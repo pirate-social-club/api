@@ -45,9 +45,9 @@ async function mintJwt(input: {
 
 async function main(): Promise<void> {
   const serviceRoot = process.cwd()
-  const repoRoot = resolve(serviceRoot, "../../..")
+  const repoRoot = resolve(serviceRoot, "../..")
   const devVarsPath = resolve(serviceRoot, ".dev.vars")
-  const brunoEnvPath = resolve(repoRoot, "specs/api/bruno/environments/local.bru")
+  const brunoEnvPath = resolve(serviceRoot, "bruno/environments/local.bru")
   const port = Number(process.env.PORT || "8787")
   if (!Number.isInteger(port) || port <= 0) {
     throw new Error(`PORT must be a positive integer, received: ${process.env.PORT ?? ""}`)
@@ -141,6 +141,7 @@ async function main(): Promise<void> {
   community_id:
   community_provisioning_job_id:
   post_id:
+  song_post_id:
   review_post_id:
   post_idempotency_key: bruno-post-01
   post_title: Hello From Bruno

@@ -1,0 +1,30 @@
+meta {
+  name: get-review-held-post
+  type: http
+  seq: 44
+}
+
+get {
+  url: {{base_url}}/posts/{{review_post_id}}?locale={{post_locale}}
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("review-held post read resolves canonical non-published row", function() {
+    const body = res.getBody();
+    expect(body.post.post_id).to.equal(bru.getEnvVar("review_post_id"));
+    expect(body.post.status).to.equal("draft");
+    expect(body.post.analysis_state).to.equal("review_required");
+    expect(body.post.content_safety_state).to.equal("pending");
+    expect(body.resolved_locale).to.equal(bru.getEnvVar("post_locale"));
+  });
+}

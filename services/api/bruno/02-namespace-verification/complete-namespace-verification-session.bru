@@ -1,0 +1,37 @@
+meta {
+  name: complete-namespace-verification-session
+  type: http
+  seq: 22
+}
+
+post {
+  url: {{base_url}}/namespace-verification-sessions/{{namespace_verification_session_id}}/complete
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+body:json {
+  {}
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("namespace verification session completes verified", function() {
+    const body = res.getBody();
+    expect(body.status).to.equal("verified");
+    expect(body.namespace_verification_id).to.be.a("string");
+  });
+}
+
+script:post-response {
+  const body = res.getBody();
+  bru.setEnvVar("namespace_verification_id", body.namespace_verification_id);
+}

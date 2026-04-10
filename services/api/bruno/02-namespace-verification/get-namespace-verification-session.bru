@@ -1,0 +1,26 @@
+meta {
+  name: get-namespace-verification-session
+  type: http
+  seq: 21
+}
+
+get {
+  url: {{base_url}}/namespace-verification-sessions/{{namespace_verification_session_id}}
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("namespace verification session matches env id", function() {
+    const body = res.getBody();
+    expect(body.namespace_verification_session_id).to.equal(bru.getEnvVar("namespace_verification_session_id"));
+  });
+}

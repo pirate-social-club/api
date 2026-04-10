@@ -130,6 +130,10 @@ async function applySqlFile(client: Client, path: URL): Promise<void> {
   }
 }
 
+function controlPlaneMigrationsUrl(path = ""): URL {
+  return new URL(`../../../db/control-plane/migrations/${path}`, import.meta.url)
+}
+
 export async function createControlPlaneTestClient(options?: {
   includeAllMigrations?: boolean
 }): Promise<{
@@ -143,7 +147,7 @@ export async function createControlPlaneTestClient(options?: {
   })
 
   if (options?.includeAllMigrations) {
-    const migrationsDir = new URL("../../../../db/control-plane/migrations/", import.meta.url)
+    const migrationsDir = controlPlaneMigrationsUrl()
     const entries = (await readdir(migrationsDir))
       .filter((entry) => entry.endsWith(".sql"))
       .sort()
@@ -151,7 +155,7 @@ export async function createControlPlaneTestClient(options?: {
       await applySqlFile(client, new URL(entry, migrationsDir))
     }
   } else {
-    await applySqlFile(client, new URL("../../../../db/control-plane/migrations/0001_control_plane_identity.sql", import.meta.url))
+    await applySqlFile(client, controlPlaneMigrationsUrl("0001_control_plane_identity.sql"))
   }
 
   return {

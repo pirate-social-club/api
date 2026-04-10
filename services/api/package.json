@@ -7,7 +7,7 @@
     "dev": "wrangler dev --port 8787",
     "dev:local": "bun run scripts/serve-local.ts",
     "bruno:prepare:local": "bun run scripts/prepare-bruno-local.ts",
-    "bruno:test:local": "cd ../../../specs/api/bruno && bru run . -r --env local --tests-only",
+    "bruno:test:local": "cd bruno && bru run . -r --env local --tests-only",
     "deploy": "wrangler deploy",
     "check": "tsc --noEmit",
     "test": "bun test",

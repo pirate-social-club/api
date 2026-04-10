@@ -1,0 +1,28 @@
+meta {
+  name: get-namespace-verification
+  type: http
+  seq: 23
+}
+
+get {
+  url: {{base_url}}/namespace-verifications/{{namespace_verification_id}}
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("namespace verification is attachable", function() {
+    const body = res.getBody();
+    expect(body.namespace_verification_id).to.equal(bru.getEnvVar("namespace_verification_id"));
+    expect(body.status).to.equal("verified");
+    expect(body.capabilities.club_attach_allowed).to.equal(true);
+  });
+}

@@ -1,0 +1,37 @@
+meta {
+  name: create-post-blocked
+  type: http
+  seq: 45
+}
+
+post {
+  url: {{base_url}}/communities/{{community_id}}/posts
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+body:json {
+  {
+    "idempotency_key": "bruno-post-blocked-01",
+    "post_type": "text",
+    "identity_mode": "public",
+    "title": "[blocked] Bruno Blocked Post",
+    "body": "Local stub should reject this create before a canonical post row is written."
+  }
+}
+
+tests {
+  test("status is 422", function() {
+    expect(res.getStatus()).to.equal(422);
+  });
+
+  test("body is analysis_blocked", function() {
+    const body = res.getBody();
+    expect(body.code).to.equal("analysis_blocked");
+  });
+}

@@ -1,11 +1,33 @@
-import type { Client, InValue } from "@libsql/client"
+import type { Client, InValue, Transaction } from "@libsql/client"
 import { makeId } from "../helpers"
 import { requiredString, rowValue, stringOrNull } from "../sql-row"
 import type { User } from "../../types"
 
+type SqlExecutor = Pick<Client, "execute"> | Pick<Transaction, "execute">
+
 export type CommunityMembershipRow = {
   membership_status: "member" | "left" | "banned" | null
   role_status: "active" | "revoked" | null
+}
+
+export type CommunityRoleAccessRow = {
+  owner_active: boolean
+  admin_active: boolean
+  moderator_active: boolean
+}
+
+export type MembershipRequestRow = {
+  membership_request_id: string
+  community_id: string
+  applicant_user_id: string
+  status: "pending" | "approved" | "rejected" | "canceled" | "expired"
+  note: string | null
+  reviewed_by_user_id: string | null
+  review_reason: string | null
+  resolved_at: string | null
+  expires_at: string | null
+  created_at: string
+  updated_at: string
 }
 
 type CommunityJoinModeRow = {
@@ -30,18 +52,18 @@ type ProofRequirement = {
   config?: Record<string, unknown> | null
 }
 
-async function firstRow(client: Client, sql: string, args: InValue[]): Promise<unknown | null> {
-  const result = await client.execute({ sql, args })
+async function firstRow(executor: SqlExecutor, sql: string, args: InValue[]): Promise<unknown | null> {
+  const result = await executor.execute({ sql, args })
   return result.rows[0] ?? null
 }
 
 export async function getCommunityMembershipState(
-  client: Client,
+  executor: SqlExecutor,
   communityId: string,
   userId: string,
 ): Promise<CommunityMembershipRow> {
   const row = await firstRow(
-    client,
+    executor,
     `
       SELECT
         (
@@ -75,9 +97,9 @@ export function canAccessCommunity(state: CommunityMembershipRow): boolean {
   return state.membership_status === "member" || state.role_status === "active"
 }
 
-export async function getCommunityJoinMode(client: Client, communityId: string): Promise<CommunityJoinModeRow["membership_mode"] | null> {
+export async function getCommunityJoinMode(executor: SqlExecutor, communityId: string): Promise<CommunityJoinModeRow["membership_mode"] | null> {
   const row = await firstRow(
-    client,
+    executor,
     `
       SELECT membership_mode
       FROM communities
@@ -88,6 +110,54 @@ export async function getCommunityJoinMode(client: Client, communityId: string):
   )
 
   return row ? requiredString(row, "membership_mode") as CommunityJoinModeRow["membership_mode"] : null
+}
+
+export async function getCommunityRoleAccessState(
+  executor: SqlExecutor,
+  communityId: string,
+  userId: string,
+): Promise<CommunityRoleAccessRow> {
+  const row = await firstRow(
+    executor,
+    `
+      SELECT
+        EXISTS(
+          SELECT 1
+          FROM community_roles
+          WHERE community_id = ?1
+            AND user_id = ?2
+            AND role = 'owner'
+            AND status = 'active'
+        ) AS owner_active,
+        EXISTS(
+          SELECT 1
+          FROM community_roles
+          WHERE community_id = ?1
+            AND user_id = ?2
+            AND role = 'admin'
+            AND status = 'active'
+        ) AS admin_active,
+        EXISTS(
+          SELECT 1
+          FROM community_roles
+          WHERE community_id = ?1
+            AND user_id = ?2
+            AND role = 'moderator'
+            AND status = 'active'
+        ) AS moderator_active
+    `,
+    [communityId, userId],
+  )
+
+  return {
+    owner_active: Boolean(Number(rowValue(row, "owner_active") ?? 0)),
+    admin_active: Boolean(Number(rowValue(row, "admin_active") ?? 0)),
+    moderator_active: Boolean(Number(rowValue(row, "moderator_active") ?? 0)),
+  }
+}
+
+export function canModerateMembershipRequests(state: CommunityRoleAccessRow): boolean {
+  return state.owner_active || state.admin_active || state.moderator_active
 }
 
 function toCommunityGateRuleRow(row: unknown): CommunityGateRuleRow {
@@ -117,6 +187,59 @@ export async function listActiveMembershipGateRules(client: Client, communityId:
   })
 
   return result.rows.map((row) => toCommunityGateRuleRow(row))
+}
+
+function toMembershipRequestRow(row: unknown): MembershipRequestRow {
+  return {
+    membership_request_id: requiredString(row, "membership_request_id"),
+    community_id: requiredString(row, "community_id"),
+    applicant_user_id: requiredString(row, "applicant_user_id"),
+    status: requiredString(row, "status") as MembershipRequestRow["status"],
+    note: stringOrNull(rowValue(row, "note")),
+    reviewed_by_user_id: stringOrNull(rowValue(row, "reviewed_by_user_id")),
+    review_reason: stringOrNull(rowValue(row, "review_reason")),
+    resolved_at: stringOrNull(rowValue(row, "resolved_at")),
+    expires_at: stringOrNull(rowValue(row, "expires_at")),
+    created_at: requiredString(row, "created_at"),
+    updated_at: requiredString(row, "updated_at"),
+  }
+}
+
+export async function listPendingMembershipRequests(client: Client, communityId: string): Promise<MembershipRequestRow[]> {
+  const result = await client.execute({
+    sql: `
+      SELECT membership_request_id, community_id, applicant_user_id, status, note, reviewed_by_user_id,
+             review_reason, resolved_at, expires_at, created_at, updated_at
+      FROM membership_requests
+      WHERE community_id = ?1
+        AND status = 'pending'
+      ORDER BY created_at ASC
+    `,
+    args: [communityId],
+  })
+
+  return result.rows.map((row) => toMembershipRequestRow(row))
+}
+
+export async function getMembershipRequestById(
+  executor: SqlExecutor,
+  communityId: string,
+  membershipRequestId: string,
+): Promise<MembershipRequestRow | null> {
+  const row = await firstRow(
+    executor,
+    `
+      SELECT membership_request_id, community_id, applicant_user_id, status, note, reviewed_by_user_id,
+             review_reason, resolved_at, expires_at, created_at, updated_at
+      FROM membership_requests
+      WHERE community_id = ?1
+        AND membership_request_id = ?2
+      LIMIT 1
+    `,
+    [communityId, membershipRequestId],
+  )
+
+  return row ? toMembershipRequestRow(row) : null
 }
 
 function parseProofRequirements(raw: string | null, fallbackGateType: string): ProofRequirement[] {
@@ -220,7 +343,7 @@ export function satisfiesMembershipGateRules(rules: CommunityGateRuleRow[], user
 }
 
 export async function upsertCommunityMembership(input: {
-  client: Client
+  client: SqlExecutor
   communityId: string
   userId: string
   now: string
@@ -244,7 +367,7 @@ export async function upsertCommunityMembership(input: {
 }
 
 export async function upsertMembershipRequest(input: {
-  client: Client
+  client: SqlExecutor
   communityId: string
   userId: string
   now: string
@@ -262,5 +385,73 @@ export async function upsertMembershipRequest(input: {
         updated_at = excluded.updated_at
     `,
     args: [makeId("mrq"), input.communityId, input.userId, input.now],
+  })
+}
+
+export async function resolvePendingMembershipRequestsAsApproved(input: {
+  client: SqlExecutor
+  communityId: string
+  userId: string
+  reviewerUserId: string | null
+  reviewReason: string | null
+  now: string
+}): Promise<void> {
+  await input.client.execute({
+    sql: `
+      UPDATE membership_requests
+      SET status = 'approved',
+          reviewed_by_user_id = ?4,
+          review_reason = ?5,
+          resolved_at = ?3,
+          updated_at = ?3
+      WHERE community_id = ?1
+        AND applicant_user_id = ?2
+        AND status = 'pending'
+    `,
+    args: [input.communityId, input.userId, input.now, input.reviewerUserId, input.reviewReason],
+  })
+}
+
+export async function resolveMembershipRequestAsApproved(input: {
+  client: SqlExecutor
+  membershipRequestId: string
+  reviewerUserId: string
+  reviewReason: string | null
+  now: string
+}): Promise<void> {
+  await input.client.execute({
+    sql: `
+      UPDATE membership_requests
+      SET status = 'approved',
+          reviewed_by_user_id = ?2,
+          review_reason = ?3,
+          resolved_at = ?4,
+          updated_at = ?4
+      WHERE membership_request_id = ?1
+        AND status = 'pending'
+    `,
+    args: [input.membershipRequestId, input.reviewerUserId, input.reviewReason, input.now],
+  })
+}
+
+export async function resolveMembershipRequestAsRejected(input: {
+  client: SqlExecutor
+  membershipRequestId: string
+  reviewerUserId: string
+  reviewReason: string | null
+  now: string
+}): Promise<void> {
+  await input.client.execute({
+    sql: `
+      UPDATE membership_requests
+      SET status = 'rejected',
+          reviewed_by_user_id = ?2,
+          review_reason = ?3,
+          resolved_at = ?4,
+          updated_at = ?4
+      WHERE membership_request_id = ?1
+        AND status = 'pending'
+    `,
+    args: [input.membershipRequestId, input.reviewerUserId, input.reviewReason, input.now],
   })
 }

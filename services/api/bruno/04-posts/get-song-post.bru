@@ -1,0 +1,33 @@
+meta {
+  name: get-song-post
+  type: http
+  seq: 48
+}
+
+get {
+  url: {{base_url}}/posts/{{song_post_id}}?locale={{post_locale}}
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("song post read returns canonical song fields", function() {
+    const body = res.getBody();
+    expect(body.post.post_id).to.equal(bru.getEnvVar("song_post_id"));
+    expect(body.post.community_id).to.equal(bru.getEnvVar("community_id"));
+    expect(body.post.post_type).to.equal("song");
+    expect(body.post.song_mode).to.equal("original");
+    expect(body.post.rights_basis).to.equal("original");
+    expect(body.post.lyrics).to.equal("Sailing on a clean mainline song path.");
+    expect(body.post.media_refs[0].storage_ref).to.equal("ipfs://bruno-song-happy-path-audio");
+    expect(body.resolved_locale).to.equal(bru.getEnvVar("post_locale"));
+  });
+}

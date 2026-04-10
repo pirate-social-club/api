@@ -77,6 +77,13 @@ Community-owned rows are written to the local per-community DB stub:
 - `namespace_handle_policies`
 - `posts`
 
+Current namespace-verification modes:
+
+- `HNS_VERIFICATION_PROVIDER=local_stub`
+  Existing deterministic local acceptance path.
+- `HNS_VERIFICATION_PROVIDER=hnsdoh`
+  Real TXT-challenge verification against the public `hnsdoh.com` resolver.
+
 ## Local Dev
 
 Memory mode:
@@ -94,9 +101,14 @@ Control-plane DB mode:
 4. Set `TURSO_CONTROL_PLANE_AUTH_TOKEN` if required by the target DB.
 5. Set `LOCAL_COMMUNITY_DB_ROOT` to a writable directory for per-community DB files.
 6. If testing the real internal publisher path, set `REGISTRY_PUBLISHER_URL`, `REGISTRY_PUBLISHER_AUTH_TOKEN`, and `REGISTRY_PUBLISHER_TIMEOUT_MS`.
-7. Fill in `AUTH_UPSTREAM_JWT_SHARED_SECRET`, `AUTH_UPSTREAM_JWT_ISSUER`, and `AUTH_UPSTREAM_JWT_AUDIENCE`.
-8. Fill in `PIRATE_APP_JWT_PRIVATE_KEY` and `PIRATE_APP_JWT_PUBLIC_KEY`.
-9. Apply the control-plane migrations before starting the worker.
+7. If testing the real HNS TXT flow, set:
+   - `HNS_VERIFICATION_PROVIDER=hnsdoh`
+   - `HNS_RESOLVER_HOST=hnsdoh.com`
+   - `HNS_VERIFICATION_TIMEOUT_MS`
+   - optionally `HNS_PIRATE_NS_HOSTS` if you want `pirate_dns_authority_verified` to turn on from specific NS hosts
+8. Fill in `AUTH_UPSTREAM_JWT_SHARED_SECRET`, `AUTH_UPSTREAM_JWT_ISSUER`, and `AUTH_UPSTREAM_JWT_AUDIENCE`.
+9. Fill in `PIRATE_APP_JWT_PRIVATE_KEY` and `PIRATE_APP_JWT_PUBLIC_KEY`.
+10. Apply the control-plane migrations before starting the worker.
 
 ## Full First Slice Local Setup
 
@@ -113,7 +125,7 @@ This resets:
 
 - the local control-plane SQLite file resolved from `TURSO_CONTROL_PLANE_DATABASE_URL`
 - the local community DB root resolved from `LOCAL_COMMUNITY_DB_ROOT`
-- `specs/api/bruno/environments/local.bru` with fresh JWT fixtures and a new subject
+- `services/api/bruno/environments/local.bru` with fresh JWT fixtures and a new subject
 
 2. Ensure `.dev.vars` in `pirate-api/services/api` is populated for local file-backed Bun runs.
 
@@ -132,6 +144,32 @@ rtk bun run bruno:test:local
 ```
 
 This local Bruno path intentionally uses Bun, not Wrangler, because the first-slice local control-plane/community databases are `file:`-backed.
+
+## Real HNS TXT Flow
+
+When `HNS_VERIFICATION_PROVIDER=hnsdoh`, the namespace flow changes from stub acceptance to
+real TXT observation:
+
+1. `POST /namespace-verification-sessions` returns:
+   - `challenge_host`
+   - `challenge_txt_value`
+   - `challenge_expires_at`
+2. publish the returned TXT value on the HNS root:
+   - host: `_pirate.<root>`
+   - value: `pirate-verification=<session_id>`
+3. call `POST /namespace-verification-sessions/{id}/complete`
+
+The runtime then queries `hnsdoh.com` directly for:
+
+- root existence
+- challenge TXT visibility
+- basic routing presence
+- optional Pirate NS authority if `HNS_PIRATE_NS_HOSTS` is configured
+
+Current limitation:
+
+- expiry-horizon enforcement is still a resolver-side heuristic in this runtime path
+- `HNS_ASSUME_EXPIRY_HORIZON_SUFFICIENT=true` is the current default until a public expiry-aware provider is wired in
 
 ## Mint A Dev JWT
 
@@ -187,7 +225,7 @@ curl -X POST http://127.0.0.1:8787/auth/session/exchange \
 
 ## Bruno
 
-The live API acceptance collection is under [specs/api/bruno](/home/t42/Documents/pirate-v2/specs/api/bruno).
+The live API acceptance collection is under [bruno](/home/t42/Documents/pirate-v2/pirate-api/services/api/bruno).
 
 Recommended local run:
 

@@ -6,9 +6,17 @@ import {
 } from "./community-local-db"
 import {
   canAccessCommunity,
+  canModerateMembershipRequests,
+  getCommunityRoleAccessState,
   getCommunityJoinMode,
   getCommunityMembershipState,
+  getMembershipRequestById,
   listActiveMembershipGateRules,
+  listPendingMembershipRequests,
+  resolveMembershipRequestAsApproved,
+  resolveMembershipRequestAsRejected,
+  resolvePendingMembershipRequestsAsApproved,
+  type MembershipRequestRow,
   satisfiesMembershipGateRules,
   upsertCommunityMembership,
   upsertMembershipRequest,
@@ -17,7 +25,7 @@ import { openCommunityDb } from "./community-db-factory"
 import type { UserRepository } from "../auth/repositories"
 import type { CommunityRow, JobRow } from "../auth/control-plane-auth-rows"
 import type { CommunityRepository } from "./control-plane-community-repository"
-import { badRequestError, eligibilityFailed, gateFailed, internalError, notFoundError } from "../errors"
+import { badRequestError, conflictError, eligibilityFailed, gateFailed, internalError, notFoundError } from "../errors"
 import { envFlag, makeId, nowIso } from "../helpers"
 import { verifyPirateAccessToken } from "../auth/pirate-session-token"
 import { getRegistryPublicationAdapter } from "./registry-publication"
@@ -32,10 +40,29 @@ import type {
 } from "../../types"
 
 export type CreateCommunityRequestBody = CreateCommunityRequest
+
+type CommunityProofRequirementInput = {
+  proof_type: string
+  accepted_providers?: string[] | null
+  accepted_mechanisms?: string[] | null
+  config?: Record<string, unknown> | null
+}
+
+type CommunityGateRuleInput = {
+  scope: "membership" | "viewer" | "posting"
+  gate_family: "token_holding" | "identity_proof"
+  gate_type: string
+  proof_requirements?: CommunityProofRequirementInput[] | null
+  chain_namespace?: string | null
+  gate_config?: Record<string, unknown> | null
+}
+
 type MembershipResult = {
   community_id: string
   status: "joined" | "requested" | "left"
 }
+
+type MembershipRequestResponse = MembershipRequestRow
 
 const VALID_PUBLIC_V0_PROVIDERS_BY_PROOF_TYPE = {
   unique_human: new Set(["self", "very"]),
@@ -327,6 +354,7 @@ function assertCreateRequest(
   namespace: {
     namespace_verification_id: string
   }
+  gate_rules?: CommunityGateRuleInput[] | null
 } {
   if (!body.display_name?.trim() || !body.namespace?.namespace_verification_id?.trim()) {
     throw badRequestError("display_name and namespace.namespace_verification_id are required")
@@ -360,7 +388,13 @@ function assertCreateRequest(
     throw eligibilityFailed("Public v0 community creation only allows membership-scope identity-proof gates")
   }
   for (const rule of body.gate_rules ?? []) {
+    if (!rule.scope || !rule.gate_family || !rule.gate_type) {
+      throw badRequestError("Invalid gate_rules entry")
+    }
     for (const requirement of rule.proof_requirements ?? []) {
+      if (!requirement.proof_type) {
+        throw badRequestError("Invalid gate_rules proof requirement")
+      }
       const acceptedProviders = requirement.accepted_providers ?? []
       if (acceptedProviders.length === 0) {
         continue
@@ -420,6 +454,17 @@ async function requireOwnedCommunity(
     throw notFoundError("Community not found")
   }
   return community
+}
+
+async function requireCommunityModerationAccess(input: {
+  dbClient: Awaited<ReturnType<typeof openCommunityDb>>["client"]
+  communityId: string
+  userId: string
+}): Promise<void> {
+  const access = await getCommunityRoleAccessState(input.dbClient, input.communityId, input.userId)
+  if (!canModerateMembershipRequests(access)) {
+    throw eligibilityFailed("Community moderation access is required")
+  }
 }
 
 export async function createCommunity(input: {
@@ -539,6 +584,7 @@ export async function createCommunity(input: {
   let localSnapshot: LocalCommunitySnapshot | null = null
 
   try {
+    const gateRules = (input.body.gate_rules ?? []) as CommunityGateRuleInput[]
     localSnapshot = await bootstrapLocalCommunityDb({
       rootDir: dbRoot,
       communityId,
@@ -554,7 +600,7 @@ export async function createCommunity(input: {
       governanceMode: input.body.governance_mode ?? "centralized",
       handlePolicyTemplate: input.body.handle_policy?.policy_template ?? "standard",
       pricingModel: null,
-      gateRules: (input.body.gate_rules ?? []).map((rule) => ({
+      gateRules: gateRules.map((rule) => ({
         scope: rule.scope,
         gateFamily: rule.gate_family,
         gateType: rule.gate_type,
@@ -701,6 +747,14 @@ export async function joinCommunity(input: {
         userId: session.userId,
         now,
       })
+      await resolvePendingMembershipRequestsAsApproved({
+        client: db.client,
+        communityId: input.communityId,
+        userId: session.userId,
+        reviewerUserId: null,
+        reviewReason: "resolved_by_membership",
+        now,
+      })
       return {
         community_id: input.communityId,
         status: "joined",
@@ -730,10 +784,167 @@ export async function joinCommunity(input: {
       userId: session.userId,
       now,
     })
+    await resolvePendingMembershipRequestsAsApproved({
+      client: db.client,
+      communityId: input.communityId,
+      userId: session.userId,
+      reviewerUserId: null,
+      reviewReason: "resolved_by_membership",
+      now,
+    })
     return {
       community_id: input.communityId,
       status: "joined",
     }
+  } finally {
+    db.close()
+  }
+}
+
+export async function listMembershipRequests(input: {
+  env: Env
+  bearerToken: string
+  communityId: string
+  communityRepository: CommunityRepository
+}): Promise<{ membership_requests: MembershipRequestResponse[] }> {
+  const session = await verifyPirateAccessToken({ env: input.env, token: input.bearerToken })
+  const community = await input.communityRepository.getCommunityById(input.communityId)
+  if (!community || community.provisioning_state !== "active" || community.status !== "active") {
+    throw notFoundError("Community not found")
+  }
+
+  const db = await openCommunityDb(input.communityRepository, input.communityId)
+  try {
+    await requireCommunityModerationAccess({
+      dbClient: db.client,
+      communityId: input.communityId,
+      userId: session.userId,
+    })
+    const membershipRequests = await listPendingMembershipRequests(db.client, input.communityId)
+    return { membership_requests: membershipRequests }
+  } finally {
+    db.close()
+  }
+}
+
+export async function approveMembershipRequest(input: {
+  env: Env
+  bearerToken: string
+  communityId: string
+  membershipRequestId: string
+  reviewReason: string | null
+  communityRepository: CommunityRepository
+}): Promise<MembershipRequestResponse> {
+  const session = await verifyPirateAccessToken({ env: input.env, token: input.bearerToken })
+  const community = await input.communityRepository.getCommunityById(input.communityId)
+  if (!community || community.provisioning_state !== "active" || community.status !== "active") {
+    throw notFoundError("Community not found")
+  }
+
+  const db = await openCommunityDb(input.communityRepository, input.communityId)
+  try {
+    await requireCommunityModerationAccess({
+      dbClient: db.client,
+      communityId: input.communityId,
+      userId: session.userId,
+    })
+
+    const existing = await getMembershipRequestById(db.client, input.communityId, input.membershipRequestId)
+    if (!existing) {
+      throw notFoundError("Membership request not found")
+    }
+    if (existing.status !== "pending") {
+      throw conflictError("Membership request is not pending")
+    }
+
+    const now = nowIso()
+    const tx = await db.client.transaction("write")
+    try {
+      await upsertCommunityMembership({
+        client: tx,
+        communityId: input.communityId,
+        userId: existing.applicant_user_id,
+        now,
+      })
+      await resolveMembershipRequestAsApproved({
+        client: tx,
+        membershipRequestId: input.membershipRequestId,
+        reviewerUserId: session.userId,
+        reviewReason: input.reviewReason,
+        now,
+      })
+      await resolvePendingMembershipRequestsAsApproved({
+        client: tx,
+        communityId: input.communityId,
+        userId: existing.applicant_user_id,
+        reviewerUserId: session.userId,
+        reviewReason: input.reviewReason,
+        now,
+      })
+      await tx.commit()
+    } catch (error) {
+      try {
+        await tx.rollback()
+      } catch {}
+      throw error
+    } finally {
+      tx.close()
+    }
+
+    const resolved = await getMembershipRequestById(db.client, input.communityId, input.membershipRequestId)
+    if (!resolved) {
+      throw internalError("Resolved membership request is missing after approval")
+    }
+    return resolved
+  } finally {
+    db.close()
+  }
+}
+
+export async function rejectMembershipRequest(input: {
+  env: Env
+  bearerToken: string
+  communityId: string
+  membershipRequestId: string
+  reviewReason: string | null
+  communityRepository: CommunityRepository
+}): Promise<MembershipRequestResponse> {
+  const session = await verifyPirateAccessToken({ env: input.env, token: input.bearerToken })
+  const community = await input.communityRepository.getCommunityById(input.communityId)
+  if (!community || community.provisioning_state !== "active" || community.status !== "active") {
+    throw notFoundError("Community not found")
+  }
+
+  const db = await openCommunityDb(input.communityRepository, input.communityId)
+  try {
+    await requireCommunityModerationAccess({
+      dbClient: db.client,
+      communityId: input.communityId,
+      userId: session.userId,
+    })
+
+    const existing = await getMembershipRequestById(db.client, input.communityId, input.membershipRequestId)
+    if (!existing) {
+      throw notFoundError("Membership request not found")
+    }
+    if (existing.status !== "pending") {
+      throw conflictError("Membership request is not pending")
+    }
+
+    const now = nowIso()
+    await resolveMembershipRequestAsRejected({
+      client: db.client,
+      membershipRequestId: input.membershipRequestId,
+      reviewerUserId: session.userId,
+      reviewReason: input.reviewReason,
+      now,
+    })
+
+    const resolved = await getMembershipRequestById(db.client, input.communityId, input.membershipRequestId)
+    if (!resolved) {
+      throw internalError("Resolved membership request is missing after rejection")
+    }
+    return resolved
   } finally {
     db.close()
   }

@@ -1,7 +1,15 @@
 import { Hono } from "hono"
 import { badRequestError, errorResponse } from "../lib/errors"
 import { getUserRepository } from "../lib/auth/repositories"
-import { createCommunity, getCommunity, joinCommunity, type CreateCommunityRequestBody } from "../lib/communities/community-service"
+import {
+  approveMembershipRequest,
+  createCommunity,
+  getCommunity,
+  joinCommunity,
+  listMembershipRequests,
+  rejectMembershipRequest,
+  type CreateCommunityRequestBody,
+} from "../lib/communities/community-service"
 import { getControlPlaneCommunityRepository } from "../lib/communities/control-plane-community-repository"
 import { getControlPlaneVerificationRepository } from "../lib/verification/control-plane-verification-repository"
 import { requireBearerToken } from "../lib/helpers"
@@ -65,6 +73,77 @@ communities.post("/:communityId/join", async (c) => {
       bearerToken: token,
       communityId: c.req.param("communityId"),
       userRepository: getUserRepository(c.env),
+      communityRepository: getControlPlaneCommunityRepository(c.env),
+    })
+    return c.json(result, 200)
+  } catch (error) {
+    const response = errorResponse(error)
+    return new Response(JSON.stringify(response.body), {
+      status: response.status,
+      headers: { "content-type": "application/json" },
+    })
+  }
+})
+
+communities.get("/:communityId/membership-requests", async (c) => {
+  try {
+    const token = requireBearerToken(c.req.header("authorization"))
+    const result = await listMembershipRequests({
+      env: c.env,
+      bearerToken: token,
+      communityId: c.req.param("communityId"),
+      communityRepository: getControlPlaneCommunityRepository(c.env),
+    })
+    return c.json(result, 200)
+  } catch (error) {
+    const response = errorResponse(error)
+    return new Response(JSON.stringify(response.body), {
+      status: response.status,
+      headers: { "content-type": "application/json" },
+    })
+  }
+})
+
+communities.post("/:communityId/membership-requests/:membershipRequestId/approve", async (c) => {
+  try {
+    const token = requireBearerToken(c.req.header("authorization"))
+    const body = await c.req.json<{ review_reason?: unknown }>().catch(() => null)
+    if (body && typeof body === "object" && body.review_reason !== undefined && body.review_reason !== null && typeof body.review_reason !== "string") {
+      throw badRequestError("Invalid membership approval payload")
+    }
+
+    const result = await approveMembershipRequest({
+      env: c.env,
+      bearerToken: token,
+      communityId: c.req.param("communityId"),
+      membershipRequestId: c.req.param("membershipRequestId"),
+      reviewReason: typeof body?.review_reason === "string" ? body.review_reason.trim() || null : null,
+      communityRepository: getControlPlaneCommunityRepository(c.env),
+    })
+    return c.json(result, 200)
+  } catch (error) {
+    const response = errorResponse(error)
+    return new Response(JSON.stringify(response.body), {
+      status: response.status,
+      headers: { "content-type": "application/json" },
+    })
+  }
+})
+
+communities.post("/:communityId/membership-requests/:membershipRequestId/reject", async (c) => {
+  try {
+    const token = requireBearerToken(c.req.header("authorization"))
+    const body = await c.req.json<{ review_reason?: unknown }>().catch(() => null)
+    if (body && typeof body === "object" && body.review_reason !== undefined && body.review_reason !== null && typeof body.review_reason !== "string") {
+      throw badRequestError("Invalid membership rejection payload")
+    }
+
+    const result = await rejectMembershipRequest({
+      env: c.env,
+      bearerToken: token,
+      communityId: c.req.param("communityId"),
+      membershipRequestId: c.req.param("membershipRequestId"),
+      reviewReason: typeof body?.review_reason === "string" ? body.review_reason.trim() || null : null,
       communityRepository: getControlPlaneCommunityRepository(c.env),
     })
     return c.json(result, 200)

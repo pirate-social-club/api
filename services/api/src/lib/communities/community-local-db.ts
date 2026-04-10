@@ -50,7 +50,7 @@ export type LocalCommunitySnapshot = {
 }
 
 function resolveCommunityTemplateMigrationsDir(): string {
-  return fileURLToPath(new URL("../../../../../../db/community-template/migrations/", import.meta.url))
+  return fileURLToPath(new URL("../../../../../db/community-template/migrations/", import.meta.url))
 }
 
 function splitSqlStatements(sql: string): string[] {

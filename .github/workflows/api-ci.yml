@@ -4,12 +4,16 @@ on:
   pull_request:
     paths:
       - ".github/workflows/api-ci.yml"
+      - "db/**"
+      - "scripts/**"
       - "services/api/**"
       - "services/cli/**"
       - "services/contracts/**"
   push:
     paths:
       - ".github/workflows/api-ci.yml"
+      - "db/**"
+      - "scripts/**"
       - "services/api/**"
       - "services/cli/**"
       - "services/contracts/**"
@@ -78,3 +82,86 @@ jobs:
       - name: Run CLI tests
         working-directory: services/cli
         run: bun run test
+
+  bruno:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.21
+
+      - name: Install sqlite3
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sqlite3
+
+      - name: Install Bruno CLI
+        run: npm install -g @usebruno/cli
+
+      - name: Install contracts dependencies
+        working-directory: services/contracts
+        run: bun install --frozen-lockfile
+
+      - name: Install API dependencies
+        working-directory: services/api
+        run: bun install --frozen-lockfile
+
+      - name: Write local API env
+        working-directory: services/api
+        shell: bash
+        run: |
+          private_key="$(openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 2>/dev/null)"
+          public_key="$(printf '%s' "$private_key" | openssl pkey -pubout 2>/dev/null)"
+          {
+            echo "ENVIRONMENT=development"
+            echo "DEV_MEMORY_STORE_ENABLED=false"
+            echo "AUTH_UPSTREAM_JWT_SHARED_SECRET=ci-upstream-shared-secret"
+            echo "AUTH_UPSTREAM_JWT_ISSUER=pirate-dev-upstream"
+            echo "AUTH_UPSTREAM_JWT_AUDIENCE=pirate-api"
+            echo "TURSO_CONTROL_PLANE_DATABASE_URL=file:/tmp/pirate-control-plane.db"
+            echo "TURSO_CONTROL_PLANE_AUTH_TOKEN="
+            echo "LOCAL_COMMUNITY_DB_ROOT=/tmp/pirate-community-dbs"
+            echo "REGISTRY_PUBLISHER_URL="
+            echo "REGISTRY_PUBLISHER_AUTH_TOKEN="
+            echo "REGISTRY_PUBLISHER_TIMEOUT_MS=25000"
+            echo 'PIRATE_APP_JWT_PRIVATE_KEY="'
+            printf '%s\n' "$private_key"
+            echo '"'
+            echo 'PIRATE_APP_JWT_PUBLIC_KEY="'
+            printf '%s\n' "$public_key"
+            echo '"'
+            echo "PIRATE_APP_JWT_ISSUER=pirate-api"
+            echo "PIRATE_APP_JWT_AUDIENCE=pirate-app"
+            echo "PIRATE_APP_JWT_TTL_SECONDS=3600"
+            echo "PRIVY_APP_ID="
+            echo "PRIVY_APP_SECRET="
+            echo "PRIVY_API_URL="
+            echo "PRIVY_JWT_VERIFICATION_KEY="
+          } > .dev.vars
+
+      - name: Run Bruno acceptance collection
+        working-directory: services/api
+        shell: bash
+        run: |
+          bun run bruno:prepare:local
+          bun run dev:local >/tmp/pirate-api-bruno.log 2>&1 &
+          server_pid=$!
+          trap 'kill ${server_pid}' EXIT
+          for attempt in {1..30}; do
+            if curl -fsS http://127.0.0.1:8787/health >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8787/health >/dev/null
+          bun run bruno:test:local

@@ -249,7 +249,6 @@ export type Community = {
   donation_partner_status: "unconfigured" | "active" | "paused";
   donation_partner_id?: string | null;
   donation_partner?: DonationPartnerSummary | null;
-  money_policy: CommunityMoneyPolicy;
   content_authenticity_policy: CommunityContentAuthenticityPolicy;
   content_authenticity_detection_policy: CommunityContentAuthenticityDetectionPolicy;
   market_context_policy: CommunityMarketContextPolicy;
@@ -298,7 +297,7 @@ export type CommunityCreateAcceptedResponse = {
   job: Job;
 };
 
-export type CreateCommunityRequest = (CreateCentralizedCommunityRequest | CreateMultisigCommunityRequest | CreateMajeurCommunityRequest);
+export type CreateCommunityRequest = CreateCentralizedCommunityRequest;
 
 export type StartVerificationSessionRequest = {
   provider: "self" | "very";
@@ -329,7 +328,6 @@ export type CreatePostRequest = (({
 } | {
   post_type: "text" | "image" | "video" | "song";
 }) & {
-  community_id: string;
   idempotency_key: string;
   identity_mode?: "public" | "anonymous";
   anonymous_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null;
@@ -484,8 +482,6 @@ type CommunityFlairPolicy = {
   definitions: Array<CommunityFlairDefinition>;
 };
 
-type CommunityFundingRouteStatusPolicy = "fail" | "fallback_display" | "queue";
-
 type CommunityGovernanceBackend = (CentralizedGovernanceBackend | MultisigGovernanceBackend | MajeurGovernanceBackend);
 
 type CommunityGraphicContentPolicy = {
@@ -532,37 +528,6 @@ type CommunityMarketContextPolicy = {
 type CommunityMarketContextProviderSet = "platform_default" | "approved_profile";
 
 type CommunityModerationDecisionLevel = "allow" | "review" | "disallow";
-
-type CommunityMoneyAssetRef = {
-  asset_symbol: string;
-  chain_namespace?: string | null;
-  chain_id?: number | null;
-  display_name?: string | null;
-};
-
-type CommunityMoneyChainRef = {
-  chain_namespace: string;
-  chain_id?: number | null;
-  display_name?: string | null;
-};
-
-type CommunityMoneyPolicy = {
-  community_id: string;
-  policy_origin: CommunityPolicyOrigin;
-  funding_preference: string;
-  accepted_funding_assets: Array<CommunityMoneyAssetRef>;
-  accepted_source_chains: Array<CommunityMoneyChainRef>;
-  approved_route_providers?: Array<string> | null;
-  destination_settlement_chain: CommunityMoneyChainRef;
-  destination_settlement_token: string;
-  treasury_denomination?: string | null;
-  max_slippage_bps: number;
-  quote_ttl_seconds: number;
-  route_required: boolean;
-  route_status_policy: CommunityFundingRouteStatusPolicy;
-  route_hop_tolerance: number;
-  updated_at: string;
-};
 
 type CommunityMotionMediaPolicy = {
   community_id: string;
@@ -680,185 +645,15 @@ type CreateCentralizedCommunityRequest = (CreateCommunityRequestBase & {
   governance_mode: "centralized";
 });
 
-type CreateCommunityAdultContentPolicyInput = {
-  suggestive: CommunityModerationDecisionLevel;
-  artistic_nudity: CommunityModerationDecisionLevel;
-  explicit_nudity: CommunityModerationDecisionLevel;
-  explicit_sexual_content: CommunityModerationDecisionLevel;
-  fetish_content: CommunityModerationDecisionLevel;
-};
-
-type CreateCommunityBootstrapInput = {
-  flair_policy?: CreateCommunityFlairPolicyInput | null;
-  rules?: Array<CreateCommunityRuleInput>;
-  resource_links?: Array<CreateCommunityResourceLinkInput>;
-};
-
-type CreateCommunityCaptureEditPolicyInput = {
-  basic_adjustments: CommunityDisclosureDecisionLevel;
-  retouching: CommunityDisclosureDecisionLevel;
-  compositing: CommunityDisclosureDecisionLevel;
-  documentary_editing: CommunityDisclosureDecisionLevel;
-  require_edit_disclosure: boolean;
-};
-
-type CreateCommunityContentAuthenticityDetectionPolicyInput = {
-  selection_mode: CommunityContentAuthenticityDetectionSelectionMode;
-  authenticity_detection_profile_id?: string | null;
-};
-
-type CreateCommunityContentAuthenticityPolicyInput = {
-  authenticity_stance: CommunityContentAuthenticityStance;
-  text_policy: CommunityTextAuthenticityPolicySettings;
-  image_policy: CommunityImageAuthenticityPolicySettings;
-  video_policy: CommunityVideoAuthenticityPolicySettings;
-  song_policy: CommunitySongAuthenticityPolicySettings;
-};
-
-type CreateCommunityDonationPolicyInput = {
-  donation_policy_mode: "none" | "optional_creator_sidecar" | "fundraiser_default";
-  donation_partner_id?: string | null;
-};
-
-type CreateCommunityFlairDefinitionInput = {
-  label: string;
-  description?: string | null;
-  color_token?: string | null;
-  position: number;
-  allowed_post_types?: Array<"text" | "image" | "video" | "song"> | null;
-};
-
-type CreateCommunityFlairPolicyInput = {
-  flair_enabled?: boolean;
-  require_flair_on_top_level_posts?: boolean;
-  definitions?: Array<CreateCommunityFlairDefinitionInput>;
-};
-
-type CreateCommunityGraphicContentPolicyInput = {
-  injury_medical: CommunityModerationDecisionLevel;
-  gore: CommunityModerationDecisionLevel;
-  extreme_gore: CommunityModerationDecisionLevel;
-  body_horror_disturbing: CommunityModerationDecisionLevel;
-  animal_harm: CommunityModerationDecisionLevel;
-};
-
-type CreateCommunityLanguagePolicyInput = {
-  profanity: CommunityModerationDecisionLevel;
-  slurs: "review" | "disallow";
-};
-
-type CreateCommunityMarketContextPolicyInput = {
-  mode: CommunityMarketContextMode;
-  enabled_post_types?: Array<"link" | "image" | "video"> | null;
-  max_markets_per_post?: number | null;
-  provider_set?: CommunityMarketContextProviderSet | null;
-  market_context_profile_id?: string | null;
-};
-
-type CreateCommunityMoneyPolicyInput = {
-  funding_preference: string;
-  accepted_funding_assets: Array<CommunityMoneyAssetRef>;
-  accepted_source_chains: Array<CommunityMoneyChainRef>;
-  approved_route_providers?: Array<string> | null;
-  destination_settlement_chain: CommunityMoneyChainRef;
-  destination_settlement_token: string;
-  treasury_denomination?: string | null;
-  max_slippage_bps: number;
-  quote_ttl_seconds: number;
-  route_required: boolean;
-  route_status_policy: CommunityFundingRouteStatusPolicy;
-  route_hop_tolerance: number;
-};
-
-type CreateCommunityMotionMediaPolicyInput = {
-  allow_animated_images: boolean;
-  allow_silent_looping_video: boolean;
-  allow_audio_video: boolean;
-  max_video_duration_seconds?: number | null;
-  require_video_transcription?: boolean;
-};
-
-type CreateCommunityPromotionPolicyInput = {
-  self_promotion_mode: CommunitySelfPromotionMode;
-  require_affiliation_disclosure: boolean;
-  max_promotional_posts_per_week?: number | null;
-  promotional_participation_ratio?: number | null;
-  require_minimum_membership_days?: number | null;
-};
-
-type CreateCommunityProvenancePolicyInput = {
-  allowed_creator_relations: Array<CommunityCreatorRelation>;
-  require_creator_relation: boolean;
-  false_claim_consequence: CommunityFalseClaimConsequence;
-  allow_oc_claim: boolean;
-  require_proof_for_original: boolean;
-};
-
 type CreateCommunityRequestBase = {
   display_name: string;
-  description?: string | null;
-  artist_identity_id?: string | null;
-  membership_mode: "open" | "request" | "gated";
-  allow_anonymous_identity: boolean;
-  anonymous_identity_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null;
-  allowed_disclosed_qualifiers?: Array<string> | null;
-  allow_qualifiers_on_anonymous_posts?: boolean | null;
-  root_post_min_trust_tier?: "new" | "established" | "trusted" | "high_trust" | null;
-  reply_min_trust_tier?: "new" | "established" | "trusted" | "high_trust" | null;
-  anonymous_posting_min_trust_tier?: "new" | "established" | "trusted" | "high_trust" | null;
-  root_post_quota_by_trust_tier?: RootPostQuotaByTrustTier | null;
-  reply_quota_by_trust_tier?: ReplyQuotaByTrustTier | null;
-  probation_window_days?: number | null;
-  link_post_policy?: "allow" | "require_established" | null;
-  default_age_gate_policy?: "none" | "18_plus";
-  namespace: NamespaceAttachmentInput;
-  handle_policy: HandlePolicyInput;
-  donation_policy?: (CreateCommunityDonationPolicyInput & Record<string, never>) | null;
-  content_authenticity_policy?: (CreateCommunityContentAuthenticityPolicyInput & Record<string, never>) | null;
-  source_policy?: (CreateCommunitySourcePolicyInput & Record<string, never>) | null;
-  capture_edit_policy?: (CreateCommunityCaptureEditPolicyInput & Record<string, never>) | null;
-  adult_content_policy?: (CreateCommunityAdultContentPolicyInput & Record<string, never>) | null;
-  graphic_content_policy?: (CreateCommunityGraphicContentPolicyInput & Record<string, never>) | null;
-  motion_media_policy?: (CreateCommunityMotionMediaPolicyInput & Record<string, never>) | null;
-  language_policy?: (CreateCommunityLanguagePolicyInput & Record<string, never>) | null;
-  provenance_policy?: (CreateCommunityProvenancePolicyInput & Record<string, never>) | null;
-  promotion_policy?: (CreateCommunityPromotionPolicyInput & Record<string, never>) | null;
-  content_authenticity_detection_policy?: (CreateCommunityContentAuthenticityDetectionPolicyInput & Record<string, never>) | null;
-  market_context_policy?: (CreateCommunityMarketContextPolicyInput & Record<string, never>) | null;
-  money_policy?: (CreateCommunityMoneyPolicyInput & Record<string, never>) | null;
-  community_bootstrap?: CreateCommunityBootstrapInput | null;
-  gate_rules?: Array<GateRuleInput> | null;
+  namespace: {
+    namespace_verification_id: string;
+  };
+  handle_policy: {
+    policy_template: "standard";
+  };
 };
-
-type CreateCommunityResourceLinkInput = {
-  label: string;
-  url: string;
-  resource_kind: "link" | "playlist" | "document" | "discord" | "website" | "other";
-  position: number;
-};
-
-type CreateCommunityRuleInput = {
-  title: string;
-  body: string;
-  position: number;
-};
-
-type CreateCommunitySourcePolicyInput = {
-  identified_person_media_scope: CommunityIdentifiedPersonMediaScope;
-  require_source_url_for_reposts: boolean;
-  allow_human_made_fan_art_of_real_people: boolean;
-  require_fan_art_disclosure: boolean;
-};
-
-type CreateMajeurCommunityRequest = (CreateCommunityRequestBase & {
-  governance_mode: "majeur";
-  governance_backend: MajeurGovernanceCreateInput;
-});
-
-type CreateMultisigCommunityRequest = (CreateCommunityRequestBase & {
-  governance_mode: "multisig";
-  governance_backend: MultisigGovernanceAttachmentInput;
-});
 
 type DisclosedQualifierSnapshot = {
   qualifier_template_id: string;
@@ -892,22 +687,7 @@ type GateRule = {
   updated_at: string;
 };
 
-type GateRuleInput = {
-  scope: "membership" | "viewer" | "posting";
-  gate_family: "token_holding" | "identity_proof";
-  gate_type: "erc721_holding" | "erc1155_holding" | "erc20_balance" | "solana_nft_holding" | "unique_human" | "age_over_18" | "nationality" | "gender" | "sanctions_clear" | "wallet_score";
-  proof_requirements?: Array<ProofRequirement> | null;
-  chain_namespace?: string | null;
-  gate_config?: (Record<string, unknown>) | null;
-};
-
 type GovernanceVerificationState = "not_required" | "pending" | "verified" | "broken";
-
-type HandlePolicyInput = {
-  policy_template: "standard" | "premium" | "membership_gated" | "custom";
-  pricing_model?: "free" | "flat_by_length" | "custom_curve" | "gated_then_flat" | null;
-  membership_required_for_claim?: boolean;
-};
 
 type MajeurGovernanceBackend = {
   governance_mode: "majeur";
@@ -919,11 +699,6 @@ type MajeurGovernanceBackend = {
   governance_attached_at?: string | null;
   governance_last_verified_at?: string | null;
   governance_metadata: MajeurGovernanceMetadata;
-};
-
-type MajeurGovernanceCreateInput = {
-  chain_id: number;
-  summon: MajeurSafeSummonInput;
 };
 
 type MajeurGovernanceMetadata = {
@@ -944,33 +719,6 @@ type MajeurGovernanceMetadata = {
   auto_futarchy_cap?: string | null;
   futarchy_reward_token?: string | null;
   config_version: number;
-};
-
-type MajeurSafeConfigInput = {
-  proposal_threshold: string;
-  proposal_ttl_seconds: number;
-  timelock_delay_seconds?: number | null;
-  quorum_absolute?: string | null;
-  min_yes_votes_absolute?: string | null;
-  lock_shares?: boolean;
-  lock_loot?: boolean;
-  rollback_guardian?: string | null;
-  rollback_singleton?: string | null;
-  rollback_expiry?: number | null;
-};
-
-type MajeurSafeSummonInput = {
-  preset?: "founder" | "standard" | "fast" | "custom" | null;
-  org_name: string;
-  org_symbol: string;
-  org_uri?: string | null;
-  quorum_bps?: number | null;
-  ragequittable: boolean;
-  renderer?: string | null;
-  init_holders: Array<string>;
-  init_shares: Array<string>;
-  init_loot?: Array<string> | null;
-  config: MajeurSafeConfigInput;
 };
 
 type MarketContextMarket = {
@@ -1006,19 +754,6 @@ type MediaDescriptor = {
   duration_ms?: number | null;
 };
 
-type MultisigAttachmentProofInput = {
-  proof_kind: "eip1271";
-  challenge: string;
-  signature: string;
-};
-
-type MultisigGovernanceAttachmentInput = {
-  chain_id: number;
-  contract_address: string;
-  treasury_address?: string | null;
-  attachment_proof: MultisigAttachmentProofInput;
-};
-
 type MultisigGovernanceBackend = {
   governance_mode: "multisig";
   governance_chain_id: number;
@@ -1037,14 +772,6 @@ type MultisigGovernanceMetadata = {
   is_safe_compatible: boolean;
   version_label?: string | null;
   master_copy_address?: string | null;
-};
-
-type NamespaceAttachmentInput = {
-  namespace_verification_id: string;
-  display_label?: string;
-  normalized_label?: string;
-  resolver_label?: string | null;
-  route_family?: string | null;
 };
 
 type PostCreatorRelation = "captured" | "created" | "subject" | "authorized_repost" | "fan_work" | "found";

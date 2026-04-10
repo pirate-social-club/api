@@ -36,9 +36,10 @@ async function toRequest(req: IncomingMessage): Promise<Request> {
     }
   }
 
-  const body = req.method === "GET" || req.method === "HEAD"
+  const bodyBytes = req.method === "GET" || req.method === "HEAD"
     ? undefined
     : await readRequestBody(req) ?? undefined
+  const body = bodyBytes ? new Blob([new Uint8Array(bodyBytes)]) : undefined
 
   return new Request(`http://${req.headers.host || `127.0.0.1:${port}`}${req.url || "/"}`, {
     method: req.method,

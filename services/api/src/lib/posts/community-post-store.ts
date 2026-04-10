@@ -19,6 +19,7 @@ type PostRow = {
   title: string | null
   body: string | null
   caption: string | null
+  lyrics: string | null
   link_url: string | null
   media_refs_json: string | null
   source_language: string | null
@@ -75,6 +76,7 @@ function toPostRow(row: unknown): PostRow {
     title: stringOrNull(rowValue(row, "title")),
     body: stringOrNull(rowValue(row, "body")),
     caption: stringOrNull(rowValue(row, "caption")),
+    lyrics: stringOrNull(rowValue(row, "lyrics")),
     link_url: stringOrNull(rowValue(row, "link_url")),
     media_refs_json: stringOrNull(rowValue(row, "media_refs_json")),
     source_language: stringOrNull(rowValue(row, "source_language")),
@@ -108,6 +110,7 @@ function serializePost(row: PostRow): Post {
     title: row.title,
     body: row.body,
     caption: row.caption,
+    lyrics: row.lyrics,
     link_url: row.link_url,
     media_refs: parseMediaRefs(row.media_refs_json),
     source_language: row.source_language,
@@ -141,6 +144,7 @@ export async function findPostByIdempotencyKey(input: {
     `
       SELECT post_id, community_id, author_user_id, identity_mode, anonymous_scope, anonymous_label,
              disclosed_qualifiers_json, flair_id, post_type, status, title, body, caption, link_url,
+             lyrics,
              media_refs_json, source_language, translation_policy, asset_id, parent_post_id, song_mode,
              rights_basis, analysis_state, analysis_result_ref, content_safety_state, age_gate_policy,
              idempotency_key, created_at, updated_at
@@ -179,22 +183,22 @@ export async function insertPost(input: {
   const analysisState = stubAnalysis.analysis_state
   const contentSafetyState = stubAnalysis.content_safety_state
   const status = stubAnalysis.status
-  const sourceLanguage = input.body.body || input.body.title || input.body.caption ? "en" : null
+  const sourceLanguage = input.body.body || input.body.title || input.body.caption || input.body.lyrics ? "en" : null
 
   await input.client.execute({
     sql: `
       INSERT INTO posts (
         post_id, community_id, author_user_id, identity_mode, anonymous_scope, anonymous_label,
         disclosed_qualifiers_json, flair_id, post_type, status, song_mode, title, body, caption,
-        link_url, media_refs_json, source_language, translation_policy, rights_basis, asset_id,
+        lyrics, link_url, media_refs_json, source_language, translation_policy, rights_basis, asset_id,
         parent_post_id, analysis_state, analysis_result_ref, content_safety_state, age_gate_policy,
         created_at, updated_at, idempotency_key
       ) VALUES (
         ?1, ?2, ?3, ?4, ?5, ?6,
         ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
         ?15, ?16, ?17, ?18, ?19, ?20,
-        ?21, ?22, NULL, ?23, ?24,
-        ?25, ?25, ?26
+        ?21, ?22, ?23, NULL, ?24, ?25,
+        ?26, ?26, ?27
       )
     `,
     args: [
@@ -212,6 +216,7 @@ export async function insertPost(input: {
       input.body.title ?? null,
       input.body.body ?? null,
       input.body.caption ?? null,
+      input.body.lyrics ?? null,
       input.body.link_url ?? null,
       mediaRefsJson,
       sourceLanguage,
@@ -240,6 +245,7 @@ export async function getPostById(client: Client, postId: string): Promise<Post 
     `
       SELECT post_id, community_id, author_user_id, identity_mode, anonymous_scope, anonymous_label,
              disclosed_qualifiers_json, flair_id, post_type, status, title, body, caption, link_url,
+             lyrics,
              media_refs_json, source_language, translation_policy, asset_id, parent_post_id, song_mode,
              rights_basis, analysis_state, analysis_result_ref, content_safety_state, age_gate_policy,
              idempotency_key, created_at, updated_at
@@ -400,5 +406,21 @@ export function assertPostCreateRequest(body: CreatePostRequest, communityId: st
   }
   if (body.identity_mode === "anonymous" && !body.anonymous_scope) {
     throw badRequestError("anonymous_scope is required for anonymous posts")
+  }
+  if (body.post_type === "song" && body.identity_mode === "anonymous") {
+    throw badRequestError("song posts must use public identity")
+  }
+  if (body.post_type === "song" && !body.lyrics?.trim()) {
+    throw badRequestError("lyrics are required for song posts")
+  }
+  if (body.post_type === "song" && (!body.media_refs || body.media_refs.length === 0)) {
+    throw badRequestError("song posts require at least one audio media_ref")
+  }
+  if (
+    body.post_type === "song"
+    && body.song_mode === "remix"
+    && body.rights_basis !== "derivative"
+  ) {
+    throw badRequestError("song remix posts must use rights_basis = derivative")
   }
 }
