@@ -1,0 +1,80 @@
+name: api-ci
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/api-ci.yml"
+      - "services/api/**"
+      - "services/cli/**"
+      - "services/contracts/**"
+  push:
+    paths:
+      - ".github/workflows/api-ci.yml"
+      - "services/api/**"
+      - "services/cli/**"
+      - "services/contracts/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.21
+
+      - name: Install contracts dependencies
+        working-directory: services/contracts
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck generated contracts package
+        working-directory: services/contracts
+        run: bun run check
+
+      - name: Install API dependencies
+        working-directory: services/api
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck API service
+        working-directory: services/api
+        run: bun run check
+
+      - name: Run API tests
+        working-directory: services/api
+        run: bun run test
+
+  cli:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.21
+
+      - name: Install contracts dependencies
+        working-directory: services/contracts
+        run: bun install --frozen-lockfile
+
+      - name: Install CLI dependencies
+        working-directory: services/cli
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck CLI
+        working-directory: services/cli
+        run: bun run check
+
+      - name: Run CLI tests
+        working-directory: services/cli
+        run: bun run test

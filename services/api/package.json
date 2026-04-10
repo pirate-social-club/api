@@ -1,0 +1,29 @@
+{
+  "name": "@pirate/api-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --port 8787",
+    "dev:local": "bun run scripts/serve-local.ts",
+    "bruno:prepare:local": "bun run scripts/prepare-bruno-local.ts",
+    "bruno:test:local": "cd ../../../specs/api/bruno && bru run . -r --env local --tests-only",
+    "deploy": "wrangler deploy",
+    "check": "tsc --noEmit",
+    "test": "bun test",
+    "mint:dev-jwt": "bun run scripts/mint-dev-jwt.ts"
+  },
+  "dependencies": {
+    "@pirate/api-contracts": "file:../contracts",
+    "@libsql/client": "^0.17.2",
+    "@privy-io/node": "^0.11.0",
+    "hono": "^4.8.5",
+    "jose": "^6.2.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260405.0",
+    "@types/node": "^24.5.2",
+    "typescript": "^5.8.3",
+    "wrangler": "^4.13.2"
+  }
+}

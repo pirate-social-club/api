@@ -1,0 +1,421 @@
+import { createHash } from "node:crypto"
+import { mkdir, readdir, readFile } from "node:fs/promises"
+import { dirname, join, resolve } from "node:path"
+import { fileURLToPath, pathToFileURL } from "node:url"
+import { createClient } from "@libsql/client"
+import type { Client } from "@libsql/client"
+import { internalError } from "../errors"
+
+export type LocalCommunityBootstrapInput = {
+  rootDir: string
+  communityId: string
+  createdByUserId: string
+  displayName: string
+  description: string | null
+  namespaceVerificationId: string
+  namespaceLabel: string
+  membershipMode: "open" | "request" | "gated"
+  defaultAgeGatePolicy: "none" | "18_plus"
+  allowAnonymousIdentity: boolean
+  anonymousIdentityScope: "community_stable" | "thread_stable" | "post_ephemeral" | null
+  governanceMode: "centralized" | "multisig" | "majeur"
+  handlePolicyTemplate: "standard" | "premium" | "membership_gated" | "custom"
+  pricingModel: "free" | "flat_by_length" | "custom_curve" | "gated_then_flat" | null
+  gateRules: Array<{
+    scope: "membership" | "viewer" | "posting"
+    gateFamily: "identity_proof" | "token_holding"
+    gateType: string
+    proofRequirementsJson: string | null
+    chainNamespace: string | null
+    gateConfigJson: string | null
+  }>
+  now: string
+}
+
+export type LocalCommunitySnapshot = {
+  community_id: string
+  display_name: string
+  description: string | null
+  status: "draft" | "active" | "frozen" | "archived" | "deleted"
+  membership_mode: "open" | "request" | "gated"
+  default_age_gate_policy: "none" | "18_plus"
+  allow_anonymous_identity: boolean
+  anonymous_identity_scope: "community_stable" | "thread_stable" | "post_ephemeral" | null
+  donation_policy_mode: "none" | "optional_creator_sidecar" | "fundraiser_default"
+  donation_partner_status: "unconfigured" | "active" | "inactive"
+  governance_mode: "centralized" | "multisig" | "majeur"
+  created_by_user_id: string
+  created_at: string
+  updated_at: string
+}
+
+function resolveCommunityTemplateMigrationsDir(): string {
+  return fileURLToPath(new URL("../../../../../../db/community-template/migrations/", import.meta.url))
+}
+
+function splitSqlStatements(sql: string): string[] {
+  const statements: string[] = []
+  let current = ""
+  let inSingleQuote = false
+
+  for (let index = 0; index < sql.length; index += 1) {
+    const char = sql[index]
+    const next = sql[index + 1]
+    current += char
+
+    if (char === "'" && sql[index - 1] !== "\\") {
+      if (inSingleQuote && next === "'") {
+        current += next
+        index += 1
+        continue
+      }
+      inSingleQuote = !inSingleQuote
+      continue
+    }
+
+    if (char === ";" && !inSingleQuote) {
+      const statement = current.trim()
+      if (statement) {
+        statements.push(statement)
+      }
+      current = ""
+    }
+  }
+
+  const trailing = current.trim()
+  if (trailing) {
+    statements.push(trailing)
+  }
+
+  return statements
+}
+
+async function ensureSchemaMigrationsTable(client: Client): Promise<void> {
+  await client.execute(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      migration_name TEXT PRIMARY KEY,
+      migration_label TEXT NOT NULL,
+      checksum TEXT NOT NULL,
+      applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `)
+}
+
+async function applyMigrationFile(client: Client, migrationFilePath: string): Promise<void> {
+  const migrationName = migrationFilePath.split("/").pop()
+  if (!migrationName) {
+    throw internalError("Invalid migration path")
+  }
+
+  const sql = await readFile(migrationFilePath, "utf8")
+  const checksum = createHash("sha256").update(sql).digest("hex")
+  const existing = await client.execute({
+    sql: `
+      SELECT checksum
+      FROM schema_migrations
+      WHERE migration_name = ?1
+      LIMIT 1
+    `,
+    args: [migrationName],
+  })
+  const existingChecksum = existing.rows[0]?.checksum
+  if (typeof existingChecksum === "string") {
+    if (existingChecksum !== checksum) {
+      throw internalError(`Migration checksum mismatch for ${migrationName}`)
+    }
+    return
+  }
+
+  const statements = splitSqlStatements(sql)
+  const tx = await client.transaction("write")
+  try {
+    for (const statement of statements) {
+      await tx.execute(statement)
+    }
+    await tx.execute({
+      sql: `
+        INSERT INTO schema_migrations (migration_name, migration_label, checksum)
+        VALUES (?1, 'community-template', ?2)
+      `,
+      args: [migrationName, checksum],
+    })
+    await tx.commit()
+  } catch (error) {
+    try {
+      await tx.rollback()
+    } catch {}
+    throw error
+  } finally {
+    tx.close()
+  }
+}
+
+async function applyCommunityTemplateMigrations(client: Client): Promise<void> {
+  await ensureSchemaMigrationsTable(client)
+  const migrationsDir = resolveCommunityTemplateMigrationsDir()
+  const migrationEntries = (await readdir(migrationsDir))
+    .filter((entry) => entry.endsWith(".sql"))
+    .sort()
+
+  for (const entry of migrationEntries) {
+    await applyMigrationFile(client, join(migrationsDir, entry))
+  }
+}
+
+function boolToSqlite(value: boolean): 0 | 1 {
+  return value ? 1 : 0
+}
+
+function sanitizeCommunityId(communityId: string): string {
+  const trimmed = communityId.trim()
+  if (!trimmed || !/^[A-Za-z0-9_-]+$/.test(trimmed)) {
+    throw internalError("Invalid community id for local database path")
+  }
+  return trimmed
+}
+
+export function buildLocalCommunityDbPath(rootDir: string, communityId: string): string {
+  const baseDir = resolve(rootDir || "/tmp/pirate-community-dbs")
+  const safeCommunityId = sanitizeCommunityId(communityId)
+  return join(baseDir, `community-${safeCommunityId}.db`)
+}
+
+export function buildLocalCommunityDbUrl(rootDir: string, communityId: string): string {
+  return pathToFileURL(buildLocalCommunityDbPath(rootDir, communityId)).toString()
+}
+
+export async function bootstrapLocalCommunityDb(input: LocalCommunityBootstrapInput): Promise<LocalCommunitySnapshot> {
+  const dbPath = buildLocalCommunityDbPath(input.rootDir, input.communityId)
+  await mkdir(dirname(dbPath), { recursive: true })
+  const client = createClient({
+    url: pathToFileURL(dbPath).toString(),
+  })
+
+  try {
+    await applyCommunityTemplateMigrations(client)
+
+    const namespaceId = `ns_${input.communityId}`
+    const namespaceHandlePolicyId = `nhp_${input.communityId}`
+    const membershipId = `mbr_${input.communityId}_${input.createdByUserId}`
+    const roleAssignmentId = `role_${input.communityId}_${input.createdByUserId}_owner`
+    const now = input.now
+
+    const tx = await client.transaction("write")
+    try {
+      await tx.execute({
+        sql: `
+          INSERT INTO communities (
+            community_id, display_name, description, status, artist_identity_id, artist_governance_state,
+            membership_mode, default_age_gate_policy, allow_anonymous_identity, anonymous_identity_scope,
+            donation_partner_id, donation_policy_mode, donation_partner_status, governance_mode,
+            settings_json, created_by_user_id, created_at, updated_at
+          ) VALUES (
+            ?1, ?2, ?3, 'active', NULL, 'fan_run', ?4, ?5, ?6, ?7,
+            NULL, 'none', 'unconfigured', ?8, NULL, ?9, ?10, ?10
+          )
+          ON CONFLICT(community_id) DO UPDATE SET
+            display_name = excluded.display_name,
+            description = excluded.description,
+            status = excluded.status,
+            membership_mode = excluded.membership_mode,
+            default_age_gate_policy = excluded.default_age_gate_policy,
+            allow_anonymous_identity = excluded.allow_anonymous_identity,
+            anonymous_identity_scope = excluded.anonymous_identity_scope,
+            donation_policy_mode = excluded.donation_policy_mode,
+            donation_partner_status = excluded.donation_partner_status,
+            governance_mode = excluded.governance_mode,
+            updated_at = excluded.updated_at
+        `,
+        args: [
+          input.communityId,
+          input.displayName,
+          input.description,
+          input.membershipMode,
+          input.defaultAgeGatePolicy,
+          boolToSqlite(input.allowAnonymousIdentity),
+          input.anonymousIdentityScope,
+          input.governanceMode,
+          input.createdByUserId,
+          now,
+        ],
+      })
+
+      await tx.execute({
+        sql: `
+          INSERT INTO community_memberships (
+            membership_id, community_id, user_id, status, joined_at, left_at, banned_at, created_at, updated_at
+          ) VALUES (
+            ?1, ?2, ?3, 'member', ?4, NULL, NULL, ?4, ?4
+          )
+          ON CONFLICT(membership_id) DO UPDATE SET
+            status = excluded.status,
+            joined_at = excluded.joined_at,
+            left_at = excluded.left_at,
+            banned_at = excluded.banned_at,
+            updated_at = excluded.updated_at
+        `,
+        args: [membershipId, input.communityId, input.createdByUserId, now],
+      })
+
+      await tx.execute({
+        sql: `
+          INSERT INTO community_roles (
+            role_assignment_id, community_id, user_id, role, status, granted_by_user_id, granted_at, revoked_at, created_at, updated_at
+          ) VALUES (
+            ?1, ?2, ?3, 'owner', 'active', ?3, ?4, NULL, ?4, ?4
+          )
+          ON CONFLICT(role_assignment_id) DO UPDATE SET
+            status = excluded.status,
+            granted_at = excluded.granted_at,
+            revoked_at = excluded.revoked_at,
+            updated_at = excluded.updated_at
+        `,
+        args: [roleAssignmentId, input.communityId, input.createdByUserId, now],
+      })
+
+      await tx.execute({
+        sql: `
+          INSERT INTO namespace_bindings (
+            namespace_id, community_id, namespace_verification_id, display_label, normalized_label,
+            resolver_label, route_family, status, created_at, updated_at
+          ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, NULL, NULL, 'active', ?6, ?6
+          )
+          ON CONFLICT(namespace_id) DO UPDATE SET
+            namespace_verification_id = excluded.namespace_verification_id,
+            display_label = excluded.display_label,
+            normalized_label = excluded.normalized_label,
+            status = excluded.status,
+            updated_at = excluded.updated_at
+        `,
+        args: [
+          namespaceId,
+          input.communityId,
+          input.namespaceVerificationId,
+          input.namespaceLabel,
+          input.namespaceLabel.toLowerCase(),
+          now,
+        ],
+      })
+
+      await tx.execute({
+        sql: `
+          INSERT INTO namespace_handle_policies (
+            namespace_handle_policy_id, community_id, namespace_id, policy_template, pricing_model,
+            membership_required_for_claim, settings_json, created_at, updated_at
+          ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, 1, NULL, ?6, ?6
+          )
+          ON CONFLICT(namespace_handle_policy_id) DO UPDATE SET
+            policy_template = excluded.policy_template,
+            pricing_model = excluded.pricing_model,
+            membership_required_for_claim = excluded.membership_required_for_claim,
+            updated_at = excluded.updated_at
+        `,
+        args: [
+          namespaceHandlePolicyId,
+          input.communityId,
+          namespaceId,
+          input.handlePolicyTemplate,
+          input.pricingModel,
+          now,
+        ],
+      })
+
+      for (const [index, rule] of input.gateRules.entries()) {
+        await tx.execute({
+          sql: `
+            INSERT INTO community_gate_rules (
+              gate_rule_id, community_id, scope, gate_family, gate_type, proof_requirements_json,
+              chain_namespace, gate_config_json, status, created_at, updated_at
+            ) VALUES (
+              ?1, ?2, ?3, ?4, ?5, ?6,
+              ?7, ?8, 'active', ?9, ?9
+            )
+          `,
+          args: [
+            `grl_${input.communityId}_${index}`,
+            input.communityId,
+            rule.scope,
+            rule.gateFamily,
+            rule.gateType,
+            rule.proofRequirementsJson,
+            rule.chainNamespace,
+            rule.gateConfigJson,
+            now,
+          ],
+        })
+      }
+
+      await tx.commit()
+    } catch (error) {
+      try {
+        await tx.rollback()
+      } catch {}
+      throw error
+    } finally {
+      tx.close()
+    }
+
+    return {
+      community_id: input.communityId,
+      display_name: input.displayName,
+      description: input.description,
+      status: "active",
+      membership_mode: input.membershipMode,
+      default_age_gate_policy: input.defaultAgeGatePolicy,
+      allow_anonymous_identity: input.allowAnonymousIdentity,
+      anonymous_identity_scope: input.anonymousIdentityScope,
+      donation_policy_mode: "none",
+      donation_partner_status: "unconfigured",
+      governance_mode: input.governanceMode,
+      created_by_user_id: input.createdByUserId,
+      created_at: now,
+      updated_at: now,
+    }
+  } finally {
+    client.close()
+  }
+}
+
+export async function readLocalCommunity(databaseUrl: string, communityId: string): Promise<LocalCommunitySnapshot | null> {
+  const client = createClient({ url: databaseUrl })
+  try {
+    const result = await client.execute({
+      sql: `
+        SELECT community_id, display_name, description, status, membership_mode, default_age_gate_policy,
+               allow_anonymous_identity, anonymous_identity_scope, donation_policy_mode, donation_partner_status,
+               governance_mode, created_by_user_id, created_at, updated_at
+        FROM communities
+        WHERE community_id = ?1
+        LIMIT 1
+      `,
+      args: [communityId],
+    })
+    const row = result.rows[0]
+    if (!row) {
+      return null
+    }
+
+    return {
+      community_id: String(row.community_id),
+      display_name: String(row.display_name),
+      description: row.description == null ? null : String(row.description),
+      status: String(row.status) as LocalCommunitySnapshot["status"],
+      membership_mode: String(row.membership_mode) as LocalCommunitySnapshot["membership_mode"],
+      default_age_gate_policy: String(row.default_age_gate_policy) as LocalCommunitySnapshot["default_age_gate_policy"],
+      allow_anonymous_identity: Boolean(Number(row.allow_anonymous_identity ?? 0)),
+      anonymous_identity_scope: row.anonymous_identity_scope == null
+        ? null
+        : (String(row.anonymous_identity_scope) as LocalCommunitySnapshot["anonymous_identity_scope"]),
+      donation_policy_mode: String(row.donation_policy_mode) as LocalCommunitySnapshot["donation_policy_mode"],
+      donation_partner_status: String(row.donation_partner_status) as LocalCommunitySnapshot["donation_partner_status"],
+      governance_mode: String(row.governance_mode) as LocalCommunitySnapshot["governance_mode"],
+      created_by_user_id: String(row.created_by_user_id),
+      created_at: String(row.created_at),
+      updated_at: String(row.updated_at),
+    }
+  } finally {
+    client.close()
+  }
+}
