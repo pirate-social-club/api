@@ -1,7 +1,7 @@
 import type { Client, InValue, Transaction } from "@libsql/client"
 import { makeId } from "../helpers"
 import { requiredString, rowValue, stringOrNull } from "../sql-row"
-import type { User } from "../../types"
+import type { Post, User, WalletAttachmentSummary } from "../../types"
 
 type SqlExecutor = Pick<Client, "execute"> | Pick<Transaction, "execute">
 
@@ -34,8 +34,9 @@ type CommunityJoinModeRow = {
   membership_mode: "open" | "request" | "gated"
 }
 
-type CommunityGateRuleRow = {
+export type CommunityGateRuleRow = {
   gate_rule_id: string
+  community_id: string
   scope: "membership" | "viewer" | "posting"
   gate_family: "identity_proof" | "token_holding"
   gate_type: string
@@ -43,6 +44,8 @@ type CommunityGateRuleRow = {
   chain_namespace: string | null
   gate_config_json: string | null
   status: "active" | "disabled"
+  created_at: string
+  updated_at: string
 }
 
 type ProofRequirement = {
@@ -50,6 +53,18 @@ type ProofRequirement = {
   accepted_providers?: string[] | null
   accepted_mechanisms?: string[] | null
   config?: Record<string, unknown> | null
+}
+
+export type TokenGateEvaluator = (input: {
+  rule: CommunityGateRuleRow
+  gateConfig: Record<string, unknown> | null
+  wallets: WalletAttachmentSummary[]
+}) => Promise<boolean>
+
+export type GateEvaluationContext = {
+  user: User
+  wallets: WalletAttachmentSummary[]
+  tokenGateEvaluator?: TokenGateEvaluator
 }
 
 async function firstRow(executor: SqlExecutor, sql: string, args: InValue[]): Promise<unknown | null> {
@@ -163,6 +178,7 @@ export function canModerateMembershipRequests(state: CommunityRoleAccessRow): bo
 function toCommunityGateRuleRow(row: unknown): CommunityGateRuleRow {
   return {
     gate_rule_id: requiredString(row, "gate_rule_id"),
+    community_id: requiredString(row, "community_id"),
     scope: requiredString(row, "scope") as CommunityGateRuleRow["scope"],
     gate_family: requiredString(row, "gate_family") as CommunityGateRuleRow["gate_family"],
     gate_type: requiredString(row, "gate_type"),
@@ -170,23 +186,67 @@ function toCommunityGateRuleRow(row: unknown): CommunityGateRuleRow {
     chain_namespace: stringOrNull(rowValue(row, "chain_namespace")),
     gate_config_json: stringOrNull(rowValue(row, "gate_config_json")),
     status: requiredString(row, "status") as CommunityGateRuleRow["status"],
+    created_at: requiredString(row, "created_at"),
+    updated_at: requiredString(row, "updated_at"),
   }
 }
 
-export async function listActiveMembershipGateRules(client: Client, communityId: string): Promise<CommunityGateRuleRow[]> {
+export async function listCommunityGateRules(client: Client, communityId: string): Promise<CommunityGateRuleRow[]> {
   const result = await client.execute({
     sql: `
-      SELECT gate_rule_id, scope, gate_family, gate_type, proof_requirements_json, chain_namespace, gate_config_json, status
+      SELECT gate_rule_id, community_id, scope, gate_family, gate_type, proof_requirements_json, chain_namespace, gate_config_json, status, created_at, updated_at
       FROM community_gate_rules
       WHERE community_id = ?1
-        AND scope = 'membership'
-        AND status = 'active'
       ORDER BY created_at ASC
     `,
     args: [communityId],
   })
 
   return result.rows.map((row) => toCommunityGateRuleRow(row))
+}
+
+export async function listActiveCommunityGateRules(
+  client: Client,
+  communityId: string,
+  scope: CommunityGateRuleRow["scope"],
+): Promise<CommunityGateRuleRow[]> {
+  const result = await client.execute({
+    sql: `
+      SELECT gate_rule_id, community_id, scope, gate_family, gate_type, proof_requirements_json, chain_namespace, gate_config_json, status, created_at, updated_at
+      FROM community_gate_rules
+      WHERE community_id = ?1
+        AND scope = ?2
+        AND status = 'active'
+      ORDER BY created_at ASC
+    `,
+    args: [communityId, scope],
+  })
+
+  return result.rows.map((row) => toCommunityGateRuleRow(row))
+}
+
+export async function listActiveMembershipGateRules(client: Client, communityId: string): Promise<CommunityGateRuleRow[]> {
+  return listActiveCommunityGateRules(client, communityId, "membership")
+}
+
+export async function getCommunityGateRuleById(
+  client: Client,
+  communityId: string,
+  gateRuleId: string,
+): Promise<CommunityGateRuleRow | null> {
+  const row = await firstRow(
+    client,
+    `
+      SELECT gate_rule_id, community_id, scope, gate_family, gate_type, proof_requirements_json, chain_namespace, gate_config_json, status, created_at, updated_at
+      FROM community_gate_rules
+      WHERE community_id = ?1
+        AND gate_rule_id = ?2
+      LIMIT 1
+    `,
+    [communityId, gateRuleId],
+  )
+
+  return row ? toCommunityGateRuleRow(row) : null
 }
 
 function toMembershipRequestRow(row: unknown): MembershipRequestRow {
@@ -219,6 +279,26 @@ export async function listPendingMembershipRequests(client: Client, communityId:
   })
 
   return result.rows.map((row) => toMembershipRequestRow(row))
+}
+
+export async function listActiveCommunityMemberUserIds(
+  executor: SqlExecutor,
+  communityId: string,
+): Promise<string[]> {
+  const result = await executor.execute({
+    sql: `
+      SELECT user_id
+      FROM community_memberships
+      WHERE community_id = ?1
+        AND status = 'member'
+      ORDER BY joined_at ASC, created_at ASC
+    `,
+    args: [communityId],
+  })
+
+  return result.rows
+    .map((row) => stringOrNull(rowValue(row, "user_id")))
+    .filter((userId): userId is string => Boolean(userId))
 }
 
 export async function getMembershipRequestById(
@@ -271,6 +351,31 @@ function includesAcceptedProvider(acceptedProviders: string[] | null | undefined
     return true
   }
   return provider != null && acceptedProviders.includes(provider)
+}
+
+function gateAppliesToPostType(
+  gateConfig: Record<string, unknown> | null,
+  postType: Post["post_type"] | null | undefined,
+): boolean {
+  if (!postType) {
+    return true
+  }
+
+  const configuredPostTypes = Array.isArray(gateConfig?.post_types)
+    ? gateConfig.post_types.filter((value): value is Post["post_type"] => (
+      value === "text"
+      || value === "image"
+      || value === "video"
+      || value === "link"
+      || value === "song"
+    ))
+    : []
+
+  if (configuredPostTypes.length === 0) {
+    return true
+  }
+
+  return configuredPostTypes.includes(postType)
 }
 
 function satisfiesProofRequirement(user: User, requirement: ProofRequirement, gateConfig: Record<string, unknown> | null): boolean {
@@ -327,18 +432,107 @@ function satisfiesProofRequirement(user: User, requirement: ProofRequirement, ga
   }
 }
 
-export function satisfiesMembershipGateRules(rules: CommunityGateRuleRow[], user: User): boolean {
+export async function satisfiesCommunityGateRules(
+  rules: CommunityGateRuleRow[],
+  context: GateEvaluationContext,
+  options?: {
+    postType?: Post["post_type"] | null
+  },
+): Promise<boolean> {
   if (rules.length === 0) {
     return false
   }
 
-  return rules.every((rule) => {
+  for (const rule of rules) {
+    const gateConfig = parseGateConfig(rule.gate_config_json)
+    if (!gateAppliesToPostType(gateConfig, options?.postType)) {
+      continue
+    }
+
+    if (rule.gate_family === "token_holding") {
+      if (!context.tokenGateEvaluator) {
+        return false
+      }
+
+      const passesTokenGate = await context.tokenGateEvaluator({
+        rule,
+        gateConfig,
+        wallets: context.wallets,
+      })
+      if (!passesTokenGate) {
+        return false
+      }
+      continue
+    }
+
     if (rule.gate_family !== "identity_proof") {
       return false
     }
-    const gateConfig = parseGateConfig(rule.gate_config_json)
+
     const requirements = parseProofRequirements(rule.proof_requirements_json, rule.gate_type)
-    return requirements.every((requirement) => satisfiesProofRequirement(user, requirement, gateConfig))
+    const passesIdentityGate = requirements.every((requirement) => satisfiesProofRequirement(context.user, requirement, gateConfig))
+    if (!passesIdentityGate) {
+      return false
+    }
+  }
+
+  return true
+}
+
+export async function satisfiesMembershipGateRules(
+  rules: CommunityGateRuleRow[],
+  context: GateEvaluationContext,
+): Promise<boolean> {
+  return await satisfiesCommunityGateRules(rules, context)
+}
+
+export async function upsertCommunityGateRule(input: {
+  client: SqlExecutor
+  gateRuleId: string
+  communityId: string
+  scope: CommunityGateRuleRow["scope"]
+  gateFamily: CommunityGateRuleRow["gate_family"]
+  gateType: CommunityGateRuleRow["gate_type"]
+  proofRequirementsJson: string | null
+  chainNamespace: string | null
+  gateConfigJson: string | null
+  status: CommunityGateRuleRow["status"]
+  createdAt: string
+  updatedAt: string
+}): Promise<void> {
+  await input.client.execute({
+    sql: `
+      INSERT INTO community_gate_rules (
+        gate_rule_id, community_id, scope, gate_family, gate_type, proof_requirements_json,
+        chain_namespace, gate_config_json, status, created_at, updated_at
+      ) VALUES (
+        ?1, ?2, ?3, ?4, ?5, ?6,
+        ?7, ?8, ?9, ?10, ?11
+      )
+      ON CONFLICT(gate_rule_id) DO UPDATE SET
+        community_id = excluded.community_id,
+        scope = excluded.scope,
+        gate_family = excluded.gate_family,
+        gate_type = excluded.gate_type,
+        proof_requirements_json = excluded.proof_requirements_json,
+        chain_namespace = excluded.chain_namespace,
+        gate_config_json = excluded.gate_config_json,
+        status = excluded.status,
+        updated_at = excluded.updated_at
+    `,
+    args: [
+      input.gateRuleId,
+      input.communityId,
+      input.scope,
+      input.gateFamily,
+      input.gateType,
+      input.proofRequirementsJson,
+      input.chainNamespace,
+      input.gateConfigJson,
+      input.status,
+      input.createdAt,
+      input.updatedAt,
+    ],
   })
 }
 
