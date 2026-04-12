@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import app from "../src/index"
+import { setRedditVerificationCheckerForTests } from "../src/lib/onboarding/reddit-bootstrap"
 import { createRouteTestContext, json, mintUpstreamJwt, resetRuntimeCaches } from "./helpers"
 import type { Env } from "../src/types"
 
@@ -37,9 +38,11 @@ async function exchangeJwt(env: Env, sub: string): Promise<{ accessToken: string
 
 beforeEach(() => {
   resetRuntimeCaches()
+  setRedditVerificationCheckerForTests(null)
 })
 
 afterEach(async () => {
+  setRedditVerificationCheckerForTests(null)
   if (cleanup) {
     await cleanup()
     cleanup = null
@@ -232,16 +235,37 @@ describe("profile routes", () => {
 
     const session = await exchangeJwt(ctx.env, "profile-username-step-user")
 
+    const createdVerification = await requestJson("http://pirate.test/onboarding/reddit-verification", "POST", {
+      reddit_username: "u/mynewhandle",
+    }, ctx.env, session.accessToken)
+    expect(createdVerification.status).toBe(200)
+    const createdVerificationBody = await json(createdVerification) as {
+      verification_hint: string | null
+    }
+    const rawCode = createdVerificationBody.verification_hint?.match(/`([^`]+)`/)?.[1] ?? null
+    expect(typeof rawCode).toBe("string")
+
+    setRedditVerificationCheckerForTests(async ({ verificationCode }) => verificationCode === rawCode
+      ? { status: "verified" as const }
+      : { status: "pending" as const, failureCode: "code_not_found" as const })
+
+    const verifiedVerification = await requestJson("http://pirate.test/onboarding/reddit-verification", "POST", {
+      reddit_username: "mynewhandle",
+    }, ctx.env, session.accessToken)
+    expect(verifiedVerification.status).toBe(200)
+    const verifiedVerificationBody = await json(verifiedVerification) as {
+      status: string
+    }
+    expect(verifiedVerificationBody.status).toBe("verified")
+
     const onboardingBefore = await app.request("http://pirate.test/onboarding/status", {
       headers: { authorization: `Bearer ${session.accessToken}` },
     }, ctx.env)
     const onboardingBeforeBody = await json(onboardingBefore) as {
       generated_handle_assigned: boolean
-      username_step_completed: boolean
       cleanup_rename_available: boolean
     }
     expect(onboardingBeforeBody.generated_handle_assigned).toBe(true)
-    expect(onboardingBeforeBody.username_step_completed).toBe(false)
     expect(onboardingBeforeBody.cleanup_rename_available).toBe(true)
 
     const renamed = await requestJson("http://pirate.test/profiles/me/global-handle/rename", "POST", {
@@ -254,7 +278,7 @@ describe("profile routes", () => {
       free_rename_consumed: boolean
     }
     expect(renamedBody.label).toBe("mynewhandle.pirate")
-    expect(renamedBody.issuance_source).toBe("free_cleanup_rename")
+    expect(renamedBody.issuance_source).toBe("reddit_verified_claim")
     expect(renamedBody.free_rename_consumed).toBe(true)
 
     const onboardingAfter = await app.request("http://pirate.test/onboarding/status", {
@@ -262,11 +286,9 @@ describe("profile routes", () => {
     }, ctx.env)
     const onboardingAfterBody = await json(onboardingAfter) as {
       generated_handle_assigned: boolean
-      username_step_completed: boolean
       cleanup_rename_available: boolean
     }
     expect(onboardingAfterBody.generated_handle_assigned).toBe(false)
-    expect(onboardingAfterBody.username_step_completed).toBe(true)
     expect(onboardingAfterBody.cleanup_rename_available).toBe(false)
   })
 })

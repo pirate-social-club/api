@@ -155,6 +155,32 @@ export async function getLatestRedditVerificationSessionRowForUsername(
   return row ? toRedditVerificationSessionRow(row) : null
 }
 
+export async function getLatestVerifiedRedditVerificationSessionRow(
+  executor: DbExecutor,
+  userId: string,
+): Promise<RedditVerificationSessionRow | null> {
+  const row = await firstRow(executor, {
+    sql: `
+      SELECT reddit_verification_session_id, user_id, reddit_username, verification_code, code_placement_surface,
+             status, verification_hint, failure_code, checked_count, last_checked_at, verified_at,
+             expires_at, created_at, updated_at
+      FROM reddit_verification_sessions
+      WHERE user_id = ?1
+        AND status = 'verified'
+      ORDER BY verified_at DESC, created_at DESC
+      LIMIT 1
+    `,
+    args: [userId],
+  }).catch((error) => {
+    if (isMissingTableError(error, "reddit_verification_sessions")) {
+      return null
+    }
+    throw error
+  })
+
+  return row ? toRedditVerificationSessionRow(row) : null
+}
+
 export async function getLatestExternalReputationSnapshotRow(
   executor: DbExecutor,
   userId: string,

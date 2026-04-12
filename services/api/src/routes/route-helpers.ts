@@ -1,5 +1,5 @@
 import type { Context } from "hono"
-import { errorResponse } from "../lib/errors"
+import { badRequestError, errorResponse } from "../lib/errors"
 import type { Env } from "../types"
 
 export type AppRouteContext = Context<{ Bindings: Env }>
@@ -17,4 +17,11 @@ export function handleRoute(handler: AppRouteHandler): AppRouteHandler {
       })
     }
   }
+}
+
+export function requireRouteParam(value: string | undefined, label: string): string {
+  if (!value) {
+    throw badRequestError(`Missing ${label}`)
+  }
+  return value
 }
