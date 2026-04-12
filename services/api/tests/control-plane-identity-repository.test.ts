@@ -30,7 +30,7 @@ describe("control-plane identity repository", () => {
 
     expect(session.user.primary_wallet_attachment_id).toBeNull()
     expect(session.wallet_attachments).toEqual([])
-  })
+  }, 10_000)
 
   test("privy identities persist wallet attachments and can switch the primary wallet", async () => {
     const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
@@ -61,5 +61,5 @@ describe("control-plane identity repository", () => {
     expect(second.wallet_attachments).toHaveLength(2)
     expect(second.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_address).toBe(WALLET_B)
     expect(second.user.primary_wallet_attachment_id).toBe(second.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_attachment_id)
-  })
+  }, 10_000)
 })

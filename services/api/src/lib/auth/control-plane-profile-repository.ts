@@ -1,15 +1,24 @@
-import type { Client } from "@libsql/client"
 import { conflictError } from "../errors"
 import { nowIso } from "../helpers"
+import type { ControlPlaneDbClient } from "../control-plane-db"
 import type { GlobalHandle, HandleUpgradeQuote, Profile } from "../../types"
 import { ControlPlaneIdentityRepository } from "./control-plane-identity-repository"
-import { getGlobalHandleRow, getProfileRow, getUserRow, hasUniqueConstraintField } from "./control-plane-auth-queries"
+import {
+  getGlobalHandleRow,
+  getLatestVerifiedRedditVerificationSessionRow,
+  getProfileRow,
+  getUserRow,
+  hasUniqueConstraintField,
+} from "./control-plane-auth-queries"
 import { serializeGlobalHandle } from "./control-plane-auth-serializers"
 import {
   assertFreeCleanupRenameEligible,
+  assertRedditVerifiedClaimEligible,
   buildHandleUpgradeQuote,
   isCleanupRenameAvailable,
+  isReservedGlobalHandleLabel,
   normalizeDesiredGlobalHandleLabel,
+  validateDesiredGlobalHandleLabel,
 } from "./global-handle-policy"
 import { makeId } from "../helpers"
 
@@ -23,7 +32,7 @@ export type UpdateProfileInput = {
 export class ControlPlaneProfileRepository {
   private readonly identityRepository: ControlPlaneIdentityRepository
 
-  constructor(private readonly client: Client) {
+  constructor(private readonly client: ControlPlaneDbClient) {
     this.identityRepository = new ControlPlaneIdentityRepository(client)
   }
 
@@ -61,7 +70,7 @@ export class ControlPlaneProfileRepository {
     return await this.identityRepository.getProfileByUserId(userId)
   }
 
-  async renameGlobalHandle(userId: string, desiredLabel: string): Promise<GlobalHandle | null> {
+  async renameGlobalHandle(userId: string, desiredLabel: string, issuanceSource?: string): Promise<GlobalHandle | null> {
     const userRow = await getUserRow(this.client, userId)
     const profileRow = await getProfileRow(this.client, userId)
     if (!userRow || !profileRow) {
@@ -84,6 +93,16 @@ export class ControlPlaneProfileRepository {
       activeGlobalHandle: serializeGlobalHandle(activeGlobalHandleRow),
       userCreatedAt: userRow.created_at,
     })
+
+    if (issuanceSource === "reddit_verified_claim") {
+      const verifiedRedditUsername = await getLatestVerifiedRedditVerificationSessionRow(this.client, userId)
+      assertRedditVerifiedClaimEligible({
+        labelNormalized: desired.labelNormalized,
+        verifiedRedditUsername: verifiedRedditUsername?.reddit_username ?? null,
+      })
+    }
+
+    const resolvedIssuanceSource = issuanceSource ?? "free_cleanup_rename"
 
     const tx = await this.client.transaction("write")
     try {
@@ -120,10 +139,10 @@ export class ControlPlaneProfileRepository {
             created_at,
             updated_at
           ) VALUES (
-            ?1, ?2, ?3, ?4, 'active', 'standard', 'free_cleanup_rename', NULL, NULL, 1, ?5, NULL, ?5, ?5
+            ?1, ?2, ?3, ?4, 'active', 'standard', ?5, NULL, NULL, 1, ?6, NULL, ?6, ?6
           )
         `,
-        args: [nextGlobalHandleId, userId, desired.labelNormalized, desired.labelDisplay, updatedAt],
+        args: [nextGlobalHandleId, userId, desired.labelNormalized, desired.labelDisplay, resolvedIssuanceSource, updatedAt],
       })
 
       await tx.execute({
@@ -199,5 +218,48 @@ export class ControlPlaneProfileRepository {
       }),
       labelAvailable: activeLabelOwnerUserId == null || activeLabelOwnerUserId === userId,
     })
+  }
+
+  async checkGlobalHandleAvailability(userId: string, label: string): Promise<{
+    label: string
+    status: "available" | "taken" | "reserved" | "invalid"
+    suggestion?: { label: string; source: "variation" | "generated" }
+  }> {
+    const result = validateDesiredGlobalHandleLabel(label)
+    if (!result.valid) {
+      return { label: label.trim().toLowerCase(), status: "invalid" }
+    }
+
+    if (isReservedGlobalHandleLabel(result.labelNormalized)) {
+      return { label: result.labelNormalized, status: "reserved" }
+    }
+
+    const profileRow = await getProfileRow(this.client, userId)
+    if (!profileRow) {
+      return { label: result.labelNormalized, status: "available" }
+    }
+
+    const activeGlobalHandleRow = await getGlobalHandleRow(this.client, profileRow.global_handle_id)
+    if (activeGlobalHandleRow && activeGlobalHandleRow.label_normalized === result.labelNormalized) {
+      return { label: result.labelNormalized, status: "available" }
+    }
+
+    const activeRow = await this.client.execute({
+      sql: `
+        SELECT user_id
+        FROM global_handles
+        WHERE label_normalized = ?1
+          AND status = 'active'
+        LIMIT 1
+      `,
+      args: [result.labelNormalized],
+    })
+    const activeLabelOwnerUserId = activeRow.rows[0]?.user_id == null ? null : String(activeRow.rows[0]?.user_id)
+
+    if (activeLabelOwnerUserId != null && activeLabelOwnerUserId !== userId) {
+      return { label: result.labelNormalized, status: "taken" }
+    }
+
+    return { label: result.labelNormalized, status: "available" }
   }
 }

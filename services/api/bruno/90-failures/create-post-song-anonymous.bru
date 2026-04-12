@@ -1,0 +1,48 @@
+meta {
+  name: create-post-song-anonymous
+  type: http
+  seq: 110
+}
+
+post {
+  url: {{base_url}}/communities/{{community_id}}/posts
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{pirate_access_token_member}}
+}
+
+body:json {
+  {
+    "post_type": "song",
+    "identity_mode": "anonymous",
+    "anonymous_scope": "community_stable",
+    "title": "Anonymous Song",
+    "lyrics": "This should fail because song posts are public-only.",
+    "media_refs": [
+      {
+        "storage_ref": "ipfs://bruno-song-anonymous-audio",
+        "mime_type": "audio/mpeg",
+        "size_bytes": 1024,
+        "content_hash": "sha256:bruno-song-anonymous-audio",
+        "duration_ms": 30000
+      }
+    ],
+    "idempotency_key": "bruno-post-song-anonymous-01"
+  }
+}
+
+tests {
+  test("status is 400", function() {
+    expect(res.getStatus()).to.equal(400);
+  });
+
+  test("body is bad_request", function() {
+    const body = res.getBody();
+    expect(body.code).to.equal("bad_request");
+    expect(body.message).to.equal("song posts must use public identity");
+  });
+}

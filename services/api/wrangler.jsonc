@@ -15,6 +15,33 @@
     "PIRATE_APP_JWT_ISSUER": "pirate-api",
     "PIRATE_APP_JWT_AUDIENCE": "pirate-app",
     "PIRATE_APP_JWT_TTL_SECONDS": "3600",
-    "DEV_MEMORY_STORE_ENABLED": "true"
+    "DEV_MEMORY_STORE_ENABLED": "true",
+    "FILEBASE_S3_BUCKET_MUSIC": "dev-songs",
+    "FILEBASE_S3_ENDPOINT": "https://s3.filebase.com",
+    "FILEBASE_S3_REGION": "us-east-1",
+    "IPFS_GATEWAY_URL": "https://psc.myfilebase.com/ipfs"
+  },
+  "env": {
+    "staging": {
+      "name": "pirate-api-staging",
+      "vars": {
+        "ENVIRONMENT": "staging",
+        "JWT_BASED_AUTH_ENABLED": "true",
+        "JWT_BASED_AUTH_ISSUERS": "pirate-staging-upstream",
+        "JWT_BASED_AUTH_AUDIENCE": "pirate-api-staging",
+        "PIRATE_APP_JWT_ISSUER": "pirate-api-staging",
+        "PIRATE_APP_JWT_AUDIENCE": "pirate-app-staging",
+        "PIRATE_APP_JWT_TTL_SECONDS": "3600",
+        "DEV_MEMORY_STORE_ENABLED": "false",
+        "COMMUNITY_PROVISION_OPERATOR_BASE_URL": "https://spaces.pirate.sc",
+        "COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS": "60000",
+        "COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION": "aws-us-east-1",
+        "TURSO_COMMUNITY_DB_WRAP_KEY_VERSION": "2",
+        "FILEBASE_S3_BUCKET_MUSIC": "staging-songs",
+        "FILEBASE_S3_ENDPOINT": "https://s3.filebase.com",
+        "FILEBASE_S3_REGION": "us-east-1",
+        "IPFS_GATEWAY_URL": "https://psc.myfilebase.com/ipfs"
+      }
+    }
   }
 }

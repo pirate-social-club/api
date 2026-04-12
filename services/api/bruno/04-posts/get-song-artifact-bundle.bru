@@ -1,0 +1,30 @@
+meta {
+  name: get-song-artifact-bundle
+  type: http
+  seq: 50
+}
+
+get {
+  url: {{base_url}}/communities/{{community_id}}/song-artifacts/{{song_artifact_bundle_id}}
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("song artifact bundle read returns canonical ready bundle", function() {
+    const body = res.getBody();
+    expect(body.song_artifact_bundle_id).to.equal(bru.getEnvVar("song_artifact_bundle_id"));
+    expect(body.community_id).to.equal(bru.getEnvVar("community_id"));
+    expect(body.status).to.equal("ready");
+    expect(body.primary_audio.storage_ref).to.equal(bru.getEnvVar("song_primary_audio_storage_ref"));
+    expect(body.lyrics).to.equal(bru.getEnvVar("song_lyrics"));
+  });
+}

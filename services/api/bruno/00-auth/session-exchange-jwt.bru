@@ -1,0 +1,47 @@
+meta {
+  name: session-exchange-jwt
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{base_url}}/auth/session/exchange
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+}
+
+body:json {
+  {
+    "proof": {
+      "type": "jwt_based_auth",
+      "jwt": "{{upstream_jwt}}"
+    }
+  }
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("response includes access token and account payload", function() {
+    const body = res.getBody();
+    expect(body.access_token).to.be.a("string");
+    expect(body.user.user_id).to.be.a("string");
+    expect(body.profile.user_id).to.equal(body.user.user_id);
+    expect(body.onboarding.generated_handle_assigned).to.equal(true);
+    expect(Array.isArray(body.wallet_attachments)).to.equal(true);
+  });
+}
+
+script:post-response {
+  const body = res.getBody();
+  bru.setEnvVar("pirate_access_token", body.access_token);
+  bru.setEnvVar("pirate_access_token_member", body.access_token);
+  bru.setEnvVar("pirate_user_id", body.user.user_id);
+  bru.setEnvVar("pirate_user_id_member", body.user.user_id);
+}

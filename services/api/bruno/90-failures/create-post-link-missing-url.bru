@@ -1,0 +1,36 @@
+meta {
+  name: create-post-link-missing-url
+  type: http
+  seq: 110
+}
+
+post {
+  url: {{base_url}}/communities/{{community_id}}/posts
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{pirate_access_token_member}}
+}
+
+body:json {
+  {
+    "post_type": "link",
+    "title": "Broken Link Post",
+    "body": "Missing link_url should fail validation.",
+    "idempotency_key": "bruno-post-link-missing-url-01"
+  }
+}
+
+tests {
+  test("status is 400", function() {
+    expect(res.getStatus()).to.equal(400);
+  });
+
+  test("body is bad_request", function() {
+    const body = res.getBody();
+    expect(body.code).to.equal("bad_request");
+  });
+}

@@ -1,0 +1,41 @@
+meta {
+  name: patch-pricing-policy
+  type: http
+  seq: 57
+}
+
+patch {
+  url: {{base_url}}/communities/{{community_id}}/pricing-policy
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+body:json {
+  {
+    "regional_pricing_enabled": false,
+    "verification_provider_requirement": null,
+    "default_tier_key": null,
+    "tiers": [],
+    "country_assignments": []
+  }
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("pricing policy stays flat with no regional tiers", function() {
+    const body = res.getBody();
+    expect(body.policy_origin).to.equal("explicit");
+    expect(body.regional_pricing_enabled).to.equal(false);
+    expect(body.verification_provider_requirement).to.equal(null);
+    expect(body.tiers).to.have.length(0);
+    expect(body.country_assignments).to.have.length(0);
+  });
+}

@@ -1,0 +1,37 @@
+meta {
+  name: session-exchange-wrong-audience
+  type: http
+  seq: 93
+}
+
+post {
+  url: {{base_url}}/auth/session/exchange
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+}
+
+body:json {
+  {
+    "proof": {
+      "type": "jwt_based_auth",
+      "jwt": "{{upstream_jwt_wrong_audience}}"
+    }
+  }
+}
+
+tests {
+  test("status is 401", function() {
+    expect(res.getStatus()).to.equal(401);
+  });
+
+  test("body is auth_error", function() {
+    const body = res.getBody();
+    expect(body.code).to.equal("auth_error");
+    expect(body.message).to.equal("Authentication failed");
+    expect(body.retryable).to.equal(false);
+  });
+}

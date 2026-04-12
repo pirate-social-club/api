@@ -41,3 +41,10 @@ export function requireBearerToken(headerValue: string | undefined): string {
   }
   return headerValue.slice("Bearer ".length)
 }
+
+export function readBearerToken(headerValue: string | undefined): string | null {
+  if (!headerValue || !headerValue.startsWith("Bearer ")) {
+    return null
+  }
+  return headerValue.slice("Bearer ".length)
+}

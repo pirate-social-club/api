@@ -1,24 +1,28 @@
-import type { Client, Transaction } from "@libsql/client"
 import {
+  jsonStringOrNull,
   numberOrNull,
+  requiredJsonString,
   requiredNumber,
   requiredString,
   rowValue,
   stringOrNull,
 } from "../sql-row"
+import type { ControlPlaneDbExecutor } from "../control-plane-db"
 import type {
   GlobalHandle,
   Job,
+  CommunityPricingPolicy,
   NamespaceVerification,
   NamespaceVerificationSession,
   Post,
+  CommunityMoneyPolicy,
   RedditImportSummary,
   RedditVerification,
   SessionExchangeResponse,
   User,
 } from "../../types"
 
-export type DbExecutor = Pick<Client, "execute"> | Pick<Transaction, "execute">
+export type DbExecutor = ControlPlaneDbExecutor
 
 export type UserRow = {
   user_id: string
@@ -74,8 +78,12 @@ export type VerificationSessionRow = {
   verification_session_id: string
   user_id: string
   provider: "self" | "very" | "passport"
+  wallet_attachment_id: string | null
   requested_capabilities_json: string
+  verification_intent: string | null
+  policy_id: string | null
   status: "pending" | "verified" | "failed" | "expired" | "canceled"
+  upstream_session_ref: string | null
   result_ref: string | null
   failure_code: string | null
   completed_at: string | null
@@ -96,13 +104,15 @@ export type NamespaceVerificationSessionRow = {
   namespace_verification_session_id: string
   namespace_verification_id: string | null
   user_id: string
-  family: "hns"
+  family: "hns" | "spaces"
   submitted_root_label: string
   normalized_root_label: string | null
   status: NamespaceVerificationSession["status"]
   challenge_host: string | null
   challenge_txt_value: string | null
   challenge_expires_at: string | null
+  challenge_kind: "dns_txt" | "schnorr_sign" | null
+  challenge_payload_json: string | null
   root_exists: number | null
   root_control_verified: number | null
   expiry_horizon_sufficient: number | null
@@ -118,6 +128,10 @@ export type NamespaceVerificationSessionRow = {
   failure_reason: string | null
   accepted_at: string | null
   expires_at: string
+  anchor_height: number | null
+  anchor_block_hash: string | null
+  anchor_root_hash: string | null
+  proof_root_hash: string | null
   created_at: string
   updated_at: string
 }
@@ -125,23 +139,27 @@ export type NamespaceVerificationSessionRow = {
 export type NamespaceVerificationRow = {
   namespace_verification_id: string
   user_id: string
-  family: "hns"
+  family: "hns" | "spaces"
   normalized_root_label: string
   status: NamespaceVerification["status"]
   root_exists: number
-  root_control_verified: number
-  expiry_horizon_sufficient: number
-  routing_enabled: number
-  pirate_dns_authority_verified: number
+  root_control_verified: number | null
+  expiry_horizon_sufficient: number | null
+  routing_enabled: number | null
+  pirate_dns_authority_verified: number | null
   club_attach_allowed: number
-  pirate_web_routing_allowed: number
-  pirate_subdomain_issuance_allowed: number
+  pirate_web_routing_allowed: number | null
+  pirate_subdomain_issuance_allowed: number | null
   control_class: NamespaceVerification["control_class"]
   operation_class: NamespaceVerification["operation_class"]
   observation_provider: string | null
   evidence_bundle_ref: string | null
   accepted_at: string
   expires_at: string
+  anchor_height: number | null
+  anchor_block_hash: string | null
+  anchor_root_hash: string | null
+  proof_root_hash: string | null
   created_at: string
   updated_at: string
 }
@@ -152,35 +170,12 @@ export type CommunityRow = {
   display_name: string
   status: "draft" | "active" | "frozen" | "archived" | "deleted" | "suspended"
   provisioning_state: "requested" | "provisioning" | "active" | "rotation_required" | "error"
-  registry_publication_state:
-    | "not_started"
-    | "pending_create"
-    | "pending_seed"
-    | "published"
-    | "stale"
-    | "publication_error"
-  registry_attempt_id: string | null
-  registry_published_at: string | null
-  registry_publication_job_id: string | null
-  registry_error_code: string | null
   transfer_state: "none" | "pending" | "transferred" | "federated"
   route_slug: string | null
   namespace_verification_id: string | null
   primary_database_binding_id: string | null
-  created_at: string
-  updated_at: string
-}
-
-export type CommunityRegistryAttemptRow = {
-  registry_attempt_id: string
-  actor_user_id: string
-  actor_primary_wallet_snapshot: string | null
-  actor_governance_address_snapshot: string | null
-  namespace_verification_id: string
-  normalized_root_label: string
-  community_id: string | null
-  attempt_status: "in_progress" | "succeeded" | "failed"
-  failure_code: string | null
+  projected_member_count: number | null
+  projected_qualified_member_count: number | null
   created_at: string
   updated_at: string
 }
@@ -199,6 +194,52 @@ export type CommunityDatabaseBindingRow = {
   status: "active" | "inactive" | "pending_transfer" | "superseded" | "error"
   transferred_at: string | null
   created_at: string
+  updated_at: string
+}
+
+export type CommunityDbCredentialRow = {
+  community_db_credential_id: string
+  community_database_binding_id: string
+  credential_kind: "database_token" | "group_token"
+  token_name: string
+  encrypted_token: string
+  encryption_key_version: number
+  token_scope: "database" | "group"
+  status: "active" | "superseded" | "invalidated"
+  issued_at: string
+  invalidated_at: string | null
+  expires_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type CommunityMoneyPolicyRow = {
+  community_id: string
+  funding_preference: string
+  accepted_funding_assets_json: string
+  accepted_source_chains_json: string
+  approved_route_providers_json: string | null
+  destination_settlement_chain_json: string
+  destination_settlement_token: string
+  treasury_denomination: string | null
+  max_slippage_bps: number
+  quote_ttl_seconds: number
+  route_required: number
+  route_status_policy: CommunityMoneyPolicy["route_status_policy"]
+  route_hop_tolerance: number
+  updated_at: string
+}
+
+export type CommunityPricingPolicyRow = {
+  community_id: string
+  regional_pricing_enabled: number
+  verification_provider_requirement: CommunityPricingPolicy["verification_provider_requirement"]
+  default_tier_key: string | null
+  tiers_json: string
+  country_assignments_json: string
+  source_template_id: string | null
+  source_template_version: string | null
+  pricing_policy_version: string
   updated_at: string
 }
 
@@ -272,7 +313,7 @@ export function toUserRow(row: unknown): UserRow {
     primary_wallet_attachment_id: stringOrNull(rowValue(row, "primary_wallet_attachment_id")),
     verification_state: requiredString(row, "verification_state") as User["verification_state"],
     capability_provider: (stringOrNull(rowValue(row, "capability_provider")) as User["capability_provider"] | "passport" | "zkpass"),
-    verification_capabilities_json: requiredString(row, "verification_capabilities_json"),
+    verification_capabilities_json: requiredJsonString(row, "verification_capabilities_json"),
     verified_at: stringOrNull(rowValue(row, "verified_at")),
     nationality: stringOrNull(rowValue(row, "nationality")),
     current_verification_session_id: stringOrNull(rowValue(row, "current_verification_session_id")),
@@ -329,8 +370,12 @@ export function toVerificationSessionRow(row: unknown): VerificationSessionRow {
     verification_session_id: requiredString(row, "verification_session_id"),
     user_id: requiredString(row, "user_id"),
     provider: requiredString(row, "provider") as VerificationSessionRow["provider"],
-    requested_capabilities_json: requiredString(row, "requested_capabilities_json"),
+    wallet_attachment_id: stringOrNull(rowValue(row, "wallet_attachment_id")),
+    requested_capabilities_json: requiredJsonString(row, "requested_capabilities_json"),
+    verification_intent: stringOrNull(rowValue(row, "verification_intent")),
+    policy_id: stringOrNull(rowValue(row, "policy_id")),
     status: requiredString(row, "status") as VerificationSessionRow["status"],
+    upstream_session_ref: stringOrNull(rowValue(row, "upstream_session_ref")),
     result_ref: stringOrNull(rowValue(row, "result_ref")),
     failure_code: stringOrNull(rowValue(row, "failure_code")),
     completed_at: stringOrNull(rowValue(row, "completed_at")),
@@ -355,13 +400,15 @@ export function toNamespaceVerificationSessionRow(row: unknown): NamespaceVerifi
     namespace_verification_session_id: requiredString(row, "namespace_verification_session_id"),
     namespace_verification_id: stringOrNull(rowValue(row, "namespace_verification_id")),
     user_id: requiredString(row, "user_id"),
-    family: requiredString(row, "family") as "hns",
+    family: requiredString(row, "family") as NamespaceVerificationSessionRow["family"],
     submitted_root_label: requiredString(row, "submitted_root_label"),
     normalized_root_label: stringOrNull(rowValue(row, "normalized_root_label")),
     status: requiredString(row, "status") as NamespaceVerificationSession["status"],
     challenge_host: stringOrNull(rowValue(row, "challenge_host")),
     challenge_txt_value: stringOrNull(rowValue(row, "challenge_txt_value")),
     challenge_expires_at: stringOrNull(rowValue(row, "challenge_expires_at")),
+    challenge_kind: stringOrNull(rowValue(row, "challenge_kind")) as NamespaceVerificationSessionRow["challenge_kind"],
+    challenge_payload_json: jsonStringOrNull(rowValue(row, "challenge_payload_json")),
     root_exists: numberOrNull(rowValue(row, "root_exists")),
     root_control_verified: numberOrNull(rowValue(row, "root_control_verified")),
     expiry_horizon_sufficient: numberOrNull(rowValue(row, "expiry_horizon_sufficient")),
@@ -377,6 +424,10 @@ export function toNamespaceVerificationSessionRow(row: unknown): NamespaceVerifi
     failure_reason: stringOrNull(rowValue(row, "failure_reason")),
     accepted_at: stringOrNull(rowValue(row, "accepted_at")),
     expires_at: requiredString(row, "expires_at"),
+    anchor_height: numberOrNull(rowValue(row, "anchor_height")),
+    anchor_block_hash: stringOrNull(rowValue(row, "anchor_block_hash")),
+    anchor_root_hash: stringOrNull(rowValue(row, "anchor_root_hash")),
+    proof_root_hash: stringOrNull(rowValue(row, "proof_root_hash")),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
   }
@@ -386,23 +437,27 @@ export function toNamespaceVerificationRow(row: unknown): NamespaceVerificationR
   return {
     namespace_verification_id: requiredString(row, "namespace_verification_id"),
     user_id: requiredString(row, "user_id"),
-    family: requiredString(row, "family") as "hns",
+    family: requiredString(row, "family") as NamespaceVerificationRow["family"],
     normalized_root_label: requiredString(row, "normalized_root_label"),
     status: requiredString(row, "status") as NamespaceVerification["status"],
     root_exists: requiredNumber(row, "root_exists"),
-    root_control_verified: requiredNumber(row, "root_control_verified"),
-    expiry_horizon_sufficient: requiredNumber(row, "expiry_horizon_sufficient"),
-    routing_enabled: requiredNumber(row, "routing_enabled"),
-    pirate_dns_authority_verified: requiredNumber(row, "pirate_dns_authority_verified"),
+    root_control_verified: numberOrNull(rowValue(row, "root_control_verified")),
+    expiry_horizon_sufficient: numberOrNull(rowValue(row, "expiry_horizon_sufficient")),
+    routing_enabled: numberOrNull(rowValue(row, "routing_enabled")),
+    pirate_dns_authority_verified: numberOrNull(rowValue(row, "pirate_dns_authority_verified")),
     club_attach_allowed: requiredNumber(row, "club_attach_allowed"),
-    pirate_web_routing_allowed: requiredNumber(row, "pirate_web_routing_allowed"),
-    pirate_subdomain_issuance_allowed: requiredNumber(row, "pirate_subdomain_issuance_allowed"),
+    pirate_web_routing_allowed: numberOrNull(rowValue(row, "pirate_web_routing_allowed")),
+    pirate_subdomain_issuance_allowed: numberOrNull(rowValue(row, "pirate_subdomain_issuance_allowed")),
     control_class: stringOrNull(rowValue(row, "control_class")) as NamespaceVerification["control_class"],
     operation_class: stringOrNull(rowValue(row, "operation_class")) as NamespaceVerification["operation_class"],
     observation_provider: stringOrNull(rowValue(row, "observation_provider")),
     evidence_bundle_ref: stringOrNull(rowValue(row, "evidence_bundle_ref")),
     accepted_at: requiredString(row, "accepted_at"),
     expires_at: requiredString(row, "expires_at"),
+    anchor_height: numberOrNull(rowValue(row, "anchor_height")),
+    anchor_block_hash: stringOrNull(rowValue(row, "anchor_block_hash")),
+    anchor_root_hash: stringOrNull(rowValue(row, "anchor_root_hash")),
+    proof_root_hash: stringOrNull(rowValue(row, "proof_root_hash")),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
   }
@@ -415,31 +470,12 @@ export function toCommunityRow(row: unknown): CommunityRow {
     display_name: requiredString(row, "display_name"),
     status: requiredString(row, "status") as CommunityRow["status"],
     provisioning_state: requiredString(row, "provisioning_state") as CommunityRow["provisioning_state"],
-    registry_publication_state: requiredString(row, "registry_publication_state") as CommunityRow["registry_publication_state"],
-    registry_attempt_id: stringOrNull(rowValue(row, "registry_attempt_id")),
-    registry_published_at: stringOrNull(rowValue(row, "registry_published_at")),
-    registry_publication_job_id: stringOrNull(rowValue(row, "registry_publication_job_id")),
-    registry_error_code: stringOrNull(rowValue(row, "registry_error_code")),
     transfer_state: requiredString(row, "transfer_state") as CommunityRow["transfer_state"],
     route_slug: stringOrNull(rowValue(row, "route_slug")),
     namespace_verification_id: stringOrNull(rowValue(row, "namespace_verification_id")),
     primary_database_binding_id: stringOrNull(rowValue(row, "primary_database_binding_id")),
-    created_at: requiredString(row, "created_at"),
-    updated_at: requiredString(row, "updated_at"),
-  }
-}
-
-export function toCommunityRegistryAttemptRow(row: unknown): CommunityRegistryAttemptRow {
-  return {
-    registry_attempt_id: requiredString(row, "registry_attempt_id"),
-    actor_user_id: requiredString(row, "actor_user_id"),
-    actor_primary_wallet_snapshot: stringOrNull(rowValue(row, "actor_primary_wallet_snapshot")),
-    actor_governance_address_snapshot: stringOrNull(rowValue(row, "actor_governance_address_snapshot")),
-    namespace_verification_id: requiredString(row, "namespace_verification_id"),
-    normalized_root_label: requiredString(row, "normalized_root_label"),
-    community_id: stringOrNull(rowValue(row, "community_id")),
-    attempt_status: requiredString(row, "attempt_status") as CommunityRegistryAttemptRow["attempt_status"],
-    failure_code: stringOrNull(rowValue(row, "failure_code")),
+    projected_member_count: numberOrNull(rowValue(row, "projected_member_count")),
+    projected_qualified_member_count: numberOrNull(rowValue(row, "projected_qualified_member_count")),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
   }
@@ -464,6 +500,58 @@ export function toCommunityDatabaseBindingRow(row: unknown): CommunityDatabaseBi
   }
 }
 
+export function toCommunityDbCredentialRow(row: unknown): CommunityDbCredentialRow {
+  return {
+    community_db_credential_id: requiredString(row, "community_db_credential_id"),
+    community_database_binding_id: requiredString(row, "community_database_binding_id"),
+    credential_kind: requiredString(row, "credential_kind") as CommunityDbCredentialRow["credential_kind"],
+    token_name: requiredString(row, "token_name"),
+    encrypted_token: requiredString(row, "encrypted_token"),
+    encryption_key_version: requiredNumber(row, "encryption_key_version"),
+    token_scope: requiredString(row, "token_scope") as CommunityDbCredentialRow["token_scope"],
+    status: requiredString(row, "status") as CommunityDbCredentialRow["status"],
+    issued_at: requiredString(row, "issued_at"),
+    invalidated_at: stringOrNull(rowValue(row, "invalidated_at")),
+    expires_at: stringOrNull(rowValue(row, "expires_at")),
+    created_at: requiredString(row, "created_at"),
+    updated_at: requiredString(row, "updated_at"),
+  }
+}
+
+export function toCommunityMoneyPolicyRow(row: unknown): CommunityMoneyPolicyRow {
+  return {
+    community_id: requiredString(row, "community_id"),
+    funding_preference: requiredString(row, "funding_preference"),
+    accepted_funding_assets_json: requiredJsonString(row, "accepted_funding_assets_json"),
+    accepted_source_chains_json: requiredJsonString(row, "accepted_source_chains_json"),
+    approved_route_providers_json: jsonStringOrNull(rowValue(row, "approved_route_providers_json")),
+    destination_settlement_chain_json: requiredJsonString(row, "destination_settlement_chain_json"),
+    destination_settlement_token: requiredString(row, "destination_settlement_token"),
+    treasury_denomination: stringOrNull(rowValue(row, "treasury_denomination")),
+    max_slippage_bps: requiredNumber(row, "max_slippage_bps"),
+    quote_ttl_seconds: requiredNumber(row, "quote_ttl_seconds"),
+    route_required: requiredNumber(row, "route_required"),
+    route_status_policy: requiredString(row, "route_status_policy") as CommunityMoneyPolicy["route_status_policy"],
+    route_hop_tolerance: requiredNumber(row, "route_hop_tolerance"),
+    updated_at: requiredString(row, "updated_at"),
+  }
+}
+
+export function toCommunityPricingPolicyRow(row: unknown): CommunityPricingPolicyRow {
+  return {
+    community_id: requiredString(row, "community_id"),
+    regional_pricing_enabled: requiredNumber(row, "regional_pricing_enabled"),
+    verification_provider_requirement: stringOrNull(rowValue(row, "verification_provider_requirement")) as CommunityPricingPolicyRow["verification_provider_requirement"],
+    default_tier_key: stringOrNull(rowValue(row, "default_tier_key")),
+    tiers_json: requiredJsonString(row, "tiers_json"),
+    country_assignments_json: requiredJsonString(row, "country_assignments_json"),
+    source_template_id: stringOrNull(rowValue(row, "source_template_id")),
+    source_template_version: stringOrNull(rowValue(row, "source_template_version")),
+    pricing_policy_version: requiredString(row, "pricing_policy_version"),
+    updated_at: requiredString(row, "updated_at"),
+  }
+}
+
 export function toJobRow(row: unknown): JobRow {
   return {
     job_id: requiredString(row, "job_id"),
@@ -473,7 +561,7 @@ export function toJobRow(row: unknown): JobRow {
     subject_type: requiredString(row, "subject_type"),
     subject_id: requiredString(row, "subject_id"),
     status: requiredString(row, "status") as JobRow["status"],
-    payload_json: stringOrNull(rowValue(row, "payload_json")),
+    payload_json: jsonStringOrNull(rowValue(row, "payload_json")),
     result_ref: stringOrNull(rowValue(row, "result_ref")),
     error_code: stringOrNull(rowValue(row, "error_code")),
     attempt_count: requiredNumber(row, "attempt_count"),
@@ -493,7 +581,7 @@ export function toCommunityPostProjectionRow(row: unknown): CommunityPostProject
     post_type: requiredString(row, "post_type") as CommunityPostProjectionRow["post_type"],
     status: requiredString(row, "status") as CommunityPostProjectionRow["status"],
     source_created_at: requiredString(row, "source_created_at"),
-    projected_payload_json: requiredString(row, "projected_payload_json"),
+    projected_payload_json: requiredJsonString(row, "projected_payload_json"),
     projection_version: requiredNumber(row, "projection_version"),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
@@ -528,7 +616,7 @@ export function toExternalReputationSnapshotRow(row: unknown): ExternalReputatio
     source_account_handle: requiredString(row, "source_account_handle"),
     proof_method: requiredString(row, "proof_method") as "profile_code",
     captured_at: requiredString(row, "captured_at"),
-    snapshot_payload_json: requiredString(row, "snapshot_payload_json"),
+    snapshot_payload_json: requiredJsonString(row, "snapshot_payload_json"),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
   }

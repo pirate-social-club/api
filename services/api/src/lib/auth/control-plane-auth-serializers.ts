@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { boolOrNull } from "../sql-row"
 import { buildDefaultVerificationCapabilities } from "../verification/verification-capabilities"
 import type {
@@ -26,6 +27,20 @@ import type {
   VerificationSession,
   WalletAttachmentSummary,
 } from "../../types"
+
+function normalizeVerificationIntent(value: string | null): VerificationSession["verification_intent"] {
+  switch (value) {
+    case "profile_verification":
+    case "community_creation":
+    case "ucommunity_join":
+    case "post_access_18_plus":
+    case "commerce_pricing":
+    case "qualifier_disclosure":
+      return value
+    default:
+      return null
+  }
+}
 
 export function parseVerificationCapabilities(raw: string | null | undefined): VerificationCapabilities {
   if (!raw) {
@@ -129,23 +144,146 @@ function buildNamespaceCapabilities(input: {
   }
 }
 
+function parseJsonObject(value: string | null | undefined): Record<string, unknown> | null {
+  if (!value) {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null
+  } catch {
+    return null
+  }
+}
+
+function buildVerificationCallbackPath(verificationSessionId: string): string {
+  return `/verification-sessions/${verificationSessionId}/callback`
+}
+
+function buildSelfUserIdentifierHex(userId: string): string {
+  return `0x${createHash("sha256").update(userId).digest("hex")}`
+}
+
+function buildVeryWidgetLaunch(input: {
+  env?: {
+    VERY_VERIFY_URL?: string
+    VERY_WIDGET_APP_ID?: string
+    VERY_WIDGET_CONTEXT?: string
+    VERY_WIDGET_EXTERNAL_NULLIFIER?: string
+    VERY_WIDGET_TYPE_ID?: string
+  }
+}) {
+  const externalNullifier = input.env?.VERY_WIDGET_EXTERNAL_NULLIFIER?.trim() || "pirate-community-creation"
+
+  return {
+    app_id: input.env?.VERY_WIDGET_APP_ID?.trim() || "",
+    context: input.env?.VERY_WIDGET_CONTEXT?.trim() || "VeryAI - Palm Verification Timestamp",
+    type_id: input.env?.VERY_WIDGET_TYPE_ID?.trim() || "3",
+    query: {
+      conditions: [{
+        identifier: "val",
+        operation: "IN",
+        value: {
+          from: "1743436800",
+          to: "2043436800",
+        },
+      }],
+      options: {
+        expiredAtLowerBound: "1743436800",
+        externalNullifier,
+        equalCheckId: "0",
+        pseudonym: "0",
+      },
+    },
+    verify_url: input.env?.VERY_VERIFY_URL?.trim() || "https://verify.very.org/api/v1/verify",
+  }
+}
+
+function buildSelfAppLaunch(input: {
+  env?: {
+    SELF_VERIFICATION_SCOPE?: string
+    SELF_MOCK_PASSPORT?: string
+  }
+  requestedCapabilities: VerificationSession["requested_capabilities"]
+  endpoint: string
+  verificationSessionId: string
+  userId: string
+}): NonNullable<NonNullable<VerificationSession["launch"]>["self_app"]> {
+  const mockPassport = input.env?.SELF_MOCK_PASSPORT === "true"
+  return {
+    app_name: "Pirate",
+    header: "Verify with Self",
+    endpoint: input.endpoint,
+    endpoint_type: mockPassport ? "staging_https" : "https",
+    scope: input.env?.SELF_VERIFICATION_SCOPE?.trim() || "pirate-verification-v0",
+    session_id: input.verificationSessionId,
+    user_id: buildSelfUserIdentifierHex(input.userId),
+    user_id_type: "hex",
+    disclosures: {
+      nationality: input.requestedCapabilities.includes("nationality"),
+      minimum_age: input.requestedCapabilities.includes("age_over_18") ? 18 : null,
+      gender: input.requestedCapabilities.includes("gender"),
+    },
+    dev_mode: mockPassport,
+    version: 2,
+    chain_id: mockPassport ? 11142220 : 42220,
+    user_defined_data: input.verificationSessionId,
+  }
+}
+
 export function serializeVerificationSession(input: {
   row: VerificationSessionRow
   attestationRow: UserAttestationRow | null
+  env?: {
+    VERY_VERIFY_URL?: string
+    VERY_WIDGET_APP_ID?: string
+    VERY_WIDGET_CONTEXT?: string
+    VERY_WIDGET_EXTERNAL_NULLIFIER?: string
+    VERY_WIDGET_TYPE_ID?: string
+    SELF_MOCK_PASSPORT?: string
+    SELF_VERIFICATION_SCOPE?: string
+  }
 }): VerificationSession {
   const requestedCapabilities = JSON.parse(input.row.requested_capabilities_json) as VerificationSession["requested_capabilities"]
+  const isVery = input.row.provider === "very"
+  const callbackPath = buildVerificationCallbackPath(input.row.verification_session_id)
+  const selfEndpoint = input.row.upstream_session_ref ?? callbackPath
   return {
     verification_session_id: input.row.verification_session_id,
     user_id: input.row.user_id,
     provider: input.row.provider === "self" || input.row.provider === "very" ? input.row.provider : "self",
-    wallet_attachment_id: null,
+    provider_mode: isVery ? "widget" : "qr_deeplink",
+    wallet_attachment_id: input.row.wallet_attachment_id,
     requested_capabilities: requestedCapabilities,
+    verification_intent: normalizeVerificationIntent(input.row.verification_intent),
+    policy_id: input.row.policy_id,
     status: input.row.status === "canceled" ? "failed" : input.row.status,
+    launch: isVery
+      ? {
+          mode: "widget",
+          very_widget: buildVeryWidgetLaunch({
+            env: input.env,
+          }),
+        }
+      : {
+          mode: "qr_deeplink",
+          self_app: buildSelfAppLaunch({
+            env: input.env,
+            requestedCapabilities,
+            endpoint: selfEndpoint,
+            verificationSessionId: input.row.verification_session_id,
+            userId: input.row.user_id,
+          }),
+        },
+    callback_path: isVery ? `/verification-sessions/${input.row.verification_session_id}/complete` : callbackPath,
     nationality: null,
     age_at_verification: null,
     attestation_id: input.attestationRow?.user_attestation_id ?? null,
-    proof_hash: null,
-    evidence_ref: input.row.result_ref,
+    proof_hash: input.row.result_ref,
+    evidence_ref: null,
     verified_at: input.attestationRow?.verified_at ?? input.row.completed_at,
     failure_reason: input.row.failure_code,
     created_at: input.row.created_at,
@@ -165,6 +303,8 @@ export function serializeNamespaceVerificationSession(row: NamespaceVerification
     challenge_host: row.challenge_host,
     challenge_txt_value: row.challenge_txt_value,
     challenge_expires_at: row.challenge_expires_at,
+    challenge_kind: row.challenge_kind,
+    challenge_payload: parseJsonObject(row.challenge_payload_json),
     assertions: buildNamespaceAssertions(row),
     capabilities: buildNamespaceCapabilities(row),
     control_class: row.control_class,

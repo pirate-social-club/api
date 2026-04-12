@@ -4,9 +4,12 @@ import { makeId, nowIso } from "../helpers"
 import { generateHandleCandidate } from "./handle-generator"
 import {
   assertFreeCleanupRenameEligible,
+  assertRedditVerifiedClaimEligible,
   buildHandleUpgradeQuote,
   normalizeDesiredGlobalHandleLabel,
   isCleanupRenameAvailable,
+  isReservedGlobalHandleLabel,
+  validateDesiredGlobalHandleLabel,
 } from "./global-handle-policy"
 import { checkRedditVerificationCode, importRedditSnapshot, makeRedditVerificationCode } from "../onboarding/reddit-bootstrap"
 import type {
@@ -45,16 +48,27 @@ type MemoryStore = {
 
 const globalScope = globalThis as typeof globalThis & {
   __pirateMemoryAuthStore?: MemoryStore
+  __pirateMemoryAuthStores?: Map<string, MemoryStore>
 }
 
-function getMemoryStore(): MemoryStore {
-  if (!globalScope.__pirateMemoryAuthStore) {
-    globalScope.__pirateMemoryAuthStore = {
+function getMemoryStore(storeKey = "default"): MemoryStore {
+  if (!globalScope.__pirateMemoryAuthStores) {
+    globalScope.__pirateMemoryAuthStores = new Map()
+  }
+  const existing = globalScope.__pirateMemoryAuthStores.get(storeKey)
+  if (existing) {
+    return existing
+  }
+
+  const store = {
       byUserId: new Map(),
       userIdByProviderSubject: new Map(),
     }
+  globalScope.__pirateMemoryAuthStores.set(storeKey, store)
+  if (storeKey === "default") {
+    globalScope.__pirateMemoryAuthStore = store
   }
-  return globalScope.__pirateMemoryAuthStore
+  return store
 }
 
 function makeProviderKey(provider: string, subject: string): string {
@@ -162,8 +176,14 @@ function mergeWallets(existing: WalletAttachmentSummary[], identity: UpstreamIde
 }
 
 export class MemoryAuthRepository {
+  constructor(private readonly storeKey = "default") {}
+
+  private getStore(): MemoryStore {
+    return getMemoryStore(this.storeKey)
+  }
+
   async exchangeIdentity(identity: UpstreamIdentity): Promise<Omit<SessionExchangeResponse, "access_token">> {
-    const store = getMemoryStore()
+    const store = this.getStore()
     const providerKey = makeProviderKey(identity.provider, identity.providerSubject)
     const existingUserId = store.userIdByProviderSubject.get(providerKey)
 
@@ -207,11 +227,17 @@ export class MemoryAuthRepository {
   }
 
   getRecordByUserId(userId: string): RepositoryRecord | null {
-    return getMemoryStore().byUserId.get(userId) ?? null
+    return this.getStore().byUserId.get(userId) ?? null
   }
 
   async getUserById(userId: string): Promise<User | null> {
     return this.getRecordByUserId(userId)?.user ?? null
+  }
+
+  async listUsersByIds(userIds: string[]): Promise<User[]> {
+    return [...new Set(userIds)]
+      .map((userId) => this.getRecordByUserId(userId)?.user ?? null)
+      .filter((user): user is User => user != null)
   }
 
   async getWalletAttachmentsByUserId(userId: string): Promise<WalletAttachmentSummary[]> {
@@ -248,7 +274,7 @@ export class MemoryAuthRepository {
     return record.profile
   }
 
-  async renameGlobalHandle(userId: string, desiredLabel: string): Promise<GlobalHandle | null> {
+  async renameGlobalHandle(userId: string, desiredLabel: string, issuanceSource?: string): Promise<GlobalHandle | null> {
     const record = this.getRecordByUserId(userId)
     if (!record) {
       return null
@@ -266,7 +292,16 @@ export class MemoryAuthRepository {
       userCreatedAt: record.user.created_at,
     })
 
-    const store = getMemoryStore()
+    if (issuanceSource === "reddit_verified_claim") {
+      assertRedditVerifiedClaimEligible({
+        labelNormalized: desired.labelNormalized,
+        verifiedRedditUsername: record.redditVerification?.status === "verified"
+          ? record.redditVerification.reddit_username
+          : null,
+      })
+    }
+
+    const store = this.getStore()
     for (const candidateRecord of store.byUserId.values()) {
       if (
         candidateRecord.user.user_id !== userId
@@ -277,14 +312,14 @@ export class MemoryAuthRepository {
       }
     }
 
+    const resolvedIssuanceSource = issuanceSource ?? "free_cleanup_rename"
     const updatedAt = nowIso()
-    const previous = record.profile.global_handle
     const next: GlobalHandle = {
       global_handle_id: makeId("ghl"),
       label: desired.labelDisplay,
       tier: "standard",
       status: "active",
-      issuance_source: "free_cleanup_rename",
+      issuance_source: resolvedIssuanceSource as GlobalHandle["issuance_source"],
       redirect_target_global_handle_id: null,
       price_paid_usd: null,
       free_rename_consumed: true,
@@ -305,6 +340,14 @@ export class MemoryAuthRepository {
     return next
   }
 
+  async getLatestVerifiedRedditUsername(userId: string): Promise<string | null> {
+    const record = this.getRecordByUserId(userId)
+    if (!record || record.redditVerification?.status !== "verified") {
+      return null
+    }
+    return record.redditVerification.reddit_username
+  }
+
   async quoteGlobalHandleUpgrade(userId: string, desiredLabel: string): Promise<HandleUpgradeQuote | null> {
     const record = this.getRecordByUserId(userId)
     if (!record) {
@@ -312,7 +355,7 @@ export class MemoryAuthRepository {
     }
 
     const desired = normalizeDesiredGlobalHandleLabel(desiredLabel)
-    const store = getMemoryStore()
+    const store = this.getStore()
     const labelAvailable = ![...store.byUserId.values()].some((candidateRecord) => (
       candidateRecord.user.user_id !== userId
       && candidateRecord.profile.global_handle.status === "active"
@@ -329,6 +372,38 @@ export class MemoryAuthRepository {
       }),
       labelAvailable,
     })
+  }
+
+  async checkGlobalHandleAvailability(userId: string, label: string): Promise<{
+    label: string
+    status: "available" | "taken" | "reserved" | "invalid"
+    suggestion?: { label: string; source: "variation" | "generated" }
+  }> {
+    const result = validateDesiredGlobalHandleLabel(label)
+    if (!result.valid) {
+      return { label: label.trim().toLowerCase(), status: "invalid" }
+    }
+
+    if (isReservedGlobalHandleLabel(result.labelNormalized)) {
+      return { label: result.labelNormalized, status: "reserved" }
+    }
+
+    const record = this.getRecordByUserId(userId)
+    if (record && record.profile.global_handle.label.replace(/\.pirate$/i, "").toLowerCase() === result.labelNormalized) {
+      return { label: result.labelNormalized, status: "available" }
+    }
+
+    const store = this.getStore()
+    const takenBy = [...store.byUserId.values()].find((candidateRecord) => (
+      candidateRecord.user.user_id !== userId
+      && candidateRecord.profile.global_handle.status === "active"
+      && candidateRecord.profile.global_handle.label.replace(/\.pirate$/i, "").toLowerCase() === result.labelNormalized
+    ))
+    if (takenBy) {
+      return { label: result.labelNormalized, status: "taken" }
+    }
+
+    return { label: result.labelNormalized, status: "available" }
   }
 
   async startOrCheckRedditVerification(input: {
@@ -429,11 +504,30 @@ export class MemoryAuthRepository {
     if (record.redditVerification?.status !== "verified" || record.redditVerification.reddit_username !== input.redditUsername) {
       throw verificationRequired("Reddit verification is required")
     }
+    if (record.redditImportJob?.status === "running") {
+      const staleAfterSeconds = Number(String(input.env.REDDIT_IMPORT_JOB_STALE_AFTER_SECONDS || "").trim())
+      const thresholdSeconds = Number.isFinite(staleAfterSeconds) && staleAfterSeconds > 0 ? Math.trunc(staleAfterSeconds) : 300
+      const updatedAtMs = Date.parse(record.redditImportJob.updated_at)
+      if (Number.isFinite(updatedAtMs) && updatedAtMs < (Date.now() - (thresholdSeconds * 1000))) {
+        record.redditImportJob = {
+          ...record.redditImportJob,
+          status: "queued",
+          error_code: null,
+          updated_at: nowIso(),
+        }
+        record.onboarding.reddit_import_status = "queued"
+      }
+    }
+    if (record.redditImportJob && (record.redditImportJob.status === "queued" || record.redditImportJob.status === "running")) {
+      return {
+        job: record.redditImportJob,
+      }
+    }
 
     const job: Job = {
       job_id: makeId("job"),
       job_type: "reddit_snapshot_import",
-      status: "running",
+      status: "queued",
       subject_type: "user",
       subject_id: input.userId,
       result_ref: null,
@@ -442,16 +536,55 @@ export class MemoryAuthRepository {
       updated_at: nowIso(),
     }
     record.redditImportJob = job
+    record.onboarding.reddit_import_status = "queued"
+
+    return {
+      job: record.redditImportJob,
+    }
+  }
+
+  async processQueuedRedditSnapshotImport(input: {
+    env: Env
+    userId: string
+    jobId: string
+  }): Promise<boolean> {
+    const record = this.getRecordByUserId(input.userId)
+    if (!record) {
+      return false
+    }
+    if (!record.redditImportJob || record.redditImportJob.job_id !== input.jobId) {
+      return false
+    }
+    if (record.redditImportJob.status !== "queued") {
+      return false
+    }
+
+    record.redditImportJob = {
+      ...record.redditImportJob,
+      status: "running",
+      updated_at: nowIso(),
+    }
     record.onboarding.reddit_import_status = "running"
+    const redditUsername = record.redditVerification?.reddit_username
+    if (!redditUsername) {
+      record.redditImportJob = {
+        ...record.redditImportJob,
+        status: "failed",
+        error_code: "invalid_payload",
+        updated_at: nowIso(),
+      }
+      record.onboarding.reddit_import_status = "failed"
+      return true
+    }
 
     try {
       const summary = await importRedditSnapshot({
         env: input.env,
-        redditUsername: input.redditUsername,
+        redditUsername,
       })
       record.redditImportSummary = summary
       record.redditImportJob = {
-        ...job,
+        ...record.redditImportJob,
         status: "succeeded",
         result_ref: makeId("ers"),
         updated_at: nowIso(),
@@ -460,17 +593,62 @@ export class MemoryAuthRepository {
       record.onboarding.suggested_community_ids = summary.suggested_communities.map((community) => community.community_id)
     } catch (error) {
       record.redditImportJob = {
-        ...job,
+        ...record.redditImportJob,
         status: "failed",
         error_code: "source_error",
         updated_at: nowIso(),
       }
       record.onboarding.reddit_import_status = "failed"
     }
+    return true
+  }
 
-    return {
-      job: record.redditImportJob,
+  async drainRedditSnapshotImportJobs(input: {
+    env: Env
+    maxJobs: number
+    staleAfterSeconds: number
+  }): Promise<{ recoveredCount: number; drainedCount: number }> {
+    const store = this.getStore()
+    let recoveredCount = 0
+    let drainedCount = 0
+    const nowMs = Date.now()
+
+    for (const record of store.byUserId.values()) {
+      if (
+        record.redditImportJob?.status === "running"
+        && Date.parse(record.redditImportJob.updated_at) < (nowMs - (input.staleAfterSeconds * 1000))
+      ) {
+        record.redditImportJob = {
+          ...record.redditImportJob,
+          status: "queued",
+          error_code: null,
+          updated_at: nowIso(),
+        }
+        record.onboarding.reddit_import_status = "queued"
+        recoveredCount += 1
+      }
     }
+
+    const queued = [...store.byUserId.values()]
+      .filter((record) => record.redditImportJob?.status === "queued")
+      .sort((a, b) => String(a.redditImportJob?.created_at || "").localeCompare(String(b.redditImportJob?.created_at || "")))
+      .slice(0, input.maxJobs)
+
+    for (const record of queued) {
+      if (!record.redditImportJob) {
+        continue
+      }
+      const claimed = await this.processQueuedRedditSnapshotImport({
+        env: input.env,
+        userId: record.user.user_id,
+        jobId: record.redditImportJob.job_id,
+      })
+      if (claimed) {
+        drainedCount += 1
+      }
+    }
+
+    return { recoveredCount, drainedCount }
   }
 
   async getLatestRedditImportSummary(userId: string): Promise<RedditImportSummary | null> {

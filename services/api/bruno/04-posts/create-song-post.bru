@@ -1,0 +1,54 @@
+meta {
+  name: create-song-post
+  type: http
+  seq: 51
+}
+
+post {
+  url: {{base_url}}/communities/{{community_id}}/posts
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+body:json {
+  {
+    "idempotency_key": "bruno-song-post-01",
+    "post_type": "song",
+    "identity_mode": "public",
+    "song_mode": "original",
+    "rights_basis": "original",
+    "title": "Mainline Song Post",
+    "caption": "First executable song post through Bruno.",
+    "song_artifact_bundle_id": "{{song_artifact_bundle_id}}"
+  }
+}
+
+tests {
+  test("status is 201", function() {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("song create returns canonical published post", function() {
+    const body = res.getBody();
+    expect(body.post_id).to.be.a("string");
+    expect(body.community_id).to.equal(bru.getEnvVar("community_id"));
+    expect(body.post_type).to.equal("song");
+    expect(body.identity_mode).to.equal("public");
+    expect(body.song_mode).to.equal("original");
+    expect(body.rights_basis).to.equal("original");
+    expect(body.song_artifact_bundle_id).to.equal(bru.getEnvVar("song_artifact_bundle_id"));
+    expect(body.status).to.equal("published");
+    expect(body.lyrics).to.equal(bru.getEnvVar("song_lyrics"));
+    expect(body.media_refs[0].storage_ref).to.equal(bru.getEnvVar("song_primary_audio_storage_ref"));
+  });
+}
+
+script:post-response {
+  const body = res.getBody();
+  bru.setEnvVar("song_post_id", body.post_id);
+}

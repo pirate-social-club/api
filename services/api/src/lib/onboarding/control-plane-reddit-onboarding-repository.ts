@@ -1,8 +1,9 @@
-import type { Client } from "@libsql/client"
 import { verificationRequired, internalError } from "../errors"
 import { makeId, nowIso } from "../helpers"
+import type { ControlPlaneDbClient } from "../control-plane-db"
 import {
   getLatestExternalReputationSnapshotRow,
+  getLatestVerifiedRedditVerificationSessionRow,
   getLatestJobRowBySubjectAndType,
   getLatestRedditVerificationSessionRowForUsername,
 } from "../auth/control-plane-auth-queries"
@@ -10,6 +11,8 @@ import { serializeRedditImportSummary, serializeRedditVerification } from "../au
 import { getJobById } from "../communities/control-plane-community-repository"
 import type { Env, Job, RedditImportSummary, RedditVerification } from "../../types"
 import { checkRedditVerificationCode, importRedditSnapshot, makeRedditVerificationCode } from "./reddit-bootstrap"
+
+const DEFAULT_REDDIT_IMPORT_STALE_AFTER_SECONDS = 300
 
 function serializeJob(row: {
   job_id: string
@@ -36,7 +39,46 @@ function serializeJob(row: {
 }
 
 export class ControlPlaneRedditOnboardingRepository {
-  constructor(private readonly client: Client) {}
+  constructor(private readonly client: ControlPlaneDbClient) {}
+
+  async getLatestVerifiedRedditUsername(userId: string): Promise<string | null> {
+    const verification = await getLatestVerifiedRedditVerificationSessionRow(this.client, userId)
+    return verification?.reddit_username ?? null
+  }
+
+  private getRedditImportStaleAfterSeconds(env: Env): number {
+    const parsed = Number(String(env.REDDIT_IMPORT_JOB_STALE_AFTER_SECONDS || "").trim())
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return DEFAULT_REDDIT_IMPORT_STALE_AFTER_SECONDS
+    }
+    return Math.trunc(parsed)
+  }
+
+  private async recoverStaleRunningRedditImportJobs(input: {
+    staleAfterSeconds: number
+    userId?: string
+  }): Promise<number> {
+    const staleBefore = new Date(Date.now() - (input.staleAfterSeconds * 1000)).toISOString()
+    const scopedUserClause = input.userId ? "AND subject_id = ?3" : ""
+    const args = input.userId
+      ? [staleBefore, nowIso(), input.userId]
+      : [staleBefore, nowIso()]
+    const result = await this.client.execute({
+      sql: `
+        UPDATE jobs
+        SET status = 'queued',
+            error_code = NULL,
+            updated_at = ?2
+        WHERE job_type = 'reddit_snapshot_import'
+          AND subject_type = 'user'
+          AND status = 'running'
+          AND updated_at < ?1
+          ${scopedUserClause}
+      `,
+      args,
+    })
+    return result.rowsAffected
+  }
 
   async startOrCheckRedditVerification(input: {
     env: Env
@@ -182,6 +224,12 @@ export class ControlPlaneRedditOnboardingRepository {
       throw verificationRequired("Reddit verification is required")
     }
 
+    const staleAfterSeconds = this.getRedditImportStaleAfterSeconds(input.env)
+    await this.recoverStaleRunningRedditImportJobs({
+      staleAfterSeconds,
+      userId: input.userId,
+    })
+
     const existingJob = await getLatestJobRowBySubjectAndType(this.client, {
       subjectType: "user",
       subjectId: input.userId,
@@ -208,20 +256,69 @@ export class ControlPlaneRedditOnboardingRepository {
       args: [jobId, input.userId, JSON.stringify({ reddit_username: input.redditUsername }), createdAt],
     })
 
-    try {
+    const jobRow = await getJobById(this.client, jobId)
+    if (!jobRow) {
+      throw internalError("Reddit snapshot import job is missing after create")
+    }
+    return {
+      job: serializeJob(jobRow),
+    }
+  }
+
+  async processQueuedRedditSnapshotImport(input: {
+    env: Env
+    userId: string
+    jobId: string
+  }): Promise<boolean> {
+    const existingJob = await getJobById(this.client, input.jobId)
+    if (
+      !existingJob
+      || existingJob.subject_type !== "user"
+      || existingJob.subject_id !== input.userId
+      || existingJob.job_type !== "reddit_snapshot_import"
+    ) {
+      return false
+    }
+    if (existingJob.status === "running" || existingJob.status === "succeeded" || existingJob.status === "failed") {
+      return false
+    }
+
+    const claimedAt = nowIso()
+    const claim = await this.client.execute({
+      sql: `
+        UPDATE jobs
+        SET status = 'running',
+            attempt_count = attempt_count + 1,
+            updated_at = ?2
+        WHERE job_id = ?1
+          AND status = 'queued'
+      `,
+      args: [input.jobId, claimedAt],
+    })
+    if (claim.rowsAffected === 0) {
+      return false
+    }
+
+    const payload = JSON.parse(String(existingJob.payload_json || "{}")) as { reddit_username?: string }
+    const redditUsername = typeof payload.reddit_username === "string" ? payload.reddit_username : null
+    if (!redditUsername) {
       await this.client.execute({
         sql: `
           UPDATE jobs
-          SET status = 'running',
+          SET status = 'failed',
+              error_code = 'invalid_payload',
               updated_at = ?2
           WHERE job_id = ?1
         `,
-        args: [jobId, nowIso()],
+        args: [input.jobId, nowIso()],
       })
+      return true
+    }
 
+    try {
       const summary = await importRedditSnapshot({
         env: input.env,
-        redditUsername: input.redditUsername,
+        redditUsername,
       })
       const snapshotId = makeId("ers")
       const completedAt = nowIso()
@@ -241,7 +338,7 @@ export class ControlPlaneRedditOnboardingRepository {
           args: [
             snapshotId,
             input.userId,
-            input.redditUsername,
+            redditUsername,
             summary.imported_at,
             JSON.stringify(summary),
           ],
@@ -255,7 +352,7 @@ export class ControlPlaneRedditOnboardingRepository {
                 updated_at = ?3
             WHERE job_id = ?1
           `,
-          args: [jobId, snapshotId, completedAt],
+          args: [input.jobId, snapshotId, completedAt],
         })
         await tx.commit()
       } catch (error) {
@@ -278,16 +375,48 @@ export class ControlPlaneRedditOnboardingRepository {
               updated_at = ?3
           WHERE job_id = ?1
         `,
-        args: [jobId, errorCode, nowIso()],
+        args: [input.jobId, errorCode, nowIso()],
       })
     }
+    return true
+  }
 
-    const jobRow = await getJobById(this.client, jobId)
-    if (!jobRow) {
-      throw internalError("Reddit snapshot import job is missing after create")
+  async drainRedditSnapshotImportJobs(input: {
+    env: Env
+    maxJobs: number
+    staleAfterSeconds: number
+  }): Promise<{ recoveredCount: number; drainedCount: number }> {
+    const recoveredCount = await this.recoverStaleRunningRedditImportJobs({
+      staleAfterSeconds: input.staleAfterSeconds,
+    })
+    const jobs = await this.client.execute({
+      sql: `
+        SELECT job_id, subject_id
+        FROM jobs
+        WHERE job_type = 'reddit_snapshot_import'
+          AND subject_type = 'user'
+          AND status = 'queued'
+        ORDER BY created_at ASC, job_id ASC
+        LIMIT ?1
+      `,
+      args: [input.maxJobs],
+    })
+
+    let drainedCount = 0
+    for (const row of jobs.rows) {
+      const claimed = await this.processQueuedRedditSnapshotImport({
+        env: input.env,
+        userId: String((row as Record<string, unknown>).subject_id),
+        jobId: String((row as Record<string, unknown>).job_id),
+      })
+      if (claimed) {
+        drainedCount += 1
+      }
     }
+
     return {
-      job: serializeJob(jobRow),
+      recoveredCount,
+      drainedCount,
     }
   }
 

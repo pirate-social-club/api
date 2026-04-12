@@ -1,0 +1,37 @@
+meta {
+  name: patch-community
+  type: http
+  seq: 33
+}
+
+patch {
+  url: {{base_url}}/communities/{{community_id}}
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+body:json {
+  {
+    "description": "{{community_description}}",
+    "membership_mode": "open",
+    "default_age_gate_policy": "none"
+  }
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("community patch persists mutable settings", function() {
+    const body = res.getBody();
+    expect(body.community_id).to.equal(bru.getEnvVar("community_id"));
+    expect(body.description).to.equal(bru.getEnvVar("community_description"));
+    expect(body.membership_mode).to.equal("open");
+  });
+}

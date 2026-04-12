@@ -32,8 +32,99 @@ Current auth support:
 
 Current persistence mode:
 
-- control-plane libSQL/Turso repository when `DEV_MEMORY_STORE_ENABLED` is false
-- in-memory repository only when `DEV_MEMORY_STORE_ENABLED=true`
+- `local-sqlite` mode: file-backed SQLite for control-plane and per-community databases
+- `worker-dev` mode: Wrangler worker with in-memory store (`DEV_MEMORY_STORE_ENABLED=true` in `wrangler.jsonc`)
+
+## Modes
+
+The API runs in one of these modes:
+
+| Mode | Runtime | Config file | Intended use |
+|---|---|---|---|
+| `local-sqlite` | Bun HTTP server | `.env.local-sqlite` | Primary day-to-day development |
+| `worker-dev` | Wrangler dev worker | Wrangler config | Worker-runtime debugging |
+| `staging` | Bun HTTP server against remote infra | `.env.staging` | Shared integration testing |
+| `production` | deployed runtime | `.env.production.example` as reference only | Real production only |
+
+Startup prints the resolved mode and backends:
+
+```
+pirate-api mode=local-sqlite
+  control_plane_db = file:/tmp/pirate-control-plane-live.db
+  community_db_root = /tmp/pirate-community-dbs-live
+  registry_publication = deferred
+  hns_verification = local_stub
+```
+
+If the env file is missing or the database is not in a usable state, the server exits immediately with a message naming the expected file or the fix command (`rtk bun run local:reset`).
+
+### local-sqlite
+
+Primary day-to-day development mode. Bun server + file-backed SQLite. No remote dependencies.
+
+Setup:
+
+```bash
+cd pirate-api/services/api
+cp .env.local-sqlite.example .env.local-sqlite
+```
+
+Fill in secrets (JWT shared secret, RSA keys, Privy credentials) in `.env.local-sqlite`.
+
+Reset databases to a clean state:
+
+```bash
+rtk bun run local:reset
+```
+
+Start the server:
+
+```bash
+rtk bun run dev:local-sqlite
+```
+
+### worker-dev
+
+Wrangler worker runtime for debugging Worker-specific behavior. This is not the standard full local app stack.
+
+```bash
+rtk bun run dev:worker
+```
+
+### staging / production
+
+Remote infra only. No file-backed databases. No local stub codepaths.
+
+- `staging` loads `.env.staging`
+- `production` should be secret-manager or CI driven rather than local hand-edited env files
+- `.env.production.example` exists only as a reference template for required keys
+
+The startup guard rejects these local-only settings in `staging` and `production`:
+
+- `CONTROL_PLANE_DATABASE_URL=file:...`
+- `LOCAL_COMMUNITY_DB_ROOT`
+- `DEV_MEMORY_STORE_ENABLED=true`
+- localhost `PIRATE_API_PUBLIC_ORIGIN`
+
+For staging and production runtime, the API still needs:
+
+- `TURSO_COMMUNITY_DB_WRAP_KEY`
+- `TURSO_COMMUNITY_DB_WRAP_KEY_VERSION`
+- `COMMUNITY_PROVISION_OPERATOR_BASE_URL`
+- `COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN`
+- `COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS`
+- `COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION`
+
+The public runtime uses those values to call the private community-provision operator and to encrypt the returned per-community DB token before writing it to the control plane.
+
+Do not put private Turso Platform operator secrets such as `TURSO_PLATFORM_API_TOKEN` into the public API runtime env. Those belong in separate operator tooling env files.
+
+Deploy commands:
+
+```bash
+rtk bun run deploy:staging
+rtk bun run deploy:production
+```
 
 ## Internal Layout
 
@@ -77,26 +168,37 @@ Community-owned rows are written to the local per-community DB stub:
 - `namespace_handle_policies`
 - `posts`
 
+Current namespace-verification modes:
+
+- `HNS_VERIFICATION_PROVIDER=local_stub`
+  Existing deterministic local acceptance path.
+- `HNS_VERIFICATION_PROVIDER=hnsdoh`
+  Real TXT-challenge verification against the public `hnsdoh.com` resolver.
+
 ## Local Dev
 
-Memory mode:
+See [Modes](#modes) for the full mode reference.
 
-1. Set `DEV_MEMORY_STORE_ENABLED=true`.
-2. Fill in `AUTH_UPSTREAM_JWT_SHARED_SECRET` or `JWT_BASED_AUTH_SHARED_SECRET`.
-3. Fill in `PIRATE_APP_JWT_PRIVATE_KEY` and `PIRATE_APP_JWT_PUBLIC_KEY`.
-4. Run `bun run dev`.
+Quick start (local-sqlite):
 
-Control-plane DB mode:
+```bash
+cd pirate-api/services/api
+cp .env.local-sqlite.example .env.local-sqlite
+# fill in secrets
+rtk bun run local:reset
+rtk bun run dev:local-sqlite
+```
 
-1. Copy `.dev.vars.example` to `.dev.vars`.
-2. Set `DEV_MEMORY_STORE_ENABLED=false`.
-3. Set `TURSO_CONTROL_PLANE_DATABASE_URL`.
-4. Set `TURSO_CONTROL_PLANE_AUTH_TOKEN` if required by the target DB.
-5. Set `LOCAL_COMMUNITY_DB_ROOT` to a writable directory for per-community DB files.
-6. If testing the real internal publisher path, set `REGISTRY_PUBLISHER_URL`, `REGISTRY_PUBLISHER_AUTH_TOKEN`, and `REGISTRY_PUBLISHER_TIMEOUT_MS`.
-7. Fill in `AUTH_UPSTREAM_JWT_SHARED_SECRET`, `AUTH_UPSTREAM_JWT_ISSUER`, and `AUTH_UPSTREAM_JWT_AUDIENCE`.
-8. Fill in `PIRATE_APP_JWT_PRIVATE_KEY` and `PIRATE_APP_JWT_PUBLIC_KEY`.
-9. Apply the control-plane migrations before starting the worker.
+Troubleshooting:
+
+- missing `communities` table: `rtk bun run local:reset`
+- missing community DB root: `rtk bun run local:reset`
+- wrong env file or mode: read the startup banner first
+
+Optional overrides in `.env.local-sqlite`:
+
+- For real song artifact uploads, set `FILEBASE_S3_BUCKET_MUSIC` and related S3 keys.
+- For the real HNS TXT flow, set `HNS_VERIFICATION_PROVIDER=hnsdoh` and `HNS_RESOLVER_HOST=hnsdoh.com`.
 
 ## Full First Slice Local Setup
 
@@ -106,32 +208,70 @@ This is the shortest path to a real local worker that matches the Bruno collecti
 
 ```bash
 cd pirate-api/services/api
-rtk bun run bruno:prepare:local
+rtk bun run bruno:prepare:local-sqlite
 ```
 
 This resets:
 
-- the local control-plane SQLite file resolved from `TURSO_CONTROL_PLANE_DATABASE_URL`
+- the local control-plane SQLite file resolved from `CONTROL_PLANE_DATABASE_URL`
 - the local community DB root resolved from `LOCAL_COMMUNITY_DB_ROOT`
-- `specs/api/bruno/environments/local.bru` with fresh JWT fixtures and a new subject
+- `services/api/bruno/environments/local.bru` with fresh JWT fixtures and a new subject
 
-2. Ensure `.dev.vars` in `pirate-api/services/api` is populated for local file-backed Bun runs.
+2. Ensure `.env.local-sqlite` in `pirate-api/services/api` is populated with secrets.
 
 3. Start the Bun local server:
 
 ```bash
 cd pirate-api/services/api
-rtk bun run dev:local
+rtk bun run dev:local-sqlite
 ```
 
 4. Run the Bruno collection from the service repo wrapper:
 
 ```bash
 cd pirate-api/services/api
-rtk bun run bruno:test:local
+rtk bun run bruno:test:local-sqlite
 ```
 
-This local Bruno path intentionally uses Bun, not Wrangler, because the first-slice local control-plane/community databases are `file:`-backed.
+## Real HNS TXT Flow
+
+When `HNS_VERIFICATION_PROVIDER=hnsdoh`, the namespace flow changes from stub acceptance to
+real TXT observation:
+
+1. `POST /namespace-verification-sessions` returns:
+   - `challenge_host`
+   - `challenge_txt_value`
+   - `challenge_expires_at`
+   - for the same authenticated user and normalized root, this start call now reuses the latest
+     non-expired namespace-verification session instead of minting a new challenge every time
+2. publish the returned TXT value on the HNS root:
+   - host: `_pirate.<root>`
+   - value: `pirate-verification=<session_id>`
+3. call `POST /namespace-verification-sessions/{id}/complete`
+
+If you need to deliberately rotate the challenge for an existing session, call
+`POST /namespace-verification-sessions/{id}/complete` with `{"restart_challenge": true}` instead
+of starting a second session for the same root.
+
+The runtime then queries `hnsdoh.com` directly for:
+
+- root existence
+- challenge TXT visibility
+- basic routing presence
+- optional Pirate NS authority if `HNS_PIRATE_NS_HOSTS` is configured
+
+Current verification semantics:
+
+- successful TXT observation proves control of the served DNS zone for the HNS root
+- it does not yet prove onchain ownership of the HNS root itself
+- `root_control_verified` is therefore a v0 zone-control approximation carried forward for compatibility with the current API shape
+- `control_class=single_holder_root` is also a v0 assumption until chain-aware ownership classification exists
+- `expiry_horizon_sufficient` is currently derived from deployment config, not chain observation
+
+Current limitation:
+
+- expiry-horizon enforcement is still a resolver-side heuristic in this runtime path
+- `HNS_ASSUME_EXPIRY_HORIZON_SUFFICIENT=true` is the current default until a public expiry-aware provider is wired in
 
 ## Mint A Dev JWT
 
@@ -145,7 +285,7 @@ The script reads:
 - `AUTH_UPSTREAM_JWT_ISSUER` or `JWT_BASED_AUTH_ISSUERS`
 - `AUTH_UPSTREAM_JWT_AUDIENCE` or `JWT_BASED_AUTH_AUDIENCE`
 
-from `.dev.vars` or the current shell environment.
+from `.env.local-sqlite`, with the current shell environment allowed to override those values.
 
 ## Pirate Session JWT
 
@@ -158,19 +298,15 @@ Required env:
 - `PIRATE_APP_JWT_ISSUER`
 - `PIRATE_APP_JWT_AUDIENCE`
 
-## Registry Publisher
+## Registry Publication
 
-The default local path still uses the in-process registry stub.
+Tableland-backed registry publication is deferred for launch.
 
-To exercise the internal publisher boundary instead, configure:
+Current launch posture:
 
-- `REGISTRY_PUBLISHER_URL`
-- `REGISTRY_PUBLISHER_AUTH_TOKEN`
-- `REGISTRY_PUBLISHER_TIMEOUT_MS`
-
-When `REGISTRY_PUBLISHER_URL` is configured, the Worker first calls the publisher to create the
-public community-create attempt before it writes the mirrored Turso `community_registry_attempts`
-row. This is the beginning of the audit-first ordering required by the registry-plane decision.
+- community creation does not depend on a registry publisher
+- app reads are API/Turso-backed only
+- any existing Tableland publisher code should be treated as dormant, not launch-critical
 
 ## Example Exchange
 
@@ -187,21 +323,21 @@ curl -X POST http://127.0.0.1:8787/auth/session/exchange \
 
 ## Bruno
 
-The live API acceptance collection is under [specs/api/bruno](/home/t42/Documents/pirate-v2/specs/api/bruno).
+The live API acceptance collection is under [bruno](/home/t42/Documents/pirate-v2/pirate-api/services/api/bruno).
 
 Recommended local run:
 
 ```bash
 cd pirate-api/services/api
-rtk bun run bruno:prepare:local
-rtk bun run dev:local
+rtk bun run bruno:prepare:local-sqlite
+rtk bun run dev:local-sqlite
 ```
 
 Then in a second terminal:
 
 ```bash
 cd pirate-api/services/api
-rtk bun run bruno:test:local
+rtk bun run bruno:test:local-sqlite
 ```
 
 Run order:

@@ -1,0 +1,46 @@
+meta {
+  name: create-post-song-missing-lyrics
+  type: http
+  seq: 111
+}
+
+post {
+  url: {{base_url}}/communities/{{community_id}}/posts
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{pirate_access_token_member}}
+}
+
+body:json {
+  {
+    "post_type": "song",
+    "identity_mode": "public",
+    "title": "Song Without Lyrics",
+    "media_refs": [
+      {
+        "storage_ref": "ipfs://bruno-song-missing-lyrics-audio",
+        "mime_type": "audio/mpeg",
+        "size_bytes": 1024,
+        "content_hash": "sha256:bruno-song-missing-lyrics-audio",
+        "duration_ms": 30000
+      }
+    ],
+    "idempotency_key": "bruno-post-song-missing-lyrics-01"
+  }
+}
+
+tests {
+  test("status is 400", function() {
+    expect(res.getStatus()).to.equal(400);
+  });
+
+  test("body is bad_request", function() {
+    const body = res.getBody();
+    expect(body.code).to.equal("bad_request");
+    expect(body.message).to.equal("lyrics are required for song posts");
+  });
+}

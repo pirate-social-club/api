@@ -1,0 +1,37 @@
+meta {
+  name: create-post-anonymous-missing-scope
+  type: http
+  seq: 109
+}
+
+post {
+  url: {{base_url}}/communities/{{community_id}}/posts
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{pirate_access_token_member}}
+}
+
+body:json {
+  {
+    "post_type": "text",
+    "identity_mode": "anonymous",
+    "title": "Anonymous Without Scope",
+    "body": "Missing anonymous scope should fail validation.",
+    "idempotency_key": "bruno-post-anonymous-missing-scope-01"
+  }
+}
+
+tests {
+  test("status is 400", function() {
+    expect(res.getStatus()).to.equal(400);
+  });
+
+  test("body is bad_request", function() {
+    const body = res.getBody();
+    expect(body.code).to.equal("bad_request");
+  });
+}

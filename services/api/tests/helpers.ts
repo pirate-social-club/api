@@ -9,7 +9,12 @@ import type { Env } from "../src/types"
 const encoder = new TextEncoder()
 
 export function resetMemoryStore(): void {
-  delete (globalThis as typeof globalThis & { __pirateMemoryAuthStore?: unknown }).__pirateMemoryAuthStore
+  const scope = globalThis as typeof globalThis & {
+    __pirateMemoryAuthStore?: unknown
+    __pirateMemoryAuthStores?: unknown
+  }
+  delete scope.__pirateMemoryAuthStore
+  delete scope.__pirateMemoryAuthStores
 }
 
 export function resetRuntimeCaches(): void {
@@ -17,11 +22,25 @@ export function resetRuntimeCaches(): void {
   const scope = globalThis as typeof globalThis & {
     __pirateControlPlaneRepositoryBundle?: unknown
     __pirateControlPlaneClientKey?: unknown
+    __pirateControlPlaneCommunityRepository?: unknown
+    __pirateControlPlaneCommunityRepositoryKey?: unknown
     __pirateMemoryAuthRepository?: unknown
+    __pirateMemoryAuthRepositoryKey?: unknown
+    __pirateSongArtifactBundleRepository?: unknown
+    __pirateSongArtifactBundleRepositoryKey?: unknown
+    __pirateSongArtifactUploadRepository?: unknown
+    __pirateSongArtifactUploadRepositoryKey?: unknown
   }
   delete scope.__pirateControlPlaneRepositoryBundle
   delete scope.__pirateControlPlaneClientKey
+  delete scope.__pirateControlPlaneCommunityRepository
+  delete scope.__pirateControlPlaneCommunityRepositoryKey
   delete scope.__pirateMemoryAuthRepository
+  delete scope.__pirateMemoryAuthRepositoryKey
+  delete scope.__pirateSongArtifactBundleRepository
+  delete scope.__pirateSongArtifactBundleRepositoryKey
+  delete scope.__pirateSongArtifactUploadRepository
+  delete scope.__pirateSongArtifactUploadRepositoryKey
 }
 
 export function buildTestEnv(overrides: Partial<Env> = {}): Env {
@@ -68,6 +87,30 @@ export async function mintUpstreamJwt(
 
 export async function json(response: Response): Promise<unknown> {
   return await response.json()
+}
+
+export function createTestExecutionContext(): {
+  executionCtx: {
+    waitUntil(promise: Promise<unknown>): void
+    passThroughOnException(): void
+  }
+  drain: () => Promise<void>
+} {
+  const pending: Promise<unknown>[] = []
+  return {
+    executionCtx: {
+      waitUntil(promise: Promise<unknown>) {
+        pending.push(Promise.resolve(promise))
+      },
+      passThroughOnException() {},
+    },
+    async drain() {
+      while (pending.length > 0) {
+        const current = pending.splice(0, pending.length)
+        await Promise.allSettled(current)
+      }
+    },
+  }
 }
 
 function splitSqlStatements(sql: string): string[] {
@@ -130,6 +173,10 @@ async function applySqlFile(client: Client, path: URL): Promise<void> {
   }
 }
 
+function controlPlaneMigrationsUrl(path = ""): URL {
+  return new URL(`../../../db/control-plane/migrations/${path}`, import.meta.url)
+}
+
 export async function createControlPlaneTestClient(options?: {
   includeAllMigrations?: boolean
 }): Promise<{
@@ -143,7 +190,7 @@ export async function createControlPlaneTestClient(options?: {
   })
 
   if (options?.includeAllMigrations) {
-    const migrationsDir = new URL("../../../../db/control-plane/migrations/", import.meta.url)
+    const migrationsDir = controlPlaneMigrationsUrl()
     const entries = (await readdir(migrationsDir))
       .filter((entry) => entry.endsWith(".sql"))
       .sort()
@@ -151,7 +198,7 @@ export async function createControlPlaneTestClient(options?: {
       await applySqlFile(client, new URL(entry, migrationsDir))
     }
   } else {
-    await applySqlFile(client, new URL("../../../../db/control-plane/migrations/0001_control_plane_identity.sql", import.meta.url))
+    await applySqlFile(client, controlPlaneMigrationsUrl("0001_control_plane_identity.sql"))
   }
 
   return {
@@ -176,7 +223,7 @@ export async function createRouteTestContext(overrides: Partial<Env> = {}): Prom
   const env = buildTestEnv({
     DEV_MEMORY_STORE_ENABLED: "false",
     ENVIRONMENT: "test",
-    TURSO_CONTROL_PLANE_DATABASE_URL: `file:${controlPlane.databasePath}`,
+    CONTROL_PLANE_DATABASE_URL: `file:${controlPlane.databasePath}`,
     LOCAL_COMMUNITY_DB_ROOT: communityDbRoot,
     ...overrides,
   })

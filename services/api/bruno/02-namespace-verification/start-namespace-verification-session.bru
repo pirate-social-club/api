@@ -1,0 +1,41 @@
+meta {
+  name: start-namespace-verification-session
+  type: http
+  seq: 20
+}
+
+post {
+  url: {{base_url}}/namespace-verification-sessions
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+body:json {
+  {
+    "family": "hns",
+    "root_label": "{{namespace_root_label}}"
+  }
+}
+
+tests {
+  test("status is 201", function() {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("namespace verification session starts with challenge", function() {
+    const body = res.getBody();
+    expect(body.namespace_verification_session_id).to.be.a("string");
+    expect(body.status).to.equal("challenge_required");
+    expect(body.challenge_txt_value).to.be.a("string");
+  });
+}
+
+script:post-response {
+  const body = res.getBody();
+  bru.setEnvVar("namespace_verification_session_id", body.namespace_verification_session_id);
+}

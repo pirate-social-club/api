@@ -1,0 +1,49 @@
+meta {
+  name: create-song-artifact-upload
+  type: http
+  seq: 47
+}
+
+post {
+  url: {{base_url}}/communities/{{community_id}}/song-artifact-uploads
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+body:json {
+  {
+    "artifact_kind": "primary_audio",
+    "mime_type": "audio/mpeg",
+    "filename": "bruno-song-happy-path.mp3",
+    "size_bytes": 27,
+    "content_hash": "sha256:7e52767e7a24c2dacbd45c1d43634a660fe6b7453f6f14b4003d6a33d5a1c32f"
+  }
+}
+
+tests {
+  test("status is 201", function() {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("song artifact upload create returns pending upload intent", function() {
+    const body = res.getBody();
+    expect(body.song_artifact_upload_id).to.be.a("string");
+    expect(body.community_id).to.equal(bru.getEnvVar("community_id"));
+    expect(body.status).to.equal("pending_upload");
+    expect(body.artifact_kind).to.equal("primary_audio");
+    expect(body.mime_type).to.equal("audio/mpeg");
+    expect(body.size_bytes).to.equal(27);
+    expect(body.content_hash).to.equal("sha256:7e52767e7a24c2dacbd45c1d43634a660fe6b7453f6f14b4003d6a33d5a1c32f");
+  });
+}
+
+script:post-response {
+  const body = res.getBody();
+  bru.setEnvVar("song_artifact_upload_id", body.song_artifact_upload_id);
+  bru.setEnvVar("song_artifact_upload_url", body.upload_url);
+}

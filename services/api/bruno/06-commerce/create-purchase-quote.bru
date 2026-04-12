@@ -1,0 +1,48 @@
+meta {
+  name: create-purchase-quote
+  type: http
+  seq: 63
+}
+
+post {
+  url: {{base_url}}/communities/{{community_id}}/purchase-quotes
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+body:json {
+  {
+    "listing_id": "{{listing_id}}",
+    "client_estimated_slippage_bps": 0,
+    "client_estimated_hop_count": 0
+  }
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("purchase quote prices the active listing on the direct lane", function() {
+    const body = res.getBody();
+    expect(body.quote_id).to.be.a("string");
+    expect(body.community_id).to.equal(bru.getEnvVar("community_id"));
+    expect(body.listing_id).to.equal(bru.getEnvVar("listing_id"));
+    expect(body.base_price_usd).to.equal(15);
+    expect(body.final_price_usd).to.equal(15);
+    expect(body.funding_mode).to.equal("direct");
+    expect(body.destination_settlement_chain.chain_id).to.equal(8453);
+    expect(body.destination_settlement_token).to.equal("ETH");
+    expect(body.pricing_tier).to.equal(null);
+  });
+}
+
+script:post-response {
+  const body = res.getBody();
+  bru.setEnvVar("purchase_quote_id", body.quote_id);
+}

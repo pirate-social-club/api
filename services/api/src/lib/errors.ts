@@ -2,12 +2,14 @@ export class HttpError extends Error {
   readonly status: number
   readonly code: string
   readonly retryable: boolean
+  readonly details?: Record<string, unknown>
 
-  constructor(status: number, code: string, message: string, retryable = false) {
+  constructor(status: number, code: string, message: string, retryable = false, details?: Record<string, unknown>) {
     super(message)
     this.status = status
     this.code = code
     this.retryable = retryable
+    this.details = details
   }
 }
 
@@ -27,15 +29,15 @@ export function eligibilityFailed(message: string): HttpError {
   return new HttpError(403, "eligibility_failed", message)
 }
 
-export function gateFailed(message: string): HttpError {
-  return new HttpError(403, "gate_failed", message)
+export function gateFailed(message: string, details?: Record<string, unknown>): HttpError {
+  return new HttpError(403, "gate_failed", message, false, details)
 }
 
 export function conflictError(message: string): HttpError {
   return new HttpError(409, "conflict", message)
 }
 
-export function analysisBlocked(message: string): HttpError {
+export function analysisBlockedError(message: string): HttpError {
   return new HttpError(422, "analysis_blocked", message)
 }
 
@@ -47,7 +49,14 @@ export function internalError(message: string): HttpError {
   return new HttpError(500, "internal_error", message)
 }
 
-export function errorResponse(error: unknown): { status: number; body: { code: string; message: string; retryable?: boolean } } {
+export function notImplementedError(message: string): HttpError {
+  return new HttpError(501, "not_implemented", message)
+}
+
+export function errorResponse(error: unknown): {
+  status: number
+  body: { code: string; message: string; retryable?: boolean; details?: Record<string, unknown> }
+} {
   if (error instanceof HttpError) {
     return {
       status: error.status,
@@ -55,6 +64,7 @@ export function errorResponse(error: unknown): { status: number; body: { code: s
         code: error.code,
         message: error.message,
         retryable: error.retryable,
+        details: error.details,
       },
     }
   }

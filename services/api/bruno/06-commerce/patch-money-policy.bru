@@ -1,0 +1,53 @@
+meta {
+  name: patch-money-policy
+  type: http
+  seq: 55
+}
+
+patch {
+  url: {{base_url}}/communities/{{community_id}}/money-policy
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+body:json {
+  {
+    "funding_preference": "ETH",
+    "accepted_funding_assets": [],
+    "accepted_source_chains": [],
+    "approved_route_providers": null,
+    "destination_settlement_chain": {
+      "chain_namespace": "eip155",
+      "chain_id": 8453,
+      "display_name": "Base"
+    },
+    "destination_settlement_token": "ETH",
+    "treasury_denomination": "ETH",
+    "max_slippage_bps": 0,
+    "quote_ttl_seconds": 300,
+    "route_required": false,
+    "route_status_policy": "fail",
+    "route_hop_tolerance": 0
+  }
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("money policy persists direct Base settlement posture", function() {
+    const body = res.getBody();
+    expect(body.policy_origin).to.equal("explicit");
+    expect(body.funding_preference).to.equal("ETH");
+    expect(body.destination_settlement_chain.chain_id).to.equal(8453);
+    expect(body.destination_settlement_token).to.equal("ETH");
+    expect(body.route_required).to.equal(false);
+    expect(body.approved_route_providers).to.equal(null);
+  });
+}

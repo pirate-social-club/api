@@ -1,0 +1,36 @@
+meta {
+  name: create-post-verified-non-member
+  type: http
+  seq: 108
+}
+
+post {
+  url: {{base_url}}/communities/{{community_id}}/posts
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+body:json {
+  {
+    "post_type": "text",
+    "title": "Hello From Outside",
+    "body": "Verified non-member should still be denied.",
+    "idempotency_key": "bruno-post-non-member-01"
+  }
+}
+
+tests {
+  test("status is 404", function() {
+    expect(res.getStatus()).to.equal(404);
+  });
+
+  test("body is not_found", function() {
+    const body = res.getBody();
+    expect(body.code).to.equal("not_found");
+  });
+}

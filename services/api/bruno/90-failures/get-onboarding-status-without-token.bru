@@ -1,0 +1,24 @@
+meta {
+  name: get-onboarding-status-without-token
+  type: http
+  seq: 95
+}
+
+get {
+  url: {{base_url}}/onboarding/status
+  body: none
+  auth: none
+}
+
+tests {
+  test("status is 401", function() {
+    expect(res.getStatus()).to.equal(401);
+  });
+
+  test("body is auth_error", function() {
+    const body = res.getBody();
+    expect(body.code).to.equal("auth_error");
+    expect(body.message).to.equal("Authentication failed");
+    expect(body.retryable).to.equal(false);
+  });
+}

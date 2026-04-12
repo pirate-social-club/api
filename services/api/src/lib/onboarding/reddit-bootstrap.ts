@@ -25,7 +25,12 @@ type PullPushThing = {
   subreddit?: string
   score?: number
   created_utc?: number
+  distinguished?: string | null
 }
+
+type PullPushFetchResult =
+  | { ok: true; kind: "submission" | "comment"; things: PullPushThing[] }
+  | { ok: false; kind: "submission" | "comment"; errorCode: "rate_limited" | "source_error" }
 
 function pullpushBaseUrl(env: Env): string {
   return String(env.REDDIT_PULLPUSH_BASE_URL || DEFAULT_PULLPUSH_BASE_URL).trim().replace(/\/+$/, "")
@@ -50,6 +55,27 @@ async function fetchPullPushThings(
 
   const body = await response.json() as { data?: PullPushThing[] }
   return Array.isArray(body.data) ? body.data : []
+}
+
+async function fetchPullPushThingsSafe(
+  env: Env,
+  kind: "submission" | "comment",
+  redditUsername: string,
+): Promise<PullPushFetchResult> {
+  try {
+    return {
+      ok: true,
+      kind,
+      things: await fetchPullPushThings(env, kind, redditUsername),
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return {
+      ok: false,
+      kind,
+      errorCode: message === "rate_limited" ? "rate_limited" : "source_error",
+    }
+  }
 }
 
 function normalizeTopSubreddits(things: PullPushThing[]): RedditImportSummary["top_subreddits"] {
@@ -77,14 +103,88 @@ function normalizeTopSubreddits(things: PullPushThing[]): RedditImportSummary["t
     }))
 }
 
+function normalizeModeratorOf(things: PullPushThing[]): string[] {
+  const moderatorOf = new Set<string>()
+  for (const thing of things) {
+    const subreddit = typeof thing.subreddit === "string" ? thing.subreddit.trim() : ""
+    if (!subreddit) {
+      continue
+    }
+    if (String(thing.distinguished || "").toLowerCase() === "moderator") {
+      moderatorOf.add(subreddit)
+    }
+  }
+  return [...moderatorOf].sort((a, b) => a.localeCompare(b))
+}
+
+function inferInterestsFromTopSubreddits(
+  topSubreddits: RedditImportSummary["top_subreddits"],
+): string[] {
+  const inferred = new Set<string>()
+  for (const entry of topSubreddits) {
+    const normalized = entry.subreddit
+      .trim()
+      .replace(/^r\//i, "")
+      .replace(/[_-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .toLowerCase()
+    if (!normalized) {
+      continue
+    }
+    inferred.add(normalized)
+    if (inferred.size >= 5) {
+      break
+    }
+  }
+  return [...inferred]
+}
+
+function makeCoverageNote(input: {
+  submissionResult: PullPushFetchResult
+  commentResult: PullPushFetchResult
+  totalThings: number
+}): string {
+  const failedKinds = [input.submissionResult, input.commentResult]
+    .filter((result): result is Extract<PullPushFetchResult, { ok: false }> => !result.ok)
+    .map((result) => result.kind)
+
+  if (failedKinds.length === 0) {
+    return input.totalThings > 0
+      ? "Historical archival snapshot from PullPush-backed Reddit data; coverage may be partial."
+      : "No historical Reddit activity was found in the archival source."
+  }
+
+  const failedLabel = failedKinds.join(" + ")
+  const errorCode = [input.submissionResult, input.commentResult]
+    .find((result): result is Extract<PullPushFetchResult, { ok: false }> => !result.ok)?.errorCode ?? "source_error"
+
+  if (input.totalThings > 0) {
+    return `Partial historical archival snapshot from PullPush-backed Reddit data; ${failedLabel} fetch failed with ${errorCode}.`
+  }
+
+  return `Reddit archival snapshot could not be completed; ${failedLabel} fetch failed with ${errorCode}.`
+}
+
 async function defaultRedditImporter(input: {
   env: Env
   redditUsername: string
 }): Promise<RedditImportSummary> {
-  const [submissions, comments] = await Promise.all([
-    fetchPullPushThings(input.env, "submission", input.redditUsername),
-    fetchPullPushThings(input.env, "comment", input.redditUsername),
+  const [submissionResult, commentResult] = await Promise.all([
+    fetchPullPushThingsSafe(input.env, "submission", input.redditUsername),
+    fetchPullPushThingsSafe(input.env, "comment", input.redditUsername),
   ])
+  const errors = [submissionResult, commentResult].filter(
+    (result): result is Extract<PullPushFetchResult, { ok: false }> => !result.ok,
+  )
+  if (errors.length === 2) {
+    if (errors.every((result) => result.errorCode === "rate_limited")) {
+      throw new Error("rate_limited")
+    }
+    throw new Error("source_error")
+  }
+
+  const submissions = submissionResult.ok ? submissionResult.things : []
+  const comments = commentResult.ok ? commentResult.things : []
 
   const allThings = [...submissions, ...comments]
   const createdEpochs = allThings
@@ -99,6 +199,8 @@ async function defaultRedditImporter(input: {
     0,
   )
   const topSubreddits = normalizeTopSubreddits(allThings)
+  const moderatorOf = normalizeModeratorOf(allThings)
+  const inferredInterests = inferInterestsFromTopSubreddits(topSubreddits)
 
   return {
     reddit_username: input.redditUsername,
@@ -106,12 +208,14 @@ async function defaultRedditImporter(input: {
     account_age_days: accountAgeDays,
     global_karma: allThings.length > 0 ? globalKarma : null,
     top_subreddits: topSubreddits,
-    moderator_of: [],
-    inferred_interests: [],
+    moderator_of: moderatorOf,
+    inferred_interests: inferredInterests,
     suggested_communities: [],
-    coverage_note: allThings.length > 0
-      ? "Historical archival snapshot from PullPush-backed Reddit data; coverage may be partial."
-      : "No historical Reddit activity was found in the archival source.",
+    coverage_note: makeCoverageNote({
+      submissionResult,
+      commentResult,
+      totalThings: allThings.length,
+    }),
   }
 }
 

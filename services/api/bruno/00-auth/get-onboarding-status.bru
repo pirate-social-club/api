@@ -1,0 +1,29 @@
+meta {
+  name: get-onboarding-status
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{base_url}}/onboarding/status
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("newly bootstrapped onboarding payload is present", function() {
+    const body = res.getBody();
+    expect(body.generated_handle_assigned).to.equal(true);
+    expect(body.cleanup_rename_available).to.equal(true);
+    expect(body.reddit_verification_status).to.equal("not_started");
+    expect(body.reddit_import_status).to.equal("not_started");
+  });
+}
