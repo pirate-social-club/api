@@ -1,10 +1,8 @@
 export type {
   AuthProof,
   CommunityMoneyPolicy,
-  CommunityPurchaseQuote,
   CommunityPurchaseQuotePreflight,
   CommunityPurchaseQuotePreflightRequest,
-  CommunityPurchaseQuoteRequest,
   CommunityCreateAcceptedResponse,
   CompleteNamespaceVerificationSessionRequest,
   CompleteVerificationSessionRequest,
@@ -23,7 +21,6 @@ export type {
   SessionExchangeRequest,
   SessionExchangeResponse,
   StartNamespaceVerificationSessionRequest,
-  StartVerificationSessionRequest,
   SongArtifactUpload,
   UpdateCommunityMoneyPolicyRequest,
   User,
@@ -48,6 +45,17 @@ export type {
 type ContractCreateCommunityRequest = import("@pirate/api-contracts").CreateCommunityRequest
 type ContractCommunity = import("@pirate/api-contracts").Community
 type ContractPost = import("@pirate/api-contracts").Post
+type ContractGateRule = NonNullable<ContractCommunity["gate_rules"]>[number]
+type ContractVerificationIntent = NonNullable<import("@pirate/api-contracts").StartVerificationSessionRequest["verification_intent"]>
+
+export type VerificationIntent = ContractVerificationIntent | "ucommunity_join"
+
+export type StartVerificationSessionRequest = Omit<
+  import("@pirate/api-contracts").StartVerificationSessionRequest,
+  "verification_intent"
+> & {
+  verification_intent?: VerificationIntent | null
+}
 
 export type CreateCommunityRequest = ContractCreateCommunityRequest & {
   description?: string | null
@@ -263,6 +271,7 @@ export type UserReport = {
   user_report_id: string
   community_id: string
   post_id: string
+  moderation_case_id: string | null
   reporter_user_id: string
   reason_code: UserReportReasonCode
   note: string | null
@@ -390,23 +399,16 @@ export type CommunityReferenceLinkAdmin = {
   updated_at: string
 }
 
-export type CommunityGateRule = {
-  gate_rule_id: string
-  community_id: string
-  scope: "membership" | "viewer" | "posting"
-  gate_family: "identity_proof" | "token_holding"
-  gate_type: string
-  proof_requirements?: Array<{
-    proof_type: string
-    accepted_providers?: string[] | null
-    accepted_mechanisms?: string[] | null
-    config?: Record<string, unknown> | null
-  }> | null
-  chain_namespace?: string | null
-  gate_config?: Record<string, unknown> | null
-  status: "active" | "disabled"
-  created_at: string
-  updated_at: string
+export type CommunityGateRule = ContractGateRule
+
+export type CommunityPurchaseQuoteRequest = import("@pirate/api-contracts").CommunityPurchaseQuoteRequest & {
+  destination_settlement_amount_atomic?: string | null
+  destination_settlement_decimals?: number | null
+}
+
+export type CommunityPurchaseQuote = import("@pirate/api-contracts").CommunityPurchaseQuote & {
+  destination_settlement_amount_atomic?: string | null
+  destination_settlement_decimals?: number | null
 }
 
 export type Community = Omit<ContractCommunity, "gate_rules"> & {
