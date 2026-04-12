@@ -38,7 +38,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.2.21
+          bun-version: 1.3.10
 
       - name: Check out cdr-sdk
         run: git clone --depth 1 https://github.com/piplabs/cdr-sdk "${GITHUB_WORKSPACE}/../../cdr-sdk"
@@ -79,7 +79,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.2.21
+          bun-version: 1.3.10
 
       - name: Install contracts dependencies
         working-directory: services/contracts
@@ -112,7 +112,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.2.21
+          bun-version: 1.3.10
 
       - name: Check out cdr-sdk
         run: git clone --depth 1 https://github.com/piplabs/cdr-sdk "${GITHUB_WORKSPACE}/../../cdr-sdk"
