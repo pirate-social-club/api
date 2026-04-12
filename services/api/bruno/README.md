@@ -72,8 +72,8 @@ Suggested collection layout:
 - `90-failures/create-post-verified-non-member`
 - `90-failures/create-post-anonymous-missing-scope`
 - `90-failures/create-post-link-missing-url`
-- `05-membership/join-community`
-- `05-membership/get-community-after-join`
+- `95-membership/join-community`
+- `95-membership/get-community-after-join`
 
 This now covers the full first slice through first post creation, the post-create setup path community owners actually need, a minimal commerce configuration path, and the first non-creator membership transition.
 
@@ -124,7 +124,7 @@ The secondary-user failure flow also reuses the mutable auth state:
 - `session-exchange-jwt-secondary` overwrites `pirate_access_token`
 - `session-exchange-jwt-secondary` overwrites `pirate_user_id`
 - the follow-up secondary verification requests act on that swapped user context
-- the later membership requests intentionally keep that verified secondary user and transition them from non-member to joined member
+- the later `95-membership/*` requests intentionally keep that verified secondary user and transition them from non-member to joined member
 
 Optional diagnostic values:
 
@@ -271,7 +271,7 @@ The next two failure requests stay after that swap on purpose:
 
 Those requests should still return `400 bad_request` even when the active auth context is now the secondary non-member, because request-shape validation runs before deeper posting eligibility checks.
 
-After those negative checks, the membership requests join that same verified secondary user to the created community and confirm the member counts move from creator-only (`1`) to creator-plus-joiner (`2`).
+After those negative checks, the `95-membership/*` requests join that same verified secondary user to the created community and confirm the member counts move from creator-only (`1`) to creator-plus-joiner (`2`).
 
 ## Request Shapes
 
