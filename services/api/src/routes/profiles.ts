@@ -1,9 +1,10 @@
 import { Hono } from "hono"
 import { authError, badRequestError, notFoundError } from "../lib/errors"
 import { requireBearerToken } from "../lib/helpers"
+import { normalizeDesiredGlobalHandleLabel } from "../lib/auth/global-handle-policy"
 import { verifyPirateAccessToken } from "../lib/auth/pirate-session-token"
-import { getProfileRepository } from "../lib/auth/repositories"
-import { handleRoute } from "./route-helpers"
+import { getProfileRepository, getRedditOnboardingRepository } from "../lib/auth/repositories"
+import { handleRoute, requireRouteParam } from "./route-helpers"
 import type { Env } from "../types"
 
 const profiles = new Hono<{ Bindings: Env }>()
@@ -84,8 +85,14 @@ profiles.post("/me/global-handle/rename", handleRoute(async (c) => {
     throw badRequestError("Invalid handle rename payload")
   }
 
+  const desiredLabel = normalizeDesiredGlobalHandleLabel(body.desired_label)
+  const verifiedRedditUsername = await getRedditOnboardingRepository(c.env).getLatestVerifiedRedditUsername(session.userId)
   const repository = getProfileRepository(c.env)
-  const globalHandle = await repository.renameGlobalHandle(session.userId, body.desired_label)
+  const globalHandle = await repository.renameGlobalHandle(
+    session.userId,
+    body.desired_label,
+    verifiedRedditUsername === desiredLabel.labelNormalized ? "reddit_verified_claim" : undefined,
+  )
   if (!globalHandle) {
     throw authError("Authentication failed")
   }
@@ -112,7 +119,7 @@ profiles.get("/:userId", handleRoute(async (c) => {
   const token = requireBearerToken(c.req.header("authorization"))
   await verifyPirateAccessToken({ env: c.env, token })
   const repository = getProfileRepository(c.env)
-  const profile = await repository.getProfileByUserId(c.req.param("userId") ?? "")
+  const profile = await repository.getProfileByUserId(requireRouteParam(c.req.param("userId"), "user_id"))
   if (!profile) {
     throw notFoundError("Profile not found")
   }

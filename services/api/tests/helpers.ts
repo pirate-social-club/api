@@ -17,6 +17,8 @@ export function resetRuntimeCaches(): void {
   const scope = globalThis as typeof globalThis & {
     __pirateControlPlaneRepositoryBundle?: unknown
     __pirateControlPlaneClientKey?: unknown
+    __pirateControlPlaneCommunityRepository?: unknown
+    __pirateControlPlaneCommunityRepositoryKey?: unknown
     __pirateMemoryAuthRepository?: unknown
     __pirateSongArtifactBundleRepository?: unknown
     __pirateSongArtifactBundleRepositoryKey?: unknown
@@ -25,6 +27,8 @@ export function resetRuntimeCaches(): void {
   }
   delete scope.__pirateControlPlaneRepositoryBundle
   delete scope.__pirateControlPlaneClientKey
+  delete scope.__pirateControlPlaneCommunityRepository
+  delete scope.__pirateControlPlaneCommunityRepositoryKey
   delete scope.__pirateMemoryAuthRepository
   delete scope.__pirateSongArtifactBundleRepository
   delete scope.__pirateSongArtifactBundleRepositoryKey

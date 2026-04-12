@@ -25,14 +25,10 @@ import {
 } from "../lib/posts/song-asset-locked-delivery-service"
 import { authError } from "../lib/errors"
 import { requireBearerToken } from "../lib/helpers"
-import { handleRoute } from "./route-helpers"
+import { handleRoute, requireRouteParam } from "./route-helpers"
 import type { Env } from "../types"
 
 const jobs = new Hono<{ Bindings: Env }>()
-
-function routeParam(c: { req: { param(name: string): string | undefined } }, name: string): string {
-  return c.req.param(name) ?? ""
-}
 
 function requireInternalJobRunnerToken(c: { req: { header(name: string): string | undefined }; env: Env }): void {
   const expected = String(c.env.INTERNAL_JOB_RUNNER_TOKEN || "").trim()
@@ -130,7 +126,7 @@ jobs.get("/:jobId", handleRoute(async (c) => {
   const result = await getJob({
     env: c.env,
     bearerToken: token,
-    jobId: routeParam(c, "jobId"),
+    jobId: requireRouteParam(c.req.param("jobId"), "job_id"),
     repository,
   })
   return c.json(result, 200)

@@ -4,6 +4,7 @@ import { makeId, nowIso } from "../helpers"
 import { generateHandleCandidate } from "./handle-generator"
 import {
   assertFreeCleanupRenameEligible,
+  assertRedditVerifiedClaimEligible,
   buildHandleUpgradeQuote,
   normalizeDesiredGlobalHandleLabel,
   isCleanupRenameAvailable,
@@ -274,6 +275,15 @@ export class MemoryAuthRepository {
       userCreatedAt: record.user.created_at,
     })
 
+    if (issuanceSource === "reddit_verified_claim") {
+      assertRedditVerifiedClaimEligible({
+        labelNormalized: desired.labelNormalized,
+        verifiedRedditUsername: record.redditVerification?.status === "verified"
+          ? record.redditVerification.reddit_username
+          : null,
+      })
+    }
+
     const store = getMemoryStore()
     for (const candidateRecord of store.byUserId.values()) {
       if (
@@ -311,6 +321,14 @@ export class MemoryAuthRepository {
       cleanup_rename_available: false,
     }
     return next
+  }
+
+  async getLatestVerifiedRedditUsername(userId: string): Promise<string | null> {
+    const record = this.getRecordByUserId(userId)
+    if (!record || record.redditVerification?.status !== "verified") {
+      return null
+    }
+    return record.redditVerification.reddit_username
   }
 
   async quoteGlobalHandleUpgrade(userId: string, desiredLabel: string): Promise<HandleUpgradeQuote | null> {

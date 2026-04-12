@@ -12,12 +12,15 @@ import type { Env, User, WalletAttachmentSummary } from "../src/types"
 function makeUser(): User {
   return {
     user_id: "usr_test",
-    profile_id: "pro_test",
     primary_wallet_attachment_id: "wal_primary",
+    verification_state: "unverified",
+    capability_provider: null,
     verification_capabilities: buildDefaultVerificationCapabilities(),
+    verified_at: null,
+    nationality: null,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
-  } as User
+  }
 }
 
 function makeTokenRule(overrides: Partial<CommunityGateRuleRow> = {}): CommunityGateRuleRow {
@@ -86,6 +89,38 @@ describe("community token gate normalization", () => {
       token_id: "42",
       min_balance: "3",
     }))
+  })
+
+  test("normalizes nationality gates to Self-backed ISO alpha-2 config", () => {
+    const normalized = normalizeGateRuleInput({
+      gate_family: "identity_proof",
+      gate_type: "nationality",
+      gate_config: {
+        required_value: "us",
+      },
+    })
+
+    expect(normalized.chainNamespace).toBeNull()
+    expect(normalized.proofRequirementsJson).toBe(JSON.stringify([
+      {
+        proof_type: "nationality",
+        accepted_providers: ["self"],
+      },
+    ]))
+    expect(normalized.gateConfigJson).toBe(JSON.stringify({
+      required_value: "US",
+    }))
+  })
+
+  test("rejects nationality gates that mix required and excluded country config", () => {
+    expect(() => normalizeGateRuleInput({
+      gate_family: "identity_proof",
+      gate_type: "nationality",
+      gate_config: {
+        required_value: "US",
+        excluded_values: ["CA"],
+      },
+    })).toThrow("nationality gates must use either required_value or excluded_values, not both")
   })
 })
 
@@ -174,5 +209,44 @@ describe("community token gate evaluation", () => {
     )
 
     expect(passes).toBe(true)
+  })
+
+  test("enforces nationality required_value and accepted provider", async () => {
+    const user = makeUser()
+    user.verification_capabilities.nationality = {
+      state: "verified",
+      value: "CA",
+      provider: "self",
+      proof_type: "nationality",
+      mechanism: "zk-nationality",
+      verified_at: "2026-01-01T00:00:00Z",
+    }
+
+    const passes = await satisfiesCommunityGateRules(
+      [
+        {
+          ...makeTokenRule({
+            gate_family: "identity_proof",
+            gate_type: "nationality",
+            proof_requirements_json: JSON.stringify([
+              {
+                proof_type: "nationality",
+                accepted_providers: ["self"],
+              },
+            ]),
+            gate_config_json: JSON.stringify({
+              required_value: "US",
+            }),
+            chain_namespace: null,
+          }),
+        },
+      ],
+      {
+        user,
+        wallets: [],
+      },
+    )
+
+    expect(passes).toBe(false)
   })
 })

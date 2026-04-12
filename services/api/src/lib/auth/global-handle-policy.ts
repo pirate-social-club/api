@@ -170,3 +170,13 @@ export function assertFreeCleanupRenameEligible(input: {
     throw eligibilityFailed("Free cleanup rename only applies to standard handles with 8 or more characters")
   }
 }
+
+export function assertRedditVerifiedClaimEligible(input: {
+  labelNormalized: string
+  verifiedRedditUsername?: string | null
+}): void {
+  const normalizedVerifiedUsername = String(input.verifiedRedditUsername || "").trim().replace(/^u\//i, "").toLowerCase()
+  if (!normalizedVerifiedUsername || normalizedVerifiedUsername !== input.labelNormalized) {
+    throw eligibilityFailed("Reddit verified claim is only allowed for your verified Reddit username")
+  }
+}

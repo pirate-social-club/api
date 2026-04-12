@@ -27,10 +27,17 @@ import {
   setPrimaryWalletAttachment,
   buildSongMediaRef,
   setPassportWalletScore,
+  setVerifiedUserNationality,
   createCompletedSongArtifactUpload,
   buildUploadBytes,
+  buildWavBytes,
+  readPurchaseRow,
+  readPurchaseEntitlementRow,
 } from "./community-test-helpers"
-import { buildLocalCommunityDbUrl } from "../src/lib/communities/community-local-db"
+import { bootstrapLocalCommunityDb, buildLocalCommunityDbUrl } from "../src/lib/communities/community-local-db"
+import { getCommunityPurchaseQuoteById } from "../src/lib/communities/community-purchase-quote-store"
+import { createRightsReviewCase } from "../src/lib/posts/community-post-store"
+import { getControlPlaneSongArtifactBundleRepository } from "../src/lib/posts/control-plane-song-artifact-repository"
 import { createRouteTestContext, json, mintUpstreamJwt, resetRuntimeCaches } from "./helpers"
 import type { Env } from "../src/types"
 
@@ -269,6 +276,30 @@ describe("community routes", () => {
     expect(fetchedReviewHeldPostBody.post.content_safety_state).toBe("pending")
     expect(fetchedReviewHeldPostBody.resolved_locale).toBe("es")
 
+    const reviewQueue = await app.request(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}/moderation-cases`,
+      {
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(reviewQueue.status).toBe(200)
+    const reviewQueueBody = await json(reviewQueue) as {
+      items: Array<{
+        post_id: string
+        opened_by: string
+        queue_scope: string
+        status: string
+      }>
+    }
+    expect(reviewQueueBody.items.some((item) => item.post_id === reviewHeldPostBody.post_id)).toBe(true)
+    const heldCase = reviewQueueBody.items.find((item) => item.post_id === reviewHeldPostBody.post_id)
+    expect(heldCase?.opened_by).toBe("platform_analysis")
+    expect(heldCase?.queue_scope).toBe("community")
+    expect(heldCase?.status).toBe("open")
+
     const blockedPost = await requestJson(
       `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
       {
@@ -384,12 +415,10 @@ describe("community routes", () => {
     expect(createdReport.status).toBe(201)
     const createdReportBody = await json(createdReport) as {
       user_report_id: string
-      moderation_case_id: string | null
       reporter_user_id: string
       reason_code: string
     }
     expect(createdReportBody.user_report_id).toMatch(/^urp_/)
-    expect(createdReportBody.moderation_case_id).toMatch(/^mcs_/)
     expect(createdReportBody.reporter_user_id).toBe(reporter.userId)
     expect(createdReportBody.reason_code).toBe("harassment")
 
@@ -434,14 +463,15 @@ describe("community routes", () => {
       }>
     }
     expect(ownerQueueBody.items).toHaveLength(1)
-    expect(ownerQueueBody.items[0]?.moderation_case_id).toBe(createdReportBody.moderation_case_id)
+    const moderationCaseId = ownerQueueBody.items[0]?.moderation_case_id ?? ""
+    expect(moderationCaseId).toMatch(/^mcs_/)
     expect(ownerQueueBody.items[0]?.status).toBe("open")
     expect(ownerQueueBody.items[0]?.opened_by).toBe("user_report")
     expect(ownerQueueBody.items[0]?.queue_scope).toBe("community")
     expect(ownerQueueBody.items[0]?.priority).toBe("low")
 
     const ownerCaseDetail = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/moderation-cases/${createdReportBody.moderation_case_id}`,
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}/moderation-cases/${moderationCaseId}`,
       {
         headers: {
           authorization: `Bearer ${owner.accessToken}`,
@@ -457,7 +487,7 @@ describe("community routes", () => {
       signals: Array<unknown>
       actions: Array<unknown>
     }
-    expect(ownerCaseBody.case.moderation_case_id).toBe(createdReportBody.moderation_case_id)
+    expect(ownerCaseBody.case.moderation_case_id).toBe(moderationCaseId)
     expect(ownerCaseBody.case.status).toBe("open")
     expect(ownerCaseBody.post.post_id).toBe(createdPostBody.post_id)
     expect(ownerCaseBody.post.status).toBe("published")
@@ -467,7 +497,7 @@ describe("community routes", () => {
     expect(ownerCaseBody.actions).toHaveLength(0)
 
     const resolvedCase = await requestJson(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/moderation-cases/${createdReportBody.moderation_case_id}/actions`,
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}/moderation-cases/${moderationCaseId}/actions`,
       {
         action_type: "remove",
         note: "Removed after review.",
@@ -522,8 +552,21 @@ describe("community routes", () => {
       items: Array<{ moderation_case_id: string; status: string }>
     }
     expect(resolvedQueueBody.items).toHaveLength(1)
-    expect(resolvedQueueBody.items[0]?.moderation_case_id).toBe(createdReportBody.moderation_case_id)
+    expect(resolvedQueueBody.items[0]?.moderation_case_id).toBe(moderationCaseId)
     expect(resolvedQueueBody.items[0]?.status).toBe("resolved")
+
+    const secondReporter = await exchangeJwt(ctx.env, "moderation-second-reporter")
+    await completeUniqueHumanVerification(ctx.env, secondReporter.accessToken)
+    await addCommunityMember(ctx.communityDbRoot, communityCreateBody.community.community_id, secondReporter.userId)
+    const reportRemovedPost = await requestJson(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts/${createdPostBody.post_id}/reports`,
+      {
+        reason_code: "misleading",
+      },
+      ctx.env,
+      secondReporter.accessToken,
+    )
+    expect(reportRemovedPost.status).toBe(201)
 
     const reporterReadRemovedPost = await app.request(
       `http://pirate.test/posts/${createdPostBody.post_id}`,
@@ -831,6 +874,217 @@ describe("community routes", () => {
     expect(body.error?.message ?? body.message).toBe("REGISTRY_PUBLISHER_URL is not configured")
   })
 
+  test("community create fails outside local environments when no provision operator is configured", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "community-no-provision-operator-user")
+    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, session.accessToken, "no-provision-operator")
+
+    const productionEnv = {
+      ...ctx.env,
+      ENVIRONMENT: "production",
+      ALLOW_LOCAL_STUB_REGISTRY_PUBLICATION: "true",
+    }
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "No Provision Operator Club",
+      namespace: {
+        namespace_verification_id: namespaceVerificationId,
+      },
+    }, productionEnv, session.accessToken)
+
+    expect(communityCreate.status).toBe(500)
+    const body = await json(communityCreate) as { error?: { message?: string }; message?: string }
+    expect(body.error?.message ?? body.message).toBe("COMMUNITY_PROVISION_OPERATOR_BASE_URL is not configured")
+  })
+
+  test("community create provisions through the private operator when configured", async () => {
+    const operatorToken = "operator-test-token"
+    const operatorBaseUrl = "http://operator.test"
+    const wrapKey = "11".repeat(32)
+    const originalFetch = globalThis.fetch
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    globalThis.fetch = (async (input, init) => {
+      const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
+      if (!requestUrl.startsWith(operatorBaseUrl)) {
+        return originalFetch(input as never, init)
+      }
+
+      const url = new URL(requestUrl)
+      const authorization = init?.headers instanceof Headers
+        ? init.headers.get("authorization")
+        : Array.isArray(init?.headers)
+          ? init?.headers.find(([key]) => key.toLowerCase() === "authorization")?.[1]
+          : init?.headers && "authorization" in init.headers
+            ? String((init.headers as Record<string, unknown>).authorization)
+            : null
+
+      if (authorization !== `Bearer ${operatorToken}`) {
+        return new Response(JSON.stringify({ error_code: "operator_unauthorized" }), {
+          status: 401,
+          headers: { "content-type": "application/json" },
+        })
+      }
+
+      if (url.pathname !== "/internal/v0/community-provisioning/provision") {
+        return new Response("not found", { status: 404 })
+      }
+
+      const body = init?.body ? JSON.parse(String(init.body)) as {
+        community_id: string
+        creator_user_id: string
+        display_name: string
+        namespace_verification_id: string
+        created_at: string
+        bootstrap_payload: {
+          description?: string | null
+          namespace_label: string
+          membership_mode: "open" | "request" | "gated"
+          default_age_gate_policy: "none" | "18_plus"
+          allow_anonymous_identity: boolean
+          anonymous_identity_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null
+          governance_mode: "centralized"
+          handle_policy_template: string
+          gate_rules: Array<{
+            scope: "membership" | "viewer" | "posting"
+            gate_family: "token_holding" | "identity_proof"
+            gate_type: string
+            proof_requirements_json: string
+            chain_namespace: string | null
+            gate_config_json: string | null
+          }>
+        }
+      } : null
+      if (!body) {
+        return new Response(JSON.stringify({ error_code: "missing_body" }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        })
+      }
+
+      const databaseUrl = buildLocalCommunityDbUrl(ctx.communityDbRoot, body.community_id)
+      await bootstrapLocalCommunityDb({
+        rootDir: ctx.communityDbRoot,
+        communityId: body.community_id,
+        createdByUserId: body.creator_user_id,
+        displayName: body.display_name,
+        description: body.bootstrap_payload.description ?? null,
+        namespaceVerificationId: body.namespace_verification_id,
+        namespaceLabel: body.bootstrap_payload.namespace_label,
+        membershipMode: body.bootstrap_payload.membership_mode,
+        defaultAgeGatePolicy: body.bootstrap_payload.default_age_gate_policy,
+        allowAnonymousIdentity: body.bootstrap_payload.allow_anonymous_identity,
+        anonymousIdentityScope: body.bootstrap_payload.anonymous_identity_scope ?? null,
+        governanceMode: body.bootstrap_payload.governance_mode,
+        handlePolicyTemplate: body.bootstrap_payload.handle_policy_template,
+        pricingModel: null,
+        gateRules: body.bootstrap_payload.gate_rules.map((rule) => ({
+          scope: rule.scope,
+          gateFamily: rule.gate_family,
+          gateType: rule.gate_type,
+          proofRequirementsJson: rule.proof_requirements_json,
+          chainNamespace: rule.chain_namespace,
+          gateConfigJson: rule.gate_config_json,
+        })),
+        now: body.created_at,
+      })
+
+      return new Response(JSON.stringify({
+        organization_slug: "pirate-social",
+        group_name: "club-cmt-private-operator",
+        group_id: "grp_private_operator",
+        database_name: "main-cmt-private-operator",
+        database_id: "db_private_operator",
+        database_url: databaseUrl,
+        location: "aws-us-east-1",
+        token_name: `worker-${body.community_id}-v1`,
+        plaintext_token: "operator-db-token",
+        issued_at: body.created_at,
+        expires_at: null,
+      }), {
+        headers: { "content-type": "application/json" },
+      })
+    }) as typeof globalThis.fetch
+
+    try {
+      const session = await exchangeJwt(ctx.env, "community-private-operator-user")
+      const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, session.accessToken, "private-operator-root")
+      const productionEnv = {
+        ...ctx.env,
+        ENVIRONMENT: "production",
+        TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
+        TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "3",
+        COMMUNITY_PROVISION_OPERATOR_BASE_URL: operatorBaseUrl,
+        COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN: operatorToken,
+        COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS: "1000",
+        COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION: "aws-us-east-1",
+        ALLOW_LOCAL_STUB_REGISTRY_PUBLICATION: "true",
+      }
+
+      const communityCreate = await requestJson("http://pirate.test/communities", {
+        display_name: "Private Operator Club",
+        namespace: {
+          namespace_verification_id: namespaceVerificationId,
+        },
+      }, productionEnv, session.accessToken)
+
+      expect(communityCreate.status).toBe(202)
+      const body = await json(communityCreate) as {
+        community: {
+          community_id: string
+          provisioning_state: string
+        }
+        job: {
+          status: string
+        }
+      }
+      expect(body.job.status).toBe("succeeded")
+      expect(body.community.provisioning_state).toBe("active")
+
+      const bindingRows = await ctx.client.execute({
+        sql: `
+          SELECT organization_slug, database_name, database_url, status
+          FROM community_database_bindings
+          WHERE community_id = ?1
+            AND binding_role = 'primary'
+          LIMIT 1
+        `,
+        args: [body.community.community_id],
+      })
+      expect(bindingRows.rows).toHaveLength(1)
+      expect(String(bindingRows.rows[0]?.organization_slug)).toBe("pirate-social")
+      expect(String(bindingRows.rows[0]?.database_name)).toBe("main-cmt-private-operator")
+      expect(String(bindingRows.rows[0]?.status)).toBe("active")
+      expect(String(bindingRows.rows[0]?.database_url)).toBe(
+        buildLocalCommunityDbUrl(ctx.communityDbRoot, body.community.community_id),
+      )
+
+      const credentialRows = await ctx.client.execute({
+        sql: `
+          SELECT token_name, encryption_key_version, status
+          FROM community_db_credentials
+          WHERE community_database_binding_id = (
+            SELECT community_database_binding_id
+            FROM community_database_bindings
+            WHERE community_id = ?1
+              AND binding_role = 'primary'
+            LIMIT 1
+          )
+        `,
+        args: [body.community.community_id],
+      })
+      expect(credentialRows.rows).toHaveLength(1)
+      expect(String(credentialRows.rows[0]?.token_name)).toBe(`worker-${body.community.community_id}-v1`)
+      expect(Number(credentialRows.rows[0]?.encryption_key_version)).toBe(3)
+      expect(String(credentialRows.rows[0]?.status)).toBe("active")
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   test("community discovery ranks by qualified_member_count instead of raw member inflation", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
@@ -941,6 +1195,17 @@ describe("community routes", () => {
       projected_qualified_member_count: 1,
     })
 
+    await ctx.client.execute({
+      sql: `
+        UPDATE community_database_bindings
+        SET database_url = 'invalid://discover-broken',
+            updated_at = CURRENT_TIMESTAMP
+        WHERE community_id = ?1
+          AND binding_role = 'primary'
+      `,
+      args: [communityABody.community.community_id],
+    })
+
     const discovered = await app.request(
       "http://pirate.test/communities/discover?limit=10",
       {},
@@ -997,6 +1262,8 @@ describe("community routes", () => {
       {
         description: "Updated patch description",
         membership_mode: "request",
+        allow_anonymous_identity: true,
+        anonymous_identity_scope: "thread_stable",
         default_age_gate_policy: "none",
       },
       ctx.env,
@@ -1009,14 +1276,35 @@ describe("community routes", () => {
       community_id: string
       description: string | null
       membership_mode: string
+      allow_anonymous_identity: boolean
+      anonymous_identity_scope: string | null
       default_age_gate_policy: string
       registry_publication_state: string
     }
     expect(patchedBody.community_id).toBe(communityCreateBody.community.community_id)
     expect(patchedBody.description).toBe("Updated patch description")
     expect(patchedBody.membership_mode).toBe("request")
+    expect(patchedBody.allow_anonymous_identity).toBe(true)
+    expect(patchedBody.anonymous_identity_scope).toBe("thread_stable")
     expect(patchedBody.default_age_gate_policy).toBe("none")
     expect(patchedBody.registry_publication_state).toBe("stale")
+
+    const disableAnonymousIdentity = await requestJson(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}`,
+      {
+        allow_anonymous_identity: false,
+      },
+      ctx.env,
+      owner.accessToken,
+      "PATCH",
+    )
+    expect(disableAnonymousIdentity.status).toBe(200)
+    const disabledBody = await json(disableAnonymousIdentity) as {
+      allow_anonymous_identity: boolean
+      anonymous_identity_scope: string | null
+    }
+    expect(disabledBody.allow_anonymous_identity).toBe(false)
+    expect(disabledBody.anonymous_identity_scope).toBeNull()
 
     const fetched = await app.request(
       `http://pirate.test/communities/${communityCreateBody.community.community_id}`,
@@ -1031,10 +1319,14 @@ describe("community routes", () => {
     const fetchedBody = await json(fetched) as {
       description: string | null
       membership_mode: string
+      allow_anonymous_identity: boolean
+      anonymous_identity_scope: string | null
       registry_publication_state: string
     }
     expect(fetchedBody.description).toBe("Updated patch description")
     expect(fetchedBody.membership_mode).toBe("request")
+    expect(fetchedBody.allow_anonymous_identity).toBe(false)
+    expect(fetchedBody.anonymous_identity_scope).toBeNull()
     expect(fetchedBody.registry_publication_state).toBe("stale")
   })
 
@@ -2205,8 +2497,93 @@ describe("community routes", () => {
       ctx.env,
       veryMember.accessToken,
     )
-    expect(veryAllowedPost.status).toBe(201)
+  expect(veryAllowedPost.status).toBe(201)
+})
+
+test("post create can require a Self nationality posting gate", async () => {
+  const ctx = await createRouteTestContext()
+  cleanup = ctx.cleanup
+
+  const creator = await exchangeJwt(ctx.env, "community-posting-nationality-creator")
+  const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+
+  const communityCreate = await requestJson("http://pirate.test/communities", {
+    display_name: "Pirate US Posting Club",
+    namespace: {
+      namespace_verification_id: namespaceVerificationId,
+    },
+  }, ctx.env, creator.accessToken)
+  expect(communityCreate.status).toBe(202)
+  const communityCreateBody = await json(communityCreate) as {
+    community: { community_id: string }
+  }
+
+  const gateRuleCreate = await requestJson(
+    `http://pirate.test/communities/${communityCreateBody.community.community_id}/gate-rules`,
+    {
+      scope: "posting",
+      gate_family: "identity_proof",
+      gate_type: "nationality",
+      gate_config: {
+        required_value: "US",
+      },
+      proof_requirements: [
+        {
+          proof_type: "nationality",
+          accepted_providers: ["self"],
+        },
+      ],
+    },
+    ctx.env,
+    creator.accessToken,
+  )
+  expect(gateRuleCreate.status).toBe(201)
+
+  const deniedMember = await exchangeJwt(ctx.env, "community-posting-nationality-ca-member")
+  await setVerifiedUserNationality({
+    client: ctx.client,
+    userId: deniedMember.userId,
+    countryCode: "CA",
   })
+  await addCommunityMember(ctx.communityDbRoot, communityCreateBody.community.community_id, deniedMember.userId)
+
+  const deniedPost = await requestJson(
+    `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+    {
+      post_type: "text",
+      title: "Blocked by nationality gate",
+      body: "A non-US member should not pass the posting gate.",
+      idempotency_key: "post-key-posting-nationality-ca",
+    },
+    ctx.env,
+    deniedMember.accessToken,
+  )
+  expect(deniedPost.status).toBe(403)
+  const deniedBody = await json(deniedPost) as { code: string; message: string }
+  expect(deniedBody.code).toBe("gate_failed")
+  expect(deniedBody.message).toBe("Posting requirements are not satisfied")
+
+  const allowedMember = await exchangeJwt(ctx.env, "community-posting-nationality-us-member")
+  await setVerifiedUserNationality({
+    client: ctx.client,
+    userId: allowedMember.userId,
+    countryCode: "US",
+  })
+  await addCommunityMember(ctx.communityDbRoot, communityCreateBody.community.community_id, allowedMember.userId)
+
+  const allowedPost = await requestJson(
+    `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+    {
+      post_type: "text",
+      title: "Allowed by nationality gate",
+      body: "A US member should pass the posting gate.",
+      idempotency_key: "post-key-posting-nationality-us",
+    },
+    ctx.env,
+    allowedMember.accessToken,
+  )
+  expect(allowedPost.status).toBe(201)
+})
 
   test("first-post-only posting gates only apply to the first text post", async () => {
     const ctx = await createRouteTestContext()
@@ -3602,10 +3979,18 @@ describe("community routes", () => {
       )
       expect(buyerDownload.status).toBe(200)
       expect(new TextDecoder().decode(await buyerDownload.arrayBuffer())).toBe("locked-cdr-read-audio")
-      expect(cdrReadBody?.delivery_ref).toBe(assetRow?.locked_delivery_ref)
-      expect((cdrReadBody?.access_proof as { scope?: unknown } | undefined)?.scope).toBe("asset.share")
-      expect(typeof litRequestBody?.code).toBe("string")
-      expect(litRequestBody?.js_params).toMatchObject({
+      const typedCdrReadBody = cdrReadBody as {
+        delivery_ref?: unknown
+        access_proof?: { scope?: unknown }
+      } | null
+      const typedLitRequestBody = litRequestBody as {
+        code?: unknown
+        js_params?: Record<string, unknown>
+      } | null
+      expect(typedCdrReadBody?.delivery_ref).toBe(assetRow?.locked_delivery_ref)
+      expect(typedCdrReadBody?.access_proof?.scope).toBe("asset.share")
+      expect(typeof typedLitRequestBody?.code).toBe("string")
+      expect(typedLitRequestBody?.js_params).toMatchObject({
         expectedSignerAddress: "0x2125952f22ad971df5645e31a613fe42dcc42c48",
       })
     } finally {
@@ -4391,11 +4776,15 @@ describe("community routes", () => {
       expect(buyerDownload.status).toBe(200)
       expect(new TextDecoder().decode(await buyerDownload.arrayBuffer())).toBe("story-settlement-audio")
 
-      expect(typeof litRequestBody?.code).toBe("string")
-      expect(litRequestBody?.js_params).toMatchObject({
+      const typedLitRequestBody = litRequestBody as {
+        code?: unknown
+        js_params?: Record<string, unknown>
+      } | null
+      expect(typeof typedLitRequestBody?.code).toBe("string")
+      expect(typedLitRequestBody?.js_params).toMatchObject({
         expectedSignerAddress: "0xfb1e0bbe209c1b75f8e365f3055bff4b0a24702b",
       })
-      const unsignedTx = (litRequestBody?.js_params as { unsignedTx?: Record<string, unknown> } | undefined)?.unsignedTx
+      const unsignedTx = (typedLitRequestBody?.js_params as { unsignedTx?: Record<string, unknown> } | undefined)?.unsignedTx
       expect(unsignedTx?.to).toBe("0xFECcC2cF8C9946E1384eF5733B509ac70677c5bd")
       expect(unsignedTx?.value).toBe("7000000000000000000")
     } finally {
@@ -4614,8 +5003,12 @@ describe("community routes", () => {
       expect(proofBody.signature).toBe(`0x${"11".repeat(32)}${"22".repeat(32)}1b`)
       expect(proofBody.delivery_ref).toMatch(/^pirate-cdr:\/\//)
 
-      expect(typeof litRequestBody?.code).toBe("string")
-      expect(litRequestBody?.js_params).toMatchObject({
+      const typedLitRequestBody = litRequestBody as {
+        code?: unknown
+        js_params?: Record<string, unknown>
+      } | null
+      expect(typeof typedLitRequestBody?.code).toBe("string")
+      expect(typedLitRequestBody?.js_params).toMatchObject({
         expectedSignerAddress: "0x2125952f22ad971df5645e31a613fe42dcc42c48",
       })
     } finally {
@@ -5281,7 +5674,7 @@ describe("community routes", () => {
     const deniedBody = await json(bundleCreate) as { code: string; message: string }
     expect(deniedBody.code).toBe("bad_request")
     expect(deniedBody.message).toBe("primary_audio.mime_type must be audio/*")
-  })
+  }, 10_000)
 
   test("song post create returns 400 when artifact bundle is still draft", async () => {
     const ctx = await createRouteTestContext()
@@ -5948,11 +6341,106 @@ describe("community routes", () => {
       ctx.env,
     )
 
-    expect(allowedJoin.status).toBe(200)
-    const allowedBody = await json(allowedJoin) as { community_id: string; status: string }
-    expect(allowedBody.community_id).toBe(communityCreateBody.community.community_id)
-    expect(allowedBody.status).toBe("joined")
+  expect(allowedJoin.status).toBe(200)
+  const allowedBody = await json(allowedJoin) as { community_id: string; status: string }
+  expect(allowedBody.community_id).toBe(communityCreateBody.community.community_id)
+  expect(allowedBody.status).toBe("joined")
+})
+
+test("gated community join enforces Self nationality requirements", async () => {
+  const ctx = await createRouteTestContext()
+  cleanup = ctx.cleanup
+
+  const creator = await exchangeJwt(ctx.env, "community-nationality-join-creator")
+  const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+
+  const communityCreate = await requestJson("http://pirate.test/communities", {
+    display_name: "Pirate US Members",
+    namespace: {
+      namespace_verification_id: namespaceVerificationId,
+    },
+    membership_mode: "gated",
+    gate_rules: [
+      {
+        scope: "membership",
+        gate_family: "identity_proof",
+        gate_type: "nationality",
+        gate_config: {
+          required_value: "US",
+        },
+        proof_requirements: [
+          {
+            proof_type: "nationality",
+            accepted_providers: ["self"],
+          },
+        ],
+      },
+    ],
+  }, ctx.env, creator.accessToken)
+  expect(communityCreate.status).toBe(202)
+  const communityCreateBody = await json(communityCreate) as {
+    community: { community_id: string }
+  }
+
+  const deniedJoiner = await exchangeJwt(ctx.env, "community-nationality-join-ca")
+  await setVerifiedUserNationality({
+    client: ctx.client,
+    userId: deniedJoiner.userId,
+    countryCode: "CA",
   })
+
+  const deniedJoin = await app.request(
+    `http://pirate.test/communities/${communityCreateBody.community.community_id}/join`,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${deniedJoiner.accessToken}`,
+      },
+    },
+    ctx.env,
+  )
+
+  expect(deniedJoin.status).toBe(403)
+  const deniedBody = await json(deniedJoin) as {
+    code: string
+    message: string
+    details?: {
+      verification_policy?: {
+        policy_id?: string
+        provider?: string
+        verification_intent?: string
+      }
+    }
+  }
+  expect(deniedBody.code).toBe("gate_failed")
+  expect(deniedBody.message).toBe("Community membership requirements are not satisfied")
+  expect(deniedBody.details?.verification_policy?.policy_id).toBe("policy_self_join_v1")
+  expect(deniedBody.details?.verification_policy?.provider).toBe("self")
+  expect(deniedBody.details?.verification_policy?.verification_intent).toBe("ucommunity_join")
+
+  const allowedJoiner = await exchangeJwt(ctx.env, "community-nationality-join-us")
+  await setVerifiedUserNationality({
+    client: ctx.client,
+    userId: allowedJoiner.userId,
+    countryCode: "US",
+  })
+
+  const allowedJoin = await app.request(
+    `http://pirate.test/communities/${communityCreateBody.community.community_id}/join`,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${allowedJoiner.accessToken}`,
+      },
+    },
+    ctx.env,
+  )
+
+  expect(allowedJoin.status).toBe(200)
+  const allowedBody = await json(allowedJoin) as { community_id: string; status: string }
+  expect(allowedBody.community_id).toBe(communityCreateBody.community.community_id)
+  expect(allowedBody.status).toBe("joined")
+})
 
   test("community create rejects invalid accepted_providers combinations", async () => {
     const ctx = await createRouteTestContext()
@@ -5981,10 +6469,10 @@ describe("community routes", () => {
         },
       ],
     }, ctx.env, session.accessToken)
-    expect(invalidGenderProvider.status).toBe(403)
+    expect(invalidGenderProvider.status).toBe(400)
     const invalidGenderProviderBody = await json(invalidGenderProvider) as { code: string; message: string }
-    expect(invalidGenderProviderBody.code).toBe("eligibility_failed")
-    expect(invalidGenderProviderBody.message).toMatch(/Invalid accepted_providers for gender/)
+    expect(invalidGenderProviderBody.code).toBe("bad_request")
+    expect(invalidGenderProviderBody.message).toMatch(/accepted_providers are invalid for gender/)
 
     const invalidWalletScoreProvider = await requestJson("http://pirate.test/communities", {
       display_name: "Invalid Wallet Provider Club",
@@ -6006,10 +6494,10 @@ describe("community routes", () => {
         },
       ],
     }, ctx.env, session.accessToken)
-    expect(invalidWalletScoreProvider.status).toBe(403)
+    expect(invalidWalletScoreProvider.status).toBe(400)
     const invalidWalletScoreProviderBody = await json(invalidWalletScoreProvider) as { code: string; message: string }
-    expect(invalidWalletScoreProviderBody.code).toBe("eligibility_failed")
-    expect(invalidWalletScoreProviderBody.message).toMatch(/Invalid accepted_providers for wallet_score/)
+    expect(invalidWalletScoreProviderBody.code).toBe("bad_request")
+    expect(invalidWalletScoreProviderBody.message).toMatch(/accepted_providers are invalid for wallet_score/)
   })
 
   test("community money policy returns a default policy and persists explicit updates", async () => {

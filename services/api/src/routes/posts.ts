@@ -4,14 +4,10 @@ import { getUserRepository } from "../lib/auth/repositories"
 import { getControlPlaneCommunityRepository } from "../lib/communities/control-plane-community-repository"
 import { requireBearerToken } from "../lib/helpers"
 import { castPostVote, getPost } from "../lib/posts/post-service"
-import { handleRoute } from "./route-helpers"
+import { handleRoute, requireRouteParam } from "./route-helpers"
 import type { Env } from "../types"
 
 const posts = new Hono<{ Bindings: Env }>()
-
-function routeParam(c: { req: { param(name: string): string | undefined } }, name: string): string {
-  return c.req.param(name) ?? ""
-}
 
 posts.get("/:postId", handleRoute(async (c) => {
   const token = requireBearerToken(c.req.header("authorization"))
@@ -19,7 +15,7 @@ posts.get("/:postId", handleRoute(async (c) => {
   const result = await getPost({
     env: c.env,
     bearerToken: token,
-    postId: routeParam(c, "postId"),
+    postId: requireRouteParam(c.req.param("postId"), "post_id"),
     locale: c.req.query("locale") ?? null,
     communityRepository,
   })
@@ -36,7 +32,7 @@ posts.post("/:postId/vote", handleRoute(async (c) => {
   const result = await castPostVote({
     env: c.env,
     bearerToken: token,
-    postId: routeParam(c, "postId"),
+    postId: requireRouteParam(c.req.param("postId"), "post_id"),
     value: body.value,
     userRepository: getUserRepository(c.env),
     communityRepository: getControlPlaneCommunityRepository(c.env),
