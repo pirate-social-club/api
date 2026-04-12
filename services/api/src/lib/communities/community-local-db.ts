@@ -644,19 +644,31 @@ export async function updateLocalCommunityMembershipStats(input: {
 }): Promise<void> {
   const client = createClient({ url: input.databaseUrl })
   try {
-    await client.execute({
-      sql: `
-        UPDATE communities
-        SET cached_member_count = ?2,
-            cached_qualified_member_count = ?3,
-            updated_at = ?4
-        WHERE community_id = ?1
-      `,
-      args: [input.communityId, input.memberCount, input.qualifiedMemberCount, input.updatedAt],
-    })
+    await updateLocalCommunityMembershipStatsWithExecutor(client, input)
   } finally {
     client.close()
   }
+}
+
+export async function updateLocalCommunityMembershipStatsWithExecutor(
+  executor: SqlExecutor,
+  input: {
+    communityId: string
+    memberCount: number
+    qualifiedMemberCount: number
+    updatedAt: string
+  },
+): Promise<void> {
+  await executor.execute({
+    sql: `
+      UPDATE communities
+      SET cached_member_count = ?2,
+          cached_qualified_member_count = ?3,
+          updated_at = ?4
+      WHERE community_id = ?1
+    `,
+    args: [input.communityId, input.memberCount, input.qualifiedMemberCount, input.updatedAt],
+  })
 }
 
 export async function readLocalCommunityProfile(

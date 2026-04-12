@@ -98,6 +98,8 @@ export async function joinCommunity(input: {
         repository: input.communityRepository,
         userRepository: input.userRepository,
         communityId: input.communityId,
+        localDb: db,
+        community,
       })
       return {
         community_id: input.communityId,
@@ -151,6 +153,8 @@ export async function joinCommunity(input: {
       repository: input.communityRepository,
       userRepository: input.userRepository,
       communityId: input.communityId,
+      localDb: db,
+      community,
     })
     return {
       community_id: input.communityId,
@@ -256,6 +260,8 @@ export async function approveMembershipRequest(input: {
       repository: input.communityRepository,
       userRepository: input.userRepository,
       communityId: input.communityId,
+      localDb: db,
+      community,
     })
 
     const resolved = await getMembershipRequestById(db.client, input.communityId, input.membershipRequestId)
