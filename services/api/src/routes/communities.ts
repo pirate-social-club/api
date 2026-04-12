@@ -110,7 +110,7 @@ function normalizeNamespaceLabel(value: string): string {
 }
 
 function routeParam(c: { req: { param(name: string): string | undefined } }, name: string): string {
-  return routeParam(c, name) ?? ""
+  return c.req.param(name) ?? ""
 }
 
 async function requireVerifiedHumanForModeration(input: {

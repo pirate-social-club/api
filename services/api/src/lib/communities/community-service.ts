@@ -37,6 +37,13 @@ import {
 } from "./community-membership-store"
 import { openCommunityDb } from "./community-db-factory"
 import { normalizeGateRuleInput } from "./community-gate-rule-normalization"
+import {
+  allowLocalStubCommunityProvisioning,
+  provisionCommunityWithOperator,
+  requireCommunityDbWrapKeyVersion,
+  requireCommunityProvisionGroupLocation,
+  shouldUseCommunityProvisionOperator,
+} from "./community-provision-operator"
 import type { UserRepository } from "../auth/repositories"
 import type { CommunityRow, JobRow } from "../auth/control-plane-auth-rows"
 import type { CommunityRepository } from "./control-plane-community-repository"
@@ -412,6 +419,25 @@ function parseCommunityListLimit(limit: string | null | undefined): number {
   return Math.min(100, Math.max(1, Math.trunc(parsed)))
 }
 
+function compareDiscoverableCommunities(a: Community, b: Community): number {
+  const qualifiedDiff = (b.qualified_member_count ?? 0) - (a.qualified_member_count ?? 0)
+  if (qualifiedDiff !== 0) {
+    return qualifiedDiff
+  }
+
+  const stageDiff = Date.parse(String(b.stage_entered_at || b.created_at)) - Date.parse(String(a.stage_entered_at || a.created_at))
+  if (stageDiff !== 0) {
+    return stageDiff
+  }
+
+  const createdDiff = Date.parse(b.created_at) - Date.parse(a.created_at)
+  if (createdDiff !== 0) {
+    return createdDiff
+  }
+
+  return a.community_id.localeCompare(b.community_id)
+}
+
 async function deriveCommunityReadModel(
   repo: CommunityRepository,
   userRepository: UserRepository,
@@ -606,6 +632,32 @@ function resolveCommunityDbRoot(env: Env): string {
   }
 
   throw internalError("LOCAL_COMMUNITY_DB_ROOT is not configured")
+}
+
+function normalizeCommunityTursoNamePart(communityId: string): string {
+  return communityId.trim().toLowerCase().replace(/_/g, "-")
+}
+
+function buildPendingOperatorBindingSeed(input: {
+  communityId: string
+  location: string
+}): {
+  organizationSlug: string
+  groupName: string
+  databaseName: string
+  databaseUrl: string
+  location: string
+  status: "inactive"
+} {
+  const normalizedCommunityId = normalizeCommunityTursoNamePart(input.communityId)
+  return {
+    organizationSlug: "operator-pending",
+    groupName: `club-${normalizedCommunityId}`,
+    databaseName: `main-${normalizedCommunityId}`,
+    databaseUrl: `libsql://pending-${normalizedCommunityId}.invalid`,
+    location: input.location,
+    status: "inactive",
+  }
 }
 
 function assertCreateRequest(
@@ -819,7 +871,14 @@ export async function createCommunity(input: {
     throw eligibilityFailed("Namespace verification has expired")
   }
 
-  const dbRoot = resolveCommunityDbRoot(input.env)
+  const useProvisionOperator = shouldUseCommunityProvisionOperator(input.env)
+  if (!useProvisionOperator && !allowLocalStubCommunityProvisioning(input.env)) {
+    throw internalError("COMMUNITY_PROVISION_OPERATOR_BASE_URL is not configured")
+  }
+
+  const dbRoot = useProvisionOperator ? null : resolveCommunityDbRoot(input.env)
+  const groupLocation = useProvisionOperator ? requireCommunityProvisionGroupLocation(input.env) : null
+  const provisioningMode = useProvisionOperator ? "turso_operator" : "local_stub"
   const registryPublication = getRegistryPublicationAdapter(input.env)
   const existingCommunity = await input.communityRepository.getCommunityByNamespaceVerificationId(
     namespaceVerificationId,
@@ -842,7 +901,31 @@ export async function createCommunity(input: {
   const communityId = existingCommunity?.community_id ?? makeId("cmt")
   const bindingId = existingCommunity?.primary_database_binding_id ?? makeId("cdb")
   const jobId = makeId("job")
-  const databaseUrl = buildLocalCommunityDbUrl(dbRoot, communityId)
+  const gateRules = (input.body.gate_rules ?? []) as CommunityGateRuleInput[]
+  const normalizedGateRules = gateRules.map((rule) => {
+    const normalized = normalizeGateRuleInput(rule)
+    return {
+      scope: rule.scope,
+      gateFamily: rule.gate_family,
+      gateType: rule.gate_type,
+      proofRequirementsJson: normalized.proofRequirementsJson,
+      chainNamespace: normalized.chainNamespace,
+      gateConfigJson: normalized.gateConfigJson,
+    }
+  })
+  const bindingSeed = useProvisionOperator
+    ? buildPendingOperatorBindingSeed({
+        communityId,
+        location: groupLocation as string,
+      })
+    : {
+        organizationSlug: "local-dev",
+        groupName: `club-${communityId}`,
+        databaseName: "main",
+        databaseUrl: buildLocalCommunityDbUrl(dbRoot as string, communityId),
+        location: "local",
+        status: "active" as const,
+      }
   const publicAttempt = await registryPublication.createCommunityCreateAttempt({
     actorUserId: session.userId,
     actorPrimaryWalletSnapshot,
@@ -870,7 +953,8 @@ export async function createCommunity(input: {
             registryAttemptId: registryAttempt.registry_attempt_id,
             jobId,
             namespaceVerificationId,
-            databaseUrl,
+            provisioningMode,
+            fallbackBindingSeed: bindingSeed,
             createdAt,
           })
         : await input.communityRepository.createCommunityProvisioningRequest({
@@ -881,7 +965,8 @@ export async function createCommunity(input: {
             creatorUserId: session.userId,
             displayName,
             namespaceVerificationId,
-            databaseUrl,
+            provisioningMode,
+            bindingSeed,
             createdAt,
           })
     } catch (error) {
@@ -896,52 +981,108 @@ export async function createCommunity(input: {
 
   let provisioningCompleted = false
   let provisioningFinalized: { community: CommunityRow; job: JobRow } | null = null
-  let localSnapshot: LocalCommunitySnapshot | null = null
 
   try {
-    const gateRules = (input.body.gate_rules ?? []) as CommunityGateRuleInput[]
-    localSnapshot = await bootstrapLocalCommunityDb({
-      rootDir: dbRoot,
-      communityId,
-      createdByUserId: session.userId,
-      displayName,
-      description: input.body.description?.trim() || null,
-      namespaceVerificationId,
-      namespaceLabel: namespaceVerification.normalized_root_label,
-      membershipMode: input.body.membership_mode ?? "open",
-      defaultAgeGatePolicy: input.body.default_age_gate_policy ?? "none",
-      allowAnonymousIdentity: input.body.allow_anonymous_identity ?? false,
-      anonymousIdentityScope: input.body.allow_anonymous_identity ? (input.body.anonymous_identity_scope ?? null) : null,
-      governanceMode: input.body.governance_mode ?? "centralized",
-      handlePolicyTemplate: input.body.handle_policy?.policy_template ?? "standard",
-      pricingModel: null,
-      gateRules: gateRules.map((rule) => {
-        const normalized = normalizeGateRuleInput(rule)
-        return {
-          scope: rule.scope,
-          gateFamily: rule.gate_family,
-          gateType: rule.gate_type,
-          proofRequirementsJson: normalized.proofRequirementsJson,
-          chainNamespace: normalized.chainNamespace,
-          gateConfigJson: normalized.gateConfigJson,
-        }
-      }),
-      now: createdAt,
-    })
+    if (useProvisionOperator) {
+      const provisioned = await provisionCommunityWithOperator(input.env, {
+        communityId,
+        creatorUserId: session.userId,
+        displayName,
+        namespaceVerificationId,
+        groupLocation: groupLocation as string,
+        createdAt,
+        bootstrapPayload: {
+          description: input.body.description?.trim() || null,
+          namespaceLabel: namespaceVerification.normalized_root_label,
+          membershipMode: input.body.membership_mode ?? "open",
+          defaultAgeGatePolicy: input.body.default_age_gate_policy ?? "none",
+          allowAnonymousIdentity: input.body.allow_anonymous_identity ?? false,
+          anonymousIdentityScope:
+            input.body.allow_anonymous_identity ? (input.body.anonymous_identity_scope ?? null) : null,
+          governanceMode: input.body.governance_mode ?? "centralized",
+          handlePolicyTemplate: input.body.handle_policy?.policy_template ?? "standard",
+          pricingModel: null,
+          gateRules: normalizedGateRules,
+        },
+      })
 
-    provisioningFinalized = await input.communityRepository.markCommunityProvisioningSucceeded({
-      communityId,
-      communityDatabaseBindingId: prepared.binding.community_database_binding_id,
-      jobId: prepared.job.job_id,
-      actorUserId: session.userId,
-      resultRef: prepared.binding.database_url,
-      createdAt,
-      metadata: {
-        binding_id: prepared.binding.community_database_binding_id,
-        database_url: prepared.binding.database_url,
-        mode: "local_stub",
-      },
-    })
+      const completed = await input.communityRepository.completeCommunityProvisioning({
+        communityId,
+        communityDatabaseBindingId: prepared.binding.community_database_binding_id,
+        jobId: prepared.job.job_id,
+        actorUserId: session.userId,
+        resultRef: provisioned.databaseUrl,
+        createdAt,
+        metadata: {
+          binding_id: prepared.binding.community_database_binding_id,
+          database_url: provisioned.databaseUrl,
+          mode: provisioningMode,
+          organization_slug: provisioned.organizationSlug,
+          group_name: provisioned.groupName,
+          database_name: provisioned.databaseName,
+          token_name: provisioned.tokenName,
+        },
+        binding: {
+          organizationSlug: provisioned.organizationSlug,
+          groupName: provisioned.groupName,
+          groupId: provisioned.groupId,
+          databaseName: provisioned.databaseName,
+          databaseId: provisioned.databaseId,
+          databaseUrl: provisioned.databaseUrl,
+          location: provisioned.location,
+          status: "active",
+          createdAt: prepared.binding.created_at,
+          updatedAt: createdAt,
+        },
+        credential: {
+          tokenName: provisioned.tokenName,
+          plaintextToken: provisioned.plaintextToken,
+          encryptionKeyVersion: requireCommunityDbWrapKeyVersion(input.env),
+          issuedAt: provisioned.issuedAt,
+          expiresAt: provisioned.expiresAt,
+          updatedAt: createdAt,
+        },
+      })
+
+      provisioningFinalized = {
+        community: completed.community,
+        job: completed.job,
+      }
+    } else {
+      await bootstrapLocalCommunityDb({
+        rootDir: dbRoot as string,
+        communityId,
+        createdByUserId: session.userId,
+        displayName,
+        description: input.body.description?.trim() || null,
+        namespaceVerificationId,
+        namespaceLabel: namespaceVerification.normalized_root_label,
+        membershipMode: input.body.membership_mode ?? "open",
+        defaultAgeGatePolicy: input.body.default_age_gate_policy ?? "none",
+        allowAnonymousIdentity: input.body.allow_anonymous_identity ?? false,
+        anonymousIdentityScope: input.body.allow_anonymous_identity ? (input.body.anonymous_identity_scope ?? null) : null,
+        governanceMode: input.body.governance_mode ?? "centralized",
+        handlePolicyTemplate: input.body.handle_policy?.policy_template ?? "standard",
+        pricingModel: null,
+        gateRules: normalizedGateRules,
+        now: createdAt,
+      })
+
+      provisioningFinalized = await input.communityRepository.markCommunityProvisioningSucceeded({
+        communityId,
+        communityDatabaseBindingId: prepared.binding.community_database_binding_id,
+        jobId: prepared.job.job_id,
+        actorUserId: session.userId,
+        resultRef: prepared.binding.database_url,
+        createdAt,
+        metadata: {
+          binding_id: prepared.binding.community_database_binding_id,
+          database_url: prepared.binding.database_url,
+          mode: provisioningMode,
+        },
+      })
+    }
+
     provisioningCompleted = true
 
     const publicationFinalized = await registryPublication.publishCommunityCreate({
@@ -965,17 +1106,21 @@ export async function createCommunity(input: {
     }
   } catch (error) {
     const failedAt = nowIso()
+    const provisioningErrorCode = useProvisionOperator
+      ? "community_provision_operator_failed"
+      : "local_stub_bootstrap_failed"
 
     if (!provisioningCompleted) {
       await input.communityRepository.markCommunityProvisioningFailed({
         communityId,
         jobId: prepared.job.job_id,
         actorUserId: session.userId,
-        errorCode: "local_stub_bootstrap_failed",
+        errorCode: provisioningErrorCode,
         createdAt: failedAt,
         metadata: {
           binding_id: prepared.binding.community_database_binding_id,
           database_url: prepared.binding.database_url,
+          mode: provisioningMode,
           message: error instanceof Error ? error.message : String(error),
         },
       }).catch(() => {})
@@ -985,9 +1130,10 @@ export async function createCommunity(input: {
         registryAttemptId: registryAttempt.registry_attempt_id,
         jobId: null,
         actorUserId: session.userId,
-        errorCode: "local_stub_bootstrap_failed",
+        errorCode: provisioningErrorCode,
         createdAt: failedAt,
         metadata: {
+          mode: provisioningMode,
           message: error instanceof Error ? error.message : String(error),
         },
       }).catch(() => {})
@@ -1131,55 +1277,41 @@ export async function listDiscoverableCommunities(input: {
   limit?: string | null
 }): Promise<CommunityListResponse> {
   const rows = await input.repository.listActiveCommunities()
-  const localSnapshots = new Map<string, LocalCommunitySnapshot | null>()
-  const fallbackMemberIdsByCommunity = new Map<string, string[]>()
-  const allMemberIds = new Set<string>()
+  const limit = parseCommunityListLimit(input.limit)
+  const items: Community[] = []
 
-  await Promise.all(rows.map(async (row) => {
-    const db = await openCommunityDb(input.repository, row.community_id)
+  for (const row of rows) {
+    let local: LocalCommunitySnapshot | null = null
+    let memberCount: number | null = row.projected_member_count
+    let qualifiedMemberCount: number | null = row.projected_qualified_member_count
+
     try {
-      const local = await readLocalCommunityWithExecutor(db.client, row.community_id).catch(() => null)
-      localSnapshots.set(row.community_id, local)
-      if (
-        (row.projected_member_count == null || row.projected_qualified_member_count == null)
-        && (local?.cached_member_count == null || local.cached_qualified_member_count == null)
-      ) {
-        const memberUserIds = await listActiveCommunityMemberUserIds(db.client, row.community_id)
-        fallbackMemberIdsByCommunity.set(row.community_id, memberUserIds)
-        for (const userId of memberUserIds) {
-          allMemberIds.add(userId)
+      const db = await openCommunityDb(input.repository, row.community_id)
+      try {
+        local = await readLocalCommunityWithExecutor(db.client, row.community_id).catch(() => null)
+        if (memberCount == null || qualifiedMemberCount == null) {
+          if (local?.cached_member_count != null && local.cached_qualified_member_count != null) {
+            memberCount = local.cached_member_count
+            qualifiedMemberCount = local.cached_qualified_member_count
+          } else {
+            const memberUserIds = await listActiveCommunityMemberUserIds(db.client, row.community_id)
+            const users = await input.userRepository.listUsersByIds(memberUserIds)
+            const usersById = new Map(users.map((user) => [user.user_id, user]))
+            memberCount = memberUserIds.length
+            qualifiedMemberCount = 0
+            for (const userId of memberUserIds) {
+              if (usersById.get(userId)?.verification_capabilities.unique_human.state === "verified") {
+                qualifiedMemberCount += 1
+              }
+            }
+          }
         }
+      } finally {
+        db.close()
       }
-    } finally {
-      db.close()
-    }
-  }))
+    } catch {}
 
-  const users = await input.userRepository.listUsersByIds([...allMemberIds])
-  const usersById = new Map(users.map((user) => [user.user_id, user]))
-
-  const items = rows.map((row) => {
-    const local = localSnapshots.get(row.community_id) ?? null
-    let memberCount: number
-    let qualifiedMemberCount: number
-    if (row.projected_member_count != null && row.projected_qualified_member_count != null) {
-      memberCount = row.projected_member_count
-      qualifiedMemberCount = row.projected_qualified_member_count
-    } else if (local?.cached_member_count != null && local.cached_qualified_member_count != null) {
-      memberCount = local.cached_member_count
-      qualifiedMemberCount = local.cached_qualified_member_count
-    } else {
-      const memberUserIds = fallbackMemberIdsByCommunity.get(row.community_id) ?? []
-      memberCount = memberUserIds.length
-      qualifiedMemberCount = 0
-      for (const userId of memberUserIds) {
-        if (usersById.get(userId)?.verification_capabilities.unique_human.state === "verified") {
-          qualifiedMemberCount += 1
-        }
-      }
-    }
-
-    return serializeCommunity(
+    const item = serializeCommunity(
       row,
       local,
       {
@@ -1196,31 +1328,16 @@ export async function listDiscoverableCommunities(input: {
       null,
       null,
     )
-  })
 
-  const sorted = items
-    .sort((a, b) => {
-      const qualifiedDiff = (b.qualified_member_count ?? 0) - (a.qualified_member_count ?? 0)
-      if (qualifiedDiff !== 0) {
-        return qualifiedDiff
-      }
-
-      const stageDiff = Date.parse(String(b.stage_entered_at || b.created_at)) - Date.parse(String(a.stage_entered_at || a.created_at))
-      if (stageDiff !== 0) {
-        return stageDiff
-      }
-
-      const createdDiff = Date.parse(b.created_at) - Date.parse(a.created_at)
-      if (createdDiff !== 0) {
-        return createdDiff
-      }
-
-      return a.community_id.localeCompare(b.community_id)
-    })
-    .slice(0, parseCommunityListLimit(input.limit))
+    items.push(item)
+    items.sort(compareDiscoverableCommunities)
+    if (items.length > limit) {
+      items.length = limit
+    }
+  }
 
   return {
-    items: sorted,
+    items,
     next_cursor: null,
   }
 }
@@ -1247,6 +1364,7 @@ export async function updateCommunity(input: {
   try {
     const updatedAt = nowIso()
     const body = input.body
+    const disableAnonymousIdentity = body.allow_anonymous_identity === false
     const local = await updateLocalCommunity({
       databaseUrl: db.databaseUrl,
       communityId: input.communityId,
@@ -1256,8 +1374,8 @@ export async function updateCommunity(input: {
       descriptionSet: Object.prototype.hasOwnProperty.call(body, "description"),
       membershipMode: body.membership_mode,
       allowAnonymousIdentity: body.allow_anonymous_identity,
-      anonymousIdentityScope: body.anonymous_identity_scope,
-      anonymousIdentityScopeSet: Object.prototype.hasOwnProperty.call(body, "anonymous_identity_scope"),
+      anonymousIdentityScope: disableAnonymousIdentity ? null : body.anonymous_identity_scope,
+      anonymousIdentityScopeSet: disableAnonymousIdentity || Object.prototype.hasOwnProperty.call(body, "anonymous_identity_scope"),
       defaultAgeGatePolicy: body.default_age_gate_policy,
       updatedAt,
     })
