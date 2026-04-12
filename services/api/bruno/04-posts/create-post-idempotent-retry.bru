@@ -1,0 +1,39 @@
+meta {
+  name: create-post-idempotent-retry
+  type: http
+  seq: 41
+}
+
+post {
+  url: {{base_url}}/communities/{{community_id}}/posts
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+body:json {
+  {
+    "idempotency_key": "{{post_idempotency_key}}",
+    "post_type": "text",
+    "identity_mode": "public",
+    "title": "{{post_title}}",
+    "body": "{{post_body}}"
+  }
+}
+
+tests {
+  test("status is 201", function() {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("idempotent retry returns the original post", function() {
+    const body = res.getBody();
+    expect(body.post_id).to.equal(bru.getEnvVar("post_id"));
+    expect(body.community_id).to.equal(bru.getEnvVar("community_id"));
+    expect(body.status).to.equal("published");
+  });
+}

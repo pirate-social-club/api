@@ -1,0 +1,37 @@
+meta {
+  name: patch-donation-policy
+  type: http
+  seq: 38
+}
+
+patch {
+  url: {{base_url}}/communities/{{community_id}}/donation-policy
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+body:json {
+  {
+    "donation_policy_mode": "none",
+    "donation_partner_id": null,
+    "donation_partner_status": "unconfigured"
+  }
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("donation sidecars remain disabled", function() {
+    const body = res.getBody();
+    expect(body.donation_policy_mode).to.equal("none");
+    expect(body.donation_partner_id).to.equal(null);
+    expect(body.donation_partner_status).to.equal("unconfigured");
+  });
+}

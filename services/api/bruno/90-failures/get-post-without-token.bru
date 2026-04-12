@@ -1,0 +1,22 @@
+meta {
+  name: get-post-without-token
+  type: http
+  seq: 104
+}
+
+get {
+  url: {{base_url}}/posts/{{post_id}}?locale={{post_locale}}
+  body: none
+  auth: none
+}
+
+tests {
+  test("status is 401", function() {
+    expect(res.getStatus()).to.equal(401);
+  });
+
+  test("body is auth_error", function() {
+    const body = res.getBody();
+    expect(body.code).to.equal("auth_error");
+  });
+}

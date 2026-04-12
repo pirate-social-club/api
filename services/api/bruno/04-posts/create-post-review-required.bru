@@ -1,0 +1,46 @@
+meta {
+  name: create-post-review-required
+  type: http
+  seq: 43
+}
+
+post {
+  url: {{base_url}}/communities/{{community_id}}/posts
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+body:json {
+  {
+    "idempotency_key": "bruno-post-review-required-01",
+    "post_type": "text",
+    "identity_mode": "public",
+    "title": "[review-required] Bruno Review Hold",
+    "body": "Local stub should persist this post in a non-published review-held state."
+  }
+}
+
+tests {
+  test("status is 202", function() {
+    expect(res.getStatus()).to.equal(202);
+  });
+
+  test("review-held post returns canonical non-published row", function() {
+    const body = res.getBody();
+    expect(body.post_id).to.be.a("string");
+    expect(body.community_id).to.equal(bru.getEnvVar("community_id"));
+    expect(body.status).to.equal("draft");
+    expect(body.analysis_state).to.equal("review_required");
+    expect(body.content_safety_state).to.equal("pending");
+  });
+}
+
+script:post-response {
+  const body = res.getBody();
+  bru.setEnvVar("review_post_id", body.post_id);
+}

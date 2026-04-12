@@ -1,0 +1,27 @@
+meta {
+  name: get-job
+  type: http
+  seq: 31
+}
+
+get {
+  url: {{base_url}}/jobs/{{community_provisioning_job_id}}
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("community provisioning job succeeded", function() {
+    const body = res.getBody();
+    expect(body.job_id).to.equal(bru.getEnvVar("community_provisioning_job_id"));
+    expect(body.status).to.equal("succeeded");
+  });
+}

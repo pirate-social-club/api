@@ -1,0 +1,66 @@
+meta {
+  name: patch-community-profile
+  type: http
+  seq: 35
+}
+
+patch {
+  url: {{base_url}}/communities/{{community_id}}/community-profile
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+body:json {
+  {
+    "rules": [
+      {
+        "title": "Stay on topic",
+        "body": "Keep posts focused on the community subject.",
+        "position": 0
+      },
+      {
+        "title": "No NSFW or 18+ content",
+        "body": "Pornographic or explicitly adult material is not allowed here.",
+        "position": 1
+      },
+      {
+        "title": "No spam or low-effort promo",
+        "body": "Repetitive promotion and low-signal farming posts are removed.",
+        "position": 2
+      }
+    ],
+    "resource_links": [
+      {
+        "label": "Official site",
+        "url": "https://example.com",
+        "resource_kind": "website",
+        "position": 0
+      },
+      {
+        "label": "Docs",
+        "url": "https://example.com/docs",
+        "resource_kind": "document",
+        "position": 1
+      }
+    ]
+  }
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("community profile patch returns ordered rules and resource links", function() {
+    const body = res.getBody();
+    expect(body.rules).to.have.length(3);
+    expect(body.resource_links).to.have.length(2);
+    expect(body.rules[0].title).to.equal("Stay on topic");
+    expect(body.resource_links[0].label).to.equal("Official site");
+  });
+}

@@ -1,0 +1,27 @@
+meta {
+  name: get-community
+  type: http
+  seq: 32
+}
+
+get {
+  url: {{base_url}}/communities/{{community_id}}
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("community is active", function() {
+    const body = res.getBody();
+    expect(body.community_id).to.equal(bru.getEnvVar("community_id"));
+    expect(body.provisioning_state).to.equal("active");
+  });
+}

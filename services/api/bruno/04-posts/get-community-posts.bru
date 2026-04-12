@@ -1,0 +1,32 @@
+meta {
+  name: get-community-posts
+  type: http
+  seq: 46
+}
+
+get {
+  url: {{base_url}}/communities/{{community_id}}/posts?locale={{post_locale}}
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("community feed returns published posts only", function() {
+    const body = res.getBody();
+    expect(body.items).to.be.an("array");
+    expect(body.items.length).to.equal(1);
+    expect(body.items[0].post.post_id).to.equal(bru.getEnvVar("post_id"));
+    expect(body.items[0].post.status).to.equal("published");
+    expect(body.items[0].resolved_locale).to.equal(bru.getEnvVar("post_locale"));
+    expect(body.items.some((item) => item.post.post_id === bru.getEnvVar("review_post_id"))).to.equal(false);
+    expect(body.next_cursor).to.equal(null);
+  });
+}

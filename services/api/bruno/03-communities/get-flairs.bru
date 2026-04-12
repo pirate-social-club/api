@@ -1,0 +1,28 @@
+meta {
+  name: get-flairs
+  type: http
+  seq: 37
+}
+
+get {
+  url: {{base_url}}/communities/{{community_id}}/flairs
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("flair policy returns canonical fields", function() {
+    const body = res.getBody();
+    expect(body.flair_enabled).to.be.a("boolean");
+    expect(body.require_flair_on_top_level_posts).to.be.a("boolean");
+    expect(body.definitions).to.be.an("array");
+  });
+}

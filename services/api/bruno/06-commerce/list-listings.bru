@@ -1,0 +1,27 @@
+meta {
+  name: list-listings
+  type: http
+  seq: 59
+}
+
+get {
+  url: {{base_url}}/communities/{{community_id}}/listings
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("listing list includes the created listing", function() {
+    const body = res.getBody();
+    expect(body.items).to.be.an("array");
+    expect(body.items[0].listing_id).to.equal(bru.getEnvVar("listing_id"));
+  });
+}

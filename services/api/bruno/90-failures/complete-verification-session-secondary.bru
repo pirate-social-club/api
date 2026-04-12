@@ -1,0 +1,34 @@
+meta {
+  name: complete-verification-session-secondary
+  type: http
+  seq: 107
+}
+
+post {
+  url: {{base_url}}/verification-sessions/{{verification_session_id}}/complete
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+body:json {
+  {
+    "proof_hash": "proof-hash-bruno-secondary-01"
+  }
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("secondary verification session completes verified", function() {
+    const body = res.getBody();
+    expect(body.status).to.equal("verified");
+    expect(body.attestation_id).to.be.a("string");
+  });
+}

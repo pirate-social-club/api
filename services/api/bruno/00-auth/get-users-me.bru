@@ -1,0 +1,27 @@
+meta {
+  name: get-users-me
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{base_url}}/users/me
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("resolved user matches exchanged user", function() {
+    const body = res.getBody();
+    expect(body.user_id).to.equal(bru.getEnvVar("pirate_user_id"));
+    expect(body.verification_state).to.equal("unverified");
+  });
+}

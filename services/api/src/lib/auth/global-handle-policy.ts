@@ -16,23 +16,38 @@ const RESERVED_GLOBAL_HANDLE_LABELS = new Set([
   "security",
 ])
 
-export function normalizeDesiredGlobalHandleLabel(desiredLabel: string): {
-  labelNormalized: string
-  labelDisplay: string
-} {
+const GLOBAL_HANDLE_LABEL_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+
+export type ValidateDesiredGlobalHandleLabelResult =
+  | { valid: true; labelNormalized: string; labelDisplay: string }
+  | { valid: false }
+
+export function validateDesiredGlobalHandleLabel(desiredLabel: string): ValidateDesiredGlobalHandleLabelResult {
   const trimmed = desiredLabel.trim().toLowerCase()
   const withoutSuffix = trimmed.endsWith(GLOBAL_HANDLE_SUFFIX)
     ? trimmed.slice(0, -GLOBAL_HANDLE_SUFFIX.length)
     : trimmed
 
-  if (!withoutSuffix || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(withoutSuffix)) {
-    throw badRequestError("Invalid desired_label")
+  if (!withoutSuffix || !GLOBAL_HANDLE_LABEL_PATTERN.test(withoutSuffix)) {
+    return { valid: false }
   }
 
   return {
+    valid: true,
     labelNormalized: withoutSuffix,
     labelDisplay: `${withoutSuffix}${GLOBAL_HANDLE_SUFFIX}`,
   }
+}
+
+export function normalizeDesiredGlobalHandleLabel(desiredLabel: string): {
+  labelNormalized: string
+  labelDisplay: string
+} {
+  const result = validateDesiredGlobalHandleLabel(desiredLabel)
+  if (!result.valid) {
+    throw badRequestError("Invalid desired_label")
+  }
+  return { labelNormalized: result.labelNormalized, labelDisplay: result.labelDisplay }
 }
 
 export function isReservedGlobalHandleLabel(labelNormalized: string): boolean {

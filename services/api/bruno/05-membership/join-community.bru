@@ -1,0 +1,27 @@
+meta {
+  name: join-community
+  type: http
+  seq: 114
+}
+
+post {
+  url: {{base_url}}/communities/{{community_id}}/join
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("verified secondary user joins the community", function() {
+    const body = res.getBody();
+    expect(body.community_id).to.equal(bru.getEnvVar("community_id"));
+    expect(body.status).to.equal("joined");
+  });
+}

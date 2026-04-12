@@ -1,0 +1,26 @@
+meta {
+  name: get-verification-session
+  type: http
+  seq: 11
+}
+
+get {
+  url: {{base_url}}/verification-sessions/{{verification_session_id}}
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("verification session matches env id", function() {
+    const body = res.getBody();
+    expect(body.verification_session_id).to.equal(bru.getEnvVar("verification_session_id"));
+  });
+}

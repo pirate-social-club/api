@@ -1,0 +1,29 @@
+meta {
+  name: get-pricing-policy
+  type: http
+  seq: 56
+}
+
+get {
+  url: {{base_url}}/communities/{{community_id}}/pricing-policy
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("pricing policy returns canonical fields", function() {
+    const body = res.getBody();
+    expect(body.community_id).to.equal(bru.getEnvVar("community_id"));
+    expect(body.regional_pricing_enabled).to.be.a("boolean");
+    expect(body.tiers).to.be.an("array");
+    expect(body.country_assignments).to.be.an("array");
+  });
+}

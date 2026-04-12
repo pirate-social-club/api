@@ -1,0 +1,45 @@
+meta {
+  name: create-listing
+  type: http
+  seq: 58
+}
+
+post {
+  url: {{base_url}}/communities/{{community_id}}/listings
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+body:json {
+  {
+    "asset_id": "ast_bruno_infinity_001",
+    "price_usd": 12.5,
+    "regional_pricing_enabled": false,
+    "status": "active"
+  }
+}
+
+tests {
+  test("status is 201", function() {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("listing create returns an active fixed-price listing", function() {
+    const body = res.getBody();
+    expect(body.listing_id).to.be.a("string");
+    expect(body.asset_id).to.equal("ast_bruno_infinity_001");
+    expect(body.status).to.equal("active");
+    expect(body.price_usd).to.equal(12.5);
+    expect(body.regional_pricing_enabled).to.equal(false);
+  });
+}
+
+script:post-response {
+  const body = res.getBody();
+  bru.setEnvVar("listing_id", body.listing_id);
+}

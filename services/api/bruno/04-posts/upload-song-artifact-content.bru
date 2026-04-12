@@ -1,0 +1,50 @@
+meta {
+  name: upload-song-artifact-content
+  type: http
+  seq: 48
+}
+
+put {
+  url: {{base_url}}/communities/{{community_id}}/song-artifact-uploads/{{song_artifact_upload_id}}/content
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+body:json {
+  {
+    "content_base64": "YnJ1bm8tc29uZy1oYXBweS1wYXRoLWF1ZGlv"
+  }
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("song artifact upload content returns uploaded descriptor", function() {
+    const body = res.getBody();
+    expect(body.song_artifact_upload_id).to.equal(bru.getEnvVar("song_artifact_upload_id"));
+    expect(body.status).to.equal("uploaded");
+    expect(body.storage_ref).to.be.a("string");
+    expect(body.size_bytes).to.equal(27);
+    expect(body.content_hash).to.equal("sha256:7e52767e7a24c2dacbd45c1d43634a660fe6b7453f6f14b4003d6a33d5a1c32f");
+    expect(body.storage_provider).to.equal("filebase");
+    expect(body.storage_bucket).to.equal("dev-songs");
+    expect(body.storage_object_key).to.be.a("string");
+    expect(body.storage_endpoint).to.equal("https://s3.filebase.com");
+    expect(body.gateway_url).to.match(/^https:\/\/psc\.myfilebase\.com\/ipfs\/.+$/);
+  });
+}
+
+script:post-response {
+  const body = res.getBody();
+  bru.setEnvVar("song_primary_audio_storage_ref", body.storage_ref);
+  bru.setEnvVar("song_primary_audio_size_bytes", String(body.size_bytes));
+  bru.setEnvVar("song_primary_audio_content_hash", body.content_hash);
+  bru.setEnvVar("song_primary_audio_gateway_url", body.gateway_url);
+}

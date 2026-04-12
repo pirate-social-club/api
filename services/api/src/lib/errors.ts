@@ -35,16 +35,16 @@ export function conflictError(message: string): HttpError {
   return new HttpError(409, "conflict", message)
 }
 
-export function analysisBlocked(message: string): HttpError {
-  return new HttpError(422, "analysis_blocked", message)
-}
-
 export function notFoundError(message: string): HttpError {
   return new HttpError(404, "not_found", message)
 }
 
 export function internalError(message: string): HttpError {
   return new HttpError(500, "internal_error", message)
+}
+
+export function notImplementedError(message: string): HttpError {
+  return new HttpError(501, "not_implemented", message)
 }
 
 export function errorResponse(error: unknown): { status: number; body: { code: string; message: string; retryable?: boolean } } {

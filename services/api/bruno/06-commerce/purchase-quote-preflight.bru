@@ -1,0 +1,40 @@
+meta {
+  name: purchase-quote-preflight
+  type: http
+  seq: 62
+}
+
+post {
+  url: {{base_url}}/communities/{{community_id}}/purchase-quote-preflight
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+body:json {
+  {
+    "client_estimated_slippage_bps": 0,
+    "client_estimated_hop_count": 0
+  }
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("preflight reflects the direct Base settlement lane", function() {
+    const body = res.getBody();
+    expect(body.eligible).to.equal(true);
+    expect(body.funding_mode).to.equal("direct");
+    expect(body.policy_origin).to.equal("explicit");
+    expect(body.funding_preference).to.equal("ETH");
+    expect(body.destination_settlement_chain.chain_id).to.equal(8453);
+    expect(body.destination_settlement_token).to.equal("ETH");
+    expect(body.route_required).to.equal(false);
+  });
+}

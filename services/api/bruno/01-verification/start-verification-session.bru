@@ -1,0 +1,40 @@
+meta {
+  name: start-verification-session
+  type: http
+  seq: 10
+}
+
+post {
+  url: {{base_url}}/verification-sessions
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+body:json {
+  {
+    "provider": "self"
+  }
+}
+
+tests {
+  test("status is 201", function() {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("verification session starts pending", function() {
+    const body = res.getBody();
+    expect(body.verification_session_id).to.be.a("string");
+    expect(body.status).to.equal("pending");
+    expect(body.user_id).to.equal(bru.getEnvVar("pirate_user_id"));
+  });
+}
+
+script:post-response {
+  const body = res.getBody();
+  bru.setEnvVar("verification_session_id", body.verification_session_id);
+}

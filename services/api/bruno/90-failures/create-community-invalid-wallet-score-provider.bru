@@ -1,0 +1,56 @@
+meta {
+  name: create-community-invalid-wallet-score-provider
+  type: http
+  seq: 104
+}
+
+post {
+  url: {{base_url}}/communities
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+body:json {
+  {
+    "display_name": "{{community_display_name}}",
+    "membership_mode": "gated",
+    "governance_mode": "centralized",
+    "default_age_gate_policy": "none",
+    "allow_anonymous_identity": false,
+    "handle_policy": {
+      "policy_template": "standard"
+    },
+    "namespace": {
+      "namespace_verification_id": "{{namespace_verification_id}}"
+    },
+    "gate_rules": [
+      {
+        "scope": "membership",
+        "gate_family": "identity_proof",
+        "gate_type": "wallet_score",
+        "proof_requirements": [
+          {
+            "proof_type": "wallet_score",
+            "accepted_providers": ["self"]
+          }
+        ]
+      }
+    ]
+  }
+}
+
+tests {
+  test("status is 403", function() {
+    expect(res.getStatus()).to.equal(403);
+  });
+
+  test("body is eligibility_failed", function() {
+    const body = res.getBody();
+    expect(body.code).to.equal("eligibility_failed");
+  });
+}

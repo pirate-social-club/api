@@ -1,0 +1,52 @@
+meta {
+  name: create-song-artifact-bundle
+  type: http
+  seq: 49
+}
+
+post {
+  url: {{base_url}}/communities/{{community_id}}/song-artifacts
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+body:json {
+  {
+    "primary_audio": {
+      "storage_ref": "{{song_primary_audio_storage_ref}}",
+      "mime_type": "audio/mpeg",
+      "size_bytes": {{song_primary_audio_size_bytes}},
+      "content_hash": "{{song_primary_audio_content_hash}}",
+      "duration_ms": 30000
+    },
+    "lyrics": "Sailing on a clean mainline song path."
+  }
+}
+
+tests {
+  test("status is 201", function() {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("song artifact bundle create returns canonical ready bundle", function() {
+    const body = res.getBody();
+    expect(body.song_artifact_bundle_id).to.be.a("string");
+    expect(body.community_id).to.equal(bru.getEnvVar("community_id"));
+    expect(body.status).to.equal("ready");
+    expect(body.primary_audio.storage_ref).to.equal(bru.getEnvVar("song_primary_audio_storage_ref"));
+    expect(body.media_refs[0].storage_ref).to.equal(bru.getEnvVar("song_primary_audio_storage_ref"));
+    expect(body.lyrics).to.equal("Sailing on a clean mainline song path.");
+  });
+}
+
+script:post-response {
+  const body = res.getBody();
+  bru.setEnvVar("song_artifact_bundle_id", body.song_artifact_bundle_id);
+  bru.setEnvVar("song_primary_audio_storage_ref", body.primary_audio.storage_ref);
+  bru.setEnvVar("song_lyrics", body.lyrics);
+}

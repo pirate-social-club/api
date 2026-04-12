@@ -1,0 +1,49 @@
+meta {
+  name: create-post-song-remix-invalid-rights-basis
+  type: http
+  seq: 113
+}
+
+post {
+  url: {{base_url}}/communities/{{community_id}}/posts
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+body:json {
+  {
+    "post_type": "song",
+    "identity_mode": "public",
+    "song_mode": "remix",
+    "rights_basis": "original",
+    "title": "Invalid Remix Basis",
+    "lyrics": "This remix should fail because rights_basis is wrong.",
+    "media_refs": [
+      {
+        "storage_ref": "ipfs://bruno-song-remix-invalid-basis-audio",
+        "mime_type": "audio/mpeg",
+        "size_bytes": 1024,
+        "content_hash": "sha256:bruno-song-remix-invalid-basis-audio",
+        "duration_ms": 30000
+      }
+    ],
+    "idempotency_key": "bruno-post-song-remix-invalid-basis-01"
+  }
+}
+
+tests {
+  test("status is 400", function() {
+    expect(res.getStatus()).to.equal(400);
+  });
+
+  test("body is bad_request", function() {
+    const body = res.getBody();
+    expect(body.code).to.equal("bad_request");
+    expect(body.message).to.equal("song remix posts must use rights_basis = derivative");
+  });
+}

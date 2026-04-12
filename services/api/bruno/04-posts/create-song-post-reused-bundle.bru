@@ -1,0 +1,41 @@
+meta {
+  name: create-song-post-reused-bundle
+  type: http
+  seq: 52
+}
+
+post {
+  url: {{base_url}}/communities/{{community_id}}/posts
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+body:json {
+  {
+    "idempotency_key": "bruno-song-post-02",
+    "post_type": "song",
+    "identity_mode": "public",
+    "song_mode": "original",
+    "rights_basis": "original",
+    "title": "Mainline Song Post Again",
+    "caption": "Second publish attempt from the same bundle.",
+    "song_artifact_bundle_id": "{{song_artifact_bundle_id}}"
+  }
+}
+
+tests {
+  test("status is 400", function() {
+    expect(res.getStatus()).to.equal(400);
+  });
+
+  test("reused bundle is rejected", function() {
+    const body = res.getBody();
+    expect(body.code).to.equal("bad_request");
+    expect(body.message).to.equal("Song artifact bundle has already been used");
+  });
+}

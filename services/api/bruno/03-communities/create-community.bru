@@ -1,0 +1,52 @@
+meta {
+  name: create-community
+  type: http
+  seq: 30
+}
+
+post {
+  url: {{base_url}}/communities
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+body:json {
+  {
+    "display_name": "{{community_display_name}}",
+    "description": "{{community_description}}",
+    "membership_mode": "open",
+    "governance_mode": "centralized",
+    "default_age_gate_policy": "none",
+    "allow_anonymous_identity": false,
+    "handle_policy": {
+      "policy_template": "standard"
+    },
+    "namespace": {
+      "namespace_verification_id": "{{namespace_verification_id}}"
+    }
+  }
+}
+
+tests {
+  test("status is 202", function() {
+    expect(res.getStatus()).to.equal(202);
+  });
+
+  test("community create returns community and job", function() {
+    const body = res.getBody();
+    expect(body.community.community_id).to.be.a("string");
+    expect(body.job.job_id).to.be.a("string");
+    expect(body.community.namespace_verification_id).to.equal(bru.getEnvVar("namespace_verification_id"));
+  });
+}
+
+script:post-response {
+  const body = res.getBody();
+  bru.setEnvVar("community_id", body.community.community_id);
+  bru.setEnvVar("community_provisioning_job_id", body.job.job_id);
+}

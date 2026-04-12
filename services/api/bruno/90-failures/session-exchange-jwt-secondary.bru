@@ -1,0 +1,42 @@
+meta {
+  name: session-exchange-jwt-secondary
+  type: http
+  seq: 105
+}
+
+post {
+  url: {{base_url}}/auth/session/exchange
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+}
+
+body:json {
+  {
+    "proof": {
+      "type": "jwt_based_auth",
+      "jwt": "{{upstream_jwt_secondary}}"
+    }
+  }
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("secondary session exchange resolves a new user", function() {
+    const body = res.getBody();
+    expect(body.access_token).to.be.a("string");
+    expect(body.user.user_id).to.be.a("string");
+  });
+}
+
+script:post-response {
+  const body = res.getBody();
+  bru.setEnvVar("pirate_access_token", body.access_token);
+  bru.setEnvVar("pirate_user_id", body.user.user_id);
+}

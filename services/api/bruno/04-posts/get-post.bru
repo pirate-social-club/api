@@ -1,0 +1,28 @@
+meta {
+  name: get-post
+  type: http
+  seq: 42
+}
+
+get {
+  url: {{base_url}}/posts/{{post_id}}?locale={{post_locale}}
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("localized post response resolves the created post", function() {
+    const body = res.getBody();
+    expect(body.post.post_id).to.equal(bru.getEnvVar("post_id"));
+    expect(body.post.community_id).to.equal(bru.getEnvVar("community_id"));
+    expect(body.resolved_locale).to.equal(bru.getEnvVar("post_locale"));
+  });
+}
