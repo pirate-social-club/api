@@ -221,12 +221,14 @@ jobs:
           {
             echo "ENVIRONMENT=development"
             echo "DEV_MEMORY_STORE_ENABLED=false"
+            echo "PIRATE_API_PUBLIC_ORIGIN=http://127.0.0.1:8787"
             echo "JWT_BASED_AUTH_ENABLED=true"
             echo "AUTH_UPSTREAM_JWT_SHARED_SECRET=ci-upstream-shared-secret"
             echo "AUTH_UPSTREAM_JWT_ISSUER=pirate-dev-upstream"
             echo "AUTH_UPSTREAM_JWT_AUDIENCE=pirate-api"
             echo "CONTROL_PLANE_DATABASE_URL=file:/tmp/pirate-control-plane.db"
             echo "LOCAL_COMMUNITY_DB_ROOT=/tmp/pirate-community-dbs"
+            echo "ALLOW_LOCAL_STUB_REGISTRY_PUBLICATION=true"
             echo "REGISTRY_PUBLISHER_URL="
             echo "REGISTRY_PUBLISHER_AUTH_TOKEN="
             echo "REGISTRY_PUBLISHER_TIMEOUT_MS=25000"
@@ -261,3 +263,13 @@ jobs:
           done
           curl -fsS http://127.0.0.1:8787/health >/dev/null
           bun run bruno:test:local-sqlite
+
+      - name: Dump local API log on Bruno failure
+        if: failure()
+        shell: bash
+        run: |
+          if [ -f /tmp/pirate-api-bruno.log ]; then
+            tail -n 200 /tmp/pirate-api-bruno.log
+          else
+            echo "/tmp/pirate-api-bruno.log not found"
+          fi
