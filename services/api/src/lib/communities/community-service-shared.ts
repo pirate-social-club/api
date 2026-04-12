@@ -50,10 +50,13 @@ export async function recomputeAndPersistCommunityMembershipStats(input: {
   const db = await openCommunityDb(input.repository, input.communityId)
   try {
     const memberUserIds = await listActiveCommunityMemberUserIds(db.client, input.communityId)
-    const users = await input.userRepository.listUsersByIds(memberUserIds)
+    const countedUserIds = community.creator_user_id && !memberUserIds.includes(community.creator_user_id)
+      ? [...memberUserIds, community.creator_user_id]
+      : memberUserIds
+    const users = await input.userRepository.listUsersByIds(countedUserIds)
     const usersById = new Map(users.map((user) => [user.user_id, user]))
     let qualifiedMemberCount = 0
-    for (const userId of memberUserIds) {
+    for (const userId of countedUserIds) {
       if (usersById.get(userId)?.verification_capabilities.unique_human.state === "verified") {
         qualifiedMemberCount += 1
       }
@@ -61,13 +64,13 @@ export async function recomputeAndPersistCommunityMembershipStats(input: {
     await updateLocalCommunityMembershipStats({
       databaseUrl: db.databaseUrl,
       communityId: input.communityId,
-      memberCount: memberUserIds.length,
+      memberCount: countedUserIds.length,
       qualifiedMemberCount,
       updatedAt: nowIso(),
     })
     await input.repository.updateCommunityProjectedMembershipCounts({
       communityId: input.communityId,
-      memberCount: memberUserIds.length,
+      memberCount: countedUserIds.length,
       qualifiedMemberCount,
     })
   } finally {

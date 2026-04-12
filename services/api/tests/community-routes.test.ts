@@ -6193,6 +6193,24 @@ test("post create can require a Self nationality posting gate", async () => {
     const allowedBody = await json(allowedJoin) as { community_id: string; status: string }
     expect(allowedBody.community_id).toBe(communityCreateBody.community.community_id)
     expect(allowedBody.status).toBe("joined")
+
+    const communityGet = await app.request(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}`,
+      {
+        headers: {
+          authorization: `Bearer ${verifiedJoiner.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+
+    expect(communityGet.status).toBe(200)
+    const communityGetBody = await json(communityGet) as {
+      member_count: number | null
+      qualified_member_count: number | null
+    }
+    expect(communityGetBody.member_count).toBe(2)
+    expect(communityGetBody.qualified_member_count).toBe(2)
   })
 
   test("community join accepts a passport wallet score that passes the platform threshold", async () => {
