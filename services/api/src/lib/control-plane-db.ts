@@ -1,4 +1,5 @@
 import { internalError } from "./errors"
+import { neon, neonConfig, Pool } from "@neondatabase/serverless"
 import type { Env } from "../types"
 
 type SqlStatement = {
@@ -23,6 +24,13 @@ type BunReservedSqlClient = BunSqlClient & {
   release(): void
 }
 
+type NeonQueryResult = {
+  rows: SqlRow[]
+  rowCount?: number | null
+}
+
+neonConfig.fetchConnectionCache = true
+
 export type ControlPlaneQueryResult = {
   rows: SqlRow[]
   rowsAffected: number
@@ -44,12 +52,9 @@ export interface ControlPlaneDbClient extends ControlPlaneDbExecutor {
   close(): Promise<void> | void
 }
 
-function requireBunSql(): new (url: string) => BunSqlClient {
+function getBunSql(): (new (url: string) => BunSqlClient) | null {
   const BunRuntime = (globalThis as { Bun?: { SQL?: new (url: string) => BunSqlClient } }).Bun
-  if (!BunRuntime?.SQL) {
-    throw internalError("Bun.SQL is required for the control-plane runtime")
-  }
-  return BunRuntime.SQL
+  return BunRuntime?.SQL ?? null
 }
 
 function normalizeStatement(databaseUrl: string, sql: string): string {
@@ -76,6 +81,17 @@ function bindExecute(
   }
 }
 
+function toNeonQueryResult(result: NeonQueryResult): ControlPlaneQueryResult {
+  return {
+    rows: result.rows,
+    rowsAffected: Number(result.rowCount ?? 0),
+  }
+}
+
+function isReservedSqlClient(client: BunSqlClient | BunReservedSqlClient): client is BunReservedSqlClient {
+  return typeof (client as { release?: unknown }).release === "function"
+}
+
 export function requireControlPlaneDatabaseUrl(env: Env): string {
   const url = String(env.CONTROL_PLANE_DATABASE_URL || "").trim()
   if (!url) {
@@ -86,59 +102,132 @@ export function requireControlPlaneDatabaseUrl(env: Env): string {
 
 export function createControlPlaneDbClient(env: Env): ControlPlaneDbClient {
   const databaseUrl = requireControlPlaneDatabaseUrl(env)
-  const SQL = requireBunSql()
-  const client = new SQL(databaseUrl)
-  const execute = bindExecute(databaseUrl, client)
   const isFileDatabase = databaseUrl.startsWith("file:")
+  const BunSql = getBunSql()
+
+  if (BunSql) {
+    const client = new BunSql(databaseUrl)
+    const execute = bindExecute(databaseUrl, client)
+
+    return {
+      execute,
+      async batch(statements) {
+        const results: ControlPlaneQueryResult[] = []
+        for (const statement of statements) {
+          results.push(await execute(statement))
+        }
+        return results
+      },
+      async transaction(mode = "write") {
+        const txClient = isFileDatabase ? client : await client.reserve()
+        const txExecute = bindExecute(databaseUrl, txClient)
+        const beginSql = isFileDatabase && mode === "write"
+          ? "BEGIN IMMEDIATE"
+          : "BEGIN"
+
+        await txClient.unsafe(beginSql)
+
+        let finished = false
+
+        return {
+          execute: txExecute,
+          async batch(statements) {
+            const results: ControlPlaneQueryResult[] = []
+            for (const statement of statements) {
+              results.push(await txExecute(statement))
+            }
+            return results
+          },
+          async commit() {
+            if (finished) return
+            await txClient.unsafe("COMMIT")
+            finished = true
+          },
+          async rollback() {
+            if (finished) return
+            await txClient.unsafe("ROLLBACK")
+            finished = true
+          },
+          close() {
+            if (!isFileDatabase && isReservedSqlClient(txClient)) {
+              txClient.release()
+            }
+          },
+        }
+      },
+      async close() {
+        await client.close()
+      },
+    }
+  }
 
   return {
-    execute,
+    async execute(statement) {
+      const client = neon<false, true>(databaseUrl, { fullResults: true })
+      const result = await client.query(
+        normalizeStatement(databaseUrl, statement.sql),
+        statement.args ?? [],
+      )
+      return toNeonQueryResult(result)
+    },
     async batch(statements) {
+      const client = neon<false, true>(databaseUrl, { fullResults: true })
       const results: ControlPlaneQueryResult[] = []
       for (const statement of statements) {
-        results.push(await execute(statement))
+        const result = await client.query(
+          normalizeStatement(databaseUrl, statement.sql),
+          statement.args ?? [],
+        )
+        results.push(toNeonQueryResult(result))
       }
       return results
     },
     async transaction(mode = "write") {
-      const txClient = isFileDatabase ? client : await client.reserve()
-      const txExecute = bindExecute(databaseUrl, txClient)
-      const beginSql = isFileDatabase && mode === "write"
-        ? "BEGIN IMMEDIATE"
-        : "BEGIN"
-
-      await txClient.unsafe(beginSql)
+      const pool = new Pool({ connectionString: databaseUrl })
+      const client = await pool.connect()
+      const beginSql = mode === "write" ? "BEGIN" : "BEGIN READ ONLY"
+      await client.query(beginSql)
 
       let finished = false
+      let closed = false
+
+      const close = async () => {
+        if (closed) return
+        closed = true
+        client.release()
+        await pool.end()
+      }
 
       return {
-        execute: txExecute,
+        async execute(statement) {
+          const result = await client.query<SqlRow>(normalizeStatement(databaseUrl, statement.sql), statement.args ?? [])
+          return toNeonQueryResult(result)
+        },
         async batch(statements) {
           const results: ControlPlaneQueryResult[] = []
           for (const statement of statements) {
-            results.push(await txExecute(statement))
+            const result = await client.query<SqlRow>(normalizeStatement(databaseUrl, statement.sql), statement.args ?? [])
+            results.push(toNeonQueryResult(result))
           }
           return results
         },
         async commit() {
           if (finished) return
-          await txClient.unsafe("COMMIT")
+          await client.query("COMMIT")
           finished = true
+          await close()
         },
         async rollback() {
           if (finished) return
-          await txClient.unsafe("ROLLBACK")
+          await client.query("ROLLBACK")
           finished = true
+          await close()
         },
         close() {
-          if (!isFileDatabase) {
-            txClient.release()
-          }
+          void close()
         },
       }
     },
-    async close() {
-      await client.close()
-    },
+    close() {},
   }
 }

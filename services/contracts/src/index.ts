@@ -47,6 +47,11 @@ export type VerificationCapabilities = {
 
 export type User = {
   user_id: string;
+  community_posting_state?: ({
+    community_ref?: string;
+    community_id?: string;
+    has_created_text_post?: boolean;
+  }) | null;
   primary_wallet_attachment_id?: string | null;
   verification_state: "unverified" | "pending" | "verified" | "reverification_required";
   capability_provider?: "self" | "very" | null;
@@ -183,11 +188,9 @@ export type NamespaceVerificationSession = {
   submitted_root_label: string;
   normalized_root_label?: string | null;
   status: "draft" | "inspecting" | "dns_setup_required" | "challenge_required" | "challenge_pending" | "verifying" | "verified" | "failed" | "expired" | "disputed";
-  challenge_host?: string | null;
-  challenge_txt_value?: string | null;
-  challenge_expires_at?: string | null;
   challenge_kind?: "dns_txt" | "schnorr_sign" | null;
-  challenge_payload?: Record<string, unknown> | null;
+  challenge_payload?: (Record<string, unknown>) | null;
+  challenge_expires_at?: string | null;
   assertions?: NamespaceVerificationAssertions | null;
   capabilities?: NamespaceVerificationCapabilities | null;
   control_class?: "single_holder_root" | "multisig_controlled_root" | "dao_controlled_root" | "burned_or_immutable_root" | null;
@@ -231,15 +234,9 @@ export type Community = {
   community_id: string;
   display_name: string;
   description?: string | null;
-  primary_data_region?: CommunityPrimaryDataRegion | null;
   namespace_verification_id?: string | null;
   status: "draft" | "active" | "frozen" | "archived" | "deleted";
   provisioning_state: "requested" | "provisioning" | "active" | "rotation_required" | "error";
-  registry_publication_state: "not_started" | "pending_create" | "pending_seed" | "published" | "stale" | "publication_error";
-  registry_attempt_id?: string | null;
-  registry_published_at?: string | null;
-  registry_publication_job_id?: string | null;
-  registry_error_code?: string | null;
   artist_identity_id?: string | null;
   community_agent_user_id?: string | null;
   membership_mode: "open" | "request" | "gated";
@@ -275,6 +272,7 @@ export type Community = {
   graphic_content_policy: CommunityGraphicContentPolicy;
   motion_media_policy: CommunityMotionMediaPolicy;
   language_policy: CommunityLanguagePolicy;
+  civility_policy: CommunityCivilityPolicy;
   provenance_policy: CommunityProvenancePolicy;
   promotion_policy: CommunityPromotionPolicy;
   label_policy?: CommunityLabelPolicy | null;
@@ -417,6 +415,8 @@ export type CommunityPurchaseQuoteRequest = {
   client_estimated_slippage_bps: number;
   client_estimated_hop_count: number;
   client_route_valid_for_seconds?: number | null;
+  destination_settlement_amount_atomic?: string | null;
+  destination_settlement_decimals?: number | null;
 };
 
 export type CommunityPurchaseQuote = {
@@ -438,6 +438,8 @@ export type CommunityPurchaseQuote = {
   policy_origin: CommunityPolicyOrigin;
   destination_settlement_chain: CommunityMoneyChainRef;
   destination_settlement_token: string;
+  destination_settlement_amount_atomic?: string | null;
+  destination_settlement_decimals?: number | null;
   treasury_denomination?: string | null;
   quote_ttl_seconds: number;
   route_required: boolean;
@@ -495,7 +497,7 @@ export type MembershipResult = {
 
 export type Job = {
   job_id: string;
-  job_type: "community_provisioning" | "community_registry_publication" | "reddit_snapshot_import" | "reddit_feature_derivation" | "club_threads_export" | "media_analysis" | "story_publication" | "purchase_settlement_confirmation" | "entitlement_grant" | "artist_metadata_enrichment" | "track_reconciliation" | "catalog_track_preregistration" | "stem_separation" | "forced_alignment" | "karaoke_package_assembly";
+  job_type: "community_provisioning" | "reddit_snapshot_import" | "club_threads_export" | "media_analysis" | "story_publication" | "purchase_settlement_confirmation" | "entitlement_grant" | "artist_metadata_enrichment" | "track_reconciliation" | "catalog_track_preregistration" | "stem_separation" | "forced_alignment" | "karaoke_package_assembly";
   status: "queued" | "running" | "succeeded" | "failed";
   subject_type: string;
   subject_id: string;
@@ -540,7 +542,7 @@ export type UpdateCommunityPricingPolicyRequest = {
 export type StartVerificationSessionRequest = {
   provider: "self" | "very";
   provider_mode?: "qr_deeplink" | "widget" | null;
-  requested_capabilities: Array<RequestedVerificationCapability>;
+  requested_capabilities?: Array<RequestedVerificationCapability>;
   wallet_attachment_id?: string | null;
   verification_intent?: VerificationIntent | null;
   policy_id?: string | null;
@@ -548,6 +550,7 @@ export type StartVerificationSessionRequest = {
 
 export type CompleteVerificationSessionRequest = {
   attestation_id?: string | null;
+  proof?: string | null;
   proof_hash?: string | null;
   provider_payload_ref?: string | null;
 };
@@ -559,12 +562,7 @@ export type StartNamespaceVerificationSessionRequest = {
 
 export type CompleteNamespaceVerificationSessionRequest = {
   restart_challenge?: boolean | null;
-  signature_payload?: {
-    signature?: string | null;
-    algorithm?: string | null;
-    signer_pubkey?: string | null;
-    digest?: string | null;
-  } | null;
+  signature_payload?: (Record<string, unknown>) | null;
 };
 
 export type CreateSongArtifactUploadRequest = {
@@ -795,6 +793,16 @@ type CommunityCaptureEditPolicy = {
   updated_at: string;
 };
 
+type CommunityCivilityPolicy = {
+  community_id: string;
+  policy_origin: CommunityPolicyOrigin;
+  group_directed_demeaning_language: CommunityModerationDecisionLevel;
+  targeted_insults: CommunityModerationDecisionLevel;
+  targeted_harassment: CommunityModerationDecisionLevel;
+  threatening_language: CommunityEscalationDecisionLevel;
+  updated_at: string;
+};
+
 type CommunityContentAuthenticityDetectionPolicy = {
   community_id: string;
   policy_origin: CommunityPolicyOrigin;
@@ -821,6 +829,8 @@ type CommunityContentAuthenticityStance = "human_only" | "human_first" | "ai_all
 type CommunityCreatorRelation = "captured" | "created" | "subject" | "authorized_repost" | "fan_work" | "found";
 
 type CommunityDisclosureDecisionLevel = "allow" | "require_disclosure" | "disallow";
+
+type CommunityEscalationDecisionLevel = "review" | "disallow";
 
 type CommunityFalseClaimConsequence = "warning" | "post_removed" | "temporary_ban" | "permanent_ban";
 
@@ -868,7 +878,7 @@ type CommunityLanguagePolicy = {
   community_id: string;
   policy_origin: CommunityPolicyOrigin;
   profanity: CommunityModerationDecisionLevel;
-  slurs: "review" | "disallow";
+  slurs: CommunityModerationDecisionLevel;
   updated_at: string;
 };
 
@@ -930,8 +940,6 @@ type CommunityPricingTier = {
 };
 
 type CommunityPricingVerificationProvider = "self";
-
-type CommunityPrimaryDataRegion = "eu_ireland" | "us_east" | "us_west" | "asia_tokyo" | "asia_mumbai";
 
 type CommunityProfile = {
   rules: Array<CommunityRule>;
@@ -1321,7 +1329,7 @@ type VerificationCapabilityState = {
   verified_at?: string | null;
 };
 
-type VerificationIntent = "profile_verification" | "community_creation" | "post_access_18_plus" | "commerce_pricing" | "qualifier_disclosure";
+export type VerificationIntent = "profile_verification" | "community_creation" | "ucommunity_join" | "post_access_18_plus" | "commerce_pricing" | "qualifier_disclosure";
 
 type VerificationSessionLaunch = {
   mode: "qr_deeplink" | "widget" | "none";

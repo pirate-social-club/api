@@ -7,7 +7,7 @@ import { readModeEnv } from "./_lib/dev-vars"
 function requireEnv(values: Record<string, string>, key: string): string {
   const value = values[key]?.trim()
   if (!value) {
-    throw new Error(`${key} is not configured in .dev.vars`)
+    throw new Error(`${key} is not configured in .env.local-sqlite`)
   }
   return value
 }

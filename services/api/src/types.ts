@@ -1,17 +1,11 @@
 export type {
   AuthProof,
   CommunityMoneyPolicy,
-  CommunityPurchaseQuote,
-  CommunityPurchaseQuotePreflight,
-  CommunityPurchaseQuotePreflightRequest,
-  CommunityPurchaseQuoteRequest,
-  CommunityCreateAcceptedResponse,
   CompleteNamespaceVerificationSessionRequest,
   CompleteVerificationSessionRequest,
   CreateSongArtifactUploadRequest,
   ErrorResponse,
   GlobalHandle,
-  Job,
   NamespaceVerification,
   NamespaceVerificationAssertions,
   NamespaceVerificationCapabilities,
@@ -23,31 +17,38 @@ export type {
   SessionExchangeRequest,
   SessionExchangeResponse,
   StartNamespaceVerificationSessionRequest,
-  StartVerificationSessionRequest,
   SongArtifactUpload,
   UpdateCommunityMoneyPolicyRequest,
   User,
   VerificationCapabilities,
-  VerificationSession,
   WalletAttachmentSummary,
 } from "@pirate/api-contracts"
 
 export type {
+  CommunityCreateAcceptedResponse,
   CommunityListing,
   CommunityListingListResponse,
-  CreateCommunityListingRequest,
-  UpdateCommunityListingRequest,
   CommunityPurchase,
   CommunityPurchaseListResponse,
+  CommunityPurchaseQuote,
+  CommunityPurchaseQuotePreflight,
+  CommunityPurchaseQuotePreflightRequest,
+  CommunityPurchaseQuoteRequest,
   CommunityPurchaseSettlement,
   CommunityPurchaseSettlementFailure,
   CommunityPurchaseSettlementFailureRequest,
   CommunityPurchaseSettlementRequest,
+  CreateCommunityListingRequest,
+  Job,
+  StartVerificationSessionRequest,
+  UpdateCommunityListingRequest,
+  VerificationIntent,
+  VerificationSession,
 } from "../../contracts/src/index"
 
-type ContractCreateCommunityRequest = import("@pirate/api-contracts").CreateCommunityRequest
-type ContractCommunity = import("@pirate/api-contracts").Community
-type ContractPost = import("@pirate/api-contracts").Post
+type ContractCreateCommunityRequest = import("../../contracts/src/index").CreateCommunityRequest
+type ContractCommunity = import("../../contracts/src/index").Community
+type ContractPost = import("../../contracts/src/index").Post
 
 export type CreateCommunityRequest = ContractCreateCommunityRequest & {
   description?: string | null
@@ -263,7 +264,6 @@ export type UserReport = {
   user_report_id: string
   community_id: string
   post_id: string
-  moderation_case_id: string | null
   reporter_user_id: string
   reason_code: UserReportReasonCode
   note: string | null
@@ -319,7 +319,7 @@ export type ModerationCaseListResponse = {
 
 export type ModerationCaseDetail = {
   case: ModerationCase
-  post: ContractPost
+  post: Post
   signals: ModerationSignal[]
   reports: UserReport[]
   actions: ModerationAction[]
@@ -396,10 +396,10 @@ export type CommunityGateRule = {
   community_id: string
   scope: "membership" | "viewer" | "posting"
   gate_family: "identity_proof" | "token_holding"
-  gate_type: string
+  gate_type: "erc721_holding" | "erc1155_holding" | "erc20_balance" | "solana_nft_holding" | "unique_human" | "age_over_18" | "nationality" | "gender" | "sanctions_clear" | "wallet_score"
   proof_requirements?: Array<{
-    proof_type?: string
-    accepted_providers?: string[] | null
+    proof_type: "unique_human" | "biometric_liveness" | "wallet_score" | "gov_id" | "age_over_18" | "nationality" | "gender" | "sanctions_clear" | "phone"
+    accepted_providers?: Array<"self" | "very" | "passport"> | null
     accepted_mechanisms?: string[] | null
     config?: Record<string, unknown> | null
   }> | null
@@ -410,7 +410,7 @@ export type CommunityGateRule = {
   updated_at: string
 }
 
-export type Community = ContractCommunity & {
+export type Community = Omit<ContractCommunity, "gate_rules"> & {
   flair_policy?: CommunityFlairPolicy | null
   gate_rules?: CommunityGateRule[] | null
 }
@@ -699,11 +699,13 @@ export type Env = {
   SELF_VERIFICATION_SCOPE?: string
   SELF_MOCK_PASSPORT?: string
   CONTROL_PLANE_DATABASE_URL?: string
+  TURSO_COMMUNITY_DB_WRAP_KEY?: string
+  TURSO_COMMUNITY_DB_WRAP_KEY_VERSION?: string
   LOCAL_COMMUNITY_DB_ROOT?: string
-  ALLOW_LOCAL_STUB_REGISTRY_PUBLICATION?: string
-  REGISTRY_PUBLISHER_URL?: string
-  REGISTRY_PUBLISHER_AUTH_TOKEN?: string
-  REGISTRY_PUBLISHER_TIMEOUT_MS?: string
+  COMMUNITY_PROVISION_OPERATOR_BASE_URL?: string
+  COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN?: string
+  COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS?: string
+  COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION?: string
   VERY_VERIFY_URL?: string
   HNS_VERIFICATION_PROVIDER?: string
   HNS_RESOLVER_HOST?: string
@@ -745,6 +747,8 @@ export type Env = {
   SONG_LYRICS_TRANSLATION_TARGET_LOCALES?: string
   SONG_ENRICHMENT_DRAIN_LIMIT?: string
   SONG_ENRICHMENT_STALE_AFTER_SECONDS?: string
+  SONG_PREVIEW_DRAIN_LIMIT?: string
+  SONG_PREVIEW_STALE_AFTER_SECONDS?: string
   COMMUNITY_POST_PROJECTION_RECONCILE_LIMIT?: string
   SONG_ASSET_STORY_DRAIN_LIMIT?: string
   SONG_ASSET_STORY_STALE_AFTER_SECONDS?: string

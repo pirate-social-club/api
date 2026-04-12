@@ -81,10 +81,6 @@ function validateRemoteMode(activeMode: "staging" | "production"): void {
     throw new Error(`LOCAL_COMMUNITY_DB_ROOT must be unset in ${activeMode} mode`)
   }
 
-  if (envFlag(env.ALLOW_LOCAL_STUB_REGISTRY_PUBLICATION)) {
-    throw new Error(`ALLOW_LOCAL_STUB_REGISTRY_PUBLICATION=true is not allowed in ${activeMode} mode`)
-  }
-
   const publicOrigin = String(env.PIRATE_API_PUBLIC_ORIGIN || "").trim()
   if (publicOrigin) {
     const normalized = publicOrigin.toLowerCase()
@@ -99,16 +95,13 @@ function printBanner(): void {
   const communityRoot = mode === "local-sqlite"
     ? String(env.LOCAL_COMMUNITY_DB_ROOT || "").trim()
     : "disabled"
-  const registryMode = String(env.REGISTRY_PUBLISHER_URL || "").trim()
-    ? "remote"
-    : (envFlag(env.ALLOW_LOCAL_STUB_REGISTRY_PUBLICATION) ? "local_stub" : "disabled")
   const hnsMode = String(env.HNS_VERIFICATION_PROVIDER || "local_stub").trim()
 
   const lines = [
     `pirate-api mode=${mode}`,
     `  control_plane_db = ${cpUrl}`,
     `  community_db_root = ${communityRoot}`,
-    `  registry_publication = ${registryMode}`,
+    "  registry_publication = deferred",
     `  hns_verification = ${hnsMode}`,
   ]
 

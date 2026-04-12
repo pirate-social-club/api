@@ -12,9 +12,9 @@ import {
 import {
   type ExternalReputationSnapshotRow,
   type CommunityDatabaseBindingRow,
+  type CommunityDbCredentialRow,
   type CommunityMoneyPolicyRow,
   type CommunityPricingPolicyRow,
-  type CommunityRegistryAttemptRow,
   type CommunityPostProjectionRow,
   type CommunityRow,
   type DbExecutor,
@@ -30,9 +30,9 @@ import {
   type WalletAttachmentRow,
   toExternalReputationSnapshotRow,
   toCommunityDatabaseBindingRow,
+  toCommunityDbCredentialRow,
   toCommunityMoneyPolicyRow,
   toCommunityPricingPolicyRow,
-  toCommunityRegistryAttemptRow,
   toCommunityPostProjectionRow,
   toCommunityRow,
   toGlobalHandleRow,
@@ -91,6 +91,7 @@ async function getLatestVerificationSessionRow(executor: DbExecutor, userId: str
   const row = await firstRow(executor, {
     sql: `
       SELECT verification_session_id, user_id, provider, wallet_attachment_id, requested_capabilities_json,
+             verification_intent, policy_id,
              status, result_ref, failure_code, completed_at, expires_at, created_at, updated_at
       FROM verification_sessions
       WHERE user_id = ?1
@@ -264,9 +265,7 @@ async function getLatestNamespaceVerificationRow(executor: DbExecutor, userId: s
 export async function getCommunityRowById(executor: DbExecutor, communityId: string): Promise<CommunityRow | null> {
   const row = await firstRow(executor, {
     sql: `
-      SELECT community_id, creator_user_id, display_name, status, provisioning_state,
-             registry_publication_state, registry_attempt_id, registry_published_at,
-             registry_publication_job_id, registry_error_code, transfer_state,
+      SELECT community_id, creator_user_id, display_name, status, provisioning_state, transfer_state,
              route_slug, namespace_verification_id, primary_database_binding_id,
              projected_member_count, projected_qualified_member_count, created_at, updated_at
       FROM communities
@@ -285,9 +284,7 @@ export async function getCommunityRowByNamespaceVerificationId(
 ): Promise<CommunityRow | null> {
   const row = await firstRow(executor, {
     sql: `
-      SELECT community_id, creator_user_id, display_name, status, provisioning_state,
-             registry_publication_state, registry_attempt_id, registry_published_at,
-             registry_publication_job_id, registry_error_code, transfer_state,
+      SELECT community_id, creator_user_id, display_name, status, provisioning_state, transfer_state,
              route_slug, namespace_verification_id, primary_database_binding_id,
              projected_member_count, projected_qualified_member_count, created_at, updated_at
       FROM communities
@@ -306,9 +303,7 @@ export async function getCommunityRowByRouteKey(
 ): Promise<CommunityRow | null> {
   const row = await firstRow(executor, {
     sql: `
-      SELECT c.community_id, c.creator_user_id, c.display_name, c.status, c.provisioning_state,
-             c.registry_publication_state, c.registry_attempt_id, c.registry_published_at,
-             c.registry_publication_job_id, c.registry_error_code, c.transfer_state,
+      SELECT c.community_id, c.creator_user_id, c.display_name, c.status, c.provisioning_state, c.transfer_state,
              c.route_slug, c.namespace_verification_id, c.primary_database_binding_id,
              c.projected_member_count, c.projected_qualified_member_count, c.created_at, c.updated_at
       FROM communities AS c
@@ -341,9 +336,7 @@ export async function getCommunityRowByNamespaceLabel(
 ): Promise<CommunityRow | null> {
   const row = await firstRow(executor, {
     sql: `
-      SELECT c.community_id, c.creator_user_id, c.display_name, c.status, c.provisioning_state,
-             c.registry_publication_state, c.registry_attempt_id, c.registry_published_at,
-             c.registry_publication_job_id, c.registry_error_code, c.transfer_state,
+      SELECT c.community_id, c.creator_user_id, c.display_name, c.status, c.provisioning_state, c.transfer_state,
              c.route_slug, c.namespace_verification_id, c.primary_database_binding_id,
              c.projected_member_count, c.projected_qualified_member_count, c.created_at, c.updated_at
       FROM communities AS c
@@ -366,9 +359,7 @@ export async function listCommunityRowsByCreatorUserId(
 ): Promise<CommunityRow[]> {
   const result = await executor.execute({
     sql: `
-      SELECT community_id, creator_user_id, display_name, status, provisioning_state,
-             registry_publication_state, registry_attempt_id, registry_published_at,
-             registry_publication_job_id, registry_error_code, transfer_state,
+      SELECT community_id, creator_user_id, display_name, status, provisioning_state, transfer_state,
              route_slug, namespace_verification_id, primary_database_binding_id,
              projected_member_count, projected_qualified_member_count, created_at, updated_at
       FROM communities
@@ -417,6 +408,29 @@ export async function getPrimaryCommunityDatabaseBindingRow(
   })
 
   return row ? toCommunityDatabaseBindingRow(row) : null
+}
+
+export async function getActiveCommunityDbCredentialRowByBindingId(
+  executor: DbExecutor,
+  communityDatabaseBindingId: string,
+): Promise<CommunityDbCredentialRow | null> {
+  const row = await firstRow(executor, {
+    sql: `
+      SELECT community_db_credential_id, community_database_binding_id, credential_kind, token_name,
+             encrypted_token, encryption_key_version, token_scope, status, issued_at,
+             invalidated_at, expires_at, created_at, updated_at
+      FROM community_db_credentials
+      WHERE community_database_binding_id = ?1
+        AND credential_kind = 'database_token'
+        AND token_scope = 'database'
+        AND status = 'active'
+      ORDER BY issued_at DESC, created_at DESC
+      LIMIT 1
+    `,
+    args: [communityDatabaseBindingId],
+  })
+
+  return row ? toCommunityDbCredentialRow(row) : null
 }
 
 export async function getCommunityMoneyPolicyRowByCommunityId(
@@ -528,50 +542,6 @@ export async function getLatestJobRowBySubjectAndType(
   })
 
   return row ? toJobRow(row) : null
-}
-
-export async function getLatestCommunityRegistryPublicationJobRow(
-  executor: DbExecutor,
-  communityId: string,
-): Promise<JobRow | null> {
-  const row = await firstRow(executor, {
-    sql: `
-      SELECT job_id, job_type, job_scope, community_id, subject_type, subject_id, status, payload_json,
-             result_ref, error_code, attempt_count, available_at, created_at, updated_at
-      FROM jobs
-      WHERE community_id = ?1
-        AND job_type = 'community_registry_publication'
-      ORDER BY created_at DESC, job_id DESC
-      LIMIT 1
-    `,
-    args: [communityId],
-  })
-
-  return row ? toJobRow(row) : null
-}
-
-export async function getCommunityRegistryAttemptRowById(
-  executor: DbExecutor,
-  registryAttemptId: string,
-): Promise<CommunityRegistryAttemptRow | null> {
-  const row = await firstRow(executor, {
-    sql: `
-      SELECT registry_attempt_id, actor_user_id, actor_primary_wallet_snapshot, actor_governance_address_snapshot,
-             namespace_verification_id, normalized_root_label, community_id, attempt_status, failure_code,
-             created_at, updated_at
-      FROM community_registry_attempts
-      WHERE registry_attempt_id = ?1
-      LIMIT 1
-    `,
-    args: [registryAttemptId],
-  }).catch((error) => {
-    if (isMissingTableError(error, "community_registry_attempts")) {
-      return null
-    }
-    throw error
-  })
-
-  return row ? toCommunityRegistryAttemptRow(row) : null
 }
 
 export async function getCommunityPostProjectionRowByPostId(

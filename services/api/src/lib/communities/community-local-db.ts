@@ -211,6 +211,8 @@ type StoredCommunitySettings = {
   community_flair_policy?: LocalCommunityFlairPolicySnapshot
 } | null
 
+type MutableStoredCommunitySettings = NonNullable<StoredCommunitySettings>
+
 type SqlExecutor = Pick<Client, "execute"> | Pick<Transaction, "execute">
 
 function toLocalCommunitySnapshot(row: Record<string, unknown>): LocalCommunitySnapshot {
@@ -371,6 +373,60 @@ function parseStoredCommunitySettings(value: unknown): StoredCommunitySettings {
     return parsed && typeof parsed === "object" ? parsed : null
   } catch {
     return null
+  }
+}
+
+async function updateStoredCommunitySettings<T>(input: {
+  databaseUrl: string
+  communityId: string
+  updatedAt: string
+  mutate: (current: MutableStoredCommunitySettings) => {
+    nextSettings: MutableStoredCommunitySettings
+    result: T
+  }
+}): Promise<T | null> {
+  const client = createClient({ url: input.databaseUrl })
+  try {
+    const tx = await client.transaction("write")
+    try {
+      const result = await tx.execute({
+        sql: `
+          SELECT settings_json
+          FROM communities
+          WHERE community_id = ?1
+          LIMIT 1
+        `,
+        args: [input.communityId],
+      })
+      const row = result.rows[0]
+      if (!row) {
+        await tx.rollback()
+        return null
+      }
+
+      const current = parseStoredCommunitySettings(row.settings_json) ?? {}
+      const { nextSettings, result: output } = input.mutate(current)
+      await tx.execute({
+        sql: `
+          UPDATE communities
+          SET settings_json = ?2,
+              updated_at = ?3
+          WHERE community_id = ?1
+        `,
+        args: [input.communityId, JSON.stringify(nextSettings), input.updatedAt],
+      })
+      await tx.commit()
+      return output
+    } catch (error) {
+      try {
+        await tx.rollback()
+      } catch {}
+      throw error
+    } finally {
+      tx.close()
+    }
+  } finally {
+    client.close()
   }
 }
 
@@ -898,42 +954,18 @@ export async function updateLocalCommunityProfile(input: {
   profile: LocalCommunityProfileSnapshot
   updatedAt: string
 }): Promise<LocalCommunityProfileSnapshot | null> {
-  const client = createClient({ url: input.databaseUrl })
-  try {
-    const result = await client.execute({
-      sql: `
-        SELECT settings_json
-        FROM communities
-        WHERE community_id = ?1
-        LIMIT 1
-      `,
-      args: [input.communityId],
-    })
-    const row = result.rows[0]
-    if (!row) {
-      return null
-    }
-
-    const parsed = parseStoredCommunitySettings(row.settings_json) ?? {}
-    const nextSettings = {
-      ...parsed,
-      community_profile: input.profile,
-    }
-
-    await client.execute({
-      sql: `
-        UPDATE communities
-        SET settings_json = ?2,
-            updated_at = ?3
-        WHERE community_id = ?1
-      `,
-      args: [input.communityId, JSON.stringify(nextSettings), input.updatedAt],
-    })
-
-    return readLocalCommunityProfile(input.databaseUrl, input.communityId)
-  } finally {
-    client.close()
-  }
+  return updateStoredCommunitySettings({
+    databaseUrl: input.databaseUrl,
+    communityId: input.communityId,
+    updatedAt: input.updatedAt,
+    mutate: (current) => ({
+      nextSettings: {
+        ...current,
+        community_profile: input.profile,
+      },
+      result: input.profile,
+    }),
+  })
 }
 
 export async function updateLocalCommunityReferenceLinks(input: {
@@ -942,42 +974,18 @@ export async function updateLocalCommunityReferenceLinks(input: {
   referenceLinks: LocalCommunityReferenceLinkSnapshot[]
   updatedAt: string
 }): Promise<LocalCommunityReferenceLinkSnapshot[] | null> {
-  const client = createClient({ url: input.databaseUrl })
-  try {
-    const result = await client.execute({
-      sql: `
-        SELECT settings_json
-        FROM communities
-        WHERE community_id = ?1
-        LIMIT 1
-      `,
-      args: [input.communityId],
-    })
-    const row = result.rows[0]
-    if (!row) {
-      return null
-    }
-
-    const parsed = parseStoredCommunitySettings(row.settings_json) ?? {}
-    const nextSettings = {
-      ...parsed,
-      community_reference_links: input.referenceLinks,
-    }
-
-    await client.execute({
-      sql: `
-        UPDATE communities
-        SET settings_json = ?2,
-            updated_at = ?3
-        WHERE community_id = ?1
-      `,
-      args: [input.communityId, JSON.stringify(nextSettings), input.updatedAt],
-    })
-
-    return readLocalCommunityReferenceLinks(input.databaseUrl, input.communityId)
-  } finally {
-    client.close()
-  }
+  return updateStoredCommunitySettings({
+    databaseUrl: input.databaseUrl,
+    communityId: input.communityId,
+    updatedAt: input.updatedAt,
+    mutate: (current) => ({
+      nextSettings: {
+        ...current,
+        community_reference_links: input.referenceLinks,
+      },
+      result: input.referenceLinks,
+    }),
+  })
 }
 
 export async function updateLocalCommunityContentAuthenticityPolicy(input: {
@@ -986,42 +994,18 @@ export async function updateLocalCommunityContentAuthenticityPolicy(input: {
   policy: LocalCommunityContentAuthenticityPolicySnapshot
   updatedAt: string
 }): Promise<LocalCommunityContentAuthenticityPolicySnapshot | null> {
-  const client = createClient({ url: input.databaseUrl })
-  try {
-    const result = await client.execute({
-      sql: `
-        SELECT settings_json
-        FROM communities
-        WHERE community_id = ?1
-        LIMIT 1
-      `,
-      args: [input.communityId],
-    })
-    const row = result.rows[0]
-    if (!row) {
-      return null
-    }
-
-    const parsed = parseStoredCommunitySettings(row.settings_json) ?? {}
-    const nextSettings = {
-      ...parsed,
-      community_content_authenticity_policy: input.policy,
-    }
-
-    await client.execute({
-      sql: `
-        UPDATE communities
-        SET settings_json = ?2,
-            updated_at = ?3
-        WHERE community_id = ?1
-      `,
-      args: [input.communityId, JSON.stringify(nextSettings), input.updatedAt],
-    })
-
-    return readLocalCommunityContentAuthenticityPolicy(input.databaseUrl, input.communityId)
-  } finally {
-    client.close()
-  }
+  return updateStoredCommunitySettings({
+    databaseUrl: input.databaseUrl,
+    communityId: input.communityId,
+    updatedAt: input.updatedAt,
+    mutate: (current) => ({
+      nextSettings: {
+        ...current,
+        community_content_authenticity_policy: input.policy,
+      },
+      result: input.policy,
+    }),
+  })
 }
 
 export async function updateLocalCommunitySourcePolicy(input: {
@@ -1030,42 +1014,18 @@ export async function updateLocalCommunitySourcePolicy(input: {
   policy: LocalCommunitySourcePolicySnapshot
   updatedAt: string
 }): Promise<LocalCommunitySourcePolicySnapshot | null> {
-  const client = createClient({ url: input.databaseUrl })
-  try {
-    const result = await client.execute({
-      sql: `
-        SELECT settings_json
-        FROM communities
-        WHERE community_id = ?1
-        LIMIT 1
-      `,
-      args: [input.communityId],
-    })
-    const row = result.rows[0]
-    if (!row) {
-      return null
-    }
-
-    const parsed = parseStoredCommunitySettings(row.settings_json) ?? {}
-    const nextSettings = {
-      ...parsed,
-      community_source_policy: input.policy,
-    }
-
-    await client.execute({
-      sql: `
-        UPDATE communities
-        SET settings_json = ?2,
-            updated_at = ?3
-        WHERE community_id = ?1
-      `,
-      args: [input.communityId, JSON.stringify(nextSettings), input.updatedAt],
-    })
-
-    return readLocalCommunitySourcePolicy(input.databaseUrl, input.communityId)
-  } finally {
-    client.close()
-  }
+  return updateStoredCommunitySettings({
+    databaseUrl: input.databaseUrl,
+    communityId: input.communityId,
+    updatedAt: input.updatedAt,
+    mutate: (current) => ({
+      nextSettings: {
+        ...current,
+        community_source_policy: input.policy,
+      },
+      result: input.policy,
+    }),
+  })
 }
 
 export async function updateLocalCommunityMarketContextPolicy(input: {
@@ -1074,42 +1034,18 @@ export async function updateLocalCommunityMarketContextPolicy(input: {
   policy: LocalCommunityMarketContextPolicySnapshot
   updatedAt: string
 }): Promise<LocalCommunityMarketContextPolicySnapshot | null> {
-  const client = createClient({ url: input.databaseUrl })
-  try {
-    const result = await client.execute({
-      sql: `
-        SELECT settings_json
-        FROM communities
-        WHERE community_id = ?1
-        LIMIT 1
-      `,
-      args: [input.communityId],
-    })
-    const row = result.rows[0]
-    if (!row) {
-      return null
-    }
-
-    const parsed = parseStoredCommunitySettings(row.settings_json) ?? {}
-    const nextSettings = {
-      ...parsed,
-      community_market_context_policy: input.policy,
-    }
-
-    await client.execute({
-      sql: `
-        UPDATE communities
-        SET settings_json = ?2,
-            updated_at = ?3
-        WHERE community_id = ?1
-      `,
-      args: [input.communityId, JSON.stringify(nextSettings), input.updatedAt],
-    })
-
-    return readLocalCommunityMarketContextPolicy(input.databaseUrl, input.communityId)
-  } finally {
-    client.close()
-  }
+  return updateStoredCommunitySettings({
+    databaseUrl: input.databaseUrl,
+    communityId: input.communityId,
+    updatedAt: input.updatedAt,
+    mutate: (current) => ({
+      nextSettings: {
+        ...current,
+        community_market_context_policy: input.policy,
+      },
+      result: input.policy,
+    }),
+  })
 }
 
 export async function updateLocalCommunityContentAuthenticityDetectionPolicy(input: {
@@ -1118,42 +1054,18 @@ export async function updateLocalCommunityContentAuthenticityDetectionPolicy(inp
   policy: LocalCommunityContentAuthenticityDetectionPolicySnapshot
   updatedAt: string
 }): Promise<LocalCommunityContentAuthenticityDetectionPolicySnapshot | null> {
-  const client = createClient({ url: input.databaseUrl })
-  try {
-    const result = await client.execute({
-      sql: `
-        SELECT settings_json
-        FROM communities
-        WHERE community_id = ?1
-        LIMIT 1
-      `,
-      args: [input.communityId],
-    })
-    const row = result.rows[0]
-    if (!row) {
-      return null
-    }
-
-    const parsed = parseStoredCommunitySettings(row.settings_json) ?? {}
-    const nextSettings = {
-      ...parsed,
-      community_content_authenticity_detection_policy: input.policy,
-    }
-
-    await client.execute({
-      sql: `
-        UPDATE communities
-        SET settings_json = ?2,
-            updated_at = ?3
-        WHERE community_id = ?1
-      `,
-      args: [input.communityId, JSON.stringify(nextSettings), input.updatedAt],
-    })
-
-    return readLocalCommunityContentAuthenticityDetectionPolicy(input.databaseUrl, input.communityId)
-  } finally {
-    client.close()
-  }
+  return updateStoredCommunitySettings({
+    databaseUrl: input.databaseUrl,
+    communityId: input.communityId,
+    updatedAt: input.updatedAt,
+    mutate: (current) => ({
+      nextSettings: {
+        ...current,
+        community_content_authenticity_detection_policy: input.policy,
+      },
+      result: input.policy,
+    }),
+  })
 }
 
 export async function updateLocalCommunityFlairPolicy(input: {
@@ -1162,42 +1074,18 @@ export async function updateLocalCommunityFlairPolicy(input: {
   policy: LocalCommunityFlairPolicySnapshot
   updatedAt: string
 }): Promise<LocalCommunityFlairPolicySnapshot | null> {
-  const client = createClient({ url: input.databaseUrl })
-  try {
-    const result = await client.execute({
-      sql: `
-        SELECT settings_json
-        FROM communities
-        WHERE community_id = ?1
-        LIMIT 1
-      `,
-      args: [input.communityId],
-    })
-    const row = result.rows[0]
-    if (!row) {
-      return null
-    }
-
-    const parsed = parseStoredCommunitySettings(row.settings_json) ?? {}
-    const nextSettings = {
-      ...parsed,
-      community_flair_policy: input.policy,
-    }
-
-    await client.execute({
-      sql: `
-        UPDATE communities
-        SET settings_json = ?2,
-            updated_at = ?3
-        WHERE community_id = ?1
-      `,
-      args: [input.communityId, JSON.stringify(nextSettings), input.updatedAt],
-    })
-
-    return readLocalCommunityFlairPolicy(input.databaseUrl, input.communityId)
-  } finally {
-    client.close()
-  }
+  return updateStoredCommunitySettings({
+    databaseUrl: input.databaseUrl,
+    communityId: input.communityId,
+    updatedAt: input.updatedAt,
+    mutate: (current) => ({
+      nextSettings: {
+        ...current,
+        community_flair_policy: input.policy,
+      },
+      result: input.policy,
+    }),
+  })
 }
 
 export function makeLocalCommunityRuleId(): string {

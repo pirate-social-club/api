@@ -9,6 +9,8 @@ coverage/
 .env.local
 .env.*.local
 .env.local-sqlite
+.env.staging
+.env.production
 .dev.vars
 
 .DS_Store

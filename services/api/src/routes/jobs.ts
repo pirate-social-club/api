@@ -25,7 +25,7 @@ import {
 } from "../lib/posts/song-asset-locked-delivery-service"
 import { authError } from "../lib/errors"
 import { requireBearerToken } from "../lib/helpers"
-import { handleRoute } from "./route-helpers"
+import { handleRoute, requireRouteParam } from "./route-helpers"
 import type { Env } from "../types"
 
 const jobs = new Hono<{ Bindings: Env }>()
@@ -126,7 +126,7 @@ jobs.get("/:jobId", handleRoute(async (c) => {
   const result = await getJob({
     env: c.env,
     bearerToken: token,
-    jobId: c.req.param("jobId"),
+    jobId: requireRouteParam(c.req.param("jobId"), "job_id"),
     repository,
   })
   return c.json(result, 200)

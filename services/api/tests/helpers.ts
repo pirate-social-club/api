@@ -225,7 +225,6 @@ export async function createRouteTestContext(overrides: Partial<Env> = {}): Prom
     ENVIRONMENT: "test",
     CONTROL_PLANE_DATABASE_URL: `file:${controlPlane.databasePath}`,
     LOCAL_COMMUNITY_DB_ROOT: communityDbRoot,
-    ALLOW_LOCAL_STUB_REGISTRY_PUBLICATION: "true",
     ...overrides,
   })
 

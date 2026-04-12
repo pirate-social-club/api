@@ -17,7 +17,8 @@
     "secrets:sync:staging": "../../../scripts/sync-wrangler-api-secrets.sh --env-file .env.staging --wrangler-env staging",
     "check": "tsc --noEmit",
     "test": "bun test",
-    "mint:dev-jwt": "bun run scripts/mint-dev-jwt.ts"
+    "mint:dev-jwt": "bun run scripts/mint-dev-jwt.ts",
+    "local:seed": "bun run scripts/seed-local-community.ts"
   },
   "dependencies": {
     "@libsql/client": "^0.17.2",

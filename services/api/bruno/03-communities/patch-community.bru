@@ -33,6 +33,5 @@ tests {
     expect(body.community_id).to.equal(bru.getEnvVar("community_id"));
     expect(body.description).to.equal(bru.getEnvVar("community_description"));
     expect(body.membership_mode).to.equal("open");
-    expect(body.registry_publication_state).to.equal("stale");
   });
 }

@@ -88,7 +88,7 @@ async function main(): Promise<void> {
     method: "eth_getTransactionCount",
     params: [account.address, "pending"],
   })
-  const nonce = BigInt(String(nonceHex))
+  const nonce = Number(BigInt(String(nonceHex)))
 
   const grantSerializedTx = await account.signTransaction({
     type: "eip1559",
@@ -116,7 +116,7 @@ async function main(): Promise<void> {
     const fundSerializedTx = await account.signTransaction({
       type: "eip1559",
       chainId: 1315,
-      nonce: nonce + 1n,
+      nonce: nonce + 1,
       to: operator,
       value: parseEther(fundAmount),
       gas: 21000n,

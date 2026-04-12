@@ -28,6 +28,20 @@ import type {
   WalletAttachmentSummary,
 } from "../../types"
 
+function normalizeVerificationIntent(value: string | null): VerificationSession["verification_intent"] {
+  switch (value) {
+    case "profile_verification":
+    case "community_creation":
+    case "ucommunity_join":
+    case "post_access_18_plus":
+    case "commerce_pricing":
+    case "qualifier_disclosure":
+      return value
+    default:
+      return null
+  }
+}
+
 export function parseVerificationCapabilities(raw: string | null | undefined): VerificationCapabilities {
   if (!raw) {
     return buildDefaultVerificationCapabilities()
@@ -244,6 +258,8 @@ export function serializeVerificationSession(input: {
     provider_mode: isVery ? "widget" : "qr_deeplink",
     wallet_attachment_id: input.row.wallet_attachment_id,
     requested_capabilities: requestedCapabilities,
+    verification_intent: normalizeVerificationIntent(input.row.verification_intent),
+    policy_id: input.row.policy_id,
     status: input.row.status === "canceled" ? "failed" : input.row.status,
     launch: isVery
       ? {

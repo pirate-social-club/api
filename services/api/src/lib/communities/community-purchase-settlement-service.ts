@@ -104,9 +104,6 @@ export async function confirmCommunityPurchaseSettlement(input: {
       communityId: input.communityId,
       quoteId: body.quote_id.trim(),
     })
-    const quotedSettlement = quote as typeof quote & {
-      destination_settlement_amount_atomic?: string | null
-    }
     if (!quote || quote.buyer_user_id !== session.userId) {
       throw notFoundError("Purchase quote not found")
     }
@@ -145,7 +142,7 @@ export async function confirmCommunityPurchaseSettlement(input: {
     let settlementTxRef = body.settlement_tx_ref?.trim() || null
 
     if (useRealStorySettlement) {
-      if (!quotedSettlement.destination_settlement_amount_atomic) {
+      if (!quote.destination_settlement_amount_atomic) {
         throw badRequestError("Purchase quote is missing destination settlement amount")
       }
       const listing = await getCommunityListingById({
@@ -188,7 +185,7 @@ export async function confirmCommunityPurchaseSettlement(input: {
             asset,
             buyerAddress: buyerWalletAddress,
             payoutRecipient,
-            amountAtomic: quotedSettlement.destination_settlement_amount_atomic,
+            amountAtomic: quote.destination_settlement_amount_atomic,
           })
           : await settleCommunityPurchaseViaDirectKey({
             env: input.env,
@@ -197,7 +194,7 @@ export async function confirmCommunityPurchaseSettlement(input: {
             asset,
             buyerAddress: buyerWalletAddress,
             payoutRecipient,
-            amountAtomic: quotedSettlement.destination_settlement_amount_atomic,
+            amountAtomic: quote.destination_settlement_amount_atomic,
           })
         settlementTxRef = settlement.storySettlementTxRef
       }

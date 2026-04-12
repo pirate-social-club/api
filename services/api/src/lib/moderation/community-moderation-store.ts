@@ -84,7 +84,6 @@ function toUserReport(row: unknown): UserReport {
     user_report_id: requiredString(row, "user_report_id"),
     community_id: requiredString(row, "community_id"),
     post_id: requiredString(row, "post_id"),
-    moderation_case_id: stringOrNull(rowValue(row, "moderation_case_id")),
     reporter_user_id: requiredString(row, "reporter_user_id"),
     reason_code: requiredString(row, "reason_code") as UserReportReasonCode,
     note: stringOrNull(rowValue(row, "note")),
@@ -458,10 +457,10 @@ export async function attachSongModerationSignalsAndCase(input: {
           signal_type, severity, provider, provider_label, evidence_ref, created_at
         ) VALUES (
           ?1, ?2, ?3, ?4, ?5, 'platform_analysis',
-          ?6, ?7, 'openrouter', ?8, ?9, ?10
-        )
-      `,
-      args: [
+        ?6, ?7, 'openrouter', ?8, ?9, ?10
+      )
+    `,
+    args: [
         makeId("msg"),
         input.communityId,
         input.postId,
@@ -470,7 +469,7 @@ export async function attachSongModerationSignalsAndCase(input: {
         signal.signalType,
         signal.severity,
         signal.providerLabel,
-        input.analysisResultRef,
+        null,
         input.createdAt,
       ],
     })

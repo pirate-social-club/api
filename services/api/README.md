@@ -52,7 +52,7 @@ Startup prints the resolved mode and backends:
 pirate-api mode=local-sqlite
   control_plane_db = file:/tmp/pirate-control-plane-live.db
   community_db_root = /tmp/pirate-community-dbs-live
-  registry_publication = local_stub
+  registry_publication = deferred
   hns_verification = local_stub
 ```
 
@@ -103,9 +103,28 @@ The startup guard rejects these local-only settings in `staging` and `production
 
 - `CONTROL_PLANE_DATABASE_URL=file:...`
 - `LOCAL_COMMUNITY_DB_ROOT`
-- `ALLOW_LOCAL_STUB_REGISTRY_PUBLICATION=true`
 - `DEV_MEMORY_STORE_ENABLED=true`
 - localhost `PIRATE_API_PUBLIC_ORIGIN`
+
+For staging and production runtime, the API still needs:
+
+- `TURSO_COMMUNITY_DB_WRAP_KEY`
+- `TURSO_COMMUNITY_DB_WRAP_KEY_VERSION`
+- `COMMUNITY_PROVISION_OPERATOR_BASE_URL`
+- `COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN`
+- `COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS`
+- `COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION`
+
+The public runtime uses those values to call the private community-provision operator and to encrypt the returned per-community DB token before writing it to the control plane.
+
+Do not put private Turso Platform operator secrets such as `TURSO_PLATFORM_API_TOKEN` into the public API runtime env. Those belong in separate operator tooling env files.
+
+Deploy commands:
+
+```bash
+rtk bun run deploy:staging
+rtk bun run deploy:production
+```
 
 ## Internal Layout
 
@@ -179,7 +198,6 @@ Troubleshooting:
 Optional overrides in `.env.local-sqlite`:
 
 - For real song artifact uploads, set `FILEBASE_S3_BUCKET_MUSIC` and related S3 keys.
-- For the real internal publisher path, set `REGISTRY_PUBLISHER_URL`, `REGISTRY_PUBLISHER_AUTH_TOKEN`, and `REGISTRY_PUBLISHER_TIMEOUT_MS`.
 - For the real HNS TXT flow, set `HNS_VERIFICATION_PROVIDER=hnsdoh` and `HNS_RESOLVER_HOST=hnsdoh.com`.
 
 ## Full First Slice Local Setup
@@ -267,7 +285,7 @@ The script reads:
 - `AUTH_UPSTREAM_JWT_ISSUER` or `JWT_BASED_AUTH_ISSUERS`
 - `AUTH_UPSTREAM_JWT_AUDIENCE` or `JWT_BASED_AUTH_AUDIENCE`
 
-from `.env.local-sqlite` (preferred), `.dev.vars` (fallback), or the current shell environment.
+from `.env.local-sqlite`, with the current shell environment allowed to override those values.
 
 ## Pirate Session JWT
 
@@ -280,24 +298,15 @@ Required env:
 - `PIRATE_APP_JWT_ISSUER`
 - `PIRATE_APP_JWT_AUDIENCE`
 
-## Registry Publisher
+## Registry Publication
 
-The default local path still uses the in-process registry stub.
+Tableland-backed registry publication is deferred for launch.
 
-To exercise the internal publisher boundary instead, configure:
+Current launch posture:
 
-- `REGISTRY_PUBLISHER_URL`
-- `REGISTRY_PUBLISHER_AUTH_TOKEN`
-- `REGISTRY_PUBLISHER_TIMEOUT_MS`
-
-For the current normal-runtime Tableland publisher prototype, use a timeout budget closer to
-`60000ms` than `25000ms`. The live Base Sepolia publication path can exceed `25s`, which causes
-false `publication_error` responses at the Worker boundary even when the publisher eventually
-succeeds.
-
-When `REGISTRY_PUBLISHER_URL` is configured, the Worker first calls the publisher to create the
-public community-create attempt before it writes the mirrored Turso `community_registry_attempts`
-row. This is the beginning of the audit-first ordering required by the registry-plane decision.
+- community creation does not depend on a registry publisher
+- app reads are API/Turso-backed only
+- any existing Tableland publisher code should be treated as dormant, not launch-critical
 
 ## Example Exchange
 

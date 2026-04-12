@@ -667,7 +667,7 @@ async function configureEntitlementClassIfPossible(input: {
     method: "eth_getTransactionCount",
     params: [account.address, "pending"],
   }) as string
-  const nonce = BigInt(nonceHex)
+  const nonce = Number(BigInt(nonceHex))
   const serializedTx = await account.signTransaction({
     type: "eip1559",
     chainId: 1315,
@@ -750,7 +750,7 @@ async function grantStoryPublishOperatorIfPossible(input: {
     method: "eth_getTransactionCount",
     params: [account.address, "pending"],
   }) as string
-  const nonce = BigInt(nonceHex)
+  const nonce = Number(BigInt(nonceHex))
   const serializedTx = await account.signTransaction({
     type: "eip1559",
     chainId: 1315,
@@ -907,7 +907,7 @@ async function requestCdrReadViaRawTx(input: {
     method: "eth_getTransactionCount",
     params: [account.address, "pending"],
   })
-  const nonce = BigInt(String(nonceHex))
+  const nonce = Number(BigInt(String(nonceHex)))
   const serializedTx = await account.signTransaction({
     type: "eip1559",
     chainId: 1315,

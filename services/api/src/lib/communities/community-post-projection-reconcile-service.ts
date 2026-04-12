@@ -63,7 +63,7 @@ export async function reconcileRecentCommunityPostProjections(input: {
         await input.communityRepository.reconcileCommunityPostProjection({
           communityId: post.community_id,
           sourcePostId: post.post_id,
-          authorUserId: post.author_user_id,
+          authorUserId: post.author_user_id ?? null,
           identityMode: post.identity_mode,
           postType: post.post_type,
           status: post.status,

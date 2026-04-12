@@ -91,7 +91,7 @@ import {
 } from "../lib/moderation/community-moderation-store"
 import { getPostById } from "../lib/posts/community-post-store"
 import { verifyPirateAccessToken } from "../lib/auth/pirate-session-token"
-import { handleRoute } from "./route-helpers"
+import { handleRoute, requireRouteParam, type AppRouteContext } from "./route-helpers"
 import type {
   CreateModerationActionRequest,
   CreatePostRequest,
@@ -107,6 +107,46 @@ const handleCommunityRoute = handleRoute
 
 function normalizeNamespaceLabel(value: string): string {
   return value.trim().replace(/^@+/, "").toLowerCase()
+}
+
+function communityIdParam(c: AppRouteContext): string {
+  return requireRouteParam(c.req.param("communityId"), "community_id")
+}
+
+function postIdParam(c: AppRouteContext): string {
+  return requireRouteParam(c.req.param("postId"), "post_id")
+}
+
+function listingIdParam(c: AppRouteContext): string {
+  return requireRouteParam(c.req.param("listingId"), "listing_id")
+}
+
+function purchaseIdParam(c: AppRouteContext): string {
+  return requireRouteParam(c.req.param("purchaseId"), "purchase_id")
+}
+
+function membershipRequestIdParam(c: AppRouteContext): string {
+  return requireRouteParam(c.req.param("membershipRequestId"), "membership_request_id")
+}
+
+function referenceLinkIdParam(c: AppRouteContext): string {
+  return requireRouteParam(c.req.param("communityReferenceLinkId"), "community_reference_link_id")
+}
+
+function moderationCaseIdParam(c: AppRouteContext): string {
+  return requireRouteParam(c.req.param("moderationCaseId"), "moderation_case_id")
+}
+
+function songArtifactUploadIdParam(c: AppRouteContext): string {
+  return requireRouteParam(c.req.param("songArtifactUploadId"), "song_artifact_upload_id")
+}
+
+function songArtifactBundleIdParam(c: AppRouteContext): string {
+  return requireRouteParam(c.req.param("songArtifactBundleId"), "song_artifact_bundle_id")
+}
+
+function assetIdParam(c: AppRouteContext): string {
+  return requireRouteParam(c.req.param("assetId"), "asset_id")
 }
 
 async function requireVerifiedHumanForModeration(input: {
@@ -205,7 +245,7 @@ communities.post("/", handleCommunityRoute(async (c) => {
 
 communities.get("/by-namespace/:namespaceLabel", handleCommunityRoute(async (c) => {
   const repository = getControlPlaneCommunityRepository(c.env)
-  const rawNamespaceLabel = c.req.param("namespaceLabel")
+  const rawNamespaceLabel = requireRouteParam(c.req.param("namespaceLabel"), "namespace_label")
   const normalizedLabel = normalizeNamespaceLabel(rawNamespaceLabel)
   if (!normalizedLabel) {
     throw badRequestError("Namespace label is required")
@@ -222,7 +262,7 @@ communities.get("/by-namespace/:namespaceLabel", handleCommunityRoute(async (c) 
 communities.get("/:communityId", handleCommunityRoute(async (c) => {
   const repository = getControlPlaneCommunityRepository(c.env)
   const result = await getCommunity({
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     repository,
     userRepository: getUserRepository(c.env),
   })
@@ -239,7 +279,7 @@ communities.patch("/:communityId", handleCommunityRoute(async (c) => {
   const result = await updateCommunity({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     body,
     repository: getControlPlaneCommunityRepository(c.env),
     userRepository: getUserRepository(c.env),
@@ -252,7 +292,7 @@ communities.get("/:communityId/community-profile", handleCommunityRoute(async (c
   const result = await getCommunityProfile({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     repository: getControlPlaneCommunityRepository(c.env),
   })
   return c.json(result, 200)
@@ -268,7 +308,7 @@ communities.patch("/:communityId/community-profile", handleCommunityRoute(async 
   const result = await updateCommunityProfile({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     body,
     repository: getControlPlaneCommunityRepository(c.env),
   })
@@ -280,7 +320,7 @@ communities.get("/:communityId/reference-links", handleCommunityRoute(async (c) 
   const result = await listCommunityReferenceLinks({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     repository: getControlPlaneCommunityRepository(c.env),
   })
   return c.json(result, 200)
@@ -295,7 +335,7 @@ communities.post("/:communityId/reference-links", handleCommunityRoute(async (c)
   const result = await createCommunityReferenceLink({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     body,
     repository: getControlPlaneCommunityRepository(c.env),
   })
@@ -307,8 +347,8 @@ communities.get("/:communityId/reference-links/:communityReferenceLinkId", handl
   const result = await getCommunityReferenceLink({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
-    communityReferenceLinkId: c.req.param("communityReferenceLinkId"),
+    communityId: communityIdParam(c),
+    communityReferenceLinkId: referenceLinkIdParam(c),
     repository: getControlPlaneCommunityRepository(c.env),
   })
   return c.json(result, 200)
@@ -323,8 +363,8 @@ communities.patch("/:communityId/reference-links/:communityReferenceLinkId", han
   const result = await updateCommunityReferenceLink({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
-    communityReferenceLinkId: c.req.param("communityReferenceLinkId"),
+    communityId: communityIdParam(c),
+    communityReferenceLinkId: referenceLinkIdParam(c),
     body,
     repository: getControlPlaneCommunityRepository(c.env),
   })
@@ -336,8 +376,8 @@ communities.post("/:communityId/reference-links/:communityReferenceLinkId/archiv
   const result = await archiveCommunityReferenceLink({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
-    communityReferenceLinkId: c.req.param("communityReferenceLinkId"),
+    communityId: communityIdParam(c),
+    communityReferenceLinkId: referenceLinkIdParam(c),
     repository: getControlPlaneCommunityRepository(c.env),
   })
   return c.json(result, 200)
@@ -349,7 +389,7 @@ communities.get("/:communityId/money-policy", handleCommunityRoute(async (c) => 
   const result = await getCommunityMoneyPolicy({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     repository,
   })
   return c.json(result, 200)
@@ -360,7 +400,7 @@ communities.get("/:communityId/donation-policy", handleCommunityRoute(async (c) 
   const result = await getCommunityDonationPolicy({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     repository: getControlPlaneCommunityRepository(c.env),
   })
   return c.json(result, 200)
@@ -371,7 +411,7 @@ communities.get("/:communityId/flairs", handleCommunityRoute(async (c) => {
   const result = await getCommunityFlairPolicy({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     repository: getControlPlaneCommunityRepository(c.env),
   })
   return c.json(result, 200)
@@ -387,7 +427,7 @@ communities.patch("/:communityId/flairs", handleCommunityRoute(async (c) => {
   const result = await updateCommunityFlairPolicy({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     body,
     repository: getControlPlaneCommunityRepository(c.env),
   })
@@ -404,7 +444,7 @@ communities.patch("/:communityId/donation-policy", handleCommunityRoute(async (c
   const result = await updateCommunityDonationPolicy({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     body,
     repository: getControlPlaneCommunityRepository(c.env),
   })
@@ -416,7 +456,7 @@ communities.get("/:communityId/content-authenticity-policy", handleCommunityRout
   const result = await getCommunityContentAuthenticityPolicy({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     repository: getControlPlaneCommunityRepository(c.env),
   })
   return c.json(result, 200)
@@ -432,7 +472,7 @@ communities.patch("/:communityId/content-authenticity-policy", handleCommunityRo
   const result = await updateCommunityContentAuthenticityPolicy({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     body,
     repository: getControlPlaneCommunityRepository(c.env),
   })
@@ -444,7 +484,7 @@ communities.get("/:communityId/content-authenticity-detection-policy", handleCom
   const result = await getCommunityContentAuthenticityDetectionPolicy({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     repository: getControlPlaneCommunityRepository(c.env),
   })
   return c.json(result, 200)
@@ -460,7 +500,7 @@ communities.patch("/:communityId/content-authenticity-detection-policy", handleC
   const result = await updateCommunityContentAuthenticityDetectionPolicy({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     body,
     repository: getControlPlaneCommunityRepository(c.env),
   })
@@ -472,7 +512,7 @@ communities.get("/:communityId/market-context-policy", handleCommunityRoute(asyn
   const result = await getCommunityMarketContextPolicy({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     repository: getControlPlaneCommunityRepository(c.env),
   })
   return c.json(result, 200)
@@ -488,7 +528,7 @@ communities.patch("/:communityId/market-context-policy", handleCommunityRoute(as
   const result = await updateCommunityMarketContextPolicy({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     body,
     repository: getControlPlaneCommunityRepository(c.env),
   })
@@ -500,7 +540,7 @@ communities.get("/:communityId/source-policy", handleCommunityRoute(async (c) =>
   const result = await getCommunitySourcePolicy({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     repository: getControlPlaneCommunityRepository(c.env),
   })
   return c.json(result, 200)
@@ -511,7 +551,7 @@ communities.get("/:communityId/gate-rules", handleCommunityRoute(async (c) => {
   const result = await listCommunityGateRules({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     repository: getControlPlaneCommunityRepository(c.env),
   })
   return c.json({ gate_rules: result }, 200)
@@ -527,7 +567,7 @@ communities.post("/:communityId/gate-rules", handleCommunityRoute(async (c) => {
   const result = await upsertCommunityGateRule({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     body: body as {
       gate_rule_id?: string
       scope?: "membership" | "viewer" | "posting"
@@ -553,7 +593,7 @@ communities.patch("/:communityId/source-policy", handleCommunityRoute(async (c) 
   const result = await updateCommunitySourcePolicy({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     body,
     repository: getControlPlaneCommunityRepository(c.env),
   })
@@ -571,7 +611,7 @@ communities.patch("/:communityId/money-policy", handleCommunityRoute(async (c) =
   const result = await updateCommunityMoneyPolicy({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     body,
     repository,
   })
@@ -584,7 +624,7 @@ communities.get("/:communityId/pricing-policy", handleCommunityRoute(async (c) =
   const result = await getCommunityPricingPolicy({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     repository,
   })
   return c.json(result, 200)
@@ -601,7 +641,7 @@ communities.patch("/:communityId/pricing-policy", handleCommunityRoute(async (c)
   const result = await updateCommunityPricingPolicy({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     body,
     repository,
   })
@@ -619,7 +659,7 @@ communities.post("/:communityId/purchase-quote-preflight", handleCommunityRoute(
   const result = await quoteCommunityPurchasePreflight({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     body,
     repository,
   })
@@ -637,7 +677,7 @@ communities.post("/:communityId/purchase-quotes", handleCommunityRoute(async (c)
   const result = await quoteCommunityPurchase({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     body,
     repository,
     userRepository: getUserRepository(c.env),
@@ -650,7 +690,7 @@ communities.get("/:communityId/listings", handleCommunityRoute(async (c) => {
   const result = await listCommunityListingRecords({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     repository: getControlPlaneCommunityRepository(c.env),
   })
   return c.json(result, 200)
@@ -665,7 +705,7 @@ communities.post("/:communityId/listings", handleCommunityRoute(async (c) => {
   const result = await createCommunityListingRecord({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     body,
     repository: getControlPlaneCommunityRepository(c.env),
   })
@@ -677,8 +717,8 @@ communities.get("/:communityId/listings/:listingId", handleCommunityRoute(async 
   const result = await getCommunityListingRecord({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
-    listingId: c.req.param("listingId"),
+    communityId: communityIdParam(c),
+    listingId: listingIdParam(c),
     repository: getControlPlaneCommunityRepository(c.env),
   })
   return c.json(result, 200)
@@ -693,8 +733,8 @@ communities.patch("/:communityId/listings/:listingId", handleCommunityRoute(asyn
   const result = await updateCommunityListingRecord({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
-    listingId: c.req.param("listingId"),
+    communityId: communityIdParam(c),
+    listingId: listingIdParam(c),
     body,
     repository: getControlPlaneCommunityRepository(c.env),
   })
@@ -706,7 +746,7 @@ communities.get("/:communityId/purchases", handleCommunityRoute(async (c) => {
   const result = await listBuyerCommunityPurchases({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     repository: getControlPlaneCommunityRepository(c.env),
   })
   return c.json(result, 200)
@@ -717,8 +757,8 @@ communities.get("/:communityId/purchases/:purchaseId", handleCommunityRoute(asyn
   const result = await getBuyerCommunityPurchase({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
-    purchaseId: c.req.param("purchaseId"),
+    communityId: communityIdParam(c),
+    purchaseId: purchaseIdParam(c),
     repository: getControlPlaneCommunityRepository(c.env),
   })
   return c.json(result, 200)
@@ -735,7 +775,7 @@ communities.post("/:communityId/purchase-settlements", handleCommunityRoute(asyn
   const result = await confirmCommunityPurchaseSettlement({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     body,
     repository,
     userRepository: getUserRepository(c.env),
@@ -754,7 +794,7 @@ communities.post("/:communityId/purchase-settlements/fail", handleCommunityRoute
   const result = await failCommunityPurchaseSettlement({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     body,
     repository,
   })
@@ -766,7 +806,7 @@ communities.post("/:communityId/join", handleCommunityRoute(async (c) => {
   const result = await joinCommunity({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     userRepository: getUserRepository(c.env),
     communityRepository: getControlPlaneCommunityRepository(c.env),
   })
@@ -778,7 +818,7 @@ communities.get("/:communityId/membership-requests", handleCommunityRoute(async 
   const result = await listMembershipRequests({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     communityRepository: getControlPlaneCommunityRepository(c.env),
   })
   return c.json(result, 200)
@@ -794,8 +834,8 @@ communities.post("/:communityId/membership-requests/:membershipRequestId/approve
   const result = await approveMembershipRequest({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
-    membershipRequestId: c.req.param("membershipRequestId"),
+    communityId: communityIdParam(c),
+    membershipRequestId: membershipRequestIdParam(c),
     reviewReason: typeof body?.review_reason === "string" ? body.review_reason.trim() || null : null,
     communityRepository: getControlPlaneCommunityRepository(c.env),
     userRepository: getUserRepository(c.env),
@@ -813,8 +853,8 @@ communities.post("/:communityId/membership-requests/:membershipRequestId/reject"
   const result = await rejectMembershipRequest({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
-    membershipRequestId: c.req.param("membershipRequestId"),
+    communityId: communityIdParam(c),
+    membershipRequestId: membershipRequestIdParam(c),
     reviewReason: typeof body?.review_reason === "string" ? body.review_reason.trim() || null : null,
     communityRepository: getControlPlaneCommunityRepository(c.env),
   })
@@ -833,7 +873,7 @@ communities.post("/:communityId/posts", handleCommunityRoute(async (c) => {
   const result = await createPost({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     body,
     userRepository,
     communityRepository,
@@ -851,7 +891,7 @@ communities.post("/:communityId/posts/:postId/reports", handleCommunityRoute(asy
 
   const userRepository = getUserRepository(c.env)
   const communityRepository = getControlPlaneCommunityRepository(c.env)
-  const community = await communityRepository.getCommunityById(c.req.param("communityId"))
+  const community = await communityRepository.getCommunityById(communityIdParam(c))
   if (!community || community.provisioning_state !== "active" || community.status !== "active") {
     throw notFoundError("Community not found")
   }
@@ -861,22 +901,22 @@ communities.post("/:communityId/posts/:postId/reports", handleCommunityRoute(asy
     userRepository,
   })
 
-  const db = await openCommunityDb(communityRepository, c.req.param("communityId"))
+  const db = await openCommunityDb(communityRepository, communityIdParam(c))
   try {
-    const membership = await getCommunityMembershipState(db.client, c.req.param("communityId"), session.userId)
+    const membership = await getCommunityMembershipState(db.client, communityIdParam(c), session.userId)
     if (!canAccessCommunity(membership)) {
       throw notFoundError("Community not found")
     }
-    const post = await getPostById(db.client, c.req.param("postId"))
-    if (!post || post.community_id !== c.req.param("communityId") || post.status !== "published") {
+    const post = await getPostById(db.client, postIdParam(c))
+    if (!post || post.community_id !== communityIdParam(c)) {
       throw notFoundError("Post not found")
     }
     const tx = await db.client.transaction("write")
     try {
       const report = await createUserReportAndAttachToCase({
         client: tx,
-        communityId: c.req.param("communityId"),
-        postId: c.req.param("postId"),
+        communityId: communityIdParam(c),
+        postId: postIdParam(c),
         reporterUserId: session.userId,
         reasonCode: body.reason_code,
         note: typeof body.note === "string" ? body.note.trim() || null : null,
@@ -900,20 +940,20 @@ communities.post("/:communityId/posts/:postId/reports", handleCommunityRoute(asy
 communities.get("/:communityId/moderation-cases", handleCommunityRoute(async (c) => {
   const token = requireBearerToken(c.req.header("authorization"))
   const communityRepository = getControlPlaneCommunityRepository(c.env)
-  const community = await communityRepository.getCommunityById(c.req.param("communityId"))
+  const community = await communityRepository.getCommunityById(communityIdParam(c))
   if (!community || community.provisioning_state !== "active" || community.status !== "active") {
     throw notFoundError("Community not found")
   }
   const session = await verifyPirateAccessToken({ env: c.env, token })
-  const db = await openCommunityDb(communityRepository, c.req.param("communityId"))
+  const db = await openCommunityDb(communityRepository, communityIdParam(c))
   try {
-    const membership = await getCommunityMembershipState(db.client, c.req.param("communityId"), session.userId)
+    const membership = await getCommunityMembershipState(db.client, communityIdParam(c), session.userId)
     if (!canAccessCommunity(membership)) {
       throw notFoundError("Community not found")
     }
     await requireCommunityModerationAccess({
       dbClient: db.client,
-      communityId: c.req.param("communityId"),
+      communityId: communityIdParam(c),
       userId: session.userId,
     })
     const rawStatus = c.req.query("status")
@@ -921,7 +961,7 @@ communities.get("/:communityId/moderation-cases", handleCommunityRoute(async (c)
     return c.json({
       items: await listModerationCases({
         client: db.client,
-        communityId: c.req.param("communityId"),
+        communityId: communityIdParam(c),
         status,
       }),
     }, 200)
@@ -933,26 +973,26 @@ communities.get("/:communityId/moderation-cases", handleCommunityRoute(async (c)
 communities.get("/:communityId/moderation-cases/:moderationCaseId", handleCommunityRoute(async (c) => {
   const token = requireBearerToken(c.req.header("authorization"))
   const communityRepository = getControlPlaneCommunityRepository(c.env)
-  const community = await communityRepository.getCommunityById(c.req.param("communityId"))
+  const community = await communityRepository.getCommunityById(communityIdParam(c))
   if (!community || community.provisioning_state !== "active" || community.status !== "active") {
     throw notFoundError("Community not found")
   }
   const session = await verifyPirateAccessToken({ env: c.env, token })
-  const db = await openCommunityDb(communityRepository, c.req.param("communityId"))
+  const db = await openCommunityDb(communityRepository, communityIdParam(c))
   try {
-    const membership = await getCommunityMembershipState(db.client, c.req.param("communityId"), session.userId)
+    const membership = await getCommunityMembershipState(db.client, communityIdParam(c), session.userId)
     if (!canAccessCommunity(membership)) {
       throw notFoundError("Community not found")
     }
     await requireCommunityModerationAccess({
       dbClient: db.client,
-      communityId: c.req.param("communityId"),
+      communityId: communityIdParam(c),
       userId: session.userId,
     })
     const detail = await getModerationCaseDetail({
       client: db.client,
-      communityId: c.req.param("communityId"),
-      moderationCaseId: c.req.param("moderationCaseId"),
+      communityId: communityIdParam(c),
+      moderationCaseId: moderationCaseIdParam(c),
     })
     return c.json(detail, 200)
   } finally {
@@ -967,20 +1007,20 @@ communities.post("/:communityId/moderation-cases/:moderationCaseId/actions", han
     throw badRequestError("Invalid moderation action payload")
   }
   const communityRepository = getControlPlaneCommunityRepository(c.env)
-  const community = await communityRepository.getCommunityById(c.req.param("communityId"))
+  const community = await communityRepository.getCommunityById(communityIdParam(c))
   if (!community || community.provisioning_state !== "active" || community.status !== "active") {
     throw notFoundError("Community not found")
   }
   const session = await verifyPirateAccessToken({ env: c.env, token })
-  const db = await openCommunityDb(communityRepository, c.req.param("communityId"))
+  const db = await openCommunityDb(communityRepository, communityIdParam(c))
   try {
-    const membership = await getCommunityMembershipState(db.client, c.req.param("communityId"), session.userId)
+    const membership = await getCommunityMembershipState(db.client, communityIdParam(c), session.userId)
     if (!canAccessCommunity(membership)) {
       throw notFoundError("Community not found")
     }
     await requireCommunityModerationAccess({
       dbClient: db.client,
-      communityId: c.req.param("communityId"),
+      communityId: communityIdParam(c),
       userId: session.userId,
     })
 
@@ -988,8 +1028,8 @@ communities.post("/:communityId/moderation-cases/:moderationCaseId/actions", han
     try {
       const result = await resolveModerationCaseWithAction({
         client: tx,
-        communityId: c.req.param("communityId"),
-        moderationCaseId: c.req.param("moderationCaseId"),
+        communityId: communityIdParam(c),
+        moderationCaseId: moderationCaseIdParam(c),
         actorUserId: session.userId,
         actionType: body.action_type,
         note: typeof body.note === "string" ? body.note.trim() || null : null,
@@ -1028,8 +1068,8 @@ communities.patch("/:communityId/posts/:postId/upstream-refs", handleCommunityRo
   const result = await attachUpstreamRefsAndPublish({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
-    postId: c.req.param("postId"),
+    communityId: communityIdParam(c),
+    postId: postIdParam(c),
     body,
     userRepository,
     communityRepository,
@@ -1045,8 +1085,8 @@ communities.delete("/:communityId/posts/:postId/publish-hold", handleCommunityRo
   await abandonHeldSongDraft({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
-    postId: c.req.param("postId"),
+    communityId: communityIdParam(c),
+    postId: postIdParam(c),
     userRepository,
     communityRepository,
     songArtifactRepository: getControlPlaneSongArtifactBundleRepository(c.env),
@@ -1066,7 +1106,7 @@ communities.post("/:communityId/song-artifacts", handleCommunityRoute(async (c) 
   const result = await createSongArtifactBundle({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     body,
     userRepository,
     communityRepository,
@@ -1088,7 +1128,7 @@ communities.post("/:communityId/song-artifact-uploads", handleCommunityRoute(asy
   const result = await createSongArtifactUpload({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     body,
     userRepository,
     communityRepository,
@@ -1116,8 +1156,8 @@ communities.put("/:communityId/song-artifact-uploads/:songArtifactUploadId/conte
   const result = await uploadSongArtifactContent({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
-    uploadId: c.req.param("songArtifactUploadId"),
+    communityId: communityIdParam(c),
+    uploadId: songArtifactUploadIdParam(c),
     bytes,
     userRepository,
     communityRepository,
@@ -1131,8 +1171,8 @@ communities.get("/:communityId/song-artifacts/:songArtifactBundleId", handleComm
   const result = await getSongArtifactBundle({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
-    bundleId: c.req.param("songArtifactBundleId"),
+    communityId: communityIdParam(c),
+    bundleId: songArtifactBundleIdParam(c),
     songArtifactRepository: getControlPlaneSongArtifactBundleRepository(c.env),
   })
   return c.json(result, 200)
@@ -1143,7 +1183,7 @@ communities.get("/:communityId/posts", handleCommunityRoute(async (c) => {
   const result = await listCommunityPosts({
     env: c.env,
     bearerToken: readBearerToken(c.req.header("authorization")),
-    communityId: c.req.param("communityId"),
+    communityId: communityIdParam(c),
     locale: c.req.query("locale") ?? null,
     limit: c.req.query("limit") ?? null,
     cursor: c.req.query("cursor") ?? null,
@@ -1158,8 +1198,8 @@ communities.get("/:communityId/assets/:assetId", handleCommunityRoute(async (c) 
   const result = await getCommunityAsset({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
-    assetId: c.req.param("assetId"),
+    communityId: communityIdParam(c),
+    assetId: assetIdParam(c),
     communityRepository: getControlPlaneCommunityRepository(c.env),
   })
   return c.json(result, 200)
@@ -1170,8 +1210,8 @@ communities.get("/:communityId/assets/:assetId/access", handleCommunityRoute(asy
   const result = await getCommunityAssetAccess({
     env: c.env,
     bearerToken: token,
-    communityId: c.req.param("communityId"),
-    assetId: c.req.param("assetId"),
+    communityId: communityIdParam(c),
+    assetId: assetIdParam(c),
     communityRepository: getControlPlaneCommunityRepository(c.env),
   })
   return c.json(result, 200)
@@ -1182,8 +1222,8 @@ communities.get("/:communityId/assets/:assetId/access-proof", handleCommunityRou
   const result = await issueCommunityAssetAccessProof({
     env: c.env,
     bearerToken: token,
-    communityId: String(c.req.param("communityId")),
-    assetId: String(c.req.param("assetId")),
+    communityId: String(communityIdParam(c)),
+    assetId: String(assetIdParam(c)),
     walletAttachmentId: c.req.query("wallet_attachment_id") ?? null,
     communityRepository: getControlPlaneCommunityRepository(c.env),
     userRepository: getUserRepository(c.env),
@@ -1196,8 +1236,8 @@ communities.get("/:communityId/assets/:assetId/cdr-manifest", handleCommunityRou
   const result = await getCommunityAssetCdrManifest({
     env: c.env,
     bearerToken: token,
-    communityId: String(c.req.param("communityId")),
-    assetId: String(c.req.param("assetId")),
+    communityId: String(communityIdParam(c)),
+    assetId: String(assetIdParam(c)),
     walletAttachmentId: c.req.query("wallet_attachment_id") ?? null,
     communityRepository: getControlPlaneCommunityRepository(c.env),
     userRepository: getUserRepository(c.env),
@@ -1210,8 +1250,8 @@ communities.get("/:communityId/assets/:assetId/download", handleCommunityRoute(a
   const result = await downloadCommunityAsset({
     env: c.env,
     bearerToken: token,
-    communityId: String(c.req.param("communityId")),
-    assetId: String(c.req.param("assetId")),
+    communityId: String(communityIdParam(c)),
+    assetId: String(assetIdParam(c)),
     communityRepository: getControlPlaneCommunityRepository(c.env),
     songArtifactRepository: getControlPlaneSongArtifactBundleRepository(c.env),
     userRepository: getUserRepository(c.env),
