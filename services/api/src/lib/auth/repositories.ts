@@ -83,6 +83,7 @@ const globalScope = globalThis as typeof globalThis & {
   __pirateControlPlaneRepositoryBundle?: ControlPlaneRepositoryBundle
   __pirateControlPlaneClientKey?: string
   __pirateMemoryAuthRepository?: MemoryAuthRepository
+  __pirateMemoryAuthRepositoryKey?: string
 }
 
 function canCacheControlPlaneRepositories(env: Env): boolean {
@@ -118,9 +119,19 @@ function getControlPlaneRepositoryBundle(env: Env): ControlPlaneRepositoryBundle
   return bundle
 }
 
-function getMemoryAuthRepository(): MemoryAuthRepository {
-  if (!globalScope.__pirateMemoryAuthRepository) {
-    globalScope.__pirateMemoryAuthRepository = new MemoryAuthRepository()
+function getMemoryAuthRepository(env: Env): MemoryAuthRepository {
+  const storeKey = String(env.PIRATE_APP_JWT_PUBLIC_KEY || env.AUTH_UPSTREAM_JWT_SHARED_SECRET || "default")
+  if (
+    String(env.ENVIRONMENT || "").trim().toLowerCase() === "test"
+  ) {
+    return new MemoryAuthRepository(storeKey)
+  }
+  if (
+    !globalScope.__pirateMemoryAuthRepository
+    || globalScope.__pirateMemoryAuthRepositoryKey !== storeKey
+  ) {
+    globalScope.__pirateMemoryAuthRepository = new MemoryAuthRepository(storeKey)
+    globalScope.__pirateMemoryAuthRepositoryKey = storeKey
   }
   return globalScope.__pirateMemoryAuthRepository
 }
@@ -137,35 +148,35 @@ function usingMemoryStore(env: Env): boolean {
 
 export function getSessionRepository(env: Env): SessionRepository {
   if (usingMemoryStore(env)) {
-    return getMemoryAuthRepository()
+    return getMemoryAuthRepository(env)
   }
   return getControlPlaneRepositoryBundle(env).identity
 }
 
 export function getUserRepository(env: Env): UserRepository {
   if (usingMemoryStore(env)) {
-    return getMemoryAuthRepository()
+    return getMemoryAuthRepository(env)
   }
   return getControlPlaneRepositoryBundle(env).identity
 }
 
 export function getOnboardingStatusRepository(env: Env): OnboardingStatusRepository {
   if (usingMemoryStore(env)) {
-    return getMemoryAuthRepository()
+    return getMemoryAuthRepository(env)
   }
   return getControlPlaneRepositoryBundle(env).identity
 }
 
 export function getProfileRepository(env: Env): ProfileRepository {
   if (usingMemoryStore(env)) {
-    return getMemoryAuthRepository()
+    return getMemoryAuthRepository(env)
   }
   return getControlPlaneRepositoryBundle(env).profile
 }
 
 export function getRedditOnboardingRepository(env: Env): RedditOnboardingRepository {
   if (usingMemoryStore(env)) {
-    return getMemoryAuthRepository()
+    return getMemoryAuthRepository(env)
   }
   return getControlPlaneRepositoryBundle(env).redditOnboarding
 }

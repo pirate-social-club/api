@@ -9,7 +9,12 @@ import type { Env } from "../src/types"
 const encoder = new TextEncoder()
 
 export function resetMemoryStore(): void {
-  delete (globalThis as typeof globalThis & { __pirateMemoryAuthStore?: unknown }).__pirateMemoryAuthStore
+  const scope = globalThis as typeof globalThis & {
+    __pirateMemoryAuthStore?: unknown
+    __pirateMemoryAuthStores?: unknown
+  }
+  delete scope.__pirateMemoryAuthStore
+  delete scope.__pirateMemoryAuthStores
 }
 
 export function resetRuntimeCaches(): void {
@@ -17,7 +22,10 @@ export function resetRuntimeCaches(): void {
   const scope = globalThis as typeof globalThis & {
     __pirateControlPlaneRepositoryBundle?: unknown
     __pirateControlPlaneClientKey?: unknown
+    __pirateControlPlaneCommunityRepository?: unknown
+    __pirateControlPlaneCommunityRepositoryKey?: unknown
     __pirateMemoryAuthRepository?: unknown
+    __pirateMemoryAuthRepositoryKey?: unknown
     __pirateSongArtifactBundleRepository?: unknown
     __pirateSongArtifactBundleRepositoryKey?: unknown
     __pirateSongArtifactUploadRepository?: unknown
@@ -25,7 +33,10 @@ export function resetRuntimeCaches(): void {
   }
   delete scope.__pirateControlPlaneRepositoryBundle
   delete scope.__pirateControlPlaneClientKey
+  delete scope.__pirateControlPlaneCommunityRepository
+  delete scope.__pirateControlPlaneCommunityRepositoryKey
   delete scope.__pirateMemoryAuthRepository
+  delete scope.__pirateMemoryAuthRepositoryKey
   delete scope.__pirateSongArtifactBundleRepository
   delete scope.__pirateSongArtifactBundleRepositoryKey
   delete scope.__pirateSongArtifactUploadRepository

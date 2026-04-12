@@ -4,6 +4,7 @@ import { makeId, nowIso } from "../helpers"
 import { generateHandleCandidate } from "./handle-generator"
 import {
   assertFreeCleanupRenameEligible,
+  assertRedditVerifiedClaimEligible,
   buildHandleUpgradeQuote,
   normalizeDesiredGlobalHandleLabel,
   isCleanupRenameAvailable,
@@ -47,16 +48,27 @@ type MemoryStore = {
 
 const globalScope = globalThis as typeof globalThis & {
   __pirateMemoryAuthStore?: MemoryStore
+  __pirateMemoryAuthStores?: Map<string, MemoryStore>
 }
 
-function getMemoryStore(): MemoryStore {
-  if (!globalScope.__pirateMemoryAuthStore) {
-    globalScope.__pirateMemoryAuthStore = {
+function getMemoryStore(storeKey = "default"): MemoryStore {
+  if (!globalScope.__pirateMemoryAuthStores) {
+    globalScope.__pirateMemoryAuthStores = new Map()
+  }
+  const existing = globalScope.__pirateMemoryAuthStores.get(storeKey)
+  if (existing) {
+    return existing
+  }
+
+  const store = {
       byUserId: new Map(),
       userIdByProviderSubject: new Map(),
     }
+  globalScope.__pirateMemoryAuthStores.set(storeKey, store)
+  if (storeKey === "default") {
+    globalScope.__pirateMemoryAuthStore = store
   }
-  return globalScope.__pirateMemoryAuthStore
+  return store
 }
 
 function makeProviderKey(provider: string, subject: string): string {
@@ -164,8 +176,14 @@ function mergeWallets(existing: WalletAttachmentSummary[], identity: UpstreamIde
 }
 
 export class MemoryAuthRepository {
+  constructor(private readonly storeKey = "default") {}
+
+  private getStore(): MemoryStore {
+    return getMemoryStore(this.storeKey)
+  }
+
   async exchangeIdentity(identity: UpstreamIdentity): Promise<Omit<SessionExchangeResponse, "access_token">> {
-    const store = getMemoryStore()
+    const store = this.getStore()
     const providerKey = makeProviderKey(identity.provider, identity.providerSubject)
     const existingUserId = store.userIdByProviderSubject.get(providerKey)
 
@@ -209,7 +227,7 @@ export class MemoryAuthRepository {
   }
 
   getRecordByUserId(userId: string): RepositoryRecord | null {
-    return getMemoryStore().byUserId.get(userId) ?? null
+    return this.getStore().byUserId.get(userId) ?? null
   }
 
   async getUserById(userId: string): Promise<User | null> {
@@ -274,7 +292,16 @@ export class MemoryAuthRepository {
       userCreatedAt: record.user.created_at,
     })
 
-    const store = getMemoryStore()
+    if (issuanceSource === "reddit_verified_claim") {
+      assertRedditVerifiedClaimEligible({
+        labelNormalized: desired.labelNormalized,
+        verifiedRedditUsername: record.redditVerification?.status === "verified"
+          ? record.redditVerification.reddit_username
+          : null,
+      })
+    }
+
+    const store = this.getStore()
     for (const candidateRecord of store.byUserId.values()) {
       if (
         candidateRecord.user.user_id !== userId
@@ -313,6 +340,14 @@ export class MemoryAuthRepository {
     return next
   }
 
+  async getLatestVerifiedRedditUsername(userId: string): Promise<string | null> {
+    const record = this.getRecordByUserId(userId)
+    if (!record || record.redditVerification?.status !== "verified") {
+      return null
+    }
+    return record.redditVerification.reddit_username
+  }
+
   async quoteGlobalHandleUpgrade(userId: string, desiredLabel: string): Promise<HandleUpgradeQuote | null> {
     const record = this.getRecordByUserId(userId)
     if (!record) {
@@ -320,7 +355,7 @@ export class MemoryAuthRepository {
     }
 
     const desired = normalizeDesiredGlobalHandleLabel(desiredLabel)
-    const store = getMemoryStore()
+    const store = this.getStore()
     const labelAvailable = ![...store.byUserId.values()].some((candidateRecord) => (
       candidateRecord.user.user_id !== userId
       && candidateRecord.profile.global_handle.status === "active"
@@ -358,7 +393,7 @@ export class MemoryAuthRepository {
       return { label: result.labelNormalized, status: "available" }
     }
 
-    const store = getMemoryStore()
+    const store = this.getStore()
     const takenBy = [...store.byUserId.values()].find((candidateRecord) => (
       candidateRecord.user.user_id !== userId
       && candidateRecord.profile.global_handle.status === "active"
@@ -573,7 +608,7 @@ export class MemoryAuthRepository {
     maxJobs: number
     staleAfterSeconds: number
   }): Promise<{ recoveredCount: number; drainedCount: number }> {
-    const store = getMemoryStore()
+    const store = this.getStore()
     let recoveredCount = 0
     let drainedCount = 0
     const nowMs = Date.now()
