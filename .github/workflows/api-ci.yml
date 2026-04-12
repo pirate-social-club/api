@@ -22,9 +22,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: api-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   api:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
 
     steps:
       - name: Check out repository
@@ -34,6 +38,17 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.2.21
+
+      - name: Restore Bun cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            services/contracts/node_modules
+            services/api/node_modules
+          key: ${{ runner.os }}-bun-1.2.21-api-${{ hashFiles('services/contracts/bun.lock', 'services/api/bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-1.2.21-api-
 
       - name: Install contracts dependencies
         working-directory: services/contracts
@@ -56,7 +71,7 @@ jobs:
         run: bun run test
 
   cli:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
 
     steps:
       - name: Check out repository
@@ -66,6 +81,17 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.2.21
+
+      - name: Restore Bun cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            services/contracts/node_modules
+            services/cli/node_modules
+          key: ${{ runner.os }}-bun-1.2.21-cli-${{ hashFiles('services/contracts/bun.lock', 'services/cli/bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-1.2.21-cli-
 
       - name: Install contracts dependencies
         working-directory: services/contracts
@@ -84,7 +110,7 @@ jobs:
         run: bun run test
 
   bruno:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
 
     steps:
       - name: Check out repository
@@ -99,6 +125,18 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.2.21
+
+      - name: Restore dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            ~/.npm
+            services/contracts/node_modules
+            services/api/node_modules
+          key: ${{ runner.os }}-bun-1.2.21-bruno-${{ hashFiles('services/contracts/bun.lock', 'services/api/bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-1.2.21-bruno-
 
       - name: Install sqlite3
         run: |
@@ -128,8 +166,7 @@ jobs:
             echo "AUTH_UPSTREAM_JWT_SHARED_SECRET=ci-upstream-shared-secret"
             echo "AUTH_UPSTREAM_JWT_ISSUER=pirate-dev-upstream"
             echo "AUTH_UPSTREAM_JWT_AUDIENCE=pirate-api"
-            echo "TURSO_CONTROL_PLANE_DATABASE_URL=file:/tmp/pirate-control-plane.db"
-            echo "TURSO_CONTROL_PLANE_AUTH_TOKEN="
+            echo "CONTROL_PLANE_DATABASE_URL=file:/tmp/pirate-control-plane.db"
             echo "LOCAL_COMMUNITY_DB_ROOT=/tmp/pirate-community-dbs"
             echo "REGISTRY_PUBLISHER_URL="
             echo "REGISTRY_PUBLISHER_AUTH_TOKEN="
@@ -147,14 +184,14 @@ jobs:
             echo "PRIVY_APP_SECRET="
             echo "PRIVY_API_URL="
             echo "PRIVY_JWT_VERIFICATION_KEY="
-          } > .dev.vars
+          } > .env.local-sqlite
 
       - name: Run Bruno acceptance collection
         working-directory: services/api
         shell: bash
         run: |
-          bun run bruno:prepare:local
-          bun run dev:local >/tmp/pirate-api-bruno.log 2>&1 &
+          bun run bruno:prepare:local-sqlite
+          bun run dev:local-sqlite >/tmp/pirate-api-bruno.log 2>&1 &
           server_pid=$!
           trap 'kill ${server_pid}' EXIT
           for attempt in {1..30}; do
@@ -164,4 +201,4 @@ jobs:
             sleep 1
           done
           curl -fsS http://127.0.0.1:8787/health >/dev/null
-          bun run bruno:test:local
+          bun run bruno:test:local-sqlite
