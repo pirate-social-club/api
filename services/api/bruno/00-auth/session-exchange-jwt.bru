@@ -41,5 +41,7 @@ tests {
 script:post-response {
   const body = res.getBody();
   bru.setEnvVar("pirate_access_token", body.access_token);
+  bru.setEnvVar("pirate_access_token_member", body.access_token);
   bru.setEnvVar("pirate_user_id", body.user.user_id);
+  bru.setEnvVar("pirate_user_id_member", body.user.user_id);
 }

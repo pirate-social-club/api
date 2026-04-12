@@ -85,7 +85,9 @@ Use these Bruno environment values:
 - `upstream_jwt`
 - `upstream_jwt_secondary`
 - `pirate_access_token`
+- `pirate_access_token_member`
 - `pirate_user_id`
+- `pirate_user_id_member`
 - `verification_session_id`
 - `namespace_root_label`
 - `namespace_verification_session_id`
@@ -124,6 +126,7 @@ The secondary-user failure flow also reuses the mutable auth state:
 - `session-exchange-jwt-secondary` overwrites `pirate_access_token`
 - `session-exchange-jwt-secondary` overwrites `pirate_user_id`
 - the follow-up secondary verification requests act on that swapped user context
+- the post-validation failure requests use the original member token to keep `400` assertions independent of non-member authz order
 - the later membership requests intentionally keep that verified secondary user and transition them from non-member to joined member
 
 Optional diagnostic values:
@@ -146,12 +149,12 @@ Before running the collection:
 
 ```bash
 cd pirate-api/services/api
-rtk bun run bruno:prepare:local
+rtk bun run bruno:prepare:local-sqlite
 ```
 
 This resets the local control-plane/community DBs and rewrites `environments/local.bru` with fresh JWT fixtures.
 
-2. In `pirate-api/services/api/.dev.vars`, set:
+2. In `pirate-api/services/api/.env.local-sqlite`, set:
 
 ```dotenv
 ENVIRONMENT=development
@@ -175,14 +178,14 @@ PIRATE_APP_JWT_AUDIENCE=pirate-app
 
 ```bash
 cd pirate-api/services/api
-rtk bun run dev:local
+rtk bun run dev:local-sqlite
 ```
 
 4. Run the collection from the service repo wrapper:
 
 ```bash
 cd pirate-api/services/api
-rtk bun run bruno:test:local
+rtk bun run bruno:test:local-sqlite
 ```
 
 This local Bruno path uses Bun rather than Wrangler because the first-slice local DBs are `file:`-backed.
