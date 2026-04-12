@@ -234,18 +234,27 @@ const globalScope = globalThis as typeof globalThis & {
   __pirateSongArtifactUploadRepositoryKey?: string
 }
 
+function canCacheSongArtifactUploadRepository(): boolean {
+  return typeof (globalThis as { Bun?: unknown }).Bun !== "undefined"
+}
+
 export function getControlPlaneSongArtifactUploadRepository(env: Env): SongArtifactUploadRepository {
   const cacheKey = requireControlPlaneDbUrl(env)
 
   if (
+    canCacheSongArtifactUploadRepository()
+    && (
     globalScope.__pirateSongArtifactUploadRepository
     && globalScope.__pirateSongArtifactUploadRepositoryKey === cacheKey
+    )
   ) {
     return globalScope.__pirateSongArtifactUploadRepository
   }
 
   const repository = new ControlPlaneSongArtifactUploadRepository(createControlPlaneDbClient(env))
-  globalScope.__pirateSongArtifactUploadRepository = repository
-  globalScope.__pirateSongArtifactUploadRepositoryKey = cacheKey
+  if (canCacheSongArtifactUploadRepository()) {
+    globalScope.__pirateSongArtifactUploadRepository = repository
+    globalScope.__pirateSongArtifactUploadRepositoryKey = cacheKey
+  }
   return repository
 }

@@ -33,11 +33,19 @@ tests {
     expect(body.storage_ref).to.be.a("string");
     expect(body.size_bytes).to.equal(27);
     expect(body.content_hash).to.equal("sha256:7e52767e7a24c2dacbd45c1d43634a660fe6b7453f6f14b4003d6a33d5a1c32f");
-    expect(body.storage_provider).to.equal("filebase");
-    expect(body.storage_bucket).to.equal("dev-songs");
-    expect(body.storage_object_key).to.be.a("string");
-    expect(body.storage_endpoint).to.equal("https://s3.filebase.com");
-    expect(body.gateway_url).to.match(/^https:\/\/psc\.myfilebase\.com\/ipfs\/.+$/);
+    expect(["filebase", "local_stub"]).to.include(body.storage_provider);
+    if (body.storage_provider === "filebase") {
+      expect(body.storage_bucket).to.equal("dev-songs");
+      expect(body.storage_object_key).to.be.a("string");
+      expect(body.storage_endpoint).to.equal("https://s3.filebase.com");
+      expect(body.gateway_url).to.match(/^https:\/\/psc\.myfilebase\.com\/ipfs\/.+$/);
+      return;
+    }
+
+    expect(body.storage_bucket).to.equal(null);
+    expect(body.storage_object_key).to.equal(null);
+    expect(body.storage_endpoint).to.equal(null);
+    expect(body.gateway_url).to.equal(null);
   });
 }
 

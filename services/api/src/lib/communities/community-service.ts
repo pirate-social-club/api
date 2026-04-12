@@ -432,19 +432,12 @@ async function deriveCommunityReadModel(
     }
   }
 
-  const local = await readLocalCommunity(binding.database_url, communityRow.community_id).catch(() => null)
-  if (communityRow.projected_member_count != null && communityRow.projected_qualified_member_count != null) {
-    return {
-      local,
-      databaseUrl: binding.database_url,
-      derived: {
-        memberCount: communityRow.projected_member_count,
-        qualifiedMemberCount: communityRow.projected_qualified_member_count,
-        communityStage: "initial",
-        civicScaleTier: deriveCivicScaleTier(communityRow.projected_member_count),
-        stageEnteredAt: local?.created_at ?? communityRow.created_at,
-      },
-    }
+  const localDb = await openCommunityDb(repo, communityRow.community_id)
+  let local: LocalCommunitySnapshot | null = null
+  try {
+    local = await readLocalCommunityWithExecutor(localDb.client, communityRow.community_id).catch(() => null)
+  } finally {
+    localDb.close()
   }
   if (local?.cached_member_count != null && local.cached_qualified_member_count != null) {
     return {
@@ -456,6 +449,19 @@ async function deriveCommunityReadModel(
         communityStage: "initial",
         civicScaleTier: deriveCivicScaleTier(local.cached_member_count),
         stageEnteredAt: local.created_at ?? communityRow.created_at,
+      },
+    }
+  }
+  if (communityRow.projected_member_count != null && communityRow.projected_qualified_member_count != null) {
+    return {
+      local,
+      databaseUrl: binding.database_url,
+      derived: {
+        memberCount: communityRow.projected_member_count,
+        qualifiedMemberCount: communityRow.projected_qualified_member_count,
+        communityStage: "initial",
+        civicScaleTier: deriveCivicScaleTier(communityRow.projected_member_count),
+        stageEnteredAt: local?.created_at ?? communityRow.created_at,
       },
     }
   }
