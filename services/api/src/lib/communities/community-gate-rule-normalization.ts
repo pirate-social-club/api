@@ -30,6 +30,24 @@ type NormalizedGateRule = {
   gateConfigJson: string | null
 }
 
+type ProofRequirementInput = {
+  proof_type?: unknown
+  accepted_providers?: unknown
+  accepted_mechanisms?: unknown
+  config?: unknown
+}
+
+const VALID_ACCEPTED_PROVIDERS_BY_PROOF_TYPE = {
+  unique_human: new Set(["self", "very"]),
+  age_over_18: new Set(["self"]),
+  nationality: new Set(["self"]),
+  gender: new Set(["self"]),
+  wallet_score: new Set(["passport"]),
+  sanctions_clear: new Set(["passport"]),
+} as const
+
+const isoCountryCodePattern = /^[A-Z]{2}$/u
+
 function requireRecord(value: Record<string, unknown> | null | undefined, fieldName: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw badRequestError(`${fieldName} must be an object`)
@@ -78,15 +96,201 @@ function requireIntegerString(
   return parsed.toString()
 }
 
+function normalizeAcceptedProviders(value: unknown, proofType: string): string[] | null {
+  if (value == null) {
+    return null
+  }
+  if (!Array.isArray(value)) {
+    throw badRequestError("accepted_providers must be an array")
+  }
+
+  const validProviders = VALID_ACCEPTED_PROVIDERS_BY_PROOF_TYPE[
+    proofType as keyof typeof VALID_ACCEPTED_PROVIDERS_BY_PROOF_TYPE
+  ]
+
+  const acceptedProviders = value.map((entry) => {
+    if (typeof entry !== "string" || entry.trim().length === 0) {
+      throw badRequestError("accepted_providers entries must be non-empty strings")
+    }
+    return entry.trim()
+  })
+
+  if (!validProviders) {
+    return acceptedProviders.length > 0 ? acceptedProviders : null
+  }
+
+  const invalidProviders = acceptedProviders.filter((provider) => !validProviders.has(provider))
+  if (invalidProviders.length > 0) {
+    throw badRequestError(`accepted_providers are invalid for ${proofType}: ${invalidProviders.join(", ")}`)
+  }
+
+  return acceptedProviders.length > 0 ? acceptedProviders : null
+}
+
+function normalizeAcceptedMechanisms(value: unknown): string[] | null {
+  if (value == null) {
+    return null
+  }
+  if (!Array.isArray(value)) {
+    throw badRequestError("accepted_mechanisms must be an array")
+  }
+
+  const acceptedMechanisms = value.map((entry) => {
+    if (typeof entry !== "string" || entry.trim().length === 0) {
+      throw badRequestError("accepted_mechanisms entries must be non-empty strings")
+    }
+    return entry.trim()
+  })
+
+  return acceptedMechanisms.length > 0 ? acceptedMechanisms : null
+}
+
+function normalizeCountryCode(value: unknown, fieldName: string): string {
+  if (typeof value !== "string") {
+    throw badRequestError(`${fieldName} must be a 2-letter ISO country code`)
+  }
+
+  const normalized = value.trim().toUpperCase()
+  if (!isoCountryCodePattern.test(normalized)) {
+    throw badRequestError(`${fieldName} must be a 2-letter ISO country code`)
+  }
+
+  return normalized
+}
+
+function normalizeCountryCodeList(value: unknown, fieldName: string): string[] {
+  if (!Array.isArray(value)) {
+    throw badRequestError(`${fieldName} must be an array of 2-letter ISO country codes`)
+  }
+
+  return value.map((entry, index) => normalizeCountryCode(entry, `${fieldName}[${index}]`))
+}
+
+function normalizeIdentityGateConfig(gateType: string, gateConfig: Record<string, unknown> | null | undefined): Record<string, unknown> | null {
+  if (gateType === "nationality") {
+    const config = gateConfig ?? {}
+    const hasRequiredValue = config.required_value != null
+    const hasExcludedValues = config.excluded_values != null
+
+    if (hasRequiredValue && hasExcludedValues) {
+      throw badRequestError("nationality gates must use either required_value or excluded_values, not both")
+    }
+
+    if (!hasRequiredValue && !hasExcludedValues) {
+      throw badRequestError("nationality gates require required_value or excluded_values")
+    }
+
+    if (hasRequiredValue) {
+      return {
+        required_value: normalizeCountryCode(config.required_value, "gate_config.required_value"),
+      }
+    }
+
+    const excludedValues = normalizeCountryCodeList(config.excluded_values, "gate_config.excluded_values")
+    if (excludedValues.length === 0) {
+      throw badRequestError("gate_config.excluded_values must not be empty")
+    }
+
+    return {
+      excluded_values: excludedValues,
+    }
+  }
+
+  if (gateType === "gender") {
+    if (gateConfig == null) {
+      return null
+    }
+
+    const requiredValue = gateConfig.required_value
+    if (requiredValue == null) {
+      return null
+    }
+
+    if (requiredValue !== "M" && requiredValue !== "F") {
+      throw badRequestError("gate_config.required_value must be M or F")
+    }
+
+    return {
+      required_value: requiredValue,
+    }
+  }
+
+  if (gateType === "wallet_score") {
+    if (gateConfig == null) {
+      return null
+    }
+
+    const minimumScore = gateConfig.minimum_score
+    if (minimumScore == null) {
+      return null
+    }
+
+    if (typeof minimumScore !== "number" || !Number.isFinite(minimumScore)) {
+      throw badRequestError("gate_config.minimum_score must be a number")
+    }
+
+    return {
+      minimum_score: minimumScore,
+    }
+  }
+
+  return gateConfig == null ? null : gateConfig
+}
+
+function normalizeIdentityProofRequirements(
+  gateType: string,
+  value: unknown[] | null | undefined,
+): ProofRequirementInput[] {
+  if (value == null || value.length === 0) {
+    const defaultProviders = VALID_ACCEPTED_PROVIDERS_BY_PROOF_TYPE[
+      gateType as keyof typeof VALID_ACCEPTED_PROVIDERS_BY_PROOF_TYPE
+    ]
+    return [
+      {
+        proof_type: gateType,
+        accepted_providers: defaultProviders ? Array.from(defaultProviders) : null,
+      },
+    ]
+  }
+
+  return value.map((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw badRequestError("proof_requirements entries must be objects")
+    }
+
+    const requirement = entry as ProofRequirementInput
+    const proofType = typeof requirement.proof_type === "string" && requirement.proof_type.trim().length > 0
+      ? requirement.proof_type.trim()
+      : gateType
+
+    return {
+      proof_type: proofType,
+      accepted_providers: normalizeAcceptedProviders(requirement.accepted_providers, proofType),
+      accepted_mechanisms: normalizeAcceptedMechanisms(requirement.accepted_mechanisms),
+      config: requirement.config && typeof requirement.config === "object" && !Array.isArray(requirement.config)
+        ? requirement.config as Record<string, unknown>
+        : requirement.config == null
+          ? null
+          : (() => {
+              throw badRequestError("proof_requirements.config must be an object")
+            })(),
+    }
+  })
+}
+
 function normalizeIdentityGate(body: GateRuleInputLike): NormalizedGateRule {
-  if (!SUPPORTED_IDENTITY_GATE_TYPES.has(String(body.gate_type))) {
-    throw badRequestError(`Unsupported identity gate type ${String(body.gate_type)}`)
+  const gateType = String(body.gate_type)
+  if (!SUPPORTED_IDENTITY_GATE_TYPES.has(gateType)) {
+    throw badRequestError(`Unsupported identity gate type ${gateType}`)
   }
 
   return {
-    proofRequirementsJson: body.proof_requirements == null ? null : JSON.stringify(body.proof_requirements),
+    proofRequirementsJson: JSON.stringify(normalizeIdentityProofRequirements(gateType, body.proof_requirements)),
     chainNamespace: null,
-    gateConfigJson: body.gate_config == null ? null : JSON.stringify(body.gate_config),
+    gateConfigJson: (() => {
+      const normalizedGateConfig = normalizeIdentityGateConfig(gateType, body.gate_config)
+      return normalizedGateConfig == null ? null : JSON.stringify(normalizedGateConfig)
+    })(),
   }
 }
 

@@ -22,13 +22,28 @@ type StoryAeneidDeliveryConfig = {
 
 let cachedConfig: StoryAeneidDeliveryConfig | null = null
 
+const CONFIG_CANDIDATES = [
+  new URL("../../../../../config/story-aeneid-delivery.json", import.meta.url),
+  new URL("../../../../../../config/story-aeneid-delivery.json", import.meta.url),
+]
+
 function readConfig(): StoryAeneidDeliveryConfig {
   if (cachedConfig) {
     return cachedConfig
   }
-  const raw = readFileSync(new URL("../../../../../../config/story-aeneid-delivery.json", import.meta.url), "utf8")
-  cachedConfig = JSON.parse(raw) as StoryAeneidDeliveryConfig
-  return cachedConfig
+
+  let lastError: Error | null = null
+  for (const candidate of CONFIG_CANDIDATES) {
+    try {
+      const raw = readFileSync(candidate, "utf8")
+      cachedConfig = JSON.parse(raw) as StoryAeneidDeliveryConfig
+      return cachedConfig
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error))
+    }
+  }
+
+  throw lastError ?? new Error("story_delivery_config_missing")
 }
 
 export function getStoryAeneidDeliveryDefaults(): {

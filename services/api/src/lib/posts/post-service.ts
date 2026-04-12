@@ -411,13 +411,9 @@ async function requireUploadedSongArtifactRef(input: {
   communityId: string
   userId: string
   artifactKind: SongArtifactUpload["artifact_kind"]
-  descriptor: { storage_ref: string; mime_type?: string | null; size_bytes?: number | null; content_hash?: string | null }
+  descriptor: { storage_ref: string; mime_type: string; size_bytes?: number | null; content_hash?: string | null }
   uploadRepository: SongArtifactUploadRepository
 }): Promise<void> {
-  const descriptorMimeType = input.descriptor.mime_type?.trim()
-  if (!descriptorMimeType) {
-    throw badRequestError(`${input.artifactKind}.mime_type is required`)
-  }
   const upload = await input.uploadRepository.getSongArtifactUploadByStorageRef(input.descriptor.storage_ref.trim())
   if (!upload || upload.community_id !== input.communityId || upload.uploader_user_id !== input.userId) {
     throw badRequestError(`${input.artifactKind}.storage_ref must reference an uploaded song artifact`)
@@ -428,7 +424,7 @@ async function requireUploadedSongArtifactRef(input: {
   if (upload.artifact_kind !== input.artifactKind) {
     throw badRequestError(`${input.artifactKind}.storage_ref has the wrong artifact_kind`)
   }
-  if (upload.mime_type !== descriptorMimeType) {
+  if (upload.mime_type !== input.descriptor.mime_type) {
     throw badRequestError(`${input.artifactKind}.mime_type must match the uploaded artifact`)
   }
   if (input.descriptor.size_bytes != null && upload.size_bytes != null && input.descriptor.size_bytes !== upload.size_bytes) {
