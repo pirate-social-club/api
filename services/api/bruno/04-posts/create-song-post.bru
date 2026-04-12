@@ -1,7 +1,7 @@
 meta {
   name: create-song-post
   type: http
-  seq: 47
+  seq: 51
 }
 
 post {
@@ -24,16 +24,7 @@ body:json {
     "rights_basis": "original",
     "title": "Mainline Song Post",
     "caption": "First executable song post through Bruno.",
-    "lyrics": "Sailing on a clean mainline song path.",
-    "media_refs": [
-      {
-        "storage_ref": "ipfs://bruno-song-happy-path-audio",
-        "mime_type": "audio/mpeg",
-        "size_bytes": 1024,
-        "content_hash": "sha256:bruno-song-happy-path-audio",
-        "duration_ms": 30000
-      }
-    ]
+    "song_artifact_bundle_id": "{{song_artifact_bundle_id}}"
   }
 }
 
@@ -50,9 +41,10 @@ tests {
     expect(body.identity_mode).to.equal("public");
     expect(body.song_mode).to.equal("original");
     expect(body.rights_basis).to.equal("original");
+    expect(body.song_artifact_bundle_id).to.equal(bru.getEnvVar("song_artifact_bundle_id"));
     expect(body.status).to.equal("published");
-    expect(body.lyrics).to.equal("Sailing on a clean mainline song path.");
-    expect(body.media_refs[0].storage_ref).to.equal("ipfs://bruno-song-happy-path-audio");
+    expect(body.lyrics).to.equal(bru.getEnvVar("song_lyrics"));
+    expect(body.media_refs[0].storage_ref).to.equal(bru.getEnvVar("song_primary_audio_storage_ref"));
   });
 }
 

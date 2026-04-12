@@ -208,4 +208,65 @@ describe("profile routes", () => {
     expect(premiumQuoteBody.eligible).toBe(true)
     expect(premiumQuoteBody.reason ?? null).toBeNull()
   })
+
+  test("second rename attempt after free cleanup is consumed returns 403", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "profile-second-rename-user")
+
+    const firstRename = await requestJson("http://pirate.test/profiles/me/global-handle/rename", "POST", {
+      desired_label: "firstchoice",
+    }, ctx.env, session.accessToken)
+    expect(firstRename.status).toBe(200)
+
+    const secondRename = await requestJson("http://pirate.test/profiles/me/global-handle/rename", "POST", {
+      desired_label: "secondchoice",
+    }, ctx.env, session.accessToken)
+    expect(secondRename.status).toBe(403)
+  })
+
+  test("onboarding rename sets username_step_completed and updates issuance_source", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "profile-username-step-user")
+
+    const onboardingBefore = await app.request("http://pirate.test/onboarding/status", {
+      headers: { authorization: `Bearer ${session.accessToken}` },
+    }, ctx.env)
+    const onboardingBeforeBody = await json(onboardingBefore) as {
+      generated_handle_assigned: boolean
+      username_step_completed: boolean
+      cleanup_rename_available: boolean
+    }
+    expect(onboardingBeforeBody.generated_handle_assigned).toBe(true)
+    expect(onboardingBeforeBody.username_step_completed).toBe(false)
+    expect(onboardingBeforeBody.cleanup_rename_available).toBe(true)
+
+    const renamed = await requestJson("http://pirate.test/profiles/me/global-handle/rename", "POST", {
+      desired_label: "mynewhandle",
+    }, ctx.env, session.accessToken)
+    expect(renamed.status).toBe(200)
+    const renamedBody = await json(renamed) as {
+      label: string
+      issuance_source: string
+      free_rename_consumed: boolean
+    }
+    expect(renamedBody.label).toBe("mynewhandle.pirate")
+    expect(renamedBody.issuance_source).toBe("free_cleanup_rename")
+    expect(renamedBody.free_rename_consumed).toBe(true)
+
+    const onboardingAfter = await app.request("http://pirate.test/onboarding/status", {
+      headers: { authorization: `Bearer ${session.accessToken}` },
+    }, ctx.env)
+    const onboardingAfterBody = await json(onboardingAfter) as {
+      generated_handle_assigned: boolean
+      username_step_completed: boolean
+      cleanup_rename_available: boolean
+    }
+    expect(onboardingAfterBody.generated_handle_assigned).toBe(false)
+    expect(onboardingAfterBody.username_step_completed).toBe(true)
+    expect(onboardingAfterBody.cleanup_rename_available).toBe(false)
+  })
 })

@@ -1,6 +1,7 @@
 import { createClient } from "@libsql/client"
 import type { Client } from "@libsql/client"
 import type { CommunityRepository } from "./control-plane-community-repository"
+import { applyCommunityTemplateMigrations } from "./community-local-db"
 import { internalError, notFoundError } from "../errors"
 
 export async function openCommunityDb(
@@ -16,6 +17,9 @@ export async function openCommunityDb(
   }
 
   const client = createClient({ url: binding.database_url })
+  if (binding.database_url.startsWith("file:")) {
+    await applyCommunityTemplateMigrations(client)
+  }
   return {
     client,
     databaseUrl: binding.database_url,

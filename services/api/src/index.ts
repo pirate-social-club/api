@@ -1,7 +1,9 @@
 import { Hono } from "hono"
 import { cors } from "hono/cors"
 import auth from "./routes/auth"
+import communityNamespace from "./routes/community-namespace"
 import communities from "./routes/communities"
+import feeds from "./routes/feeds"
 import jobs from "./routes/jobs"
 import onboarding from "./routes/onboarding"
 import posts from "./routes/posts"
@@ -24,7 +26,9 @@ app.use(
 
 app.get("/health", (c) => c.json({ ok: true }))
 app.route("/auth", auth)
+app.route("/communities", communityNamespace)
 app.route("/communities", communities)
+app.route("/feeds", feeds)
 app.route("/jobs", jobs)
 app.route("/posts", posts)
 app.route("/users", users)

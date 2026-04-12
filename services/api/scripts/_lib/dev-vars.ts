@@ -1,6 +1,26 @@
 import { existsSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
 
+export type PirateMode = "local-sqlite" | "staging" | "production"
+
+export function readModeEnv(dir: string, mode: PirateMode): Record<string, string> {
+  const filename = `.env.${mode}`
+  const filepath = resolve(dir, filename)
+  if (!existsSync(filepath)) {
+    throw new Error(`Missing mode env file: ${filepath}\nCopy .env.${mode}.example to .env.${mode} and fill in values.`)
+  }
+  return readDevVars(filepath)
+}
+
+export function readDevVarsFromDir(dir: string, filename = ".dev.vars"): Record<string, string> {
+  return readDevVars(resolve(dir, filename))
+}
+
+/** @deprecated Use readDevVarsFromDir(import.meta.dirname) instead. */
+export function readDevVarsFromCwd(filename = ".dev.vars"): Record<string, string> {
+  return readDevVars(resolve(process.cwd(), filename))
+}
+
 export function readDevVars(filepath: string): Record<string, string> {
   if (!existsSync(filepath)) return {}
 
@@ -56,8 +76,4 @@ export function readDevVars(filepath: string): Record<string, string> {
   }
 
   return values
-}
-
-export function readDevVarsFromCwd(filename = ".dev.vars"): Record<string, string> {
-  return readDevVars(resolve(process.cwd(), filename))
 }

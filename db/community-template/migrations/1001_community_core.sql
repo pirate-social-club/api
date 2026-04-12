@@ -172,8 +172,8 @@ CREATE UNIQUE INDEX idx_community_handles_active_user_namespace
     ON community_handles(namespace_id, user_id)
     WHERE status = 'active';
 
-CREATE TABLE flairs (
-    flair_id TEXT PRIMARY KEY,
+CREATE TABLE labels (
+    label_id TEXT PRIMARY KEY,
     community_id TEXT NOT NULL,
     label TEXT NOT NULL,
     description TEXT,
@@ -185,8 +185,8 @@ CREATE TABLE flairs (
     FOREIGN KEY (community_id) REFERENCES communities(community_id)
 );
 
-CREATE INDEX idx_flairs_club_status
-    ON flairs(community_id, status);
+CREATE INDEX idx_labels_club_status
+    ON labels(community_id, status);
 
 CREATE TABLE posts (
     post_id TEXT PRIMARY KEY,
@@ -200,7 +200,7 @@ CREATE TABLE posts (
     ),
     anonymous_label TEXT,
     disclosed_qualifiers_json TEXT,
-    flair_id TEXT,
+    label_id TEXT,
     post_type TEXT NOT NULL CHECK (
         post_type IN ('text', 'image', 'video', 'link', 'song')
     ),
@@ -216,6 +216,7 @@ CREATE TABLE posts (
     lyrics TEXT,
     link_url TEXT,
     media_refs_json TEXT,
+    song_artifact_bundle_id TEXT,
     source_language TEXT,
     translation_policy TEXT CHECK (
         translation_policy IS NULL OR translation_policy IN ('none', 'machine_allowed', 'human_only', 'hybrid')
@@ -238,7 +239,7 @@ CREATE TABLE posts (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY (community_id) REFERENCES communities(community_id),
-    FOREIGN KEY (flair_id) REFERENCES flairs(flair_id),
+    FOREIGN KEY (label_id) REFERENCES labels(label_id),
     FOREIGN KEY (parent_post_id) REFERENCES posts(post_id)
 );
 
@@ -333,14 +334,18 @@ CREATE TABLE purchases (
     live_room_id TEXT,
     buyer_user_id TEXT NOT NULL,
     settlement_wallet_attachment_id TEXT NOT NULL,
-    purchase_price_usd TEXT NOT NULL,
+    purchase_price_usd REAL NOT NULL CHECK (
+        purchase_price_usd >= 0
+    ),
     pricing_tier TEXT,
     settlement_chain TEXT NOT NULL,
     settlement_token TEXT NOT NULL,
     settlement_tx_ref TEXT NOT NULL,
     donation_partner_id TEXT,
     donation_share_pct TEXT,
-    donation_amount_usd TEXT,
+    donation_amount_usd REAL CHECK (
+        donation_amount_usd IS NULL OR donation_amount_usd >= 0
+    ),
     donation_settlement_ref TEXT,
     created_at TEXT NOT NULL,
     FOREIGN KEY (community_id) REFERENCES communities(community_id),

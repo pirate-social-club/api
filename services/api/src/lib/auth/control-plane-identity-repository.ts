@@ -1,5 +1,5 @@
-import type { Client } from "@libsql/client"
 import { internalError } from "../errors"
+import type { ControlPlaneDbClient } from "../control-plane-db"
 import { generateHandleCandidate } from "./handle-generator"
 import { buildDefaultVerificationCapabilities } from "../verification/verification-capabilities"
 import {
@@ -8,6 +8,7 @@ import {
   getGlobalHandleRow,
   getProfileRow,
   getUserRow,
+  listUserRowsByIds,
   hasUniqueConstraintField,
   listActiveWalletAttachmentRows,
   loadSnapshot,
@@ -19,7 +20,7 @@ import { makeId, nowIso } from "../helpers"
 import type { OnboardingStatus, Profile, UpstreamIdentity, User, WalletAttachmentSummary } from "../../types"
 
 export class ControlPlaneIdentityRepository {
-  constructor(private readonly client: Client) {}
+  constructor(private readonly client: ControlPlaneDbClient) {}
 
   async exchangeIdentity(identity: UpstreamIdentity): Promise<SessionSnapshot> {
     const provider = identity.provider
@@ -174,6 +175,11 @@ export class ControlPlaneIdentityRepository {
   async getUserById(userId: string): Promise<User | null> {
     const userRow = await getUserRow(this.client, userId)
     return userRow ? serializeUser(userRow) : null
+  }
+
+  async listUsersByIds(userIds: string[]): Promise<User[]> {
+    const rows = await listUserRowsByIds(this.client, userIds)
+    return rows.map((row) => serializeUser(row))
   }
 
   async getWalletAttachmentsByUserId(userId: string): Promise<WalletAttachmentSummary[]> {

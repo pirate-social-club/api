@@ -1,7 +1,7 @@
 // GENERATED FILE. Edit specs/api/src/** and run `rtk bun specs/api/scripts/generate-api-contracts.ts`.
 
 export type ErrorResponse = {
-  code: "auth_error" | "payment_required" | "verification_required" | "eligibility_failed" | "gate_failed" | "posting_trust_tier_too_low" | "posting_quota_exhausted" | "analysis_blocked" | "analysis_review_required" | "flair_required" | "invalid_flair_selection" | "flair_required_but_none_applicable" | "conflict" | "not_found" | "rate_limited" | "payment_failed" | "settlement_pending" | "internal_error";
+  code: "bad_request" | "auth_error" | "payment_required" | "verification_required" | "eligibility_failed" | "gate_failed" | "posting_trust_tier_too_low" | "posting_quota_exhausted" | "analysis_blocked" | "analysis_review_required" | "label_required" | "invalid_label_selection" | "label_required_but_none_applicable" | "conflict" | "not_found" | "rate_limited" | "payment_failed" | "settlement_pending" | "internal_error";
   message: string;
   retryable?: boolean;
 };
@@ -9,6 +9,7 @@ export type ErrorResponse = {
 export type AuthProof = ({
   type: "privy_access_token";
   privy_access_token: string;
+  privy_identity_token?: string | null;
   wallet_address?: string | null;
 } | {
   type: "jwt_based_auth";
@@ -19,6 +20,7 @@ export type SessionExchangeRequest = {
   proof: ({
     type: "privy_access_token";
     privy_access_token: string;
+    privy_identity_token?: string | null;
     wallet_address?: string | null;
   } | {
     type: "jwt_based_auth";
@@ -159,29 +161,37 @@ export type NamespaceVerificationAssertions = {
   expiry_horizon_sufficient?: boolean | null;
   routing_enabled?: boolean | null;
   pirate_dns_authority_verified?: boolean | null;
+  root_key_proof_verified?: boolean | null;
+  live_signature_verified?: boolean | null;
+  anchor_fresh_enough?: boolean | null;
+  owner_signed_updates_verified?: boolean | null;
 };
 
 export type NamespaceVerificationCapabilities = {
   club_attach_allowed?: boolean | null;
   pirate_web_routing_allowed?: boolean | null;
   pirate_subdomain_issuance_allowed?: boolean | null;
+  owner_signed_record_updates_allowed?: boolean | null;
+  pirate_subspace_issuance_allowed?: boolean | null;
 };
 
 export type NamespaceVerificationSession = {
   namespace_verification_session_id: string;
   namespace_verification_id?: string | null;
   user_id: string;
-  family: "hns";
+  family: "hns" | "spaces";
   submitted_root_label: string;
   normalized_root_label?: string | null;
-  status: "draft" | "inspecting" | "challenge_required" | "challenge_pending" | "verifying" | "verified" | "failed" | "expired" | "disputed";
+  status: "draft" | "inspecting" | "dns_setup_required" | "challenge_required" | "challenge_pending" | "verifying" | "verified" | "failed" | "expired" | "disputed";
   challenge_host?: string | null;
   challenge_txt_value?: string | null;
   challenge_expires_at?: string | null;
+  challenge_kind?: "dns_txt" | "schnorr_sign" | null;
+  challenge_payload?: Record<string, unknown> | null;
   assertions?: NamespaceVerificationAssertions | null;
   capabilities?: NamespaceVerificationCapabilities | null;
   control_class?: "single_holder_root" | "multisig_controlled_root" | "dao_controlled_root" | "burned_or_immutable_root" | null;
-  operation_class?: "owner_managed_namespace" | "routing_only_namespace" | "pirate_delegated_namespace" | null;
+  operation_class?: "owner_managed_namespace" | "routing_only_namespace" | "pirate_delegated_namespace" | "owner_signed_updates_namespace" | null;
   observation_provider?: string | null;
   evidence_bundle_ref?: string | null;
   failure_reason?: string | null;
@@ -194,13 +204,13 @@ export type NamespaceVerificationSession = {
 export type NamespaceVerification = {
   namespace_verification_id: string;
   user_id: string;
-  family: "hns";
+  family: "hns" | "spaces";
   normalized_root_label: string;
   status: "verified" | "stale" | "expired" | "disputed";
   assertions: NamespaceVerificationAssertions;
   capabilities: NamespaceVerificationCapabilities;
   control_class?: "single_holder_root" | "multisig_controlled_root" | "dao_controlled_root" | "burned_or_immutable_root" | null;
-  operation_class?: "owner_managed_namespace" | "routing_only_namespace" | "pirate_delegated_namespace" | null;
+  operation_class?: "owner_managed_namespace" | "routing_only_namespace" | "pirate_delegated_namespace" | "owner_signed_updates_namespace" | null;
   observation_provider?: string | null;
   evidence_bundle_ref?: string | null;
   accepted_at: string;
@@ -221,6 +231,7 @@ export type Community = {
   community_id: string;
   display_name: string;
   description?: string | null;
+  primary_data_region?: CommunityPrimaryDataRegion | null;
   namespace_verification_id?: string | null;
   status: "draft" | "active" | "frozen" | "archived" | "deleted";
   provisioning_state: "requested" | "provisioning" | "active" | "rotation_required" | "error";
@@ -244,6 +255,12 @@ export type Community = {
   probation_window_days?: number | null;
   link_post_policy?: "allow" | "require_established" | null;
   default_age_gate_policy?: "none" | "18_plus";
+  agent_posting_policy: "disallow" | "review" | "allow_with_disclosure" | "allow";
+  agent_posting_scope: "replies_only" | "top_level_and_replies";
+  agent_daily_post_cap?: number | null;
+  agent_daily_reply_cap?: number | null;
+  agent_min_owner_trust_tier?: "new" | "established" | "trusted" | "high_trust" | null;
+  agent_owner_active_limit?: number | null;
   civic_scale_tier?: "club" | "village" | "town" | "city" | "state";
   donation_policy_mode: "none" | "optional_creator_sidecar" | "fundraiser_default";
   donation_partner_status: "unconfigured" | "active" | "paused";
@@ -260,7 +277,7 @@ export type Community = {
   language_policy: CommunityLanguagePolicy;
   provenance_policy: CommunityProvenancePolicy;
   promotion_policy: CommunityPromotionPolicy;
-  flair_policy?: CommunityFlairPolicy | null;
+  label_policy?: CommunityLabelPolicy | null;
   community_profile?: CommunityProfile | null;
   reference_links?: Array<CommunityReferenceLinkPublic> | null;
   community_stage?: "initial";
@@ -275,6 +292,202 @@ export type Community = {
   updated_at: string;
 };
 
+export type CommunityMoneyPolicy = {
+  community_id: string;
+  policy_origin: CommunityPolicyOrigin;
+  funding_preference: string;
+  accepted_funding_assets: Array<CommunityMoneyAssetRef>;
+  accepted_source_chains: Array<CommunityMoneyChainRef>;
+  approved_route_providers?: Array<string> | null;
+  destination_settlement_chain: CommunityMoneyChainRef;
+  destination_settlement_token: string;
+  treasury_denomination?: string | null;
+  max_slippage_bps: number;
+  quote_ttl_seconds: number;
+  route_required: boolean;
+  route_status_policy: CommunityFundingRouteStatusPolicy;
+  route_hop_tolerance: number;
+  updated_at: string;
+};
+
+export type CommunityPricingPolicy = {
+  community_id: string;
+  policy_origin: CommunityPolicyOrigin;
+  pricing_policy_version: string;
+  regional_pricing_enabled: boolean;
+  verification_provider_requirement?: CommunityPricingVerificationProvider | null;
+  default_tier_key?: string | null;
+  tiers: Array<CommunityPricingTier>;
+  country_assignments: Array<CommunityPricingCountryAssignment>;
+  source_template_id?: string | null;
+  source_template_version?: string | null;
+  updated_at: string;
+};
+
+export type CommunityListing = {
+  listing_id: string;
+  community_id: string;
+  asset_id?: string | null;
+  live_room_id?: string | null;
+  listing_mode: "fixed_price";
+  status: "draft" | "active" | "paused" | "archived";
+  price_usd: number;
+  regional_pricing_enabled: boolean;
+  created_by_user_id: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreateCommunityListingRequest = {
+  asset_id?: string | null;
+  live_room_id?: string | null;
+  price_usd: number;
+  regional_pricing_enabled: boolean;
+  status: "draft" | "active" | "paused" | "archived";
+};
+
+export type UpdateCommunityListingRequest = {
+  price_usd?: number;
+  regional_pricing_enabled?: boolean;
+  status?: "draft" | "active" | "paused" | "archived";
+};
+
+export type CommunityListingListResponse = {
+  items: Array<CommunityListing>;
+};
+
+export type CommunityPurchase = {
+  purchase_id: string;
+  community_id: string;
+  listing_id: string;
+  asset_id?: string | null;
+  live_room_id?: string | null;
+  buyer_user_id: string;
+  settlement_wallet_attachment_id: string;
+  purchase_price_usd: number;
+  pricing_tier?: string | null;
+  settlement_chain: CommunityMoneyChainRef;
+  settlement_token: string;
+  settlement_tx_ref: string;
+  purchase_entitlement_id: string;
+  entitlement_kind: "asset_access" | "live_room_access" | "replay_access" | "license";
+  entitlement_target_ref: string;
+  created_at: string;
+};
+
+export type CommunityPurchaseListResponse = {
+  items: Array<CommunityPurchase>;
+};
+
+export type CommunityPurchaseQuotePreflightRequest = {
+  funding_asset?: CommunityMoneyAssetRef | null;
+  source_chain?: CommunityMoneyChainRef | null;
+  route_provider?: string | null;
+  client_estimated_slippage_bps: number;
+  client_estimated_hop_count: number;
+  client_route_valid_for_seconds?: number | null;
+};
+
+export type CommunityPurchaseQuotePreflight = {
+  community_id: string;
+  eligible: boolean;
+  funding_mode: CommunityPurchaseFundingMode;
+  policy_origin: CommunityPolicyOrigin;
+  funding_preference: string;
+  funding_asset?: CommunityMoneyAssetRef | null;
+  source_chain?: CommunityMoneyChainRef | null;
+  route_provider?: string | null;
+  destination_settlement_chain: CommunityMoneyChainRef;
+  destination_settlement_token: string;
+  treasury_denomination?: string | null;
+  max_slippage_bps: number;
+  quote_ttl_seconds: number;
+  route_required: boolean;
+  route_status_policy: CommunityFundingRouteStatusPolicy;
+  route_hop_tolerance: number;
+  quoted_at: string;
+  expires_at: string;
+};
+
+export type CommunityPurchaseQuoteRequest = {
+  listing_id: string;
+  funding_asset?: CommunityMoneyAssetRef | null;
+  source_chain?: CommunityMoneyChainRef | null;
+  route_provider?: string | null;
+  client_estimated_slippage_bps: number;
+  client_estimated_hop_count: number;
+  client_route_valid_for_seconds?: number | null;
+};
+
+export type CommunityPurchaseQuote = {
+  quote_id: string;
+  community_id: string;
+  listing_id: string;
+  buyer_user_id: string;
+  asset_id?: string | null;
+  live_room_id?: string | null;
+  base_price_usd: number;
+  pricing_tier?: string | null;
+  final_price_usd: number;
+  funding_mode: CommunityPurchaseFundingMode;
+  funding_asset?: CommunityMoneyAssetRef | null;
+  source_chain?: CommunityMoneyChainRef | null;
+  route_provider?: string | null;
+  route_policy_compliant: boolean;
+  route_live_available?: boolean | null;
+  policy_origin: CommunityPolicyOrigin;
+  destination_settlement_chain: CommunityMoneyChainRef;
+  destination_settlement_token: string;
+  treasury_denomination?: string | null;
+  quote_ttl_seconds: number;
+  route_required: boolean;
+  route_status_policy: CommunityFundingRouteStatusPolicy;
+  route_hop_tolerance: number;
+  verification_snapshot_ref?: string | null;
+  pricing_policy_version?: string | null;
+  quoted_at: string;
+  expires_at: string;
+};
+
+export type CommunityPurchaseSettlementRequest = {
+  quote_id: string;
+  settlement_wallet_attachment_id: string;
+  settlement_tx_ref: string;
+};
+
+export type CommunityPurchaseSettlement = {
+  purchase_id: string;
+  quote_id: string;
+  community_id: string;
+  listing_id: string;
+  buyer_user_id: string;
+  asset_id?: string | null;
+  live_room_id?: string | null;
+  settlement_wallet_attachment_id: string;
+  purchase_price_usd: number;
+  pricing_tier?: string | null;
+  settlement_chain: CommunityMoneyChainRef;
+  settlement_chain_ref: string;
+  settlement_token: string;
+  settlement_tx_ref: string;
+  entitlement_kind: "asset_access" | "live_room_access";
+  entitlement_target_ref: string;
+  purchase_entitlement_id: string;
+  settled_at: string;
+};
+
+export type CommunityPurchaseSettlementFailureRequest = {
+  quote_id: string;
+};
+
+export type CommunityPurchaseSettlementFailure = {
+  quote_id: string;
+  community_id: string;
+  status: "failed" | "expired";
+  failed_at?: string | null;
+  expires_at: string;
+};
+
 export type MembershipResult = {
   community_id: string;
   status: "joined" | "requested" | "left";
@@ -282,7 +495,7 @@ export type MembershipResult = {
 
 export type Job = {
   job_id: string;
-  job_type: "community_provisioning" | "community_registry_publication" | "reddit_snapshot_import" | "club_threads_export" | "media_analysis" | "story_publication" | "purchase_settlement_confirmation" | "entitlement_grant" | "artist_metadata_enrichment" | "track_reconciliation" | "catalog_track_preregistration" | "stem_separation" | "forced_alignment" | "karaoke_package_assembly";
+  job_type: "community_provisioning" | "community_registry_publication" | "reddit_snapshot_import" | "reddit_feature_derivation" | "club_threads_export" | "media_analysis" | "story_publication" | "purchase_settlement_confirmation" | "entitlement_grant" | "artist_metadata_enrichment" | "track_reconciliation" | "catalog_track_preregistration" | "stem_separation" | "forced_alignment" | "karaoke_package_assembly";
   status: "queued" | "running" | "succeeded" | "failed";
   subject_type: string;
   subject_id: string;
@@ -298,6 +511,31 @@ export type CommunityCreateAcceptedResponse = {
 };
 
 export type CreateCommunityRequest = CreateCentralizedCommunityRequest;
+
+export type UpdateCommunityMoneyPolicyRequest = {
+  funding_preference: string;
+  accepted_funding_assets: Array<CommunityMoneyAssetRef>;
+  accepted_source_chains: Array<CommunityMoneyChainRef>;
+  approved_route_providers?: Array<string> | null;
+  destination_settlement_chain: CommunityMoneyChainRef;
+  destination_settlement_token: string;
+  treasury_denomination?: string | null;
+  max_slippage_bps: number;
+  quote_ttl_seconds: number;
+  route_required: boolean;
+  route_status_policy: CommunityFundingRouteStatusPolicy;
+  route_hop_tolerance: number;
+};
+
+export type UpdateCommunityPricingPolicyRequest = {
+  regional_pricing_enabled: boolean;
+  verification_provider_requirement?: CommunityPricingVerificationProvider | null;
+  default_tier_key?: string | null;
+  tiers: Array<CommunityPricingTier>;
+  country_assignments: Array<CommunityPricingCountryAssignment>;
+  source_template_id?: string | null;
+  source_template_version?: string | null;
+};
 
 export type StartVerificationSessionRequest = {
   provider: "self" | "very";
@@ -315,25 +553,66 @@ export type CompleteVerificationSessionRequest = {
 };
 
 export type StartNamespaceVerificationSessionRequest = {
-  family: "hns";
+  family: "hns" | "spaces";
   root_label: string;
 };
 
 export type CompleteNamespaceVerificationSessionRequest = {
   restart_challenge?: boolean | null;
+  signature_payload?: {
+    signature?: string | null;
+    algorithm?: string | null;
+    signer_pubkey?: string | null;
+    digest?: string | null;
+  } | null;
 };
 
-export type CreatePostRequest = (({
-  post_type: "link";
+export type CreateSongArtifactUploadRequest = {
+  artifact_kind: "primary_audio" | "cover_art" | "preview_audio" | "canvas_video" | "instrumental_audio" | "vocal_audio";
+  mime_type: string;
+  filename?: string | null;
+  size_bytes?: number | null;
+  content_hash?: string | null;
+};
+
+export type CreateSongArtifactBundleRequest = {
+  primary_audio: SongArtifactUploadRef;
+  lyrics: string;
+  cover_art?: SongArtifactUploadRef | null;
+  preview_audio?: SongArtifactUploadRef | null;
+  preview_window?: SongPreviewWindow | null;
+  canvas_video?: SongArtifactUploadRef | null;
+  instrumental_audio?: SongArtifactUploadRef | null;
+  vocal_audio?: SongArtifactUploadRef | null;
+};
+
+export type CreatePostRequest = (((unknown & {
+  post_type: "text";
+  title?: string;
+  body?: string;
+}) | {
+  post_type: "image";
+  media_refs: Array<ImageMediaDescriptor>;
 } | {
-  post_type: "text" | "image" | "video" | "song";
-}) & {
+  post_type: "video";
+  media_refs: Array<VideoMediaDescriptor>;
+} | {
+  post_type: "link";
+} | (unknown & {
+  post_type: "song";
+  identity_mode: "public";
+  access_mode?: "public" | "locked";
+  media_refs?: Array<AudioMediaDescriptor>;
+})) & {
   idempotency_key: string;
+  authorship_mode?: "human_direct" | "user_agent";
+  agent_id?: string | null;
+  agent_action_proof?: AgentActionProof | null;
   identity_mode?: "public" | "anonymous";
   anonymous_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null;
   disclosed_qualifier_ids?: Array<string> | null;
   parent_post_id?: string | null;
-  flair_id?: string | null;
+  label_id?: string | null;
   post_type: "text" | "image" | "video" | "link" | "song";
   title?: string | null;
   body?: string | null;
@@ -342,23 +621,85 @@ export type CreatePostRequest = (({
   media_refs?: Array<MediaDescriptor>;
   creator_relation?: PostCreatorRelation | null;
   promotion_disclosure?: PromotionDisclosureInput | null;
-  translation_policy?: "none" | "machine_allowed" | "human_only" | "hybrid" | null;
+  translation_policy?: "none" | "machine_allowed" | "human_only" | "hybrid";
+  access_mode?: "public" | "locked" | null;
   asset_id?: string | null;
+  song_artifact_bundle_id?: string | null;
   song_mode?: "original" | "remix" | null;
   rights_basis?: "none" | "original" | "derivative" | "attribution_only" | null;
-  age_gate_policy?: "none" | "18_plus" | null;
+  upstream_asset_refs?: Array<string> | null;
   lyrics?: string | null;
 });
+
+export type SongArtifactUpload = {
+  song_artifact_upload_id: string;
+  community_id: string;
+  uploader_user_id: string;
+  artifact_kind: "primary_audio" | "cover_art" | "preview_audio" | "canvas_video" | "instrumental_audio" | "vocal_audio";
+  status: "pending_upload" | "uploaded" | "failed";
+  storage_ref: string;
+  mime_type: string;
+  filename?: string | null;
+  size_bytes?: number | null;
+  content_hash?: string | null;
+  storage_provider?: "filebase" | "local_stub" | null;
+  storage_bucket?: string | null;
+  storage_object_key?: string | null;
+  storage_endpoint?: string | null;
+  gateway_url?: string | null;
+  upload_url: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SongArtifactBundle = {
+  song_artifact_bundle_id: string;
+  community_id: string;
+  creator_user_id: string;
+  status: "draft" | "validating" | "ready" | "consuming" | "consumed" | "failed";
+  primary_audio: SongAudioArtifactDescriptor;
+  media_refs: Array<MediaDescriptor>;
+  lyrics: string;
+  lyrics_sha256: string;
+  cover_art?: SongImageArtifactDescriptor | null;
+  preview_audio?: SongAudioArtifactDescriptor | null;
+  preview_window?: SongPreviewWindow | null;
+  preview_status: "pending" | "processing" | "completed" | "failed";
+  preview_error?: string | null;
+  canvas_video?: SongVideoArtifactDescriptor | null;
+  instrumental_audio?: SongAudioArtifactDescriptor | null;
+  vocal_audio?: SongAudioArtifactDescriptor | null;
+  translation_status: "pending" | "processing" | "completed" | "failed";
+  translation_error?: string | null;
+  translated_lyrics_ref?: string | null;
+  translated_lyrics?: (Record<string, unknown>) | null;
+  alignment_status: "pending" | "processing" | "completed" | "failed";
+  alignment_error?: string | null;
+  timed_lyrics_ref?: string | null;
+  timed_lyrics?: (Record<string, unknown>) | null;
+  moderation_status: "pending" | "processing" | "completed" | "failed";
+  moderation_error?: string | null;
+  moderation_result_ref?: string | null;
+  moderation_result?: (Record<string, unknown>) | null;
+  created_at: string;
+  updated_at: string;
+};
 
 export type Post = {
   post_id: string;
   community_id: string;
   author_user_id?: string | null;
+  authorship_mode: "human_direct" | "user_agent";
+  agent_id?: string | null;
+  agent_ownership_record_id?: string | null;
   identity_mode: "public" | "anonymous";
   anonymous_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null;
   anonymous_label?: string | null;
+  agent_display_name_snapshot?: string | null;
+  agent_owner_handle_snapshot?: string | null;
+  agent_ownership_provider_snapshot?: string | null;
   disclosed_qualifiers_json?: Array<DisclosedQualifierSnapshot> | null;
-  flair_id?: string | null;
+  label_id?: string | null;
   post_type: "text" | "image" | "video" | "link" | "song";
   status: "draft" | "published" | "hidden" | "removed" | "deleted";
   title?: string | null;
@@ -371,9 +712,11 @@ export type Post = {
   source_language?: string | null;
   translation_policy?: "none" | "machine_allowed" | "human_only" | "hybrid" | null;
   asset_id?: string | null;
+  song_artifact_bundle_id?: string | null;
   parent_post_id?: string | null;
   song_mode?: "original" | "remix" | null;
   rights_basis?: "none" | "original" | "derivative" | "attribution_only" | null;
+  upstream_asset_refs?: Array<string> | null;
   analysis_state: "pending" | "allow" | "allow_with_required_reference" | "review_required" | "blocked";
   analysis_result_ref?: string | null;
   content_safety_state: "pending" | "safe" | "sensitive" | "adult";
@@ -385,7 +728,7 @@ export type Post = {
 export type LocalizedPostResponse = {
   post: Post;
   market_context?: MarketContextSummary | null;
-  flair?: PostFlair | null;
+  label?: PostLabel | null;
   upvote_count: number;
   downvote_count: number;
   like_count: number;
@@ -397,6 +740,21 @@ export type LocalizedPostResponse = {
   translated_body?: string | null;
   translated_caption?: string | null;
   source_hash: string;
+};
+
+type AgentActionProof = {
+  nonce: string;
+  signed_at: string;
+  canonical_request_hash: string;
+  signature: string;
+};
+
+type AudioMediaDescriptor = {
+  storage_ref: string;
+  mime_type: string;
+  size_bytes?: number | null;
+  content_hash?: string | null;
+  duration_ms?: number | null;
 };
 
 type CentralizedGovernanceBackend = {
@@ -466,21 +824,7 @@ type CommunityDisclosureDecisionLevel = "allow" | "require_disclosure" | "disall
 
 type CommunityFalseClaimConsequence = "warning" | "post_removed" | "temporary_ban" | "permanent_ban";
 
-type CommunityFlairDefinition = {
-  flair_id: string;
-  label: string;
-  description?: string | null;
-  color_token?: string | null;
-  status: "active" | "archived";
-  position: number;
-  allowed_post_types?: Array<"text" | "image" | "video" | "song"> | null;
-};
-
-type CommunityFlairPolicy = {
-  flair_enabled: boolean;
-  require_flair_on_top_level_posts: boolean;
-  definitions: Array<CommunityFlairDefinition>;
-};
+type CommunityFundingRouteStatusPolicy = "fail" | "fallback_display" | "queue";
 
 type CommunityGovernanceBackend = (CentralizedGovernanceBackend | MultisigGovernanceBackend | MajeurGovernanceBackend);
 
@@ -502,6 +846,22 @@ type CommunityImageAuthenticityPolicySettings = {
   allow_ai_restoration: boolean;
   allow_generative_editing: boolean;
   allow_ai_generated: boolean;
+};
+
+type CommunityLabelDefinition = {
+  label_id: string;
+  label: string;
+  description?: string | null;
+  color_token?: string | null;
+  status: "active" | "archived";
+  position: number;
+  allowed_post_types?: Array<"text" | "image" | "video" | "song"> | null;
+};
+
+type CommunityLabelPolicy = {
+  label_enabled: boolean;
+  require_label_on_top_level_posts: boolean;
+  definitions: Array<CommunityLabelDefinition>;
 };
 
 type CommunityLanguagePolicy = {
@@ -529,6 +889,19 @@ type CommunityMarketContextProviderSet = "platform_default" | "approved_profile"
 
 type CommunityModerationDecisionLevel = "allow" | "review" | "disallow";
 
+type CommunityMoneyAssetRef = {
+  asset_symbol: string;
+  chain_namespace?: string | null;
+  chain_id?: number | null;
+  display_name?: string | null;
+};
+
+type CommunityMoneyChainRef = {
+  chain_namespace: string;
+  chain_id?: number | null;
+  display_name?: string | null;
+};
+
 type CommunityMotionMediaPolicy = {
   community_id: string;
   policy_origin: CommunityPolicyOrigin;
@@ -541,6 +914,24 @@ type CommunityMotionMediaPolicy = {
 };
 
 type CommunityPolicyOrigin = "default" | "explicit";
+
+type CommunityPricingAdjustmentType = "multiplier" | "fixed_price_usd";
+
+type CommunityPricingCountryAssignment = {
+  country_code: string;
+  tier_key: string;
+};
+
+type CommunityPricingTier = {
+  tier_key: string;
+  display_name?: string | null;
+  adjustment_type: CommunityPricingAdjustmentType;
+  adjustment_value: number;
+};
+
+type CommunityPricingVerificationProvider = "self";
+
+type CommunityPrimaryDataRegion = "eu_ireland" | "us_east" | "us_west" | "asia_tokyo" | "asia_mumbai";
 
 type CommunityProfile = {
   rules: Array<CommunityRule>;
@@ -568,6 +959,8 @@ type CommunityProvenancePolicy = {
   require_proof_for_original: boolean;
   updated_at: string;
 };
+
+type CommunityPurchaseFundingMode = "direct" | "routed";
 
 type CommunityReferenceLinkMetadata = {
   display_name?: string | null;
@@ -689,6 +1082,15 @@ type GateRule = {
 
 type GovernanceVerificationState = "not_required" | "pending" | "verified" | "broken";
 
+type ImageMediaDescriptor = {
+  storage_ref: string;
+  mime_type: string;
+  size_bytes?: number | null;
+  content_hash?: string | null;
+  width?: number | null;
+  height?: number | null;
+};
+
 type MajeurGovernanceBackend = {
   governance_mode: "majeur";
   governance_chain_id: number;
@@ -776,8 +1178,8 @@ type MultisigGovernanceMetadata = {
 
 type PostCreatorRelation = "captured" | "created" | "subject" | "authorized_repost" | "fan_work" | "found";
 
-type PostFlair = {
-  flair_id: string;
+type PostLabel = {
+  label_id: string;
   label: string;
   color_token?: string | null;
   status: "active" | "archived";
@@ -871,6 +1273,46 @@ type SelfVerificationLaunch = {
   dev_mode?: boolean | null;
 };
 
+type SongArtifactUploadRef = {
+  song_artifact_upload_id: string;
+};
+
+type SongAudioArtifactDescriptor = {
+  storage_ref: string;
+  mime_type: string;
+  size_bytes?: number | null;
+  content_hash?: string | null;
+  duration_ms?: number | null;
+  clip_start_ms?: number | null;
+  clip_duration_ms?: number | null;
+};
+
+type SongImageArtifactDescriptor = {
+  storage_ref: string;
+  mime_type: string;
+  size_bytes?: number | null;
+  content_hash?: string | null;
+  width?: number | null;
+  height?: number | null;
+};
+
+type SongPreviewWindow = {
+  start_ms: number;
+  duration_ms: number;
+};
+
+type SongVideoArtifactDescriptor = {
+  storage_ref: string;
+  mime_type: string;
+  size_bytes?: number | null;
+  content_hash?: string | null;
+  duration_ms?: number | null;
+  clip_start_ms?: number | null;
+  clip_duration_ms?: number | null;
+  width?: number | null;
+  height?: number | null;
+};
+
 type VerificationCapabilityState = {
   state: "unverified" | "pending" | "verified" | "expired";
   provider?: "self" | "very" | null;
@@ -901,6 +1343,16 @@ type VeryWidgetLaunch = {
   type_id: string;
   query: Record<string, unknown>;
   verify_url: string;
+};
+
+type VideoMediaDescriptor = {
+  storage_ref: string;
+  mime_type: string;
+  size_bytes?: number | null;
+  content_hash?: string | null;
+  duration_ms?: number | null;
+  width?: number | null;
+  height?: number | null;
 };
 
 type WalletScoreCapabilityState = {
@@ -936,7 +1388,21 @@ export const apiRoutes = {
   namespaceVerification: (namespaceVerificationId: string) => `/namespace-verifications/${namespaceVerificationId}`,
   communities: "/communities",
   community: (communityId: string) => `/communities/${communityId}`,
+  communityMoneyPolicy: (communityId: string) => `/communities/${communityId}/money-policy`,
+  communityPricingPolicy: (communityId: string) => `/communities/${communityId}/pricing-policy`,
+  communityListings: (communityId: string) => `/communities/${communityId}/listings`,
+  communityListing: (communityId: string, listingId: string) => `/communities/${communityId}/listings/${listingId}`,
+  communityPurchases: (communityId: string) => `/communities/${communityId}/purchases`,
+  communityPurchase: (communityId: string, purchaseId: string) => `/communities/${communityId}/purchases/${purchaseId}`,
+  communityPurchaseQuotePreflight: (communityId: string) => `/communities/${communityId}/purchase-quote-preflight`,
+  communityPurchaseQuotes: (communityId: string) => `/communities/${communityId}/purchase-quotes`,
+  communityPurchaseSettlements: (communityId: string) => `/communities/${communityId}/purchase-settlements`,
+  communityPurchaseSettlementFailures: (communityId: string) => `/communities/${communityId}/purchase-settlements/fail`,
   communityPosts: (communityId: string) => `/communities/${communityId}/posts`,
+  communitySongArtifactUploads: (communityId: string) => `/communities/${communityId}/song-artifact-uploads`,
+  communitySongArtifactUploadContent: (communityId: string, songArtifactUploadId: string) => `/communities/${communityId}/song-artifact-uploads/${songArtifactUploadId}/content`,
+  communitySongArtifacts: (communityId: string) => `/communities/${communityId}/song-artifacts`,
+  communitySongArtifact: (communityId: string, songArtifactBundleId: string) => `/communities/${communityId}/song-artifacts/${songArtifactBundleId}`,
   job: (jobId: string) => `/jobs/${jobId}`,
   post: (postId: string) => `/posts/${postId}`,
 } as const

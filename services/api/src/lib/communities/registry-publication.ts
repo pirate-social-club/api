@@ -8,6 +8,7 @@ type CommunityCreateAttemptResult = {
   registryAttemptId: string
   actorPrimaryWalletSnapshot: string | null
   actorGovernanceAddressSnapshot: string | null
+  attemptsTableName: string
   resultRef: string | null
 }
 
@@ -51,6 +52,10 @@ function publisherBaseUrl(env: Env): string | null {
   return configured ? configured.replace(/\/+$/, "") : null
 }
 
+function allowLocalStubRegistryPublication(env: Env): boolean {
+  return String(env.ALLOW_LOCAL_STUB_REGISTRY_PUBLICATION || "").trim().toLowerCase() === "true"
+}
+
 async function fetchPublisherJson(
   env: Env,
   path: string,
@@ -62,7 +67,7 @@ async function fetchPublisherJson(
   }
 
   const controller = new AbortController()
-  const timeoutMs = parseTimeoutMs(env.REGISTRY_PUBLISHER_TIMEOUT_MS, 25000)
+  const timeoutMs = parseTimeoutMs(env.REGISTRY_PUBLISHER_TIMEOUT_MS, 60000)
   const timer = setTimeout(() => controller.abort("timeout"), timeoutMs)
 
   try {
@@ -125,10 +130,12 @@ async function createCommunityCreateAttemptLocalStub(input: {
   actorPrimaryWalletSnapshot: string | null
   actorGovernanceAddressSnapshot: string | null
 }): Promise<CommunityCreateAttemptResult> {
+  const registryAttemptId = makeId("rga")
   return {
-    registryAttemptId: makeId("rga"),
+    registryAttemptId,
     actorPrimaryWalletSnapshot: input.actorPrimaryWalletSnapshot,
     actorGovernanceAddressSnapshot: input.actorGovernanceAddressSnapshot,
+    attemptsTableName: "community_create_attempts_local_stub_84532_1",
     resultRef: `local_stub://registry-attempt/${input.actorUserId}`,
   }
 }
@@ -165,6 +172,12 @@ async function publishCommunityCreateLocalStub(input: {
         actorUserId: input.actorUserId,
         resultRef: `local_stub://registry/${input.communityId}`,
         createdAt: input.createdAt,
+        tableRefs: {
+          attemptsTableName: "community_create_attempts_local_stub_84532_1",
+          clubRegistryTableName: `clubreg_local_stub_${input.communityId}`,
+          clubNamespaceTableName: `clubns_local_stub_${input.communityId}`,
+          publisherKind: "direct_key",
+        },
         metadata: {
           mode: "local_stub",
           registry_attempt_id: input.registryAttemptId,
@@ -226,6 +239,7 @@ function getHttpRegistryPublicationAdapter(env: Env): RegistryPublicationAdapter
           payload.actor_primary_wallet_snapshot == null ? null : String(payload.actor_primary_wallet_snapshot),
         actorGovernanceAddressSnapshot:
           payload.actor_governance_address_snapshot == null ? null : String(payload.actor_governance_address_snapshot),
+        attemptsTableName: String(payload.attempts_table || "").trim(),
         resultRef: payload.result_ref == null ? null : String(payload.result_ref),
       }
     },
@@ -252,6 +266,16 @@ function getHttpRegistryPublicationAdapter(env: Env): RegistryPublicationAdapter
 
         const status = String(payload.status || "").trim()
         if (status === "published") {
+          const rawTableRefs = payload.table_refs
+          const tableRefs = rawTableRefs && typeof rawTableRefs === "object"
+            ? rawTableRefs as Record<string, unknown>
+            : null
+          const attemptsTableName = String(tableRefs?.attempts_table || "").trim()
+          const clubRegistryTableName = String(tableRefs?.club_registry_table || "").trim()
+          const clubNamespaceTableName = String(tableRefs?.club_namespace_table || "").trim()
+          if (!attemptsTableName || !clubRegistryTableName || !clubNamespaceTableName) {
+            throw internalError("registry_publisher_missing_table_refs")
+          }
           return input.repo.markCommunityRegistryPublicationSucceeded({
             communityId: input.communityId,
             registryAttemptId: input.registryAttemptId,
@@ -259,9 +283,15 @@ function getHttpRegistryPublicationAdapter(env: Env): RegistryPublicationAdapter
             actorUserId: input.actorUserId,
             resultRef: payload.result_ref == null ? null : String(payload.result_ref),
             createdAt: payload.registry_published_at == null ? input.createdAt : String(payload.registry_published_at),
+            tableRefs: {
+              attemptsTableName,
+              clubRegistryTableName,
+              clubNamespaceTableName,
+              publisherKind: "direct_key",
+            },
             metadata: {
               mode: "publisher_http",
-              table_refs: payload.table_refs ?? null,
+              table_refs: tableRefs,
             },
           })
         }
@@ -303,6 +333,10 @@ export function getRegistryPublicationAdapter(env: Env): RegistryPublicationAdap
       throw badRequestError("REGISTRY_PUBLISHER_AUTH_TOKEN is required when REGISTRY_PUBLISHER_URL is configured")
     }
     return getHttpRegistryPublicationAdapter(env)
+  }
+
+  if (!allowLocalStubRegistryPublication(env)) {
+    throw internalError("REGISTRY_PUBLISHER_URL is not configured")
   }
 
   return {

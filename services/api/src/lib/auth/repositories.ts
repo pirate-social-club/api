@@ -1,6 +1,6 @@
-import { createClient } from "@libsql/client"
 import { internalError } from "../errors"
 import { envFlag, isLocalEnvironment } from "../helpers"
+import { createControlPlaneDbClient, requireControlPlaneDatabaseUrl } from "../control-plane-db"
 import type {
   Env,
   GlobalHandle,
@@ -15,7 +15,6 @@ import type {
   WalletAttachmentSummary,
 } from "../../types"
 import type { SessionSnapshot } from "./control-plane-auth-rows"
-import { requireControlPlaneDbUrl } from "./control-plane-auth-queries"
 import { ControlPlaneIdentityRepository } from "./control-plane-identity-repository"
 import { ControlPlaneProfileRepository, type UpdateProfileInput } from "./control-plane-profile-repository"
 import { MemoryAuthRepository } from "./memory-auth-repository"
@@ -29,6 +28,7 @@ export interface SessionRepository {
 
 export interface UserRepository {
   getUserById(userId: string): Promise<User | null>
+  listUsersByIds(userIds: string[]): Promise<User[]>
   getWalletAttachmentsByUserId(userId: string): Promise<WalletAttachmentSummary[]>
 }
 
@@ -39,8 +39,13 @@ export interface OnboardingStatusRepository {
 export interface ProfileRepository {
   getProfileByUserId(userId: string): Promise<Profile | null>
   updateProfile(userId: string, input: UpdateProfileInput): Promise<Profile | null>
-  renameGlobalHandle(userId: string, desiredLabel: string): Promise<GlobalHandle | null>
+  renameGlobalHandle(userId: string, desiredLabel: string, issuanceSource?: string): Promise<GlobalHandle | null>
   quoteGlobalHandleUpgrade(userId: string, desiredLabel: string): Promise<HandleUpgradeQuote | null>
+  checkGlobalHandleAvailability(userId: string, label: string): Promise<{
+    label: string
+    status: "available" | "taken" | "reserved" | "invalid"
+    suggestion?: { label: string; source: "variation" | "generated" }
+  }>
 }
 
 export interface RedditOnboardingRepository {
@@ -54,6 +59,16 @@ export interface RedditOnboardingRepository {
     userId: string
     redditUsername: string
   }): Promise<{ job: Job }>
+  processQueuedRedditSnapshotImport(input: {
+    env: Env
+    userId: string
+    jobId: string
+  }): Promise<boolean>
+  drainRedditSnapshotImportJobs(input: {
+    env: Env
+    maxJobs: number
+    staleAfterSeconds: number
+  }): Promise<{ recoveredCount: number; drainedCount: number }>
   getLatestRedditImportSummary(userId: string): Promise<RedditImportSummary | null>
 }
 
@@ -70,9 +85,7 @@ const globalScope = globalThis as typeof globalThis & {
 }
 
 function getControlPlaneRepositoryBundle(env: Env): ControlPlaneRepositoryBundle {
-  const url = requireControlPlaneDbUrl(env)
-  const authToken = String(env.TURSO_CONTROL_PLANE_AUTH_TOKEN || "").trim()
-  const cacheKey = `${url}|${authToken}`
+  const cacheKey = requireControlPlaneDatabaseUrl(env)
 
   if (
     globalScope.__pirateControlPlaneRepositoryBundle
@@ -81,10 +94,7 @@ function getControlPlaneRepositoryBundle(env: Env): ControlPlaneRepositoryBundle
     return globalScope.__pirateControlPlaneRepositoryBundle
   }
 
-  const client = createClient({
-    url,
-    authToken: authToken || undefined,
-  })
+  const client = createControlPlaneDbClient(env)
   const bundle = {
     identity: new ControlPlaneIdentityRepository(client),
     profile: new ControlPlaneProfileRepository(client),

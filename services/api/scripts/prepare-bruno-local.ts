@@ -2,7 +2,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises"
 import { resolve } from "node:path"
 import { spawnSync } from "node:child_process"
 import { SignJWT } from "jose"
-import { readDevVars } from "./_lib/dev-vars"
+import { readModeEnv } from "./_lib/dev-vars"
 
 function requireEnv(values: Record<string, string>, key: string): string {
   const value = values[key]?.trim()
@@ -44,20 +44,19 @@ async function mintJwt(input: {
 }
 
 async function main(): Promise<void> {
-  const serviceRoot = process.cwd()
+  const serviceRoot = resolve(import.meta.dirname, "..")
   const repoRoot = resolve(serviceRoot, "../..")
-  const devVarsPath = resolve(serviceRoot, ".dev.vars")
   const brunoEnvPath = resolve(serviceRoot, "bruno/environments/local.bru")
   const port = Number(process.env.PORT || "8787")
   if (!Number.isInteger(port) || port <= 0) {
     throw new Error(`PORT must be a positive integer, received: ${process.env.PORT ?? ""}`)
   }
   const baseUrl = `http://127.0.0.1:${port}`
-  const devVars = readDevVars(devVarsPath)
+  const devVars = readModeEnv(serviceRoot, "local-sqlite")
 
   const controlPlaneDbPath = requireLocalFilePath(
-    requireEnv(devVars, "TURSO_CONTROL_PLANE_DATABASE_URL"),
-    "TURSO_CONTROL_PLANE_DATABASE_URL",
+    requireEnv(devVars, "CONTROL_PLANE_DATABASE_URL"),
+    "CONTROL_PLANE_DATABASE_URL",
   )
   const communityDbRoot = requireEnv(devVars, "LOCAL_COMMUNITY_DB_ROOT")
 
@@ -141,11 +140,19 @@ async function main(): Promise<void> {
   community_id:
   community_provisioning_job_id:
   post_id:
+  song_artifact_upload_id:
+  song_artifact_upload_url:
+  song_artifact_bundle_id:
   song_post_id:
   review_post_id:
   post_idempotency_key: bruno-post-01
   post_title: Hello From Bruno
   post_body: First post created through the API collection.
+  song_primary_audio_storage_ref:
+  song_primary_audio_size_bytes:
+  song_primary_audio_content_hash:
+  song_primary_audio_gateway_url:
+  song_lyrics:
   post_locale: en
   upstream_jwt_expired: ${upstreamJwtExpired}
   upstream_jwt_malformed: not-a-jwt

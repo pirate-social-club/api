@@ -247,6 +247,89 @@ export type UpdateCommunityProfileRequest = {
   }>
 }
 
+export type ModerationSignalSeverity = "low" | "medium" | "high"
+export type ModerationCaseStatus = "open" | "resolved"
+export type ModerationQueueScope = "community" | "platform"
+export type ModerationCaseOpenedBy = "platform_analysis" | "user_report" | "mixed"
+export type UserReportReasonCode = "spam" | "harassment" | "hate" | "sexual_content" | "graphic_content" | "misleading" | "other"
+export type ModerationActionType = "dismiss" | "hide" | "remove" | "restore" | "age_gate"
+
+export type CreateUserReportRequest = {
+  reason_code: UserReportReasonCode
+  note?: string | null
+}
+
+export type UserReport = {
+  user_report_id: string
+  community_id: string
+  post_id: string
+  moderation_case_id: string | null
+  reporter_user_id: string
+  reason_code: UserReportReasonCode
+  note: string | null
+  created_at: string
+}
+
+export type ModerationSignal = {
+  moderation_signal_id: string
+  community_id: string
+  post_id: string
+  moderation_case_id: string | null
+  analysis_result_ref: string | null
+  source: "platform_analysis"
+  signal_type: string
+  severity: ModerationSignalSeverity
+  provider: string
+  provider_label: string
+  evidence_ref: string | null
+  created_at: string
+}
+
+export type ModerationAction = {
+  moderation_action_id: string
+  moderation_case_id: string
+  community_id: string
+  post_id: string
+  actor_user_id: string
+  action_type: ModerationActionType
+  note: string | null
+  previous_post_status: ContractPost["status"] | null
+  next_post_status: ContractPost["status"] | null
+  previous_age_gate_policy: ContractPost["age_gate_policy"] | null
+  next_age_gate_policy: ContractPost["age_gate_policy"] | null
+  created_at: string
+}
+
+export type ModerationCase = {
+  moderation_case_id: string
+  community_id: string
+  post_id: string
+  status: ModerationCaseStatus
+  queue_scope: ModerationQueueScope
+  priority: ModerationSignalSeverity
+  opened_by: ModerationCaseOpenedBy
+  created_at: string
+  updated_at: string
+  resolved_at: string | null
+}
+
+export type ModerationCaseListResponse = {
+  items: ModerationCase[]
+}
+
+export type ModerationCaseDetail = {
+  case: ModerationCase
+  post: ContractPost
+  signals: ModerationSignal[]
+  reports: UserReport[]
+  actions: ModerationAction[]
+}
+
+export type CreateModerationActionRequest = {
+  action_type: ModerationActionType
+  note?: string | null
+}
+
 export type CommunityReferenceLinkPlatform =
   | "musicbrainz"
   | "genius"
@@ -502,8 +585,16 @@ export type Asset = {
   story_status: "none" | "requested" | "published" | "failed"
   story_error: string | null
   story_ip_id: string | null
+  story_ip_nft_contract: string | null
+  story_ip_nft_token_id: string | null
   story_publish_tx_ref: string | null
+  story_publish_model: "pirate_v1" | "story_ip_v1"
   story_asset_version_id: string | null
+  story_license_terms_id: string | null
+  story_license_template: string | null
+  story_royalty_policy: string | null
+  story_derivative_registered_at: string | null
+  story_revenue_token: string | null
   story_cdr_vault_uuid: number | null
   story_cdr_encrypted_cid: string | null
   story_cdr_allocate_tx_ref: string | null
@@ -604,9 +695,10 @@ export type HandleUpgradeQuote = {
 export type Env = {
   ENVIRONMENT?: string
   DEV_MEMORY_STORE_ENABLED?: string
-  TURSO_CONTROL_PLANE_DATABASE_URL?: string
-  TURSO_CONTROL_PLANE_DATABASE_NAME?: string
-  TURSO_CONTROL_PLANE_AUTH_TOKEN?: string
+  PIRATE_API_PUBLIC_ORIGIN?: string
+  SELF_VERIFICATION_SCOPE?: string
+  SELF_MOCK_PASSPORT?: string
+  CONTROL_PLANE_DATABASE_URL?: string
   LOCAL_COMMUNITY_DB_ROOT?: string
   ALLOW_LOCAL_STUB_REGISTRY_PUBLICATION?: string
   REGISTRY_PUBLISHER_URL?: string
@@ -663,6 +755,8 @@ export type Env = {
   STORY_AENEID_RPC_URL?: string
   ETHEREUM_MAINNET_RPC_URL?: string
   POLYGON_MAINNET_RPC_URL?: string
+  STORY_IP_ASSET_REGISTRY_ADDRESS?: string
+  STORY_SONG_IP_TOKEN_ADDRESS?: string
   STORY_ASSET_PUBLISH_COORDINATOR_ADDRESS?: string
   STORY_OPERATOR_PKP_ADDRESS?: string
   STORY_OPERATOR_PKP_PUBLIC_KEY?: string

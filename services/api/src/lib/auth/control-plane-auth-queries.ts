@@ -1,16 +1,19 @@
-import type { Client, InStatement, Transaction } from "@libsql/client"
 import { internalError } from "../errors"
 import { makeId, nowIso } from "../helpers"
+import { requireControlPlaneDatabaseUrl } from "../control-plane-db"
 import {
   assembleProfile,
   parseRedditImportSummary,
   parseVerificationCapabilities,
+  serializeGlobalHandle,
   serializeUser,
   serializeWalletAttachments,
 } from "./control-plane-auth-serializers"
 import {
   type ExternalReputationSnapshotRow,
   type CommunityDatabaseBindingRow,
+  type CommunityMoneyPolicyRow,
+  type CommunityPricingPolicyRow,
   type CommunityRegistryAttemptRow,
   type CommunityPostProjectionRow,
   type CommunityRow,
@@ -27,6 +30,8 @@ import {
   type WalletAttachmentRow,
   toExternalReputationSnapshotRow,
   toCommunityDatabaseBindingRow,
+  toCommunityMoneyPolicyRow,
+  toCommunityPricingPolicyRow,
   toCommunityRegistryAttemptRow,
   toCommunityPostProjectionRow,
   toCommunityRow,
@@ -41,17 +46,19 @@ import {
   toWalletAttachmentRow,
 } from "./control-plane-auth-rows"
 import type { Env, OnboardingStatus, UpstreamIdentity } from "../../types"
+import { isCleanupRenameAvailable } from "./global-handle-policy"
+
+type InStatement = {
+  sql: string
+  args?: Array<string | number | boolean | null>
+}
 
 type AuthProviderLinkRow = {
   user_id: string
 }
 
 export function requireControlPlaneDbUrl(env: Env): string {
-  const url = String(env.TURSO_CONTROL_PLANE_DATABASE_URL || "").trim()
-  if (!url) {
-    throw internalError("TURSO_CONTROL_PLANE_DATABASE_URL is not configured")
-  }
-  return url
+  return requireControlPlaneDatabaseUrl(env)
 }
 
 function parseUniqueConstraintFields(error: unknown): string[] {
@@ -83,7 +90,7 @@ export async function firstRow(executor: DbExecutor, stmt: InStatement): Promise
 async function getLatestVerificationSessionRow(executor: DbExecutor, userId: string): Promise<VerificationSessionRow | null> {
   const row = await firstRow(executor, {
     sql: `
-      SELECT verification_session_id, user_id, provider, requested_capabilities_json,
+      SELECT verification_session_id, user_id, provider, wallet_attachment_id, requested_capabilities_json,
              status, result_ref, failure_code, completed_at, expires_at, created_at, updated_at
       FROM verification_sessions
       WHERE user_id = ?1
@@ -179,10 +186,13 @@ async function getLatestNamespaceVerificationSessionRow(executor: DbExecutor, us
     sql: `
       SELECT namespace_verification_session_id, namespace_verification_id, user_id, family, submitted_root_label,
              normalized_root_label, status, challenge_host, challenge_txt_value, challenge_expires_at,
+             challenge_kind, challenge_payload_json,
              root_exists, root_control_verified, expiry_horizon_sufficient, routing_enabled,
              pirate_dns_authority_verified, club_attach_allowed, pirate_web_routing_allowed,
              pirate_subdomain_issuance_allowed, control_class, operation_class, observation_provider,
-             evidence_bundle_ref, failure_reason, accepted_at, expires_at, created_at, updated_at
+             evidence_bundle_ref, failure_reason, accepted_at, expires_at,
+             anchor_height, anchor_block_hash, anchor_root_hash, proof_root_hash,
+             created_at, updated_at
       FROM namespace_verification_sessions
       WHERE user_id = ?1
       ORDER BY created_at DESC
@@ -206,7 +216,9 @@ async function getLatestNamespaceVerificationRow(executor: DbExecutor, userId: s
              root_exists, root_control_verified, expiry_horizon_sufficient, routing_enabled,
              pirate_dns_authority_verified, club_attach_allowed, pirate_web_routing_allowed,
              pirate_subdomain_issuance_allowed, control_class, operation_class, observation_provider,
-             evidence_bundle_ref, accepted_at, expires_at, created_at, updated_at
+             evidence_bundle_ref, accepted_at, expires_at,
+             anchor_height, anchor_block_hash, anchor_root_hash, proof_root_hash,
+             created_at, updated_at
       FROM namespace_verifications
       WHERE user_id = ?1
       ORDER BY accepted_at DESC
@@ -229,7 +241,8 @@ export async function getCommunityRowById(executor: DbExecutor, communityId: str
       SELECT community_id, creator_user_id, display_name, status, provisioning_state,
              registry_publication_state, registry_attempt_id, registry_published_at,
              registry_publication_job_id, registry_error_code, transfer_state,
-             route_slug, namespace_verification_id, primary_database_binding_id, created_at, updated_at
+             route_slug, namespace_verification_id, primary_database_binding_id,
+             projected_member_count, projected_qualified_member_count, created_at, updated_at
       FROM communities
       WHERE community_id = ?1
       LIMIT 1
@@ -249,7 +262,8 @@ export async function getCommunityRowByNamespaceVerificationId(
       SELECT community_id, creator_user_id, display_name, status, provisioning_state,
              registry_publication_state, registry_attempt_id, registry_published_at,
              registry_publication_job_id, registry_error_code, transfer_state,
-             route_slug, namespace_verification_id, primary_database_binding_id, created_at, updated_at
+             route_slug, namespace_verification_id, primary_database_binding_id,
+             projected_member_count, projected_qualified_member_count, created_at, updated_at
       FROM communities
       WHERE namespace_verification_id = ?1
       LIMIT 1
@@ -258,6 +272,87 @@ export async function getCommunityRowByNamespaceVerificationId(
   })
 
   return row ? toCommunityRow(row) : null
+}
+
+export async function getCommunityRowByRouteKey(
+  executor: DbExecutor,
+  routeKey: string,
+): Promise<CommunityRow | null> {
+  const row = await firstRow(executor, {
+    sql: `
+      SELECT c.community_id, c.creator_user_id, c.display_name, c.status, c.provisioning_state,
+             c.registry_publication_state, c.registry_attempt_id, c.registry_published_at,
+             c.registry_publication_job_id, c.registry_error_code, c.transfer_state,
+             c.route_slug, c.namespace_verification_id, c.primary_database_binding_id,
+             c.projected_member_count, c.projected_qualified_member_count, c.created_at, c.updated_at
+      FROM communities AS c
+      LEFT JOIN namespace_verifications AS nv
+        ON nv.namespace_verification_id = c.namespace_verification_id
+      WHERE c.route_slug = ?1
+         OR nv.normalized_root_label = ?1
+      ORDER BY
+        CASE
+          WHEN c.route_slug = ?1 THEN 0
+          WHEN nv.normalized_root_label = ?1 THEN 1
+          ELSE 2
+        END,
+        c.created_at DESC,
+        c.community_id DESC
+      LIMIT 1
+    `,
+    args: [routeKey],
+  })
+
+  return row ? toCommunityRow(row) : null
+}
+
+export async function getCommunityRowByNamespaceLabel(
+  executor: DbExecutor,
+  input: {
+    normalizedLabel: string
+    family: "spaces"
+  },
+): Promise<CommunityRow | null> {
+  const row = await firstRow(executor, {
+    sql: `
+      SELECT c.community_id, c.creator_user_id, c.display_name, c.status, c.provisioning_state,
+             c.registry_publication_state, c.registry_attempt_id, c.registry_published_at,
+             c.registry_publication_job_id, c.registry_error_code, c.transfer_state,
+             c.route_slug, c.namespace_verification_id, c.primary_database_binding_id,
+             c.projected_member_count, c.projected_qualified_member_count, c.created_at, c.updated_at
+      FROM communities AS c
+      INNER JOIN namespace_verifications AS nv
+        ON nv.namespace_verification_id = c.namespace_verification_id
+      WHERE nv.normalized_root_label = ?1
+        AND nv.family = ?2
+      ORDER BY c.created_at DESC, c.community_id DESC
+      LIMIT 1
+    `,
+    args: [input.normalizedLabel, input.family],
+  })
+
+  return row ? toCommunityRow(row) : null
+}
+
+export async function listCommunityRowsByCreatorUserId(
+  executor: DbExecutor,
+  creatorUserId: string,
+): Promise<CommunityRow[]> {
+  const result = await executor.execute({
+    sql: `
+      SELECT community_id, creator_user_id, display_name, status, provisioning_state,
+             registry_publication_state, registry_attempt_id, registry_published_at,
+             registry_publication_job_id, registry_error_code, transfer_state,
+             route_slug, namespace_verification_id, primary_database_binding_id,
+             projected_member_count, projected_qualified_member_count, created_at, updated_at
+      FROM communities
+      WHERE creator_user_id = ?1
+      ORDER BY created_at DESC, community_id DESC
+    `,
+    args: [creatorUserId],
+  })
+
+  return result.rows.map((row) => toCommunityRow(row))
 }
 
 export async function getCommunityDatabaseBindingRowById(
@@ -296,6 +391,55 @@ export async function getPrimaryCommunityDatabaseBindingRow(
   })
 
   return row ? toCommunityDatabaseBindingRow(row) : null
+}
+
+export async function getCommunityMoneyPolicyRowByCommunityId(
+  executor: DbExecutor,
+  communityId: string,
+): Promise<CommunityMoneyPolicyRow | null> {
+  const row = await firstRow(executor, {
+    sql: `
+      SELECT community_id, funding_preference, accepted_funding_assets_json, accepted_source_chains_json,
+             approved_route_providers_json, destination_settlement_chain_json, destination_settlement_token,
+             treasury_denomination, max_slippage_bps, quote_ttl_seconds, route_required,
+             route_status_policy, route_hop_tolerance, updated_at
+      FROM community_money_policies
+      WHERE community_id = ?1
+      LIMIT 1
+    `,
+    args: [communityId],
+  }).catch((error) => {
+    if (isMissingTableError(error, "community_money_policies")) {
+      return null
+    }
+    throw error
+  })
+
+  return row ? toCommunityMoneyPolicyRow(row) : null
+}
+
+export async function getCommunityPricingPolicyRowByCommunityId(
+  executor: DbExecutor,
+  communityId: string,
+): Promise<CommunityPricingPolicyRow | null> {
+  const row = await firstRow(executor, {
+    sql: `
+      SELECT community_id, regional_pricing_enabled, verification_provider_requirement, default_tier_key,
+             tiers_json, country_assignments_json, source_template_id, source_template_version,
+             pricing_policy_version, updated_at
+      FROM community_pricing_policies
+      WHERE community_id = ?1
+      LIMIT 1
+    `,
+    args: [communityId],
+  }).catch((error) => {
+    if (isMissingTableError(error, "community_pricing_policies")) {
+      return null
+    }
+    throw error
+  })
+
+  return row ? toCommunityPricingPolicyRow(row) : null
 }
 
 export async function getJobRowById(executor: DbExecutor, jobId: string): Promise<JobRow | null> {
@@ -494,7 +638,10 @@ export async function deriveOnboardingStatus(
 
   return {
     generated_handle_assigned: activeGlobalHandleRow.issuance_source === "generated_signup",
-    cleanup_rename_available: !Boolean(activeGlobalHandleRow.free_rename_consumed),
+    cleanup_rename_available: isCleanupRenameAvailable({
+      userCreatedAt: userRow.created_at,
+      activeGlobalHandle: serializeGlobalHandle(activeGlobalHandleRow),
+    }),
     unique_human_verification_status: uniqueHumanState,
     namespace_verification_status: namespaceStatus,
     community_creation_ready: missingRequirements.length === 0,
@@ -541,6 +688,27 @@ export async function getUserRow(executor: DbExecutor, userId: string): Promise<
   })
 
   return row ? toUserRow(row) : null
+}
+
+export async function listUserRowsByIds(executor: DbExecutor, userIds: string[]): Promise<UserRow[]> {
+  const normalized = [...new Set(userIds.filter(Boolean))]
+  if (normalized.length === 0) {
+    return []
+  }
+
+  const placeholders = normalized.map((_, index) => `?${index + 1}`).join(", ")
+  const result = await executor.execute({
+    sql: `
+      SELECT user_id, primary_wallet_attachment_id, verification_state, capability_provider,
+             verification_capabilities_json, verified_at, nationality, current_verification_session_id,
+             created_at, updated_at
+      FROM users
+      WHERE user_id IN (${placeholders})
+    `,
+    args: normalized,
+  })
+
+  return result.rows.map((row) => toUserRow(row))
 }
 
 export async function getProfileRow(executor: DbExecutor, userId: string): Promise<ProfileRow | null> {

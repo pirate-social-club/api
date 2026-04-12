@@ -6,10 +6,14 @@ import type { Env } from "../../types"
 export type HnsVerificationSuccess = {
   kind: "verified"
   rootExists: boolean
+  // v0 approximation: DNS TXT proof demonstrates control of the served zone,
+  // not onchain ownership of the HNS root itself.
   rootControlVerified: boolean
+  // v0 approximation: deployment policy flag, not chain-derived expiry evidence.
   expiryHorizonSufficient: boolean
   routingEnabled: boolean
   pirateDnsAuthorityVerified: boolean
+  // v0 approximation until chain-aware ownership classification exists.
   controlClass: "single_holder_root"
   operationClass: "owner_managed_namespace" | "pirate_delegated_namespace"
   observationProvider: string
@@ -172,6 +176,10 @@ export async function verifyHnsTxtChallenge(
       resolver_host: resolverHost,
       root_label: normalizedRootLabel,
       challenge_host: challengeHost,
+      verification_basis: "dns_txt_zone_control",
+      ownership_scope: "zone_control_not_onchain_root_ownership",
+      expiry_horizon_basis: expiryHorizonSufficient ? "assumed_true_from_env" : "assumed_false_from_env",
+      control_class_basis: "assumed_single_holder_root_for_v0",
       root_ns: normalizedNs,
       root_a: rootA,
       root_aaaa: rootAaaa,
@@ -236,6 +244,8 @@ export async function verifyHnsTxtChallenge(
   } catch (error) {
     const rawResponse = {
       resolver_host: resolverHost,
+      verification_basis: "dns_txt_zone_control",
+      ownership_scope: "zone_control_not_onchain_root_ownership",
       message: error instanceof Error ? error.message : String(error),
     }
     return {

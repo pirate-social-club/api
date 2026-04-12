@@ -1,8 +1,11 @@
+import { resolve } from "node:path"
 import { SignJWT } from "jose"
-import { readDevVarsFromCwd } from "./_lib/dev-vars"
+import { readModeEnv } from "./_lib/dev-vars"
+
+const fileEnv = readModeEnv(resolve(import.meta.dirname, ".."), "local-sqlite")
 
 function resolveEnv(name: string, fallback = ""): string {
-  return process.env[name] || readDevVarsFromCwd()[name] || fallback
+  return process.env[name] || fileEnv[name] || fallback
 }
 
 function readArg(name: string): string | null {

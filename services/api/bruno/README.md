@@ -23,6 +23,12 @@ Suggested collection layout:
 - `03-communities/create-community`
 - `03-communities/get-job`
 - `03-communities/get-community`
+- `03-communities/patch-community`
+- `03-communities/get-community-profile`
+- `03-communities/patch-community-profile`
+- `03-communities/get-donation-policy`
+- `03-communities/get-flairs`
+- `03-communities/patch-donation-policy`
 - `04-posts/create-post`
 - `04-posts/create-post-idempotent-retry`
 - `04-posts/get-post`
@@ -30,6 +36,23 @@ Suggested collection layout:
 - `04-posts/get-review-held-post`
 - `04-posts/create-post-blocked`
 - `04-posts/get-community-posts`
+- `04-posts/create-song-artifact-upload`
+- `04-posts/upload-song-artifact-content`
+- `04-posts/create-song-artifact-bundle`
+- `04-posts/get-song-artifact-bundle`
+- `04-posts/create-song-post`
+- `04-posts/create-song-post-reused-bundle`
+- `04-posts/get-song-post`
+- `06-commerce/get-money-policy`
+- `06-commerce/patch-money-policy`
+- `06-commerce/get-pricing-policy`
+- `06-commerce/patch-pricing-policy`
+- `06-commerce/create-listing`
+- `06-commerce/list-listings`
+- `06-commerce/get-listing`
+- `06-commerce/patch-listing`
+- `06-commerce/purchase-quote-preflight`
+- `06-commerce/create-purchase-quote`
 - `90-failures/get-onboarding-status-without-token`
 - `90-failures/session-exchange-expired-jwt`
 - `90-failures/session-exchange-malformed-jwt`
@@ -49,8 +72,10 @@ Suggested collection layout:
 - `90-failures/create-post-verified-non-member`
 - `90-failures/create-post-anonymous-missing-scope`
 - `90-failures/create-post-link-missing-url`
+- `05-membership/join-community`
+- `05-membership/get-community-after-join`
 
-This now covers the full first slice through first post creation.
+This now covers the full first slice through first post creation, the post-create setup path community owners actually need, a minimal commerce configuration path, and the first non-creator membership transition.
 
 ## Environment Variables
 
@@ -69,12 +94,22 @@ Use these Bruno environment values:
 - `community_description`
 - `community_id`
 - `community_provisioning_job_id`
+- `listing_id`
+- `purchase_quote_id`
 - `post_id`
+- `song_artifact_upload_id`
+- `song_artifact_upload_url`
+- `song_artifact_bundle_id`
 - `song_post_id`
 - `review_post_id`
 - `post_idempotency_key`
 - `post_title`
 - `post_body`
+- `song_primary_audio_storage_ref`
+- `song_primary_audio_size_bytes`
+- `song_primary_audio_content_hash`
+- `song_primary_audio_gateway_url`
+- `song_lyrics`
 - `post_locale`
 
 Helpful failure-case env values:
@@ -89,6 +124,7 @@ The secondary-user failure flow also reuses the mutable auth state:
 - `session-exchange-jwt-secondary` overwrites `pirate_access_token`
 - `session-exchange-jwt-secondary` overwrites `pirate_user_id`
 - the follow-up secondary verification requests act on that swapped user context
+- the later membership requests intentionally keep that verified secondary user and transition them from non-member to joined member
 
 Optional diagnostic values:
 
@@ -123,7 +159,7 @@ DEV_MEMORY_STORE_ENABLED=false
 AUTH_UPSTREAM_JWT_SHARED_SECRET=replace-me
 AUTH_UPSTREAM_JWT_ISSUER=pirate-dev-upstream
 AUTH_UPSTREAM_JWT_AUDIENCE=pirate-api
-TURSO_CONTROL_PLANE_DATABASE_URL=file:/tmp/pirate-control-plane.db
+CONTROL_PLANE_DATABASE_URL=file:/tmp/pirate-control-plane.db
 LOCAL_COMMUNITY_DB_ROOT=/tmp/pirate-community-dbs
 PIRATE_APP_JWT_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----
 replace-me
@@ -166,25 +202,48 @@ This local Bruno path uses Bun rather than Wrangler because the first-slice loca
 11. `POST /communities`
 12. `GET /jobs/{job_id}`
 13. `GET /communities/{community_id}`
-14. `POST /communities/{community_id}/posts`
-15. `POST /communities/{community_id}/posts` with the same `idempotency_key`
-16. `GET /posts/{post_id}`
-17. `POST /communities/{community_id}/posts` with the local stub review trigger
-18. `GET /posts/{review_post_id}`
-19. `POST /communities/{community_id}/posts` with the local stub block trigger
-20. `GET /communities/{community_id}/posts`
-21. `POST /communities/{community_id}/posts` for a mainline song post
-22. `GET /posts/{song_post_id}`
-23. `POST /auth/session/exchange` with `upstream_jwt_secondary`
-24. `POST /verification-sessions`
-25. `POST /verification-sessions/{verification_session_id}/complete`
-26. `POST /communities/{community_id}/posts` as a verified non-member
-27. `POST /communities/{community_id}/posts` with `identity_mode = anonymous` and no `anonymous_scope`
-28. `POST /communities/{community_id}/posts` with `post_type = link` and no `link_url`
-29. `POST /communities/{community_id}/posts` with `post_type = song` and `identity_mode = anonymous`
-30. `POST /communities/{community_id}/posts` with `post_type = song` and no `lyrics`
-31. `POST /communities/{community_id}/posts` with `post_type = song` and no audio `media_refs`
-32. `POST /communities/{community_id}/posts` with `post_type = song`, `song_mode = remix`, and `rights_basis != derivative`
+14. `PATCH /communities/{community_id}`
+15. `GET /communities/{community_id}/community-profile`
+16. `PATCH /communities/{community_id}/community-profile`
+17. `GET /communities/{community_id}/donation-policy`
+18. `GET /communities/{community_id}/flairs`
+19. `PATCH /communities/{community_id}/donation-policy`
+20. `POST /communities/{community_id}/posts`
+21. `POST /communities/{community_id}/posts` with the same `idempotency_key`
+22. `GET /posts/{post_id}`
+23. `POST /communities/{community_id}/posts` with the local stub review trigger
+24. `GET /posts/{review_post_id}`
+25. `POST /communities/{community_id}/posts` with the local stub block trigger
+26. `GET /communities/{community_id}/posts`
+27. `POST /communities/{community_id}/song-artifact-uploads`
+28. `PUT /communities/{community_id}/song-artifact-uploads/{song_artifact_upload_id}/content`
+29. `POST /communities/{community_id}/song-artifacts`
+30. `GET /communities/{community_id}/song-artifacts/{song_artifact_bundle_id}`
+31. `POST /communities/{community_id}/posts` for a mainline song post
+32. `POST /communities/{community_id}/posts` with the same song bundle and a new `idempotency_key`
+33. `GET /posts/{song_post_id}`
+34. `GET /communities/{community_id}/money-policy`
+35. `PATCH /communities/{community_id}/money-policy`
+36. `GET /communities/{community_id}/pricing-policy`
+37. `PATCH /communities/{community_id}/pricing-policy`
+38. `POST /communities/{community_id}/listings`
+39. `GET /communities/{community_id}/listings`
+40. `GET /communities/{community_id}/listings/{listing_id}`
+41. `PATCH /communities/{community_id}/listings/{listing_id}`
+42. `POST /communities/{community_id}/purchase-quote-preflight`
+43. `POST /communities/{community_id}/purchase-quotes`
+44. `POST /auth/session/exchange` with `upstream_jwt_secondary`
+45. `POST /verification-sessions`
+46. `POST /verification-sessions/{verification_session_id}/complete`
+47. `POST /communities/{community_id}/posts` as a verified non-member
+48. `POST /communities/{community_id}/posts` with `identity_mode = anonymous` and no `anonymous_scope`
+49. `POST /communities/{community_id}/posts` with `post_type = link` and no `link_url`
+50. `POST /communities/{community_id}/posts` with `post_type = song` and `identity_mode = anonymous`
+51. `POST /communities/{community_id}/posts` with `post_type = song` and no `lyrics`
+52. `POST /communities/{community_id}/posts` with `post_type = song` and no audio `media_refs`
+53. `POST /communities/{community_id}/posts` with `post_type = song`, `song_mode = remix`, and `rights_basis != derivative`
+54. `POST /communities/{community_id}/join`
+55. `GET /communities/{community_id}`
 
 The post path depends on the projection write. After a successful post create, validate in SQL that:
 
@@ -211,6 +270,8 @@ The next two failure requests stay after that swap on purpose:
 - the song validation failures are also structural payload validation failures
 
 Those requests should still return `400 bad_request` even when the active auth context is now the secondary non-member, because request-shape validation runs before deeper posting eligibility checks.
+
+After those negative checks, the membership requests join that same verified secondary user to the created community and confirm the member counts move from creator-only (`1`) to creator-plus-joiner (`2`).
 
 ## Request Shapes
 
@@ -327,6 +388,28 @@ The review-held read uses the same endpoint and should return the persisted cano
 
 In the current implemented surface, that non-published direct read is intentionally limited to the post author or the community owner. Other members should receive `404`.
 
+### `POST /communities/{community_id}/song-artifact-uploads`
+
+Success expectations:
+
+- status `201`
+- body contains canonical `song_artifact_upload_id`
+- `status = pending_upload`
+- `artifact_kind = primary_audio`
+- post-response saves `song_artifact_upload_id` and `song_artifact_upload_url`
+
+### `PUT /communities/{community_id}/song-artifact-uploads/{song_artifact_upload_id}/content`
+
+Success expectations:
+
+- status `200`
+- body contains the same `song_artifact_upload_id`
+- `status = uploaded`
+- `storage_ref` becomes the canonical song audio ref
+- `storage_provider = filebase` in the live Infisical-backed path
+- `gateway_url` uses the Filebase gateway for fast verification reads
+- post-response saves `song_primary_audio_storage_ref`, `song_primary_audio_size_bytes`, `song_primary_audio_content_hash`, and `song_primary_audio_gateway_url`
+
 ### `POST /communities/{community_id}/posts` for a song
 
 Success expectations:
@@ -337,8 +420,40 @@ Success expectations:
 - `identity_mode = public`
 - `song_mode = original`
 - `rights_basis = original`
-- `lyrics` round-trip on the canonical post payload
+- request body uses `song_artifact_bundle_id` instead of duplicating `lyrics` and `media_refs`
+- response echoes the canonical `song_artifact_bundle_id`
+- `lyrics` and `media_refs` round-trip on the canonical post payload from the registered bundle
+- after the first successful publish, the bundle becomes consumed and cannot be reused for a second new post
 - post-response saves `song_post_id`
+
+### `POST /communities/{community_id}/posts` for a song with a reused bundle
+
+Failure expectations:
+
+- status `400`
+- body code is `bad_request`
+- message is `Song artifact bundle has already been used`
+
+### `POST /communities/{community_id}/song-artifacts`
+
+Success expectations:
+
+- status `201`
+- body contains canonical `song_artifact_bundle_id`
+- `status = ready`
+- `primary_audio.storage_ref` matches the uploaded audio ref
+- `media_refs` contains the normalized primary audio descriptor
+- post-response saves `song_artifact_bundle_id`, `song_primary_audio_storage_ref`, and `song_lyrics`
+
+### `GET /communities/{community_id}/song-artifacts/{song_artifact_bundle_id}`
+
+Success expectations:
+
+- status `200`
+- body contains the same `song_artifact_bundle_id`
+- `status = ready` before the song is published from it
+- `body.primary_audio.storage_ref` matches the saved bundle env value
+- `body.lyrics` matches the saved bundle env value
 
 ### `GET /posts/{song_post_id}`
 
@@ -348,6 +463,7 @@ Success expectations:
 - body contains `post`
 - `body.post.post_id` matches `song_post_id`
 - `body.post.post_type = song`
+- `body.post.song_artifact_bundle_id` matches the bundle used at create time
 - `body.post.lyrics` matches the create payload
 - `resolved_locale` matches `post_locale`
 

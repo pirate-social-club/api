@@ -1,0 +1,27 @@
+meta {
+  name: get-community-profile
+  type: http
+  seq: 34
+}
+
+get {
+  url: {{base_url}}/communities/{{community_id}}/community-profile
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{pirate_access_token}}
+}
+
+tests {
+  test("status is 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("community profile has rules and resource links arrays", function() {
+    const body = res.getBody();
+    expect(body.rules).to.be.an("array");
+    expect(body.resource_links).to.be.an("array");
+  });
+}

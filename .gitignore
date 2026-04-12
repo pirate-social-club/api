@@ -8,6 +8,7 @@ coverage/
 .env
 .env.local
 .env.*.local
+.env.local-sqlite
 .dev.vars
 
 .DS_Store
@@ -16,4 +17,3 @@ Thumbs.db
 *.tmp
 *.temp
 .cache/
-

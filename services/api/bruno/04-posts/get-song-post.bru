@@ -1,7 +1,7 @@
 meta {
   name: get-song-post
   type: http
-  seq: 48
+  seq: 53
 }
 
 get {
@@ -26,8 +26,9 @@ tests {
     expect(body.post.post_type).to.equal("song");
     expect(body.post.song_mode).to.equal("original");
     expect(body.post.rights_basis).to.equal("original");
-    expect(body.post.lyrics).to.equal("Sailing on a clean mainline song path.");
-    expect(body.post.media_refs[0].storage_ref).to.equal("ipfs://bruno-song-happy-path-audio");
+    expect(body.post.song_artifact_bundle_id).to.equal(bru.getEnvVar("song_artifact_bundle_id"));
+    expect(body.post.lyrics).to.equal(bru.getEnvVar("song_lyrics"));
+    expect(body.post.media_refs[0].storage_ref).to.equal(bru.getEnvVar("song_primary_audio_storage_ref"));
     expect(body.resolved_locale).to.equal(bru.getEnvVar("post_locale"));
   });
 }

@@ -1,5 +1,11 @@
 # Database Migrations
 
+This tree is a worker-local fixture copy, not the canonical migration source.
+
+- `/home/t42/Documents/pirate-v2/db/` is canonical for operational docs and bootstrap commands.
+- Keep the community-template tree here aligned with the canonical community-template migrations.
+- Control-plane files here may intentionally diverge from canonical `db/control-plane/migrations/` when the local worker fixture target is SQLite/libSQL instead of PostgreSQL/Neon.
+
 Pirate v2 now has two relational migration roots:
 
 - `db/control-plane/migrations/`
@@ -36,12 +42,32 @@ Control-plane migrations:
 - `0007_control_plane_registry_publication.sql`
 - `0008_control_plane_reddit_onboarding_and_profiles.sql`
 - `0009_control_plane_market_context_bindings.sql`
+- `0010_control_plane_community_money_policies.sql`
+- `0011_control_plane_song_artifact_bundles.sql`
+- `0012_control_plane_song_artifact_uploads.sql`
+- `0013_control_plane_song_artifact_upload_storage_metadata.sql`
+- `0014_control_plane_community_discovery_projection.sql`
+- `0015_control_plane_song_artifact_bundle_enrichment.sql`
+- `0016_control_plane_community_pricing_policies.sql`
+- `0017_control_plane_song_artifact_bundle_preview_window.sql`
+- `0018_control_plane_song_artifact_bundle_preview_status.sql`
 
 Community-template migrations:
 
 - `1001_community_core.sql`
-- `1002_community_post_idempotency.sql`
-- `1003_community_market_context.sql`
+- `1002_community_listings.sql`
+- `1003_community_post_idempotency.sql`
+- `1004_community_market_context.sql`
+- `1005_community_purchase_quotes.sql`
+- `1006_community_assets.sql`
+- `1007_community_cached_counts.sql`
+- `1008_community_gate_rules.sql`
+- `1009_community_purchase_quote_verification_snapshots.sql`
+- `1010_community_post_flair.sql`
+- `1011_community_asset_story_publish_inputs.sql`
+- `1012_community_asset_media_descriptors.sql`
+- `1013_community_asset_locked_delivery_payload.sql`
+- `1014_community_purchase_quote_settlement_amount.sql`
 
 ## Local Apply
 
