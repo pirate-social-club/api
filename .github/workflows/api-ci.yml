@@ -63,6 +63,11 @@ jobs:
         working-directory: services/contracts
         run: bun install --frozen-lockfile
 
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
       - name: Typecheck generated contracts package
         working-directory: services/contracts
         run: bun run check

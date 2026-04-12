@@ -412,6 +412,25 @@ function parseCommunityListLimit(limit: string | null | undefined): number {
   return Math.min(100, Math.max(1, Math.trunc(parsed)))
 }
 
+function compareDiscoverableCommunities(a: Community, b: Community): number {
+  const qualifiedDiff = (b.qualified_member_count ?? 0) - (a.qualified_member_count ?? 0)
+  if (qualifiedDiff !== 0) {
+    return qualifiedDiff
+  }
+
+  const stageDiff = Date.parse(String(b.stage_entered_at || b.created_at)) - Date.parse(String(a.stage_entered_at || a.created_at))
+  if (stageDiff !== 0) {
+    return stageDiff
+  }
+
+  const createdDiff = Date.parse(b.created_at) - Date.parse(a.created_at)
+  if (createdDiff !== 0) {
+    return createdDiff
+  }
+
+  return a.community_id.localeCompare(b.community_id)
+}
+
 async function deriveCommunityReadModel(
   repo: CommunityRepository,
   userRepository: UserRepository,
@@ -432,41 +451,9 @@ async function deriveCommunityReadModel(
     }
   }
 
-  const localDb = await openCommunityDb(repo, communityRow.community_id)
-  let local: LocalCommunitySnapshot | null = null
-  try {
-    local = await readLocalCommunityWithExecutor(localDb.client, communityRow.community_id).catch(() => null)
-  } finally {
-    localDb.close()
-  }
-  if (local?.cached_member_count != null && local.cached_qualified_member_count != null) {
-    return {
-      local,
-      databaseUrl: binding.database_url,
-      derived: {
-        memberCount: local.cached_member_count,
-        qualifiedMemberCount: local.cached_qualified_member_count,
-        communityStage: "initial",
-        civicScaleTier: deriveCivicScaleTier(local.cached_member_count),
-        stageEnteredAt: local.created_at ?? communityRow.created_at,
-      },
-    }
-  }
-  if (communityRow.projected_member_count != null && communityRow.projected_qualified_member_count != null) {
-    return {
-      local,
-      databaseUrl: binding.database_url,
-      derived: {
-        memberCount: communityRow.projected_member_count,
-        qualifiedMemberCount: communityRow.projected_qualified_member_count,
-        communityStage: "initial",
-        civicScaleTier: deriveCivicScaleTier(communityRow.projected_member_count),
-        stageEnteredAt: local?.created_at ?? communityRow.created_at,
-      },
-    }
-  }
   const db = await openCommunityDb(repo, communityRow.community_id)
   try {
+    const local = await readLocalCommunityWithExecutor(db.client, communityRow.community_id).catch(() => null)
     const memberUserIds = await listActiveCommunityMemberUserIds(db.client, communityRow.community_id)
     const users = await userRepository.listUsersByIds(memberUserIds)
     const usersById = new Map(users.map((user) => [user.user_id, user]))
