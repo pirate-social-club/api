@@ -21,7 +21,8 @@ export async function deriveSongPreviewAudio(input: {
 }): Promise<MediaDescriptor> {
   const sourceBytes = await readStoredSongArtifactBytes(input.env, input.primaryAudio.storage_ref)
   const tempRoot = await mkdtemp(join(tmpdir(), "pirate-song-preview-"))
-  const sourcePath = join(tempRoot, input.primaryAudio.mime_type.toLowerCase().includes("wav") ? "source.wav" : "source.bin")
+  const primaryMimeType = input.primaryAudio.mime_type?.toLowerCase() ?? ""
+  const sourcePath = join(tempRoot, primaryMimeType.includes("wav") ? "source.wav" : "source.bin")
   const outputPath = join(tempRoot, "preview.mp3")
 
   try {
