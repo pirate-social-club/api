@@ -459,19 +459,6 @@ async function deriveCommunityReadModel(
   }
 
   const local = await readLocalCommunity(binding.database_url, communityRow.community_id).catch(() => null)
-  if (communityRow.projected_member_count != null && communityRow.projected_qualified_member_count != null) {
-    return {
-      local,
-      databaseUrl: binding.database_url,
-      derived: {
-        memberCount: communityRow.projected_member_count,
-        qualifiedMemberCount: communityRow.projected_qualified_member_count,
-        communityStage: "initial",
-        civicScaleTier: deriveCivicScaleTier(communityRow.projected_member_count),
-        stageEnteredAt: local?.created_at ?? communityRow.created_at,
-      },
-    }
-  }
   if (local?.cached_member_count != null && local.cached_qualified_member_count != null) {
     return {
       local,
@@ -482,6 +469,19 @@ async function deriveCommunityReadModel(
         communityStage: "initial",
         civicScaleTier: deriveCivicScaleTier(local.cached_member_count),
         stageEnteredAt: local.created_at ?? communityRow.created_at,
+      },
+    }
+  }
+  if (communityRow.projected_member_count != null && communityRow.projected_qualified_member_count != null) {
+    return {
+      local,
+      databaseUrl: binding.database_url,
+      derived: {
+        memberCount: communityRow.projected_member_count,
+        qualifiedMemberCount: communityRow.projected_qualified_member_count,
+        communityStage: "initial",
+        civicScaleTier: deriveCivicScaleTier(communityRow.projected_member_count),
+        stageEnteredAt: local?.created_at ?? communityRow.created_at,
       },
     }
   }
@@ -1282,27 +1282,25 @@ export async function listDiscoverableCommunities(input: {
 
   for (const row of rows) {
     let local: LocalCommunitySnapshot | null = null
-    let memberCount: number | null = row.projected_member_count
-    let qualifiedMemberCount: number | null = row.projected_qualified_member_count
+    let memberCount: number | null = null
+    let qualifiedMemberCount: number | null = null
 
     try {
       const db = await openCommunityDb(input.repository, row.community_id)
       try {
         local = await readLocalCommunityWithExecutor(db.client, row.community_id).catch(() => null)
-        if (memberCount == null || qualifiedMemberCount == null) {
-          if (local?.cached_member_count != null && local.cached_qualified_member_count != null) {
-            memberCount = local.cached_member_count
-            qualifiedMemberCount = local.cached_qualified_member_count
-          } else {
-            const memberUserIds = await listActiveCommunityMemberUserIds(db.client, row.community_id)
-            const users = await input.userRepository.listUsersByIds(memberUserIds)
-            const usersById = new Map(users.map((user) => [user.user_id, user]))
-            memberCount = memberUserIds.length
-            qualifiedMemberCount = 0
-            for (const userId of memberUserIds) {
-              if (usersById.get(userId)?.verification_capabilities.unique_human.state === "verified") {
-                qualifiedMemberCount += 1
-              }
+        if (local?.cached_member_count != null && local.cached_qualified_member_count != null) {
+          memberCount = local.cached_member_count
+          qualifiedMemberCount = local.cached_qualified_member_count
+        } else {
+          const memberUserIds = await listActiveCommunityMemberUserIds(db.client, row.community_id)
+          const users = await input.userRepository.listUsersByIds(memberUserIds)
+          const usersById = new Map(users.map((user) => [user.user_id, user]))
+          memberCount = memberUserIds.length
+          qualifiedMemberCount = 0
+          for (const userId of memberUserIds) {
+            if (usersById.get(userId)?.verification_capabilities.unique_human.state === "verified") {
+              qualifiedMemberCount += 1
             }
           }
         }
@@ -1310,6 +1308,10 @@ export async function listDiscoverableCommunities(input: {
         db.close()
       }
     } catch {}
+    if (memberCount == null || qualifiedMemberCount == null) {
+      memberCount = row.projected_member_count
+      qualifiedMemberCount = row.projected_qualified_member_count
+    }
 
     const item = serializeCommunity(
       row,
