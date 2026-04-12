@@ -1,5 +1,7 @@
 import {
+  jsonStringOrNull,
   numberOrNull,
+  requiredJsonString,
   requiredNumber,
   requiredString,
   rowValue,
@@ -78,6 +80,8 @@ export type VerificationSessionRow = {
   provider: "self" | "very" | "passport"
   wallet_attachment_id: string | null
   requested_capabilities_json: string
+  verification_intent: string | null
+  policy_id: string | null
   status: "pending" | "verified" | "failed" | "expired" | "canceled"
   upstream_session_ref: string | null
   result_ref: string | null
@@ -218,6 +222,22 @@ export type CommunityDatabaseBindingRow = {
   updated_at: string
 }
 
+export type CommunityDbCredentialRow = {
+  community_db_credential_id: string
+  community_database_binding_id: string
+  credential_kind: "database_token" | "group_token"
+  token_name: string
+  encrypted_token: string
+  encryption_key_version: number
+  token_scope: "database" | "group"
+  status: "active" | "superseded" | "invalidated"
+  issued_at: string
+  invalidated_at: string | null
+  expires_at: string | null
+  created_at: string
+  updated_at: string
+}
+
 export type CommunityMoneyPolicyRow = {
   community_id: string
   funding_preference: string
@@ -318,7 +338,7 @@ export function toUserRow(row: unknown): UserRow {
     primary_wallet_attachment_id: stringOrNull(rowValue(row, "primary_wallet_attachment_id")),
     verification_state: requiredString(row, "verification_state") as User["verification_state"],
     capability_provider: (stringOrNull(rowValue(row, "capability_provider")) as User["capability_provider"] | "passport" | "zkpass"),
-    verification_capabilities_json: requiredString(row, "verification_capabilities_json"),
+    verification_capabilities_json: requiredJsonString(row, "verification_capabilities_json"),
     verified_at: stringOrNull(rowValue(row, "verified_at")),
     nationality: stringOrNull(rowValue(row, "nationality")),
     current_verification_session_id: stringOrNull(rowValue(row, "current_verification_session_id")),
@@ -376,7 +396,9 @@ export function toVerificationSessionRow(row: unknown): VerificationSessionRow {
     user_id: requiredString(row, "user_id"),
     provider: requiredString(row, "provider") as VerificationSessionRow["provider"],
     wallet_attachment_id: stringOrNull(rowValue(row, "wallet_attachment_id")),
-    requested_capabilities_json: requiredString(row, "requested_capabilities_json"),
+    requested_capabilities_json: requiredJsonString(row, "requested_capabilities_json"),
+    verification_intent: stringOrNull(rowValue(row, "verification_intent")),
+    policy_id: stringOrNull(rowValue(row, "policy_id")),
     status: requiredString(row, "status") as VerificationSessionRow["status"],
     upstream_session_ref: stringOrNull(rowValue(row, "upstream_session_ref")),
     result_ref: stringOrNull(rowValue(row, "result_ref")),
@@ -411,7 +433,7 @@ export function toNamespaceVerificationSessionRow(row: unknown): NamespaceVerifi
     challenge_txt_value: stringOrNull(rowValue(row, "challenge_txt_value")),
     challenge_expires_at: stringOrNull(rowValue(row, "challenge_expires_at")),
     challenge_kind: stringOrNull(rowValue(row, "challenge_kind")) as NamespaceVerificationSessionRow["challenge_kind"],
-    challenge_payload_json: stringOrNull(rowValue(row, "challenge_payload_json")),
+    challenge_payload_json: jsonStringOrNull(rowValue(row, "challenge_payload_json")),
     root_exists: numberOrNull(rowValue(row, "root_exists")),
     root_control_verified: numberOrNull(rowValue(row, "root_control_verified")),
     expiry_horizon_sufficient: numberOrNull(rowValue(row, "expiry_horizon_sufficient")),
@@ -524,14 +546,32 @@ export function toCommunityDatabaseBindingRow(row: unknown): CommunityDatabaseBi
   }
 }
 
+export function toCommunityDbCredentialRow(row: unknown): CommunityDbCredentialRow {
+  return {
+    community_db_credential_id: requiredString(row, "community_db_credential_id"),
+    community_database_binding_id: requiredString(row, "community_database_binding_id"),
+    credential_kind: requiredString(row, "credential_kind") as CommunityDbCredentialRow["credential_kind"],
+    token_name: requiredString(row, "token_name"),
+    encrypted_token: requiredString(row, "encrypted_token"),
+    encryption_key_version: requiredNumber(row, "encryption_key_version"),
+    token_scope: requiredString(row, "token_scope") as CommunityDbCredentialRow["token_scope"],
+    status: requiredString(row, "status") as CommunityDbCredentialRow["status"],
+    issued_at: requiredString(row, "issued_at"),
+    invalidated_at: stringOrNull(rowValue(row, "invalidated_at")),
+    expires_at: stringOrNull(rowValue(row, "expires_at")),
+    created_at: requiredString(row, "created_at"),
+    updated_at: requiredString(row, "updated_at"),
+  }
+}
+
 export function toCommunityMoneyPolicyRow(row: unknown): CommunityMoneyPolicyRow {
   return {
     community_id: requiredString(row, "community_id"),
     funding_preference: requiredString(row, "funding_preference"),
-    accepted_funding_assets_json: requiredString(row, "accepted_funding_assets_json"),
-    accepted_source_chains_json: requiredString(row, "accepted_source_chains_json"),
-    approved_route_providers_json: stringOrNull(rowValue(row, "approved_route_providers_json")),
-    destination_settlement_chain_json: requiredString(row, "destination_settlement_chain_json"),
+    accepted_funding_assets_json: requiredJsonString(row, "accepted_funding_assets_json"),
+    accepted_source_chains_json: requiredJsonString(row, "accepted_source_chains_json"),
+    approved_route_providers_json: jsonStringOrNull(rowValue(row, "approved_route_providers_json")),
+    destination_settlement_chain_json: requiredJsonString(row, "destination_settlement_chain_json"),
     destination_settlement_token: requiredString(row, "destination_settlement_token"),
     treasury_denomination: stringOrNull(rowValue(row, "treasury_denomination")),
     max_slippage_bps: requiredNumber(row, "max_slippage_bps"),
@@ -549,8 +589,8 @@ export function toCommunityPricingPolicyRow(row: unknown): CommunityPricingPolic
     regional_pricing_enabled: requiredNumber(row, "regional_pricing_enabled"),
     verification_provider_requirement: stringOrNull(rowValue(row, "verification_provider_requirement")) as CommunityPricingPolicyRow["verification_provider_requirement"],
     default_tier_key: stringOrNull(rowValue(row, "default_tier_key")),
-    tiers_json: requiredString(row, "tiers_json"),
-    country_assignments_json: requiredString(row, "country_assignments_json"),
+    tiers_json: requiredJsonString(row, "tiers_json"),
+    country_assignments_json: requiredJsonString(row, "country_assignments_json"),
     source_template_id: stringOrNull(rowValue(row, "source_template_id")),
     source_template_version: stringOrNull(rowValue(row, "source_template_version")),
     pricing_policy_version: requiredString(row, "pricing_policy_version"),
@@ -567,7 +607,7 @@ export function toJobRow(row: unknown): JobRow {
     subject_type: requiredString(row, "subject_type"),
     subject_id: requiredString(row, "subject_id"),
     status: requiredString(row, "status") as JobRow["status"],
-    payload_json: stringOrNull(rowValue(row, "payload_json")),
+    payload_json: jsonStringOrNull(rowValue(row, "payload_json")),
     result_ref: stringOrNull(rowValue(row, "result_ref")),
     error_code: stringOrNull(rowValue(row, "error_code")),
     attempt_count: requiredNumber(row, "attempt_count"),
@@ -587,7 +627,7 @@ export function toCommunityPostProjectionRow(row: unknown): CommunityPostProject
     post_type: requiredString(row, "post_type") as CommunityPostProjectionRow["post_type"],
     status: requiredString(row, "status") as CommunityPostProjectionRow["status"],
     source_created_at: requiredString(row, "source_created_at"),
-    projected_payload_json: requiredString(row, "projected_payload_json"),
+    projected_payload_json: requiredJsonString(row, "projected_payload_json"),
     projection_version: requiredNumber(row, "projection_version"),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
@@ -622,7 +662,7 @@ export function toExternalReputationSnapshotRow(row: unknown): ExternalReputatio
     source_account_handle: requiredString(row, "source_account_handle"),
     proof_method: requiredString(row, "proof_method") as "profile_code",
     captured_at: requiredString(row, "captured_at"),
-    snapshot_payload_json: requiredString(row, "snapshot_payload_json"),
+    snapshot_payload_json: requiredJsonString(row, "snapshot_payload_json"),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
   }

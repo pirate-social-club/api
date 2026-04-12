@@ -9,7 +9,7 @@ import type { CommunityRepository } from "./control-plane-community-repository"
 import { eligibilityFailed } from "../errors"
 import { nowIso } from "../helpers"
 import {
-  updateLocalCommunityMembershipStats,
+  updateLocalCommunityMembershipStatsWithExecutor,
 } from "./community-local-db"
 import type { Env, User } from "../../types"
 
@@ -38,39 +38,41 @@ export async function recomputeAndPersistCommunityMembershipStats(input: {
   repository: CommunityRepository
   userRepository: UserRepository
   communityId: string
+  localDb?: Awaited<ReturnType<typeof openCommunityDb>> | null
+  community?: Awaited<ReturnType<CommunityRepository["getCommunityById"]>>
 }): Promise<void> {
-  const binding = await input.repository.getPrimaryCommunityDatabaseBinding(input.communityId)
-  if (!binding) {
-    return
-  }
-  const community = await input.repository.getCommunityById(input.communityId)
+  const community = input.community ?? await input.repository.getCommunityById(input.communityId)
   if (!community) {
     return
   }
-  const db = await openCommunityDb(input.repository, input.communityId)
+  const db = input.localDb ?? await openCommunityDb(input.repository, input.communityId)
   try {
     const memberUserIds = await listActiveCommunityMemberUserIds(db.client, input.communityId)
-    const users = await input.userRepository.listUsersByIds(memberUserIds)
+    const countedUserIds = community.creator_user_id && !memberUserIds.includes(community.creator_user_id)
+      ? [...memberUserIds, community.creator_user_id]
+      : memberUserIds
+    const users = await input.userRepository.listUsersByIds(countedUserIds)
     const usersById = new Map(users.map((user) => [user.user_id, user]))
     let qualifiedMemberCount = 0
-    for (const userId of memberUserIds) {
+    for (const userId of countedUserIds) {
       if (usersById.get(userId)?.verification_capabilities.unique_human.state === "verified") {
         qualifiedMemberCount += 1
       }
     }
-    await updateLocalCommunityMembershipStats({
-      databaseUrl: db.databaseUrl,
+    await updateLocalCommunityMembershipStatsWithExecutor(db.client, {
       communityId: input.communityId,
-      memberCount: memberUserIds.length,
+      memberCount: countedUserIds.length,
       qualifiedMemberCount,
       updatedAt: nowIso(),
     })
     await input.repository.updateCommunityProjectedMembershipCounts({
       communityId: input.communityId,
-      memberCount: memberUserIds.length,
+      memberCount: countedUserIds.length,
       qualifiedMemberCount,
     })
   } finally {
-    db.close()
+    if (!input.localDb) {
+      db.close()
+    }
   }
 }

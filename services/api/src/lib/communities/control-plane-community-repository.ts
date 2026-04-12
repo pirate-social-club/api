@@ -1,7 +1,13 @@
+import { createHash } from "node:crypto"
 import { internalError } from "../errors"
 import { makeId } from "../helpers"
-import { createControlPlaneDbClient, type ControlPlaneDbClient } from "../control-plane-db"
 import {
+  createControlPlaneDbClient,
+  type ControlPlaneDbClient,
+  type ControlPlaneDbExecutor,
+} from "../control-plane-db"
+import {
+  getActiveCommunityDbCredentialRowByBindingId,
   getCommunityDatabaseBindingRowById,
   getCommunityMoneyPolicyRowByCommunityId,
   getCommunityPricingPolicyRowByCommunityId,
@@ -21,6 +27,7 @@ import {
 } from "../auth/control-plane-auth-queries"
 import type {
   CommunityDatabaseBindingRow,
+  CommunityDbCredentialRow,
   CommunityMoneyPolicyRow,
   CommunityPricingPolicyRow,
   CommunityRegistryAttemptRow,
@@ -29,6 +36,10 @@ import type {
   JobRow,
 } from "../auth/control-plane-auth-rows"
 import { toCommunityPostProjectionRow, toCommunityRow } from "../auth/control-plane-auth-rows"
+import {
+  decryptCommunityDbCredential,
+  encryptCommunityDbCredential,
+} from "./community-db-credential-crypto"
 import type { Env } from "../../types"
 
 type Client = ControlPlaneDbClient
@@ -73,6 +84,171 @@ export async function getPrimaryCommunityDatabaseBinding(
   communityId: string,
 ): Promise<CommunityDatabaseBindingRow | null> {
   return getPrimaryCommunityDatabaseBindingRow(client, communityId)
+}
+
+export async function getActiveCommunityDbCredential(
+  client: ControlPlaneDbClient,
+  communityDatabaseBindingId: string,
+): Promise<CommunityDbCredentialRow | null> {
+  return getActiveCommunityDbCredentialRowByBindingId(client, communityDatabaseBindingId)
+}
+
+async function upsertCommunityDatabaseBindingRow(
+  executor: ControlPlaneDbExecutor,
+  input: {
+    communityDatabaseBindingId: string
+    communityId: string
+    organizationSlug: string
+    groupName: string
+    groupId: string | null
+    databaseName: string
+    databaseId: string | null
+    databaseUrl: string
+    location: string | null
+    status: CommunityDatabaseBindingRow["status"]
+    createdAt: string
+    updatedAt: string
+  },
+): Promise<CommunityDatabaseBindingRow> {
+  await executor.execute({
+    sql: `
+      INSERT INTO community_database_bindings (
+        community_database_binding_id, community_id, binding_role, organization_slug, group_name, group_id,
+        database_name, database_id, database_url, location, status, transferred_at, created_at, updated_at
+      ) VALUES (
+        ?1, ?2, 'primary', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11, ?12
+      )
+      ON CONFLICT(community_database_binding_id) DO UPDATE SET
+        community_id = excluded.community_id,
+        binding_role = excluded.binding_role,
+        organization_slug = excluded.organization_slug,
+        group_name = excluded.group_name,
+        group_id = excluded.group_id,
+        database_name = excluded.database_name,
+        database_id = excluded.database_id,
+        database_url = excluded.database_url,
+        location = excluded.location,
+        status = excluded.status,
+        transferred_at = excluded.transferred_at,
+        updated_at = excluded.updated_at
+    `,
+    args: [
+      input.communityDatabaseBindingId,
+      input.communityId,
+      input.organizationSlug,
+      input.groupName,
+      input.groupId,
+      input.databaseName,
+      input.databaseId,
+      input.databaseUrl,
+      input.location,
+      input.status,
+      input.createdAt,
+      input.updatedAt,
+    ],
+  })
+
+  const row = await getCommunityDatabaseBindingRowById(executor, input.communityDatabaseBindingId)
+  if (!row) {
+    throw internalError("Community database binding row is missing after upsert")
+  }
+
+  return row
+}
+
+async function upsertActiveCommunityDbCredentialExecutor(
+  executor: ControlPlaneDbExecutor,
+  input: {
+    communityDbCredentialId: string
+    communityDatabaseBindingId: string
+    tokenName: string
+    encryptedToken: string
+    encryptionKeyVersion: number
+    issuedAt: string
+    expiresAt?: string | null
+    updatedAt: string
+  },
+): Promise<CommunityDbCredentialRow> {
+  await executor.execute({
+    sql: `
+      UPDATE community_db_credentials
+      SET status = 'superseded',
+          invalidated_at = ?2,
+          updated_at = ?2
+      WHERE community_database_binding_id = ?1
+        AND status = 'active'
+    `,
+    args: [input.communityDatabaseBindingId, input.updatedAt],
+  })
+
+  await executor.execute({
+    sql: `
+      INSERT INTO community_db_credentials (
+        community_db_credential_id,
+        community_database_binding_id,
+        credential_kind,
+        token_name,
+        encrypted_token,
+        encryption_key_version,
+        token_scope,
+        status,
+        issued_at,
+        invalidated_at,
+        expires_at,
+        created_at,
+        updated_at
+      ) VALUES (
+        ?1, ?2, 'database_token', ?3, ?4, ?5, 'database', 'active',
+        ?6, NULL, ?7, ?8, ?8
+      )
+    `,
+    args: [
+      input.communityDbCredentialId,
+      input.communityDatabaseBindingId,
+      input.tokenName,
+      input.encryptedToken,
+      input.encryptionKeyVersion,
+      input.issuedAt,
+      input.expiresAt ?? null,
+      input.updatedAt,
+    ],
+  })
+
+  const credential = await getActiveCommunityDbCredentialRowByBindingId(executor, input.communityDatabaseBindingId)
+  if (!credential) {
+    throw internalError("Community DB credential row is missing after upsert")
+  }
+
+  return credential
+}
+
+export async function upsertActiveCommunityDbCredential(
+  client: ControlPlaneDbClient,
+  input: {
+    communityDbCredentialId: string
+    communityDatabaseBindingId: string
+    tokenName: string
+    encryptedToken: string
+    encryptionKeyVersion: number
+    issuedAt: string
+    expiresAt?: string | null
+    updatedAt: string
+  },
+): Promise<CommunityDbCredentialRow> {
+  const tx = await client.transaction("write")
+
+  try {
+    const credential = await upsertActiveCommunityDbCredentialExecutor(tx, input)
+    await tx.commit()
+    return credential
+  } catch (error) {
+    try {
+      await tx.rollback()
+    } catch {}
+    throw error
+  } finally {
+    tx.close()
+  }
 }
 
 export async function getCommunityMoneyPolicyByCommunityId(
@@ -627,7 +803,15 @@ export async function createCommunityProvisioningRequest(
     creatorUserId: string
     displayName: string
     namespaceVerificationId: string
-    databaseUrl: string
+    provisioningMode: string
+    bindingSeed: {
+      organizationSlug: string
+      groupName: string
+      databaseName: string
+      databaseUrl: string
+      location: string | null
+      status: CommunityDatabaseBindingRow["status"]
+    }
     createdAt: string
   },
 ): Promise<{
@@ -666,10 +850,20 @@ export async function createCommunityProvisioningRequest(
           community_database_binding_id, community_id, binding_role, organization_slug, group_name, group_id,
           database_name, database_id, database_url, location, status, transferred_at, created_at, updated_at
         ) VALUES (
-          ?1, ?2, 'primary', 'local-dev', ?3, NULL, 'main', NULL, ?4, 'local', 'active', NULL, ?5, ?5
+          ?1, ?2, 'primary', ?3, ?4, NULL, ?5, NULL, ?6, ?7, ?8, NULL, ?9, ?9
         )
       `,
-      args: [input.communityDatabaseBindingId, input.communityId, `club-${input.communityId}`, input.databaseUrl, input.createdAt],
+      args: [
+        input.communityDatabaseBindingId,
+        input.communityId,
+        input.bindingSeed.organizationSlug,
+        input.bindingSeed.groupName,
+        input.bindingSeed.databaseName,
+        input.bindingSeed.databaseUrl,
+        input.bindingSeed.location,
+        input.bindingSeed.status,
+        input.createdAt,
+      ],
     })
 
     await tx.execute({
@@ -697,8 +891,8 @@ export async function createCommunityProvisioningRequest(
         input.communityId,
         JSON.stringify({
           namespace_verification_id: input.namespaceVerificationId,
-          mode: "local_stub",
-          database_url: input.databaseUrl,
+          mode: input.provisioningMode,
+          database_url: input.bindingSeed.databaseUrl,
         }),
         input.createdAt,
       ],
@@ -741,7 +935,15 @@ export async function retryCommunityProvisioningRequest(
     registryAttemptId: string
     jobId: string
     namespaceVerificationId: string
-    databaseUrl: string
+    provisioningMode: string
+    fallbackBindingSeed: {
+      organizationSlug: string
+      groupName: string
+      databaseName: string
+      databaseUrl: string
+      location: string | null
+      status: CommunityDatabaseBindingRow["status"]
+    }
     createdAt: string
   },
 ): Promise<{
@@ -762,16 +964,26 @@ export async function retryCommunityProvisioningRequest(
       : await getPrimaryCommunityDatabaseBindingRow(tx, input.communityId)
 
     if (!bindingRow) {
-      await tx.execute({
-        sql: `
+        await tx.execute({
+          sql: `
           INSERT INTO community_database_bindings (
             community_database_binding_id, community_id, binding_role, organization_slug, group_name, group_id,
             database_name, database_id, database_url, location, status, transferred_at, created_at, updated_at
           ) VALUES (
-            ?1, ?2, 'primary', 'local-dev', ?3, NULL, 'main', NULL, ?4, 'local', 'active', NULL, ?5, ?5
+            ?1, ?2, 'primary', ?3, ?4, NULL, ?5, NULL, ?6, ?7, ?8, NULL, ?9, ?9
           )
         `,
-        args: [input.fallbackBindingId, input.communityId, `club-${input.communityId}`, input.databaseUrl, input.createdAt],
+        args: [
+          input.fallbackBindingId,
+          input.communityId,
+          input.fallbackBindingSeed.organizationSlug,
+          input.fallbackBindingSeed.groupName,
+          input.fallbackBindingSeed.databaseName,
+          input.fallbackBindingSeed.databaseUrl,
+          input.fallbackBindingSeed.location,
+          input.fallbackBindingSeed.status,
+          input.createdAt,
+        ],
       })
 
       await tx.execute({
@@ -829,8 +1041,8 @@ export async function retryCommunityProvisioningRequest(
         input.communityId,
         JSON.stringify({
           namespace_verification_id: input.namespaceVerificationId,
-          mode: "local_stub",
-          database_url: bindingRow?.database_url ?? input.databaseUrl,
+          mode: input.provisioningMode,
+          database_url: bindingRow?.database_url ?? input.fallbackBindingSeed.databaseUrl,
           retry: true,
         }),
         attemptCount,
@@ -1189,6 +1401,130 @@ export async function markCommunityProvisioningSucceeded(
   }
 }
 
+export async function completeCommunityProvisioning(
+  client: Client,
+  env: Pick<Env, "TURSO_COMMUNITY_DB_WRAP_KEY">,
+  input: {
+    communityId: string
+    communityDatabaseBindingId: string
+    jobId: string
+    actorUserId: string
+    resultRef: string | null
+    createdAt: string
+    metadata: Record<string, unknown>
+    binding: {
+      organizationSlug: string
+      groupName: string
+      groupId: string | null
+      databaseName: string
+      databaseId: string | null
+      databaseUrl: string
+      location: string | null
+      status: CommunityDatabaseBindingRow["status"]
+      createdAt: string
+      updatedAt: string
+    }
+    credential: {
+      tokenName: string
+      plaintextToken: string
+      encryptionKeyVersion: number
+      issuedAt: string
+      expiresAt?: string | null
+      updatedAt: string
+    }
+  },
+): Promise<{
+  community: CommunityRow
+  job: JobRow
+  binding: CommunityDatabaseBindingRow
+  credential: CommunityDbCredentialRow
+}> {
+  const tx = await client.transaction("write")
+  const auditEventId = makeId("aud")
+
+  try {
+    const binding = await upsertCommunityDatabaseBindingRow(tx, {
+      communityDatabaseBindingId: input.communityDatabaseBindingId,
+      communityId: input.communityId,
+      organizationSlug: input.binding.organizationSlug,
+      groupName: input.binding.groupName,
+      groupId: input.binding.groupId,
+      databaseName: input.binding.databaseName,
+      databaseId: input.binding.databaseId,
+      databaseUrl: input.binding.databaseUrl,
+      location: input.binding.location,
+      status: input.binding.status,
+      createdAt: input.binding.createdAt,
+      updatedAt: input.binding.updatedAt,
+    })
+
+    const credential = await upsertActiveCommunityDbCredentialExecutor(tx, {
+      communityDbCredentialId: makeId("cdc"),
+      communityDatabaseBindingId: input.communityDatabaseBindingId,
+      tokenName: input.credential.tokenName,
+      encryptedToken: encryptCommunityDbCredential({
+        plaintextToken: input.credential.plaintextToken,
+        wrapKey: env.TURSO_COMMUNITY_DB_WRAP_KEY,
+      }),
+      encryptionKeyVersion: input.credential.encryptionKeyVersion,
+      issuedAt: input.credential.issuedAt,
+      expiresAt: input.credential.expiresAt ?? null,
+      updatedAt: input.credential.updatedAt,
+    })
+
+    await tx.batch([
+      {
+        sql: `
+          UPDATE communities
+          SET status = 'active',
+              provisioning_state = 'active',
+              primary_database_binding_id = ?2,
+              updated_at = ?3
+          WHERE community_id = ?1
+        `,
+        args: [input.communityId, input.communityDatabaseBindingId, input.createdAt],
+      },
+      {
+        sql: `
+          UPDATE jobs
+          SET status = 'succeeded',
+              result_ref = ?2,
+              error_code = NULL,
+              updated_at = ?3
+          WHERE job_id = ?1
+        `,
+        args: [input.jobId, input.resultRef, input.createdAt],
+      },
+      {
+        sql: `
+          INSERT INTO audit_log (
+            audit_event_id, actor_type, actor_id, action, target_type, target_id, community_id, metadata_json, created_at
+          ) VALUES (
+            ?1, 'user', ?2, 'community.provisioning_succeeded', 'community', ?3, ?3, ?4, ?5
+          )
+        `,
+        args: [auditEventId, input.actorUserId, input.communityId, JSON.stringify(input.metadata), input.createdAt],
+      },
+    ])
+
+    const communityRow = await getCommunityRowById(tx, input.communityId)
+    const jobRow = await getJobRowById(tx, input.jobId)
+    if (!communityRow || !jobRow) {
+      throw internalError("Provisioning success rows are missing after update")
+    }
+
+    await tx.commit()
+    return { community: communityRow, job: jobRow, binding, credential }
+  } catch (error) {
+    try {
+      await tx.rollback()
+    } catch {}
+    throw error
+  } finally {
+    tx.close()
+  }
+}
+
 export async function markCommunityProvisioningFailed(
   client: Client,
   input: {
@@ -1257,6 +1593,16 @@ export interface CommunityRepository {
   getCommunityByNamespaceVerificationId(namespaceVerificationId: string): Promise<CommunityRow | null>
   listCommunitiesByCreatorUserId(creatorUserId: string): Promise<CommunityRow[]>
   getPrimaryCommunityDatabaseBinding(communityId: string): Promise<CommunityDatabaseBindingRow | null>
+  getActiveCommunityDatabaseAuthToken(communityDatabaseBindingId: string): Promise<string | null>
+  upsertActiveCommunityDatabaseCredential(input: {
+    communityDatabaseBindingId: string
+    tokenName: string
+    plaintextToken: string
+    encryptionKeyVersion: number
+    issuedAt: string
+    expiresAt?: string | null
+    updatedAt: string
+  }): Promise<CommunityDbCredentialRow>
   getCommunityMoneyPolicyByCommunityId(communityId: string): Promise<CommunityMoneyPolicyRow | null>
   getCommunityPricingPolicyByCommunityId(communityId: string): Promise<CommunityPricingPolicyRow | null>
   getJobById(jobId: string): Promise<JobRow | null>
@@ -1355,7 +1701,15 @@ export interface CommunityRepository {
     creatorUserId: string
     displayName: string
     namespaceVerificationId: string
-    databaseUrl: string
+    provisioningMode: string
+    bindingSeed: {
+      organizationSlug: string
+      groupName: string
+      databaseName: string
+      databaseUrl: string
+      location: string | null
+      status: CommunityDatabaseBindingRow["status"]
+    }
     createdAt: string
   }): Promise<{
     community: CommunityRow
@@ -1368,7 +1722,15 @@ export interface CommunityRepository {
     registryAttemptId: string
     jobId: string
     namespaceVerificationId: string
-    databaseUrl: string
+    provisioningMode: string
+    fallbackBindingSeed: {
+      organizationSlug: string
+      groupName: string
+      databaseName: string
+      databaseUrl: string
+      location: string | null
+      status: CommunityDatabaseBindingRow["status"]
+    }
     createdAt: string
   }): Promise<{
     community: CommunityRow
@@ -1386,6 +1748,40 @@ export interface CommunityRepository {
   }): Promise<{
     community: CommunityRow
     job: JobRow
+  }>
+  completeCommunityProvisioning(input: {
+    communityId: string
+    communityDatabaseBindingId: string
+    jobId: string
+    actorUserId: string
+    resultRef: string | null
+    createdAt: string
+    metadata: Record<string, unknown>
+    binding: {
+      organizationSlug: string
+      groupName: string
+      groupId: string | null
+      databaseName: string
+      databaseId: string | null
+      databaseUrl: string
+      location: string | null
+      status: CommunityDatabaseBindingRow["status"]
+      createdAt: string
+      updatedAt: string
+    }
+    credential: {
+      tokenName: string
+      plaintextToken: string
+      encryptionKeyVersion: number
+      issuedAt: string
+      expiresAt?: string | null
+      updatedAt: string
+    }
+  }): Promise<{
+    community: CommunityRow
+    job: JobRow
+    binding: CommunityDatabaseBindingRow
+    credential: CommunityDbCredentialRow
   }>
   markCommunityProvisioningFailed(input: {
     communityId: string
@@ -1435,7 +1831,10 @@ export interface CommunityRepository {
 }
 
 export class ControlPlaneCommunityRepository implements CommunityRepository {
-  constructor(private readonly client: ControlPlaneDbClient) {}
+  constructor(
+    private readonly client: ControlPlaneDbClient,
+    private readonly env: Pick<Env, "TURSO_COMMUNITY_DB_WRAP_KEY">,
+  ) {}
 
   async getCommunityById(communityId: string): Promise<CommunityRow | null> {
     return getCommunityById(this.client, communityId)
@@ -1462,6 +1861,44 @@ export class ControlPlaneCommunityRepository implements CommunityRepository {
 
   async getPrimaryCommunityDatabaseBinding(communityId: string): Promise<CommunityDatabaseBindingRow | null> {
     return getPrimaryCommunityDatabaseBinding(this.client, communityId)
+  }
+
+  async getActiveCommunityDatabaseAuthToken(communityDatabaseBindingId: string): Promise<string | null> {
+    const credential = await getActiveCommunityDbCredential(this.client, communityDatabaseBindingId)
+    if (!credential) {
+      return null
+    }
+    return decryptCommunityDbCredential({
+      encryptedToken: credential.encrypted_token,
+      encryptionKeyVersion: credential.encryption_key_version,
+      wrapKey: this.env.TURSO_COMMUNITY_DB_WRAP_KEY,
+    })
+  }
+
+  async upsertActiveCommunityDatabaseCredential(input: {
+    communityDatabaseBindingId: string
+    tokenName: string
+    plaintextToken: string
+    encryptionKeyVersion: number
+    issuedAt: string
+    expiresAt?: string | null
+    updatedAt: string
+  }): Promise<CommunityDbCredentialRow> {
+    const encryptedToken = encryptCommunityDbCredential({
+      plaintextToken: input.plaintextToken,
+      wrapKey: this.env.TURSO_COMMUNITY_DB_WRAP_KEY,
+    })
+
+    return upsertActiveCommunityDbCredential(this.client, {
+      communityDbCredentialId: makeId("cdc"),
+      communityDatabaseBindingId: input.communityDatabaseBindingId,
+      tokenName: input.tokenName,
+      encryptedToken,
+      encryptionKeyVersion: input.encryptionKeyVersion,
+      issuedAt: input.issuedAt,
+      expiresAt: input.expiresAt ?? null,
+      updatedAt: input.updatedAt,
+    })
   }
 
   async getCommunityMoneyPolicyByCommunityId(communityId: string): Promise<CommunityMoneyPolicyRow | null> {
@@ -1632,7 +2069,15 @@ export class ControlPlaneCommunityRepository implements CommunityRepository {
     creatorUserId: string
     displayName: string
     namespaceVerificationId: string
-    databaseUrl: string
+    provisioningMode: string
+    bindingSeed: {
+      organizationSlug: string
+      groupName: string
+      databaseName: string
+      databaseUrl: string
+      location: string | null
+      status: CommunityDatabaseBindingRow["status"]
+    }
     createdAt: string
   }): Promise<{
     community: CommunityRow
@@ -1648,7 +2093,15 @@ export class ControlPlaneCommunityRepository implements CommunityRepository {
     registryAttemptId: string
     jobId: string
     namespaceVerificationId: string
-    databaseUrl: string
+    provisioningMode: string
+    fallbackBindingSeed: {
+      organizationSlug: string
+      groupName: string
+      databaseName: string
+      databaseUrl: string
+      location: string | null
+      status: CommunityDatabaseBindingRow["status"]
+    }
     createdAt: string
   }): Promise<{
     community: CommunityRow
@@ -1671,6 +2124,43 @@ export class ControlPlaneCommunityRepository implements CommunityRepository {
     job: JobRow
   }> {
     return markCommunityProvisioningSucceeded(this.client, input)
+  }
+
+  async completeCommunityProvisioning(input: {
+    communityId: string
+    communityDatabaseBindingId: string
+    jobId: string
+    actorUserId: string
+    resultRef: string | null
+    createdAt: string
+    metadata: Record<string, unknown>
+    binding: {
+      organizationSlug: string
+      groupName: string
+      groupId: string | null
+      databaseName: string
+      databaseId: string | null
+      databaseUrl: string
+      location: string | null
+      status: CommunityDatabaseBindingRow["status"]
+      createdAt: string
+      updatedAt: string
+    }
+    credential: {
+      tokenName: string
+      plaintextToken: string
+      encryptionKeyVersion: number
+      issuedAt: string
+      expiresAt?: string | null
+      updatedAt: string
+    }
+  }): Promise<{
+    community: CommunityRow
+    job: JobRow
+    binding: CommunityDatabaseBindingRow
+    credential: CommunityDbCredentialRow
+  }> {
+    return completeCommunityProvisioning(this.client, this.env, input)
   }
 
   async markCommunityProvisioningFailed(input: {
@@ -1756,7 +2246,10 @@ const globalScope = globalThis as typeof globalThis & {
 }
 
 export function getControlPlaneCommunityRepository(env: Env): ControlPlaneCommunityRepository {
-  const cacheKey = requireControlPlaneDbUrl(env)
+  const cacheKey = [
+    requireControlPlaneDbUrl(env),
+    createHash("sha256").update(String(env.TURSO_COMMUNITY_DB_WRAP_KEY || "")).digest("hex"),
+  ].join("::")
 
   if (
     globalScope.__pirateControlPlaneCommunityRepository
@@ -1765,7 +2258,7 @@ export function getControlPlaneCommunityRepository(env: Env): ControlPlaneCommun
     return globalScope.__pirateControlPlaneCommunityRepository
   }
 
-  const repository = new ControlPlaneCommunityRepository(createControlPlaneDbClient(env))
+  const repository = new ControlPlaneCommunityRepository(createControlPlaneDbClient(env), env)
   globalScope.__pirateControlPlaneCommunityRepository = repository
   globalScope.__pirateControlPlaneCommunityRepositoryKey = cacheKey
   return repository

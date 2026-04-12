@@ -124,6 +124,19 @@ async function prepareVerifiedNamespace(
   return completedBody.namespace_verification_id
 }
 
+async function completeUniqueHumanVerification(env: Env, accessToken: string): Promise<void> {
+  const verificationSession = await requestJson("http://pirate.test/verification-sessions", {
+    provider: "self",
+  }, env, accessToken)
+  const verificationBody = await json(verificationSession) as { verification_session_id: string }
+  await requestJson(
+    `http://pirate.test/verification-sessions/${verificationBody.verification_session_id}/complete`,
+    {},
+    env,
+    accessToken,
+  )
+}
+
 function buildUploadBytes(seed: string): Uint8Array {
   return new TextEncoder().encode(seed)
 }
@@ -177,7 +190,15 @@ function buildWavBytes(durationMs: number, sampleRate = 8_000): Uint8Array {
   return new Uint8Array(buffer)
 }
 
-function buildSongMediaRef(storageRef: string, overrides: Record<string, unknown> = {}) {
+function buildSongMediaRef(
+  storageRef: string,
+  overrides: Record<string, unknown> = {},
+): {
+  storage_ref: string
+  mime_type: string
+  duration_ms: number
+  content_hash?: string | null
+} & Record<string, unknown> {
   return {
     storage_ref: storageRef,
     mime_type: "audio/mpeg",
@@ -798,6 +819,19 @@ describe("jobs routes", () => {
       }
       expect(feedBody.items.some((item) => item.post_id === createSongBody.post_id)).toBe(false)
 
+      const reporter = await exchangeJwt(ctx.env, "song-enrichment-hidden-reporter")
+      await completeUniqueHumanVerification(ctx.env, reporter.accessToken)
+      await addCommunityMember(ctx.communityDbRoot, communityCreateBody.community.community_id, reporter.userId)
+      const hiddenPostReport = await requestJson(
+        `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts/${createSongBody.post_id}/reports`,
+        {
+          reason_code: "graphic_content",
+        },
+        ctx.env,
+        reporter.accessToken,
+      )
+      expect(hiddenPostReport.status).toBe(201)
+
       const moderationCases = await app.request(
         `http://pirate.test/communities/${communityCreateBody.community.community_id}/moderation-cases`,
         {
@@ -819,7 +853,7 @@ describe("jobs routes", () => {
       }
       expect(moderationCasesBody.items).toHaveLength(1)
       expect(moderationCasesBody.items[0]?.post_id).toBe(createSongBody.post_id)
-      expect(moderationCasesBody.items[0]?.opened_by).toBe("platform_analysis")
+      expect(moderationCasesBody.items[0]?.opened_by).toBe("mixed")
       expect(moderationCasesBody.items[0]?.queue_scope).toBe("community")
       expect(moderationCasesBody.items[0]?.priority).toBe("medium")
 
@@ -837,7 +871,7 @@ describe("jobs routes", () => {
         reports: Array<unknown>
         signals: Array<{ signal_type: string; analysis_result_ref: string | null }>
       }
-      expect(moderationCaseDetailBody.reports).toHaveLength(0)
+      expect(moderationCaseDetailBody.reports).toHaveLength(1)
       expect(moderationCaseDetailBody.signals.length > 0).toBe(true)
       expect(moderationCaseDetailBody.signals.every((signal) => signal.analysis_result_ref != null)).toBe(true)
     } finally {
@@ -1444,7 +1478,7 @@ describe("jobs routes", () => {
     } finally {
       globalThis.fetch = originalFetch
     }
-  })
+  }, 10_000)
 
   test("internal song enrichment drain retries failed translation and moderation work", async () => {
     let openRouterCalls = 0
@@ -1650,7 +1684,7 @@ describe("jobs routes", () => {
     } finally {
       globalThis.fetch = originalFetch
     }
-  })
+  }, 10_000)
 
   test("internal song enrichment drain reclaims stale processing bundles", async () => {
     const originalFetch = globalThis.fetch

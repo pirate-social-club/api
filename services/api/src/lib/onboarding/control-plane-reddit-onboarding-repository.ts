@@ -3,6 +3,7 @@ import { makeId, nowIso } from "../helpers"
 import type { ControlPlaneDbClient } from "../control-plane-db"
 import {
   getLatestExternalReputationSnapshotRow,
+  getLatestVerifiedRedditVerificationSessionRow,
   getLatestJobRowBySubjectAndType,
   getLatestRedditVerificationSessionRowForUsername,
 } from "../auth/control-plane-auth-queries"
@@ -39,6 +40,11 @@ function serializeJob(row: {
 
 export class ControlPlaneRedditOnboardingRepository {
   constructor(private readonly client: ControlPlaneDbClient) {}
+
+  async getLatestVerifiedRedditUsername(userId: string): Promise<string | null> {
+    const verification = await getLatestVerifiedRedditVerificationSessionRow(this.client, userId)
+    return verification?.reddit_username ?? null
+  }
 
   private getRedditImportStaleAfterSeconds(env: Env): number {
     const parsed = Number(String(env.REDDIT_IMPORT_JOB_STALE_AFTER_SECONDS || "").trim())

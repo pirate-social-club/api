@@ -1,0 +1,27 @@
+{
+  "$schema": "./story-aeneid-delivery.schema.json",
+  "network": {
+    "name": "story-aeneid",
+    "chainId": 1315,
+    "deployRpcUrl": "https://rpc.ankr.com/story_aeneid_testnet"
+  },
+  "deployment": {
+    "tag": "dev-aeneid-delivery-2026-04-11",
+    "deployerAddress": "0xBAFB9D9e48c39b16895e2F11E40eE656a4b31f87",
+    "ownerAddress": "0xBAFB9D9e48c39b16895e2F11E40eE656a4b31f87",
+    "completedAt": "2026-04-11"
+  },
+  "contracts": {
+    "purchaseEntitlementToken": "0x0d3eF43a98077c9a71853309EE4C6665C20C1Fa6",
+    "pirateSignerRegistry": "0xFdbBd5B130Ce519e9CF3DFE070De241519C1f51C",
+    "tokenGateCondition": "0x1b5340517389bd91316ee7ac866b16f2e9387e96",
+    "signedAccessConditionV1": "0x82c30cf9524ad83c8a67e6b855d9c286c89586b3",
+    "assetPublishCoordinatorV1": "0xf68b731a5801A50e983E9302E32eF6DA22CB0792",
+    "marketplaceSettlementV1": "0xFECcC2cF8C9946E1384eF5733B509ac70677c5bd"
+  },
+  "grants": {
+    "publishOperator": "0x7f969455cFe240927F1ACe4E23000685Ad224dA7",
+    "settlementOperator": "0xfB1E0bbE209C1B75f8E365F3055bfF4b0a24702B",
+    "accessProofSigner": "0x2125952f22Ad971df5645E31a613fe42DCC42c48"
+  }
+}

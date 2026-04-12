@@ -3,10 +3,17 @@ import { nowIso } from "../helpers"
 import type { ControlPlaneDbClient } from "../control-plane-db"
 import type { GlobalHandle, HandleUpgradeQuote, Profile } from "../../types"
 import { ControlPlaneIdentityRepository } from "./control-plane-identity-repository"
-import { getGlobalHandleRow, getProfileRow, getUserRow, hasUniqueConstraintField } from "./control-plane-auth-queries"
+import {
+  getGlobalHandleRow,
+  getLatestVerifiedRedditVerificationSessionRow,
+  getProfileRow,
+  getUserRow,
+  hasUniqueConstraintField,
+} from "./control-plane-auth-queries"
 import { serializeGlobalHandle } from "./control-plane-auth-serializers"
 import {
   assertFreeCleanupRenameEligible,
+  assertRedditVerifiedClaimEligible,
   buildHandleUpgradeQuote,
   isCleanupRenameAvailable,
   isReservedGlobalHandleLabel,
@@ -86,6 +93,14 @@ export class ControlPlaneProfileRepository {
       activeGlobalHandle: serializeGlobalHandle(activeGlobalHandleRow),
       userCreatedAt: userRow.created_at,
     })
+
+    if (issuanceSource === "reddit_verified_claim") {
+      const verifiedRedditUsername = await getLatestVerifiedRedditVerificationSessionRow(this.client, userId)
+      assertRedditVerifiedClaimEligible({
+        labelNormalized: desired.labelNormalized,
+        verifiedRedditUsername: verifiedRedditUsername?.reddit_username ?? null,
+      })
+    }
 
     const resolvedIssuanceSource = issuanceSource ?? "free_cleanup_rename"
 

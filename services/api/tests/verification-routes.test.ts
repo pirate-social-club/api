@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
 import app from "../src/index"
 import { json, mintUpstreamJwt, createRouteTestContext, resetRuntimeCaches } from "./helpers"
 import type { Env } from "../src/types"
@@ -6,6 +6,30 @@ import {
   buildStubSpacesRootPubkey,
   buildStubSpacesSignature,
 } from "../src/lib/verification/spaces-verifier"
+import { parseVerificationCapabilities } from "../src/lib/auth/control-plane-auth-serializers"
+
+mock.module("@selfxyz/core", () => ({
+  AllIds: new Map([[1, true]]),
+  DefaultConfigStore: class MockDefaultConfigStore {
+    constructor(_config: Record<string, unknown>) {}
+  },
+  SelfBackendVerifier: class MockSelfBackendVerifier {
+    constructor(..._args: unknown[]) {}
+
+    async verify() {
+      return {
+        attestationId: 1,
+        isValidDetails: {
+          isMinimumAgeValid: true,
+        },
+        discloseOutput: {
+          nationality: "USA",
+          gender: "M",
+        },
+      }
+    }
+  },
+}))
 
 let cleanup: (() => Promise<void>) | null = null
 
@@ -127,6 +151,255 @@ describe("verification routes", () => {
       ctx.env,
     )
     expect(malformedCallback.status).toBe(400)
+  })
+
+  test("self sessions preserve requested capabilities in launch metadata", async () => {
+    const ctx = await createRouteTestContext({
+      PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.example",
+      SELF_VERIFICATION_SCOPE: "pirate-verification-v0",
+      SELF_MOCK_PASSPORT: "true",
+    })
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "self-requested-capabilities-user")
+
+    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "self",
+      requested_capabilities: ["unique_human", "age_over_18", "nationality"],
+      verification_intent: "profile_verification",
+    }, ctx.env, session.accessToken)
+    expect(createdVerification.status).toBe(201)
+    const verificationBody = await json(createdVerification) as {
+      requested_capabilities: string[]
+      launch?: {
+        self_app?: {
+          disclosures?: {
+            nationality?: boolean
+            minimum_age?: number | null
+          }
+        }
+      } | null
+    }
+
+    expect(verificationBody.requested_capabilities).toEqual(["unique_human", "age_over_18", "nationality"])
+    expect(verificationBody.launch?.self_app?.disclosures?.nationality).toBe(true)
+    expect(verificationBody.launch?.self_app?.disclosures?.minimum_age).toBe(18)
+  })
+
+  test("verification sessions persist verification intent and policy id", async () => {
+    const ctx = await createRouteTestContext({
+      PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.example",
+      SELF_VERIFICATION_SCOPE: "pirate-verification-v0",
+      SELF_MOCK_PASSPORT: "true",
+    })
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-metadata-user")
+
+    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "self",
+      requested_capabilities: ["unique_human", "nationality"],
+      verification_intent: "ucommunity_join",
+      policy_id: "policy_self_join_v1",
+    }, ctx.env, session.accessToken)
+    expect(createdVerification.status).toBe(201)
+    const verificationBody = await json(createdVerification) as {
+      verification_session_id: string
+      verification_intent: string | null
+      policy_id: string | null
+    }
+    expect(verificationBody.verification_intent).toBe("ucommunity_join")
+    expect(verificationBody.policy_id).toBe("policy_self_join_v1")
+
+    const storedSession = await ctx.client.execute({
+      sql: `
+        SELECT verification_intent, policy_id
+        FROM verification_sessions
+        WHERE verification_session_id = ?1
+        LIMIT 1
+      `,
+      args: [verificationBody.verification_session_id],
+    })
+    expect(storedSession.rows).toHaveLength(1)
+    expect(String(storedSession.rows[0]?.verification_intent || "")).toBe("ucommunity_join")
+    expect(String(storedSession.rows[0]?.policy_id || "")).toBe("policy_self_join_v1")
+
+    const fetchedVerification = await app.request(
+      `http://pirate.test/verification-sessions/${verificationBody.verification_session_id}`,
+      {
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(fetchedVerification.status).toBe(200)
+    const fetchedBody = await json(fetchedVerification) as {
+      verification_intent: string | null
+      policy_id: string | null
+    }
+    expect(fetchedBody.verification_intent).toBe("ucommunity_join")
+    expect(fetchedBody.policy_id).toBe("policy_self_join_v1")
+  })
+
+  test("verification policy makes server-selected capabilities and intent authoritative", async () => {
+    const ctx = await createRouteTestContext({
+      PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.example",
+      SELF_VERIFICATION_SCOPE: "pirate-verification-v0",
+      SELF_MOCK_PASSPORT: "true",
+    })
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-policy-authoritative-user")
+
+    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "self",
+      requested_capabilities: ["unique_human"],
+      policy_id: "policy_self_join_v1",
+    }, ctx.env, session.accessToken)
+    expect(createdVerification.status).toBe(201)
+    const verificationBody = await json(createdVerification) as {
+      requested_capabilities: string[]
+      verification_intent: string | null
+      policy_id: string | null
+    }
+
+    expect(verificationBody.requested_capabilities).toEqual(["unique_human", "age_over_18", "nationality"])
+    expect(verificationBody.verification_intent).toBe("ucommunity_join")
+    expect(verificationBody.policy_id).toBe("policy_self_join_v1")
+  })
+
+  test("verification policy rejects requested capabilities outside the policy", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-policy-capability-mismatch-user")
+
+    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "self",
+      requested_capabilities: ["unique_human", "gender"],
+      policy_id: "policy_self_join_v1",
+    }, ctx.env, session.accessToken)
+    expect(createdVerification.status).toBe(400)
+  })
+
+  test("verification policy rejects verification intent mismatches", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-policy-intent-mismatch-user")
+
+    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "self",
+      requested_capabilities: ["unique_human"],
+      verification_intent: "profile_verification",
+      policy_id: "policy_self_join_v1",
+    }, ctx.env, session.accessToken)
+    expect(createdVerification.status).toBe(400)
+  })
+
+  test("verification policy rejects unknown policy ids", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-policy-unknown-user")
+
+    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "self",
+      requested_capabilities: ["unique_human"],
+      policy_id: "policy_does_not_exist",
+    }, ctx.env, session.accessToken)
+    expect(createdVerification.status).toBe(400)
+  })
+
+  test("verification session start rejects invalid verification intent", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-invalid-intent-user")
+
+    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "self",
+      requested_capabilities: ["unique_human"],
+      verification_intent: "not_real_intent",
+    }, ctx.env, session.accessToken)
+    expect(createdVerification.status).toBe(400)
+  })
+
+  test("verification sessions default verification intent and policy id to null", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-default-metadata-user")
+
+    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "self",
+      requested_capabilities: ["unique_human"],
+    }, ctx.env, session.accessToken)
+    expect(createdVerification.status).toBe(201)
+    const verificationBody = await json(createdVerification) as {
+      verification_intent: string | null
+      policy_id: string | null
+    }
+    expect(verificationBody.verification_intent).toBeNull()
+    expect(verificationBody.policy_id).toBeNull()
+  })
+
+  test("self callback persists nationality and age capabilities on the account", async () => {
+    const ctx = await createRouteTestContext({
+      PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.example",
+      SELF_VERIFICATION_SCOPE: "pirate-verification-v0",
+      SELF_MOCK_PASSPORT: "true",
+    })
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "self-nationality-callback-user")
+
+    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "self",
+      requested_capabilities: ["unique_human", "age_over_18", "nationality"],
+    }, ctx.env, session.accessToken)
+    expect(createdVerification.status).toBe(201)
+    const verificationBody = await json(createdVerification) as {
+      verification_session_id: string
+    }
+
+    const callback = await requestJson(
+      `http://pirate.test/verification-sessions/${verificationBody.verification_session_id}/callback`,
+      {
+        attestationId: 1,
+        proof: {
+          a: ["1", "2"],
+          b: [["3", "4"], ["5", "6"]],
+          c: ["7", "8"],
+        },
+        publicSignals: ["9", "10"],
+        userContextData: "0x1234",
+      },
+      ctx.env,
+    )
+    expect(callback.status).toBe(200)
+
+    const userResult = await ctx.client.execute({
+      sql: `
+        SELECT verification_capabilities_json, nationality, current_verification_session_id
+        FROM users
+        WHERE user_id = ?1
+        LIMIT 1
+      `,
+      args: [session.userId],
+    })
+    expect(userResult.rows).toHaveLength(1)
+    const row = userResult.rows[0]
+    const capabilities = parseVerificationCapabilities(String(row?.verification_capabilities_json || ""))
+
+    expect(capabilities.unique_human.state).toBe("verified")
+    expect(capabilities.age_over_18.state).toBe("verified")
+    expect(capabilities.nationality.state).toBe("verified")
+    expect(capabilities.nationality.provider).toBe("self")
+    expect(capabilities.nationality.value).toBe("US")
+    expect(String(row?.nationality || "")).toBe("US")
+    expect(String(row?.current_verification_session_id || "")).toBe(verificationBody.verification_session_id)
   })
 
   test("verification and namespace endpoints work through the full route stack", async () => {

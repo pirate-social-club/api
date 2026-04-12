@@ -16,8 +16,19 @@ export async function openCommunityDb(
     throw internalError("Community database URL is missing")
   }
 
-  const client = createClient({ url: binding.database_url })
-  if (binding.database_url.startsWith("file:")) {
+  const isFileDatabase = binding.database_url.startsWith("file:")
+  const authToken = isFileDatabase
+    ? null
+    : await repo.getActiveCommunityDatabaseAuthToken(binding.community_database_binding_id)
+
+  if (!isFileDatabase && !authToken) {
+    throw internalError("Community database auth token is missing")
+  }
+
+  const client = createClient(authToken
+    ? { url: binding.database_url, authToken }
+    : { url: binding.database_url })
+  if (isFileDatabase) {
     await applyCommunityTemplateMigrations(client)
   }
   return {

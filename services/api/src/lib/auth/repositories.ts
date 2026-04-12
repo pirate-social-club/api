@@ -54,6 +54,7 @@ export interface RedditOnboardingRepository {
     userId: string
     redditUsername: string
   }): Promise<RedditVerification>
+  getLatestVerifiedRedditUsername(userId: string): Promise<string | null>
   startRedditSnapshotImport(input: {
     env: Env
     userId: string

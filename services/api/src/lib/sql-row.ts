@@ -7,11 +7,26 @@ export function rowValue(row: unknown, key: string): unknown {
 
 export function stringOrNull(value: unknown): string | null {
   if (value == null) return null
+  if (value instanceof Date) return value.toISOString()
   return String(value)
+}
+
+export function jsonStringOrNull(value: unknown): string | null {
+  if (value == null) return null
+  if (typeof value === "string") return value
+  return JSON.stringify(value)
 }
 
 export function requiredString(row: unknown, key: string): string {
   const value = stringOrNull(rowValue(row, key))
+  if (!value) {
+    throw internalError(`Missing required column ${key}`)
+  }
+  return value
+}
+
+export function requiredJsonString(row: unknown, key: string): string {
+  const value = jsonStringOrNull(rowValue(row, key))
   if (!value) {
     throw internalError(`Missing required column ${key}`)
   }

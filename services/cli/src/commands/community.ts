@@ -4,7 +4,7 @@ import {
   type CommunityCreateAcceptedResponse,
   type CreateCommunityRequest,
 } from "@pirate/api-contracts"
-import { getFlag, requireFlag } from "../args.js"
+import { requireFlag } from "../args.js"
 import { apiRequest } from "../http.js"
 import { exitWithUsage, printJson } from "../output.js"
 import { requireStoredSession } from "../session.js"
@@ -20,14 +20,9 @@ export async function runCommunity(
     case "create": {
       const displayName = requireFlag(args, "display-name")
       const namespaceVerificationId = requireFlag(args, "namespace-verification-id")
-      const description = getFlag(args, "description")
       const body: CreateCommunityRequest = {
         display_name: displayName,
-        description: description ?? null,
-        membership_mode: "open",
         governance_mode: "centralized",
-        default_age_gate_policy: "none",
-        allow_anonymous_identity: false,
         handle_policy: {
           policy_template: "standard",
         },

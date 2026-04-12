@@ -23,6 +23,7 @@ import type { CommunityRepository } from "./control-plane-community-repository"
 import { conflictError, gateFailed, internalError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import { verifyPirateAccessToken } from "../auth/pirate-session-token"
+import { inferMembershipGateFailureVerificationPolicy } from "../verification/verification-policies"
 import {
   recomputeAndPersistCommunityMembershipStats,
   requireCommunityModerationAccess,
@@ -97,6 +98,8 @@ export async function joinCommunity(input: {
         repository: input.communityRepository,
         userRepository: input.userRepository,
         communityId: input.communityId,
+        localDb: db,
+        community,
       })
       return {
         community_id: input.communityId,
@@ -126,7 +129,11 @@ export async function joinCommunity(input: {
         ...tokenInput,
       }),
     }))) {
-      throw gateFailed("Community membership requirements are not satisfied")
+      const verificationPolicy = inferMembershipGateFailureVerificationPolicy(rules)
+      throw gateFailed(
+        "Community membership requirements are not satisfied",
+        verificationPolicy ? { verification_policy: verificationPolicy } : undefined,
+      )
     }
     await upsertCommunityMembership({
       client: db.client,
@@ -146,6 +153,8 @@ export async function joinCommunity(input: {
       repository: input.communityRepository,
       userRepository: input.userRepository,
       communityId: input.communityId,
+      localDb: db,
+      community,
     })
     return {
       community_id: input.communityId,
@@ -251,6 +260,8 @@ export async function approveMembershipRequest(input: {
       repository: input.communityRepository,
       userRepository: input.userRepository,
       communityId: input.communityId,
+      localDb: db,
+      community,
     })
 
     const resolved = await getMembershipRequestById(db.client, input.communityId, input.membershipRequestId)

@@ -3,31 +3,69 @@ import { authError, badRequestError, errorResponse, notFoundError } from "../lib
 import { getControlPlaneVerificationRepository } from "../lib/verification/control-plane-verification-repository"
 import { requireBearerToken } from "../lib/helpers"
 import { verifyPirateAccessToken } from "../lib/auth/pirate-session-token"
-import { handleRoute } from "./route-helpers"
-import type { Env } from "../types"
+import { handleRoute, requireRouteParam } from "./route-helpers"
+import type { Env, StartVerificationSessionRequest } from "../types"
 
 const verification = new Hono<{ Bindings: Env }>()
-
-function requireRouteParam(value: string | undefined, label: string): string {
-  if (!value) {
-    throw badRequestError(`Missing ${label}`)
-  }
-  return value
-}
+const VALID_VERIFICATION_INTENTS = new Set<string>([
+  "profile_verification",
+  "community_creation",
+  "ucommunity_join",
+  "post_access_18_plus",
+  "commerce_pricing",
+  "qualifier_disclosure",
+] as const)
 
 verification.post("/verification-sessions", handleRoute(async (c) => {
   const token = requireBearerToken(c.req.header("authorization"))
   const session = await verifyPirateAccessToken({ env: c.env, token })
-  const body = await c.req.json<{ provider?: "self" | "very"; wallet_attachment_id?: string | null }>().catch(() => null)
+  const body = await c.req.json<Partial<StartVerificationSessionRequest>>().catch(() => null)
   if (!body?.provider || (body.provider !== "self" && body.provider !== "very")) {
     throw badRequestError("Invalid verification session payload")
   }
+
+  const requestedCapabilitiesInput = body.requested_capabilities
+  const requestedCapabilities = Array.isArray(requestedCapabilitiesInput)
+    ? requestedCapabilitiesInput.filter((value): value is "unique_human" | "age_over_18" | "nationality" | "gender" => (
+      value === "unique_human"
+      || value === "age_over_18"
+      || value === "nationality"
+      || value === "gender"
+    ))
+    : null
+  if (
+    requestedCapabilities != null
+    && Array.isArray(requestedCapabilitiesInput)
+    && requestedCapabilities.length !== requestedCapabilitiesInput.length
+  ) {
+    throw badRequestError("Invalid requested_capabilities")
+  }
+  const verificationIntent = typeof body.verification_intent === "string"
+    ? body.verification_intent
+    : body.verification_intent == null
+      ? null
+      : (() => {
+          throw badRequestError("Invalid verification_intent")
+        })()
+  if (verificationIntent != null && !VALID_VERIFICATION_INTENTS.has(verificationIntent)) {
+    throw badRequestError("Invalid verification_intent")
+  }
+  const policyId = typeof body.policy_id === "string"
+    ? body.policy_id
+    : body.policy_id == null
+      ? null
+      : (() => {
+          throw badRequestError("Invalid policy_id")
+        })()
 
   const repo = getControlPlaneVerificationRepository(c.env)
   const created = await repo.startVerificationSession({
     userId: session.userId,
     provider: body.provider,
     walletAttachmentId: body.wallet_attachment_id ?? null,
+    requestedCapabilities,
+    verificationIntent,
+    policyId,
   })
   return c.json(created, 201)
 }))

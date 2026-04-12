@@ -131,8 +131,8 @@ export function createControlPlaneDbClient(env: Env): ControlPlaneDbClient {
           finished = true
         },
         close() {
-          if (!isFileDatabase) {
-            txClient.release()
+          if (!isFileDatabase && "release" in txClient) {
+            (txClient as BunReservedSqlClient).release()
           }
         },
       }

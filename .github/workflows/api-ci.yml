@@ -34,6 +34,17 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Check out CDR SDK
+        uses: actions/checkout@v4
+        with:
+          repository: piplabs/cdr-sdk
+          path: cdr-sdk
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -50,9 +61,32 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-bun-1.2.21-api-
 
+      - name: Link CDR SDK workspace
+        shell: bash
+        run: |
+          sdk_link_target="${GITHUB_WORKSPACE}/../../cdr-sdk"
+          if [ ! -e "${sdk_link_target}" ]; then
+            ln -s "${GITHUB_WORKSPACE}/cdr-sdk" "${sdk_link_target}"
+          fi
+
+      - name: Install and build CDR SDK
+        working-directory: cdr-sdk
+        shell: bash
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm --filter @piplabs/cdr-contracts build
+          pnpm --filter @piplabs/cdr-crypto build
+          pnpm --filter @piplabs/cdr-sdk build
+
       - name: Install contracts dependencies
         working-directory: services/contracts
         run: bun install --frozen-lockfile
+
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
 
       - name: Typecheck generated contracts package
         working-directory: services/contracts
@@ -116,6 +150,12 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Check out CDR SDK
+        uses: actions/checkout@v4
+        with:
+          repository: piplabs/cdr-sdk
+          path: cdr-sdk
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -138,10 +178,28 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-bun-1.2.21-bruno-
 
+      - name: Link CDR SDK workspace
+        shell: bash
+        run: |
+          sdk_link_target="${GITHUB_WORKSPACE}/../../cdr-sdk"
+          if [ ! -e "${sdk_link_target}" ]; then
+            ln -s "${GITHUB_WORKSPACE}/cdr-sdk" "${sdk_link_target}"
+          fi
+
+      - name: Install and build CDR SDK
+        working-directory: cdr-sdk
+        shell: bash
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm --filter @piplabs/cdr-contracts build
+          pnpm --filter @piplabs/cdr-crypto build
+          pnpm --filter @piplabs/cdr-sdk build
+
       - name: Install sqlite3
         run: |
           sudo apt-get update
-          sudo apt-get install -y sqlite3
+          sudo apt-get install -y ffmpeg sqlite3
 
       - name: Install Bruno CLI
         run: npm install -g @usebruno/cli
@@ -163,11 +221,14 @@ jobs:
           {
             echo "ENVIRONMENT=development"
             echo "DEV_MEMORY_STORE_ENABLED=false"
+            echo "PIRATE_API_PUBLIC_ORIGIN=http://127.0.0.1:8787"
+            echo "JWT_BASED_AUTH_ENABLED=true"
             echo "AUTH_UPSTREAM_JWT_SHARED_SECRET=ci-upstream-shared-secret"
             echo "AUTH_UPSTREAM_JWT_ISSUER=pirate-dev-upstream"
             echo "AUTH_UPSTREAM_JWT_AUDIENCE=pirate-api"
             echo "CONTROL_PLANE_DATABASE_URL=file:/tmp/pirate-control-plane.db"
             echo "LOCAL_COMMUNITY_DB_ROOT=/tmp/pirate-community-dbs"
+            echo "ALLOW_LOCAL_STUB_REGISTRY_PUBLICATION=true"
             echo "REGISTRY_PUBLISHER_URL="
             echo "REGISTRY_PUBLISHER_AUTH_TOKEN="
             echo "REGISTRY_PUBLISHER_TIMEOUT_MS=25000"
@@ -202,3 +263,13 @@ jobs:
           done
           curl -fsS http://127.0.0.1:8787/health >/dev/null
           bun run bruno:test:local-sqlite
+
+      - name: Dump local API log on Bruno failure
+        if: failure()
+        shell: bash
+        run: |
+          if [ -f /tmp/pirate-api-bruno.log ]; then
+            tail -n 200 /tmp/pirate-api-bruno.log
+          else
+            echo "/tmp/pirate-api-bruno.log not found"
+          fi

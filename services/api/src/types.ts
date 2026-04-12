@@ -1,10 +1,8 @@
 export type {
   AuthProof,
   CommunityMoneyPolicy,
-  CommunityPurchaseQuote,
   CommunityPurchaseQuotePreflight,
   CommunityPurchaseQuotePreflightRequest,
-  CommunityPurchaseQuoteRequest,
   CommunityCreateAcceptedResponse,
   CompleteNamespaceVerificationSessionRequest,
   CompleteVerificationSessionRequest,
@@ -23,12 +21,10 @@ export type {
   SessionExchangeRequest,
   SessionExchangeResponse,
   StartNamespaceVerificationSessionRequest,
-  StartVerificationSessionRequest,
   SongArtifactUpload,
   UpdateCommunityMoneyPolicyRequest,
   User,
   VerificationCapabilities,
-  VerificationSession,
   WalletAttachmentSummary,
 } from "@pirate/api-contracts"
 
@@ -48,6 +44,24 @@ export type {
 type ContractCreateCommunityRequest = import("@pirate/api-contracts").CreateCommunityRequest
 type ContractCommunity = import("@pirate/api-contracts").Community
 type ContractPost = import("@pirate/api-contracts").Post
+type ContractGateRule = NonNullable<ContractCommunity["gate_rules"]>[number]
+type ContractVerificationIntent = NonNullable<import("@pirate/api-contracts").StartVerificationSessionRequest["verification_intent"]>
+
+export type VerificationIntent = ContractVerificationIntent | "ucommunity_join"
+
+export type StartVerificationSessionRequest = Omit<
+  import("@pirate/api-contracts").StartVerificationSessionRequest,
+  "verification_intent"
+> & {
+  verification_intent?: VerificationIntent | null
+}
+
+export type VerificationSession = Omit<
+  import("@pirate/api-contracts").VerificationSession,
+  "verification_intent"
+> & {
+  verification_intent?: VerificationIntent | null
+}
 
 export type CreateCommunityRequest = ContractCreateCommunityRequest & {
   description?: string | null
@@ -319,7 +333,7 @@ export type ModerationCaseListResponse = {
 
 export type ModerationCaseDetail = {
   case: ModerationCase
-  post: ContractPost
+  post: Post
   signals: ModerationSignal[]
   reports: UserReport[]
   actions: ModerationAction[]
@@ -391,26 +405,19 @@ export type CommunityReferenceLinkAdmin = {
   updated_at: string
 }
 
-export type CommunityGateRule = {
-  gate_rule_id: string
-  community_id: string
-  scope: "membership" | "viewer" | "posting"
-  gate_family: "identity_proof" | "token_holding"
-  gate_type: string
-  proof_requirements?: Array<{
-    proof_type?: string
-    accepted_providers?: string[] | null
-    accepted_mechanisms?: string[] | null
-    config?: Record<string, unknown> | null
-  }> | null
-  chain_namespace?: string | null
-  gate_config?: Record<string, unknown> | null
-  status: "active" | "disabled"
-  created_at: string
-  updated_at: string
+export type CommunityGateRule = ContractGateRule
+
+export type CommunityPurchaseQuoteRequest = import("@pirate/api-contracts").CommunityPurchaseQuoteRequest & {
+  destination_settlement_amount_atomic?: string | null
+  destination_settlement_decimals?: number | null
 }
 
-export type Community = ContractCommunity & {
+export type CommunityPurchaseQuote = import("@pirate/api-contracts").CommunityPurchaseQuote & {
+  destination_settlement_amount_atomic?: string | null
+  destination_settlement_decimals?: number | null
+}
+
+export type Community = Omit<ContractCommunity, "gate_rules"> & {
   flair_policy?: CommunityFlairPolicy | null
   gate_rules?: CommunityGateRule[] | null
 }
@@ -699,7 +706,13 @@ export type Env = {
   SELF_VERIFICATION_SCOPE?: string
   SELF_MOCK_PASSPORT?: string
   CONTROL_PLANE_DATABASE_URL?: string
+  TURSO_COMMUNITY_DB_WRAP_KEY?: string
+  TURSO_COMMUNITY_DB_WRAP_KEY_VERSION?: string
   LOCAL_COMMUNITY_DB_ROOT?: string
+  COMMUNITY_PROVISION_OPERATOR_BASE_URL?: string
+  COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN?: string
+  COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS?: string
+  COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION?: string
   ALLOW_LOCAL_STUB_REGISTRY_PUBLICATION?: string
   REGISTRY_PUBLISHER_URL?: string
   REGISTRY_PUBLISHER_AUTH_TOKEN?: string
@@ -745,6 +758,8 @@ export type Env = {
   SONG_LYRICS_TRANSLATION_TARGET_LOCALES?: string
   SONG_ENRICHMENT_DRAIN_LIMIT?: string
   SONG_ENRICHMENT_STALE_AFTER_SECONDS?: string
+  SONG_PREVIEW_DRAIN_LIMIT?: string
+  SONG_PREVIEW_STALE_AFTER_SECONDS?: string
   COMMUNITY_POST_PROJECTION_RECONCILE_LIMIT?: string
   SONG_ASSET_STORY_DRAIN_LIMIT?: string
   SONG_ASSET_STORY_STALE_AFTER_SECONDS?: string

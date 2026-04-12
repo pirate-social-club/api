@@ -717,7 +717,7 @@ export async function expirePurchaseQuote(input: {
   }
 }
 
-async function readPurchaseRow(input: {
+export async function readPurchaseRow(input: {
   communityDbRoot: string
   communityId: string
   purchaseId: string
@@ -759,7 +759,7 @@ async function readPurchaseRow(input: {
   }
 }
 
-async function readPurchaseEntitlementRow(input: {
+export async function readPurchaseEntitlementRow(input: {
   communityDbRoot: string
   communityId: string
   purchaseId: string
@@ -799,7 +799,7 @@ async function readPurchaseEntitlementRow(input: {
   }
 }
 
-async function setVerifiedUserNationality(input: {
+export async function setVerifiedUserNationality(input: {
   client: Client
   userId: string
   countryCode: string
@@ -838,7 +838,15 @@ async function setVerifiedUserNationality(input: {
   })
 }
 
-export function buildSongMediaRef(storageRef: string, overrides: Record<string, unknown> = {}) {
+export function buildSongMediaRef(
+  storageRef: string,
+  overrides: Record<string, unknown> = {},
+): {
+  storage_ref: string
+  mime_type: string
+  duration_ms: number
+  content_hash?: string | null
+} & Record<string, unknown> {
   return {
     storage_ref: storageRef,
     mime_type: "audio/mpeg",
@@ -870,7 +878,7 @@ export function buildUploadBytes(seed: string): Uint8Array {
   return new TextEncoder().encode(seed)
 }
 
-function buildWavBytes(durationMs: number, sampleRate = 8_000): Uint8Array {
+export function buildWavBytes(durationMs: number, sampleRate = 8_000): Uint8Array {
   const channelCount = 1
   const bytesPerSample = 2
   const sampleCount = Math.max(1, Math.round((durationMs / 1000) * sampleRate))
