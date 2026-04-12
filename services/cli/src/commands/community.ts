@@ -22,10 +22,7 @@ export async function runCommunity(
       const namespaceVerificationId = requireFlag(args, "namespace-verification-id")
       const body: CreateCommunityRequest = {
         display_name: displayName,
-        membership_mode: "open",
         governance_mode: "centralized",
-        default_age_gate_policy: "none",
-        allow_anonymous_identity: false,
         handle_policy: {
           policy_template: "standard",
         },
