@@ -216,6 +216,7 @@ jobs:
           {
             echo "ENVIRONMENT=development"
             echo "DEV_MEMORY_STORE_ENABLED=false"
+            echo "JWT_BASED_AUTH_ENABLED=true"
             echo "AUTH_UPSTREAM_JWT_SHARED_SECRET=ci-upstream-shared-secret"
             echo "AUTH_UPSTREAM_JWT_ISSUER=pirate-dev-upstream"
             echo "AUTH_UPSTREAM_JWT_AUDIENCE=pirate-api"
