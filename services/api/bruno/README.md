@@ -406,8 +406,8 @@ Success expectations:
 - body contains the same `song_artifact_upload_id`
 - `status = uploaded`
 - `storage_ref` becomes the canonical song audio ref
-- `storage_provider = filebase` in the live Infisical-backed path
-- `gateway_url` uses the Filebase gateway for fast verification reads
+- `storage_provider = local_stub` in the local-sqlite path
+- the local stub path leaves `storage_bucket`, `storage_object_key`, `storage_endpoint`, and `gateway_url` unset
 - post-response saves `song_primary_audio_storage_ref`, `song_primary_audio_size_bytes`, `song_primary_audio_content_hash`, and `song_primary_audio_gateway_url`
 
 ### `POST /communities/{community_id}/posts` for a song
