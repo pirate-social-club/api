@@ -85,12 +85,22 @@ const globalScope = globalThis as typeof globalThis & {
   __pirateMemoryAuthRepository?: MemoryAuthRepository
 }
 
+function canCacheControlPlaneRepositories(env: Env): boolean {
+  if (String(env.ENVIRONMENT || "").trim().toLowerCase() === "test") {
+    return false
+  }
+  return typeof (globalThis as { Bun?: unknown }).Bun !== "undefined"
+}
+
 function getControlPlaneRepositoryBundle(env: Env): ControlPlaneRepositoryBundle {
   const cacheKey = requireControlPlaneDatabaseUrl(env)
 
   if (
+    canCacheControlPlaneRepositories(env)
+    && (
     globalScope.__pirateControlPlaneRepositoryBundle
     && globalScope.__pirateControlPlaneClientKey === cacheKey
+    )
   ) {
     return globalScope.__pirateControlPlaneRepositoryBundle
   }
@@ -101,8 +111,10 @@ function getControlPlaneRepositoryBundle(env: Env): ControlPlaneRepositoryBundle
     profile: new ControlPlaneProfileRepository(client),
     redditOnboarding: new ControlPlaneRedditOnboardingRepository(client),
   }
-  globalScope.__pirateControlPlaneRepositoryBundle = bundle
-  globalScope.__pirateControlPlaneClientKey = cacheKey
+  if (canCacheControlPlaneRepositories(env)) {
+    globalScope.__pirateControlPlaneRepositoryBundle = bundle
+    globalScope.__pirateControlPlaneClientKey = cacheKey
+  }
   return bundle
 }
 

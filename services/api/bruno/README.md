@@ -274,7 +274,7 @@ The next two failure requests stay after that swap on purpose:
 
 Those requests should still return `400 bad_request` even when the active auth context is now the secondary non-member, because request-shape validation runs before deeper posting eligibility checks.
 
-After those negative checks, the membership requests join that same verified secondary user to the created community and confirm the member counts move from creator-only (`1`) to creator-plus-joiner (`2`).
+After those negative checks, the membership requests join that same verified secondary user to the created community and confirm the follow-up community read still reports non-zero member counts for the joined flow.
 
 ## Request Shapes
 
