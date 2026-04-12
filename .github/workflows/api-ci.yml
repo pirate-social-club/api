@@ -36,7 +36,7 @@ jobs:
           bun-version: 1.2.21
 
       - name: Check out cdr-sdk
-        run: git clone --depth 1 https://github.com/piplabs/cdr-sdk "${GITHUB_WORKSPACE}/../cdr-sdk"
+        run: git clone --depth 1 https://github.com/piplabs/cdr-sdk "${GITHUB_WORKSPACE}/../../cdr-sdk"
 
       - name: Install contracts dependencies
         working-directory: services/contracts
@@ -104,7 +104,7 @@ jobs:
           bun-version: 1.2.21
 
       - name: Check out cdr-sdk
-        run: git clone --depth 1 https://github.com/piplabs/cdr-sdk "${GITHUB_WORKSPACE}/../cdr-sdk"
+        run: git clone --depth 1 https://github.com/piplabs/cdr-sdk "${GITHUB_WORKSPACE}/../../cdr-sdk"
 
       - name: Install sqlite3
         run: |
