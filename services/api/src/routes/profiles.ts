@@ -112,7 +112,7 @@ profiles.get("/:userId", handleRoute(async (c) => {
   const token = requireBearerToken(c.req.header("authorization"))
   await verifyPirateAccessToken({ env: c.env, token })
   const repository = getProfileRepository(c.env)
-  const profile = await repository.getProfileByUserId(c.req.param("userId"))
+  const profile = await repository.getProfileByUserId(c.req.param("userId") ?? "")
   if (!profile) {
     throw notFoundError("Profile not found")
   }

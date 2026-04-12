@@ -30,6 +30,10 @@ import type { Env } from "../types"
 
 const jobs = new Hono<{ Bindings: Env }>()
 
+function routeParam(c: { req: { param(name: string): string | undefined } }, name: string): string {
+  return c.req.param(name) ?? ""
+}
+
 function requireInternalJobRunnerToken(c: { req: { header(name: string): string | undefined }; env: Env }): void {
   const expected = String(c.env.INTERNAL_JOB_RUNNER_TOKEN || "").trim()
   const actual = requireBearerToken(c.req.header("authorization"))
@@ -126,7 +130,7 @@ jobs.get("/:jobId", handleRoute(async (c) => {
   const result = await getJob({
     env: c.env,
     bearerToken: token,
-    jobId: c.req.param("jobId"),
+    jobId: routeParam(c, "jobId"),
     repository,
   })
   return c.json(result, 200)

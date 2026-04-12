@@ -5,12 +5,16 @@ import type { Env } from "../types"
 
 const communityNamespace = new Hono<{ Bindings: Env }>()
 
+function routeParam(c: { req: { param(name: string): string | undefined } }, name: string): string {
+  return c.req.param(name) ?? ""
+}
+
 communityNamespace.get(
   "/by-namespace/:namespaceLabel",
   handleRoute(async (c) => {
     const result = await getCommunityByNamespaceRoute({
       env: c.env,
-      namespaceLabel: c.req.param("namespaceLabel"),
+      namespaceLabel: routeParam(c, "namespaceLabel"),
     })
     return c.json(result, 200)
   }),

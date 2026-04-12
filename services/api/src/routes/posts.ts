@@ -9,13 +9,17 @@ import type { Env } from "../types"
 
 const posts = new Hono<{ Bindings: Env }>()
 
+function routeParam(c: { req: { param(name: string): string | undefined } }, name: string): string {
+  return c.req.param(name) ?? ""
+}
+
 posts.get("/:postId", handleRoute(async (c) => {
   const token = requireBearerToken(c.req.header("authorization"))
   const communityRepository = getControlPlaneCommunityRepository(c.env)
   const result = await getPost({
     env: c.env,
     bearerToken: token,
-    postId: c.req.param("postId"),
+    postId: routeParam(c, "postId"),
     locale: c.req.query("locale") ?? null,
     communityRepository,
   })
@@ -32,7 +36,7 @@ posts.post("/:postId/vote", handleRoute(async (c) => {
   const result = await castPostVote({
     env: c.env,
     bearerToken: token,
-    postId: c.req.param("postId"),
+    postId: routeParam(c, "postId"),
     value: body.value,
     userRepository: getUserRepository(c.env),
     communityRepository: getControlPlaneCommunityRepository(c.env),

@@ -418,9 +418,8 @@ export type CommunityPurchaseQuote = import("@pirate/api-contracts").CommunityPu
   destination_settlement_decimals?: number | null
 }
 
-export type Community = Omit<ContractCommunity, "gate_rules"> & {
+export type Community = ContractCommunity & {
   flair_policy?: CommunityFlairPolicy | null
-  gate_rules?: CommunityGateRule[] | null
 }
 
 export type CreatePostRequest = Omit<import("@pirate/api-contracts").CreatePostRequest, "media_refs"> & {
@@ -447,7 +446,7 @@ export type LocalizedPostResponse = import("@pirate/api-contracts").LocalizedPos
 
 export type MediaDescriptor = {
   storage_ref: string
-  mime_type: string
+  mime_type?: string | null
   size_bytes?: number | null
   content_hash?: string | null
   duration_ms?: number | null
