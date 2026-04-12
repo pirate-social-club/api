@@ -566,7 +566,7 @@ function serializeCommunityGateRules(rules: CommunityGateRuleRow[]): CommunityGa
     community_id: rule.community_id,
     scope: rule.scope,
     gate_family: rule.gate_family,
-    gate_type: rule.gate_type,
+    gate_type: rule.gate_type as CommunityGateRule["gate_type"],
     proof_requirements: rule.proof_requirements_json
       ? JSON.parse(rule.proof_requirements_json) as CommunityGateRule["proof_requirements"]
       : null,
