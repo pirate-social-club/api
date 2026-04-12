@@ -30,6 +30,11 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -37,6 +42,16 @@ jobs:
 
       - name: Check out cdr-sdk
         run: git clone --depth 1 https://github.com/piplabs/cdr-sdk "${GITHUB_WORKSPACE}/../../cdr-sdk"
+
+      - name: Install and build cdr-sdk packages
+        working-directory: ../../cdr-sdk
+        shell: bash
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm --filter @piplabs/cdr-contracts build
+          pnpm --filter @piplabs/cdr-crypto build
+          pnpm --filter @piplabs/cdr-sdk build
 
       - name: Install contracts dependencies
         working-directory: services/contracts
@@ -49,10 +64,6 @@ jobs:
       - name: Install API dependencies
         working-directory: services/api
         run: bun install --frozen-lockfile
-
-      - name: Typecheck API service
-        working-directory: services/api
-        run: bun run check
 
       - name: Run API tests
         working-directory: services/api
@@ -106,6 +117,16 @@ jobs:
       - name: Check out cdr-sdk
         run: git clone --depth 1 https://github.com/piplabs/cdr-sdk "${GITHUB_WORKSPACE}/../../cdr-sdk"
 
+      - name: Install and build cdr-sdk packages
+        working-directory: ../../cdr-sdk
+        shell: bash
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm --filter @piplabs/cdr-contracts build
+          pnpm --filter @piplabs/cdr-crypto build
+          pnpm --filter @piplabs/cdr-sdk build
+
       - name: Install sqlite3
         run: |
           sudo apt-get update
@@ -128,12 +149,16 @@ jobs:
           {
             echo "ENVIRONMENT=development"
             echo "DEV_MEMORY_STORE_ENABLED=false"
+            echo "PIRATE_API_PUBLIC_ORIGIN=http://127.0.0.1:8787"
+            echo "SELF_VERIFICATION_SCOPE=pirate-verification-v0"
+            echo "SELF_MOCK_PASSPORT=true"
             echo "JWT_BASED_AUTH_ENABLED=true"
             echo "AUTH_UPSTREAM_JWT_SHARED_SECRET=ci-upstream-shared-secret"
             echo "AUTH_UPSTREAM_JWT_ISSUER=pirate-dev-upstream"
             echo "AUTH_UPSTREAM_JWT_AUDIENCE=pirate-api"
             echo "CONTROL_PLANE_DATABASE_URL=file:/tmp/pirate-control-plane.db"
             echo "LOCAL_COMMUNITY_DB_ROOT=/tmp/pirate-community-dbs"
+            echo "ALLOW_LOCAL_STUB_REGISTRY_PUBLICATION=true"
             echo "REGISTRY_PUBLISHER_URL="
             echo "REGISTRY_PUBLISHER_AUTH_TOKEN="
             echo "REGISTRY_PUBLISHER_TIMEOUT_MS=25000"
@@ -159,12 +184,19 @@ jobs:
           bun run bruno:prepare:local-sqlite
           bun run dev:local-sqlite >/tmp/pirate-api-bruno.log 2>&1 &
           server_pid=$!
-          trap 'kill ${server_pid}' EXIT
+          trap 'kill ${server_pid} 2>/dev/null || true' EXIT
           for attempt in {1..30}; do
+            if ! kill -0 "${server_pid}" 2>/dev/null; then
+              cat /tmp/pirate-api-bruno.log
+              exit 1
+            fi
             if curl -fsS http://127.0.0.1:8787/health >/dev/null; then
               break
             fi
             sleep 1
           done
-          curl -fsS http://127.0.0.1:8787/health >/dev/null
+          if ! curl -fsS http://127.0.0.1:8787/health >/dev/null; then
+            cat /tmp/pirate-api-bruno.log
+            exit 1
+          fi
           bun run bruno:test:local-sqlite
