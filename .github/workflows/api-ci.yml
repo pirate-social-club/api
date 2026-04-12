@@ -40,14 +40,6 @@ jobs:
           repository: piplabs/cdr-sdk
           path: cdr-sdk
 
-      - name: Check out core lit-actions
-        uses: actions/checkout@v4
-        with:
-          repository: pirate-social-club/core
-          path: core
-          sparse-checkout: |
-            lit-actions
-
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -75,14 +67,6 @@ jobs:
           sdk_link_target="${GITHUB_WORKSPACE}/../../cdr-sdk"
           if [ ! -e "${sdk_link_target}" ]; then
             ln -s "${GITHUB_WORKSPACE}/cdr-sdk" "${sdk_link_target}"
-          fi
-
-      - name: Link lit-actions workspace
-        shell: bash
-        run: |
-          lit_actions_link_target="${GITHUB_WORKSPACE}/../lit-actions"
-          if [ ! -e "${lit_actions_link_target}" ]; then
-            ln -s "${GITHUB_WORKSPACE}/core/lit-actions" "${lit_actions_link_target}"
           fi
 
       - name: Install and build CDR SDK
@@ -172,14 +156,6 @@ jobs:
           repository: piplabs/cdr-sdk
           path: cdr-sdk
 
-      - name: Check out core lit-actions
-        uses: actions/checkout@v4
-        with:
-          repository: pirate-social-club/core
-          path: core
-          sparse-checkout: |
-            lit-actions
-
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -208,14 +184,6 @@ jobs:
           sdk_link_target="${GITHUB_WORKSPACE}/../../cdr-sdk"
           if [ ! -e "${sdk_link_target}" ]; then
             ln -s "${GITHUB_WORKSPACE}/cdr-sdk" "${sdk_link_target}"
-          fi
-
-      - name: Link lit-actions workspace
-        shell: bash
-        run: |
-          lit_actions_link_target="${GITHUB_WORKSPACE}/../lit-actions"
-          if [ ! -e "${lit_actions_link_target}" ]; then
-            ln -s "${GITHUB_WORKSPACE}/core/lit-actions" "${lit_actions_link_target}"
           fi
 
       - name: Install and build CDR SDK

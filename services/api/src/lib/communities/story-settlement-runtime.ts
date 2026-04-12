@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto"
-import { readFileSync } from "node:fs"
 import { privateKeyToAccount } from "viem/accounts"
 import type { Asset, Env } from "../../types"
 import { getStoryAeneidDeliveryDefaults } from "../posts/story-delivery-config"
+import { readLocalLitActionSource } from "../lit-action-source"
 
 const DEFAULT_IPFS_GATEWAY_URL = "https://psc.myfilebase.com/ipfs"
 const DEFAULT_LIT_CHIPOTLE_API_BASE_URL = "https://api.dev.litprotocol.com"
@@ -98,10 +98,7 @@ function buildSettledPurchasesCalldata(purchaseRef: string): string {
 }
 
 function readLocalActionSource(): string {
-  return readFileSync(
-    new URL("../../../../../../lit-actions/story-settlement/settle-purchase.js", import.meta.url),
-    "utf8",
-  )
+  return readLocalLitActionSource("story-settlement/settle-purchase.js")
 }
 
 async function fetchTextFromIpfs(ref: string, env: Env): Promise<string> {

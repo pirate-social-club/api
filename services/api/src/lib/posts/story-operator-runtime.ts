@@ -1,8 +1,8 @@
-import { readFileSync } from "node:fs"
 import { createPublicClient, createWalletClient, decodeFunctionResult, encodeFunctionData, http, parseAbi } from "viem"
 import { privateKeyToAccount } from "viem/accounts"
 import type { Asset, Env } from "../../types"
 import { getStoryAeneidDeliveryDefaults } from "./story-delivery-config"
+import { readLocalLitActionSource } from "../lit-action-source"
 
 const DEFAULT_IPFS_GATEWAY_URL = "https://psc.myfilebase.com/ipfs"
 const DEFAULT_LIT_CHIPOTLE_API_BASE_URL = "https://api.dev.litprotocol.com"
@@ -79,10 +79,7 @@ async function fetchTextFromIpfs(ref: string, env: Env): Promise<string> {
 }
 
 function readLocalActionSource(): string {
-  return readFileSync(
-    new URL("../../../../../../lit-actions/story-operator/bundled/publish-asset-version.bundle.js", import.meta.url),
-    "utf8",
-  )
+  return readLocalLitActionSource("story-operator/bundled/publish-asset-version.bundle.js")
 }
 
 async function litApiRequest(input: {

@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto"
-import { readFileSync } from "node:fs"
 import { privateKeyToAccount } from "viem/accounts"
 import type { Asset, AssetAccessProofResponse, Env } from "../../types"
 import { getStoryAeneidDeliveryDefaults } from "./story-delivery-config"
+import { readLocalLitActionSource } from "../lit-action-source"
 
 const DEFAULT_LIT_CHIPOTLE_API_BASE_URL = "https://api.dev.litprotocol.com"
 const DEFAULT_STORY_ACCESS_CONTROLLER_PKP_ADDRESS = "0x2125952f22Ad971df5645E31a613fe42DCC42c48"
@@ -89,10 +89,7 @@ function padHexData(value: string): string {
 }
 
 function readLocalActionSource(): string {
-  return readFileSync(
-    new URL("../../../../../../lit-actions/story-access-controller/sign-access-proof.js", import.meta.url),
-    "utf8",
-  )
+  return readLocalLitActionSource("story-access-controller/sign-access-proof.js")
 }
 
 async function fetchTextFromIpfs(ref: string, env: Env): Promise<string> {

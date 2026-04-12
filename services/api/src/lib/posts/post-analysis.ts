@@ -532,3 +532,16 @@ export async function markMediaAnalysisReferencesSatisfied(input: {
     args: [input.analysisResultId, input.updatedAt],
   })
 }
+
+export async function deleteMediaAnalysisResultsBySourcePostId(input: {
+  client: AnalysisExecutor
+  sourcePostId: string
+}): Promise<void> {
+  await input.client.execute({
+    sql: `
+      DELETE FROM media_analysis_results
+      WHERE source_post_id = ?1
+    `,
+    args: [input.sourcePostId],
+  })
+}

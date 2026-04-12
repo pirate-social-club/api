@@ -30,7 +30,7 @@ import {
   updatePostAssetId,
   upsertPostVote,
 } from "./community-post-store"
-import { markMediaAnalysisReferencesSatisfied } from "./post-analysis"
+import { deleteMediaAnalysisResultsBySourcePostId, markMediaAnalysisReferencesSatisfied } from "./post-analysis"
 import {
   canAccessCommunity,
   getCommunityMembershipState,
@@ -746,6 +746,10 @@ export async function createPost(input: {
         const cleanupTx = await db.client.transaction("write").catch(() => null)
         if (cleanupTx) {
           try {
+            await deleteMediaAnalysisResultsBySourcePostId({
+              client: cleanupTx,
+              sourcePostId: createdPostId,
+            })
             await deleteAssetsBySourcePostId({
               client: cleanupTx,
               sourcePostId: createdPostId,
@@ -971,6 +975,10 @@ export async function abandonHeldSongDraft(input: {
     const updatedAt = nowIso()
     const tx = await db.client.transaction("write")
     try {
+      await deleteMediaAnalysisResultsBySourcePostId({
+        client: tx,
+        sourcePostId: currentPost.post_id,
+      })
       await deleteAssetsBySourcePostId({
         client: tx,
         sourcePostId: currentPost.post_id,

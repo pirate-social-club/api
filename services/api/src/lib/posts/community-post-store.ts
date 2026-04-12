@@ -884,10 +884,28 @@ export async function createRightsReviewCase(input: {
   analysisResultRef: string | null
   createdAt: string
 }): Promise<string> {
+  const existing = await firstRow(
+    input.client,
+    `
+      SELECT rights_review_case_id
+      FROM rights_review_cases
+      WHERE subject_type = ?1
+        AND subject_id = ?2
+        AND trigger_source = ?3
+        AND status IN ('open', 'under_review')
+      ORDER BY created_at DESC, rights_review_case_id DESC
+      LIMIT 1
+    `,
+    [input.subjectType, input.subjectId, input.triggerSource],
+  )
+  if (existing) {
+    return requiredString(existing, "rights_review_case_id")
+  }
+
   const caseId = makeId("rrc")
   await input.client.execute({
     sql: `
-      INSERT OR IGNORE INTO rights_review_cases (
+      INSERT INTO rights_review_cases (
         rights_review_case_id, subject_type, subject_id, community_id,
         status, trigger_source, analysis_result_ref,
         submitted_evidence_refs_json, resolution, resolver_user_id,
@@ -907,21 +925,7 @@ export async function createRightsReviewCase(input: {
       input.triggerSource,
       input.analysisResultRef,
       input.createdAt,
-      ],
-    })
-  const existing = await firstRow(
-    input.client,
-    `
-      SELECT rights_review_case_id
-      FROM rights_review_cases
-      WHERE subject_type = ?1
-        AND subject_id = ?2
-        AND trigger_source = ?3
-        AND status IN ('open', 'under_review')
-      ORDER BY created_at DESC, rights_review_case_id DESC
-      LIMIT 1
-    `,
-    [input.subjectType, input.subjectId, input.triggerSource],
-  )
-  return existing ? requiredString(existing, "rights_review_case_id") : caseId
+    ],
+  })
+  return caseId
 }
