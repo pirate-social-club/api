@@ -34,6 +34,17 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Check out CDR SDK
+        uses: actions/checkout@v4
+        with:
+          repository: piplabs/cdr-sdk
+          path: cdr-sdk
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -49,6 +60,24 @@ jobs:
           key: ${{ runner.os }}-bun-1.2.21-api-${{ hashFiles('services/contracts/bun.lock', 'services/api/bun.lock') }}
           restore-keys: |
             ${{ runner.os }}-bun-1.2.21-api-
+
+      - name: Link CDR SDK workspace
+        shell: bash
+        run: |
+          sdk_link_target="${GITHUB_WORKSPACE}/../../cdr-sdk"
+          if [ ! -e "${sdk_link_target}" ]; then
+            ln -s "${GITHUB_WORKSPACE}/cdr-sdk" "${sdk_link_target}"
+          fi
+
+      - name: Install and build CDR SDK
+        working-directory: cdr-sdk
+        shell: bash
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm --filter @piplabs/cdr-contracts build
+          pnpm --filter @piplabs/cdr-crypto build
+          pnpm --filter @piplabs/cdr-sdk build
 
       - name: Install contracts dependencies
         working-directory: services/contracts
@@ -116,6 +145,12 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Check out CDR SDK
+        uses: actions/checkout@v4
+        with:
+          repository: piplabs/cdr-sdk
+          path: cdr-sdk
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -137,6 +172,24 @@ jobs:
           key: ${{ runner.os }}-bun-1.2.21-bruno-${{ hashFiles('services/contracts/bun.lock', 'services/api/bun.lock') }}
           restore-keys: |
             ${{ runner.os }}-bun-1.2.21-bruno-
+
+      - name: Link CDR SDK workspace
+        shell: bash
+        run: |
+          sdk_link_target="${GITHUB_WORKSPACE}/../../cdr-sdk"
+          if [ ! -e "${sdk_link_target}" ]; then
+            ln -s "${GITHUB_WORKSPACE}/cdr-sdk" "${sdk_link_target}"
+          fi
+
+      - name: Install and build CDR SDK
+        working-directory: cdr-sdk
+        shell: bash
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm --filter @piplabs/cdr-contracts build
+          pnpm --filter @piplabs/cdr-crypto build
+          pnpm --filter @piplabs/cdr-sdk build
 
       - name: Install sqlite3
         run: |

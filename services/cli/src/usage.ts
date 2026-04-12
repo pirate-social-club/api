@@ -14,7 +14,7 @@ export const USAGE_TEXT = [
   "  pirate verify namespace start <root>",
   "  pirate verify namespace complete <session_id> [--restart-challenge]",
   "  pirate verify namespace status <session_id|verification_id> [--kind session|verification|auto]",
-  "  pirate community create --display-name <name> --namespace-verification-id <id> [--description <text>]",
+  "  pirate community create --display-name <name> --namespace-verification-id <id>",
   "  pirate community get <community_id>",
   "  pirate job get <job_id>",
   "  pirate post create <community_id> --title <title> --body <body> [--idempotency-key <key>]",
