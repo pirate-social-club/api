@@ -40,6 +40,14 @@ jobs:
           repository: piplabs/cdr-sdk
           path: cdr-sdk
 
+      - name: Check out core lit-actions
+        uses: actions/checkout@v4
+        with:
+          repository: pirate-social-club/core
+          path: core
+          sparse-checkout: |
+            lit-actions
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -69,6 +77,14 @@ jobs:
             ln -s "${GITHUB_WORKSPACE}/cdr-sdk" "${sdk_link_target}"
           fi
 
+      - name: Link lit-actions workspace
+        shell: bash
+        run: |
+          lit_actions_link_target="${GITHUB_WORKSPACE}/../lit-actions"
+          if [ ! -e "${lit_actions_link_target}" ]; then
+            ln -s "${GITHUB_WORKSPACE}/core/lit-actions" "${lit_actions_link_target}"
+          fi
+
       - name: Install and build CDR SDK
         working-directory: cdr-sdk
         shell: bash
@@ -82,6 +98,11 @@ jobs:
       - name: Install contracts dependencies
         working-directory: services/contracts
         run: bun install --frozen-lockfile
+
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
 
       - name: Typecheck generated contracts package
         working-directory: services/contracts
@@ -151,6 +172,14 @@ jobs:
           repository: piplabs/cdr-sdk
           path: cdr-sdk
 
+      - name: Check out core lit-actions
+        uses: actions/checkout@v4
+        with:
+          repository: pirate-social-club/core
+          path: core
+          sparse-checkout: |
+            lit-actions
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -181,6 +210,14 @@ jobs:
             ln -s "${GITHUB_WORKSPACE}/cdr-sdk" "${sdk_link_target}"
           fi
 
+      - name: Link lit-actions workspace
+        shell: bash
+        run: |
+          lit_actions_link_target="${GITHUB_WORKSPACE}/../lit-actions"
+          if [ ! -e "${lit_actions_link_target}" ]; then
+            ln -s "${GITHUB_WORKSPACE}/core/lit-actions" "${lit_actions_link_target}"
+          fi
+
       - name: Install and build CDR SDK
         working-directory: cdr-sdk
         shell: bash
@@ -194,7 +231,7 @@ jobs:
       - name: Install sqlite3
         run: |
           sudo apt-get update
-          sudo apt-get install -y sqlite3
+          sudo apt-get install -y ffmpeg sqlite3
 
       - name: Install Bruno CLI
         run: npm install -g @usebruno/cli
