@@ -35,6 +35,9 @@ jobs:
         with:
           bun-version: 1.2.21
 
+      - name: Check out cdr-sdk
+        run: git clone --depth 1 https://github.com/piplabs/cdr-sdk "${GITHUB_WORKSPACE}/../cdr-sdk"
+
       - name: Install contracts dependencies
         working-directory: services/contracts
         run: bun install --frozen-lockfile
@@ -99,6 +102,9 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.2.21
+
+      - name: Check out cdr-sdk
+        run: git clone --depth 1 https://github.com/piplabs/cdr-sdk "${GITHUB_WORKSPACE}/../cdr-sdk"
 
       - name: Install sqlite3
         run: |
