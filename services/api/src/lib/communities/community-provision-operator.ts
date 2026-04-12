@@ -143,7 +143,7 @@ export async function provisionCommunityWithOperator(
         scope: "membership" | "viewer" | "posting"
         gateFamily: "token_holding" | "identity_proof"
         gateType: string
-        proofRequirementsJson: string
+        proofRequirementsJson: string | null
         chainNamespace: string | null
         gateConfigJson: string | null
       }>

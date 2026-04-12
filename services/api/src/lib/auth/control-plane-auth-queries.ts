@@ -12,6 +12,7 @@ import {
 import {
   type ExternalReputationSnapshotRow,
   type CommunityDatabaseBindingRow,
+  type CommunityDbCredentialRow,
   type CommunityMoneyPolicyRow,
   type CommunityPricingPolicyRow,
   type CommunityRegistryAttemptRow,
@@ -30,6 +31,7 @@ import {
   type WalletAttachmentRow,
   toExternalReputationSnapshotRow,
   toCommunityDatabaseBindingRow,
+  toCommunityDbCredentialRow,
   toCommunityMoneyPolicyRow,
   toCommunityPricingPolicyRow,
   toCommunityRegistryAttemptRow,
@@ -91,6 +93,7 @@ async function getLatestVerificationSessionRow(executor: DbExecutor, userId: str
   const row = await firstRow(executor, {
     sql: `
       SELECT verification_session_id, user_id, provider, wallet_attachment_id, requested_capabilities_json,
+             verification_intent, policy_id,
              status, result_ref, failure_code, completed_at, expires_at, created_at, updated_at
       FROM verification_sessions
       WHERE user_id = ?1
@@ -145,6 +148,32 @@ export async function getLatestRedditVerificationSessionRowForUsername(
       LIMIT 1
     `,
     args: [userId, redditUsername],
+  }).catch((error) => {
+    if (isMissingTableError(error, "reddit_verification_sessions")) {
+      return null
+    }
+    throw error
+  })
+
+  return row ? toRedditVerificationSessionRow(row) : null
+}
+
+export async function getLatestVerifiedRedditVerificationSessionRow(
+  executor: DbExecutor,
+  userId: string,
+): Promise<RedditVerificationSessionRow | null> {
+  const row = await firstRow(executor, {
+    sql: `
+      SELECT reddit_verification_session_id, user_id, reddit_username, verification_code, code_placement_surface,
+             status, verification_hint, failure_code, checked_count, last_checked_at, verified_at,
+             expires_at, created_at, updated_at
+      FROM reddit_verification_sessions
+      WHERE user_id = ?1
+        AND status = 'verified'
+      ORDER BY verified_at DESC, created_at DESC
+      LIMIT 1
+    `,
+    args: [userId],
   }).catch((error) => {
     if (isMissingTableError(error, "reddit_verification_sessions")) {
       return null
@@ -391,6 +420,29 @@ export async function getPrimaryCommunityDatabaseBindingRow(
   })
 
   return row ? toCommunityDatabaseBindingRow(row) : null
+}
+
+export async function getActiveCommunityDbCredentialRowByBindingId(
+  executor: DbExecutor,
+  communityDatabaseBindingId: string,
+): Promise<CommunityDbCredentialRow | null> {
+  const row = await firstRow(executor, {
+    sql: `
+      SELECT community_db_credential_id, community_database_binding_id, credential_kind, token_name,
+             encrypted_token, encryption_key_version, token_scope, status, issued_at,
+             invalidated_at, expires_at, created_at, updated_at
+      FROM community_db_credentials
+      WHERE community_database_binding_id = ?1
+        AND credential_kind = 'database_token'
+        AND token_scope = 'database'
+        AND status = 'active'
+      ORDER BY issued_at DESC, created_at DESC
+      LIMIT 1
+    `,
+    args: [communityDatabaseBindingId],
+  })
+
+  return row ? toCommunityDbCredentialRow(row) : null
 }
 
 export async function getCommunityMoneyPolicyRowByCommunityId(
