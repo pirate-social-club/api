@@ -1,8 +1,10 @@
 export type {
   AuthProof,
   CommunityMoneyPolicy,
+  CommunityPurchaseQuote,
   CommunityPurchaseQuotePreflight,
   CommunityPurchaseQuotePreflightRequest,
+  CommunityPurchaseQuoteRequest,
   CommunityCreateAcceptedResponse,
   CompleteNamespaceVerificationSessionRequest,
   CompleteVerificationSessionRequest,
@@ -46,7 +48,6 @@ export type {
 type ContractCreateCommunityRequest = import("@pirate/api-contracts").CreateCommunityRequest
 type ContractCommunity = import("@pirate/api-contracts").Community
 type ContractPost = import("@pirate/api-contracts").Post
-type ContractGateRule = NonNullable<ContractCommunity["gate_rules"]>[number]
 
 export type CreateCommunityRequest = ContractCreateCommunityRequest & {
   description?: string | null
@@ -262,7 +263,6 @@ export type UserReport = {
   user_report_id: string
   community_id: string
   post_id: string
-  moderation_case_id: string | null
   reporter_user_id: string
   reason_code: UserReportReasonCode
   note: string | null
@@ -318,7 +318,7 @@ export type ModerationCaseListResponse = {
 
 export type ModerationCaseDetail = {
   case: ModerationCase
-  post: ContractPost
+  post: Post
   signals: ModerationSignal[]
   reports: UserReport[]
   actions: ModerationAction[]
@@ -390,20 +390,28 @@ export type CommunityReferenceLinkAdmin = {
   updated_at: string
 }
 
-export type CommunityGateRule = ContractGateRule
-
-export type CommunityPurchaseQuoteRequest = import("@pirate/api-contracts").CommunityPurchaseQuoteRequest & {
-  destination_settlement_amount_atomic?: string | null
-  destination_settlement_decimals?: number | null
+export type CommunityGateRule = {
+  gate_rule_id: string
+  community_id: string
+  scope: "membership" | "viewer" | "posting"
+  gate_family: "identity_proof" | "token_holding"
+  gate_type: string
+  proof_requirements?: Array<{
+    proof_type: string
+    accepted_providers?: string[] | null
+    accepted_mechanisms?: string[] | null
+    config?: Record<string, unknown> | null
+  }> | null
+  chain_namespace?: string | null
+  gate_config?: Record<string, unknown> | null
+  status: "active" | "disabled"
+  created_at: string
+  updated_at: string
 }
 
-export type CommunityPurchaseQuote = import("@pirate/api-contracts").CommunityPurchaseQuote & {
-  destination_settlement_amount_atomic?: string | null
-  destination_settlement_decimals?: number | null
-}
-
-export type Community = ContractCommunity & {
+export type Community = Omit<ContractCommunity, "gate_rules"> & {
   flair_policy?: CommunityFlairPolicy | null
+  gate_rules?: CommunityGateRule[] | null
 }
 
 export type CreatePostRequest = Omit<import("@pirate/api-contracts").CreatePostRequest, "media_refs"> & {
@@ -430,7 +438,7 @@ export type LocalizedPostResponse = import("@pirate/api-contracts").LocalizedPos
 
 export type MediaDescriptor = {
   storage_ref: string
-  mime_type?: string | null
+  mime_type: string
   size_bytes?: number | null
   content_hash?: string | null
   duration_ms?: number | null

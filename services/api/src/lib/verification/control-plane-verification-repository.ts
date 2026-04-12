@@ -31,10 +31,12 @@ import {
   inspectSpacesNamespace,
   verifySpacesNamespaceSignature,
 } from "./spaces-verifier"
+import { resolveVerificationSessionPolicy } from "./verification-policies"
 import type {
   Env,
   NamespaceVerification,
   NamespaceVerificationSession,
+  StartVerificationSessionRequest,
   VerificationSession,
 } from "../../types"
 
@@ -60,7 +62,16 @@ type SelfSdkModule = {
       proof: unknown,
       pubSignals: unknown[],
       userContextData: string,
-    ) => Promise<{ attestationId: string | number }>
+    ) => Promise<{
+      attestationId: string | number
+      isValidDetails?: {
+        isMinimumAgeValid?: boolean
+      }
+      discloseOutput?: {
+        nationality?: string
+        gender?: string
+      }
+    }>
   }
 }
 
@@ -263,10 +274,20 @@ async function upsertNamespaceAssertion(
   const scopeId = input.namespaceVerificationId ?? input.namespaceVerificationSessionId
   await client.execute({
     sql: `
-      INSERT OR REPLACE INTO namespace_verification_assertions (
+      INSERT INTO namespace_verification_assertions (
         assertion_record_id, namespace_verification_session_id, namespace_verification_id, family, assertion_name,
         assertion_value, source_evidence_bundle_id, status, first_accepted_at, last_revalidated_at, created_at, updated_at
       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'accepted', ?8, ?8, ?8, ?8)
+      ON CONFLICT (assertion_record_id) DO UPDATE SET
+        namespace_verification_session_id = excluded.namespace_verification_session_id,
+        namespace_verification_id = excluded.namespace_verification_id,
+        family = excluded.family,
+        assertion_name = excluded.assertion_name,
+        assertion_value = excluded.assertion_value,
+        source_evidence_bundle_id = excluded.source_evidence_bundle_id,
+        status = excluded.status,
+        last_revalidated_at = excluded.last_revalidated_at,
+        updated_at = excluded.updated_at
     `,
     args: [
       `nva_${scopeId}_${input.assertionName}`,
@@ -296,10 +317,17 @@ async function upsertNamespaceCapability(
   const scopeId = input.namespaceVerificationId ?? input.namespaceVerificationSessionId
   await client.execute({
     sql: `
-      INSERT OR REPLACE INTO namespace_verification_capabilities (
+      INSERT INTO namespace_verification_capabilities (
         capability_record_id, namespace_verification_session_id, namespace_verification_id, family, capability_name,
         capability_value, source_evidence_bundle_id, status, first_accepted_at, last_revalidated_at, created_at, updated_at
       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'accepted', ?8, ?8, ?8, ?8)
+      ON CONFLICT (namespace_verification_session_id, capability_name, status) DO UPDATE SET
+        namespace_verification_id = excluded.namespace_verification_id,
+        family = excluded.family,
+        capability_value = excluded.capability_value,
+        source_evidence_bundle_id = excluded.source_evidence_bundle_id,
+        last_revalidated_at = excluded.last_revalidated_at,
+        updated_at = excluded.updated_at
     `,
     args: [
       `nvc_${scopeId}_${input.capabilityName}`,
@@ -344,7 +372,7 @@ async function insertOrReplaceNamespaceVerification(
 ) {
   await client.execute({
     sql: `
-      INSERT OR REPLACE INTO namespace_verifications (
+      INSERT INTO namespace_verifications (
         namespace_verification_id, source_namespace_verification_session_id, user_id, family, normalized_root_label,
         status, root_exists, root_control_verified, expiry_horizon_sufficient, routing_enabled,
         pirate_dns_authority_verified, club_attach_allowed, pirate_web_routing_allowed, pirate_subdomain_issuance_allowed,
@@ -359,6 +387,31 @@ async function insertOrReplaceNamespaceVerification(
         ?20, ?21, ?22, ?23,
         ?18, ?18
       )
+      ON CONFLICT (namespace_verification_id) DO UPDATE SET
+        source_namespace_verification_session_id = excluded.source_namespace_verification_session_id,
+        user_id = excluded.user_id,
+        family = excluded.family,
+        normalized_root_label = excluded.normalized_root_label,
+        status = excluded.status,
+        root_exists = excluded.root_exists,
+        root_control_verified = excluded.root_control_verified,
+        expiry_horizon_sufficient = excluded.expiry_horizon_sufficient,
+        routing_enabled = excluded.routing_enabled,
+        pirate_dns_authority_verified = excluded.pirate_dns_authority_verified,
+        club_attach_allowed = excluded.club_attach_allowed,
+        pirate_web_routing_allowed = excluded.pirate_web_routing_allowed,
+        pirate_subdomain_issuance_allowed = excluded.pirate_subdomain_issuance_allowed,
+        control_class = excluded.control_class,
+        operation_class = excluded.operation_class,
+        observation_provider = excluded.observation_provider,
+        evidence_bundle_ref = excluded.evidence_bundle_ref,
+        accepted_at = excluded.accepted_at,
+        expires_at = excluded.expires_at,
+        anchor_height = excluded.anchor_height,
+        anchor_block_hash = excluded.anchor_block_hash,
+        anchor_root_hash = excluded.anchor_root_hash,
+        proof_root_hash = excluded.proof_root_hash,
+        updated_at = excluded.updated_at
     `,
     args: [
       input.namespaceVerificationId,
@@ -396,6 +449,106 @@ function parseRequestedCapabilities(raw: string): Array<"unique_human" | "age_ov
   return JSON.parse(raw) as Array<"unique_human" | "age_over_18" | "nationality" | "gender">
 }
 
+const VALID_VERIFICATION_INTENTS = new Set<NonNullable<StartVerificationSessionRequest["verification_intent"]>>([
+  "profile_verification",
+  "community_creation",
+  "ucommunity_join",
+  "post_access_18_plus",
+  "commerce_pricing",
+  "qualifier_disclosure",
+])
+
+const SUPPORTED_REQUESTED_CAPABILITIES = new Set([
+  "unique_human",
+  "age_over_18",
+  "nationality",
+  "gender",
+] as const)
+
+const VALID_REQUESTED_CAPABILITIES_BY_PROVIDER = {
+  self: new Set(["unique_human", "age_over_18", "nationality", "gender"]),
+  very: new Set(["unique_human"]),
+} as const
+
+function normalizeRequestedCapabilities(input: {
+  provider: "self" | "very"
+  requestedCapabilities?: Array<"unique_human" | "age_over_18" | "nationality" | "gender"> | null
+}): Array<"unique_human" | "age_over_18" | "nationality" | "gender"> {
+  const rawCapabilities = input.requestedCapabilities ?? ["unique_human"]
+  if (rawCapabilities.length === 0) {
+    throw badRequestError("requested_capabilities must contain at least one capability")
+  }
+
+  const validCapabilities = VALID_REQUESTED_CAPABILITIES_BY_PROVIDER[input.provider]
+  const normalized: Array<"unique_human" | "age_over_18" | "nationality" | "gender"> = []
+  for (const capability of rawCapabilities) {
+    if (!SUPPORTED_REQUESTED_CAPABILITIES.has(capability)) {
+      throw badRequestError(`Unsupported requested capability ${String(capability)}`)
+    }
+    if (!validCapabilities.has(capability)) {
+      throw badRequestError(`${input.provider} does not support requested capability ${capability}`)
+    }
+    if (!normalized.includes(capability)) {
+      normalized.push(capability)
+    }
+  }
+
+  if (!normalized.includes("unique_human")) {
+    normalized.unshift("unique_human")
+  }
+
+  return normalized
+}
+
+function normalizeVerificationIntent(
+  value: StartVerificationSessionRequest["verification_intent"] | undefined,
+): StartVerificationSessionRequest["verification_intent"] | null {
+  if (value == null) {
+    return null
+  }
+  if (!VALID_VERIFICATION_INTENTS.has(value)) {
+    throw badRequestError(`Unsupported verification intent ${String(value)}`)
+  }
+  return value
+}
+
+function normalizePolicyId(value: string | null | undefined): string | null {
+  if (value == null) {
+    return null
+  }
+  const normalized = value.trim()
+  return normalized.length > 0 ? normalized : null
+}
+
+async function normalizeNationalityValue(rawValue: string | null | undefined): Promise<string | null> {
+  if (typeof rawValue !== "string" || rawValue.trim().length === 0) {
+    return null
+  }
+
+  const normalized = rawValue.trim().toUpperCase()
+  if (/^[A-Z]{2}$/u.test(normalized)) {
+    return normalized
+  }
+
+  if (/^[A-Z]{3}$/u.test(normalized)) {
+    try {
+      const primarySpecifier = "country-iso-3-to-2"
+      const fallbackSpecifier = "../../../../../../pirate-web/node_modules/country-iso-3-to-2/index.js"
+      const module = await import(primarySpecifier)
+        .catch(async () => await import(fallbackSpecifier))
+      const getCountryIso2 = (module.default ?? module) as (value: string) => string | undefined
+      const alpha2 = getCountryIso2(normalized)
+      return typeof alpha2 === "string" && /^[A-Z]{2}$/u.test(alpha2.toUpperCase())
+        ? alpha2.toUpperCase()
+        : null
+    } catch {
+      return null
+    }
+  }
+
+  return null
+}
+
 function parseSelfCallbackRequestBody(value: unknown) {
   const body = (value ?? {}) as SelfCallbackRequestBody
   const attestationIdRaw = body.attestationId
@@ -426,10 +579,11 @@ function parseSelfCallbackRequestBody(value: unknown) {
 
 async function loadSelfSdk(): Promise<SelfSdkModule> {
   const importBySpecifier = async (specifier: string): Promise<unknown> => await import(specifier)
+  const fallbackSpecifier = "../../../../../../pirate-web/node_modules/@selfxyz/core/dist/index.js"
 
   if (!selfSdkModulePromise) {
     selfSdkModulePromise = importBySpecifier("@selfxyz/core")
-      .catch(async () => await importBySpecifier("../../../../../pirate-web/node_modules/@selfxyz/core/dist/index.js"))
+      .catch(async () => await importBySpecifier(fallbackSpecifier))
       .then((module) => module as SelfSdkModule)
       .catch(() => {
         selfSdkModulePromise = null
@@ -474,6 +628,12 @@ async function verifySelfCallback(input: {
       pubSignals: parsed.pubSignals,
       userContextData: parsed.userContextData,
     })).digest("hex"),
+    requestedCapabilities,
+    isMinimumAgeValid: verification.isValidDetails?.isMinimumAgeValid === true,
+    nationality: await normalizeNationalityValue(verification.discloseOutput?.nationality),
+    gender: typeof verification.discloseOutput?.gender === "string" && verification.discloseOutput.gender.trim().length > 0
+      ? verification.discloseOutput.gender.trim().toUpperCase()
+      : null,
   }
 }
 
@@ -520,6 +680,7 @@ async function getVerificationSessionRowForUser(
   const row = await firstRow(client, {
     sql: `
       SELECT verification_session_id, user_id, provider, wallet_attachment_id, requested_capabilities_json,
+             verification_intent, policy_id,
              status, upstream_session_ref, result_ref, failure_code, completed_at, expires_at, created_at, updated_at
       FROM verification_sessions
       WHERE verification_session_id = ?1
@@ -539,6 +700,7 @@ async function getVerificationSessionRowById(
   const row = await firstRow(client, {
     sql: `
       SELECT verification_session_id, user_id, provider, wallet_attachment_id, requested_capabilities_json,
+             verification_intent, policy_id,
              status, upstream_session_ref, result_ref, failure_code, completed_at, expires_at, created_at, updated_at
       FROM verification_sessions
       WHERE verification_session_id = ?1
@@ -660,6 +822,9 @@ export async function startVerificationSession(
     userId: string
     provider: "self" | "very"
     walletAttachmentId?: string | null
+    requestedCapabilities?: Array<"unique_human" | "age_over_18" | "nationality" | "gender"> | null
+    verificationIntent?: StartVerificationSessionRequest["verification_intent"]
+    policyId?: string | null
     env?: Env
   },
 ): Promise<VerificationSession> {
@@ -667,21 +832,35 @@ export async function startVerificationSession(
   const createdAt = now.toISOString()
   const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString()
   const verificationSessionId = makeId("ver")
+  const requestedCapabilities = normalizeRequestedCapabilities({
+    provider: input.provider,
+    requestedCapabilities: input.requestedCapabilities,
+  })
+  const verificationIntent = normalizeVerificationIntent(input.verificationIntent)
+  const policyId = normalizePolicyId(input.policyId)
+  const policyResolved = resolveVerificationSessionPolicy({
+    provider: input.provider,
+    requestedCapabilities,
+    verificationIntent,
+    policyId,
+  })
 
   await client.execute({
     sql: `
       INSERT INTO verification_sessions (
         verification_session_id, user_id, provider, wallet_attachment_id, session_kind, requested_capabilities_json,
-        status, upstream_session_ref, result_ref, failure_code, started_at, completed_at,
-        expires_at, created_at, updated_at
-      ) VALUES (?1, ?2, ?3, ?4, 'identity_proof', ?5, 'pending', ?6, NULL, NULL, ?7, NULL, ?8, ?7, ?7)
+        verification_intent, policy_id, status, upstream_session_ref, result_ref, failure_code, started_at,
+        completed_at, expires_at, created_at, updated_at
+      ) VALUES (?1, ?2, ?3, ?4, 'identity_proof', ?5, ?6, ?7, 'pending', ?8, NULL, NULL, ?9, NULL, ?10, ?9, ?9)
     `,
     args: [
       verificationSessionId,
       input.userId,
       input.provider,
       input.walletAttachmentId ?? null,
-      JSON.stringify(["unique_human"]),
+      JSON.stringify(policyResolved.requestedCapabilities),
+      policyResolved.verificationIntent ?? null,
+      policyResolved.policyId,
       input.provider === "self" && input.env ? buildVerificationCallbackUrl(input.env, verificationSessionId) : null,
       createdAt,
       expiresAt,
@@ -717,6 +896,12 @@ export async function completeVerificationSession(
     attestationId?: string | null
     proofHash?: string | null
     proof?: string | null
+    requestedCapabilities?: Array<"unique_human" | "age_over_18" | "nationality" | "gender"> | null
+    selfDisclosures?: {
+      isMinimumAgeValid?: boolean | null
+      nationality?: string | null
+      gender?: string | null
+    } | null
     env: Env
   },
 ): Promise<VerificationSession | null> {
@@ -733,6 +918,7 @@ export async function completeVerificationSession(
   if (!userRow) {
     throw internalError("User row missing while completing verification session")
   }
+  const requestedCapabilities = input.requestedCapabilities ?? parseRequestedCapabilities(row.requested_capabilities_json)
 
   let resolvedProofHash = input.proofHash ?? null
   let mechanism = row.provider === "self" ? "self-sdk" : "session_complete"
@@ -755,6 +941,42 @@ export async function completeVerificationSession(
     proof_type: "unique_human",
     mechanism,
     verified_at: updatedAt,
+  }
+
+  if (row.provider === "self" && requestedCapabilities.includes("age_over_18") && input.selfDisclosures?.isMinimumAgeValid === true) {
+    capabilities.age_over_18 = {
+      state: "verified",
+      provider: "self",
+      proof_type: "age_over_18",
+      mechanism: "self-sdk",
+      verified_at: updatedAt,
+    }
+  }
+
+  if (row.provider === "self" && requestedCapabilities.includes("nationality") && typeof input.selfDisclosures?.nationality === "string") {
+    capabilities.nationality = {
+      state: "verified",
+      value: input.selfDisclosures.nationality,
+      provider: "self",
+      proof_type: "nationality",
+      mechanism: "zk-nationality",
+      verified_at: updatedAt,
+    }
+  }
+
+  if (
+    row.provider === "self"
+    && requestedCapabilities.includes("gender")
+    && (input.selfDisclosures?.gender === "M" || input.selfDisclosures?.gender === "F")
+  ) {
+    capabilities.gender = {
+      state: "verified",
+      value: input.selfDisclosures.gender,
+      provider: "self",
+      proof_type: "gender",
+      mechanism: "self-sdk",
+      verified_at: updatedAt,
+    }
   }
 
   await client.batch([
@@ -786,11 +1008,19 @@ export async function completeVerificationSession(
             capability_provider = ?2,
             verification_capabilities_json = ?3,
             verified_at = ?4,
+            nationality = ?6,
             current_verification_session_id = ?1,
             updated_at = ?4
         WHERE user_id = ?5
       `,
-      args: [input.verificationSessionId, row.provider, JSON.stringify(capabilities), updatedAt, input.userId],
+      args: [
+        input.verificationSessionId,
+        row.provider,
+        JSON.stringify(capabilities),
+        updatedAt,
+        input.userId,
+        capabilities.nationality.state === "verified" ? capabilities.nationality.value ?? null : null,
+      ],
     },
   ], "write")
 
@@ -833,6 +1063,12 @@ export async function completeVerificationSessionByCallback(
     userId: row.user_id,
     attestationId: verified.attestationId,
     proofHash: verified.proofHash,
+    requestedCapabilities: verified.requestedCapabilities,
+    selfDisclosures: {
+      isMinimumAgeValid: verified.isMinimumAgeValid,
+      nationality: verified.nationality,
+      gender: verified.gender === "M" || verified.gender === "F" ? verified.gender : null,
+    },
     env: input.env,
   })
 }
@@ -1747,7 +1983,7 @@ export async function completeNamespaceVerificationSession(
       },
       {
         sql: `
-          INSERT OR REPLACE INTO namespace_verifications (
+          INSERT INTO namespace_verifications (
             namespace_verification_id, source_namespace_verification_session_id, user_id, family, normalized_root_label,
             status, root_exists, root_control_verified, expiry_horizon_sufficient, routing_enabled,
             pirate_dns_authority_verified, club_attach_allowed, pirate_web_routing_allowed, pirate_subdomain_issuance_allowed,
@@ -1756,6 +1992,27 @@ export async function completeNamespaceVerificationSession(
             ?1, ?2, ?3, 'hns', ?4, 'verified', 1, 1, ?5, ?6, ?7, ?8, ?9, ?10,
             ?11, ?12, ?13, ?14, ?15, ?16, ?15, ?15
           )
+          ON CONFLICT (namespace_verification_id) DO UPDATE SET
+            source_namespace_verification_session_id = excluded.source_namespace_verification_session_id,
+            user_id = excluded.user_id,
+            family = excluded.family,
+            normalized_root_label = excluded.normalized_root_label,
+            status = excluded.status,
+            root_exists = excluded.root_exists,
+            root_control_verified = excluded.root_control_verified,
+            expiry_horizon_sufficient = excluded.expiry_horizon_sufficient,
+            routing_enabled = excluded.routing_enabled,
+            pirate_dns_authority_verified = excluded.pirate_dns_authority_verified,
+            club_attach_allowed = excluded.club_attach_allowed,
+            pirate_web_routing_allowed = excluded.pirate_web_routing_allowed,
+            pirate_subdomain_issuance_allowed = excluded.pirate_subdomain_issuance_allowed,
+            control_class = excluded.control_class,
+            operation_class = excluded.operation_class,
+            observation_provider = excluded.observation_provider,
+            evidence_bundle_ref = excluded.evidence_bundle_ref,
+            accepted_at = excluded.accepted_at,
+            expires_at = excluded.expires_at,
+            updated_at = excluded.updated_at
         `,
         args: [
           verificationId,
@@ -1831,7 +2088,7 @@ export async function completeNamespaceVerificationSession(
     },
     {
       sql: `
-        INSERT OR REPLACE INTO namespace_verifications (
+        INSERT INTO namespace_verifications (
           namespace_verification_id, source_namespace_verification_session_id, user_id, family, normalized_root_label,
           status, root_exists, root_control_verified, expiry_horizon_sufficient, routing_enabled,
           pirate_dns_authority_verified, club_attach_allowed, pirate_web_routing_allowed, pirate_subdomain_issuance_allowed,
@@ -1840,6 +2097,27 @@ export async function completeNamespaceVerificationSession(
           ?1, ?2, ?3, 'hns', ?4, 'verified', 1, 1, 1, 1, 0, 1, 1, 0,
           'single_holder_root', 'owner_managed_namespace', 'local_stub', ?5, ?6, ?7, ?6, ?6
         )
+        ON CONFLICT (namespace_verification_id) DO UPDATE SET
+          source_namespace_verification_session_id = excluded.source_namespace_verification_session_id,
+          user_id = excluded.user_id,
+          family = excluded.family,
+          normalized_root_label = excluded.normalized_root_label,
+          status = excluded.status,
+          root_exists = excluded.root_exists,
+          root_control_verified = excluded.root_control_verified,
+          expiry_horizon_sufficient = excluded.expiry_horizon_sufficient,
+          routing_enabled = excluded.routing_enabled,
+          pirate_dns_authority_verified = excluded.pirate_dns_authority_verified,
+          club_attach_allowed = excluded.club_attach_allowed,
+          pirate_web_routing_allowed = excluded.pirate_web_routing_allowed,
+          pirate_subdomain_issuance_allowed = excluded.pirate_subdomain_issuance_allowed,
+          control_class = excluded.control_class,
+          operation_class = excluded.operation_class,
+          observation_provider = excluded.observation_provider,
+          evidence_bundle_ref = excluded.evidence_bundle_ref,
+          accepted_at = excluded.accepted_at,
+          expires_at = excluded.expires_at,
+          updated_at = excluded.updated_at
       `,
       args: [verificationId, input.namespaceVerificationSessionId, input.userId, row.normalized_root_label ?? row.submitted_root_label.toLowerCase(), evidenceBundleId, updatedAt, expiresAt],
     },
@@ -1879,6 +2157,9 @@ export interface VerificationRepository {
     userId: string
     provider: "self" | "very"
     walletAttachmentId?: string | null
+    requestedCapabilities?: Array<"unique_human" | "age_over_18" | "nationality" | "gender"> | null
+    verificationIntent?: StartVerificationSessionRequest["verification_intent"]
+    policyId?: string | null
   }): Promise<VerificationSession>
   getVerificationSession(verificationSessionId: string, userId: string): Promise<VerificationSession | null>
   completeVerificationSession(input: {
@@ -1922,6 +2203,9 @@ export class ControlPlaneVerificationRepository implements VerificationRepositor
     userId: string
     provider: "self" | "very"
     walletAttachmentId?: string | null
+    requestedCapabilities?: Array<"unique_human" | "age_over_18" | "nationality" | "gender"> | null
+    verificationIntent?: StartVerificationSessionRequest["verification_intent"]
+    policyId?: string | null
   }): Promise<VerificationSession> {
     return startVerificationSession(this.client, {
       ...input,
