@@ -26,7 +26,7 @@ function readConfig(): StoryAeneidDeliveryConfig {
   if (cachedConfig) {
     return cachedConfig
   }
-  const raw = readFileSync(new URL("../../../../../../config/story-aeneid-delivery.json", import.meta.url), "utf8")
+  const raw = readFileSync(new URL("../../../../../config/story-aeneid-delivery.json", import.meta.url), "utf8")
   cachedConfig = JSON.parse(raw) as StoryAeneidDeliveryConfig
   return cachedConfig
 }

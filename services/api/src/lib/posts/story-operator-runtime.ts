@@ -80,7 +80,7 @@ async function fetchTextFromIpfs(ref: string, env: Env): Promise<string> {
 
 function readLocalActionSource(): string {
   return readFileSync(
-    new URL("../../../../../../lit-actions/story-operator/bundled/publish-asset-version.bundle.js", import.meta.url),
+    new URL("../../../../../lit-actions/story-operator/bundled/publish-asset-version.bundle.js", import.meta.url),
     "utf8",
   )
 }

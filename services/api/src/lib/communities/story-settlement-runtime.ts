@@ -99,7 +99,7 @@ function buildSettledPurchasesCalldata(purchaseRef: string): string {
 
 function readLocalActionSource(): string {
   return readFileSync(
-    new URL("../../../../../../lit-actions/story-settlement/settle-purchase.js", import.meta.url),
+    new URL("../../../../../lit-actions/story-settlement/settle-purchase.js", import.meta.url),
     "utf8",
   )
 }

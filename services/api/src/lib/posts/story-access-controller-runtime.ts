@@ -90,7 +90,7 @@ function padHexData(value: string): string {
 
 function readLocalActionSource(): string {
   return readFileSync(
-    new URL("../../../../../../lit-actions/story-access-controller/sign-access-proof.js", import.meta.url),
+    new URL("../../../../../lit-actions/story-access-controller/sign-access-proof.js", import.meta.url),
     "utf8",
   )
 }
