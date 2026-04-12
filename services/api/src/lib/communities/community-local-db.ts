@@ -238,7 +238,7 @@ function toLocalCommunitySnapshot(row: Record<string, unknown>): LocalCommunityS
 }
 
 function resolveCommunityTemplateMigrationsDir(): string {
-  return fileURLToPath(new URL("../../../../../../db/community-template/migrations/", import.meta.url))
+  return fileURLToPath(new URL("../../../../../db/community-template/migrations/", import.meta.url))
 }
 
 function splitSqlStatements(sql: string): string[] {
@@ -311,6 +311,26 @@ async function applyMigrationFile(client: Client, migrationFilePath: string): Pr
     if (existingChecksum !== checksum) {
       throw internalError(`Migration checksum mismatch for ${migrationName}`)
     }
+    return
+  }
+
+  const duplicate = await client.execute({
+    sql: `
+      SELECT migration_name
+      FROM schema_migrations
+      WHERE checksum = ?1
+      LIMIT 1
+    `,
+    args: [checksum],
+  })
+  if (duplicate.rows[0]?.migration_name) {
+    await client.execute({
+      sql: `
+        INSERT INTO schema_migrations (migration_name, migration_label, checksum)
+        VALUES (?1, 'community-template', ?2)
+      `,
+      args: [migrationName, checksum],
+    })
     return
   }
 

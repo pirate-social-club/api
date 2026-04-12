@@ -1,9 +1,8 @@
 import { TextEncoder } from "node:util"
 import { createPublicClient, createWalletClient, encodeAbiParameters, http, parseEventLogs, toHex } from "viem"
 import { privateKeyToAccount } from "viem/accounts"
-import { encryptFile } from "../../../../../../../cdr-sdk/packages/crypto/dist/index.js"
-import { cdrAbi, contractAddresses } from "../../../../../../../cdr-sdk/packages/contracts/dist/index.js"
-import { uuidToLabel } from "../../../../../../../cdr-sdk/packages/sdk/dist/label.js"
+import { encryptFile } from "@piplabs/cdr-crypto"
+import { cdrAbi, contractAddresses } from "@piplabs/cdr-contracts"
 import type { Asset, Env } from "../../types"
 import { persistSongArtifactUpload } from "./local-song-artifact-upload-storage"
 import { readStoredSongArtifactBytes } from "./song-artifact-storage"
@@ -123,6 +122,13 @@ function normalizeCidLike(value: string): string {
   return trimmed.startsWith("ipfs://") ? trimmed.slice("ipfs://".length) : trimmed
 }
 
+function uuidToLabel(uuid: number): Uint8Array {
+  const label = new Uint8Array(32)
+  const view = new DataView(label.buffer)
+  view.setUint32(28, uuid, false)
+  return label
+}
+
 function assertSuccessfulReceipt(input: {
   status: string
   label: string
@@ -211,11 +217,11 @@ export async function uploadSongAssetToCdrViaSdk(input: {
   const account = privateKeyToAccount(privateKey)
   const publicClient = createPublicClient({
     transport: http(rpcUrl),
-  }) as unknown as ConstructorParameters<typeof CDRClient>[0]["publicClient"]
+  })
   const walletClient = createWalletClient({
     account,
     transport: http(rpcUrl),
-  }) as unknown as NonNullable<ConstructorParameters<typeof CDRClient>[0]["walletClient"]>
+  })
   const dkg = resolveCdrDkgConfig(input.env)
 
   await ensureCdrWasm()

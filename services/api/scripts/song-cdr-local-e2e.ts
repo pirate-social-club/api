@@ -7,6 +7,7 @@ import { basename, join } from "node:path"
 import { createClient } from "@libsql/client"
 import { createPublicClient, createWalletClient, encodeFunctionData, http } from "viem"
 import { privateKeyToAccount } from "viem/accounts"
+import { cdrAbi, contractAddresses } from "@piplabs/cdr-contracts"
 import app from "../src/index"
 import { CDRClient, initWasm, type StorageProvider } from "../src/lib/posts/story-cdr-sdk-client"
 import { getStoryAeneidDeliveryDefaults } from "../src/lib/posts/story-delivery-config"
@@ -15,7 +16,6 @@ import { buildStoryPurchaseRef } from "../src/lib/communities/story-settlement-r
 import { createRouteTestContext, json, mintUpstreamJwt, resetRuntimeCaches } from "../tests/helpers"
 import { readDevVarsFromCwd } from "./_lib/dev-vars"
 import { assertIpfsUnixFsCid } from "./_lib/ipfs-cid"
-import { cdrAbi, contractAddresses } from "../../../../../cdr-sdk/packages/contracts/dist/index.js"
 
 type UploadedSongArtifact = {
   song_artifact_upload_id: string

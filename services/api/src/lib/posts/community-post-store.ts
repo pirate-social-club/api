@@ -1,7 +1,7 @@
 import type { Client, InValue, Transaction } from "@libsql/client"
-import { badRequestError, internalError } from "../errors"
+import { analysisBlockedError, badRequestError, internalError } from "../errors"
 import { makeId } from "../helpers"
-import { resolvePrePublishAnalysis, persistMediaAnalysisResult } from "./post-analysis"
+import { resolvePrePublishAnalysis, persistMediaAnalysisResult, type PrePublishAnalysisResult } from "./post-analysis"
 import { numberOrNull, requiredNumber, requiredString, rowValue, stringOrNull } from "../sql-row"
 import type { CreatePostRequest, LocalizedPostResponse, Post, Env } from "../../types"
 
@@ -144,6 +144,97 @@ async function firstRow(client: PostExecutor, sql: string, args: InValue[]): Pro
   return result.rows[0] ?? null
 }
 
+function shouldCreatePrePublishModerationCase(result: PrePublishAnalysisResult): boolean {
+  if (result.outcome !== "review_required") {
+    return false
+  }
+  if (!result.policyReasonCode) {
+    return true
+  }
+  if (result.policyReasonCode === "derivative_without_upstream_refs" || result.policyReasonCode === "duplicate_audio_hash") {
+    return false
+  }
+  // ACRCloud-derived review holds are publish gates, not moderator queue work in v0.
+  if (result.policyReasonCode.startsWith("acrcloud_")) {
+    return false
+  }
+  return true
+}
+
+async function createPrePublishModerationCase(input: {
+  client: PostExecutor
+  communityId: string
+  postId: string
+  analysisResultRef: string
+  analysis: PrePublishAnalysisResult
+  createdAt: string
+}): Promise<void> {
+  const insertedCaseId = makeId("mcs")
+  await input.client.execute({
+    sql: `
+      INSERT OR IGNORE INTO moderation_cases (
+        moderation_case_id, community_id, post_id, status, queue_scope, priority, opened_by, created_at, updated_at, resolved_at
+      ) VALUES (
+        ?1, ?2, ?3, 'open', 'community', 'medium', 'platform_analysis', ?4, ?4, NULL
+      )
+    `,
+    args: [insertedCaseId, input.communityId, input.postId, input.createdAt],
+  })
+  const moderationCaseRow = await firstRow(
+    input.client,
+    `
+      SELECT moderation_case_id
+      FROM moderation_cases
+      WHERE community_id = ?1
+        AND post_id = ?2
+        AND status = 'open'
+      LIMIT 1
+    `,
+    [input.communityId, input.postId],
+  )
+  const moderationCaseId = moderationCaseRow
+    ? requiredString(moderationCaseRow, "moderation_case_id")
+    : insertedCaseId
+
+  const signalType = input.analysis.policyReasonCode ?? "review_required"
+  const existingSignal = await firstRow(
+    input.client,
+    `
+      SELECT moderation_signal_id
+      FROM moderation_signals
+      WHERE post_id = ?1
+        AND analysis_result_ref = ?2
+        AND signal_type = ?3
+      LIMIT 1
+    `,
+    [input.postId, input.analysisResultRef, signalType],
+  )
+  if (existingSignal) {
+    return
+  }
+  await input.client.execute({
+    sql: `
+      INSERT INTO moderation_signals (
+        moderation_signal_id, community_id, post_id, moderation_case_id, analysis_result_ref, source,
+        signal_type, severity, provider, provider_label, evidence_ref, created_at
+      ) VALUES (
+        ?1, ?2, ?3, ?4, ?5, 'platform_analysis',
+        ?6, 'medium', 'pirate_local', ?7, NULL, ?8
+      )
+    `,
+    args: [
+      makeId("msg"),
+      input.communityId,
+      input.postId,
+      moderationCaseId,
+      input.analysisResultRef,
+      signalType,
+      input.analysis.policyReason ?? "Local moderation review",
+      input.createdAt,
+    ],
+  })
+}
+
 export async function findPostByIdempotencyKey(input: {
   client: PostExecutor
   communityId: string
@@ -234,6 +325,10 @@ export async function insertPost(input: {
   const status = analysis.status
   const sourceLanguage = input.body.body || input.body.title || input.body.caption || input.body.lyrics ? "en" : null
 
+  if (analysis.outcome === "blocked") {
+    throw analysisBlockedError(analysis.policyReason ?? "Post blocked by analysis")
+  }
+
   await input.client.execute({
     sql: `
       INSERT INTO posts (
@@ -300,6 +395,16 @@ export async function insertPost(input: {
       analysisResultRef,
       updatedAt: input.createdAt,
     })
+    if (shouldCreatePrePublishModerationCase(analysis)) {
+      await createPrePublishModerationCase({
+        client: input.client,
+        communityId: input.communityId,
+        postId,
+        analysisResultRef,
+        analysis,
+        createdAt: input.createdAt,
+      })
+    }
   }
 
   const created = await getPostById(input.client, postId)

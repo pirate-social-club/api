@@ -86,6 +86,15 @@ async function runAcrcloudIdentify(
   }
 }
 
+function collectTextForLocalStub(body: CreatePostRequest): string {
+  return [
+    typeof body.title === "string" ? body.title : "",
+    typeof body.body === "string" ? body.body : "",
+    typeof body.caption === "string" ? body.caption : "",
+    typeof body.lyrics === "string" ? body.lyrics : "",
+  ].join("\n").toLowerCase()
+}
+
 export async function resolvePrePublishAnalysis(input: {
   client: AnalysisExecutor
   env: Env
@@ -96,6 +105,37 @@ export async function resolvePrePublishAnalysis(input: {
   audioBytes?: Uint8Array | null
 }): Promise<PrePublishAnalysisResult> {
   const { client, env, communityId, body } = input
+  const localStubText = collectTextForLocalStub(body)
+  if (localStubText.includes("[blocked]")) {
+    return {
+      outcome: "blocked",
+      contentSafetyState: "pending",
+      status: "hidden",
+      analysisResultId: null,
+      policyReasonCode: "local_stub_blocked",
+      policyReason: "Local stub blocked the post before publication",
+      acrcloudMusicMatchJson: null,
+      acrcloudCustomMatchJson: null,
+      acrcloudErrorCode: null,
+      acrcloudErrorMessage: null,
+      duplicateHashPostIds: [],
+    }
+  }
+  if (localStubText.includes("[review-required]")) {
+    return {
+      outcome: "review_required",
+      contentSafetyState: "pending",
+      status: "draft",
+      analysisResultId: null,
+      policyReasonCode: "local_stub_review_required",
+      policyReason: "Local stub moved the post into review",
+      acrcloudMusicMatchJson: null,
+      acrcloudCustomMatchJson: null,
+      acrcloudErrorCode: null,
+      acrcloudErrorMessage: null,
+      duplicateHashPostIds: [],
+    }
+  }
   const isSongPost = body.post_type === "song"
   const isOriginal = !body.song_mode || body.song_mode === "original"
   const hasDerivativeBasis = body.rights_basis === "derivative"
