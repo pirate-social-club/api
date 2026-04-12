@@ -205,7 +205,7 @@ communities.post("/", handleCommunityRoute(async (c) => {
 
 communities.get("/by-namespace/:namespaceLabel", handleCommunityRoute(async (c) => {
   const repository = getControlPlaneCommunityRepository(c.env)
-  const rawNamespaceLabel = c.req.param("namespaceLabel")
+  const rawNamespaceLabel = c.req.param("namespaceLabel") ?? ""
   const normalizedLabel = normalizeNamespaceLabel(rawNamespaceLabel)
   if (!normalizedLabel) {
     throw badRequestError("Namespace label is required")

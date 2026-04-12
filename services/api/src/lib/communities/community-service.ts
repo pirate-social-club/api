@@ -1194,6 +1194,7 @@ export async function listDiscoverableCommunities(input: {
       null,
       null,
       null,
+      null,
     )
   })
 

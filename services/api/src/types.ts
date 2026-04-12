@@ -1,10 +1,8 @@
 export type {
   AuthProof,
   CommunityMoneyPolicy,
-  CommunityPurchaseQuote,
   CommunityPurchaseQuotePreflight,
   CommunityPurchaseQuotePreflightRequest,
-  CommunityPurchaseQuoteRequest,
   CommunityCreateAcceptedResponse,
   CompleteNamespaceVerificationSessionRequest,
   CompleteVerificationSessionRequest,
@@ -410,7 +408,17 @@ export type CommunityGateRule = {
   updated_at: string
 }
 
-export type Community = ContractCommunity & {
+export type CommunityPurchaseQuoteRequest = import("@pirate/api-contracts").CommunityPurchaseQuoteRequest & {
+  destination_settlement_amount_atomic?: string | null
+  destination_settlement_decimals?: number | null
+}
+
+export type CommunityPurchaseQuote = import("@pirate/api-contracts").CommunityPurchaseQuote & {
+  destination_settlement_amount_atomic?: string | null
+  destination_settlement_decimals?: number | null
+}
+
+export type Community = Omit<ContractCommunity, "gate_rules"> & {
   flair_policy?: CommunityFlairPolicy | null
   gate_rules?: CommunityGateRule[] | null
 }
@@ -745,6 +753,8 @@ export type Env = {
   SONG_LYRICS_TRANSLATION_TARGET_LOCALES?: string
   SONG_ENRICHMENT_DRAIN_LIMIT?: string
   SONG_ENRICHMENT_STALE_AFTER_SECONDS?: string
+  SONG_PREVIEW_DRAIN_LIMIT?: string
+  SONG_PREVIEW_STALE_AFTER_SECONDS?: string
   COMMUNITY_POST_PROJECTION_RECONCILE_LIMIT?: string
   SONG_ASSET_STORY_DRAIN_LIMIT?: string
   SONG_ASSET_STORY_STALE_AFTER_SECONDS?: string
