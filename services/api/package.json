@@ -19,11 +19,12 @@
     "mint:dev-jwt": "bun run scripts/mint-dev-jwt.ts"
   },
   "dependencies": {
+    "@libsql/client": "^0.17.2",
     "@piplabs/cdr-contracts": "file:../../../../cdr-sdk/packages/contracts",
     "@piplabs/cdr-crypto": "file:../../../../cdr-sdk/packages/crypto",
     "@pirate/api-contracts": "file:../contracts",
-    "@libsql/client": "^0.17.2",
     "@privy-io/node": "^0.11.0",
+    "country-iso-3-to-2": "^1.1.1",
     "hono": "^4.8.5",
     "jose": "^6.2.2",
     "viem": "^2.47.6"

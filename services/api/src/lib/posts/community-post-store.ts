@@ -468,7 +468,11 @@ export async function updateSongPostModerationByBundleId(input: {
   if (!current) {
     return { post: null, updated: false }
   }
-  if (!input.forceOverwrite && current.analysis_result_ref != null) {
+  const alreadyModerated = current.analysis_state === "review_required" || current.analysis_state === "blocked"
+  if (!input.forceOverwrite && alreadyModerated) {
+    // Song posts can carry a pre-publish analysis result before async enrichment runs.
+    // Allow the first async moderation write to replace that provisional state, but do
+    // not overwrite a post once it already reflects a moderation outcome.
     return { post: current, updated: false }
   }
 

@@ -919,7 +919,6 @@ async function applyModerationToPublishedSongPost(input: {
         contentSafetyState: derived.contentSafetyState,
         ageGatePolicy: derived.ageGatePolicy,
         updatedAt: txNow,
-        forceOverwrite: true,
       })
       if (!moderationUpdate.post || !moderationUpdate.updated) {
         await writeTx.commit()

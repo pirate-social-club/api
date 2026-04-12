@@ -532,10 +532,7 @@ async function normalizeNationalityValue(rawValue: string | null | undefined): P
 
   if (/^[A-Z]{3}$/u.test(normalized)) {
     try {
-      const primarySpecifier = "country-iso-3-to-2"
-      const fallbackSpecifier = "../../../../../../pirate-web/node_modules/country-iso-3-to-2/index.js"
-      const module = await import(primarySpecifier)
-        .catch(async () => await import(fallbackSpecifier))
+      const module = await import("country-iso-3-to-2")
       const getCountryIso2 = (module.default ?? module) as (value: string) => string | undefined
       const alpha2 = getCountryIso2(normalized)
       return typeof alpha2 === "string" && /^[A-Z]{2}$/u.test(alpha2.toUpperCase())
