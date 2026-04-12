@@ -25,7 +25,6 @@ export type {
   UpdateCommunityMoneyPolicyRequest,
   User,
   VerificationCapabilities,
-  VerificationSession,
   WalletAttachmentSummary,
 } from "@pirate/api-contracts"
 
@@ -52,6 +51,13 @@ export type VerificationIntent = ContractVerificationIntent | "ucommunity_join"
 
 export type StartVerificationSessionRequest = Omit<
   import("@pirate/api-contracts").StartVerificationSessionRequest,
+  "verification_intent"
+> & {
+  verification_intent?: VerificationIntent | null
+}
+
+export type VerificationSession = Omit<
+  import("@pirate/api-contracts").VerificationSession,
   "verification_intent"
 > & {
   verification_intent?: VerificationIntent | null
