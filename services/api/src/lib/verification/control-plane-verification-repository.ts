@@ -1,6 +1,6 @@
 import { createClient } from "@libsql/client"
 import type { Client } from "@libsql/client"
-import { internalError, verificationRequired } from "../errors"
+import { badRequestError, eligibilityFailed, internalError, providerUnavailable, verificationRequired } from "../errors"
 import { makeId } from "../helpers"
 import {
   firstRow,
@@ -26,12 +26,116 @@ import {
   toUserAttestationRow,
   toVerificationSessionRow,
 } from "../auth/control-plane-auth-rows"
+import {
+  inspectHnsRoot,
+  isHnsVerifierConfigured,
+  publishHnsTxtRecord,
+  verifyHnsTxtRecord,
+} from "./hns-verifier"
+import type { HnsInspectResult, HnsVerifyTxtResult } from "./hns-verifier"
+import type { VeryProvider, VerySessionOutcome } from "./very-provider"
+import { getVeryProvider } from "./very-provider"
+import {
+  inspectSpacesNamespace,
+  mintSpacesChallenge,
+  verifySpacesSignature,
+} from "./spaces-verifier"
 import type {
   Env,
   NamespaceVerification,
   NamespaceVerificationSession,
+  RequestedVerificationCapability,
+  VerificationIntent,
   VerificationSession,
+  VerificationSessionLaunch,
 } from "../../types"
+
+function isProductionEnv(env: Env): boolean {
+  return String(env.ENVIRONMENT || "").trim().toLowerCase() === "production"
+}
+
+function isSpacesVerifierConfigured(env: Env): boolean {
+  return String(env.SPACES_VERIFIER_BASE_URL || "").trim().length > 0
+}
+
+function boolToDb(value: boolean | null | undefined): number | null {
+  if (value == null) {
+    return null
+  }
+  return value ? 1 : 0
+}
+
+function isSessionExpired(expiresAt: string | null): boolean {
+  if (!expiresAt) {
+    return false
+  }
+  return Date.parse(expiresAt) <= Date.now()
+}
+
+type HnsSessionAssertionSnapshot = {
+  rootExists: number | null
+  rootControlVerified: number | null
+  expiryHorizonSufficient: number | null
+  routingEnabled: number | null
+  pirateDnsAuthorityVerified: number | null
+  clubAttachAllowed: number | null
+  pirateWebRoutingAllowed: number | null
+  pirateSubdomainIssuanceAllowed: number | null
+  controlClass: NamespaceVerificationSession["control_class"]
+  operationClass: NamespaceVerificationSession["operation_class"]
+}
+
+function deriveHnsInspectionSnapshot(inspection: HnsInspectResult): HnsSessionAssertionSnapshot {
+  const rootExists = boolToDb(inspection.root_exists) ?? (inspection.zone_exists === true ? 1 : null)
+  const rootControlVerified = boolToDb(inspection.root_control_verified)
+  const expiryHorizonSufficient = boolToDb(inspection.expiry_horizon_sufficient)
+  const routingEnabled = boolToDb(inspection.routing_enabled)
+  const pirateDnsAuthorityVerified = boolToDb(inspection.pirate_dns_authority_verified)
+
+  return {
+    rootExists,
+    rootControlVerified,
+    expiryHorizonSufficient,
+    routingEnabled,
+    pirateDnsAuthorityVerified,
+    clubAttachAllowed: null,
+    pirateWebRoutingAllowed: null,
+    pirateSubdomainIssuanceAllowed: null,
+    controlClass: inspection.control_class ?? null,
+    operationClass: inspection.operation_class ?? null,
+  }
+}
+
+function deriveAcceptedHnsSnapshot(
+  row: NamespaceVerificationSessionRow,
+  verification: HnsVerifyTxtResult | null,
+): HnsSessionAssertionSnapshot {
+  const rootExists = boolToDb(verification?.root_exists) ?? row.root_exists ?? 1
+  const rootControlVerified = boolToDb(verification?.root_control_verified) ?? row.root_control_verified ?? 1
+  const expiryHorizonSufficient = boolToDb(verification?.expiry_horizon_sufficient) ?? row.expiry_horizon_sufficient ?? 1
+  const routingEnabled = boolToDb(verification?.routing_enabled) ?? row.routing_enabled ?? 1
+  const pirateDnsAuthorityVerified = boolToDb(verification?.pirate_dns_authority_verified)
+    ?? row.pirate_dns_authority_verified
+    ?? 0
+
+  const clubAttachAllowed = rootControlVerified === 1 && expiryHorizonSufficient === 1 ? 1 : 0
+  const pirateWebRoutingAllowed = rootControlVerified === 1 && routingEnabled === 1 ? 1 : 0
+  const pirateSubdomainIssuanceAllowed =
+    rootControlVerified === 1 && expiryHorizonSufficient === 1 && pirateDnsAuthorityVerified === 1 ? 1 : 0
+
+  return {
+    rootExists,
+    rootControlVerified,
+    expiryHorizonSufficient,
+    routingEnabled,
+    pirateDnsAuthorityVerified,
+    clubAttachAllowed,
+    pirateWebRoutingAllowed,
+    pirateSubdomainIssuanceAllowed,
+    controlClass: verification?.control_class ?? row.control_class ?? "single_holder_root",
+    operationClass: verification?.operation_class ?? row.operation_class ?? "owner_managed_namespace",
+  }
+}
 
 async function getVerificationSessionRowForUser(
   client: Client,
@@ -41,7 +145,9 @@ async function getVerificationSessionRowForUser(
   const row = await firstRow(client, {
     sql: `
       SELECT verification_session_id, user_id, provider, requested_capabilities_json,
-             status, result_ref, failure_code, completed_at, expires_at, created_at, updated_at
+             status, upstream_session_ref, result_ref, failure_code,
+             wallet_attachment_id, verification_intent, policy_id,
+             completed_at, expires_at, created_at, updated_at
       FROM verification_sessions
       WHERE verification_session_id = ?1
         AND user_id = ?2
@@ -53,24 +159,23 @@ async function getVerificationSessionRowForUser(
   return row ? toVerificationSessionRow(row) : null
 }
 
-async function getAttestationBySourceSessionId(
+async function getAttestationsBySourceSessionId(
   client: Client,
   verificationSessionId: string,
   userId: string,
-): Promise<UserAttestationRow | null> {
-  const row = await firstRow(client, {
+): Promise<UserAttestationRow[]> {
+  const result = await client.execute({
     sql: `
       SELECT user_attestation_id, capability_key, status, verified_at, expires_at
       FROM user_attestations
       WHERE source_verification_session_id = ?1
         AND user_id = ?2
-      ORDER BY created_at DESC
-      LIMIT 1
+      ORDER BY created_at ASC
     `,
     args: [verificationSessionId, userId],
   })
 
-  return row ? toUserAttestationRow(row) : null
+  return result.rows.map((row) => toUserAttestationRow(row))
 }
 
 async function getNamespaceVerificationSessionRowForUser(
@@ -80,15 +185,103 @@ async function getNamespaceVerificationSessionRowForUser(
 ): Promise<NamespaceVerificationSessionRow | null> {
   const row = await firstRow(client, {
     sql: `
-      SELECT namespace_verification_session_id, namespace_verification_id, user_id, family, submitted_root_label,
-             normalized_root_label, status, challenge_host, challenge_txt_value, challenge_expires_at,
-             root_exists, root_control_verified, expiry_horizon_sufficient, routing_enabled,
-             pirate_dns_authority_verified, club_attach_allowed, pirate_web_routing_allowed,
-             pirate_subdomain_issuance_allowed, control_class, operation_class, observation_provider,
-             evidence_bundle_ref, failure_reason, accepted_at, expires_at, created_at, updated_at
-      FROM namespace_verification_sessions
-      WHERE namespace_verification_session_id = ?1
-        AND user_id = ?2
+      SELECT
+        nvs.namespace_verification_session_id,
+        nvs.namespace_verification_id,
+        nvs.user_id,
+        nvs.family,
+        nvs.submitted_root_label,
+        nvs.normalized_root_label,
+        nvs.status,
+        nvs.challenge_kind,
+        nvs.challenge_payload_json,
+        nvs.challenge_host,
+        nvs.challenge_txt_value,
+        nvs.challenge_expires_at,
+        nvs.root_exists,
+        nvs.root_control_verified,
+        nvs.expiry_horizon_sufficient,
+        nvs.routing_enabled,
+        nvs.pirate_dns_authority_verified,
+        (
+          SELECT assertion_value
+          FROM namespace_verification_assertions AS nva
+          WHERE nva.namespace_verification_session_id = nvs.namespace_verification_session_id
+            AND nva.namespace_verification_id IS NULL
+            AND nva.assertion_name = 'root_key_proof_verified'
+            AND nva.status = 'accepted'
+          ORDER BY nva.updated_at DESC
+          LIMIT 1
+        ) AS root_key_proof_verified,
+        (
+          SELECT assertion_value
+          FROM namespace_verification_assertions AS nva
+          WHERE nva.namespace_verification_session_id = nvs.namespace_verification_session_id
+            AND nva.namespace_verification_id IS NULL
+            AND nva.assertion_name = 'live_signature_verified'
+            AND nva.status = 'accepted'
+          ORDER BY nva.updated_at DESC
+          LIMIT 1
+        ) AS live_signature_verified,
+        (
+          SELECT assertion_value
+          FROM namespace_verification_assertions AS nva
+          WHERE nva.namespace_verification_session_id = nvs.namespace_verification_session_id
+            AND nva.namespace_verification_id IS NULL
+            AND nva.assertion_name = 'anchor_fresh_enough'
+            AND nva.status = 'accepted'
+          ORDER BY nva.updated_at DESC
+          LIMIT 1
+        ) AS anchor_fresh_enough,
+        (
+          SELECT assertion_value
+          FROM namespace_verification_assertions AS nva
+          WHERE nva.namespace_verification_session_id = nvs.namespace_verification_session_id
+            AND nva.namespace_verification_id IS NULL
+            AND nva.assertion_name = 'owner_signed_updates_verified'
+            AND nva.status = 'accepted'
+          ORDER BY nva.updated_at DESC
+          LIMIT 1
+        ) AS owner_signed_updates_verified,
+        nvs.club_attach_allowed,
+        nvs.pirate_web_routing_allowed,
+        nvs.pirate_subdomain_issuance_allowed,
+        (
+          SELECT capability_value
+          FROM namespace_verification_capabilities AS nvc
+          WHERE nvc.namespace_verification_session_id = nvs.namespace_verification_session_id
+            AND nvc.namespace_verification_id IS NULL
+            AND nvc.capability_name = 'owner_signed_record_updates_allowed'
+            AND nvc.status = 'accepted'
+          ORDER BY nvc.updated_at DESC
+          LIMIT 1
+        ) AS owner_signed_record_updates_allowed,
+        (
+          SELECT capability_value
+          FROM namespace_verification_capabilities AS nvc
+          WHERE nvc.namespace_verification_session_id = nvs.namespace_verification_session_id
+            AND nvc.namespace_verification_id IS NULL
+            AND nvc.capability_name = 'pirate_subspace_issuance_allowed'
+            AND nvc.status = 'accepted'
+          ORDER BY nvc.updated_at DESC
+          LIMIT 1
+        ) AS pirate_subspace_issuance_allowed,
+        nvs.control_class,
+        nvs.operation_class,
+        nvs.observation_provider,
+        nvs.evidence_bundle_ref,
+        nvs.failure_reason,
+        nvs.accepted_at,
+        nvs.anchor_height,
+        nvs.anchor_block_hash,
+        nvs.anchor_root_hash,
+        nvs.proof_root_hash,
+        nvs.expires_at,
+        nvs.created_at,
+        nvs.updated_at
+      FROM namespace_verification_sessions AS nvs
+      WHERE nvs.namespace_verification_session_id = ?1
+        AND nvs.user_id = ?2
       LIMIT 1
     `,
     args: [namespaceVerificationSessionId, userId],
@@ -104,14 +297,89 @@ async function getNamespaceVerificationRowForUser(
 ): Promise<NamespaceVerificationRow | null> {
   const row = await firstRow(client, {
     sql: `
-      SELECT namespace_verification_id, user_id, family, normalized_root_label, status,
-             root_exists, root_control_verified, expiry_horizon_sufficient, routing_enabled,
-             pirate_dns_authority_verified, club_attach_allowed, pirate_web_routing_allowed,
-             pirate_subdomain_issuance_allowed, control_class, operation_class, observation_provider,
-             evidence_bundle_ref, accepted_at, expires_at, created_at, updated_at
-      FROM namespace_verifications
-      WHERE namespace_verification_id = ?1
-        AND user_id = ?2
+      SELECT
+        nv.namespace_verification_id,
+        nv.user_id,
+        nv.family,
+        nv.normalized_root_label,
+        nv.status,
+        nv.root_exists,
+        nv.root_control_verified,
+        nv.expiry_horizon_sufficient,
+        nv.routing_enabled,
+        nv.pirate_dns_authority_verified,
+        (
+          SELECT assertion_value
+          FROM namespace_verification_assertions AS nva
+          WHERE nva.namespace_verification_id = nv.namespace_verification_id
+            AND nva.assertion_name = 'root_key_proof_verified'
+            AND nva.status = 'accepted'
+          ORDER BY nva.updated_at DESC
+          LIMIT 1
+        ) AS root_key_proof_verified,
+        (
+          SELECT assertion_value
+          FROM namespace_verification_assertions AS nva
+          WHERE nva.namespace_verification_id = nv.namespace_verification_id
+            AND nva.assertion_name = 'live_signature_verified'
+            AND nva.status = 'accepted'
+          ORDER BY nva.updated_at DESC
+          LIMIT 1
+        ) AS live_signature_verified,
+        (
+          SELECT assertion_value
+          FROM namespace_verification_assertions AS nva
+          WHERE nva.namespace_verification_id = nv.namespace_verification_id
+            AND nva.assertion_name = 'anchor_fresh_enough'
+            AND nva.status = 'accepted'
+          ORDER BY nva.updated_at DESC
+          LIMIT 1
+        ) AS anchor_fresh_enough,
+        (
+          SELECT assertion_value
+          FROM namespace_verification_assertions AS nva
+          WHERE nva.namespace_verification_id = nv.namespace_verification_id
+            AND nva.assertion_name = 'owner_signed_updates_verified'
+            AND nva.status = 'accepted'
+          ORDER BY nva.updated_at DESC
+          LIMIT 1
+        ) AS owner_signed_updates_verified,
+        nv.club_attach_allowed,
+        nv.pirate_web_routing_allowed,
+        nv.pirate_subdomain_issuance_allowed,
+        (
+          SELECT capability_value
+          FROM namespace_verification_capabilities AS nvc
+          WHERE nvc.namespace_verification_id = nv.namespace_verification_id
+            AND nvc.capability_name = 'owner_signed_record_updates_allowed'
+            AND nvc.status = 'accepted'
+          ORDER BY nvc.updated_at DESC
+          LIMIT 1
+        ) AS owner_signed_record_updates_allowed,
+        (
+          SELECT capability_value
+          FROM namespace_verification_capabilities AS nvc
+          WHERE nvc.namespace_verification_id = nv.namespace_verification_id
+            AND nvc.capability_name = 'pirate_subspace_issuance_allowed'
+            AND nvc.status = 'accepted'
+          ORDER BY nvc.updated_at DESC
+          LIMIT 1
+        ) AS pirate_subspace_issuance_allowed,
+        nv.control_class,
+        nv.operation_class,
+        nv.observation_provider,
+        nv.evidence_bundle_ref,
+        nv.accepted_at,
+        nv.anchor_height,
+        nv.anchor_block_hash,
+        nv.anchor_root_hash,
+        nv.proof_root_hash,
+        nv.expires_at,
+        nv.created_at,
+        nv.updated_at
+      FROM namespace_verifications AS nv
+      WHERE nv.namespace_verification_id = ?1
+        AND nv.user_id = ?2
       LIMIT 1
     `,
     args: [namespaceVerificationId, userId],
@@ -122,33 +390,71 @@ async function getNamespaceVerificationRowForUser(
 
 export async function startVerificationSession(
   client: Client,
+  env: Env,
   input: {
     userId: string
     provider: "self" | "very"
+    requestedCapabilities?: RequestedVerificationCapability[] | null
     walletAttachmentId?: string | null
+    verificationIntent?: VerificationIntent | null
+    policyId?: string | null
   },
 ): Promise<VerificationSession> {
+  const requestedCapabilities = (input.requestedCapabilities?.length ? input.requestedCapabilities : ["unique_human"]) as RequestedVerificationCapability[]
   const now = new Date()
   const createdAt = now.toISOString()
   const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString()
   const verificationSessionId = makeId("ver")
 
+  let upstreamSessionRef: string | null = null
+  let launch: VerificationSessionLaunch | null = null
+
+  if (input.provider === "very") {
+    for (const cap of requestedCapabilities) {
+      if (cap !== "unique_human") {
+        throw badRequestError("Only unique_human verification is supported for the very provider")
+      }
+    }
+    const provider = getVeryProvider(env)
+    const result = await provider.startSession({
+      userId: input.userId,
+      requestedCapabilities: requestedCapabilities.filter((c): c is "unique_human" => c === "unique_human"),
+      walletAttachmentId: input.walletAttachmentId ?? null,
+      verificationIntent: input.verificationIntent ?? null,
+      policyId: input.policyId ?? null,
+    })
+    upstreamSessionRef = result.upstreamSessionRef
+    launch = { mode: "widget", very_widget: result.launch }
+  }
+
   await client.execute({
     sql: `
       INSERT INTO verification_sessions (
         verification_session_id, user_id, provider, session_kind, requested_capabilities_json,
-        status, upstream_session_ref, result_ref, failure_code, started_at, completed_at,
-        expires_at, created_at, updated_at
-      ) VALUES (?1, ?2, ?3, 'identity_proof', ?4, 'pending', NULL, NULL, NULL, ?5, NULL, ?6, ?5, ?5)
+        status, upstream_session_ref, result_ref, failure_code,
+        wallet_attachment_id, verification_intent, policy_id,
+        started_at, completed_at, expires_at, created_at, updated_at
+      ) VALUES (?1, ?2, ?3, 'identity_proof', ?4, 'pending', ?5, NULL, NULL, ?6, ?7, ?8, ?9, NULL, ?10, ?9, ?9)
     `,
-    args: [verificationSessionId, input.userId, input.provider, JSON.stringify(["unique_human"]), createdAt, expiresAt],
+    args: [
+      verificationSessionId,
+      input.userId,
+      input.provider,
+      JSON.stringify(requestedCapabilities),
+      upstreamSessionRef,
+      input.walletAttachmentId ?? null,
+      input.verificationIntent ?? null,
+      input.policyId ?? null,
+      createdAt,
+      expiresAt,
+    ],
   })
 
   const row = await getVerificationSessionRowForUser(client, verificationSessionId, input.userId)
   if (!row) {
     throw internalError("Verification session row is missing after creation")
   }
-  return serializeVerificationSession({ row, attestationRow: null })
+  return serializeVerificationSession({ row, attestationRows: [], launch })
 }
 
 export async function getVerificationSession(
@@ -160,22 +466,143 @@ export async function getVerificationSession(
   if (!row) {
     return null
   }
-  const attestationRow = await getAttestationBySourceSessionId(client, verificationSessionId, userId)
-  return serializeVerificationSession({ row, attestationRow })
+  const attestationRows = await getAttestationsBySourceSessionId(client, verificationSessionId, userId)
+  return serializeVerificationSession({ row, attestationRows })
 }
 
 export async function completeVerificationSession(
   client: Client,
+  env: Env,
   input: {
     verificationSessionId: string
     userId: string
     attestationId?: string | null
+    proof?: string | null
     proofHash?: string | null
+    providerPayloadRef?: string | null
   },
 ): Promise<VerificationSession | null> {
   const row = await getVerificationSessionRowForUser(client, input.verificationSessionId, input.userId)
   if (!row) {
     return null
+  }
+
+  if (isTerminalStatus(row.status)) {
+    const attestationRows = await getAttestationsBySourceSessionId(client, input.verificationSessionId, input.userId)
+    return serializeVerificationSession({ row, attestationRows })
+  }
+
+  if (row.status !== "pending") {
+    throw badRequestError("Session is not in a pollable state")
+  }
+
+  if (row.provider === "very") {
+    return completeVerySession(client, env, row, input)
+  }
+
+  const environment = String(env.ENVIRONMENT || "").trim()
+  if (environment === "production" && row.provider === "self") {
+    throw verificationRequired("Self-verification is not available in production")
+  }
+
+  const sessionExpiresAt = row.expires_at
+  if (sessionExpiresAt && new Date(sessionExpiresAt) < new Date()) {
+    throw eligibilityFailed("Verification session has expired")
+  }
+
+  return finalizeVerification(client, row, input)
+}
+
+function isTerminalStatus(status: string): boolean {
+  return status === "verified" || status === "failed" || status === "expired"
+}
+
+async function completeVerySession(
+  client: Client,
+  env: Env,
+  row: VerificationSessionRow,
+  input: {
+    verificationSessionId: string
+    userId: string
+    attestationId?: string | null
+    proof?: string | null
+    proofHash?: string | null
+    providerPayloadRef?: string | null
+  },
+): Promise<VerificationSession> {
+  if (!row.upstream_session_ref) {
+    throw internalError("Very session has no upstream reference")
+  }
+
+  const sessionExpiresAt = row.expires_at
+  if (sessionExpiresAt && new Date(sessionExpiresAt) < new Date()) {
+    await client.execute({
+      sql: `UPDATE verification_sessions SET status = 'expired', updated_at = ?2 WHERE verification_session_id = ?1`,
+      args: [input.verificationSessionId, new Date().toISOString()],
+    })
+    const updatedRow = await getVerificationSessionRowForUser(client, input.verificationSessionId, input.userId)
+    return serializeVerificationSession({ row: updatedRow!, attestationRows: [] })
+  }
+
+  let outcome: VerySessionOutcome
+  try {
+    const provider = getVeryProvider(env)
+    outcome = await provider.getSessionOutcome({
+      upstreamSessionRef: row.upstream_session_ref,
+      providerPayloadRef: input.providerPayloadRef ?? input.proof ?? null,
+    })
+  } catch (error) {
+    throw providerUnavailable(
+      error instanceof Error ? error.message : "Very provider is unavailable"
+    )
+  }
+
+  if (outcome.status === "verified") {
+    return finalizeVerification(client, row, input, outcome.attestationData)
+  }
+
+  if (outcome.status === "pending") {
+    return serializeVerificationSession({ row, attestationRows: [] })
+  }
+
+  if (outcome.status === "failed") {
+    const updatedAt = new Date().toISOString()
+    await client.execute({
+      sql: `UPDATE verification_sessions SET status = 'failed', failure_code = ?2, updated_at = ?3 WHERE verification_session_id = ?1`,
+      args: [input.verificationSessionId, outcome.failureReason, updatedAt],
+    })
+    const updatedRow = await getVerificationSessionRowForUser(client, input.verificationSessionId, input.userId)
+    return serializeVerificationSession({ row: updatedRow!, attestationRows: [] })
+  }
+
+  if (outcome.status === "expired") {
+    const updatedAt = new Date().toISOString()
+    await client.execute({
+      sql: `UPDATE verification_sessions SET status = 'expired', failure_code = 'provider_expired', updated_at = ?2 WHERE verification_session_id = ?1`,
+      args: [input.verificationSessionId, updatedAt],
+    })
+    const updatedRow = await getVerificationSessionRowForUser(client, input.verificationSessionId, input.userId)
+    return serializeVerificationSession({ row: updatedRow!, attestationRows: [] })
+  }
+
+  return serializeVerificationSession({ row, attestationRows: [] })
+}
+
+async function finalizeVerification(
+  client: Client,
+  row: VerificationSessionRow,
+  input: {
+    verificationSessionId: string
+    userId: string
+    attestationId?: string | null
+    proof?: string | null
+    proofHash?: string | null
+  },
+  attestationData?: Record<string, unknown>,
+): Promise<VerificationSession> {
+  const existingAttestations = await getAttestationsBySourceSessionId(client, input.verificationSessionId, input.userId)
+  if (existingAttestations.some((a) => a.status === "accepted")) {
+    return getVerificationSession(client, input.verificationSessionId, input.userId) as Promise<VerificationSession>
   }
 
   const now = new Date()
@@ -192,9 +619,15 @@ export async function completeVerificationSession(
     state: "verified",
     provider: row.provider === "self" || row.provider === "very" ? row.provider : null,
     proof_type: "unique_human",
-    mechanism: "session_complete",
+    mechanism: row.provider === "very" ? "very_provider" : "session_complete",
     verified_at: updatedAt,
   }
+
+  const valueJson = attestationData
+    ? JSON.stringify({ state: "verified", ...attestationData })
+    : JSON.stringify({ state: "verified" })
+  const attestationProofHash = typeof attestationData?.proof_hash === "string" ? attestationData.proof_hash : null
+  const resultRef = input.proofHash ?? attestationProofHash ?? null
 
   await client.batch([
     {
@@ -207,7 +640,7 @@ export async function completeVerificationSession(
             updated_at = ?3
         WHERE verification_session_id = ?1
       `,
-      args: [input.verificationSessionId, input.proofHash ?? null, updatedAt],
+      args: [input.verificationSessionId, resultRef, updatedAt],
     },
     {
       sql: `
@@ -216,7 +649,7 @@ export async function completeVerificationSession(
           capability_key, status, value_json, verified_at, expires_at, revoked_at, created_at, updated_at
         ) VALUES (?1, ?2, ?3, ?4, 'unique_human', 'unique_human', 'accepted', ?5, ?6, ?7, NULL, ?6, ?6)
       `,
-      args: [attestationId, input.userId, input.verificationSessionId, row.provider, JSON.stringify({ state: "verified" }), updatedAt, expiresAt],
+      args: [attestationId, input.userId, input.verificationSessionId, row.provider, valueJson, updatedAt, expiresAt],
     },
     {
       sql: `
@@ -233,14 +666,15 @@ export async function completeVerificationSession(
     },
   ], "write")
 
-  return getVerificationSession(client, input.verificationSessionId, input.userId)
+  return getVerificationSession(client, input.verificationSessionId, input.userId) as Promise<VerificationSession>
 }
 
 export async function startNamespaceVerificationSession(
   client: Client,
+  env: Env,
   input: {
     userId: string
-    family: "hns"
+    family: "hns" | "spaces"
     rootLabel: string
   },
 ): Promise<NamespaceVerificationSession> {
@@ -256,29 +690,136 @@ export async function startNamespaceVerificationSession(
   const now = new Date()
   const createdAt = now.toISOString()
   const expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
-  const challengeExpiresAt = new Date(now.getTime() + 60 * 60 * 1000).toISOString()
   const normalizedRootLabel = input.rootLabel.trim().toLowerCase()
   const sessionId = makeId("nvs")
-  const challengeHost = `_pirate.${normalizedRootLabel}`
-  const challengeTxtValue = `pirate-verification=${sessionId}`
+  if (input.family === "spaces") {
+    if (!isSpacesVerifierConfigured(env)) {
+      if (isProductionEnv(env)) {
+        throw providerUnavailable("Spaces verifier is not configured")
+      }
+      throw verificationRequired("Spaces verifier is not available in this environment")
+    }
+    const inspection = await inspectSpacesNamespace(env, normalizedRootLabel)
+    if (!inspection.rootExists) {
+      throw verificationRequired("Spaces namespace root does not exist")
+    }
+    const challenge = await mintSpacesChallenge(
+      env,
+      normalizedRootLabel,
+      inspection.rootPubkey ?? "",
+      sessionId,
+    )
 
-  await client.execute({
-    sql: `
-      INSERT INTO namespace_verification_sessions (
-        namespace_verification_session_id, namespace_verification_id, user_id, family, submitted_root_label,
-        normalized_root_label, status, challenge_host, challenge_txt_value, challenge_expires_at,
-        root_exists, root_control_verified, expiry_horizon_sufficient, routing_enabled,
-        pirate_dns_authority_verified, club_attach_allowed, pirate_web_routing_allowed,
-        pirate_subdomain_issuance_allowed, control_class, operation_class, observation_provider,
-        evidence_bundle_ref, failure_reason, accepted_at, expires_at, created_at, updated_at
-      ) VALUES (
-        ?1, NULL, ?2, ?3, ?4, ?5, 'challenge_required', ?6, ?7, ?8,
-        NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'local_stub',
-        NULL, NULL, NULL, ?9, ?10, ?10
-      )
-    `,
-    args: [sessionId, input.userId, input.family, input.rootLabel, normalizedRootLabel, challengeHost, challengeTxtValue, challengeExpiresAt, expiresAt, createdAt],
-  })
+    await client.execute({
+      sql: `
+        INSERT INTO namespace_verification_sessions (
+          namespace_verification_session_id, namespace_verification_id, user_id, family, submitted_root_label,
+          normalized_root_label, status, challenge_kind, challenge_payload_json, challenge_expires_at,
+          root_exists, root_control_verified, expiry_horizon_sufficient, routing_enabled,
+          pirate_dns_authority_verified, club_attach_allowed, pirate_web_routing_allowed,
+          pirate_subdomain_issuance_allowed, control_class, operation_class, observation_provider,
+          evidence_bundle_ref, failure_reason, accepted_at, anchor_height, anchor_block_hash, anchor_root_hash, proof_root_hash,
+          expires_at, created_at, updated_at
+        ) VALUES (
+          ?1, NULL, ?2, 'spaces', ?3, ?4, 'challenge_required', 'schnorr_sign', ?5, ?6,
+          1, ?7, ?8, NULL, NULL, NULL, NULL, NULL, ?9, ?10, ?11,
+          NULL, NULL, NULL, ?12, ?13, ?14, ?15, ?16, ?17, ?17
+        )
+      `,
+      args: [
+        sessionId,
+        input.userId,
+        input.rootLabel,
+        normalizedRootLabel,
+        JSON.stringify(challenge.challengePayload),
+        challenge.challengeExpiresAt,
+        inspection.rootKeyProofVerified ? 1 : 0,
+        inspection.anchorFreshEnough == null ? null : inspection.anchorFreshEnough ? 1 : 0,
+        inspection.controlClass,
+        inspection.operationClass,
+        inspection.observationProvider,
+        inspection.acceptedAnchorHeight,
+        inspection.acceptedAnchorBlockHash,
+        inspection.acceptedAnchorRootHash,
+        inspection.proofRootHash,
+        expiresAt,
+        createdAt,
+      ],
+    })
+  } else {
+    const challengeExpiresAt = new Date(now.getTime() + 60 * 60 * 1000).toISOString()
+    const challengeHost = `_pirate.${normalizedRootLabel}`
+    const challengeTxtValue = `pirate-verification=${sessionId}`
+    let observationProvider = "local_stub"
+    let inspectionSnapshot: HnsSessionAssertionSnapshot = {
+      rootExists: null,
+      rootControlVerified: null,
+      expiryHorizonSufficient: null,
+      routingEnabled: null,
+      pirateDnsAuthorityVerified: null,
+      clubAttachAllowed: null,
+      pirateWebRoutingAllowed: null,
+      pirateSubdomainIssuanceAllowed: null,
+      controlClass: null,
+      operationClass: null,
+    }
+
+    if (isHnsVerifierConfigured(env)) {
+      const inspection = await inspectHnsRoot(env, {
+        rootLabel: normalizedRootLabel,
+        challengeHost,
+      })
+      inspectionSnapshot = deriveHnsInspectionSnapshot(inspection)
+      const published = await publishHnsTxtRecord(env, {
+        rootLabel: normalizedRootLabel,
+        challengeHost,
+        challengeTxtValue,
+      })
+      observationProvider = published.observation_provider ?? inspection.observation_provider ?? "hns_verifier"
+    } else if (isProductionEnv(env)) {
+      throw providerUnavailable("HNS verifier is not configured")
+    }
+
+    await client.execute({
+      sql: `
+        INSERT INTO namespace_verification_sessions (
+          namespace_verification_session_id, namespace_verification_id, user_id, family, submitted_root_label,
+          normalized_root_label, status, challenge_kind, challenge_payload_json, challenge_host, challenge_txt_value, challenge_expires_at,
+          root_exists, root_control_verified, expiry_horizon_sufficient, routing_enabled,
+          pirate_dns_authority_verified, club_attach_allowed, pirate_web_routing_allowed,
+          pirate_subdomain_issuance_allowed, control_class, operation_class, observation_provider,
+          evidence_bundle_ref, failure_reason, accepted_at, expires_at, created_at, updated_at
+        ) VALUES (
+          ?1, NULL, ?2, ?3, ?4, ?5, 'challenge_required', 'dns_txt', NULL, ?6, ?7, ?8,
+          ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
+          NULL, NULL, NULL, ?20, ?21, ?21
+        )
+      `,
+      args: [
+        sessionId,
+        input.userId,
+        input.family,
+        input.rootLabel,
+        normalizedRootLabel,
+        challengeHost,
+        challengeTxtValue,
+        challengeExpiresAt,
+        inspectionSnapshot.rootExists ?? null,
+        inspectionSnapshot.rootControlVerified ?? null,
+        inspectionSnapshot.expiryHorizonSufficient ?? null,
+        inspectionSnapshot.routingEnabled ?? null,
+        inspectionSnapshot.pirateDnsAuthorityVerified ?? null,
+        inspectionSnapshot.clubAttachAllowed ?? null,
+        inspectionSnapshot.pirateWebRoutingAllowed ?? null,
+        inspectionSnapshot.pirateSubdomainIssuanceAllowed ?? null,
+        inspectionSnapshot.controlClass ?? null,
+        inspectionSnapshot.operationClass ?? null,
+        observationProvider,
+        expiresAt,
+        createdAt,
+      ],
+    })
+  }
 
   const row = await getNamespaceVerificationSessionRowForUser(client, sessionId, input.userId)
   if (!row) {
@@ -298,10 +839,12 @@ export async function getNamespaceVerificationSession(
 
 export async function completeNamespaceVerificationSession(
   client: Client,
+  env: Env,
   input: {
     namespaceVerificationSessionId: string
     userId: string
     restartChallenge?: boolean | null
+    signaturePayload?: Record<string, unknown> | null
   },
 ): Promise<NamespaceVerificationSession | null> {
   const row = await getNamespaceVerificationSessionRowForUser(client, input.namespaceVerificationSessionId, input.userId)
@@ -312,17 +855,174 @@ export async function completeNamespaceVerificationSession(
   const now = new Date()
   const updatedAt = now.toISOString()
   if (input.restartChallenge) {
-    const challengeExpiresAt = new Date(now.getTime() + 60 * 60 * 1000).toISOString()
+    if (row.family === "spaces") {
+      if (!isSpacesVerifierConfigured(env)) {
+        if (isProductionEnv(env)) {
+          throw providerUnavailable("Spaces verifier is not configured")
+        }
+        throw verificationRequired("Spaces verifier is not available in this environment")
+      }
+      const inspection = await inspectSpacesNamespace(env, row.normalized_root_label ?? row.submitted_root_label.toLowerCase())
+      if (!inspection.rootExists) {
+        throw verificationRequired("Spaces namespace root does not exist")
+      }
+      const challenge = await mintSpacesChallenge(
+        env,
+        row.normalized_root_label ?? row.submitted_root_label.toLowerCase(),
+        inspection.rootPubkey ?? "",
+        input.namespaceVerificationSessionId,
+      )
+      const expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
+      await client.execute({
+        sql: `
+          UPDATE namespace_verification_sessions
+          SET namespace_verification_id = NULL,
+              status = 'challenge_required',
+              challenge_kind = 'schnorr_sign',
+              challenge_payload_json = ?2,
+              challenge_expires_at = ?3,
+              root_exists = 1,
+              root_control_verified = ?4,
+              expiry_horizon_sufficient = ?5,
+              control_class = ?6,
+              operation_class = ?7,
+              observation_provider = ?8,
+              evidence_bundle_ref = NULL,
+              failure_reason = NULL,
+              accepted_at = NULL,
+              anchor_height = ?9,
+              anchor_block_hash = ?10,
+              anchor_root_hash = ?11,
+              proof_root_hash = ?12,
+              expires_at = ?13,
+              updated_at = ?14
+          WHERE namespace_verification_session_id = ?1
+        `,
+        args: [
+          input.namespaceVerificationSessionId,
+          JSON.stringify(challenge.challengePayload),
+          challenge.challengeExpiresAt,
+          inspection.rootKeyProofVerified ? 1 : 0,
+          inspection.anchorFreshEnough == null ? null : inspection.anchorFreshEnough ? 1 : 0,
+          inspection.controlClass,
+          inspection.operationClass,
+          inspection.observationProvider,
+          inspection.acceptedAnchorHeight,
+          inspection.acceptedAnchorBlockHash,
+          inspection.acceptedAnchorRootHash,
+          inspection.proofRootHash,
+          expiresAt,
+          updatedAt,
+        ],
+      })
+    } else {
+      const challengeTxtValue = `pirate-verification=${makeId("nch")}`
+      const challengeExpiresAt = new Date(now.getTime() + 60 * 60 * 1000).toISOString()
+      const expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
+      let observationProvider = row.observation_provider ?? "local_stub"
+      let inspectionSnapshot: HnsSessionAssertionSnapshot = {
+        rootExists: row.root_exists,
+        rootControlVerified: row.root_control_verified ?? null,
+        expiryHorizonSufficient: row.expiry_horizon_sufficient,
+        routingEnabled: row.routing_enabled,
+        pirateDnsAuthorityVerified: row.pirate_dns_authority_verified,
+        clubAttachAllowed: null,
+        pirateWebRoutingAllowed: null,
+        pirateSubdomainIssuanceAllowed: null,
+        controlClass: row.control_class,
+        operationClass: row.operation_class,
+      }
+
+      if (isHnsVerifierConfigured(env)) {
+        const inspection = await inspectHnsRoot(env, {
+          rootLabel: row.normalized_root_label ?? row.submitted_root_label.toLowerCase(),
+          challengeHost: row.challenge_host,
+        })
+        inspectionSnapshot = deriveHnsInspectionSnapshot(inspection)
+        const published = await publishHnsTxtRecord(env, {
+          rootLabel: row.normalized_root_label ?? row.submitted_root_label.toLowerCase(),
+          challengeHost: row.challenge_host,
+          challengeTxtValue,
+        })
+        observationProvider = published.observation_provider ?? "hns_verifier"
+      } else if (isProductionEnv(env)) {
+        throw providerUnavailable("HNS verifier is not configured")
+      }
+
+      await client.execute({
+        sql: `
+          UPDATE namespace_verification_sessions
+          SET namespace_verification_id = NULL,
+              status = 'challenge_required',
+              challenge_kind = 'dns_txt',
+              challenge_payload_json = NULL,
+              challenge_txt_value = ?2,
+              challenge_expires_at = ?3,
+              root_exists = ?4,
+              root_control_verified = ?5,
+              expiry_horizon_sufficient = ?6,
+              routing_enabled = ?7,
+              pirate_dns_authority_verified = ?8,
+              club_attach_allowed = ?9,
+              pirate_web_routing_allowed = ?10,
+              pirate_subdomain_issuance_allowed = ?11,
+              control_class = ?12,
+              operation_class = ?13,
+              observation_provider = ?14,
+              evidence_bundle_ref = NULL,
+              failure_reason = NULL,
+              accepted_at = NULL,
+              expires_at = ?15,
+              updated_at = ?16
+          WHERE namespace_verification_session_id = ?1
+        `,
+        args: [
+          input.namespaceVerificationSessionId,
+          challengeTxtValue,
+          challengeExpiresAt,
+          inspectionSnapshot.rootExists,
+          inspectionSnapshot.rootControlVerified,
+          inspectionSnapshot.expiryHorizonSufficient,
+          inspectionSnapshot.routingEnabled,
+          inspectionSnapshot.pirateDnsAuthorityVerified,
+          inspectionSnapshot.clubAttachAllowed,
+          inspectionSnapshot.pirateWebRoutingAllowed,
+          inspectionSnapshot.pirateSubdomainIssuanceAllowed,
+          inspectionSnapshot.controlClass,
+          inspectionSnapshot.operationClass,
+          observationProvider,
+          expiresAt,
+          updatedAt,
+        ],
+      })
+    }
+    return getNamespaceVerificationSession(client, input.namespaceVerificationSessionId, input.userId)
+  }
+
+  if (row.expires_at && new Date(row.expires_at).getTime() < now.getTime()) {
     await client.execute({
       sql: `
         UPDATE namespace_verification_sessions
-        SET status = 'challenge_required',
-            challenge_txt_value = ?2,
-            challenge_expires_at = ?3,
-            updated_at = ?4
+        SET status = 'expired',
+            failure_reason = 'session_expired',
+            updated_at = ?2
         WHERE namespace_verification_session_id = ?1
       `,
-      args: [input.namespaceVerificationSessionId, `pirate-verification=${makeId("nch")}`, challengeExpiresAt, updatedAt],
+      args: [input.namespaceVerificationSessionId, updatedAt],
+    })
+    return getNamespaceVerificationSession(client, input.namespaceVerificationSessionId, input.userId)
+  }
+
+  if (row.challenge_expires_at && new Date(row.challenge_expires_at).getTime() < now.getTime()) {
+    await client.execute({
+      sql: `
+        UPDATE namespace_verification_sessions
+        SET status = 'expired',
+            failure_reason = 'challenge_expired',
+            updated_at = ?2
+        WHERE namespace_verification_session_id = ?1
+      `,
+      args: [input.namespaceVerificationSessionId, updatedAt],
     })
     return getNamespaceVerificationSession(client, input.namespaceVerificationSessionId, input.userId)
   }
@@ -331,63 +1031,273 @@ export async function completeNamespaceVerificationSession(
   const evidenceBundleId = makeId("nev")
   const expiresAt = row.expires_at
 
-  await client.batch([
-    {
-      sql: `
-        UPDATE namespace_verification_sessions
-        SET namespace_verification_id = ?2,
-            status = 'verified',
-            root_exists = 1,
-            root_control_verified = 1,
-            expiry_horizon_sufficient = 1,
-            routing_enabled = 1,
-            pirate_dns_authority_verified = 0,
-            club_attach_allowed = 1,
-            pirate_web_routing_allowed = 1,
-            pirate_subdomain_issuance_allowed = 0,
-            control_class = 'single_holder_root',
-            operation_class = 'owner_managed_namespace',
-            observation_provider = 'local_stub',
-            evidence_bundle_ref = ?3,
-            failure_reason = NULL,
-            accepted_at = ?4,
-            updated_at = ?4
-        WHERE namespace_verification_session_id = ?1
-      `,
-      args: [input.namespaceVerificationSessionId, verificationId, evidenceBundleId, updatedAt],
-    },
-    {
-      sql: `
-        INSERT OR REPLACE INTO namespace_verifications (
-          namespace_verification_id, source_namespace_verification_session_id, user_id, family, normalized_root_label,
-          status, root_exists, root_control_verified, expiry_horizon_sufficient, routing_enabled,
-          pirate_dns_authority_verified, club_attach_allowed, pirate_web_routing_allowed, pirate_subdomain_issuance_allowed,
-          control_class, operation_class, observation_provider, evidence_bundle_ref, accepted_at, expires_at, created_at, updated_at
-        ) VALUES (
-          ?1, ?2, ?3, 'hns', ?4, 'verified', 1, 1, 1, 1, 0, 1, 1, 0,
-          'single_holder_root', 'owner_managed_namespace', 'local_stub', ?5, ?6, ?7, ?6, ?6
-        )
-      `,
-      args: [verificationId, input.namespaceVerificationSessionId, input.userId, row.normalized_root_label ?? row.submitted_root_label.toLowerCase(), evidenceBundleId, updatedAt, expiresAt],
-    },
-    {
-      sql: `
-        INSERT INTO namespace_verification_evidence_bundles (
-          evidence_bundle_id, namespace_verification_session_id, namespace_verification_id, family, normalized_root_label,
-          evidence_kind, provider, resolver_path_json, raw_response_json, evidence_hash, observed_at, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, 'hns', ?4, 'accepted_snapshot', 'local_stub', ?5, ?6, NULL, ?7, ?7, ?7)
-      `,
-      args: [
-        evidenceBundleId,
-        input.namespaceVerificationSessionId,
-        verificationId,
-        row.normalized_root_label ?? row.submitted_root_label.toLowerCase(),
-        JSON.stringify(["local_stub"]),
-        JSON.stringify({ root_exists: true, root_control_verified: true, routing_enabled: true }),
-        updatedAt,
-      ],
-    },
-  ], "write")
+  if (row.family === "spaces") {
+    const challengePayload = input.signaturePayload ?? null
+    if (!challengePayload || typeof challengePayload !== "object") {
+      throw badRequestError("signature_payload is required to complete a spaces namespace verification")
+    }
+    const digest = typeof challengePayload.digest === "string" ? challengePayload.digest : null
+    const signature = typeof challengePayload.signature === "string" ? challengePayload.signature : null
+    const rootPubkey = typeof challengePayload.root_pubkey === "string"
+      ? challengePayload.root_pubkey
+      : typeof row.challenge_payload_json === "string"
+        ? (() => {
+          try {
+            const parsed = JSON.parse(row.challenge_payload_json) as Record<string, unknown>
+            return typeof parsed.root_pubkey === "string" ? parsed.root_pubkey : null
+          } catch {
+            return null
+          }
+        })()
+        : null
+    if (!digest || !signature || !rootPubkey) {
+      throw badRequestError("signature_payload must include digest, signature, and root_pubkey")
+    }
+    const verification = await verifySpacesSignature(env, {
+      digest,
+      signature,
+      rootPubkey,
+      signerPubkey: typeof challengePayload.signer_pubkey === "string" ? challengePayload.signer_pubkey : null,
+    })
+    if (!verification.validSignature) {
+      await client.execute({
+        sql: `
+          UPDATE namespace_verification_sessions
+          SET status = 'failed',
+              observation_provider = ?2,
+              failure_reason = ?3,
+              updated_at = ?4
+          WHERE namespace_verification_session_id = ?1
+        `,
+        args: [
+          input.namespaceVerificationSessionId,
+          verification.observationProvider ?? row.observation_provider ?? "spaces_verifier",
+          verification.failureReason ?? (verification.wrongSigner ? "wrong_signer" : "invalid_signature"),
+          updatedAt,
+        ],
+      })
+      return getNamespaceVerificationSession(client, input.namespaceVerificationSessionId, input.userId)
+    }
+
+    const observationProvider = verification.observationProvider ?? row.observation_provider ?? "spaces_verifier"
+    const acceptedRootLabel = row.normalized_root_label ?? row.submitted_root_label.toLowerCase()
+
+    await client.batch([
+      {
+        sql: `
+          UPDATE namespace_verification_sessions
+          SET namespace_verification_id = ?2,
+              status = 'verified',
+              root_exists = 1,
+              root_control_verified = 1,
+              expiry_horizon_sufficient = COALESCE(expiry_horizon_sufficient, 1),
+              routing_enabled = COALESCE(routing_enabled, 1),
+              pirate_dns_authority_verified = 0,
+              club_attach_allowed = 1,
+              pirate_web_routing_allowed = 1,
+              pirate_subdomain_issuance_allowed = 0,
+              control_class = COALESCE(control_class, 'single_holder_root'),
+              operation_class = COALESCE(operation_class, 'owner_managed_namespace'),
+              observation_provider = ?4,
+              evidence_bundle_ref = ?3,
+              failure_reason = NULL,
+              accepted_at = ?5,
+              updated_at = ?5
+          WHERE namespace_verification_session_id = ?1
+        `,
+        args: [input.namespaceVerificationSessionId, verificationId, evidenceBundleId, observationProvider, updatedAt],
+      },
+      {
+        sql: `
+          INSERT OR REPLACE INTO namespace_verifications (
+            namespace_verification_id, source_namespace_verification_session_id, user_id, family, normalized_root_label,
+            status, root_exists, root_control_verified, expiry_horizon_sufficient, routing_enabled,
+            pirate_dns_authority_verified, club_attach_allowed, pirate_web_routing_allowed, pirate_subdomain_issuance_allowed,
+            control_class, operation_class, observation_provider, evidence_bundle_ref, accepted_at, expires_at, created_at, updated_at,
+            anchor_height, anchor_block_hash, anchor_root_hash, proof_root_hash
+          ) VALUES (
+            ?1, ?2, ?3, 'spaces', ?4, 'verified', 1, 1, COALESCE(?5, 1), COALESCE(?6, 1), 0, 1, 1, 0,
+            COALESCE(?7, 'single_holder_root'), COALESCE(?8, 'owner_managed_namespace'), ?9, ?10, ?11, ?12, ?11, ?11,
+            ?13, ?14, ?15, ?16
+          )
+        `,
+        args: [
+          verificationId,
+          input.namespaceVerificationSessionId,
+          input.userId,
+          acceptedRootLabel,
+          row.expiry_horizon_sufficient,
+          row.routing_enabled,
+          row.control_class,
+          row.operation_class,
+          observationProvider,
+          evidenceBundleId,
+          updatedAt,
+          expiresAt,
+          row.anchor_height,
+          row.anchor_block_hash,
+          row.anchor_root_hash,
+          row.proof_root_hash,
+        ],
+      },
+      {
+        sql: `
+          INSERT INTO namespace_verification_evidence_bundles (
+            evidence_bundle_id, namespace_verification_session_id, namespace_verification_id, family, normalized_root_label,
+            evidence_kind, provider, resolver_path_json, raw_response_json, evidence_hash, observed_at, created_at, updated_at
+          ) VALUES (?1, ?2, ?3, 'spaces', ?4, 'challenge_signature', ?5, ?6, ?7, NULL, ?8, ?8, ?8)
+        `,
+        args: [
+          evidenceBundleId,
+          input.namespaceVerificationSessionId,
+          verificationId,
+          acceptedRootLabel,
+          observationProvider,
+          JSON.stringify([observationProvider]),
+          JSON.stringify({ verification, challenge_payload: challengePayload }),
+          updatedAt,
+        ],
+      },
+    ], "write")
+  } else {
+    let observationProvider = row.observation_provider ?? "local_stub"
+    let verificationEvidence: Record<string, unknown> = {
+      root_exists: row.root_exists === 1,
+      root_control_verified: row.root_control_verified === 1,
+      expiry_horizon_sufficient: row.expiry_horizon_sufficient === 1,
+      routing_enabled: row.routing_enabled === 1,
+      pirate_dns_authority_verified: row.pirate_dns_authority_verified === 1,
+    }
+    let verificationResult: HnsVerifyTxtResult | null = null
+
+    if (isHnsVerifierConfigured(env)) {
+      const verification = await verifyHnsTxtRecord(env, {
+        rootLabel: row.normalized_root_label ?? row.submitted_root_label.toLowerCase(),
+        challengeHost: row.challenge_host,
+        challengeTxtValue: row.challenge_txt_value ?? "",
+      })
+      verificationResult = verification
+      observationProvider = verification.observation_provider ?? "hns_verifier"
+      verificationEvidence = verification as Record<string, unknown>
+
+      if (verification.verified !== true) {
+        await client.execute({
+          sql: `
+            UPDATE namespace_verification_sessions
+            SET status = 'failed',
+                observation_provider = ?2,
+                failure_reason = ?3,
+                updated_at = ?4
+            WHERE namespace_verification_session_id = ?1
+          `,
+          args: [
+            input.namespaceVerificationSessionId,
+            observationProvider,
+            verification.failure_reason ?? "challenge_mismatch",
+            updatedAt,
+          ],
+        })
+        return getNamespaceVerificationSession(client, input.namespaceVerificationSessionId, input.userId)
+      }
+    } else if (isProductionEnv(env)) {
+      throw providerUnavailable("HNS verifier is not configured")
+    }
+
+    const acceptedSnapshot = deriveAcceptedHnsSnapshot(row, verificationResult)
+    await client.batch([
+      {
+        sql: `
+          UPDATE namespace_verification_sessions
+          SET namespace_verification_id = ?2,
+              status = 'verified',
+              root_exists = ?4,
+              root_control_verified = ?5,
+              expiry_horizon_sufficient = ?6,
+              routing_enabled = ?7,
+              pirate_dns_authority_verified = ?8,
+              club_attach_allowed = ?9,
+              pirate_web_routing_allowed = ?10,
+              pirate_subdomain_issuance_allowed = ?11,
+              control_class = ?12,
+              operation_class = ?13,
+              observation_provider = ?14,
+              evidence_bundle_ref = ?3,
+              failure_reason = NULL,
+              accepted_at = ?15,
+              updated_at = ?15
+          WHERE namespace_verification_session_id = ?1
+        `,
+        args: [
+          input.namespaceVerificationSessionId,
+          verificationId,
+          evidenceBundleId,
+          acceptedSnapshot.rootExists,
+          acceptedSnapshot.rootControlVerified,
+          acceptedSnapshot.expiryHorizonSufficient,
+          acceptedSnapshot.routingEnabled,
+          acceptedSnapshot.pirateDnsAuthorityVerified,
+          acceptedSnapshot.clubAttachAllowed,
+          acceptedSnapshot.pirateWebRoutingAllowed,
+          acceptedSnapshot.pirateSubdomainIssuanceAllowed,
+          acceptedSnapshot.controlClass,
+          acceptedSnapshot.operationClass,
+          observationProvider,
+          updatedAt,
+        ],
+      },
+      {
+        sql: `
+          INSERT OR REPLACE INTO namespace_verifications (
+            namespace_verification_id, source_namespace_verification_session_id, user_id, family, normalized_root_label,
+            status, root_exists, root_control_verified, expiry_horizon_sufficient, routing_enabled,
+            pirate_dns_authority_verified, club_attach_allowed, pirate_web_routing_allowed, pirate_subdomain_issuance_allowed,
+            control_class, operation_class, observation_provider, evidence_bundle_ref, accepted_at, expires_at, created_at, updated_at
+          ) VALUES (
+            ?1, ?2, ?3, 'hns', ?4, 'verified', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+            ?13, ?14, ?15, ?16, ?17, ?18, ?17, ?17
+          )
+        `,
+        args: [
+          verificationId,
+          input.namespaceVerificationSessionId,
+          input.userId,
+          row.normalized_root_label ?? row.submitted_root_label.toLowerCase(),
+          acceptedSnapshot.rootExists,
+          acceptedSnapshot.rootControlVerified,
+          acceptedSnapshot.expiryHorizonSufficient,
+          acceptedSnapshot.routingEnabled,
+          acceptedSnapshot.pirateDnsAuthorityVerified,
+          acceptedSnapshot.clubAttachAllowed,
+          acceptedSnapshot.pirateWebRoutingAllowed,
+          acceptedSnapshot.pirateSubdomainIssuanceAllowed,
+          acceptedSnapshot.controlClass,
+          acceptedSnapshot.operationClass,
+          observationProvider,
+          evidenceBundleId,
+          updatedAt,
+          expiresAt,
+        ],
+      },
+      {
+        sql: `
+          INSERT INTO namespace_verification_evidence_bundles (
+            evidence_bundle_id, namespace_verification_session_id, namespace_verification_id, family, normalized_root_label,
+            evidence_kind, provider, resolver_path_json, raw_response_json, evidence_hash, observed_at, created_at, updated_at
+          ) VALUES (?1, ?2, ?3, 'hns', ?4, 'accepted_snapshot', ?5, ?6, ?7, NULL, ?8, ?8, ?8)
+        `,
+        args: [
+          evidenceBundleId,
+          input.namespaceVerificationSessionId,
+          verificationId,
+          row.normalized_root_label ?? row.submitted_root_label.toLowerCase(),
+          observationProvider,
+          JSON.stringify([observationProvider]),
+          JSON.stringify(verificationEvidence),
+          updatedAt,
+        ],
+      },
+    ], "write")
+  }
 
   return getNamespaceVerificationSession(client, input.namespaceVerificationSessionId, input.userId)
 }
@@ -405,18 +1315,23 @@ export interface VerificationRepository {
   startVerificationSession(input: {
     userId: string
     provider: "self" | "very"
+    requestedCapabilities?: RequestedVerificationCapability[] | null
     walletAttachmentId?: string | null
+    verificationIntent?: VerificationIntent | null
+    policyId?: string | null
   }): Promise<VerificationSession>
   getVerificationSession(verificationSessionId: string, userId: string): Promise<VerificationSession | null>
   completeVerificationSession(input: {
     verificationSessionId: string
     userId: string
     attestationId?: string | null
+    proof?: string | null
     proofHash?: string | null
+    providerPayloadRef?: string | null
   }): Promise<VerificationSession | null>
   startNamespaceVerificationSession(input: {
     userId: string
-    family: "hns"
+    family: "hns" | "spaces"
     rootLabel: string
   }): Promise<NamespaceVerificationSession>
   getNamespaceVerificationSession(
@@ -427,19 +1342,26 @@ export interface VerificationRepository {
     namespaceVerificationSessionId: string
     userId: string
     restartChallenge?: boolean | null
+    signaturePayload?: Record<string, unknown> | null
   }): Promise<NamespaceVerificationSession | null>
   getNamespaceVerification(namespaceVerificationId: string, userId: string): Promise<NamespaceVerification | null>
 }
 
 export class ControlPlaneVerificationRepository implements VerificationRepository {
-  constructor(private readonly client: Client) {}
+  constructor(
+    private readonly client: Client,
+    private readonly env: Env,
+  ) {}
 
   async startVerificationSession(input: {
     userId: string
     provider: "self" | "very"
+    requestedCapabilities?: RequestedVerificationCapability[] | null
     walletAttachmentId?: string | null
+    verificationIntent?: VerificationIntent | null
+    policyId?: string | null
   }): Promise<VerificationSession> {
-    return startVerificationSession(this.client, input)
+    return startVerificationSession(this.client, this.env, input)
   }
 
   async getVerificationSession(verificationSessionId: string, userId: string): Promise<VerificationSession | null> {
@@ -450,17 +1372,19 @@ export class ControlPlaneVerificationRepository implements VerificationRepositor
     verificationSessionId: string
     userId: string
     attestationId?: string | null
+    proof?: string | null
     proofHash?: string | null
+    providerPayloadRef?: string | null
   }): Promise<VerificationSession | null> {
-    return completeVerificationSession(this.client, input)
+    return completeVerificationSession(this.client, this.env, input)
   }
 
   async startNamespaceVerificationSession(input: {
     userId: string
-    family: "hns"
+    family: "hns" | "spaces"
     rootLabel: string
   }): Promise<NamespaceVerificationSession> {
-    return startNamespaceVerificationSession(this.client, input)
+    return startNamespaceVerificationSession(this.client, this.env, input)
   }
 
   async getNamespaceVerificationSession(
@@ -474,8 +1398,9 @@ export class ControlPlaneVerificationRepository implements VerificationRepositor
     namespaceVerificationSessionId: string
     userId: string
     restartChallenge?: boolean | null
+    signaturePayload?: Record<string, unknown> | null
   }): Promise<NamespaceVerificationSession | null> {
-    return completeNamespaceVerificationSession(this.client, input)
+    return completeNamespaceVerificationSession(this.client, this.env, input)
   }
 
   async getNamespaceVerification(namespaceVerificationId: string, userId: string): Promise<NamespaceVerification | null> {
@@ -491,7 +1416,16 @@ const globalScope = globalThis as typeof globalThis & {
 export function getControlPlaneVerificationRepository(env: Env): ControlPlaneVerificationRepository {
   const url = requireControlPlaneDbUrl(env)
   const authToken = String(env.TURSO_CONTROL_PLANE_AUTH_TOKEN || "").trim()
-  const cacheKey = `${url}|${authToken}`
+  const cacheKey = [
+    url,
+    authToken,
+    String(env.VERY_API_URL || ""),
+    String(env.VERY_API_KEY || ""),
+    String(env.VERY_APP_ID || ""),
+    String(env.HNS_VERIFIER_BASE_URL || ""),
+    String(env.HNS_VERIFIER_AUTH_TOKEN || ""),
+    String(env.ENVIRONMENT || ""),
+  ].join("|")
 
   if (
     globalScope.__pirateControlPlaneVerificationRepository
@@ -505,6 +1439,7 @@ export function getControlPlaneVerificationRepository(env: Env): ControlPlaneVer
       url,
       authToken: authToken || undefined,
     }),
+    env,
   )
   globalScope.__pirateControlPlaneVerificationRepository = repository
   globalScope.__pirateControlPlaneVerificationRepositoryKey = cacheKey

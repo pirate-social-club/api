@@ -107,6 +107,10 @@ function buildNamespaceAssertions(input: {
   expiry_horizon_sufficient: number | null
   routing_enabled: number | null
   pirate_dns_authority_verified: number | null
+  root_key_proof_verified: number | null
+  live_signature_verified: number | null
+  anchor_fresh_enough: number | null
+  owner_signed_updates_verified: number | null
 }): NamespaceVerificationAssertions {
   return {
     root_exists: boolOrNull(input.root_exists),
@@ -114,6 +118,10 @@ function buildNamespaceAssertions(input: {
     expiry_horizon_sufficient: boolOrNull(input.expiry_horizon_sufficient),
     routing_enabled: boolOrNull(input.routing_enabled),
     pirate_dns_authority_verified: boolOrNull(input.pirate_dns_authority_verified),
+    root_key_proof_verified: boolOrNull(input.root_key_proof_verified),
+    live_signature_verified: boolOrNull(input.live_signature_verified),
+    anchor_fresh_enough: boolOrNull(input.anchor_fresh_enough),
+    owner_signed_updates_verified: boolOrNull(input.owner_signed_updates_verified),
   }
 }
 
@@ -121,11 +129,28 @@ function buildNamespaceCapabilities(input: {
   club_attach_allowed: number | null
   pirate_web_routing_allowed: number | null
   pirate_subdomain_issuance_allowed: number | null
+  owner_signed_record_updates_allowed: number | null
+  pirate_subspace_issuance_allowed: number | null
 }): NamespaceVerificationCapabilities {
   return {
     club_attach_allowed: boolOrNull(input.club_attach_allowed),
     pirate_web_routing_allowed: boolOrNull(input.pirate_web_routing_allowed),
     pirate_subdomain_issuance_allowed: boolOrNull(input.pirate_subdomain_issuance_allowed),
+    owner_signed_record_updates_allowed: boolOrNull(input.owner_signed_record_updates_allowed),
+    pirate_subspace_issuance_allowed: boolOrNull(input.pirate_subspace_issuance_allowed),
+  }
+}
+
+function parseChallengePayload(raw: string | null | undefined): Record<string, unknown> | null {
+  if (!raw) {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : null
+  } catch {
+    return null
   }
 }
 
@@ -162,8 +187,10 @@ export function serializeNamespaceVerificationSession(row: NamespaceVerification
     submitted_root_label: row.submitted_root_label,
     normalized_root_label: row.normalized_root_label,
     status: row.status,
+    challenge_kind: (row.challenge_kind as NamespaceVerificationSession["challenge_kind"]) ?? null,
     challenge_host: row.challenge_host,
     challenge_txt_value: row.challenge_txt_value,
+    challenge_payload: parseChallengePayload(row.challenge_payload_json),
     challenge_expires_at: row.challenge_expires_at,
     assertions: buildNamespaceAssertions(row),
     capabilities: buildNamespaceCapabilities(row),
