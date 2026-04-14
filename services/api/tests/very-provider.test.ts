@@ -415,3 +415,81 @@ describe("Very provider upstream session creation", () => {
     }
   })
 })
+
+describe("Very provider development fallback", () => {
+  test("startSession fallback omits verify_url when no API key", async () => {
+    const { getVeryProvider } = require("../src/lib/verification/very-provider") as typeof import("../src/lib/verification/very-provider")
+    const env = {
+      VERY_APP_ID: "fallback-app-id",
+      ENVIRONMENT: "development",
+    } as any
+    const provider = getVeryProvider(env)
+    const result = await provider.startSession({
+      userId: "user-1",
+      requestedCapabilities: ["unique_human"],
+      walletAttachmentId: null,
+      verificationIntent: null,
+      policyId: null,
+    })
+    expect(result.launch.verify_url == null).toBe(true)
+    expect(result.launch.app_id).toBe("fallback-app-id")
+  })
+
+  test("getSessionOutcome returns verified in development without API key", async () => {
+    const { getVeryProvider } = require("../src/lib/verification/very-provider") as typeof import("../src/lib/verification/very-provider")
+    const env = {
+      VERY_APP_ID: "dev-app",
+      ENVIRONMENT: "development",
+    } as any
+    const provider = getVeryProvider(env)
+    const outcome = await provider.getSessionOutcome({
+      upstreamSessionRef: "local-ref",
+      providerPayloadRef: "some-proof",
+    })
+    expect(outcome.status).toBe("verified")
+    if (outcome.status === "verified") {
+      expect(typeof outcome.attestationData.proof_hash).toBe("string")
+      expect(outcome.attestationData.provider_status).toBe("local_widget_verified")
+    }
+  })
+
+  test("getSessionOutcome returns pending when no providerPayloadRef", async () => {
+    const { getVeryProvider } = require("../src/lib/verification/very-provider") as typeof import("../src/lib/verification/very-provider")
+    const env = {
+      VERY_APP_ID: "dev-app",
+      ENVIRONMENT: "development",
+    } as any
+    const provider = getVeryProvider(env)
+    const outcome = await provider.getSessionOutcome({
+      upstreamSessionRef: "local-ref",
+      providerPayloadRef: null,
+    })
+    expect(outcome.status).toBe("pending")
+  })
+
+  test("getSessionOutcome does not bypass in non-development environment", async () => {
+    const { getVeryProvider } = require("../src/lib/verification/very-provider") as typeof import("../src/lib/verification/very-provider")
+    const env = {
+      VERY_APP_ID: "prod-app",
+      VERY_API_KEY: "real-key",
+      ENVIRONMENT: "production",
+    } as any
+    const provider = getVeryProvider(env)
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => {
+      return new Response(JSON.stringify({ status: "valid" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }) as typeof globalThis.fetch
+    try {
+      const outcome = await provider.getSessionOutcome({
+        upstreamSessionRef: "prod-ref",
+        providerPayloadRef: "prod-proof",
+      })
+      expect(outcome.status).toBe("verified")
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+})

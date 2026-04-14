@@ -1321,4 +1321,59 @@ describe("verification routes", () => {
       expect(fetchedBody.operation_class).toBe("routing_only_namespace")
     })
   })
+
+  describe("POST /very/verify", () => {
+    test("returns valid in development without API key", async () => {
+      const ctx = await createRouteTestContext({
+        VERY_APP_ID: "test-app",
+        ENVIRONMENT: "development",
+      })
+      cleanup = ctx.cleanup
+      const response = await requestJson("http://pirate.test/very/verify", {
+        proof: "some-proof-payload",
+      }, ctx.env)
+      expect(response.status).toBe(200)
+      const body = await json(response) as { status: string }
+      expect(body.status).toBe("valid")
+    })
+
+    test("returns 400 error when proof is missing", async () => {
+      const ctx = await createRouteTestContext({
+        VERY_APP_ID: "test-app",
+        ENVIRONMENT: "development",
+      })
+      cleanup = ctx.cleanup
+      const response = await requestJson("http://pirate.test/very/verify", {}, ctx.env)
+      expect(response.status).toBe(400)
+    })
+
+    test("returns use_upstream_verifier in production with API key", async () => {
+      const ctx = await createRouteTestContext({
+        VERY_APP_ID: "test-app",
+        VERY_API_KEY: "real-key",
+        ENVIRONMENT: "production",
+      })
+      cleanup = ctx.cleanup
+      const response = await requestJson("http://pirate.test/very/verify", {
+        proof: "some-proof-payload",
+      }, ctx.env)
+      expect(response.status).toBe(400)
+      const body = await json(response) as { status: string; error: string }
+      expect(body.error).toBe("use_upstream_verifier")
+    })
+
+    test("returns local_proxy_unavailable without API key in non-development", async () => {
+      const ctx = await createRouteTestContext({
+        VERY_APP_ID: "test-app",
+        ENVIRONMENT: "staging",
+      })
+      cleanup = ctx.cleanup
+      const response = await requestJson("http://pirate.test/very/verify", {
+        proof: "some-proof-payload",
+      }, ctx.env)
+      expect(response.status).toBe(502)
+      const body = await json(response) as { status: string; error: string }
+      expect(body.error).toBe("local_proxy_unavailable")
+    })
+  })
 })

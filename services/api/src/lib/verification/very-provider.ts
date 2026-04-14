@@ -61,6 +61,10 @@ function trimEnv(value: string | undefined): string {
   return String(value || "").trim()
 }
 
+function isDevelopmentEnv(env: Env): boolean {
+  return String(env.ENVIRONMENT || "").trim().toLowerCase() === "development"
+}
+
 function requireConfiguredVery(env: Env): {
   apiUrl: string
   apiKey: string | null
@@ -397,7 +401,7 @@ export function getVeryProvider(env: Env): VeryProvider {
       if (!input.providerPayloadRef?.trim()) {
         return { status: "pending" }
       }
-      if (!apiKey && String(env.ENVIRONMENT || "").trim() === "development") {
+      if (!apiKey && isDevelopmentEnv(env)) {
         console.warn("[very-provider] trusting local widget completion in development")
         return {
           status: "verified",

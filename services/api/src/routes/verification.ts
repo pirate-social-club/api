@@ -107,9 +107,14 @@ verification.post("/very/verify", async (c) => {
     }
 
     const hasApiKey = Boolean(String(c.env.VERY_API_KEY || "").trim())
-    if (!hasApiKey && String(c.env.ENVIRONMENT || "").trim() === "development") {
-      console.warn("[very-provider] trusting local widget proof verification in development")
+    const isDev = String(c.env.ENVIRONMENT || "").trim().toLowerCase() === "development"
+    if (!hasApiKey && isDev) {
+      console.warn("[very-verify] trusting local widget proof in development")
       return c.json({ status: "valid" }, 200)
+    }
+
+    if (hasApiKey) {
+      return c.json({ status: "invalid", error: "use_upstream_verifier" }, 400)
     }
 
     return c.json({ status: "invalid", error: "local_proxy_unavailable" }, 502)
