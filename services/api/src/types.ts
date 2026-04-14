@@ -20,6 +20,8 @@ export type {
   RedditImportSummary,
   RedditVerification,
   RequestedVerificationCapability,
+  SelfVerificationDisclosures,
+  SelfVerificationLaunch,
   SessionExchangeRequest,
   SessionExchangeResponse,
   StartNamespaceVerificationSessionRequest,
@@ -73,6 +75,12 @@ export type Env = {
   VERY_API_KEY?: string
   VERY_APP_ID?: string
   VERY_VERIFY_URL?: string
+  VERY_SESSIONS_URL?: string
+  SELF_API_URL?: string
+  SELF_API_KEY?: string
+  SELF_APP_NAME?: string
+  SELF_ENDPOINT?: string
+  SELF_ENDPOINT_TYPE?: string
   SPACES_VERIFIER_BASE_URL?: string
   SPACES_VERIFIER_AUTH_TOKEN?: string
   SPACES_VERIFIER_CHALLENGE_DOMAIN?: string

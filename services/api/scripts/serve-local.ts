@@ -36,9 +36,15 @@ async function toRequest(req: IncomingMessage): Promise<Request> {
     }
   }
 
-  const body = req.method === "GET" || req.method === "HEAD"
-    ? undefined
-    : await readRequestBody(req) ?? undefined
+  const rawBody = req.method === "GET" || req.method === "HEAD"
+    ? null
+    : await readRequestBody(req)
+  const body: BodyInit | undefined = rawBody ? new ReadableStream({
+    start(controller) {
+      controller.enqueue(rawBody)
+      controller.close()
+    },
+  }) : undefined
 
   return new Request(`http://${req.headers.host || `127.0.0.1:${port}`}${req.url || "/"}`, {
     method: req.method,

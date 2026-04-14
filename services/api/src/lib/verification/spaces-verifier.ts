@@ -1,4 +1,4 @@
-import { internalError, providerUnavailable } from "../errors"
+import { internalError } from "../errors"
 import type { Env } from "../../types"
 
 const SPACES_VERIFIER_TIMEOUT_MS = 8_000
@@ -55,6 +55,18 @@ export type SpacesSignatureVerification = {
   failureReason: string | null
 }
 
+export type SpacesChallengePayload = {
+  kind: "schnorr_sign"
+  domain: string
+  root_label: string
+  root_pubkey: string
+  nonce: string
+  issued_at: string
+  expires_at: string
+  message: string
+  digest: string
+}
+
 function normalizeRootLabel(value: string): string {
   const trimmed = value.trim().toLowerCase()
   return trimmed.startsWith("@") ? trimmed.slice(1) : trimmed
@@ -63,7 +75,7 @@ function normalizeRootLabel(value: string): string {
 function requireSpacesVerifierBaseUrl(env: Env): string {
   const baseUrl = String(env.SPACES_VERIFIER_BASE_URL || "").trim()
   if (!baseUrl) {
-    throw providerUnavailable("SPACES_VERIFIER_BASE_URL is not configured")
+    throw internalError("SPACES_VERIFIER_BASE_URL is not configured")
   }
   return baseUrl
 }
@@ -108,16 +120,16 @@ async function spacesVerifierRequest<T>(
       const message = body && typeof body === "object" && "error" in body && typeof body.error === "string"
         ? body.error
         : "Spaces verifier request failed"
-      throw providerUnavailable(message)
+      throw internalError(message)
     }
     if (body == null || typeof body !== "object") {
-      throw providerUnavailable("Spaces verifier returned an invalid response")
+      throw internalError("Spaces verifier returned an invalid response")
     }
 
     return body as T
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
-      throw providerUnavailable("Spaces verifier request timed out")
+      throw internalError("Spaces verifier request timed out")
     }
     throw error
   } finally {
@@ -132,7 +144,7 @@ export async function inspectSpacesNamespace(env: Env, rootLabel: string): Promi
   })
 
   if (!("root_exists" in result)) {
-    throw providerUnavailable("Spaces verifier inspect response missing root_exists")
+    throw internalError("Spaces verifier inspect response missing root_exists")
   }
 
   return {
@@ -173,7 +185,7 @@ export async function verifySpacesSignature(
   })
 
   if (!("valid_signature" in result)) {
-    throw providerUnavailable("Spaces verifier signature response missing valid_signature")
+    throw internalError("Spaces verifier signature response missing valid_signature")
   }
 
   return {
@@ -201,18 +213,12 @@ export async function mintSpacesChallenge(
   sessionId: string,
 ): Promise<{
   challengeExpiresAt: string
-  challengePayload: {
-    kind: "schnorr_sign"
-    domain: string
-    root_label: string
-    root_pubkey: string
-    nonce: string
-    issued_at: string
-    expires_at: string
-    message: string
-    digest: string
-  }
+  challengePayload: SpacesChallengePayload
 }> {
+  if (!rootPubkey.trim()) {
+    throw internalError("cannot mint Spaces challenge without a root public key")
+  }
+
   const issuedAt = new Date()
   const challengeExpiresAt = new Date(issuedAt.getTime() + 10 * 60 * 1000).toISOString()
   const domain = getSpacesChallengeDomain(env)
