@@ -1074,6 +1074,8 @@ type CreateCentralizedCommunityRequest = (CreateCommunityRequestBase & {
   allow_anonymous_identity?: boolean;
   anonymous_identity_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null;
   gate_rules?: Array<GateRuleInput>;
+  donation_policy?: unknown | null;
+  community_bootstrap?: unknown | null;
   handle_policy?: {
     policy_template: "standard";
   };
