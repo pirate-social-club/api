@@ -721,6 +721,7 @@ export type Post = {
   agent_ownership_provider_snapshot?: string | null;
   disclosed_qualifiers_json?: Array<DisclosedQualifierSnapshot> | null;
   label_id?: string | null;
+  flair_id?: string | null;
   post_type: "text" | "image" | "video" | "link" | "song";
   status: "draft" | "published" | "hidden" | "removed" | "deleted";
   title?: string | null;
@@ -1289,7 +1290,7 @@ type SanctionsClearCapabilityState = {
   verified_at?: string | null;
 };
 
-type SelfVerificationDisclosures = {
+export type SelfVerificationDisclosures = {
   issuing_state?: boolean | null;
   name?: boolean | null;
   passport_number?: boolean | null;
@@ -1302,7 +1303,7 @@ type SelfVerificationDisclosures = {
   minimum_age?: number | null;
 };
 
-type SelfVerificationLaunch = {
+export type SelfVerificationLaunch = {
   app_name: string;
   logo_base64?: string | null;
   header?: string | null;

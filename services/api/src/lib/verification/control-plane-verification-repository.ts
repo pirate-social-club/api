@@ -1,5 +1,5 @@
 import { createClient } from "@libsql/client"
-import type { Client } from "@libsql/client"
+import type { Client, InStatement, InValue } from "@libsql/client"
 import { badRequestError, eligibilityFailed, internalError, providerUnavailable, verificationRequired } from "../errors"
 import { makeId } from "../helpers"
 import {
@@ -35,6 +35,8 @@ import {
 import type { HnsInspectResult, HnsVerifyTxtResult } from "./hns-verifier"
 import type { VeryProvider, VerySessionOutcome } from "./very-provider"
 import { getVeryProvider } from "./very-provider"
+import type { SelfProvider, SelfSessionOutcome } from "./self-provider"
+import { canonicalizeRequestedCapabilities, getSelfProvider } from "./self-provider"
 import {
   inspectSpacesNamespace,
   mintSpacesChallenge,
@@ -400,7 +402,7 @@ export async function startVerificationSession(
     policyId?: string | null
   },
 ): Promise<VerificationSession> {
-  const requestedCapabilities = (input.requestedCapabilities?.length ? input.requestedCapabilities : ["unique_human"]) as RequestedVerificationCapability[]
+  const requestedCapabilities = canonicalizeRequestedCapabilities(input.provider, (input.requestedCapabilities?.length ? input.requestedCapabilities : ["unique_human"]) as RequestedVerificationCapability[])
   const now = new Date()
   const createdAt = now.toISOString()
   const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString()
@@ -425,6 +427,18 @@ export async function startVerificationSession(
     })
     upstreamSessionRef = result.upstreamSessionRef
     launch = { mode: "widget", very_widget: result.launch }
+  }
+
+  if (input.provider === "self") {
+    const provider = getSelfProvider(env)
+    const result = await provider.startSession({
+      userId: input.userId,
+      requestedCapabilities,
+      verificationIntent: input.verificationIntent ?? null,
+      policyId: input.policyId ?? null,
+    })
+    upstreamSessionRef = result.upstreamSessionRef
+    launch = { mode: "qr_deeplink", self_app: result.launch }
   }
 
   await client.execute({
@@ -500,9 +514,8 @@ export async function completeVerificationSession(
     return completeVerySession(client, env, row, input)
   }
 
-  const environment = String(env.ENVIRONMENT || "").trim()
-  if (environment === "production" && row.provider === "self") {
-    throw verificationRequired("Self-verification is not available in production")
+  if (row.provider === "self") {
+    return completeSelfSession(client, env, row, input)
   }
 
   const sessionExpiresAt = row.expires_at
@@ -558,7 +571,76 @@ async function completeVerySession(
   }
 
   if (outcome.status === "verified") {
-    return finalizeVerification(client, row, input, outcome.attestationData)
+    return finalizeVerification(client, row, input, null, null, outcome.attestationData)
+  }
+
+  if (outcome.status === "pending") {
+    return serializeVerificationSession({ row, attestationRows: [] })
+  }
+
+  if (outcome.status === "failed") {
+    const updatedAt = new Date().toISOString()
+    await client.execute({
+      sql: `UPDATE verification_sessions SET status = 'failed', failure_code = ?2, updated_at = ?3 WHERE verification_session_id = ?1`,
+      args: [input.verificationSessionId, outcome.failureReason, updatedAt],
+    })
+    const updatedRow = await getVerificationSessionRowForUser(client, input.verificationSessionId, input.userId)
+    return serializeVerificationSession({ row: updatedRow!, attestationRows: [] })
+  }
+
+  if (outcome.status === "expired") {
+    const updatedAt = new Date().toISOString()
+    await client.execute({
+      sql: `UPDATE verification_sessions SET status = 'expired', failure_code = 'provider_expired', updated_at = ?2 WHERE verification_session_id = ?1`,
+      args: [input.verificationSessionId, updatedAt],
+    })
+    const updatedRow = await getVerificationSessionRowForUser(client, input.verificationSessionId, input.userId)
+    return serializeVerificationSession({ row: updatedRow!, attestationRows: [] })
+  }
+
+  return serializeVerificationSession({ row, attestationRows: [] })
+}
+
+async function completeSelfSession(
+  client: Client,
+  env: Env,
+  row: VerificationSessionRow,
+  input: {
+    verificationSessionId: string
+    userId: string
+    attestationId?: string | null
+    proof?: string | null
+    proofHash?: string | null
+    providerPayloadRef?: string | null
+  },
+): Promise<VerificationSession> {
+  const sessionExpiresAt = row.expires_at
+  if (sessionExpiresAt && new Date(sessionExpiresAt) < new Date()) {
+    await client.execute({
+      sql: `UPDATE verification_sessions SET status = 'expired', updated_at = ?2 WHERE verification_session_id = ?1`,
+      args: [input.verificationSessionId, new Date().toISOString()],
+    })
+    const updatedRow = await getVerificationSessionRowForUser(client, input.verificationSessionId, input.userId)
+    return serializeVerificationSession({ row: updatedRow!, attestationRows: [] })
+  }
+
+  let outcome: SelfSessionOutcome
+  try {
+    const provider = getSelfProvider(env)
+    outcome = await provider.getSessionOutcome({
+      upstreamSessionRef: row.upstream_session_ref ?? input.verificationSessionId,
+      proof: input.proof ?? null,
+      providerPayloadRef: input.providerPayloadRef ?? null,
+    })
+  } catch (error) {
+    throw providerUnavailable(
+      error instanceof Error ? error.message : "Self provider is unavailable"
+    )
+  }
+
+  if (outcome.status === "verified") {
+    const requestedCapabilities = JSON.parse(row.requested_capabilities_json) as RequestedVerificationCapability[]
+    return finalizeVerification(client, row, input, requestedCapabilities, outcome.claims)
   }
 
   if (outcome.status === "pending") {
@@ -598,6 +680,8 @@ async function finalizeVerification(
     proof?: string | null
     proofHash?: string | null
   },
+  requestedCapabilities?: RequestedVerificationCapability[] | null,
+  selfClaims?: { age_over_18: boolean; nationality: string | null } | null,
   attestationData?: Record<string, unknown>,
 ): Promise<VerificationSession> {
   const existingAttestations = await getAttestationsBySourceSessionId(client, input.verificationSessionId, input.userId)
@@ -615,6 +699,10 @@ async function finalizeVerification(
   }
 
   const capabilities = parseVerificationCapabilities(userRow.verification_capabilities_json)
+
+  const capsToMint = requestedCapabilities ?? ["unique_human"]
+  const attestationInserts: InStatement[] = []
+
   capabilities.unique_human = {
     state: "verified",
     provider: row.provider === "self" || row.provider === "very" ? row.provider : null,
@@ -622,14 +710,60 @@ async function finalizeVerification(
     mechanism: row.provider === "very" ? "very_provider" : "session_complete",
     verified_at: updatedAt,
   }
+  attestationInserts.push({
+    sql: `
+      INSERT INTO user_attestations (
+        user_attestation_id, user_id, source_verification_session_id, provider, attestation_type,
+        capability_key, status, value_json, verified_at, expires_at, revoked_at, created_at, updated_at
+      ) VALUES (?1, ?2, ?3, ?4, 'unique_human', 'unique_human', 'accepted', ?5, ?6, ?7, NULL, ?6, ?6)
+    `,
+    args: [makeId("att"), input.userId, input.verificationSessionId, row.provider, JSON.stringify({ state: "verified" }), updatedAt, expiresAt],
+  })
 
-  const valueJson = attestationData
-    ? JSON.stringify({ state: "verified", ...attestationData })
-    : JSON.stringify({ state: "verified" })
+  if (capsToMint.includes("age_over_18") && row.provider === "self") {
+    capabilities.age_over_18 = {
+      state: "verified",
+      provider: "self",
+      proof_type: "age_over_18",
+      mechanism: "self_disclosure",
+      verified_at: updatedAt,
+    }
+    attestationInserts.push({
+      sql: `
+        INSERT INTO user_attestations (
+          user_attestation_id, user_id, source_verification_session_id, provider, attestation_type,
+          capability_key, status, value_json, verified_at, expires_at, revoked_at, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, 'age_over_18', 'age_over_18', 'accepted', ?5, ?6, ?7, NULL, ?6, ?6)
+      `,
+      args: [makeId("att"), input.userId, input.verificationSessionId, row.provider, JSON.stringify({ state: "verified", age_over_18: true }), updatedAt, expiresAt],
+    })
+  }
+
+  if (capsToMint.includes("nationality") && row.provider === "self") {
+    const nationalityValue = selfClaims?.nationality ?? null
+    capabilities.nationality = {
+      state: "verified",
+      value: nationalityValue,
+      provider: "self",
+      proof_type: "nationality",
+      mechanism: "self_disclosure",
+      verified_at: updatedAt,
+    }
+    attestationInserts.push({
+      sql: `
+        INSERT INTO user_attestations (
+          user_attestation_id, user_id, source_verification_session_id, provider, attestation_type,
+          capability_key, status, value_json, verified_at, expires_at, revoked_at, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, 'nationality', 'nationality', 'accepted', ?5, ?6, ?7, NULL, ?6, ?6)
+      `,
+      args: [makeId("att"), input.userId, input.verificationSessionId, row.provider, JSON.stringify({ state: "verified", nationality: nationalityValue }), updatedAt, expiresAt],
+    })
+  }
+
   const attestationProofHash = typeof attestationData?.proof_hash === "string" ? attestationData.proof_hash : null
   const resultRef = input.proofHash ?? attestationProofHash ?? null
 
-  await client.batch([
+  const batchStatements: InStatement[] = [
     {
       sql: `
         UPDATE verification_sessions
@@ -642,15 +776,7 @@ async function finalizeVerification(
       `,
       args: [input.verificationSessionId, resultRef, updatedAt],
     },
-    {
-      sql: `
-        INSERT INTO user_attestations (
-          user_attestation_id, user_id, source_verification_session_id, provider, attestation_type,
-          capability_key, status, value_json, verified_at, expires_at, revoked_at, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, 'unique_human', 'unique_human', 'accepted', ?5, ?6, ?7, NULL, ?6, ?6)
-      `,
-      args: [attestationId, input.userId, input.verificationSessionId, row.provider, valueJson, updatedAt, expiresAt],
-    },
+    ...attestationInserts,
     {
       sql: `
         UPDATE users
@@ -664,7 +790,9 @@ async function finalizeVerification(
       `,
       args: [input.verificationSessionId, row.provider, JSON.stringify(capabilities), updatedAt, input.userId],
     },
-  ], "write")
+  ]
+
+  await client.batch(batchStatements, "write")
 
   return getVerificationSession(client, input.verificationSessionId, input.userId) as Promise<VerificationSession>
 }
@@ -980,16 +1108,16 @@ export async function completeNamespaceVerificationSession(
           input.namespaceVerificationSessionId,
           challengeTxtValue,
           challengeExpiresAt,
-          inspectionSnapshot.rootExists,
-          inspectionSnapshot.rootControlVerified,
-          inspectionSnapshot.expiryHorizonSufficient,
-          inspectionSnapshot.routingEnabled,
-          inspectionSnapshot.pirateDnsAuthorityVerified,
-          inspectionSnapshot.clubAttachAllowed,
-          inspectionSnapshot.pirateWebRoutingAllowed,
-          inspectionSnapshot.pirateSubdomainIssuanceAllowed,
-          inspectionSnapshot.controlClass,
-          inspectionSnapshot.operationClass,
+          inspectionSnapshot.rootExists ?? null,
+          inspectionSnapshot.rootControlVerified ?? null,
+          inspectionSnapshot.expiryHorizonSufficient ?? null,
+          inspectionSnapshot.routingEnabled ?? null,
+          inspectionSnapshot.pirateDnsAuthorityVerified ?? null,
+          inspectionSnapshot.clubAttachAllowed ?? null,
+          inspectionSnapshot.pirateWebRoutingAllowed ?? null,
+          inspectionSnapshot.pirateSubdomainIssuanceAllowed ?? null,
+          inspectionSnapshot.controlClass ?? null,
+          inspectionSnapshot.operationClass ?? null,
           observationProvider,
           expiresAt,
           updatedAt,
@@ -1126,18 +1254,18 @@ export async function completeNamespaceVerificationSession(
           input.namespaceVerificationSessionId,
           input.userId,
           acceptedRootLabel,
-          row.expiry_horizon_sufficient,
-          row.routing_enabled,
-          row.control_class,
-          row.operation_class,
+          row.expiry_horizon_sufficient ?? null,
+          row.routing_enabled ?? null,
+          row.control_class ?? null,
+          row.operation_class ?? null,
           observationProvider,
           evidenceBundleId,
           updatedAt,
           expiresAt,
-          row.anchor_height,
-          row.anchor_block_hash,
-          row.anchor_root_hash,
-          row.proof_root_hash,
+          row.anchor_height ?? null,
+          row.anchor_block_hash ?? null,
+          row.anchor_root_hash ?? null,
+          row.proof_root_hash ?? null,
         ],
       },
       {
@@ -1231,16 +1359,16 @@ export async function completeNamespaceVerificationSession(
           input.namespaceVerificationSessionId,
           verificationId,
           evidenceBundleId,
-          acceptedSnapshot.rootExists,
-          acceptedSnapshot.rootControlVerified,
-          acceptedSnapshot.expiryHorizonSufficient,
-          acceptedSnapshot.routingEnabled,
-          acceptedSnapshot.pirateDnsAuthorityVerified,
-          acceptedSnapshot.clubAttachAllowed,
-          acceptedSnapshot.pirateWebRoutingAllowed,
-          acceptedSnapshot.pirateSubdomainIssuanceAllowed,
-          acceptedSnapshot.controlClass,
-          acceptedSnapshot.operationClass,
+          acceptedSnapshot.rootExists ?? null,
+          acceptedSnapshot.rootControlVerified ?? null,
+          acceptedSnapshot.expiryHorizonSufficient ?? null,
+          acceptedSnapshot.routingEnabled ?? null,
+          acceptedSnapshot.pirateDnsAuthorityVerified ?? null,
+          acceptedSnapshot.clubAttachAllowed ?? null,
+          acceptedSnapshot.pirateWebRoutingAllowed ?? null,
+          acceptedSnapshot.pirateSubdomainIssuanceAllowed ?? null,
+          acceptedSnapshot.controlClass ?? null,
+          acceptedSnapshot.operationClass ?? null,
           observationProvider,
           updatedAt,
         ],
@@ -1262,16 +1390,16 @@ export async function completeNamespaceVerificationSession(
           input.namespaceVerificationSessionId,
           input.userId,
           row.normalized_root_label ?? row.submitted_root_label.toLowerCase(),
-          acceptedSnapshot.rootExists,
-          acceptedSnapshot.rootControlVerified,
-          acceptedSnapshot.expiryHorizonSufficient,
-          acceptedSnapshot.routingEnabled,
-          acceptedSnapshot.pirateDnsAuthorityVerified,
-          acceptedSnapshot.clubAttachAllowed,
-          acceptedSnapshot.pirateWebRoutingAllowed,
-          acceptedSnapshot.pirateSubdomainIssuanceAllowed,
-          acceptedSnapshot.controlClass,
-          acceptedSnapshot.operationClass,
+          acceptedSnapshot.rootExists ?? null,
+          acceptedSnapshot.rootControlVerified ?? null,
+          acceptedSnapshot.expiryHorizonSufficient ?? null,
+          acceptedSnapshot.routingEnabled ?? null,
+          acceptedSnapshot.pirateDnsAuthorityVerified ?? null,
+          acceptedSnapshot.clubAttachAllowed ?? null,
+          acceptedSnapshot.pirateWebRoutingAllowed ?? null,
+          acceptedSnapshot.pirateSubdomainIssuanceAllowed ?? null,
+          acceptedSnapshot.controlClass ?? null,
+          acceptedSnapshot.operationClass ?? null,
           observationProvider,
           evidenceBundleId,
           updatedAt,

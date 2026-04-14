@@ -5,6 +5,7 @@ import { mkdtemp, readdir, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Env } from "../src/types"
+import { setSelfProviderForTests } from "../src/lib/verification/self-provider"
 import { setVeryProviderForTests } from "../src/lib/verification/very-provider"
 
 const encoder = new TextEncoder()
@@ -15,6 +16,7 @@ export function resetMemoryStore(): void {
 
 export function resetRuntimeCaches(): void {
   resetMemoryStore()
+  setSelfProviderForTests(null)
   setVeryProviderForTests(null)
   const scope = globalThis as typeof globalThis & {
     __pirateControlPlaneRepositoryBundle?: unknown
@@ -151,7 +153,12 @@ function toSqliteCompatibleStatement(statement: string): string | null {
     return null
   }
 
-  return statement
+  let sqliteCompat = statement
+  sqliteCompat = sqliteCompat.replace(/\bJSONB\b/gi, "TEXT")
+  sqliteCompat = sqliteCompat.replace(/\bTIMESTAMPTZ\b/gi, "TEXT")
+  sqliteCompat = sqliteCompat.replace(/\bTIMESTAMP\b/gi, "TEXT")
+
+  return sqliteCompat
 }
 
 export async function createControlPlaneTestClient(options?: {

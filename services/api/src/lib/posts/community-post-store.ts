@@ -98,6 +98,7 @@ function serializePost(row: PostRow): Post {
     post_id: row.post_id,
     community_id: row.community_id,
     author_user_id: row.identity_mode === "anonymous" ? null : row.author_user_id,
+    authorship_mode: "human_direct",
     identity_mode: row.identity_mode,
     anonymous_scope: row.anonymous_scope,
     anonymous_label: row.anonymous_label,
