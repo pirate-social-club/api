@@ -520,6 +520,7 @@ export async function createCommunity(input: {
             jobId,
             creatorUserId: session.userId,
             displayName,
+            membershipMode: input.body.membership_mode ?? "open",
             namespaceVerificationId,
             databaseUrl,
             createdAt,

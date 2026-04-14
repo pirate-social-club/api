@@ -4,6 +4,8 @@ import app from "../src/index"
 import { buildLocalCommunityDbUrl } from "../src/lib/communities/community-local-db"
 import { buildDefaultVerificationCapabilities } from "../src/lib/verification/verification-capabilities"
 import { createRouteTestContext, json, mintUpstreamJwt, resetRuntimeCaches } from "./helpers"
+import { setVeryProviderForTests } from "../src/lib/verification/very-provider"
+import type { VeryProvider } from "../src/lib/verification/very-provider"
 import type { Env } from "../src/types"
 
 let cleanup: (() => Promise<void>) | null = null
@@ -1076,7 +1078,11 @@ describe("community routes", () => {
   })
 
   test("gated community join enforces membership proof requirements", async () => {
-    const ctx = await createRouteTestContext()
+    const ctx = await createRouteTestContext({
+      VERY_API_URL: "https://very.test",
+      VERY_API_KEY: "very-test-key",
+      VERY_APP_ID: "very-test-app",
+    })
     cleanup = ctx.cleanup
 
     const verifiedCreator = await exchangeJwt(ctx.env, "community-gated-creator")
@@ -1108,7 +1114,24 @@ describe("community routes", () => {
     }
 
     const veryJoiner = await exchangeJwt(ctx.env, "community-gated-very-joiner")
+    setVeryProviderForTests({
+      startSession: async () => ({
+        upstreamSessionRef: "very-test-ref",
+        launch: {
+          app_id: "test",
+          context: "verification",
+          type_id: "palm_scan",
+          query: {},
+          verify_url: "https://verify.very.org/test",
+        },
+      }),
+      getSessionOutcome: async () => ({
+        status: "verified",
+        attestationData: {},
+      }),
+    } satisfies VeryProvider)
     await completeUniqueHumanVerification(ctx.env, veryJoiner.accessToken, "very")
+    setVeryProviderForTests(null)
 
     const deniedJoin = await app.request(
       `http://pirate.test/communities/${communityCreateBody.community.community_id}/join`,

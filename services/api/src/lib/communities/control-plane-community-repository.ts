@@ -221,6 +221,7 @@ export async function createCommunityProvisioningRequest(
     jobId: string
     creatorUserId: string
     displayName: string
+    membershipMode: "open" | "request" | "gated"
     namespaceVerificationId: string
     databaseUrl: string
     createdAt: string
@@ -236,19 +237,20 @@ export async function createCommunityProvisioningRequest(
     await tx.execute({
       sql: `
         INSERT INTO communities (
-          community_id, creator_user_id, display_name, status, provisioning_state, transfer_state,
+          community_id, creator_user_id, display_name, membership_mode, status, provisioning_state, transfer_state,
           route_slug, namespace_verification_id, primary_database_binding_id, registry_publication_state,
           registry_attempt_id, registry_published_at, registry_publication_job_id, registry_error_code,
           created_at, updated_at
         ) VALUES (
-          ?1, ?2, ?3, 'active', 'provisioning', 'none', NULL, ?4, NULL, 'pending_create',
-          ?5, NULL, NULL, NULL, ?6, ?6
+          ?1, ?2, ?3, ?4, 'active', 'provisioning', 'none', NULL, ?5, NULL, 'pending_create',
+          ?6, NULL, NULL, NULL, ?7, ?7
         )
       `,
       args: [
         input.communityId,
         input.creatorUserId,
         input.displayName,
+        input.membershipMode,
         input.namespaceVerificationId,
         input.registryAttemptId,
         input.createdAt,
@@ -846,6 +848,7 @@ export interface CommunityRepository {
     jobId: string
     creatorUserId: string
     displayName: string
+    membershipMode: "open" | "request" | "gated"
     namespaceVerificationId: string
     databaseUrl: string
     createdAt: string
@@ -999,6 +1002,7 @@ export class ControlPlaneCommunityRepository implements CommunityRepository {
     jobId: string
     creatorUserId: string
     displayName: string
+    membershipMode: "open" | "request" | "gated"
     namespaceVerificationId: string
     databaseUrl: string
     createdAt: string

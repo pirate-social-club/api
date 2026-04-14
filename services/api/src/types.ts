@@ -19,13 +19,17 @@ export type {
   Profile,
   RedditImportSummary,
   RedditVerification,
+  RequestedVerificationCapability,
   SessionExchangeRequest,
   SessionExchangeResponse,
   StartNamespaceVerificationSessionRequest,
   StartVerificationSessionRequest,
   User,
   VerificationCapabilities,
+  VerificationIntent,
   VerificationSession,
+  VerificationSessionLaunch,
+  VeryWidgetLaunch,
   WalletAttachmentSummary,
 } from "@pirate/api-contracts"
 
@@ -65,6 +69,11 @@ export type Env = {
   PRIVY_JWT_VERIFICATION_KEY?: string
   REDDIT_PROFILE_CHECK_USER_AGENT?: string
   REDDIT_PULLPUSH_BASE_URL?: string
+  VERY_API_URL?: string
+  VERY_API_KEY?: string
+  VERY_APP_ID?: string
+  HNS_VERIFIER_BASE_URL?: string
+  HNS_VERIFIER_AUTH_TOKEN?: string
 }
 
 export type UpstreamIdentity = {

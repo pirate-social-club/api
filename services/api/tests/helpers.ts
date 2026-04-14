@@ -5,6 +5,7 @@ import { mkdtemp, readdir, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Env } from "../src/types"
+import { setVeryProviderForTests } from "../src/lib/verification/very-provider"
 
 const encoder = new TextEncoder()
 
@@ -14,13 +15,22 @@ export function resetMemoryStore(): void {
 
 export function resetRuntimeCaches(): void {
   resetMemoryStore()
+  setVeryProviderForTests(null)
   const scope = globalThis as typeof globalThis & {
     __pirateControlPlaneRepositoryBundle?: unknown
     __pirateControlPlaneClientKey?: unknown
+    __pirateControlPlaneCommunityRepository?: unknown
+    __pirateControlPlaneCommunityRepositoryKey?: unknown
+    __pirateControlPlaneVerificationRepository?: unknown
+    __pirateControlPlaneVerificationRepositoryKey?: unknown
     __pirateMemoryAuthRepository?: unknown
   }
   delete scope.__pirateControlPlaneRepositoryBundle
   delete scope.__pirateControlPlaneClientKey
+  delete scope.__pirateControlPlaneCommunityRepository
+  delete scope.__pirateControlPlaneCommunityRepositoryKey
+  delete scope.__pirateControlPlaneVerificationRepository
+  delete scope.__pirateControlPlaneVerificationRepositoryKey
   delete scope.__pirateMemoryAuthRepository
 }
 
@@ -126,8 +136,22 @@ async function applySqlFile(client: Client, path: URL): Promise<void> {
   const rawSql = await readFile(path, "utf8")
   const statements = splitSqlStatements(rawSql)
   for (const statement of statements) {
-    await client.execute(statement)
+    const sqliteStatement = toSqliteCompatibleStatement(statement)
+    if (!sqliteStatement) {
+      continue
+    }
+    await client.execute(sqliteStatement)
   }
+}
+
+function toSqliteCompatibleStatement(statement: string): string | null {
+  const normalized = statement.trim().replace(/\s+/g, " ").toUpperCase()
+
+  if (normalized.startsWith("ALTER TABLE") && normalized.includes(" ADD CONSTRAINT ")) {
+    return null
+  }
+
+  return statement
 }
 
 export async function createControlPlaneTestClient(options?: {
@@ -147,7 +171,9 @@ export async function createControlPlaneTestClient(options?: {
     const entries = (await readdir(migrationsDir))
       .filter((entry) => entry.endsWith(".sql"))
       .sort()
-    for (const entry of entries) {
+    const baselineEntry = entries.find((entry) => entry.startsWith("0000_") && entry.includes("baseline"))
+    const entriesToApply = baselineEntry ? [baselineEntry] : entries
+    for (const entry of entriesToApply) {
       await applySqlFile(client, new URL(entry, migrationsDir))
     }
   } else {
