@@ -120,7 +120,7 @@ async function defaultRedditChecker(input: {
   redditUsername: string
   verificationCode: string
 }): Promise<RedditCheckResult> {
-  const url = `https://www.reddit.com/user/${encodeURIComponent(input.redditUsername)}/`
+  const url = `https://www.reddit.com/user/${encodeURIComponent(input.redditUsername)}/about.json`
   const response = await fetch(url, {
     headers: {
       "user-agent": String(input.env.REDDIT_PROFILE_CHECK_USER_AGENT || DEFAULT_PROFILE_USER_AGENT),
@@ -155,8 +155,20 @@ async function defaultRedditChecker(input: {
     }
   }
 
-  const html = await response.text()
-  if (html.includes(input.verificationCode)) {
+  const body = await response.json().catch(() => null) as {
+    data?: {
+      subreddit?: {
+        public_description?: string
+        description?: string
+      }
+    }
+  } | null
+
+  const publicDescription = body?.data?.subreddit?.public_description ?? ""
+  const description = body?.data?.subreddit?.description ?? ""
+  const haystack = `${publicDescription}\n${description}`
+
+  if (haystack.includes(input.verificationCode)) {
     return {
       status: "verified",
     }
