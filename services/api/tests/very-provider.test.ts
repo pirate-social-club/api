@@ -86,22 +86,40 @@ describe("Very provider adapter", () => {
       VERY_APP_ID: "test-app",
     } as any
     const provider = getVeryProvider(env)
-    const startResult = await provider.startSession({
-      userId: "user-1",
-      requestedCapabilities: ["unique_human"],
-      walletAttachmentId: null,
-      verificationIntent: null,
-      policyId: null,
-    })
-    expect(typeof startResult.upstreamSessionRef).toBe("string")
-    expect(startResult.launch.app_id).toBe("test-app")
-    expect(startResult.launch.verify_url.includes("very.example.com")).toBe(true)
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => {
+      return new Response(JSON.stringify({
+        session_id: "vs_test_pending_123",
+        app_id: "test-app",
+        context: "Veros - Palm Verification Timestamp",
+        type_id: "3",
+        verify_url: "https://very.example.com/api/v1/verify",
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }) as typeof globalThis.fetch
 
-    const outcome = await provider.getSessionOutcome({
-      upstreamSessionRef: startResult.upstreamSessionRef,
-      providerPayloadRef: null,
-    })
-    expect(outcome.status).toBe("pending")
+    try {
+      const startResult = await provider.startSession({
+        userId: "user-1",
+        requestedCapabilities: ["unique_human"],
+        walletAttachmentId: null,
+        verificationIntent: null,
+        policyId: null,
+      })
+      expect(typeof startResult.upstreamSessionRef).toBe("string")
+      expect(startResult.launch.app_id).toBe("test-app")
+      expect(startResult.launch.verify_url).toBe("https://very.example.com/api/v1/verify")
+
+      const outcome = await provider.getSessionOutcome({
+        upstreamSessionRef: startResult.upstreamSessionRef,
+        providerPayloadRef: null,
+      })
+      expect(outcome.status).toBe("pending")
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 
   test("configured provider verifies a proof payload through the Very verifier endpoint", async () => {
@@ -160,7 +178,7 @@ describe("Very provider mock integration", () => {
 
     expect(result.upstreamSessionRef).toBe("very-upstream-ref-123")
     expect(result.launch.app_id).toBe("test-app-id")
-    expect(result.launch.verify_url.includes("very-upstream-ref-123")).toBe(true)
+    expect(result.launch.verify_url?.includes("very-upstream-ref-123")).toBe(true)
   })
 
   test("startSession rejects non-unique_human capabilities via route layer", () => {
@@ -316,7 +334,7 @@ describe("Very provider upstream session creation", () => {
     }
   })
 
-  test("startSession falls back to local ref when VERY_SESSIONS_URL is not set", async () => {
+  test("startSession derives the upstream sessions url when VERY_SESSIONS_URL is not set", async () => {
     const { getVeryProvider } = require("../src/lib/verification/very-provider") as typeof import("../src/lib/verification/very-provider")
     const env = {
       VERY_API_URL: "https://very.example.com",
@@ -325,15 +343,36 @@ describe("Very provider upstream session creation", () => {
     } as any
     const provider = getVeryProvider(env)
 
-    const result = await provider.startSession({
-      userId: "user-1",
-      requestedCapabilities: ["unique_human"],
-      walletAttachmentId: null,
-      verificationIntent: null,
-      policyId: null,
-    })
-    expect(result.upstreamSessionRef.startsWith("vs_")).toBe(true)
-    expect(result.launch.app_id).toBe("test-app")
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (input, init) => {
+      expect(String(input)).toBe("https://very.example.com/api/v1/sessions")
+      expect(init?.method).toBe("POST")
+      return new Response(JSON.stringify({
+        session_id: "vs_upstream_derived_123",
+        app_id: "test-app",
+        context: "Veros - Palm Verification Timestamp",
+        type_id: "3",
+        verify_url: "https://very.example.com/api/v1/verify",
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }) as typeof globalThis.fetch
+
+    try {
+      const result = await provider.startSession({
+        userId: "user-1",
+        requestedCapabilities: ["unique_human"],
+        walletAttachmentId: null,
+        verificationIntent: null,
+        policyId: null,
+      })
+      expect(result.upstreamSessionRef).toBe("vs_upstream_derived_123")
+      expect(result.launch.app_id).toBe("test-app")
+      expect(result.launch.verify_url).toBe("https://very.example.com/api/v1/verify")
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 
   test("startSession throws providerUnavailable when upstream returns error", async () => {

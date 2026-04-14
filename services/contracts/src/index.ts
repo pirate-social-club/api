@@ -171,7 +171,7 @@ export type VeryWidgetLaunch = {
   context: string;
   type_id: string;
   query: Record<string, unknown>;
-  verify_url: string;
+  verify_url?: string;
 };
 
 export type RequestedVerificationCapability = "unique_human" | "age_over_18" | "nationality" | "gender";

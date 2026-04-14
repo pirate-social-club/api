@@ -763,14 +763,27 @@ async function completeVerySession(
   }
 
   if (outcome.status === "verified") {
+    console.info("[very-provider] completion outcome", {
+      verificationSessionId: input.verificationSessionId,
+      outcome: outcome.status,
+    })
     return finalizeVerification(client, row, input, null, null, outcome.attestationData)
   }
 
   if (outcome.status === "pending") {
+    console.info("[very-provider] completion outcome", {
+      verificationSessionId: input.verificationSessionId,
+      outcome: outcome.status,
+    })
     return serializeVerificationSession({ row, attestationRows: [] })
   }
 
   if (outcome.status === "failed") {
+    console.warn("[very-provider] completion outcome", {
+      verificationSessionId: input.verificationSessionId,
+      outcome: outcome.status,
+      failureReason: outcome.failureReason,
+    })
     const updatedAt = new Date().toISOString()
     await client.execute({
       sql: `UPDATE verification_sessions SET status = 'failed', failure_code = ?2, updated_at = ?3 WHERE verification_session_id = ?1`,
@@ -781,6 +794,10 @@ async function completeVerySession(
   }
 
   if (outcome.status === "expired") {
+    console.warn("[very-provider] completion outcome", {
+      verificationSessionId: input.verificationSessionId,
+      outcome: outcome.status,
+    })
     const updatedAt = new Date().toISOString()
     await client.execute({
       sql: `UPDATE verification_sessions SET status = 'expired', failure_code = 'provider_expired', updated_at = ?2 WHERE verification_session_id = ?1`,

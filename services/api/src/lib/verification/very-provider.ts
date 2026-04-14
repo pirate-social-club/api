@@ -76,7 +76,9 @@ function requireConfiguredVery(env: Env): {
   }
 
   const verifyUrl = trimEnv(env.VERY_VERIFY_URL) || deriveVeryVerifyUrl(apiUrl)
-  const sessionsUrl = apiKey ? (trimEnv(env.VERY_SESSIONS_URL) || null) : null
+  const sessionsUrl = apiKey
+    ? (trimEnv(env.VERY_SESSIONS_URL) || deriveVerySessionsUrl(apiUrl))
+    : null
   return { apiUrl, apiKey, appId, verifyUrl, sessionsUrl }
 }
 
@@ -112,10 +114,14 @@ function buildExternalNullifier(input: {
   verificationIntent: string | null
   policyId: string | null
   upstreamSessionRef: string
+  includeSessionId?: boolean
 }): string {
   const intent = normalizeVerificationIntent(input.verificationIntent)
   if (input.policyId) {
     return `Pirate - ${intent} - ${input.policyId}`
+  }
+  if (input.includeSessionId === false) {
+    return `Pirate - ${intent}`
   }
   return `Pirate - ${intent} - ${input.upstreamSessionRef}`
 }
@@ -144,27 +150,37 @@ function buildVeryQuery(input: {
   verificationIntent: string | null
   policyId: string | null
   upstreamSessionRef: string
+  includeSessionId?: boolean
 }): Record<string, unknown> {
   const nowSeconds = Math.floor(Date.now() / 1000)
-  const oneYearSeconds = nowSeconds + 365 * 24 * 60 * 60
+  // Use a broad validity window for anonymous ZK mode. The Very docs example
+  // shows a wide timestamp range, and a narrow "now -> +1y" window can reject
+  // otherwise valid palm proofs if `val` is not minted at the moment of scan.
+  const lowerBoundSeconds = 0
+  const upperBoundSeconds = 4_102_444_800 // 2100-01-01T00:00:00Z
+  const options: Record<string, unknown> = {
+    expiredAtLowerBound: String(nowSeconds),
+    externalNullifier: buildExternalNullifier(input),
+    equalCheckId: "0",
+    pseudonym: input.includeSessionId === false
+      ? (input.walletAttachmentId ?? "0")
+      : (input.walletAttachmentId ?? input.userId),
+  }
+  if (input.includeSessionId !== false) {
+    options.sessionId = input.upstreamSessionRef
+  }
   return {
     conditions: [
       {
         identifier: "val",
         operation: "IN",
         value: {
-          from: String(nowSeconds),
-          to: String(oneYearSeconds),
+          from: String(lowerBoundSeconds),
+          to: String(upperBoundSeconds),
         },
       },
     ],
-    options: {
-      expiredAtLowerBound: String(nowSeconds),
-      externalNullifier: buildExternalNullifier(input),
-      equalCheckId: "0",
-      pseudonym: input.walletAttachmentId ?? input.userId,
-      sessionId: input.upstreamSessionRef,
-    },
+    options,
   }
 }
 
@@ -343,6 +359,7 @@ export function getVeryProvider(env: Env): VeryProvider {
   return {
     async startSession(input) {
       if (sessionsUrl && apiKey) {
+        console.info("[very-provider] starting upstream session", { sessionsUrl })
         return createVerySession({
           sessionsUrl,
           apiKey,
@@ -356,6 +373,7 @@ export function getVeryProvider(env: Env): VeryProvider {
       }
 
       const upstreamSessionRef = makeId("vs")
+      console.warn("[very-provider] using local fallback session", { hasApiKey: Boolean(apiKey) })
       return {
         upstreamSessionRef,
         launch: {
@@ -368,8 +386,8 @@ export function getVeryProvider(env: Env): VeryProvider {
             verificationIntent: input.verificationIntent,
             policyId: input.policyId,
             upstreamSessionRef,
+            includeSessionId: false,
           }),
-          verify_url: verifyUrl,
         },
       }
     },
@@ -378,6 +396,17 @@ export function getVeryProvider(env: Env): VeryProvider {
       const { apiKey, verifyUrl } = requireConfiguredVery(env)
       if (!input.providerPayloadRef?.trim()) {
         return { status: "pending" }
+      }
+      if (!apiKey && String(env.ENVIRONMENT || "").trim() === "development") {
+        console.warn("[very-provider] trusting local widget completion in development")
+        return {
+          status: "verified",
+          attestationData: {
+            proof_hash: await sha256Hex(input.providerPayloadRef.trim()),
+            provider_session_ref: input.upstreamSessionRef,
+            provider_status: "local_widget_verified",
+          },
+        }
       }
       return await verifyVeryPayload({
         verifyUrl,

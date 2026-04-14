@@ -69,6 +69,13 @@ verification.post("/verification-sessions/:verificationSessionId/complete", asyn
       (await c.req
         .json<{ attestation_id?: string | null; proof?: string | null; proof_hash?: string | null; provider_payload_ref?: string | null }>()
         .catch(() => null)) ?? null
+    console.info("[verification-route] complete requested", {
+      verificationSessionId: c.req.param("verificationSessionId"),
+      userId: session.userId,
+      hasProof: Boolean(body?.proof),
+      hasProofHash: Boolean(body?.proof_hash),
+      hasProviderPayloadRef: Boolean(body?.provider_payload_ref),
+    })
     const repo = getControlPlaneVerificationRepository(c.env)
     const result = await repo.completeVerificationSession({
       verificationSessionId: c.req.param("verificationSessionId"),
@@ -82,6 +89,30 @@ verification.post("/verification-sessions/:verificationSessionId/complete", asyn
       throw notFoundError("Verification session not found")
     }
     return c.json(result, 200)
+  } catch (error) {
+    const response = errorResponse(error)
+    return new Response(JSON.stringify(response.body), {
+      status: response.status,
+      headers: { "content-type": "application/json" },
+    })
+  }
+})
+
+verification.post("/very/verify", async (c) => {
+  try {
+    const body = (await c.req.json<{ proof?: string | null }>().catch(() => null)) ?? null
+    const proof = body?.proof?.trim() ?? ""
+    if (!proof) {
+      throw badRequestError("Missing proof")
+    }
+
+    const hasApiKey = Boolean(String(c.env.VERY_API_KEY || "").trim())
+    if (!hasApiKey && String(c.env.ENVIRONMENT || "").trim() === "development") {
+      console.warn("[very-provider] trusting local widget proof verification in development")
+      return c.json({ status: "valid" }, 200)
+    }
+
+    return c.json({ status: "invalid", error: "local_proxy_unavailable" }, 502)
   } catch (error) {
     const response = errorResponse(error)
     return new Response(JSON.stringify(response.body), {

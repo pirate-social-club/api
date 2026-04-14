@@ -175,23 +175,24 @@ describe("verification routes", () => {
 
     const session = await exchangeJwt(ctx.env, "verification-very-user")
 
-    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
-      provider: "very",
-      verification_intent: "community_creation",
-    }, ctx.env, session.accessToken)
-    expect(createdVerification.status).toBe(201)
-    const createdBody = await json(createdVerification) as {
-      verification_session_id: string
-      status: string
-      provider_mode: string | null
-      launch?: { very_widget?: { verify_url: string } }
-    }
-    expect(createdBody.status).toBe("pending")
-    expect(createdBody.provider_mode).toBe("widget")
-    expect(createdBody.launch?.very_widget?.verify_url).toBe("https://very.test/api/v1/verify")
-
     await withFetchMock(async (input, init) => {
       const url = typeof input === "string" ? input : input.toString()
+      if (url === "https://very.test/api/v1/sessions") {
+        expect(init?.method).toBe("POST")
+        const body = JSON.parse(String(init?.body))
+        expect(body.app_id).toBe("very-app")
+        expect(body.verify_url).toBe("https://very.test/api/v1/verify")
+        return new Response(JSON.stringify({
+          session_id: "vs_test_upstream_123",
+          app_id: "very-app",
+          context: "Veros - Palm Verification Timestamp",
+          type_id: "3",
+          verify_url: "https://very.test/api/v1/verify",
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
       expect(url).toBe("https://very.test/api/v1/verify")
       const body = JSON.parse(String(init?.body))
       expect(body.proof).toBe("very-zk-proof-123")
@@ -206,6 +207,21 @@ describe("verification routes", () => {
         headers: { "content-type": "application/json" },
       })
     }, async () => {
+      const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+        provider: "very",
+        verification_intent: "community_creation",
+      }, ctx.env, session.accessToken)
+      expect(createdVerification.status).toBe(201)
+      const createdBody = await json(createdVerification) as {
+        verification_session_id: string
+        status: string
+        provider_mode: string | null
+        launch?: { very_widget?: { verify_url?: string } }
+      }
+      expect(createdBody.status).toBe("pending")
+      expect(createdBody.provider_mode).toBe("widget")
+      expect(createdBody.launch?.very_widget?.verify_url).toBe("https://very.test/api/v1/verify")
+
       const completedVerification = await requestJson(
         `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/complete`,
         {
