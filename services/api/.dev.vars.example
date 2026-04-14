@@ -3,9 +3,11 @@ DEV_MEMORY_STORE_ENABLED=false
 AUTH_UPSTREAM_JWT_SHARED_SECRET=replace-me-with-a-long-random-secret
 AUTH_UPSTREAM_JWT_ISSUER=pirate-dev-upstream
 AUTH_UPSTREAM_JWT_AUDIENCE=pirate-api
-TURSO_CONTROL_PLANE_DATABASE_URL=file:/absolute/path/to/pirate-control-plane.db
+# Optional for bun local dev. Blank defaults to services/api/.local/control-plane.db.
+TURSO_CONTROL_PLANE_DATABASE_URL=
 TURSO_CONTROL_PLANE_AUTH_TOKEN=
-LOCAL_COMMUNITY_DB_ROOT=/absolute/path/to/local-community-dbs
+# Optional for bun local dev. Blank defaults to services/api/.local/community-dbs.
+LOCAL_COMMUNITY_DB_ROOT=
 REGISTRY_PUBLISHER_URL=
 REGISTRY_PUBLISHER_AUTH_TOKEN=
 REGISTRY_PUBLISHER_TIMEOUT_MS=25000

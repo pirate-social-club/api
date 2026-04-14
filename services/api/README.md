@@ -90,13 +90,13 @@ Control-plane DB mode:
 
 1. Copy `.dev.vars.example` to `.dev.vars`.
 2. Set `DEV_MEMORY_STORE_ENABLED=false`.
-3. Set `TURSO_CONTROL_PLANE_DATABASE_URL`.
+3. Set `TURSO_CONTROL_PLANE_DATABASE_URL` if you want a specific DB. Leave it blank to use `services/api/.local/control-plane.db`.
 4. Set `TURSO_CONTROL_PLANE_AUTH_TOKEN` if required by the target DB.
-5. Set `LOCAL_COMMUNITY_DB_ROOT` to a writable directory for per-community DB files.
+5. Set `LOCAL_COMMUNITY_DB_ROOT` if you want a specific community DB directory. Leave it blank to use `services/api/.local/community-dbs`.
 6. If testing the real internal publisher path, set `REGISTRY_PUBLISHER_URL`, `REGISTRY_PUBLISHER_AUTH_TOKEN`, and `REGISTRY_PUBLISHER_TIMEOUT_MS`.
 7. Fill in `AUTH_UPSTREAM_JWT_SHARED_SECRET`, `AUTH_UPSTREAM_JWT_ISSUER`, and `AUTH_UPSTREAM_JWT_AUDIENCE`.
 8. Fill in `PIRATE_APP_JWT_PRIVATE_KEY` and `PIRATE_APP_JWT_PUBLIC_KEY`.
-9. Apply the control-plane migrations before starting the worker.
+9. Start `rtk bun run dev:local`. The local server bootstraps the control-plane migrations automatically for local file-backed DBs.
 
 ## Full First Slice Local Setup
 
@@ -111,8 +111,8 @@ rtk bun run bruno:prepare:local
 
 This resets:
 
-- the local control-plane SQLite file resolved from `TURSO_CONTROL_PLANE_DATABASE_URL`
-- the local community DB root resolved from `LOCAL_COMMUNITY_DB_ROOT`
+- the local control-plane SQLite file resolved from `TURSO_CONTROL_PLANE_DATABASE_URL`, or `services/api/.local/control-plane.db` when unset
+- the local community DB root resolved from `LOCAL_COMMUNITY_DB_ROOT`, or `services/api/.local/community-dbs` when unset
 - `specs/api/bruno/environments/local.bru` with fresh JWT fixtures and a new subject
 
 2. Ensure `.dev.vars` in `pirate-api/services/api` is populated for local file-backed Bun runs.
@@ -131,6 +131,8 @@ For local Very widget testing:
 cd pirate-api/services/api
 rtk bun run dev:local
 ```
+
+`dev:local` keeps the SQLite files in `services/api/.local/` by default and reapplies pending control-plane migrations on startup.
 
 4. Run the Bruno collection from the service repo wrapper:
 

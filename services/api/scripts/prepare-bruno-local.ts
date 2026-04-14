@@ -1,8 +1,12 @@
 import { mkdir, rm, writeFile } from "node:fs/promises"
 import { resolve } from "node:path"
-import { spawnSync } from "node:child_process"
 import { SignJWT } from "jose"
 import { readDevVars } from "./_lib/dev-vars"
+import {
+  applyLocalControlPlaneMigrations,
+  requireLocalControlPlaneDbPath,
+  resolveLocalDevStorage,
+} from "./_lib/local-dev-storage"
 
 function requireEnv(values: Record<string, string>, key: string): string {
   const value = values[key]?.trim()
@@ -10,19 +14,6 @@ function requireEnv(values: Record<string, string>, key: string): string {
     throw new Error(`${key} is not configured in .dev.vars`)
   }
   return value
-}
-
-function requireLocalFilePath(url: string, key: string): string {
-  if (!url.startsWith("file:")) {
-    throw new Error(`${key} must use a local file: URL for Bruno local prep`)
-  }
-
-  const parsed = new URL(url)
-  if (!parsed.pathname) {
-    throw new Error(`${key} must resolve to a writable local file path`)
-  }
-
-  return parsed.pathname
 }
 
 async function mintJwt(input: {
@@ -54,30 +45,16 @@ async function main(): Promise<void> {
   }
   const baseUrl = `http://127.0.0.1:${port}`
   const devVars = readDevVars(devVarsPath)
-
-  const controlPlaneDbPath = requireLocalFilePath(
-    requireEnv(devVars, "TURSO_CONTROL_PLANE_DATABASE_URL"),
-    "TURSO_CONTROL_PLANE_DATABASE_URL",
-  )
-  const communityDbRoot = requireEnv(devVars, "LOCAL_COMMUNITY_DB_ROOT")
+  const localDevStorage = resolveLocalDevStorage(devVars, serviceRoot)
+  const controlPlaneDbPath = requireLocalControlPlaneDbPath(localDevStorage)
+  const communityDbRoot = localDevStorage.communityDbRoot
 
   await rm(controlPlaneDbPath, { force: true })
   await rm(`${controlPlaneDbPath}-shm`, { force: true })
   await rm(`${controlPlaneDbPath}-wal`, { force: true })
   await rm(communityDbRoot, { recursive: true, force: true })
   await mkdir(communityDbRoot, { recursive: true })
-
-  const migrate = spawnSync(
-    "./scripts/apply-sqlite-migrations.sh",
-    ["--db", controlPlaneDbPath, "--migrations", "db/control-plane/migrations", "--label", "control-plane"],
-    {
-      cwd: repoRoot,
-      encoding: "utf8",
-    },
-  )
-  if (migrate.status !== 0) {
-    throw new Error(`migration bootstrap failed:\n${migrate.stderr}`)
-  }
+  applyLocalControlPlaneMigrations(localDevStorage)
 
   const secret = requireEnv(devVars, "AUTH_UPSTREAM_JWT_SHARED_SECRET")
   const issuer = requireEnv(devVars, "AUTH_UPSTREAM_JWT_ISSUER")

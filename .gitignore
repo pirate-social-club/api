@@ -9,6 +9,7 @@ coverage/
 .env.local
 .env.*.local
 .dev.vars
+services/api/.local/
 .codex
 
 .DS_Store

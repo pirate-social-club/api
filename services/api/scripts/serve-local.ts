@@ -2,12 +2,13 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import app from "../src/index"
 import type { Env } from "../src/types"
 import { readDevVarsFromCwd } from "./_lib/dev-vars"
+import {
+  applyLocalControlPlaneMigrations,
+  ensureLocalDevStorage,
+  resolveLocalDevStorage,
+} from "./_lib/local-dev-storage"
 
 const port = Number(process.env.PORT || "8787")
-const env = {
-  ...readDevVarsFromCwd(),
-  ...process.env,
-} as Env
 
 async function readRequestBody(req: IncomingMessage): Promise<Uint8Array | null> {
   const chunks: Uint8Array[] = []
@@ -62,25 +63,48 @@ async function writeResponse(res: ServerResponse, response: Response): Promise<v
   res.end(body)
 }
 
-const server = createServer(async (req, res) => {
-  try {
-    const request = await toRequest(req)
-    const response = await app.fetch(request, env as never)
-    await writeResponse(res, response)
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    await writeResponse(res, new Response(JSON.stringify({
-      code: "internal_error",
-      message,
-    }), {
-      status: 500,
-      headers: {
-        "content-type": "application/json; charset=utf-8",
-      },
-    }))
+async function main(): Promise<void> {
+  const baseEnv = {
+    ...readDevVarsFromCwd(),
+    ...process.env,
   }
-})
+  const localDevStorage = resolveLocalDevStorage(baseEnv)
+  await ensureLocalDevStorage(localDevStorage)
 
-server.listen(port, "127.0.0.1", () => {
-  console.log(`pirate-api local node server listening on http://127.0.0.1:${port}`)
-})
+  if (localDevStorage.controlPlaneDbPath) {
+    applyLocalControlPlaneMigrations(localDevStorage)
+  }
+
+  const env = {
+    ...baseEnv,
+    TURSO_CONTROL_PLANE_DATABASE_URL: localDevStorage.controlPlaneDbUrl,
+    LOCAL_COMMUNITY_DB_ROOT: localDevStorage.communityDbRoot,
+  } as Env
+
+  const server = createServer(async (req, res) => {
+    try {
+      const request = await toRequest(req)
+      const response = await app.fetch(request, env as never)
+      await writeResponse(res, response)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      await writeResponse(res, new Response(JSON.stringify({
+        code: "internal_error",
+        message,
+      }), {
+        status: 500,
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+        },
+      }))
+    }
+  })
+
+  server.listen(port, "127.0.0.1", () => {
+    console.log(`pirate-api local node server listening on http://127.0.0.1:${port}`)
+    console.log(`control-plane db: ${localDevStorage.controlPlaneDbPath ?? localDevStorage.controlPlaneDbUrl}`)
+    console.log(`community db root: ${localDevStorage.communityDbRoot}`)
+  })
+}
+
+await main()
