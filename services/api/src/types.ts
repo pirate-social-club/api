@@ -72,6 +72,10 @@ export type Env = {
   VERY_API_URL?: string
   VERY_API_KEY?: string
   VERY_APP_ID?: string
+  VERY_VERIFY_URL?: string
+  SPACES_VERIFIER_BASE_URL?: string
+  SPACES_VERIFIER_AUTH_TOKEN?: string
+  SPACES_VERIFIER_CHALLENGE_DOMAIN?: string
   HNS_VERIFIER_BASE_URL?: string
   HNS_VERIFIER_AUTH_TOKEN?: string
 }

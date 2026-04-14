@@ -82,6 +82,48 @@ describe("Very provider adapter", () => {
     })
     expect(outcome.status).toBe("pending")
   })
+
+  test("configured provider verifies a proof payload through the Very verifier endpoint", async () => {
+    const { getVeryProvider } = require("../src/lib/verification/very-provider") as typeof import("../src/lib/verification/very-provider")
+    const env = {
+      VERY_API_URL: "https://very.example.com",
+      VERY_API_KEY: "test-key",
+      VERY_APP_ID: "test-app",
+    } as any
+    const provider = getVeryProvider(env)
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (input, init) => {
+      expect(String(input)).toBe("https://very.example.com/api/v1/verify")
+      expect(init?.method).toBe("POST")
+      const body = JSON.parse(String(init?.body))
+      expect(body.proof).toBe("proof-payload-123")
+      expect(body.session_id).toBe("very-upstream-ref-123")
+      return new Response(JSON.stringify({
+        status: "valid",
+        data: {
+          attestation_id: "very-att-1",
+        },
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }) as typeof globalThis.fetch
+
+    try {
+      const outcome = await provider.getSessionOutcome({
+        upstreamSessionRef: "very-upstream-ref-123",
+        providerPayloadRef: "proof-payload-123",
+      })
+      expect(outcome.status).toBe("verified")
+      if (outcome.status === "verified") {
+        expect(typeof outcome.attestationData.proof_hash).toBe("string")
+        expect(outcome.attestationData.attestation_id).toBe("very-att-1")
+      }
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
 })
 
 describe("Very provider mock integration", () => {
