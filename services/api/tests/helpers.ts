@@ -5,6 +5,7 @@ import { mkdtemp, readdir, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Env } from "../src/types"
+import { splitSqlStatements, toSqliteCompatibleStatement } from "../src/lib/sqlite-migration"
 import { setSelfProviderForTests } from "../src/lib/verification/self-provider"
 import { setVeryProviderForTests } from "../src/lib/verification/very-provider"
 
@@ -82,58 +83,6 @@ export async function json(response: Response): Promise<unknown> {
   return await response.json()
 }
 
-function splitSqlStatements(sql: string): string[] {
-  const statements: string[] = []
-  let current = ""
-  let inSingleQuote = false
-  let inTrigger = false
-
-  for (let index = 0; index < sql.length; index += 1) {
-    const char = sql[index]
-    const next = sql[index + 1]
-    current += char
-
-    if (!inSingleQuote && !inTrigger && current.trimStart().toUpperCase().startsWith("CREATE TRIGGER")) {
-      inTrigger = true
-    }
-
-    if (char === "'" && sql[index - 1] !== "\\") {
-      if (inSingleQuote && next === "'") {
-        current += next
-        index += 1
-        continue
-      }
-      inSingleQuote = !inSingleQuote
-      continue
-    }
-
-    if (inTrigger && !inSingleQuote && current.trimEnd().toUpperCase().endsWith("END;")) {
-      const statement = current.trim()
-      if (statement) {
-        statements.push(statement)
-      }
-      current = ""
-      inTrigger = false
-      continue
-    }
-
-    if (char === ";" && !inSingleQuote && !inTrigger) {
-      const statement = current.trim()
-      if (statement) {
-        statements.push(statement)
-      }
-      current = ""
-    }
-  }
-
-  const trailing = current.trim()
-  if (trailing) {
-    statements.push(trailing)
-  }
-
-  return statements
-}
-
 async function applySqlFile(client: Client, path: URL): Promise<void> {
   const rawSql = await readFile(path, "utf8")
   const statements = splitSqlStatements(rawSql)
@@ -144,21 +93,6 @@ async function applySqlFile(client: Client, path: URL): Promise<void> {
     }
     await client.execute(sqliteStatement)
   }
-}
-
-function toSqliteCompatibleStatement(statement: string): string | null {
-  const normalized = statement.trim().replace(/\s+/g, " ").toUpperCase()
-
-  if (normalized.startsWith("ALTER TABLE") && normalized.includes(" ADD CONSTRAINT ")) {
-    return null
-  }
-
-  let sqliteCompat = statement
-  sqliteCompat = sqliteCompat.replace(/\bJSONB\b/gi, "TEXT")
-  sqliteCompat = sqliteCompat.replace(/\bTIMESTAMPTZ\b/gi, "TEXT")
-  sqliteCompat = sqliteCompat.replace(/\bTIMESTAMP\b/gi, "TEXT")
-
-  return sqliteCompat
 }
 
 export async function createControlPlaneTestClient(options?: {
