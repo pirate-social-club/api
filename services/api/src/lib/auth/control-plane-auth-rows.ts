@@ -76,8 +76,12 @@ export type VerificationSessionRow = {
   provider: "self" | "very" | "passport"
   requested_capabilities_json: string
   status: "pending" | "verified" | "failed" | "expired" | "canceled"
+  upstream_session_ref: string | null
   result_ref: string | null
   failure_code: string | null
+  wallet_attachment_id: string | null
+  verification_intent: string | null
+  policy_id: string | null
   completed_at: string | null
   expires_at: string | null
   created_at: string
@@ -353,8 +357,12 @@ export function toVerificationSessionRow(row: unknown): VerificationSessionRow {
     provider: requiredString(row, "provider") as VerificationSessionRow["provider"],
     requested_capabilities_json: requiredString(row, "requested_capabilities_json"),
     status: requiredString(row, "status") as VerificationSessionRow["status"],
+    upstream_session_ref: stringOrNull(rowValue(row, "upstream_session_ref")),
     result_ref: stringOrNull(rowValue(row, "result_ref")),
     failure_code: stringOrNull(rowValue(row, "failure_code")),
+    wallet_attachment_id: stringOrNull(rowValue(row, "wallet_attachment_id")),
+    verification_intent: stringOrNull(rowValue(row, "verification_intent")),
+    policy_id: stringOrNull(rowValue(row, "policy_id")),
     completed_at: stringOrNull(rowValue(row, "completed_at")),
     expires_at: stringOrNull(rowValue(row, "expires_at")),
     created_at: requiredString(row, "created_at"),

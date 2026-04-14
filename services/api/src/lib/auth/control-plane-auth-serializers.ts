@@ -24,6 +24,7 @@ import type {
   User,
   VerificationCapabilities,
   VerificationSession,
+  VerificationSessionLaunch,
   WalletAttachmentSummary,
 } from "../../types"
 
@@ -156,22 +157,27 @@ function parseChallengePayload(raw: string | null | undefined): Record<string, u
 
 export function serializeVerificationSession(input: {
   row: VerificationSessionRow
-  attestationRow: UserAttestationRow | null
+  attestationRows: UserAttestationRow[]
+  launch?: VerificationSessionLaunch | null
 }): VerificationSession {
   const requestedCapabilities = JSON.parse(input.row.requested_capabilities_json) as VerificationSession["requested_capabilities"]
   return {
     verification_session_id: input.row.verification_session_id,
     user_id: input.row.user_id,
     provider: input.row.provider === "self" || input.row.provider === "very" ? input.row.provider : "self",
-    wallet_attachment_id: null,
+    provider_mode: input.row.provider === "very" && input.row.upstream_session_ref ? "widget" : null,
+    wallet_attachment_id: input.row.wallet_attachment_id,
     requested_capabilities: requestedCapabilities,
+    verification_intent: input.row.verification_intent as VerificationSession["verification_intent"],
+    policy_id: input.row.policy_id,
     status: input.row.status === "canceled" ? "failed" : input.row.status,
+    launch: input.launch ?? undefined,
     nationality: null,
     age_at_verification: null,
-    attestation_id: input.attestationRow?.user_attestation_id ?? null,
-    proof_hash: null,
+    attestation_ids: input.attestationRows.map((r) => r.user_attestation_id),
+    proof_hash: input.row.result_ref,
     evidence_ref: input.row.result_ref,
-    verified_at: input.attestationRow?.verified_at ?? input.row.completed_at,
+    verified_at: input.attestationRows.length > 0 ? input.attestationRows[0].verified_at : input.row.completed_at,
     failure_reason: input.row.failure_code,
     created_at: input.row.created_at,
     expires_at: input.row.expires_at ?? input.row.created_at,

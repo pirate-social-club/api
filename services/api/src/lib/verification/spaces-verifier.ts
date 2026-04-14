@@ -1,4 +1,4 @@
-import { internalError } from "../errors"
+import { internalError, providerUnavailable } from "../errors"
 import type { Env } from "../../types"
 
 const SPACES_VERIFIER_TIMEOUT_MS = 8_000
@@ -63,7 +63,7 @@ function normalizeRootLabel(value: string): string {
 function requireSpacesVerifierBaseUrl(env: Env): string {
   const baseUrl = String(env.SPACES_VERIFIER_BASE_URL || "").trim()
   if (!baseUrl) {
-    throw internalError("SPACES_VERIFIER_BASE_URL is not configured")
+    throw providerUnavailable("SPACES_VERIFIER_BASE_URL is not configured")
   }
   return baseUrl
 }
@@ -108,16 +108,16 @@ async function spacesVerifierRequest<T>(
       const message = body && typeof body === "object" && "error" in body && typeof body.error === "string"
         ? body.error
         : "Spaces verifier request failed"
-      throw internalError(message)
+      throw providerUnavailable(message)
     }
     if (body == null || typeof body !== "object") {
-      throw internalError("Spaces verifier returned an invalid response")
+      throw providerUnavailable("Spaces verifier returned an invalid response")
     }
 
     return body as T
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
-      throw internalError("Spaces verifier request timed out")
+      throw providerUnavailable("Spaces verifier request timed out")
     }
     throw error
   } finally {
@@ -132,7 +132,7 @@ export async function inspectSpacesNamespace(env: Env, rootLabel: string): Promi
   })
 
   if (!("root_exists" in result)) {
-    throw internalError("Spaces verifier inspect response missing root_exists")
+    throw providerUnavailable("Spaces verifier inspect response missing root_exists")
   }
 
   return {
@@ -173,7 +173,7 @@ export async function verifySpacesSignature(
   })
 
   if (!("valid_signature" in result)) {
-    throw internalError("Spaces verifier signature response missing valid_signature")
+    throw providerUnavailable("Spaces verifier signature response missing valid_signature")
   }
 
   return {
