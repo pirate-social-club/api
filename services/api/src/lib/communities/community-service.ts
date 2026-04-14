@@ -18,7 +18,7 @@ import type { UserRepository } from "../auth/repositories"
 import type { CommunityRow, JobRow } from "../auth/control-plane-auth-rows"
 import type { CommunityRepository } from "./control-plane-community-repository"
 import { badRequestError, eligibilityFailed, gateFailed, internalError, notFoundError } from "../errors"
-import { envFlag, makeId, nowIso } from "../helpers"
+import { makeId, nowIso } from "../helpers"
 import { verifyPirateAccessToken } from "../auth/pirate-session-token"
 import { getRegistryPublicationAdapter } from "./registry-publication"
 import type { VerificationRepository } from "../verification/control-plane-verification-repository"
@@ -314,11 +314,6 @@ function resolveCommunityDbRoot(env: Env): string {
   const configured = String(env.LOCAL_COMMUNITY_DB_ROOT || "").trim()
   if (configured) {
     return configured
-  }
-
-  const environment = String(env.ENVIRONMENT || "").trim().toLowerCase()
-  if (envFlag(env.DEV_MEMORY_STORE_ENABLED, false) || ["dev", "development", "local", "test"].includes(environment)) {
-    return "/tmp/pirate-community-dbs"
   }
 
   throw internalError("LOCAL_COMMUNITY_DB_ROOT is not configured")

@@ -175,7 +175,11 @@ function sanitizeCommunityId(communityId: string): string {
 }
 
 export function buildLocalCommunityDbPath(rootDir: string, communityId: string): string {
-  const baseDir = resolve(rootDir || "/tmp/pirate-community-dbs")
+  const configuredRootDir = rootDir.trim()
+  if (!configuredRootDir) {
+    throw internalError("LOCAL_COMMUNITY_DB_ROOT is not configured")
+  }
+  const baseDir = resolve(configuredRootDir)
   const safeCommunityId = sanitizeCommunityId(communityId)
   return join(baseDir, `community-${safeCommunityId}.db`)
 }
