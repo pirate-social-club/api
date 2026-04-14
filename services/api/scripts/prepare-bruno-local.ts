@@ -54,7 +54,7 @@ async function main(): Promise<void> {
   await rm(`${controlPlaneDbPath}-wal`, { force: true })
   await rm(communityDbRoot, { recursive: true, force: true })
   await mkdir(communityDbRoot, { recursive: true })
-  applyLocalControlPlaneMigrations(localDevStorage)
+  await applyLocalControlPlaneMigrations(localDevStorage)
 
   const secret = requireEnv(devVars, "AUTH_UPSTREAM_JWT_SHARED_SECRET")
   const issuer = requireEnv(devVars, "AUTH_UPSTREAM_JWT_ISSUER")

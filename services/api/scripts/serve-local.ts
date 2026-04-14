@@ -72,7 +72,7 @@ async function main(): Promise<void> {
   await ensureLocalDevStorage(localDevStorage)
 
   if (localDevStorage.controlPlaneDbPath) {
-    applyLocalControlPlaneMigrations(localDevStorage)
+    await applyLocalControlPlaneMigrations(localDevStorage)
   }
 
   const env = {
