@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { setVeryProviderForTests } from "../src/lib/verification/very-provider"
 import type { VeryProvider, VeryStartResult, VerySessionOutcome } from "../src/lib/verification/very-provider"
 import { resetRuntimeCaches } from "./helpers"
@@ -11,31 +11,52 @@ afterEach(() => {
   setVeryProviderForTests(null)
 })
 
+type TrackedFn = {
+  (): Promise<unknown>
+  callCount: number
+  calls: unknown[][]
+}
+
+function trackFn<T extends (...args: any[]) => Promise<unknown>>(fn: T): T & TrackedFn {
+  const calls: unknown[][] = []
+  const tracked = async (...args: unknown[]) => {
+    calls.push(args)
+    return fn(...args)
+  }
+  ;(tracked as TrackedFn).callCount = 0
+  Object.defineProperty(tracked, "callCount", {
+    get: () => calls.length,
+  })
+  ;(tracked as any).calls = calls
+  return tracked as T & TrackedFn
+}
+
 function createMockVeryProvider(overrides?: {
   startResult?: Partial<VeryStartResult>
   outcomes?: VerySessionOutcome[]
-}): VeryProvider {
+}): VeryProvider & { startSession: TrackedFn; getSessionOutcome: TrackedFn } {
   let callIndex = 0
   const outcomes = overrides?.outcomes ?? [{ status: "verified", attestationData: {} }]
 
-  return {
-    startSession: mock(async () => ({
-      upstreamSessionRef: "very-upstream-ref-123",
-      launch: {
-        app_id: "test-app-id",
-        context: "verification",
-        type_id: "palm_scan",
-        query: { session: "very-upstream-ref-123" },
-        verify_url: "https://verify.very.org/session/very-upstream-ref-123",
-      },
-      ...overrides?.startResult,
-    })),
-    getSessionOutcome: mock(async () => {
-      const outcome = outcomes[Math.min(callIndex, outcomes.length - 1)]
-      callIndex += 1
-      return outcome
-    }),
-  }
+  const startSession = trackFn(async () => ({
+    upstreamSessionRef: "very-upstream-ref-123",
+    launch: {
+      app_id: "test-app-id",
+      context: "verification",
+      type_id: "palm_scan",
+      query: { session: "very-upstream-ref-123" },
+      verify_url: "https://verify.very.org/session/very-upstream-ref-123",
+    },
+    ...overrides?.startResult,
+  }))
+
+  const getSessionOutcome = trackFn(async () => {
+    const outcome = outcomes[Math.min(callIndex, outcomes.length - 1)]
+    callIndex += 1
+    return outcome
+  })
+
+  return { startSession, getSessionOutcome } as VeryProvider & { startSession: TrackedFn; getSessionOutcome: TrackedFn }
 }
 
 describe("Very provider adapter", () => {
@@ -43,7 +64,7 @@ describe("Very provider adapter", () => {
     const { getVeryProvider } = require("../src/lib/verification/very-provider") as typeof import("../src/lib/verification/very-provider")
     try {
       getVeryProvider({} as any)
-      expect.unreachable("Should have thrown")
+      throw new Error("Should have thrown")
     } catch (error: any) {
       expect(error.code).toBe("provider_unavailable")
     }
@@ -74,7 +95,7 @@ describe("Very provider adapter", () => {
     })
     expect(typeof startResult.upstreamSessionRef).toBe("string")
     expect(startResult.launch.app_id).toBe("test-app")
-    expect(startResult.launch.verify_url).toContain("very.example.com")
+    expect(startResult.launch.verify_url.includes("very.example.com")).toBe(true)
 
     const outcome = await provider.getSessionOutcome({
       upstreamSessionRef: startResult.upstreamSessionRef,
@@ -139,12 +160,12 @@ describe("Very provider mock integration", () => {
 
     expect(result.upstreamSessionRef).toBe("very-upstream-ref-123")
     expect(result.launch.app_id).toBe("test-app-id")
-    expect(result.launch.verify_url).toContain("very-upstream-ref-123")
+    expect(result.launch.verify_url.includes("very-upstream-ref-123")).toBe(true)
   })
 
   test("startSession rejects non-unique_human capabilities via route layer", () => {
     const provider = createMockVeryProvider()
-    expect(provider.startSession).toHaveBeenCalledTimes(0)
+    expect(provider.startSession.callCount).toBe(0)
   })
 
   test("getSessionOutcome returns verified when provider confirms", async () => {
@@ -227,8 +248,8 @@ describe("Very provider mock integration", () => {
       policyId: "policy-1",
     })
 
-    expect(provider.startSession).toHaveBeenCalledTimes(1)
-    const startArgs = (provider.startSession as any).mock.calls[0][0]
+    expect(provider.startSession.callCount).toBe(1)
+    const startArgs = provider.startSession.calls[0][0] as any
     expect(startArgs.userId).toBe("user-abc")
     expect(startArgs.requestedCapabilities).toEqual(["unique_human"])
     expect(startArgs.walletAttachmentId).toBe("wallet-123")
@@ -240,8 +261,8 @@ describe("Very provider mock integration", () => {
       providerPayloadRef: "callback-token",
     })
 
-    expect(provider.getSessionOutcome).toHaveBeenCalledTimes(1)
-    const outcomeArgs = (provider.getSessionOutcome as any).mock.calls[0][0]
+    expect(provider.getSessionOutcome.callCount).toBe(1)
+    const outcomeArgs = provider.getSessionOutcome.calls[0][0] as any
     expect(outcomeArgs.upstreamSessionRef).toBe("ref-456")
     expect(outcomeArgs.providerPayloadRef).toBe("callback-token")
   })

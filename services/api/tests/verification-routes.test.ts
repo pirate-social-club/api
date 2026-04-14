@@ -102,7 +102,7 @@ describe("verification routes", () => {
     }
     expect(completedVerificationBody.status).toBe("verified")
     expect(Array.isArray(completedVerificationBody.attestation_ids)).toBe(true)
-    expect(completedVerificationBody.attestation_ids.length).toBeGreaterThan(0)
+    expect(completedVerificationBody.attestation_ids.length > 0).toBe(true)
     expect(typeof completedVerificationBody.attestation_ids[0]).toBe("string")
 
     const createdNamespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
@@ -605,8 +605,8 @@ describe("verification routes", () => {
       expect(restartedBody.evidence_bundle_ref).toBeNull()
       expect(restartedBody.accepted_at).toBeNull()
       expect(restartedBody.failure_reason).toBeNull()
-      expect(restartedBody.challenge_txt_value).not.toBe(createdBody.challenge_txt_value)
-      expect(new Date(restartedBody.expires_at).getTime()).toBeGreaterThan(new Date(createdBody.expires_at).getTime())
+      expect(restartedBody.challenge_txt_value !== createdBody.challenge_txt_value).toBe(true)
+      expect(new Date(restartedBody.expires_at).getTime() > new Date(createdBody.expires_at).getTime()).toBe(true)
     })
   })
 
