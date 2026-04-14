@@ -53,9 +53,13 @@ export async function runVerify(
         const sessionId = requireFlag(args, "session-id")
         const attestationId = getFlag(args, "attestation-id")
         const proofHash = getFlag(args, "proof-hash")
+        const proof = getFlag(args, "proof")
+        const providerPayloadRef = getFlag(args, "provider-payload-ref")
         const body: CompleteVerificationSessionRequest = {
           ...(attestationId ? { attestation_id: attestationId } : {}),
           ...(proofHash ? { proof_hash: proofHash } : {}),
+          ...(proof ? { proof } : {}),
+          ...(providerPayloadRef ? { provider_payload_ref: providerPayloadRef } : {}),
         }
         const result = await apiRequest<VerificationSession>({
           baseUrl: session.baseUrl,

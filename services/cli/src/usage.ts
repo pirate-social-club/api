@@ -10,7 +10,7 @@ export const USAGE_TEXT = [
   "  pirate onboarding status",
   "  pirate verify human start [--provider self|very]",
   "  pirate verify human status --session-id <id>",
-  "  pirate verify human complete --session-id <id> [--attestation-id <id>] [--proof-hash <hash>]",
+  "  pirate verify human complete --session-id <id> [--attestation-id <id>] [--proof-hash <hash>] [--proof <proof>] [--provider-payload-ref <ref>]",
   "  pirate verify namespace start <root>",
   "  pirate verify namespace complete <session_id> [--restart-challenge]",
   "  pirate verify namespace status <session_id|verification_id> [--kind session|verification|auto]",
