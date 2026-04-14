@@ -42,13 +42,32 @@ type VeryVerifyResponse = {
   data?: Record<string, unknown> | null
 }
 
+type VeryCreateSessionResponse = {
+  session_id?: string
+  id?: string
+  upstream_session_ref?: string
+  app_id?: string
+  context?: string
+  type_id?: string
+  query?: Record<string, unknown>
+  verify_url?: string
+  status?: string
+  error?: string | null
+}
+
 let testOverride: VeryProvider | null = null
 
 function trimEnv(value: string | undefined): string {
   return String(value || "").trim()
 }
 
-function requireConfiguredVery(env: Env): { apiUrl: string; apiKey: string; appId: string; verifyUrl: string } {
+function requireConfiguredVery(env: Env): {
+  apiUrl: string
+  apiKey: string
+  appId: string
+  verifyUrl: string
+  sessionsUrl: string | null
+} {
   const apiUrl = trimEnv(env.VERY_API_URL)
   const apiKey = trimEnv(env.VERY_API_KEY)
   const appId = trimEnv(env.VERY_APP_ID)
@@ -57,7 +76,8 @@ function requireConfiguredVery(env: Env): { apiUrl: string; apiKey: string; appI
   }
 
   const verifyUrl = trimEnv(env.VERY_VERIFY_URL) || deriveVeryVerifyUrl(apiUrl)
-  return { apiUrl, apiKey, appId, verifyUrl }
+  const sessionsUrl = trimEnv(env.VERY_SESSIONS_URL) || null
+  return { apiUrl, apiKey, appId, verifyUrl, sessionsUrl }
 }
 
 function deriveVeryVerifyUrl(apiUrl: string): string {
@@ -68,6 +88,20 @@ function deriveVeryVerifyUrl(apiUrl: string): string {
       return url.toString()
     }
     url.pathname = pathname ? `${pathname}/api/v1/verify` : "/api/v1/verify"
+    return url.toString()
+  } catch {
+    throw internalError("VERY_API_URL is not a valid URL")
+  }
+}
+
+function deriveVerySessionsUrl(apiUrl: string): string {
+  try {
+    const url = new URL(apiUrl)
+    const pathname = url.pathname.replace(/\/$/, "")
+    if (pathname.endsWith("/api/v1/sessions") || pathname.endsWith("/sessions")) {
+      return url.toString()
+    }
+    url.pathname = pathname ? `${pathname}/api/v1/sessions` : "/api/v1/sessions"
     return url.toString()
   } catch {
     throw internalError("VERY_API_URL is not a valid URL")
@@ -131,6 +165,88 @@ function buildVeryQuery(input: {
       pseudonym: input.walletAttachmentId ?? input.userId,
       sessionId: input.upstreamSessionRef,
     },
+  }
+}
+
+async function createVerySession(input: {
+  sessionsUrl: string
+  apiKey: string
+  appId: string
+  verifyUrl: string
+  userId: string
+  walletAttachmentId: string | null
+  verificationIntent: string | null
+  policyId: string | null
+}): Promise<VeryStartResult> {
+  const provisionalRef = makeId("vs")
+  const query = buildVeryQuery({
+    userId: input.userId,
+    walletAttachmentId: input.walletAttachmentId,
+    verificationIntent: input.verificationIntent,
+    policyId: input.policyId,
+    upstreamSessionRef: provisionalRef,
+  })
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), VERY_TIMEOUT_MS)
+
+  try {
+    const response = await fetch(input.sessionsUrl, {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        authorization: `Bearer ${input.apiKey}`,
+        "x-api-key": input.apiKey,
+      },
+      body: JSON.stringify({
+        app_id: input.appId,
+        context: "Veros - Palm Verification Timestamp",
+        type_id: "3",
+        query,
+        verify_url: input.verifyUrl,
+      }),
+      signal: controller.signal,
+    })
+
+    const body = await response.json().catch(() => null) as VeryCreateSessionResponse | null
+    if (!response.ok) {
+      const message = body?.error || `Very session creation failed with status ${response.status}`
+      throw providerUnavailable(message)
+    }
+    if (!body || typeof body !== "object") {
+      throw providerUnavailable("Very session creation response was invalid")
+    }
+
+    const upstreamSessionRef = body.session_id || body.id || body.upstream_session_ref || provisionalRef
+    const resolvedQuery = body.query || query
+    const upstreamSessionRefInQuery = (resolvedQuery as Record<string, unknown>)?.options
+      ? ((resolvedQuery as Record<string, unknown>).options as Record<string, unknown>)?.sessionId
+      : null
+    if (typeof upstreamSessionRefInQuery === "string" && upstreamSessionRefInQuery !== provisionalRef) {
+      (resolvedQuery as Record<string, unknown>).options = {
+        ...((resolvedQuery as Record<string, unknown>).options as Record<string, unknown>),
+        sessionId: upstreamSessionRef,
+      }
+    }
+
+    return {
+      upstreamSessionRef,
+      launch: {
+        app_id: body.app_id || input.appId,
+        context: body.context || "Veros - Palm Verification Timestamp",
+        type_id: body.type_id || "3",
+        query: resolvedQuery,
+        verify_url: body.verify_url || input.verifyUrl,
+      },
+    }
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw providerUnavailable("Very session creation request timed out")
+    }
+    throw error
+  } finally {
+    clearTimeout(timeout)
   }
 }
 
@@ -220,10 +336,23 @@ export function getVeryProvider(env: Env): VeryProvider {
     return testOverride
   }
 
-  const { appId, verifyUrl } = requireConfiguredVery(env)
+  const { appId, verifyUrl, sessionsUrl } = requireConfiguredVery(env)
 
   return {
     async startSession(input) {
+      if (sessionsUrl) {
+        return createVerySession({
+          sessionsUrl,
+          apiKey: requireConfiguredVery(env).apiKey,
+          appId,
+          verifyUrl,
+          userId: input.userId,
+          walletAttachmentId: input.walletAttachmentId,
+          verificationIntent: input.verificationIntent,
+          policyId: input.policyId,
+        })
+      }
+
       const upstreamSessionRef = makeId("vs")
       return {
         upstreamSessionRef,

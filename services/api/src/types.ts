@@ -75,6 +75,7 @@ export type Env = {
   VERY_API_KEY?: string
   VERY_APP_ID?: string
   VERY_VERIFY_URL?: string
+  VERY_SESSIONS_URL?: string
   SELF_API_URL?: string
   SELF_API_KEY?: string
   SELF_APP_NAME?: string
