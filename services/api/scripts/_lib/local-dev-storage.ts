@@ -1,4 +1,5 @@
 import { createClient, type Client } from "@libsql/client"
+import { createHash } from "node:crypto"
 import { mkdir, readFile, readdir } from "node:fs/promises"
 import { dirname, isAbsolute, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -104,25 +105,93 @@ async function hasTable(client: Client, tableName: string): Promise<boolean> {
   return result.rows.length > 0
 }
 
+async function ensureSchemaMigrationsTable(client: Client): Promise<void> {
+  await client.execute(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      migration_name TEXT PRIMARY KEY,
+      migration_label TEXT NOT NULL,
+      checksum TEXT NOT NULL,
+      applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `)
+}
+
+async function getAppliedChecksum(client: Client, migrationName: string): Promise<string | null> {
+  const result = await client.execute({
+    sql: `
+      SELECT checksum
+      FROM schema_migrations
+      WHERE migration_name = ?1
+      LIMIT 1
+    `,
+    args: [migrationName],
+  })
+
+  const row = result.rows[0]
+  if (!row) {
+    return null
+  }
+
+  const checksum = row.checksum
+  return typeof checksum === "string" ? checksum : String(checksum)
+}
+
+async function recordAppliedMigration(
+  client: Client,
+  migrationName: string,
+  checksum: string,
+): Promise<void> {
+  await client.execute({
+    sql: `
+      INSERT INTO schema_migrations (migration_name, migration_label, checksum)
+      VALUES (?1, 'control-plane', ?2)
+      ON CONFLICT(migration_name) DO UPDATE SET
+        migration_label = excluded.migration_label,
+        checksum = excluded.checksum
+    `,
+    args: [migrationName, checksum],
+  })
+}
+
 export async function applyLocalControlPlaneMigrations(storage: LocalDevStorage): Promise<void> {
   requireLocalControlPlaneDbPath(storage)
   const client = createClient({ url: storage.controlPlaneDbUrl })
 
   try {
-    if (await hasTable(client, "auth_provider_links")) {
-      return
-    }
-
     const migrationsDir = resolve(storage.repoRoot, "db/control-plane/migrations")
     const entries = (await readdir(migrationsDir))
       .filter((entry) => entry.endsWith(".sql"))
       .sort()
     const baselineEntry = entries.find((entry) => entry.startsWith("0000_") && entry.includes("baseline"))
     const entriesToApply = baselineEntry ? [baselineEntry] : entries
+    const baselineMigrationName = entriesToApply[0]
+    if (!baselineMigrationName) {
+      throw new Error("no control-plane baseline migration found")
+    }
+    const baselineMigrationPath = join(migrationsDir, baselineMigrationName)
+    const baselineSql = await readFile(baselineMigrationPath, "utf8")
+    const baselineChecksum = createHash("sha256").update(baselineSql).digest("hex")
+
+    await ensureSchemaMigrationsTable(client)
+
+    const appliedChecksum = await getAppliedChecksum(client, baselineMigrationName)
+    if (appliedChecksum) {
+      if (appliedChecksum !== baselineChecksum) {
+        throw new Error(`baseline checksum mismatch for ${baselineMigrationName}`)
+      }
+      return
+    }
+
+    if (await hasTable(client, "auth_provider_links")) {
+      await recordAppliedMigration(client, baselineMigrationName, baselineChecksum)
+      return
+    }
 
     for (const entry of entriesToApply) {
       await applySqlFile(client, join(migrationsDir, entry))
     }
+
+    await recordAppliedMigration(client, baselineMigrationName, baselineChecksum)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     throw new Error(`control-plane migration bootstrap failed:\n${message}`)
