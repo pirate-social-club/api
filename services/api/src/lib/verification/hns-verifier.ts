@@ -52,9 +52,16 @@ function getHnsVerifierBaseUrl(env: Env): string | null {
     return null
   }
 
-  return raw.endsWith("/inspect")
-    ? raw.slice(0, -"/inspect".length)
-    : raw.replace(/\/+$/, "")
+  const normalized = raw.replace(/\/+$/, "")
+  if (
+    normalized.endsWith("/inspect")
+    || normalized.endsWith("/publish-txt")
+    || normalized.endsWith("/verify-txt")
+  ) {
+    throw providerUnavailable(`HNS_VERIFIER_BASE_URL must be the base URL without a path suffix. Got: ${raw}`)
+  }
+
+  return normalized
 }
 
 function getHnsVerifierAuthToken(env: Env): string | null {

@@ -63,20 +63,20 @@ function trimEnv(value: string | undefined): string {
 
 function requireConfiguredVery(env: Env): {
   apiUrl: string
-  apiKey: string
+  apiKey: string | null
   appId: string
   verifyUrl: string
   sessionsUrl: string | null
 } {
-  const apiUrl = trimEnv(env.VERY_API_URL)
+  const apiUrl = trimEnv(env.VERY_API_URL) || "https://api.very.org"
   const apiKey = trimEnv(env.VERY_API_KEY)
   const appId = trimEnv(env.VERY_APP_ID)
-  if (!apiUrl || !apiKey || !appId) {
-    throw providerUnavailable("Very provider not configured: VERY_API_URL, VERY_API_KEY, and VERY_APP_ID must be set")
+  if (!appId) {
+    throw providerUnavailable("Very provider not configured: VERY_APP_ID must be set")
   }
 
   const verifyUrl = trimEnv(env.VERY_VERIFY_URL) || deriveVeryVerifyUrl(apiUrl)
-  const sessionsUrl = trimEnv(env.VERY_SESSIONS_URL) || null
+  const sessionsUrl = apiKey ? (trimEnv(env.VERY_SESSIONS_URL) || null) : null
   return { apiUrl, apiKey, appId, verifyUrl, sessionsUrl }
 }
 
@@ -257,7 +257,7 @@ async function sha256Hex(value: string): Promise<string> {
 
 async function verifyVeryPayload(input: {
   verifyUrl: string
-  apiKey: string
+  apiKey: string | null
   providerPayloadRef: string
   upstreamSessionRef: string
 }): Promise<VerySessionOutcome> {
@@ -270,8 +270,10 @@ async function verifyVeryPayload(input: {
       headers: {
         accept: "application/json",
         "content-type": "application/json",
-        authorization: `Bearer ${input.apiKey}`,
-        "x-api-key": input.apiKey,
+        ...(input.apiKey ? {
+          authorization: `Bearer ${input.apiKey}`,
+          "x-api-key": input.apiKey,
+        } : {}),
       },
       body: JSON.stringify({
         proof: input.providerPayloadRef,
@@ -336,14 +338,14 @@ export function getVeryProvider(env: Env): VeryProvider {
     return testOverride
   }
 
-  const { appId, verifyUrl, sessionsUrl } = requireConfiguredVery(env)
+  const { appId, apiKey, verifyUrl, sessionsUrl } = requireConfiguredVery(env)
 
   return {
     async startSession(input) {
-      if (sessionsUrl) {
+      if (sessionsUrl && apiKey) {
         return createVerySession({
           sessionsUrl,
-          apiKey: requireConfiguredVery(env).apiKey,
+          apiKey,
           appId,
           verifyUrl,
           userId: input.userId,

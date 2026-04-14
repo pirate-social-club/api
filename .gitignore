@@ -9,6 +9,7 @@ coverage/
 .env.local
 .env.*.local
 .dev.vars
+.codex
 
 .DS_Store
 Thumbs.db
@@ -16,4 +17,3 @@ Thumbs.db
 *.tmp
 *.temp
 .cache/
-

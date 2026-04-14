@@ -55,6 +55,18 @@ export type SpacesSignatureVerification = {
   failureReason: string | null
 }
 
+export type SpacesChallengePayload = {
+  kind: "schnorr_sign"
+  domain: string
+  root_label: string
+  root_pubkey: string
+  nonce: string
+  issued_at: string
+  expires_at: string
+  message: string
+  digest: string
+}
+
 function normalizeRootLabel(value: string): string {
   const trimmed = value.trim().toLowerCase()
   return trimmed.startsWith("@") ? trimmed.slice(1) : trimmed
@@ -201,18 +213,12 @@ export async function mintSpacesChallenge(
   sessionId: string,
 ): Promise<{
   challengeExpiresAt: string
-  challengePayload: {
-    kind: "schnorr_sign"
-    domain: string
-    root_label: string
-    root_pubkey: string
-    nonce: string
-    issued_at: string
-    expires_at: string
-    message: string
-    digest: string
-  }
+  challengePayload: SpacesChallengePayload
 }> {
+  if (!rootPubkey.trim()) {
+    throw internalError("cannot mint Spaces challenge without a root public key")
+  }
+
   const issuedAt = new Date()
   const challengeExpiresAt = new Date(issuedAt.getTime() + 10 * 60 * 1000).toISOString()
   const domain = getSpacesChallengeDomain(env)
