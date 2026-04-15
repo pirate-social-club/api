@@ -6,10 +6,11 @@ import {
 } from "./community-local-db"
 import {
   canAccessCommunity,
+  buildMembershipGateSummary,
+  evaluateMembershipGateRules,
   getCommunityJoinMode,
   getCommunityMembershipState,
   listActiveMembershipGateRules,
-  satisfiesMembershipGateRules,
   upsertCommunityMembership,
   upsertMembershipRequest,
 } from "./community-membership-store"
@@ -17,7 +18,7 @@ import { openCommunityDb } from "./community-db-factory"
 import type { UserRepository } from "../auth/repositories"
 import type { CommunityRow, JobRow } from "../auth/control-plane-auth-rows"
 import type { CommunityRepository } from "./control-plane-community-repository"
-import { badRequestError, eligibilityFailed, gateFailed, internalError, notFoundError } from "../errors"
+import { badRequestError, eligibilityFailed, gateFailedWithDetails, internalError, notFoundError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { verifyPirateAccessToken } from "../auth/pirate-session-token"
 import { getRegistryPublicationAdapter } from "./registry-publication"
@@ -25,9 +26,11 @@ import type { VerificationRepository } from "../verification/control-plane-verif
 import type {
   Community,
   CommunityCreateAcceptedResponse,
+  CommunityPreview,
   CreateCommunityRequest,
   Env,
   Job,
+  JoinEligibility,
   User,
 } from "../../types"
 
@@ -384,6 +387,31 @@ function assertCreateRequest(
       }
     }
   }
+  for (const rule of body.gate_rules ?? []) {
+    if (rule.gate_type !== "nationality") {
+      continue
+    }
+
+    const requirements = rule.proof_requirements ?? []
+    if (requirements.length !== 1 || requirements[0].proof_type !== "nationality") {
+      throw eligibilityFailed("Nationality gate must have exactly one nationality proof requirement")
+    }
+
+    const requirement = requirements[0]
+    const acceptedProviders = requirement.accepted_providers ?? []
+    if (acceptedProviders.length !== 1 || acceptedProviders[0] !== "self") {
+      throw eligibilityFailed("Nationality gate accepted_providers must be exactly [\"self\"]")
+    }
+
+    const config = (requirement.config ?? rule.gate_config ?? {}) as Record<string, unknown>
+    const requiredValue = typeof config.required_value === "string" ? config.required_value : null
+    if (!requiredValue) {
+      throw eligibilityFailed("Nationality gate requires a required_value in config")
+    }
+    if (!/^[A-Z]{2}$/.test(requiredValue)) {
+      throw eligibilityFailed("Nationality gate required_value must match ^[A-Z]{2}$")
+    }
+  }
 }
 
 async function loadCommunityProjection(
@@ -658,6 +686,163 @@ export async function getCommunity(input: {
   return loadCommunityProjection(input.repository, community)
 }
 
+export async function getCommunityPreview(input: {
+  env: Env
+  bearerToken: string
+  communityId: string
+  communityRepository: CommunityRepository
+}): Promise<CommunityPreview> {
+  const session = await verifyPirateAccessToken({ env: input.env, token: input.bearerToken })
+  const community = await input.communityRepository.getCommunityById(input.communityId)
+  if (!community || community.provisioning_state !== "active" || community.status !== "active") {
+    throw notFoundError("Community not found")
+  }
+
+  const binding = await input.communityRepository.getPrimaryCommunityDatabaseBinding(community.community_id)
+  const local = binding ? await readLocalCommunity(binding.database_url, community.community_id).catch(() => null) : null
+  const membershipMode: CommunityPreview["membership_mode"] =
+    local?.membership_mode === "request" ? "open" : (local?.membership_mode ?? "open")
+
+  const db = await openCommunityDb(input.communityRepository, input.communityId)
+  try {
+    const rules = await listActiveMembershipGateRules(db.client, input.communityId)
+    const membership = await getCommunityMembershipState(db.client, input.communityId, session.userId)
+    const viewerMembershipStatus: CommunityPreview["viewer_membership_status"] =
+      membership.membership_status === "banned"
+        ? "banned"
+        : canAccessCommunity(membership)
+          ? "member"
+          : "not_member"
+
+    return {
+      community_id: community.community_id,
+      display_name: local?.display_name ?? community.display_name,
+      description: local?.description ?? null,
+      membership_mode: membershipMode,
+      member_count: null,
+      membership_gate_summaries: rules.map(buildMembershipGateSummary),
+      viewer_membership_status: viewerMembershipStatus,
+      created_at: community.created_at,
+    }
+  } finally {
+    db.close()
+  }
+}
+
+export async function getJoinEligibility(input: {
+  env: Env
+  bearerToken: string
+  communityId: string
+  userRepository: UserRepository
+  communityRepository: CommunityRepository
+}): Promise<JoinEligibility> {
+  const session = await verifyPirateAccessToken({ env: input.env, token: input.bearerToken })
+  const user = await input.userRepository.getUserById(session.userId)
+  if (!user) {
+    throw internalError("Resolved user row is missing for join eligibility")
+  }
+
+  const community = await input.communityRepository.getCommunityById(input.communityId)
+  if (!community || community.provisioning_state !== "active" || community.status !== "active") {
+    throw notFoundError("Community not found")
+  }
+
+  const binding = await input.communityRepository.getPrimaryCommunityDatabaseBinding(community.community_id)
+  const local = binding ? await readLocalCommunity(binding.database_url, community.community_id).catch(() => null) : null
+  const membershipMode: JoinEligibility["membership_mode"] =
+    local?.membership_mode === "request" ? "open" : (local?.membership_mode ?? "open")
+
+  const db = await openCommunityDb(input.communityRepository, input.communityId)
+  try {
+    const membership = await getCommunityMembershipState(db.client, input.communityId, session.userId)
+    if (canAccessCommunity(membership)) {
+      return {
+        community_id: input.communityId,
+        membership_mode: membershipMode,
+        joinable_now: false,
+        status: "already_joined",
+        membership_gate_summaries: [],
+        missing_capabilities: [],
+      }
+    }
+
+    if (membership.membership_status === "banned") {
+      return {
+        community_id: input.communityId,
+        membership_mode: membershipMode,
+        joinable_now: false,
+        status: "banned",
+        membership_gate_summaries: [],
+        missing_capabilities: [],
+      }
+    }
+
+    if (!satisfiesBaselineJoinGate(user)) {
+      return {
+        community_id: input.communityId,
+        membership_mode: membershipMode,
+        joinable_now: false,
+        status: "verification_required",
+        membership_gate_summaries: [],
+        missing_capabilities: ["unique_human"],
+        suggested_verification_provider: "self",
+        suggested_verification_intent: "community_join",
+      }
+    }
+
+    if (membershipMode === "open") {
+      return {
+        community_id: input.communityId,
+        membership_mode: "open",
+        joinable_now: true,
+        status: "joinable",
+        membership_gate_summaries: [],
+        missing_capabilities: [],
+      }
+    }
+
+    const rules = await listActiveMembershipGateRules(db.client, input.communityId)
+    const gateSummaries = rules.map(buildMembershipGateSummary)
+    const evaluation = evaluateMembershipGateRules(rules, user)
+    if (evaluation.satisfied) {
+      return {
+        community_id: input.communityId,
+        membership_mode: membershipMode,
+        joinable_now: true,
+        status: "joinable",
+        membership_gate_summaries: gateSummaries,
+        missing_capabilities: [],
+      }
+    }
+
+    if (evaluation.missingCapabilities.length > 0) {
+      return {
+        community_id: input.communityId,
+        membership_mode: membershipMode,
+        joinable_now: false,
+        status: "verification_required",
+        membership_gate_summaries: gateSummaries,
+        missing_capabilities: evaluation.missingCapabilities,
+        suggested_verification_provider: evaluation.suggestedVerificationProvider,
+        suggested_verification_intent: evaluation.missingCapabilities.includes("nationality")
+          ? "community_join"
+          : null,
+      }
+    }
+
+    return {
+      community_id: input.communityId,
+      membership_mode: membershipMode,
+      joinable_now: false,
+      status: "gate_failed",
+      membership_gate_summaries: gateSummaries,
+      missing_capabilities: [],
+    }
+  } finally {
+    db.close()
+  }
+}
+
 export async function joinCommunity(input: {
   env: Env
   bearerToken: string
@@ -671,7 +856,12 @@ export async function joinCommunity(input: {
     throw internalError("Resolved user row is missing for community join")
   }
   if (!satisfiesBaselineJoinGate(user)) {
-    throw gateFailed("A platform trust credential is required to join this community")
+    throw gateFailedWithDetails("A platform trust credential is required to join this community", {
+      missing_capabilities: ["unique_human"],
+      suggested_verification_provider: "self",
+      suggested_verification_intent: "community_join",
+      failure_reason: "missing_verification",
+    })
   }
 
   const community = await input.communityRepository.getCommunityById(input.communityId)
@@ -689,7 +879,9 @@ export async function joinCommunity(input: {
       }
     }
     if (membership.membership_status === "banned") {
-      throw gateFailed("Community membership is not available for this account")
+      throw gateFailedWithDetails("Community membership is not available for this account", {
+        failure_reason: "banned",
+      })
     }
 
     const membershipMode = await getCommunityJoinMode(db.client, input.communityId)
@@ -725,8 +917,30 @@ export async function joinCommunity(input: {
     }
 
     const rules = await listActiveMembershipGateRules(db.client, input.communityId)
-    if (!satisfiesMembershipGateRules(rules, user)) {
-      throw gateFailed("Community membership requirements are not satisfied")
+    const gateSummaries = rules.map(buildMembershipGateSummary)
+    const evaluation = evaluateMembershipGateRules(rules, user)
+    if (!evaluation.satisfied) {
+      if (evaluation.missingCapabilities.length > 0) {
+        throw gateFailedWithDetails("Verification is required to join this community", {
+          membership_gate_summaries: gateSummaries,
+          missing_capabilities: evaluation.missingCapabilities,
+          suggested_verification_provider: evaluation.suggestedVerificationProvider,
+          suggested_verification_intent: evaluation.missingCapabilities.includes("nationality")
+            ? "community_join"
+            : null,
+          failure_reason: "missing_verification",
+        })
+      }
+      if (evaluation.mismatchReasons.includes("nationality_mismatch")) {
+        throw gateFailedWithDetails("Your verified nationality does not satisfy this community requirement", {
+          membership_gate_summaries: gateSummaries,
+          failure_reason: "nationality_mismatch",
+        })
+      }
+      throw gateFailedWithDetails("Community membership requirements are not satisfied", {
+        membership_gate_summaries: gateSummaries,
+        failure_reason: "unsupported",
+      })
     }
     await upsertCommunityMembership({
       client: db.client,

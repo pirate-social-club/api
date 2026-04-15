@@ -1,7 +1,7 @@
 import type { Client, InValue } from "@libsql/client"
 import { makeId } from "../helpers"
 import { requiredString, rowValue, stringOrNull } from "../sql-row"
-import type { User } from "../../types"
+import type { MembershipGateSummary, JoinEligibility, User } from "../../types"
 
 export type CommunityMembershipRow = {
   membership_status: "member" | "left" | "banned" | null
@@ -205,18 +205,7 @@ function satisfiesProofRequirement(user: User, requirement: ProofRequirement, ga
 }
 
 export function satisfiesMembershipGateRules(rules: CommunityGateRuleRow[], user: User): boolean {
-  if (rules.length === 0) {
-    return false
-  }
-
-  return rules.every((rule) => {
-    if (rule.gate_family !== "identity_proof") {
-      return false
-    }
-    const gateConfig = parseGateConfig(rule.gate_config_json)
-    const requirements = parseProofRequirements(rule.proof_requirements_json, rule.gate_type)
-    return requirements.every((requirement) => satisfiesProofRequirement(user, requirement, gateConfig))
-  })
+  return evaluateMembershipGateRules(rules, user).satisfied
 }
 
 export async function upsertCommunityMembership(input: {
@@ -263,4 +252,150 @@ export async function upsertMembershipRequest(input: {
     `,
     args: [makeId("mrq"), input.communityId, input.userId, input.now],
   })
+}
+
+export type MembershipGateEvaluation = {
+  satisfied: boolean
+  missingCapabilities: Array<"unique_human" | "age_over_18" | "nationality" | "gender">
+  mismatchReasons: string[]
+  suggestedVerificationProvider: "self" | "very" | null
+}
+
+export function buildMembershipGateSummary(rule: CommunityGateRuleRow): MembershipGateSummary {
+  const requirements = parseProofRequirements(rule.proof_requirements_json, rule.gate_type)
+  const gateConfig = parseGateConfig(rule.gate_config_json)
+  const primaryReq = requirements[0]
+
+  const summary: MembershipGateSummary = {
+    gate_type: rule.gate_type as MembershipGateSummary["gate_type"],
+  }
+
+  if (primaryReq?.accepted_providers?.length) {
+    summary.accepted_providers = primaryReq.accepted_providers as MembershipGateSummary["accepted_providers"]
+  }
+
+  if (rule.gate_type === "nationality") {
+    const config = (primaryReq?.config ?? gateConfig ?? {}) as Record<string, unknown>
+    if (typeof config.required_value === "string") {
+      summary.required_value = config.required_value
+    }
+    if (Array.isArray(config.excluded_values)) {
+      summary.excluded_values = config.excluded_values.filter((v): v is string => typeof v === "string")
+    }
+  }
+
+  return summary
+}
+
+export function evaluateMembershipGateRules(
+  rules: CommunityGateRuleRow[],
+  user: User,
+): MembershipGateEvaluation {
+  if (rules.length === 0) {
+    return {
+      satisfied: false,
+      missingCapabilities: [],
+      mismatchReasons: ["no_active_gate_rules"],
+      suggestedVerificationProvider: null,
+    }
+  }
+
+  const missingCapabilities: MembershipGateEvaluation["missingCapabilities"] = []
+  const mismatchReasons: string[] = []
+  let suggestedProvider: "self" | "very" | null = null
+
+  for (const rule of rules) {
+    if (rule.gate_family !== "identity_proof") {
+      mismatchReasons.push(`unsupported_gate_family:${rule.gate_family}`)
+      continue
+    }
+
+    const gateConfig = parseGateConfig(rule.gate_config_json)
+    const requirements = parseProofRequirements(rule.proof_requirements_json, rule.gate_type)
+
+    for (const requirement of requirements) {
+      const config = (requirement.config ?? gateConfig ?? {}) as Record<string, unknown>
+
+      switch (requirement.proof_type) {
+        case "nationality": {
+          const capability = user.verification_capabilities.nationality
+          if (capability.state !== "verified") {
+            missingCapabilities.push("nationality")
+            if (includesAcceptedProvider(requirement.accepted_providers, "self")) {
+              suggestedProvider = "self"
+            }
+          } else if (!includesAcceptedProvider(requirement.accepted_providers, capability.provider)) {
+            mismatchReasons.push("provider_not_accepted")
+          } else {
+            const requiredValue = typeof config.required_value === "string" ? config.required_value : null
+            const excludedValues = Array.isArray(config.excluded_values)
+              ? config.excluded_values.filter((v): v is string => typeof v === "string")
+              : []
+            if (requiredValue && capability.value !== requiredValue) {
+              mismatchReasons.push("nationality_mismatch")
+            }
+            if (capability.value && excludedValues.includes(capability.value)) {
+              mismatchReasons.push("nationality_excluded")
+            }
+          }
+          break
+        }
+        case "unique_human": {
+          const capability = user.verification_capabilities.unique_human
+          if (capability.state !== "verified") {
+            missingCapabilities.push("unique_human")
+            if (includesAcceptedProvider(requirement.accepted_providers, "self")) {
+              suggestedProvider = suggestedProvider ?? "self"
+            }
+            if (includesAcceptedProvider(requirement.accepted_providers, "very")) {
+              suggestedProvider = suggestedProvider ?? "very"
+            }
+          } else if (!includesAcceptedProvider(requirement.accepted_providers, capability.provider)) {
+            mismatchReasons.push("provider_not_accepted")
+          }
+          break
+        }
+        case "age_over_18": {
+          const capability = user.verification_capabilities.age_over_18
+          if (capability.state !== "verified") {
+            missingCapabilities.push("age_over_18")
+            if (includesAcceptedProvider(requirement.accepted_providers, "self")) {
+              suggestedProvider = suggestedProvider ?? "self"
+            }
+          } else if (!includesAcceptedProvider(requirement.accepted_providers, capability.provider)) {
+            mismatchReasons.push("provider_not_accepted")
+          }
+          break
+        }
+        case "gender": {
+          const capability = user.verification_capabilities.gender
+          if (capability.state !== "verified") {
+            missingCapabilities.push("gender")
+            if (includesAcceptedProvider(requirement.accepted_providers, "self")) {
+              suggestedProvider = suggestedProvider ?? "self"
+            }
+          } else if (!includesAcceptedProvider(requirement.accepted_providers, capability.provider)) {
+            mismatchReasons.push("provider_not_accepted")
+          } else {
+            const requiredValue = typeof config.required_value === "string" ? config.required_value : null
+            if (requiredValue && capability.value !== requiredValue) {
+              mismatchReasons.push("gender_mismatch")
+            }
+          }
+          break
+        }
+        default:
+          if (!satisfiesProofRequirement(user, requirement, gateConfig)) {
+            mismatchReasons.push(`unsatisfied:${requirement.proof_type}`)
+          }
+      }
+    }
+  }
+
+  return {
+    satisfied: missingCapabilities.length === 0 && mismatchReasons.length === 0,
+    missingCapabilities,
+    mismatchReasons,
+    suggestedVerificationProvider: suggestedProvider,
+  }
 }

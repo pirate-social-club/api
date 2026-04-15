@@ -95,7 +95,6 @@ function buildNewRecord(identity: UpstreamIdentity): RepositoryRecord {
       capability_provider: null,
       verification_capabilities: buildDefaultVerificationCapabilities(),
       verified_at: null,
-      nationality: null,
       created_at: timestamp,
       updated_at: timestamp,
     },

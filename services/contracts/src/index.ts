@@ -4,6 +4,7 @@ export type ErrorResponse = {
   code: "bad_request" | "auth_error" | "payment_required" | "verification_required" | "eligibility_failed" | "gate_failed" | "posting_trust_tier_too_low" | "posting_quota_exhausted" | "analysis_blocked" | "analysis_review_required" | "label_required" | "invalid_label_selection" | "label_required_but_none_applicable" | "conflict" | "not_found" | "rate_limited" | "payment_failed" | "settlement_pending" | "provider_unavailable" | "internal_error";
   message: string;
   retryable?: boolean;
+  details?: (Record<string, unknown>) | null;
 };
 
 export type AuthProof = ({
@@ -57,7 +58,6 @@ export type User = {
   capability_provider?: "self" | "very" | null;
   verification_capabilities: VerificationCapabilities;
   verified_at?: string | null;
-  nationality?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -151,7 +151,7 @@ export type VerificationSession = {
   callback_path?: string | null;
   nationality?: string | null;
   age_at_verification?: number | null;
-  attestation_ids: Array<string>;
+  attestation_id?: string | null;
   proof_hash?: string | null;
   evidence_ref?: string | null;
   verified_at?: string | null;
@@ -171,7 +171,7 @@ export type VeryWidgetLaunch = {
   context: string;
   type_id: string;
   query: Record<string, unknown>;
-  verify_url?: string;
+  verify_url: string;
 };
 
 export type RequestedVerificationCapability = "unique_human" | "age_over_18" | "nationality" | "gender";
@@ -207,8 +207,6 @@ export type NamespaceVerificationSession = {
   normalized_root_label?: string | null;
   status: "draft" | "inspecting" | "dns_setup_required" | "challenge_required" | "challenge_pending" | "verifying" | "verified" | "failed" | "expired" | "disputed";
   challenge_kind?: "dns_txt" | "schnorr_sign" | null;
-  challenge_host?: string | null;
-  challenge_txt_value?: string | null;
   challenge_payload?: (Record<string, unknown>) | null;
   challenge_expires_at?: string | null;
   assertions?: NamespaceVerificationAssertions | null;
@@ -257,11 +255,6 @@ export type Community = {
   namespace_verification_id?: string | null;
   status: "draft" | "active" | "frozen" | "archived" | "deleted";
   provisioning_state: "requested" | "provisioning" | "active" | "rotation_required" | "error";
-  registry_publication_state?: "not_started" | "pending_create" | "pending_seed" | "published" | "stale" | "publication_error" | null;
-  registry_publication_job_id?: string | null;
-  registry_attempt_id?: string | null;
-  registry_published_at?: string | null;
-  registry_error_code?: string | null;
   artist_identity_id?: string | null;
   community_agent_user_id?: string | null;
   membership_mode: "open" | "request" | "gated";
@@ -648,8 +641,6 @@ export type CreatePostRequest = (((unknown & {
   rights_basis?: "none" | "original" | "derivative" | "attribution_only" | null;
   upstream_asset_refs?: Array<string> | null;
   lyrics?: string | null;
-  flair_id?: string | null;
-  age_gate_policy?: "none" | "18_plus" | null;
 });
 
 export type SongArtifactUpload = {
@@ -721,7 +712,6 @@ export type Post = {
   agent_ownership_provider_snapshot?: string | null;
   disclosed_qualifiers_json?: Array<DisclosedQualifierSnapshot> | null;
   label_id?: string | null;
-  flair_id?: string | null;
   post_type: "text" | "image" | "video" | "link" | "song";
   status: "draft" | "published" | "hidden" | "removed" | "deleted";
   title?: string | null;
@@ -749,7 +739,6 @@ export type Post = {
 
 export type LocalizedPostResponse = {
   post: Post;
-  flair?: PostLabel | null;
   market_context?: MarketContextSummary | null;
   label?: PostLabel | null;
   upvote_count: number;
@@ -763,6 +752,43 @@ export type LocalizedPostResponse = {
   translated_body?: string | null;
   translated_caption?: string | null;
   source_hash: string;
+};
+
+export type MembershipGateSummary = {
+  gate_type: "nationality" | "unique_human" | "age_over_18" | "wallet_score";
+  accepted_providers?: Array<"self" | "very" | "passport"> | null;
+  required_value?: string | null;
+  excluded_values?: Array<string> | null;
+};
+
+export type CommunityPreview = {
+  community_id: string;
+  display_name: string;
+  description?: string | null;
+  membership_mode: "open" | "gated";
+  member_count?: number | null;
+  membership_gate_summaries: Array<MembershipGateSummary>;
+  viewer_membership_status?: "member" | "not_member" | "banned" | null;
+  created_at: string;
+};
+
+export type JoinEligibility = {
+  community_id: string;
+  membership_mode: "open" | "gated";
+  joinable_now: boolean;
+  status: "joinable" | "verification_required" | "gate_failed" | "already_joined" | "banned";
+  membership_gate_summaries: Array<MembershipGateSummary>;
+  missing_capabilities: Array<"unique_human" | "age_over_18" | "nationality" | "gender">;
+  suggested_verification_provider?: "self" | "very" | null;
+  suggested_verification_intent?: "community_join" | null;
+};
+
+export type GateFailureDetails = {
+  membership_gate_summaries?: Array<MembershipGateSummary> | null;
+  missing_capabilities?: Array<string> | null;
+  suggested_verification_provider?: "self" | "very" | null;
+  suggested_verification_intent?: "community_join" | null;
+  failure_reason?: "missing_verification" | "provider_not_accepted" | "nationality_mismatch" | "unsupported" | "banned" | null;
 };
 
 type AgentActionProof = {
@@ -1069,23 +1095,15 @@ type CommunityVideoAuthenticityPolicySettings = {
 
 type CreateCentralizedCommunityRequest = (CreateCommunityRequestBase & {
   governance_mode: "centralized";
-  description?: string | null;
-  membership_mode?: "open" | "request" | "gated";
-  default_age_gate_policy?: "none" | "18_plus";
-  allow_anonymous_identity?: boolean;
-  anonymous_identity_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null;
-  gate_rules?: Array<GateRuleInput>;
-  donation_policy?: unknown | null;
-  community_bootstrap?: unknown | null;
-  handle_policy?: {
-    policy_template: "standard";
-  };
 });
 
 type CreateCommunityRequestBase = {
   display_name: string;
   namespace: {
     namespace_verification_id: string;
+  };
+  handle_policy: {
+    policy_template: "standard";
   };
 };
 
@@ -1105,15 +1123,6 @@ type DonationPartnerSummary = {
   provider_partner_ref?: string | null;
   review_status: "pending" | "approved" | "rejected";
   status: "active" | "paused" | "retired";
-};
-
-type GateRuleInput = {
-  scope: "membership" | "viewer" | "posting";
-  gate_family: "identity_proof" | "token_holding";
-  gate_type: string;
-  proof_requirements?: Array<ProofRequirement> | null;
-  chain_namespace?: string | null;
-  gate_config?: (Record<string, unknown>) | null;
 };
 
 type GateRule = {
@@ -1290,7 +1299,7 @@ type SanctionsClearCapabilityState = {
   verified_at?: string | null;
 };
 
-export type SelfVerificationDisclosures = {
+type SelfVerificationDisclosures = {
   issuing_state?: boolean | null;
   name?: boolean | null;
   passport_number?: boolean | null;
@@ -1303,7 +1312,7 @@ export type SelfVerificationDisclosures = {
   minimum_age?: number | null;
 };
 
-export type SelfVerificationLaunch = {
+type SelfVerificationLaunch = {
   app_name: string;
   logo_base64?: string | null;
   header?: string | null;
@@ -1431,6 +1440,8 @@ export const apiRoutes = {
   communityPurchaseSettlements: (communityId: string) => `/communities/${communityId}/purchase-settlements`,
   communityPurchaseSettlementFailures: (communityId: string) => `/communities/${communityId}/purchase-settlements/fail`,
   communityPosts: (communityId: string) => `/communities/${communityId}/posts`,
+  communityPreview: (communityId: string) => `/communities/${communityId}/preview`,
+  communityJoinEligibility: (communityId: string) => `/communities/${communityId}/join-eligibility`,
   communitySongArtifactUploads: (communityId: string) => `/communities/${communityId}/song-artifact-uploads`,
   communitySongArtifactUploadContent: (communityId: string, songArtifactUploadId: string) => `/communities/${communityId}/song-artifact-uploads/${songArtifactUploadId}/content`,
   communitySongArtifacts: (communityId: string) => `/communities/${communityId}/song-artifacts`,

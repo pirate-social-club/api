@@ -9,5 +9,13 @@ declare module "bun:test" {
     toEqual(expected: unknown): void
     toMatch(expected: RegExp): void
     toHaveLength(expected: number): void
+    toContain(expected: string): void
+    toThrow(expected?: string | RegExp): void
+    readonly not: {
+      toContain(expected: string): void
+    }
+    readonly rejects: {
+      toThrow(expected?: string | RegExp): Promise<void>
+    }
   }
 }

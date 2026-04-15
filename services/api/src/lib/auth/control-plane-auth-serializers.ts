@@ -59,7 +59,6 @@ export function serializeUser(row: UserRow): User {
       : null,
     verification_capabilities: parseVerificationCapabilities(row.verification_capabilities_json),
     verified_at: row.verified_at,
-    nationality: row.nationality,
     created_at: row.created_at,
     updated_at: row.updated_at,
   }
@@ -174,7 +173,8 @@ export function serializeVerificationSession(input: {
     launch: input.launch ?? undefined,
     nationality: null,
     age_at_verification: null,
-    attestation_ids: input.attestationRows.map((r) => r.user_attestation_id),
+    attestation_ids: input.attestationRows.map((row) => row.user_attestation_id),
+    attestation_id: input.attestationRows.length > 0 ? input.attestationRows[0].user_attestation_id : null,
     proof_hash: input.row.result_ref,
     evidence_ref: input.row.result_ref,
     verified_at: input.attestationRows.length > 0 ? input.attestationRows[0].verified_at : input.row.completed_at,

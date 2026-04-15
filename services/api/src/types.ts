@@ -2,14 +2,18 @@ export type {
   AuthProof,
   Community,
   CommunityCreateAcceptedResponse,
+  CommunityPreview,
   CompleteNamespaceVerificationSessionRequest,
   CompleteVerificationSessionRequest,
   CreateCommunityRequest,
   CreatePostRequest,
   ErrorResponse,
+  GateFailureDetails,
   GlobalHandle,
   Job,
+  JoinEligibility,
   LocalizedPostResponse,
+  MembershipGateSummary,
   NamespaceVerification,
   NamespaceVerificationAssertions,
   NamespaceVerificationCapabilities,
@@ -47,6 +51,7 @@ export type Env = {
   ENVIRONMENT?: string
   DEV_MEMORY_STORE_ENABLED?: string
   TURSO_CONTROL_PLANE_DATABASE_URL?: string
+  CONTROL_PLANE_DATABASE_URL?: string
   TURSO_CONTROL_PLANE_DATABASE_NAME?: string
   TURSO_CONTROL_PLANE_AUTH_TOKEN?: string
   LOCAL_COMMUNITY_DB_ROOT?: string
@@ -86,6 +91,7 @@ export type Env = {
   SPACES_VERIFIER_CHALLENGE_DOMAIN?: string
   HNS_VERIFIER_BASE_URL?: string
   HNS_VERIFIER_AUTH_TOKEN?: string
+  HNS_CHALLENGE_TTL_HOURS?: string
 }
 
 export type UpstreamIdentity = {
