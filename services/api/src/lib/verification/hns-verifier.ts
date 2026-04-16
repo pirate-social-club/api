@@ -46,7 +46,7 @@ export type HnsVerifyTxtResult = {
   challenge_name?: string
 }
 
-function getHnsVerifierBaseUrl(env: Env): string | null {
+export function getHnsVerifierBaseUrl(env: Env): string | null {
   const raw = env.HNS_VERIFIER_BASE_URL?.trim()
   if (!raw) {
     return null

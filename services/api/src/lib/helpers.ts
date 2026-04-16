@@ -1,4 +1,4 @@
-import { authError } from "./errors"
+import type { Env } from "../types"
 
 export function nowIso(): string {
   return new Date().toISOString()
@@ -33,11 +33,4 @@ export function dedupeStrings(values: string[]): string[] {
 
 export function makeId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "")}`
-}
-
-export function requireBearerToken(headerValue: string | undefined): string {
-  if (!headerValue || !headerValue.startsWith("Bearer ")) {
-    throw authError("Authentication failed")
-  }
-  return headerValue.slice("Bearer ".length)
 }

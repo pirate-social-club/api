@@ -61,6 +61,7 @@ export function toSqliteCompatibleStatement(statement: string): string | null {
   sqliteCompat = sqliteCompat.replace(/\bJSONB\b/gi, "TEXT")
   sqliteCompat = sqliteCompat.replace(/\bTIMESTAMPTZ\b/gi, "TEXT")
   sqliteCompat = sqliteCompat.replace(/\bTIMESTAMP\b/gi, "TEXT")
+  sqliteCompat = sqliteCompat.replace(/\bADD COLUMN IF NOT EXISTS\b/gi, "ADD COLUMN")
 
   return sqliteCompat
 }

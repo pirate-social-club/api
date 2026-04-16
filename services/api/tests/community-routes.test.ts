@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { createClient } from "@libsql/client"
 import app from "../src/index"
 import { buildLocalCommunityDbUrl } from "../src/lib/communities/community-local-db"
+import { decryptCommunityDbCredential } from "../src/lib/communities/community-db-credential-crypto"
 import { buildDefaultVerificationCapabilities } from "../src/lib/verification/verification-capabilities"
 import { createRouteTestContext, json, mintUpstreamJwt, resetRuntimeCaches } from "./helpers"
 import { setVeryProviderForTests } from "../src/lib/verification/very-provider"
@@ -216,6 +217,51 @@ async function setPrimaryWalletAttachment(
   }
 }
 
+async function getCommunityControlPlaneState(
+  env: Env,
+  communityId: string,
+): Promise<{
+  namespaceVerificationId: string | null
+  routeSlug: string | null
+  registryPublicationState: string
+  registryAttemptCount: number
+}> {
+  const client = createClient({
+    url: String(env.TURSO_CONTROL_PLANE_DATABASE_URL),
+  })
+
+  try {
+    const communityResult = await client.execute({
+      sql: `
+        SELECT namespace_verification_id, route_slug, registry_publication_state
+        FROM communities
+        WHERE community_id = ?1
+        LIMIT 1
+      `,
+      args: [communityId],
+    })
+    const attemptResult = await client.execute({
+      sql: `
+        SELECT COUNT(*) AS attempt_count
+        FROM community_registry_attempts
+        WHERE community_id = ?1
+      `,
+      args: [communityId],
+    })
+
+    return {
+      namespaceVerificationId: communityResult.rows[0]?.namespace_verification_id == null
+        ? null
+        : String(communityResult.rows[0]?.namespace_verification_id),
+      routeSlug: communityResult.rows[0]?.route_slug == null ? null : String(communityResult.rows[0]?.route_slug),
+      registryPublicationState: String(communityResult.rows[0]?.registry_publication_state ?? ""),
+      registryAttemptCount: Number(attemptResult.rows[0]?.attempt_count ?? 0),
+    }
+  } finally {
+    client.close()
+  }
+}
+
 beforeEach(() => {
   resetRuntimeCaches()
 })
@@ -228,6 +274,136 @@ afterEach(async () => {
 })
 
 describe("community routes", () => {
+  test("community create succeeds without a namespace and can attach one later", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "community-optional-namespace-user")
+    await completeUniqueHumanVerification(ctx.env, session.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Namespace Later Club",
+      handle_policy: {
+        policy_template: "standard",
+      },
+    }, ctx.env, session.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: {
+        community_id: string
+        namespace_verification_id: string | null
+        route_slug: string | null
+        registry_publication_state: string | null
+      }
+    }
+    expect(communityCreateBody.community.namespace_verification_id).toBeNull()
+    expect(communityCreateBody.community.route_slug).toBeNull()
+    expect(communityCreateBody.community.registry_publication_state).toBe("not_started")
+
+    const createdState = await getCommunityControlPlaneState(ctx.env, communityCreateBody.community.community_id)
+    expect(createdState.namespaceVerificationId).toBeNull()
+    expect(createdState.routeSlug).toBeNull()
+    expect(createdState.registryPublicationState).toBe("not_started")
+    expect(createdState.registryAttemptCount).toBe(0)
+
+    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, session.accessToken)
+    const attachResponse = await requestJson(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}/namespace`,
+      {
+        namespace_verification_id: namespaceVerificationId,
+      },
+      ctx.env,
+      session.accessToken,
+    )
+    expect(attachResponse.status).toBe(200)
+    const attachedCommunity = await json(attachResponse) as {
+      community_id: string
+      namespace_verification_id: string | null
+      route_slug: string | null
+      registry_publication_state: string | null
+    }
+    expect(attachedCommunity.namespace_verification_id).toBe(namespaceVerificationId)
+    expect(attachedCommunity.route_slug).toBe("piratecommunityroot")
+    expect(attachedCommunity.registry_publication_state).toBe("published")
+
+    const attachedState = await getCommunityControlPlaneState(ctx.env, communityCreateBody.community.community_id)
+    expect(attachedState.namespaceVerificationId).toBe(namespaceVerificationId)
+    expect(attachedState.routeSlug).toBe("piratecommunityroot")
+    expect(attachedState.registryPublicationState).toBe("published")
+    expect(attachedState.registryAttemptCount).toBe(1)
+  })
+
+  test("community owner can persist and read a pending namespace verification session", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "community-pending-session-user")
+    await completeUniqueHumanVerification(ctx.env, session.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Pending Namespace Club",
+      handle_policy: {
+        policy_template: "standard",
+      },
+    }, ctx.env, session.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: {
+        community_id: string
+        pending_namespace_verification_session_id: string | null
+      }
+    }
+    expect(communityCreateBody.community.pending_namespace_verification_session_id).toBeNull()
+
+    const namespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
+      family: "hns",
+      root_label: "PendingAttachRoot",
+    }, ctx.env, session.accessToken)
+    expect(namespaceSession.status).toBe(201)
+    const namespaceSessionBody = await json(namespaceSession) as {
+      namespace_verification_session_id: string
+    }
+
+    const pendingUpdate = await Promise.resolve(app.request(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}/pending-namespace-session`,
+      {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${session.accessToken}`,
+        },
+        body: JSON.stringify({
+          namespace_verification_session_id: namespaceSessionBody.namespace_verification_session_id,
+        }),
+      },
+      ctx.env,
+    ))
+    expect(pendingUpdate.status).toBe(200)
+    const updatedCommunity = await json(pendingUpdate) as {
+      pending_namespace_verification_session_id: string | null
+    }
+    expect(updatedCommunity.pending_namespace_verification_session_id).toBe(
+      namespaceSessionBody.namespace_verification_session_id,
+    )
+
+    const fetchedCommunity = await app.request(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}`,
+      {
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(fetchedCommunity.status).toBe(200)
+    const fetchedBody = await json(fetchedCommunity) as {
+      pending_namespace_verification_session_id: string | null
+    }
+    expect(fetchedBody.pending_namespace_verification_session_id).toBe(
+      namespaceSessionBody.namespace_verification_session_id,
+    )
+  })
+
   test("community create, job fetch, post create, and post read work through the full route stack", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
@@ -600,6 +776,711 @@ describe("community routes", () => {
       const registryJobBody = await json(registryJob) as { status: string; error_code: string | null }
       expect(registryJobBody.status).toBe("failed")
       expect(registryJobBody.error_code).toBe("registry_publisher_timeout")
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("community create provisions through the private operator when configured", async () => {
+    const operatorBaseUrl = "https://operator.test"
+    const operatorToken = "operator-secret"
+    const wrapKey = "11".repeat(32)
+    const originalFetch = globalThis.fetch
+    let provisionBody: Record<string, unknown> | null = null
+
+    globalThis.fetch = (async (input, init) => {
+      const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
+      if (requestUrl.startsWith(`${operatorBaseUrl}/internal/v0/community-provisioning/provision`)) {
+        const authHeader = init?.headers instanceof Headers
+          ? init.headers.get("authorization")
+          : Array.isArray(init?.headers)
+            ? init.headers.find(([key]) => key.toLowerCase() === "authorization")?.[1]
+            : init?.headers && "authorization" in init.headers
+              ? String((init.headers as Record<string, unknown>).authorization)
+              : null
+        expect(authHeader).toBe(`Bearer ${operatorToken}`)
+        provisionBody = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : null
+
+        return new Response(JSON.stringify({
+          community_id: "cmt_operator_test",
+          job_id: "job_operator_runtime",
+          binding_id: "cdb_operator_runtime",
+          credential_id: "cdc_operator_runtime",
+          organization_slug: "pirate-org",
+          group_name: "club-cmt-operator-test",
+          group_id: "grp_operator_test",
+          database_name: "main-cmt-operator-test",
+          database_id: "db_operator_test",
+          database_url: "libsql://main-cmt-operator-test-pirate-org.iad.turso.io",
+          location: "iad",
+          token_name: "worker-cmt_operator_test-v1",
+          plaintext_token: "db-token-operator-test",
+          issued_at: "2026-04-15T18:00:00.000Z",
+          expires_at: null,
+          rotation_number: 1,
+        }), {
+          headers: { "content-type": "application/json" },
+        })
+      }
+
+      if (requestUrl.includes(".turso.io")) {
+        return new Response("remote db unavailable in test", { status: 503 })
+      }
+
+      return originalFetch(input as never, init)
+    }) as typeof globalThis.fetch
+
+    try {
+      const ctx = await createRouteTestContext({
+        LOCAL_COMMUNITY_DB_ROOT: "",
+        COMMUNITY_PROVISION_OPERATOR_BASE_URL: operatorBaseUrl,
+        COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN: operatorToken,
+        COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION: "iad",
+        COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS: "2000",
+        TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
+        TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "7",
+      })
+      cleanup = ctx.cleanup
+
+      const session = await exchangeJwt(ctx.env, "community-operator-user")
+      const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, session.accessToken)
+
+      const response = await requestJson("http://pirate.test/communities", {
+        display_name: "Operator Club",
+        namespace: {
+          namespace_verification_id: namespaceVerificationId,
+        },
+      }, ctx.env, session.accessToken)
+
+      expect(response.status).toBe(202)
+      const body = await json(response) as {
+        community: {
+          community_id: string
+          namespace_verification_id: string | null
+          provisioning_state: string
+        }
+        job: {
+          job_id: string
+          status: string
+        }
+      }
+
+      expect(body.community.provisioning_state).toBe("active")
+      expect(body.community.namespace_verification_id).toBe(namespaceVerificationId)
+      expect(body.job.status).toBe("succeeded")
+      if (!provisionBody) {
+        throw new Error("operator provision request was not captured")
+      }
+      const operatorRequest = provisionBody
+      expect(operatorRequest["community_id"]).toBe(body.community.community_id)
+      expect(operatorRequest["group_location"]).toBe("iad")
+      expect((operatorRequest["bootstrap_payload"] as Record<string, unknown> | null)?.["namespace_label"]).toBe("piratecommunityroot")
+
+      const bindingRows = await ctx.client.execute({
+        sql: `
+          SELECT community_database_binding_id, organization_slug, group_name, database_name, database_url, location, status
+          FROM community_database_bindings
+          WHERE community_id = ?1
+            AND binding_role = 'primary'
+          LIMIT 1
+        `,
+        args: [body.community.community_id],
+      })
+      expect(bindingRows.rows[0]?.organization_slug).toBe("pirate-org")
+      expect(bindingRows.rows[0]?.group_name).toBe("club-cmt-operator-test")
+      expect(bindingRows.rows[0]?.database_name).toBe("main-cmt-operator-test")
+      expect(bindingRows.rows[0]?.database_url).toBe("libsql://main-cmt-operator-test-pirate-org.iad.turso.io")
+      expect(bindingRows.rows[0]?.location).toBe("iad")
+      expect(bindingRows.rows[0]?.status).toBe("active")
+
+      const bindingId = String(bindingRows.rows[0]?.community_database_binding_id ?? "")
+      const credentialRows = await ctx.client.execute({
+        sql: `
+          SELECT token_name, encrypted_token, encryption_key_version, status
+          FROM community_db_credentials
+          WHERE community_database_binding_id = ?1
+          LIMIT 1
+        `,
+        args: [bindingId],
+      })
+      expect(credentialRows.rows[0]?.token_name).toBe("worker-cmt_operator_test-v1")
+      expect(credentialRows.rows[0]?.status).toBe("active")
+      expect(
+        decryptCommunityDbCredential({
+          encryptedToken: String(credentialRows.rows[0]?.encrypted_token ?? ""),
+          encryptionKeyVersion: Number(credentialRows.rows[0]?.encryption_key_version ?? 0),
+          wrapKey,
+        }),
+      ).toBe("db-token-operator-test")
+
+      const communityGet = await app.request(
+        `http://pirate.test/communities/${body.community.community_id}`,
+        {
+          headers: {
+            authorization: `Bearer ${session.accessToken}`,
+          },
+        },
+        ctx.env,
+      )
+      expect(communityGet.status).toBe(200)
+      const communityGetBody = await json(communityGet) as { namespace_verification_id: string | null }
+      expect(communityGetBody.namespace_verification_id).toBe(namespaceVerificationId)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("community create falls back to a synthetic cdc_* id when operator omits credential_id", async () => {
+    const operatorBaseUrl = "https://operator.test"
+    const operatorToken = "operator-secret"
+    const wrapKey = "11".repeat(32)
+    const originalFetch = globalThis.fetch
+
+    globalThis.fetch = (async (input, init) => {
+      const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
+      if (requestUrl.startsWith(`${operatorBaseUrl}/internal/v0/community-provisioning/provision`)) {
+        return new Response(JSON.stringify({
+          community_id: "cmt_operator_no_cred",
+          job_id: "job_operator_no_cred",
+          binding_id: "cdb_operator_no_cred",
+          credential_id: "",
+          organization_slug: "pirate-org",
+          group_name: "club-cmt-no-cred",
+          group_id: "grp_no_cred",
+          database_name: "main-cmt-no-cred",
+          database_id: "db_no_cred",
+          database_url: "libsql://main-cmt-no-cred-pirate-org.iad.turso.io",
+          location: "iad",
+          token_name: "worker-cmt_no_cred-v1",
+          plaintext_token: "db-token-no-cred",
+          issued_at: "2026-04-15T18:00:00.000Z",
+          expires_at: null,
+          rotation_number: 1,
+        }), {
+          headers: { "content-type": "application/json" },
+        })
+      }
+
+      if (requestUrl.includes(".turso.io")) {
+        return new Response("remote db unavailable in test", { status: 503 })
+      }
+
+      return originalFetch(input as never, init)
+    }) as typeof globalThis.fetch
+
+    try {
+      const ctx = await createRouteTestContext({
+        LOCAL_COMMUNITY_DB_ROOT: "",
+        COMMUNITY_PROVISION_OPERATOR_BASE_URL: operatorBaseUrl,
+        COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN: operatorToken,
+        COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION: "iad",
+        COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS: "2000",
+        TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
+        TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "7",
+      })
+      cleanup = ctx.cleanup
+
+      const session = await exchangeJwt(ctx.env, "community-fallback-cred-user")
+      const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, session.accessToken)
+
+      const response = await requestJson("http://pirate.test/communities", {
+        display_name: "Fallback Cred Club",
+        namespace: {
+          namespace_verification_id: namespaceVerificationId,
+        },
+      }, ctx.env, session.accessToken)
+
+      expect(response.status).toBe(202)
+      const body = await json(response) as {
+        community: {
+          community_id: string
+          provisioning_state: string
+        }
+        job: {
+          job_id: string
+          status: string
+        }
+      }
+
+      expect(body.community.provisioning_state).toBe("active")
+      expect(body.job.status).toBe("succeeded")
+
+      const bindingRows = await ctx.client.execute({
+        sql: `
+          SELECT community_database_binding_id
+          FROM community_database_bindings
+          WHERE community_id = ?1
+            AND binding_role = 'primary'
+          LIMIT 1
+        `,
+        args: [body.community.community_id],
+      })
+      const bindingId = String(bindingRows.rows[0]?.community_database_binding_id ?? "")
+      const credentialRows = await ctx.client.execute({
+        sql: `
+          SELECT community_db_credential_id, status
+          FROM community_db_credentials
+          WHERE community_database_binding_id = ?1
+          LIMIT 1
+        `,
+        args: [bindingId],
+      })
+      expect(credentialRows.rows.length).toBe(1)
+      expect(String(credentialRows.rows[0]?.community_db_credential_id ?? "")).toMatch(/^cdc_/)
+      expect(credentialRows.rows[0]?.status).toBe("active")
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("community create finalizes a local namespaced community after a provisioning-state crash without creating a new job", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "community-local-finalize-user")
+    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, session.accessToken)
+
+    const firstResponse = await requestJson("http://pirate.test/communities", {
+      display_name: "Local Finalize Club",
+      namespace: {
+        namespace_verification_id: namespaceVerificationId,
+      },
+    }, ctx.env, session.accessToken)
+
+    expect(firstResponse.status).toBe(202)
+    const firstBody = await json(firstResponse) as {
+      community: {
+        community_id: string
+        provisioning_state: string
+      }
+      job: {
+        job_id: string
+        status: string
+      }
+    }
+    expect(firstBody.community.provisioning_state).toBe("active")
+    expect(firstBody.job.status).toBe("succeeded")
+
+    const bindingRows = await ctx.client.execute({
+      sql: `
+        SELECT community_database_binding_id
+        FROM community_database_bindings
+        WHERE community_id = ?1
+          AND binding_role = 'primary'
+        LIMIT 1
+      `,
+      args: [firstBody.community.community_id],
+    })
+    const bindingId = String(bindingRows.rows[0]?.community_database_binding_id ?? "")
+    const credentialRows = await ctx.client.execute({
+      sql: `
+        SELECT COUNT(*) AS count
+        FROM community_db_credentials
+        WHERE community_database_binding_id = ?1
+      `,
+      args: [bindingId],
+    })
+    expect(Number(credentialRows.rows[0]?.count ?? 0)).toBe(0)
+
+    await ctx.client.execute({
+      sql: `
+        UPDATE communities
+        SET provisioning_state = 'provisioning',
+            updated_at = ?2
+        WHERE community_id = ?1
+      `,
+      args: [firstBody.community.community_id, new Date(Date.now() - 60_000).toISOString()],
+    })
+
+    const secondResponse = await requestJson("http://pirate.test/communities", {
+      display_name: "Local Finalize Club",
+      namespace: {
+        namespace_verification_id: namespaceVerificationId,
+      },
+    }, ctx.env, session.accessToken)
+
+    expect(secondResponse.status).toBe(202)
+    const secondBody = await json(secondResponse) as {
+      community: {
+        community_id: string
+        provisioning_state: string
+      }
+      job: {
+        job_id: string
+        status: string
+      }
+    }
+    expect(secondBody.community.community_id).toBe(firstBody.community.community_id)
+    expect(secondBody.community.provisioning_state).toBe("active")
+    expect(secondBody.job.job_id).toBe(firstBody.job.job_id)
+    expect(secondBody.job.status).toBe("succeeded")
+  })
+
+  test("community create finalizes a stuck community that has real binding and credential but provisioning not active", async () => {
+    const operatorBaseUrl = "https://operator.test"
+    const operatorToken = "operator-secret"
+    const wrapKey = "11".repeat(32)
+    const originalFetch = globalThis.fetch
+    let operatorCallCount = 0
+
+    globalThis.fetch = (async (input, init) => {
+      const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
+      if (requestUrl.startsWith(`${operatorBaseUrl}/internal/v0/community-provisioning/provision`)) {
+        operatorCallCount += 1
+        return new Response(JSON.stringify({
+          community_id: "cmt_finalize_test",
+          job_id: "job_finalize_test",
+          binding_id: "cdb_finalize_test",
+          credential_id: "cdc_finalize_test",
+          organization_slug: "pirate-org",
+          group_name: "club-cmt-finalize-test",
+          group_id: "grp_finalize_test",
+          database_name: "main-cmt-finalize-test",
+          database_id: "db_finalize_test",
+          database_url: "libsql://main-cmt-finalize-test-pirate-org.iad.turso.io",
+          location: "iad",
+          token_name: "worker-cmt_finalize_test-v1",
+          plaintext_token: "db-token-finalize-test",
+          issued_at: "2026-04-15T18:00:00.000Z",
+          expires_at: null,
+          rotation_number: 1,
+        }), {
+          headers: { "content-type": "application/json" },
+        })
+      }
+
+      if (requestUrl.includes(".turso.io")) {
+        return new Response("remote db unavailable in test", { status: 503 })
+      }
+
+      return originalFetch(input as never, init)
+    }) as typeof globalThis.fetch
+
+    try {
+      const ctx = await createRouteTestContext({
+        LOCAL_COMMUNITY_DB_ROOT: "",
+        COMMUNITY_PROVISION_OPERATOR_BASE_URL: operatorBaseUrl,
+        COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN: operatorToken,
+        COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION: "iad",
+        COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS: "2000",
+        TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
+        TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "7",
+      })
+      cleanup = ctx.cleanup
+
+      const session = await exchangeJwt(ctx.env, "community-finalize-user")
+      const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, session.accessToken)
+
+      const firstResponse = await requestJson("http://pirate.test/communities", {
+        display_name: "Finalize Club",
+        namespace: {
+          namespace_verification_id: namespaceVerificationId,
+        },
+      }, ctx.env, session.accessToken)
+
+      expect(firstResponse.status).toBe(202)
+      const firstBody = await json(firstResponse) as {
+        community: {
+          community_id: string
+          provisioning_state: string
+        }
+        job: {
+          job_id: string
+          status: string
+        }
+      }
+      expect(firstBody.community.provisioning_state).toBe("active")
+
+      await ctx.client.execute({
+        sql: `
+          UPDATE communities
+          SET provisioning_state = 'provisioning',
+              updated_at = ?2
+          WHERE community_id = ?1
+        `,
+        args: [firstBody.community.community_id, new Date(Date.now() - 60_000).toISOString()],
+      })
+
+      const secondResponse = await requestJson("http://pirate.test/communities", {
+        display_name: "Finalize Club",
+        namespace: {
+          namespace_verification_id: namespaceVerificationId,
+        },
+      }, ctx.env, session.accessToken)
+
+      expect(secondResponse.status).toBe(202)
+      const secondBody = await json(secondResponse) as {
+        community: {
+          community_id: string
+          provisioning_state: string
+        }
+        job: {
+          status: string
+        }
+      }
+      expect(secondBody.community.provisioning_state).toBe("active")
+      expect(secondBody.job.status).toBe("succeeded")
+      expect(operatorCallCount).toBe(1)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("community create returns publication_error when finalize-after-crash hits a publisher timeout", async () => {
+    const publisherToken = "publisher-test-token"
+    const publisherBaseUrl = "http://publisher.test"
+    const originalFetch = globalThis.fetch
+
+    globalThis.fetch = (async (input, init) => {
+      const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
+      if (!requestUrl.startsWith(publisherBaseUrl)) {
+        return originalFetch(input as never, init)
+      }
+
+      const url = new URL(requestUrl)
+      const authorization = init?.headers instanceof Headers
+        ? init.headers.get("authorization")
+        : Array.isArray(init?.headers)
+          ? init?.headers.find(([key]) => key.toLowerCase() === "authorization")?.[1]
+          : init?.headers && "authorization" in init.headers
+            ? String((init.headers as Record<string, unknown>).authorization)
+            : null
+
+      if (authorization !== `Bearer ${publisherToken}`) {
+        return new Response(JSON.stringify({ error_code: "publisher_unauthorized" }), {
+          status: 401,
+          headers: { "content-type": "application/json" },
+        })
+      }
+
+      if (url.pathname === "/internal/v0/create-community-attempt") {
+        return new Response(JSON.stringify({
+          ok: true,
+          registry_attempt_id: "rga_finalize_timeout_test",
+          actor_primary_wallet_snapshot: null,
+          actor_governance_address_snapshot: null,
+          result_ref: "publisher://attempt/rga_finalize_timeout_test",
+        }), {
+          headers: { "content-type": "application/json" },
+        })
+      }
+
+      if (url.pathname === "/internal/v0/publish-community-create") {
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(resolve, 150)
+          const signal = init?.signal
+          if (signal) {
+            signal.addEventListener("abort", () => {
+              clearTimeout(timer)
+              const error = new Error("aborted")
+              error.name = "AbortError"
+              reject(error)
+            }, { once: true })
+          }
+        })
+        return new Response(JSON.stringify({
+          ok: true,
+          status: "published",
+          result_ref: "tableland://community/cmt_finalize_timeout_test",
+          registry_published_at: new Date().toISOString(),
+        }), {
+          headers: { "content-type": "application/json" },
+        })
+      }
+
+      return new Response("not found", { status: 404 })
+    }) as typeof globalThis.fetch
+
+    try {
+      const ctx = await createRouteTestContext()
+      cleanup = ctx.cleanup
+
+      const session = await exchangeJwt(ctx.env, "community-finalize-timeout-user")
+      const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, session.accessToken)
+
+      const firstResponse = await requestJson("http://pirate.test/communities", {
+        display_name: "Finalize Timeout Club",
+        namespace: {
+          namespace_verification_id: namespaceVerificationId,
+        },
+      }, ctx.env, session.accessToken)
+
+      expect(firstResponse.status).toBe(202)
+      const firstBody = await json(firstResponse) as {
+        community: {
+          community_id: string
+          provisioning_state: string
+        }
+        job: {
+          job_id: string
+          status: string
+        }
+      }
+      expect(firstBody.community.provisioning_state).toBe("active")
+      expect(firstBody.job.status).toBe("succeeded")
+
+      await ctx.client.execute({
+        sql: `
+          UPDATE communities
+          SET provisioning_state = 'provisioning',
+              updated_at = ?2
+          WHERE community_id = ?1
+        `,
+        args: [firstBody.community.community_id, new Date(Date.now() - 60_000).toISOString()],
+      })
+
+      ctx.env.REGISTRY_PUBLISHER_URL = publisherBaseUrl
+      ctx.env.REGISTRY_PUBLISHER_AUTH_TOKEN = publisherToken
+      ctx.env.REGISTRY_PUBLISHER_TIMEOUT_MS = "25"
+
+      const secondResponse = await requestJson("http://pirate.test/communities", {
+        display_name: "Finalize Timeout Club",
+        namespace: {
+          namespace_verification_id: namespaceVerificationId,
+        },
+      }, ctx.env, session.accessToken)
+
+      expect(secondResponse.status).toBe(202)
+      const secondBody = await json(secondResponse) as {
+        community: {
+          community_id: string
+          provisioning_state: string
+          registry_publication_state: string
+          registry_publication_job_id: string | null
+          registry_error_code: string | null
+        }
+        job: {
+          job_id: string
+          status: string
+        }
+      }
+      expect(secondBody.community.community_id).toBe(firstBody.community.community_id)
+      expect(secondBody.community.provisioning_state).toBe("active")
+      expect(secondBody.community.registry_publication_state).toBe("publication_error")
+      expect(secondBody.community.registry_error_code).toBe("registry_publisher_timeout")
+      expect(secondBody.job.job_id).toBe(firstBody.job.job_id)
+      expect(secondBody.job.status).toBe("succeeded")
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("community create returns in-progress state for a recently running job without re-provisioning", async () => {
+    const operatorBaseUrl = "https://operator.test"
+    const operatorToken = "operator-secret"
+    const wrapKey = "11".repeat(32)
+    const originalFetch = globalThis.fetch
+    let operatorCallCount = 0
+
+    globalThis.fetch = (async (input, init) => {
+      const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
+      if (requestUrl.startsWith(`${operatorBaseUrl}/internal/v0/community-provisioning/provision`)) {
+        operatorCallCount += 1
+        return new Response(JSON.stringify({
+          community_id: "cmt_recent_job_test",
+          job_id: "job_recent_job_test",
+          binding_id: "cdb_recent_job_test",
+          credential_id: "cdc_recent_job_test",
+          organization_slug: "pirate-org",
+          group_name: "club-cmt-recent-job-test",
+          group_id: "grp_recent_job_test",
+          database_name: "main-cmt-recent-job-test",
+          database_id: "db_recent_job_test",
+          database_url: "libsql://main-cmt-recent-job-test-pirate-org.iad.turso.io",
+          location: "iad",
+          token_name: "worker-cmt_recent_job_test-v1",
+          plaintext_token: "db-token-recent-job-test",
+          issued_at: "2026-04-15T18:00:00.000Z",
+          expires_at: null,
+          rotation_number: 1,
+        }), {
+          headers: { "content-type": "application/json" },
+        })
+      }
+
+      if (requestUrl.includes(".turso.io")) {
+        return new Response("remote db unavailable in test", { status: 503 })
+      }
+
+      return originalFetch(input as never, init)
+    }) as typeof globalThis.fetch
+
+    try {
+      const ctx = await createRouteTestContext({
+        LOCAL_COMMUNITY_DB_ROOT: "",
+        COMMUNITY_PROVISION_OPERATOR_BASE_URL: operatorBaseUrl,
+        COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN: operatorToken,
+        COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION: "iad",
+        COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS: "2000",
+        TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
+        TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "7",
+      })
+      cleanup = ctx.cleanup
+
+      const session = await exchangeJwt(ctx.env, "community-recent-job-user")
+      const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, session.accessToken)
+
+      const firstResponse = await requestJson("http://pirate.test/communities", {
+        display_name: "Recent Job Club",
+        namespace: {
+          namespace_verification_id: namespaceVerificationId,
+        },
+      }, ctx.env, session.accessToken)
+
+      expect(firstResponse.status).toBe(202)
+      const firstBody = await json(firstResponse) as {
+        community: {
+          community_id: string
+          provisioning_state: string
+        }
+        job: {
+          job_id: string
+          status: string
+        }
+      }
+      expect(firstBody.community.provisioning_state).toBe("active")
+
+      await ctx.client.execute({
+        sql: `
+          UPDATE communities
+          SET provisioning_state = 'provisioning',
+              updated_at = ?2
+          WHERE community_id = ?1
+        `,
+        args: [firstBody.community.community_id, new Date().toISOString()],
+      })
+
+      await ctx.client.execute({
+        sql: `
+          UPDATE jobs
+          SET status = 'running',
+              updated_at = ?2
+          WHERE job_id = ?1
+        `,
+        args: [firstBody.job.job_id, new Date().toISOString()],
+      })
+
+      const secondResponse = await requestJson("http://pirate.test/communities", {
+        display_name: "Recent Job Club",
+        namespace: {
+          namespace_verification_id: namespaceVerificationId,
+        },
+      }, ctx.env, session.accessToken)
+
+      expect(secondResponse.status).toBe(202)
+      const secondBody = await json(secondResponse) as {
+        community: {
+          community_id: string
+          provisioning_state: string
+        }
+        job: {
+          job_id: string
+          status: string
+        }
+      }
+      expect(secondBody.community.provisioning_state).toBe("provisioning")
+      expect(secondBody.job.status).toBe("running")
+      expect(operatorCallCount).toBe(1)
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -1897,5 +2778,78 @@ describe("community routes", () => {
     const allowedBody = await json(allowedJoin) as { community_id: string; status: string }
     expect(allowedBody.community_id).toBe(communityCreateBody.community.community_id)
     expect(allowedBody.status).toBe("joined")
+  })
+
+  test("preview returns membership_mode 'request' for request-mode community", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "request-preview-creator")
+    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Request Mode Preview Club",
+      namespace: {
+        namespace_verification_id: namespaceVerificationId,
+      },
+      membership_mode: "request",
+    }, ctx.env, creator.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: { community_id: string }
+    }
+
+    const preview = await app.request(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}/preview`,
+      {
+        headers: { authorization: `Bearer ${creator.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(preview.status).toBe(200)
+    const previewBody = await json(preview) as {
+      membership_mode: string
+    }
+    expect(previewBody.membership_mode).toBe("request")
+  })
+
+  test("join-eligibility returns joinable with joinable_now false for request-mode community", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "request-elig-creator")
+    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Request Mode Eligibility Club",
+      namespace: {
+        namespace_verification_id: namespaceVerificationId,
+      },
+      membership_mode: "request",
+    }, ctx.env, creator.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: { community_id: string }
+    }
+
+    const joiner = await exchangeJwt(ctx.env, "request-elig-joiner")
+    await completeUniqueHumanVerification(ctx.env, joiner.accessToken)
+
+    const eligibility = await app.request(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}/join-eligibility`,
+      {
+        headers: { authorization: `Bearer ${joiner.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(eligibility.status).toBe(200)
+    const eligibilityBody = await json(eligibility) as {
+      status: string
+      membership_mode: string
+      joinable_now: boolean
+    }
+    expect(eligibilityBody.membership_mode).toBe("request")
+    expect(eligibilityBody.status).toBe("requestable")
+    expect(eligibilityBody.joinable_now).toBe(false)
   })
 })

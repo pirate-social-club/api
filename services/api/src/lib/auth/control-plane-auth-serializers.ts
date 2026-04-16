@@ -173,7 +173,6 @@ export function serializeVerificationSession(input: {
     launch: input.launch ?? undefined,
     nationality: null,
     age_at_verification: null,
-    attestation_ids: input.attestationRows.map((row) => row.user_attestation_id),
     attestation_id: input.attestationRows.length > 0 ? input.attestationRows[0].user_attestation_id : null,
     proof_hash: input.row.result_ref,
     evidence_ref: input.row.result_ref,

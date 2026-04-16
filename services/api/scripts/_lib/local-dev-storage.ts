@@ -3,7 +3,11 @@ import { createHash } from "node:crypto"
 import { mkdir, readFile, readdir } from "node:fs/promises"
 import { dirname, isAbsolute, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
-import { splitSqlStatements, toSqliteCompatibleStatement } from "../../src/lib/sqlite-migration"
+import { splitSqlStatements, toSqliteCompatibleStatement } from "../../shared/sql-migration"
+
+const SQLITE_COMPATIBLE_CONTROL_PLANE_MIGRATIONS = new Set([
+  "0034_control_plane_communities_pending_namespace.sql",
+])
 
 export type LocalDevStorage = {
   repoRoot: string
@@ -105,6 +109,19 @@ async function hasTable(client: Client, tableName: string): Promise<boolean> {
   return result.rows.length > 0
 }
 
+async function hasColumn(client: Client, tableName: string, columnName: string): Promise<boolean> {
+  const result = await client.execute(`PRAGMA table_info(${tableName})`)
+
+  for (const row of result.rows) {
+    const name = row.name
+    if (typeof name === "string" && name === columnName) {
+      return true
+    }
+  }
+
+  return false
+}
+
 async function ensureSchemaMigrationsTable(client: Client): Promise<void> {
   await client.execute(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -163,8 +180,7 @@ export async function applyLocalControlPlaneMigrations(storage: LocalDevStorage)
       .filter((entry) => entry.endsWith(".sql"))
       .sort()
     const baselineEntry = entries.find((entry) => entry.startsWith("0000_") && entry.includes("baseline"))
-    const entriesToApply = baselineEntry ? [baselineEntry] : entries
-    const baselineMigrationName = entriesToApply[0]
+    const baselineMigrationName = baselineEntry ?? entries[0]
     if (!baselineMigrationName) {
       throw new Error("no control-plane baseline migration found")
     }
@@ -175,23 +191,48 @@ export async function applyLocalControlPlaneMigrations(storage: LocalDevStorage)
     await ensureSchemaMigrationsTable(client)
 
     const appliedChecksum = await getAppliedChecksum(client, baselineMigrationName)
+    const hasBootstrappedSchema = await hasTable(client, "auth_provider_links")
     if (appliedChecksum) {
-      if (appliedChecksum !== baselineChecksum) {
+      if (appliedChecksum !== baselineChecksum && !hasBootstrappedSchema) {
         throw new Error(`baseline checksum mismatch for ${baselineMigrationName}`)
       }
-      return
-    }
-
-    if (await hasTable(client, "auth_provider_links")) {
+    } else if (hasBootstrappedSchema) {
       await recordAppliedMigration(client, baselineMigrationName, baselineChecksum)
-      return
+    } else {
+      await applySqlFile(client, baselineMigrationPath)
+      await recordAppliedMigration(client, baselineMigrationName, baselineChecksum)
     }
 
-    for (const entry of entriesToApply) {
-      await applySqlFile(client, join(migrationsDir, entry))
-    }
+    for (const entry of entries) {
+      if (entry === baselineMigrationName || !SQLITE_COMPATIBLE_CONTROL_PLANE_MIGRATIONS.has(entry)) {
+        continue
+      }
 
-    await recordAppliedMigration(client, baselineMigrationName, baselineChecksum)
+      const migrationPath = join(migrationsDir, entry)
+      const migrationSql = await readFile(migrationPath, "utf8")
+      const migrationChecksum = createHash("sha256").update(migrationSql).digest("hex")
+      const appliedMigrationChecksum = await getAppliedChecksum(client, entry)
+      if (appliedMigrationChecksum) {
+        if (appliedMigrationChecksum !== migrationChecksum) {
+          throw new Error(`checksum mismatch for ${entry}`)
+        }
+        continue
+      }
+
+      // The rolling baseline can already contain columns introduced by a later
+      // SQLite-compatible migration. Record it as applied instead of replaying
+      // the ALTER TABLE and failing on fresh local databases.
+      if (
+        entry === "0034_control_plane_communities_pending_namespace.sql"
+        && await hasColumn(client, "communities", "pending_namespace_verification_session_id")
+      ) {
+        await recordAppliedMigration(client, entry, migrationChecksum)
+        continue
+      }
+
+      await applySqlFile(client, migrationPath)
+      await recordAppliedMigration(client, entry, migrationChecksum)
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     throw new Error(`control-plane migration bootstrap failed:\n${message}`)

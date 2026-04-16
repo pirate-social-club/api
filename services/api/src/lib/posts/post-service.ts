@@ -19,7 +19,6 @@ import {
 } from "../communities/community-membership-store"
 import { analysisBlocked, eligibilityFailed, notFoundError, verificationRequired } from "../errors"
 import { nowIso } from "../helpers"
-import { verifyPirateAccessToken } from "../auth/pirate-session-token"
 import type { CreatePostRequest, Env, LocalizedPostResponse, Post } from "../../types"
 
 type CommunityFeedResponse = {
@@ -74,13 +73,12 @@ async function requireVerifiedHuman(userRepository: UserRepository, userId: stri
 
 export async function createPost(input: {
   env: Env
-  bearerToken: string
+  userId: string
   communityId: string
   body: CreatePostRequest
   userRepository: UserRepository
   communityRepository: CommunityRepository
 }): Promise<Post> {
-  const session = await verifyPirateAccessToken({ env: input.env, token: input.bearerToken })
   const community = await input.communityRepository.getCommunityById(input.communityId)
   if (!community || community.provisioning_state !== "active" || community.status !== "active") {
     throw eligibilityFailed("Community is not available for posting")
@@ -88,10 +86,10 @@ export async function createPost(input: {
 
   assertPostCreateRequest(input.body, input.communityId)
 
-  const db = await openCommunityDb(input.communityRepository, input.communityId)
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
-    await requireMemberAccess(db.client, input.communityId, session.userId)
-    await requireVerifiedHuman(input.userRepository, session.userId)
+    await requireMemberAccess(db.client, input.communityId, input.userId)
+    await requireVerifiedHuman(input.userRepository, input.userId)
     const stubAnalysis = resolveStubAnalysisOutcome(input.body)
     if (stubAnalysis.analysis_state === "blocked") {
       throw analysisBlocked("Content analysis blocked publication")
@@ -102,7 +100,7 @@ export async function createPost(input: {
       ? await findPostByIdempotencyKey({
           client: db.client,
           communityId: input.communityId,
-          authorUserId: session.userId,
+          authorUserId: input.userId,
           idempotencyKey,
         })
       : null
@@ -114,7 +112,7 @@ export async function createPost(input: {
     const post = await insertPost({
       client: db.client,
       communityId: input.communityId,
-      authorUserId: session.userId,
+      authorUserId: input.userId,
       body: input.body,
       createdAt,
     })
@@ -128,7 +126,7 @@ export async function createPost(input: {
       status: post.status,
       sourceCreatedAt: post.created_at,
       projectedPayloadJson: JSON.stringify(post),
-      actorUserId: session.userId,
+      actorUserId: input.userId,
       createdAt,
     })
 
@@ -140,22 +138,21 @@ export async function createPost(input: {
 
 export async function castPostVote(input: {
   env: Env
-  bearerToken: string
+  userId: string
   postId: string
   value: -1 | 1
   userRepository: UserRepository
   communityRepository: CommunityRepository
 }): Promise<{ post_id: string; value: -1 | 1 }> {
-  const session = await verifyPirateAccessToken({ env: input.env, token: input.bearerToken })
   const projection = await input.communityRepository.getCommunityPostProjectionByPostId(input.postId)
   if (!projection) {
     throw notFoundError("Post not found")
   }
 
-  const db = await openCommunityDb(input.communityRepository, projection.community_id)
+  const db = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
   try {
-    await requireMemberAccess(db.client, projection.community_id, session.userId)
-    await requireVerifiedHuman(input.userRepository, session.userId)
+    await requireMemberAccess(db.client, projection.community_id, input.userId)
+    await requireVerifiedHuman(input.userRepository, input.userId)
     const post = await getPostById(db.client, input.postId)
     if (!post) {
       throw notFoundError("Post not found")
@@ -165,7 +162,7 @@ export async function castPostVote(input: {
       client: db.client,
       postId: input.postId,
       communityId: projection.community_id,
-      userId: session.userId,
+      userId: input.userId,
       value: input.value,
       now: nowIso(),
     })
@@ -176,25 +173,24 @@ export async function castPostVote(input: {
 
 export async function getPost(input: {
   env: Env
-  bearerToken: string
+  userId: string
   postId: string
   locale?: string | null
   communityRepository: CommunityRepository
 }): Promise<LocalizedPostResponse> {
-  const session = await verifyPirateAccessToken({ env: input.env, token: input.bearerToken })
   const projection = await input.communityRepository.getCommunityPostProjectionByPostId(input.postId)
   if (!projection) {
     throw notFoundError("Post not found")
   }
 
-  const db = await openCommunityDb(input.communityRepository, projection.community_id)
+  const db = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
   try {
-    const membership = await requireMemberAccess(db.client, projection.community_id, session.userId)
+    const membership = await requireMemberAccess(db.client, projection.community_id, input.userId)
     const post = await getPostById(db.client, input.postId)
     if (!post) {
       throw notFoundError("Post not found")
     }
-    if (post.status !== "published" && !canReadNonPublishedPost(post, membership, session.userId)) {
+    if (post.status !== "published" && !canReadNonPublishedPost(post, membership, input.userId)) {
       throw notFoundError("Post not found")
     }
     return toLocalizedPostResponse(post, input.locale ?? undefined)
@@ -205,7 +201,7 @@ export async function getPost(input: {
 
 export async function listCommunityPosts(input: {
   env: Env
-  bearerToken: string
+  userId: string
   communityId: string
   locale?: string | null
   limit?: string | null
@@ -213,19 +209,18 @@ export async function listCommunityPosts(input: {
   flairId?: string | null
   communityRepository: CommunityRepository
 }): Promise<CommunityFeedResponse> {
-  const session = await verifyPirateAccessToken({ env: input.env, token: input.bearerToken })
   const community = await input.communityRepository.getCommunityById(input.communityId)
   if (!community || community.provisioning_state !== "active" || community.status !== "active") {
     throw notFoundError("Community not found")
   }
 
-  const db = await openCommunityDb(input.communityRepository, input.communityId)
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
-    await requireMemberAccess(db.client, input.communityId, session.userId)
+    await requireMemberAccess(db.client, input.communityId, input.userId)
     const feed = await listPublishedLocalizedPosts({
       client: db.client,
       communityId: input.communityId,
-      viewerUserId: session.userId,
+      viewerUserId: input.userId,
       limit: parseFeedLimit(input.limit),
       locale: input.locale ?? undefined,
       flairId: input.flairId ?? null,

@@ -73,6 +73,14 @@ async function main(): Promise<void> {
 
   if (localDevStorage.controlPlaneDbPath) {
     await applyLocalControlPlaneMigrations(localDevStorage)
+  } else {
+    console.warn(
+      [
+        "warning: dev:local is using a remote control-plane database;",
+        "local control-plane migrations will not run.",
+        "Leave TURSO_CONTROL_PLANE_DATABASE_URL blank to use services/api/.local/control-plane.db.",
+      ].join(" "),
+    )
   }
 
   const env = {

@@ -171,7 +171,7 @@ export type VeryWidgetLaunch = {
   context: string;
   type_id: string;
   query: Record<string, unknown>;
-  verify_url: string;
+  verify_url?: string;
 };
 
 export type RequestedVerificationCapability = "unique_human" | "age_over_18" | "nationality" | "gender";
@@ -207,6 +207,8 @@ export type NamespaceVerificationSession = {
   normalized_root_label?: string | null;
   status: "draft" | "inspecting" | "dns_setup_required" | "challenge_required" | "challenge_pending" | "verifying" | "verified" | "failed" | "expired" | "disputed";
   challenge_kind?: "dns_txt" | "schnorr_sign" | null;
+  challenge_host?: string | null;
+  challenge_txt_value?: string | null;
   challenge_payload?: (Record<string, unknown>) | null;
   challenge_expires_at?: string | null;
   assertions?: NamespaceVerificationAssertions | null;
@@ -253,8 +255,15 @@ export type Community = {
   display_name: string;
   description?: string | null;
   namespace_verification_id?: string | null;
+  route_slug?: string | null;
+  pending_namespace_verification_session_id?: string | null;
   status: "draft" | "active" | "frozen" | "archived" | "deleted";
   provisioning_state: "requested" | "provisioning" | "active" | "rotation_required" | "error";
+  registry_publication_state?: "not_started" | "pending_create" | "pending_seed" | "published" | "stale" | "publication_error" | null;
+  registry_publication_job_id?: string | null;
+  registry_attempt_id?: string | null;
+  registry_published_at?: string | null;
+  registry_error_code?: string | null;
   artist_identity_id?: string | null;
   community_agent_user_id?: string | null;
   membership_mode: "open" | "request" | "gated";
@@ -623,6 +632,7 @@ export type CreatePostRequest = (((unknown & {
   identity_mode?: "public" | "anonymous";
   anonymous_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null;
   disclosed_qualifier_ids?: Array<string> | null;
+  flair_id?: string | null;
   parent_post_id?: string | null;
   label_id?: string | null;
   post_type: "text" | "image" | "video" | "link" | "song";
@@ -634,6 +644,7 @@ export type CreatePostRequest = (((unknown & {
   creator_relation?: PostCreatorRelation | null;
   promotion_disclosure?: PromotionDisclosureInput | null;
   translation_policy?: "none" | "machine_allowed" | "human_only" | "hybrid";
+  age_gate_policy?: "none" | "18_plus" | null;
   access_mode?: "public" | "locked" | null;
   asset_id?: string | null;
   song_artifact_bundle_id?: string | null;
@@ -711,6 +722,7 @@ export type Post = {
   agent_owner_handle_snapshot?: string | null;
   agent_ownership_provider_snapshot?: string | null;
   disclosed_qualifiers_json?: Array<DisclosedQualifierSnapshot> | null;
+  flair_id?: string | null;
   label_id?: string | null;
   post_type: "text" | "image" | "video" | "link" | "song";
   status: "draft" | "published" | "hidden" | "removed" | "deleted";
@@ -739,6 +751,7 @@ export type Post = {
 
 export type LocalizedPostResponse = {
   post: Post;
+  flair?: PostLabel | null;
   market_context?: MarketContextSummary | null;
   label?: PostLabel | null;
   upvote_count: number;
@@ -765,7 +778,7 @@ export type CommunityPreview = {
   community_id: string;
   display_name: string;
   description?: string | null;
-  membership_mode: "open" | "gated";
+  membership_mode: "open" | "request" | "gated";
   member_count?: number | null;
   membership_gate_summaries: Array<MembershipGateSummary>;
   viewer_membership_status?: "member" | "not_member" | "banned" | null;
@@ -774,9 +787,9 @@ export type CommunityPreview = {
 
 export type JoinEligibility = {
   community_id: string;
-  membership_mode: "open" | "gated";
+  membership_mode: "open" | "request" | "gated";
   joinable_now: boolean;
-  status: "joinable" | "verification_required" | "gate_failed" | "already_joined" | "banned";
+  status: "joinable" | "requestable" | "verification_required" | "gate_failed" | "already_joined" | "banned";
   membership_gate_summaries: Array<MembershipGateSummary>;
   missing_capabilities: Array<"unique_human" | "age_over_18" | "nationality" | "gender">;
   suggested_verification_provider?: "self" | "very" | null;
@@ -1095,13 +1108,28 @@ type CommunityVideoAuthenticityPolicySettings = {
 
 type CreateCentralizedCommunityRequest = (CreateCommunityRequestBase & {
   governance_mode: "centralized";
+  description?: string | null;
+  membership_mode?: "open" | "request" | "gated";
+  default_age_gate_policy?: "none" | "18_plus";
+  allow_anonymous_identity?: boolean;
+  anonymous_identity_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null;
+  gate_rules?: Array<{
+    scope: "membership" | "viewer" | "posting";
+    gate_family: "token_holding" | "identity_proof";
+    gate_type: "erc721_holding" | "erc1155_holding" | "erc20_balance" | "solana_nft_holding" | "unique_human" | "age_over_18" | "nationality" | "gender" | "sanctions_clear" | "wallet_score";
+    proof_requirements?: Array<ProofRequirement> | null;
+    chain_namespace?: string | null;
+    gate_config?: (Record<string, unknown>) | null;
+  }> | null;
+  donation_policy?: unknown | null;
+  community_bootstrap?: unknown | null;
 });
 
 type CreateCommunityRequestBase = {
   display_name: string;
-  namespace: {
+  namespace?: {
     namespace_verification_id: string;
-  };
+  } | null;
   handle_policy: {
     policy_template: "standard";
   };
@@ -1299,7 +1327,7 @@ type SanctionsClearCapabilityState = {
   verified_at?: string | null;
 };
 
-type SelfVerificationDisclosures = {
+export type SelfVerificationDisclosures = {
   issuing_state?: boolean | null;
   name?: boolean | null;
   passport_number?: boolean | null;
@@ -1312,7 +1340,7 @@ type SelfVerificationDisclosures = {
   minimum_age?: number | null;
 };
 
-type SelfVerificationLaunch = {
+export type SelfVerificationLaunch = {
   app_name: string;
   logo_base64?: string | null;
   header?: string | null;
@@ -1380,7 +1408,7 @@ type VerificationCapabilityState = {
 
 type VerifiedCapabilityState = {
   state: "unverified" | "verified" | "expired";
-  provider?: "self" | null;
+  provider?: "self" | "very" | null;
   proof_type?: "age_over_18" | "nationality" | "gender" | null;
   mechanism?: string | null;
   verified_at?: string | null;

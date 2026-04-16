@@ -1,4 +1,6 @@
 import type { Client, Transaction } from "@libsql/client"
+import type { DbExecutor } from "../db-helpers"
+export type { DbExecutor } from "../db-helpers"
 import {
   numberOrNull,
   requiredNumber,
@@ -17,8 +19,6 @@ import type {
   SessionExchangeResponse,
   User,
 } from "../../types"
-
-export type DbExecutor = Pick<Client, "execute"> | Pick<Transaction, "execute">
 
 export type UserRow = {
   user_id: string
@@ -192,6 +192,7 @@ export type CommunityRow = {
   transfer_state: "none" | "pending" | "transferred" | "federated"
   route_slug: string | null
   namespace_verification_id: string | null
+  pending_namespace_verification_session_id: string | null
   primary_database_binding_id: string | null
   created_at: string
   updated_at: string
@@ -224,6 +225,22 @@ export type CommunityDatabaseBindingRow = {
   location: string | null
   status: "active" | "inactive" | "pending_transfer" | "superseded" | "error"
   transferred_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type CommunityDbCredentialRow = {
+  community_db_credential_id: string
+  community_database_binding_id: string
+  credential_kind: "database_token" | "group_token"
+  token_name: string
+  encrypted_token: string
+  encryption_key_version: number
+  token_scope: "database" | "group"
+  status: "active" | "superseded" | "invalidated"
+  issued_at: string
+  invalidated_at: string | null
+  expires_at: string | null
   created_at: string
   updated_at: string
 }
@@ -475,6 +492,7 @@ export function toCommunityRow(row: unknown): CommunityRow {
     transfer_state: requiredString(row, "transfer_state") as CommunityRow["transfer_state"],
     route_slug: stringOrNull(rowValue(row, "route_slug")),
     namespace_verification_id: stringOrNull(rowValue(row, "namespace_verification_id")),
+    pending_namespace_verification_session_id: stringOrNull(rowValue(row, "pending_namespace_verification_session_id")),
     primary_database_binding_id: stringOrNull(rowValue(row, "primary_database_binding_id")),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
@@ -511,6 +529,24 @@ export function toCommunityDatabaseBindingRow(row: unknown): CommunityDatabaseBi
     location: stringOrNull(rowValue(row, "location")),
     status: requiredString(row, "status") as CommunityDatabaseBindingRow["status"],
     transferred_at: stringOrNull(rowValue(row, "transferred_at")),
+    created_at: requiredString(row, "created_at"),
+    updated_at: requiredString(row, "updated_at"),
+  }
+}
+
+export function toCommunityDbCredentialRow(row: unknown): CommunityDbCredentialRow {
+  return {
+    community_db_credential_id: requiredString(row, "community_db_credential_id"),
+    community_database_binding_id: requiredString(row, "community_database_binding_id"),
+    credential_kind: requiredString(row, "credential_kind") as CommunityDbCredentialRow["credential_kind"],
+    token_name: requiredString(row, "token_name"),
+    encrypted_token: requiredString(row, "encrypted_token"),
+    encryption_key_version: requiredNumber(row, "encryption_key_version"),
+    token_scope: requiredString(row, "token_scope") as CommunityDbCredentialRow["token_scope"],
+    status: requiredString(row, "status") as CommunityDbCredentialRow["status"],
+    issued_at: requiredString(row, "issued_at"),
+    invalidated_at: stringOrNull(rowValue(row, "invalidated_at")),
+    expires_at: stringOrNull(rowValue(row, "expires_at")),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
   }

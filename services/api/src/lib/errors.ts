@@ -1,3 +1,5 @@
+import type { GateFailureDetails } from "../types"
+
 export class HttpError extends Error {
   readonly status: number
   readonly code: string
@@ -33,8 +35,8 @@ export function gateFailed(message: string): HttpError {
   return new HttpError(403, "gate_failed", message)
 }
 
-export function gateFailedWithDetails(message: string, details: Record<string, unknown>): HttpError {
-  return new HttpError(403, "gate_failed", message, false, details)
+export function gateFailedWithDetails(message: string, details: GateFailureDetails): HttpError {
+  return new HttpError(403, "gate_failed", message, false, details as Record<string, unknown>)
 }
 
 export function conflictError(message: string): HttpError {

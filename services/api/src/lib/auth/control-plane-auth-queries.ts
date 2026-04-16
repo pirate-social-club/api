@@ -1,4 +1,5 @@
-import type { Client, InStatement, Transaction } from "@libsql/client"
+import type { InStatement } from "@libsql/client"
+import { executeFirst, type DbExecutor } from "../db-helpers"
 import { internalError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import {
@@ -10,11 +11,11 @@ import {
 } from "./control-plane-auth-serializers"
 import {
   type ExternalReputationSnapshotRow,
+  type CommunityDbCredentialRow,
   type CommunityDatabaseBindingRow,
   type CommunityRegistryAttemptRow,
   type CommunityPostProjectionRow,
   type CommunityRow,
-  type DbExecutor,
   type GlobalHandleRow,
   type JobRow,
   type NamespaceVerificationRow,
@@ -27,6 +28,7 @@ import {
   type WalletAttachmentRow,
   toExternalReputationSnapshotRow,
   toCommunityDatabaseBindingRow,
+  toCommunityDbCredentialRow,
   toCommunityRegistryAttemptRow,
   toCommunityPostProjectionRow,
   toCommunityRow,
@@ -47,7 +49,7 @@ type AuthProviderLinkRow = {
 }
 
 export function requireControlPlaneDbUrl(env: Env): string {
-  const url = String(env.TURSO_CONTROL_PLANE_DATABASE_URL || "").trim()
+  const url = String(env.TURSO_CONTROL_PLANE_DATABASE_URL || env.CONTROL_PLANE_DATABASE_URL || "").trim()
   if (!url) {
     throw internalError("TURSO_CONTROL_PLANE_DATABASE_URL is not configured")
   }
@@ -76,8 +78,7 @@ function isMissingTableError(error: unknown, tableName: string): boolean {
 }
 
 export async function firstRow(executor: DbExecutor, stmt: InStatement): Promise<unknown | null> {
-  const result = await executor.execute(stmt)
-  return result.rows[0] ?? null
+  return executeFirst(executor, stmt)
 }
 
 async function getLatestVerificationSessionRow(executor: DbExecutor, userId: string): Promise<VerificationSessionRow | null> {
@@ -229,7 +230,8 @@ export async function getCommunityRowById(executor: DbExecutor, communityId: str
       SELECT community_id, creator_user_id, display_name, status, provisioning_state,
              registry_publication_state, registry_attempt_id, registry_published_at,
              registry_publication_job_id, registry_error_code, transfer_state,
-             route_slug, namespace_verification_id, primary_database_binding_id, created_at, updated_at
+             route_slug, namespace_verification_id, pending_namespace_verification_session_id,
+             primary_database_binding_id, created_at, updated_at
       FROM communities
       WHERE community_id = ?1
       LIMIT 1
@@ -249,7 +251,8 @@ export async function getCommunityRowByNamespaceVerificationId(
       SELECT community_id, creator_user_id, display_name, status, provisioning_state,
              registry_publication_state, registry_attempt_id, registry_published_at,
              registry_publication_job_id, registry_error_code, transfer_state,
-             route_slug, namespace_verification_id, primary_database_binding_id, created_at, updated_at
+             route_slug, namespace_verification_id, pending_namespace_verification_session_id,
+             primary_database_binding_id, created_at, updated_at
       FROM communities
       WHERE namespace_verification_id = ?1
       LIMIT 1
@@ -296,6 +299,27 @@ export async function getPrimaryCommunityDatabaseBindingRow(
   })
 
   return row ? toCommunityDatabaseBindingRow(row) : null
+}
+
+export async function getActiveCommunityDbCredentialRow(
+  executor: DbExecutor,
+  communityDatabaseBindingId: string,
+): Promise<CommunityDbCredentialRow | null> {
+  const row = await firstRow(executor, {
+    sql: `
+      SELECT community_db_credential_id, community_database_binding_id, credential_kind, token_name,
+             encrypted_token, encryption_key_version, token_scope, status, issued_at, invalidated_at,
+             expires_at, created_at, updated_at
+      FROM community_db_credentials
+      WHERE community_database_binding_id = ?1
+        AND status = 'active'
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+    args: [communityDatabaseBindingId],
+  })
+
+  return row ? toCommunityDbCredentialRow(row) : null
 }
 
 export async function getJobRowById(executor: DbExecutor, jobId: string): Promise<JobRow | null> {

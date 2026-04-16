@@ -9,7 +9,7 @@ function pad4(value: number): string {
 const ADJECTIVES = ["swift", "solar", "quiet", "brisk", "sable"]
 const NOUNS = ["fox", "harbor", "signal", "anchor", "comet"]
 
-export function formatDisplayLabel(labelNormalized: string): string {
+function formatDisplayLabel(labelNormalized: string): string {
   return `${labelNormalized}.pirate`
 }
 

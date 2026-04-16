@@ -1,6 +1,7 @@
-import { createClient } from "@libsql/client"
+import { globalSingleton } from "../db-helpers"
 import { internalError } from "../errors"
 import { envFlag, isLocalEnvironment } from "../helpers"
+import { getControlPlaneClient } from "../runtime-deps"
 import type {
   Env,
   GlobalHandle,
@@ -63,43 +64,23 @@ type ControlPlaneRepositoryBundle = {
   redditOnboarding: ControlPlaneRedditOnboardingRepository
 }
 
-const globalScope = globalThis as typeof globalThis & {
-  __pirateControlPlaneRepositoryBundle?: ControlPlaneRepositoryBundle
-  __pirateControlPlaneClientKey?: string
-  __pirateMemoryAuthRepository?: MemoryAuthRepository
-}
-
 function getControlPlaneRepositoryBundle(env: Env): ControlPlaneRepositoryBundle {
   const url = requireControlPlaneDbUrl(env)
   const authToken = String(env.TURSO_CONTROL_PLANE_AUTH_TOKEN || "").trim()
-  const cacheKey = `${url}|${authToken}`
+  const cacheKey = `bundle:${url}|${authToken}`
 
-  if (
-    globalScope.__pirateControlPlaneRepositoryBundle
-    && globalScope.__pirateControlPlaneClientKey === cacheKey
-  ) {
-    return globalScope.__pirateControlPlaneRepositoryBundle
-  }
-
-  const client = createClient({
-    url,
-    authToken: authToken || undefined,
+  return globalSingleton("controlPlaneRepositoryBundle", cacheKey, () => {
+    const client = getControlPlaneClient(env)
+    return {
+      identity: new ControlPlaneIdentityRepository(client),
+      profile: new ControlPlaneProfileRepository(client),
+      redditOnboarding: new ControlPlaneRedditOnboardingRepository(client),
+    }
   })
-  const bundle = {
-    identity: new ControlPlaneIdentityRepository(client),
-    profile: new ControlPlaneProfileRepository(client),
-    redditOnboarding: new ControlPlaneRedditOnboardingRepository(client),
-  }
-  globalScope.__pirateControlPlaneRepositoryBundle = bundle
-  globalScope.__pirateControlPlaneClientKey = cacheKey
-  return bundle
 }
 
 function getMemoryAuthRepository(): MemoryAuthRepository {
-  if (!globalScope.__pirateMemoryAuthRepository) {
-    globalScope.__pirateMemoryAuthRepository = new MemoryAuthRepository()
-  }
-  return globalScope.__pirateMemoryAuthRepository
+  return globalSingleton("memoryAuthRepository", "singleton", () => new MemoryAuthRepository())
 }
 
 function usingMemoryStore(env: Env): boolean {

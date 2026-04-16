@@ -1,5 +1,6 @@
-import type { Client, InValue } from "@libsql/client"
+import type { Client } from "@libsql/client"
 import { badRequestError, internalError } from "../errors"
+import { executeFirst } from "../db-helpers"
 import { makeId } from "../helpers"
 import { resolveStubAnalysisOutcome } from "./post-analysis"
 import { numberOrNull, requiredNumber, requiredString, rowValue, stringOrNull } from "../sql-row"
@@ -126,32 +127,29 @@ function serializePost(row: PostRow): Post {
   }
 }
 
-async function firstRow(client: Client, sql: string, args: InValue[]): Promise<unknown | null> {
-  const result = await client.execute({ sql, args })
-  return result.rows[0] ?? null
-}
-
 export async function findPostByIdempotencyKey(input: {
   client: Client
   communityId: string
   authorUserId: string
   idempotencyKey: string
 }): Promise<Post | null> {
-  const row = await firstRow(
+  const row = await executeFirst(
     input.client,
-    `
-      SELECT post_id, community_id, author_user_id, identity_mode, anonymous_scope, anonymous_label,
-             disclosed_qualifiers_json, flair_id, post_type, status, title, body, caption, link_url,
-             media_refs_json, source_language, translation_policy, asset_id, parent_post_id, song_mode,
-             rights_basis, analysis_state, analysis_result_ref, content_safety_state, age_gate_policy,
-             idempotency_key, created_at, updated_at
-      FROM posts
-      WHERE community_id = ?1
-        AND author_user_id = ?2
-        AND idempotency_key = ?3
-      LIMIT 1
-    `,
-    [input.communityId, input.authorUserId, input.idempotencyKey],
+    {
+      sql: `
+        SELECT post_id, community_id, author_user_id, identity_mode, anonymous_scope, anonymous_label,
+               disclosed_qualifiers_json, flair_id, post_type, status, title, body, caption, link_url,
+               media_refs_json, source_language, translation_policy, asset_id, parent_post_id, song_mode,
+               rights_basis, analysis_state, analysis_result_ref, content_safety_state, age_gate_policy,
+               idempotency_key, created_at, updated_at
+        FROM posts
+        WHERE community_id = ?1
+          AND author_user_id = ?2
+          AND idempotency_key = ?3
+        LIMIT 1
+      `,
+      args: [input.communityId, input.authorUserId, input.idempotencyKey],
+    },
   )
 
   return row ? serializePost(toPostRow(row)) : null
@@ -236,19 +234,21 @@ export async function insertPost(input: {
 }
 
 export async function getPostById(client: Client, postId: string): Promise<Post | null> {
-  const row = await firstRow(
+  const row = await executeFirst(
     client,
-    `
-      SELECT post_id, community_id, author_user_id, identity_mode, anonymous_scope, anonymous_label,
-             disclosed_qualifiers_json, flair_id, post_type, status, title, body, caption, link_url,
-             media_refs_json, source_language, translation_policy, asset_id, parent_post_id, song_mode,
-             rights_basis, analysis_state, analysis_result_ref, content_safety_state, age_gate_policy,
-             idempotency_key, created_at, updated_at
-      FROM posts
-      WHERE post_id = ?1
-      LIMIT 1
-    `,
-    [postId],
+    {
+      sql: `
+        SELECT post_id, community_id, author_user_id, identity_mode, anonymous_scope, anonymous_label,
+               disclosed_qualifiers_json, flair_id, post_type, status, title, body, caption, link_url,
+               media_refs_json, source_language, translation_policy, asset_id, parent_post_id, song_mode,
+               rights_basis, analysis_state, analysis_result_ref, content_safety_state, age_gate_policy,
+               idempotency_key, created_at, updated_at
+        FROM posts
+        WHERE post_id = ?1
+        LIMIT 1
+      `,
+      args: [postId],
+    },
   )
 
   return row ? serializePost(toPostRow(row)) : null

@@ -1,11 +1,10 @@
-import { createClient } from "@libsql/client"
 import type { Client, InStatement, InValue } from "@libsql/client"
 import { badRequestError, eligibilityFailed, internalError, providerUnavailable, verificationRequired } from "../errors"
+import { executeFirst, globalSingleton } from "../db-helpers"
 import { makeId } from "../helpers"
+import { getControlPlaneCacheKey, getControlPlaneClient } from "../runtime-deps"
 import {
-  firstRow,
   getUserRow,
-  requireControlPlaneDbUrl,
 } from "../auth/control-plane-auth-queries"
 import {
   parseVerificationCapabilities,
@@ -61,11 +60,19 @@ function isSpacesVerifierConfigured(env: Env): boolean {
   return String(env.SPACES_VERIFIER_BASE_URL || "").trim().length > 0
 }
 
-function boolToDb(value: boolean | null | undefined): number | null {
+export function boolToDb(value: boolean | null | undefined): number | null {
   if (value == null) {
     return null
   }
   return value ? 1 : 0
+}
+
+function getHnsChallengeTtlHours(env: Env): number {
+  const rawTtlHours = Number(env.HNS_CHALLENGE_TTL_HOURS)
+  if (Number.isFinite(rawTtlHours) && rawTtlHours >= 1 && rawTtlHours <= 168) {
+    return rawTtlHours
+  }
+  return 24
 }
 
 function isSessionExpired(expiresAt: string | null): boolean {
@@ -110,7 +117,7 @@ type SpacesAcceptedSnapshot = {
   operationClass: NamespaceVerificationOperationClass | null
 }
 
-function deriveHnsInspectionSnapshot(inspection: HnsInspectResult): HnsSessionAssertionSnapshot {
+export function deriveHnsInspectionSnapshot(inspection: HnsInspectResult): HnsSessionAssertionSnapshot {
   const rootExists = boolToDb(inspection.root_exists) ?? (inspection.zone_exists === true ? 1 : null)
   const rootControlVerified = boolToDb(inspection.root_control_verified)
   const expiryHorizonSufficient = boolToDb(inspection.expiry_horizon_sufficient)
@@ -131,7 +138,7 @@ function deriveHnsInspectionSnapshot(inspection: HnsInspectResult): HnsSessionAs
   }
 }
 
-function deriveAcceptedHnsSnapshot(
+export function deriveAcceptedHnsSnapshot(
   row: NamespaceVerificationSessionRow,
   verification: HnsVerifyTxtResult | null,
 ): HnsSessionAssertionSnapshot {
@@ -170,7 +177,7 @@ function deriveAcceptedHnsSnapshot(
   }
 }
 
-function deriveSpacesAcceptedSnapshot(row: NamespaceVerificationSessionRow): SpacesAcceptedSnapshot {
+export function deriveSpacesAcceptedSnapshot(row: NamespaceVerificationSessionRow): SpacesAcceptedSnapshot {
   const rootControlVerified = row.root_control_verified === 1 ? 1 : 0
   const expiryHorizonSufficient = row.expiry_horizon_sufficient ?? null
   const routingEnabled = row.routing_enabled ?? null
@@ -195,7 +202,7 @@ function deriveSpacesAcceptedSnapshot(row: NamespaceVerificationSessionRow): Spa
   }
 }
 
-function parseStoredSpacesChallenge(
+export function parseStoredSpacesChallenge(
   challengePayloadJson: string | null,
 ): SpacesChallengePayload {
   if (!challengePayloadJson) {
@@ -336,7 +343,7 @@ async function getVerificationSessionRowForUser(
   verificationSessionId: string,
   userId: string,
 ): Promise<VerificationSessionRow | null> {
-  const row = await firstRow(client, {
+  const row = await executeFirst(client, {
     sql: `
       SELECT verification_session_id, user_id, provider, requested_capabilities_json,
              status, upstream_session_ref, result_ref, failure_code,
@@ -377,7 +384,7 @@ async function getNamespaceVerificationSessionRowForUser(
   namespaceVerificationSessionId: string,
   userId: string,
 ): Promise<NamespaceVerificationSessionRow | null> {
-  const row = await firstRow(client, {
+  const row = await executeFirst(client, {
     sql: `
       SELECT
         nvs.namespace_verification_session_id,
@@ -489,7 +496,7 @@ async function getNamespaceVerificationRowForUser(
   namespaceVerificationId: string,
   userId: string,
 ): Promise<NamespaceVerificationRow | null> {
-  const row = await firstRow(client, {
+  const row = await executeFirst(client, {
     sql: `
       SELECT
         nv.namespace_verification_id,
@@ -1090,7 +1097,7 @@ export async function startNamespaceVerificationSession(
       ],
     })
   } else {
-    const challengeExpiresAt = new Date(now.getTime() + 60 * 60 * 1000).toISOString()
+    const challengeExpiresAt = new Date(now.getTime() + getHnsChallengeTtlHours(env) * 60 * 60 * 1000).toISOString()
     const challengeHost = `_pirate.${normalizedRootLabel}`
     const challengeTxtValue = `pirate-verification=${sessionId}`
     let observationProvider = "local_stub"
@@ -1266,7 +1273,7 @@ export async function completeNamespaceVerificationSession(
       })
     } else {
       const challengeTxtValue = `pirate-verification=${makeId("nch")}`
-      const challengeExpiresAt = new Date(now.getTime() + 60 * 60 * 1000).toISOString()
+      const challengeExpiresAt = new Date(now.getTime() + getHnsChallengeTtlHours(env) * 60 * 60 * 1000).toISOString()
       const expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
       let observationProvider = row.observation_provider ?? "local_stub"
       let inspectionSnapshot: HnsSessionAssertionSnapshot = {
@@ -1576,19 +1583,25 @@ export async function completeNamespaceVerificationSession(
       verificationEvidence = verification as Record<string, unknown>
 
       if (verification.verified !== true) {
+        const challengeExpiresAtMs = row.challenge_expires_at ? Date.parse(row.challenge_expires_at) : Number.NaN
+        const challengeStillValid = Number.isFinite(challengeExpiresAtMs) && challengeExpiresAtMs > now.getTime()
+        const observedValues = verification.observed_values ?? []
+        const isPending = challengeStillValid && observedValues.length === 0
+
         await client.execute({
           sql: `
             UPDATE namespace_verification_sessions
-            SET status = 'failed',
-                observation_provider = ?2,
-                failure_reason = ?3,
-                updated_at = ?4
+            SET status = ?2,
+                observation_provider = ?3,
+                failure_reason = ?4,
+                updated_at = ?5
             WHERE namespace_verification_session_id = ?1
           `,
           args: [
             input.namespaceVerificationSessionId,
+            isPending ? "challenge_pending" : "failed",
             observationProvider,
-            verification.failure_reason ?? "challenge_mismatch",
+            isPending ? null : (verification.failure_reason ?? "challenge_mismatch"),
             updatedAt,
           ],
         })
@@ -1838,17 +1851,10 @@ export class ControlPlaneVerificationRepository implements VerificationRepositor
   }
 }
 
-const globalScope = globalThis as typeof globalThis & {
-  __pirateControlPlaneVerificationRepository?: ControlPlaneVerificationRepository
-  __pirateControlPlaneVerificationRepositoryKey?: string
-}
-
 export function getControlPlaneVerificationRepository(env: Env): ControlPlaneVerificationRepository {
-  const url = requireControlPlaneDbUrl(env)
-  const authToken = String(env.TURSO_CONTROL_PLANE_AUTH_TOKEN || "").trim()
+  const client = getControlPlaneClient(env)
   const cacheKey = [
-    url,
-    authToken,
+    getControlPlaneCacheKey(env),
     String(env.VERY_API_URL || ""),
     String(env.VERY_API_KEY || ""),
     String(env.VERY_APP_ID || ""),
@@ -1857,21 +1863,7 @@ export function getControlPlaneVerificationRepository(env: Env): ControlPlaneVer
     String(env.ENVIRONMENT || ""),
   ].join("|")
 
-  if (
-    globalScope.__pirateControlPlaneVerificationRepository
-    && globalScope.__pirateControlPlaneVerificationRepositoryKey === cacheKey
-  ) {
-    return globalScope.__pirateControlPlaneVerificationRepository
-  }
-
-  const repository = new ControlPlaneVerificationRepository(
-    createClient({
-      url,
-      authToken: authToken || undefined,
-    }),
-    env,
+  return globalSingleton("controlPlaneVerificationRepository", cacheKey, () =>
+    new ControlPlaneVerificationRepository(client, env),
   )
-  globalScope.__pirateControlPlaneVerificationRepository = repository
-  globalScope.__pirateControlPlaneVerificationRepositoryKey = cacheKey
-  return repository
 }

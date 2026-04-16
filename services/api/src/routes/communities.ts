@@ -1,171 +1,162 @@
 import { Hono } from "hono"
-import { badRequestError, errorResponse } from "../lib/errors"
+import { badRequestError } from "../lib/errors"
 import { getUserRepository } from "../lib/auth/repositories"
-import { createCommunity, getCommunity, getCommunityPreview, getJoinEligibility, joinCommunity, type CreateCommunityRequestBody } from "../lib/communities/community-service"
-import { getControlPlaneCommunityRepository } from "../lib/communities/control-plane-community-repository"
+import {
+  attachNamespaceToCommunity,
+  createCommunity,
+  getCommunity,
+  getCommunityPreview,
+  getJoinEligibility,
+  joinCommunity,
+  setPendingNamespaceVerificationSession,
+  type CreateCommunityRequestBody,
+} from "../lib/communities/community-service"
+import { getCommunityRepository } from "../lib/communities/control-plane-community-repository"
 import { getControlPlaneVerificationRepository } from "../lib/verification/control-plane-verification-repository"
-import { requireBearerToken } from "../lib/helpers"
+import { authenticate, type AuthenticatedEnv } from "../lib/auth-middleware"
 import { createPost, listCommunityPosts } from "../lib/posts/post-service"
 import type { CreatePostRequest } from "../types"
-import type { Env } from "../types"
 
-const communities = new Hono<{ Bindings: Env }>()
+const communities = new Hono<AuthenticatedEnv>()
+
+communities.use("*", authenticate)
 
 communities.post("/", async (c) => {
-  try {
-    const token = requireBearerToken(c.req.header("authorization"))
-    const body = await c.req.json<CreateCommunityRequestBody>().catch(() => null)
-    if (!body) {
-      throw badRequestError("Invalid community create payload")
-    }
-
-    const result = await createCommunity({
-      env: c.env,
-      bearerToken: token,
-      body,
-      userRepository: getUserRepository(c.env),
-      verificationRepository: getControlPlaneVerificationRepository(c.env),
-      communityRepository: getControlPlaneCommunityRepository(c.env),
-    })
-    return c.json(result, 202)
-  } catch (error) {
-    const response = errorResponse(error)
-    return new Response(JSON.stringify(response.body), {
-      status: response.status,
-      headers: { "content-type": "application/json" },
-    })
+  const actor = c.get("actor")
+  const body = await c.req.json<CreateCommunityRequestBody>().catch(() => null)
+  if (!body) {
+    throw badRequestError("Invalid community create payload")
   }
+
+  const result = await createCommunity({
+    env: c.env,
+    userId: actor.userId,
+    body,
+    userRepository: getUserRepository(c.env),
+    verificationRepository: getControlPlaneVerificationRepository(c.env),
+    communityRepository: getCommunityRepository(c.env),
+  })
+  return c.json(result, 202)
 })
 
 communities.get("/:communityId", async (c) => {
-  try {
-    const token = requireBearerToken(c.req.header("authorization"))
-    const repository = getControlPlaneCommunityRepository(c.env)
-    const result = await getCommunity({
-      env: c.env,
-      bearerToken: token,
-      communityId: c.req.param("communityId"),
-      repository,
-    })
-    return c.json(result, 200)
-  } catch (error) {
-    const response = errorResponse(error)
-    return new Response(JSON.stringify(response.body), {
-      status: response.status,
-      headers: { "content-type": "application/json" },
-    })
-  }
+  const actor = c.get("actor")
+  const repository = getCommunityRepository(c.env)
+  const result = await getCommunity({
+    env: c.env,
+    userId: actor.userId,
+    communityId: c.req.param("communityId"),
+    repository,
+  })
+  return c.json(result, 200)
 })
 
 communities.get("/:communityId/preview", async (c) => {
-  try {
-    const token = requireBearerToken(c.req.header("authorization"))
-    const result = await getCommunityPreview({
-      env: c.env,
-      bearerToken: token,
-      communityId: c.req.param("communityId"),
-      communityRepository: getControlPlaneCommunityRepository(c.env),
-    })
-    return c.json(result, 200)
-  } catch (error) {
-    const response = errorResponse(error)
-    return new Response(JSON.stringify(response.body), {
-      status: response.status,
-      headers: { "content-type": "application/json" },
-    })
-  }
+  const actor = c.get("actor")
+  const result = await getCommunityPreview({
+    env: c.env,
+    userId: actor.userId,
+    communityId: c.req.param("communityId"),
+    communityRepository: getCommunityRepository(c.env),
+  })
+  return c.json(result, 200)
 })
 
 communities.get("/:communityId/join-eligibility", async (c) => {
-  try {
-    const token = requireBearerToken(c.req.header("authorization"))
-    const result = await getJoinEligibility({
-      env: c.env,
-      bearerToken: token,
-      communityId: c.req.param("communityId"),
-      userRepository: getUserRepository(c.env),
-      communityRepository: getControlPlaneCommunityRepository(c.env),
-    })
-    return c.json(result, 200)
-  } catch (error) {
-    const response = errorResponse(error)
-    return new Response(JSON.stringify(response.body), {
-      status: response.status,
-      headers: { "content-type": "application/json" },
-    })
+  const actor = c.get("actor")
+  const result = await getJoinEligibility({
+    env: c.env,
+    userId: actor.userId,
+    communityId: c.req.param("communityId"),
+    userRepository: getUserRepository(c.env),
+    communityRepository: getCommunityRepository(c.env),
+  })
+  return c.json(result, 200)
+})
+
+communities.post("/:communityId/namespace", async (c) => {
+  const actor = c.get("actor")
+  const body = await c.req.json<{ namespace_verification_id?: string | null }>().catch(() => null)
+  const namespaceVerificationId = body?.namespace_verification_id?.trim()
+  if (!namespaceVerificationId) {
+    throw badRequestError("namespace_verification_id is required")
   }
+
+  const result = await attachNamespaceToCommunity({
+    env: c.env,
+    userId: actor.userId,
+    communityId: c.req.param("communityId"),
+    namespaceVerificationId,
+    userRepository: getUserRepository(c.env),
+    verificationRepository: getControlPlaneVerificationRepository(c.env),
+    communityRepository: getCommunityRepository(c.env),
+  })
+  return c.json(result, 200)
+})
+
+communities.put("/:communityId/pending-namespace-session", async (c) => {
+  const actor = c.get("actor")
+  const body = await c.req.json<{ namespace_verification_session_id?: string | null }>().catch(() => null)
+  const sessionId = typeof body?.namespace_verification_session_id === "string"
+    ? body.namespace_verification_session_id.trim() || null
+    : null
+
+  const result = await setPendingNamespaceVerificationSession({
+    env: c.env,
+    userId: actor.userId,
+    communityId: c.req.param("communityId"),
+    sessionId,
+    communityRepository: getCommunityRepository(c.env),
+  })
+  return c.json(result, 200)
 })
 
 communities.post("/:communityId/join", async (c) => {
-  try {
-    const token = requireBearerToken(c.req.header("authorization"))
-    const result = await joinCommunity({
-      env: c.env,
-      bearerToken: token,
-      communityId: c.req.param("communityId"),
-      userRepository: getUserRepository(c.env),
-      communityRepository: getControlPlaneCommunityRepository(c.env),
-    })
-    return c.json(result, 200)
-  } catch (error) {
-    const response = errorResponse(error)
-    return new Response(JSON.stringify(response.body), {
-      status: response.status,
-      headers: { "content-type": "application/json" },
-    })
-  }
+  const actor = c.get("actor")
+  const result = await joinCommunity({
+    env: c.env,
+    userId: actor.userId,
+    communityId: c.req.param("communityId"),
+    userRepository: getUserRepository(c.env),
+    communityRepository: getCommunityRepository(c.env),
+  })
+  return c.json(result, 200)
 })
 
 communities.post("/:communityId/posts", async (c) => {
-  try {
-    const token = requireBearerToken(c.req.header("authorization"))
-    const body = await c.req.json<CreatePostRequest>().catch(() => null)
-    if (!body) {
-      throw badRequestError("Invalid post create payload")
-    }
-
-    const userRepository = getUserRepository(c.env)
-    const communityRepository = getControlPlaneCommunityRepository(c.env)
-    const result = await createPost({
-      env: c.env,
-      bearerToken: token,
-      communityId: c.req.param("communityId"),
-      body,
-      userRepository,
-      communityRepository,
-    })
-    return c.json(result, result.status === "published" ? 201 : 202)
-  } catch (error) {
-    const response = errorResponse(error)
-    return new Response(JSON.stringify(response.body), {
-      status: response.status,
-      headers: { "content-type": "application/json" },
-    })
+  const actor = c.get("actor")
+  const body = await c.req.json<CreatePostRequest>().catch(() => null)
+  if (!body) {
+    throw badRequestError("Invalid post create payload")
   }
+
+  const userRepository = getUserRepository(c.env)
+  const communityRepository = getCommunityRepository(c.env)
+  const result = await createPost({
+    env: c.env,
+    userId: actor.userId,
+    communityId: c.req.param("communityId"),
+    body,
+    userRepository,
+    communityRepository,
+  })
+  return c.json(result, result.status === "published" ? 201 : 202)
 })
 
 communities.get("/:communityId/posts", async (c) => {
-  try {
-    const token = requireBearerToken(c.req.header("authorization"))
-    const communityRepository = getControlPlaneCommunityRepository(c.env)
-    const result = await listCommunityPosts({
-      env: c.env,
-      bearerToken: token,
-      communityId: c.req.param("communityId"),
-      locale: c.req.query("locale") ?? null,
-      limit: c.req.query("limit") ?? null,
-      cursor: c.req.query("cursor") ?? null,
-      flairId: c.req.query("flair_id") ?? null,
-      communityRepository,
-    })
-    return c.json(result, 200)
-  } catch (error) {
-    const response = errorResponse(error)
-    return new Response(JSON.stringify(response.body), {
-      status: response.status,
-      headers: { "content-type": "application/json" },
-    })
-  }
+  const actor = c.get("actor")
+  const communityRepository = getCommunityRepository(c.env)
+  const result = await listCommunityPosts({
+    env: c.env,
+    userId: actor.userId,
+    communityId: c.req.param("communityId"),
+    locale: c.req.query("locale") ?? null,
+    limit: c.req.query("limit") ?? null,
+    cursor: c.req.query("cursor") ?? null,
+    flairId: c.req.query("flair_id") ?? null,
+    communityRepository,
+  })
+  return c.json(result, 200)
 })
 
 export default communities

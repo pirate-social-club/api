@@ -2,8 +2,11 @@ import { createClient } from "@libsql/client"
 import type { Client } from "@libsql/client"
 import type { CommunityRepository } from "./control-plane-community-repository"
 import { internalError, notFoundError } from "../errors"
+import { decryptCommunityDbCredential } from "./community-db-credential-crypto"
+import type { Env } from "../../types"
 
 export async function openCommunityDb(
+  env: Env,
   repo: CommunityRepository,
   communityId: string,
 ): Promise<{ client: Client; close: () => void; databaseUrl: string }> {
@@ -15,7 +18,19 @@ export async function openCommunityDb(
     throw internalError("Community database URL is missing")
   }
 
-  const client = createClient({ url: binding.database_url })
+  const activeCredential = await repo.getActiveCommunityDbCredential(binding.community_database_binding_id)
+  const authToken = activeCredential
+    ? decryptCommunityDbCredential({
+        encryptedToken: activeCredential.encrypted_token,
+        encryptionKeyVersion: activeCredential.encryption_key_version,
+        wrapKey: String(env.TURSO_COMMUNITY_DB_WRAP_KEY || ""),
+      })
+    : undefined
+
+  const client = createClient({
+    url: binding.database_url,
+    ...(authToken ? { authToken } : {}),
+  })
   return {
     client,
     databaseUrl: binding.database_url,

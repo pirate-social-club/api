@@ -111,12 +111,10 @@ describe("verification routes", () => {
     expect(completedVerification.status).toBe(200)
     const completedVerificationBody = await json(completedVerification) as {
       status: string
-      attestation_ids: string[]
+      attestation_id: string | null
     }
     expect(completedVerificationBody.status).toBe("verified")
-    expect(Array.isArray(completedVerificationBody.attestation_ids)).toBe(true)
-    expect(completedVerificationBody.attestation_ids.length > 0).toBe(true)
-    expect(typeof completedVerificationBody.attestation_ids[0]).toBe("string")
+    expect(typeof completedVerificationBody.attestation_id).toBe("string")
 
     const createdNamespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
       family: "hns",
@@ -234,11 +232,11 @@ describe("verification routes", () => {
       const completedBody = await json(completedVerification) as {
         status: string
         proof_hash: string | null
-        attestation_ids: string[]
+        attestation_id: string | null
       }
       expect(completedBody.status).toBe("verified")
       expect(typeof completedBody.proof_hash).toBe("string")
-      expect(completedBody.attestation_ids.length).toBe(1)
+      expect(typeof completedBody.attestation_id).toBe("string")
     })
   })
 
@@ -975,6 +973,7 @@ describe("verification routes", () => {
             verified: false,
             observation_provider: "powerdns_api",
             failure_reason: "challenge_mismatch",
+            observed_values: ["unexpected-value"],
           }), {
             status: 200,
             headers: { "content-type": "application/json" },
@@ -1122,6 +1121,113 @@ describe("verification routes", () => {
       expect(restartedBody.failure_reason).toBeNull()
       expect(restartedBody.challenge_txt_value !== createdBody.challenge_txt_value).toBe(true)
       expect(new Date(restartedBody.expires_at).getTime() > new Date(createdBody.expires_at).getTime()).toBe(true)
+    })
+  })
+
+  test("hns verification stays challenge_pending while TXT is still propagating and reuses the same challenge", async () => {
+    const ctx = await createRouteTestContext({
+      HNS_VERIFIER_BASE_URL: "http://hns-verifier.test",
+      HNS_CHALLENGE_TTL_HOURS: "24",
+    })
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-hns-pending-user")
+    await createSelfVerifiedSession(ctx.env, session.accessToken)
+
+    let verifyCount = 0
+    const originalFetch = globalThis.fetch
+    await withFetchMock(async (input, init) => {
+      const url = typeof input === "string" ? input : input.toString()
+      if (url.startsWith("http://hns-verifier.test")) {
+        if (url.includes("/inspect?")) {
+          return new Response(JSON.stringify({
+            root_exists: true,
+            expiry_horizon_sufficient: true,
+            routing_enabled: true,
+            pirate_dns_authority_verified: false,
+            control_class: "single_holder_root",
+            operation_class: "owner_managed_namespace",
+            observation_provider: "powerdns_api",
+          }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          })
+        }
+
+        if (url.endsWith("/publish-txt")) {
+          return new Response(JSON.stringify({
+            observation_provider: "powerdns_api",
+          }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          })
+        }
+
+        if (url.endsWith("/verify-txt")) {
+          verifyCount += 1
+          return new Response(JSON.stringify(
+            verifyCount === 1
+              ? {
+                  verified: false,
+                  observed_values: [],
+                  observation_provider: "powerdns_api",
+                }
+              : {
+                  verified: true,
+                  observation_provider: "powerdns_api",
+                },
+          ), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          })
+        }
+      }
+
+      return originalFetch(input, init)
+    }, async () => {
+      const createdNamespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
+        family: "hns",
+        root_label: "PiratePendingRoot",
+      }, ctx.env, session.accessToken)
+      expect(createdNamespaceSession.status).toBe(201)
+      const createdBody = await json(createdNamespaceSession) as {
+        namespace_verification_session_id: string
+        challenge_txt_value: string | null
+      }
+
+      const pendingCompletion = await requestJson(
+        `http://pirate.test/namespace-verification-sessions/${createdBody.namespace_verification_session_id}/complete`,
+        {},
+        ctx.env,
+        session.accessToken,
+      )
+      expect(pendingCompletion.status).toBe(200)
+      const pendingBody = await json(pendingCompletion) as {
+        status: string
+        namespace_verification_id: string | null
+        challenge_txt_value: string | null
+        failure_reason: string | null
+      }
+      expect(pendingBody.status).toBe("challenge_pending")
+      expect(pendingBody.namespace_verification_id).toBeNull()
+      expect(pendingBody.challenge_txt_value).toBe(createdBody.challenge_txt_value)
+      expect(pendingBody.failure_reason).toBeNull()
+
+      const verifiedCompletion = await requestJson(
+        `http://pirate.test/namespace-verification-sessions/${createdBody.namespace_verification_session_id}/complete`,
+        {},
+        ctx.env,
+        session.accessToken,
+      )
+      expect(verifiedCompletion.status).toBe(200)
+      const verifiedBody = await json(verifiedCompletion) as {
+        status: string
+        namespace_verification_id: string | null
+        challenge_txt_value: string | null
+      }
+      expect(verifiedBody.status).toBe("verified")
+      expect(typeof verifiedBody.namespace_verification_id).toBe("string")
+      expect(verifiedBody.challenge_txt_value).toBe(createdBody.challenge_txt_value)
     })
   })
 

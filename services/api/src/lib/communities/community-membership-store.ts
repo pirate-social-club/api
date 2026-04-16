@@ -1,4 +1,5 @@
-import type { Client, InValue } from "@libsql/client"
+import type { Client } from "@libsql/client"
+import { executeFirst } from "../db-helpers"
 import { makeId } from "../helpers"
 import { requiredString, rowValue, stringOrNull } from "../sql-row"
 import type { MembershipGateSummary, JoinEligibility, User } from "../../types"
@@ -30,39 +31,36 @@ type ProofRequirement = {
   config?: Record<string, unknown> | null
 }
 
-async function firstRow(client: Client, sql: string, args: InValue[]): Promise<unknown | null> {
-  const result = await client.execute({ sql, args })
-  return result.rows[0] ?? null
-}
-
 export async function getCommunityMembershipState(
   client: Client,
   communityId: string,
   userId: string,
 ): Promise<CommunityMembershipRow> {
-  const row = await firstRow(
+  const row = await executeFirst(
     client,
-    `
-      SELECT
-        (
-          SELECT status
-          FROM community_memberships
-          WHERE community_id = ?1
-            AND user_id = ?2
-          ORDER BY created_at DESC
-          LIMIT 1
-        ) AS membership_status,
-        (
-          SELECT status
-          FROM community_roles
-          WHERE community_id = ?1
-            AND user_id = ?2
-            AND role = 'owner'
-          ORDER BY created_at DESC
-          LIMIT 1
-        ) AS role_status
-    `,
-    [communityId, userId],
+    {
+      sql: `
+        SELECT
+          (
+            SELECT status
+            FROM community_memberships
+            WHERE community_id = ?1
+              AND user_id = ?2
+            ORDER BY created_at DESC
+            LIMIT 1
+          ) AS membership_status,
+          (
+            SELECT status
+            FROM community_roles
+            WHERE community_id = ?1
+              AND user_id = ?2
+              AND role = 'owner'
+            ORDER BY created_at DESC
+            LIMIT 1
+          ) AS role_status
+      `,
+      args: [communityId, userId],
+    },
   )
 
   return {
@@ -76,15 +74,17 @@ export function canAccessCommunity(state: CommunityMembershipRow): boolean {
 }
 
 export async function getCommunityJoinMode(client: Client, communityId: string): Promise<CommunityJoinModeRow["membership_mode"] | null> {
-  const row = await firstRow(
+  const row = await executeFirst(
     client,
-    `
-      SELECT membership_mode
-      FROM communities
-      WHERE community_id = ?1
-      LIMIT 1
-    `,
-    [communityId],
+    {
+      sql: `
+        SELECT membership_mode
+        FROM communities
+        WHERE community_id = ?1
+        LIMIT 1
+      `,
+      args: [communityId],
+    },
   )
 
   return row ? requiredString(row, "membership_mode") as CommunityJoinModeRow["membership_mode"] : null

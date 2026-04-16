@@ -164,4 +164,42 @@ describe("evaluateMembershipGateRules", () => {
     expect(satisfiesMembershipGateRules([makeNationalityRule("US")], user)).toBe(true)
     expect(satisfiesMembershipGateRules([makeNationalityRule("AR")], user)).toBe(false)
   })
+
+  test("returns nationality_excluded when user nationality is in excluded_values", () => {
+    const rule: CommunityGateRuleRow = {
+      gate_rule_id: "gr_excl",
+      scope: "membership",
+      gate_family: "identity_proof",
+      gate_type: "nationality",
+      proof_requirements_json: JSON.stringify([
+        { proof_type: "nationality", accepted_providers: ["self"], config: { excluded_values: ["AR", "IR"] } },
+      ]),
+      chain_namespace: null,
+      gate_config_json: null,
+      status: "active",
+    }
+    const user = makeUser({ nationality: { state: "verified", provider: "self", value: "AR" } })
+    const result = evaluateMembershipGateRules([rule], user)
+    expect(result.satisfied).toBe(false)
+    expect(result.mismatchReasons).toContain("nationality_excluded")
+  })
+
+  test("builds nationality summary with excluded_values", () => {
+    const rule: CommunityGateRuleRow = {
+      gate_rule_id: "gr_excl_sum",
+      scope: "membership",
+      gate_family: "identity_proof",
+      gate_type: "nationality",
+      proof_requirements_json: JSON.stringify([
+        { proof_type: "nationality", accepted_providers: ["self"], config: { required_value: "US", excluded_values: ["AR", "IR"] } },
+      ]),
+      chain_namespace: null,
+      gate_config_json: null,
+      status: "active",
+    }
+    const summary = buildMembershipGateSummary(rule)
+    expect(summary.gate_type).toBe("nationality")
+    expect(summary.required_value).toBe("US")
+    expect(summary.excluded_values).toEqual(["AR", "IR"])
+  })
 })

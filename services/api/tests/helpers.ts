@@ -5,9 +5,10 @@ import { mkdtemp, readdir, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Env } from "../src/types"
-import { splitSqlStatements, toSqliteCompatibleStatement } from "../src/lib/sqlite-migration"
 import { setSelfProviderForTests } from "../src/lib/verification/self-provider"
 import { setVeryProviderForTests } from "../src/lib/verification/very-provider"
+
+import { splitSqlStatements, toSqliteCompatibleStatement } from "../shared/sql-migration"
 
 const encoder = new TextEncoder()
 
@@ -20,21 +21,9 @@ export function resetRuntimeCaches(): void {
   setSelfProviderForTests(null)
   setVeryProviderForTests(null)
   const scope = globalThis as typeof globalThis & {
-    __pirateControlPlaneRepositoryBundle?: unknown
-    __pirateControlPlaneClientKey?: unknown
-    __pirateControlPlaneCommunityRepository?: unknown
-    __pirateControlPlaneCommunityRepositoryKey?: unknown
-    __pirateControlPlaneVerificationRepository?: unknown
-    __pirateControlPlaneVerificationRepositoryKey?: unknown
-    __pirateMemoryAuthRepository?: unknown
+    __pirateSingletons?: Map<string, unknown>
   }
-  delete scope.__pirateControlPlaneRepositoryBundle
-  delete scope.__pirateControlPlaneClientKey
-  delete scope.__pirateControlPlaneCommunityRepository
-  delete scope.__pirateControlPlaneCommunityRepositoryKey
-  delete scope.__pirateControlPlaneVerificationRepository
-  delete scope.__pirateControlPlaneVerificationRepositoryKey
-  delete scope.__pirateMemoryAuthRepository
+  scope.__pirateSingletons?.clear()
 }
 
 export function buildTestEnv(overrides: Partial<Env> = {}): Env {
