@@ -1,9 +1,9 @@
 import { internalError, providerUnavailable } from "../errors"
 import { makeId } from "../helpers"
+import { sha256Hex } from "../crypto"
 import type { Env, VerificationIntent, VeryWidgetLaunch } from "../../types"
 
 const VERY_TIMEOUT_MS = 15_000
-const encoder = new TextEncoder()
 
 export type VeryStartResult = {
   upstreamSessionRef: string
@@ -268,11 +268,6 @@ async function createVerySession(input: {
   } finally {
     clearTimeout(timeout)
   }
-}
-
-async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(value))
-  return Array.from(new Uint8Array(digest), (part) => part.toString(16).padStart(2, "0")).join("")
 }
 
 async function verifyVeryPayload(input: {

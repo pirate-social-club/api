@@ -1,8 +1,11 @@
 import { internalError } from "../errors"
 import type { Env } from "../../types"
+import { sha256Hex } from "../crypto"
+import { normalizeRootLabel } from "./labels"
+
+export { normalizeRootLabel }
 
 const SPACES_VERIFIER_TIMEOUT_MS = 8_000
-const encoder = new TextEncoder()
 
 type SpacesInspectResponse = {
   root_exists?: boolean
@@ -12,9 +15,9 @@ type SpacesInspectResponse = {
   operation_class?: string | null
   observation_provider?: string | null
   proof_payload?: Record<string, unknown> | null
-  anchor_height?: number | null
-  anchor_block_hash?: string | null
-  anchor_root_hash?: string | null
+  accepted_anchor_height?: number | null
+  accepted_anchor_block_hash?: string | null
+  accepted_anchor_root_hash?: string | null
   proof_root_hash?: string | null
   anchor_fresh_enough?: boolean | null
   failure_reason?: string | null
@@ -65,11 +68,6 @@ export type SpacesChallengePayload = {
   expires_at: string
   message: string
   digest: string
-}
-
-function normalizeRootLabel(value: string): string {
-  const trimmed = value.trim().toLowerCase()
-  return trimmed.startsWith("@") ? trimmed.slice(1) : trimmed
 }
 
 function requireSpacesVerifierBaseUrl(env: Env): string {
@@ -151,9 +149,9 @@ export async function inspectSpacesNamespace(env: Env, rootLabel: string): Promi
     rootExists: result.root_exists === true,
     rootKeyProofVerified: result.root_key_proof_verified === true,
     anchorFreshEnough: typeof result.anchor_fresh_enough === "boolean" ? result.anchor_fresh_enough : null,
-    acceptedAnchorHeight: typeof result.anchor_height === "number" ? result.anchor_height : null,
-    acceptedAnchorBlockHash: typeof result.anchor_block_hash === "string" ? result.anchor_block_hash : null,
-    acceptedAnchorRootHash: typeof result.anchor_root_hash === "string" ? result.anchor_root_hash : null,
+    acceptedAnchorHeight: typeof result.accepted_anchor_height === "number" ? result.accepted_anchor_height : null,
+    acceptedAnchorBlockHash: typeof result.accepted_anchor_block_hash === "string" ? result.accepted_anchor_block_hash : null,
+    acceptedAnchorRootHash: typeof result.accepted_anchor_root_hash === "string" ? result.accepted_anchor_root_hash : null,
     proofRootHash: typeof result.proof_root_hash === "string" ? result.proof_root_hash : null,
     rootPubkey: typeof result.root_pubkey === "string" ? result.root_pubkey : null,
     controlClass: (result.control_class as SpacesInspection["controlClass"]) ?? null,
@@ -199,11 +197,6 @@ export async function verifySpacesSignature(
 function randomNonceHex(bytes = 16): string {
   const value = crypto.getRandomValues(new Uint8Array(bytes))
   return Array.from(value, (part) => part.toString(16).padStart(2, "0")).join("")
-}
-
-async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(value))
-  return Array.from(new Uint8Array(digest), (part) => part.toString(16).padStart(2, "0")).join("")
 }
 
 export async function mintSpacesChallenge(

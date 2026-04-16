@@ -266,9 +266,9 @@ describe("verification routes", () => {
           control_class: "single_holder_root",
           operation_class: "owner_managed_namespace",
           observation_provider: "spaces_verifier",
-          anchor_height: 42,
-          anchor_block_hash: "block-hash",
-          anchor_root_hash: "anchor-root",
+          accepted_anchor_height: 42,
+          accepted_anchor_block_hash: "block-hash",
+          accepted_anchor_root_hash: "anchor-root",
           proof_root_hash: "proof-root",
           anchor_fresh_enough: true,
         }), {
