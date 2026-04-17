@@ -1,5 +1,4 @@
 import { Hono } from "hono"
-import { getUserRepository } from "../lib/auth/repositories"
 import {
   createCommunityListing,
   createCommunityPurchaseQuote,
@@ -20,9 +19,11 @@ import {
   updateCommunityListing,
 } from "../lib/communities/community-commerce-service"
 import { getCommunity } from "../lib/communities/community-service"
-import { getCommunityRepository } from "../lib/communities/control-plane-community-repository"
-import { badRequestError } from "../lib/errors"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
+import {
+  getCommunityRouteContext,
+  requireJsonBody,
+} from "./communities-route-helpers"
 import type {
   CommunityPurchaseQuotePreflightRequest,
   CommunityPurchaseQuoteRequest,
@@ -36,246 +37,222 @@ import type {
 
 export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.get("/:communityId/money-policy", async (c) => {
-    const actor = c.get("actor")
+    const { actor, communityId, communityRepository } = getCommunityRouteContext(c)
     await getCommunity({
       env: c.env,
       userId: actor.userId,
-      communityId: c.req.param("communityId"),
-      repository: getCommunityRepository(c.env),
+      communityId,
+      repository: communityRepository,
     })
     const result = await getCommunityMoneyPolicy({
       env: c.env,
-      communityId: c.req.param("communityId"),
+      communityId,
     })
     return c.json(result, 200)
   })
 
   communities.put("/:communityId/money-policy", async (c) => {
-    const actor = c.get("actor")
-    const body = await c.req.json<UpdateCommunityMoneyPolicyRequest>().catch(() => null)
-    if (!body) {
-      throw badRequestError("Invalid community money policy payload")
-    }
+    const { actor, communityId, communityRepository } = getCommunityRouteContext(c)
+    const body = await requireJsonBody<UpdateCommunityMoneyPolicyRequest>(c, "Invalid community money policy payload")
     const result = await updateCommunityMoneyPolicy({
       env: c.env,
       userId: actor.userId,
-      communityId: c.req.param("communityId"),
+      communityId,
       body,
-      communityRepository: getCommunityRepository(c.env),
+      communityRepository,
     })
     return c.json(result, 200)
   })
 
   communities.get("/:communityId/pricing-policy", async (c) => {
-    const actor = c.get("actor")
+    const { actor, communityId, communityRepository } = getCommunityRouteContext(c)
     await getCommunity({
       env: c.env,
       userId: actor.userId,
-      communityId: c.req.param("communityId"),
-      repository: getCommunityRepository(c.env),
+      communityId,
+      repository: communityRepository,
     })
     const result = await getCommunityPricingPolicy({
       env: c.env,
-      communityId: c.req.param("communityId"),
+      communityId,
     })
     return c.json(result, 200)
   })
 
   communities.put("/:communityId/pricing-policy", async (c) => {
-    const actor = c.get("actor")
-    const body = await c.req.json<UpdateCommunityPricingPolicyRequest>().catch(() => null)
-    if (!body) {
-      throw badRequestError("Invalid community pricing policy payload")
-    }
+    const { actor, communityId, communityRepository } = getCommunityRouteContext(c)
+    const body = await requireJsonBody<UpdateCommunityPricingPolicyRequest>(c, "Invalid community pricing policy payload")
     const result = await updateCommunityPricingPolicy({
       env: c.env,
       userId: actor.userId,
-      communityId: c.req.param("communityId"),
+      communityId,
       body,
-      communityRepository: getCommunityRepository(c.env),
+      communityRepository,
     })
     return c.json(result, 200)
   })
 
   communities.get("/:communityId/assets/:assetId", async (c) => {
-    const actor = c.get("actor")
+    const { actor, communityId, communityRepository } = getCommunityRouteContext(c)
     const result = await getCommunityAsset({
       env: c.env,
       userId: actor.userId,
-      communityId: c.req.param("communityId"),
+      communityId,
       assetId: c.req.param("assetId"),
-      communityRepository: getCommunityRepository(c.env),
+      communityRepository,
     })
     return c.json(result, 200)
   })
 
   communities.get("/:communityId/assets/:assetId/access", async (c) => {
-    const actor = c.get("actor")
+    const { actor, communityId, communityRepository, userRepository } = getCommunityRouteContext(c)
     const result = await resolveCommunityAssetAccess({
       env: c.env,
       userId: actor.userId,
-      communityId: c.req.param("communityId"),
+      communityId,
       assetId: c.req.param("assetId"),
-      communityRepository: getCommunityRepository(c.env),
-      userRepository: getUserRepository(c.env),
+      communityRepository,
+      userRepository,
     })
     return c.json(result, 200)
   })
 
   communities.get("/:communityId/assets/:assetId/content", async (c) => {
-    const actor = c.get("actor")
+    const { actor, communityId, communityRepository, userRepository } = getCommunityRouteContext(c)
     return await fetchCommunityAssetContent({
       env: c.env,
       userId: actor.userId,
-      communityId: c.req.param("communityId"),
+      communityId,
       assetId: c.req.param("assetId"),
-      communityRepository: getCommunityRepository(c.env),
-      userRepository: getUserRepository(c.env),
+      communityRepository,
+      userRepository,
     })
   })
 
   communities.get("/:communityId/listings", async (c) => {
-    const actor = c.get("actor")
+    const { actor, communityId, communityRepository } = getCommunityRouteContext(c)
     const result = await listCommunityListings({
       env: c.env,
       userId: actor.userId,
-      communityId: c.req.param("communityId"),
-      communityRepository: getCommunityRepository(c.env),
+      communityId,
+      communityRepository,
     })
     return c.json(result, 200)
   })
 
   communities.post("/:communityId/listings", async (c) => {
-    const actor = c.get("actor")
-    const body = await c.req.json<CreateCommunityListingRequest>().catch(() => null)
-    if (!body) {
-      throw badRequestError("Invalid community listing payload")
-    }
+    const { actor, communityId, communityRepository, userRepository } = getCommunityRouteContext(c)
+    const body = await requireJsonBody<CreateCommunityListingRequest>(c, "Invalid community listing payload")
     const result = await createCommunityListing({
       env: c.env,
       userId: actor.userId,
-      communityId: c.req.param("communityId"),
+      communityId,
       body,
-      communityRepository: getCommunityRepository(c.env),
-      userRepository: getUserRepository(c.env),
+      communityRepository,
+      userRepository,
     })
     return c.json(result, 201)
   })
 
   communities.get("/:communityId/listings/:listingId", async (c) => {
-    const actor = c.get("actor")
+    const { actor, communityId, communityRepository } = getCommunityRouteContext(c)
     const result = await getCommunityListing({
       env: c.env,
       userId: actor.userId,
-      communityId: c.req.param("communityId"),
+      communityId,
       listingId: c.req.param("listingId"),
-      communityRepository: getCommunityRepository(c.env),
+      communityRepository,
     })
     return c.json(result, 200)
   })
 
   communities.patch("/:communityId/listings/:listingId", async (c) => {
-    const actor = c.get("actor")
-    const body = await c.req.json<UpdateCommunityListingRequest>().catch(() => null)
-    if (!body) {
-      throw badRequestError("Invalid community listing update payload")
-    }
+    const { actor, communityId, communityRepository } = getCommunityRouteContext(c)
+    const body = await requireJsonBody<UpdateCommunityListingRequest>(c, "Invalid community listing update payload")
     const result = await updateCommunityListing({
       env: c.env,
       userId: actor.userId,
-      communityId: c.req.param("communityId"),
+      communityId,
       listingId: c.req.param("listingId"),
       body,
-      communityRepository: getCommunityRepository(c.env),
+      communityRepository,
     })
     return c.json(result, 200)
   })
 
   communities.get("/:communityId/purchases", async (c) => {
-    const actor = c.get("actor")
+    const { actor, communityId, communityRepository } = getCommunityRouteContext(c)
     const result = await listCommunityPurchases({
       env: c.env,
       userId: actor.userId,
-      communityId: c.req.param("communityId"),
-      communityRepository: getCommunityRepository(c.env),
+      communityId,
+      communityRepository,
     })
     return c.json(result, 200)
   })
 
   communities.get("/:communityId/purchases/:purchaseId", async (c) => {
-    const actor = c.get("actor")
+    const { actor, communityId, communityRepository } = getCommunityRouteContext(c)
     const result = await getCommunityPurchase({
       env: c.env,
       userId: actor.userId,
-      communityId: c.req.param("communityId"),
+      communityId,
       purchaseId: c.req.param("purchaseId"),
-      communityRepository: getCommunityRepository(c.env),
+      communityRepository,
     })
     return c.json(result, 200)
   })
 
   communities.post("/:communityId/purchase-quote-preflight", async (c) => {
-    const actor = c.get("actor")
-    const body = await c.req.json<CommunityPurchaseQuotePreflightRequest>().catch(() => null)
-    if (!body) {
-      throw badRequestError("Invalid purchase quote preflight payload")
-    }
+    const { actor, communityId, communityRepository, userRepository } = getCommunityRouteContext(c)
+    const body = await requireJsonBody<CommunityPurchaseQuotePreflightRequest>(c, "Invalid purchase quote preflight payload")
     const result = await preflightCommunityPurchaseQuote({
       env: c.env,
       userId: actor.userId,
-      communityId: c.req.param("communityId"),
+      communityId,
       body,
-      communityRepository: getCommunityRepository(c.env),
-      userRepository: getUserRepository(c.env),
+      communityRepository,
+      userRepository,
     })
     return c.json(result, 200)
   })
 
   communities.post("/:communityId/purchase-quotes", async (c) => {
-    const actor = c.get("actor")
-    const body = await c.req.json<CommunityPurchaseQuoteRequest>().catch(() => null)
-    if (!body) {
-      throw badRequestError("Invalid purchase quote payload")
-    }
+    const { actor, communityId, communityRepository, userRepository } = getCommunityRouteContext(c)
+    const body = await requireJsonBody<CommunityPurchaseQuoteRequest>(c, "Invalid purchase quote payload")
     const result = await createCommunityPurchaseQuote({
       env: c.env,
       userId: actor.userId,
-      communityId: c.req.param("communityId"),
+      communityId,
       body,
-      communityRepository: getCommunityRepository(c.env),
-      userRepository: getUserRepository(c.env),
+      communityRepository,
+      userRepository,
     })
     return c.json(result, 201)
   })
 
   communities.post("/:communityId/purchase-settlements", async (c) => {
-    const actor = c.get("actor")
-    const body = await c.req.json<CommunityPurchaseSettlementRequest>().catch(() => null)
-    if (!body) {
-      throw badRequestError("Invalid purchase settlement payload")
-    }
+    const { actor, communityId, communityRepository } = getCommunityRouteContext(c)
+    const body = await requireJsonBody<CommunityPurchaseSettlementRequest>(c, "Invalid purchase settlement payload")
     const result = await settleCommunityPurchase({
       env: c.env,
       userId: actor.userId,
-      communityId: c.req.param("communityId"),
+      communityId,
       body,
-      communityRepository: getCommunityRepository(c.env),
+      communityRepository,
     })
     return c.json(result, 201)
   })
 
   communities.post("/:communityId/purchase-settlements/fail", async (c) => {
-    const actor = c.get("actor")
-    const body = await c.req.json<CommunityPurchaseSettlementFailureRequest>().catch(() => null)
-    if (!body) {
-      throw badRequestError("Invalid purchase settlement failure payload")
-    }
+    const { actor, communityId, communityRepository } = getCommunityRouteContext(c)
+    const body = await requireJsonBody<CommunityPurchaseSettlementFailureRequest>(c, "Invalid purchase settlement failure payload")
     const result = await failCommunityPurchase({
       env: c.env,
       userId: actor.userId,
-      communityId: c.req.param("communityId"),
+      communityId,
       body,
-      communityRepository: getCommunityRepository(c.env),
+      communityRepository,
     })
     return c.json(result, 200)
   })
