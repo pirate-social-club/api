@@ -1,4 +1,4 @@
-import type { Client } from "@libsql/client"
+import type { Client } from "../sql-client"
 import { internalError } from "../errors"
 import { generateHandleCandidate } from "./handle-generator"
 import { buildDefaultVerificationCapabilities } from "../verification/verification-capabilities"

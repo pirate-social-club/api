@@ -1,4 +1,4 @@
-import type { Client } from "@libsql/client"
+import type { Client } from "../sql-client"
 import { badRequestError, internalError } from "../errors"
 import { executeFirst } from "../db-helpers"
 import { makeId } from "../helpers"

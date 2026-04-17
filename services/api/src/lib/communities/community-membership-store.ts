@@ -1,4 +1,4 @@
-import type { Client } from "@libsql/client"
+import type { Client } from "../sql-client"
 import { executeFirst } from "../db-helpers"
 import { makeId } from "../helpers"
 import { requiredString, rowValue, stringOrNull } from "../sql-row"

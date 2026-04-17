@@ -49,7 +49,7 @@ export function resolveLocalDevStorage(
 ): LocalDevStorage {
   const repoRoot = resolve(serviceRoot, "../../..")
   const defaultDataRoot = resolve(serviceRoot, ".local")
-  const configuredDbUrl = String(values.TURSO_CONTROL_PLANE_DATABASE_URL || "").trim()
+  const configuredDbUrl = String(values.CONTROL_PLANE_DATABASE_URL || "").trim()
   const configuredCommunityRoot = String(values.LOCAL_COMMUNITY_DB_ROOT || "").trim()
 
   const controlPlaneDbUrl = configuredDbUrl
@@ -78,7 +78,7 @@ export async function ensureLocalDevStorage(storage: LocalDevStorage): Promise<v
 
 export function requireLocalControlPlaneDbPath(storage: LocalDevStorage): string {
   if (!storage.controlPlaneDbPath) {
-    throw new Error("TURSO_CONTROL_PLANE_DATABASE_URL must resolve to a local file path for this command")
+    throw new Error("CONTROL_PLANE_DATABASE_URL must resolve to a local file path for this command")
   }
 
   return storage.controlPlaneDbPath

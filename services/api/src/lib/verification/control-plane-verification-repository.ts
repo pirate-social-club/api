@@ -1,4 +1,4 @@
-import type { Client, InStatement } from "@libsql/client"
+import type { Client, InStatement } from "../sql-client"
 import { badRequestError, eligibilityFailed, internalError, providerUnavailable, verificationRequired } from "../errors"
 import { executeFirst, globalSingleton } from "../db-helpers"
 import { makeId } from "../helpers"

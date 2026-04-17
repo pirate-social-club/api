@@ -1,7 +1,7 @@
-import type { InStatement } from "@libsql/client"
 import { executeFirst, type DbExecutor } from "../db-helpers"
 import { internalError } from "../errors"
 import { makeId } from "../helpers"
+import type { InStatement } from "../sql-client"
 import {
   assembleProfile,
   parseRedditImportSummary,
@@ -52,10 +52,10 @@ type AuthProviderLinkRow = {
 
 export function requireControlPlaneDbUrl(env: Env): string {
   const url = normalizeControlPlaneDbUrl(
-    String(env.TURSO_CONTROL_PLANE_DATABASE_URL || env.CONTROL_PLANE_DATABASE_URL || "").trim(),
+    String(env.CONTROL_PLANE_DATABASE_URL || "").trim(),
   )
   if (!url) {
-    throw internalError("TURSO_CONTROL_PLANE_DATABASE_URL is not configured")
+    throw internalError("CONTROL_PLANE_DATABASE_URL is not configured")
   }
   return url
 }
@@ -92,6 +92,21 @@ export function normalizeControlPlaneDbUrl(rawUrl: string): string {
 }
 
 function parseUniqueConstraintFields(error: unknown): string[] {
+  const code = typeof error === "object" && error && "code" in error ? String((error as { code?: unknown }).code) : ""
+  if (code === "23505") {
+    const detail = typeof error === "object" && error && "detail" in error
+      ? String((error as { detail?: unknown }).detail || "")
+      : ""
+    const match = /Key \((.+)\)=/i.exec(detail)
+    if (!match?.[1]) {
+      return []
+    }
+    return match[1]
+      .split(",")
+      .map((field) => field.trim())
+      .filter(Boolean)
+  }
+
   const message = error instanceof Error ? error.message : String(error)
   const match = /UNIQUE constraint failed: (.+)$/i.exec(message)
   if (!match?.[1]) {
@@ -108,16 +123,28 @@ export function hasUniqueConstraintField(error: unknown, field: string): boolean
 }
 
 function isMissingTableError(error: unknown, tableName: string): boolean {
+  const code = typeof error === "object" && error && "code" in error ? String((error as { code?: unknown }).code) : ""
+  if (code === "42P01") {
+    return true
+  }
   const message = error instanceof Error ? error.message : String(error)
   return message.includes("no such table") && message.includes(tableName)
 }
 
 function isMissingColumnError(error: unknown, columnName: string): boolean {
+  const code = typeof error === "object" && error && "code" in error ? String((error as { code?: unknown }).code) : ""
+  if (code === "42703") {
+    return true
+  }
   const message = error instanceof Error ? error.message : String(error)
   return message.includes("no such column") && message.includes(columnName)
 }
 
 function isDuplicateColumnError(error: unknown, columnName: string): boolean {
+  const code = typeof error === "object" && error && "code" in error ? String((error as { code?: unknown }).code) : ""
+  if (code === "42701") {
+    return true
+  }
   const message = error instanceof Error ? error.message : String(error)
   return message.includes("duplicate column name") && message.includes(columnName)
 }

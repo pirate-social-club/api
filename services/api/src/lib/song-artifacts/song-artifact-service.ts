@@ -1,4 +1,4 @@
-import type { Client } from "@libsql/client"
+import type { Client } from "../sql-client"
 import type { UserRepository } from "../auth/repositories"
 import type { CommunityRepository } from "../communities/control-plane-community-repository"
 import { openCommunityDb } from "../communities/community-db-factory"

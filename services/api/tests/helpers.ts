@@ -140,7 +140,7 @@ export async function createRouteTestContext(overrides: Partial<Env> = {}): Prom
   const env = buildTestEnv({
     DEV_MEMORY_STORE_ENABLED: "false",
     ENVIRONMENT: "test",
-    TURSO_CONTROL_PLANE_DATABASE_URL: `file:${controlPlane.databasePath}`,
+    CONTROL_PLANE_DATABASE_URL: `file:${controlPlane.databasePath}`,
     LOCAL_COMMUNITY_DB_ROOT: communityDbRoot,
     ...overrides,
   })

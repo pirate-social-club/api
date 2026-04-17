@@ -1,4 +1,4 @@
-import type { Client } from "@libsql/client"
+import type { Client } from "../sql-client"
 import { makeId } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
 import { getCommunityPostProjectionRowByPostId } from "../auth/control-plane-auth-queries"

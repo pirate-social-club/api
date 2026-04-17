@@ -90,8 +90,8 @@ Control-plane DB mode:
 
 1. Copy `.dev.vars.example` to `.dev.vars`.
 2. Set `DEV_MEMORY_STORE_ENABLED=false`.
-3. Set `TURSO_CONTROL_PLANE_DATABASE_URL` if you want a specific DB. Leave it blank to use `services/api/.local/control-plane.db`.
-4. Set `TURSO_CONTROL_PLANE_AUTH_TOKEN` if required by the target DB.
+3. Set `CONTROL_PLANE_DATABASE_URL` if you want a specific DB. Leave it blank to use `services/api/.local/control-plane.db`.
+4. Set `TURSO_CONTROL_PLANE_AUTH_TOKEN` only if you are pointing a local dev run at a libsql endpoint instead of the default local file DB.
 5. Set `LOCAL_COMMUNITY_DB_ROOT` if you want a specific community DB directory. Leave it blank to use `services/api/.local/community-dbs`.
 6. If testing the real internal publisher path, set `REGISTRY_PUBLISHER_URL`, `REGISTRY_PUBLISHER_AUTH_TOKEN`, and `REGISTRY_PUBLISHER_TIMEOUT_MS`.
 7. For community avatar and banner uploads, set `FILEBASE_S3_ACCESS_KEY`, `FILEBASE_S3_SECRET_KEY`, and `FILEBASE_MEDIA_BUCKET`. If you already use `FILEBASE_S3_BUCKET_MUSIC`, the API will reuse that bucket until you standardize on `FILEBASE_MEDIA_BUCKET`. Optional: `FILEBASE_S3_ENDPOINT` and `FILEBASE_S3_REGION`.
@@ -113,7 +113,7 @@ rtk bun run bruno:prepare:local
 
 This resets:
 
-- the local control-plane SQLite file resolved from `TURSO_CONTROL_PLANE_DATABASE_URL`, or `services/api/.local/control-plane.db` when unset
+- the local control-plane SQLite file resolved from `CONTROL_PLANE_DATABASE_URL`, or `services/api/.local/control-plane.db` when unset
 - the local community DB root resolved from `LOCAL_COMMUNITY_DB_ROOT`, or `services/api/.local/community-dbs` when unset
 - `specs/api/bruno/environments/local.bru` with fresh JWT fixtures and a new subject
 

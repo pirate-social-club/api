@@ -282,8 +282,8 @@ describe("profile routes", () => {
       ...base,
       env: {
         ...base.env,
-        TURSO_CONTROL_PLANE_DATABASE_URL:
-          `${base.env.TURSO_CONTROL_PLANE_DATABASE_URL}?channel_binding=require&sslmode=require`,
+        CONTROL_PLANE_DATABASE_URL:
+          `${base.env.CONTROL_PLANE_DATABASE_URL}?channel_binding=require&sslmode=require`,
       },
     }
 

@@ -172,7 +172,7 @@ async function setPassportWalletScore(
   },
 ): Promise<void> {
   const client = createClient({
-    url: String(env.TURSO_CONTROL_PLANE_DATABASE_URL),
+    url: String(env.CONTROL_PLANE_DATABASE_URL),
   })
 
   try {
@@ -211,7 +211,7 @@ async function setPrimaryWalletAttachment(
   walletAddress: string,
 ): Promise<void> {
   const client = createClient({
-    url: String(env.TURSO_CONTROL_PLANE_DATABASE_URL),
+    url: String(env.CONTROL_PLANE_DATABASE_URL),
   })
 
   try {
@@ -261,7 +261,7 @@ async function getCommunityControlPlaneState(
   registryAttemptCount: number
 }> {
   const client = createClient({
-    url: String(env.TURSO_CONTROL_PLANE_DATABASE_URL),
+    url: String(env.CONTROL_PLANE_DATABASE_URL),
   })
 
   try {

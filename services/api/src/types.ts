@@ -75,7 +75,6 @@ export type HandleUpgradeQuote = {
 export type Env = {
   ENVIRONMENT?: string
   DEV_MEMORY_STORE_ENABLED?: string
-  TURSO_CONTROL_PLANE_DATABASE_URL?: string
   CONTROL_PLANE_DATABASE_URL?: string
   TURSO_CONTROL_PLANE_DATABASE_NAME?: string
   TURSO_CONTROL_PLANE_AUTH_TOKEN?: string

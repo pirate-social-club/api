@@ -78,14 +78,14 @@ async function main(): Promise<void> {
       [
         "warning: dev:local is using a remote control-plane database;",
         "local control-plane migrations will not run.",
-        "Leave TURSO_CONTROL_PLANE_DATABASE_URL blank to use services/api/.local/control-plane.db.",
+        "Leave CONTROL_PLANE_DATABASE_URL blank to use services/api/.local/control-plane.db.",
       ].join(" "),
     )
   }
 
   const env = {
     ...baseEnv,
-    TURSO_CONTROL_PLANE_DATABASE_URL: localDevStorage.controlPlaneDbUrl,
+    CONTROL_PLANE_DATABASE_URL: localDevStorage.controlPlaneDbUrl,
     LOCAL_COMMUNITY_DB_ROOT: localDevStorage.communityDbRoot,
   } as Env
 

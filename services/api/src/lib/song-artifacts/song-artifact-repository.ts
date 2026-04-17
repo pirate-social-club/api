@@ -1,4 +1,4 @@
-import type { Client } from "@libsql/client"
+import type { Client } from "../sql-client"
 import { executeFirst } from "../db-helpers"
 import { internalError, notFoundError } from "../errors"
 import { numberOrNull, requiredString, rowValue, stringOrNull } from "../sql-row"

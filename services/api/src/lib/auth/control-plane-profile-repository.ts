@@ -1,4 +1,4 @@
-import type { Client } from "@libsql/client"
+import type { Client } from "../sql-client"
 import { conflictError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import type { Env, GlobalHandle, HandleUpgradeQuote, Profile } from "../../types"

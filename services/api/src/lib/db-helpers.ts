@@ -1,4 +1,4 @@
-import type { Client, InStatement, Transaction } from "@libsql/client"
+import type { Client, InStatement, Transaction } from "./sql-client"
 
 export type DbExecutor = Pick<Client, "execute"> | Pick<Transaction, "execute">
 

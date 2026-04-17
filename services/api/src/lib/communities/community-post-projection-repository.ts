@@ -1,4 +1,4 @@
-import type { Client } from "@libsql/client"
+import type { Client } from "../sql-client"
 import { internalError } from "../errors"
 import { makeId } from "../helpers"
 import { getCommunityPostProjectionRowByPostId } from "../auth/control-plane-auth-queries"

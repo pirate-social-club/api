@@ -1,4 +1,4 @@
-import type { Client } from "@libsql/client"
+import type { Client } from "../sql-client"
 import { AbiCoder } from "ethers"
 import { executeFirst } from "../db-helpers"
 import { badRequestError, eligibilityFailed, notFoundError, verificationRequired } from "../errors"
