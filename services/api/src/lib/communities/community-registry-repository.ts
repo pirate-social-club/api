@@ -7,12 +7,12 @@ import {
   getJobRowById,
   getLatestCommunityRegistryPublicationJobRow,
   listActiveWalletAttachmentRows,
-} from "../auth/control-plane-auth-queries"
+} from "../auth/auth-db-queries"
 import type {
   CommunityRegistryAttemptRow,
   CommunityRow,
   JobRow,
-} from "../auth/control-plane-auth-rows"
+} from "../auth/auth-db-rows"
 
 async function resolveRegistryAttemptWalletSnapshot(
   client: Client,

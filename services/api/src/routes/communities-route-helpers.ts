@@ -3,7 +3,7 @@ import { getUserRepository, type UserRepository } from "../lib/auth/repositories
 import {
   getCommunityRepository,
   type CommunityRepository,
-} from "../lib/communities/control-plane-community-repository"
+} from "../lib/communities/db-community-repository"
 import {
   getControlPlaneVerificationRepository,
   type VerificationRepository,

@@ -12,8 +12,8 @@ import {
   provisionCommunityViaOperator,
 } from "./community-provision-operator-client"
 import type { UserRepository } from "../auth/repositories"
-import type { CommunityDatabaseBindingRow, CommunityRow, JobRow } from "../auth/control-plane-auth-rows"
-import type { CommunityRepository } from "./control-plane-community-repository"
+import type { CommunityDatabaseBindingRow, CommunityRow, JobRow } from "../auth/auth-db-rows"
+import type { CommunityRepository } from "./db-community-repository"
 import { badRequestError, eligibilityFailed, internalError, notFoundError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { getRegistryPublicationAdapter } from "./registry-publication"

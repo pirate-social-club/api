@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { ControlPlaneIdentityRepository } from "../src/lib/auth/control-plane-identity-repository"
+import { DatabaseIdentityRepository } from "../src/lib/auth/db-identity-repository"
 import { createControlPlaneTestClient } from "./helpers"
 
 const WALLET_A = "0x1111111111111111111111111111111111111111"
@@ -18,7 +18,7 @@ describe("control-plane identity repository", () => {
   test("jwt identities create users with empty wallet attachments", async () => {
     const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
     cleanup = setup.cleanup
-    const repo = new ControlPlaneIdentityRepository(setup.client)
+    const repo = new DatabaseIdentityRepository(setup.client)
 
     const session = await repo.exchangeIdentity({
       provider: "jwt",
@@ -35,7 +35,7 @@ describe("control-plane identity repository", () => {
   test("privy identities persist wallet attachments and can switch the primary wallet", async () => {
     const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
     cleanup = setup.cleanup
-    const repo = new ControlPlaneIdentityRepository(setup.client)
+    const repo = new DatabaseIdentityRepository(setup.client)
 
     const first = await repo.exchangeIdentity({
       provider: "privy",

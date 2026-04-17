@@ -14,9 +14,9 @@ import {
   listActiveWalletAttachmentRows,
   loadSnapshot,
   reconcileWalletAttachments,
-} from "./control-plane-auth-queries"
-import { assembleProfile, serializeUser, serializeWalletAttachments } from "./control-plane-auth-serializers"
-import type { SessionSnapshot } from "./control-plane-auth-rows"
+} from "./auth-db-queries"
+import { assembleProfile, serializeUser, serializeWalletAttachments } from "./auth-serializers"
+import type { SessionSnapshot } from "./auth-db-rows"
 import { makeId, nowIso } from "../helpers"
 import type { OnboardingStatus, Profile, UpstreamIdentity, User, WalletAttachmentSummary } from "../../types"
 import type { PublicProfileResolution } from "./repositories"
@@ -36,7 +36,7 @@ function normalizePublicHandleLabel(value: string): {
   }
 }
 
-export class ControlPlaneIdentityRepository {
+export class DatabaseIdentityRepository {
   constructor(private readonly client: Client) {}
 
   async exchangeIdentity(identity: UpstreamIdentity): Promise<SessionSnapshot> {

@@ -1,5 +1,5 @@
-import type { CommunityRow, JobRow } from "../auth/control-plane-auth-rows"
-import type { CommunityRepository } from "./control-plane-community-repository"
+import type { CommunityRow, JobRow } from "../auth/auth-db-rows"
+import type { CommunityRepository } from "./db-community-repository"
 import { badRequestError, internalError } from "../errors"
 import { makeId } from "../helpers"
 import type { Env } from "../../types"

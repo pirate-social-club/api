@@ -7,12 +7,12 @@ import {
   getJobRowById,
   getLatestCommunityProvisioningJobRow,
   getPrimaryCommunityDatabaseBindingRow,
-} from "../auth/control-plane-auth-queries"
+} from "../auth/auth-db-queries"
 import type {
   CommunityDatabaseBindingRow,
   CommunityRow,
   JobRow,
-} from "../auth/control-plane-auth-rows"
+} from "../auth/auth-db-rows"
 
 export async function createCommunityProvisioningRequest(
   client: Client,

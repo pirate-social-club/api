@@ -1,7 +1,7 @@
 import { Hono } from "hono"
 import { badRequestError } from "../lib/errors"
 import { getUserRepository } from "../lib/auth/repositories"
-import { getCommunityRepository } from "../lib/communities/control-plane-community-repository"
+import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { authenticate, type AuthenticatedEnv } from "../lib/auth-middleware"
 import { castPostVote, getPost } from "../lib/posts/post-service"
 

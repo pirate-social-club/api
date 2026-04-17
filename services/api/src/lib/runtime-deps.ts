@@ -2,7 +2,7 @@ import { createClient as createLibsqlClient } from "@libsql/client"
 import type { Client as LibsqlClient, Transaction as LibsqlTransaction } from "@libsql/client"
 import { Pool, neonConfig } from "@neondatabase/serverless"
 import { globalSingleton } from "./db-helpers"
-import { requireControlPlaneDbUrl } from "./auth/control-plane-auth-queries"
+import { requireControlPlaneDbUrl } from "./auth/auth-db-queries"
 import type { Client, InStatement, QueryResult, QueryResultRow, Transaction } from "./sql-client"
 import type { Env } from "../types"
 

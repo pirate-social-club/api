@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
-import { parseVerificationCapabilities, serializeUser } from "../src/lib/auth/control-plane-auth-serializers"
-import type { UserRow } from "../src/lib/auth/control-plane-auth-rows"
+import { parseVerificationCapabilities, serializeUser } from "../src/lib/auth/auth-serializers"
+import type { UserRow } from "../src/lib/auth/auth-db-rows"
 import { INTERACTIVE_VERIFICATION_TTL_MS } from "../src/lib/verification/verification-capabilities"
 
 describe("verification capability lifecycle", () => {

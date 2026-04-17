@@ -6,7 +6,7 @@ import { makeId, nowIso } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
 import { getCommunityMembershipState } from "./community-membership-store"
 import { openCommunityDb } from "./community-db-factory"
-import type { CommunityRepository } from "./control-plane-community-repository"
+import type { CommunityRepository } from "./db-community-repository"
 import { getPostById } from "../posts/community-post-store"
 import {
   fetchSongArtifactBytes,

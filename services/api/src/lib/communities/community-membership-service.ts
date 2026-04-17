@@ -14,7 +14,7 @@ import {
   resolveCommunityBannerRef,
 } from "./community-identity-media"
 import type { UserRepository } from "../auth/repositories"
-import type { CommunityRepository } from "./control-plane-community-repository"
+import type { CommunityRepository } from "./db-community-repository"
 import { gateFailedWithDetails, internalError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import { loadCommunityProjection, requireOwnedCommunity } from "./community-create-service"

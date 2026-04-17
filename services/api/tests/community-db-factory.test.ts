@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createClient } from "@libsql/client"
 import { openCommunityDb } from "../src/lib/communities/community-db-factory"
-import type { CommunityRepository } from "../src/lib/communities/control-plane-community-repository"
+import type { CommunityRepository } from "../src/lib/communities/db-community-repository"
 import { splitSqlStatements, toSqliteCompatibleStatement } from "../shared/sql-migration"
 
 const cleanupPaths: string[] = []

@@ -1,6 +1,6 @@
 import { createClient } from "@libsql/client"
 import type { Client } from "@libsql/client"
-import type { CommunityRepository } from "./control-plane-community-repository"
+import type { CommunityRepository } from "./db-community-repository"
 import { internalError, notFoundError } from "../errors"
 import { decryptCommunityDbCredential } from "./community-db-credential-crypto"
 import { ensureCommunityDbSchema } from "./community-local-db"

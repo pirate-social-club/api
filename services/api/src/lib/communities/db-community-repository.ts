@@ -1,7 +1,7 @@
 import type { Client } from "../sql-client"
 import { makeId } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
-import { getCommunityPostProjectionRowByPostId } from "../auth/control-plane-auth-queries"
+import { getCommunityPostProjectionRowByPostId } from "../auth/auth-db-queries"
 import type {
   CommunityDbCredentialRow,
   CommunityDatabaseBindingRow,
@@ -9,7 +9,7 @@ import type {
   CommunityPostProjectionRow,
   CommunityRow,
   JobRow,
-} from "../auth/control-plane-auth-rows"
+} from "../auth/auth-db-rows"
 import type { Env } from "../../types"
 
 export {
@@ -76,7 +76,7 @@ export async function getLatestCommunityRegistryPublicationJob(
   client: Client,
   communityId: string,
 ): Promise<JobRow | null> {
-  const { getLatestCommunityRegistryPublicationJobRow } = await import("../auth/control-plane-auth-queries")
+  const { getLatestCommunityRegistryPublicationJobRow } = await import("../auth/auth-db-queries")
   return getLatestCommunityRegistryPublicationJobRow(client, communityId)
 }
 
@@ -227,7 +227,7 @@ export interface CommunityRepository {
   }): Promise<void>
 }
 
-export class ControlPlaneCommunityRepository implements CommunityRepository {
+export class DatabaseCommunityRepository implements CommunityRepository {
   constructor(private readonly client: Client) {}
 
   async getCommunityById(communityId: string): Promise<CommunityRow | null> {
@@ -437,7 +437,5 @@ export class ControlPlaneCommunityRepository implements CommunityRepository {
 }
 
 export function getCommunityRepository(env: Env): CommunityRepository {
-  return new ControlPlaneCommunityRepository(getControlPlaneClient(env))
+  return new DatabaseCommunityRepository(getControlPlaneClient(env))
 }
-
-export const getControlPlaneCommunityRepository = getCommunityRepository

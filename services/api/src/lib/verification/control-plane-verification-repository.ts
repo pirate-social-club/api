@@ -5,25 +5,25 @@ import { makeId } from "../helpers"
 import { getControlPlaneCacheKey, getControlPlaneClient } from "../runtime-deps"
 import {
   getUserRow,
-} from "../auth/control-plane-auth-queries"
+} from "../auth/auth-db-queries"
 import {
   parseVerificationCapabilities,
   serializeNamespaceVerification,
   serializeNamespaceVerificationSession,
   serializeVerificationSession,
-} from "../auth/control-plane-auth-serializers"
+} from "../auth/auth-serializers"
 import type {
   NamespaceVerificationRow,
   NamespaceVerificationSessionRow,
   UserAttestationRow,
   VerificationSessionRow,
-} from "../auth/control-plane-auth-rows"
+} from "../auth/auth-db-rows"
 import {
   toNamespaceVerificationRow,
   toNamespaceVerificationSessionRow,
   toUserAttestationRow,
   toVerificationSessionRow,
-} from "../auth/control-plane-auth-rows"
+} from "../auth/auth-db-rows"
 import {
   inspectHnsRoot,
   isHnsVerifierConfigured,

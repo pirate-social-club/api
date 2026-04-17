@@ -5,9 +5,9 @@ import {
   getLatestExternalReputationSnapshotRow,
   getLatestJobRowBySubjectAndType,
   getLatestRedditVerificationSessionRowForUsername,
-} from "../auth/control-plane-auth-queries"
-import { serializeRedditImportSummary, serializeRedditVerification } from "../auth/control-plane-auth-serializers"
-import { getJobById } from "../communities/control-plane-community-repository"
+} from "../auth/auth-db-queries"
+import { serializeRedditImportSummary, serializeRedditVerification } from "../auth/auth-serializers"
+import { getJobById } from "../communities/db-community-repository"
 import type { Env, Job, RedditImportSummary, RedditVerification } from "../../types"
 import { checkRedditVerificationCode, importRedditSnapshot, makeRedditVerificationCode } from "./reddit-bootstrap"
 
@@ -35,7 +35,7 @@ function serializeJob(row: {
   }
 }
 
-export class ControlPlaneRedditOnboardingRepository {
+export class DatabaseRedditOnboardingRepository {
   constructor(private readonly client: Client) {}
 
   async startOrCheckRedditVerification(input: {

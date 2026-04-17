@@ -15,12 +15,12 @@ import type {
   User,
   WalletAttachmentSummary,
 } from "../../types"
-import type { SessionSnapshot } from "./control-plane-auth-rows"
-import { requireControlPlaneDbUrl } from "./control-plane-auth-queries"
-import { ControlPlaneIdentityRepository } from "./control-plane-identity-repository"
-import { ControlPlaneProfileRepository, type UpdateProfileInput } from "./control-plane-profile-repository"
+import type { SessionSnapshot } from "./auth-db-rows"
+import { requireControlPlaneDbUrl } from "./auth-db-queries"
+import { DatabaseIdentityRepository } from "./db-identity-repository"
+import { DatabaseProfileRepository, type UpdateProfileInput } from "./db-profile-repository"
 import { MemoryAuthRepository } from "./memory-auth-repository"
-import { ControlPlaneRedditOnboardingRepository } from "../onboarding/control-plane-reddit-onboarding-repository"
+import { DatabaseRedditOnboardingRepository } from "../onboarding/db-reddit-onboarding-repository"
 
 export type { UpdateProfileInput }
 
@@ -68,22 +68,22 @@ export interface RedditOnboardingRepository {
   getLatestRedditImportSummary(userId: string): Promise<RedditImportSummary | null>
 }
 
-type ControlPlaneRepositoryBundle = {
-  identity: ControlPlaneIdentityRepository
-  profile: ControlPlaneProfileRepository
-  redditOnboarding: ControlPlaneRedditOnboardingRepository
+type DatabaseRepositoryBundle = {
+  identity: DatabaseIdentityRepository
+  profile: DatabaseProfileRepository
+  redditOnboarding: DatabaseRedditOnboardingRepository
 }
 
-function getControlPlaneRepositoryBundle(env: Env): ControlPlaneRepositoryBundle {
+function getDatabaseRepositoryBundle(env: Env): DatabaseRepositoryBundle {
   const url = requireControlPlaneDbUrl(env)
   const cacheKey = `bundle:${url}`
 
   return globalSingleton("controlPlaneRepositoryBundle", cacheKey, () => {
     const client = getControlPlaneClient(env)
     return {
-      identity: new ControlPlaneIdentityRepository(client),
-      profile: new ControlPlaneProfileRepository(client, env),
-      redditOnboarding: new ControlPlaneRedditOnboardingRepository(client),
+      identity: new DatabaseIdentityRepository(client),
+      profile: new DatabaseProfileRepository(client, env),
+      redditOnboarding: new DatabaseRedditOnboardingRepository(client),
     }
   })
 }
@@ -106,33 +106,33 @@ export function getSessionRepository(env: Env): SessionRepository {
   if (usingMemoryStore(env)) {
     return getMemoryAuthRepository()
   }
-  return getControlPlaneRepositoryBundle(env).identity
+  return getDatabaseRepositoryBundle(env).identity
 }
 
 export function getUserRepository(env: Env): UserRepository {
   if (usingMemoryStore(env)) {
     return getMemoryAuthRepository()
   }
-  return getControlPlaneRepositoryBundle(env).identity
+  return getDatabaseRepositoryBundle(env).identity
 }
 
 export function getOnboardingStatusRepository(env: Env): OnboardingStatusRepository {
   if (usingMemoryStore(env)) {
     return getMemoryAuthRepository()
   }
-  return getControlPlaneRepositoryBundle(env).identity
+  return getDatabaseRepositoryBundle(env).identity
 }
 
 export function getProfileRepository(env: Env): ProfileRepository {
   if (usingMemoryStore(env)) {
     return getMemoryAuthRepository()
   }
-  return getControlPlaneRepositoryBundle(env).profile
+  return getDatabaseRepositoryBundle(env).profile
 }
 
 export function getRedditOnboardingRepository(env: Env): RedditOnboardingRepository {
   if (usingMemoryStore(env)) {
     return getMemoryAuthRepository()
   }
-  return getControlPlaneRepositoryBundle(env).redditOnboarding
+  return getDatabaseRepositoryBundle(env).redditOnboarding
 }

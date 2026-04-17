@@ -16,7 +16,7 @@ import type {
   UserRow,
   VerificationSessionRow,
   WalletAttachmentRow,
-} from "./control-plane-auth-rows"
+} from "./auth-db-rows"
 import type {
   GlobalHandle,
   LinkedHandle,

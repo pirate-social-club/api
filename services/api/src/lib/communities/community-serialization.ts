@@ -1,5 +1,5 @@
 import type { User } from "../../types"
-import type { CommunityRow, JobRow } from "../auth/control-plane-auth-rows"
+import type { CommunityRow, JobRow } from "../auth/auth-db-rows"
 import type { LocalCommunitySnapshot } from "./community-local-db"
 import type { Community, Job } from "../../types"
 import {

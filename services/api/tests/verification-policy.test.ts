@@ -8,7 +8,7 @@ import {
 } from "../src/lib/verification/control-plane-verification-repository"
 import type { HnsInspectResult, HnsVerifyTxtResult } from "../src/lib/verification/hns-verifier"
 import type { SpacesChallengePayload } from "../src/lib/verification/spaces-verifier"
-import type { NamespaceVerificationSessionRow } from "../src/lib/auth/control-plane-auth-rows"
+import type { NamespaceVerificationSessionRow } from "../src/lib/auth/auth-db-rows"
 
 function stubRow(overrides: Partial<NamespaceVerificationSessionRow> = {}): NamespaceVerificationSessionRow {
   return {

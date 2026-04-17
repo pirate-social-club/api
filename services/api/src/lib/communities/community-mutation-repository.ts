@@ -3,8 +3,8 @@ import { internalError } from "../errors"
 import {
   getCommunityRowById,
   getCommunityRowByNamespaceVerificationId,
-} from "../auth/control-plane-auth-queries"
-import type { CommunityRow } from "../auth/control-plane-auth-rows"
+} from "../auth/auth-db-queries"
+import type { CommunityRow } from "../auth/auth-db-rows"
 
 export async function attachNamespaceToCommunity(
   client: Client,

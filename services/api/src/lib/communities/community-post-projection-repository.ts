@@ -1,8 +1,8 @@
 import type { Client } from "../sql-client"
 import { internalError } from "../errors"
 import { makeId } from "../helpers"
-import { getCommunityPostProjectionRowByPostId } from "../auth/control-plane-auth-queries"
-import type { CommunityPostProjectionRow } from "../auth/control-plane-auth-rows"
+import { getCommunityPostProjectionRowByPostId } from "../auth/auth-db-queries"
+import type { CommunityPostProjectionRow } from "../auth/auth-db-rows"
 
 export async function recordCommunityPostProjection(
   client: Client,

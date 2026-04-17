@@ -1,6 +1,6 @@
 import type { Client } from "../sql-client"
 import type { UserRepository } from "../auth/repositories"
-import type { CommunityRepository } from "../communities/control-plane-community-repository"
+import type { CommunityRepository } from "../communities/db-community-repository"
 import { openCommunityDb } from "../communities/community-db-factory"
 import { analysisBlocked, badRequestError, eligibilityFailed, notFoundError, verificationRequired } from "../errors"
 import { makeId, nowIso } from "../helpers"

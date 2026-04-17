@@ -2,7 +2,7 @@ import type { Client } from "../sql-client"
 import { conflictError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import type { Env, GlobalHandle, HandleUpgradeQuote, Profile } from "../../types"
-import { ControlPlaneIdentityRepository } from "./control-plane-identity-repository"
+import { DatabaseIdentityRepository } from "./db-identity-repository"
 import {
   ensureProfilesPrimaryLinkedHandleColumn,
   firstRow,
@@ -12,8 +12,8 @@ import {
   getUserRow,
   hasUniqueConstraintField,
   listActiveWalletAttachmentRows,
-} from "./control-plane-auth-queries"
-import { serializeGlobalHandle } from "./control-plane-auth-serializers"
+} from "./auth-db-queries"
+import { serializeGlobalHandle } from "./auth-serializers"
 import {
   assertFreeCleanupRenameEligible,
   buildHandleUpgradeQuote,
@@ -32,14 +32,14 @@ export type UpdateProfileInput = {
   preferred_locale?: string | null
 }
 
-export class ControlPlaneProfileRepository {
-  private readonly identityRepository: ControlPlaneIdentityRepository
+export class DatabaseProfileRepository {
+  private readonly identityRepository: DatabaseIdentityRepository
 
   constructor(
     private readonly client: Client,
     private readonly env: Env,
   ) {
-    this.identityRepository = new ControlPlaneIdentityRepository(client)
+    this.identityRepository = new DatabaseIdentityRepository(client)
   }
 
   async getProfileByUserId(userId: string): Promise<Profile | null> {

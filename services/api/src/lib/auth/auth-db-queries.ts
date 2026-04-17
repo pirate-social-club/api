@@ -8,7 +8,7 @@ import {
   parseVerificationCapabilities,
   serializeUser,
   serializeWalletAttachments,
-} from "./control-plane-auth-serializers"
+} from "./auth-serializers"
 import {
   type ExternalReputationSnapshotRow,
   type CommunityDbCredentialRow,
@@ -43,7 +43,7 @@ import {
   toUserRow,
   toVerificationSessionRow,
   toWalletAttachmentRow,
-} from "./control-plane-auth-rows"
+} from "./auth-db-rows"
 import type { Env, OnboardingStatus, UpstreamIdentity } from "../../types"
 
 type AuthProviderLinkRow = {
