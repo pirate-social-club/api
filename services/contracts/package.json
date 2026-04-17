@@ -9,6 +9,7 @@
   "types": "./src/index.ts",
   "scripts": {
     "generate": "bun ../../../specs/api/scripts/generate-api-contracts.ts",
+    "check:fresh": "bun run scripts/check-generated-fresh.ts",
     "check": "tsc --noEmit"
   },
   "devDependencies": {

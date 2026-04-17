@@ -1,4 +1,3 @@
-import { internalError } from "../errors"
 import { nowIso } from "../helpers"
 import type { Env, RedditImportSummary } from "../../types"
 

@@ -8,6 +8,9 @@ import type { Env } from "../src/types"
 import { setSelfProviderForTests } from "../src/lib/verification/self-provider"
 import { setVeryProviderForTests } from "../src/lib/verification/very-provider"
 import { setEnsResolverForTests } from "../src/lib/auth/ens-linked-handle-service"
+import { setStoryAccessProofSignerForTests } from "../src/lib/story/story-access-proof-service"
+import { setStoryCdrUploaderForTests } from "../src/lib/story/story-cdr"
+import { setStoryAssetPublisherForTests } from "../src/lib/story/story-publish-service"
 
 import { splitSqlStatements, toSqliteCompatibleStatement } from "../shared/sql-migration"
 
@@ -22,6 +25,9 @@ export function resetRuntimeCaches(): void {
   setSelfProviderForTests(null)
   setVeryProviderForTests(null)
   setEnsResolverForTests(null)
+  setStoryAccessProofSignerForTests(null)
+  setStoryCdrUploaderForTests(null)
+  setStoryAssetPublisherForTests(null)
   const scope = globalThis as typeof globalThis & {
     __pirateSingletons?: Map<string, unknown>
   }

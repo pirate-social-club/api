@@ -332,7 +332,6 @@ export class MemoryAuthRepository {
     }
 
     const updatedAt = nowIso()
-    const previous = record.profile.global_handle
     const next: GlobalHandle = {
       global_handle_id: makeId("ghl"),
       label: desired.labelDisplay,

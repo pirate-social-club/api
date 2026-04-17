@@ -80,20 +80,6 @@ async function requireActiveCommunity(
   }
 }
 
-function parseStoredCommunitySettings(value: string | null): Record<string, unknown> {
-  if (!value?.trim()) {
-    return {}
-  }
-  try {
-    const parsed = JSON.parse(value) as unknown
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : {}
-  } catch {
-    return {}
-  }
-}
-
 function assertUploadRequest(input: CreateSongArtifactUploadRequest): void {
   const kind = input.artifact_kind as SongArtifactKind
   const mimeType = input.mime_type.trim().toLowerCase()

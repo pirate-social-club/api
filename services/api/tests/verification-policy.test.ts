@@ -23,6 +23,7 @@ function stubRow(overrides: Partial<NamespaceVerificationSessionRow> = {}): Name
     challenge_payload_json: null,
     challenge_host: "_pirate.testroot",
     challenge_txt_value: "pirate-verification=nvs_test",
+    setup_nameservers_json: null,
     challenge_expires_at: new Date(Date.now() + 3600_000).toISOString(),
     root_exists: null,
     root_control_verified: null,

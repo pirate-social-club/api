@@ -1,4 +1,4 @@
-import type { Client, InStatement, InValue } from "@libsql/client"
+import type { Client, InStatement } from "@libsql/client"
 import { badRequestError, eligibilityFailed, internalError, providerUnavailable, verificationRequired } from "../errors"
 import { executeFirst, globalSingleton } from "../db-helpers"
 import { makeId } from "../helpers"
@@ -16,7 +16,6 @@ import type {
   NamespaceVerificationRow,
   NamespaceVerificationSessionRow,
   UserAttestationRow,
-  UserRow,
   VerificationSessionRow,
 } from "../auth/control-plane-auth-rows"
 import {
@@ -32,9 +31,9 @@ import {
   verifyHnsTxtRecord,
 } from "./hns-verifier"
 import type { HnsInspectResult, HnsVerifyTxtResult } from "./hns-verifier"
-import type { VeryProvider, VerySessionOutcome } from "./very-provider"
+import type { VerySessionOutcome } from "./very-provider"
 import { getVeryProvider } from "./very-provider"
-import type { SelfProvider, SelfSessionOutcome } from "./self-provider"
+import type { SelfSessionOutcome } from "./self-provider"
 import { canonicalizeRequestedCapabilities, getSelfProvider } from "./self-provider"
 import {
   inspectSpacesNamespace,
@@ -73,13 +72,6 @@ function getHnsChallengeTtlHours(env: Env): number {
     return rawTtlHours
   }
   return 24
-}
-
-function isSessionExpired(expiresAt: string | null): boolean {
-  if (!expiresAt) {
-    return false
-  }
-  return Date.parse(expiresAt) <= Date.now()
 }
 
 type HnsSessionAssertionSnapshot = {
@@ -1003,7 +995,6 @@ async function finalizeVerification(
 
   const now = new Date()
   const updatedAt = now.toISOString()
-  const attestationId = input.attestationId?.trim() || makeId("att")
   const expiresAt = row.expires_at ?? new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
   const userRow = await getUserRow(client, input.userId)
   if (!userRow) {

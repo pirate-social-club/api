@@ -45,8 +45,31 @@ export type StoryCdrUploadResult = {
 }
 
 let cdrCryptoReadyPromise: Promise<CdrCryptoModule> | null = null
+let testUploader: ((params: {
+  env: Env
+  dataKey: Uint8Array
+  writeConditionAddr: string
+  readConditionAddr: string
+  writeConditionData: `0x${string}`
+  readConditionData: `0x${string}`
+  accessAuxData?: `0x${string}`
+}) => Promise<StoryCdrUploadResult>) | null = null
 
-function resolveBackendCdrContracts(chainId: number): { cdrAddress: string; dkgAddress: string } | null {
+export function setStoryCdrUploaderForTests(
+  uploader: ((params: {
+    env: Env
+    dataKey: Uint8Array
+    writeConditionAddr: string
+    readConditionAddr: string
+    writeConditionData: `0x${string}`
+    readConditionData: `0x${string}`
+    accessAuxData?: `0x${string}`
+  }) => Promise<StoryCdrUploadResult>) | null,
+): void {
+  testUploader = uploader
+}
+
+export function resolveStoryCdrContracts(chainId: number): { cdrAddress: string; dkgAddress: string } | null {
   if (chainId === DEFAULT_STORY_CHAIN_ID) {
     return {
       cdrAddress: CDR_TESTNET_ADDRESS,
@@ -146,6 +169,9 @@ export async function uploadCdrEncryptedDataKey(params: {
   readConditionData: `0x${string}`
   accessAuxData?: `0x${string}`
 }): Promise<StoryCdrUploadResult> {
+  if (testUploader) {
+    return await testUploader(params)
+  }
   const writerPkpConfig = resolveStoryCdrWriterPkpExecutionConfig(params.env)
   if (!writerPkpConfig.ok) throw new Error(writerPkpConfig.error)
   if (!writerPkpConfig.value) {
@@ -157,7 +183,7 @@ export async function uploadCdrEncryptedDataKey(params: {
   if (!Number.isInteger(chainId) || chainId <= 0) {
     throw new Error(`Invalid STORY_CHAIN_ID: ${chainIdRaw || "<empty>"}`)
   }
-  const contracts = resolveBackendCdrContracts(chainId)
+  const contracts = resolveStoryCdrContracts(chainId)
   if (!contracts) {
     throw new Error(`CDR backend upload is not configured for Story chain ${chainId}`)
   }

@@ -4,7 +4,7 @@ const abiCoder = AbiCoder.defaultAbiCoder()
 
 export function hashBytes32FromParts(...parts: Array<string | null | undefined>): `0x${string}` {
   const canonical = parts.map((part) => String(part || "").trim()).join(":")
-  return keccak256(toUtf8Bytes(canonical))
+  return keccak256(toUtf8Bytes(canonical)) as `0x${string}`
 }
 
 export function deriveStoryAssetVersionId(input: {
@@ -23,7 +23,7 @@ export function deriveStoryAssetVersionId(input: {
   )
 }
 
-export function deriveStoryNamespace(assetVersionId: string): `0x${string}` {
+export function deriveStoryNamespace(assetVersionId: `0x${string}`): `0x${string}` {
   return hashBytes32FromParts("pirate-v2", "asset-namespace", assetVersionId)
 }
 
@@ -40,7 +40,7 @@ export function derivePurchaseRef(input: {
 }
 
 export function deriveStorageRefHash(storageRef: string): `0x${string}` {
-  return keccak256(toUtf8Bytes(storageRef.trim()))
+  return keccak256(toUtf8Bytes(storageRef.trim())) as `0x${string}`
 }
 
 export function encodeTokenGateConditionData(input: {
@@ -58,6 +58,6 @@ export function encodeWriteConditionOperatorData(operatorAddress: string): `0x${
   return abiCoder.encode(["address"], [operatorAddress]) as `0x${string}`
 }
 
-export function encodeSignedAccessNamespace(namespace: string): `0x${string}` {
+export function encodeSignedAccessNamespace(namespace: `0x${string}`): `0x${string}` {
   return abiCoder.encode(["bytes32"], [namespace]) as `0x${string}`
 }

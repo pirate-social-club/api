@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import app from "../src/index"
 import { createRouteTestContext, json, mintUpstreamJwt, resetRuntimeCaches } from "./helpers"
 import type { Env } from "../src/types"
+import { setStoryAccessProofSignerForTests } from "../src/lib/story/story-access-proof-service"
+import { setStoryAssetPublisherForTests } from "../src/lib/story/story-publish-service"
+import { setStoryCdrUploaderForTests } from "../src/lib/story/story-cdr"
 
 let cleanup: (() => Promise<void>) | null = null
 let originalFetch: typeof fetch
@@ -951,6 +954,33 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
 
   test("publishes a locked song, sells access, and decrypts the purchased asset", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
+    setStoryCdrUploaderForTests(async () => ({
+      cdrVaultUuid: 4242,
+      writerAddress: "0x0000000000000000000000000000000000000cd1",
+      txHashes: {
+        allocate: "0xalloc",
+        write: "0xwrite",
+      },
+    }))
+    setStoryAssetPublisherForTests(async () => ({
+      entitlementConfiguredTxHash: "0xconfigure",
+      publishTxHash: "0xpublish",
+    }))
+    setStoryAccessProofSignerForTests(async (input) => ({
+      digest: "0xd1e57",
+      signature: `0x${"11".repeat(65)}` as `0x${string}`,
+      signerAddress: "0x0000000000000000000000000000000000000acc",
+      proof: {
+        vaultUuid: input.vaultUuid,
+        caller: input.callerAddress,
+        accessRef: input.accessRef,
+        scope: input.scope === "asset.owner"
+          ? "0xb8c1a2b531e7c9d996686b1cc6dcd49d2d7037be365b6d380ebaf489440d4f18"
+          : "0x2e3cf0f4f202b4d5d9581a50ca154fd30d982d3e5b85f49252f774117e2a1f7c",
+        expiry: input.expiry,
+        namespace: input.namespace,
+      },
+    }))
 
     globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const request = input instanceof Request ? input : new Request(input, init)
@@ -1036,6 +1066,11 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
       ACRCLOUD_HOST: "acrcloud.test",
       ELEVENLABS_API_KEY: "test-elevenlabs-key",
       ELEVENLABS_FORCE_ALIGNMENT_URL: "https://elevenlabs.test/forced-alignment",
+      STORY_CDR_WRITER_PKP_ADDRESS: "0x0000000000000000000000000000000000000cd1",
+      STORY_CDR_WRITER_ACTION_CID_ALLOCATE_WRITE: "bafybeigdyrzt2n6p5d6lq4b7nrbw7wvsj6c7z5i6xq6a4h3s2g4m5n6o7u",
+      LIT_CHIPOTLE_CDR_WRITER_API_KEY: "test-chipotle-cdr-writer",
+      LIT_CHIPOTLE_API_BASE_URL: "https://chipotle.test",
+      IPFS_GATEWAY_URL: "https://ipfs.test/ipfs",
     })
     cleanup = ctx.cleanup
 
@@ -1169,7 +1204,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
       media_refs?: Array<{ storage_ref: string }>
     }
     expect(lockedPostBody.access_mode).toBe("locked")
-    expect(lockedPostBody.asset_id).toBeTruthy()
+    expect(typeof lockedPostBody.asset_id === "string" && lockedPostBody.asset_id.length > 0).toBe(true)
     expect(lockedPostBody.media_refs?.[0]?.storage_ref).toBe(previewUploadIntentBody.storage_ref)
 
     const assetId = lockedPostBody.asset_id as string
@@ -1227,7 +1262,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     expect(buyerAccessBeforePurchaseBody.access_granted).toBe(false)
     expect(buyerAccessBeforePurchaseBody.decision_reason).toBe("purchase_required")
 
-    const buyerContentBeforePurchase = await app.request(
+    const buyerCiphertextBeforePurchase = await app.request(
       `http://pirate.test/communities/${communityId}/assets/${assetId}/content`,
       {
         headers: {
@@ -1236,7 +1271,10 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
       },
       ctx.env,
     )
-    expect(buyerContentBeforePurchase.status).toBe(404)
+    expect(buyerCiphertextBeforePurchase.status).toBe(200)
+    expect(buyerCiphertextBeforePurchase.headers.get("content-type")).toBe("application/octet-stream")
+    const ciphertextBeforePurchase = new Uint8Array(await buyerCiphertextBeforePurchase.arrayBuffer())
+    expect(ciphertextBeforePurchase).not.toEqual(primaryBytes)
 
     const listingCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/listings`,
@@ -1303,11 +1341,25 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     const buyerAccessAfterPurchaseBody = await json(buyerAccessAfterPurchase) as {
       access_granted: boolean
       decision_reason: string
+      delivery_kind: string | null
+      story_cdr_access?: {
+        ciphertext_ref: string
+        vault_uuid: number
+        access_scope: string
+        access_aux_data_hex: string
+      } | null
     }
     expect(buyerAccessAfterPurchaseBody.access_granted).toBe(true)
     expect(buyerAccessAfterPurchaseBody.decision_reason).toBe("purchase_entitlement")
+    expect(buyerAccessAfterPurchaseBody.delivery_kind).toBe("story_cdr_ref")
+    expect(buyerAccessAfterPurchaseBody.story_cdr_access?.ciphertext_ref).toBe(
+      `/communities/${communityId}/assets/${assetId}/content`,
+    )
+    expect(buyerAccessAfterPurchaseBody.story_cdr_access?.vault_uuid).toBe(4242)
+    expect(buyerAccessAfterPurchaseBody.story_cdr_access?.access_scope).toBe("asset.share")
+    expect(buyerAccessAfterPurchaseBody.story_cdr_access?.access_aux_data_hex.startsWith("0x")).toBe(true)
 
-    const buyerContentAfterPurchase = await app.request(
+    const buyerCiphertextAfterPurchase = await app.request(
       `http://pirate.test/communities/${communityId}/assets/${assetId}/content`,
       {
         headers: {
@@ -1316,8 +1368,8 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
       },
       ctx.env,
     )
-    expect(buyerContentAfterPurchase.status).toBe(200)
-    expect(buyerContentAfterPurchase.headers.get("content-type")).toBe("audio/mpeg")
-    expect(new Uint8Array(await buyerContentAfterPurchase.arrayBuffer())).toEqual(primaryBytes)
+    expect(buyerCiphertextAfterPurchase.status).toBe(200)
+    expect(buyerCiphertextAfterPurchase.headers.get("content-type")).toBe("application/octet-stream")
+    expect(new Uint8Array(await buyerCiphertextAfterPurchase.arrayBuffer())).toEqual(ciphertextBeforePurchase)
   })
 })

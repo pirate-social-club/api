@@ -48,8 +48,13 @@ export function serializeCommunity(row: CommunityRow, local: LocalCommunitySnaps
   const adultContentPolicy = storedSettings.adult_content_policy as Community["adult_content_policy"] | undefined
   const graphicContentPolicy = storedSettings.graphic_content_policy as Community["graphic_content_policy"] | undefined
   const civilityPolicy = storedSettings.civility_policy as Community["civility_policy"] | undefined
-  const openAIModerationSettings =
-    storedSettings.openai_moderation_settings as Community["openai_moderation_settings"] | undefined
+  const openAIModerationSettings = storedSettings.openai_moderation_settings as {
+    scan_titles: boolean
+    scan_post_bodies: boolean
+    scan_captions: boolean
+    scan_link_preview_text: boolean
+    scan_images: boolean
+  } | undefined
   return {
     community_id: row.community_id,
     display_name: displayName,
@@ -78,6 +83,7 @@ export function serializeCommunity(row: CommunityRow, local: LocalCommunitySnaps
     allow_anonymous_identity: local?.allow_anonymous_identity ?? false,
     anonymous_identity_scope: local?.anonymous_identity_scope ?? null,
     governance_mode: local?.governance_mode ?? "centralized",
+    human_verification_lane: "self",
     donation_policy_mode: local?.donation_policy_mode ?? "none",
     donation_partner_status: donationPartnerStatus,
     default_age_gate_policy: defaultAgeGatePolicy,
@@ -87,6 +93,7 @@ export function serializeCommunity(row: CommunityRow, local: LocalCommunitySnaps
     agent_daily_reply_cap: null,
     agent_min_owner_trust_tier: null,
     agent_owner_active_limit: null,
+    accepted_agent_ownership_providers: [],
     civic_scale_tier: "club",
     content_authenticity_policy: buildDefaultContentAuthenticityPolicy(row.community_id, policyUpdatedAt),
     content_authenticity_detection_policy: buildDefaultContentAuthenticityDetectionPolicy(row.community_id, policyUpdatedAt),
@@ -116,7 +123,19 @@ export function serializeCommunity(row: CommunityRow, local: LocalCommunitySnaps
         resource_links: [],
       }
       : null,
-    gate_rules: local?.gate_rules ?? null,
+    gate_rules: (local?.gate_rules?.map((rule) => ({
+      community_id: row.community_id,
+      gate_rule_id: rule.gate_rule_id,
+      scope: rule.scope,
+      gate_family: rule.gate_family,
+      gate_type: rule.gate_type,
+      proof_requirements: rule.proof_requirements,
+      chain_namespace: rule.chain_namespace,
+      gate_config: rule.gate_config,
+      status: rule.status,
+      created_at: rule.created_at,
+      updated_at: rule.updated_at,
+    })) as NonNullable<Community["gate_rules"]>) ?? null,
     created_by_user_id: row.creator_user_id,
     created_at: row.created_at,
     updated_at: local?.updated_at ?? row.updated_at,

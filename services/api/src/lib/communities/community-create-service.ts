@@ -23,7 +23,6 @@ import type {
   CommunityCreateAcceptedResponse,
   CreateCommunityRequest,
   Env,
-  Job,
   User,
 } from "../../types"
 import { serializeCommunity, serializeJob, getPrimaryWalletSnapshot } from "./community-serialization"
@@ -497,7 +496,7 @@ async function loadCommunityLocalSnapshot(
       status: gateRow.status === "disabled" ? "disabled" : "active",
       created_at: String(gateRow.created_at),
       updated_at: String(gateRow.updated_at),
-    }))
+    } satisfies LocalCommunitySnapshot["gate_rules"][number]))
 
     return {
       community_id: String(row.community_id),

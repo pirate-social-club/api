@@ -40,7 +40,7 @@ app.route("/", verification)
 
 app.notFound((c) => c.json({ code: "not_found", message: "Not found" }, 404))
 
-app.onError((error, c) => {
+app.onError((error) => {
   console.error("[api-worker]", error)
   const response = errorResponse(error)
   return new Response(JSON.stringify(response.body), {

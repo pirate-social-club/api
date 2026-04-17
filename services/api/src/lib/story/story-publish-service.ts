@@ -25,6 +25,36 @@ export type StoryAssetPublishResult = {
   publishTxHash: string
 }
 
+let testPublisher: ((input: {
+  env: Env
+  publisherAddress: string
+  assetVersionId: `0x${string}`
+  cdrVaultUuid: number
+  namespace: `0x${string}`
+  contentHash: `0x${string}`
+  storageRefHash: `0x${string}`
+  entitlementTokenId: bigint
+  readConditionAddress: string
+  writeConditionAddress: string
+}) => Promise<StoryAssetPublishResult>) | null = null
+
+export function setStoryAssetPublisherForTests(
+  publisher: ((input: {
+    env: Env
+    publisherAddress: string
+    assetVersionId: `0x${string}`
+    cdrVaultUuid: number
+    namespace: `0x${string}`
+    contentHash: `0x${string}`
+    storageRefHash: `0x${string}`
+    entitlementTokenId: bigint
+    readConditionAddress: string
+    writeConditionAddress: string
+  }) => Promise<StoryAssetPublishResult>) | null,
+): void {
+  testPublisher = publisher
+}
+
 function normalizePrivateKey(raw: string | null | undefined): string | null {
   const value = String(raw || "").trim()
   if (!value) return null
@@ -44,6 +74,9 @@ export async function publishLockedAssetVersionToStory(input: {
   readConditionAddress: string
   writeConditionAddress: string
 }): Promise<StoryAssetPublishResult> {
+  if (testPublisher) {
+    return await testPublisher(input)
+  }
   const ownerPrivateKey = normalizePrivateKey(input.env.STORY_CONTRACT_OWNER_PRIVATE_KEY)
   if (!ownerPrivateKey) {
     throw new Error("STORY_CONTRACT_OWNER_PRIVATE_KEY missing/invalid")

@@ -12,7 +12,6 @@ import type {
   CommunityRegistryAttemptRow,
   CommunityRow,
   JobRow,
-  WalletAttachmentRow,
 } from "../auth/control-plane-auth-rows"
 
 async function resolveRegistryAttemptWalletSnapshot(

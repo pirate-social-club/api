@@ -1,4 +1,5 @@
 import type { Client } from "@libsql/client"
+import { AbiCoder } from "ethers"
 import { executeFirst } from "../db-helpers"
 import { badRequestError, eligibilityFailed, notFoundError, verificationRequired } from "../errors"
 import { makeId, nowIso } from "../helpers"
@@ -14,6 +15,33 @@ import {
 } from "../song-artifacts/song-artifact-storage"
 import { findUploadedSongArtifactByStorageRef } from "../song-artifacts/song-artifact-repository"
 import type { UserRepository } from "../auth/repositories"
+import { getPrimaryWalletSnapshot } from "./community-serialization"
+import {
+  generateStorySignedAccessProof,
+  type StoryAccessScope,
+} from "../story/story-access-proof-service"
+import {
+  deriveEntitlementTokenId,
+  deriveStorageRefHash,
+  deriveStoryAssetVersionId,
+  deriveStoryNamespace,
+  hashBytes32FromParts,
+  encodeSignedAccessNamespace,
+  encodeWriteConditionOperatorData,
+} from "../story/story-identifiers"
+import {
+  resolveStoryCdrContracts,
+  uploadCdrEncryptedDataKey,
+} from "../story/story-cdr"
+import { resolveStoryCdrWriterPkpExecutionConfig } from "../story/cdr-writer-pkp"
+import {
+  publishLockedAssetVersionToStory,
+} from "../story/story-publish-service"
+import {
+  resolveStoryChainId,
+  resolveStoryRpcUrl,
+  STORY_DELIVERY_CONTRACTS,
+} from "../story/story-runtime-config"
 import type {
   Asset,
   AssetAccessResponse,
@@ -153,9 +181,10 @@ type PurchaseEntitlementRow = {
 type LockedDeliverySecret = {
   algorithm: "AES-GCM"
   iv_b64: string
-  key_b64: string
   mime_type: string
 }
+
+const abiCoder = AbiCoder.defaultAbiCoder()
 
 function parseJsonValue<T>(value: string | null, fallback: T): T {
   if (!value?.trim()) {
@@ -351,7 +380,7 @@ function serializeSettlement(
     settlement_chain_ref: toChainRefString(settlementChain),
     settlement_token: purchase.settlement_token,
     settlement_tx_ref: purchase.settlement_tx_ref,
-    entitlement_kind: entitlement.entitlement_kind === "license" ? "asset_access" : entitlement.entitlement_kind,
+    entitlement_kind: toSettlementEntitlementKind(entitlement.entitlement_kind),
     entitlement_target_ref: entitlement.target_ref,
     purchase_entitlement_id: entitlement.purchase_entitlement_id,
     settled_at: purchase.created_at,
@@ -371,7 +400,7 @@ async function requireCommunityOwner(input: {
   communityRepository: CommunityRepository
 }): Promise<void> {
   const community = await input.communityRepository.getCommunityById(input.communityId)
-  if (!community || community.created_by_user_id !== input.userId) {
+  if (!community || community.creator_user_id !== input.userId) {
     throw notFoundError("Community not found")
   }
 }
@@ -390,6 +419,10 @@ function roundUsd(value: number): number {
   return Math.round(value * 100) / 100
 }
 
+function toOwnedBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
+  return new Uint8Array(bytes)
+}
+
 function toBase64(bytes: Uint8Array): string {
   let binary = ""
   for (const byte of bytes) {
@@ -398,51 +431,177 @@ function toBase64(bytes: Uint8Array): string {
   return btoa(binary)
 }
 
-function fromBase64(value: string): Uint8Array {
-  const decoded = atob(value)
-  const bytes = new Uint8Array(decoded.length)
-  for (let index = 0; index < decoded.length; index += 1) {
-    bytes[index] = decoded.charCodeAt(index)
-  }
-  return bytes
+function toSettlementEntitlementKind(
+  entitlementKind: CommunityPurchase["entitlement_kind"],
+): CommunityPurchaseSettlement["entitlement_kind"] {
+  return entitlementKind === "live_room_access" ? "live_room_access" : "asset_access"
 }
 
 async function encryptLockedPayload(bytes: Uint8Array): Promise<{
   ciphertext: Uint8Array
-  secret: LockedDeliverySecret
+  dataKey: Uint8Array
+  metadata: LockedDeliverySecret
 }> {
   const keyBytes = crypto.getRandomValues(new Uint8Array(32))
   const iv = crypto.getRandomValues(new Uint8Array(12))
   const key = await crypto.subtle.importKey("raw", keyBytes, { name: "AES-GCM" }, false, ["encrypt"])
-  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, bytes))
+  const ciphertext = new Uint8Array(
+    await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, toOwnedBytes(bytes)),
+  )
   return {
     ciphertext,
-    secret: {
+    dataKey: keyBytes,
+    metadata: {
       algorithm: "AES-GCM",
       iv_b64: toBase64(iv),
-      key_b64: toBase64(keyBytes),
       mime_type: "audio/mpeg",
     },
   }
 }
 
-async function decryptLockedPayload(input: {
-  bytes: Uint8Array
-  secret: LockedDeliverySecret
-}): Promise<Uint8Array> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    fromBase64(input.secret.key_b64),
-    { name: "AES-GCM" },
-    false,
-    ["decrypt"],
+function buildAssetContentPath(communityId: string, assetId: string): string {
+  return `/communities/${encodeURIComponent(communityId)}/assets/${encodeURIComponent(assetId)}/content`
+}
+
+async function resolvePrimaryWalletAddress(input: {
+  env: Env
+  userRepository: UserRepository
+  userId: string
+}): Promise<string> {
+  const user = await input.userRepository.getUserById(input.userId)
+  if (!user) {
+    throw notFoundError("User not found")
+  }
+  const attachments = await input.userRepository.getWalletAttachmentsByUserId(input.userId)
+  const address = getPrimaryWalletSnapshot(user, attachments)
+  if (!address?.trim()) {
+    const operatorAddress = String(input.env.STORY_OPERATOR_PKP_ADDRESS || "").trim()
+    if (operatorAddress) {
+      return operatorAddress
+    }
+    const writerAddress = String(input.env.STORY_CDR_WRITER_PKP_ADDRESS || "").trim()
+    if (writerAddress) {
+      return writerAddress
+    }
+    throw badRequestError("Primary wallet is required")
+  }
+  return address
+}
+
+function encodeStoryAccessAuxData(input: {
+  vaultUuid: number
+  caller: string
+  accessRef: `0x${string}`
+  scope: `0x${string}`
+  expiry: number
+  namespace: `0x${string}`
+  signature: `0x${string}`
+}): `0x${string}` {
+  return abiCoder.encode(
+    [
+      "tuple(uint32 vaultUuid,address caller,bytes32 accessRef,bytes32 scope,uint64 expiry,bytes32 namespace)",
+      "bytes",
+    ],
+    [
+      {
+        vaultUuid: input.vaultUuid,
+        caller: input.caller,
+        accessRef: input.accessRef,
+        scope: input.scope,
+        expiry: input.expiry,
+        namespace: input.namespace,
+      },
+      input.signature,
+    ],
+  ) as `0x${string}`
+}
+
+function buildStoryAccessRef(input: {
+  communityId: string
+  assetId: string
+  userId: string
+  decisionReason: AssetAccessResponse["decision_reason"]
+}): `0x${string}` {
+  return hashBytes32FromParts(
+    "pirate-v2",
+    "story-access",
+    input.communityId,
+    input.assetId,
+    input.userId,
+    input.decisionReason,
   )
-  const plaintext = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: fromBase64(input.secret.iv_b64) },
-    key,
-    input.bytes,
-  )
-  return new Uint8Array(plaintext)
+}
+
+async function buildStoryCdrAccessPackage(input: {
+  env: Env
+  asset: AssetRow
+  callerWalletAddress: string
+  userId: string
+  decisionReason: "creator" | "moderator" | "purchase_entitlement"
+}): Promise<NonNullable<AssetAccessResponse["story_cdr_access"]>> {
+  if (!input.asset.story_cdr_vault_uuid || !input.asset.story_namespace || !input.asset.locked_delivery_secret_json) {
+    throw notFoundError("Locked asset CDR metadata not found")
+  }
+  const chainId = resolveStoryChainId(input.env)
+  const cdrContracts = resolveStoryCdrContracts(chainId)
+  if (!cdrContracts) {
+    throw badRequestError("Story CDR contracts are not configured for this chain")
+  }
+  const metadata = parseJsonValue<LockedDeliverySecret>(input.asset.locked_delivery_secret_json, {
+    algorithm: "AES-GCM",
+    iv_b64: "",
+    mime_type: "application/octet-stream",
+  })
+  const accessScope: StoryAccessScope = input.decisionReason === "purchase_entitlement" ? "asset.share" : "asset.owner"
+  const accessRef = buildStoryAccessRef({
+    communityId: input.asset.community_id,
+    assetId: input.asset.asset_id,
+    userId: input.userId,
+    decisionReason: input.decisionReason,
+  })
+  const accessProof = await generateStorySignedAccessProof({
+    env: input.env,
+    vaultUuid: input.asset.story_cdr_vault_uuid,
+    callerAddress: input.callerWalletAddress,
+    accessRef,
+    scope: accessScope,
+    expiry: Math.floor(Date.now() / 1000) + 300,
+    namespace: input.asset.story_namespace as `0x${string}`,
+    verifyingContract: STORY_DELIVERY_CONTRACTS.signedAccessConditionV1,
+  })
+
+  return {
+    chain_id: chainId,
+    rpc_url: resolveStoryRpcUrl(input.env),
+    cdr_contract_address: cdrContracts.cdrAddress,
+    read_condition_address: STORY_DELIVERY_CONTRACTS.signedAccessConditionV1,
+    ciphertext_ref: buildAssetContentPath(input.asset.community_id, input.asset.asset_id),
+    cipher_algorithm: metadata.algorithm,
+    cipher_iv_b64: metadata.iv_b64,
+    mime_type: metadata.mime_type,
+    vault_uuid: input.asset.story_cdr_vault_uuid,
+    namespace: input.asset.story_namespace,
+    access_scope: accessScope,
+    access_aux_data_hex: encodeStoryAccessAuxData({
+      vaultUuid: accessProof.proof.vaultUuid,
+      caller: accessProof.proof.caller,
+      accessRef: accessProof.proof.accessRef,
+      scope: accessProof.proof.scope,
+      expiry: accessProof.proof.expiry,
+      namespace: accessProof.proof.namespace,
+      signature: accessProof.signature,
+    }),
+    access_proof: {
+      digest: accessProof.digest,
+      signature: accessProof.signature,
+      signer_address: accessProof.signerAddress,
+      caller: accessProof.proof.caller,
+      access_ref: accessProof.proof.accessRef,
+      scope: accessProof.proof.scope,
+      expiry: accessProof.proof.expiry,
+      namespace: accessProof.proof.namespace,
+    },
+  }
 }
 
 async function getAssetRow(client: Client, communityId: string, assetId: string): Promise<AssetRow | null> {
@@ -1006,12 +1165,21 @@ async function prepareLockedSongAssetDelivery(input: {
   env: Env
   communityId: string
   assetId: string
+  creatorWalletAddress: string
   bundle: SongArtifactBundle
 }): Promise<{
+  storyStatus: Asset["story_status"]
+  storyPublishTxRef: string
+  storyAssetVersionId: string
+  storyCdrVaultUuid: number
+  storyNamespace: string
+  storyEntitlementTokenId: string
+  storyReadCondition: string
+  storyWriteCondition: string
   lockedDeliveryStatus: Asset["locked_delivery_status"]
   lockedDeliveryRef: string
   lockedDeliveryStorageRef: string
-  lockedDeliverySecretJson: string
+  lockedDeliveryMetadataJson: string
 }> {
   const controlPlaneClient = getControlPlaneClient(input.env)
   const upload = await findUploadedSongArtifactByStorageRef({
@@ -1028,8 +1196,8 @@ async function prepareLockedSongAssetDelivery(input: {
     objectKey: upload.storage_object_key,
   })
   const plaintext = new Uint8Array(await upstream.arrayBuffer())
-  const { ciphertext, secret } = await encryptLockedPayload(plaintext)
-  secret.mime_type = input.bundle.primary_audio.mime_type
+  const { ciphertext, dataKey, metadata } = await encryptLockedPayload(plaintext)
+  metadata.mime_type = input.bundle.primary_audio.mime_type
 
   const objectKey = `locked-assets/${input.communityId}/${input.assetId}/payload.bin`
   await uploadFilebaseObject({
@@ -1038,11 +1206,59 @@ async function prepareLockedSongAssetDelivery(input: {
     mimeType: "application/octet-stream",
     bytes: ciphertext,
   })
+  const primaryContentHash = (input.bundle.primary_audio.content_hash?.trim() || `0x${await sha256Hex(plaintext)}`) as `0x${string}`
+  const assetVersionId = deriveStoryAssetVersionId({
+    communityId: input.communityId,
+    assetId: input.assetId,
+    bundleId: input.bundle.song_artifact_bundle_id,
+    primaryContentHash,
+  })
+  const namespace = deriveStoryNamespace(assetVersionId)
+  const entitlementTokenId = deriveEntitlementTokenId(assetVersionId)
+  const readConditionAddress = STORY_DELIVERY_CONTRACTS.signedAccessConditionV1
+  const writeConditionAddress = STORY_DELIVERY_CONTRACTS.signedAccessConditionV1
+  const writerConfig = resolveStoryCdrWriterPkpExecutionConfig(input.env)
+  if (!writerConfig.ok) {
+    throw badRequestError(writerConfig.error)
+  }
+  if (!writerConfig.value) {
+    throw badRequestError("STORY_CDR_WRITER_PKP_ADDRESS missing/invalid")
+  }
+  const readConditionData = encodeSignedAccessNamespace(namespace)
+  const writeConditionData = encodeWriteConditionOperatorData(writerConfig.value.pkp.pkpAddress)
+  const cdrUpload = await uploadCdrEncryptedDataKey({
+    env: input.env,
+    dataKey,
+    readConditionAddr: readConditionAddress,
+    writeConditionAddr: writeConditionAddress,
+    readConditionData,
+    writeConditionData,
+  })
+  const storyPublish = await publishLockedAssetVersionToStory({
+    env: input.env,
+    publisherAddress: input.creatorWalletAddress,
+    assetVersionId,
+    cdrVaultUuid: cdrUpload.cdrVaultUuid,
+    namespace,
+    contentHash: primaryContentHash,
+    storageRefHash: deriveStorageRefHash(objectKey),
+    entitlementTokenId,
+    readConditionAddress,
+    writeConditionAddress,
+  })
   return {
+    storyStatus: "published",
+    storyPublishTxRef: storyPublish.publishTxHash,
+    storyAssetVersionId: assetVersionId,
+    storyCdrVaultUuid: cdrUpload.cdrVaultUuid,
+    storyNamespace: namespace,
+    storyEntitlementTokenId: entitlementTokenId.toString(),
+    storyReadCondition: readConditionAddress,
+    storyWriteCondition: writeConditionAddress,
     lockedDeliveryStatus: "ready",
-    lockedDeliveryRef: `asset-delivery:${input.assetId}`,
+    lockedDeliveryRef: buildAssetContentPath(input.communityId, input.assetId),
     lockedDeliveryStorageRef: objectKey,
-    lockedDeliverySecretJson: JSON.stringify(secret),
+    lockedDeliveryMetadataJson: JSON.stringify(metadata),
   }
 }
 
@@ -1073,6 +1289,7 @@ export async function createSongAssetForPost(input: {
   communityId: string
   post: Post
   bundle: SongArtifactBundle
+  userRepository: UserRepository
 }): Promise<Asset> {
   if (!input.post.asset_id?.trim()) {
     throw badRequestError("Song post is missing asset_id")
@@ -1086,23 +1303,48 @@ export async function createSongAssetForPost(input: {
   let lockedDeliveryRef: string | null = null
   let lockedDeliveryError: string | null = null
   let lockedDeliveryStorageRef: string | null = null
-  let lockedDeliverySecretJson: string | null = null
+  let lockedDeliveryMetadataJson: string | null = null
+  let storyStatus: Asset["story_status"] = "none"
+  let storyError: string | null = null
+  let storyPublishTxRef: string | null = null
+  let storyAssetVersionId: string | null = null
+  let storyCdrVaultUuid: number | null = null
+  let storyNamespace: string | null = null
+  let storyEntitlementTokenId: string | null = null
+  let storyReadCondition: string | null = null
+  let storyWriteCondition: string | null = null
 
   if ((input.post.access_mode ?? "public") === "locked") {
     try {
+      const creatorWalletAddress = await resolvePrimaryWalletAddress({
+        env: input.env,
+        userRepository: input.userRepository,
+        userId: input.post.author_user_id ?? "",
+      })
       const lockedDelivery = await prepareLockedSongAssetDelivery({
         env: input.env,
         communityId: input.communityId,
         assetId: input.post.asset_id,
+        creatorWalletAddress,
         bundle: input.bundle,
       })
+      storyStatus = lockedDelivery.storyStatus
+      storyPublishTxRef = lockedDelivery.storyPublishTxRef
+      storyAssetVersionId = lockedDelivery.storyAssetVersionId
+      storyCdrVaultUuid = lockedDelivery.storyCdrVaultUuid
+      storyNamespace = lockedDelivery.storyNamespace
+      storyEntitlementTokenId = lockedDelivery.storyEntitlementTokenId
+      storyReadCondition = lockedDelivery.storyReadCondition
+      storyWriteCondition = lockedDelivery.storyWriteCondition
       lockedDeliveryStatus = lockedDelivery.lockedDeliveryStatus
       lockedDeliveryRef = lockedDelivery.lockedDeliveryRef
       lockedDeliveryStorageRef = lockedDelivery.lockedDeliveryStorageRef
-      lockedDeliverySecretJson = lockedDelivery.lockedDeliverySecretJson
+      lockedDeliveryMetadataJson = lockedDelivery.lockedDeliveryMetadataJson
     } catch (error) {
+      storyStatus = "failed"
+      storyError = error instanceof Error ? error.message : String(error)
       lockedDeliveryStatus = "failed"
-      lockedDeliveryError = error instanceof Error ? error.message : String(error)
+      lockedDeliveryError = storyError
       throw badRequestError(`Locked delivery preparation failed: ${lockedDeliveryError}`)
     }
   }
@@ -1119,10 +1361,10 @@ export async function createSongAssetForPost(input: {
       ) VALUES (
         ?1, ?2, ?3, ?4, ?5, 'song_audio',
         ?6, ?7, ?8, ?9, 'draft',
-        'none', NULL, NULL, ?10, ?11,
-        ?12, ?13, ?13, NULL, NULL,
-        NULL, NULL, NULL, NULL,
-        NULL, ?14, ?15
+        ?10, ?11, NULL, ?12, ?13,
+        ?14, ?15, ?15, ?16, ?17,
+        ?18, ?19, ?20, ?21, ?22,
+        ?23, ?24
       )
     `,
     args: [
@@ -1135,12 +1377,21 @@ export async function createSongAssetForPost(input: {
       input.post.access_mode ?? "public",
       input.bundle.primary_audio.storage_ref,
       input.bundle.primary_audio.content_hash ?? `0x${await sha256Hex(input.bundle.primary_audio.storage_ref)}`,
+      storyStatus,
+      storyError,
       lockedDeliveryStatus,
       lockedDeliveryRef,
       lockedDeliveryError,
       createdAt,
+      storyPublishTxRef,
+      storyAssetVersionId,
+      storyCdrVaultUuid,
+      storyNamespace,
+      storyEntitlementTokenId,
+      storyReadCondition,
+      storyWriteCondition,
       lockedDeliveryStorageRef,
-      lockedDeliverySecretJson,
+      lockedDeliveryMetadataJson,
     ],
   })
   const asset = await getAssetRow(input.client, input.communityId, input.post.asset_id)
@@ -1185,6 +1436,7 @@ export async function resolveCommunityAssetAccess(input: {
   communityId: string
   assetId: string
   communityRepository: CommunityRepository
+  userRepository: UserRepository
 }): Promise<AssetAccessResponse> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
@@ -1216,10 +1468,17 @@ export async function resolveCommunityAssetAccess(input: {
         decision_reason: isPrivilegedViewer ? "creator" : "public",
         delivery_kind: "primary_content_ref",
         delivery_ref: buildAssetContentPath(asset.community_id, asset.asset_id),
+        story_cdr_access: null,
       }
     }
 
     if (isPrivilegedViewer) {
+      const callerWalletAddress = await resolvePrimaryWalletAddress({
+        env: input.env,
+        userRepository: input.userRepository,
+        userId: input.userId,
+      })
+      const decisionReason = membership.role_status === "active" && asset.creator_user_id !== input.userId ? "moderator" : "creator"
       return {
         asset_id: asset.asset_id,
         community_id: asset.community_id,
@@ -1229,14 +1488,28 @@ export async function resolveCommunityAssetAccess(input: {
         story_status: asset.story_status,
         locked_delivery_status: asset.locked_delivery_status,
         access_granted: asset.locked_delivery_status === "ready",
-        decision_reason: membership.role_status === "active" && asset.creator_user_id !== input.userId ? "moderator" : "creator",
-        delivery_kind: asset.locked_delivery_status === "ready" ? "locked_delivery_ref" : null,
+        decision_reason: decisionReason,
+        delivery_kind: asset.locked_delivery_status === "ready" ? "story_cdr_ref" : null,
         delivery_ref: asset.locked_delivery_status === "ready" ? buildAssetContentPath(asset.community_id, asset.asset_id) : null,
+        story_cdr_access: asset.locked_delivery_status === "ready"
+          ? await buildStoryCdrAccessPackage({
+            env: input.env,
+            asset,
+            callerWalletAddress,
+            userId: input.userId,
+            decisionReason,
+          })
+          : null,
       }
     }
 
     const entitlement = await getActiveEntitlementForBuyer(db.client, input.communityId, input.userId, asset.asset_id)
     if (entitlement && asset.locked_delivery_status === "ready") {
+      const callerWalletAddress = await resolvePrimaryWalletAddress({
+        env: input.env,
+        userRepository: input.userRepository,
+        userId: input.userId,
+      })
       return {
         asset_id: asset.asset_id,
         community_id: asset.community_id,
@@ -1247,8 +1520,15 @@ export async function resolveCommunityAssetAccess(input: {
         locked_delivery_status: asset.locked_delivery_status,
         access_granted: true,
         decision_reason: "purchase_entitlement",
-        delivery_kind: "locked_delivery_ref",
+        delivery_kind: "story_cdr_ref",
         delivery_ref: buildAssetContentPath(asset.community_id, asset.asset_id),
+        story_cdr_access: await buildStoryCdrAccessPackage({
+          env: input.env,
+          asset,
+          callerWalletAddress,
+          userId: input.userId,
+          decisionReason: "purchase_entitlement",
+        }),
       }
     }
 
@@ -1264,14 +1544,11 @@ export async function resolveCommunityAssetAccess(input: {
       decision_reason: asset.locked_delivery_status === "ready" ? "purchase_required" : "delivery_pending",
       delivery_kind: null,
       delivery_ref: null,
+      story_cdr_access: null,
     }
   } finally {
     db.close()
   }
-}
-
-function buildAssetContentPath(communityId: string, assetId: string): string {
-  return `/communities/${encodeURIComponent(communityId)}/assets/${encodeURIComponent(assetId)}/content`
 }
 
 export async function fetchCommunityAssetContent(input: {
@@ -1280,49 +1557,33 @@ export async function fetchCommunityAssetContent(input: {
   communityId: string
   assetId: string
   communityRepository: CommunityRepository
+  userRepository: UserRepository
 }): Promise<Response> {
-  const access = await resolveCommunityAssetAccess(input)
-  if (!access.access_granted) {
-    throw notFoundError("Asset content not found")
-  }
-
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
     const asset = await getAssetRow(db.client, input.communityId, input.assetId)
     if (!asset) {
       throw notFoundError("Asset not found")
     }
-    if (asset.access_mode === "public" || !asset.locked_delivery_storage_ref || !asset.locked_delivery_secret_json) {
+    const post = await getPostById(db.client, asset.source_post_id)
+    const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
+    const isPrivilegedViewer = asset.creator_user_id === input.userId || membership.role_status === "active"
+    if (!post) {
+      throw notFoundError("Asset not found")
+    }
+    if (post.status !== "published" && !isPrivilegedViewer) {
+      throw notFoundError("Asset content not found")
+    }
+    if (asset.access_mode === "public" || !asset.locked_delivery_storage_ref) {
       return await fetchPrimarySongAssetContent({
         env: input.env,
         communityId: input.communityId,
         storageRef: asset.primary_content_ref,
       })
     }
-    const encrypted = await fetchSongArtifactBytes({
+    return await fetchSongArtifactBytes({
       env: input.env,
       objectKey: asset.locked_delivery_storage_ref,
-    })
-    const plaintext = await decryptLockedPayload({
-      bytes: new Uint8Array(await encrypted.arrayBuffer()),
-      secret: parseJsonValue(asset.locked_delivery_secret_json, {
-        algorithm: "AES-GCM",
-        iv_b64: "",
-        key_b64: "",
-        mime_type: "application/octet-stream",
-      }),
-    })
-    return new Response(plaintext, {
-      status: 200,
-      headers: {
-        "content-type": parseJsonValue<LockedDeliverySecret>(asset.locked_delivery_secret_json, {
-          algorithm: "AES-GCM",
-          iv_b64: "",
-          key_b64: "",
-          mime_type: "application/octet-stream",
-        }).mime_type,
-        "cache-control": "private, max-age=60",
-      },
     })
   } finally {
     db.close()

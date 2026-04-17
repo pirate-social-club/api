@@ -398,7 +398,7 @@ export function toLocalizedPostResponse(post: Post, locale?: string): LocalizedP
   }
 }
 
-export function assertPostCreateRequest(body: CreatePostRequest, communityId: string): void {
+export function assertPostCreateRequest(body: CreatePostRequest, _communityId: string): void {
   if (Object.prototype.hasOwnProperty.call(body, "community_id")) {
     throw badRequestError("community_id must not be provided in the post body")
   }

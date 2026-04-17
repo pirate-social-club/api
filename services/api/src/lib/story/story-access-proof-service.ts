@@ -5,6 +5,13 @@ import { parseExpectedEvmAddress } from "../evm-signer"
 import { resolveStoryAccessControllerPkpExecutionConfig } from "./access-controller-pkp"
 import { resolveStoryChainId } from "./story-runtime-config"
 
+type AccessProofTypedData = {
+  AccessProof: Array<{
+    name: string
+    type: string
+  }>
+}
+
 export type StoryAccessScope = "asset.owner" | "asset.share"
 
 export type StorySignedAccessProof = {
@@ -90,7 +97,7 @@ export async function generateStorySignedAccessProof(input: {
     chainId: resolveStoryChainId(input.env),
     verifyingContract: getAddress(verifyingContract),
   }
-  const types = {
+  const types: AccessProofTypedData = {
     AccessProof: [
       { name: "vaultUuid", type: "uint32" },
       { name: "caller", type: "address" },
@@ -99,7 +106,7 @@ export async function generateStorySignedAccessProof(input: {
       { name: "expiry", type: "uint64" },
       { name: "namespace", type: "bytes32" },
     ],
-  } as const
+  }
   const proof = {
     vaultUuid: input.vaultUuid,
     caller: getAddress(callerAddress),

@@ -274,6 +274,38 @@ describe("profile routes", () => {
     expect(redirectedBody.profile.global_handle.label).toBe("captainpublic.pirate")
   })
 
+  test("public profiles tolerate control-plane URLs with unsupported libsql query params", async () => {
+    const base = await createRouteTestContext()
+    cleanup = base.cleanup
+
+    const ctx = {
+      ...base,
+      env: {
+        ...base.env,
+        TURSO_CONTROL_PLANE_DATABASE_URL:
+          `${base.env.TURSO_CONTROL_PLANE_DATABASE_URL}?channel_binding=require&sslmode=require`,
+      },
+    }
+
+    const session = await exchangeJwt(ctx.env, "profile-public-handle-query-param-user")
+
+    const renamed = await requestJson("http://pirate.test/profiles/me/global-handle/rename", "POST", {
+      desired_label: "queryparamcaptain",
+    }, ctx.env, session.accessToken)
+    expect(renamed.status).toBe(200)
+
+    const response = await app.request("http://pirate.test/public-profiles/queryparamcaptain", {}, ctx.env)
+    expect(response.status).toBe(200)
+    const body = await json(response) as {
+      resolved_handle_label: string
+      is_canonical: boolean
+      profile: { user_id: string }
+    }
+    expect(body.resolved_handle_label).toBe("queryparamcaptain.pirate")
+    expect(body.is_canonical).toBe(true)
+    expect(body.profile.user_id).toBe(session.userId)
+  })
+
   test("global handle rename returns conflict when the desired label is already active", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup

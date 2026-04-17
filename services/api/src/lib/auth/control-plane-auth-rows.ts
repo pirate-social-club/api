@@ -1,5 +1,3 @@
-import type { Client, Transaction } from "@libsql/client"
-import type { DbExecutor } from "../db-helpers"
 export type { DbExecutor } from "../db-helpers"
 import {
   numberOrNull,
@@ -15,7 +13,6 @@ import type {
   NamespaceVerification,
   NamespaceVerificationSession,
   Post,
-  RedditImportSummary,
   RedditVerification,
   SessionExchangeResponse,
   User,

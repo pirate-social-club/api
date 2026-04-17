@@ -1,7 +1,6 @@
 import type { Client } from "@libsql/client"
 import {
   getActiveCommunityDbCredentialRow,
-  getCommunityDatabaseBindingRowById,
   getCommunityRowById,
   getCommunityRowByNamespaceVerificationId,
   getJobRowById,

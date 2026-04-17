@@ -5,6 +5,7 @@ declare module "bun:test" {
   export const afterEach: (fn: () => unknown | Promise<unknown>) => void
   export function expect<T>(value: T): {
     toBe(expected: unknown): void
+    toBeTruthy(): void
     toBeNull(): void
     toEqual(expected: unknown): void
     toMatch(expected: RegExp): void
@@ -12,7 +13,11 @@ declare module "bun:test" {
     toContain(expected: string): void
     toThrow(expected?: string | RegExp): void
     readonly not: {
+      toBe(expected: unknown): void
+      toBeNull(): void
       toContain(expected: string): void
+      toEqual(expected: unknown): void
+      toThrow(expected?: string | RegExp): void
     }
     readonly rejects: {
       toThrow(expected?: string | RegExp): Promise<void>

@@ -47,7 +47,7 @@ function makeUniqueHumanRule(): CommunityGateRuleRow {
 }
 
 function makeUser(overrides: {
-  nationality?: { state: CapabilityState; provider?: "self" | "very"; value?: string }
+  nationality?: { state: CapabilityState; provider?: "self"; value?: string }
   uniqueHuman?: { state: CapabilityState; provider?: "self" | "very" }
 }): User {
   const caps = buildDefaultVerificationCapabilities()
@@ -133,8 +133,19 @@ describe("evaluateMembershipGateRules", () => {
   })
 
   test("returns provider_not_accepted when provider is wrong", () => {
-    const user = makeUser({ nationality: { state: "verified", provider: "very", value: "US" } })
-    const rules = [makeNationalityRule("US")]
+    const user = makeUser({ nationality: { state: "verified", provider: "self", value: "US" } })
+    const rules: CommunityGateRuleRow[] = [{
+      gate_rule_id: "gr_test_wrong_provider",
+      scope: "membership",
+      gate_family: "identity_proof",
+      gate_type: "nationality",
+      proof_requirements_json: JSON.stringify([
+        { proof_type: "nationality", accepted_providers: ["very"], config: { required_value: "US" } },
+      ]),
+      chain_namespace: null,
+      gate_config_json: null,
+      status: "active",
+    }]
     const result = evaluateMembershipGateRules(rules, user)
     expect(result.satisfied).toBe(false)
     expect(result.mismatchReasons).toContain("provider_not_accepted")

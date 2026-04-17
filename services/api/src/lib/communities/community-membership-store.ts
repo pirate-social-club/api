@@ -2,7 +2,7 @@ import type { Client } from "@libsql/client"
 import { executeFirst } from "../db-helpers"
 import { makeId } from "../helpers"
 import { requiredString, rowValue, stringOrNull } from "../sql-row"
-import type { MembershipGateSummary, JoinEligibility, User } from "../../types"
+import type { MembershipGateSummary, User } from "../../types"
 
 export type CommunityMembershipRow = {
   membership_status: "member" | "left" | "banned" | null

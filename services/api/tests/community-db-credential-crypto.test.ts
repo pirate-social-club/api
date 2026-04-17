@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test"
 import { encryptCommunityDbCredential, decryptCommunityDbCredential } from "../src/lib/communities/community-db-credential-crypto"
-import { internalError } from "../src/lib/errors"
 
 const VALID_WRAP_KEY = "0".repeat(64)
 

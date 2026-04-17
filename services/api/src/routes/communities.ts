@@ -324,6 +324,7 @@ communities.get("/:communityId/assets/:assetId/access", async (c) => {
     communityId: c.req.param("communityId"),
     assetId: c.req.param("assetId"),
     communityRepository: getCommunityRepository(c.env),
+    userRepository: getUserRepository(c.env),
   })
   return c.json(result, 200)
 })
@@ -336,6 +337,7 @@ communities.get("/:communityId/assets/:assetId/content", async (c) => {
     communityId: c.req.param("communityId"),
     assetId: c.req.param("assetId"),
     communityRepository: getCommunityRepository(c.env),
+    userRepository: getUserRepository(c.env),
   })
 })
 

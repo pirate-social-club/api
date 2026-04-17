@@ -138,7 +138,6 @@ profiles.post("/me/primary-public-handle", async (c) => {
 })
 
 profiles.get("/:userId", async (c) => {
-  const actor = c.get("actor")
   const repository = getProfileRepository(c.env)
   const profile = await repository.getProfileByUserId(c.req.param("userId"))
   if (!profile) {

@@ -478,7 +478,7 @@ async function evaluateAlignment(input: {
   return {
     alignmentStatus: "completed",
     alignmentError: null,
-    timedLyrics: normalizeTimedLyrics(providerResult),
+    timedLyrics: normalizeTimedLyrics(providerResult ?? {}),
   }
 }
 

@@ -387,6 +387,7 @@ export function getVeryProvider(env: Env): VeryProvider {
             upstreamSessionRef,
             includeSessionId: false,
           }),
+          verify_url: verifyUrl,
         },
       }
     },

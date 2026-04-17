@@ -1,5 +1,3 @@
-import type { Env } from "../types"
-
 export function nowIso(): string {
   return new Date().toISOString()
 }

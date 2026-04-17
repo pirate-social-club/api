@@ -1,7 +1,7 @@
 import type { InStatement } from "@libsql/client"
 import { executeFirst, type DbExecutor } from "../db-helpers"
 import { internalError } from "../errors"
-import { makeId, nowIso } from "../helpers"
+import { makeId } from "../helpers"
 import {
   assembleProfile,
   parseRedditImportSummary,
@@ -51,11 +51,44 @@ type AuthProviderLinkRow = {
 }
 
 export function requireControlPlaneDbUrl(env: Env): string {
-  const url = String(env.TURSO_CONTROL_PLANE_DATABASE_URL || env.CONTROL_PLANE_DATABASE_URL || "").trim()
+  const url = normalizeControlPlaneDbUrl(
+    String(env.TURSO_CONTROL_PLANE_DATABASE_URL || env.CONTROL_PLANE_DATABASE_URL || "").trim(),
+  )
   if (!url) {
     throw internalError("TURSO_CONTROL_PLANE_DATABASE_URL is not configured")
   }
   return url
+}
+
+const UNSUPPORTED_LIBSQL_URL_PARAMS = ["channel_binding", "sslmode"] as const
+
+export function normalizeControlPlaneDbUrl(rawUrl: string): string {
+  if (!rawUrl) {
+    return rawUrl
+  }
+
+  const queryStart = rawUrl.indexOf("?")
+  if (queryStart === -1) {
+    return rawUrl
+  }
+
+  const hashStart = rawUrl.indexOf("#", queryStart)
+  const base = rawUrl.slice(0, queryStart)
+  const query = rawUrl.slice(queryStart + 1, hashStart === -1 ? rawUrl.length : hashStart)
+  const hash = hashStart === -1 ? "" : rawUrl.slice(hashStart)
+  const params = new URLSearchParams(query)
+  const originalQuery = params.toString()
+
+  for (const key of UNSUPPORTED_LIBSQL_URL_PARAMS) {
+    params.delete(key)
+  }
+
+  const nextQuery = params.toString()
+  if (nextQuery === originalQuery) {
+    return rawUrl
+  }
+
+  return nextQuery ? `${base}?${nextQuery}${hash}` : `${base}${hash}`
 }
 
 function parseUniqueConstraintFields(error: unknown): string[] {
@@ -668,7 +701,7 @@ export async function getLinkedHandleRow(
 }
 
 export async function getGlobalHandleRow(executor: DbExecutor, globalHandleId: string): Promise<GlobalHandleRow | null> {
-  const row = await firstRow(executor, {
+  const stmt = {
     sql: `
       SELECT global_handle_id, user_id, label_normalized, label_display, status, tier, issuance_source,
              redirect_target_global_handle_id, price_paid_usd, free_rename_consumed, issued_at,
@@ -678,6 +711,38 @@ export async function getGlobalHandleRow(executor: DbExecutor, globalHandleId: s
       LIMIT 1
     `,
     args: [globalHandleId],
+  }
+
+  const row = await firstRow(executor, stmt).catch(async (error) => {
+    if (
+      isMissingColumnError(error, "price_paid_usd")
+      || isMissingColumnError(error, "free_rename_consumed")
+      || isMissingColumnError(error, "replaced_at")
+    ) {
+      return await firstRow(executor, {
+        sql: `
+          SELECT global_handle_id, user_id, label_normalized, label_display, status, tier, issuance_source,
+                 redirect_target_global_handle_id, issued_at, created_at, updated_at
+          FROM global_handles
+          WHERE global_handle_id = ?1
+          LIMIT 1
+        `,
+        args: [globalHandleId],
+      }).then((legacyRow) => {
+        if (!legacyRow) {
+          return null
+        }
+
+        return {
+          ...legacyRow,
+          price_paid_usd: null,
+          free_rename_consumed: 0,
+          replaced_at: null,
+        }
+      })
+    }
+
+    throw error
   })
 
   return row ? toGlobalHandleRow(row) : null
@@ -687,7 +752,7 @@ export async function getGlobalHandleRowByLabelNormalized(
   executor: DbExecutor,
   labelNormalized: string,
 ): Promise<GlobalHandleRow | null> {
-  const row = await firstRow(executor, {
+  const stmt = {
     sql: `
       SELECT global_handle_id, user_id, label_normalized, label_display, status, tier, issuance_source,
              redirect_target_global_handle_id, price_paid_usd, free_rename_consumed, issued_at,
@@ -697,6 +762,38 @@ export async function getGlobalHandleRowByLabelNormalized(
       LIMIT 1
     `,
     args: [labelNormalized],
+  }
+
+  const row = await firstRow(executor, stmt).catch(async (error) => {
+    if (
+      isMissingColumnError(error, "price_paid_usd")
+      || isMissingColumnError(error, "free_rename_consumed")
+      || isMissingColumnError(error, "replaced_at")
+    ) {
+      return await firstRow(executor, {
+        sql: `
+          SELECT global_handle_id, user_id, label_normalized, label_display, status, tier, issuance_source,
+                 redirect_target_global_handle_id, issued_at, created_at, updated_at
+          FROM global_handles
+          WHERE label_normalized = ?1
+          LIMIT 1
+        `,
+        args: [labelNormalized],
+      }).then((legacyRow) => {
+        if (!legacyRow) {
+          return null
+        }
+
+        return {
+          ...legacyRow,
+          price_paid_usd: null,
+          free_rename_consumed: 0,
+          replaced_at: null,
+        }
+      })
+    }
+
+    throw error
   })
 
   return row ? toGlobalHandleRow(row) : null

@@ -272,6 +272,11 @@ export type Community = {
   pending_namespace_verification_session_id?: string | null;
   status: "draft" | "active" | "frozen" | "archived" | "deleted";
   provisioning_state: "requested" | "provisioning" | "active" | "rotation_required" | "error";
+  registry_publication_state?: "not_started" | "pending_create" | "pending_seed" | "published" | "stale" | "publication_error";
+  registry_attempt_id?: string | null;
+  registry_published_at?: string | null;
+  registry_publication_job_id?: string | null;
+  registry_error_code?: string | null;
   artist_identity_id?: string | null;
   community_agent_user_id?: string | null;
   membership_mode: "open" | "request" | "gated";
@@ -310,6 +315,13 @@ export type Community = {
   motion_media_policy: CommunityMotionMediaPolicy;
   language_policy: CommunityLanguagePolicy;
   civility_policy: CommunityCivilityPolicy;
+  openai_moderation_settings?: {
+    scan_titles: boolean;
+    scan_post_bodies: boolean;
+    scan_captions: boolean;
+    scan_link_preview_text: boolean;
+    scan_images: boolean;
+  } | null;
   provenance_policy: CommunityProvenancePolicy;
   promotion_policy: CommunityPromotionPolicy;
   label_policy?: CommunityLabelPolicy | null;
@@ -430,8 +442,32 @@ export type AssetAccessResponse = {
   locked_delivery_status: "none" | "requested" | "ready" | "failed";
   access_granted: boolean;
   decision_reason: "public" | "creator" | "moderator" | "purchase_entitlement" | "purchase_required" | "delivery_pending";
-  delivery_kind: "primary_content_ref" | "locked_delivery_ref" | null;
+  delivery_kind: "primary_content_ref" | "story_cdr_ref" | null;
   delivery_ref: string | null;
+  story_cdr_access?: ({
+    chain_id: number;
+    rpc_url: string;
+    cdr_contract_address: string;
+    read_condition_address: string;
+    ciphertext_ref: string;
+    cipher_algorithm: "AES-GCM";
+    cipher_iv_b64: string;
+    mime_type: string;
+    vault_uuid: number;
+    namespace: string;
+    access_scope: "asset.owner" | "asset.share";
+    access_aux_data_hex: string;
+    access_proof: {
+      digest: string;
+      signature: string;
+      signer_address: string;
+      caller: string;
+      access_ref: string;
+      scope: string;
+      expiry: number;
+      namespace: string;
+    };
+  }) | null;
 };
 
 export type CommunityPurchase = {
@@ -840,7 +876,7 @@ export type CommunityPreview = {
 
 export type JoinEligibility = {
   community_id: string;
-  membership_mode: "open" | "gated";
+  membership_mode: "open" | "request" | "gated";
   human_verification_lane: HumanVerificationLane;
   joinable_now: boolean;
   status: "joinable" | "requestable" | "verification_required" | "gate_failed" | "already_joined" | "banned";
@@ -1126,6 +1162,7 @@ type CommunityRule = {
   rule_id: string;
   title: string;
   body: string;
+  report_reason?: string | null;
   position: number;
   status: "active" | "archived";
 };
@@ -1333,6 +1370,7 @@ type CreateCommunityResourceLinkInput = {
 type CreateCommunityRuleInput = {
   title: string;
   body: string;
+  report_reason?: string | null;
   position: number;
 };
 

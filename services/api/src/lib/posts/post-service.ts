@@ -220,6 +220,7 @@ export async function createPost(input: {
           communityId: input.communityId,
           post,
           bundle: resolvedSongBundleForAsset.bundle,
+          userRepository: input.userRepository,
         })
       }
       await consumeSongPostBundle({
