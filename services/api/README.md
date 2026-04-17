@@ -1,27 +1,27 @@
 # Pirate API Sidecar
 
-Local Worker for the first executable Pirate API slice.
+Local Worker for the current Pirate API surface.
 
 ## Scope
 
-Current implemented path:
+Current route surface:
 
+- `GET /health`
 - `POST /auth/session/exchange`
 - `GET /users/me`
 - `GET /onboarding/status`
-- `POST /verification-sessions`
-- `GET /verification-sessions/{verification_session_id}`
-- `POST /verification-sessions/{verification_session_id}/complete`
-- `POST /namespace-verification-sessions`
-- `GET /namespace-verification-sessions/{namespace_verification_session_id}`
-- `POST /namespace-verification-sessions/{namespace_verification_session_id}/complete`
-- `GET /namespace-verifications/{namespace_verification_id}`
-- `POST /communities`
-- `GET /communities/{community_id}`
-- `GET /jobs/{job_id}`
-- `POST /communities/{community_id}/posts`
-- `GET /posts/{post_id}`
-- `GET /health`
+- verification routes mounted at `/`
+  `POST /verification-sessions`, `GET /verification-sessions/{verification_session_id}`, `POST /verification-sessions/{verification_session_id}/complete`, `POST /namespace-verification-sessions`, `GET /namespace-verification-sessions/{namespace_verification_session_id}`, `POST /namespace-verification-sessions/{namespace_verification_session_id}/complete`, `GET /namespace-verifications/{namespace_verification_id}`
+- profile routes
+  `GET /profiles/me`, `PATCH /profiles/me`, handle rename/upgrade/sync endpoints under `/profiles/me/*`, `GET /profiles/{user_id}`
+- public profile route
+  `GET /public-profiles/{handle_label}`
+- media routes
+  `POST /profile-media`, `POST /community-media`
+- jobs and posts
+  `GET /jobs/{job_id}`, `GET /posts/{post_id}`, `POST /posts/{post_id}/vote`
+- communities
+  create/read/preview, join eligibility, join, namespace attach, pending namespace session, rules, gates, safety, posts, money policy, pricing policy, asset access/content, listings, purchases, purchase quotes/settlements, song artifact uploads, and song artifact bundles under `/communities/{community_id}/*`
 
 Current auth support:
 
@@ -32,7 +32,8 @@ Current auth support:
 
 Current persistence mode:
 
-- control-plane libSQL/Turso repository when `DEV_MEMORY_STORE_ENABLED` is false
+- control-plane DB via the shared `sql-client` abstraction when `DEV_MEMORY_STORE_ENABLED=false`
+- libsql/local-file control-plane URLs and PostgreSQL control-plane URLs both work through the same repository layer
 - in-memory repository only when `DEV_MEMORY_STORE_ENABLED=true`
 
 ## Internal Layout
@@ -46,13 +47,25 @@ The service now groups runtime code by domain under `src/lib/`:
 - `verification/`
   Human-verification and namespace-verification persistence.
 - `communities/`
-  Community provisioning, community DB bootstrap, membership logic, and job/registry orchestration.
+  Community provisioning, community DB bootstrap, membership logic, job/registry orchestration, and commerce.
 - `posts/`
   Post validation, storage, reads, and votes.
+- `song-artifacts/`
+  Upload intents, content ingest, bundle analysis, and song publishing support.
+- `story/`
+  Story/CDR access proofs, publish flows, settlement flows, and PKP-backed integrations.
 
 Shared primitives that are intentionally cross-domain stay at the `src/lib/` root, such as `errors.ts`, `helpers.ts`, and `sql-row.ts`.
 
-The DB-backed first slice now reads and writes:
+Route registration now lives under `src/routes/`. The community router is intentionally split into:
+
+- `communities-core.ts`
+- `communities-commerce.ts`
+- `communities-song-artifacts.ts`
+
+with shared request helpers in `communities-route-helpers.ts`.
+
+The DB-backed API now reads and writes control-plane rows such as:
 
 - `users`
 - `auth_provider_links`
@@ -68,7 +81,7 @@ The DB-backed first slice now reads and writes:
 - `community_post_projections`
 - active `wallet_attachments` reads
 
-Community-owned rows are written to the local per-community DB stub:
+Community-owned rows are written to the per-community DB:
 
 - `communities`
 - `community_memberships`
@@ -100,7 +113,7 @@ Control-plane DB mode:
 10. Fill in `PIRATE_APP_JWT_PRIVATE_KEY` and `PIRATE_APP_JWT_PUBLIC_KEY`.
 11. Start `rtk bun run dev:local`. The local server bootstraps the control-plane migrations automatically for local file-backed DBs.
 
-## Full First Slice Local Setup
+## Full Local Setup
 
 This is the shortest path to a real local worker that matches the Bruno collection.
 
@@ -143,7 +156,7 @@ cd pirate-api/services/api
 rtk bun run bruno:test:local
 ```
 
-This local Bruno path intentionally uses Bun, not Wrangler, because the first-slice local control-plane/community databases are `file:`-backed.
+This local Bruno path intentionally uses Bun, not Wrangler, because the local control-plane/community databases are `file:`-backed.
 
 ## Mint A Dev JWT
 
@@ -181,8 +194,8 @@ To exercise the internal publisher boundary instead, configure:
 - `REGISTRY_PUBLISHER_TIMEOUT_MS`
 
 When `REGISTRY_PUBLISHER_URL` is configured, the Worker first calls the publisher to create the
-public community-create attempt before it writes the mirrored Turso `community_registry_attempts`
-row. This is the beginning of the audit-first ordering required by the registry-plane decision.
+public community-create attempt before it writes the mirrored `community_registry_attempts`
+row.
 
 ## Example Exchange
 
