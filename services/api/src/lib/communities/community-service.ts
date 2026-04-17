@@ -1,4 +1,10 @@
-export type { CreateCommunityRequestBody, CreateCommunityAuth } from "./community-create-service"
+export type {
+  CreateCommunityRequestBody,
+  CreateCommunityAuth,
+  UpdateCommunityGatesRequestBody,
+  UpdateCommunitySafetyRequestBody,
+  UpdateCommunityRulesRequestBody,
+} from "./community-create-service"
 export {
   createCommunity,
   attachNamespaceToCommunity,
@@ -9,6 +15,9 @@ export {
   resolveCreateCommunityAuth,
   loadCommunityProjection,
   requireOwnedCommunity,
+  updateCommunityGates,
+  updateCommunitySafety,
+  updateCommunityRules,
 } from "./community-create-service"
 export type { ProvisioningRetryAction } from "./community-create-service"
 

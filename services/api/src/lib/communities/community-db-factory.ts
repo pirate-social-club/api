@@ -3,6 +3,7 @@ import type { Client } from "@libsql/client"
 import type { CommunityRepository } from "./control-plane-community-repository"
 import { internalError, notFoundError } from "../errors"
 import { decryptCommunityDbCredential } from "./community-db-credential-crypto"
+import { ensureCommunityDbSchema } from "./community-local-db"
 import type { Env } from "../../types"
 
 export async function openCommunityDb(
@@ -31,6 +32,7 @@ export async function openCommunityDb(
     url: binding.database_url,
     ...(authToken ? { authToken } : {}),
   })
+  await ensureCommunityDbSchema(client)
   return {
     client,
     databaseUrl: binding.database_url,

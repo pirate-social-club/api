@@ -24,6 +24,13 @@ import { ControlPlaneRedditOnboardingRepository } from "../onboarding/control-pl
 
 export type { UpdateProfileInput }
 
+export type PublicProfileResolution = {
+  profile: Profile
+  requested_handle_label: string
+  resolved_handle_label: string
+  is_canonical: boolean
+}
+
 export interface SessionRepository {
   exchangeIdentity(identity: UpstreamIdentity): Promise<SessionSnapshot>
 }
@@ -39,9 +46,12 @@ export interface OnboardingStatusRepository {
 
 export interface ProfileRepository {
   getProfileByUserId(userId: string): Promise<Profile | null>
+  resolvePublicProfileByHandle(handleLabel: string): Promise<PublicProfileResolution | null>
   updateProfile(userId: string, input: UpdateProfileInput): Promise<Profile | null>
   renameGlobalHandle(userId: string, desiredLabel: string): Promise<GlobalHandle | null>
   quoteGlobalHandleUpgrade(userId: string, desiredLabel: string): Promise<HandleUpgradeQuote | null>
+  syncLinkedHandles(userId: string): Promise<Profile | null>
+  setPrimaryPublicHandle(userId: string, linkedHandleId: string | null): Promise<Profile | null>
 }
 
 export interface RedditOnboardingRepository {
@@ -73,7 +83,7 @@ function getControlPlaneRepositoryBundle(env: Env): ControlPlaneRepositoryBundle
     const client = getControlPlaneClient(env)
     return {
       identity: new ControlPlaneIdentityRepository(client),
-      profile: new ControlPlaneProfileRepository(client),
+      profile: new ControlPlaneProfileRepository(client, env),
       redditOnboarding: new ControlPlaneRedditOnboardingRepository(client),
     }
   })

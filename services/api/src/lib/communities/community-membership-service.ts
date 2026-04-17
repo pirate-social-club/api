@@ -9,6 +9,10 @@ import {
   upsertMembershipRequest,
 } from "./community-membership-store"
 import { openCommunityDb } from "./community-db-factory"
+import {
+  resolveCommunityAvatarRef,
+  resolveCommunityBannerRef,
+} from "./community-identity-media"
 import type { UserRepository } from "../auth/repositories"
 import type { CommunityRepository } from "./control-plane-community-repository"
 import { gateFailedWithDetails, internalError, notFoundError } from "../errors"
@@ -93,7 +97,7 @@ export async function getCommunityPreview(input: {
           : "not_member"
 
     const localResult = await db.client.execute({
-      sql: `SELECT display_name, description, membership_mode, created_at FROM communities WHERE community_id = ?1 LIMIT 1`,
+      sql: `SELECT display_name, description, avatar_ref, banner_ref, membership_mode, created_at FROM communities WHERE community_id = ?1 LIMIT 1`,
       args: [input.communityId],
     })
     const localRow = localResult.rows[0]
@@ -106,6 +110,16 @@ export async function getCommunityPreview(input: {
       community_id: community.community_id,
       display_name: localRow?.display_name ? String(localRow.display_name) : community.display_name,
       description: localRow?.description != null ? String(localRow.description) : null,
+      avatar_ref: resolveCommunityAvatarRef({
+        communityId: community.community_id,
+        displayName: localRow?.display_name ? String(localRow.display_name) : community.display_name,
+        avatarRef: localRow?.avatar_ref == null ? community.avatar_ref ?? null : String(localRow.avatar_ref),
+      }),
+      banner_ref: resolveCommunityBannerRef({
+        communityId: community.community_id,
+        displayName: localRow?.display_name ? String(localRow.display_name) : community.display_name,
+        bannerRef: localRow?.banner_ref == null ? community.banner_ref ?? null : String(localRow.banner_ref),
+      }),
       membership_mode: membershipMode,
       member_count: null,
       membership_gate_summaries: rules.map(buildMembershipGateSummary),
@@ -226,7 +240,7 @@ export async function getJoinEligibility(input: {
         membership_gate_summaries: gateSummaries,
         missing_capabilities: evaluation.missingCapabilities,
         suggested_verification_provider: evaluation.suggestedVerificationProvider,
-        suggested_verification_intent: evaluation.missingCapabilities.includes("nationality")
+        suggested_verification_intent: evaluation.suggestedVerificationProvider === "self"
           ? "community_join"
           : null,
       }
@@ -326,7 +340,7 @@ export async function joinCommunity(input: {
           membership_gate_summaries: gateSummaries,
           missing_capabilities: evaluation.missingCapabilities,
           suggested_verification_provider: evaluation.suggestedVerificationProvider,
-          suggested_verification_intent: evaluation.missingCapabilities.includes("nationality")
+          suggested_verification_intent: evaluation.suggestedVerificationProvider === "self"
             ? "community_join"
             : null,
           failure_reason: "missing_verification",
@@ -336,6 +350,12 @@ export async function joinCommunity(input: {
         throw gateFailedWithDetails("Your verified nationality does not satisfy this community requirement", {
           membership_gate_summaries: gateSummaries,
           failure_reason: "nationality_mismatch",
+        })
+      }
+      if (evaluation.mismatchReasons.includes("gender_mismatch")) {
+        throw gateFailedWithDetails("Your verified gender does not satisfy this community requirement", {
+          membership_gate_summaries: gateSummaries,
+          failure_reason: "gender_mismatch",
         })
       }
       throw gateFailedWithDetails("Community membership requirements are not satisfied", {

@@ -18,6 +18,7 @@ import {
   type CommunityRow,
   type GlobalHandleRow,
   type JobRow,
+  type LinkedHandleRow,
   type NamespaceVerificationRow,
   type NamespaceVerificationSessionRow,
   type ProfileRow,
@@ -34,6 +35,7 @@ import {
   toCommunityRow,
   toGlobalHandleRow,
   toJobRow,
+  toLinkedHandleRow,
   toNamespaceVerificationRow,
   toNamespaceVerificationSessionRow,
   toProfileRow,
@@ -75,6 +77,27 @@ export function hasUniqueConstraintField(error: unknown, field: string): boolean
 function isMissingTableError(error: unknown, tableName: string): boolean {
   const message = error instanceof Error ? error.message : String(error)
   return message.includes("no such table") && message.includes(tableName)
+}
+
+function isMissingColumnError(error: unknown, columnName: string): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.includes("no such column") && message.includes(columnName)
+}
+
+function isDuplicateColumnError(error: unknown, columnName: string): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.includes("duplicate column name") && message.includes(columnName)
+}
+
+export async function ensureProfilesPrimaryLinkedHandleColumn(executor: DbExecutor): Promise<void> {
+  try {
+    await executor.execute("ALTER TABLE profiles ADD COLUMN primary_linked_handle_id TEXT")
+  } catch (error) {
+    if (isDuplicateColumnError(error, "primary_linked_handle_id")) {
+      return
+    }
+    throw error
+  }
 }
 
 export async function firstRow(executor: DbExecutor, stmt: InStatement): Promise<unknown | null> {
@@ -179,7 +202,7 @@ async function getLatestNamespaceVerificationSessionRow(executor: DbExecutor, us
   const row = await firstRow(executor, {
     sql: `
       SELECT namespace_verification_session_id, namespace_verification_id, user_id, family, submitted_root_label,
-             normalized_root_label, status, challenge_host, challenge_txt_value, challenge_expires_at,
+             normalized_root_label, status, challenge_host, challenge_txt_value, setup_nameservers_json, challenge_expires_at,
              root_exists, root_control_verified, expiry_horizon_sufficient, routing_enabled,
              pirate_dns_authority_verified, club_attach_allowed, pirate_web_routing_allowed,
              pirate_subdomain_issuance_allowed, control_class, operation_class, observation_provider,
@@ -466,13 +489,15 @@ export async function deriveOnboardingStatus(
 
   const uniqueHumanState: OnboardingStatus["unique_human_verification_status"] = capabilities.unique_human.state === "verified"
     ? "verified"
-    : latestVerificationSession?.status === "pending"
-      ? "pending"
-      : latestVerificationSession?.status === "expired"
-        ? "expired"
-        : latestVerificationSession?.status === "failed" || latestVerificationSession?.status === "canceled"
-          ? "failed"
-          : "not_started"
+    : capabilities.unique_human.state === "expired"
+      ? "expired"
+      : latestVerificationSession?.status === "pending"
+        ? "pending"
+        : latestVerificationSession?.status === "expired"
+          ? "expired"
+          : latestVerificationSession?.status === "failed" || latestVerificationSession?.status === "canceled"
+            ? "failed"
+            : "not_started"
 
   const namespaceStatus: OnboardingStatus["namespace_verification_status"] = latestNamespaceVerification
     ? latestNamespaceVerification.status
@@ -568,17 +593,78 @@ export async function getUserRow(executor: DbExecutor, userId: string): Promise<
 }
 
 export async function getProfileRow(executor: DbExecutor, userId: string): Promise<ProfileRow | null> {
-  const row = await firstRow(executor, {
+  const stmt = {
     sql: `
-      SELECT user_id, display_name, bio, avatar_ref, cover_ref, preferred_locale, global_handle_id, created_at, updated_at
+      SELECT user_id, display_name, bio, avatar_ref, cover_ref, preferred_locale,
+             global_handle_id, primary_linked_handle_id, created_at, updated_at
       FROM profiles
       WHERE user_id = ?1
       LIMIT 1
     `,
     args: [userId],
+  }
+
+  const row = await firstRow(executor, stmt).catch(async (error) => {
+    if (isMissingColumnError(error, "primary_linked_handle_id")) {
+      await ensureProfilesPrimaryLinkedHandleColumn(executor)
+      return await firstRow(executor, stmt)
+    }
+    throw error
   })
 
   return row ? toProfileRow(row) : null
+}
+
+export async function listLinkedHandleRows(executor: DbExecutor, userId: string): Promise<LinkedHandleRow[]> {
+  try {
+    const result = await executor.execute({
+      sql: `
+        SELECT linked_handle_id, user_id, wallet_attachment_id, kind, label_normalized, label_display,
+               verification_state, metadata_json, created_at, updated_at
+        FROM linked_handles
+        WHERE user_id = ?1
+        ORDER BY
+          CASE kind
+            WHEN 'ens' THEN 0
+            ELSE 1
+          END,
+          label_display ASC
+      `,
+      args: [userId],
+    })
+
+    return result.rows.map(toLinkedHandleRow)
+  } catch (error) {
+    if (isMissingTableError(error, "linked_handles")) {
+      return []
+    }
+    throw error
+  }
+}
+
+export async function getLinkedHandleRow(
+  executor: DbExecutor,
+  userId: string,
+  linkedHandleId: string,
+): Promise<LinkedHandleRow | null> {
+  const row = await firstRow(executor, {
+    sql: `
+      SELECT linked_handle_id, user_id, wallet_attachment_id, kind, label_normalized, label_display,
+             verification_state, metadata_json, created_at, updated_at
+      FROM linked_handles
+      WHERE user_id = ?1
+        AND linked_handle_id = ?2
+      LIMIT 1
+    `,
+    args: [userId, linkedHandleId],
+  }).catch((error) => {
+    if (isMissingTableError(error, "linked_handles")) {
+      return null
+    }
+    throw error
+  })
+
+  return row ? toLinkedHandleRow(row) : null
 }
 
 export async function getGlobalHandleRow(executor: DbExecutor, globalHandleId: string): Promise<GlobalHandleRow | null> {
@@ -592,6 +678,25 @@ export async function getGlobalHandleRow(executor: DbExecutor, globalHandleId: s
       LIMIT 1
     `,
     args: [globalHandleId],
+  })
+
+  return row ? toGlobalHandleRow(row) : null
+}
+
+export async function getGlobalHandleRowByLabelNormalized(
+  executor: DbExecutor,
+  labelNormalized: string,
+): Promise<GlobalHandleRow | null> {
+  const row = await firstRow(executor, {
+    sql: `
+      SELECT global_handle_id, user_id, label_normalized, label_display, status, tier, issuance_source,
+             redirect_target_global_handle_id, price_paid_usd, free_rename_consumed, issued_at,
+             replaced_at, created_at, updated_at
+      FROM global_handles
+      WHERE label_normalized = ?1
+      LIMIT 1
+    `,
+    args: [labelNormalized],
   })
 
   return row ? toGlobalHandleRow(row) : null
@@ -712,10 +817,11 @@ export async function loadSnapshot(executor: DbExecutor, userId: string): Promis
   }
 
   const walletRows = await listActiveWalletAttachmentRows(executor, userId)
+  const linkedHandleRows = await listLinkedHandleRows(executor, userId)
 
   return {
     user: serializeUser(userRow),
-    profile: assembleProfile(profileRow, globalHandleRow),
+    profile: assembleProfile(profileRow, globalHandleRow, linkedHandleRows),
     onboarding: await deriveOnboardingStatus(executor, userRow, globalHandleRow),
     wallet_attachments: serializeWalletAttachments(walletRows),
   }

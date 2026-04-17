@@ -1,10 +1,13 @@
 import { Hono } from "hono"
 import { cors } from "hono/cors"
 import auth from "./routes/auth"
+import communityMedia from "./routes/community-media"
 import communities from "./routes/communities"
 import jobs from "./routes/jobs"
 import onboarding from "./routes/onboarding"
 import posts from "./routes/posts"
+import publicProfiles from "./routes/public-profiles"
+import profileMedia from "./routes/profile-media"
 import profiles from "./routes/profiles"
 import users from "./routes/users"
 import verification from "./routes/verification"
@@ -17,16 +20,19 @@ app.use(
   "/*",
   cors({
     origin: "*",
-    allowMethods: ["GET", "POST", "PATCH", "OPTIONS"],
+    allowMethods: ["GET", "POST", "PUT", "PATCH", "OPTIONS"],
     allowHeaders: ["Content-Type", "Authorization"],
   }),
 )
 
 app.get("/health", (c) => c.json({ ok: true }))
 app.route("/auth", auth)
+app.route("/community-media", communityMedia)
 app.route("/communities", communities)
 app.route("/jobs", jobs)
 app.route("/posts", posts)
+app.route("/public-profiles", publicProfiles)
+app.route("/profile-media", profileMedia)
 app.route("/users", users)
 app.route("/onboarding", onboarding)
 app.route("/profiles", profiles)

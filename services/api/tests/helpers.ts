@@ -7,6 +7,7 @@ import { join } from "node:path"
 import type { Env } from "../src/types"
 import { setSelfProviderForTests } from "../src/lib/verification/self-provider"
 import { setVeryProviderForTests } from "../src/lib/verification/very-provider"
+import { setEnsResolverForTests } from "../src/lib/auth/ens-linked-handle-service"
 
 import { splitSqlStatements, toSqliteCompatibleStatement } from "../shared/sql-migration"
 
@@ -20,6 +21,7 @@ export function resetRuntimeCaches(): void {
   resetMemoryStore()
   setSelfProviderForTests(null)
   setVeryProviderForTests(null)
+  setEnsResolverForTests(null)
   const scope = globalThis as typeof globalThis & {
     __pirateSingletons?: Map<string, unknown>
   }

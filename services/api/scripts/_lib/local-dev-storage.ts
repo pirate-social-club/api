@@ -7,6 +7,8 @@ import { splitSqlStatements, toSqliteCompatibleStatement } from "../../shared/sq
 
 const SQLITE_COMPATIBLE_CONTROL_PLANE_MIGRATIONS = new Set([
   "0034_control_plane_communities_pending_namespace.sql",
+  "0035_control_plane_namespace_setup_nameservers.sql",
+  "0036_control_plane_linked_handles.sql",
 ])
 
 export type LocalDevStorage = {
@@ -225,6 +227,23 @@ export async function applyLocalControlPlaneMigrations(storage: LocalDevStorage)
       if (
         entry === "0034_control_plane_communities_pending_namespace.sql"
         && await hasColumn(client, "communities", "pending_namespace_verification_session_id")
+      ) {
+        await recordAppliedMigration(client, entry, migrationChecksum)
+        continue
+      }
+
+      if (
+        entry === "0035_control_plane_namespace_setup_nameservers.sql"
+        && await hasColumn(client, "namespace_verification_sessions", "setup_nameservers_json")
+      ) {
+        await recordAppliedMigration(client, entry, migrationChecksum)
+        continue
+      }
+
+      if (
+        entry === "0036_control_plane_linked_handles.sql"
+        && await hasTable(client, "linked_handles")
+        && await hasColumn(client, "profiles", "primary_linked_handle_id")
       ) {
         await recordAppliedMigration(client, entry, migrationChecksum)
         continue

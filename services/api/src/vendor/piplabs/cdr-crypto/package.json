@@ -1,0 +1,13 @@
+{
+  "name": "@piplabs/cdr-crypto",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "dependencies": {
+    "@ethereumjs/rlp": "^10.1.1",
+    "@noble/ciphers": "^1.0",
+    "@noble/curves": "^1.6",
+    "@noble/hashes": "^1.5"
+  }
+}

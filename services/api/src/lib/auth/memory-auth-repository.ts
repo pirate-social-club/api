@@ -23,6 +23,7 @@ import type {
   User,
   WalletAttachmentSummary,
 } from "../../types"
+import type { PublicProfileResolution } from "./repositories"
 
 type RepositoryRecord = {
   user: User
@@ -102,8 +103,18 @@ function buildNewRecord(identity: UpstreamIdentity): RepositoryRecord {
       user_id: userId,
       display_name: null,
       avatar_ref: null,
+      cover_ref: null,
       bio: null,
       preferred_locale: null,
+      linked_handles: [
+        {
+          linked_handle_id: `global:${globalHandle.global_handle_id}`,
+          label: globalHandle.label,
+          kind: "pirate",
+          verification_state: "verified",
+        },
+      ],
+      primary_public_handle: null,
       global_handle: globalHandle,
       created_at: timestamp,
       updated_at: timestamp,
@@ -225,9 +236,31 @@ export class MemoryAuthRepository {
     return this.getRecordByUserId(userId)?.profile ?? null
   }
 
+  async resolvePublicProfileByHandle(handleLabel: string): Promise<PublicProfileResolution | null> {
+    const trimmedHandleLabel = handleLabel.trim().toLowerCase()
+    const normalizedHandleLabel = trimmedHandleLabel.endsWith(".pirate")
+      ? trimmedHandleLabel
+      : `${trimmedHandleLabel}.pirate`
+
+    const record = [...getMemoryStore().byUserId.values()].find((candidate) => (
+      candidate.profile.global_handle.label.toLowerCase() === normalizedHandleLabel
+    ))
+    if (!record) {
+      return null
+    }
+
+    return {
+      profile: record.profile,
+      requested_handle_label: normalizedHandleLabel,
+      resolved_handle_label: record.profile.global_handle.label,
+      is_canonical: true,
+    }
+  }
+
   async updateProfile(userId: string, input: {
     display_name?: string | null
     avatar_ref?: string | null
+    cover_ref?: string | null
     bio?: string | null
     preferred_locale?: string | null
   }): Promise<Profile | null> {
@@ -240,10 +273,32 @@ export class MemoryAuthRepository {
       ...record.profile,
       display_name: input.display_name !== undefined ? input.display_name : record.profile.display_name,
       avatar_ref: input.avatar_ref !== undefined ? input.avatar_ref : record.profile.avatar_ref,
+      cover_ref: input.cover_ref !== undefined ? input.cover_ref : record.profile.cover_ref,
       bio: input.bio !== undefined ? input.bio : record.profile.bio,
       preferred_locale: input.preferred_locale !== undefined ? input.preferred_locale : record.profile.preferred_locale,
       updated_at: nowIso(),
     }
+    return record.profile
+  }
+
+  async syncLinkedHandles(userId: string): Promise<Profile | null> {
+    return this.getRecordByUserId(userId)?.profile ?? null
+  }
+
+  async setPrimaryPublicHandle(userId: string, linkedHandleId: string | null): Promise<Profile | null> {
+    const record = this.getRecordByUserId(userId)
+    if (!record) {
+      return null
+    }
+
+    record.profile = {
+      ...record.profile,
+      primary_public_handle: linkedHandleId == null
+        ? null
+        : (record.profile.linked_handles ?? []).find((handle) => handle.linked_handle_id === linkedHandleId) ?? null,
+      updated_at: nowIso(),
+    }
+
     return record.profile
   }
 
@@ -294,6 +349,15 @@ export class MemoryAuthRepository {
     record.profile = {
       ...record.profile,
       global_handle: next,
+      linked_handles: [
+        {
+          linked_handle_id: `global:${next.global_handle_id}`,
+          label: next.label,
+          kind: "pirate",
+          verification_state: "verified",
+        },
+        ...(record.profile.linked_handles ?? []).filter((handle) => handle.kind !== "pirate"),
+      ],
       updated_at: updatedAt,
     }
     record.onboarding = {

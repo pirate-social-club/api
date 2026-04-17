@@ -1,0 +1,343 @@
+/**
+ * TypeScript loader for the cb-mpc TDH2 WASM module.
+ *
+ * Usage:
+ *   import { initWasm, getWasm } from "./loader.js";
+ *   await initWasm();
+ *   const wasm = getWasm();
+ *   const raw = wasm.tdh2Encrypt(globalPubKey, plaintext, label);
+ */
+import createCbMpcModule from "./cb-mpc-tdh2.js";
+/** Ed25519 curve code in cb-mpc (NID_ED25519 = 0x043f = 1087) */
+export const CURVE_ED25519 = 1087;
+/**
+ * High-level wrapper around the cb-mpc TDH2 WASM module.
+ * Exposed as CbMpcWasm for consumers that need the type.
+ */
+export class CbMpcWasm {
+    M;
+    constructor(module) {
+        this.M = module;
+    }
+    /**
+     * Encrypt plaintext to a TDH2 public key.
+     *
+     * @param globalPubKey  Serialized EC point (curve-code prefixed) — the DKG global public key
+     * @param plaintext     Data to encrypt
+     * @param label         Associated data label
+     * @returns Serialized TDH2 ciphertext bytes
+     */
+    tdh2Encrypt(globalPubKey, plaintext, label) {
+        const M = this.M;
+        const pointPtr = this.allocBytes(globalPubKey);
+        const handlePtr = M._malloc(4);
+        try {
+            let rv = M._wasm_tdh2_pub_key_from_point(pointPtr, globalPubKey.length, handlePtr);
+            if (rv !== 0)
+                throw new Error(`wasm_tdh2_pub_key_from_point failed: ${rv}`);
+            const pkHandle = M.getValue(handlePtr, "i32");
+            const plainPtr = this.allocBytes(plaintext);
+            const labelPtr = this.allocBytes(label);
+            const outPtrPtr = M._malloc(4);
+            const outSizePtr = M._malloc(4);
+            try {
+                rv = M._wasm_tdh2_encrypt(pkHandle, plainPtr, plaintext.length, labelPtr, label.length, outPtrPtr, outSizePtr);
+                if (rv !== 0)
+                    throw new Error(`wasm_tdh2_encrypt failed: ${rv}`);
+                return this.readResult(outPtrPtr, outSizePtr);
+            }
+            finally {
+                M._free(plainPtr);
+                M._free(labelPtr);
+                M._free(outPtrPtr);
+                M._free(outSizePtr);
+                M._wasm_tdh2_free_pub_key(pkHandle);
+            }
+        }
+        finally {
+            M._free(pointPtr);
+            M._free(handlePtr);
+        }
+    }
+    /**
+     * Combine threshold partial decryptions to recover plaintext.
+     *
+     * @param threshold     Threshold value for the access structure
+     * @param pids          1-based participant indices (one per partial)
+     * @param pubShares     Validator public key shares (one per partial)
+     * @param partials      Raw partial decryption bytes (one per partial)
+     * @param globalPubKey  Serialized DKG global public key point
+     * @param ciphertext    Serialized TDH2 ciphertext bytes
+     * @param label         Label used during encryption
+     * @returns Recovered plaintext
+     */
+    /**
+     * Verify a TDH2 ciphertext against a public key and label.
+     */
+    tdh2Verify(globalPubKey, ciphertext, label) {
+        const M = this.M;
+        const pointPtr = this.allocBytes(globalPubKey);
+        const handlePtr = M._malloc(4);
+        try {
+            let rv = M._wasm_tdh2_pub_key_from_point(pointPtr, globalPubKey.length, handlePtr);
+            if (rv !== 0)
+                throw new Error(`wasm_tdh2_pub_key_from_point failed: ${rv}`);
+            const pkHandle = M.getValue(handlePtr, "i32");
+            const ctPtr = this.allocBytes(ciphertext);
+            const labelPtr = this.allocBytes(label);
+            try {
+                rv = M._wasm_tdh2_verify(pkHandle, ctPtr, ciphertext.length, labelPtr, label.length);
+                return rv === 0;
+            }
+            finally {
+                M._free(ctPtr);
+                M._free(labelPtr);
+                M._wasm_tdh2_free_pub_key(pkHandle);
+            }
+        }
+        finally {
+            M._free(pointPtr);
+            M._free(handlePtr);
+        }
+    }
+    /**
+     * Diagnostic: encrypt then verify both in-memory and after round-trip.
+     * Returns: 0 = both pass, 1 = in-memory fail, 2 = round-trip fail, 3 = both fail
+     */
+    /** Test Ed25519 scalar arithmetic. Returns 0 if all pass. */
+    tdh2ArithTest(globalPubKey) {
+        const M = this.M;
+        const pointPtr = this.allocBytes(globalPubKey);
+        const handlePtr = M._malloc(4);
+        try {
+            let rv = M._wasm_tdh2_pub_key_from_point(pointPtr, globalPubKey.length, handlePtr);
+            if (rv !== 0)
+                return -1;
+            const pkHandle = M.getValue(handlePtr, "i32");
+            try {
+                return M._wasm_tdh2_arith_test(pkHandle);
+            }
+            finally {
+                M._wasm_tdh2_free_pub_key(pkHandle);
+            }
+        }
+        finally {
+            M._free(pointPtr);
+            M._free(handlePtr);
+        }
+    }
+    tdh2Diag(globalPubKey, plaintext, label) {
+        const M = this.M;
+        const pointPtr = this.allocBytes(globalPubKey);
+        const handlePtr = M._malloc(4);
+        try {
+            let rv = M._wasm_tdh2_pub_key_from_point(pointPtr, globalPubKey.length, handlePtr);
+            if (rv !== 0)
+                throw new Error(`wasm_tdh2_pub_key_from_point failed: ${rv}`);
+            const pkHandle = M.getValue(handlePtr, "i32");
+            const plainPtr = this.allocBytes(plaintext);
+            const labelPtr = this.allocBytes(label);
+            try {
+                return M._wasm_tdh2_diag(pkHandle, plainPtr, plaintext.length, labelPtr, label.length);
+            }
+            finally {
+                M._free(plainPtr);
+                M._free(labelPtr);
+                M._wasm_tdh2_free_pub_key(pkHandle);
+            }
+        }
+        finally {
+            M._free(pointPtr);
+            M._free(handlePtr);
+        }
+    }
+    tdh2Combine(threshold, pids, pubShares, partials, globalPubKey, ciphertext, label) {
+        const M = this.M;
+        const n = partials.length;
+        const encoder = new TextEncoder();
+        // Build participant names from pids (e.g. "1", "2", ...)
+        const names = pids.map((pid) => encoder.encode(String(pid)));
+        // Create public key
+        const pointPtr = this.allocBytes(globalPubKey);
+        const handlePtr = M._malloc(4);
+        let rv = M._wasm_tdh2_pub_key_from_point(pointPtr, globalPubKey.length, handlePtr);
+        if (rv !== 0) {
+            M._free(pointPtr);
+            M._free(handlePtr);
+            throw new Error(`wasm_tdh2_pub_key_from_point failed: ${rv}`);
+        }
+        const pkHandle = M.getValue(handlePtr, "i32");
+        M._free(pointPtr);
+        M._free(handlePtr);
+        // Build access structure: threshold gate with n leaf children
+        // node_e enum: NONE=0, LEAF=1, AND=2, OR=3, THRESHOLD=4
+        const NODE_LEAF = 1;
+        const NODE_THRESHOLD = 4;
+        const rootNameBytes = encoder.encode("root");
+        const rootNamePtr = this.allocBytes(rootNameBytes);
+        const rootHandle = M._wasm_ac_new_node(NODE_THRESHOLD, rootNamePtr, rootNameBytes.length, threshold);
+        M._free(rootNamePtr);
+        for (let i = 0; i < n; i++) {
+            const namePtr = this.allocBytes(names[i]);
+            const leafHandle = M._wasm_ac_new_node(NODE_LEAF, namePtr, names[i].length, 0);
+            M._wasm_ac_set_node_pid(leafHandle, pids[i]);
+            M._free(namePtr);
+            M._wasm_ac_add_child(rootHandle, leafHandle);
+        }
+        const acHandle = M._wasm_ac_new(rootHandle, CURVE_ED25519);
+        const { dataPtr: namesDataPtr, sizesPtr: namesSizesPtr } = this.allocConcatArrays(names);
+        const { dataPtr: pubSharesDataPtr, sizesPtr: pubSharesSizesPtr } = this.allocConcatArrays(pubShares);
+        const { dataPtr: partialsDataPtr, sizesPtr: partialsSizesPtr } = this.allocConcatArrays(partials);
+        const ctPtr = this.allocBytes(ciphertext);
+        const labelPtr = this.allocBytes(label);
+        const outPtrPtr = M._malloc(4);
+        const outSizePtr = M._malloc(4);
+        try {
+            rv = M._wasm_tdh2_combine(acHandle, pkHandle, n, namesDataPtr, namesSizesPtr, pubSharesDataPtr, pubSharesSizesPtr, ctPtr, ciphertext.length, labelPtr, label.length, partialsDataPtr, partialsSizesPtr, outPtrPtr, outSizePtr);
+            if (rv !== 0)
+                throw new Error(`wasm_tdh2_combine failed: ${rv}`);
+            return this.readResult(outPtrPtr, outSizePtr);
+        }
+        finally {
+            M._free(namesDataPtr);
+            M._free(namesSizesPtr);
+            M._free(pubSharesDataPtr);
+            M._free(pubSharesSizesPtr);
+            M._free(partialsDataPtr);
+            M._free(partialsSizesPtr);
+            M._free(ctPtr);
+            M._free(labelPtr);
+            M._free(outPtrPtr);
+            M._free(outSizePtr);
+            M._wasm_ac_free(acHandle);
+            M._wasm_tdh2_free_pub_key(pkHandle);
+        }
+    }
+    tdh2CombineDiag(threshold, pids, pubShares, partials, globalPubKey, ciphertext, label) {
+        const M = this.M;
+        const n = partials.length;
+        const encoder = new TextEncoder();
+        const names = pids.map((pid) => encoder.encode(String(pid)));
+        const pointPtr = this.allocBytes(globalPubKey);
+        const handlePtr = M._malloc(4);
+        let rv = M._wasm_tdh2_pub_key_from_point(pointPtr, globalPubKey.length, handlePtr);
+        if (rv !== 0) {
+            M._free(pointPtr);
+            M._free(handlePtr);
+            throw new Error(`wasm_tdh2_pub_key_from_point failed: ${rv}`);
+        }
+        const pkHandle = M.getValue(handlePtr, "i32");
+        M._free(pointPtr);
+        M._free(handlePtr);
+        const NODE_LEAF_D = 1;
+        const NODE_THRESHOLD_D = 4;
+        const rootNameBytes = encoder.encode("root");
+        const rootNamePtr = this.allocBytes(rootNameBytes);
+        const rootHandle = M._wasm_ac_new_node(NODE_THRESHOLD_D, rootNamePtr, rootNameBytes.length, threshold);
+        M._free(rootNamePtr);
+        for (let i = 0; i < n; i++) {
+            const namePtr = this.allocBytes(names[i]);
+            const leafHandle = M._wasm_ac_new_node(NODE_LEAF_D, namePtr, names[i].length, 0);
+            M._wasm_ac_set_node_pid(leafHandle, pids[i]);
+            M._free(namePtr);
+            M._wasm_ac_add_child(rootHandle, leafHandle);
+        }
+        const acHandle = M._wasm_ac_new(rootHandle, CURVE_ED25519);
+        const { dataPtr: namesDataPtr, sizesPtr: namesSizesPtr } = this.allocConcatArrays(names);
+        const { dataPtr: pubSharesDataPtr, sizesPtr: pubSharesSizesPtr } = this.allocConcatArrays(pubShares);
+        const { dataPtr: partialsDataPtr, sizesPtr: partialsSizesPtr } = this.allocConcatArrays(partials);
+        const ctPtr = this.allocBytes(ciphertext);
+        const labelPtr = this.allocBytes(label);
+        const failIdxPtr = M._malloc(4);
+        try {
+            rv = M._wasm_tdh2_combine_diag(acHandle, pkHandle, n, namesDataPtr, namesSizesPtr, pubSharesDataPtr, pubSharesSizesPtr, ctPtr, ciphertext.length, labelPtr, label.length, partialsDataPtr, partialsSizesPtr, failIdxPtr);
+            const failIdx = M.getValue(failIdxPtr, "i32");
+            return { stepCode: rv, failIdx };
+        }
+        finally {
+            M._free(namesDataPtr);
+            M._free(namesSizesPtr);
+            M._free(pubSharesDataPtr);
+            M._free(pubSharesSizesPtr);
+            M._free(partialsDataPtr);
+            M._free(partialsSizesPtr);
+            M._free(ctPtr);
+            M._free(labelPtr);
+            M._free(failIdxPtr);
+            M._wasm_ac_free(acHandle);
+            M._wasm_tdh2_free_pub_key(pkHandle);
+        }
+    }
+    allocBytes(data) {
+        const ptr = this.M._malloc(data.length);
+        this.M.HEAPU8.set(data, ptr);
+        return ptr;
+    }
+    allocConcatArrays(arrays) {
+        const totalSize = arrays.reduce((sum, a) => sum + a.length, 0);
+        const dataPtr = this.M._malloc(totalSize || 1);
+        const sizesPtr = this.M._malloc(arrays.length * 4);
+        let offset = 0;
+        for (let i = 0; i < arrays.length; i++) {
+            this.M.HEAPU8.set(arrays[i], dataPtr + offset);
+            this.M.HEAP32[(sizesPtr >> 2) + i] = arrays[i].length;
+            offset += arrays[i].length;
+        }
+        return { dataPtr, sizesPtr };
+    }
+    readResult(outPtrPtr, outSizePtr) {
+        const dataPtr = this.M.getValue(outPtrPtr, "i32");
+        const dataSize = this.M.getValue(outSizePtr, "i32");
+        const result = new Uint8Array(dataSize);
+        result.set(this.M.HEAPU8.subarray(dataPtr, dataPtr + dataSize));
+        this.M._free(dataPtr);
+        return result;
+    }
+}
+let wasmInstance = null;
+/**
+ * Initialize the WASM module. Must be called once before using tdh2Encrypt/tdh2Combine.
+ * Subsequent calls are no-ops and return immediately.
+ */
+export async function initWasm() {
+    if (wasmInstance)
+        return;
+    const Module = await createCbMpcModule();
+    const ptrSize = Module._wasm_ptr_size();
+    if (ptrSize !== 4) {
+        console.warn(`Unexpected WASM pointer size: ${ptrSize} (expected 4)`);
+    }
+    // Seed the OpenSSL PRNG with supplemental entropy from the JS runtime.
+    // The WASM module's getrandom.js library provides crypto.getRandomValues()
+    // as the primary entropy source via the getrandom syscall. This call adds
+    // additional entropy on top.
+    if (typeof Module._wasm_seed_random === "function") {
+        const seed = new Uint8Array(48);
+        globalThis.crypto.getRandomValues(seed);
+        const seedPtr = Module._malloc(seed.length);
+        Module.HEAPU8.set(seed, seedPtr);
+        Module._wasm_seed_random(seedPtr, seed.length);
+        Module._free(seedPtr);
+        seed.fill(0);
+    }
+    wasmInstance = new CbMpcWasm(Module);
+}
+/**
+ * Return the initialized WASM instance, or null if initWasm() has not been called.
+ */
+export function getWasm() {
+    return wasmInstance;
+}
+/**
+ * Reset the WASM instance. Primarily for use in tests.
+ */
+export function resetWasm() {
+    wasmInstance = null;
+}
+/**
+ * Inject a pre-built CbMpcWasm instance. For use in tests only.
+ */
+export function setWasmForTesting(instance) {
+    wasmInstance = instance;
+}
+//# sourceMappingURL=loader.js.map

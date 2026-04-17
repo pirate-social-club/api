@@ -14,16 +14,19 @@ type PostRow = {
   anonymous_scope: Post["anonymous_scope"]
   anonymous_label: string | null
   disclosed_qualifiers_json: string | null
-  flair_id: string | null
+  label_id: string | null
   post_type: Post["post_type"]
   status: Post["status"]
   title: string | null
   body: string | null
   caption: string | null
+  lyrics: string | null
   link_url: string | null
   media_refs_json: string | null
+  song_artifact_bundle_id: string | null
   source_language: string | null
   translation_policy: Post["translation_policy"]
+  access_mode: Post["access_mode"]
   asset_id: string | null
   parent_post_id: string | null
   song_mode: Post["song_mode"]
@@ -70,16 +73,19 @@ function toPostRow(row: unknown): PostRow {
     anonymous_scope: stringOrNull(rowValue(row, "anonymous_scope")) as Post["anonymous_scope"],
     anonymous_label: stringOrNull(rowValue(row, "anonymous_label")),
     disclosed_qualifiers_json: stringOrNull(rowValue(row, "disclosed_qualifiers_json")),
-    flair_id: stringOrNull(rowValue(row, "flair_id")),
+    label_id: stringOrNull(rowValue(row, "label_id")),
     post_type: requiredString(row, "post_type") as Post["post_type"],
     status: requiredString(row, "status") as Post["status"],
     title: stringOrNull(rowValue(row, "title")),
     body: stringOrNull(rowValue(row, "body")),
     caption: stringOrNull(rowValue(row, "caption")),
+    lyrics: stringOrNull(rowValue(row, "lyrics")),
     link_url: stringOrNull(rowValue(row, "link_url")),
     media_refs_json: stringOrNull(rowValue(row, "media_refs_json")),
+    song_artifact_bundle_id: stringOrNull(rowValue(row, "song_artifact_bundle_id")),
     source_language: stringOrNull(rowValue(row, "source_language")),
     translation_policy: stringOrNull(rowValue(row, "translation_policy")) as Post["translation_policy"],
+    access_mode: stringOrNull(rowValue(row, "access_mode")) as Post["access_mode"],
     asset_id: stringOrNull(rowValue(row, "asset_id")),
     parent_post_id: stringOrNull(rowValue(row, "parent_post_id")),
     song_mode: stringOrNull(rowValue(row, "song_mode")) as Post["song_mode"],
@@ -104,7 +110,7 @@ function serializePost(row: PostRow): Post {
     anonymous_scope: row.anonymous_scope,
     anonymous_label: row.anonymous_label,
     disclosed_qualifiers_json: parseDisclosedQualifiers(row.disclosed_qualifiers_json),
-    flair_id: row.flair_id,
+    label_id: row.label_id,
     post_type: row.post_type,
     status: row.status,
     title: row.title,
@@ -112,8 +118,10 @@ function serializePost(row: PostRow): Post {
     caption: row.caption,
     link_url: row.link_url,
     media_refs: parseMediaRefs(row.media_refs_json),
+    song_artifact_bundle_id: row.song_artifact_bundle_id,
     source_language: row.source_language,
     translation_policy: row.translation_policy,
+    access_mode: row.access_mode,
     asset_id: row.asset_id,
     parent_post_id: row.parent_post_id,
     song_mode: row.song_mode,
@@ -138,10 +146,10 @@ export async function findPostByIdempotencyKey(input: {
     {
       sql: `
         SELECT post_id, community_id, author_user_id, identity_mode, anonymous_scope, anonymous_label,
-               disclosed_qualifiers_json, flair_id, post_type, status, title, body, caption, link_url,
-               media_refs_json, source_language, translation_policy, asset_id, parent_post_id, song_mode,
-               rights_basis, analysis_state, analysis_result_ref, content_safety_state, age_gate_policy,
-               idempotency_key, created_at, updated_at
+               disclosed_qualifiers_json, label_id, post_type, status, title, body, caption, lyrics,
+               link_url, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
+               access_mode, asset_id, parent_post_id, song_mode, rights_basis, analysis_state, analysis_result_ref,
+               content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
         FROM posts
         WHERE community_id = ?1
           AND author_user_id = ?2
@@ -161,6 +169,7 @@ export async function insertPost(input: {
   authorUserId: string
   body: CreatePostRequest
   createdAt: string
+  analysisOverride?: Pick<Post, "analysis_state" | "content_safety_state" | "age_gate_policy" | "status">
 }): Promise<Post> {
   const postId = makeId("pst")
   const identityMode = input.body.identity_mode ?? "public"
@@ -172,28 +181,28 @@ export async function insertPost(input: {
     : null
   const mediaRefsJson = input.body.media_refs ? JSON.stringify(input.body.media_refs) : null
   const translationPolicy = input.body.translation_policy ?? "none"
-  const ageGatePolicy = input.body.age_gate_policy ?? "none"
   const idempotencyKey = input.body.idempotency_key?.trim() ?? ""
   const stubAnalysis = resolveStubAnalysisOutcome(input.body)
-  const analysisState = stubAnalysis.analysis_state
-  const contentSafetyState = stubAnalysis.content_safety_state
-  const status = stubAnalysis.status
-  const sourceLanguage = input.body.body || input.body.title || input.body.caption ? "en" : null
+  const analysisState = input.analysisOverride?.analysis_state ?? stubAnalysis.analysis_state
+  const contentSafetyState = input.analysisOverride?.content_safety_state ?? stubAnalysis.content_safety_state
+  const status = input.analysisOverride?.status ?? stubAnalysis.status
+  const ageGatePolicy = input.analysisOverride?.age_gate_policy ?? "none"
+  const sourceLanguage = input.body.body || input.body.title || input.body.caption || input.body.lyrics ? "en" : null
 
   await input.client.execute({
     sql: `
       INSERT INTO posts (
         post_id, community_id, author_user_id, identity_mode, anonymous_scope, anonymous_label,
-        disclosed_qualifiers_json, flair_id, post_type, status, song_mode, title, body, caption,
-        link_url, media_refs_json, source_language, translation_policy, rights_basis, asset_id,
-        parent_post_id, analysis_state, analysis_result_ref, content_safety_state, age_gate_policy,
-        created_at, updated_at, idempotency_key
+        disclosed_qualifiers_json, label_id, post_type, status, song_mode, title, body, caption,
+        lyrics, link_url, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
+        rights_basis, access_mode, asset_id, parent_post_id, analysis_state, analysis_result_ref, content_safety_state,
+        age_gate_policy, created_at, updated_at, idempotency_key
       ) VALUES (
         ?1, ?2, ?3, ?4, ?5, ?6,
         ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
         ?15, ?16, ?17, ?18, ?19, ?20,
-        ?21, ?22, NULL, ?23, ?24,
-        ?25, ?25, ?26
+        ?21, ?22, ?23, ?24, ?25, NULL, ?26,
+        ?27, ?28, ?28, ?29
       )
     `,
     args: [
@@ -204,18 +213,21 @@ export async function insertPost(input: {
       anonymousScope,
       anonymousLabel,
       disclosedQualifiersJson,
-      input.body.flair_id ?? null,
+      input.body.label_id ?? null,
       postType,
       status,
       input.body.song_mode ?? null,
       input.body.title ?? null,
       input.body.body ?? null,
       input.body.caption ?? null,
+      input.body.lyrics ?? null,
       input.body.link_url ?? null,
       mediaRefsJson,
+      input.body.song_artifact_bundle_id ?? null,
       sourceLanguage,
       translationPolicy,
       input.body.rights_basis ?? "none",
+      input.body.access_mode ?? (postType === "song" ? "public" : null),
       input.body.asset_id ?? null,
       input.body.parent_post_id ?? null,
       analysisState,
@@ -239,10 +251,10 @@ export async function getPostById(client: Client, postId: string): Promise<Post 
     {
       sql: `
         SELECT post_id, community_id, author_user_id, identity_mode, anonymous_scope, anonymous_label,
-               disclosed_qualifiers_json, flair_id, post_type, status, title, body, caption, link_url,
-               media_refs_json, source_language, translation_policy, asset_id, parent_post_id, song_mode,
-               rights_basis, analysis_state, analysis_result_ref, content_safety_state, age_gate_policy,
-               idempotency_key, created_at, updated_at
+               disclosed_qualifiers_json, label_id, post_type, status, title, body, caption, lyrics,
+               link_url, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
+               access_mode, asset_id, parent_post_id, song_mode, rights_basis, analysis_state, analysis_result_ref,
+               content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
         FROM posts
         WHERE post_id = ?1
         LIMIT 1
@@ -266,10 +278,10 @@ export async function listPublishedLocalizedPosts(input: {
   const result = await input.client.execute({
     sql: `
       SELECT post_id, community_id, author_user_id, identity_mode, anonymous_scope, anonymous_label,
-             disclosed_qualifiers_json, flair_id, post_type, status, title, body, caption, link_url,
-             media_refs_json, source_language, translation_policy, asset_id, parent_post_id, song_mode,
-             rights_basis, analysis_state, analysis_result_ref, content_safety_state, age_gate_policy,
-             idempotency_key, created_at, updated_at,
+             disclosed_qualifiers_json, label_id, post_type, status, title, body, caption, lyrics,
+             link_url, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
+             access_mode, asset_id, parent_post_id, song_mode, rights_basis, analysis_state, analysis_result_ref,
+             content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at,
              (
                SELECT COUNT(*)
                FROM post_votes
@@ -298,7 +310,7 @@ export async function listPublishedLocalizedPosts(input: {
       FROM posts
       WHERE community_id = ?1
         AND status = 'published'
-        AND (?3 IS NULL OR flair_id = ?3)
+        AND (?3 IS NULL OR label_id = ?3)
         AND (
           ?4 IS NULL
           OR created_at < ?4
@@ -372,7 +384,7 @@ export async function upsertPostVote(input: {
 export function toLocalizedPostResponse(post: Post, locale?: string): LocalizedPostResponse {
   return {
     post,
-    flair: null,
+    label: null,
     upvote_count: 0,
     downvote_count: 0,
     like_count: 0,
@@ -401,5 +413,19 @@ export function assertPostCreateRequest(body: CreatePostRequest, communityId: st
   }
   if (body.identity_mode === "anonymous" && !body.anonymous_scope) {
     throw badRequestError("anonymous_scope is required for anonymous posts")
+  }
+  if (body.post_type !== "song" && body.access_mode) {
+    throw badRequestError("access_mode is only supported for song posts")
+  }
+  if (body.post_type === "song") {
+    if ((body.identity_mode ?? "public") !== "public") {
+      throw badRequestError("song posts must use public identity")
+    }
+    if (!body.song_artifact_bundle_id?.trim()) {
+      throw badRequestError("song_artifact_bundle_id is required for song posts")
+    }
+    if (body.access_mode && body.access_mode !== "public" && body.access_mode !== "locked") {
+      throw badRequestError("song access_mode must be public or locked")
+    }
   }
 }

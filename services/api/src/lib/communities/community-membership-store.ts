@@ -274,12 +274,12 @@ export function buildMembershipGateSummary(rule: CommunityGateRuleRow): Membersh
     summary.accepted_providers = primaryReq.accepted_providers as MembershipGateSummary["accepted_providers"]
   }
 
-  if (rule.gate_type === "nationality") {
+  if (rule.gate_type === "nationality" || rule.gate_type === "gender") {
     const config = (primaryReq?.config ?? gateConfig ?? {}) as Record<string, unknown>
     if (typeof config.required_value === "string") {
       summary.required_value = config.required_value
     }
-    if (Array.isArray(config.excluded_values)) {
+    if (rule.gate_type === "nationality" && Array.isArray(config.excluded_values)) {
       summary.excluded_values = config.excluded_values.filter((v): v is string => typeof v === "string")
     }
   }

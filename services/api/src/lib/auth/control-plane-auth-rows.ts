@@ -11,6 +11,7 @@ import {
 import type {
   GlobalHandle,
   Job,
+  LinkedHandle,
   NamespaceVerification,
   NamespaceVerificationSession,
   Post,
@@ -41,6 +42,20 @@ export type ProfileRow = {
   cover_ref: string | null
   preferred_locale: string | null
   global_handle_id: string
+  primary_linked_handle_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type LinkedHandleRow = {
+  linked_handle_id: string
+  user_id: string
+  wallet_attachment_id: string | null
+  kind: LinkedHandle["kind"]
+  label_normalized: string
+  label_display: string
+  verification_state: LinkedHandle["verification_state"]
+  metadata_json: string | null
   created_at: string
   updated_at: string
 }
@@ -108,6 +123,7 @@ export type NamespaceVerificationSessionRow = {
   challenge_payload_json: string | null
   challenge_host: string | null
   challenge_txt_value: string | null
+  setup_nameservers_json: string | null
   challenge_expires_at: string | null
   root_exists: number | null
   root_control_verified: number | null
@@ -333,6 +349,22 @@ export function toProfileRow(row: unknown): ProfileRow {
     cover_ref: stringOrNull(rowValue(row, "cover_ref")),
     preferred_locale: stringOrNull(rowValue(row, "preferred_locale")),
     global_handle_id: requiredString(row, "global_handle_id"),
+    primary_linked_handle_id: stringOrNull(rowValue(row, "primary_linked_handle_id")),
+    created_at: requiredString(row, "created_at"),
+    updated_at: requiredString(row, "updated_at"),
+  }
+}
+
+export function toLinkedHandleRow(row: unknown): LinkedHandleRow {
+  return {
+    linked_handle_id: requiredString(row, "linked_handle_id"),
+    user_id: requiredString(row, "user_id"),
+    wallet_attachment_id: stringOrNull(rowValue(row, "wallet_attachment_id")),
+    kind: requiredString(row, "kind") as LinkedHandle["kind"],
+    label_normalized: requiredString(row, "label_normalized"),
+    label_display: requiredString(row, "label_display"),
+    verification_state: requiredString(row, "verification_state") as LinkedHandle["verification_state"],
+    metadata_json: stringOrNull(rowValue(row, "metadata_json")),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
   }
@@ -410,6 +442,7 @@ export function toNamespaceVerificationSessionRow(row: unknown): NamespaceVerifi
     challenge_payload_json: stringOrNull(rowValue(row, "challenge_payload_json")),
     challenge_host: stringOrNull(rowValue(row, "challenge_host")),
     challenge_txt_value: stringOrNull(rowValue(row, "challenge_txt_value")),
+    setup_nameservers_json: stringOrNull(rowValue(row, "setup_nameservers_json")),
     challenge_expires_at: stringOrNull(rowValue(row, "challenge_expires_at")),
     root_exists: numberOrNull(rowValue(row, "root_exists")),
     root_control_verified: numberOrNull(rowValue(row, "root_control_verified")),

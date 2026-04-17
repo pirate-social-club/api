@@ -91,6 +91,7 @@ async function request<T>(env: Env, path: string, init?: RequestInit): Promise<T
 
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
+    signal: init?.signal ?? AbortSignal.timeout(10_000),
     headers: {
       ...headers,
       ...(init?.headers ?? {}),

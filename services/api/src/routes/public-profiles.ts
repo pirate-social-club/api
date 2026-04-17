@@ -1,0 +1,17 @@
+import { Hono } from "hono"
+import { notFoundError } from "../lib/errors"
+import { getProfileRepository } from "../lib/auth/repositories"
+import type { Env } from "../types"
+
+const publicProfiles = new Hono<{ Bindings: Env }>()
+
+publicProfiles.get("/:handleLabel", async (c) => {
+  const repository = getProfileRepository(c.env)
+  const resolved = await repository.resolvePublicProfileByHandle(c.req.param("handleLabel"))
+  if (!resolved) {
+    throw notFoundError("Profile not found")
+  }
+  return c.json(resolved, 200)
+})
+
+export default publicProfiles

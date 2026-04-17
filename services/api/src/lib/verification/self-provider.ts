@@ -1,10 +1,46 @@
-import { providerUnavailable } from "../errors"
+import { badRequestError, providerUnavailable } from "../errors"
 import { makeId } from "../helpers"
 import type { Env, RequestedVerificationCapability, SelfVerificationDisclosures, SelfVerificationLaunch, VerificationIntent } from "../../types"
 
 const SELF_TIMEOUT_MS = 15_000
 
-const SELF_CAPABILITY_ORDER: readonly RequestedVerificationCapability[] = ["unique_human", "age_over_18", "nationality"]
+const SELF_CAPABILITY_ORDER: readonly RequestedVerificationCapability[] = ["unique_human", "age_over_18", "nationality", "gender"]
+const SELF_DEV_STUB_REF_PREFIX = "self-dev-stub"
+
+function normalizeGenderClaim(value: unknown): "M" | "F" | null {
+  if (typeof value !== "string") {
+    return null
+  }
+
+  // Self currently exposes a document marker, not a broader identity model.
+  const normalized = value.trim().toUpperCase()
+  if (normalized === "M" || normalized === "MALE") {
+    return "M"
+  }
+  if (normalized === "F" || normalized === "FEMALE") {
+    return "F"
+  }
+  return null
+}
+
+function encodeDevStubSessionRef(requestedCapabilities: RequestedVerificationCapability[]): string {
+  return `${SELF_DEV_STUB_REF_PREFIX}:${encodeURIComponent(requestedCapabilities.join(","))}:${makeId("ss")}`
+}
+
+function decodeDevStubCapabilities(upstreamSessionRef: string): Set<RequestedVerificationCapability> {
+  if (!upstreamSessionRef.startsWith(`${SELF_DEV_STUB_REF_PREFIX}:`)) {
+    return new Set()
+  }
+
+  const [, encodedCapabilities] = upstreamSessionRef.split(":", 3)
+  const decoded = decodeURIComponent(encodedCapabilities || "")
+  return new Set(
+    decoded
+      .split(",")
+      .map((cap) => cap.trim())
+      .filter((cap): cap is RequestedVerificationCapability => SELF_CAPABILITY_ORDER.includes(cap as RequestedVerificationCapability)),
+  )
+}
 
 export function canonicalizeRequestedCapabilities(
   provider: "self" | "very",
@@ -13,7 +49,11 @@ export function canonicalizeRequestedCapabilities(
   if (provider === "very") return ["unique_human"]
   if (requested.length === 0) return ["unique_human"]
   const set = new Set(requested)
-  if (set.has("age_over_18") || set.has("nationality")) {
+  const unsupported = Array.from(set).filter((cap) => !SELF_CAPABILITY_ORDER.includes(cap))
+  if (unsupported.length > 0) {
+    throw badRequestError(`Unsupported Self requested_capabilities: ${unsupported.join(", ")}`)
+  }
+  if (set.has("age_over_18") || set.has("nationality") || set.has("gender")) {
     set.add("unique_human")
   }
   return SELF_CAPABILITY_ORDER.filter((c) => set.has(c))
@@ -30,6 +70,9 @@ export function mapCapabilitiesToDisclosures(
   if (set.has("nationality")) {
     disclosures.nationality = true
   }
+  if (set.has("gender")) {
+    disclosures.gender = true
+  }
   return disclosures
 }
 
@@ -41,6 +84,7 @@ export type SelfStartResult = {
 export type SelfVerifiedClaims = {
   age_over_18: boolean
   nationality: string | null
+  gender: "M" | "F" | null
 }
 
 export type SelfSessionOutcome =
@@ -126,6 +170,7 @@ async function verifySelfProof(input: {
       const claims: SelfVerifiedClaims = {
         age_over_18: disclosures?.minimum_age != null || disclosures?.date_of_birth != null,
         nationality: typeof disclosures?.nationality === "string" ? disclosures.nationality : null,
+        gender: normalizeGenderClaim(disclosures?.gender ?? body.gender),
       }
       return { status: "verified", claims }
     }
@@ -166,7 +211,7 @@ export function getSelfProvider(env: Env): SelfProvider {
 
     return {
       async startSession(input) {
-        const upstreamSessionRef = makeId("ss")
+        const upstreamSessionRef = encodeDevStubSessionRef(input.requestedCapabilities)
         const disclosures = mapCapabilitiesToDisclosures(input.requestedCapabilities)
 
         return {
@@ -184,12 +229,14 @@ export function getSelfProvider(env: Env): SelfProvider {
         }
       },
 
-      async getSessionOutcome() {
+      async getSessionOutcome(input) {
+        const capabilities = decodeDevStubCapabilities(input.upstreamSessionRef)
         return {
           status: "verified",
           claims: {
-            age_over_18: true,
-            nationality: null,
+            age_over_18: capabilities.has("age_over_18"),
+            nationality: capabilities.has("nationality") ? "US" : null,
+            gender: capabilities.has("gender") ? "F" : null,
           },
         }
       },

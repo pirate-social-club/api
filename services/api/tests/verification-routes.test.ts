@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import app from "../src/index"
 import { json, mintUpstreamJwt, createRouteTestContext, resetRuntimeCaches } from "./helpers"
+import { setSelfProviderForTests } from "../src/lib/verification/self-provider"
 import type { Env } from "../src/types"
 
 let cleanup: (() => Promise<void>) | null = null
@@ -73,6 +74,77 @@ afterEach(async () => {
 })
 
 describe("verification routes", () => {
+  test("verification session start accepts self gender capability requests", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-gender-user")
+
+    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "self",
+      requested_capabilities: ["gender"],
+    }, ctx.env, session.accessToken)
+    expect(createdVerification.status).toBe(201)
+    const body = await json(createdVerification) as {
+      status: string
+      requested_capabilities: string[]
+      launch?: { self_app?: { disclosures?: { gender?: boolean } } }
+    }
+    expect(body.status).toBe("pending")
+    expect(body.requested_capabilities).toEqual(["unique_human", "gender"])
+    expect(body.launch?.self_app?.disclosures?.gender).toBe(true)
+  })
+
+  test("verification completion fails when self does not return the requested gender claim", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-gender-missing-claim-user")
+    setSelfProviderForTests({
+      startSession: async () => ({
+        upstreamSessionRef: "self-test-ref",
+        launch: {
+          app_name: "Pirate",
+          endpoint: "https://self.xyz",
+          endpoint_type: "https",
+          scope: "community_join",
+          session_id: "self-test-ref",
+          user_id: "test",
+          user_id_type: "uuid",
+          disclosures: { gender: true },
+        },
+      }),
+      getSessionOutcome: async () => ({
+        status: "verified",
+        claims: { age_over_18: true, nationality: null, gender: null },
+      }),
+    } satisfies import("../src/lib/verification/self-provider").SelfProvider)
+
+    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "self",
+      requested_capabilities: ["gender"],
+      verification_intent: "community_join",
+    }, ctx.env, session.accessToken)
+    expect(createdVerification.status).toBe(201)
+    const createdBody = await json(createdVerification) as { verification_session_id: string }
+
+    const completedVerification = await requestJson(
+      `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/complete`,
+      {},
+      ctx.env,
+      session.accessToken,
+    )
+    setSelfProviderForTests(null)
+
+    expect(completedVerification.status).toBe(200)
+    const completedBody = await json(completedVerification) as {
+      status: string
+      failure_reason: string | null
+    }
+    expect(completedBody.status).toBe("failed")
+    expect(completedBody.failure_reason).toBe("missing_required_claims:gender")
+  })
+
   test("verification and namespace endpoints work through the full route stack", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
@@ -821,7 +893,7 @@ describe("verification routes", () => {
     })
   })
 
-  test("namespace verification publishes and verifies through the configured HNS verifier", async () => {
+  test("namespace verification requires DNS setup before publishing through the configured HNS verifier", async () => {
     const ctx = await createRouteTestContext({
       HNS_VERIFIER_BASE_URL: "http://hns-verifier.test",
       HNS_VERIFIER_AUTH_TOKEN: "test-hns-token",
@@ -842,6 +914,7 @@ describe("verification routes", () => {
     )
 
     const calls: Array<{ url: string; body: unknown }> = []
+    let inspectCount = 0
     const originalFetch = globalThis.fetch
 
     await withFetchMock(async (input, init) => {
@@ -861,11 +934,26 @@ describe("verification routes", () => {
         }
 
         if (url.includes("/inspect?")) {
+          inspectCount += 1
           return new Response(JSON.stringify({
-            zone_exists: false,
-            challenge_present: false,
-            observation_provider: "powerdns_api",
-            failure_reason: "zone_not_provisioned",
+            ...(inspectCount < 3
+              ? {
+                  zone_exists: false,
+                  challenge_present: false,
+                  nameservers: ["ns1.pirate.sc."],
+                  observation_provider: "powerdns_api",
+                  failure_reason: "zone_not_provisioned",
+                }
+              : {
+                  root_exists: true,
+                  expiry_horizon_sufficient: true,
+                  routing_enabled: true,
+                  pirate_dns_authority_verified: true,
+                  nameservers: ["ns1.pirate.sc."],
+                  operation_class: "pirate_delegated_namespace",
+                  observation_provider: "powerdns_api",
+                  failure_reason: null,
+                }),
           }), {
             status: 200,
             headers: { "content-type": "application/json" },
@@ -894,11 +982,77 @@ describe("verification routes", () => {
       const namespaceSessionBody = await json(createdNamespaceSession) as {
         namespace_verification_session_id: string
         status: string
-        challenge_txt_value: string
+        challenge_host: string | null
+        challenge_txt_value: string | null
+        setup_nameservers: string[] | null
         observation_provider: string | null
       }
-      expect(namespaceSessionBody.status).toBe("challenge_required")
+      expect(namespaceSessionBody.status).toBe("dns_setup_required")
+      expect(namespaceSessionBody.challenge_host).toBeNull()
+      expect(namespaceSessionBody.challenge_txt_value).toBeNull()
+      expect(namespaceSessionBody.setup_nameservers).toEqual(["ns1.pirate.sc."])
       expect(namespaceSessionBody.observation_provider).toBe("powerdns_api")
+      expect(inspectCount).toBe(1)
+      expect(calls.some((entry) => entry.url.endsWith("/publish-txt"))).toBe(false)
+
+      const fetchedNamespaceSession = await app.request(
+        `http://pirate.test/namespace-verification-sessions/${namespaceSessionBody.namespace_verification_session_id}`,
+        {
+          method: "GET",
+          headers: {
+            authorization: `Bearer ${session.accessToken}`,
+          },
+        },
+        ctx.env,
+      )
+      expect(fetchedNamespaceSession.status).toBe(200)
+      const fetchedNamespaceSessionBody = await json(fetchedNamespaceSession) as {
+        status: string
+        setup_nameservers: string[] | null
+      }
+      expect(fetchedNamespaceSessionBody.status).toBe("dns_setup_required")
+      expect(fetchedNamespaceSessionBody.setup_nameservers).toEqual(["ns1.pirate.sc."])
+      expect(inspectCount).toBe(1)
+
+      const setupCheckedNamespaceSession = await requestJson(
+        `http://pirate.test/namespace-verification-sessions/${namespaceSessionBody.namespace_verification_session_id}/complete`,
+        { restart_challenge: true },
+        ctx.env,
+        session.accessToken,
+      )
+      expect(setupCheckedNamespaceSession.status).toBe(200)
+      const setupCheckedBody = await json(setupCheckedNamespaceSession) as {
+        status: string
+        challenge_host: string | null
+        challenge_txt_value: string | null
+        setup_nameservers: string[] | null
+        observation_provider: string | null
+      }
+      expect(setupCheckedBody.status).toBe("dns_setup_required")
+      expect(setupCheckedBody.challenge_host).toBeNull()
+      expect(setupCheckedBody.challenge_txt_value).toBeNull()
+      expect(setupCheckedBody.setup_nameservers).toEqual(["ns1.pirate.sc."])
+      expect(setupCheckedBody.observation_provider).toBe("powerdns_api")
+      expect(calls.some((entry) => entry.url.endsWith("/publish-txt"))).toBe(false)
+
+      const promotedNamespaceSession = await requestJson(
+        `http://pirate.test/namespace-verification-sessions/${namespaceSessionBody.namespace_verification_session_id}/complete`,
+        { restart_challenge: true },
+        ctx.env,
+        session.accessToken,
+      )
+      expect(promotedNamespaceSession.status).toBe(200)
+      const promotedBody = await json(promotedNamespaceSession) as {
+        status: string
+        challenge_host: string | null
+        challenge_txt_value: string | null
+        observation_provider: string | null
+      }
+      expect(promotedBody.status).toBe("challenge_required")
+      expect(promotedBody.challenge_host).toBe("_pirate.pirateverifierroot")
+      expect(typeof promotedBody.challenge_txt_value).toBe("string")
+      expect(promotedBody.observation_provider).toBe("powerdns_api")
+      expect(calls.some((entry) => entry.url.endsWith("/publish-txt"))).toBe(true)
 
       const completedNamespaceSession = await requestJson(
         `http://pirate.test/namespace-verification-sessions/${namespaceSessionBody.namespace_verification_session_id}/complete`,
@@ -916,11 +1070,11 @@ describe("verification routes", () => {
       expect(typeof completedNamespaceBody.namespace_verification_id).toBe("string")
       expect(completedNamespaceBody.observation_provider).toBe("powerdns_api")
 
-      expect(calls.length).toBe(3)
-      expect(calls[0]?.url.includes("/inspect?")).toBe(true)
-      expect(calls[1]?.url.endsWith("/publish-txt")).toBe(true)
-      expect(calls[2]?.url.endsWith("/verify-txt")).toBe(true)
-      expect((calls[1]?.body as { challenge_txt_value?: string })?.challenge_txt_value).toBe(namespaceSessionBody.challenge_txt_value)
+      expect(calls.some((entry) => entry.url.includes("/inspect?"))).toBe(true)
+      expect(calls.some((entry) => entry.url.endsWith("/publish-txt"))).toBe(true)
+      expect(calls.some((entry) => entry.url.endsWith("/verify-txt"))).toBe(true)
+      const publishCall = calls.find((entry) => entry.url.endsWith("/publish-txt"))
+      expect((publishCall?.body as { challenge_txt_value?: string })?.challenge_txt_value).toBe(promotedBody.challenge_txt_value)
     })
   })
 
@@ -949,10 +1103,12 @@ describe("verification routes", () => {
       if (url.startsWith("http://hns-verifier.test")) {
         if (url.includes("/inspect?")) {
           return new Response(JSON.stringify({
-            zone_exists: false,
-            challenge_present: false,
+            root_exists: true,
+            expiry_horizon_sufficient: true,
+            routing_enabled: true,
+            pirate_dns_authority_verified: true,
+            operation_class: "pirate_delegated_namespace",
             observation_provider: "powerdns_api",
-            failure_reason: "zone_not_provisioned",
           }), {
             status: 200,
             headers: { "content-type": "application/json" },
@@ -1039,9 +1195,9 @@ describe("verification routes", () => {
             root_exists: true,
             expiry_horizon_sufficient: true,
             routing_enabled: true,
-            pirate_dns_authority_verified: false,
+            pirate_dns_authority_verified: true,
             control_class: "single_holder_root",
-            operation_class: "owner_managed_namespace",
+            operation_class: "pirate_delegated_namespace",
             observation_provider: "powerdns_api",
           }), {
             status: 200,
@@ -1144,9 +1300,9 @@ describe("verification routes", () => {
             root_exists: true,
             expiry_horizon_sufficient: true,
             routing_enabled: true,
-            pirate_dns_authority_verified: false,
+            pirate_dns_authority_verified: true,
             control_class: "single_holder_root",
-            operation_class: "owner_managed_namespace",
+            operation_class: "pirate_delegated_namespace",
             observation_provider: "powerdns_api",
           }), {
             status: 200,
@@ -1258,6 +1414,8 @@ describe("verification routes", () => {
           return new Response(JSON.stringify({
             root_exists: true,
             expiry_horizon_sufficient: true,
+            pirate_dns_authority_verified: true,
+            operation_class: "pirate_delegated_namespace",
             observation_provider: "powerdns_api",
           }), {
             status: 200,

@@ -1,8 +1,13 @@
 import { boolOrNull } from "../sql-row"
-import { buildDefaultVerificationCapabilities } from "../verification/verification-capabilities"
+import {
+  applyLazyCapabilityExpiry,
+  buildDefaultVerificationCapabilities,
+  deriveVerificationState,
+} from "../verification/verification-capabilities"
 import type {
   ExternalReputationSnapshotRow,
   GlobalHandleRow,
+  LinkedHandleRow,
   NamespaceVerificationRow,
   NamespaceVerificationSessionRow,
   ProfileRow,
@@ -14,6 +19,7 @@ import type {
 } from "./control-plane-auth-rows"
 import type {
   GlobalHandle,
+  LinkedHandle,
   NamespaceVerification,
   NamespaceVerificationAssertions,
   NamespaceVerificationCapabilities,
@@ -30,34 +36,35 @@ import type {
 
 export function parseVerificationCapabilities(raw: string | null | undefined): VerificationCapabilities {
   if (!raw) {
-    return buildDefaultVerificationCapabilities()
+    return applyLazyCapabilityExpiry(buildDefaultVerificationCapabilities())
   }
 
   try {
     const parsed = JSON.parse(raw) as Partial<VerificationCapabilities>
     const defaults = buildDefaultVerificationCapabilities()
-    return {
+    return applyLazyCapabilityExpiry({
       unique_human: parsed.unique_human ?? defaults.unique_human,
       age_over_18: parsed.age_over_18 ?? defaults.age_over_18,
       nationality: parsed.nationality ?? defaults.nationality,
       gender: parsed.gender ?? defaults.gender,
       sanctions_clear: parsed.sanctions_clear ?? defaults.sanctions_clear,
       wallet_score: parsed.wallet_score ?? defaults.wallet_score,
-    }
+    })
   } catch {
-    return buildDefaultVerificationCapabilities()
+    return applyLazyCapabilityExpiry(buildDefaultVerificationCapabilities())
   }
 }
 
 export function serializeUser(row: UserRow): User {
+  const verificationCapabilities = parseVerificationCapabilities(row.verification_capabilities_json)
   return {
     user_id: row.user_id,
     primary_wallet_attachment_id: row.primary_wallet_attachment_id,
-    verification_state: row.verification_state,
+    verification_state: deriveVerificationState(verificationCapabilities),
     capability_provider: row.capability_provider === "self" || row.capability_provider === "very"
       ? row.capability_provider
       : null,
-    verification_capabilities: parseVerificationCapabilities(row.verification_capabilities_json),
+    verification_capabilities: verificationCapabilities,
     verified_at: row.verified_at,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -79,13 +86,43 @@ export function serializeGlobalHandle(row: GlobalHandleRow): GlobalHandle {
   }
 }
 
-export function assembleProfile(profileRow: ProfileRow, globalHandleRow: GlobalHandleRow): Profile {
+export function serializeLinkedHandleRow(row: LinkedHandleRow): LinkedHandle {
+  return {
+    linked_handle_id: row.linked_handle_id,
+    label: row.label_display,
+    kind: row.kind,
+    verification_state: row.verification_state,
+  }
+}
+
+export function serializePirateLinkedHandle(row: GlobalHandleRow): LinkedHandle {
+  return {
+    linked_handle_id: `global:${row.global_handle_id}`,
+    label: row.label_display,
+    kind: "pirate",
+    verification_state: "verified",
+  }
+}
+
+export function assembleProfile(
+  profileRow: ProfileRow,
+  globalHandleRow: GlobalHandleRow,
+  linkedHandleRows: LinkedHandleRow[] = [],
+): Profile {
+  const externalLinkedHandles = linkedHandleRows.map(serializeLinkedHandleRow)
+  const primaryPublicHandle = profileRow.primary_linked_handle_id
+    ? externalLinkedHandles.find((handle) => handle.linked_handle_id === profileRow.primary_linked_handle_id) ?? null
+    : null
+
   return {
     user_id: profileRow.user_id,
     display_name: profileRow.display_name,
     avatar_ref: profileRow.avatar_ref,
+    cover_ref: profileRow.cover_ref,
     bio: profileRow.bio,
     preferred_locale: profileRow.preferred_locale,
+    linked_handles: [serializePirateLinkedHandle(globalHandleRow), ...externalLinkedHandles],
+    primary_public_handle: primaryPublicHandle,
     global_handle: serializeGlobalHandle(globalHandleRow),
     created_at: profileRow.created_at,
     updated_at: profileRow.updated_at,
@@ -183,7 +220,12 @@ export function serializeVerificationSession(input: {
   }
 }
 
-export function serializeNamespaceVerificationSession(row: NamespaceVerificationSessionRow): NamespaceVerificationSession {
+export function serializeNamespaceVerificationSession(
+  row: NamespaceVerificationSessionRow,
+  input?: { setupNameservers?: string[] | null },
+): NamespaceVerificationSession {
+  const storedSetupNameservers = parseOptionalStringArray(row.setup_nameservers_json)
+
   return {
     namespace_verification_session_id: row.namespace_verification_session_id,
     namespace_verification_id: row.namespace_verification_id,
@@ -197,6 +239,7 @@ export function serializeNamespaceVerificationSession(row: NamespaceVerification
     challenge_txt_value: row.challenge_txt_value,
     challenge_payload: parseChallengePayload(row.challenge_payload_json),
     challenge_expires_at: row.challenge_expires_at,
+    setup_nameservers: input?.setupNameservers ?? storedSetupNameservers,
     assertions: buildNamespaceAssertions(row),
     capabilities: buildNamespaceCapabilities(row),
     control_class: row.control_class,
@@ -208,6 +251,28 @@ export function serializeNamespaceVerificationSession(row: NamespaceVerification
     created_at: row.created_at,
     updated_at: row.updated_at,
     expires_at: row.expires_at,
+  }
+}
+
+function parseOptionalStringArray(raw: string | null): string[] | null {
+  if (!raw) {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) {
+      return null
+    }
+
+    const values = parsed
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+
+    return values.length > 0 ? values : null
+  } catch {
+    return null
   }
 }
 

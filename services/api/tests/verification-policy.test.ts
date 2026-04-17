@@ -262,6 +262,21 @@ describe("deriveAcceptedHnsSnapshot", () => {
     expect(snapshot.rootControlVerified).toBeNull()
   })
 
+  test("leaves control metadata null when neither row nor verifier can prove it", () => {
+    const row = stubRow({
+      control_class: null,
+      operation_class: null,
+      observation_provider: "powerdns_api",
+    })
+    const verification: HnsVerifyTxtResult = {
+      verified: true,
+      observation_provider: "powerdns_api",
+    }
+    const snapshot = deriveAcceptedHnsSnapshot(row, verification)
+    expect(snapshot.controlClass).toBeNull()
+    expect(snapshot.operationClass).toBeNull()
+  })
+
   test("expiry_horizon_sufficient=false denies club_attach", () => {
     const row = stubRow({
       root_control_verified: 1,

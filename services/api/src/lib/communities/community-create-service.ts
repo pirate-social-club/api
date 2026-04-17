@@ -1,8 +1,10 @@
 import {
   bootstrapLocalCommunityDb,
   buildLocalCommunityDbUrl,
+  type LocalCommunityRule,
   type LocalCommunitySnapshot,
 } from "./community-local-db"
+import { normalizeCommunityMediaRef } from "./community-identity-media"
 import { openCommunityDb } from "./community-db-factory"
 import { encryptCommunityDbCredential } from "./community-db-credential-crypto"
 import {
@@ -28,6 +30,54 @@ import { serializeCommunity, serializeJob, getPrimaryWalletSnapshot } from "./co
 
 export type CreateCommunityRequestBody = CreateCommunityRequest
 
+export type UpdateCommunityRulesRequestBody = {
+  rules: Array<{
+    rule_id?: string | null
+    title: string
+    body: string
+    report_reason?: string | null
+    position?: number | null
+    status?: "active" | "archived" | null
+  }>
+}
+
+export type UpdateCommunitySafetyRequestBody = {
+  adult_content_policy: {
+    suggestive: Community["adult_content_policy"]["suggestive"]
+    artistic_nudity: Community["adult_content_policy"]["artistic_nudity"]
+    explicit_nudity: Community["adult_content_policy"]["explicit_nudity"]
+    explicit_sexual_content: Community["adult_content_policy"]["explicit_sexual_content"]
+    fetish_content: Community["adult_content_policy"]["fetish_content"]
+  }
+  graphic_content_policy: {
+    injury_medical: Community["graphic_content_policy"]["injury_medical"]
+    gore: Community["graphic_content_policy"]["gore"]
+    extreme_gore: Community["graphic_content_policy"]["extreme_gore"]
+    body_horror_disturbing: Community["graphic_content_policy"]["body_horror_disturbing"]
+    animal_harm: Community["graphic_content_policy"]["animal_harm"]
+  }
+  civility_policy: {
+    group_directed_demeaning_language: Community["civility_policy"]["group_directed_demeaning_language"]
+    targeted_insults: Community["civility_policy"]["targeted_insults"]
+    targeted_harassment: Community["civility_policy"]["targeted_harassment"]
+    threatening_language: Community["civility_policy"]["threatening_language"]
+  }
+  openai_moderation_settings: NonNullable<Community["openai_moderation_settings"]>
+}
+
+export type UpdateGateRuleInput = CreateCommunityRequestBody["gate_rules"] extends
+  Array<infer T> | null | undefined
+  ? Array<T & { gate_rule_id?: string | null }>
+  : never
+
+export type UpdateCommunityGatesRequestBody = {
+  membership_mode: "open" | "request" | "gated"
+  default_age_gate_policy?: "none" | "18_plus" | null
+  allow_anonymous_identity: boolean
+  anonymous_identity_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null
+  gate_rules?: UpdateGateRuleInput
+}
+
 const VALID_PUBLIC_V0_PROVIDERS_BY_PROOF_TYPE = {
   unique_human: new Set(["self", "very"]),
   age_over_18: new Set(["self"]),
@@ -37,41 +87,25 @@ const VALID_PUBLIC_V0_PROVIDERS_BY_PROOF_TYPE = {
   sanctions_clear: new Set(["passport"]),
 } as const
 
-export function assertCreateRequest(
-  body: CreateCommunityRequestBody,
+function assertPublicV0GateConfiguration(
+  body: {
+    membership_mode?: "open" | "request" | "gated" | null
+    default_age_gate_policy?: "none" | "18_plus" | null
+    anonymous_identity_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null
+    gate_rules?: CreateCommunityRequestBody["gate_rules"]
+  },
   input: {
-    uniqueHumanVerified: boolean
     ageOver18Verified: boolean
   },
-): asserts body is CreateCommunityRequestBody & {
-  display_name: string
-} {
-  if (!body.display_name?.trim()) {
-    throw badRequestError("display_name is required")
-  }
-  if (body.namespace != null && !body.namespace.namespace_verification_id?.trim()) {
-    throw badRequestError("namespace.namespace_verification_id is required when namespace is provided")
-  }
-  if (!input.uniqueHumanVerified) {
-    throw eligibilityFailed("unique_human verification is required")
-  }
-  if ((body.governance_mode ?? "centralized") !== "centralized") {
-    throw eligibilityFailed("Only centralized community creation is allowed in public v0")
-  }
+): void {
   if (!["open", "request", "gated"].includes(body.membership_mode ?? "open")) {
     throw eligibilityFailed("Public v0 community creation only allows open, request, or gated membership")
-  }
-  if ((body.handle_policy?.policy_template ?? "standard") !== "standard") {
-    throw eligibilityFailed("Public v0 community creation requires the standard handle policy")
   }
   if ((body.anonymous_identity_scope ?? null) === "post_ephemeral") {
     throw eligibilityFailed("post_ephemeral anonymous scope is not allowed in public v0 community creation")
   }
   if ((body.default_age_gate_policy ?? "none") === "18_plus" && !input.ageOver18Verified) {
     throw eligibilityFailed("age_over_18 verification is required for 18_plus communities")
-  }
-  if (body.donation_policy != null || body.community_bootstrap != null) {
-    throw eligibilityFailed("Public v0 community creation does not accept donation or bootstrap payloads")
   }
   if (
     body.gate_rules?.some(
@@ -80,6 +114,11 @@ export function assertCreateRequest(
   ) {
     throw eligibilityFailed("Public v0 community creation only allows membership-scope identity-proof gates")
   }
+  if (body.gate_rules?.some((rule) => rule.gate_type === "sanctions_clear")) {
+    throw eligibilityFailed("Public v0 community creation does not support sanctions_clear gates")
+  }
+  let nationalityGateCount = 0
+  let genderGateCount = 0
   for (const rule of body.gate_rules ?? []) {
     for (const requirement of rule.proof_requirements ?? []) {
       const acceptedProviders = requirement.accepted_providers ?? []
@@ -104,7 +143,40 @@ export function assertCreateRequest(
   }
   for (const rule of body.gate_rules ?? []) {
     if (rule.gate_type !== "nationality") {
+      if (rule.gate_type !== "gender") {
+        continue
+      }
+
+      genderGateCount += 1
+      if (genderGateCount > 1) {
+        throw eligibilityFailed("Public v0 communities support at most one gender gate")
+      }
+
+      const requirements = rule.proof_requirements ?? []
+      if (requirements.length !== 1 || requirements[0].proof_type !== "gender") {
+        throw eligibilityFailed("Gender gate must have exactly one gender proof requirement")
+      }
+
+      const requirement = requirements[0]
+      const acceptedProviders = requirement.accepted_providers ?? []
+      if (acceptedProviders.length !== 1 || acceptedProviders[0] !== "self") {
+        throw eligibilityFailed("Gender gate accepted_providers must be exactly [\"self\"]")
+      }
+
+      const config = (requirement.config ?? rule.gate_config ?? {}) as Record<string, unknown>
+      const requiredValue = typeof config.required_value === "string" ? config.required_value : null
+      if (!requiredValue) {
+        throw eligibilityFailed("Gender gate requires a required_value in config")
+      }
+      if (requiredValue !== "M" && requiredValue !== "F") {
+        throw eligibilityFailed("Gender gate required_value must be either \"M\" or \"F\"")
+      }
       continue
+    }
+
+    nationalityGateCount += 1
+    if (nationalityGateCount > 1) {
+      throw eligibilityFailed("Public v0 communities support at most one nationality gate")
     }
 
     const requirements = rule.proof_requirements ?? []
@@ -127,6 +199,45 @@ export function assertCreateRequest(
       throw eligibilityFailed("Nationality gate required_value must match ^[A-Z]{2}$")
     }
   }
+}
+
+export function assertCreateRequest(
+  body: CreateCommunityRequestBody,
+  input: {
+    uniqueHumanVerified: boolean
+    ageOver18Verified: boolean
+  },
+): asserts body is CreateCommunityRequestBody & {
+  display_name: string
+} {
+  if (!body.display_name?.trim()) {
+    throw badRequestError("display_name is required")
+  }
+  if (body.avatar_ref != null && typeof body.avatar_ref !== "string") {
+    throw badRequestError("avatar_ref must be a string or null")
+  }
+  if (body.banner_ref != null && typeof body.banner_ref !== "string") {
+    throw badRequestError("banner_ref must be a string or null")
+  }
+  if (body.namespace != null && !body.namespace.namespace_verification_id?.trim()) {
+    throw badRequestError("namespace.namespace_verification_id is required when namespace is provided")
+  }
+  if (!input.uniqueHumanVerified) {
+    throw eligibilityFailed("unique_human verification is required")
+  }
+  if ((body.governance_mode ?? "centralized") !== "centralized") {
+    throw eligibilityFailed("Only centralized community creation is allowed in public v0")
+  }
+  if ((body.handle_policy?.policy_template ?? "standard") !== "standard") {
+    throw eligibilityFailed("Public v0 community creation requires the standard handle policy")
+  }
+  if (body.donation_policy != null) {
+    throw eligibilityFailed("Public v0 community creation does not accept donation payloads")
+  }
+  if (body.community_bootstrap?.label_policy != null || body.community_bootstrap?.resource_links != null) {
+    throw eligibilityFailed("Public v0 community creation does not support labels or resource links yet")
+  }
+  assertPublicV0GateConfiguration(body, input)
 }
 
 export type CreateCommunityAuth = {
@@ -323,8 +434,9 @@ async function loadCommunityLocalSnapshot(
   try {
     const result = await db.client.execute({
       sql: `
-        SELECT community_id, display_name, description, status, membership_mode, default_age_gate_policy,
+        SELECT community_id, display_name, description, avatar_ref, banner_ref, status, membership_mode, default_age_gate_policy,
                allow_anonymous_identity, anonymous_identity_scope, donation_policy_mode, donation_partner_status,
+               settings_json,
                governance_mode, created_by_user_id, created_at, updated_at
         FROM communities
         WHERE community_id = ?1
@@ -337,10 +449,62 @@ async function loadCommunityLocalSnapshot(
       return null
     }
 
+    const rulesResult = await db.client.execute({
+      sql: `
+        SELECT rule_id, title, body, report_reason, position, status
+        FROM community_rules
+        WHERE community_id = ?1
+        ORDER BY position ASC, created_at ASC
+      `,
+      args: [communityId],
+    })
+    const rules = rulesResult.rows.map((ruleRow, index) => ({
+      rule_id: String(ruleRow.rule_id),
+      title: String(ruleRow.title),
+      body: String(ruleRow.body),
+      report_reason:
+        ruleRow.report_reason == null || String(ruleRow.report_reason).trim().length === 0
+          ? String(ruleRow.title)
+          : String(ruleRow.report_reason),
+      position: typeof ruleRow.position === "number" ? ruleRow.position : index,
+      status: ruleRow.status === "archived" ? "archived" : "active",
+    } satisfies LocalCommunityRule))
+
+    const gateRulesResult = await db.client.execute({
+      sql: `
+        SELECT gate_rule_id, scope, gate_family, gate_type, proof_requirements_json,
+               chain_namespace, gate_config_json, status, created_at, updated_at
+        FROM community_gate_rules
+        WHERE community_id = ?1
+        ORDER BY created_at ASC
+      `,
+      args: [communityId],
+    })
+    const gate_rules = gateRulesResult.rows.map((gateRow) => ({
+      gate_rule_id: String(gateRow.gate_rule_id),
+      scope: String(gateRow.scope) as LocalCommunitySnapshot["gate_rules"][number]["scope"],
+      gate_family: String(gateRow.gate_family) as LocalCommunitySnapshot["gate_rules"][number]["gate_family"],
+      gate_type: String(gateRow.gate_type),
+      proof_requirements:
+        gateRow.proof_requirements_json == null
+          ? null
+          : JSON.parse(String(gateRow.proof_requirements_json)) as Array<Record<string, unknown>>,
+      chain_namespace: gateRow.chain_namespace == null ? null : String(gateRow.chain_namespace),
+      gate_config:
+        gateRow.gate_config_json == null
+          ? null
+          : JSON.parse(String(gateRow.gate_config_json)) as Record<string, unknown>,
+      status: gateRow.status === "disabled" ? "disabled" : "active",
+      created_at: String(gateRow.created_at),
+      updated_at: String(gateRow.updated_at),
+    }))
+
     return {
       community_id: String(row.community_id),
       display_name: String(row.display_name),
       description: row.description == null ? null : String(row.description),
+      avatar_ref: row.avatar_ref == null ? null : String(row.avatar_ref),
+      banner_ref: row.banner_ref == null ? null : String(row.banner_ref),
       status: String(row.status) as LocalCommunitySnapshot["status"],
       membership_mode: String(row.membership_mode) as LocalCommunitySnapshot["membership_mode"],
       default_age_gate_policy: String(row.default_age_gate_policy) as LocalCommunitySnapshot["default_age_gate_policy"],
@@ -350,7 +514,10 @@ async function loadCommunityLocalSnapshot(
         : (String(row.anonymous_identity_scope) as LocalCommunitySnapshot["anonymous_identity_scope"]),
       donation_policy_mode: String(row.donation_policy_mode) as LocalCommunitySnapshot["donation_policy_mode"],
       donation_partner_status: String(row.donation_partner_status) as LocalCommunitySnapshot["donation_partner_status"],
+      settings_json: row.settings_json == null ? null : String(row.settings_json),
+      gate_rules,
       governance_mode: String(row.governance_mode) as LocalCommunitySnapshot["governance_mode"],
+      rules,
       created_by_user_id: String(row.created_by_user_id),
       created_at: String(row.created_at),
       updated_at: String(row.updated_at),
@@ -381,6 +548,424 @@ export async function requireOwnedCommunity(
     throw notFoundError("Community not found")
   }
   return community
+}
+
+function normalizeInputRules(
+  rules: UpdateCommunityRulesRequestBody["rules"],
+): LocalCommunityRule[] {
+  return rules
+    .map((rule, index) => {
+      const title = rule.title.trim()
+      const body = rule.body.trim()
+      const reportReason = rule.report_reason?.trim() || title
+      const status = rule.status === "archived" ? "archived" : "active"
+      const ruleId = typeof rule.rule_id === "string" && rule.rule_id.trim().length > 0
+        ? rule.rule_id.trim()
+        : makeId("rul")
+
+      if (!title && !body) {
+        return null
+      }
+
+      return {
+        rule_id: ruleId,
+        title,
+        body,
+        report_reason: reportReason,
+        position: index,
+        status,
+      } satisfies LocalCommunityRule
+    })
+    .filter((rule): rule is LocalCommunityRule => rule !== null)
+}
+
+function isModerationDecisionLevel(
+  value: unknown,
+): value is Community["adult_content_policy"]["suggestive"] {
+  return value === "allow" || value === "review" || value === "disallow"
+}
+
+function isEscalationDecisionLevel(
+  value: unknown,
+): value is Community["civility_policy"]["threatening_language"] {
+  return value === "review" || value === "disallow"
+}
+
+function assertUpdateCommunitySafetyRequest(
+  body: UpdateCommunitySafetyRequestBody | null,
+): asserts body is UpdateCommunitySafetyRequestBody {
+  if (!body) {
+    throw badRequestError("Invalid community safety payload")
+  }
+
+  const adult = body.adult_content_policy
+  const graphic = body.graphic_content_policy
+  const civility = body.civility_policy
+  const openai = body.openai_moderation_settings
+
+  if (
+    !adult
+    || !isModerationDecisionLevel(adult.suggestive)
+    || !isModerationDecisionLevel(adult.artistic_nudity)
+    || !isModerationDecisionLevel(adult.explicit_nudity)
+    || !isModerationDecisionLevel(adult.explicit_sexual_content)
+    || !isModerationDecisionLevel(adult.fetish_content)
+  ) {
+    throw badRequestError("Invalid adult_content_policy payload")
+  }
+
+  if (
+    !graphic
+    || !isModerationDecisionLevel(graphic.injury_medical)
+    || !isModerationDecisionLevel(graphic.gore)
+    || !isModerationDecisionLevel(graphic.extreme_gore)
+    || !isModerationDecisionLevel(graphic.body_horror_disturbing)
+    || !isModerationDecisionLevel(graphic.animal_harm)
+  ) {
+    throw badRequestError("Invalid graphic_content_policy payload")
+  }
+
+  if (
+    !civility
+    || !isModerationDecisionLevel(civility.group_directed_demeaning_language)
+    || !isModerationDecisionLevel(civility.targeted_insults)
+    || !isModerationDecisionLevel(civility.targeted_harassment)
+    || !isEscalationDecisionLevel(civility.threatening_language)
+  ) {
+    throw badRequestError("Invalid civility_policy payload")
+  }
+
+  if (
+    !openai
+    || typeof openai.scan_titles !== "boolean"
+    || typeof openai.scan_post_bodies !== "boolean"
+    || typeof openai.scan_captions !== "boolean"
+    || typeof openai.scan_link_preview_text !== "boolean"
+    || typeof openai.scan_images !== "boolean"
+  ) {
+    throw badRequestError("Invalid openai_moderation_settings payload")
+  }
+}
+
+function assertUpdateCommunityGatesRequest(
+  body: UpdateCommunityGatesRequestBody | null,
+): asserts body is UpdateCommunityGatesRequestBody {
+  if (!body) {
+    throw badRequestError("Invalid community gates payload")
+  }
+
+  if (!["open", "request", "gated"].includes(body.membership_mode)) {
+    throw badRequestError("Invalid membership_mode payload")
+  }
+
+  if (typeof body.allow_anonymous_identity !== "boolean") {
+    throw badRequestError("Invalid allow_anonymous_identity payload")
+  }
+
+  if (
+    body.anonymous_identity_scope != null
+    && body.anonymous_identity_scope !== "community_stable"
+    && body.anonymous_identity_scope !== "thread_stable"
+    && body.anonymous_identity_scope !== "post_ephemeral"
+  ) {
+    throw badRequestError("Invalid anonymous_identity_scope payload")
+  }
+
+  if (
+    body.default_age_gate_policy != null
+    && body.default_age_gate_policy !== "none"
+    && body.default_age_gate_policy !== "18_plus"
+  ) {
+    throw badRequestError("Invalid default_age_gate_policy payload")
+  }
+
+  if (body.gate_rules != null && !Array.isArray(body.gate_rules)) {
+    throw badRequestError("Invalid gate_rules payload")
+  }
+
+  if (Array.isArray(body.gate_rules)) {
+    const seenGateRuleIds = new Set<string>()
+    for (const rule of body.gate_rules) {
+      if (rule.gate_rule_id != null) {
+        if (typeof rule.gate_rule_id !== "string") {
+          throw badRequestError("Invalid gate_rule_id payload")
+        }
+
+        const normalizedGateRuleId = rule.gate_rule_id.trim()
+        if (normalizedGateRuleId.length === 0) {
+          throw badRequestError("gate_rule_id must not be blank")
+        }
+        if (seenGateRuleIds.has(normalizedGateRuleId)) {
+          throw badRequestError("Duplicate gate_rule_id payload")
+        }
+        seenGateRuleIds.add(normalizedGateRuleId)
+      }
+    }
+  }
+}
+
+function parseCommunitySettingsJson(
+  rawSettingsJson: unknown,
+): Record<string, unknown> {
+  if (typeof rawSettingsJson !== "string" || rawSettingsJson.trim().length === 0) {
+    return {}
+  }
+
+  try {
+    const parsed = JSON.parse(rawSettingsJson) as unknown
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+  } catch {}
+
+  return {}
+}
+
+export async function updateCommunityRules(input: {
+  env: Env
+  userId: string
+  communityId: string
+  body: UpdateCommunityRulesRequestBody
+  communityRepository: CommunityRepository
+}): Promise<Community> {
+  await requireOwnedCommunity(input.communityRepository, input.communityId, input.userId)
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+
+  try {
+    const rules = normalizeInputRules(input.body.rules)
+    const now = nowIso()
+    const tx = await db.client.transaction("write")
+    try {
+      await tx.execute({
+        sql: `
+          DELETE FROM community_rules
+          WHERE community_id = ?1
+        `,
+        args: [input.communityId],
+      })
+
+      for (const [index, rule] of rules.entries()) {
+        await tx.execute({
+          sql: `
+            INSERT INTO community_rules (
+              rule_id, community_id, title, body, report_reason, position, status, created_at, updated_at
+            ) VALUES (
+              ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8
+            )
+          `,
+          args: [
+            rule.rule_id,
+            input.communityId,
+            rule.title,
+            rule.body,
+            rule.report_reason,
+            index,
+            rule.status,
+            now,
+          ],
+        })
+      }
+
+      await tx.execute({
+        sql: `
+          UPDATE communities
+          SET updated_at = ?2
+          WHERE community_id = ?1
+        `,
+        args: [input.communityId, now],
+      })
+
+      await tx.commit()
+    } catch (error) {
+      try {
+        await tx.rollback()
+      } catch {}
+      throw error
+    } finally {
+      tx.close()
+    }
+  } finally {
+    db.close()
+  }
+
+  const updated = await input.communityRepository.getCommunityById(input.communityId)
+  if (!updated) {
+    throw notFoundError("Community not found")
+  }
+  return loadCommunityProjection(input.env, input.communityRepository, updated)
+}
+
+export async function updateCommunitySafety(input: {
+  env: Env
+  userId: string
+  communityId: string
+  body: UpdateCommunitySafetyRequestBody | null
+  communityRepository: CommunityRepository
+}): Promise<Community> {
+  assertUpdateCommunitySafetyRequest(input.body)
+  await requireOwnedCommunity(input.communityRepository, input.communityId, input.userId)
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+
+  try {
+    const result = await db.client.execute({
+      sql: `
+        SELECT settings_json
+        FROM communities
+        WHERE community_id = ?1
+        LIMIT 1
+      `,
+      args: [input.communityId],
+    })
+    const row = result.rows[0]
+    const existingSettings = parseCommunitySettingsJson(row?.settings_json)
+    const now = nowIso()
+
+    const settings = {
+      ...existingSettings,
+      adult_content_policy: {
+        community_id: input.communityId,
+        policy_origin: "explicit" as const,
+        updated_at: now,
+        ...input.body.adult_content_policy,
+      },
+      graphic_content_policy: {
+        community_id: input.communityId,
+        policy_origin: "explicit" as const,
+        updated_at: now,
+        ...input.body.graphic_content_policy,
+      },
+      civility_policy: {
+        community_id: input.communityId,
+        policy_origin: "explicit" as const,
+        updated_at: now,
+        ...input.body.civility_policy,
+      },
+      openai_moderation_settings: input.body.openai_moderation_settings,
+    }
+
+    await db.client.execute({
+      sql: `
+        UPDATE communities
+        SET settings_json = ?2,
+            updated_at = ?3
+        WHERE community_id = ?1
+      `,
+      args: [input.communityId, JSON.stringify(settings), now],
+    })
+  } finally {
+    db.close()
+  }
+
+  const updated = await input.communityRepository.getCommunityById(input.communityId)
+  if (!updated) {
+    throw notFoundError("Community not found")
+  }
+
+  return loadCommunityProjection(input.env, input.communityRepository, updated)
+}
+
+export async function updateCommunityGates(input: {
+  env: Env
+  userId: string
+  communityId: string
+  body: UpdateCommunityGatesRequestBody | null
+  communityRepository: CommunityRepository
+  userRepository: UserRepository
+}): Promise<Community> {
+  assertUpdateCommunityGatesRequest(input.body)
+  await requireOwnedCommunity(input.communityRepository, input.communityId, input.userId)
+
+  const user = await input.userRepository.getUserById(input.userId)
+  if (!user) {
+    throw internalError("Resolved user row is missing for community gates update")
+  }
+
+  assertPublicV0GateConfiguration(input.body, {
+    ageOver18Verified: user.verification_capabilities.age_over_18.state === "verified",
+  })
+
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+
+  try {
+    const now = nowIso()
+    const tx = await db.client.transaction("write")
+    try {
+      await tx.execute({
+        sql: `
+          UPDATE communities
+          SET membership_mode = ?2,
+              default_age_gate_policy = ?3,
+              allow_anonymous_identity = ?4,
+              anonymous_identity_scope = ?5,
+              updated_at = ?6
+          WHERE community_id = ?1
+        `,
+        args: [
+          input.communityId,
+          input.body.membership_mode,
+          input.body.default_age_gate_policy ?? "none",
+          input.body.allow_anonymous_identity ? 1 : 0,
+          input.body.allow_anonymous_identity ? (input.body.anonymous_identity_scope ?? null) : null,
+          now,
+        ],
+      })
+
+      await tx.execute({
+        sql: `
+          DELETE FROM community_gate_rules
+          WHERE community_id = ?1
+        `,
+        args: [input.communityId],
+      })
+
+      for (const [index, rule] of (input.body.gate_rules ?? []).entries()) {
+        const existingId = typeof rule.gate_rule_id === "string" && rule.gate_rule_id.trim().length > 0
+          ? rule.gate_rule_id.trim()
+          : null
+        const gateRuleId = existingId ?? `grl_${input.communityId}_${index}_${nowIso().replace(/[^a-zA-Z0-9]/g, "")}_${index}`
+        await tx.execute({
+          sql: `
+            INSERT INTO community_gate_rules (
+              gate_rule_id, community_id, scope, gate_family, gate_type, proof_requirements_json,
+              chain_namespace, gate_config_json, status, created_at, updated_at
+            ) VALUES (
+              ?1, ?2, ?3, ?4, ?5, ?6,
+              ?7, ?8, 'active', ?9, ?9
+            )
+          `,
+          args: [
+            gateRuleId,
+            input.communityId,
+            rule.scope,
+            rule.gate_family,
+            rule.gate_type,
+            rule.proof_requirements ? JSON.stringify(rule.proof_requirements) : null,
+            rule.chain_namespace ?? null,
+            rule.gate_config ? JSON.stringify(rule.gate_config) : null,
+            now,
+          ],
+        })
+      }
+
+      await tx.commit()
+    } catch (error) {
+      try {
+        await tx.rollback()
+      } catch {}
+      throw error
+    } finally {
+      tx.close()
+    }
+  } finally {
+    db.close()
+  }
+
+  const updated = await input.communityRepository.getCommunityById(input.communityId)
+  if (!updated) {
+    throw notFoundError("Community not found")
+  }
+
+  return loadCommunityProjection(input.env, input.communityRepository, updated)
 }
 
 async function upsertLocalNamespaceAttachment(input: {
@@ -489,6 +1074,8 @@ async function createLocalNamespacelessCommunity(input: {
       createdByUserId: input.auth.userId,
       displayName: input.auth.displayName,
       description: input.body.description?.trim() || null,
+      avatarRef: normalizeCommunityMediaRef(input.body.avatar_ref),
+      bannerRef: normalizeCommunityMediaRef(input.body.banner_ref),
       namespaceVerificationId: null,
       namespaceLabel: null,
       membershipMode: input.body.membership_mode ?? "open",
@@ -505,6 +1092,14 @@ async function createLocalNamespacelessCommunity(input: {
         proofRequirementsJson: rule.proof_requirements ? JSON.stringify(rule.proof_requirements) : null,
         chainNamespace: rule.chain_namespace ?? null,
         gateConfigJson: rule.gate_config ? JSON.stringify(rule.gate_config) : null,
+      })),
+      rules: (input.body.community_bootstrap?.rules ?? []).map((rule, index) => ({
+        rule_id: makeId("rul"),
+        title: rule.title.trim(),
+        body: rule.body.trim(),
+        report_reason: rule.report_reason?.trim() || rule.title.trim(),
+        position: typeof rule.position === "number" ? rule.position : index,
+        status: "active",
       })),
       now: input.auth.createdAt,
     })
@@ -748,6 +1343,8 @@ async function provisionNamespacedCommunity(input: {
         createdByUserId: auth.userId,
         displayName: auth.displayName,
         description: body.description?.trim() || null,
+        avatarRef: normalizeCommunityMediaRef(body.avatar_ref),
+        bannerRef: normalizeCommunityMediaRef(body.banner_ref),
         namespaceVerificationId,
         namespaceLabel: namespaceVerification.normalized_root_label,
         membershipMode: body.membership_mode ?? "open",
@@ -764,6 +1361,14 @@ async function provisionNamespacedCommunity(input: {
           proofRequirementsJson: rule.proof_requirements ? JSON.stringify(rule.proof_requirements) : null,
           chainNamespace: rule.chain_namespace ?? null,
           gateConfigJson: rule.gate_config ? JSON.stringify(rule.gate_config) : null,
+        })),
+        rules: (body.community_bootstrap?.rules ?? []).map((rule, index) => ({
+          rule_id: makeId("rul"),
+          title: rule.title.trim(),
+          body: rule.body.trim(),
+          report_reason: rule.report_reason?.trim() || rule.title.trim(),
+          position: typeof rule.position === "number" ? rule.position : index,
+          status: "active",
         })),
         now: auth.createdAt,
       })

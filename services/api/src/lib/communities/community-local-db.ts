@@ -12,6 +12,8 @@ export type LocalCommunityBootstrapInput = {
   createdByUserId: string
   displayName: string
   description: string | null
+  avatarRef: string | null
+  bannerRef: string | null
   namespaceVerificationId: string | null
   namespaceLabel: string | null
   membershipMode: "open" | "request" | "gated"
@@ -29,13 +31,25 @@ export type LocalCommunityBootstrapInput = {
     chainNamespace: string | null
     gateConfigJson: string | null
   }>
+  rules: Array<LocalCommunityRule>
   now: string
+}
+
+export type LocalCommunityRule = {
+  rule_id: string
+  title: string
+  body: string
+  report_reason: string
+  position: number
+  status: "active" | "archived"
 }
 
 export type LocalCommunitySnapshot = {
   community_id: string
   display_name: string
   description: string | null
+  avatar_ref: string | null
+  banner_ref: string | null
   status: "draft" | "active" | "frozen" | "archived" | "deleted"
   membership_mode: "open" | "request" | "gated"
   default_age_gate_policy: "none" | "18_plus"
@@ -44,6 +58,20 @@ export type LocalCommunitySnapshot = {
   donation_policy_mode: "none" | "optional_creator_sidecar" | "fundraiser_default"
   donation_partner_status: "unconfigured" | "active" | "inactive"
   governance_mode: "centralized" | "multisig" | "majeur"
+  settings_json: string | null
+  gate_rules: Array<{
+    gate_rule_id: string
+    scope: "membership" | "viewer" | "posting"
+    gate_family: "token_holding" | "identity_proof"
+    gate_type: string
+    proof_requirements: Array<Record<string, unknown>> | null
+    chain_namespace: string | null
+    gate_config: Record<string, unknown> | null
+    status: "active" | "disabled"
+    created_at: string
+    updated_at: string
+  }>
+  rules: LocalCommunityRule[]
   created_by_user_id: string
   created_at: string
   updated_at: string
@@ -150,7 +178,7 @@ async function applyMigrationFile(client: Client, migrationFilePath: string): Pr
   }
 }
 
-async function applyCommunityTemplateMigrations(client: Client): Promise<void> {
+export async function ensureCommunityDbSchema(client: Client): Promise<void> {
   await ensureSchemaMigrationsTable(client)
   const migrationsDir = resolveCommunityTemplateMigrationsDir()
   const migrationEntries = (await readdir(migrationsDir))
@@ -196,7 +224,7 @@ export async function bootstrapLocalCommunityDb(input: LocalCommunityBootstrapIn
   })
 
   try {
-    await applyCommunityTemplateMigrations(client)
+    await ensureCommunityDbSchema(client)
 
     const membershipId = `mbr_${input.communityId}_${input.createdByUserId}`
     const roleAssignmentId = `role_${input.communityId}_${input.createdByUserId}_owner`
@@ -207,17 +235,19 @@ export async function bootstrapLocalCommunityDb(input: LocalCommunityBootstrapIn
       await tx.execute({
         sql: `
           INSERT INTO communities (
-            community_id, display_name, description, status, artist_identity_id, artist_governance_state,
+            community_id, display_name, description, avatar_ref, banner_ref, status, artist_identity_id, artist_governance_state,
             membership_mode, default_age_gate_policy, allow_anonymous_identity, anonymous_identity_scope,
             donation_partner_id, donation_policy_mode, donation_partner_status, governance_mode,
             settings_json, created_by_user_id, created_at, updated_at
           ) VALUES (
-            ?1, ?2, ?3, 'active', NULL, 'fan_run', ?4, ?5, ?6, ?7,
-            NULL, 'none', 'unconfigured', ?8, NULL, ?9, ?10, ?10
+            ?1, ?2, ?3, ?4, ?5, 'active', NULL, 'fan_run', ?6, ?7, ?8, ?9,
+            NULL, 'none', 'unconfigured', ?10, NULL, ?11, ?12, ?12
           )
           ON CONFLICT(community_id) DO UPDATE SET
             display_name = excluded.display_name,
             description = excluded.description,
+            avatar_ref = excluded.avatar_ref,
+            banner_ref = excluded.banner_ref,
             status = excluded.status,
             membership_mode = excluded.membership_mode,
             default_age_gate_policy = excluded.default_age_gate_policy,
@@ -232,6 +262,8 @@ export async function bootstrapLocalCommunityDb(input: LocalCommunityBootstrapIn
           input.communityId,
           input.displayName,
           input.description,
+          input.avatarRef,
+          input.bannerRef,
           input.membershipMode,
           input.defaultAgeGatePolicy,
           boolToSqlite(input.allowAnonymousIdentity),
@@ -354,6 +386,28 @@ export async function bootstrapLocalCommunityDb(input: LocalCommunityBootstrapIn
         })
       }
 
+      for (const rule of input.rules) {
+        await tx.execute({
+          sql: `
+            INSERT INTO community_rules (
+              rule_id, community_id, title, body, report_reason, position, status, created_at, updated_at
+            ) VALUES (
+              ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8
+            )
+          `,
+          args: [
+            rule.rule_id,
+            input.communityId,
+            rule.title,
+            rule.body,
+            rule.report_reason,
+            rule.position,
+            rule.status,
+            now,
+          ],
+        })
+      }
+
       await tx.commit()
     } catch (error) {
       try {
@@ -368,6 +422,8 @@ export async function bootstrapLocalCommunityDb(input: LocalCommunityBootstrapIn
       community_id: input.communityId,
       display_name: input.displayName,
       description: input.description,
+      avatar_ref: input.avatarRef,
+      banner_ref: input.bannerRef,
       status: "active",
       membership_mode: input.membershipMode,
       default_age_gate_policy: input.defaultAgeGatePolicy,
@@ -376,6 +432,24 @@ export async function bootstrapLocalCommunityDb(input: LocalCommunityBootstrapIn
       donation_policy_mode: "none",
       donation_partner_status: "unconfigured",
       governance_mode: input.governanceMode,
+      settings_json: null,
+      gate_rules: input.gateRules.map((rule, index) => ({
+        gate_rule_id: `grl_${input.communityId}_${index}`,
+        scope: rule.scope,
+        gate_family: rule.gateFamily,
+        gate_type: rule.gateType,
+        proof_requirements: rule.proofRequirementsJson
+          ? JSON.parse(rule.proofRequirementsJson) as Array<Record<string, unknown>>
+          : null,
+        chain_namespace: rule.chainNamespace,
+        gate_config: rule.gateConfigJson
+          ? JSON.parse(rule.gateConfigJson) as Record<string, unknown>
+          : null,
+        status: "active",
+        created_at: now,
+        updated_at: now,
+      })),
+      rules: [...input.rules].sort((a, b) => a.position - b.position),
       created_by_user_id: input.createdByUserId,
       created_at: now,
       updated_at: now,

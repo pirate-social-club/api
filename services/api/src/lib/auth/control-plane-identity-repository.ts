@@ -6,6 +6,8 @@ import {
   deriveOnboardingStatus,
   findActiveAuthProviderLink,
   getGlobalHandleRow,
+  getGlobalHandleRowByLabelNormalized,
+  listLinkedHandleRows,
   getProfileRow,
   getUserRow,
   hasUniqueConstraintField,
@@ -17,6 +19,22 @@ import { assembleProfile, serializeUser, serializeWalletAttachments } from "./co
 import type { SessionSnapshot } from "./control-plane-auth-rows"
 import { makeId, nowIso } from "../helpers"
 import type { OnboardingStatus, Profile, UpstreamIdentity, User, WalletAttachmentSummary } from "../../types"
+import type { PublicProfileResolution } from "./repositories"
+
+function normalizePublicHandleLabel(value: string): {
+  labelDisplay: string
+  labelNormalized: string
+} {
+  const trimmed = value.trim().toLowerCase().replace(/^@+/u, "")
+  const withoutSuffix = trimmed.endsWith(".pirate")
+    ? trimmed.slice(0, -".pirate".length)
+    : trimmed
+
+  return {
+    labelDisplay: `${withoutSuffix}.pirate`,
+    labelNormalized: withoutSuffix,
+  }
+}
 
 export class ControlPlaneIdentityRepository {
   constructor(private readonly client: Client) {}
@@ -206,6 +224,39 @@ export class ControlPlaneIdentityRepository {
     if (!globalHandleRow) {
       return null
     }
-    return assembleProfile(profileRow, globalHandleRow)
+    const linkedHandleRows = await listLinkedHandleRows(this.client, userId)
+    return assembleProfile(profileRow, globalHandleRow, linkedHandleRows)
+  }
+
+  async resolvePublicProfileByHandle(handleLabel: string): Promise<PublicProfileResolution | null> {
+    const requestedHandle = normalizePublicHandleLabel(handleLabel)
+    const requestedHandleRow = await getGlobalHandleRowByLabelNormalized(
+      this.client,
+      requestedHandle.labelNormalized,
+    )
+    if (!requestedHandleRow) {
+      return null
+    }
+
+    const canonicalHandleRow = requestedHandleRow.status === "redirect" && requestedHandleRow.redirect_target_global_handle_id
+      ? await getGlobalHandleRow(this.client, requestedHandleRow.redirect_target_global_handle_id)
+      : requestedHandleRow
+    if (!canonicalHandleRow) {
+      return null
+    }
+
+    const profileRow = await getProfileRow(this.client, canonicalHandleRow.user_id)
+    if (!profileRow) {
+      return null
+    }
+
+    const linkedHandleRows = await listLinkedHandleRows(this.client, canonicalHandleRow.user_id)
+
+    return {
+      profile: assembleProfile(profileRow, canonicalHandleRow, linkedHandleRows),
+      requested_handle_label: requestedHandle.labelDisplay,
+      resolved_handle_label: canonicalHandleRow.label_display,
+      is_canonical: requestedHandleRow.global_handle_id === canonicalHandleRow.global_handle_id,
+    }
   }
 }

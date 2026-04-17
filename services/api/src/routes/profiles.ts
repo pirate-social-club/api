@@ -33,6 +33,7 @@ profiles.patch("/me", async (c) => {
     .json<{
       display_name?: unknown
       avatar_ref?: unknown
+      cover_ref?: unknown
       bio?: unknown
       preferred_locale?: unknown
     }>()
@@ -44,6 +45,7 @@ profiles.patch("/me", async (c) => {
   const input: {
     display_name?: string | null
     avatar_ref?: string | null
+    cover_ref?: string | null
     bio?: string | null
     preferred_locale?: string | null
   } = {}
@@ -57,6 +59,9 @@ profiles.patch("/me", async (c) => {
   }
   if ("avatar_ref" in body) {
     input.avatar_ref = requireStringOrNull(body.avatar_ref, "avatar_ref")
+  }
+  if ("cover_ref" in body) {
+    input.cover_ref = requireStringOrNull(body.cover_ref, "cover_ref")
   }
   if ("bio" in body) {
     input.bio = requireStringOrNull(body.bio, "bio")
@@ -101,6 +106,35 @@ profiles.post("/me/global-handle/upgrade-quote", async (c) => {
     throw authError("Authentication failed")
   }
   return c.json(quote, 200)
+})
+
+profiles.post("/me/linked-handles/sync", async (c) => {
+  const actor = c.get("actor")
+  const repository = getProfileRepository(c.env)
+  const profile = await repository.syncLinkedHandles(actor.userId)
+  if (!profile) {
+    throw authError("Authentication failed")
+  }
+  return c.json(profile, 200)
+})
+
+profiles.post("/me/primary-public-handle", async (c) => {
+  const actor = c.get("actor")
+  const body = await c.req.json<{ linked_handle_id?: unknown }>().catch(() => null)
+  if (!body || typeof body !== "object") {
+    throw badRequestError("Invalid primary public handle payload")
+  }
+
+  const linkedHandleId = "linked_handle_id" in body
+    ? requireStringOrNull(body.linked_handle_id, "linked_handle_id")
+    : null
+
+  const repository = getProfileRepository(c.env)
+  const profile = await repository.setPrimaryPublicHandle(actor.userId, linkedHandleId)
+  if (!profile) {
+    throw authError("Authentication failed")
+  }
+  return c.json(profile, 200)
 })
 
 profiles.get("/:userId", async (c) => {

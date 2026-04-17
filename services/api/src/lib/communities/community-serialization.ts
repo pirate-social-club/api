@@ -16,16 +16,54 @@ import {
   buildDefaultPromotionPolicy,
   buildDefaultCivilityPolicy,
 } from "./community-policy-defaults"
+import {
+  resolveCommunityAvatarRef,
+  resolveCommunityBannerRef,
+} from "./community-identity-media"
+
+function parseStoredCommunitySettings(
+  local: LocalCommunitySnapshot | null,
+): Record<string, unknown> {
+  if (!local?.settings_json?.trim()) {
+    return {}
+  }
+
+  try {
+    const parsed = JSON.parse(local.settings_json) as unknown
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+  } catch {}
+
+  return {}
+}
 
 export function serializeCommunity(row: CommunityRow, local: LocalCommunitySnapshot | null): Community {
-  const policyUpdatedAt = row.created_at
+  const storedSettings = parseStoredCommunitySettings(local)
+  const policyUpdatedAt = local?.updated_at ?? row.created_at
   const donationPartnerStatus: Community["donation_partner_status"] =
     local?.donation_partner_status === "inactive" ? "paused" : (local?.donation_partner_status ?? "unconfigured")
   const defaultAgeGatePolicy: Community["default_age_gate_policy"] = local?.default_age_gate_policy ?? "none"
+  const displayName = local?.display_name ?? row.display_name
+  const adultContentPolicy = storedSettings.adult_content_policy as Community["adult_content_policy"] | undefined
+  const graphicContentPolicy = storedSettings.graphic_content_policy as Community["graphic_content_policy"] | undefined
+  const civilityPolicy = storedSettings.civility_policy as Community["civility_policy"] | undefined
+  const openAIModerationSettings =
+    storedSettings.openai_moderation_settings as Community["openai_moderation_settings"] | undefined
   return {
     community_id: row.community_id,
-    display_name: local?.display_name ?? row.display_name,
+    display_name: displayName,
     description: local?.description ?? null,
+    avatar_ref: resolveCommunityAvatarRef({
+      communityId: row.community_id,
+      displayName,
+      avatarRef: local?.avatar_ref,
+    }),
+    banner_ref: resolveCommunityBannerRef({
+      communityId: row.community_id,
+      displayName,
+      bannerRef: local?.banner_ref,
+    }),
     namespace_verification_id: row.namespace_verification_id,
     route_slug: row.route_slug,
     pending_namespace_verification_session_id: row.pending_namespace_verification_session_id,
@@ -55,16 +93,33 @@ export function serializeCommunity(row: CommunityRow, local: LocalCommunitySnaps
     market_context_policy: buildDefaultMarketContextPolicy(row.community_id, policyUpdatedAt),
     source_policy: buildDefaultSourcePolicy(row.community_id, policyUpdatedAt),
     capture_edit_policy: buildDefaultCaptureEditPolicy(row.community_id, policyUpdatedAt),
-    adult_content_policy: buildDefaultAdultContentPolicy(row.community_id, policyUpdatedAt, defaultAgeGatePolicy),
-    graphic_content_policy: buildDefaultGraphicContentPolicy(row.community_id, policyUpdatedAt),
+    adult_content_policy:
+      adultContentPolicy ?? buildDefaultAdultContentPolicy(row.community_id, policyUpdatedAt, defaultAgeGatePolicy),
+    graphic_content_policy:
+      graphicContentPolicy ?? buildDefaultGraphicContentPolicy(row.community_id, policyUpdatedAt),
     motion_media_policy: buildDefaultMotionMediaPolicy(row.community_id, policyUpdatedAt),
     language_policy: buildDefaultLanguagePolicy(row.community_id, policyUpdatedAt),
-    civility_policy: buildDefaultCivilityPolicy(row.community_id, policyUpdatedAt),
+    civility_policy: civilityPolicy ?? buildDefaultCivilityPolicy(row.community_id, policyUpdatedAt),
+    openai_moderation_settings: openAIModerationSettings ?? null,
     provenance_policy: buildDefaultProvenancePolicy(row.community_id, policyUpdatedAt),
     promotion_policy: buildDefaultPromotionPolicy(row.community_id, policyUpdatedAt),
+    community_profile: local
+      ? {
+        rules: local.rules.map((rule) => ({
+          rule_id: rule.rule_id,
+          title: rule.title,
+          body: rule.body,
+          report_reason: rule.report_reason,
+          position: rule.position,
+          status: rule.status,
+        })),
+        resource_links: [],
+      }
+      : null,
+    gate_rules: local?.gate_rules ?? null,
     created_by_user_id: row.creator_user_id,
     created_at: row.created_at,
-    updated_at: row.updated_at,
+    updated_at: local?.updated_at ?? row.updated_at,
   }
 }
 

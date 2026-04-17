@@ -180,6 +180,45 @@ describe("community-service helpers", () => {
       ).toThrow()
     })
 
+    test("allows gender gate in public v0 with valid self config", () => {
+      expect(() =>
+        assertCreateRequest(makeCreateBody({
+          gate_rules: [{
+            scope: "membership",
+            gate_family: "identity_proof",
+            gate_type: "gender",
+            proof_requirements: [{ proof_type: "gender", accepted_providers: ["self"], config: { required_value: "M" } }],
+          }],
+        }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+      ).not.toThrow()
+    })
+
+    test("rejects gender gate without valid required_value", () => {
+      expect(() =>
+        assertCreateRequest(makeCreateBody({
+          gate_rules: [{
+            scope: "membership",
+            gate_family: "identity_proof",
+            gate_type: "gender",
+            proof_requirements: [{ proof_type: "gender", accepted_providers: ["self"], config: { required_value: "male" } }],
+          }],
+        }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+      ).toThrow("Gender gate required_value must be either \"M\" or \"F\"")
+    })
+
+    test("rejects sanctions_clear gate in public v0", () => {
+      expect(() =>
+        assertCreateRequest(makeCreateBody({
+          gate_rules: [{
+            scope: "membership",
+            gate_family: "identity_proof",
+            gate_type: "sanctions_clear",
+            proof_requirements: [{ proof_type: "sanctions_clear", accepted_providers: ["passport"] }],
+          }],
+        }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+      ).toThrow("Public v0 community creation does not support sanctions_clear gates")
+    })
+
     test("rejects post_ephemeral anonymous scope in v0", () => {
       expect(() =>
         assertCreateRequest(makeCreateBody({

@@ -3,11 +3,30 @@ export function splitSqlStatements(sql: string): string[] {
   let current = ""
   let inSingleQuote = false
   let inTrigger = false
+  let dollarQuoteTag: string | null = null
 
   for (let index = 0; index < sql.length; index += 1) {
     const char = sql[index]
     const next = sql[index + 1]
     current += char
+
+    if (!inSingleQuote && char === "$") {
+      const remainder = sql.slice(index)
+      const dollarMatch = remainder.match(/^\$([A-Za-z_][A-Za-z0-9_]*)?\$/)
+      if (dollarMatch) {
+        const matchedTag = dollarMatch[0]
+        if (dollarQuoteTag === null) {
+          dollarQuoteTag = matchedTag
+        } else if (dollarQuoteTag === matchedTag) {
+          dollarQuoteTag = null
+        }
+        if (matchedTag.length > 1) {
+          current += matchedTag.slice(1)
+          index += matchedTag.length - 1
+          continue
+        }
+      }
+    }
 
     if (!inSingleQuote && !inTrigger && current.trimStart().toUpperCase().startsWith("CREATE TRIGGER")) {
       inTrigger = true
@@ -20,6 +39,10 @@ export function splitSqlStatements(sql: string): string[] {
         continue
       }
       inSingleQuote = !inSingleQuote
+      continue
+    }
+
+    if (dollarQuoteTag) {
       continue
     }
 
@@ -53,6 +76,10 @@ export function splitSqlStatements(sql: string): string[] {
 export function toSqliteCompatibleStatement(statement: string): string | null {
   const normalized = statement.trim().replace(/\s+/g, " ").toUpperCase()
 
+  if (normalized.startsWith("DO ")) {
+    return null
+  }
+
   if (normalized.startsWith("ALTER TABLE") && normalized.includes(" ADD CONSTRAINT ")) {
     return null
   }
@@ -61,6 +88,7 @@ export function toSqliteCompatibleStatement(statement: string): string | null {
   sqliteCompat = sqliteCompat.replace(/\bJSONB\b/gi, "TEXT")
   sqliteCompat = sqliteCompat.replace(/\bTIMESTAMPTZ\b/gi, "TEXT")
   sqliteCompat = sqliteCompat.replace(/\bTIMESTAMP\b/gi, "TEXT")
+  sqliteCompat = sqliteCompat.replace(/\bNOW\(\)/gi, "CURRENT_TIMESTAMP")
   sqliteCompat = sqliteCompat.replace(/\bADD COLUMN IF NOT EXISTS\b/gi, "ADD COLUMN")
 
   return sqliteCompat
