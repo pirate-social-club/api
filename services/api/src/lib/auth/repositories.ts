@@ -76,8 +76,7 @@ type ControlPlaneRepositoryBundle = {
 
 function getControlPlaneRepositoryBundle(env: Env): ControlPlaneRepositoryBundle {
   const url = requireControlPlaneDbUrl(env)
-  const authToken = String(env.TURSO_CONTROL_PLANE_AUTH_TOKEN || "").trim()
-  const cacheKey = `bundle:${url}|${authToken}`
+  const cacheKey = `bundle:${url}`
 
   return globalSingleton("controlPlaneRepositoryBundle", cacheKey, () => {
     const client = getControlPlaneClient(env)
