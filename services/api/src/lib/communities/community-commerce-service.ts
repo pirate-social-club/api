@@ -2,7 +2,7 @@ import type { Client } from "../sql-client"
 import { AbiCoder } from "ethers"
 import { executeFirst } from "../db-helpers"
 import { badRequestError, eligibilityFailed, notFoundError, verificationRequired } from "../errors"
-import { makeId, nowIso } from "../helpers"
+import { isLocalEnvironment, makeId, nowIso } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
 import { getCommunityMembershipState } from "./community-membership-store"
 import { openCommunityDb } from "./community-db-factory"
@@ -1301,72 +1301,100 @@ async function prepareLockedSongAssetDelivery(input: {
   })
   const namespace = deriveStoryNamespace(assetVersionId)
   const entitlementTokenId = deriveEntitlementTokenId(assetVersionId)
-  const cdrWriterMinimumBalanceWei = await estimateStoryCdrLockedPublishMinimumBalanceWei(input.env)
-  await assertStoryRuntimeSignerFunding(input.env, [
-    { name: "story-cdr-writer", minBalanceWei: cdrWriterMinimumBalanceWei },
-    "story-operator",
-  ])
   const readConditionAddress = STORY_DELIVERY_CONTRACTS.tokenGateCondition
   const writeConditionAddress = STORY_DELIVERY_CONTRACTS.signedAccessConditionV1
-  const writerConfig = resolveStoryCdrWriterDirectSigner(input.env)
-  if (!writerConfig.ok) {
-    throw badRequestError(writerConfig.error)
-  }
-  if (!writerConfig.value) {
-    throw badRequestError("STORY_CDR_WRITER_PRIVATE_KEY missing/invalid")
-  }
-  const writerValue = writerConfig.value
-  const readConditionData = encodeTokenGateConditionData({
-    entitlementTokenAddress: STORY_DELIVERY_CONTRACTS.purchaseEntitlementToken,
-    tokenId: entitlementTokenId,
-    minBalance: 1n,
-  })
-  const writeConditionData = encodeWriteConditionOperatorData(writerValue.address)
-  let cdrUpload: Awaited<ReturnType<typeof uploadCdrEncryptedDataKey>>
   try {
-    cdrUpload = await uploadCdrEncryptedDataKey({
-      env: input.env,
-      dataKey,
-      readConditionAddr: readConditionAddress,
-      writeConditionAddr: writeConditionAddress,
-      readConditionData,
-      writeConditionData,
-      accessAuxData: "0x",
+    const cdrWriterMinimumBalanceWei = await estimateStoryCdrLockedPublishMinimumBalanceWei(input.env)
+    await assertStoryRuntimeSignerFunding(input.env, [
+      { name: "story-cdr-writer", minBalanceWei: cdrWriterMinimumBalanceWei },
+      "story-operator",
+    ])
+    const writerConfig = resolveStoryCdrWriterDirectSigner(input.env)
+    if (!writerConfig.ok) {
+      throw badRequestError(writerConfig.error)
+    }
+    if (!writerConfig.value) {
+      throw badRequestError("STORY_CDR_WRITER_PRIVATE_KEY missing/invalid")
+    }
+    const readConditionData = encodeTokenGateConditionData({
+      entitlementTokenAddress: STORY_DELIVERY_CONTRACTS.purchaseEntitlementToken,
+      tokenId: entitlementTokenId,
+      minBalance: 1n,
     })
-  } catch (error) {
-    throw badRequestError(`cdr_write_failed:${error instanceof Error ? error.message : String(error)}`)
-  }
+    const writeConditionData = encodeWriteConditionOperatorData(writerConfig.value.address)
+    let cdrUpload: Awaited<ReturnType<typeof uploadCdrEncryptedDataKey>>
+    try {
+      cdrUpload = await uploadCdrEncryptedDataKey({
+        env: input.env,
+        dataKey,
+        readConditionAddr: readConditionAddress,
+        writeConditionAddr: writeConditionAddress,
+        readConditionData,
+        writeConditionData,
+        accessAuxData: "0x",
+      })
+    } catch (error) {
+      throw new Error(`cdr_write_failed:${error instanceof Error ? error.message : String(error)}`)
+    }
+    let storyPublish: Awaited<ReturnType<typeof publishLockedAssetVersionToStory>>
+    try {
+      storyPublish = await publishLockedAssetVersionToStory({
+        env: input.env,
+        publisherAddress: input.creatorWalletAddress,
+        assetVersionId,
+        cdrVaultUuid: cdrUpload.cdrVaultUuid,
+        namespace,
+        contentHash: primaryContentHash,
+        storageRefHash: deriveStorageRefHash(objectKey),
+        entitlementTokenId,
+        readConditionAddress,
+        writeConditionAddress,
+      })
+    } catch (error) {
+      throw new Error(`story_publish_failed:${error instanceof Error ? error.message : String(error)}`)
+    }
 
-  let storyPublish: Awaited<ReturnType<typeof publishLockedAssetVersionToStory>>
-  try {
-    storyPublish = await publishLockedAssetVersionToStory({
-      env: input.env,
-      publisherAddress: input.creatorWalletAddress,
-      assetVersionId,
-      cdrVaultUuid: cdrUpload.cdrVaultUuid,
-      namespace,
-      contentHash: primaryContentHash,
-      storageRefHash: deriveStorageRefHash(objectKey),
-      entitlementTokenId,
-      readConditionAddress,
-      writeConditionAddress,
-    })
+    return {
+      storyStatus: "published",
+      storyPublishTxRef: storyPublish.publishTxHash,
+      storyAssetVersionId: assetVersionId,
+      storyCdrVaultUuid: cdrUpload.cdrVaultUuid,
+      storyNamespace: namespace,
+      storyEntitlementTokenId: entitlementTokenId.toString(),
+      storyReadCondition: readConditionAddress,
+      storyWriteCondition: writeConditionAddress,
+      lockedDeliveryStatus: "ready",
+      lockedDeliveryRef: buildAssetContentPath(input.communityId, input.assetId),
+      lockedDeliveryStorageRef: objectKey,
+      lockedDeliveryMetadataJson: JSON.stringify(metadata),
+    }
   } catch (error) {
-    throw badRequestError(`story_publish_failed:${error instanceof Error ? error.message : String(error)}`)
-  }
-  return {
-    storyStatus: "published",
-    storyPublishTxRef: storyPublish.publishTxHash,
-    storyAssetVersionId: assetVersionId,
-    storyCdrVaultUuid: cdrUpload.cdrVaultUuid,
-    storyNamespace: namespace,
-    storyEntitlementTokenId: entitlementTokenId.toString(),
-    storyReadCondition: readConditionAddress,
-    storyWriteCondition: writeConditionAddress,
-    lockedDeliveryStatus: "ready",
-    lockedDeliveryRef: buildAssetContentPath(input.communityId, input.assetId),
-    lockedDeliveryStorageRef: objectKey,
-    lockedDeliveryMetadataJson: JSON.stringify(metadata),
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    if (
+      isLocalEnvironment(input.env.ENVIRONMENT)
+      && (
+        errorMessage.includes("STORY_CDR_WRITER_PRIVATE_KEY missing/invalid")
+        || errorMessage.includes("STORY_OPERATOR_PRIVATE_KEY missing/invalid")
+        || errorMessage.includes("STORY_CONTRACT_OWNER_PRIVATE_KEY missing/invalid")
+      )
+    ) {
+      console.warn(`[story] local fallback for locked delivery: ${errorMessage}`)
+      return {
+        storyStatus: "published",
+        storyPublishTxRef: hashBytes32FromParts("local-story-publish", assetVersionId),
+        storyAssetVersionId: assetVersionId,
+        storyCdrVaultUuid: Number.parseInt(assetVersionId.slice(-8), 16) || 1,
+        storyNamespace: namespace,
+        storyEntitlementTokenId: entitlementTokenId.toString(),
+        storyReadCondition: readConditionAddress,
+        storyWriteCondition: writeConditionAddress,
+        lockedDeliveryStatus: "ready",
+        lockedDeliveryRef: buildAssetContentPath(input.communityId, input.assetId),
+        lockedDeliveryStorageRef: objectKey,
+        lockedDeliveryMetadataJson: JSON.stringify(metadata),
+      }
+    }
+    throw error instanceof Error ? error : new Error(errorMessage)
   }
 }
 
