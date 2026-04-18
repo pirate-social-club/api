@@ -2,6 +2,7 @@ import type { DbExecutor } from "../db-helpers"
 import { executeFirst } from "../db-helpers"
 import { badRequestError, internalError } from "../errors"
 import { makeId } from "../helpers"
+import { buildAnonymousLabel } from "../identity/anonymous-identity"
 import { numberOrNull, requiredNumber, requiredString, rowValue, stringOrNull } from "../sql-row"
 import type {
   Comment,
@@ -325,7 +326,14 @@ export async function insertComment(input: {
   const commentId = makeId("cmt")
   const identityMode = input.body.identity_mode ?? "public"
   const anonymousScope = identityMode === "anonymous" ? (input.body.anonymous_scope ?? null) : null
-  const anonymousLabel = identityMode === "anonymous" ? "anonymous" : null
+  const anonymousLabel = identityMode === "anonymous" && anonymousScope
+    ? buildAnonymousLabel({
+        communityId: input.communityId,
+        entityId: input.threadRootPostId,
+        scope: anonymousScope,
+        userId: input.authorUserId,
+      })
+    : null
 
   await input.executor.execute({
     sql: `

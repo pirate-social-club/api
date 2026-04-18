@@ -6,6 +6,7 @@ import { resolveStubAnalysisOutcome } from "./post-analysis"
 import {
   assertPostCreateRequest,
   findPostByIdempotencyKey,
+  getCommunityPostPolicy,
   getPostById,
   getPostProjectionMetrics,
   insertPost,
@@ -26,7 +27,7 @@ import {
   type CommunityMembershipRow,
 } from "../communities/community-membership-store"
 import { enqueueCommunityJob } from "../communities/community-job-store"
-import { analysisBlocked, eligibilityFailed, notFoundError, verificationRequired } from "../errors"
+import { analysisBlocked, badRequestError, eligibilityFailed, notFoundError, verificationRequired } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import type { CreatePostRequest, Env, LocalizedPostResponse, Post } from "../../types"
 
@@ -187,6 +188,20 @@ async function requireVerifiedHuman(userRepository: UserRepository, userId: stri
   }
 }
 
+function resolveAnonymousScope(input: {
+  policyScope: Exclude<Post["anonymous_scope"], null> | undefined
+  requestedScope: Exclude<Post["anonymous_scope"], null> | undefined
+}): Exclude<Post["anonymous_scope"], null> {
+  const allowedScope = input.policyScope ?? "community_stable"
+  const requestedScope = input.requestedScope ?? allowedScope
+
+  if (requestedScope !== allowedScope) {
+    throw badRequestError("anonymous_scope does not match the community policy")
+  }
+
+  return requestedScope
+}
+
 export async function createPost(input: {
   env: Env
   userId: string
@@ -206,10 +221,6 @@ export async function createPost(input: {
   try {
     await requireMemberAccess(db.client, input.communityId, input.userId)
     await requireVerifiedHuman(input.userRepository, input.userId)
-    const stubAnalysis = resolveStubAnalysisOutcome(input.body)
-    if (stubAnalysis.analysis_state === "blocked") {
-      throw analysisBlocked("Content analysis blocked publication")
-    }
 
     const idempotencyKey = input.body.idempotency_key?.trim() ?? ""
     const existing = idempotencyKey
@@ -224,9 +235,27 @@ export async function createPost(input: {
       return existing
     }
 
-  let writeBody = input.body
-  let analysisOverride: Pick<Post, "analysis_state" | "content_safety_state" | "age_gate_policy" | "status"> | undefined
-  let resolvedSongBundleForAsset: Awaited<ReturnType<typeof resolveSongPostBundle>> | null = null
+    let writeBody = input.body
+    let analysisOverride: Pick<Post, "analysis_state" | "content_safety_state" | "age_gate_policy" | "status"> | undefined
+    let resolvedSongBundleForAsset: Awaited<ReturnType<typeof resolveSongPostBundle>> | null = null
+
+    if ((input.body.identity_mode ?? "public") === "anonymous") {
+      const policy = await getCommunityPostPolicy(db.client, input.communityId)
+      if (!policy) {
+        throw notFoundError("Community not found")
+      }
+      if (!policy.allow_anonymous_identity) {
+        throw eligibilityFailed("Anonymous posts are not enabled in this community")
+      }
+
+      writeBody = {
+        ...input.body,
+        anonymous_scope: resolveAnonymousScope({
+          policyScope: policy.anonymous_identity_scope ?? undefined,
+          requestedScope: input.body.anonymous_scope ?? undefined,
+        }),
+      }
+    }
 
     if (input.body.post_type === "song") {
       const resolvedBundle = await resolveSongPostBundle({

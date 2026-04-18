@@ -3,10 +3,19 @@ import type { Client } from "../sql-client"
 import { badRequestError, internalError } from "../errors"
 import { executeFirst } from "../db-helpers"
 import { makeId } from "../helpers"
+import {
+  buildAnonymousLabel,
+  buildDisclosedQualifierSnapshots,
+} from "../identity/anonymous-identity"
 import { detectSourceLanguageFromText } from "../localization/content-locale"
 import { resolveStubAnalysisOutcome } from "./post-analysis"
 import { numberOrNull, requiredNumber, requiredString, rowValue, stringOrNull } from "../sql-row"
 import type { CreatePostRequest, Post } from "../../types"
+
+type CommunityPostPolicy = {
+  allow_anonymous_identity: boolean
+  anonymous_identity_scope: Post["anonymous_scope"]
+}
 
 type PostRow = {
   post_id: string
@@ -177,9 +186,19 @@ export async function insertPost(input: {
   const identityMode = input.body.identity_mode ?? "public"
   const postType = input.body.post_type ?? "text"
   const anonymousScope = identityMode === "anonymous" ? (input.body.anonymous_scope ?? "community_stable") : null
-  const anonymousLabel = identityMode === "anonymous" ? "anonymous" : null
-  const disclosedQualifiersJson = identityMode === "anonymous" && input.body.disclosed_qualifier_ids
-    ? JSON.stringify(input.body.disclosed_qualifier_ids.map((qualifierId) => ({ qualifier_template_id: qualifierId })))
+  const anonymousLabel = identityMode === "anonymous" && anonymousScope
+    ? buildAnonymousLabel({
+        communityId: input.communityId,
+        entityId: postId,
+        scope: anonymousScope,
+        userId: input.authorUserId,
+      })
+    : null
+  const disclosedQualifierSnapshots = identityMode === "anonymous"
+    ? buildDisclosedQualifierSnapshots(input.body.disclosed_qualifier_ids)
+    : null
+  const disclosedQualifiersJson = disclosedQualifierSnapshots
+    ? JSON.stringify(disclosedQualifierSnapshots)
     : null
   const mediaRefsJson = input.body.media_refs ? JSON.stringify(input.body.media_refs) : null
   const translationPolicy = input.body.translation_policy ?? "none"
@@ -271,6 +290,30 @@ export async function getPostById(client: DbExecutor, postId: string): Promise<P
   )
 
   return row ? serializePost(toPostRow(row)) : null
+}
+
+export async function getCommunityPostPolicy(
+  executor: DbExecutor,
+  communityId: string,
+): Promise<CommunityPostPolicy | null> {
+  const row = await executeFirst(executor, {
+    sql: `
+      SELECT allow_anonymous_identity, anonymous_identity_scope
+      FROM communities
+      WHERE community_id = ?1
+      LIMIT 1
+    `,
+    args: [communityId],
+  })
+
+  if (!row) {
+    return null
+  }
+
+  return {
+    allow_anonymous_identity: requiredNumber(row, "allow_anonymous_identity") === 1,
+    anonymous_identity_scope: stringOrNull(rowValue(row, "anonymous_identity_scope")) as Post["anonymous_scope"],
+  }
 }
 
 function getFeedItemScore(item: {
@@ -517,8 +560,14 @@ export function assertPostCreateRequest(body: CreatePostRequest, _communityId: s
   if (body.post_type !== "link" && body.link_url) {
     throw badRequestError("link_url is only allowed for link posts")
   }
+  if ((body.identity_mode ?? "public") !== "anonymous" && body.anonymous_scope) {
+    throw badRequestError("anonymous_scope is only allowed for anonymous posts")
+  }
   if (body.identity_mode === "anonymous" && !body.anonymous_scope) {
     throw badRequestError("anonymous_scope is required for anonymous posts")
+  }
+  if ((body.identity_mode ?? "public") !== "anonymous" && body.disclosed_qualifier_ids?.length) {
+    throw badRequestError("disclosed_qualifier_ids are only allowed for anonymous posts")
   }
   if (body.post_type !== "song" && body.access_mode) {
     throw badRequestError("access_mode is only supported for song posts")

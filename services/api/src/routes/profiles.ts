@@ -5,7 +5,8 @@ import { authenticate, type AuthenticatedEnv } from "../lib/auth-middleware"
 
 const profiles = new Hono<AuthenticatedEnv>()
 
-profiles.use("*", authenticate)
+profiles.use("/me", authenticate)
+profiles.use("/me/*", authenticate)
 
 function requireStringOrNull(value: unknown, field: string): string | null {
   if (value === null) {

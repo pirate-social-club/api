@@ -118,10 +118,35 @@ function parseStoredDonationPartner(
   }
 }
 
+function parseStoredAllowedDisclosedQualifiers(
+  storedSettings: Record<string, unknown>,
+): Community["allowed_disclosed_qualifiers"] {
+  const rawQualifiers = storedSettings.allowed_disclosed_qualifiers
+  if (!Array.isArray(rawQualifiers)) {
+    return null
+  }
+
+  const qualifierIds = rawQualifiers
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter(Boolean)
+
+  return qualifierIds.length ? [...new Set(qualifierIds)] : null
+}
+
+function parseStoredAllowQualifiersOnAnonymousPosts(
+  storedSettings: Record<string, unknown>,
+): Community["allow_qualifiers_on_anonymous_posts"] {
+  const rawValue = storedSettings.allow_qualifiers_on_anonymous_posts
+  return typeof rawValue === "boolean" ? rawValue : null
+}
+
 export function serializeCommunity(row: CommunityRow, local: LocalCommunitySnapshot | null): Community {
   const storedSettings = parseStoredCommunitySettings(local)
   const referenceLinks = parseStoredReferenceLinks(storedSettings)
   const donationPartner = parseStoredDonationPartner(storedSettings)
+  const allowedDisclosedQualifiers = parseStoredAllowedDisclosedQualifiers(storedSettings)
+  const allowQualifiersOnAnonymousPosts = parseStoredAllowQualifiersOnAnonymousPosts(storedSettings)
   const policyUpdatedAt = local?.updated_at ?? row.created_at
   const donationPartnerStatus: Community["donation_partner_status"] =
     local?.donation_partner_status === "inactive" ? "paused" : (local?.donation_partner_status ?? "unconfigured")
@@ -164,6 +189,8 @@ export function serializeCommunity(row: CommunityRow, local: LocalCommunitySnaps
     membership_mode: local?.membership_mode ?? "open",
     allow_anonymous_identity: local?.allow_anonymous_identity ?? false,
     anonymous_identity_scope: local?.anonymous_identity_scope ?? null,
+    allowed_disclosed_qualifiers: allowedDisclosedQualifiers,
+    allow_qualifiers_on_anonymous_posts: allowQualifiersOnAnonymousPosts,
     governance_mode: local?.governance_mode ?? "centralized",
     human_verification_lane: "self",
     donation_policy_mode: normalizeDonationPolicyMode(local?.donation_policy_mode),

@@ -176,6 +176,37 @@ describe("profile routes", () => {
     expect(publicBody.preferred_locale).toBe("en-US")
   })
 
+  test("public profile by user id works without auth", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "profile-public-user-id")
+
+    const patched = await requestJson("http://pirate.test/profiles/me", "PATCH", {
+      display_name: "Captain Public",
+      bio: "Visible while logged out",
+      avatar_ref: "ipfs://public-avatar",
+      cover_ref: "ipfs://public-cover",
+      preferred_locale: "en-US",
+    }, ctx.env, session.accessToken)
+    expect(patched.status).toBe(200)
+
+    const publicProfile = await app.request(`http://pirate.test/profiles/${session.userId}`, {}, ctx.env)
+    expect(publicProfile.status).toBe(200)
+    const publicBody = await json(publicProfile) as {
+      user_id: string
+      display_name: string | null
+      cover_ref: string | null
+      preferred_locale: string | null
+      global_handle: { label: string }
+    }
+    expect(publicBody.user_id).toBe(session.userId)
+    expect(publicBody.display_name).toBe("Captain Public")
+    expect(publicBody.cover_ref).toBe("ipfs://public-cover")
+    expect(publicBody.preferred_locale).toBe("en-US")
+    expect(publicBody.global_handle.label).toMatch(/\.pirate$/)
+  })
+
   test("free cleanup rename updates the active global handle and consumes rename availability", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
