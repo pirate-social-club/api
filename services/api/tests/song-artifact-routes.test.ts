@@ -352,8 +352,156 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     expect(bundleReadBody.status).toBe("consumed")
     expect(bundleReadBody.moderation_result?.catalog_sync?.synced).toBe(true)
     expect(bundleReadBody.moderation_result?.catalog_sync?.file_id).toBe(42)
-    expect(bundleReadBody.moderation_result?.catalog_sync?.acr_id).toBe("acr_test_song_42")
-    expect(acrCloudCatalogCallCount).toBe(1)
+  expect(bundleReadBody.moderation_result?.catalog_sync?.acr_id).toBe("acr_test_song_42")
+  expect(acrCloudCatalogCallCount).toBe(1)
+  })
+
+  test("allows song publication when ACRCloud is not configured in local dev", async () => {
+    const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
+
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const request = input instanceof Request ? input : new Request(input, init)
+
+      if (!request.url.startsWith("https://s3.filebase.test/")) {
+        return await originalFetch(request)
+      }
+
+      if (request.method === "PUT") {
+        storedObjects.set(request.url, {
+          body: new Uint8Array(await request.arrayBuffer()),
+          contentType: request.headers.get("content-type") || "application/octet-stream",
+        })
+        return new Response(null, { status: 200 })
+      }
+
+      if (request.method === "GET") {
+        const stored = storedObjects.get(request.url)
+        if (!stored) {
+          return new Response("missing", { status: 404 })
+        }
+        return new Response(stored.body.slice().buffer, {
+          status: 200,
+          headers: {
+            "content-type": stored.contentType,
+            "content-length": String(stored.body.byteLength),
+          },
+        })
+      }
+
+      return new Response("unexpected method", { status: 500 })
+    }
+
+    const ctx = await createRouteTestContext({
+      FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
+      FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
+      FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
+      FILEBASE_S3_BUCKET_MUSIC: "pirate-song-media",
+    })
+    cleanup = ctx.cleanup
+
+    const author = await exchangeJwt(ctx.env, "song-author-no-acr")
+    await completeUniqueHumanVerification(ctx.env, author.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "No ACR Song Club",
+      membership_mode: "open",
+      handle_policy: {
+        policy_template: "standard",
+      },
+    }, ctx.env, author.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: {
+        community_id: string
+      }
+    }
+    const communityId = communityCreateBody.community.community_id
+
+    const uploadIntent = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
+      {
+        artifact_kind: "primary_audio",
+        mime_type: "audio/mpeg",
+        filename: "local-dev-song.mp3",
+        size_bytes: 8,
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(uploadIntent.status).toBe(201)
+    const uploadIntentBody = await json(uploadIntent) as {
+      song_artifact_upload_id: string
+      upload_url: string
+      storage_ref: string
+    }
+
+    const uploadContent = await app.request(
+      uploadIntentBody.upload_url,
+      {
+        method: "PUT",
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+          "content-type": "application/octet-stream",
+        },
+        body: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]).buffer,
+      },
+      ctx.env,
+    )
+    expect(uploadContent.status).toBe(200)
+
+    const bundleCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifacts`,
+      {
+        primary_audio: {
+          song_artifact_upload_id: uploadIntentBody.song_artifact_upload_id,
+        },
+        lyrics: "Line one\nLine two",
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(bundleCreate.status).toBe(201)
+    const bundleBody = await json(bundleCreate) as {
+      song_artifact_bundle_id: string
+      status: string
+      moderation_status: string
+      moderation_result?: {
+        analysis_state?: string
+        audio_identification?: {
+          provider_result?: {
+            error?: string
+          }
+        }
+      }
+    }
+    expect(bundleBody.status).toBe("ready")
+    expect(bundleBody.moderation_status).toBe("failed")
+    expect(bundleBody.moderation_result?.analysis_state).toBe("allow")
+    expect(bundleBody.moderation_result?.audio_identification?.provider_result?.error).toBe("missing_configuration")
+
+    const postCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        idempotency_key: "song-post-no-acr",
+        post_type: "song",
+        identity_mode: "public",
+        title: "Song without ACR",
+        song_mode: "original",
+        rights_basis: "original",
+        song_artifact_bundle_id: bundleBody.song_artifact_bundle_id,
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(postCreate.status).toBe(201)
+    const postBody = await json(postCreate) as {
+      post_type: string
+      status: string
+      song_artifact_bundle_id: string | null
+    }
+    expect(postBody.post_type).toBe("song")
+    expect(postBody.status).toBe("published")
+    expect(postBody.song_artifact_bundle_id).toBe(bundleBody.song_artifact_bundle_id)
   })
 
   test("requires derivative references when ACRCloud custom bucket returns a match", async () => {

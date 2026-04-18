@@ -325,6 +325,7 @@ async function evaluateAudioIdentification(input: {
     upload: input.primaryAudioUpload,
   })
   const providerFailed = Boolean(providerResult && typeof providerResult.error === "string")
+  const missingConfiguration = providerResult?.error === "missing_configuration"
   const metadata = (providerResult as {
     metadata?: {
       music?: unknown[]
@@ -338,7 +339,9 @@ async function evaluateAudioIdentification(input: {
 
   return {
     analysisState: providerFailed
-      ? "review_required"
+      ? missingConfiguration
+        ? "allow"
+        : "review_required"
       : matchFound
         ? "allow_with_required_reference"
         : "allow",
