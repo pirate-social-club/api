@@ -3,6 +3,7 @@ import type { CommunityRow, JobRow } from "../auth/auth-db-rows"
 import type { LocalCommunitySnapshot } from "./community-local-db"
 import type { Community, Job } from "../../types"
 import {
+  buildDefaultMoneyPolicy,
   buildDefaultContentAuthenticityPolicy,
   buildDefaultContentAuthenticityDetectionPolicy,
   buildDefaultMarketContextPolicy,
@@ -38,8 +39,80 @@ function parseStoredCommunitySettings(
   return {}
 }
 
+function parseStoredReferenceLinks(
+  storedSettings: Record<string, unknown>,
+): NonNullable<Community["reference_links"]> {
+  const rawLinks = storedSettings.reference_links
+  if (!Array.isArray(rawLinks)) {
+    return []
+  }
+
+  return rawLinks.flatMap((rawLink, index) => {
+    if (!rawLink || typeof rawLink !== "object") {
+      return []
+    }
+
+    const link = rawLink as Record<string, unknown>
+    const metadata = link.metadata && typeof link.metadata === "object"
+      ? link.metadata as Record<string, unknown>
+      : {}
+
+    if (typeof link.community_reference_link_id !== "string" || typeof link.platform !== "string" || typeof link.url !== "string") {
+      return []
+    }
+
+    return [{
+      community_reference_link_id: link.community_reference_link_id,
+      platform: link.platform as NonNullable<Community["reference_links"]>[number]["platform"],
+      url: link.url,
+      label: typeof link.label === "string" ? link.label : null,
+      link_status: link.link_status === "archived" ? "archived" : "active",
+      verified: link.verified === true,
+      metadata: {
+        display_name: typeof metadata.display_name === "string" ? metadata.display_name : null,
+        image_url: typeof metadata.image_url === "string" ? metadata.image_url : null,
+      },
+      position: typeof link.position === "number" ? link.position : index,
+    } satisfies NonNullable<Community["reference_links"]>[number]]
+  }).sort((left, right) => left.position - right.position)
+}
+
+function parseStoredDonationPartner(
+  storedSettings: Record<string, unknown>,
+): Community["donation_partner"] {
+  const rawPartner = storedSettings.donation_partner
+  if (!rawPartner || typeof rawPartner !== "object" || Array.isArray(rawPartner)) {
+    return null
+  }
+
+  const partner = rawPartner as Record<string, unknown>
+  if (
+    typeof partner.donation_partner_id !== "string"
+    || typeof partner.display_name !== "string"
+    || partner.provider !== "endaoment"
+  ) {
+    return null
+  }
+
+  return {
+    donation_partner_id: partner.donation_partner_id,
+    display_name: partner.display_name,
+    provider: "endaoment" as const,
+    provider_partner_ref: typeof partner.provider_partner_ref === "string" ? partner.provider_partner_ref : null,
+    image_url: typeof partner.image_url === "string" ? partner.image_url : null,
+    review_status: partner.review_status === "pending" || partner.review_status === "rejected"
+      ? partner.review_status
+      : "approved",
+    status: partner.status === "paused" || partner.status === "retired"
+      ? partner.status
+      : "active",
+  }
+}
+
 export function serializeCommunity(row: CommunityRow, local: LocalCommunitySnapshot | null): Community {
   const storedSettings = parseStoredCommunitySettings(local)
+  const referenceLinks = parseStoredReferenceLinks(storedSettings)
+  const donationPartner = parseStoredDonationPartner(storedSettings)
   const policyUpdatedAt = local?.updated_at ?? row.created_at
   const donationPartnerStatus: Community["donation_partner_status"] =
     local?.donation_partner_status === "inactive" ? "paused" : (local?.donation_partner_status ?? "unconfigured")
@@ -86,6 +159,8 @@ export function serializeCommunity(row: CommunityRow, local: LocalCommunitySnaps
     human_verification_lane: "self",
     donation_policy_mode: local?.donation_policy_mode ?? "none",
     donation_partner_status: donationPartnerStatus,
+    donation_partner_id: local?.donation_partner_id ?? null,
+    donation_partner: local?.donation_partner_id ? donationPartner : null,
     default_age_gate_policy: defaultAgeGatePolicy,
     agent_posting_policy: "disallow",
     agent_posting_scope: "replies_only",
@@ -95,6 +170,7 @@ export function serializeCommunity(row: CommunityRow, local: LocalCommunitySnaps
     agent_owner_active_limit: null,
     accepted_agent_ownership_providers: [],
     civic_scale_tier: "club",
+    money_policy: buildDefaultMoneyPolicy(row.community_id),
     content_authenticity_policy: buildDefaultContentAuthenticityPolicy(row.community_id, policyUpdatedAt),
     content_authenticity_detection_policy: buildDefaultContentAuthenticityDetectionPolicy(row.community_id, policyUpdatedAt),
     market_context_policy: buildDefaultMarketContextPolicy(row.community_id, policyUpdatedAt),
@@ -123,6 +199,7 @@ export function serializeCommunity(row: CommunityRow, local: LocalCommunitySnaps
         resource_links: [],
       }
       : null,
+    reference_links: referenceLinks,
     gate_rules: (local?.gate_rules?.map((rule) => ({
       community_id: row.community_id,
       gate_rule_id: rule.gate_rule_id,

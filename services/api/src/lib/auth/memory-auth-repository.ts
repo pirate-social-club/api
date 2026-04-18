@@ -254,6 +254,7 @@ export class MemoryAuthRepository {
       requested_handle_label: normalizedHandleLabel,
       resolved_handle_label: record.profile.global_handle.label,
       is_canonical: true,
+      created_communities: [],
     }
   }
 

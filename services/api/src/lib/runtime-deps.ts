@@ -12,7 +12,7 @@ type PostgresQueryable = {
 
 neonConfig.poolQueryViaFetch = true
 
-function isPostgresControlPlaneUrl(value: string): boolean {
+export function isPostgresControlPlaneUrl(value: string): boolean {
   return value.startsWith("postgres://") || value.startsWith("postgresql://")
 }
 
@@ -50,6 +50,13 @@ function normalizeRows(rows: unknown[]): QueryResultRow[] {
 
 function postgresifySql(sql: string): string {
   const normalized = sql.replace(/\?(\d+)/g, (_, index: string) => `$${index}`)
+
+  if (/INSERT OR IGNORE INTO wallet_attachments\b/i.test(normalized)) {
+    return normalized.replace(
+      /INSERT OR IGNORE INTO wallet_attachments\b([\s\S]*?)\)\s*$/i,
+      "INSERT INTO wallet_attachments$1)\n      ON CONFLICT DO NOTHING",
+    )
+  }
 
   if (/INSERT OR REPLACE INTO namespace_verification_capabilities\b/i.test(normalized)) {
     return `${normalized}
@@ -251,17 +258,16 @@ export function getControlPlaneCacheKey(env: Env): string {
 
 function getControlPlaneClient(env: Env): Client {
   const url = requireControlPlaneDbUrl(env)
+  if (isPostgresControlPlaneUrl(url)) {
+    // In Cloudflare Workers, Postgres I/O objects must stay request-scoped.
+    // Reusing a cached Neon pool across requests can trigger cross-request I/O failures.
+    return new PostgresClientAdapter(new Pool({ connectionString: url, max: 4 }))
+  }
+
   const cacheKey = `cp:${getControlPlaneCacheKey(env)}`
-
-  return globalSingleton("controlPlaneClient", cacheKey, () => {
-    if (isPostgresControlPlaneUrl(url)) {
-      return new PostgresClientAdapter(new Pool({ connectionString: url, max: 4 }))
-    }
-
-    return new LibsqlClientAdapter(createLibsqlClient({
-      url,
-    }))
-  })
+  return globalSingleton("controlPlaneClient", cacheKey, () => new LibsqlClientAdapter(createLibsqlClient({
+    url,
+  })))
 }
 
 export { getControlPlaneClient }

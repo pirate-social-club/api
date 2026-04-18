@@ -61,7 +61,7 @@ export async function provisionCommunityViaOperator(input: {
   communityId: string
   creatorUserId: string
   displayName: string
-  namespaceVerificationId: string
+  namespaceVerificationId: string | null
   groupLocation: string
   bootstrapPayload: OperatorBootstrapPayload
 }): Promise<ProvisionCommunityOperatorResult> {

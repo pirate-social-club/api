@@ -6,9 +6,11 @@ import { decryptCommunityDbCredential } from "./community-db-credential-crypto"
 import { ensureCommunityDbSchema } from "./community-local-db"
 import type { Env } from "../../types"
 
+type CommunityDbRepository = Pick<CommunityRepository, "getPrimaryCommunityDatabaseBinding" | "getActiveCommunityDbCredential">
+
 export async function openCommunityDb(
   env: Env,
-  repo: CommunityRepository,
+  repo: CommunityDbRepository,
   communityId: string,
 ): Promise<{ client: Client; close: () => void; databaseUrl: string }> {
   const binding = await repo.getPrimaryCommunityDatabaseBinding(communityId)

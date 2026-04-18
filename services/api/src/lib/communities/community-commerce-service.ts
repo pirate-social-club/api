@@ -21,22 +21,29 @@ import {
   type StoryAccessScope,
 } from "../story/story-access-proof-service"
 import {
+  derivePurchaseRef,
   deriveEntitlementTokenId,
   deriveStorageRefHash,
   deriveStoryAssetVersionId,
   deriveStoryNamespace,
+  encodeTokenGateConditionData,
   hashBytes32FromParts,
-  encodeSignedAccessNamespace,
   encodeWriteConditionOperatorData,
 } from "../story/story-identifiers"
 import {
+  estimateStoryCdrLockedPublishMinimumBalanceWei,
   resolveStoryCdrContracts,
   uploadCdrEncryptedDataKey,
 } from "../story/story-cdr"
-import { resolveStoryCdrWriterPkpExecutionConfig } from "../story/cdr-writer-pkp"
+import {
+  resolveStoryCdrWriterDirectSigner,
+  resolveStoryOperatorDirectSigner,
+} from "../story/story-direct-signer"
 import {
   publishLockedAssetVersionToStory,
 } from "../story/story-publish-service"
+import { assertStoryRuntimeSignerFunding } from "../story/story-runtime-funding"
+import { settlePurchaseOnStory } from "../story/story-settlement-service"
 import {
   resolveStoryChainId,
   resolveStoryRpcUrl,
@@ -132,6 +139,8 @@ type PurchaseQuoteRow = {
   policy_origin: CommunityMoneyPolicy["policy_origin"]
   destination_settlement_chain_json: string
   destination_settlement_token: string
+  destination_settlement_amount_atomic: string | null
+  destination_settlement_decimals: number | null
   treasury_denomination: string | null
   quote_ttl_seconds: number
   route_required: boolean
@@ -185,6 +194,8 @@ type LockedDeliverySecret = {
 }
 
 const abiCoder = AbiCoder.defaultAbiCoder()
+const STORY_NATIVE_SETTLEMENT_DECIMALS = 18
+const STORY_NATIVE_SETTLEMENT_DECIMAL_FACTOR = 10n ** 16n
 
 function parseJsonValue<T>(value: string | null, fallback: T): T {
   if (!value?.trim()) {
@@ -419,6 +430,36 @@ function roundUsd(value: number): number {
   return Math.round(value * 100) / 100
 }
 
+function resolveSettlementAmountSnapshot(finalPriceUsd: number): {
+  amountAtomic: string
+  decimals: number
+} {
+  const roundedUsd = roundUsd(finalPriceUsd)
+  const cents = Math.round(roundedUsd * 100)
+  if (!Number.isFinite(roundedUsd) || cents <= 0) {
+    throw badRequestError("Settlement amount must be positive")
+  }
+  return {
+    amountAtomic: String(BigInt(cents) * STORY_NATIVE_SETTLEMENT_DECIMAL_FACTOR),
+    decimals: STORY_NATIVE_SETTLEMENT_DECIMALS,
+  }
+}
+
+function parseQuoteSettlementAmountAtomic(quote: PurchaseQuoteRow): bigint {
+  const raw = String(quote.destination_settlement_amount_atomic || "").trim()
+  if (raw) {
+    try {
+      const parsed = BigInt(raw)
+      if (parsed > 0n) {
+        return parsed
+      }
+    } catch {
+      // Fall through to the derived amount below.
+    }
+  }
+  return BigInt(resolveSettlementAmountSnapshot(quote.final_price_usd).amountAtomic)
+}
+
 function toOwnedBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
   return new Uint8Array(bytes)
 }
@@ -467,6 +508,7 @@ async function resolvePrimaryWalletAddress(input: {
   env: Env
   userRepository: UserRepository
   userId: string
+  fallbackToRuntimeSigner?: boolean
 }): Promise<string> {
   const user = await input.userRepository.getUserById(input.userId)
   if (!user) {
@@ -475,17 +517,32 @@ async function resolvePrimaryWalletAddress(input: {
   const attachments = await input.userRepository.getWalletAttachmentsByUserId(input.userId)
   const address = getPrimaryWalletSnapshot(user, attachments)
   if (!address?.trim()) {
-    const operatorAddress = String(input.env.STORY_OPERATOR_PKP_ADDRESS || "").trim()
-    if (operatorAddress) {
-      return operatorAddress
-    }
-    const writerAddress = String(input.env.STORY_CDR_WRITER_PKP_ADDRESS || "").trim()
-    if (writerAddress) {
-      return writerAddress
+    if (input.fallbackToRuntimeSigner !== false) {
+      const operator = resolveStoryOperatorDirectSigner(input.env)
+      if (operator.ok && operator.value) {
+        return operator.value.address
+      }
+      const writer = resolveStoryCdrWriterDirectSigner(input.env)
+      if (writer.ok && writer.value) {
+        return writer.value.address
+      }
     }
     throw badRequestError("Primary wallet is required")
   }
   return address
+}
+
+async function resolveWalletAttachmentAddress(input: {
+  userRepository: UserRepository
+  userId: string
+  walletAttachmentId: string
+}): Promise<string> {
+  const attachments = await input.userRepository.getWalletAttachmentsByUserId(input.userId)
+  const attachment = attachments.find((candidate) => candidate.wallet_attachment_id === input.walletAttachmentId)
+  if (!attachment?.wallet_address?.trim()) {
+    throw badRequestError("Settlement wallet attachment is invalid")
+  }
+  return attachment.wallet_address
 }
 
 function encodeStoryAccessAuxData(input: {
@@ -559,6 +616,31 @@ async function buildStoryCdrAccessPackage(input: {
     userId: input.userId,
     decisionReason: input.decisionReason,
   })
+  const readConditionAddress = input.asset.story_read_condition || STORY_DELIVERY_CONTRACTS.signedAccessConditionV1
+  if (
+    readConditionAddress === STORY_DELIVERY_CONTRACTS.tokenGateCondition
+    && input.decisionReason === "purchase_entitlement"
+  ) {
+    return {
+      chain_id: chainId,
+      rpc_url: resolveStoryRpcUrl(input.env),
+      cdr_contract_address: cdrContracts.cdrAddress,
+      read_condition_address: readConditionAddress,
+      ciphertext_ref: buildAssetContentPath(input.asset.community_id, input.asset.asset_id),
+      cipher_algorithm: metadata.algorithm,
+      cipher_iv_b64: metadata.iv_b64,
+      mime_type: metadata.mime_type,
+      vault_uuid: input.asset.story_cdr_vault_uuid,
+      namespace: input.asset.story_namespace,
+      access_scope: accessScope,
+      access_ref: accessRef,
+      access_aux_data_hex: "0x",
+      access_proof: {
+        mode: "token_gate",
+        entitlement_token_id: input.asset.story_entitlement_token_id,
+      },
+    }
+  }
   const accessProof = await generateStorySignedAccessProof({
     env: input.env,
     vaultUuid: input.asset.story_cdr_vault_uuid,
@@ -567,14 +649,14 @@ async function buildStoryCdrAccessPackage(input: {
     scope: accessScope,
     expiry: Math.floor(Date.now() / 1000) + 300,
     namespace: input.asset.story_namespace as `0x${string}`,
-    verifyingContract: STORY_DELIVERY_CONTRACTS.signedAccessConditionV1,
+    verifyingContract: readConditionAddress,
   })
 
   return {
     chain_id: chainId,
     rpc_url: resolveStoryRpcUrl(input.env),
     cdr_contract_address: cdrContracts.cdrAddress,
-    read_condition_address: STORY_DELIVERY_CONTRACTS.signedAccessConditionV1,
+    read_condition_address: readConditionAddress,
     ciphertext_ref: buildAssetContentPath(input.asset.community_id, input.asset.asset_id),
     cipher_algorithm: metadata.algorithm,
     cipher_iv_b64: metadata.iv_b64,
@@ -582,6 +664,7 @@ async function buildStoryCdrAccessPackage(input: {
     vault_uuid: input.asset.story_cdr_vault_uuid,
     namespace: input.asset.story_namespace,
     access_scope: accessScope,
+    access_ref: accessRef,
     access_aux_data_hex: encodeStoryAccessAuxData({
       vaultUuid: accessProof.proof.vaultUuid,
       caller: accessProof.proof.caller,
@@ -784,7 +867,8 @@ async function getPurchaseQuoteRow(
       SELECT quote_id, community_id, listing_id, buyer_user_id, asset_id, live_room_id, base_price_usd,
              pricing_tier, final_price_usd, funding_mode, funding_asset_json, source_chain_json,
              route_provider, route_policy_compliant, route_live_available, policy_origin,
-             destination_settlement_chain_json, destination_settlement_token, treasury_denomination,
+             destination_settlement_chain_json, destination_settlement_token, destination_settlement_amount_atomic,
+             destination_settlement_decimals, treasury_denomination,
              quote_ttl_seconds, route_required, route_status_policy, route_hop_tolerance,
              verification_snapshot_ref, pricing_policy_version, status, quoted_at, expires_at,
              consumed_at, failed_at, created_at, updated_at
@@ -816,6 +900,8 @@ async function getPurchaseQuoteRow(
     policy_origin: requiredString(row, "policy_origin") as CommunityMoneyPolicy["policy_origin"],
     destination_settlement_chain_json: requiredString(row, "destination_settlement_chain_json"),
     destination_settlement_token: requiredString(row, "destination_settlement_token"),
+    destination_settlement_amount_atomic: stringOrNull(row, "destination_settlement_amount_atomic"),
+    destination_settlement_decimals: numberOrNull(row, "destination_settlement_decimals"),
     treasury_denomination: stringOrNull(row, "treasury_denomination"),
     quote_ttl_seconds: Number(numberOrNull(row, "quote_ttl_seconds") ?? 0),
     route_required: sqliteToBool((row as Record<string, unknown>).route_required),
@@ -1215,37 +1301,59 @@ async function prepareLockedSongAssetDelivery(input: {
   })
   const namespace = deriveStoryNamespace(assetVersionId)
   const entitlementTokenId = deriveEntitlementTokenId(assetVersionId)
-  const readConditionAddress = STORY_DELIVERY_CONTRACTS.signedAccessConditionV1
+  const cdrWriterMinimumBalanceWei = await estimateStoryCdrLockedPublishMinimumBalanceWei(input.env)
+  await assertStoryRuntimeSignerFunding(input.env, [
+    { name: "story-cdr-writer", minBalanceWei: cdrWriterMinimumBalanceWei },
+    "story-operator",
+  ])
+  const readConditionAddress = STORY_DELIVERY_CONTRACTS.tokenGateCondition
   const writeConditionAddress = STORY_DELIVERY_CONTRACTS.signedAccessConditionV1
-  const writerConfig = resolveStoryCdrWriterPkpExecutionConfig(input.env)
+  const writerConfig = resolveStoryCdrWriterDirectSigner(input.env)
   if (!writerConfig.ok) {
     throw badRequestError(writerConfig.error)
   }
   if (!writerConfig.value) {
-    throw badRequestError("STORY_CDR_WRITER_PKP_ADDRESS missing/invalid")
+    throw badRequestError("STORY_CDR_WRITER_PRIVATE_KEY missing/invalid")
   }
-  const readConditionData = encodeSignedAccessNamespace(namespace)
-  const writeConditionData = encodeWriteConditionOperatorData(writerConfig.value.pkp.pkpAddress)
-  const cdrUpload = await uploadCdrEncryptedDataKey({
-    env: input.env,
-    dataKey,
-    readConditionAddr: readConditionAddress,
-    writeConditionAddr: writeConditionAddress,
-    readConditionData,
-    writeConditionData,
+  const writerValue = writerConfig.value
+  const readConditionData = encodeTokenGateConditionData({
+    entitlementTokenAddress: STORY_DELIVERY_CONTRACTS.purchaseEntitlementToken,
+    tokenId: entitlementTokenId,
+    minBalance: 1n,
   })
-  const storyPublish = await publishLockedAssetVersionToStory({
-    env: input.env,
-    publisherAddress: input.creatorWalletAddress,
-    assetVersionId,
-    cdrVaultUuid: cdrUpload.cdrVaultUuid,
-    namespace,
-    contentHash: primaryContentHash,
-    storageRefHash: deriveStorageRefHash(objectKey),
-    entitlementTokenId,
-    readConditionAddress,
-    writeConditionAddress,
-  })
+  const writeConditionData = encodeWriteConditionOperatorData(writerValue.address)
+  let cdrUpload: Awaited<ReturnType<typeof uploadCdrEncryptedDataKey>>
+  try {
+    cdrUpload = await uploadCdrEncryptedDataKey({
+      env: input.env,
+      dataKey,
+      readConditionAddr: readConditionAddress,
+      writeConditionAddr: writeConditionAddress,
+      readConditionData,
+      writeConditionData,
+      accessAuxData: "0x",
+    })
+  } catch (error) {
+    throw badRequestError(`cdr_write_failed:${error instanceof Error ? error.message : String(error)}`)
+  }
+
+  let storyPublish: Awaited<ReturnType<typeof publishLockedAssetVersionToStory>>
+  try {
+    storyPublish = await publishLockedAssetVersionToStory({
+      env: input.env,
+      publisherAddress: input.creatorWalletAddress,
+      assetVersionId,
+      cdrVaultUuid: cdrUpload.cdrVaultUuid,
+      namespace,
+      contentHash: primaryContentHash,
+      storageRefHash: deriveStorageRefHash(objectKey),
+      entitlementTokenId,
+      readConditionAddress,
+      writeConditionAddress,
+    })
+  } catch (error) {
+    throw badRequestError(`story_publish_failed:${error instanceof Error ? error.message : String(error)}`)
+  }
   return {
     storyStatus: "published",
     storyPublishTxRef: storyPublish.publishTxHash,
@@ -1908,24 +2016,25 @@ export async function createCommunityPurchaseQuote(input: {
     const quotedAt = nowIso()
     const expiresAt = new Date(Date.now() + moneyPolicy.quote_ttl_seconds * 1000).toISOString()
     const verificationSnapshotRef = resolvedPrice.verificationSnapshot ? makeId("qvs") : null
+    const settlementAmount = resolveSettlementAmountSnapshot(resolvedPrice.finalPriceUsd)
     await db.client.execute({
       sql: `
         INSERT INTO purchase_quotes (
           quote_id, community_id, listing_id, buyer_user_id, asset_id, live_room_id, base_price_usd,
           pricing_tier, final_price_usd, funding_mode, funding_asset_json, source_chain_json,
           route_provider, route_policy_compliant, route_live_available, policy_origin,
-          destination_settlement_chain_json, destination_settlement_token, treasury_denomination,
+          destination_settlement_chain_json, destination_settlement_token, destination_settlement_amount_atomic,
+          destination_settlement_decimals, treasury_denomination,
           quote_ttl_seconds, route_required, route_status_policy, route_hop_tolerance,
           verification_snapshot_ref, pricing_policy_version, status, quoted_at, expires_at,
           consumed_at, failed_at, created_at, updated_at
         ) VALUES (
           ?1, ?2, ?3, ?4, ?5, NULL, ?6,
-          ?7, ?8, ?9, ?10, ?11,
-          ?12, ?13, ?14, ?15,
-          ?16, ?17, ?18,
-          ?19, ?20, ?21, ?22,
-          ?23, ?24, 'active', ?25, ?26,
-          NULL, NULL, ?25, ?25
+          ?7, ?8, ?9, ?10, ?11, ?12,
+          ?13, ?14, ?15, ?16, ?17, ?18,
+          ?19, ?20, ?21, ?22, ?23, ?24,
+          ?25, ?26, 'active', ?27, ?28,
+          NULL, NULL, ?27, ?27
         )
       `,
       args: [
@@ -1946,6 +2055,8 @@ export async function createCommunityPurchaseQuote(input: {
         moneyPolicy.policy_origin,
         JSON.stringify(moneyPolicy.destination_settlement_chain),
         moneyPolicy.destination_settlement_token,
+        settlementAmount.amountAtomic,
+        settlementAmount.decimals,
         moneyPolicy.treasury_denomination ?? null,
         moneyPolicy.quote_ttl_seconds,
         boolToSqlite(moneyPolicy.route_required),
@@ -1999,6 +2110,7 @@ export async function settleCommunityPurchase(input: {
   communityId: string
   body: CommunityPurchaseSettlementRequest
   communityRepository: CommunityRepository
+  userRepository: UserRepository
 }): Promise<CommunityPurchaseSettlement> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
@@ -2029,6 +2141,45 @@ export async function settleCommunityPurchase(input: {
       quote.destination_settlement_chain_json,
       { chain_namespace: "eip155", chain_id: 1315, display_name: "Story Aeneid" },
     )
+    let canonicalSettlementTxRef = input.body.settlement_tx_ref
+    if (quote.asset_id) {
+      const asset = await getAssetRow(db.client, input.communityId, quote.asset_id)
+      if (!asset) {
+        throw notFoundError("Asset not found")
+      }
+      if (asset.access_mode === "locked") {
+        if (!asset.story_entitlement_token_id?.trim()) {
+          throw badRequestError("Locked asset entitlement token is not configured")
+        }
+        if (asset.story_status !== "published" || asset.locked_delivery_status !== "ready") {
+          throw badRequestError("Locked asset is not ready for purchase settlement")
+        }
+        const buyerWalletAddress = await resolveWalletAttachmentAddress({
+          userRepository: input.userRepository,
+          userId: input.userId,
+          walletAttachmentId: input.body.settlement_wallet_attachment_id,
+        })
+        const payoutRecipient = await resolvePrimaryWalletAddress({
+          env: input.env,
+          userRepository: input.userRepository,
+          userId: asset.creator_user_id,
+          fallbackToRuntimeSigner: false,
+        })
+        const storySettlement = await settlePurchaseOnStory({
+          env: input.env,
+          purchaseRef: derivePurchaseRef({
+            communityId: input.communityId,
+            purchaseId,
+            assetId: asset.asset_id,
+          }),
+          buyerAddress: buyerWalletAddress,
+          entitlementTokenId: BigInt(asset.story_entitlement_token_id),
+          payoutRecipient,
+          amountWei: parseQuoteSettlementAmountAtomic(quote),
+        })
+        canonicalSettlementTxRef = storySettlement.settlementTxHash
+      }
+    }
     await db.client.execute({
       sql: `
         INSERT INTO purchases (
@@ -2054,7 +2205,7 @@ export async function settleCommunityPurchase(input: {
         quote.pricing_tier,
         JSON.stringify(settlementChain),
         quote.destination_settlement_token,
-        input.body.settlement_tx_ref,
+        canonicalSettlementTxRef,
         createdAt,
       ],
     })

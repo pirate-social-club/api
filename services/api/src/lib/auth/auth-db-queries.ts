@@ -11,6 +11,7 @@ import {
 } from "./auth-serializers"
 import {
   type ExternalReputationSnapshotRow,
+  type CommunityCommentProjectionRow,
   type CommunityDbCredentialRow,
   type CommunityDatabaseBindingRow,
   type CommunityRegistryAttemptRow,
@@ -28,6 +29,7 @@ import {
   type VerificationSessionRow,
   type WalletAttachmentRow,
   toExternalReputationSnapshotRow,
+  toCommunityCommentProjectionRow,
   toCommunityDatabaseBindingRow,
   toCommunityDbCredentialRow,
   toCommunityRegistryAttemptRow,
@@ -259,7 +261,7 @@ export async function getLatestExternalReputationSnapshotRow(
 }
 
 async function getLatestNamespaceVerificationSessionRow(executor: DbExecutor, userId: string): Promise<NamespaceVerificationSessionRow | null> {
-  const row = await firstRow(executor, {
+  const stmt = {
     sql: `
       SELECT namespace_verification_session_id, namespace_verification_id, user_id, family, submitted_root_label,
              normalized_root_label, status, challenge_host, challenge_txt_value, setup_nameservers_json, challenge_expires_at,
@@ -273,9 +275,28 @@ async function getLatestNamespaceVerificationSessionRow(executor: DbExecutor, us
       LIMIT 1
     `,
     args: [userId],
-  }).catch((error) => {
+  }
+  const legacyStmt = {
+    sql: `
+      SELECT namespace_verification_session_id, namespace_verification_id, user_id, family, submitted_root_label,
+             normalized_root_label, status, challenge_host, challenge_txt_value, challenge_expires_at,
+             root_exists, root_control_verified, expiry_horizon_sufficient, routing_enabled,
+             pirate_dns_authority_verified, club_attach_allowed, pirate_web_routing_allowed,
+             pirate_subdomain_issuance_allowed, control_class, operation_class, observation_provider,
+             evidence_bundle_ref, failure_reason, accepted_at, expires_at, created_at, updated_at
+      FROM namespace_verification_sessions
+      WHERE user_id = ?1
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+    args: [userId],
+  }
+  const row = await firstRow(executor, stmt).catch(async (error) => {
     if (isMissingTableError(error, "namespace_verification_sessions")) {
       return null
+    }
+    if (isMissingColumnError(error, "setup_nameservers_json")) {
+      return await firstRow(executor, legacyStmt)
     }
     throw error
   })
@@ -325,6 +346,27 @@ export async function getCommunityRowById(executor: DbExecutor, communityId: str
   return row ? toCommunityRow(row) : null
 }
 
+export async function getCommunityRowByRouteSlug(
+  executor: DbExecutor,
+  routeSlug: string,
+): Promise<CommunityRow | null> {
+  const row = await firstRow(executor, {
+    sql: `
+      SELECT community_id, creator_user_id, display_name, status, provisioning_state,
+             registry_publication_state, registry_attempt_id, registry_published_at,
+             registry_publication_job_id, registry_error_code, transfer_state,
+             route_slug, namespace_verification_id, pending_namespace_verification_session_id,
+             primary_database_binding_id, created_at, updated_at
+      FROM communities
+      WHERE route_slug = ?1
+      LIMIT 1
+    `,
+    args: [routeSlug],
+  })
+
+  return row ? toCommunityRow(row) : null
+}
+
 export async function getCommunityRowByNamespaceVerificationId(
   executor: DbExecutor,
   namespaceVerificationId: string,
@@ -344,6 +386,47 @@ export async function getCommunityRowByNamespaceVerificationId(
   })
 
   return row ? toCommunityRow(row) : null
+}
+
+export async function listCreatedCommunityRowsByCreatorUserId(
+  executor: DbExecutor,
+  creatorUserId: string,
+): Promise<CommunityRow[]> {
+  const result = await executor.execute({
+    sql: `
+      SELECT community_id, creator_user_id, display_name, status, provisioning_state,
+             registry_publication_state, registry_attempt_id, registry_published_at,
+             registry_publication_job_id, registry_error_code, transfer_state,
+             route_slug, namespace_verification_id, pending_namespace_verification_session_id,
+             primary_database_binding_id, created_at, updated_at
+      FROM communities
+      WHERE creator_user_id = ?1
+        AND status = 'active'
+        AND provisioning_state = 'active'
+      ORDER BY created_at DESC
+    `,
+    args: [creatorUserId],
+  })
+
+  return result.rows.map((row) => toCommunityRow(row))
+}
+
+export async function listActiveCommunityRows(executor: DbExecutor): Promise<CommunityRow[]> {
+  const result = await executor.execute({
+    sql: `
+      SELECT community_id, creator_user_id, display_name, status, provisioning_state,
+             registry_publication_state, registry_attempt_id, registry_published_at,
+             registry_publication_job_id, registry_error_code, transfer_state,
+             route_slug, namespace_verification_id, pending_namespace_verification_session_id,
+             primary_database_binding_id, created_at, updated_at
+      FROM communities
+      WHERE status = 'active'
+        AND provisioning_state = 'active'
+      ORDER BY created_at ASC, community_id ASC
+    `,
+  })
+
+  return result.rows.map((row) => toCommunityRow(row))
 }
 
 export async function getCommunityDatabaseBindingRowById(
@@ -530,6 +613,29 @@ export async function getCommunityPostProjectionRowByPostId(
   return row ? toCommunityPostProjectionRow(row) : null
 }
 
+export async function getCommunityCommentProjectionRowByCommentId(
+  executor: DbExecutor,
+  commentId: string,
+): Promise<CommunityCommentProjectionRow | null> {
+  const row = await firstRow(executor, {
+    sql: `
+      SELECT projection_id, community_id, thread_root_post_id, source_comment_id, parent_comment_id, depth, status,
+             source_created_at, created_at, updated_at
+      FROM comment_projections
+      WHERE source_comment_id = ?1
+      LIMIT 1
+    `,
+    args: [commentId],
+  }).catch((error) => {
+    if (isMissingTableError(error, "comment_projections")) {
+      return null
+    }
+    throw error
+  })
+
+  return row ? toCommunityCommentProjectionRow(row) : null
+}
+
 export async function deriveOnboardingStatus(
   executor: DbExecutor,
   userRow: UserRow,
@@ -663,11 +769,20 @@ export async function getProfileRow(executor: DbExecutor, userId: string): Promi
     `,
     args: [userId],
   }
+  const legacyStmt = {
+    sql: `
+      SELECT user_id, display_name, bio, avatar_ref, cover_ref, preferred_locale,
+             global_handle_id, created_at, updated_at
+      FROM profiles
+      WHERE user_id = ?1
+      LIMIT 1
+    `,
+    args: [userId],
+  }
 
   const row = await firstRow(executor, stmt).catch(async (error) => {
     if (isMissingColumnError(error, "primary_linked_handle_id")) {
-      await ensureProfilesPrimaryLinkedHandleColumn(executor)
-      return await firstRow(executor, stmt)
+      return await firstRow(executor, legacyStmt)
     }
     throw error
   })

@@ -1,9 +1,9 @@
-import { TypedDataEncoder, getAddress, id } from "ethers"
+import { JsonRpcProvider, TypedDataEncoder, Wallet, getAddress, id } from "ethers"
 import type { Env } from "../../types"
-import { executeChipotleLitAction } from "../evm-chipotle"
 import { parseExpectedEvmAddress } from "../evm-signer"
-import { resolveStoryAccessControllerPkpExecutionConfig } from "./access-controller-pkp"
-import { resolveStoryChainId } from "./story-runtime-config"
+import { resolveStoryAccessControllerDirectSigner } from "./story-direct-signer"
+import { ensureStoryAccessSignerAuthorized } from "./story-runtime-authorization"
+import { resolveStoryChainId, resolveStoryRpcUrl } from "./story-runtime-config"
 
 type AccessProofTypedData = {
   AccessProof: Array<{
@@ -87,9 +87,9 @@ export async function generateStorySignedAccessProof(input: {
   if (!verifyingContract) {
     throw new Error("verifyingContract missing/invalid")
   }
-  const config = resolveStoryAccessControllerPkpExecutionConfig(input.env)
+  const config = resolveStoryAccessControllerDirectSigner(input.env)
   if (!config.ok) throw new Error(config.error)
-  if (!config.value) throw new Error("STORY_ACCESS_CONTROLLER_PKP_ADDRESS missing/invalid")
+  if (!config.value) throw new Error("STORY_ACCESS_CONTROLLER_PRIVATE_KEY missing/invalid")
 
   const domain = {
     name: "PirateSignedAccess",
@@ -116,28 +116,18 @@ export async function generateStorySignedAccessProof(input: {
     namespace: input.namespace,
   }
   const digest = TypedDataEncoder.hash(domain, types, proof) as `0x${string}`
-  const litResponse = await executeChipotleLitAction({
-    ...config.value.pkp,
-    jsParams: {
-      digest,
-      expectedSignerAddress: config.value.pkp.pkpAddress,
-    },
+  const provider = new JsonRpcProvider(resolveStoryRpcUrl(input.env), resolveStoryChainId(input.env))
+  await ensureStoryAccessSignerAuthorized({
+    env: input.env,
+    provider,
+    signerAddress: config.value.address,
   })
-  let parsed: Record<string, unknown> | null = null
-  if (typeof litResponse.response === "string" && litResponse.response.trim()) {
-    parsed = JSON.parse(litResponse.response) as Record<string, unknown>
-  } else if (litResponse.response && typeof litResponse.response === "object" && !Array.isArray(litResponse.response)) {
-    parsed = litResponse.response as Record<string, unknown>
-  }
-  const signature = typeof parsed?.signature === "string" ? parsed.signature as `0x${string}` : null
-  const signerAddress = typeof parsed?.signerAddress === "string" ? parsed.signerAddress : config.value.pkp.pkpAddress
-  if (!signature) {
-    throw new Error("story_access_proof_signature_missing")
-  }
+  const signer = new Wallet(config.value.privateKey, provider)
+  const signature = await signer.signTypedData(domain, types, proof) as `0x${string}`
   return {
     digest,
     signature,
-    signerAddress,
+    signerAddress: signer.address,
     proof,
   }
 }

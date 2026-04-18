@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import app from "../src/index"
 import type { Env } from "../src/types"
-import { readDevVarsFromCwd } from "./_lib/dev-vars"
+import { readDevVarsFromCwd, readWranglerVarsFromCwd } from "./_lib/dev-vars"
 import {
   applyLocalControlPlaneMigrations,
   ensureLocalDevStorage,
@@ -64,8 +64,15 @@ async function writeResponse(res: ServerResponse, response: Response): Promise<v
 }
 
 async function main(): Promise<void> {
+  const wranglerEnv = readWranglerVarsFromCwd("wrangler.jsonc", "development")
+  const devVars = readDevVarsFromCwd()
+  if (!("COMMUNITY_PROVISION_OPERATOR_BASE_URL" in devVars) && !process.env.COMMUNITY_PROVISION_OPERATOR_BASE_URL) {
+    delete wranglerEnv.COMMUNITY_PROVISION_OPERATOR_BASE_URL
+    delete wranglerEnv.COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS
+  }
   const baseEnv = {
-    ...readDevVarsFromCwd(),
+    ...wranglerEnv,
+    ...devVars,
     ...process.env,
   }
   const localDevStorage = resolveLocalDevStorage(baseEnv)

@@ -56,6 +56,7 @@ export type LocalCommunitySnapshot = {
   allow_anonymous_identity: boolean
   anonymous_identity_scope: "community_stable" | "thread_stable" | "post_ephemeral" | null
   donation_policy_mode: "none" | "optional_creator_sidecar" | "fundraiser_default"
+  donation_partner_id: string | null
   donation_partner_status: "unconfigured" | "active" | "inactive"
   governance_mode: "centralized" | "multisig" | "majeur"
   settings_json: string | null
@@ -430,6 +431,7 @@ export async function bootstrapLocalCommunityDb(input: LocalCommunityBootstrapIn
       allow_anonymous_identity: input.allowAnonymousIdentity,
       anonymous_identity_scope: input.anonymousIdentityScope,
       donation_policy_mode: "none",
+      donation_partner_id: null,
       donation_partner_status: "unconfigured",
       governance_mode: input.governanceMode,
       settings_json: null,

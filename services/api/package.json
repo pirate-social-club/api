@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "wrangler dev --port 8787",
     "dev:local": "bun run scripts/serve-local.ts",
+    "cancel:story-runtime-pending-tx": "bun run scripts/cancel-story-runtime-pending-tx.ts",
+    "fund:story-runtime-signers": "bun run scripts/fund-story-runtime-signers.ts",
+    "worker:community-jobs:local": "bun run scripts/run-community-job-worker.ts",
     "bruno:prepare:local": "bun run scripts/prepare-bruno-local.ts",
     "bruno:test:local": "cd ../../../specs/api/bruno && bru run . -r --env local --tests-only",
     "deploy": "wrangler deploy",
@@ -14,6 +17,7 @@
     "mint:dev-jwt": "bun run scripts/mint-dev-jwt.ts"
   },
   "dependencies": {
+    "@ethersphere/bee-js": "^11.1.1",
     "@libsql/client": "^0.17.2",
     "@neondatabase/serverless": "^1.1.0",
     "@pirate/api-contracts": "file:../contracts",

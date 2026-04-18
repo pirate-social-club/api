@@ -7,6 +7,8 @@ export function rowValue(row: unknown, key: string): unknown {
 
 export function stringOrNull(value: unknown): string | null {
   if (value == null) return null
+  if (Array.isArray(value)) return JSON.stringify(value)
+  if (typeof value === "object") return JSON.stringify(value)
   return String(value)
 }
 

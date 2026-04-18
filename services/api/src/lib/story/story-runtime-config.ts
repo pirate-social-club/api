@@ -1,16 +1,18 @@
 import type { Env } from "../../types"
 
 export const DEFAULT_STORY_CHAIN_ID = 1315
-export const DEFAULT_STORY_RPC_URL = "https://rpc.ankr.com/story_aeneid_testnet"
+export const DEFAULT_STORY_RPC_URL = "https://aeneid.storyrpc.io"
 export const DEFAULT_STORY_TX_WAIT_TIMEOUT_MS = 45_000
+export const DEFAULT_STORY_RUNTIME_SIGNER_MIN_BALANCE_WEI = 100_000_000_000_000_000n
+export const DEFAULT_STORY_RUNTIME_SIGNER_TARGET_BALANCE_WEI = 250_000_000_000_000_000n
 
 export const STORY_DELIVERY_CONTRACTS = {
-  purchaseEntitlementToken: "0x0d3eF43a98077c9a71853309EE4C6665C20C1Fa6",
-  pirateSignerRegistry: "0xFdbBd5B130Ce519e9CF3DFE070De241519C1f51C",
-  tokenGateCondition: "0x1b5340517389bd91316ee7ac866b16f2e9387e96",
-  signedAccessConditionV1: "0x82c30cf9524ad83c8a67e6b855d9c286c89586b3",
-  assetPublishCoordinatorV1: "0xf68b731a5801A50e983E9302E32eF6DA22CB0792",
-  marketplaceSettlementV1: "0xFECcC2cF8C9946E1384eF5733B509ac70677c5bd",
+  purchaseEntitlementToken: "0x6952c089fE7b270268306313cF6E4CC7f566921c",
+  pirateSignerRegistry: "0x8e25e5D2B6Fb9B3c5E703D737FE6b0E8b55253f3",
+  tokenGateCondition: "0x29a859d9012ffc73443af5e3264c1605d44f6bcc",
+  signedAccessConditionV1: "0xa8e49520c4d681d34fde757c41f5a06b87b52e43",
+  assetPublishCoordinatorV1: "0xAD6919367E72F3D2390E837bEbf042368c2acfDf",
+  marketplaceSettlementV1: "0x71c7ee1B0F108C7AC76AF12D70D8BE6fE13F8847",
 } as const
 
 export function resolveStoryChainId(env: Pick<Env, "STORY_CHAIN_ID">): number {
@@ -24,10 +26,51 @@ export function resolveStoryRpcUrl(env: Pick<Env, "STORY_RPC_URL">): string {
   return raw || DEFAULT_STORY_RPC_URL
 }
 
+export function resolveStoryRpcUrls(env: Pick<Env, "STORY_RPC_URL" | "STORY_RPC_FALLBACK_URLS">): string[] {
+  const urls = [
+    resolveStoryRpcUrl(env),
+    ...String(env.STORY_RPC_FALLBACK_URLS || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
+  ]
+  const deduped = new Set<string>()
+  for (const url of urls) {
+    deduped.add(url.replace(/\/+$/, ""))
+  }
+  return [...deduped]
+}
+
 export function resolveStoryTxWaitTimeoutMs(env: Pick<Env, "STORY_TX_WAIT_TIMEOUT_MS">): number {
   const raw = String(env.STORY_TX_WAIT_TIMEOUT_MS || "").trim()
   const parsed = raw ? Number(raw) : DEFAULT_STORY_TX_WAIT_TIMEOUT_MS
   return Number.isInteger(parsed) && parsed >= 1_000 && parsed <= 300_000
     ? parsed
     : DEFAULT_STORY_TX_WAIT_TIMEOUT_MS
+}
+
+function parsePositiveBigInt(raw: string | null | undefined): bigint | null {
+  const normalized = String(raw || "").trim()
+  if (!normalized) return null
+  if (!/^\d+$/.test(normalized)) return null
+  try {
+    const value = BigInt(normalized)
+    return value > 0n ? value : null
+  } catch {
+    return null
+  }
+}
+
+export function resolveStoryRuntimeSignerMinBalanceWei(
+  env: Pick<Env, "STORY_RUNTIME_SIGNER_MIN_BALANCE_WEI">,
+): bigint {
+  return parsePositiveBigInt(env.STORY_RUNTIME_SIGNER_MIN_BALANCE_WEI) ?? DEFAULT_STORY_RUNTIME_SIGNER_MIN_BALANCE_WEI
+}
+
+export function resolveStoryRuntimeSignerTargetBalanceWei(
+  env: Pick<Env, "STORY_RUNTIME_SIGNER_MIN_BALANCE_WEI" | "STORY_RUNTIME_SIGNER_TARGET_BALANCE_WEI">,
+): bigint {
+  const minBalance = resolveStoryRuntimeSignerMinBalanceWei(env)
+  const target = parsePositiveBigInt(env.STORY_RUNTIME_SIGNER_TARGET_BALANCE_WEI) ?? DEFAULT_STORY_RUNTIME_SIGNER_TARGET_BALANCE_WEI
+  return target >= minBalance ? target : minBalance
 }

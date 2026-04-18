@@ -1,9 +1,9 @@
 import { JsonRpcProvider, Wallet, getAddress } from "ethers"
 import type { Env } from "../../types"
 import { resolveDirectTxGasPolicy, sendContractTxWithPolicy } from "../evm-direct-tx"
-import { sendContractTxWithPkp } from "../evm-chipotle"
 import { parseExpectedEvmAddress } from "../evm-signer"
-import { resolveStoryOperatorPkpExecutionConfig } from "./story-operator-pkp"
+import { resolveStoryOperatorDirectSigner } from "./story-direct-signer"
+import { ensureStoryPublishOperatorAuthorized } from "./story-runtime-authorization"
 import {
   DEFAULT_STORY_RPC_URL,
   STORY_DELIVERY_CONTRACTS,
@@ -81,10 +81,10 @@ export async function publishLockedAssetVersionToStory(input: {
   if (!ownerPrivateKey) {
     throw new Error("STORY_CONTRACT_OWNER_PRIVATE_KEY missing/invalid")
   }
-  const operatorConfig = resolveStoryOperatorPkpExecutionConfig(input.env)
+  const operatorConfig = resolveStoryOperatorDirectSigner(input.env)
   if (!operatorConfig.ok) throw new Error(operatorConfig.error)
   if (!operatorConfig.value) {
-    throw new Error("STORY_OPERATOR_PKP_ADDRESS missing/invalid")
+    throw new Error("STORY_OPERATOR_PRIVATE_KEY missing/invalid")
   }
 
   const publisherAddress = parseExpectedEvmAddress(input.publisherAddress)
@@ -117,6 +117,7 @@ export async function publishLockedAssetVersionToStory(input: {
 
   const provider = new JsonRpcProvider(rpcUrl, chainId)
   const ownerSigner = new Wallet(ownerPrivateKey, provider)
+  const operatorSigner = new Wallet(operatorConfig.value.privateKey, provider)
 
   const configureTx = await sendContractTxWithPolicy({
     provider,
@@ -137,9 +138,14 @@ export async function publishLockedAssetVersionToStory(input: {
     throw new Error("story_entitlement_class_configure_failed")
   }
 
-  const publishTx = await sendContractTxWithPkp({
+  await ensureStoryPublishOperatorAuthorized({
+    env: input.env,
     provider,
-    chainId,
+    operatorAddress: operatorSigner.address,
+  })
+
+  const publishTx = await sendContractTxWithPolicy({
+    provider,
     contractAddress: STORY_DELIVERY_CONTRACTS.assetPublishCoordinatorV1,
     abi: ASSET_PUBLISH_COORDINATOR_ABI,
     functionName: "publishAssetVersion",
@@ -155,16 +161,15 @@ export async function publishLockedAssetVersionToStory(input: {
       getAddress(writeConditionAddress),
     ],
     gasPolicy: gasPolicy.value,
-    pkp: operatorConfig.value.pkp,
-    txWaitTimeoutMs,
-    label: "story_publish_asset_version",
+    signer: operatorSigner,
   })
-  if (!publishTx.receipt || publishTx.receipt.status !== 1) {
+  const publishReceipt = await provider.waitForTransaction(String(publishTx.hash || ""), 1, txWaitTimeoutMs)
+  if (!publishReceipt || publishReceipt.status !== 1) {
     throw new Error("story_publish_asset_version_failed")
   }
 
   return {
     entitlementConfiguredTxHash: String(configureTx.hash || ""),
-    publishTxHash: publishTx.txHash,
+    publishTxHash: String(publishTx.hash || ""),
   }
 }

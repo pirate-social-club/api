@@ -25,6 +25,7 @@ export async function createCommunityProvisioningRequest(
     displayName: string
     membershipMode: "open" | "request" | "gated"
     namespaceVerificationId: string | null
+    routeSlug?: string | null
     databaseUrl: string
     createdAt: string
   },
@@ -46,8 +47,8 @@ export async function createCommunityProvisioningRequest(
           registry_attempt_id, registry_published_at, registry_publication_job_id, registry_error_code,
           created_at, updated_at
         ) VALUES (
-          ?1, ?2, ?3, ?4, 'active', 'provisioning', 'none', NULL, ?5, NULL, NULL, ?6,
-          ?7, NULL, NULL, NULL, ?8, ?8
+          ?1, ?2, ?3, ?4, 'active', 'provisioning', 'none', ?5, ?6, NULL, NULL, ?7,
+          ?8, NULL, NULL, NULL, ?9, ?9
         )
       `,
       args: [
@@ -55,6 +56,7 @@ export async function createCommunityProvisioningRequest(
         input.creatorUserId,
         input.displayName,
         input.membershipMode,
+        input.routeSlug,
         input.namespaceVerificationId,
         registryPublicationState,
         input.registryAttemptId,
@@ -145,6 +147,7 @@ export async function retryCommunityProvisioningRequest(
     registryAttemptId: string
     jobId: string
     namespaceVerificationId: string
+    routeSlug: string
     databaseUrl: string
     createdAt: string
   },
@@ -197,6 +200,7 @@ export async function retryCommunityProvisioningRequest(
       sql: `
         UPDATE communities
         SET provisioning_state = 'provisioning',
+            route_slug = ?4,
             registry_publication_state = 'pending_create',
             registry_attempt_id = ?2,
             registry_published_at = NULL,
@@ -205,7 +209,7 @@ export async function retryCommunityProvisioningRequest(
             updated_at = ?3
         WHERE community_id = ?1
       `,
-      args: [input.communityId, input.registryAttemptId, input.createdAt],
+      args: [input.communityId, input.registryAttemptId, input.createdAt, input.routeSlug],
     })
 
     await tx.execute({

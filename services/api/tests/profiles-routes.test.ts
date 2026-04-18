@@ -241,6 +241,46 @@ describe("profile routes", () => {
     }, ctx.env, session.accessToken)
     expect(renamed.status).toBe(200)
 
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO communities (
+          community_id,
+          creator_user_id,
+          display_name,
+          membership_mode,
+          status,
+          provisioning_state,
+          transfer_state,
+          route_slug,
+          namespace_verification_id,
+          pending_namespace_verification_session_id,
+          primary_database_binding_id,
+          registry_publication_state,
+          registry_attempt_id,
+          registry_published_at,
+          registry_publication_job_id,
+          registry_error_code,
+          created_at,
+          updated_at
+        ) VALUES
+          (?1, ?2, ?3, 'open', 'active', 'active', 'none', NULL, NULL, NULL, NULL, 'not_started', NULL, NULL, NULL, NULL, ?4, ?4),
+          (?5, ?2, ?6, 'open', 'active', 'active', 'none', NULL, NULL, NULL, NULL, 'not_started', NULL, NULL, NULL, NULL, ?7, ?7),
+          (?8, ?2, ?9, 'open', 'draft', 'requested', 'none', NULL, NULL, NULL, NULL, 'not_started', NULL, NULL, NULL, NULL, ?10, ?10)
+      `,
+      args: [
+        "cmt_public_alpha",
+        session.userId,
+        "Alpha Club",
+        "2026-04-17T00:00:00.000Z",
+        "cmt_public_beta",
+        "Beta Club",
+        "2026-04-18T00:00:00.000Z",
+        "cmt_public_hidden",
+        "Hidden Club",
+        "2026-04-19T00:00:00.000Z",
+      ],
+    })
+
     const canonicalProfile = await app.request("http://pirate.test/public-profiles/captainpublic", {}, ctx.env)
     expect(canonicalProfile.status).toBe(200)
     const canonicalBody = await json(canonicalProfile) as {
@@ -248,12 +288,20 @@ describe("profile routes", () => {
       resolved_handle_label: string
       is_canonical: boolean
       profile: { user_id: string; global_handle: { label: string } }
+      created_communities: Array<{ community_id: string; display_name: string; route_slug: string | null; created_at: string }>
     }
     expect(canonicalBody.requested_handle_label).toBe("captainpublic.pirate")
     expect(canonicalBody.resolved_handle_label).toBe("captainpublic.pirate")
     expect(canonicalBody.is_canonical).toBe(true)
     expect(canonicalBody.profile.user_id).toBe(session.userId)
     expect(canonicalBody.profile.global_handle.label).toBe("captainpublic.pirate")
+    expect(canonicalBody.created_communities.map((community) => ({
+      community_id: community.community_id,
+      display_name: community.display_name,
+    }))).toEqual([
+      { community_id: "cmt_public_beta", display_name: "Beta Club" },
+      { community_id: "cmt_public_alpha", display_name: "Alpha Club" },
+    ])
 
     const redirectedProfile = await app.request(
       `http://pirate.test/public-profiles/${encodeURIComponent(originalHandle.replace(/\.pirate$/u, ""))}`,

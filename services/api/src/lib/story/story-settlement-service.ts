@@ -1,13 +1,9 @@
-import { JsonRpcProvider, getAddress } from "ethers"
+import { JsonRpcProvider, Wallet, getAddress } from "ethers"
 import type { Env } from "../../types"
-import { resolveDirectTxGasPolicy } from "../evm-direct-tx"
-import { sendContractTxWithPkp } from "../evm-chipotle"
+import { resolveDirectTxGasPolicy, sendContractTxWithPolicy } from "../evm-direct-tx"
 import { parseExpectedEvmAddress } from "../evm-signer"
-import {
-  STORY_SETTLEMENT_ACTION,
-  resolveStorySettlementPkpAction,
-  resolveStorySettlementPkpExecutionConfig,
-} from "./story-settlement-pkp"
+import { resolveStorySettlementDirectSigner } from "./story-direct-signer"
+import { ensureStorySettlementOperatorAuthorized } from "./story-runtime-authorization"
 import {
   STORY_DELIVERY_CONTRACTS,
   resolveStoryChainId,
@@ -19,6 +15,23 @@ const MARKETPLACE_SETTLEMENT_ABI = [
   "function settlePurchase(bytes32 purchaseRef, address buyer, uint256 tokenId, address payoutRecipient)",
 ] as const
 
+type StoryPurchaseSettlementInput = {
+  env: Env
+  purchaseRef: `0x${string}`
+  buyerAddress: string
+  entitlementTokenId: bigint
+  payoutRecipient: string
+  amountWei: bigint
+}
+
+let testSettlementExecutor: ((input: StoryPurchaseSettlementInput) => Promise<{ settlementTxHash: string }>) | null = null
+
+export function setStoryPurchaseSettlementExecutorForTests(
+  executor: ((input: StoryPurchaseSettlementInput) => Promise<{ settlementTxHash: string }>) | null,
+): void {
+  testSettlementExecutor = executor
+}
+
 export async function settlePurchaseOnStory(input: {
   env: Env
   purchaseRef: `0x${string}`
@@ -27,11 +40,13 @@ export async function settlePurchaseOnStory(input: {
   payoutRecipient: string
   amountWei: bigint
 }): Promise<{ settlementTxHash: string }> {
-  const settlementConfig = resolveStorySettlementPkpExecutionConfig(input.env)
+  if (testSettlementExecutor) {
+    return await testSettlementExecutor(input)
+  }
+  const settlementConfig = resolveStorySettlementDirectSigner(input.env)
   if (!settlementConfig.ok) throw new Error(settlementConfig.error)
-  const settlePkp = resolveStorySettlementPkpAction(settlementConfig.value, STORY_SETTLEMENT_ACTION.SETTLE)
-  if (!settlePkp) {
-    throw new Error("STORY_SETTLEMENT_ACTION_CID_SETTLE missing/invalid")
+  if (!settlementConfig.value) {
+    throw new Error("MUSIC_PURCHASE_STORY_SETTLEMENT_PRIVATE_KEY missing/invalid")
   }
 
   const buyerAddress = parseExpectedEvmAddress(input.buyerAddress)
@@ -53,9 +68,15 @@ export async function settlePurchaseOnStory(input: {
   if (!gasPolicy.ok) throw new Error(gasPolicy.error)
 
   const provider = new JsonRpcProvider(resolveStoryRpcUrl(input.env), resolveStoryChainId(input.env))
-  const settlementTx = await sendContractTxWithPkp({
+  const settlementSigner = new Wallet(settlementConfig.value.privateKey, provider)
+  await ensureStorySettlementOperatorAuthorized({
+    env: input.env,
     provider,
-    chainId: resolveStoryChainId(input.env),
+    operatorAddress: settlementSigner.address,
+  })
+  const settlementTx = await sendContractTxWithPolicy({
+    provider,
+    signer: settlementSigner,
     contractAddress: STORY_DELIVERY_CONTRACTS.marketplaceSettlementV1,
     abi: MARKETPLACE_SETTLEMENT_ABI,
     functionName: "settlePurchase",
@@ -66,13 +87,15 @@ export async function settlePurchaseOnStory(input: {
       getAddress(payoutRecipient),
     ],
     gasPolicy: gasPolicy.value,
-    pkp: settlePkp,
-    txWaitTimeoutMs: resolveStoryTxWaitTimeoutMs(input.env),
-    label: "story_settle_purchase",
     value: input.amountWei,
   })
-  if (!settlementTx.receipt || settlementTx.receipt.status !== 1) {
+  const settlementReceipt = await provider.waitForTransaction(
+    String(settlementTx.hash || ""),
+    1,
+    resolveStoryTxWaitTimeoutMs(input.env),
+  )
+  if (!settlementReceipt || settlementReceipt.status !== 1) {
     throw new Error("story_settle_purchase_failed")
   }
-  return { settlementTxHash: settlementTx.txHash }
+  return { settlementTxHash: String(settlementTx.hash || "") }
 }

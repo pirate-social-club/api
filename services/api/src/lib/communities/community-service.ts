@@ -2,8 +2,10 @@ export type {
   CreateCommunityRequestBody,
   CreateCommunityAuth,
   UpdateCommunityGatesRequestBody,
+  UpdateCommunityReferenceLinksRequestBody,
   UpdateCommunitySafetyRequestBody,
   UpdateCommunityRulesRequestBody,
+  UpdateCommunityDonationPolicyRequestBody,
 } from "./community-create-service"
 export {
   createCommunity,
@@ -16,8 +18,12 @@ export {
   loadCommunityProjection,
   requireOwnedCommunity,
   updateCommunityGates,
+  updateCommunityReferenceLinks,
   updateCommunitySafety,
   updateCommunityRules,
+  updateCommunityDonationPolicy,
+  getCommunityDonationPolicy,
+  resolveCommunityDonationPartner,
 } from "./community-create-service"
 export type { ProvisioningRetryAction } from "./community-create-service"
 

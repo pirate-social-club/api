@@ -28,14 +28,15 @@ function makeTestUser(overrides: Partial<User["verification_capabilities"]> = {}
   }
 }
 
-function makeCreateBody(overrides: Partial<CreateCommunityRequest> = {}): CreateCommunityRequest {
+function makeCreateBody(overrides: Record<string, unknown> = {}): CreateCommunityRequest {
   return {
     display_name: "Test Community",
+    allow_anonymous_identity: false,
     handle_policy: { policy_template: "standard" },
     governance_mode: "centralized",
     membership_mode: "open",
     ...overrides,
-  }
+  } as CreateCommunityRequest
 }
 
 describe("community-service helpers", () => {

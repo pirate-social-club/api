@@ -5,6 +5,8 @@ import type { Env } from "../src/types"
 import { setStoryAccessProofSignerForTests } from "../src/lib/story/story-access-proof-service"
 import { setStoryAssetPublisherForTests } from "../src/lib/story/story-publish-service"
 import { setStoryCdrUploaderForTests } from "../src/lib/story/story-cdr"
+import { setStoryRuntimeFundingAssertionForTests } from "../src/lib/story/story-runtime-funding"
+import { setStoryPurchaseSettlementExecutorForTests } from "../src/lib/story/story-settlement-service"
 
 let cleanup: (() => Promise<void>) | null = null
 let originalFetch: typeof fetch
@@ -954,14 +956,40 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
 
   test("publishes a locked song, sells access, and decrypts the purchased asset", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
-    setStoryCdrUploaderForTests(async () => ({
-      cdrVaultUuid: 4242,
-      writerAddress: "0x0000000000000000000000000000000000000cd1",
-      txHashes: {
-        allocate: "0xalloc",
-        write: "0xwrite",
-      },
-    }))
+    const storySettlementCalls: Array<{
+      purchaseRef: string
+      buyerAddress: string
+      entitlementTokenId: string
+      payoutRecipient: string
+      amountWei: string
+    }> = []
+    let writeAccessAuxData: `0x${string}` | null = null
+    setStoryRuntimeFundingAssertionForTests(async () => {})
+    setStoryPurchaseSettlementExecutorForTests(async (input) => {
+      storySettlementCalls.push({
+        purchaseRef: input.purchaseRef,
+        buyerAddress: input.buyerAddress,
+        entitlementTokenId: String(input.entitlementTokenId),
+        payoutRecipient: input.payoutRecipient,
+        amountWei: String(input.amountWei),
+      })
+      return {
+        settlementTxHash: "0xstorysettlementpaid0001",
+      }
+    })
+    setStoryCdrUploaderForTests(async (input) => {
+      writeAccessAuxData = input.buildAccessAuxData
+        ? await input.buildAccessAuxData(4242)
+        : (input.accessAuxData ?? null)
+      return {
+        cdrVaultUuid: 4242,
+        writerAddress: "0x0000000000000000000000000000000000000cd1",
+        txHashes: {
+          allocate: "0xalloc",
+          write: "0xwrite",
+        },
+      }
+    })
     setStoryAssetPublisherForTests(async () => ({
       entitlementConfiguredTxHash: "0xconfigure",
       publishTxHash: "0xpublish",
@@ -1066,16 +1094,60 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
       ACRCLOUD_HOST: "acrcloud.test",
       ELEVENLABS_API_KEY: "test-elevenlabs-key",
       ELEVENLABS_FORCE_ALIGNMENT_URL: "https://elevenlabs.test/forced-alignment",
-      STORY_CDR_WRITER_PKP_ADDRESS: "0x0000000000000000000000000000000000000cd1",
-      STORY_CDR_WRITER_ACTION_CID_ALLOCATE_WRITE: "bafybeigdyrzt2n6p5d6lq4b7nrbw7wvsj6c7z5i6xq6a4h3s2g4m5n6o7u",
-      LIT_CHIPOTLE_CDR_WRITER_API_KEY: "test-chipotle-cdr-writer",
-      LIT_CHIPOTLE_API_BASE_URL: "https://chipotle.test",
+      STORY_CONTRACT_OWNER_PRIVATE_KEY: "0x1000000000000000000000000000000000000000000000000000000000000001",
+      STORY_OPERATOR_PRIVATE_KEY: "0x2000000000000000000000000000000000000000000000000000000000000002",
+      STORY_CDR_WRITER_PRIVATE_KEY: "0x3000000000000000000000000000000000000000000000000000000000000003",
+      STORY_ACCESS_CONTROLLER_PRIVATE_KEY: "0x4000000000000000000000000000000000000000000000000000000000000004",
+      MUSIC_PURCHASE_STORY_SETTLEMENT_PRIVATE_KEY: "0x5000000000000000000000000000000000000000000000000000000000000005",
       IPFS_GATEWAY_URL: "https://ipfs.test/ipfs",
     })
     cleanup = ctx.cleanup
 
     const author = await exchangeJwt(ctx.env, "song-author-locked")
     const buyer = await exchangeJwt(ctx.env, "song-buyer-locked")
+    const attachedAt = new Date().toISOString()
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO wallet_attachments (
+          wallet_attachment_id, user_id, chain_namespace, wallet_address_normalized, wallet_address_display,
+          source_provider, source_subject, attachment_kind, is_primary, status, attached_at, detached_at, created_at, updated_at
+        ) VALUES (
+          ?1, ?2, 'eip155:1315', ?3, ?3,
+          'test', ?2, 'external', 1, 'active', ?4, NULL, ?4, ?4
+        )
+      `,
+      args: ["wal_song_author_locked", author.userId, "0xaaa0000000000000000000000000000000000000", attachedAt],
+    })
+    await ctx.client.execute({
+      sql: `
+        UPDATE users
+        SET primary_wallet_attachment_id = ?2,
+            updated_at = ?3
+        WHERE user_id = ?1
+      `,
+      args: [author.userId, "wal_song_author_locked", attachedAt],
+    })
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO wallet_attachments (
+          wallet_attachment_id, user_id, chain_namespace, wallet_address_normalized, wallet_address_display,
+          source_provider, source_subject, attachment_kind, is_primary, status, attached_at, detached_at, created_at, updated_at
+        ) VALUES (
+          ?1, ?2, 'eip155:1315', ?3, ?3,
+          'test', ?2, 'external', 1, 'active', ?4, NULL, ?4, ?4
+        )
+      `,
+      args: ["wal_song_buyer_locked", buyer.userId, "0xbbb0000000000000000000000000000000000000", attachedAt],
+    })
+    await ctx.client.execute({
+      sql: `
+        UPDATE users
+        SET primary_wallet_attachment_id = ?2,
+            updated_at = ?3
+        WHERE user_id = ?1
+      `,
+      args: [buyer.userId, "wal_song_buyer_locked", attachedAt],
+    })
     await completeUniqueHumanVerification(ctx.env, author.accessToken)
     await completeUniqueHumanVerification(ctx.env, buyer.accessToken)
 
@@ -1198,6 +1270,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
       author.accessToken,
     )
     expect(lockedPostCreate.status).toBe(201)
+    expect(writeAccessAuxData).toBe("0x")
     const lockedPostBody = await json(lockedPostCreate) as {
       asset_id?: string | null
       access_mode?: string | null
@@ -1308,7 +1381,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
       final_price_usd: number
     }
     expect(quoteBody.final_price_usd).toBe(4.99)
-    const settlementWalletAttachmentId = buyer.primaryWalletAttachmentId ?? "wal_test_song_buyer"
+    const settlementWalletAttachmentId = "wal_song_buyer_locked"
 
     const purchaseSettle = await requestJson(
       `http://pirate.test/communities/${communityId}/purchase-settlements`,
@@ -1324,9 +1397,19 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     const purchaseBody = await json(purchaseSettle) as {
       entitlement_kind: string
       entitlement_target_ref: string
+      settlement_tx_ref: string
     }
     expect(purchaseBody.entitlement_kind).toBe("asset_access")
     expect(purchaseBody.entitlement_target_ref).toBe(assetId)
+    expect(purchaseBody.settlement_tx_ref).toBe("0xstorysettlementpaid0001")
+    expect(storySettlementCalls).toHaveLength(1)
+    expect(storySettlementCalls[0]).toMatchObject({
+      buyerAddress: "0xbbb0000000000000000000000000000000000000",
+      payoutRecipient: "0xaaa0000000000000000000000000000000000000",
+      amountWei: "4990000000000000000",
+    })
+    expect(storySettlementCalls[0]?.purchaseRef).toMatch(/^0x[0-9a-f]{64}$/)
+    expect(BigInt(storySettlementCalls[0]?.entitlementTokenId ?? "0")).toBeGreaterThan(0n)
 
     const buyerAccessAfterPurchase = await app.request(
       `http://pirate.test/communities/${communityId}/assets/${assetId}/access`,
@@ -1346,6 +1429,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
         ciphertext_ref: string
         vault_uuid: number
         access_scope: string
+        read_condition_address: string
         access_aux_data_hex: string
       } | null
     }
@@ -1357,7 +1441,10 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     )
     expect(buyerAccessAfterPurchaseBody.story_cdr_access?.vault_uuid).toBe(4242)
     expect(buyerAccessAfterPurchaseBody.story_cdr_access?.access_scope).toBe("asset.share")
-    expect(buyerAccessAfterPurchaseBody.story_cdr_access?.access_aux_data_hex.startsWith("0x")).toBe(true)
+    expect(buyerAccessAfterPurchaseBody.story_cdr_access?.read_condition_address).toBe(
+      "0x29a859d9012ffc73443af5e3264c1605d44f6bcc",
+    )
+    expect(buyerAccessAfterPurchaseBody.story_cdr_access?.access_aux_data_hex).toBe("0x")
 
     const buyerCiphertextAfterPurchase = await app.request(
       `http://pirate.test/communities/${communityId}/assets/${assetId}/content`,

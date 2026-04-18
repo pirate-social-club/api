@@ -11,6 +11,9 @@ import { setEnsResolverForTests } from "../src/lib/auth/ens-linked-handle-servic
 import { setStoryAccessProofSignerForTests } from "../src/lib/story/story-access-proof-service"
 import { setStoryCdrUploaderForTests } from "../src/lib/story/story-cdr"
 import { setStoryAssetPublisherForTests } from "../src/lib/story/story-publish-service"
+import { setStoryRuntimeFundingAssertionForTests } from "../src/lib/story/story-runtime-funding"
+import { setStoryPurchaseSettlementExecutorForTests } from "../src/lib/story/story-settlement-service"
+import { setSwarmPublisherForTests } from "../src/lib/swarm/swarm-publisher"
 
 import { splitSqlStatements, toSqliteCompatibleStatement } from "../shared/sql-migration"
 
@@ -28,6 +31,9 @@ export function resetRuntimeCaches(): void {
   setStoryAccessProofSignerForTests(null)
   setStoryCdrUploaderForTests(null)
   setStoryAssetPublisherForTests(null)
+  setStoryRuntimeFundingAssertionForTests(null)
+  setStoryPurchaseSettlementExecutorForTests(null)
+  setSwarmPublisherForTests(null)
   const scope = globalThis as typeof globalThis & {
     __pirateSingletons?: Map<string, unknown>
   }

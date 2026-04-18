@@ -30,6 +30,7 @@ export type ChipotleExecutionConfig = {
 
 export type PkpExecutionConfig = ChipotleExecutionConfig & {
   pkpAddress: `0x${string}`
+  pkpId?: string | null
   pkpPublicKey: `0x${string}` | null
 }
 
@@ -74,6 +75,19 @@ export type PkpSendUnsignedTxsParams = {
 const HEX_RE = /^0x([0-9a-f]{2})+$/i
 
 const litActionCodeCache = new Map<string, string>()
+const LOCAL_LIT_ACTION_SOURCE_PATHS = new Map<string, string>([
+  ["QmbD8eWHRKAKVqQumeduWgXPSBZdWQWMkvwg9F9K6SRDhA", "../../../../../lit-actions/story-operator/bundled/publish-asset-version.bundle.js"],
+  ["QmcFgAVwXBVbywPbUdtH6rAZr3ifpBtHeByM9ERVMgxRXn", "../../../../../lit-actions/story-operator/bundled/publish-asset-version.bundle.js"],
+  ["QmfW1H4eHQjDap4Ri5enbye2TRCBMKLGs5vquXF9XoXBc3", "../../../../../lit-actions/story-operator/bundled/publish-asset-version.bundle.js"],
+  ["QmUndNcG1iaYY8QbWqeACtz1hWEUX9nDD84Tp8Lkaz2Bfu", "../../../../../lit-actions/story-operator/bundled/publish-asset-version.bundle.js"],
+  ["Qmcg6b2z86VyrvcjTvTte5FwuQUw1yMgBWS1s7ttCWqEnK", "../../../../../lit-actions/story-access-controller/bundled/sign-access-proof.bundle.js"],
+  ["QmTZRuYzxwQbAfihWCGtP1TUFje1ydGWYAbzbU49z1q4ZH", "../../../../../lit-actions/story-cdr-writer/bundled/allocate-write.bundle.js"],
+  ["QmWjZUz2rhRqh8wtU8rdxnThJvyKEXiNvZjWthzZ8VVFLu", "../../../../../lit-actions/story-cdr-writer/bundled/allocate-write.bundle.js"],
+  ["Qmbg5WCda76ACk23xfdbgZPkXEQikhXe96VJv99YFz8B55", "../../../../../lit-actions/story-cdr-writer/bundled/allocate-write.bundle.js"],
+  ["QmeStb5CSxrV9fYhV6GNvtSdizaShAKR35UsNUoMNN14PE", "../../../../../lit-actions/story-settlement/bundled/settle-purchase.bundle.js"],
+  ["QmbARQFW48ux2Z47LZ1uLRDMetdwhPHEfaavqsLdVMa5ej", "../../../../../lit-actions/story-settlement/bundled/settle-purchase.bundle.js"],
+  ["Qmcw4qgJh4TbrW8Kja4U3cYofYAxi6Tq3uzGKLFrVm1Ddk", "../../../../../lit-actions/story-settlement/bundled/settle-purchase.bundle.js"],
+])
 
 export function parseChipotleBaseUrl(raw: string | null | undefined, fieldName = "LIT_CHIPOTLE_API_BASE_URL"): ConfigResult<string> {
   const normalized = String(raw || DEFAULT_CHIPOTLE_BASE_URL).trim()
@@ -256,6 +270,8 @@ export async function sendUnsignedTxsWithPkp(params: PkpSendUnsignedTxsParams): 
       unsignedTx: serializeUnsignedTx(params.unsignedTxs[0]!),
       unsignedTxs: params.unsignedTxs.map((tx) => serializeUnsignedTx(tx)),
       expectedSignerAddress: params.pkp.pkpAddress,
+      expectedPkpId: params.pkp.pkpId || params.pkp.pkpAddress,
+      ...(params.pkp.pkpPublicKey ? { expectedPkpPublicKey: params.pkp.pkpPublicKey } : {}),
     },
   })
   if (litResponse.has_error) {
@@ -386,6 +402,11 @@ async function resolveLitActionCode(params: {
   if (cached) return cached
   const cid = params.actionCid.slice("ipfs://".length).trim()
   if (!cid) throw new Error(`invalid_action_cid:${params.actionCid}`)
+  const localSource = await resolveLocalLitActionCode(cid)
+  if (localSource) {
+    litActionCodeCache.set(params.actionCid, localSource)
+    return localSource
+  }
   const fetchUrls = resolveLitActionFetchUrls(params.ipfsGatewayUrl, cid)
   let lastError = `action_code_fetch_failed:no_gateway:${cid}`
   for (const url of fetchUrls) {
@@ -407,6 +428,19 @@ async function resolveLitActionCode(params: {
     }
   }
   throw new Error(lastError)
+}
+
+async function resolveLocalLitActionCode(cid: string): Promise<string | null> {
+  const relativePath = LOCAL_LIT_ACTION_SOURCE_PATHS.get(cid)
+  if (!relativePath) return null
+  try {
+    const fs = await import("node:fs/promises")
+    const fileUrl = new URL(relativePath, import.meta.url)
+    const source = (await fs.readFile(fileUrl, "utf8")).replace(/\r\n/g, "\n")
+    return source.trim() ? source : null
+  } catch {
+    return null
+  }
 }
 
 export function resolveLitActionFetchUrls(ipfsGatewayUrl: string, cid: string): string[] {

@@ -1,7 +1,7 @@
 import { globalSingleton } from "../db-helpers"
 import { internalError } from "../errors"
 import { envFlag, isLocalEnvironment } from "../helpers"
-import { getControlPlaneClient } from "../runtime-deps"
+import { getControlPlaneClient, isPostgresControlPlaneUrl } from "../runtime-deps"
 import type {
   Env,
   GlobalHandle,
@@ -29,6 +29,12 @@ export type PublicProfileResolution = {
   requested_handle_label: string
   resolved_handle_label: string
   is_canonical: boolean
+  created_communities: Array<{
+    community_id: string
+    display_name: string
+    route_slug: string | null
+    created_at: string
+  }>
 }
 
 export interface SessionRepository {
@@ -76,16 +82,21 @@ type DatabaseRepositoryBundle = {
 
 function getDatabaseRepositoryBundle(env: Env): DatabaseRepositoryBundle {
   const url = requireControlPlaneDbUrl(env)
-  const cacheKey = `bundle:${url}`
-
-  return globalSingleton("controlPlaneRepositoryBundle", cacheKey, () => {
+  const buildBundle = (): DatabaseRepositoryBundle => {
     const client = getControlPlaneClient(env)
     return {
       identity: new DatabaseIdentityRepository(client),
       profile: new DatabaseProfileRepository(client, env),
       redditOnboarding: new DatabaseRedditOnboardingRepository(client),
     }
-  })
+  }
+
+  if (isPostgresControlPlaneUrl(url)) {
+    return buildBundle()
+  }
+
+  const cacheKey = `bundle:${url}`
+  return globalSingleton("controlPlaneRepositoryBundle", cacheKey, buildBundle)
 }
 
 function getMemoryAuthRepository(): MemoryAuthRepository {

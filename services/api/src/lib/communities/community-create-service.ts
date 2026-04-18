@@ -77,6 +77,28 @@ export type UpdateCommunityGatesRequestBody = {
   gate_rules?: UpdateGateRuleInput
 }
 
+export type UpdateCommunityReferenceLinksRequestBody = {
+  reference_links: Array<{
+    community_reference_link_id?: string | null
+    platform: NonNullable<Community["reference_links"]>[number]["platform"]
+    url: string
+    label?: string | null
+    position?: number | null
+  }>
+}
+
+export type UpdateCommunityDonationPolicyRequestBody = {
+  donation_policy_mode: "none" | "optional_creator_sidecar" | "fundraiser_default"
+  donation_partner_id?: string | null
+  donation_partner?: {
+    donation_partner_id: string
+    display_name: string
+    provider: "endaoment"
+    provider_partner_ref?: string | null
+    image_url?: string | null
+  } | null
+}
+
 const VALID_PUBLIC_V0_PROVIDERS_BY_PROOF_TYPE = {
   unique_human: new Set(["self", "very"]),
   age_over_18: new Set(["self"]),
@@ -336,7 +358,7 @@ function getUniqueHumanProviderForScope(
 
 function buildProvisionOperatorBootstrapPayload(
   body: CreateCommunityRequestBody,
-  namespaceLabel: string,
+  namespaceLabel: string | null,
 ): {
   description: string | null
   membership_mode: "open" | "request" | "gated"
@@ -345,7 +367,7 @@ function buildProvisionOperatorBootstrapPayload(
   posting_unique_human_provider: "self" | "very" | null
   handle_policy_template: "standard" | "premium" | "membership_gated" | "custom"
   handle_pricing_model: string | null
-  namespace_label: string
+  namespace_label: string | null
 } {
   return {
     description: body.description?.trim() || null,
@@ -434,7 +456,7 @@ async function loadCommunityLocalSnapshot(
     const result = await db.client.execute({
       sql: `
         SELECT community_id, display_name, description, avatar_ref, banner_ref, status, membership_mode, default_age_gate_policy,
-               allow_anonymous_identity, anonymous_identity_scope, donation_policy_mode, donation_partner_status,
+               allow_anonymous_identity, anonymous_identity_scope, donation_policy_mode, donation_partner_id, donation_partner_status,
                settings_json,
                governance_mode, created_by_user_id, created_at, updated_at
         FROM communities
@@ -512,6 +534,7 @@ async function loadCommunityLocalSnapshot(
         ? null
         : (String(row.anonymous_identity_scope) as LocalCommunitySnapshot["anonymous_identity_scope"]),
       donation_policy_mode: String(row.donation_policy_mode) as LocalCommunitySnapshot["donation_policy_mode"],
+      donation_partner_id: row.donation_partner_id == null ? null : String(row.donation_partner_id),
       donation_partner_status: String(row.donation_partner_status) as LocalCommunitySnapshot["donation_partner_status"],
       settings_json: row.settings_json == null ? null : String(row.settings_json),
       gate_rules,
@@ -703,6 +726,29 @@ function assertUpdateCommunityGatesRequest(
   }
 }
 
+function assertUpdateCommunityReferenceLinksRequest(
+  body: UpdateCommunityReferenceLinksRequestBody | null,
+): asserts body is UpdateCommunityReferenceLinksRequestBody {
+  if (!body || !Array.isArray(body.reference_links)) {
+    throw badRequestError("Invalid community reference links payload")
+  }
+
+  for (const link of body.reference_links) {
+    if (typeof link?.platform !== "string" || link.platform.trim().length === 0) {
+      throw badRequestError("Invalid reference link platform")
+    }
+    if (typeof link?.url !== "string" || link.url.trim().length === 0) {
+      throw badRequestError("Invalid reference link url")
+    }
+    if (link.community_reference_link_id != null && typeof link.community_reference_link_id !== "string") {
+      throw badRequestError("Invalid community_reference_link_id payload")
+    }
+    if (link.label != null && typeof link.label !== "string") {
+      throw badRequestError("Invalid reference link label")
+    }
+  }
+}
+
 function parseCommunitySettingsJson(
   rawSettingsJson: unknown,
 ): Record<string, unknown> {
@@ -718,6 +764,164 @@ function parseCommunitySettingsJson(
   } catch {}
 
   return {}
+}
+
+function parseStoredDonationPartnerSummary(
+  settings: Record<string, unknown>,
+): (NonNullable<Community["donation_partner"]> & { image_url?: string | null }) | null {
+  const rawPartner = settings.donation_partner
+  if (!rawPartner || typeof rawPartner !== "object" || Array.isArray(rawPartner)) {
+    return null
+  }
+
+  const partner = rawPartner as Record<string, unknown>
+  if (
+    typeof partner.donation_partner_id !== "string"
+    || typeof partner.display_name !== "string"
+    || partner.provider !== "endaoment"
+  ) {
+    return null
+  }
+
+  return {
+    donation_partner_id: partner.donation_partner_id,
+    display_name: partner.display_name,
+    provider: "endaoment",
+    provider_partner_ref: typeof partner.provider_partner_ref === "string" ? partner.provider_partner_ref : null,
+    image_url: typeof partner.image_url === "string" ? partner.image_url : null,
+    review_status: partner.review_status === "pending" || partner.review_status === "rejected"
+      ? partner.review_status
+      : "approved",
+    status: partner.status === "paused" || partner.status === "retired"
+      ? partner.status
+      : "active",
+  }
+}
+
+function parseEndaomentLookupTerm(input: string): string | null {
+  const trimmed = input.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  if (/^\d{9}$/u.test(trimmed)) {
+    return trimmed
+  }
+
+  try {
+    const url = new URL(trimmed)
+    const host = url.hostname.toLowerCase()
+    if (!host.endsWith("endaoment.org")) {
+      return null
+    }
+
+    const segments = url.pathname.split("/").filter(Boolean)
+    if (segments.length >= 2 && segments[0] === "orgs" && segments[1].trim()) {
+      return decodeURIComponent(segments[1].trim())
+    }
+  } catch {
+    return null
+  }
+
+  return null
+}
+
+type EndaomentOrganizationSearchResult = {
+  id: string
+  ein?: string | null
+  name: string
+  logo?: string | null
+  isCompliant?: boolean
+}
+
+function selectEndaomentOrganizationMatch(
+  organizations: EndaomentOrganizationSearchResult[],
+  lookupTerm: string,
+): EndaomentOrganizationSearchResult | null {
+  const normalizedLookupTerm = lookupTerm.trim().toLowerCase()
+  const exactEin = organizations.find((org) => (org.ein ?? "").trim().toLowerCase() === normalizedLookupTerm)
+  if (exactEin) {
+    return exactEin
+  }
+
+  return organizations.find((org) => org.id.trim().toLowerCase() === normalizedLookupTerm) ?? organizations[0] ?? null
+}
+
+export async function resolveCommunityDonationPartner(input: {
+  env: Env
+  userId: string
+  communityId: string
+  endaomentUrl: string
+  communityRepository: CommunityRepository
+}): Promise<{
+  donation_partner_id: string
+  display_name: string
+  provider: "endaoment"
+  provider_partner_ref: string | null
+  image_url: string | null
+}> {
+  await requireOwnedCommunity(input.communityRepository, input.communityId, input.userId)
+  const lookupTerm = parseEndaomentLookupTerm(input.endaomentUrl)
+  if (!lookupTerm) {
+    throw badRequestError("Enter a valid Endaoment organization URL.")
+  }
+
+  const endpoint = new URL("https://api.endaoment.org/v2/orgs/search")
+  endpoint.searchParams.set("searchTerm", lookupTerm)
+  endpoint.searchParams.set("count", "10")
+
+  const response = await fetch(endpoint.toString(), {
+    method: "GET",
+    headers: {
+      accept: "application/json",
+    },
+  }).catch((error: unknown) => {
+    throw internalError(error instanceof Error ? error.message : "Failed to reach Endaoment.")
+  })
+
+  if (!response.ok) {
+    throw internalError(`Endaoment lookup failed with status ${response.status}`)
+  }
+
+  const payload = await response.json().catch(() => null)
+  if (!Array.isArray(payload)) {
+    throw internalError("Endaoment lookup returned an invalid response.")
+  }
+
+  const organizations = payload.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return []
+    }
+
+    const record = entry as Record<string, unknown>
+    if (typeof record.id !== "string" || typeof record.name !== "string") {
+      return []
+    }
+
+    return [{
+      id: record.id,
+      ein: typeof record.ein === "string" ? record.ein : null,
+      isCompliant: typeof record.isCompliant === "boolean" ? record.isCompliant : undefined,
+      logo: typeof record.logo === "string" ? record.logo : null,
+      name: record.name,
+    } satisfies EndaomentOrganizationSearchResult]
+  })
+
+  const organization = selectEndaomentOrganizationMatch(organizations, lookupTerm)
+  if (!organization) {
+    throw notFoundError("This Endaoment organization was not found.")
+  }
+  if (organization.isCompliant === false) {
+    throw badRequestError("This Endaoment organization is not available right now.")
+  }
+
+  return {
+    donation_partner_id: `endaoment:${organization.id}`,
+    display_name: organization.name,
+    provider: "endaoment",
+    provider_partner_ref: organization.ein ?? organization.id,
+    image_url: organization.logo ?? null,
+  }
 }
 
 export async function updateCommunityRules(input: {
@@ -850,6 +1054,207 @@ export async function updateCommunitySafety(input: {
         WHERE community_id = ?1
       `,
       args: [input.communityId, JSON.stringify(settings), now],
+    })
+  } finally {
+    db.close()
+  }
+
+  const updated = await input.communityRepository.getCommunityById(input.communityId)
+  if (!updated) {
+    throw notFoundError("Community not found")
+  }
+
+  return loadCommunityProjection(input.env, input.communityRepository, updated)
+}
+
+export async function updateCommunityDonationPolicy(input: {
+  env: Env
+  userId: string
+  communityId: string
+  body: UpdateCommunityDonationPolicyRequestBody
+  communityRepository: CommunityRepository
+}): Promise<Community> {
+  const { donation_partner, donation_partner_id, donation_policy_mode } = input.body
+  if (donation_policy_mode !== "none" && !donation_partner_id?.trim()) {
+    throw badRequestError("donation_partner_id is required when donation_policy_mode is not none")
+  }
+  if (donation_policy_mode === "none" && donation_partner_id) {
+    throw badRequestError("donation_partner_id must be null when donation_policy_mode is none")
+  }
+  if (
+    donation_policy_mode !== "none"
+    && (
+      !donation_partner
+      || donation_partner.provider !== "endaoment"
+      || donation_partner.donation_partner_id.trim() !== donation_partner_id?.trim()
+      || !donation_partner.display_name.trim()
+    )
+  ) {
+    throw badRequestError("Resolved donation partner details are required when donations are enabled")
+  }
+
+  await requireOwnedCommunity(input.communityRepository, input.communityId, input.userId)
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+
+  try {
+    const result = await db.client.execute({
+      sql: `
+        SELECT settings_json
+        FROM communities
+        WHERE community_id = ?1
+        LIMIT 1
+      `,
+      args: [input.communityId],
+    })
+    const row = result.rows[0]
+    const existingSettings = parseCommunitySettingsJson(row?.settings_json)
+    const now = nowIso()
+    const partnerStatus = donation_policy_mode === "none" ? "unconfigured" : "active"
+    const resolvedPartnerId = donation_policy_mode === "none" ? null : (donation_partner_id ?? null)
+    const nextSettings = {
+      ...existingSettings,
+      donation_partner: donation_policy_mode === "none" || !donation_partner
+        ? null
+        : {
+          donation_partner_id: donation_partner.donation_partner_id,
+          display_name: donation_partner.display_name.trim(),
+          provider: "endaoment" as const,
+          provider_partner_ref: donation_partner.provider_partner_ref?.trim() || null,
+          image_url: donation_partner.image_url?.trim() || null,
+          review_status: "approved" as const,
+          status: "active" as const,
+        },
+    }
+
+    await db.client.execute({
+      sql: `
+        UPDATE communities
+        SET donation_policy_mode = ?2,
+            donation_partner_id = ?3,
+            donation_partner_status = ?4,
+            settings_json = ?5,
+            updated_at = ?6
+        WHERE community_id = ?1
+      `,
+      args: [input.communityId, donation_policy_mode, resolvedPartnerId, partnerStatus, JSON.stringify(nextSettings), now],
+    })
+  } finally {
+    db.close()
+  }
+
+  const updated = await input.communityRepository.getCommunityById(input.communityId)
+  if (!updated) {
+    throw notFoundError("Community not found")
+  }
+
+  return loadCommunityProjection(input.env, input.communityRepository, updated)
+}
+
+export async function getCommunityDonationPolicy(input: {
+  env: Env
+  userId: string
+  communityId: string
+  communityRepository: CommunityRepository
+}): Promise<{
+  community_id: string
+  donation_policy_mode: string
+  donation_partner_status: string
+  donation_partner_id: string | null
+  donation_partner: (NonNullable<Community["donation_partner"]> & { image_url?: string | null }) | null
+  updated_at: string
+}> {
+  await requireOwnedCommunity(input.communityRepository, input.communityId, input.userId)
+  const local = await loadCommunityLocalSnapshot(input.env, input.communityRepository, input.communityId)
+  const storedPartner = parseStoredDonationPartnerSummary(parseCommunitySettingsJson(local?.settings_json))
+
+  const mode = local?.donation_policy_mode ?? "none"
+  const status = local?.donation_partner_status ?? "unconfigured"
+  const partnerId = local?.donation_partner_id ?? null
+  const updatedAt = local?.updated_at ?? new Date().toISOString()
+
+  return {
+    community_id: input.communityId,
+    donation_policy_mode: mode,
+    donation_partner_status: status === "inactive" ? "paused" : status,
+    donation_partner_id: partnerId,
+    donation_partner: partnerId && storedPartner ? storedPartner : null,
+    updated_at: updatedAt,
+  }
+}
+
+export async function updateCommunityReferenceLinks(input: {
+  env: Env
+  userId: string
+  communityId: string
+  body: UpdateCommunityReferenceLinksRequestBody | null
+  communityRepository: CommunityRepository
+}): Promise<Community> {
+  assertUpdateCommunityReferenceLinksRequest(input.body)
+  await requireOwnedCommunity(input.communityRepository, input.communityId, input.userId)
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+
+  try {
+    const result = await db.client.execute({
+      sql: `
+        SELECT settings_json
+        FROM communities
+        WHERE community_id = ?1
+        LIMIT 1
+      `,
+      args: [input.communityId],
+    })
+    const row = result.rows[0]
+    const existingSettings = parseCommunitySettingsJson(row?.settings_json)
+    const existingLinks = Array.isArray(existingSettings.reference_links)
+      ? existingSettings.reference_links as NonNullable<Community["reference_links"]>
+      : []
+    const existingById = new Map(
+      existingLinks.map((link) => [link.community_reference_link_id, link] as const),
+    )
+    const now = nowIso()
+
+    const referenceLinks = input.body.reference_links
+      .map((link, index) => {
+        const communityReferenceLinkId = link.community_reference_link_id?.trim() || makeId("lnk")
+        const existingLink = existingById.get(communityReferenceLinkId)
+        const trimmedLabel = link.label?.trim() || null
+        const trimmedUrl = link.url.trim()
+
+        if (!trimmedUrl) {
+          return null
+        }
+
+        return {
+          community_reference_link_id: communityReferenceLinkId,
+          platform: link.platform,
+          url: trimmedUrl,
+          label: trimmedLabel,
+          link_status: "active" as const,
+          verified: existingLink?.verified ?? false,
+          metadata: {
+            display_name: trimmedLabel,
+            image_url: existingLink?.metadata.image_url ?? null,
+          },
+          position: typeof link.position === "number" ? link.position : index,
+        } satisfies NonNullable<Community["reference_links"]>[number]
+      })
+      .filter((link) => link !== null) as NonNullable<Community["reference_links"]>
+
+    await db.client.execute({
+      sql: `
+        UPDATE communities
+        SET settings_json = ?2,
+            updated_at = ?3
+        WHERE community_id = ?1
+      `,
+      args: [
+        input.communityId,
+        JSON.stringify({
+          ...existingSettings,
+          reference_links: referenceLinks,
+        }),
+        now,
+      ],
     })
   } finally {
     db.close()
@@ -1042,17 +1447,19 @@ async function upsertLocalNamespaceAttachment(input: {
   }
 }
 
-async function createLocalNamespacelessCommunity(input: {
+async function createNamespacelessCommunity(input: {
   env: Env
   body: CreateCommunityRequestBody
   auth: CreateCommunityAuth
   communityRepository: CommunityRepository
 }): Promise<CommunityCreateAcceptedResponse> {
-  const dbRoot = resolveCommunityDbRoot(input.env)
   const communityId = makeId("cmt")
   const bindingId = makeId("cdb")
   const jobId = makeId("job")
-  const databaseUrl = buildLocalCommunityDbUrl(dbRoot, communityId)
+  const useProvisionOperator = isCommunityProvisionOperatorConfigured(input.env)
+  const databaseUrl = useProvisionOperator
+    ? buildPendingCommunityDatabaseUrl(communityId)
+    : buildLocalCommunityDbUrl(resolveCommunityDbRoot(input.env), communityId)
   const prepared = await input.communityRepository.createCommunityProvisioningRequest({
     communityId,
     communityDatabaseBindingId: bindingId,
@@ -1062,58 +1469,114 @@ async function createLocalNamespacelessCommunity(input: {
     displayName: input.auth.displayName,
     membershipMode: input.body.membership_mode ?? "open",
     namespaceVerificationId: null,
+    routeSlug: null,
     databaseUrl,
     createdAt: input.auth.createdAt,
   })
 
   try {
-    const localSnapshot = await bootstrapLocalCommunityDb({
-      rootDir: dbRoot,
-      communityId,
-      createdByUserId: input.auth.userId,
-      displayName: input.auth.displayName,
-      description: input.body.description?.trim() || null,
-      avatarRef: normalizeCommunityMediaRef(input.body.avatar_ref),
-      bannerRef: normalizeCommunityMediaRef(input.body.banner_ref),
-      namespaceVerificationId: null,
-      namespaceLabel: null,
-      membershipMode: input.body.membership_mode ?? "open",
-      defaultAgeGatePolicy: input.body.default_age_gate_policy ?? "none",
-      allowAnonymousIdentity: input.body.allow_anonymous_identity ?? false,
-      anonymousIdentityScope: input.body.allow_anonymous_identity ? (input.body.anonymous_identity_scope ?? null) : null,
-      governanceMode: input.body.governance_mode ?? "centralized",
-      handlePolicyTemplate: input.body.handle_policy?.policy_template ?? "standard",
-      pricingModel: null,
-      gateRules: (input.body.gate_rules ?? []).map((rule) => ({
-        scope: rule.scope,
-        gateFamily: rule.gate_family,
-        gateType: rule.gate_type,
-        proofRequirementsJson: rule.proof_requirements ? JSON.stringify(rule.proof_requirements) : null,
-        chainNamespace: rule.chain_namespace ?? null,
-        gateConfigJson: rule.gate_config ? JSON.stringify(rule.gate_config) : null,
-      })),
-      rules: (input.body.community_bootstrap?.rules ?? []).map((rule, index) => ({
-        rule_id: makeId("rul"),
-        title: rule.title.trim(),
-        body: rule.body.trim(),
-        report_reason: rule.report_reason?.trim() || rule.title.trim(),
-        position: typeof rule.position === "number" ? rule.position : index,
-        status: "active",
-      })),
-      now: input.auth.createdAt,
-    })
+    let localSnapshot: LocalCommunitySnapshot | null = null
+    let resolvedBinding: CommunityDatabaseBindingRow | null | undefined
+
+    if (useProvisionOperator) {
+      const provisioned = await provisionCommunityViaOperator({
+        env: input.env,
+        communityId,
+        creatorUserId: input.auth.userId,
+        displayName: input.auth.displayName,
+        namespaceVerificationId: null,
+        groupLocation: resolveCommunityProvisionGroupLocation(input.env),
+        bootstrapPayload: buildProvisionOperatorBootstrapPayload(
+          input.body,
+          null,
+        ),
+      })
+      const encryptedToken = encryptCommunityDbCredential({
+        plaintextToken: provisioned.plaintextToken,
+        wrapKey: resolveCommunityDbWrapKey(input.env),
+      })
+      const communityDbCredentialId = provisioned.credentialId.trim() || (() => {
+        const fallbackId = makeId("cdc")
+        console.warn(
+          "[community-provision] operator returned empty credential_id for namespaceless community %s; using fallback %s",
+          communityId,
+          fallbackId,
+        )
+        return fallbackId
+      })()
+      await input.communityRepository.persistProvisionedCommunityDatabaseAccess({
+        communityDatabaseBindingId: prepared.binding.community_database_binding_id,
+        communityDbCredentialId,
+        organizationSlug: provisioned.organizationSlug,
+        groupName: provisioned.groupName,
+        groupId: provisioned.groupId,
+        databaseName: provisioned.databaseName,
+        databaseId: provisioned.databaseId,
+        databaseUrl: provisioned.databaseUrl,
+        location: provisioned.location,
+        tokenName: provisioned.tokenName,
+        encryptedToken,
+        encryptionKeyVersion: resolveCommunityDbWrapKeyVersion(input.env),
+        issuedAt: provisioned.issuedAt,
+        expiresAt: provisioned.expiresAt,
+        updatedAt: input.auth.createdAt,
+      })
+      localSnapshot = await loadCommunityLocalSnapshot(input.env, input.communityRepository, communityId)
+      resolvedBinding = await input.communityRepository.getPrimaryCommunityDatabaseBinding(communityId)
+    } else {
+      const dbRoot = resolveCommunityDbRoot(input.env)
+      localSnapshot = await bootstrapLocalCommunityDb({
+        rootDir: dbRoot,
+        communityId,
+        createdByUserId: input.auth.userId,
+        displayName: input.auth.displayName,
+        description: input.body.description?.trim() || null,
+        avatarRef: normalizeCommunityMediaRef(input.body.avatar_ref),
+        bannerRef: normalizeCommunityMediaRef(input.body.banner_ref),
+        namespaceVerificationId: null,
+        namespaceLabel: null,
+        membershipMode: input.body.membership_mode ?? "open",
+        defaultAgeGatePolicy: input.body.default_age_gate_policy ?? "none",
+        allowAnonymousIdentity: input.body.allow_anonymous_identity ?? false,
+        anonymousIdentityScope: input.body.allow_anonymous_identity ? (input.body.anonymous_identity_scope ?? null) : null,
+        governanceMode: input.body.governance_mode ?? "centralized",
+        handlePolicyTemplate: input.body.handle_policy?.policy_template ?? "standard",
+        pricingModel: null,
+        gateRules: (input.body.gate_rules ?? []).map((rule) => ({
+          scope: rule.scope,
+          gateFamily: rule.gate_family,
+          gateType: rule.gate_type,
+          proofRequirementsJson: rule.proof_requirements ? JSON.stringify(rule.proof_requirements) : null,
+          chainNamespace: rule.chain_namespace ?? null,
+          gateConfigJson: rule.gate_config ? JSON.stringify(rule.gate_config) : null,
+        })),
+        rules: (input.body.community_bootstrap?.rules ?? []).map((rule, index) => ({
+          rule_id: makeId("rul"),
+          title: rule.title.trim(),
+          body: rule.body.trim(),
+          report_reason: rule.report_reason?.trim() || rule.title.trim(),
+          position: typeof rule.position === "number" ? rule.position : index,
+          status: "active",
+        })),
+        now: input.auth.createdAt,
+      })
+    }
 
     const finalized = await input.communityRepository.markCommunityProvisioningSucceeded({
       communityId,
       communityDatabaseBindingId: prepared.binding.community_database_binding_id,
       jobId: prepared.job.job_id,
       actorUserId: input.auth.userId,
-      resultRef: prepared.binding.database_url,
+      resultRef: useProvisionOperator
+        ? resolvedBinding?.database_url ?? prepared.binding.database_url
+        : prepared.binding.database_url,
       createdAt: input.auth.createdAt,
       metadata: {
         binding_id: prepared.binding.community_database_binding_id,
-        database_url: prepared.binding.database_url,
-        mode: "local_stub",
+        database_url: useProvisionOperator
+          ? resolvedBinding?.database_url ?? prepared.binding.database_url
+          : prepared.binding.database_url,
+        mode: useProvisionOperator ? "turso_operator" : "local_stub",
       },
     })
 
@@ -1126,7 +1589,7 @@ async function createLocalNamespacelessCommunity(input: {
       communityId,
       jobId: prepared.job.job_id,
       actorUserId: input.auth.userId,
-      errorCode: "local_stub_bootstrap_failed",
+      errorCode: useProvisionOperator ? "turso_operator_provision_failed" : "local_stub_bootstrap_failed",
       createdAt: nowIso(),
       metadata: {
         binding_id: prepared.binding.community_database_binding_id,
@@ -1259,6 +1722,7 @@ async function provisionNamespacedCommunity(input: {
             registryAttemptId: registryAttempt.registry_attempt_id,
             jobId,
             namespaceVerificationId,
+            routeSlug: namespaceVerification.normalized_root_label,
             databaseUrl,
             createdAt: auth.createdAt,
           })
@@ -1271,6 +1735,7 @@ async function provisionNamespacedCommunity(input: {
             displayName: auth.displayName,
             membershipMode: body.membership_mode ?? "open",
             namespaceVerificationId,
+            routeSlug: namespaceVerification.normalized_root_label,
             databaseUrl,
             createdAt: auth.createdAt,
           })
@@ -1466,7 +1931,7 @@ export async function createCommunity(input: {
   const auth = await resolveCreateCommunityAuth(input)
 
   if (!auth.namespaceVerificationId) {
-    return createLocalNamespacelessCommunity({
+    return createNamespacelessCommunity({
       env: input.env,
       body: input.body,
       auth,

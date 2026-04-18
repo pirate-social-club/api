@@ -1,8 +1,9 @@
 import type { Client } from "../sql-client"
 import { makeId } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
-import { getCommunityPostProjectionRowByPostId } from "../auth/auth-db-queries"
+import { getCommunityCommentProjectionRowByCommentId, getCommunityPostProjectionRowByPostId } from "../auth/auth-db-queries"
 import type {
+  CommunityCommentProjectionRow,
   CommunityDbCredentialRow,
   CommunityDatabaseBindingRow,
   CommunityRegistryAttemptRow,
@@ -14,7 +15,9 @@ import type { Env } from "../../types"
 
 export {
   getCommunityById,
+  getCommunityByRouteSlug,
   getCommunityByNamespaceVerificationId,
+  listActiveCommunities,
   getPrimaryCommunityDatabaseBinding,
   getActiveCommunityDbCredential,
   getJobById,
@@ -38,6 +41,7 @@ export {
 } from "./community-registry-repository"
 
 export { recordCommunityPostProjection } from "./community-post-projection-repository"
+export { recordCommunityCommentProjection } from "./community-comment-projection-repository"
 
 export {
   attachNamespaceToCommunity,
@@ -46,7 +50,9 @@ export {
 
 import {
   getCommunityById,
+  getCommunityByRouteSlug,
   getCommunityByNamespaceVerificationId,
+  listActiveCommunities,
   getPrimaryCommunityDatabaseBinding,
   getActiveCommunityDbCredential,
   getJobById,
@@ -67,6 +73,7 @@ import {
   markCommunityRegistryPublicationFailed,
 } from "./community-registry-repository"
 import { recordCommunityPostProjection } from "./community-post-projection-repository"
+import { recordCommunityCommentProjection } from "./community-comment-projection-repository"
 import {
   attachNamespaceToCommunity,
   setPendingNamespaceVerificationSession,
@@ -87,14 +94,24 @@ export async function getCommunityPostProjectionByPostId(
   return getCommunityPostProjectionRowByPostId(client, postId)
 }
 
+export async function getCommunityCommentProjectionByCommentId(
+  client: Client,
+  commentId: string,
+): Promise<CommunityCommentProjectionRow | null> {
+  return getCommunityCommentProjectionRowByCommentId(client, commentId)
+}
+
 export interface CommunityRepository {
   getCommunityById(communityId: string): Promise<CommunityRow | null>
+  getCommunityByRouteSlug(routeSlug: string): Promise<CommunityRow | null>
   getCommunityByNamespaceVerificationId(namespaceVerificationId: string): Promise<CommunityRow | null>
+  listActiveCommunities(): Promise<CommunityRow[]>
   getPrimaryCommunityDatabaseBinding(communityId: string): Promise<CommunityDatabaseBindingRow | null>
   getActiveCommunityDbCredential(communityDatabaseBindingId: string): Promise<CommunityDbCredentialRow | null>
   getJobById(jobId: string): Promise<JobRow | null>
   getLatestCommunityProvisioningJob(communityId: string): Promise<JobRow | null>
   getCommunityPostProjectionByPostId(postId: string): Promise<CommunityPostProjectionRow | null>
+  getCommunityCommentProjectionByCommentId(commentId: string): Promise<CommunityCommentProjectionRow | null>
   createCommunityRegistryAttempt(input: {
     registryAttemptId?: string
     actorUserId: string
@@ -121,6 +138,17 @@ export interface CommunityRepository {
     actorUserId: string
     createdAt: string
   }): Promise<CommunityPostProjectionRow>
+  recordCommunityCommentProjection(input: {
+    communityId: string
+    threadRootPostId: string
+    sourceCommentId: string
+    parentCommentId: string | null
+    depth: number
+    status: "published" | "hidden" | "removed" | "deleted"
+    sourceCreatedAt: string
+    actorUserId: string
+    createdAt: string
+  }): Promise<CommunityCommentProjectionRow>
   createCommunityProvisioningRequest(input: {
     communityId: string
     communityDatabaseBindingId: string
@@ -130,6 +158,7 @@ export interface CommunityRepository {
     displayName: string
     membershipMode: "open" | "request" | "gated"
     namespaceVerificationId: string | null
+    routeSlug?: string | null
     databaseUrl: string
     createdAt: string
   }): Promise<{
@@ -143,6 +172,7 @@ export interface CommunityRepository {
     registryAttemptId: string
     jobId: string
     namespaceVerificationId: string
+    routeSlug: string
     databaseUrl: string
     createdAt: string
   }): Promise<{
@@ -234,8 +264,16 @@ export class DatabaseCommunityRepository implements CommunityRepository {
     return getCommunityById(this.client, communityId)
   }
 
+  async getCommunityByRouteSlug(routeSlug: string): Promise<CommunityRow | null> {
+    return getCommunityByRouteSlug(this.client, routeSlug)
+  }
+
   async getCommunityByNamespaceVerificationId(namespaceVerificationId: string): Promise<CommunityRow | null> {
     return getCommunityByNamespaceVerificationId(this.client, namespaceVerificationId)
+  }
+
+  async listActiveCommunities(): Promise<CommunityRow[]> {
+    return listActiveCommunities(this.client)
   }
 
   async getPrimaryCommunityDatabaseBinding(communityId: string): Promise<CommunityDatabaseBindingRow | null> {
@@ -256,6 +294,10 @@ export class DatabaseCommunityRepository implements CommunityRepository {
 
   async getCommunityPostProjectionByPostId(postId: string): Promise<CommunityPostProjectionRow | null> {
     return getCommunityPostProjectionByPostId(this.client, postId)
+  }
+
+  async getCommunityCommentProjectionByCommentId(commentId: string): Promise<CommunityCommentProjectionRow | null> {
+    return getCommunityCommentProjectionByCommentId(this.client, commentId)
   }
 
   async createCommunityRegistryAttempt(input: {
@@ -301,6 +343,20 @@ export class DatabaseCommunityRepository implements CommunityRepository {
     return recordCommunityPostProjection(this.client, input)
   }
 
+  async recordCommunityCommentProjection(input: {
+    communityId: string
+    threadRootPostId: string
+    sourceCommentId: string
+    parentCommentId: string | null
+    depth: number
+    status: "published" | "hidden" | "removed" | "deleted"
+    sourceCreatedAt: string
+    actorUserId: string
+    createdAt: string
+  }): Promise<CommunityCommentProjectionRow> {
+    return recordCommunityCommentProjection(this.client, input)
+  }
+
   async createCommunityProvisioningRequest(input: {
     communityId: string
     communityDatabaseBindingId: string
@@ -326,6 +382,7 @@ export class DatabaseCommunityRepository implements CommunityRepository {
     registryAttemptId: string
     jobId: string
     namespaceVerificationId: string
+    routeSlug: string
     databaseUrl: string
     createdAt: string
   }): Promise<{

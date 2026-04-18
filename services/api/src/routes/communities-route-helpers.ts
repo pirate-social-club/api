@@ -37,11 +37,37 @@ type AuthenticatedRouteContext = {
 }
 
 export function getCommunityRouteContext(c: AuthenticatedRouteContext): CommunityRouteContext {
+  const communityRepository = getCommunityRepository(c.env)
   return {
     actor: c.get("actor"),
     communityId: c.req.param("communityId"),
-    communityRepository: getCommunityRepository(c.env),
+    communityRepository,
     userRepository: getUserRepository(c.env),
+  }
+}
+
+async function resolveCommunityIdentifier(
+  communityRepository: CommunityRepository,
+  communityIdentifier: string,
+): Promise<string> {
+  const byId = await communityRepository.getCommunityById(communityIdentifier)
+  if (byId) {
+    return byId.community_id
+  }
+
+  const byRouteSlug = await communityRepository.getCommunityByRouteSlug(communityIdentifier)
+  if (byRouteSlug) {
+    return byRouteSlug.community_id
+  }
+
+  return communityIdentifier
+}
+
+export async function getResolvedCommunityRouteContext(c: AuthenticatedRouteContext): Promise<CommunityRouteContext> {
+  const base = getCommunityRouteContext(c)
+  return {
+    ...base,
+    communityId: await resolveCommunityIdentifier(base.communityRepository, base.communityId),
   }
 }
 

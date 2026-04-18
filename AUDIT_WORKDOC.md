@@ -22,10 +22,27 @@ Repo root:
 Status: mixed
 
 - The repo has real structure and a usable test harness.
-- The API surface has grown faster than the module boundaries.
-- Some test coverage exists, but the API suite is currently unstable enough that it should not be treated as a strong safety rail.
-- There is an actively developed Story/CDR subsystem with weak visibility and unclear test coverage.
-- Generated contracts have a source-of-truth gap across repo boundaries.
+- The worst route/module boundary issues have been reduced materially.
+- Static hygiene and route coverage visibility are much better than at the start of the audit.
+- The remaining risks are concentrated in cross-repo contracts freshness, full API suite trust, and explicit Story/CDR coverage or gating.
+- Generated contracts still have a source-of-truth gap across repo boundaries.
+
+## Status Snapshot
+
+- Completed: Task 3, Task 5, Task 6, Task 7, Task 8, Task 9
+- Partially complete: Task 1, Task 2
+- Open: Task 4
+
+Recent related commits:
+
+- `2866fc5` Rename control plane repositories by role
+- `1fb4204` Extract shared media storage helpers
+- `8aa82a5` Refresh API README for current surface
+- `654325e` Seed local story PKP defaults
+- `4f25d68` Generalize control plane DB client
+- `1d2ce00` Extract shared community route helpers
+- `b22982a` Split community routes by domain
+- `3fa21f8` Checkpoint audit fixes and story commerce work
 
 ## Audit Instructions For Another AI
 
@@ -70,6 +87,7 @@ When auditing, record:
 ### Task 1: Fix Contracts Source-Of-Truth Drift
 
 Priority: high
+Status: partially complete
 
 Problem:
 
@@ -102,9 +120,16 @@ Suggested fixes:
 - Expand workflow triggers to include the upstream specs path if it remains the source of truth.
 - Document the ownership boundary between `specs/api` and `services/contracts`.
 
+Progress:
+
+- Added a local freshness check in `services/contracts`.
+- Documented the repo-boundary limitation in `CONTRACTS_BOUNDARY.md`.
+- This is not fully complete because `pirate-api` CI still cannot prove freshness from sibling `specs/api` inputs on its own.
+
 ### Task 2: Stabilize The API Test Suite
 
 Priority: high
+Status: partially complete
 
 Problem:
 
@@ -143,9 +168,16 @@ Suggested fixes:
 - Isolate the heaviest integration flows from the broad route suite if needed.
 - Raise timeouts only after isolation is correct.
 
+Progress:
+
+- Multiple focused route and repository suites were added or strengthened and pass locally.
+- Targeted verification runs are green, including community, profile, media, jobs/posts, and repository coverage.
+- This is still not fully complete because the audit goal was trust in clean repeated full-suite runs, and that has not yet been proven for all of `services/api`.
+
 ### Task 3: Break Up The Communities God Route
 
 Priority: high
+Status: complete
 
 Problem:
 
@@ -180,9 +212,16 @@ Suggested target split:
 - `routes/communities/song-artifacts.ts`
 - Further subdivision should happen only if the resulting files stay overloaded after the first pass.
 
+Completed work:
+
+- `routes/communities.ts` was reduced to a mount/auth shell.
+- Capability-specific routing was split into `communities-core.ts`, `communities-commerce.ts`, and `communities-song-artifacts.ts`.
+- Shared route wiring was further reduced with `communities-route-helpers.ts`.
+
 ### Task 4: Prove Story/CDR Coverage Or Gate It Explicitly
 
 Priority: medium-high
+Status: open
 
 Problem:
 
@@ -219,9 +258,15 @@ Suggested fixes:
 - Add focused tests that prove the intended Story/CDR paths are exercised, or document which ones are deferred.
 - If some paths are development-only, gate them explicitly and say so in docs.
 
+Current note:
+
+- Story/CDR is active development, not dead code.
+- Some commerce-adjacent route coverage exists, but the exact tested Story/CDR path map is still not documented precisely enough to close this task.
+
 ### Task 5: Eliminate Media Upload DRY Debt
 
 Priority: medium
+Status: complete
 
 Problem:
 
@@ -254,9 +299,16 @@ Suggested extraction boundary:
 - shared object fetch path
 - thin domain wrappers for profile/community specifics
 
+Completed work:
+
+- Shared storage behavior now lives in `services/api/src/lib/media-storage.ts`.
+- Shared multipart/media route logic now lives in `services/api/src/routes/media-route-helpers.ts`.
+- Profile/community media routes and services were reduced to thinner domain wrappers.
+
 ### Task 6: Rename Modules Around Domain Ownership
 
 Priority: medium
+Status: complete
 
 Problem:
 
@@ -287,9 +339,16 @@ Suggested direction:
 - separate `auth`, `identity`, `profiles`, and `handles`
 - keep implementation-specific names inside lower-level files, not top-level domain boundaries
 
+Completed work:
+
+- `control-plane-*` repository/module naming was replaced with role-based names such as `auth-db-*`, `db-identity-repository`, `db-profile-repository`, and `db-community-repository`.
+- Remaining imports and tests were updated to the new names.
+- This improved naming materially, though a larger future directory split between `auth`, `identity`, `profiles`, and `handles` may still be worthwhile.
+
 ### Task 7: Update The Repo Story In Docs
 
 Priority: medium
+Status: complete
 
 Problem:
 
@@ -317,9 +376,14 @@ Definition of done:
 - Experimental or partial areas are labeled clearly.
 - Another AI or engineer can read the docs and not build the wrong mental model.
 
+Completed work:
+
+- `services/api/README.md` was refreshed to match the current route surface, module layout, config names, and community-router split.
+
 ### Task 8: Tighten Static Hygiene And Test Typechecking
 
 Priority: medium
+Status: complete
 
 Problem:
 
@@ -345,9 +409,16 @@ Definition of done:
 - Test files are included or intentionally handled with a documented reason.
 - Static checks support cleanup instead of relying only on manual review.
 
+Completed work:
+
+- `noUnusedLocals` and `noUnusedParameters` are enabled in API, CLI, and contracts TypeScript configs.
+- CLI tests are now typechecked.
+- The API unused-symbol pass was completed and verified with `tsc --noEmit`.
+
 ### Task 9: Inventory Route Coverage Gaps
 
 Priority: medium
+Status: complete
 
 Problem:
 
@@ -377,6 +448,10 @@ Suggested output:
 - one table mapping route groups to test files
 - one short list of uncovered or weakly covered endpoints
 - one priority ranking for which gaps matter first
+
+Completed work:
+
+- `ROUTE_COVERAGE.md` now maps the live route surface to primary test files, notes weak spots, and identifies follow-up priorities.
 
 ## Suggested Sequencing
 

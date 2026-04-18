@@ -8,6 +8,7 @@ import {
   getGlobalHandleRow,
   getGlobalHandleRowByLabelNormalized,
   listLinkedHandleRows,
+  listCreatedCommunityRowsByCreatorUserId,
   getProfileRow,
   getUserRow,
   hasUniqueConstraintField,
@@ -251,12 +252,19 @@ export class DatabaseIdentityRepository {
     }
 
     const linkedHandleRows = await listLinkedHandleRows(this.client, canonicalHandleRow.user_id)
+    const createdCommunityRows = await listCreatedCommunityRowsByCreatorUserId(this.client, canonicalHandleRow.user_id)
 
     return {
       profile: assembleProfile(profileRow, canonicalHandleRow, linkedHandleRows),
       requested_handle_label: requestedHandle.labelDisplay,
       resolved_handle_label: canonicalHandleRow.label_display,
       is_canonical: requestedHandleRow.global_handle_id === canonicalHandleRow.global_handle_id,
+      created_communities: createdCommunityRows.map((row) => ({
+        community_id: row.community_id,
+        display_name: row.display_name,
+        route_slug: row.route_slug,
+        created_at: row.created_at,
+      })),
     }
   }
 }

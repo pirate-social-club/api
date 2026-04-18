@@ -61,3 +61,10 @@ export function encodeWriteConditionOperatorData(operatorAddress: string): `0x${
 export function encodeSignedAccessNamespace(namespace: `0x${string}`): `0x${string}` {
   return abiCoder.encode(["bytes32"], [namespace]) as `0x${string}`
 }
+
+export function encodeSignedAccessCdrConditionData(input: {
+  namespace: `0x${string}`
+  writerAddress: string
+}): `0x${string}` {
+  return abiCoder.encode(["bytes32", "address"], [input.namespace, input.writerAddress]) as `0x${string}`
+}

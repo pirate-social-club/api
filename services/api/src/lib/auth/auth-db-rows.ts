@@ -290,6 +290,19 @@ export type CommunityPostProjectionRow = {
   updated_at: string
 }
 
+export type CommunityCommentProjectionRow = {
+  projection_id: string
+  community_id: string
+  thread_root_post_id: string
+  source_comment_id: string
+  parent_comment_id: string | null
+  depth: number
+  status: "published" | "hidden" | "removed" | "deleted"
+  source_created_at: string
+  created_at: string
+  updated_at: string
+}
+
 export type RedditVerificationSessionRow = {
   reddit_verification_session_id: string
   user_id: string
@@ -613,6 +626,21 @@ export function toCommunityPostProjectionRow(row: unknown): CommunityPostProject
     source_created_at: requiredString(row, "source_created_at"),
     projected_payload_json: requiredString(row, "projected_payload_json"),
     projection_version: requiredNumber(row, "projection_version"),
+    created_at: requiredString(row, "created_at"),
+    updated_at: requiredString(row, "updated_at"),
+  }
+}
+
+export function toCommunityCommentProjectionRow(row: unknown): CommunityCommentProjectionRow {
+  return {
+    projection_id: requiredString(row, "projection_id"),
+    community_id: requiredString(row, "community_id"),
+    thread_root_post_id: requiredString(row, "thread_root_post_id"),
+    source_comment_id: requiredString(row, "source_comment_id"),
+    parent_comment_id: stringOrNull(rowValue(row, "parent_comment_id")),
+    depth: requiredNumber(row, "depth"),
+    status: requiredString(row, "status") as CommunityCommentProjectionRow["status"],
+    source_created_at: requiredString(row, "source_created_at"),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
   }

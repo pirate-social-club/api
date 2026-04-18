@@ -2,9 +2,11 @@ import type { Client } from "../sql-client"
 import {
   getActiveCommunityDbCredentialRow,
   getCommunityRowById,
+  getCommunityRowByRouteSlug,
   getCommunityRowByNamespaceVerificationId,
   getJobRowById,
   getLatestCommunityProvisioningJobRow,
+  listActiveCommunityRows,
   getPrimaryCommunityDatabaseBindingRow,
 } from "../auth/auth-db-queries"
 import type {
@@ -18,11 +20,19 @@ export async function getCommunityById(client: Client, communityId: string): Pro
   return getCommunityRowById(client, communityId)
 }
 
+export async function getCommunityByRouteSlug(client: Client, routeSlug: string): Promise<CommunityRow | null> {
+  return getCommunityRowByRouteSlug(client, routeSlug)
+}
+
 export async function getCommunityByNamespaceVerificationId(
   client: Client,
   namespaceVerificationId: string,
 ): Promise<CommunityRow | null> {
   return getCommunityRowByNamespaceVerificationId(client, namespaceVerificationId)
+}
+
+export async function listActiveCommunities(client: Client): Promise<CommunityRow[]> {
+  return listActiveCommunityRows(client)
 }
 
 export async function getPrimaryCommunityDatabaseBinding(

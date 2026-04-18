@@ -23,6 +23,16 @@ export type StorySettlementPkpExecutionConfig = {
   actions: Partial<Record<StorySettlementAction, `ipfs://${string}`>>
 }
 
+function parseOptionalPkpId(value: string | null | undefined): ConfigResult<string | null> {
+  const normalized = String(value || "").trim()
+  if (!normalized) return { ok: true, value: null }
+  const parsed = parseExpectedEvmAddress(normalized)
+  if (!parsed) {
+    return { ok: false, error: "MUSIC_PURCHASE_STORY_SETTLEMENT_PKP_ID missing/invalid" }
+  }
+  return { ok: true, value: getAddress(parsed) }
+}
+
 const ACTION_ENV_FIELDS: Record<StorySettlementAction, string> = {
   [STORY_SETTLEMENT_ACTION.SETTLE]: "STORY_SETTLEMENT_ACTION_CID_SETTLE",
   [STORY_SETTLEMENT_ACTION.ROYALTY_SYNC]: "STORY_SETTLEMENT_ACTION_CID_ROYALTY_SYNC",
@@ -34,6 +44,7 @@ export function resolveStorySettlementPkpExecutionConfig(
   const rawActionValues = Object.values(ACTION_ENV_FIELDS).map((field) => String(env[field as keyof Env] || "").trim())
   const hasAnyConfig = Boolean(
     String(env.MUSIC_PURCHASE_STORY_SETTLEMENT_PKP_ADDRESS || "").trim()
+    || String(env.MUSIC_PURCHASE_STORY_SETTLEMENT_PKP_ID || "").trim()
     || String(env.MUSIC_PURCHASE_STORY_SETTLEMENT_PKP_PUBLIC_KEY || "").trim()
     || String(env.LIT_CHIPOTLE_STORY_SETTLEMENT_API_KEY || "").trim()
     || rawActionValues.some((value) => value.length > 0),
@@ -46,6 +57,8 @@ export function resolveStorySettlementPkpExecutionConfig(
   if (!pkpAddress) {
     return { ok: false, error: "MUSIC_PURCHASE_STORY_SETTLEMENT_PKP_ADDRESS missing/invalid" }
   }
+  const pkpId = parseOptionalPkpId(env.MUSIC_PURCHASE_STORY_SETTLEMENT_PKP_ID)
+  if (!pkpId.ok) return pkpId
   const pkpPublicKey = parseOptionalPkpPublicKey(
     env.MUSIC_PURCHASE_STORY_SETTLEMENT_PKP_PUBLIC_KEY,
     "MUSIC_PURCHASE_STORY_SETTLEMENT_PKP_PUBLIC_KEY",
@@ -86,6 +99,7 @@ export function resolveStorySettlementPkpExecutionConfig(
     value: {
       pkp: {
         pkpAddress: getAddress(pkpAddress) as `0x${string}`,
+        pkpId: pkpId.value,
         pkpPublicKey: pkpPublicKey.value,
         apiKey,
         baseUrl: chipotleBaseUrl.value,

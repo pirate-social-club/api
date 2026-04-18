@@ -313,6 +313,7 @@ export async function findUploadedSongArtifactByStorageRef(input: {
   storageRef: string
   artifactKind?: SongArtifactUpload["artifact_kind"]
 }): Promise<SongArtifactUpload | null> {
+  const hasArtifactKind = typeof input.artifactKind === "string" && input.artifactKind.length > 0
   const row = await executeFirst(input.client, {
     sql: `
       SELECT song_artifact_upload_id, community_id, uploader_user_id, artifact_kind, status, storage_ref,
@@ -321,12 +322,14 @@ export async function findUploadedSongArtifactByStorageRef(input: {
       FROM song_artifact_uploads
       WHERE community_id = ?1
         AND status = 'uploaded'
-        AND (?2 IS NULL OR artifact_kind = ?2)
-        AND (storage_ref = ?3 OR gateway_url = ?3)
+        ${hasArtifactKind ? "AND artifact_kind = ?2" : ""}
+        AND (${hasArtifactKind ? "storage_ref = ?3 OR gateway_url = ?3" : "storage_ref = ?2 OR gateway_url = ?2"})
       ORDER BY updated_at DESC
       LIMIT 1
     `,
-    args: [input.communityId, input.artifactKind ?? null, input.storageRef],
+    args: hasArtifactKind
+      ? [input.communityId, input.artifactKind, input.storageRef]
+      : [input.communityId, input.storageRef],
   })
 
   return row ? serializeSongArtifactUpload(toSongArtifactUploadRow(row)) : null

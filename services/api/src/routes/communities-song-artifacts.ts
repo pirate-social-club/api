@@ -8,7 +8,7 @@ import {
 } from "../lib/song-artifacts/song-artifact-service"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import {
-  getCommunityRouteContext,
+  getResolvedCommunityRouteContext,
   getRequestOrigin,
   readSongArtifactContent,
   requireJsonBody,
@@ -20,7 +20,7 @@ import type {
 
 export function registerCommunitySongArtifactRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.post("/:communityId/song-artifact-uploads", async (c) => {
-    const { actor, communityId, communityRepository, userRepository } = getCommunityRouteContext(c)
+    const { actor, communityId, communityRepository, userRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<CreateSongArtifactUploadRequest>(c, "Invalid song artifact upload payload")
 
     const result = await createSongArtifactUpload({
@@ -36,7 +36,7 @@ export function registerCommunitySongArtifactRoutes(communities: Hono<Authentica
   })
 
   communities.put("/:communityId/song-artifact-uploads/:songArtifactUploadId/content", async (c) => {
-    const { actor, communityId, communityRepository, userRepository } = getCommunityRouteContext(c)
+    const { actor, communityId, communityRepository, userRepository } = await getResolvedCommunityRouteContext(c)
     const content = await readSongArtifactContent(c)
 
     const result = await uploadSongArtifactContent({
@@ -53,15 +53,16 @@ export function registerCommunitySongArtifactRoutes(communities: Hono<Authentica
   })
 
   communities.get("/:communityId/song-artifact-uploads/:songArtifactUploadId/content", async (c) => {
+    const { communityId } = await getResolvedCommunityRouteContext(c)
     return await fetchSongArtifactContent({
       env: c.env,
-      communityId: c.req.param("communityId"),
+      communityId,
       songArtifactUploadId: c.req.param("songArtifactUploadId"),
     })
   })
 
   communities.post("/:communityId/song-artifacts", async (c) => {
-    const { actor, communityId, communityRepository, userRepository } = getCommunityRouteContext(c)
+    const { actor, communityId, communityRepository, userRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<CreateSongArtifactBundleRequest>(c, "Invalid song artifact bundle payload")
 
     const result = await createSongArtifactBundle({
@@ -76,7 +77,7 @@ export function registerCommunitySongArtifactRoutes(communities: Hono<Authentica
   })
 
   communities.get("/:communityId/song-artifacts/:songArtifactBundleId", async (c) => {
-    const { actor, communityId } = getCommunityRouteContext(c)
+    const { actor, communityId } = await getResolvedCommunityRouteContext(c)
     const result = await getSongArtifactBundleForCreator({
       env: c.env,
       userId: actor.userId,
