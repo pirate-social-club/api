@@ -741,6 +741,12 @@ export type CreatePostRequest = (((unknown & {
   lyrics?: string | null;
 });
 
+export type CreateCommentRequest = {
+  body: string;
+  identity_mode?: "public" | "anonymous";
+  anonymous_scope?: "community_stable" | "thread_stable" | null;
+};
+
 export type SongArtifactUpload = {
   song_artifact_upload_id: string;
   community_id: string;
@@ -836,8 +842,74 @@ export type Post = {
   updated_at: string;
 };
 
+export type Comment = {
+  comment_id: string;
+  community_id: string;
+  thread_root_post_id: string;
+  parent_comment_id: string | null;
+  author_user_id: string | null;
+  authorship_mode: "human_direct";
+  identity_mode: "public" | "anonymous";
+  anonymous_scope: "community_stable" | "thread_stable" | null;
+  anonymous_label: string | null;
+  body: string | null;
+  source_language?: string | null;
+  status: "published" | "hidden" | "removed" | "deleted";
+  depth: number;
+  direct_reply_count: number;
+  descendant_count: number;
+  upvote_count: number;
+  downvote_count: number;
+  score: number;
+  last_reply_at: string | null;
+  content_hash: string | null;
+  swarm_body_ref: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CommentListItem = {
+  comment: Comment;
+  viewer_vote: -1 | 1 | null;
+  resolved_locale: string;
+  translation_state: "ready" | "pending" | "same_language" | "policy_blocked";
+  machine_translated: boolean;
+  translated_body?: string | null;
+  source_hash: string;
+};
+
+export type CommentThreadSnapshot = {
+  thread_root_post_id: string;
+  snapshot_seq: number;
+  published_through_comment_created_at: string;
+  comment_count: number;
+  swarm_manifest_ref: string;
+  swarm_feed_ref: string | null;
+  created_at: string;
+};
+
+export type CommentListResponse = {
+  items: Array<CommentListItem>;
+  next_cursor: string | null;
+  thread_snapshot: CommentThreadSnapshot | null;
+};
+
+export type CommentContext = {
+  ancestors: Array<CommentListItem>;
+  comment: CommentListItem;
+  replies: Array<CommentListItem>;
+  next_replies_cursor: string | null;
+  thread_snapshot: CommentThreadSnapshot | null;
+};
+
+export type CommentVoteResponse = {
+  comment_id: string;
+  value: -1 | 1;
+};
+
 export type LocalizedPostResponse = {
   post: Post;
+  thread_snapshot: CommentThreadSnapshot | null;
   market_context?: MarketContextSummary | null;
   label?: PostLabel | null;
   upvote_count: number;
@@ -1728,6 +1800,7 @@ export const apiRoutes = {
   communityPurchaseSettlements: (communityId: string) => `/communities/${communityId}/purchase-settlements`,
   communityPurchaseSettlementFailures: (communityId: string) => `/communities/${communityId}/purchase-settlements/fail`,
   communityPosts: (communityId: string) => `/communities/${communityId}/posts`,
+  communityPostComments: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/comments`,
   communityPreview: (communityId: string) => `/communities/${communityId}/preview`,
   communityJoinEligibility: (communityId: string) => `/communities/${communityId}/join-eligibility`,
   communitySongArtifactUploads: (communityId: string) => `/communities/${communityId}/song-artifact-uploads`,
@@ -1736,4 +1809,8 @@ export const apiRoutes = {
   communitySongArtifact: (communityId: string, songArtifactBundleId: string) => `/communities/${communityId}/song-artifacts/${songArtifactBundleId}`,
   job: (jobId: string) => `/jobs/${jobId}`,
   post: (postId: string) => `/posts/${postId}`,
+  comment: (commentId: string) => `/comments/${commentId}`,
+  commentReplies: (commentId: string) => `/comments/${commentId}/replies`,
+  commentContext: (commentId: string) => `/comments/${commentId}/context`,
+  commentVote: (commentId: string) => `/comments/${commentId}/vote`,
 } as const

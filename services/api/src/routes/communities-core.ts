@@ -18,12 +18,14 @@ import {
 } from "../lib/communities/community-service"
 import { badRequestError } from "../lib/errors"
 import { createPost, listCommunityPosts } from "../lib/posts/post-service"
+import { createComment, listPostComments } from "../lib/comments/comment-service"
 import {
   getCommunityCreationRouteContext,
   getCommunityRouteContext,
   requireJsonBody,
 } from "./communities-route-helpers"
 import type { CreatePostRequest } from "../types"
+import type { CreateCommentRequest } from "../lib/comments/comment-types"
 
 export function registerCommunityCoreRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.post("/", async (c) => {
@@ -195,6 +197,37 @@ export function registerCommunityCoreRoutes(communities: Hono<AuthenticatedEnv>)
       limit: c.req.query("limit") ?? null,
       cursor: c.req.query("cursor") ?? null,
       flairId: c.req.query("flair_id") ?? null,
+      communityRepository,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.post("/:communityId/posts/:postId/comments", async (c) => {
+    const { actor, communityId, communityRepository, userRepository } = getCommunityRouteContext(c)
+    const body = await requireJsonBody<CreateCommentRequest>(c, "Invalid comment create payload")
+    const result = await createComment({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      threadRootPostId: c.req.param("postId"),
+      body,
+      userRepository,
+      communityRepository,
+    })
+    return c.json(result, 201)
+  })
+
+  communities.get("/:communityId/posts/:postId/comments", async (c) => {
+    const { actor, communityId, communityRepository } = getCommunityRouteContext(c)
+    const result = await listPostComments({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      threadRootPostId: c.req.param("postId"),
+      locale: c.req.query("locale") ?? null,
+      sort: c.req.query("sort") ?? null,
+      cursor: c.req.query("cursor") ?? null,
+      limit: c.req.query("limit") ?? null,
       communityRepository,
     })
     return c.json(result, 200)

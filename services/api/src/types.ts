@@ -21,8 +21,17 @@ export type {
   CommunityPreview,
   CompleteNamespaceVerificationSessionRequest,
   CompleteVerificationSessionRequest,
+  Comment,
+  CommentContext,
+  CommentListItem,
+  CommentListResponse,
+  CommentThreadSnapshot,
+  CommentVoteResponse,
+  CreateModerationActionRequest,
+  CreateUserReportRequest,
   CreateCommunityRequest,
   CreateCommunityListingRequest,
+  CreateCommentRequest,
   CreateSongArtifactBundleRequest,
   CreateSongArtifactUploadRequest,
   CreatePostRequest,
@@ -34,6 +43,11 @@ export type {
   LinkedHandle,
   LocalizedPostResponse,
   MembershipGateSummary,
+  ModerationAction,
+  ModerationCase,
+  ModerationCaseDetail,
+  ModerationCaseListResponse,
+  ModerationSignal,
   NamespaceVerification,
   NamespaceVerificationAssertions,
   NamespaceVerificationCapabilities,
@@ -56,6 +70,7 @@ export type {
   UpdateCommunityMoneyPolicyRequest,
   UpdateCommunityPricingPolicyRequest,
   User,
+  UserReport,
   VerificationCapabilities,
   VerificationIntent,
   VerificationSession,
@@ -121,37 +136,56 @@ export type Env = {
   FILEBASE_S3_REGION?: string
   FILEBASE_MEDIA_BUCKET?: string
   IPFS_GATEWAY_URL?: string
+  SWARM_BEE_API_URL?: string
+  SWARM_POSTAGE_BATCH_ID?: string
+  SWARM_FEED_PRIVATE_KEY?: string
+  SWARM_FEED_TOPIC_NAMESPACE?: string
   ETHEREUM_RPC_URL?: string
   STORY_CHAIN_ID?: string
   STORY_RPC_URL?: string
+  STORY_RPC_FALLBACK_URLS?: string
+  COMMUNITY_JOB_WORKER_INTERVAL_MS?: string
+  COMMUNITY_JOB_WORKER_MAX_JOBS_PER_COMMUNITY?: string
+  COMMUNITY_JOB_WORKER_MAX_COMMUNITIES_PER_TICK?: string
   STORY_TX_WAIT_TIMEOUT_MS?: string
+  STORY_RUNTIME_SIGNER_MIN_BALANCE_WEI?: string
+  STORY_RUNTIME_SIGNER_TARGET_BALANCE_WEI?: string
   STORY_DIRECT_TX_MAX_FEE_PER_GAS_WEI?: string
   STORY_DIRECT_TX_MAX_PRIORITY_FEE_PER_GAS_WEI?: string
   STORY_DIRECT_TX_GAS_LIMIT_MAX?: string
   STORY_DIRECT_TX_GAS_ESTIMATE_BUFFER_BPS?: string
+  STORY_RUNTIME_PRIVATE_KEY?: string
+  STORY_OPERATOR_PRIVATE_KEY?: string
   STORY_OPERATOR_PKP_ADDRESS?: string
   STORY_OPERATOR_PKP_PUBLIC_KEY?: string
   STORY_OPERATOR_ACTION_CID_PUBLISH_ASSET_VERSION?: string
   LIT_CHIPOTLE_API_BASE_URL?: string
   LIT_CHIPOTLE_OPERATOR_API_KEY?: string
+  STORY_CDR_WRITER_PRIVATE_KEY?: string
   STORY_CDR_WRITER_PKP_ADDRESS?: string
   STORY_CDR_WRITER_PKP_PUBLIC_KEY?: string
   STORY_CDR_WRITER_ACTION_CID_ALLOCATE_WRITE?: string
   LIT_CHIPOTLE_CDR_WRITER_API_KEY?: string
+  STORY_ACCESS_CONTROLLER_PRIVATE_KEY?: string
   STORY_ACCESS_CONTROLLER_PKP_ADDRESS?: string
   STORY_ACCESS_CONTROLLER_PKP_PUBLIC_KEY?: string
   STORY_ACCESS_CONTROLLER_ACTION_CID_SIGN_ACCESS_PROOF?: string
   LIT_CHIPOTLE_ACCESS_CONTROLLER_API_KEY?: string
+  MUSIC_PURCHASE_STORY_SETTLEMENT_PRIVATE_KEY?: string
   MUSIC_PURCHASE_STORY_SETTLEMENT_PKP_ADDRESS?: string
+  MUSIC_PURCHASE_STORY_SETTLEMENT_PKP_ID?: string
   MUSIC_PURCHASE_STORY_SETTLEMENT_PKP_PUBLIC_KEY?: string
   LIT_CHIPOTLE_STORY_SETTLEMENT_API_KEY?: string
   STORY_SETTLEMENT_ACTION_CID_SETTLE?: string
   STORY_SETTLEMENT_ACTION_CID_ROYALTY_SYNC?: string
   STORY_CONTRACT_OWNER_PRIVATE_KEY?: string
+  STORY_RUNTIME_FUNDER_PRIVATE_KEY?: string
   OPENROUTER_API_KEY?: string
   OPENROUTER_BASE_URL?: string
   OPENROUTER_MODEL?: string
   OPENROUTER_TIMEOUT_MS?: string
+  OPENROUTER_TRANSLATION_MODEL?: string
+  OPENROUTER_TRANSLATION_TIMEOUT_MS?: string
   OPENAI_API_KEY?: string
   OPENAI_BASE_URL?: string
   OPENAI_MODERATION_MODEL?: string

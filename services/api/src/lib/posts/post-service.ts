@@ -9,9 +9,11 @@ import {
   getPostById,
   insertPost,
   listPublishedLocalizedPosts,
-  toLocalizedPostResponse,
   upsertPostVote,
 } from "./community-post-store"
+import { getLatestThreadSnapshotForRead } from "../comments/community-comment-store"
+import { buildLocalizedPostResponse } from "../localization/post-localization-service"
+import { CONTENT_TRANSLATION_PREWARM_LOCALES, sameLanguageLocale } from "../localization/content-locale"
 import {
   consumeSongPostBundle,
   resolveSongPostBundle,
@@ -22,6 +24,7 @@ import {
   getCommunityMembershipState,
   type CommunityMembershipRow,
 } from "../communities/community-membership-store"
+import { enqueueCommunityJob } from "../communities/community-job-store"
 import { analysisBlocked, eligibilityFailed, notFoundError, verificationRequired } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import type { CreatePostRequest, Env, LocalizedPostResponse, Post } from "../../types"
@@ -29,6 +32,69 @@ import type { CreatePostRequest, Env, LocalizedPostResponse, Post } from "../../
 type CommunityFeedResponse = {
   items: LocalizedPostResponse[]
   next_cursor: string | null
+}
+
+async function enqueuePostTranslationJob(input: {
+  client: Client
+  communityId: string
+  postId: string
+  locale: string
+  createdAt: string
+}): Promise<void> {
+  await enqueueCommunityJob({
+    client: input.client,
+    communityId: input.communityId,
+    jobType: "post_translation_materialize",
+    subjectType: "post_translation",
+    subjectId: `${input.postId}:${input.locale}`,
+    payloadJson: JSON.stringify({
+      post_id: input.postId,
+      locale: input.locale,
+    }),
+    createdAt: input.createdAt,
+  })
+}
+
+async function enqueuePostTranslationPrewarmJobs(input: {
+  client: Client
+  communityId: string
+  post: Post
+  createdAt: string
+}): Promise<void> {
+  const translationPolicy = input.post.translation_policy ?? "none"
+  if (translationPolicy !== "machine_allowed" && translationPolicy !== "hybrid") {
+    return
+  }
+
+  for (const locale of CONTENT_TRANSLATION_PREWARM_LOCALES) {
+    if (sameLanguageLocale(input.post.source_language, locale)) {
+      continue
+    }
+    await enqueuePostTranslationJob({
+      client: input.client,
+      communityId: input.communityId,
+      postId: input.post.post_id,
+      locale,
+      createdAt: input.createdAt,
+    })
+  }
+}
+
+async function enqueuePostTranslationOnReadIfNeeded(input: {
+  client: Client
+  communityId: string
+  response: LocalizedPostResponse
+}): Promise<void> {
+  if (input.response.translation_state !== "pending") {
+    return
+  }
+  await enqueuePostTranslationJob({
+    client: input.client,
+    communityId: input.communityId,
+    postId: input.response.post.post_id,
+    locale: input.response.resolved_locale,
+    createdAt: nowIso(),
+  })
 }
 
 function parseFeedLimit(limit: string | null | undefined): number {
@@ -199,6 +265,13 @@ export async function createPost(input: {
       analysisOverride,
     })
 
+    await enqueuePostTranslationPrewarmJobs({
+      client: db.client,
+      communityId: input.communityId,
+      post,
+      createdAt,
+    })
+
     await input.communityRepository.recordCommunityPostProjection({
       communityId: input.communityId,
       sourcePostId: post.post_id,
@@ -293,7 +366,19 @@ export async function getPost(input: {
     if (post.status !== "published" && !canReadNonPublishedPost(post, membership, input.userId)) {
       throw notFoundError("Post not found")
     }
-    return toLocalizedPostResponse(post, input.locale ?? undefined)
+    const threadSnapshot = await getLatestThreadSnapshotForRead(db.client, post.post_id)
+    const response = await buildLocalizedPostResponse({
+      executor: db.client,
+      post,
+      locale: input.locale ?? undefined,
+      threadSnapshot,
+    })
+    await enqueuePostTranslationOnReadIfNeeded({
+      client: db.client,
+      communityId: projection.community_id,
+      response,
+    })
+    return response
   } finally {
     db.close()
   }
@@ -322,13 +407,31 @@ export async function listCommunityPosts(input: {
       communityId: input.communityId,
       viewerUserId: input.userId,
       limit: parseFeedLimit(input.limit),
-      locale: input.locale ?? undefined,
       flairId: input.flairId ?? null,
       cursor: parseFeedCursor(input.cursor),
     })
 
+    const items = await Promise.all(feed.items.map((item) => buildLocalizedPostResponse({
+      executor: db.client,
+      post: item.post,
+      locale: input.locale ?? undefined,
+      metrics: {
+        upvote_count: item.upvote_count,
+        downvote_count: item.downvote_count,
+        like_count: item.like_count,
+        viewer_vote: item.viewer_vote,
+      },
+    })))
+    for (const item of items) {
+      await enqueuePostTranslationOnReadIfNeeded({
+        client: db.client,
+        communityId: input.communityId,
+        response: item,
+      })
+    }
+
     return {
-      items: feed.items,
+      items,
       next_cursor: formatFeedCursor(feed.nextCursor),
     }
   } finally {

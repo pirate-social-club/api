@@ -1,10 +1,12 @@
+import type { DbExecutor } from "../db-helpers"
 import type { Client } from "../sql-client"
 import { badRequestError, internalError } from "../errors"
 import { executeFirst } from "../db-helpers"
 import { makeId } from "../helpers"
+import { detectSourceLanguageFromText } from "../localization/content-locale"
 import { resolveStubAnalysisOutcome } from "./post-analysis"
 import { numberOrNull, requiredNumber, requiredString, rowValue, stringOrNull } from "../sql-row"
-import type { CreatePostRequest, LocalizedPostResponse, Post } from "../../types"
+import type { CreatePostRequest, Post } from "../../types"
 
 type PostRow = {
   post_id: string
@@ -94,7 +96,7 @@ function toPostRow(row: unknown): PostRow {
     analysis_result_ref: stringOrNull(rowValue(row, "analysis_result_ref")),
     content_safety_state: requiredString(row, "content_safety_state") as Post["content_safety_state"],
     age_gate_policy: requiredString(row, "age_gate_policy") as Post["age_gate_policy"],
-    idempotency_key: requiredString(row, "idempotency_key"),
+    idempotency_key: stringOrNull(rowValue(row, "idempotency_key")) ?? "",
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
   }
@@ -187,7 +189,12 @@ export async function insertPost(input: {
   const contentSafetyState = input.analysisOverride?.content_safety_state ?? stubAnalysis.content_safety_state
   const status = input.analysisOverride?.status ?? stubAnalysis.status
   const ageGatePolicy = input.analysisOverride?.age_gate_policy ?? "none"
-  const sourceLanguage = input.body.body || input.body.title || input.body.caption || input.body.lyrics ? "en" : null
+  const sourceLanguage = detectSourceLanguageFromText([
+    input.body.title,
+    input.body.body,
+    input.body.caption,
+    input.body.lyrics,
+  ])
 
   await input.client.execute({
     sql: `
@@ -245,7 +252,7 @@ export async function insertPost(input: {
   return created
 }
 
-export async function getPostById(client: Client, postId: string): Promise<Post | null> {
+export async function getPostById(client: DbExecutor, postId: string): Promise<Post | null> {
   const row = await executeFirst(
     client,
     {
@@ -271,10 +278,18 @@ export async function listPublishedLocalizedPosts(input: {
   communityId: string
   viewerUserId: string
   limit: number
-  locale?: string
   flairId?: string | null
   cursor?: { createdAt: string; postId: string } | null
-}): Promise<{ items: LocalizedPostResponse[]; nextCursor: { createdAt: string; postId: string } | null }> {
+}): Promise<{
+  items: Array<{
+    post: Post
+    upvote_count: number
+    downvote_count: number
+    like_count: number
+    viewer_vote: -1 | 1 | null
+  }>
+  nextCursor: { createdAt: string; postId: string } | null
+}> {
   const result = await input.client.execute({
     sql: `
       SELECT post_id, community_id, author_user_id, identity_mode, anonymous_scope, anonymous_label,
@@ -332,9 +347,8 @@ export async function listPublishedLocalizedPosts(input: {
   const rows = result.rows
   const pageRows = rows.slice(0, input.limit)
   const items = pageRows.map((row) => {
-    const post = serializePost(toPostRow(row))
     return {
-      ...toLocalizedPostResponse(post, input.locale),
+      post: serializePost(toPostRow(row)),
       upvote_count: requiredNumber(row, "upvote_count"),
       downvote_count: requiredNumber(row, "downvote_count"),
       like_count: requiredNumber(row, "like_count"),
@@ -378,23 +392,6 @@ export async function upsertPostVote(input: {
   return {
     post_id: input.postId,
     value: input.value,
-  }
-}
-
-export function toLocalizedPostResponse(post: Post, locale?: string): LocalizedPostResponse {
-  return {
-    post,
-    label: null,
-    upvote_count: 0,
-    downvote_count: 0,
-    like_count: 0,
-    viewer_vote: null,
-    viewer_reaction_kinds: [],
-    resolved_locale: locale?.trim() || "en",
-    translation_state: "same_language",
-    machine_translated: false,
-    source_hash: post.post_id,
-    translated_body: null,
   }
 }
 
