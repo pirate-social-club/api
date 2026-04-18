@@ -174,6 +174,7 @@ async function insertPostTranslation(input: {
   communityId: string
   postId: string
   locale: string
+  translatedTitle?: string | null
   translatedBody: string
   translatedCaption?: string | null
 }): Promise<void> {
@@ -192,12 +193,12 @@ async function insertPostTranslation(input: {
       sql: `
         INSERT INTO content_translations (
           content_translation_id, content_type, content_id, locale, source_hash,
-          source_language, outcome, translated_body, translated_caption, provider,
+          source_language, outcome, translated_title, translated_body, translated_caption, provider,
           provider_model, provider_result_json, created_at, updated_at
         ) VALUES (
           ?1, 'post', ?2, ?3, ?4,
-          ?5, 'translated', ?6, ?7, 'openrouter',
-          'google/gemini-2.5-flash-lite-preview-09-2025', NULL, ?8, ?8
+          ?5, 'translated', ?6, ?7, ?8, 'openrouter',
+          'google/gemini-2.5-flash-lite-preview-09-2025', NULL, ?9, ?9
         )
       `,
       args: [
@@ -206,6 +207,7 @@ async function insertPostTranslation(input: {
         input.locale,
         sourceHash,
         post.source_language ?? "en",
+        input.translatedTitle ?? null,
         input.translatedBody,
         input.translatedCaption ?? null,
         now,
@@ -336,6 +338,7 @@ describe("posts routes", () => {
       communityId: community.communityId,
       postId: createdPostBody.post_id,
       locale: "es",
+      translatedTitle: "Cobertura enfocada de rutas",
       translatedBody: "Prueba dedicada de la ruta de publicaciones.",
     })
 
@@ -360,6 +363,7 @@ describe("posts routes", () => {
       resolved_locale: string
       translation_state: string
       machine_translated: boolean
+      translated_title: string | null
       translated_body: string | null
     }
     expect(fetchedPostBody.post.post_id).toBe(createdPostBody.post_id)
@@ -371,6 +375,7 @@ describe("posts routes", () => {
     expect(fetchedPostBody.resolved_locale).toBe("es")
     expect(fetchedPostBody.translation_state).toBe("ready")
     expect(fetchedPostBody.machine_translated).toBe(true)
+    expect(fetchedPostBody.translated_title).toBe("Cobertura enfocada de rutas")
     expect(fetchedPostBody.translated_body).toBe("Prueba dedicada de la ruta de publicaciones.")
   })
 

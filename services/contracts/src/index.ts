@@ -294,7 +294,7 @@ export type Community = {
   agent_owner_active_limit?: number | null;
   accepted_agent_ownership_providers: Array<AgentOwnershipProvider>;
   civic_scale_tier?: "club" | "village" | "town" | "city" | "state";
-  donation_policy_mode: "none" | "optional_creator_sidecar" | "fundraiser_default";
+  donation_policy_mode: "none" | "optional_creator_sidecar";
   donation_partner_status: "unconfigured" | "active" | "paused";
   donation_partner_id?: string | null;
   donation_partner?: DonationPartnerSummary | null;
@@ -987,9 +987,32 @@ export type LocalizedPostResponse = {
   resolved_locale: string;
   translation_state: "ready" | "pending" | "same_language" | "policy_blocked";
   machine_translated: boolean;
+  translated_title?: string | null;
   translated_body?: string | null;
   translated_caption?: string | null;
   source_hash: string;
+};
+
+export type HomeFeedSort = "best" | "new" | "top";
+
+export type HomeFeedCommunitySummary = {
+  community_id: string;
+  display_name: string;
+  route_slug?: string | null;
+  avatar_ref?: string | null;
+  member_count?: number | null;
+  updated_at: string;
+};
+
+export type HomeFeedItem = {
+  community: HomeFeedCommunitySummary;
+  post: LocalizedPostResponse;
+};
+
+export type HomeFeedResponse = {
+  items: Array<HomeFeedItem>;
+  top_communities: Array<HomeFeedCommunitySummary>;
+  next_cursor: string | null;
 };
 
 export type MembershipGateSummary = {
@@ -1424,7 +1447,7 @@ type CreateCommunityContentAuthenticityPolicyInput = {
 };
 
 type CreateCommunityDonationPolicyInput = {
-  donation_policy_mode: "none" | "optional_creator_sidecar" | "fundraiser_default";
+  donation_policy_mode: "none" | "optional_creator_sidecar";
   donation_partner_id?: string | null;
 };
 
@@ -1947,6 +1970,7 @@ export const apiRoutes = {
   namespaceVerificationSessionComplete: (namespaceVerificationSessionId: string) => `/namespace-verification-sessions/${namespaceVerificationSessionId}/complete`,
   namespaceVerification: (namespaceVerificationId: string) => `/namespace-verifications/${namespaceVerificationId}`,
   communities: "/communities",
+  homeFeed: "/feed/home",
   community: (communityId: string) => `/communities/${communityId}`,
   communityMoneyPolicy: (communityId: string) => `/communities/${communityId}/money-policy`,
   communityPricingPolicy: (communityId: string) => `/communities/${communityId}/pricing-policy`,

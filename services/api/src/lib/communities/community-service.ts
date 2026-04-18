@@ -30,6 +30,7 @@ export type { ProvisioningRetryAction } from "./community-create-service"
 export {
   getCommunity,
   getCommunityPreview,
+  getPublicCommunityPreview,
   getJoinEligibility,
   joinCommunity,
   getJob,

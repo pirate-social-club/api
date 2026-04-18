@@ -14,6 +14,7 @@ export type ContentTranslationRecord = {
   source_hash: string
   source_language: string | null
   outcome: ContentTranslationOutcome
+  translated_title: string | null
   translated_body: string | null
   translated_caption: string | null
   provider: string | null
@@ -32,6 +33,7 @@ function toContentTranslationRecord(row: unknown): ContentTranslationRecord {
     source_hash: requiredString(row, "source_hash"),
     source_language: stringOrNull(rowValue(row, "source_language")),
     outcome: requiredString(row, "outcome") as ContentTranslationOutcome,
+    translated_title: stringOrNull(rowValue(row, "translated_title")),
     translated_body: stringOrNull(rowValue(row, "translated_body")),
     translated_caption: stringOrNull(rowValue(row, "translated_caption")),
     provider: stringOrNull(rowValue(row, "provider")),
@@ -52,7 +54,7 @@ export async function getContentTranslation(input: {
   const row = await executeFirst(input.executor, {
     sql: `
       SELECT content_translation_id, content_type, content_id, locale, source_hash,
-             source_language, outcome, translated_body, translated_caption, provider,
+             source_language, outcome, translated_title, translated_body, translated_caption, provider,
              provider_model, provider_result_json, created_at, updated_at
       FROM content_translations
       WHERE content_type = ?1
@@ -75,6 +77,7 @@ export async function upsertContentTranslation(input: {
   sourceHash: string
   sourceLanguage?: string | null
   outcome: ContentTranslationOutcome
+  translatedTitle?: string | null
   translatedBody?: string | null
   translatedCaption?: string | null
   provider?: string | null
@@ -86,16 +89,17 @@ export async function upsertContentTranslation(input: {
     sql: `
       INSERT INTO content_translations (
         content_translation_id, content_type, content_id, locale, source_hash,
-        source_language, outcome, translated_body, translated_caption, provider,
+        source_language, outcome, translated_title, translated_body, translated_caption, provider,
         provider_model, provider_result_json, created_at, updated_at
       ) VALUES (
         ?1, ?2, ?3, ?4, ?5,
-        ?6, ?7, ?8, ?9, ?10,
-        ?11, ?12, ?13, ?13
+        ?6, ?7, ?8, ?9, ?10, ?11,
+        ?12, ?13, ?14, ?14
       )
       ON CONFLICT(content_type, content_id, locale, source_hash) DO UPDATE SET
         source_language = excluded.source_language,
         outcome = excluded.outcome,
+        translated_title = excluded.translated_title,
         translated_body = excluded.translated_body,
         translated_caption = excluded.translated_caption,
         provider = excluded.provider,
@@ -111,6 +115,7 @@ export async function upsertContentTranslation(input: {
       input.sourceHash,
       input.sourceLanguage ?? null,
       input.outcome,
+      input.translatedTitle ?? null,
       input.translatedBody ?? null,
       input.translatedCaption ?? null,
       input.provider ?? null,

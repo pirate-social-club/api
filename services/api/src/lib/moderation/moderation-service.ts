@@ -469,8 +469,9 @@ export async function resolveModerationCaseWithAction(input: {
 
     const now = nowIso()
     const tx = await db.client.transaction("write")
+    let mutation: Awaited<ReturnType<typeof applyModerationAction>> | null = null
     try {
-      const mutation = await applyModerationAction({
+      mutation = await applyModerationAction({
         caseRow,
         dbClient: tx,
         body: input.body,
@@ -500,6 +501,14 @@ export async function resolveModerationCaseWithAction(input: {
       throw error
     } finally {
       tx.close()
+    }
+
+    if (caseRow.post_id && mutation?.nextStatus) {
+      await input.communityRepository.updateCommunityPostProjectionStatus({
+        postId: caseRow.post_id,
+        status: mutation.nextStatus as "draft" | "published" | "hidden" | "removed" | "deleted",
+        updatedAt: now,
+      })
     }
 
     const updatedCase = await getModerationCaseById({

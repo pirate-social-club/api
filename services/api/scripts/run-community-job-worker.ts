@@ -1,5 +1,5 @@
 import { getCommunityRepository } from "../src/lib/communities/db-community-repository"
-import { runCommunityJobWorkerLoop } from "../src/lib/communities/community-job-runner"
+import { processAvailableCommunityJobs } from "../src/lib/communities/community-job-runner"
 import type { Env } from "../src/types"
 import { readDevVarsFromCwd } from "./_lib/dev-vars"
 import {
@@ -7,6 +7,7 @@ import {
   ensureLocalDevStorage,
   resolveLocalDevStorage,
 } from "./_lib/local-dev-storage"
+import { readdir } from "node:fs/promises"
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
   const parsed = Number(value ?? "")
@@ -56,20 +57,35 @@ async function main(): Promise<void> {
     ].join("\n"),
   )
 
-  await runCommunityJobWorkerLoop({
-    env,
-    communityRepository: getCommunityRepository(env),
-    pollIntervalMs,
-    maxJobsPerCommunity,
-    maxCommunities: maxCommunitiesPerTick,
-    stopWhenIdle,
-    signal: abortController.signal,
-    onTick(summary) {
-      if (summary.processed_jobs === 0) {
-        console.log("community job worker tick: idle")
+  const communityRepository = getCommunityRepository(env)
+
+  while (!abortController.signal.aborted) {
+    const localCommunityIds = await discoverLocalCommunityIds(localDevStorage.communityDbRoot)
+    let activeCommunityIds: string[] = []
+    try {
+      activeCommunityIds = (await communityRepository.listActiveCommunities()).map((community) => community.community_id)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.warn(`community job worker: failed to list active communities (${message}); falling back to local db scan`)
+    }
+
+    const communityIds = [...new Set([...activeCommunityIds, ...localCommunityIds])]
+      .slice(0, maxCommunitiesPerTick)
+
+    const summary = await processAvailableCommunityJobs({
+      env,
+      communityRepository,
+      communityIds,
+      maxCommunities: maxCommunitiesPerTick,
+      maxJobsPerCommunity,
+    })
+
+    if (summary.processed_jobs === 0) {
+      console.log("community job worker tick: idle")
+      if (stopWhenIdle) {
         return
       }
-
+    } else {
       console.log(
         `community job worker tick: processed ${summary.processed_jobs} jobs across ${summary.communities.length} communities`,
       )
@@ -78,8 +94,38 @@ async function main(): Promise<void> {
           `  ${community.community_id}: ${community.processed_jobs} (${community.jobs.map((job) => job.job_type).join(", ")})`,
         )
       }
-    },
-  })
+    }
+
+    if (abortController.signal.aborted) {
+      return
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs))
+  }
+}
+
+async function discoverLocalCommunityIds(rootDir: string): Promise<string[]> {
+  const entries = await readdir(rootDir, { withFileTypes: true }).catch(() => [])
+  const communityIds = new Set<string>()
+
+  for (const entry of entries) {
+    if (!entry.isFile()) {
+      continue
+    }
+
+    const communityDbMatch = /^community-(cmt_[^.]+)\.db$/u.exec(entry.name)
+    if (communityDbMatch?.[1]) {
+      communityIds.add(communityDbMatch[1])
+      continue
+    }
+
+    const sqliteMatch = /^(cmt_[^.]+)\.sqlite$/u.exec(entry.name)
+    if (sqliteMatch?.[1]) {
+      communityIds.add(sqliteMatch[1])
+    }
+  }
+
+  return [...communityIds]
 }
 
 await main()

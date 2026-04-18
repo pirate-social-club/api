@@ -4,9 +4,13 @@ import auth from "./routes/auth"
 import communityMedia from "./routes/community-media"
 import comments from "./routes/comments"
 import communities from "./routes/communities"
+import feed from "./routes/feed"
 import jobs from "./routes/jobs"
 import onboarding from "./routes/onboarding"
 import posts from "./routes/posts"
+import publicComments from "./routes/public-comments"
+import publicCommunities from "./routes/public-communities"
+import publicPosts from "./routes/public-posts"
 import publicProfiles from "./routes/public-profiles"
 import profileMedia from "./routes/profile-media"
 import profiles from "./routes/profiles"
@@ -31,8 +35,12 @@ app.route("/auth", auth)
 app.route("/community-media", communityMedia)
 app.route("/comments", comments)
 app.route("/communities", communities)
+app.route("/feed", feed)
 app.route("/jobs", jobs)
 app.route("/posts", posts)
+app.route("/public-comments", publicComments)
+app.route("/public-communities", publicCommunities)
+app.route("/public-posts", publicPosts)
 app.route("/public-profiles", publicProfiles)
 app.route("/profile-media", profileMedia)
 app.route("/users", users)

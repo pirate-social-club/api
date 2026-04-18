@@ -13,7 +13,8 @@ export type PostReadMetrics = {
 
 function hasTranslatablePostContent(post: Post): boolean {
   return Boolean(
-    String(post.body ?? "").trim()
+    String(post.title ?? "").trim()
+    || String(post.body ?? "").trim()
     || String(post.caption ?? "").trim(),
   )
 }
@@ -40,6 +41,7 @@ export async function buildLocalizedPostResponse(input: {
     resolved_locale: resolvedLocale,
     translation_state: "same_language",
     machine_translated: false,
+    translated_title: null,
     translated_body: null,
     translated_caption: null,
     source_hash: sourceHash,
@@ -84,6 +86,7 @@ export async function buildLocalizedPostResponse(input: {
     ...response,
     translation_state: "ready",
     machine_translated: true,
+    translated_title: cached.translated_title,
     translated_body: cached.translated_body,
     translated_caption: cached.translated_caption,
   }

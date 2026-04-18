@@ -285,7 +285,22 @@ export type CommunityPostProjectionRow = {
   status: Post["status"]
   source_created_at: string
   projected_payload_json: string
+  upvote_count: number
+  downvote_count: number
+  comment_count: number
+  like_count: number
   projection_version: number
+  created_at: string
+  updated_at: string
+}
+
+export type CommunityMembershipProjectionRow = {
+  projection_id: string
+  community_id: string
+  user_id: string
+  membership_state: "not_member" | "pending_request" | "member" | "banned"
+  role_summary_json: string | null
+  source_updated_at: string
   created_at: string
   updated_at: string
 }
@@ -625,7 +640,24 @@ export function toCommunityPostProjectionRow(row: unknown): CommunityPostProject
     status: requiredString(row, "status") as CommunityPostProjectionRow["status"],
     source_created_at: requiredString(row, "source_created_at"),
     projected_payload_json: requiredString(row, "projected_payload_json"),
+    upvote_count: numberOrNull(rowValue(row, "upvote_count")) ?? 0,
+    downvote_count: numberOrNull(rowValue(row, "downvote_count")) ?? 0,
+    comment_count: numberOrNull(rowValue(row, "comment_count")) ?? 0,
+    like_count: numberOrNull(rowValue(row, "like_count")) ?? 0,
     projection_version: requiredNumber(row, "projection_version"),
+    created_at: requiredString(row, "created_at"),
+    updated_at: requiredString(row, "updated_at"),
+  }
+}
+
+export function toCommunityMembershipProjectionRow(row: unknown): CommunityMembershipProjectionRow {
+  return {
+    projection_id: requiredString(row, "projection_id"),
+    community_id: requiredString(row, "community_id"),
+    user_id: requiredString(row, "user_id"),
+    membership_state: requiredString(row, "membership_state") as CommunityMembershipProjectionRow["membership_state"],
+    role_summary_json: stringOrNull(rowValue(row, "role_summary_json")),
+    source_updated_at: requiredString(row, "source_updated_at"),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
   }

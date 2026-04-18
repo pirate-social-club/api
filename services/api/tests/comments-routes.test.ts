@@ -666,6 +666,98 @@ describe("comments routes", () => {
     expect(translationJobs.some((job) => job.subject_id === `${replyBody.comment_id}:nl`)).toBe(true)
   })
 
+  test("public comment read endpoints return localized projections without auth", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "comments-routes-public-reader-creator")
+    const community = await createCommunity(ctx.env, creator.accessToken, "Public Comment Reader Club")
+
+    const member = await exchangeJwt(ctx.env, "comments-routes-public-reader-member")
+    await completeUniqueHumanVerification(ctx.env, member.accessToken)
+    await addCommunityMember(ctx.communityDbRoot, community.communityId, member.userId)
+
+    const createdPost = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Public comment thread",
+        body: "Body",
+        idempotency_key: "comments-routes-public-thread-1",
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(createdPost.status).toBe(201)
+    const postBody = await json(createdPost) as { post_id: string }
+
+    const topLevelComment = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/posts/${postBody.post_id}/comments`,
+      {
+        body: "Hello from public comments",
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(topLevelComment.status).toBe(201)
+    const topLevelBody = await json(topLevelComment) as { comment_id: string }
+
+    const reply = await requestJson(
+      `http://pirate.test/comments/${topLevelBody.comment_id}/replies`,
+      {
+        body: "Reply from public comments",
+      },
+      ctx.env,
+      member.accessToken,
+    )
+    expect(reply.status).toBe(201)
+    const replyBody = await json(reply) as { comment_id: string }
+
+    await insertCommentTranslation({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: community.communityId,
+      commentId: topLevelBody.comment_id,
+      locale: "zh-Hans",
+      translatedBody: "来自 Pirate 的公开评论",
+    })
+
+    const publicTopLevel = await app.request(
+      `http://pirate.test/public-comments/posts/${postBody.post_id}/comments?locale=zh-Hans&limit=10`,
+      {},
+      ctx.env,
+    )
+    expect(publicTopLevel.status).toBe(200)
+    const publicTopLevelBody = await json(publicTopLevel) as {
+      items: Array<{
+        comment: { comment_id: string }
+        resolved_locale: string
+        translation_state: string
+        translated_body: string | null
+      }>
+    }
+    expect(publicTopLevelBody.items[0]?.comment.comment_id).toBe(topLevelBody.comment_id)
+    expect(publicTopLevelBody.items[0]?.resolved_locale).toBe("zh-Hans")
+    expect(publicTopLevelBody.items[0]?.translation_state).toBe("ready")
+    expect(publicTopLevelBody.items[0]?.translated_body).toBe("来自 Pirate 的公开评论")
+
+    const publicReplies = await app.request(
+      `http://pirate.test/public-comments/${topLevelBody.comment_id}/replies?locale=zh-Hans&limit=10`,
+      {},
+      ctx.env,
+    )
+    expect(publicReplies.status).toBe(200)
+    const publicRepliesBody = await json(publicReplies) as {
+      items: Array<{
+        comment: { comment_id: string }
+        resolved_locale: string
+        translation_state: string
+      }>
+    }
+    expect(publicRepliesBody.items[0]?.comment.comment_id).toBe(replyBody.comment_id)
+    expect(publicRepliesBody.items[0]?.resolved_locale).toBe("zh-Hans")
+    expect(publicRepliesBody.items[0]?.translation_state).toBe("pending")
+  })
+
   test("DELETE /comments/:commentId tombstones the comment and keeps it in context", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup

@@ -876,6 +876,7 @@ describe("community-job-runner", () => {
                 source_language: "en",
                 target_locale: "es",
                 outcome: "translated",
+                translated_title: "Titulo traducido",
                 translated_body: "Cuerpo traducido",
                 translated_caption: null,
               }),
@@ -927,8 +928,125 @@ describe("community-job-runner", () => {
         sourceHash,
       })
       expect(translation?.outcome).toBe("translated")
+      expect(translation?.translated_title).toBe("Titulo traducido")
       expect(translation?.translated_body).toBe("Cuerpo traducido")
       expect(translation?.provider).toBe("openrouter")
+    } finally {
+      verifyDb.close()
+    }
+  })
+
+  test("refreshes stale cached post translations when translated titles are missing", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-job-translation-refresh-"))
+    cleanupPaths.push(rootDir)
+
+    const databasePath = join(rootDir, "community.db")
+    const communityId = "cmt_job_translation_refresh"
+    const env: Env = {
+      LOCAL_COMMUNITY_DB_ROOT: rootDir,
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_TRANSLATION_MODEL: "google/gemini-2.5-flash-lite-preview-09-2025",
+    }
+    const repo = buildCommunityRepository(databasePath, communityId)
+    const { postId } = await seedCommunityState({
+      env,
+      repo,
+      communityId,
+      memberUserIds: ["usr_owner"],
+    })
+
+    const setupDb = await openCommunityDb(env, repo, communityId)
+    try {
+      await setupDb.client.execute({
+        sql: `
+          UPDATE posts
+          SET translation_policy = 'machine_allowed'
+          WHERE post_id = ?1
+        `,
+        args: [postId],
+      })
+
+      const post = await getPostById(setupDb.client, postId)
+      const sourceHash = await computePostSourceHash(post!)
+      const now = new Date().toISOString()
+      await setupDb.client.execute({
+        sql: `
+          INSERT INTO content_translations (
+            content_translation_id, content_type, content_id, locale, source_hash,
+            source_language, outcome, translated_title, translated_body, translated_caption, provider,
+            provider_model, provider_result_json, created_at, updated_at
+          ) VALUES (
+            ?1, 'post', ?2, 'es', ?3,
+            'en', 'translated', NULL, 'Cuerpo traducido viejo', NULL, 'openrouter',
+            'google/gemini-2.5-flash-lite-preview-09-2025', NULL, ?4, ?4
+          )
+        `,
+        args: [`ctr_${postId}_es`, postId, sourceHash, now],
+      })
+
+      await enqueueCommunityJob({
+        client: setupDb.client,
+        communityId,
+        jobType: "post_translation_materialize",
+        subjectType: "post_translation",
+        subjectId: `${postId}:es`,
+        payloadJson: JSON.stringify({
+          post_id: postId,
+          locale: "es",
+        }),
+        createdAt: now,
+      })
+    } finally {
+      setupDb.close()
+    }
+
+    let callCount = 0
+    globalThis.fetch = (async () => {
+      callCount += 1
+      return new Response(JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                source_language: "en",
+                target_locale: "es",
+                outcome: "translated",
+                translated_title: "Titulo actualizado",
+                translated_body: "Cuerpo traducido actualizado",
+                translated_caption: null,
+              }),
+            },
+          },
+        ],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }) as typeof fetch
+
+    const processed = await processNextCommunityJob({
+      env,
+      communityId,
+      communityRepository: repo,
+    })
+    expect(processed?.job_type).toBe("post_translation_materialize")
+    expect(processed?.status).toBe("succeeded")
+    expect(processed?.result_ref).toBe("es:translated")
+    expect(callCount).toBe(1)
+
+    const verifyDb = await openCommunityDb(env, repo, communityId)
+    try {
+      const post = await getPostById(verifyDb.client, postId)
+      const sourceHash = await computePostSourceHash(post!)
+      const translation = await getContentTranslation({
+        executor: verifyDb.client,
+        contentType: "post",
+        contentId: postId,
+        locale: "es",
+        sourceHash,
+      })
+      expect(translation?.translated_title).toBe("Titulo actualizado")
+      expect(translation?.translated_body).toBe("Cuerpo traducido actualizado")
     } finally {
       verifyDb.close()
     }
@@ -974,6 +1092,7 @@ describe("community-job-runner", () => {
                 source_language: "en",
                 target_locale: "es",
                 outcome: "translated",
+                translated_title: null,
                 translated_body: "Comentario traducido",
                 translated_caption: null,
               }),

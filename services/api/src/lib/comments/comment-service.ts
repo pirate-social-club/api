@@ -14,7 +14,7 @@ import type { CommunityRepository } from "../communities/db-community-repository
 import { badRequestError, eligibilityFailed, notFoundError, verificationRequired } from "../errors"
 import { nowIso } from "../helpers"
 import type { UserRepository } from "../auth/repositories"
-import { getPostById } from "../posts/community-post-store"
+import { getPostById, getPostProjectionMetrics } from "../posts/community-post-store"
 import {
   assertCreateCommentRequest,
   getCommentById,
@@ -47,6 +47,26 @@ async function requireVerifiedHuman(userRepository: UserRepository, userId: stri
   if (user.verification_capabilities.unique_human.state !== "verified") {
     throw verificationRequired("unique_human verification is required")
   }
+}
+
+async function syncThreadRootPostProjectionMetrics(input: {
+  client: Client
+  communityRepository: CommunityRepository
+  threadRootPostId: string
+  updatedAt: string
+}): Promise<void> {
+  if (typeof input.communityRepository.updateCommunityPostProjectionMetrics !== "function") {
+    return
+  }
+  const metrics = await getPostProjectionMetrics(input.client, input.threadRootPostId)
+  await input.communityRepository.updateCommunityPostProjectionMetrics({
+    postId: input.threadRootPostId,
+    upvoteCount: metrics.upvoteCount,
+    downvoteCount: metrics.downvoteCount,
+    commentCount: metrics.commentCount,
+    likeCount: metrics.likeCount,
+    updatedAt: input.updatedAt,
+  })
 }
 
 function resolveAnonymousScope(input: {
@@ -321,6 +341,13 @@ export async function createComment(input: {
         })
       }
 
+      await syncThreadRootPostProjectionMetrics({
+        client: db.client,
+        communityRepository: input.communityRepository,
+        threadRootPostId: createdComment.thread_root_post_id,
+        updatedAt: createdAt,
+      })
+
       return createdComment
     } catch (error) {
       try {
@@ -450,6 +477,57 @@ export async function listPostComments(input: {
   }
 }
 
+export async function listPublicPostComments(input: {
+  env: Env
+  threadRootPostId: string
+  locale?: string | null
+  sort?: string | null
+  cursor?: string | null
+  limit?: string | null
+  communityRepository: CommunityRepository
+}): Promise<CommentListResponse> {
+  const projection = await input.communityRepository.getCommunityPostProjectionByPostId(input.threadRootPostId)
+  if (!projection) {
+    throw notFoundError("Post not found")
+  }
+
+  const community = await input.communityRepository.getCommunityById(projection.community_id)
+  if (!community || community.provisioning_state !== "active" || community.status !== "active") {
+    throw notFoundError("Community not found")
+  }
+
+  const db = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
+  try {
+    const post = await getPostById(db.client, input.threadRootPostId)
+    if (!post || post.community_id !== projection.community_id || post.status !== "published") {
+      throw notFoundError("Post not found")
+    }
+
+    const comments = await listTopLevelComments({
+      executor: db.client,
+      threadRootPostId: input.threadRootPostId,
+      viewerUserId: "",
+      limit: parseCommentLimit(input.limit),
+      sort: parseCommentSort(input.sort),
+      cursor: input.cursor ?? null,
+    })
+    const localizedItems = await localizeCommentItems({
+      client: db.client,
+      communityId: projection.community_id,
+      locale: input.locale ?? null,
+      items: comments.items,
+    })
+    const threadSnapshot = await getLatestThreadSnapshotForRead(db.client, input.threadRootPostId)
+    return {
+      items: localizedItems,
+      next_cursor: comments.next_cursor,
+      thread_snapshot: threadSnapshot,
+    }
+  } finally {
+    db.close()
+  }
+}
+
 export async function listCommentReplies(input: {
   env: Env
   userId: string
@@ -477,6 +555,57 @@ export async function listCommentReplies(input: {
       executor: db.client,
       parentCommentId: input.commentId,
       viewerUserId: input.userId,
+      limit: parseCommentLimit(input.limit),
+      sort: parseCommentSort(input.sort),
+      cursor: input.cursor ?? null,
+    })
+    const localizedItems = await localizeCommentItems({
+      client: db.client,
+      communityId: projection.community_id,
+      locale: input.locale ?? null,
+      items: replies.items,
+    })
+    const threadSnapshot = await getLatestThreadSnapshotForRead(db.client, projection.thread_root_post_id)
+    return {
+      items: localizedItems,
+      next_cursor: replies.next_cursor,
+      thread_snapshot: threadSnapshot,
+    }
+  } finally {
+    db.close()
+  }
+}
+
+export async function listPublicCommentReplies(input: {
+  env: Env
+  commentId: string
+  locale?: string | null
+  sort?: string | null
+  cursor?: string | null
+  limit?: string | null
+  communityRepository: CommunityRepository
+}): Promise<CommentListResponse> {
+  const projection = await input.communityRepository.getCommunityCommentProjectionByCommentId(input.commentId)
+  if (!projection) {
+    throw notFoundError("Comment not found")
+  }
+
+  const community = await input.communityRepository.getCommunityById(projection.community_id)
+  if (!community || community.provisioning_state !== "active" || community.status !== "active") {
+    throw notFoundError("Community not found")
+  }
+
+  const db = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
+  try {
+    const comment = await getCommentById(db.client, input.commentId)
+    if (!comment) {
+      throw notFoundError("Comment not found")
+    }
+
+    const replies = await listReplies({
+      executor: db.client,
+      parentCommentId: input.commentId,
+      viewerUserId: "",
       limit: parseCommentLimit(input.limit),
       sort: parseCommentSort(input.sort),
       cursor: input.cursor ?? null,
@@ -620,6 +749,13 @@ export async function deleteComment(input: {
           createdAt: updatedAt,
         })
       }
+
+      await syncThreadRootPostProjectionMetrics({
+        client: db.client,
+        communityRepository: input.communityRepository,
+        threadRootPostId: deleted.thread_root_post_id,
+        updatedAt,
+      })
 
       return deleted
     } catch (error) {

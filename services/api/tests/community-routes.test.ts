@@ -398,6 +398,116 @@ describe("community routes", () => {
     expect(postsBySlug.status).toBe(200)
   })
 
+  test("public community routes return preview and published posts without auth", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "community-public-preview-user")
+    await completeUniqueHumanVerification(ctx.env, session.accessToken)
+    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, session.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Public Community Club",
+      description: "Readable without reconnecting.",
+      namespace: {
+        namespace_verification_id: namespaceVerificationId,
+      },
+    }, ctx.env, session.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: {
+        community_id: string
+        route_slug: string | null
+      }
+    }
+
+    const createdPost = await requestJson(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      {
+        post_type: "text",
+        title: "Public route post",
+        body: "This should be visible without a session.",
+        idempotency_key: "post-key-public-community-route",
+      },
+      ctx.env,
+      session.accessToken,
+    )
+    expect(createdPost.status).toBe(201)
+    const createdPostBody = await json(createdPost) as {
+      post_id: string
+      title: string | null
+    }
+    expect(createdPostBody.title).toBe("Public route post")
+
+    const secondPost = await requestJson(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      {
+        post_type: "text",
+        title: "Second public route post",
+        body: "This should stay visible alongside the first post.",
+        idempotency_key: "post-key-public-community-route-2",
+      },
+      ctx.env,
+      session.accessToken,
+    )
+    expect(secondPost.status).toBe(201)
+    const secondPostBody = await json(secondPost) as {
+      post_id: string
+      title: string | null
+    }
+    expect(secondPostBody.title).toBe("Second public route post")
+
+    const preview = await app.request(
+      `http://pirate.test/public-communities/${communityCreateBody.community.route_slug ?? communityCreateBody.community.community_id}`,
+      {},
+      ctx.env,
+    )
+    expect(preview.status).toBe(200)
+    const previewBody = await json(preview) as {
+      community_id: string
+      display_name: string
+      description: string | null
+      viewer_membership_status: string | null
+    }
+    expect(previewBody.community_id).toBe(communityCreateBody.community.community_id)
+    expect(previewBody.display_name).toBe("Public Community Club")
+    expect(previewBody.description).toBe("Readable without reconnecting.")
+    expect(previewBody.viewer_membership_status).toBe("not_member")
+
+    const posts = await app.request(
+      `http://pirate.test/public-communities/${communityCreateBody.community.route_slug ?? communityCreateBody.community.community_id}/posts`,
+      {},
+      ctx.env,
+    )
+    expect(posts.status).toBe(200)
+    const postsBody = await json(posts) as {
+      items: Array<{ post: { post_id: string; title: string | null } }>
+      next_cursor: string | null
+    }
+    expect(postsBody.items).toHaveLength(2)
+    expect(postsBody.items[0]?.post.post_id).toBe(secondPostBody.post_id)
+    expect(postsBody.items[0]?.post.title).toBe("Second public route post")
+    expect(postsBody.items[1]?.post.post_id).toBe(createdPostBody.post_id)
+    expect(postsBody.items[1]?.post.title).toBe("Public route post")
+    expect(postsBody.next_cursor).toBeNull()
+
+    const publicPost = await app.request(
+      `http://pirate.test/public-posts/${createdPostBody.post_id}?locale=zh-Hans`,
+      {},
+      ctx.env,
+    )
+    expect(publicPost.status).toBe(200)
+    const publicPostBody = await json(publicPost) as {
+      post: { post_id: string; title: string | null }
+      resolved_locale: string
+      translation_state: string
+    }
+    expect(publicPostBody.post.post_id).toBe(createdPostBody.post_id)
+    expect(publicPostBody.post.title).toBe("Public route post")
+    expect(publicPostBody.resolved_locale).toBe("zh-Hans")
+    expect(publicPostBody.translation_state).toBe("policy_blocked")
+  })
+
   test("community owner can persist and read a pending namespace verification session", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup

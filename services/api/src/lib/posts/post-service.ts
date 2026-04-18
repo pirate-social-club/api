@@ -7,6 +7,7 @@ import {
   assertPostCreateRequest,
   findPostByIdempotencyKey,
   getPostById,
+  getPostProjectionMetrics,
   insertPost,
   listPublishedLocalizedPosts,
   upsertPostVote,
@@ -33,6 +34,8 @@ type CommunityFeedResponse = {
   items: LocalizedPostResponse[]
   next_cursor: string | null
 }
+
+type PostFeedSort = "best" | "new" | "top"
 
 async function enqueuePostTranslationJob(input: {
   client: Client
@@ -85,39 +88,67 @@ async function enqueuePostTranslationOnReadIfNeeded(input: {
   communityId: string
   response: LocalizedPostResponse
 }): Promise<void> {
-  if (input.response.translation_state !== "pending") {
+  const response = input.response
+  const needsTranslationJob = response.translation_state === "pending"
+    || (
+      response.translation_state === "ready"
+      && (
+        (String(response.post.title ?? "").trim() && !String(response.translated_title ?? "").trim())
+        || (String(response.post.body ?? "").trim() && !String(response.translated_body ?? "").trim())
+        || (String(response.post.caption ?? "").trim() && !String(response.translated_caption ?? "").trim())
+      )
+    )
+  if (!needsTranslationJob) {
     return
   }
   await enqueuePostTranslationJob({
     client: input.client,
     communityId: input.communityId,
-    postId: input.response.post.post_id,
-    locale: input.response.resolved_locale,
+    postId: response.post.post_id,
+    locale: response.resolved_locale,
     createdAt: nowIso(),
   })
 }
 
 function parseFeedLimit(limit: string | null | undefined): number {
-  const parsed = Number(limit ?? "")
+  if (typeof limit !== "string" || limit.trim() === "") {
+    return 25
+  }
+
+  const parsed = Number(limit)
   if (!Number.isFinite(parsed)) {
     return 25
   }
   return Math.min(100, Math.max(1, Math.trunc(parsed)))
 }
 
-function parseFeedCursor(cursor: string | null | undefined): { createdAt: string; postId: string } | null {
-  if (!cursor) {
-    return null
-  }
-  const [createdAt, postId] = cursor.split("|")
-  if (!createdAt || !postId) {
-    return null
-  }
-  return { createdAt, postId }
+function parseFeedCursor(cursor: string | null | undefined): string | null {
+  return typeof cursor === "string" && cursor.trim() ? cursor : null
 }
 
-function formatFeedCursor(cursor: { createdAt: string; postId: string } | null): string | null {
-  return cursor ? `${cursor.createdAt}|${cursor.postId}` : null
+function formatFeedCursor(cursor: string | null): string | null {
+  return cursor ?? null
+}
+
+function parsePostFeedSort(sort: string | null | undefined): PostFeedSort {
+  return sort === "new" || sort === "top" ? sort : "best"
+}
+
+async function syncPostProjectionMetrics(input: {
+  client: Client
+  communityRepository: CommunityRepository
+  postId: string
+  updatedAt: string
+}): Promise<void> {
+  const metrics = await getPostProjectionMetrics(input.client, input.postId)
+  await input.communityRepository.updateCommunityPostProjectionMetrics({
+    postId: input.postId,
+    upvoteCount: metrics.upvoteCount,
+    downvoteCount: metrics.downvoteCount,
+    commentCount: metrics.commentCount,
+    likeCount: metrics.likeCount,
+    updatedAt: input.updatedAt,
+  })
 }
 
 async function requireMemberAccess(client: Client, communityId: string, userId: string): Promise<CommunityMembershipRow> {
@@ -331,14 +362,22 @@ export async function castPostVote(input: {
       throw notFoundError("Post not found")
     }
 
-    return await upsertPostVote({
+    const now = nowIso()
+    const vote = await upsertPostVote({
       client: db.client,
       postId: input.postId,
       communityId: projection.community_id,
       userId: input.userId,
       value: input.value,
-      now: nowIso(),
+      now,
     })
+    await syncPostProjectionMetrics({
+      client: db.client,
+      communityRepository: input.communityRepository,
+      postId: input.postId,
+      updatedAt: now,
+    })
+    return vote
   } finally {
     db.close()
   }
@@ -384,6 +423,46 @@ export async function getPost(input: {
   }
 }
 
+export async function getPublicPost(input: {
+  env: Env
+  postId: string
+  locale?: string | null
+  communityRepository: CommunityRepository
+}): Promise<LocalizedPostResponse> {
+  const projection = await input.communityRepository.getCommunityPostProjectionByPostId(input.postId)
+  if (!projection) {
+    throw notFoundError("Post not found")
+  }
+
+  const community = await input.communityRepository.getCommunityById(projection.community_id)
+  if (!community || community.provisioning_state !== "active" || community.status !== "active") {
+    throw notFoundError("Post not found")
+  }
+
+  const db = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
+  try {
+    const post = await getPostById(db.client, input.postId)
+    if (!post || post.status !== "published") {
+      throw notFoundError("Post not found")
+    }
+    const threadSnapshot = await getLatestThreadSnapshotForRead(db.client, post.post_id)
+    const response = await buildLocalizedPostResponse({
+      executor: db.client,
+      post,
+      locale: input.locale ?? undefined,
+      threadSnapshot,
+    })
+    await enqueuePostTranslationOnReadIfNeeded({
+      client: db.client,
+      communityId: projection.community_id,
+      response,
+    })
+    return response
+  } finally {
+    db.close()
+  }
+}
+
 export async function listCommunityPosts(input: {
   env: Env
   userId: string
@@ -392,6 +471,7 @@ export async function listCommunityPosts(input: {
   limit?: string | null
   cursor?: string | null
   flairId?: string | null
+  sort?: string | null
   communityRepository: CommunityRepository
 }): Promise<CommunityFeedResponse> {
   const community = await input.communityRepository.getCommunityById(input.communityId)
@@ -408,6 +488,62 @@ export async function listCommunityPosts(input: {
       viewerUserId: input.userId,
       limit: parseFeedLimit(input.limit),
       flairId: input.flairId ?? null,
+      sort: parsePostFeedSort(input.sort),
+      cursor: parseFeedCursor(input.cursor),
+    })
+
+    const items = await Promise.all(feed.items.map((item) => buildLocalizedPostResponse({
+      executor: db.client,
+      post: item.post,
+      locale: input.locale ?? undefined,
+      metrics: {
+        upvote_count: item.upvote_count,
+        downvote_count: item.downvote_count,
+        like_count: item.like_count,
+        viewer_vote: item.viewer_vote,
+      },
+    })))
+    for (const item of items) {
+      await enqueuePostTranslationOnReadIfNeeded({
+        client: db.client,
+        communityId: input.communityId,
+        response: item,
+      })
+    }
+
+    return {
+      items,
+      next_cursor: formatFeedCursor(feed.nextCursor),
+    }
+  } finally {
+    db.close()
+  }
+}
+
+export async function listPublicCommunityPosts(input: {
+  env: Env
+  communityId: string
+  locale?: string | null
+  limit?: string | null
+  cursor?: string | null
+  flairId?: string | null
+  sort?: string | null
+  communityRepository: CommunityRepository
+}): Promise<CommunityFeedResponse> {
+  const community = await input.communityRepository.getCommunityById(input.communityId)
+  if (!community || community.provisioning_state !== "active" || community.status !== "active") {
+    throw notFoundError("Community not found")
+  }
+
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  try {
+    const feed = await listPublishedLocalizedPosts({
+      client: db.client,
+      communityId: input.communityId,
+      viewerUserId: "",
+      limit: parseFeedLimit(input.limit),
+      flairId: input.flairId ?? null,
+      sort: parsePostFeedSort(input.sort),
       cursor: parseFeedCursor(input.cursor),
     })
 

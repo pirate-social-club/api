@@ -99,6 +99,15 @@ export type UpdateCommunityDonationPolicyRequestBody = {
   } | null
 }
 
+function normalizeDonationPolicyMode(
+  mode: UpdateCommunityDonationPolicyRequestBody["donation_policy_mode"] | LocalCommunitySnapshot["donation_policy_mode"] | string | null | undefined,
+): "none" | "optional_creator_sidecar" {
+  if (mode === "optional_creator_sidecar" || mode === "fundraiser_default") {
+    return "optional_creator_sidecar"
+  }
+  return "none"
+}
+
 const VALID_PUBLIC_V0_PROVIDERS_BY_PROOF_TYPE = {
   unique_human: new Set(["self", "very"]),
   age_over_18: new Set(["self"]),
@@ -1074,7 +1083,8 @@ export async function updateCommunityDonationPolicy(input: {
   body: UpdateCommunityDonationPolicyRequestBody
   communityRepository: CommunityRepository
 }): Promise<Community> {
-  const { donation_partner, donation_partner_id, donation_policy_mode } = input.body
+  const { donation_partner, donation_partner_id } = input.body
+  const donation_policy_mode = normalizeDonationPolicyMode(input.body.donation_policy_mode)
   if (donation_policy_mode !== "none" && !donation_partner_id?.trim()) {
     throw badRequestError("donation_partner_id is required when donation_policy_mode is not none")
   }
@@ -1167,7 +1177,7 @@ export async function getCommunityDonationPolicy(input: {
   const local = await loadCommunityLocalSnapshot(input.env, input.communityRepository, input.communityId)
   const storedPartner = parseStoredDonationPartnerSummary(parseCommunitySettingsJson(local?.settings_json))
 
-  const mode = local?.donation_policy_mode ?? "none"
+  const mode = normalizeDonationPolicyMode(local?.donation_policy_mode)
   const status = local?.donation_partner_status ?? "unconfigured"
   const partnerId = local?.donation_partner_id ?? null
   const updatedAt = local?.updated_at ?? new Date().toISOString()
@@ -1578,6 +1588,14 @@ async function createNamespacelessCommunity(input: {
           : prepared.binding.database_url,
         mode: useProvisionOperator ? "turso_operator" : "local_stub",
       },
+    })
+
+    await input.communityRepository.upsertCommunityMembershipProjection({
+      communityId,
+      userId: input.auth.userId,
+      membershipState: "member",
+      sourceUpdatedAt: input.auth.createdAt,
+      createdAt: input.auth.createdAt,
     })
 
     return {

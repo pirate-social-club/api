@@ -273,13 +273,45 @@ export async function getPostById(client: DbExecutor, postId: string): Promise<P
   return row ? serializePost(toPostRow(row)) : null
 }
 
+function getFeedItemScore(item: {
+  upvote_count: number
+  downvote_count: number
+}): number {
+  return item.upvote_count - item.downvote_count
+}
+
+function getFeedItemCreatedAtMs(item: {
+  post: Post
+}): number {
+  const timestamp = Date.parse(item.post.created_at)
+  return Number.isNaN(timestamp) ? 0 : timestamp
+}
+
+function getBestFeedRank(item: {
+  post: Post
+  upvote_count: number
+  downvote_count: number
+}, now: number): number {
+  const ageHours = Math.max(0, (now - getFeedItemCreatedAtMs(item)) / 3_600_000)
+  return getFeedItemScore(item) / Math.pow(ageHours + 2, 1.5)
+}
+
+function parseOffsetCursor(cursor: string | null | undefined): number {
+  if (!cursor || !cursor.startsWith("o:")) {
+    return 0
+  }
+  const parsed = Number(cursor.slice(2))
+  return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : 0
+}
+
 export async function listPublishedLocalizedPosts(input: {
   client: Client
   communityId: string
   viewerUserId: string
   limit: number
   flairId?: string | null
-  cursor?: { createdAt: string; postId: string } | null
+  sort: "best" | "new" | "top"
+  cursor?: string | null
 }): Promise<{
   items: Array<{
     post: Post
@@ -288,8 +320,11 @@ export async function listPublishedLocalizedPosts(input: {
     like_count: number
     viewer_vote: -1 | 1 | null
   }>
-  nextCursor: { createdAt: string; postId: string } | null
+  nextCursor: string | null
 }> {
+  const newCursorParts = input.sort === "new" && input.cursor ? input.cursor.split("|") : null
+  const createdAtCursor = newCursorParts?.[0] ?? null
+  const postIdCursor = newCursorParts?.[1] ?? null
   const result = await input.client.execute({
     sql: `
       SELECT post_id, community_id, author_user_id, identity_mode, anonymous_scope, anonymous_label,
@@ -327,26 +362,26 @@ export async function listPublishedLocalizedPosts(input: {
         AND status = 'published'
         AND (?3 IS NULL OR label_id = ?3)
         AND (
-          ?4 IS NULL
-          OR created_at < ?4
-          OR (created_at = ?4 AND post_id < ?5)
+          ?4 = 0
+          OR ?5 IS NULL
+          OR created_at < ?5
+          OR (created_at = ?5 AND post_id < ?6)
         )
       ORDER BY created_at DESC, post_id DESC
-      LIMIT ?6
+      LIMIT ?7
     `,
     args: [
       input.communityId,
       input.viewerUserId,
       input.flairId ?? null,
-      input.cursor?.createdAt ?? null,
-      input.cursor?.postId ?? null,
-      input.limit + 1,
+      input.sort === "new" ? 1 : 0,
+      createdAtCursor,
+      postIdCursor,
+      input.sort === "new" ? input.limit + 1 : 10_000,
     ],
   })
 
-  const rows = result.rows
-  const pageRows = rows.slice(0, input.limit)
-  const items = pageRows.map((row) => {
+  const items = result.rows.map((row) => {
     return {
       post: serializePost(toPostRow(row)),
       upvote_count: requiredNumber(row, "upvote_count"),
@@ -356,15 +391,89 @@ export async function listPublishedLocalizedPosts(input: {
     }
   })
 
-  const overflowRow = rows.length > input.limit ? rows[input.limit] : null
-  const nextCursor = overflowRow
-    ? {
-        createdAt: requiredString(overflowRow, "created_at"),
-        postId: requiredString(overflowRow, "post_id"),
-      }
-    : null
+  if (input.sort === "new") {
+    const pageItems = items.slice(0, input.limit)
+    const overflowItem = items.length > input.limit ? items[input.limit] : null
+    return {
+      items: pageItems,
+      nextCursor: overflowItem ? `${overflowItem.post.created_at}|${overflowItem.post.post_id}` : null,
+    }
+  }
 
-  return { items, nextCursor }
+  const now = Date.now()
+  const sortedItems = [...items].sort((left, right) => {
+    if (input.sort === "top") {
+      const scoreDiff = getFeedItemScore(right) - getFeedItemScore(left)
+      if (scoreDiff !== 0) {
+        return scoreDiff
+      }
+    } else {
+      const rankDiff = getBestFeedRank(right, now) - getBestFeedRank(left, now)
+      if (rankDiff !== 0) {
+        return rankDiff
+      }
+    }
+
+    const createdAtDiff = getFeedItemCreatedAtMs(right) - getFeedItemCreatedAtMs(left)
+    if (createdAtDiff !== 0) {
+      return createdAtDiff
+    }
+    return right.post.post_id.localeCompare(left.post.post_id)
+  })
+
+  const offset = parseOffsetCursor(input.cursor)
+  const pageItems = sortedItems.slice(offset, offset + input.limit)
+  const nextCursor = offset + input.limit < sortedItems.length ? `o:${offset + input.limit}` : null
+
+  return { items: pageItems, nextCursor }
+}
+
+export async function getPostProjectionMetrics(
+  executor: DbExecutor,
+  postId: string,
+): Promise<{
+  upvoteCount: number
+  downvoteCount: number
+  commentCount: number
+  likeCount: number
+}> {
+  const row = await executeFirst(executor, {
+    sql: `
+      SELECT
+        (
+          SELECT COUNT(*)
+          FROM post_votes
+          WHERE post_id = ?1
+            AND vote_value = 1
+        ) AS upvote_count,
+        (
+          SELECT COUNT(*)
+          FROM post_votes
+          WHERE post_id = ?1
+            AND vote_value = -1
+        ) AS downvote_count,
+        (
+          SELECT COUNT(*)
+          FROM comments
+          WHERE thread_root_post_id = ?1
+            AND status = 'published'
+        ) AS comment_count,
+        (
+          SELECT COUNT(*)
+          FROM post_reactions
+          WHERE post_id = ?1
+            AND reaction_key = 'like'
+        ) AS like_count
+    `,
+    args: [postId],
+  })
+
+  return {
+    upvoteCount: requiredNumber(row, "upvote_count"),
+    downvoteCount: requiredNumber(row, "downvote_count"),
+    commentCount: requiredNumber(row, "comment_count"),
+    likeCount: requiredNumber(row, "like_count"),
+  }
 }
 
 export async function upsertPostVote(input: {

@@ -1,11 +1,16 @@
 import type { Client } from "../sql-client"
 import { makeId } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
-import { getCommunityCommentProjectionRowByCommentId, getCommunityPostProjectionRowByPostId } from "../auth/auth-db-queries"
+import {
+  getCommunityCommentProjectionRowByCommentId,
+  getCommunityPostProjectionRowByPostId,
+  listCommunityMembershipProjectionRowsByUserId,
+} from "../auth/auth-db-queries"
 import type {
   CommunityCommentProjectionRow,
   CommunityDbCredentialRow,
   CommunityDatabaseBindingRow,
+  CommunityMembershipProjectionRow,
   CommunityRegistryAttemptRow,
   CommunityPostProjectionRow,
   CommunityRow,
@@ -41,7 +46,12 @@ export {
 } from "./community-registry-repository"
 
 export { recordCommunityPostProjection } from "./community-post-projection-repository"
+export {
+  updateCommunityPostProjectionMetrics,
+  updateCommunityPostProjectionStatus,
+} from "./community-post-projection-repository"
 export { recordCommunityCommentProjection } from "./community-comment-projection-repository"
+export { upsertCommunityMembershipProjection } from "./community-membership-projection-repository"
 
 export {
   attachNamespaceToCommunity,
@@ -72,8 +82,13 @@ import {
   markCommunityRegistryPublicationSucceeded,
   markCommunityRegistryPublicationFailed,
 } from "./community-registry-repository"
-import { recordCommunityPostProjection } from "./community-post-projection-repository"
+import {
+  recordCommunityPostProjection,
+  updateCommunityPostProjectionMetrics,
+  updateCommunityPostProjectionStatus,
+} from "./community-post-projection-repository"
 import { recordCommunityCommentProjection } from "./community-comment-projection-repository"
+import { upsertCommunityMembershipProjection } from "./community-membership-projection-repository"
 import {
   attachNamespaceToCommunity,
   setPendingNamespaceVerificationSession,
@@ -101,6 +116,13 @@ export async function getCommunityCommentProjectionByCommentId(
   return getCommunityCommentProjectionRowByCommentId(client, commentId)
 }
 
+export async function listCommunityMembershipProjectionsByUserId(
+  client: Client,
+  userId: string,
+): Promise<CommunityMembershipProjectionRow[]> {
+  return listCommunityMembershipProjectionRowsByUserId(client, userId)
+}
+
 export interface CommunityRepository {
   getCommunityById(communityId: string): Promise<CommunityRow | null>
   getCommunityByRouteSlug(routeSlug: string): Promise<CommunityRow | null>
@@ -112,6 +134,7 @@ export interface CommunityRepository {
   getLatestCommunityProvisioningJob(communityId: string): Promise<JobRow | null>
   getCommunityPostProjectionByPostId(postId: string): Promise<CommunityPostProjectionRow | null>
   getCommunityCommentProjectionByCommentId(commentId: string): Promise<CommunityCommentProjectionRow | null>
+  listCommunityMembershipProjectionsByUserId(userId: string): Promise<CommunityMembershipProjectionRow[]>
   createCommunityRegistryAttempt(input: {
     registryAttemptId?: string
     actorUserId: string
@@ -149,6 +172,26 @@ export interface CommunityRepository {
     actorUserId: string
     createdAt: string
   }): Promise<CommunityCommentProjectionRow>
+  upsertCommunityMembershipProjection(input: {
+    communityId: string
+    userId: string
+    membershipState: CommunityMembershipProjectionRow["membership_state"]
+    sourceUpdatedAt: string
+    createdAt: string
+  }): Promise<void>
+  updateCommunityPostProjectionStatus(input: {
+    postId: string
+    status: CommunityPostProjectionRow["status"]
+    updatedAt: string
+  }): Promise<void>
+  updateCommunityPostProjectionMetrics(input: {
+    postId: string
+    upvoteCount: number
+    downvoteCount: number
+    commentCount: number
+    likeCount: number
+    updatedAt: string
+  }): Promise<void>
   createCommunityProvisioningRequest(input: {
     communityId: string
     communityDatabaseBindingId: string
@@ -300,6 +343,10 @@ export class DatabaseCommunityRepository implements CommunityRepository {
     return getCommunityCommentProjectionByCommentId(this.client, commentId)
   }
 
+  async listCommunityMembershipProjectionsByUserId(userId: string): Promise<CommunityMembershipProjectionRow[]> {
+    return listCommunityMembershipProjectionRowsByUserId(this.client, userId)
+  }
+
   async createCommunityRegistryAttempt(input: {
     registryAttemptId?: string
     actorUserId: string
@@ -355,6 +402,35 @@ export class DatabaseCommunityRepository implements CommunityRepository {
     createdAt: string
   }): Promise<CommunityCommentProjectionRow> {
     return recordCommunityCommentProjection(this.client, input)
+  }
+
+  async upsertCommunityMembershipProjection(input: {
+    communityId: string
+    userId: string
+    membershipState: CommunityMembershipProjectionRow["membership_state"]
+    sourceUpdatedAt: string
+    createdAt: string
+  }): Promise<void> {
+    return upsertCommunityMembershipProjection(this.client, input)
+  }
+
+  async updateCommunityPostProjectionStatus(input: {
+    postId: string
+    status: CommunityPostProjectionRow["status"]
+    updatedAt: string
+  }): Promise<void> {
+    return updateCommunityPostProjectionStatus(this.client, input)
+  }
+
+  async updateCommunityPostProjectionMetrics(input: {
+    postId: string
+    upvoteCount: number
+    downvoteCount: number
+    commentCount: number
+    likeCount: number
+    updatedAt: string
+  }): Promise<void> {
+    return updateCommunityPostProjectionMetrics(this.client, input)
   }
 
   async createCommunityProvisioningRequest(input: {

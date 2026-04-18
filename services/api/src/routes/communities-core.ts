@@ -270,6 +270,7 @@ export function registerCommunityCoreRoutes(communities: Hono<AuthenticatedEnv>)
       limit: c.req.query("limit") ?? null,
       cursor: c.req.query("cursor") ?? null,
       flairId: c.req.query("flair_id") ?? null,
+      sort: c.req.query("sort") ?? null,
       communityRepository,
     })
     return c.json(result, 200)

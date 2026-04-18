@@ -3,7 +3,7 @@ import type { Client } from "@libsql/client"
 import type { CommunityRepository } from "./db-community-repository"
 import { internalError, notFoundError } from "../errors"
 import { decryptCommunityDbCredential } from "./community-db-credential-crypto"
-import { ensureCommunityDbSchema } from "./community-local-db"
+import { buildLocalCommunityDbUrl, ensureCommunityDbSchema } from "./community-local-db"
 import type { Env } from "../../types"
 
 type CommunityDbRepository = Pick<CommunityRepository, "getPrimaryCommunityDatabaseBinding" | "getActiveCommunityDbCredential">
@@ -15,7 +15,19 @@ export async function openCommunityDb(
 ): Promise<{ client: Client; close: () => void; databaseUrl: string }> {
   const binding = await repo.getPrimaryCommunityDatabaseBinding(communityId)
   if (!binding || binding.status !== "active") {
-    throw notFoundError("Community database binding not found")
+    const localRoot = String(env.LOCAL_COMMUNITY_DB_ROOT || "").trim()
+    if (!localRoot) {
+      throw notFoundError("Community database binding not found")
+    }
+
+    const databaseUrl = buildLocalCommunityDbUrl(localRoot, communityId)
+    const client = createClient({ url: databaseUrl })
+    await ensureCommunityDbSchema(client)
+    return {
+      client,
+      databaseUrl,
+      close: () => client.close(),
+    }
   }
   if (!binding.database_url) {
     throw internalError("Community database URL is missing")

@@ -14,6 +14,7 @@ import {
   type CommunityCommentProjectionRow,
   type CommunityDbCredentialRow,
   type CommunityDatabaseBindingRow,
+  type CommunityMembershipProjectionRow,
   type CommunityRegistryAttemptRow,
   type CommunityPostProjectionRow,
   type CommunityRow,
@@ -32,6 +33,7 @@ import {
   toCommunityCommentProjectionRow,
   toCommunityDatabaseBindingRow,
   toCommunityDbCredentialRow,
+  toCommunityMembershipProjectionRow,
   toCommunityRegistryAttemptRow,
   toCommunityPostProjectionRow,
   toCommunityRow,
@@ -601,16 +603,140 @@ export async function getCommunityPostProjectionRowByPostId(
   const row = await firstRow(executor, {
     sql: `
       SELECT projection_id, community_id, source_post_id, author_user_id, identity_mode, post_type, status,
-             source_created_at, projected_payload_json, projection_version, created_at, updated_at
+             source_created_at, projected_payload_json, upvote_count, downvote_count, comment_count, like_count,
+             projection_version, created_at, updated_at
       FROM community_post_projections
       WHERE source_post_id = ?1
         AND projection_version = 1
       LIMIT 1
     `,
     args: [postId],
+  }).catch(async (error) => {
+    if (!isMissingColumnError(error, "upvote_count")) {
+      throw error
+    }
+
+    return firstRow(executor, {
+      sql: `
+        SELECT projection_id, community_id, source_post_id, author_user_id, identity_mode, post_type, status,
+               source_created_at, projected_payload_json, projection_version, created_at, updated_at
+        FROM community_post_projections
+        WHERE source_post_id = ?1
+          AND projection_version = 1
+        LIMIT 1
+      `,
+      args: [postId],
+    })
   })
 
   return row ? toCommunityPostProjectionRow(row) : null
+}
+
+export async function listCommunityMembershipProjectionRowsByUserId(
+  executor: DbExecutor,
+  userId: string,
+): Promise<CommunityMembershipProjectionRow[]> {
+  const result = await executor.execute({
+    sql: `
+      SELECT projection_id, community_id, user_id, membership_state, role_summary_json, source_updated_at, created_at, updated_at
+      FROM community_membership_projections
+      WHERE user_id = ?1
+      ORDER BY updated_at DESC, projection_id DESC
+    `,
+    args: [userId],
+  }).catch((error) => {
+    if (isMissingTableError(error, "community_membership_projections")) {
+      return { rows: [] }
+    }
+    throw error
+  })
+
+  return result.rows.map((row) => toCommunityMembershipProjectionRow(row))
+}
+
+export async function upsertCommunityMembershipProjectionRow(input: {
+  executor: DbExecutor
+  communityId: string
+  userId: string
+  membershipState: CommunityMembershipProjectionRow["membership_state"]
+  sourceUpdatedAt: string
+  createdAt: string
+}): Promise<void> {
+  await input.executor.execute({
+    sql: `
+      INSERT INTO community_membership_projections (
+        projection_id, community_id, user_id, membership_state, role_summary_json, source_updated_at, created_at, updated_at
+      ) VALUES (
+        ?1, ?2, ?3, ?4, NULL, ?5, ?6, ?6
+      )
+      ON CONFLICT(community_id, user_id) DO UPDATE SET
+        membership_state = excluded.membership_state,
+        source_updated_at = excluded.source_updated_at,
+        updated_at = excluded.updated_at
+    `,
+    args: [
+      makeId("cmp"),
+      input.communityId,
+      input.userId,
+      input.membershipState,
+      input.sourceUpdatedAt,
+      input.createdAt,
+    ],
+  })
+}
+
+export async function updateCommunityPostProjectionStatusRow(input: {
+  executor: DbExecutor
+  postId: string
+  status: CommunityPostProjectionRow["status"]
+  updatedAt: string
+}): Promise<void> {
+  await input.executor.execute({
+    sql: `
+      UPDATE community_post_projections
+      SET status = ?2,
+          updated_at = ?3
+      WHERE source_post_id = ?1
+        AND projection_version = 1
+    `,
+    args: [input.postId, input.status, input.updatedAt],
+  })
+}
+
+export async function updateCommunityPostProjectionMetricsRow(input: {
+  executor: DbExecutor
+  postId: string
+  upvoteCount: number
+  downvoteCount: number
+  commentCount: number
+  likeCount: number
+  updatedAt: string
+}): Promise<void> {
+  await input.executor.execute({
+    sql: `
+      UPDATE community_post_projections
+      SET upvote_count = ?2,
+          downvote_count = ?3,
+          comment_count = ?4,
+          like_count = ?5,
+          updated_at = ?6
+      WHERE source_post_id = ?1
+        AND projection_version = 1
+    `,
+    args: [
+      input.postId,
+      input.upvoteCount,
+      input.downvoteCount,
+      input.commentCount,
+      input.likeCount,
+      input.updatedAt,
+    ],
+  }).catch((error) => {
+    if (isMissingColumnError(error, "upvote_count")) {
+      return
+    }
+    throw error
+  })
 }
 
 export async function getCommunityCommentProjectionRowByCommentId(

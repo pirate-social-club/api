@@ -6,6 +6,7 @@ export type ContentTranslationProviderResult = {
   sourceLanguage: string
   targetLocale: string
   outcome: "translated" | "same_language"
+  translatedTitle: string | null
   translatedBody: string | null
   translatedCaption: string | null
   providerResult: Record<string, unknown> | null
@@ -31,6 +32,7 @@ function normalizeMessageContent(content: unknown): string {
 export async function requestContentTranslation(input: {
   env: Env
   sourceText: {
+    title?: string | null
     body?: string | null
     caption?: string | null
   }
@@ -73,6 +75,7 @@ export async function requestContentTranslation(input: {
                 "source_language",
                 "target_locale",
                 "outcome",
+                "translated_title",
                 "translated_body",
                 "translated_caption",
               ],
@@ -83,6 +86,7 @@ export async function requestContentTranslation(input: {
                   type: "string",
                   enum: ["translated", "same_language"],
                 },
+                translated_title: { type: ["string", "null"] },
                 translated_body: { type: ["string", "null"] },
                 translated_caption: { type: ["string", "null"] },
               },
@@ -102,6 +106,7 @@ export async function requestContentTranslation(input: {
             content: JSON.stringify({
               source_language_hint: input.sourceLanguage ?? null,
               target_locale: input.targetLocale,
+              title: input.sourceText.title ?? null,
               body: input.sourceText.body ?? null,
               caption: input.sourceText.caption ?? null,
             }),
@@ -133,6 +138,7 @@ export async function requestContentTranslation(input: {
       source_language: string
       target_locale: string
       outcome: "translated" | "same_language"
+      translated_title: string | null
       translated_body: string | null
       translated_caption: string | null
     }
@@ -143,6 +149,7 @@ export async function requestContentTranslation(input: {
       sourceLanguage: parsed.source_language,
       targetLocale: parsed.target_locale,
       outcome: parsed.outcome,
+      translatedTitle: parsed.translated_title,
       translatedBody: parsed.translated_body,
       translatedCaption: parsed.translated_caption,
       providerResult: body as Record<string, unknown>,

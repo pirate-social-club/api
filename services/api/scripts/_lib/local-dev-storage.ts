@@ -9,6 +9,8 @@ const SQLITE_COMPATIBLE_CONTROL_PLANE_MIGRATIONS = new Set([
   "0034_control_plane_communities_pending_namespace.sql",
   "0035_control_plane_namespace_setup_nameservers.sql",
   "0036_control_plane_linked_handles.sql",
+  "0037_control_plane_comment_projections.sql",
+  "0038_control_plane_post_feed_metrics.sql",
 ])
 
 export type LocalDevStorage = {

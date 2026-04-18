@@ -89,46 +89,89 @@ export async function getCommunityPreview(input: {
   try {
     const rules = await listActiveMembershipGateRules(db.client, input.communityId)
     const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
-    const viewerMembershipStatus: CommunityPreview["viewer_membership_status"] =
-      membership.membership_status === "banned"
-        ? "banned"
-        : canAccessCommunity(membership)
-          ? "member"
-          : "not_member"
-
-    const localResult = await db.client.execute({
-      sql: `SELECT display_name, description, avatar_ref, banner_ref, membership_mode, created_at FROM communities WHERE community_id = ?1 LIMIT 1`,
-      args: [input.communityId],
+    return await buildCommunityPreview({
+      client: db.client,
+      communityId: input.communityId,
+      communityDisplayName: community.display_name,
+      communityCreatedAt: community.created_at,
+      rules,
+      viewerMembershipStatus:
+        membership.membership_status === "banned"
+          ? "banned"
+          : canAccessCommunity(membership)
+            ? "member"
+            : "not_member",
     })
-    const localRow = localResult.rows[0]
-    const membershipMode: CommunityPreview["membership_mode"] =
-      localRow?.membership_mode === "open" || localRow?.membership_mode === "request" || localRow?.membership_mode === "gated"
-        ? (localRow.membership_mode as CommunityPreview["membership_mode"])
-        : "open"
-
-    return {
-      community_id: community.community_id,
-      display_name: localRow?.display_name ? String(localRow.display_name) : community.display_name,
-      description: localRow?.description != null ? String(localRow.description) : null,
-      avatar_ref: resolveCommunityAvatarRef({
-        communityId: community.community_id,
-        displayName: localRow?.display_name ? String(localRow.display_name) : community.display_name,
-        avatarRef: localRow?.avatar_ref == null ? null : String(localRow.avatar_ref),
-      }),
-      banner_ref: resolveCommunityBannerRef({
-        communityId: community.community_id,
-        displayName: localRow?.display_name ? String(localRow.display_name) : community.display_name,
-        bannerRef: localRow?.banner_ref == null ? null : String(localRow.banner_ref),
-      }),
-      membership_mode: membershipMode,
-      human_verification_lane: "self",
-      member_count: null,
-      membership_gate_summaries: rules.map(buildMembershipGateSummary),
-      viewer_membership_status: viewerMembershipStatus,
-      created_at: community.created_at,
-    }
   } finally {
     db.close()
+  }
+}
+
+export async function getPublicCommunityPreview(input: {
+  env: Env
+  communityId: string
+  communityRepository: CommunityRepository
+}): Promise<CommunityPreview> {
+  const community = await input.communityRepository.getCommunityById(input.communityId)
+  if (!community || community.provisioning_state !== "active" || community.status !== "active") {
+    throw notFoundError("Community not found")
+  }
+
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  try {
+    const rules = await listActiveMembershipGateRules(db.client, input.communityId)
+    return await buildCommunityPreview({
+      client: db.client,
+      communityId: input.communityId,
+      communityDisplayName: community.display_name,
+      communityCreatedAt: community.created_at,
+      rules,
+      viewerMembershipStatus: "not_member",
+    })
+  } finally {
+    db.close()
+  }
+}
+
+async function buildCommunityPreview(input: {
+  client: Awaited<ReturnType<typeof openCommunityDb>>["client"]
+  communityId: string
+  communityDisplayName: string
+  communityCreatedAt: string
+  rules: Awaited<ReturnType<typeof listActiveMembershipGateRules>>
+  viewerMembershipStatus: CommunityPreview["viewer_membership_status"]
+}): Promise<CommunityPreview> {
+  const localResult = await input.client.execute({
+    sql: `SELECT display_name, description, avatar_ref, banner_ref, membership_mode FROM communities WHERE community_id = ?1 LIMIT 1`,
+    args: [input.communityId],
+  })
+  const localRow = localResult.rows[0]
+  const membershipMode: CommunityPreview["membership_mode"] =
+    localRow?.membership_mode === "open" || localRow?.membership_mode === "request" || localRow?.membership_mode === "gated"
+      ? (localRow.membership_mode as CommunityPreview["membership_mode"])
+      : "open"
+  const displayName = localRow?.display_name ? String(localRow.display_name) : input.communityDisplayName
+
+  return {
+    community_id: input.communityId,
+    display_name: displayName,
+    description: localRow?.description != null ? String(localRow.description) : null,
+    avatar_ref: resolveCommunityAvatarRef({
+      communityId: input.communityId,
+      displayName,
+      avatarRef: localRow?.avatar_ref == null ? null : String(localRow.avatar_ref),
+    }),
+    banner_ref: resolveCommunityBannerRef({
+      communityId: input.communityId,
+      displayName,
+      bannerRef: localRow?.banner_ref == null ? null : String(localRow.banner_ref),
+    }),
+    membership_mode: membershipMode,
+    human_verification_lane: "self",
+    member_count: null,
+    membership_gate_summaries: input.rules.map(buildMembershipGateSummary),
+    viewer_membership_status: input.viewerMembershipStatus,
+    created_at: input.communityCreatedAt,
   }
 }
 
@@ -321,6 +364,13 @@ export async function joinCommunity(input: {
         userId: input.userId,
         now,
       })
+      await input.communityRepository.upsertCommunityMembershipProjection({
+        communityId: input.communityId,
+        userId: input.userId,
+        membershipState: "member",
+        sourceUpdatedAt: now,
+        createdAt: now,
+      })
       return {
         community_id: input.communityId,
         status: "joined",
@@ -333,6 +383,13 @@ export async function joinCommunity(input: {
         communityId: input.communityId,
         userId: input.userId,
         now,
+      })
+      await input.communityRepository.upsertCommunityMembershipProjection({
+        communityId: input.communityId,
+        userId: input.userId,
+        membershipState: "pending_request",
+        sourceUpdatedAt: now,
+        createdAt: now,
       })
       return {
         community_id: input.communityId,
@@ -377,6 +434,13 @@ export async function joinCommunity(input: {
       communityId: input.communityId,
       userId: input.userId,
       now,
+    })
+    await input.communityRepository.upsertCommunityMembershipProjection({
+      communityId: input.communityId,
+      userId: input.userId,
+      membershipState: "member",
+      sourceUpdatedAt: now,
+      createdAt: now,
     })
     return {
       community_id: input.communityId,

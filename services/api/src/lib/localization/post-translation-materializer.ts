@@ -4,10 +4,28 @@ import type { Env, Post } from "../../types"
 import { computePostSourceHash } from "./content-source-hash"
 import { DEFAULT_CONTENT_LOCALE, normalizeContentLocale, sameLanguageLocale } from "./content-locale"
 import { requestContentTranslation } from "./content-translation-provider"
-import { getContentTranslation, upsertContentTranslation } from "./content-translation-store"
+import { getContentTranslation, upsertContentTranslation, type ContentTranslationRecord } from "./content-translation-store"
 
 function hasTranslatablePostContent(post: Post): boolean {
-  return Boolean(String(post.body ?? "").trim() || String(post.caption ?? "").trim())
+  return Boolean(String(post.title ?? "").trim() || String(post.body ?? "").trim() || String(post.caption ?? "").trim())
+}
+
+function translationNeedsRefresh(post: Post, translation: ContentTranslationRecord): boolean {
+  if (translation.outcome !== "translated") {
+    return false
+  }
+
+  if (String(post.title ?? "").trim() && !String(translation.translated_title ?? "").trim()) {
+    return true
+  }
+  if (String(post.body ?? "").trim() && !String(translation.translated_body ?? "").trim()) {
+    return true
+  }
+  if (String(post.caption ?? "").trim() && !String(translation.translated_caption ?? "").trim()) {
+    return true
+  }
+
+  return false
 }
 
 export async function materializePostTranslation(input: {
@@ -49,7 +67,7 @@ export async function materializePostTranslation(input: {
     locale: resolvedLocale,
     sourceHash,
   })
-  if (existing) {
+  if (existing && !translationNeedsRefresh(input.post, existing)) {
     return `cached:${resolvedLocale}:${existing.outcome}`
   }
 
@@ -58,6 +76,7 @@ export async function materializePostTranslation(input: {
     sourceLanguage: input.post.source_language ?? null,
     targetLocale: resolvedLocale,
     sourceText: {
+      title: input.post.title ?? null,
       body: input.post.body ?? null,
       caption: input.post.caption ?? null,
     },
@@ -71,6 +90,7 @@ export async function materializePostTranslation(input: {
     sourceHash,
     sourceLanguage: translation.sourceLanguage,
     outcome: translation.outcome,
+    translatedTitle: translation.translatedTitle,
     translatedBody: translation.translatedBody,
     translatedCaption: translation.translatedCaption,
     provider: translation.provider,

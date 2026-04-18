@@ -22,6 +22,15 @@ import {
   resolveCommunityBannerRef,
 } from "./community-identity-media"
 
+function normalizeDonationPolicyMode(
+  mode: LocalCommunitySnapshot["donation_policy_mode"] | null | undefined,
+): "none" | "optional_creator_sidecar" {
+  if (mode === "optional_creator_sidecar" || mode === "fundraiser_default") {
+    return "optional_creator_sidecar"
+  }
+  return "none"
+}
+
 function parseStoredCommunitySettings(
   local: LocalCommunitySnapshot | null,
 ): Record<string, unknown> {
@@ -157,7 +166,7 @@ export function serializeCommunity(row: CommunityRow, local: LocalCommunitySnaps
     anonymous_identity_scope: local?.anonymous_identity_scope ?? null,
     governance_mode: local?.governance_mode ?? "centralized",
     human_verification_lane: "self",
-    donation_policy_mode: local?.donation_policy_mode ?? "none",
+    donation_policy_mode: normalizeDonationPolicyMode(local?.donation_policy_mode),
     donation_partner_status: donationPartnerStatus,
     donation_partner_id: local?.donation_partner_id ?? null,
     donation_partner: local?.donation_partner_id ? donationPartner : null,
