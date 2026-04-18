@@ -1403,13 +1403,17 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     expect(purchaseBody.entitlement_target_ref).toBe(assetId)
     expect(purchaseBody.settlement_tx_ref).toBe("0xstorysettlementpaid0001")
     expect(storySettlementCalls).toHaveLength(1)
-    expect(storySettlementCalls[0]).toMatchObject({
+    expect({
+      amountWei: storySettlementCalls[0]?.amountWei,
+      buyerAddress: storySettlementCalls[0]?.buyerAddress,
+      payoutRecipient: storySettlementCalls[0]?.payoutRecipient,
+    }).toEqual({
       buyerAddress: "0xbbb0000000000000000000000000000000000000",
       payoutRecipient: "0xaaa0000000000000000000000000000000000000",
       amountWei: "4990000000000000000",
     })
     expect(storySettlementCalls[0]?.purchaseRef).toMatch(/^0x[0-9a-f]{64}$/)
-    expect(BigInt(storySettlementCalls[0]?.entitlementTokenId ?? "0")).toBeGreaterThan(0n)
+    expect(BigInt(storySettlementCalls[0]?.entitlementTokenId ?? "0") > 0n).toBe(true)
 
     const buyerAccessAfterPurchase = await app.request(
       `http://pirate.test/communities/${communityId}/assets/${assetId}/access`,

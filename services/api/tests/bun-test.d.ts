@@ -9,8 +9,10 @@ declare module "bun:test" {
     toBeNull(): void
     toEqual(expected: unknown): void
     toMatch(expected: RegExp): void
+    toMatchObject(expected: unknown): void
     toHaveLength(expected: number): void
     toContain(expected: string): void
+    toBeGreaterThan(expected: unknown): void
     toThrow(expected?: string | RegExp): void
     readonly not: {
       toBe(expected: unknown): void

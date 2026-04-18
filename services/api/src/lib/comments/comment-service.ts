@@ -1,4 +1,5 @@
 import type { Client } from "../sql-client"
+import type { DbExecutor } from "../db-helpers"
 import { sha256Hex } from "../crypto"
 import { openCommunityDb } from "../communities/community-db-factory"
 import { enqueueCommunityJob } from "../communities/community-job-store"
@@ -61,7 +62,7 @@ function resolveAnonymousScope(input: {
 }
 
 async function enqueueProjectionRetry(input: {
-  client: Client
+  client: DbExecutor
   communityId: string
   comment: Comment
   createdAt: string
@@ -87,7 +88,7 @@ async function enqueueProjectionRetry(input: {
 }
 
 async function enqueueCommentTranslationJob(input: {
-  client: Client
+  client: DbExecutor
   communityId: string
   commentId: string
   locale: string
@@ -108,7 +109,7 @@ async function enqueueCommentTranslationJob(input: {
 }
 
 async function enqueueCommentTranslationPrewarmJobs(input: {
-  client: Client
+  client: DbExecutor
   communityId: string
   comment: Comment
   createdAt: string

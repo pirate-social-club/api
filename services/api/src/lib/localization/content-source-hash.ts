@@ -11,7 +11,6 @@ export async function computePostSourceHash(post: Post): Promise<string> {
     title: canonicalizeString(post.title),
     body: canonicalizeString(post.body),
     caption: canonicalizeString(post.caption),
-    lyrics: canonicalizeString(post.lyrics),
   }
 
   return `0x${await sha256Hex(JSON.stringify(payload))}`

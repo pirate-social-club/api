@@ -262,7 +262,7 @@ export async function uploadCdrEncryptedDataKey(params: {
   if (!allocateReceipt || allocateReceipt.status !== 1) {
     throw new Error("cdr_allocate_failed")
   }
-  const allocateLogs = ((allocateReceipt.logs as Array<{ topics: readonly string[]; data: string }> | undefined) || []).filter((log): log is { topics: readonly string[]; data: string } => (
+  const allocateLogs = ((allocateReceipt.logs as readonly { topics: readonly string[]; data: string }[] | undefined) || []).filter((log): log is { topics: readonly string[]; data: string } => (
     Array.isArray(log.topics)
     && log.topics.every((topic) => typeof topic === "string")
     && typeof log.data === "string"
