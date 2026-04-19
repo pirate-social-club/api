@@ -1955,6 +1955,75 @@ type WalletScoreCapabilityState = {
   }> | null;
 };
 
+export type UserTaskType = "namespace_verification_required" | "namespace_verification_pending" | "payout_setup_required";
+
+export type UserTaskStatus = "open" | "completed" | "dismissed";
+
+export type NotificationEventType = "comment_reply" | "post_commented" | "mention" | "mod_event" | "community_update";
+
+export type UserTask = {
+  task_id: string;
+  user_id: string;
+  type: UserTaskType;
+  subject_type: string;
+  subject_id: string;
+  status: UserTaskStatus;
+  priority: number;
+  payload?: (Record<string, unknown>) | null;
+  resolved_at?: string | null;
+  dismissed_at?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type NotificationEvent = {
+  event_id: string;
+  type: NotificationEventType;
+  actor_user_id?: string | null;
+  subject_type: string;
+  subject_id: string;
+  object_type?: string | null;
+  object_id?: string | null;
+  payload?: (Record<string, unknown>) | null;
+  created_at: string;
+};
+
+export type NotificationReceipt = {
+  event_id: string;
+  recipient_user_id: string;
+  seen_at?: string | null;
+  read_at?: string | null;
+  created_at: string;
+};
+
+export type NotificationSummary = {
+  open_task_count: number;
+  unread_activity_count: number;
+  has_unread: boolean;
+};
+
+export type NotificationFeedItem = {
+  event: NotificationEvent;
+  receipt: NotificationReceipt;
+};
+
+export type NotificationFeedResponse = {
+  items: Array<NotificationFeedItem>;
+  next_cursor: string | null;
+};
+
+export type NotificationTasksResponse = {
+  items: Array<UserTask>;
+};
+
+export type MarkNotificationsReadRequest = {
+  event_ids?: Array<string>;
+};
+
+export type DismissTaskRequest = {
+  task_id: string;
+};
+
 export const apiRoutes = {
   authSessionExchange: "/auth/session/exchange",
   usersMe: "/users/me",
@@ -2001,4 +2070,9 @@ export const apiRoutes = {
   commentReplies: (commentId: string) => `/comments/${commentId}/replies`,
   commentContext: (commentId: string) => `/comments/${commentId}/context`,
   commentVote: (commentId: string) => `/comments/${commentId}/vote`,
+  notificationsSummary: "/notifications/summary",
+  notificationsTasks: "/notifications/tasks",
+  notificationsFeed: "/notifications/feed",
+  notificationsMarkRead: "/notifications/mark-read",
+  notificationsDismissTask: "/notifications/dismiss-task",
 } as const

@@ -5,6 +5,7 @@ import { openCommunityDb } from "../communities/community-db-factory"
 import { enqueueCommunityJob } from "../communities/community-job-store"
 import { buildLocalizedCommentListItem } from "../localization/comment-localization-service"
 import { CONTENT_TRANSLATION_PREWARM_LOCALES, detectSourceLanguageFromText, sameLanguageLocale } from "../localization/content-locale"
+import { emitCommentReply, emitPostCommented } from "../notifications/notification-service"
 import {
   canAccessCommunity,
   getCommunityMembershipState,
@@ -347,6 +348,35 @@ export async function createComment(input: {
         threadRootPostId: createdComment.thread_root_post_id,
         updatedAt: createdAt,
       })
+
+      try {
+        const notifiedUserIds = new Set<string>()
+
+        if (parentComment && parentComment.author_user_id) {
+          await emitCommentReply({
+            env: input.env,
+            actorUserId: input.userId,
+            recipientUserId: parentComment.author_user_id,
+            communityId: input.communityId,
+            threadRootPostId: input.threadRootPostId,
+            parentCommentId: parentComment.comment_id,
+            replyCommentId: createdComment.comment_id,
+          })
+          notifiedUserIds.add(parentComment.author_user_id)
+        }
+
+        const threadRootPost = await getPostById(db.client, input.threadRootPostId)
+        if (threadRootPost?.author_user_id && threadRootPost.author_user_id !== input.userId && !notifiedUserIds.has(threadRootPost.author_user_id)) {
+          await emitPostCommented({
+            env: input.env,
+            actorUserId: input.userId,
+            postAuthorUserId: threadRootPost.author_user_id,
+            communityId: input.communityId,
+            postId: input.threadRootPostId,
+            commentId: createdComment.comment_id,
+          })
+        }
+      } catch {}
 
       return createdComment
     } catch (error) {

@@ -6,6 +6,7 @@ import comments from "./routes/comments"
 import communities from "./routes/communities"
 import feed from "./routes/feed"
 import jobs from "./routes/jobs"
+import notifications from "./routes/notifications"
 import onboarding from "./routes/onboarding"
 import posts from "./routes/posts"
 import publicComments from "./routes/public-comments"
@@ -37,6 +38,7 @@ app.route("/comments", comments)
 app.route("/communities", communities)
 app.route("/feed", feed)
 app.route("/jobs", jobs)
+app.route("/notifications", notifications)
 app.route("/posts", posts)
 app.route("/public-comments", publicComments)
 app.route("/public-communities", publicCommunities)

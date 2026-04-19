@@ -18,6 +18,7 @@ import { badRequestError, eligibilityFailed, internalError, notFoundError } from
 import { makeId, nowIso } from "../helpers"
 import { getRegistryPublicationAdapter } from "./registry-publication"
 import type { VerificationRepository } from "../verification/control-plane-verification-repository"
+import { createNamespaceVerificationTask, resolveNamespaceVerificationTask } from "../notifications/notification-service"
 import type {
   Community,
   CommunityCreateAcceptedResponse,
@@ -273,7 +274,7 @@ export function assertCreateRequest(
 export type CreateCommunityAuth = {
   userId: string
   user: User
-  displayName: string
+  communityDisplayName: string
   actorPrimaryWalletSnapshot: string | null
   namespaceVerificationId: string | null
   createdAt: string
@@ -300,7 +301,7 @@ export async function resolveCreateCommunityAuth(input: {
   return {
     userId: input.userId,
     user,
-    displayName: input.body.display_name.trim(),
+    communityDisplayName: input.body.display_name.trim(),
     actorPrimaryWalletSnapshot,
     namespaceVerificationId: input.body.namespace?.namespace_verification_id?.trim() || null,
     createdAt: nowIso(),
@@ -1476,7 +1477,7 @@ async function createNamespacelessCommunity(input: {
     registryAttemptId: null,
     jobId,
     creatorUserId: input.auth.userId,
-    displayName: input.auth.displayName,
+    displayName: input.auth.communityDisplayName,
     membershipMode: input.body.membership_mode ?? "open",
     namespaceVerificationId: null,
     routeSlug: null,
@@ -1493,7 +1494,7 @@ async function createNamespacelessCommunity(input: {
         env: input.env,
         communityId,
         creatorUserId: input.auth.userId,
-        displayName: input.auth.displayName,
+        displayName: input.auth.communityDisplayName,
         namespaceVerificationId: null,
         groupLocation: resolveCommunityProvisionGroupLocation(input.env),
         bootstrapPayload: buildProvisionOperatorBootstrapPayload(
@@ -1539,7 +1540,7 @@ async function createNamespacelessCommunity(input: {
         rootDir: dbRoot,
         communityId,
         createdByUserId: input.auth.userId,
-        displayName: input.auth.displayName,
+        displayName: input.auth.communityDisplayName,
         description: input.body.description?.trim() || null,
         avatarRef: normalizeCommunityMediaRef(input.body.avatar_ref),
         bannerRef: normalizeCommunityMediaRef(input.body.banner_ref),
@@ -1597,6 +1598,15 @@ async function createNamespacelessCommunity(input: {
       sourceUpdatedAt: input.auth.createdAt,
       createdAt: input.auth.createdAt,
     })
+
+    try {
+      await createNamespaceVerificationTask({
+        env: input.env,
+        userId: input.auth.userId,
+        communityId,
+        communityDisplayName: input.auth.communityDisplayName,
+      })
+    } catch {}
 
     return {
       community: serializeCommunity(finalized.community, localSnapshot),
@@ -1672,7 +1682,7 @@ async function finalizeExistingCommunity(input: {
       namespaceVerificationId: input.namespaceVerificationId,
       normalizedRootLabel: input.namespaceVerification.normalized_root_label,
       canonicalSeed: {
-        display_name: input.auth.displayName,
+        display_name: input.auth.communityDisplayName,
         description: input.body.description?.trim() || null,
         governance_mode: input.body.governance_mode ?? "centralized",
       },
@@ -1750,7 +1760,7 @@ async function provisionNamespacedCommunity(input: {
             registryAttemptId: registryAttempt.registry_attempt_id,
             jobId,
             creatorUserId: auth.userId,
-            displayName: auth.displayName,
+            displayName: auth.communityDisplayName,
             membershipMode: body.membership_mode ?? "open",
             namespaceVerificationId,
             routeSlug: namespaceVerification.normalized_root_label,
@@ -1778,7 +1788,7 @@ async function provisionNamespacedCommunity(input: {
         env,
         communityId,
         creatorUserId: auth.userId,
-        displayName: auth.displayName,
+        displayName: auth.communityDisplayName,
         namespaceVerificationId,
         groupLocation: resolveCommunityProvisionGroupLocation(env),
         bootstrapPayload: buildProvisionOperatorBootstrapPayload(
@@ -1823,7 +1833,7 @@ async function provisionNamespacedCommunity(input: {
         rootDir: dbRoot,
         communityId,
         createdByUserId: auth.userId,
-        displayName: auth.displayName,
+        displayName: auth.communityDisplayName,
         description: body.description?.trim() || null,
         avatarRef: normalizeCommunityMediaRef(body.avatar_ref),
         bannerRef: normalizeCommunityMediaRef(body.banner_ref),
@@ -1883,7 +1893,7 @@ async function provisionNamespacedCommunity(input: {
       namespaceVerificationId,
       normalizedRootLabel: namespaceVerification.normalized_root_label,
       canonicalSeed: {
-        display_name: auth.displayName,
+        display_name: auth.communityDisplayName,
         description: body.description?.trim() || null,
         governance_mode: body.governance_mode ?? "centralized",
       },
@@ -2103,6 +2113,14 @@ export async function attachNamespaceToCommunity(input: {
     })
     finalCommunity = publication.community
   }
+
+  try {
+    await resolveNamespaceVerificationTask({
+      env: input.env,
+      userId: input.userId,
+      communityId: input.communityId,
+    })
+  } catch {}
 
   return loadCommunityProjection(input.env, input.communityRepository, finalCommunity)
 }
