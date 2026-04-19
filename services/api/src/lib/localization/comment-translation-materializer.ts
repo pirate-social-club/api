@@ -1,10 +1,14 @@
 import type { DbExecutor } from "../db-helpers"
 import { nowIso } from "../helpers"
-import type { Comment, Env } from "../../types"
+import type { Comment as ApiComment, Env } from "../../types"
 import { computeCommentSourceHash } from "./content-source-hash"
 import { DEFAULT_CONTENT_LOCALE, normalizeContentLocale, sameLanguageLocale } from "./content-locale"
 import { requestContentTranslation } from "./content-translation-provider"
 import { getContentTranslation, upsertContentTranslation } from "./content-translation-store"
+
+type Comment = ApiComment & {
+  source_language?: string | null
+}
 
 function hasTranslatableCommentContent(comment: Comment): boolean {
   return comment.status === "published" && Boolean(String(comment.body ?? "").trim())

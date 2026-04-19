@@ -12,7 +12,9 @@ export type CommentIdentityMode = "public" | "anonymous"
 export type CommentAnonymousScope = "community_stable" | "thread_stable" | null
 export type CommentSort = "best" | "new" | "old" | "top"
 
-export type Comment = ApiComment
+export type Comment = ApiComment & {
+  source_language?: string | null
+}
 export type CreateCommentRequest = ApiCreateCommentRequest
 export type CommentListItem = ApiCommentListItem
 export type CommentListResponse = ApiCommentListResponse
