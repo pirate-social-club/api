@@ -1282,7 +1282,7 @@ type CommunityMotionMediaPolicy = {
 
 type CommunityPolicyOrigin = "default" | "explicit";
 
-type CommunityPricingAdjustmentType = "multiplier" | "fixed_price_usd";
+type CommunityPricingAdjustmentType = "multiplier";
 
 type CommunityPricingCountryAssignment = {
   country_code: string;

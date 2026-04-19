@@ -1749,9 +1749,7 @@ function resolveRegionalPrice(input: {
   if (!tier) {
     return { finalPriceUsd: basePriceUsd, pricingTier: null, verificationSnapshot: null }
   }
-  const finalPriceUsd = tier.adjustment_type === "fixed_price_usd"
-    ? roundUsd(tier.adjustment_value)
-    : roundUsd(basePriceUsd * tier.adjustment_value)
+  const finalPriceUsd = roundUsd(basePriceUsd * tier.adjustment_value)
   return {
     finalPriceUsd,
     pricingTier: tier.tier_key,
