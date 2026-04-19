@@ -36,6 +36,14 @@ import {
   resolveProvisioningRetryAction,
 } from "./community-create-shared"
 
+function requireProvisionedCredentialId(communityId: string, credentialId: string): string {
+  const trimmed = credentialId.trim()
+  if (trimmed.length === 0) {
+    throw new Error(`Provision operator returned empty credential_id for community ${communityId}`)
+  }
+  return trimmed
+}
+
 async function upsertLocalNamespaceAttachment(input: {
   env: Env
   repo: CommunityRepository
@@ -158,15 +166,7 @@ async function createNamespacelessCommunity(input: {
         plaintextToken: provisioned.plaintextToken,
         wrapKey: resolveCommunityDbWrapKey(input.env),
       })
-      const communityDbCredentialId = provisioned.credentialId.trim() || (() => {
-        const fallbackId = makeId("cdc")
-        console.warn(
-          "[community-provision] operator returned empty credential_id for namespaceless community %s; using fallback %s",
-          communityId,
-          fallbackId,
-        )
-        return fallbackId
-      })()
+      const communityDbCredentialId = requireProvisionedCredentialId(communityId, provisioned.credentialId)
       await input.communityRepository.persistProvisionedCommunityDatabaseAccess({
         communityDatabaseBindingId: prepared.binding.community_database_binding_id,
         communityDbCredentialId,
@@ -351,15 +351,7 @@ async function provisionNamespacedCommunity(input: {
         plaintextToken: provisioned.plaintextToken,
         wrapKey: resolveCommunityDbWrapKey(env),
       })
-      const communityDbCredentialId = provisioned.credentialId.trim() || (() => {
-        const fallbackId = makeId("cdc")
-        console.warn(
-          "[community-provision] operator returned empty credential_id for community %s; using fallback %s",
-          communityId,
-          fallbackId,
-        )
-        return fallbackId
-      })()
+      const communityDbCredentialId = requireProvisionedCredentialId(communityId, provisioned.credentialId)
       await repo.persistProvisionedCommunityDatabaseAccess({
         communityDatabaseBindingId: prepared.binding.community_database_binding_id,
         communityDbCredentialId,

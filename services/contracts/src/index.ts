@@ -834,7 +834,6 @@ export type Comment = {
   anonymous_scope: "community_stable" | "thread_stable" | null;
   anonymous_label: string | null;
   body: string | null;
-  source_language?: string | null;
   status: "published" | "hidden" | "removed" | "deleted";
   depth: number;
   direct_reply_count: number;
