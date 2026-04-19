@@ -41,8 +41,7 @@ export function buildDefaultCommunityAvatarRef(input: {
   communityId: string;
   displayName: string;
 }): string {
-  const seed = `${input.communityId}:${sanitizeLabel(input.displayName)}`;
-  const hash = hashSeed(seed);
+  const hash = hashSeed(input.communityId.trim());
   const hue = hash % 360;
   const secondaryHue = (hue + 38) % 360;
   const initials = buildInitials(input.displayName);

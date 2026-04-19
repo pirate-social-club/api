@@ -7,6 +7,7 @@ import { buildLocalizedPostResponse } from "../localization/post-localization-se
 import { getPostById } from "../posts/community-post-store"
 import { getControlPlaneClient } from "../runtime-deps"
 import { requiredNumber, requiredString, rowValue, numberOrNull } from "../sql-row"
+import type { CommunityMembershipProjectionRow, CommunityRow } from "../auth/auth-db-rows"
 import type {
   Env,
   HomeFeedCommunitySummary,
@@ -25,8 +26,29 @@ type HomeFeedProjectionRow = {
   like_count: number
 }
 
+export type HomeFeedTimeRange = "hour" | "day" | "week" | "month" | "year" | "all"
+
 function parseHomeFeedSort(sort: string | null | undefined): HomeFeedSort {
   return sort === "new" || sort === "top" ? sort : "best"
+}
+
+function parseHomeFeedTimeRange(timeRange: string | null | undefined): HomeFeedTimeRange {
+  if (timeRange === "hour" || timeRange === "day" || timeRange === "week" || timeRange === "month" || timeRange === "year" || timeRange === "all") {
+    return timeRange
+  }
+  return "all"
+}
+
+function getTimeRangeCutoffMs(timeRange: HomeFeedTimeRange, now: number): number | null {
+  if (timeRange === "all") return null
+  const hours: Record<Exclude<HomeFeedTimeRange, "all">, number> = {
+    hour: 1,
+    day: 24,
+    week: 168,
+    month: 720,
+    year: 8760,
+  }
+  return now - hours[timeRange] * 3_600_000
 }
 
 function parseOffsetCursor(cursor: string | null | undefined): number {
@@ -66,8 +88,12 @@ function toHomeFeedProjectionRow(row: unknown): HomeFeedProjectionRow {
 async function getViewerVote(input: {
   client: Client
   postId: string
-  userId: string
+  userId: string | null
 }): Promise<-1 | 1 | null> {
+  if (!input.userId) {
+    return null
+  }
+
   const row = await executeFirst(input.client, {
     sql: `
       SELECT vote_value
@@ -95,28 +121,102 @@ function buildCommunitySummary(community: Awaited<ReturnType<CommunityRepository
   }
 }
 
-export async function listHomeFeed(input: {
-  env: Env
-  userId: string
-  locale?: string | null
-  sort?: string | null
-  cursor?: string | null
-  communityRepository: CommunityRepository
-}): Promise<HomeFeedResponse> {
-  const membershipRows = await input.communityRepository.listCommunityMembershipProjectionsByUserId(input.userId)
-  const activeCommunities = await input.communityRepository.listActiveCommunities()
-  const memberCommunityIds = new Set(
-    membershipRows
-      .filter((row) => row.membership_state === "member")
-      .map((row) => row.community_id),
-  )
-  for (const community of activeCommunities) {
-    if (community.creator_user_id === input.userId) {
+export function resolveHomeFeedCommunityIds(input: {
+  activeCommunities: CommunityRow[]
+  membershipRows: CommunityMembershipProjectionRow[]
+  userId: string | null
+}): string[] {
+  const memberCommunityIds = new Set<string>()
+
+  if (input.userId) {
+    for (const row of input.membershipRows) {
+      if (row.membership_state === "member") {
+        memberCommunityIds.add(row.community_id)
+      }
+    }
+
+    for (const community of input.activeCommunities) {
+      if (community.creator_user_id === input.userId) {
+        memberCommunityIds.add(community.community_id)
+      }
+    }
+  } else {
+    for (const community of input.activeCommunities) {
       memberCommunityIds.add(community.community_id)
     }
   }
 
-  if (memberCommunityIds.size === 0) {
+  if (input.userId && memberCommunityIds.size === 0) {
+    for (const community of input.activeCommunities) {
+      memberCommunityIds.add(community.community_id)
+    }
+  }
+
+  return [...memberCommunityIds]
+}
+
+export type CommunityAggregate = {
+  totalScore: number
+  bestRank: number
+  latestPostMs: number
+}
+
+export function filterCommunitiesWithPosts(
+  summaries: HomeFeedCommunitySummary[],
+  aggregates: Map<string, CommunityAggregate>,
+  hasTimeRange: boolean,
+): HomeFeedCommunitySummary[] {
+  if (!hasTimeRange) return summaries
+  return summaries.filter((summary) => aggregates.has(summary.community_id))
+}
+
+export function sortCommunitySummaries(
+  summaries: HomeFeedCommunitySummary[],
+  aggregates: Map<string, CommunityAggregate>,
+  sort: HomeFeedSort,
+): HomeFeedCommunitySummary[] {
+  return [...summaries].sort((left, right) => {
+    const leftAgg = aggregates.get(left.community_id)
+    const rightAgg = aggregates.get(right.community_id)
+
+    if (sort === "top") {
+      const leftScore = leftAgg?.totalScore ?? 0
+      const rightScore = rightAgg?.totalScore ?? 0
+      if (rightScore !== leftScore) return rightScore - leftScore
+    } else if (sort === "best") {
+      const leftRank = leftAgg?.bestRank ?? 0
+      const rightRank = rightAgg?.bestRank ?? 0
+      if (rightRank !== leftRank) return rightRank - leftRank
+    }
+
+    const leftLatest = leftAgg?.latestPostMs ?? Date.parse(left.updated_at)
+    const rightLatest = rightAgg?.latestPostMs ?? Date.parse(right.updated_at)
+    if (rightLatest !== leftLatest) return rightLatest - leftLatest
+
+    return left.community_id.localeCompare(right.community_id)
+  })
+}
+
+export async function listHomeFeed(input: {
+  env: Env
+  userId: string | null
+  locale?: string | null
+  sort?: string | null
+  timeRange?: string | null
+  cursor?: string | null
+  communityRepository: CommunityRepository
+}): Promise<HomeFeedResponse> {
+  const activeCommunities = await input.communityRepository.listActiveCommunities()
+  const membershipRows = input.userId
+    ? await input.communityRepository.listCommunityMembershipProjectionsByUserId(input.userId)
+    : []
+  const communityIds = resolveHomeFeedCommunityIds({
+    activeCommunities,
+    membershipRows,
+    userId: input.userId,
+  })
+
+  if (communityIds.length === 0) {
     return {
       items: [],
       top_communities: [],
@@ -124,14 +224,15 @@ export async function listHomeFeed(input: {
     }
   }
 
-  const communityIds = [...memberCommunityIds]
   const communitySummaries = (
     await Promise.all(communityIds.map(async (communityId) => buildCommunitySummary(
       await input.communityRepository.getCommunityById(communityId),
     )))
   )
     .filter((summary): summary is HomeFeedCommunitySummary => Boolean(summary))
-    .sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at))
+
+  const sort = parseHomeFeedSort(input.sort)
+  const now = Date.now()
 
   const controlPlaneClient = getControlPlaneClient(input.env)
   const placeholders = communityIds.map((_, index) => `?${index + 1}`).join(", ")
@@ -146,38 +247,68 @@ export async function listHomeFeed(input: {
     args: communityIds,
   })
 
-  const sort = parseHomeFeedSort(input.sort)
-  const now = Date.now()
-  const sortedRows = projectionResult.rows
-    .map((row) => toHomeFeedProjectionRow(row))
-    .sort((left, right) => {
-      if (sort === "new") {
-        return getProjectionCreatedAtMs(right) - getProjectionCreatedAtMs(left)
+  const allRows = projectionResult.rows.map((row) => toHomeFeedProjectionRow(row))
+
+  const timeRange = parseHomeFeedTimeRange(input.timeRange)
+  const cutoffMs = getTimeRangeCutoffMs(timeRange, now)
+  const timeFilteredRows = cutoffMs != null
+    ? allRows.filter((row) => getProjectionCreatedAtMs(row) >= cutoffMs)
+    : allRows
+
+  const communityAggregateById = new Map<string, CommunityAggregate>()
+  for (const row of timeFilteredRows) {
+    const existing = communityAggregateById.get(row.community_id)
+    const rowScore = getProjectionScore(row)
+    const rowBestRank = getBestProjectionRank(row, now)
+    const rowCreatedAtMs = getProjectionCreatedAtMs(row)
+    if (!existing) {
+      communityAggregateById.set(row.community_id, {
+        totalScore: rowScore,
+        bestRank: rowBestRank,
+        latestPostMs: rowCreatedAtMs,
+      })
+    } else {
+      existing.totalScore += rowScore
+      existing.bestRank += rowBestRank
+      if (rowCreatedAtMs > existing.latestPostMs) {
+        existing.latestPostMs = rowCreatedAtMs
       }
-      if (sort === "top") {
-        const scoreDiff = getProjectionScore(right) - getProjectionScore(left)
-        if (scoreDiff !== 0) {
-          return scoreDiff
-        }
-      } else {
-        const rankDiff = getBestProjectionRank(right, now) - getBestProjectionRank(left, now)
-        if (rankDiff !== 0) {
-          return rankDiff
-        }
+    }
+  }
+
+  const communitySummaryById = Object.fromEntries(
+    communitySummaries.map((summary) => [summary.community_id, summary] as const),
+  )
+
+  const communitiesWithPosts = filterCommunitiesWithPosts(communitySummaries, communityAggregateById, cutoffMs != null)
+
+  const sortedCommunities = sortCommunitySummaries(communitiesWithPosts, communityAggregateById, sort)
+
+  const sortedRows = [...timeFilteredRows].sort((left, right) => {
+    if (sort === "new") {
+      return getProjectionCreatedAtMs(right) - getProjectionCreatedAtMs(left)
+    }
+    if (sort === "top") {
+      const scoreDiff = getProjectionScore(right) - getProjectionScore(left)
+      if (scoreDiff !== 0) {
+        return scoreDiff
       }
-      const createdAtDiff = getProjectionCreatedAtMs(right) - getProjectionCreatedAtMs(left)
-      if (createdAtDiff !== 0) {
-        return createdAtDiff
+    } else {
+      const rankDiff = getBestProjectionRank(right, now) - getBestProjectionRank(left, now)
+      if (rankDiff !== 0) {
+        return rankDiff
       }
-      return right.source_post_id.localeCompare(left.source_post_id)
-    })
+    }
+    const createdAtDiff = getProjectionCreatedAtMs(right) - getProjectionCreatedAtMs(left)
+    if (createdAtDiff !== 0) {
+      return createdAtDiff
+    }
+    return right.source_post_id.localeCompare(left.source_post_id)
+  })
 
   const offset = parseOffsetCursor(input.cursor)
   const pageRows = sortedRows.slice(offset, offset + 25)
   const nextCursor = offset + 25 < sortedRows.length ? `o:${offset + 25}` : null
-  const communitySummaryById = Object.fromEntries(
-    communitySummaries.map((summary) => [summary.community_id, summary] as const),
-  )
 
   const items: HomeFeedItem[] = []
   const rowsByCommunityId = new Map<string, HomeFeedProjectionRow[]>()
@@ -234,7 +365,7 @@ export async function listHomeFeed(input: {
 
   return {
     items: orderedItems,
-    top_communities: communitySummaries.slice(0, 6),
+    top_communities: sortedCommunities.slice(0, 6),
     next_cursor: nextCursor,
   }
 }

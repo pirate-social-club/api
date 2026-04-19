@@ -155,7 +155,10 @@ class LibsqlTransactionAdapter implements Transaction {
 }
 
 class LibsqlClientAdapter implements Client {
-  constructor(private readonly client: LibsqlClient) {}
+  constructor(
+    private readonly client: LibsqlClient,
+    private readonly shouldCloseClient = true,
+  ) {}
 
   async execute(statement: InStatement | string): Promise<QueryResult> {
     const result = await this.client.execute(statement as never)
@@ -181,7 +184,9 @@ class LibsqlClientAdapter implements Client {
   }
 
   close(): void {
-    this.client.close()
+    if (this.shouldCloseClient) {
+      this.client.close()
+    }
   }
 }
 
@@ -267,7 +272,7 @@ function getControlPlaneClient(env: Env): Client {
   const cacheKey = `cp:${getControlPlaneCacheKey(env)}`
   return globalSingleton("controlPlaneClient", cacheKey, () => new LibsqlClientAdapter(createLibsqlClient({
     url,
-  })))
+  }), false))
 }
 
 export { getControlPlaneClient }

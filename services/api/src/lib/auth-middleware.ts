@@ -27,7 +27,27 @@ export const authenticate = createMiddleware<{ Bindings: Env; Variables: Authent
   },
 )
 
+export const authenticateOptional = createMiddleware<{ Bindings: Env; Variables: Partial<AuthenticatedVariables> }>(
+  async (c, next) => {
+    const header = c.req.header("authorization")
+    if (!header || !header.startsWith("Bearer ")) {
+      await next()
+      return
+    }
+
+    const token = requireBearerToken(header)
+    const session = await verifyPirateAccessToken({ env: c.env, token })
+    c.set("actor", { userId: session.userId })
+    await next()
+  },
+)
+
 export type AuthenticatedEnv = {
   Bindings: Env
   Variables: AuthenticatedVariables
+}
+
+export type OptionalAuthenticatedEnv = {
+  Bindings: Env
+  Variables: Partial<AuthenticatedVariables>
 }

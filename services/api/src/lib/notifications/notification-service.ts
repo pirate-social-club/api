@@ -70,6 +70,8 @@ export async function emitCommentReply(input: {
   actorUserId: string
   recipientUserId: string
   communityId: string
+  commentExcerpt?: string | null
+  postTitle?: string | null
   threadRootPostId: string
   parentCommentId: string
   replyCommentId: string
@@ -90,6 +92,9 @@ export async function emitCommentReply(input: {
       objectId: input.replyCommentId,
       payload: {
         community_id: input.communityId,
+        comment_excerpt: input.commentExcerpt ?? null,
+        post_title: input.postTitle ?? null,
+        target_path: `/p/${input.threadRootPostId}`,
         thread_root_post_id: input.threadRootPostId,
       },
       dedupeKey: `comment_reply:${input.replyCommentId}:${input.recipientUserId}`,
@@ -111,6 +116,8 @@ export async function emitPostCommented(input: {
   actorUserId: string
   postAuthorUserId: string
   communityId: string
+  commentExcerpt?: string | null
+  postTitle?: string | null
   postId: string
   commentId: string
 }): Promise<void> {
@@ -130,6 +137,9 @@ export async function emitPostCommented(input: {
       objectId: input.commentId,
       payload: {
         community_id: input.communityId,
+        comment_excerpt: input.commentExcerpt ?? null,
+        post_title: input.postTitle ?? null,
+        target_path: `/p/${input.postId}`,
       },
       dedupeKey: `post_commented:${input.commentId}:${input.postAuthorUserId}`,
       createdAt: now,

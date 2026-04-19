@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "wrangler dev --port 8787",
     "dev:local": "bun run scripts/serve-local.ts",
+    "dev:local:full": "bun run scripts/dev-local-full.ts",
     "cancel:story-runtime-pending-tx": "bun run scripts/cancel-story-runtime-pending-tx.ts",
     "fund:story-runtime-signers": "bun run scripts/fund-story-runtime-signers.ts",
     "worker:community-jobs:local": "bun run scripts/run-community-job-worker.ts",

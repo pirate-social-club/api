@@ -17,6 +17,10 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
   return Math.trunc(parsed)
 }
 
+function hasConfiguredValue(value: string | undefined): boolean {
+  return String(value ?? "").trim().length > 0
+}
+
 async function main(): Promise<void> {
   const baseEnv = {
     ...readDevVarsFromCwd(),
@@ -39,6 +43,7 @@ async function main(): Promise<void> {
   const maxJobsPerCommunity = parsePositiveInt(env.COMMUNITY_JOB_WORKER_MAX_JOBS_PER_COMMUNITY, 25)
   const maxCommunitiesPerTick = parsePositiveInt(env.COMMUNITY_JOB_WORKER_MAX_COMMUNITIES_PER_TICK, 100)
   const stopWhenIdle = String(process.env.STOP_WHEN_IDLE || "").trim() === "1"
+  const openRouterConfigured = hasConfiguredValue(env.OPENROUTER_API_KEY)
   const abortController = new AbortController()
 
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
@@ -54,8 +59,15 @@ async function main(): Promise<void> {
       `max jobs/community: ${maxJobsPerCommunity}`,
       `max communities/tick: ${maxCommunitiesPerTick}`,
       `stop when idle: ${stopWhenIdle ? "yes" : "no"}`,
+      `openrouter configured: ${openRouterConfigured ? "yes" : "no"}`,
     ].join("\n"),
   )
+
+  if (!openRouterConfigured) {
+    console.warn(
+      "community job worker warning: OPENROUTER_API_KEY is missing; translation jobs will fail until the worker is started with runtime secrets",
+    )
+  }
 
   const communityRepository = getCommunityRepository(env)
 
