@@ -70,7 +70,6 @@ async function prepareVerifiedNamespace(env: Env, accessToken: string): Promise<
 async function createCommunity(env: Env, accessToken: string, displayName: string): Promise<{
   communityId: string
   createJobId: string
-  registryJobId: string
 }> {
   const namespaceVerificationId = await prepareVerifiedNamespace(env, accessToken)
   const response = await requestJson("http://pirate.test/communities", {
@@ -84,19 +83,15 @@ async function createCommunity(env: Env, accessToken: string, displayName: strin
   const body = await json(response) as {
     community: {
       community_id: string
-      registry_publication_job_id: string | null
     }
     job: {
       job_id: string
     }
   }
 
-  expect(typeof body.community.registry_publication_job_id).toBe("string")
-
   return {
     communityId: body.community.community_id,
     createJobId: body.job.job_id,
-    registryJobId: String(body.community.registry_publication_job_id),
   }
 }
 
@@ -256,7 +251,7 @@ afterEach(async () => {
 })
 
 describe("jobs routes", () => {
-  test("GET /jobs/:jobId returns community creation and registry publication jobs", async () => {
+  test("GET /jobs/:jobId returns the community creation job", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
 
@@ -277,27 +272,6 @@ describe("jobs routes", () => {
     expect(createJobBody.job_id).toBe(community.createJobId)
     expect(createJobBody.status).toBe("succeeded")
     expect(createJobBody.subject_id).toBe(community.communityId)
-
-    const registryJob = await app.request(
-      `http://pirate.test/jobs/${community.registryJobId}`,
-      {
-        headers: {
-          authorization: `Bearer ${session.accessToken}`,
-        },
-      },
-      ctx.env,
-    )
-    expect(registryJob.status).toBe(200)
-    const registryJobBody = await json(registryJob) as {
-      job_id: string
-      job_type: string
-      status: string
-      subject_id: string
-    }
-    expect(registryJobBody.job_id).toBe(community.registryJobId)
-    expect(registryJobBody.job_type).toBe("community_registry_publication")
-    expect(registryJobBody.status).toBe("succeeded")
-    expect(registryJobBody.subject_id).toBe(community.communityId)
   })
 })
 

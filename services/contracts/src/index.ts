@@ -265,11 +265,6 @@ export type Community = {
   pending_namespace_verification_session_id?: string | null;
   status: "draft" | "active" | "frozen" | "archived" | "deleted";
   provisioning_state: "requested" | "provisioning" | "active" | "rotation_required" | "error";
-  registry_publication_state?: "not_started" | "pending_create" | "pending_seed" | "published" | "stale" | "publication_error";
-  registry_attempt_id?: string | null;
-  registry_published_at?: string | null;
-  registry_publication_job_id?: string | null;
-  registry_error_code?: string | null;
   artist_identity_id?: string | null;
   community_agent_user_id?: string | null;
   membership_mode: "open" | "request" | "gated";
@@ -888,6 +883,11 @@ export type CommentContext = {
   thread_snapshot: CommentThreadSnapshot | null;
 };
 
+export type PostVoteResponse = {
+  post_id: string;
+  value: -1 | 1;
+};
+
 export type CommentVoteResponse = {
   comment_id: string;
   value: -1 | 1;
@@ -987,32 +987,10 @@ export type LocalizedPostResponse = {
   resolved_locale: string;
   translation_state: "ready" | "pending" | "same_language" | "policy_blocked";
   machine_translated: boolean;
-  translated_title?: string | null;
   translated_body?: string | null;
+  translated_title?: string | null;
   translated_caption?: string | null;
   source_hash: string;
-};
-
-export type HomeFeedSort = "best" | "new" | "top";
-
-export type HomeFeedCommunitySummary = {
-  community_id: string;
-  display_name: string;
-  route_slug?: string | null;
-  avatar_ref?: string | null;
-  member_count?: number | null;
-  updated_at: string;
-};
-
-export type HomeFeedItem = {
-  community: HomeFeedCommunitySummary;
-  post: LocalizedPostResponse;
-};
-
-export type HomeFeedResponse = {
-  items: Array<HomeFeedItem>;
-  top_communities: Array<HomeFeedCommunitySummary>;
-  next_cursor: string | null;
 };
 
 export type MembershipGateSummary = {
@@ -1057,6 +1035,28 @@ export type GateFailureDetails = {
   failure_reason?: "missing_verification" | "provider_not_accepted" | "nationality_mismatch" | "gender_mismatch" | "unsupported" | "banned" | null;
 };
 
+export type HomeFeedCommunitySummary = {
+  community_id: string;
+  display_name: string;
+  route_slug?: string | null;
+  avatar_ref?: string | null;
+  member_count?: number | null;
+  updated_at: string;
+};
+
+export type HomeFeedItem = {
+  community: HomeFeedCommunitySummary;
+  post: LocalizedPostResponse;
+};
+
+export type HomeFeedResponse = {
+  items: Array<FeedItem>;
+  top_communities: Array<HomeFeedCommunitySummary>;
+  next_cursor?: string | null;
+};
+
+export type HomeFeedSort = "best" | "top" | "new";
+
 export type LinkedHandle = {
   linked_handle_id: string;
   label: string;
@@ -1093,6 +1093,75 @@ export type SelfVerificationLaunch = {
   user_defined_data?: string | null;
   chain_id?: number | null;
   dev_mode?: boolean | null;
+};
+
+export type UserTaskType = "namespace_verification_required" | "namespace_verification_pending" | "payout_setup_required";
+
+export type UserTaskStatus = "open" | "completed" | "dismissed";
+
+export type NotificationEventType = "comment_reply" | "post_commented" | "mention" | "mod_event" | "community_update";
+
+export type UserTask = {
+  task_id: string;
+  user_id: string;
+  type: UserTaskType;
+  subject_type: string;
+  subject_id: string;
+  status: UserTaskStatus;
+  priority: number;
+  payload: (Record<string, unknown>) | null;
+  resolved_at?: string | null;
+  dismissed_at?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type NotificationEvent = {
+  event_id: string;
+  type: NotificationEventType;
+  actor_user_id: string | null;
+  subject_type: string;
+  subject_id: string;
+  object_type?: string | null;
+  object_id?: string | null;
+  payload?: (Record<string, unknown>) | null;
+  created_at: string;
+};
+
+export type NotificationReceipt = {
+  event_id: string;
+  recipient_user_id: string;
+  seen_at?: string | null;
+  read_at?: string | null;
+  created_at: string;
+};
+
+export type NotificationSummary = {
+  open_task_count: number;
+  unread_activity_count: number;
+  has_unread: boolean;
+};
+
+export type NotificationFeedItem = {
+  event: NotificationEvent;
+  receipt: NotificationReceipt;
+};
+
+export type NotificationFeedResponse = {
+  items: Array<NotificationFeedItem>;
+  next_cursor: string | null;
+};
+
+export type NotificationTasksResponse = {
+  items: Array<UserTask>;
+};
+
+export type MarkNotificationsReadRequest = {
+  event_ids?: Array<string>;
+};
+
+export type DismissTaskRequest = {
+  task_id: string;
 };
 
 type AgentActionProof = {
@@ -1447,7 +1516,7 @@ type CreateCommunityContentAuthenticityPolicyInput = {
 };
 
 type CreateCommunityDonationPolicyInput = {
-  donation_policy_mode: "none" | "optional_creator_sidecar";
+  donation_policy_mode: "none" | "optional_creator_sidecar" | "fundraiser_default";
   donation_partner_id?: string | null;
 };
 
@@ -1620,6 +1689,11 @@ type DonationPartnerSummary = {
   image_url?: string | null;
   review_status: "pending" | "approved" | "rejected";
   status: "active" | "paused" | "retired";
+};
+
+type FeedItem = {
+  community: HomeFeedCommunitySummary;
+  post: LocalizedPostResponse;
 };
 
 type GateRule = {
@@ -1955,75 +2029,6 @@ type WalletScoreCapabilityState = {
   }> | null;
 };
 
-export type UserTaskType = "namespace_verification_required" | "namespace_verification_pending" | "payout_setup_required";
-
-export type UserTaskStatus = "open" | "completed" | "dismissed";
-
-export type NotificationEventType = "comment_reply" | "post_commented" | "mention" | "mod_event" | "community_update";
-
-export type UserTask = {
-  task_id: string;
-  user_id: string;
-  type: UserTaskType;
-  subject_type: string;
-  subject_id: string;
-  status: UserTaskStatus;
-  priority: number;
-  payload?: (Record<string, unknown>) | null;
-  resolved_at?: string | null;
-  dismissed_at?: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-export type NotificationEvent = {
-  event_id: string;
-  type: NotificationEventType;
-  actor_user_id?: string | null;
-  subject_type: string;
-  subject_id: string;
-  object_type?: string | null;
-  object_id?: string | null;
-  payload?: (Record<string, unknown>) | null;
-  created_at: string;
-};
-
-export type NotificationReceipt = {
-  event_id: string;
-  recipient_user_id: string;
-  seen_at?: string | null;
-  read_at?: string | null;
-  created_at: string;
-};
-
-export type NotificationSummary = {
-  open_task_count: number;
-  unread_activity_count: number;
-  has_unread: boolean;
-};
-
-export type NotificationFeedItem = {
-  event: NotificationEvent;
-  receipt: NotificationReceipt;
-};
-
-export type NotificationFeedResponse = {
-  items: Array<NotificationFeedItem>;
-  next_cursor: string | null;
-};
-
-export type NotificationTasksResponse = {
-  items: Array<UserTask>;
-};
-
-export type MarkNotificationsReadRequest = {
-  event_ids?: Array<string>;
-};
-
-export type DismissTaskRequest = {
-  task_id: string;
-};
-
 export const apiRoutes = {
   authSessionExchange: "/auth/session/exchange",
   usersMe: "/users/me",
@@ -2039,7 +2044,6 @@ export const apiRoutes = {
   namespaceVerificationSessionComplete: (namespaceVerificationSessionId: string) => `/namespace-verification-sessions/${namespaceVerificationSessionId}/complete`,
   namespaceVerification: (namespaceVerificationId: string) => `/namespace-verifications/${namespaceVerificationId}`,
   communities: "/communities",
-  homeFeed: "/feed/home",
   community: (communityId: string) => `/communities/${communityId}`,
   communityMoneyPolicy: (communityId: string) => `/communities/${communityId}/money-policy`,
   communityPricingPolicy: (communityId: string) => `/communities/${communityId}/pricing-policy`,
@@ -2066,6 +2070,7 @@ export const apiRoutes = {
   communitySongArtifact: (communityId: string, songArtifactBundleId: string) => `/communities/${communityId}/song-artifacts/${songArtifactBundleId}`,
   job: (jobId: string) => `/jobs/${jobId}`,
   post: (postId: string) => `/posts/${postId}`,
+  postVote: (postId: string) => `/posts/${postId}/vote`,
   comment: (commentId: string) => `/comments/${commentId}`,
   commentReplies: (commentId: string) => `/comments/${commentId}/replies`,
   commentContext: (commentId: string) => `/comments/${commentId}/context`,

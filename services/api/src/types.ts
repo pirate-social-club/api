@@ -35,6 +35,7 @@ export type {
   CreateSongArtifactBundleRequest,
   CreateSongArtifactUploadRequest,
   CreatePostRequest,
+  DismissTaskRequest,
   ErrorResponse,
   GateFailureDetails,
   HomeFeedCommunitySummary,
@@ -46,6 +47,7 @@ export type {
   JoinEligibility,
   LinkedHandle,
   LocalizedPostResponse,
+  MarkNotificationsReadRequest,
   MembershipGateSummary,
   ModerationAction,
   ModerationCase,
@@ -56,6 +58,13 @@ export type {
   NamespaceVerificationAssertions,
   NamespaceVerificationCapabilities,
   NamespaceVerificationSession,
+  NotificationEvent,
+  NotificationEventType,
+  NotificationFeedItem,
+  NotificationFeedResponse,
+  NotificationReceipt,
+  NotificationSummary,
+  NotificationTasksResponse,
   OnboardingStatus,
   Post,
   Profile,
@@ -75,6 +84,9 @@ export type {
   UpdateCommunityPricingPolicyRequest,
   User,
   UserReport,
+  UserTask,
+  UserTaskStatus,
+  UserTaskType,
   VerificationCapabilities,
   VerificationIntent,
   VerificationSession,
@@ -98,9 +110,6 @@ export type Env = {
   TURSO_COMMUNITY_DB_WRAP_KEY?: string
   TURSO_COMMUNITY_DB_WRAP_KEY_VERSION?: string
   LOCAL_COMMUNITY_DB_ROOT?: string
-  REGISTRY_PUBLISHER_URL?: string
-  REGISTRY_PUBLISHER_AUTH_TOKEN?: string
-  REGISTRY_PUBLISHER_TIMEOUT_MS?: string
   COMMUNITY_PROVISION_OPERATOR_BASE_URL?: string
   COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN?: string
   COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS?: string

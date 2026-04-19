@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { CommunityMembershipProjectionRow, CommunityRow } from "../auth/auth-db-rows"
-import { resolveHomeFeedCommunityIds, sortCommunitySummaries } from "./home-feed-service"
+import { filterCommunitiesWithPosts, resolveHomeFeedCommunityIds, sortCommunitySummaries } from "./home-feed-service"
 import type { CommunityAggregate } from "./home-feed-service"
 import type { HomeFeedCommunitySummary } from "../../types"
 
@@ -14,11 +14,6 @@ function createCommunityRow(input: {
     display_name: input.communityId,
     status: "active",
     provisioning_state: "active",
-    registry_publication_state: "not_started",
-    registry_attempt_id: null,
-    registry_published_at: null,
-    registry_publication_job_id: null,
-    registry_error_code: null,
     transfer_state: "none",
     route_slug: input.communityId,
     namespace_verification_id: null,
@@ -107,6 +102,34 @@ function createCommunitySummary(input: {
     updated_at: input.updatedAt ?? "2026-04-18T00:00:00.000Z",
   }
 }
+
+describe("filterCommunitiesWithPosts", () => {
+  test("excludes communities with no eligible posts when a time range is active", () => {
+    const alpha = createCommunitySummary({ communityId: "cmt_alpha" })
+    const beta = createCommunitySummary({ communityId: "cmt_beta" })
+    const gamma = createCommunitySummary({ communityId: "cmt_gamma" })
+    const aggregates = new Map<string, CommunityAggregate>([
+      ["cmt_alpha", { totalScore: 5, bestRank: 2, latestPostMs: 1000 }],
+      ["cmt_gamma", { totalScore: 3, bestRank: 1, latestPostMs: 500 }],
+    ])
+
+    const result = filterCommunitiesWithPosts([alpha, beta, gamma], aggregates, true)
+
+    expect(result.map((summary) => summary.community_id)).toEqual(["cmt_alpha", "cmt_gamma"])
+  })
+
+  test("keeps communities without projection rows when no time range is active", () => {
+    const alpha = createCommunitySummary({ communityId: "cmt_alpha" })
+    const beta = createCommunitySummary({ communityId: "cmt_beta" })
+    const aggregates = new Map<string, CommunityAggregate>([
+      ["cmt_alpha", { totalScore: 5, bestRank: 2, latestPostMs: 1000 }],
+    ])
+
+    const result = filterCommunitiesWithPosts([alpha, beta], aggregates, false)
+
+    expect(result.map((summary) => summary.community_id)).toEqual(["cmt_alpha", "cmt_beta"])
+  })
+})
 
 describe("sortCommunitySummaries", () => {
   const alpha = createCommunitySummary({ communityId: "cmt_alpha" })

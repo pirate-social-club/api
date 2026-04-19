@@ -1,5 +1,4 @@
 import type { Client } from "../sql-client"
-import { makeId } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
 import {
   getCommunityCommentProjectionRowByCommentId,
@@ -11,7 +10,6 @@ import type {
   CommunityDbCredentialRow,
   CommunityDatabaseBindingRow,
   CommunityMembershipProjectionRow,
-  CommunityRegistryAttemptRow,
   CommunityPostProjectionRow,
   CommunityRow,
   JobRow,
@@ -36,14 +34,6 @@ export {
   persistProvisionedCommunityDatabaseAccess,
   markCommunityProvisioningFailed,
 } from "./community-provisioning-repository"
-
-export {
-  createCommunityRegistryAttempt,
-  markCommunityRegistryAttemptFailed,
-  createCommunityRegistryPublicationRequest,
-  markCommunityRegistryPublicationSucceeded,
-  markCommunityRegistryPublicationFailed,
-} from "./community-registry-repository"
 
 export { recordCommunityPostProjection } from "./community-post-projection-repository"
 export {
@@ -76,13 +66,6 @@ import {
   markCommunityProvisioningFailed,
 } from "./community-provisioning-repository"
 import {
-  createCommunityRegistryAttempt,
-  markCommunityRegistryAttemptFailed,
-  createCommunityRegistryPublicationRequest,
-  markCommunityRegistryPublicationSucceeded,
-  markCommunityRegistryPublicationFailed,
-} from "./community-registry-repository"
-import {
   recordCommunityPostProjection,
   updateCommunityPostProjectionMetrics,
   updateCommunityPostProjectionStatus,
@@ -93,14 +76,6 @@ import {
   attachNamespaceToCommunity,
   setPendingNamespaceVerificationSession,
 } from "./community-mutation-repository"
-
-export async function getLatestCommunityRegistryPublicationJob(
-  client: Client,
-  communityId: string,
-): Promise<JobRow | null> {
-  const { getLatestCommunityRegistryPublicationJobRow } = await import("../auth/auth-db-queries")
-  return getLatestCommunityRegistryPublicationJobRow(client, communityId)
-}
 
 export async function getCommunityPostProjectionByPostId(
   client: Client,
@@ -135,20 +110,6 @@ export interface CommunityRepository {
   getCommunityPostProjectionByPostId(postId: string): Promise<CommunityPostProjectionRow | null>
   getCommunityCommentProjectionByCommentId(commentId: string): Promise<CommunityCommentProjectionRow | null>
   listCommunityMembershipProjectionsByUserId(userId: string): Promise<CommunityMembershipProjectionRow[]>
-  createCommunityRegistryAttempt(input: {
-    registryAttemptId?: string
-    actorUserId: string
-    namespaceVerificationId: string
-    normalizedRootLabel: string
-    actorPrimaryWalletSnapshot?: string | null
-    actorGovernanceAddressSnapshot?: string | null
-    createdAt: string
-  }): Promise<CommunityRegistryAttemptRow>
-  markCommunityRegistryAttemptFailed(input: {
-    registryAttemptId: string
-    failureCode: string
-    updatedAt: string
-  }): Promise<void>
   recordCommunityPostProjection(input: {
     communityId: string
     sourcePostId: string
@@ -195,7 +156,6 @@ export interface CommunityRepository {
   createCommunityProvisioningRequest(input: {
     communityId: string
     communityDatabaseBindingId: string
-    registryAttemptId: string | null
     jobId: string
     creatorUserId: string
     displayName: string
@@ -212,7 +172,6 @@ export interface CommunityRepository {
   retryCommunityProvisioningRequest(input: {
     communityId: string
     fallbackBindingId: string
-    registryAttemptId: string
     jobId: string
     namespaceVerificationId: string
     routeSlug: string
@@ -255,33 +214,6 @@ export interface CommunityRepository {
   markCommunityProvisioningFailed(input: {
     communityId: string
     jobId: string
-    actorUserId: string
-    errorCode: string
-    createdAt: string
-    metadata: Record<string, unknown>
-  }): Promise<void>
-  createCommunityRegistryPublicationRequest(input: {
-    communityId: string
-    registryAttemptId: string
-    jobId: string
-    createdAt: string
-  }): Promise<JobRow>
-  markCommunityRegistryPublicationSucceeded(input: {
-    communityId: string
-    registryAttemptId: string
-    jobId: string
-    actorUserId: string
-    resultRef: string | null
-    createdAt: string
-    metadata: Record<string, unknown>
-  }): Promise<{
-    community: CommunityRow
-    job: JobRow
-  }>
-  markCommunityRegistryPublicationFailed(input: {
-    communityId: string
-    registryAttemptId: string
-    jobId: string | null
     actorUserId: string
     errorCode: string
     createdAt: string
@@ -347,34 +279,6 @@ export class DatabaseCommunityRepository implements CommunityRepository {
     return listCommunityMembershipProjectionRowsByUserId(this.client, userId)
   }
 
-  async createCommunityRegistryAttempt(input: {
-    registryAttemptId?: string
-    actorUserId: string
-    namespaceVerificationId: string
-    normalizedRootLabel: string
-    actorPrimaryWalletSnapshot?: string | null
-    actorGovernanceAddressSnapshot?: string | null
-    createdAt: string
-  }): Promise<CommunityRegistryAttemptRow> {
-    return createCommunityRegistryAttempt(this.client, {
-      registryAttemptId: input.registryAttemptId ?? makeId("rga"),
-      actorUserId: input.actorUserId,
-      actorPrimaryWalletSnapshot: input.actorPrimaryWalletSnapshot ?? null,
-      actorGovernanceAddressSnapshot: input.actorGovernanceAddressSnapshot ?? null,
-      namespaceVerificationId: input.namespaceVerificationId,
-      normalizedRootLabel: input.normalizedRootLabel,
-      createdAt: input.createdAt,
-    })
-  }
-
-  async markCommunityRegistryAttemptFailed(input: {
-    registryAttemptId: string
-    failureCode: string
-    updatedAt: string
-  }): Promise<void> {
-    return markCommunityRegistryAttemptFailed(this.client, input)
-  }
-
   async recordCommunityPostProjection(input: {
     communityId: string
     sourcePostId: string
@@ -436,12 +340,12 @@ export class DatabaseCommunityRepository implements CommunityRepository {
   async createCommunityProvisioningRequest(input: {
     communityId: string
     communityDatabaseBindingId: string
-    registryAttemptId: string | null
     jobId: string
     creatorUserId: string
     displayName: string
     membershipMode: "open" | "request" | "gated"
     namespaceVerificationId: string | null
+    routeSlug?: string | null
     databaseUrl: string
     createdAt: string
   }): Promise<{
@@ -455,7 +359,6 @@ export class DatabaseCommunityRepository implements CommunityRepository {
   async retryCommunityProvisioningRequest(input: {
     communityId: string
     fallbackBindingId: string
-    registryAttemptId: string
     jobId: string
     namespaceVerificationId: string
     routeSlug: string
@@ -513,42 +416,6 @@ export class DatabaseCommunityRepository implements CommunityRepository {
     metadata: Record<string, unknown>
   }): Promise<void> {
     return markCommunityProvisioningFailed(this.client, input)
-  }
-
-  async createCommunityRegistryPublicationRequest(input: {
-    communityId: string
-    registryAttemptId: string
-    jobId: string
-    createdAt: string
-  }): Promise<JobRow> {
-    return createCommunityRegistryPublicationRequest(this.client, input)
-  }
-
-  async markCommunityRegistryPublicationSucceeded(input: {
-    communityId: string
-    registryAttemptId: string
-    jobId: string
-    actorUserId: string
-    resultRef: string | null
-    createdAt: string
-    metadata: Record<string, unknown>
-  }): Promise<{
-    community: CommunityRow
-    job: JobRow
-  }> {
-    return markCommunityRegistryPublicationSucceeded(this.client, input)
-  }
-
-  async markCommunityRegistryPublicationFailed(input: {
-    communityId: string
-    registryAttemptId: string
-    jobId: string | null
-    actorUserId: string
-    errorCode: string
-    createdAt: string
-    metadata: Record<string, unknown>
-  }): Promise<void> {
-    return markCommunityRegistryPublicationFailed(this.client, input)
   }
 
   async attachNamespaceToCommunity(input: {

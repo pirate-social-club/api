@@ -19,7 +19,6 @@ export async function createCommunityProvisioningRequest(
   input: {
     communityId: string
     communityDatabaseBindingId: string
-    registryAttemptId: string | null
     jobId: string
     creatorUserId: string
     displayName: string
@@ -37,18 +36,14 @@ export async function createCommunityProvisioningRequest(
   const tx = await client.transaction("write")
 
   try {
-    const registryPublicationState = input.namespaceVerificationId ? "pending_create" : "not_started"
     await tx.execute({
       sql: `
         INSERT INTO communities (
           community_id, creator_user_id, display_name, membership_mode, status, provisioning_state, transfer_state,
           route_slug, namespace_verification_id, pending_namespace_verification_session_id,
-          primary_database_binding_id, registry_publication_state,
-          registry_attempt_id, registry_published_at, registry_publication_job_id, registry_error_code,
-          created_at, updated_at
+          primary_database_binding_id, created_at, updated_at
         ) VALUES (
-          ?1, ?2, ?3, ?4, 'active', 'provisioning', 'none', ?5, ?6, NULL, NULL, ?7,
-          ?8, NULL, NULL, NULL, ?9, ?9
+          ?1, ?2, ?3, ?4, 'active', 'provisioning', 'none', ?5, ?6, NULL, NULL, ?7, ?7
         )
       `,
       args: [
@@ -58,8 +53,6 @@ export async function createCommunityProvisioningRequest(
         input.membershipMode,
         input.routeSlug,
         input.namespaceVerificationId,
-        registryPublicationState,
-        input.registryAttemptId,
         input.createdAt,
       ],
     })
@@ -108,18 +101,6 @@ export async function createCommunityProvisioningRequest(
       ],
     })
 
-    if (input.registryAttemptId) {
-      await tx.execute({
-        sql: `
-          UPDATE community_registry_attempts
-          SET community_id = ?2,
-              updated_at = ?3
-          WHERE registry_attempt_id = ?1
-        `,
-        args: [input.registryAttemptId, input.communityId, input.createdAt],
-      })
-    }
-
     const communityRow = await getCommunityRowById(tx, input.communityId)
     const bindingRow = await getCommunityDatabaseBindingRowById(tx, input.communityDatabaseBindingId)
     const jobRow = await getJobRowById(tx, input.jobId)
@@ -144,7 +125,6 @@ export async function retryCommunityProvisioningRequest(
   input: {
     communityId: string
     fallbackBindingId: string
-    registryAttemptId: string
     jobId: string
     namespaceVerificationId: string
     routeSlug: string
@@ -200,26 +180,11 @@ export async function retryCommunityProvisioningRequest(
       sql: `
         UPDATE communities
         SET provisioning_state = 'provisioning',
-            route_slug = ?4,
-            registry_publication_state = 'pending_create',
-            registry_attempt_id = ?2,
-            registry_published_at = NULL,
-            registry_publication_job_id = NULL,
-            registry_error_code = NULL,
+            route_slug = ?2,
             updated_at = ?3
         WHERE community_id = ?1
       `,
-      args: [input.communityId, input.registryAttemptId, input.createdAt, input.routeSlug],
-    })
-
-    await tx.execute({
-      sql: `
-        UPDATE community_registry_attempts
-        SET community_id = ?2,
-            updated_at = ?3
-        WHERE registry_attempt_id = ?1
-      `,
-      args: [input.registryAttemptId, input.communityId, input.createdAt],
+      args: [input.communityId, input.routeSlug, input.createdAt],
     })
 
     await tx.execute({

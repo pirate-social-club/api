@@ -105,12 +105,12 @@ Control-plane DB mode:
 2. Set `DEV_MEMORY_STORE_ENABLED=false`.
 3. Set `CONTROL_PLANE_DATABASE_URL` if you want a specific DB. Leave it blank to use `services/api/.local/control-plane.db`.
 4. Set `LOCAL_COMMUNITY_DB_ROOT` if you want a specific community DB directory. Leave it blank to use `services/api/.local/community-dbs`.
-5. If testing the real internal publisher path, set `REGISTRY_PUBLISHER_URL`, `REGISTRY_PUBLISHER_AUTH_TOKEN`, and `REGISTRY_PUBLISHER_TIMEOUT_MS`.
-6. For community avatar and banner uploads, set `FILEBASE_S3_ACCESS_KEY`, `FILEBASE_S3_SECRET_KEY`, and `FILEBASE_MEDIA_BUCKET`. If you already use `FILEBASE_S3_BUCKET_MUSIC`, the API will reuse that bucket until you standardize on `FILEBASE_MEDIA_BUCKET`. Optional: `FILEBASE_S3_ENDPOINT` and `FILEBASE_S3_REGION`.
-7. For the real song pipeline, set `OPENROUTER_API_KEY`, `ACRCLOUD_ACCESS_KEY`, `ACRCLOUD_ACCESS_SECRET`, `ACRCLOUD_HOST`, and `ELEVENLABS_API_KEY`. Optional overrides: `OPENROUTER_BASE_URL`, `OPENROUTER_MODEL`, `ACRCLOUD_IDENTIFY_PATH`, and `ELEVENLABS_FORCE_ALIGNMENT_URL`.
-8. Fill in `AUTH_UPSTREAM_JWT_SHARED_SECRET`, `AUTH_UPSTREAM_JWT_ISSUER`, and `AUTH_UPSTREAM_JWT_AUDIENCE`.
-9. Fill in `PIRATE_APP_JWT_PRIVATE_KEY` and `PIRATE_APP_JWT_PUBLIC_KEY`.
-10. Start `rtk bun run dev:local`. The local server bootstraps the control-plane migrations automatically for local file-backed DBs.
+5. For community avatar and banner uploads, set `FILEBASE_S3_ACCESS_KEY`, `FILEBASE_S3_SECRET_KEY`, and `FILEBASE_MEDIA_BUCKET`. If you already use `FILEBASE_S3_BUCKET_MUSIC`, the API will reuse that bucket until you standardize on `FILEBASE_MEDIA_BUCKET`. Optional: `FILEBASE_S3_ENDPOINT` and `FILEBASE_S3_REGION`.
+6. For the real song pipeline and machine translations, set `OPENROUTER_API_KEY`, `ACRCLOUD_ACCESS_KEY`, `ACRCLOUD_ACCESS_SECRET`, `ACRCLOUD_HOST`, and `ELEVENLABS_API_KEY`. Optional overrides: `OPENROUTER_BASE_URL`, `OPENROUTER_MODEL`, `ACRCLOUD_IDENTIFY_PATH`, and `ELEVENLABS_FORCE_ALIGNMENT_URL`.
+7. Fill in `AUTH_UPSTREAM_JWT_SHARED_SECRET`, `AUTH_UPSTREAM_JWT_ISSUER`, and `AUTH_UPSTREAM_JWT_AUDIENCE`.
+8. Fill in `PIRATE_APP_JWT_PRIVATE_KEY` and `PIRATE_APP_JWT_PUBLIC_KEY`.
+10. Start `rtk bun run dev:local` for the API only, or `rtk bun run dev:local:full` to run the API and the community job worker together. The local server bootstraps the control-plane migrations automatically for local file-backed DBs.
+11. Post and comment translations require the worker to be running with `OPENROUTER_API_KEY` in the environment. If you use Infisical locally, prefer `rtk infisical run --env=dev --path=/services/api -- rtk bun run dev:local:full`.
 
 ## Full Local Setup
 
@@ -139,14 +139,14 @@ For local Very widget testing:
 - the web app then targets the local `POST /very/verify` route, which returns `{"status":"valid"}` only in development without a Very API key
 - this is a local happy-path shortcut only; production or any upstream-backed setup should use the real Very verifier flow
 
-3. Start the Bun local server:
+3. Start the Bun local API plus the community job worker:
 
 ```bash
 cd pirate-api/services/api
-rtk bun run dev:local
+rtk bun run dev:local:full
 ```
 
-`dev:local` keeps the SQLite files in `services/api/.local/` by default and reapplies pending control-plane migrations on startup.
+`dev:local:full` keeps the SQLite files in `services/api/.local/` by default, reapplies pending control-plane migrations on startup, and runs the translation worker with the same environment as the API process. If you only need the HTTP server, `rtk bun run dev:local` still starts the API without the worker.
 
 4. Run the Bruno collection from the service repo wrapper:
 
@@ -181,20 +181,6 @@ Required env:
 - `PIRATE_APP_JWT_PUBLIC_KEY`
 - `PIRATE_APP_JWT_ISSUER`
 - `PIRATE_APP_JWT_AUDIENCE`
-
-## Registry Publisher
-
-The default local path still uses the in-process registry stub.
-
-To exercise the internal publisher boundary instead, configure:
-
-- `REGISTRY_PUBLISHER_URL`
-- `REGISTRY_PUBLISHER_AUTH_TOKEN`
-- `REGISTRY_PUBLISHER_TIMEOUT_MS`
-
-When `REGISTRY_PUBLISHER_URL` is configured, the Worker first calls the publisher to create the
-public community-create attempt before it writes the mirrored `community_registry_attempts`
-row.
 
 ## Example Exchange
 

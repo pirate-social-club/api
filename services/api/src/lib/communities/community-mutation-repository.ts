@@ -35,7 +35,6 @@ export async function attachNamespaceToCommunity(
         UPDATE communities
         SET namespace_verification_id = ?2,
             route_slug = ?3,
-            registry_publication_state = 'pending_create',
             pending_namespace_verification_session_id = NULL,
             updated_at = ?4
         WHERE community_id = ?1

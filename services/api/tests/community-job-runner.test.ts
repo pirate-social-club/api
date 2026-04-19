@@ -66,11 +66,6 @@ function buildCommunityRow(communityId: string, now: string): CommunityRow {
     display_name: "Community Job Runner Test",
     status: "active",
     provisioning_state: "active",
-    registry_publication_state: "not_started",
-    registry_attempt_id: null,
-    registry_published_at: null,
-    registry_publication_job_id: null,
-    registry_error_code: null,
     transfer_state: "none",
     route_slug: null,
     namespace_verification_id: null,
@@ -931,6 +926,71 @@ describe("community-job-runner", () => {
       expect(translation?.translated_title).toBe("Titulo traducido")
       expect(translation?.translated_body).toBe("Cuerpo traducido")
       expect(translation?.provider).toBe("openrouter")
+    } finally {
+      verifyDb.close()
+    }
+  })
+
+  test("fails post translation jobs clearly when OPENROUTER_API_KEY is missing", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-job-translation-missing-key-"))
+    cleanupPaths.push(rootDir)
+
+    const databasePath = join(rootDir, "community.db")
+    const communityId = "cmt_job_translation_missing_key"
+    const env: Env = {
+      LOCAL_COMMUNITY_DB_ROOT: rootDir,
+      OPENROUTER_TRANSLATION_MODEL: "google/gemini-2.5-flash-lite-preview-09-2025",
+    }
+    const repo = buildCommunityRepository(databasePath, communityId)
+    const { postId } = await seedCommunityState({
+      env,
+      repo,
+      communityId,
+      memberUserIds: ["usr_owner"],
+    })
+
+    const setupDb = await openCommunityDb(env, repo, communityId)
+    try {
+      await setupDb.client.execute({
+        sql: `
+          UPDATE posts
+          SET translation_policy = 'machine_allowed'
+          WHERE post_id = ?1
+        `,
+        args: [postId],
+      })
+
+      await enqueueCommunityJob({
+        client: setupDb.client,
+        communityId,
+        jobType: "post_translation_materialize",
+        subjectType: "post_translation",
+        subjectId: `${postId}:es`,
+        payloadJson: JSON.stringify({
+          post_id: postId,
+          locale: "es",
+        }),
+        createdAt: new Date().toISOString(),
+      })
+    } finally {
+      setupDb.close()
+    }
+
+    const processed = await processNextCommunityJob({
+      env,
+      communityId,
+      communityRepository: repo,
+    })
+    expect(processed?.job_type).toBe("post_translation_materialize")
+    expect(processed?.status).toBe("failed")
+    expect(processed?.error_code).toBe("OPENROUTER_API_KEY is not configured")
+
+    const verifyDb = await openCommunityDb(env, repo, communityId)
+    try {
+      const jobs = await fetchCommunityJobs(verifyDb.client)
+      const translationJob = jobs.find((job) => job.subject_id === `${postId}:es`)
+      expect(translationJob?.status).toBe("failed")
+      expect(translationJob?.error_code).toBe("OPENROUTER_API_KEY is not configured")
     } finally {
       verifyDb.close()
     }

@@ -92,7 +92,7 @@ export function registerCommunityCoreRoutes(communities: Hono<AuthenticatedEnv>)
   })
 
   communities.post("/:communityId/namespace", async (c) => {
-    const { actor, communityId, communityRepository, userRepository } = await getResolvedCommunityRouteContext(c)
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const { verificationRepository } = getCommunityCreationRouteContext(c)
     const body = await c.req.json<{ namespace_verification_id?: string | null }>().catch(() => null)
     const namespaceVerificationId = body?.namespace_verification_id?.trim()
@@ -105,7 +105,6 @@ export function registerCommunityCoreRoutes(communities: Hono<AuthenticatedEnv>)
       userId: actor.userId,
       communityId,
       namespaceVerificationId,
-      userRepository,
       verificationRepository,
       communityRepository,
     })

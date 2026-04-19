@@ -191,36 +191,11 @@ export type CommunityRow = {
   display_name: string
   status: "draft" | "active" | "frozen" | "archived" | "deleted" | "suspended"
   provisioning_state: "requested" | "provisioning" | "active" | "rotation_required" | "error"
-  registry_publication_state:
-    | "not_started"
-    | "pending_create"
-    | "pending_seed"
-    | "published"
-    | "stale"
-    | "publication_error"
-  registry_attempt_id: string | null
-  registry_published_at: string | null
-  registry_publication_job_id: string | null
-  registry_error_code: string | null
   transfer_state: "none" | "pending" | "transferred" | "federated"
   route_slug: string | null
   namespace_verification_id: string | null
   pending_namespace_verification_session_id: string | null
   primary_database_binding_id: string | null
-  created_at: string
-  updated_at: string
-}
-
-export type CommunityRegistryAttemptRow = {
-  registry_attempt_id: string
-  actor_user_id: string
-  actor_primary_wallet_snapshot: string | null
-  actor_governance_address_snapshot: string | null
-  namespace_verification_id: string
-  normalized_root_label: string
-  community_id: string | null
-  attempt_status: "in_progress" | "succeeded" | "failed"
-  failure_code: string | null
   created_at: string
   updated_at: string
 }
@@ -542,32 +517,11 @@ export function toCommunityRow(row: unknown): CommunityRow {
     display_name: requiredString(row, "display_name"),
     status: requiredString(row, "status") as CommunityRow["status"],
     provisioning_state: requiredString(row, "provisioning_state") as CommunityRow["provisioning_state"],
-    registry_publication_state: requiredString(row, "registry_publication_state") as CommunityRow["registry_publication_state"],
-    registry_attempt_id: stringOrNull(rowValue(row, "registry_attempt_id")),
-    registry_published_at: stringOrNull(rowValue(row, "registry_published_at")),
-    registry_publication_job_id: stringOrNull(rowValue(row, "registry_publication_job_id")),
-    registry_error_code: stringOrNull(rowValue(row, "registry_error_code")),
     transfer_state: requiredString(row, "transfer_state") as CommunityRow["transfer_state"],
     route_slug: stringOrNull(rowValue(row, "route_slug")),
     namespace_verification_id: stringOrNull(rowValue(row, "namespace_verification_id")),
     pending_namespace_verification_session_id: stringOrNull(rowValue(row, "pending_namespace_verification_session_id")),
     primary_database_binding_id: stringOrNull(rowValue(row, "primary_database_binding_id")),
-    created_at: requiredString(row, "created_at"),
-    updated_at: requiredString(row, "updated_at"),
-  }
-}
-
-export function toCommunityRegistryAttemptRow(row: unknown): CommunityRegistryAttemptRow {
-  return {
-    registry_attempt_id: requiredString(row, "registry_attempt_id"),
-    actor_user_id: requiredString(row, "actor_user_id"),
-    actor_primary_wallet_snapshot: stringOrNull(rowValue(row, "actor_primary_wallet_snapshot")),
-    actor_governance_address_snapshot: stringOrNull(rowValue(row, "actor_governance_address_snapshot")),
-    namespace_verification_id: requiredString(row, "namespace_verification_id"),
-    normalized_root_label: requiredString(row, "normalized_root_label"),
-    community_id: stringOrNull(rowValue(row, "community_id")),
-    attempt_status: requiredString(row, "attempt_status") as CommunityRegistryAttemptRow["attempt_status"],
-    failure_code: stringOrNull(rowValue(row, "failure_code")),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
   }
