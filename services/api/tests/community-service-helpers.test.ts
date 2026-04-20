@@ -173,12 +173,32 @@ describe("community-service helpers", () => {
       ).toThrow()
     })
 
-    test("rejects token_holding gate family in v0", () => {
+    test("allows erc721_holding gate family in v0 with valid Ethereum config", () => {
       expect(() =>
         assertCreateRequest(makeCreateBody({
-          gate_rules: [{ scope: "membership", gate_family: "token_holding", gate_type: "erc721_holding" }],
+          gate_rules: [{
+            scope: "membership",
+            gate_family: "token_holding",
+            gate_type: "erc721_holding",
+            chain_namespace: "eip155:1",
+            gate_config: { contract_address: "0x1111111111111111111111111111111111111111" },
+          }],
         }), { uniqueHumanVerified: true, ageOver18Verified: false }),
-      ).toThrow()
+      ).not.toThrow()
+    })
+
+    test("rejects erc721_holding gate with invalid chain namespace", () => {
+      expect(() =>
+        assertCreateRequest(makeCreateBody({
+          gate_rules: [{
+            scope: "membership",
+            gate_family: "token_holding",
+            gate_type: "erc721_holding",
+            chain_namespace: "eip155:8453",
+            gate_config: { contract_address: "0x1111111111111111111111111111111111111111" },
+          }],
+        }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+      ).toThrow("ERC-721 community gates must target Ethereum mainnet (eip155:1)")
     })
 
     test("allows gender gate in public v0 with valid self config", () => {

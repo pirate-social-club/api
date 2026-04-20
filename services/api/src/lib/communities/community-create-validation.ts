@@ -8,6 +8,7 @@ import type {
 } from "../../types"
 import { getPrimaryWalletSnapshot } from "./community-serialization"
 import type { LocalCommunitySnapshot } from "./community-local-db"
+import { normalizeEthereumAddress } from "./community-token-gates"
 
 export type CreateCommunityRequestBody = CreateCommunityRequest
 
@@ -144,17 +145,31 @@ export function assertPublicV0GateConfiguration(
   if ((body.default_age_gate_policy ?? "none") === "18_plus" && !input.ageOver18Verified) {
     throw eligibilityFailed("age_over_18 verification is required for 18_plus communities")
   }
-  if (
-    body.gate_rules?.some(
-      (rule) => (rule.gate_family as string) === "token_holding" || rule.scope === "viewer" || rule.scope === "posting",
-    )
-  ) {
-    // token_holding is rejected here AND has no evaluator in community-membership-store.ts;
-    // community membership gates are identity-proof only in v0.
-    throw eligibilityFailed("Public v0 community creation only allows membership-scope identity-proof gates")
+  if (body.gate_rules?.some((rule) => rule.scope === "viewer" || rule.scope === "posting")) {
+    throw eligibilityFailed("Public v0 community creation only allows membership-scope gates")
   }
   if (body.gate_rules?.some((rule) => rule.gate_type === "sanctions_clear")) {
     throw eligibilityFailed("Public v0 community creation does not support sanctions_clear gates")
+  }
+  for (const rule of body.gate_rules ?? []) {
+    if ((rule.gate_family as string) !== "token_holding") {
+      continue
+    }
+
+    if (rule.gate_type !== "erc721_holding") {
+      throw eligibilityFailed("Public v0 community creation only supports Ethereum ERC-721 collection token gates")
+    }
+    if ((rule.chain_namespace ?? null) !== "eip155:1") {
+      throw eligibilityFailed("ERC-721 community gates must target Ethereum mainnet (eip155:1)")
+    }
+    if ((rule.proof_requirements?.length ?? 0) > 0) {
+      throw eligibilityFailed("ERC-721 community gates do not accept proof_requirements")
+    }
+
+    const config = (rule.gate_config ?? {}) as Record<string, unknown>
+    if (!normalizeEthereumAddress(config.contract_address)) {
+      throw eligibilityFailed("ERC-721 community gates require a valid Ethereum contract_address")
+    }
   }
   let nationalityGateCount = 0
   let genderGateCount = 0

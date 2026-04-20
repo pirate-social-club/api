@@ -22,6 +22,14 @@ export function roundUsd(value: number): number {
   return Math.round(value * 100) / 100
 }
 
+export function assertValidDonationSharePct(value: unknown): number {
+  const pct = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN
+  if (!Number.isInteger(pct) || pct <= 0 || pct > 50) {
+    throw badRequestError("donation_share_pct must be an integer between 1 and 50")
+  }
+  return pct
+}
+
 export function resolveSettlementAmountSnapshot(finalPriceUsd: number): {
   amountAtomic: string
   decimals: number

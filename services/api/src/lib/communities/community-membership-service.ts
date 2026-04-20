@@ -393,11 +393,17 @@ export async function getJoinEligibility(input: {
         membership_gate_summaries: [],
         missing_capabilities: [],
       }
-    }
+	}
 
     const rules = await listActiveMembershipGateRules(db.client, input.communityId)
     const gateSummaries = rules.map(buildMembershipGateSummary)
-    const evaluation = evaluateMembershipGateRules(rules, user)
+    const walletAttachments = await input.userRepository.getWalletAttachmentsByUserId(input.userId)
+    const evaluation = await evaluateMembershipGateRules({
+      env: input.env,
+      rules,
+      user,
+      walletAttachments,
+    })
     if (evaluation.satisfied) {
       return {
         community_id: input.communityId,
@@ -426,6 +432,9 @@ export async function getJoinEligibility(input: {
       }
     }
 
+    const failureReason = evaluation.mismatchReasons.includes("erc721_holding_required")
+      ? "erc721_holding_required"
+      : null
     return {
       community_id: input.communityId,
       membership_mode: membershipMode,
@@ -434,6 +443,7 @@ export async function getJoinEligibility(input: {
       status: "gate_failed",
       membership_gate_summaries: gateSummaries,
       missing_capabilities: [],
+      failure_reason: failureReason,
     }
   } finally {
     db.close()
@@ -528,7 +538,13 @@ export async function joinCommunity(input: {
 
     const rules = await listActiveMembershipGateRules(db.client, input.communityId)
     const gateSummaries = rules.map(buildMembershipGateSummary)
-    const evaluation = evaluateMembershipGateRules(rules, user)
+    const walletAttachments = await input.userRepository.getWalletAttachmentsByUserId(input.userId)
+    const evaluation = await evaluateMembershipGateRules({
+      env: input.env,
+      rules,
+      user,
+      walletAttachments,
+    })
     if (!evaluation.satisfied) {
       if (evaluation.missingCapabilities.length > 0) {
         throw gateFailedWithDetails("Verification is required to join this community", {
@@ -551,6 +567,12 @@ export async function joinCommunity(input: {
         throw gateFailedWithDetails("Your verified gender does not satisfy this community requirement", {
           membership_gate_summaries: gateSummaries,
           failure_reason: "gender_mismatch",
+        })
+      }
+      if (evaluation.mismatchReasons.includes("erc721_holding_required")) {
+        throw gateFailedWithDetails("A linked Ethereum wallet holding this NFT collection is required to join", {
+          membership_gate_summaries: gateSummaries,
+          failure_reason: "erc721_holding_required",
         })
       }
       throw gateFailedWithDetails("Community membership requirements are not satisfied", {

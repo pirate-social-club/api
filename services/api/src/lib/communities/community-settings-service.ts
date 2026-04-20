@@ -316,8 +316,6 @@ export async function updateCommunityDonationPolicy(input: {
               provider = excluded.provider,
               provider_partner_ref = excluded.provider_partner_ref,
               image_url = excluded.image_url,
-              review_status = excluded.review_status,
-              status = excluded.status,
               updated_at = excluded.updated_at
           `,
           args: [

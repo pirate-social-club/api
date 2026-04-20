@@ -2,7 +2,12 @@ import type { Client } from "../sql-client"
 import { executeFirst } from "../db-helpers"
 import { makeId } from "../helpers"
 import { requiredString, rowValue, stringOrNull } from "../sql-row"
-import type { MembershipGateSummary, User } from "../../types"
+import type { Env, MembershipGateSummary, User, WalletAttachmentSummary } from "../../types"
+import {
+  anyAttachedEthereumWalletOwnsErc721Collection,
+  hasEthereumRpcConfig,
+  normalizeEthereumAddress,
+} from "./community-token-gates"
 
 export type CommunityMembershipRow = {
   membership_status: "member" | "left" | "banned" | null
@@ -204,8 +209,13 @@ function satisfiesProofRequirement(user: User, requirement: ProofRequirement, ga
   }
 }
 
-export function satisfiesMembershipGateRules(rules: CommunityGateRuleRow[], user: User): boolean {
-  return evaluateMembershipGateRules(rules, user).satisfied
+export async function satisfiesMembershipGateRules(input: {
+  env: Env
+  rules: CommunityGateRuleRow[]
+  user: User
+  walletAttachments: WalletAttachmentSummary[]
+}): Promise<boolean> {
+  return (await evaluateMembershipGateRules(input)).satisfied
 }
 
 export async function upsertCommunityMembership(input: {
@@ -261,6 +271,10 @@ export type MembershipGateEvaluation = {
   suggestedVerificationProvider: "self" | "very" | null
 }
 
+function resolveTokenGateContractAddress(gateConfig: Record<string, unknown> | null): string | null {
+  return normalizeEthereumAddress(gateConfig?.contract_address)
+}
+
 export function buildMembershipGateSummary(rule: CommunityGateRuleRow): MembershipGateSummary {
   const requirements = parseProofRequirements(rule.proof_requirements_json, rule.gate_type)
   const gateConfig = parseGateConfig(rule.gate_config_json)
@@ -284,13 +298,26 @@ export function buildMembershipGateSummary(rule: CommunityGateRuleRow): Membersh
     }
   }
 
+  if (rule.gate_type === "erc721_holding") {
+    const contractAddress = resolveTokenGateContractAddress(gateConfig)
+    if (contractAddress) {
+      summary.contract_address = contractAddress
+    }
+    if (rule.chain_namespace) {
+      summary.chain_namespace = rule.chain_namespace
+    }
+  }
+
   return summary
 }
 
-export function evaluateMembershipGateRules(
-  rules: CommunityGateRuleRow[],
-  user: User,
-): MembershipGateEvaluation {
+export async function evaluateMembershipGateRules(input: {
+  env: Env
+  rules: CommunityGateRuleRow[]
+  user: User
+  walletAttachments: WalletAttachmentSummary[]
+}): Promise<MembershipGateEvaluation> {
+  const { env, rules, user, walletAttachments } = input
   if (rules.length === 0) {
     return {
       satisfied: false,
@@ -305,9 +332,39 @@ export function evaluateMembershipGateRules(
   let suggestedProvider: "self" | "very" | null = null
 
   for (const rule of rules) {
+    if (rule.gate_family === "token_holding") {
+      const gateConfig = parseGateConfig(rule.gate_config_json)
+      if (rule.gate_type !== "erc721_holding") {
+        mismatchReasons.push(`unsupported_gate_type:${rule.gate_type}`)
+        continue
+      }
+      if ((rule.chain_namespace ?? null) !== "eip155:1") {
+        mismatchReasons.push("unsupported_chain_namespace")
+        continue
+      }
+
+      const contractAddress = resolveTokenGateContractAddress(gateConfig)
+      if (!contractAddress) {
+        mismatchReasons.push("unsupported_gate_config")
+        continue
+      }
+
+      if (!hasEthereumRpcConfig(env)) {
+        mismatchReasons.push("unsupported")
+        continue
+      }
+
+      const holdsRequiredCollection = await anyAttachedEthereumWalletOwnsErc721Collection({
+        contractAddress,
+        env,
+        walletAttachments,
+      })
+      if (!holdsRequiredCollection) {
+        mismatchReasons.push("erc721_holding_required")
+      }
+      continue
+    }
     if (rule.gate_family !== "identity_proof") {
-      // token_holding gates are not evaluated in v0; they are also rejected at creation time
-      // by assertPublicV0GateConfiguration in community-create-validation.ts.
       mismatchReasons.push(`unsupported_gate_family:${rule.gate_family}`)
       continue
     }

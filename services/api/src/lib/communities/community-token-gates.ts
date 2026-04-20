@@ -1,0 +1,120 @@
+import { Contract, JsonRpcProvider, getAddress } from "ethers"
+import { globalSingleton } from "../db-helpers"
+import type { Env, WalletAttachmentSummary } from "../../types"
+
+const ERC721_COLLECTION_ABI = [
+  "function balanceOf(address owner) view returns (uint256)",
+] as const
+
+let erc721OwnershipCheckerForTests: ((input: {
+  contractAddress: string
+  env: Env
+  walletAddress: string
+}) => Promise<boolean>) | null = null
+
+export function setErc721OwnershipCheckerForTests(
+  checker: ((input: { contractAddress: string; env: Env; walletAddress: string }) => Promise<boolean>) | null,
+): void {
+  erc721OwnershipCheckerForTests = checker
+}
+
+export function hasEthereumRpcConfig(env: Env): boolean {
+  return String(env.ETHEREUM_RPC_URL || "").trim().length > 0
+}
+
+function getEthereumProvider(env: Env): JsonRpcProvider | null {
+  const rpcUrl = String(env.ETHEREUM_RPC_URL || "").trim()
+  if (!rpcUrl) {
+    return null
+  }
+
+  return globalSingleton("ethereumRpcProvider", rpcUrl, () => (
+    new JsonRpcProvider(rpcUrl, 1, { staticNetwork: true })
+  ))
+}
+
+export function normalizeEthereumAddress(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null
+  }
+
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  try {
+    return getAddress(trimmed)
+  } catch {
+    return null
+  }
+}
+
+export function listEthereumMainnetWalletAddresses(walletAttachments: WalletAttachmentSummary[]): string[] {
+  const seen = new Set<string>()
+  const addresses: string[] = []
+
+  for (const attachment of walletAttachments) {
+    if (attachment.chain_namespace !== "eip155:1") {
+      continue
+    }
+
+    const normalized = normalizeEthereumAddress(attachment.wallet_address)
+    if (!normalized || seen.has(normalized)) {
+      continue
+    }
+
+    seen.add(normalized)
+    addresses.push(normalized)
+  }
+
+  return addresses
+}
+
+export async function anyAttachedEthereumWalletOwnsErc721Collection(input: {
+  contractAddress: string
+  env: Env
+  walletAttachments: WalletAttachmentSummary[]
+}): Promise<boolean> {
+  const normalizedContractAddress = normalizeEthereumAddress(input.contractAddress)
+  if (!normalizedContractAddress) {
+    return false
+  }
+
+  const walletAddresses = listEthereumMainnetWalletAddresses(input.walletAttachments)
+  if (walletAddresses.length === 0) {
+    return false
+  }
+
+  if (erc721OwnershipCheckerForTests) {
+    for (const walletAddress of walletAddresses) {
+      if (await erc721OwnershipCheckerForTests({
+        contractAddress: normalizedContractAddress,
+        env: input.env,
+        walletAddress,
+      })) {
+        return true
+      }
+    }
+    return false
+  }
+
+  const provider = getEthereumProvider(input.env)
+  if (!provider) {
+    return false
+  }
+
+  const contract = new Contract(normalizedContractAddress, ERC721_COLLECTION_ABI, provider)
+  for (const walletAddress of walletAddresses) {
+    try {
+      const balance = await contract.balanceOf(walletAddress) as bigint
+      if (balance > 0n) {
+        return true
+      }
+    } catch {
+      continue
+    }
+  }
+
+  return false
+}

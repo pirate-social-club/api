@@ -17,6 +17,7 @@ import {
   getCommunityPricingPolicy,
 } from "./community-commerce-policy-service"
 import {
+  assertValidDonationSharePct,
   resolveRegionalPrice,
   resolveRoutePolicy,
   resolveSettlementAmountSnapshot,
@@ -144,10 +145,7 @@ export async function createCommunityPurchaseQuote(input: {
         throw eligibilityFailed("Donation partner is not available")
       }
 
-      const sharePct = listingPolicy.donationSharePct
-      if (!Number.isInteger(sharePct) || sharePct == null || sharePct <= 0 || sharePct > 50) {
-        throw badRequestError("Invalid donation share")
-      }
+      assertValidDonationSharePct(listingPolicy.donationSharePct)
     }
 
     const allocationSnapshot = assertExecutableQuoteAllocationSnapshot(

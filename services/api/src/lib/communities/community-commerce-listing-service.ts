@@ -16,6 +16,7 @@ import {
   serializeListing,
 } from "./community-commerce-shared"
 import { getCommunityPricingPolicy } from "./community-commerce-policy-service"
+import { assertValidDonationSharePct } from "./community-commerce-quote-helpers"
 import type {
   CommunityListing,
   CommunityListingListResponse,
@@ -44,7 +45,7 @@ async function resolveListingDonationConfig(input: {
     ? input.current.donation_partner_id
     : input.requestedPartnerId
 
-  if (nextSharePct == null) {
+  if (nextSharePct == null || nextSharePct === 0) {
     if (typeof nextPartnerId === "string" && nextPartnerId.trim()) {
       throw badRequestError("donation_share_pct is required when donation_partner_id is set")
     }
@@ -54,16 +55,7 @@ async function resolveListingDonationConfig(input: {
     }
   }
 
-  if (!Number.isInteger(nextSharePct) || nextSharePct < 0 || nextSharePct > 100) {
-    throw badRequestError("donation_share_pct must be an integer between 0 and 100")
-  }
-
-  if (nextSharePct === 0) {
-    return {
-      donation_partner_id: null,
-      donation_share_pct: null,
-    }
-  }
+  assertValidDonationSharePct(nextSharePct)
 
   if (!nextPartnerId?.trim()) {
     throw badRequestError("donation_partner_id is required when donation_share_pct is greater than 0")

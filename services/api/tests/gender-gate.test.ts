@@ -63,32 +63,32 @@ describe("gender gate evaluation", () => {
     expect(summary.required_value).toBe("M")
   })
 
-  test("returns missing gender when user lacks verification", () => {
-    const result = evaluateMembershipGateRules([makeGenderRule("M")], makeUser({
+  test("returns missing gender when user lacks verification", async () => {
+    const result = await evaluateMembershipGateRules({ env: {}, rules: [makeGenderRule("M")], user: makeUser({
       gender: { state: "unverified" },
-    }))
+    }), walletAttachments: [] })
     expect(result.satisfied).toBe(false)
     expect(result.missingCapabilities).toEqual(["gender"])
     expect(result.suggestedVerificationProvider).toBe("self")
   })
 
-  test("returns gender_mismatch when verified gender differs", () => {
-    const result = evaluateMembershipGateRules([makeGenderRule("M")], makeUser({
+  test("returns gender_mismatch when verified gender differs", async () => {
+    const result = await evaluateMembershipGateRules({ env: {}, rules: [makeGenderRule("M")], user: makeUser({
       gender: { state: "verified", provider: "self", value: "F" },
-    }))
+    }), walletAttachments: [] })
     expect(result.satisfied).toBe(false)
     expect(result.mismatchReasons).toContain("gender_mismatch")
   })
 
-  test("returns satisfied when verified gender matches", () => {
-    const result = evaluateMembershipGateRules([makeGenderRule("F")], makeUser({
+  test("returns satisfied when verified gender matches", async () => {
+    const result = await evaluateMembershipGateRules({ env: {}, rules: [makeGenderRule("F")], user: makeUser({
       gender: { state: "verified", provider: "self", value: "F" },
-    }))
+    }), walletAttachments: [] })
     expect(result.satisfied).toBe(true)
     expect(result.missingCapabilities).toEqual([])
     expect(result.mismatchReasons).toEqual([])
-    expect(satisfiesMembershipGateRules([makeGenderRule("F")], makeUser({
+    expect(await satisfiesMembershipGateRules({ env: {}, rules: [makeGenderRule("F")], user: makeUser({
       gender: { state: "verified", provider: "self", value: "F" },
-    }))).toBe(true)
+    }), walletAttachments: [] })).toBe(true)
   })
 })

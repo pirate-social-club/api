@@ -105,34 +105,34 @@ describe("buildMembershipGateSummary", () => {
 })
 
 describe("evaluateMembershipGateRules", () => {
-  test("returns satisfied when user has matching nationality", () => {
+  test("returns satisfied when user has matching nationality", async () => {
     const user = makeUser({ nationality: { state: "verified", provider: "self", value: "US" } })
     const rules = [makeNationalityRule("US")]
-    const result = evaluateMembershipGateRules(rules, user)
+    const result = await evaluateMembershipGateRules({ env: {}, rules, user, walletAttachments: [] })
     expect(result.satisfied).toBe(true)
     expect(result.missingCapabilities).toEqual([])
     expect(result.mismatchReasons).toEqual([])
   })
 
-  test("returns missing nationality when user lacks verification", () => {
+  test("returns missing nationality when user lacks verification", async () => {
     const user = makeUser({ nationality: { state: "unverified" } })
     const rules = [makeNationalityRule("US")]
-    const result = evaluateMembershipGateRules(rules, user)
+    const result = await evaluateMembershipGateRules({ env: {}, rules, user, walletAttachments: [] })
     expect(result.satisfied).toBe(false)
     expect(result.missingCapabilities).toEqual(["nationality"])
     expect(result.suggestedVerificationProvider).toBe("self")
   })
 
-  test("returns nationality_mismatch when verified nationality differs", () => {
+  test("returns nationality_mismatch when verified nationality differs", async () => {
     const user = makeUser({ nationality: { state: "verified", provider: "self", value: "AR" } })
     const rules = [makeNationalityRule("US")]
-    const result = evaluateMembershipGateRules(rules, user)
+    const result = await evaluateMembershipGateRules({ env: {}, rules, user, walletAttachments: [] })
     expect(result.satisfied).toBe(false)
     expect(result.missingCapabilities).toEqual([])
     expect(result.mismatchReasons).toContain("nationality_mismatch")
   })
 
-  test("returns provider_not_accepted when provider is wrong", () => {
+  test("returns provider_not_accepted when provider is wrong", async () => {
     const user = makeUser({ nationality: { state: "verified", provider: "self", value: "US" } })
     const rules: CommunityGateRuleRow[] = [{
       gate_rule_id: "gr_test_wrong_provider",
@@ -146,37 +146,37 @@ describe("evaluateMembershipGateRules", () => {
       gate_config_json: null,
       status: "active",
     }]
-    const result = evaluateMembershipGateRules(rules, user)
+    const result = await evaluateMembershipGateRules({ env: {}, rules, user, walletAttachments: [] })
     expect(result.satisfied).toBe(false)
     expect(result.mismatchReasons).toContain("provider_not_accepted")
   })
 
-  test("returns unsatisfied for empty rules", () => {
+  test("returns unsatisfied for empty rules", async () => {
     const user = makeUser({})
-    const result = evaluateMembershipGateRules([], user)
+    const result = await evaluateMembershipGateRules({ env: {}, rules: [], user, walletAttachments: [] })
     expect(result.satisfied).toBe(false)
     expect(result.mismatchReasons).toContain("no_active_gate_rules")
   })
 
-  test("evaluates multiple rules: one missing, one satisfied", () => {
+  test("evaluates multiple rules: one missing, one satisfied", async () => {
     const user = makeUser({
       uniqueHuman: { state: "verified", provider: "self" },
       nationality: { state: "unverified" },
     })
     const rules = [makeUniqueHumanRule(), makeNationalityRule("US")]
-    const result = evaluateMembershipGateRules(rules, user)
+    const result = await evaluateMembershipGateRules({ env: {}, rules, user, walletAttachments: [] })
     expect(result.satisfied).toBe(false)
     expect(result.missingCapabilities).toContain("nationality")
     expect(result.missingCapabilities).not.toContain("unique_human")
   })
 
-  test("satisfiesMembershipGateRules delegates to evaluateMembershipGateRules", () => {
+  test("satisfiesMembershipGateRules delegates to evaluateMembershipGateRules", async () => {
     const user = makeUser({ nationality: { state: "verified", provider: "self", value: "US" } })
-    expect(satisfiesMembershipGateRules([makeNationalityRule("US")], user)).toBe(true)
-    expect(satisfiesMembershipGateRules([makeNationalityRule("AR")], user)).toBe(false)
+    expect(await satisfiesMembershipGateRules({ env: {}, rules: [makeNationalityRule("US")], user, walletAttachments: [] })).toBe(true)
+    expect(await satisfiesMembershipGateRules({ env: {}, rules: [makeNationalityRule("AR")], user, walletAttachments: [] })).toBe(false)
   })
 
-  test("returns nationality_excluded when user nationality is in excluded_values", () => {
+  test("returns nationality_excluded when user nationality is in excluded_values", async () => {
     const rule: CommunityGateRuleRow = {
       gate_rule_id: "gr_excl",
       scope: "membership",
@@ -190,7 +190,7 @@ describe("evaluateMembershipGateRules", () => {
       status: "active",
     }
     const user = makeUser({ nationality: { state: "verified", provider: "self", value: "AR" } })
-    const result = evaluateMembershipGateRules([rule], user)
+    const result = await evaluateMembershipGateRules({ env: {}, rules: [rule], user, walletAttachments: [] })
     expect(result.satisfied).toBe(false)
     expect(result.mismatchReasons).toContain("nationality_excluded")
   })
