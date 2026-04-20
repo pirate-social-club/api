@@ -47,6 +47,11 @@ const AGENT_REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000
 const AGENT_PAIRING_CODE_TTL_MS = 10 * 60 * 1000
 const AGENT_PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
+function parseIsoMs(iso: string): number | null {
+  const parsed = new Date(iso).getTime()
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 function isTerminalStatus(status: AgentOwnershipSession["status"]): boolean {
   return status === "verified" || status === "failed" || status === "expired" || status === "cancelled"
 }
@@ -610,7 +615,8 @@ export async function claimAgentOwnershipPairingCode(
   if (pairingRow.status !== "pending") {
     throw conflictError("Pairing code is no longer available")
   }
-  if (new Date(pairingRow.expires_at).getTime() <= Date.now()) {
+  const pairingExpiresAtMs = parseIsoMs(pairingRow.expires_at)
+  if (pairingExpiresAtMs == null || pairingExpiresAtMs <= Date.now()) {
     await client.execute({
       sql: `
         UPDATE agent_pairing_codes
@@ -779,7 +785,8 @@ export async function completeAgentOwnershipSession(
   assertRegisterOnly(row.session_kind)
   assertClawkeyOnly(row.ownership_provider)
 
-  if (new Date(row.expires_at).getTime() <= Date.now()) {
+  const sessionExpiresAtMs = parseIsoMs(row.expires_at)
+  if (sessionExpiresAtMs == null || sessionExpiresAtMs <= Date.now()) {
     const updatedAt = nowIso()
     await updateAgentOwnershipSessionStatus(client, {
       row,
@@ -1065,8 +1072,8 @@ export async function refreshAgentDelegatedCredential(
     throw eligibilityFailed("Delegated credential is no longer active")
   }
 
-  const refreshExpiresAtMs = existingRow.refresh_expires_at ? new Date(existingRow.refresh_expires_at).getTime() : Number.NaN
-  if (Number.isFinite(refreshExpiresAtMs) && refreshExpiresAtMs <= Date.now()) {
+  const refreshExpiresAtMs = existingRow.refresh_expires_at ? parseIsoMs(existingRow.refresh_expires_at) : null
+  if (refreshExpiresAtMs == null || refreshExpiresAtMs <= Date.now()) {
     await client.execute({
       sql: `
         UPDATE agent_delegated_credentials
@@ -1164,8 +1171,8 @@ export async function verifyAgentDelegatedAccessToken(
     throw authError("Authentication failed")
   }
 
-  const expiresAtMs = new Date(credentialRow.expires_at).getTime()
-  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
+  const expiresAtMs = parseIsoMs(credentialRow.expires_at)
+  if (expiresAtMs == null || expiresAtMs <= Date.now()) {
     await client.execute({
       sql: `
         UPDATE agent_delegated_credentials
