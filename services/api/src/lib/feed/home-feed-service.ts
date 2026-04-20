@@ -237,13 +237,28 @@ async function listHomeFeedProjectionRows(input: {
     })
     return result.rows.map((row) => toHomeFeedProjectionRow(row))
   } catch (error) {
-    if (!isMissingColumnError(error, "visibility")) {
+    const isLegacyProjectionSchema = [
+      "visibility",
+      "upvote_count",
+      "downvote_count",
+      "comment_count",
+      "like_count",
+    ].some((columnName) => isMissingColumnError(error, columnName))
+
+    if (!isLegacyProjectionSchema) {
       throw error
     }
 
     const result = await controlPlaneClient.execute({
       sql: `
-        SELECT community_id, source_post_id, source_created_at, 'public' AS visibility, upvote_count, downvote_count, comment_count, like_count
+        SELECT community_id,
+               source_post_id,
+               source_created_at,
+               'public' AS visibility,
+               0 AS upvote_count,
+               0 AS downvote_count,
+               0 AS comment_count,
+               0 AS like_count
         FROM community_post_projections
         WHERE projection_version = 1
           AND status = 'published'
