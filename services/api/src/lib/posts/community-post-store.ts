@@ -3,6 +3,7 @@ import type { Client } from "../sql-client"
 import { badRequestError, internalError } from "../errors"
 import { executeFirst } from "../db-helpers"
 import { makeId } from "../helpers"
+import { isMissingColumnError } from "../auth/auth-db-query-helpers"
 import {
   buildAnonymousLabel,
   buildDisclosedQualifierSnapshots,
@@ -362,16 +363,37 @@ export async function insertPost(input: {
 }
 
 export async function getPostById(client: DbExecutor, postId: string): Promise<Post | null> {
-  const row = await executeFirst(
-    client,
-    {
+  const stmtWithVisibility = {
+    sql: `
+      SELECT post_id, community_id, author_user_id, authorship_mode, agent_id, agent_ownership_record_id,
+             identity_mode, anonymous_scope, anonymous_label, agent_display_name_snapshot,
+             agent_owner_handle_snapshot, agent_ownership_provider_snapshot, disclosed_qualifiers_json,
+             label_id, label_assignment_status, label_assigned_by, label_assigned_at, label_ai_confidence,
+             label_assignment_error, label_assignment_model, label_assignment_result_json,
+             post_type, status, visibility, title, body, caption, lyrics,
+             link_url, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
+             access_mode, asset_id, parent_post_id, song_mode, rights_basis, analysis_state, analysis_result_ref,
+             content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
+      FROM posts
+      WHERE post_id = ?1
+      LIMIT 1
+    `,
+    args: [postId],
+  } as const
+
+  const row = await executeFirst(client, stmtWithVisibility).catch(async (error) => {
+    if (!isMissingColumnError(error, "visibility")) {
+      throw error
+    }
+
+    return executeFirst(client, {
       sql: `
         SELECT post_id, community_id, author_user_id, authorship_mode, agent_id, agent_ownership_record_id,
                identity_mode, anonymous_scope, anonymous_label, agent_display_name_snapshot,
                agent_owner_handle_snapshot, agent_ownership_provider_snapshot, disclosed_qualifiers_json,
                label_id, label_assignment_status, label_assigned_by, label_assigned_at, label_ai_confidence,
                label_assignment_error, label_assignment_model, label_assignment_result_json,
-               post_type, status, visibility, title, body, caption, lyrics,
+               post_type, status, 'public' AS visibility, title, body, caption, lyrics,
                link_url, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
                access_mode, asset_id, parent_post_id, song_mode, rights_basis, analysis_state, analysis_result_ref,
                content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
@@ -380,8 +402,8 @@ export async function getPostById(client: DbExecutor, postId: string): Promise<P
         LIMIT 1
       `,
       args: [postId],
-    },
-  )
+    })
+  })
 
   return row ? serializePost(toPostRow(row)) : null
 }
