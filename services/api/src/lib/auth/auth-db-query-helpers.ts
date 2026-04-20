@@ -90,7 +90,11 @@ export function isMissingColumnError(error: unknown, columnName: string): boolea
     return true
   }
   const message = error instanceof Error ? error.message : String(error)
-  return message.includes("no such column") && message.includes(columnName)
+  return (
+    (message.includes("no such column") && message.includes(columnName))
+    || message.includes(`column "${columnName}" does not exist`)
+    || message.includes(`column '${columnName}' does not exist`)
+  )
 }
 
 function isDuplicateColumnError(error: unknown, columnName: string): boolean {
