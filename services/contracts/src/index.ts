@@ -565,6 +565,7 @@ export type CommunityPurchase = {
   settlement_chain: CommunityMoneyChainRef;
   settlement_token: string;
   settlement_tx_ref: string;
+  allocations: Array<CommunitySaleAllocationLeg>;
   donation_partner_id?: string | null;
   donation_share_pct?: number | null;
   donation_amount_usd?: number | null;
@@ -628,6 +629,7 @@ export type CommunityPurchaseQuote = {
   base_price_usd: number;
   pricing_tier?: string | null;
   final_price_usd: number;
+  allocation_snapshot: Array<CommunitySaleAllocationSnapshot>;
   funding_mode: CommunityPurchaseFundingMode;
   funding_asset?: CommunityMoneyAssetRef | null;
   source_chain?: CommunityMoneyChainRef | null;
@@ -669,6 +671,7 @@ export type CommunityPurchaseSettlement = {
   settlement_chain_ref: string;
   settlement_token: string;
   settlement_tx_ref: string;
+  allocations: Array<CommunitySaleAllocationLeg>;
   donation_partner_id?: string | null;
   donation_share_pct?: number | null;
   donation_amount_usd?: number | null;
@@ -1609,6 +1612,27 @@ type CommunityRule = {
   status: "active" | "archived";
 };
 
+type CommunitySaleAllocationLeg = (CommunitySaleAllocationSnapshot & {
+  status: CommunitySaleAllocationStatus;
+  settlement_ref?: string | null;
+  failure_reason?: string | null;
+});
+
+type CommunitySaleAllocationRecipientType = "creator" | "charity" | "community_treasury";
+
+type CommunitySaleAllocationSettlementStrategy = "story_payout" | "provider_payout" | "treasury_payout";
+
+type CommunitySaleAllocationSnapshot = {
+  recipient_type: CommunitySaleAllocationRecipientType;
+  recipient_ref?: string | null;
+  waterfall_position: number;
+  share_bps: number;
+  amount_usd: number;
+  settlement_strategy: CommunitySaleAllocationSettlementStrategy;
+};
+
+type CommunitySaleAllocationStatus = "quoted" | "pending" | "confirmed" | "failed";
+
 type CommunitySelfPromotionMode = "disallow" | "limited_with_disclosure" | "allowed_with_participation" | "creator_friendly";
 
 type CommunitySongAuthenticityPolicySettings = {
@@ -1887,8 +1911,8 @@ type GateRule = {
   gate_rule_id: string;
   community_id: string;
   scope: "membership" | "viewer" | "posting";
-  gate_family: "token_holding" | "identity_proof";
-  gate_type: "erc721_holding" | "erc1155_holding" | "erc20_balance" | "solana_nft_holding" | "unique_human" | "age_over_18" | "nationality" | "gender" | "sanctions_clear" | "wallet_score";
+  gate_family: "identity_proof";
+  gate_type: "unique_human" | "age_over_18" | "nationality" | "gender" | "sanctions_clear" | "wallet_score";
   proof_requirements?: Array<ProofRequirement> | null;
   chain_namespace?: string | null;
   gate_config?: (Record<string, unknown>) | null;
@@ -1899,8 +1923,8 @@ type GateRule = {
 
 type GateRuleInput = {
   scope: "membership" | "viewer" | "posting";
-  gate_family: "token_holding" | "identity_proof";
-  gate_type: "erc721_holding" | "erc1155_holding" | "erc20_balance" | "solana_nft_holding" | "unique_human" | "age_over_18" | "nationality" | "gender" | "sanctions_clear" | "wallet_score";
+  gate_family: "identity_proof";
+  gate_type: "unique_human" | "age_over_18" | "nationality" | "gender" | "sanctions_clear" | "wallet_score";
   proof_requirements?: Array<ProofRequirement> | null;
   chain_namespace?: string | null;
   gate_config?: (Record<string, unknown>) | null;

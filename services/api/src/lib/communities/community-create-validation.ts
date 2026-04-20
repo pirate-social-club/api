@@ -146,7 +146,7 @@ export function assertPublicV0GateConfiguration(
   }
   if (
     body.gate_rules?.some(
-      (rule) => rule.gate_family === "token_holding" || rule.scope === "viewer" || rule.scope === "posting",
+      (rule) => (rule.gate_family as string) === "token_holding" || rule.scope === "viewer" || rule.scope === "posting",
     )
   ) {
     // token_holding is rejected here AND has no evaluator in community-membership-store.ts;
