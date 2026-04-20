@@ -2,6 +2,7 @@ import { executeFirst } from "../db-helpers"
 import { openCommunityDb } from "../communities/community-db-factory"
 import type { Client } from "../sql-client"
 import type { CommunityRepository } from "../communities/db-community-repository"
+import { isMissingColumnError } from "../auth/auth-db-query-helpers"
 import { getLatestThreadSnapshotForRead } from "../comments/community-comment-store"
 import { buildLocalizedPostResponse } from "../localization/post-localization-service"
 import { getPostById } from "../posts/community-post-store"
@@ -216,6 +217,44 @@ export function sortCommunitySummaries(
   })
 }
 
+async function listHomeFeedProjectionRows(input: {
+  env: Env
+  communityIds: string[]
+}): Promise<HomeFeedProjectionRow[]> {
+  const controlPlaneClient = getControlPlaneClient(input.env)
+  const placeholders = input.communityIds.map((_, index) => `?${index + 1}`).join(", ")
+
+  try {
+    const result = await controlPlaneClient.execute({
+      sql: `
+        SELECT community_id, source_post_id, source_created_at, visibility, upvote_count, downvote_count, comment_count, like_count
+        FROM community_post_projections
+        WHERE projection_version = 1
+          AND status = 'published'
+          AND community_id IN (${placeholders})
+      `,
+      args: input.communityIds,
+    })
+    return result.rows.map((row) => toHomeFeedProjectionRow(row))
+  } catch (error) {
+    if (!isMissingColumnError(error, "visibility")) {
+      throw error
+    }
+
+    const result = await controlPlaneClient.execute({
+      sql: `
+        SELECT community_id, source_post_id, source_created_at, 'public' AS visibility, upvote_count, downvote_count, comment_count, like_count
+        FROM community_post_projections
+        WHERE projection_version = 1
+          AND status = 'published'
+          AND community_id IN (${placeholders})
+      `,
+      args: input.communityIds,
+    })
+    return result.rows.map((row) => toHomeFeedProjectionRow(row))
+  }
+}
+
 export async function listHomeFeed(input: {
   env: Env
   userId: string | null
@@ -257,21 +296,11 @@ export async function listHomeFeed(input: {
 
   const sort = parseHomeFeedSort(input.sort)
   const now = Date.now()
-
-  const controlPlaneClient = getControlPlaneClient(input.env)
-  const placeholders = communityIds.map((_, index) => `?${index + 1}`).join(", ")
-  const projectionResult = await controlPlaneClient.execute({
-    sql: `
-      SELECT community_id, source_post_id, source_created_at, visibility, upvote_count, downvote_count, comment_count, like_count
-      FROM community_post_projections
-      WHERE projection_version = 1
-        AND status = 'published'
-        AND community_id IN (${placeholders})
-    `,
-    args: communityIds,
-  })
   const allRows = filterVisibleHomeFeedProjections(
-    projectionResult.rows.map((row) => toHomeFeedProjectionRow(row)),
+    await listHomeFeedProjectionRows({
+      env: input.env,
+      communityIds,
+    }),
     memberCommunityIdSet,
   )
 
