@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import app from "../src/index"
 import { setClawkeyProviderForTests } from "../src/lib/agents/clawkey-provider"
 import appWorker from "../src/index"
-import { buildTestEnv, createRouteTestContext, json, resetRuntimeCaches } from "./helpers"
+import { buildTestEnv, createControlPlaneTestClient, createRouteTestContext, json, resetRuntimeCaches } from "./helpers"
 import { createSignedAgentChallenge } from "./agent-test-helpers"
 import { createSelfVerifiedSession, exchangeJwt, requestJson } from "./verification-test-helpers"
 
@@ -283,6 +283,38 @@ describe("agent routes", () => {
     expect(agentBody.display_name).toBe("Palm Agent")
     expect(agentBody.current_ownership?.device_id).toBe("claw-device-verified")
     expect(agentBody.current_ownership?.evidence_ref).toBe(registeredAt)
+  })
+
+  test("agents list returns an empty result on legacy databases without agent tables", async () => {
+    const controlPlane = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanup = controlPlane.cleanup
+
+    await controlPlane.client.execute("DROP TABLE IF EXISTS agent_action_nonce_replays")
+    await controlPlane.client.execute("DROP TABLE IF EXISTS agent_pairing_codes")
+    await controlPlane.client.execute("DROP TABLE IF EXISTS agent_delegated_credentials")
+    await controlPlane.client.execute("DROP TABLE IF EXISTS agent_ownership_sessions")
+    await controlPlane.client.execute("DROP TABLE IF EXISTS agent_ownership_records")
+    await controlPlane.client.execute("DROP TABLE IF EXISTS user_agents")
+
+    const env = buildTestEnv({
+      DEV_MEMORY_STORE_ENABLED: "false",
+      ENVIRONMENT: "test",
+      CONTROL_PLANE_DATABASE_URL: `file:${controlPlane.databasePath}`,
+    })
+
+    const session = await exchangeJwt(env, "legacy-agent-list-user")
+    const response = await app.request(
+      "http://pirate.test/agents",
+      {
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+        },
+      },
+      env,
+    )
+
+    expect(response.status).toBe(200)
+    expect(await json(response)).toEqual({ items: [] })
   })
 
   test("verified owner can issue and refresh a delegated credential for an active agent", async () => {

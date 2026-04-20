@@ -1,6 +1,6 @@
 import type { DbExecutor } from "../db-helpers"
 import type { Client, Transaction } from "../sql-client"
-import { firstRow } from "../auth/auth-db-query-helpers"
+import { firstRow, isMissingTableError } from "../auth/auth-db-query-helpers"
 import { getUserRow } from "../auth/auth-db-user-queries"
 import { parseVerificationCapabilities } from "../auth/auth-serializers"
 import { authError, badRequestError, conflictError, eligibilityFailed, internalError, notFoundError, notImplementedError, verificationRequired } from "../errors"
@@ -937,7 +937,12 @@ export async function getUserAgent(
   agentId: string,
   userId: string,
 ): Promise<UserAgent | null> {
-  const row = await getUserAgentRowForOwner(client, agentId, userId)
+  const row = await getUserAgentRowForOwner(client, agentId, userId).catch((error) => {
+    if (isMissingTableError(error, "user_agents")) {
+      return null
+    }
+    throw error
+  })
   if (!row) {
     return null
   }
@@ -949,7 +954,12 @@ export async function listUserAgents(
   client: Client,
   userId: string,
 ): Promise<UserAgent[]> {
-  const rows = await listUserAgentRowsForOwner(client, userId)
+  const rows = await listUserAgentRowsForOwner(client, userId).catch((error) => {
+    if (isMissingTableError(error, "user_agents")) {
+      return []
+    }
+    throw error
+  })
   const items: UserAgent[] = []
   for (const row of rows) {
     const currentOwnershipRow = await getCurrentOwnershipRecordRowForAgent(client, row.agent_id, userId)

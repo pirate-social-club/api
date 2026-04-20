@@ -596,13 +596,28 @@ export async function reconcileWalletAttachments(
   await executor.execute({
     sql: `
       UPDATE wallet_attachments
-      SET is_primary = CASE WHEN wallet_attachment_id = ?2 THEN 1 ELSE 0 END,
-          updated_at = ?3
+      SET is_primary = 0,
+          updated_at = ?2
       WHERE user_id = ?1
         AND status = 'active'
+        AND is_primary = 1
     `,
-    args: [input.userId, desiredPrimaryRow?.wallet_attachment_id ?? "", input.updatedAt],
+    args: [input.userId, input.updatedAt],
   })
+
+  if (desiredPrimaryRow) {
+    await executor.execute({
+      sql: `
+        UPDATE wallet_attachments
+        SET is_primary = 1,
+            updated_at = ?3
+        WHERE user_id = ?1
+          AND wallet_attachment_id = ?2
+          AND status = 'active'
+      `,
+      args: [input.userId, desiredPrimaryRow.wallet_attachment_id, input.updatedAt],
+    })
+  }
 
   await executor.execute({
     sql: `
