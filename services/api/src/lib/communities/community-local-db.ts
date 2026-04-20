@@ -6,6 +6,8 @@ import { createClient } from "@libsql/client"
 import type { Client } from "@libsql/client"
 import { internalError } from "../errors"
 
+const LOCAL_SQLITE_BUSY_TIMEOUT_MS = 5000
+
 export type LocalCommunityBootstrapInput = {
   rootDir: string
   communityId: string
@@ -130,6 +132,12 @@ async function ensureSchemaMigrationsTable(client: Client): Promise<void> {
   `)
 }
 
+export async function configureLocalCommunityDbClient(client: Client): Promise<void> {
+  await client.execute("PRAGMA journal_mode = WAL")
+  await client.execute("PRAGMA synchronous = NORMAL")
+  await client.execute(`PRAGMA busy_timeout = ${LOCAL_SQLITE_BUSY_TIMEOUT_MS}`)
+}
+
 async function applyMigrationFile(client: Client, migrationFilePath: string): Promise<void> {
   const migrationName = migrationFilePath.split("/").pop()
   if (!migrationName) {
@@ -225,6 +233,7 @@ export async function bootstrapLocalCommunityDb(input: LocalCommunityBootstrapIn
   })
 
   try {
+    await configureLocalCommunityDbClient(client)
     await ensureCommunityDbSchema(client)
 
     const membershipId = `mbr_${input.communityId}_${input.createdByUserId}`

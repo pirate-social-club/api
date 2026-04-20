@@ -181,6 +181,142 @@ export type RequestedVerificationCapability = "unique_human" | "age_over_18" | "
 
 export type VerificationIntent = "profile_verification" | "community_creation" | "community_join" | "post_access_18_plus" | "commerce_pricing" | "qualifier_disclosure";
 
+export type AgentOwnershipProvider = "self_agent_id" | "clawkey";
+
+export type AgentOwnershipSessionKind = "register" | "refresh" | "transfer" | "deregister";
+
+export type AgentOwnershipSessionStatus = "pending" | "awaiting_owner" | "proof_submitted" | "verified" | "failed" | "expired" | "cancelled";
+
+export type UserAgentStatus = "pending" | "active" | "suspended" | "revoked" | "transferred" | "deregistered";
+
+export type AgentOwnershipState = "pending" | "verified" | "expired" | "revoked" | "transferred";
+
+export type AgentChallenge = {
+  device_id: string;
+  public_key: string;
+  message: string;
+  signature: string;
+  timestamp: number;
+};
+
+export type AgentActionProof = {
+  nonce: string;
+  signed_at: string;
+  canonical_request_hash: string;
+  signature: string;
+};
+
+export type SelfAgentOwnershipLaunch = {
+  deep_link?: string | null;
+  qr_ref?: string | null;
+  session_token_ref?: string | null;
+};
+
+export type ClawkeyRegistrationLaunch = {
+  session_id: string;
+  registration_url: string;
+  expires_at?: string | null;
+};
+
+export type AgentOwnershipSessionLaunch = {
+  mode: "qr_deeplink" | "registration_url" | "none";
+  self_agent?: SelfAgentOwnershipLaunch;
+  clawkey_registration?: ClawkeyRegistrationLaunch;
+};
+
+export type StartAgentOwnershipSessionRequest = {
+  session_kind: AgentOwnershipSessionKind;
+  ownership_provider: AgentOwnershipProvider;
+  agent_id?: string | null;
+  display_name?: string | null;
+  policy_id?: string | null;
+  agent_challenge: AgentChallenge;
+};
+
+export type CompleteAgentOwnershipSessionRequest = {
+  attestation_id?: string | null;
+  proof_hash?: string | null;
+  provider_payload_ref?: string | null;
+};
+
+export type ProviderAgentOwnershipCallbackRequest = {
+  provider?: AgentOwnershipProvider;
+  event_type?: string | null;
+  attestation_id?: string | null;
+  proof_hash?: string | null;
+  payload?: (Record<string, unknown>) | null;
+};
+
+export type AgentOwnershipRecord = {
+  agent_ownership_record_id: string;
+  agent_id: string;
+  owner_user_id: string;
+  ownership_provider: AgentOwnershipProvider;
+  provider_subject_id?: string | null;
+  device_id?: string | null;
+  public_key?: string | null;
+  ownership_state: AgentOwnershipState;
+  source_session_id?: string | null;
+  verified_at?: string | null;
+  expires_at?: string | null;
+  ended_at?: string | null;
+  evidence_ref?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AgentOwnershipSession = {
+  agent_ownership_session_id: string;
+  session_kind: AgentOwnershipSessionKind;
+  owner_user_id?: string | null;
+  agent_id?: string | null;
+  ownership_provider: AgentOwnershipProvider;
+  status: AgentOwnershipSessionStatus;
+  agent_challenge_ref?: string;
+  provider_session_ref?: string | null;
+  launch: AgentOwnershipSessionLaunch;
+  callback_path?: string | null;
+  resolved_agent_ownership_record_id?: string | null;
+  created_at: string;
+  expires_at: string;
+  updated_at: string;
+};
+
+export type AgentDelegatedCredentialIssueRequest = {
+  current_ownership_record_id?: string | null;
+};
+
+export type AgentDelegatedCredentialRefreshRequest = {
+  refresh_token: string;
+};
+
+export type AgentDelegatedCredential = {
+  agent_id: string;
+  owner_user_id: string;
+  current_ownership_record_id: string;
+  token_type: "Bearer";
+  access_token: string;
+  refresh_token: string;
+  issued_at: string;
+  expires_at: string;
+  refresh_expires_at?: string | null;
+};
+
+export type UserAgent = {
+  agent_id: string;
+  owner_user_id: string;
+  display_name: string;
+  status: UserAgentStatus;
+  current_ownership_record_id?: string | null;
+  current_ownership?: AgentOwnershipRecord | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type UserAgentListResponse = {
+  items: Array<UserAgent>;
+};
+
 export type NamespaceVerificationAssertions = {
   root_exists?: boolean | null;
   root_control_verified?: boolean | null;
@@ -258,6 +394,7 @@ export type Community = {
   community_id: string;
   display_name: string;
   description?: string | null;
+  localized_text?: CommunityTextLocalization | null;
   avatar_ref?: string | null;
   banner_ref?: string | null;
   namespace_verification_id?: string | null;
@@ -271,6 +408,7 @@ export type Community = {
   allow_anonymous_identity: boolean;
   anonymous_identity_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null;
   human_verification_lane: HumanVerificationLane;
+  human_verification_lane_origin: CommunityAgentResolutionOrigin;
   allowed_disclosed_qualifiers?: Array<string> | null;
   allow_qualifiers_on_anonymous_posts?: boolean | null;
   root_post_min_trust_tier?: "new" | "established" | "trusted" | "high_trust" | null;
@@ -288,6 +426,7 @@ export type Community = {
   agent_min_owner_trust_tier?: "new" | "established" | "trusted" | "high_trust" | null;
   agent_owner_active_limit?: number | null;
   accepted_agent_ownership_providers: Array<AgentOwnershipProvider>;
+  accepted_agent_ownership_providers_origin: CommunityAgentResolutionOrigin;
   civic_scale_tier?: "club" | "village" | "town" | "city" | "state";
   donation_policy_mode: "none" | "optional_creator_sidecar";
   donation_partner_status: "unconfigured" | "active" | "paused";
@@ -654,6 +793,7 @@ export type CreatePostRequest = (((unknown & {
   creator_relation?: PostCreatorRelation | null;
   promotion_disclosure?: PromotionDisclosureInput | null;
   translation_policy?: "none" | "machine_allowed" | "human_only" | "hybrid";
+  visibility?: "public" | "members_only";
   access_mode?: "public" | "locked" | null;
   asset_id?: string | null;
   song_artifact_bundle_id?: string | null;
@@ -665,6 +805,9 @@ export type CreatePostRequest = (((unknown & {
 
 export type CreateCommentRequest = {
   body: string;
+  authorship_mode?: "human_direct" | "user_agent";
+  agent_id?: string | null;
+  agent_action_proof?: AgentActionProof | null;
   identity_mode?: "public" | "anonymous";
   anonymous_scope?: "community_stable" | "thread_stable" | null;
 };
@@ -799,6 +942,7 @@ export type Post = {
   label_id?: string | null;
   post_type: "text" | "image" | "video" | "link" | "song";
   status: "draft" | "published" | "hidden" | "removed" | "deleted";
+  visibility: "public" | "members_only";
   title?: string | null;
   body?: string | null;
   caption?: string | null;
@@ -829,10 +973,15 @@ export type Comment = {
   thread_root_post_id: string;
   parent_comment_id: string | null;
   author_user_id: string | null;
-  authorship_mode: "human_direct";
+  authorship_mode: "human_direct" | "user_agent";
+  agent_id?: string | null;
+  agent_ownership_record_id?: string | null;
   identity_mode: "public" | "anonymous";
   anonymous_scope: "community_stable" | "thread_stable" | null;
   anonymous_label: string | null;
+  agent_display_name_snapshot?: string | null;
+  agent_owner_handle_snapshot?: string | null;
+  agent_ownership_provider_snapshot?: AgentOwnershipProvider | null;
   body: string | null;
   status: "published" | "hidden" | "removed" | "deleted";
   depth: number;
@@ -992,6 +1141,19 @@ export type LocalizedPostResponse = {
   source_hash: string;
 };
 
+export type CommunityTextLocalizationItem = {
+  field_key: string;
+  translation_state: "ready" | "pending" | "same_language" | "policy_blocked";
+  machine_translated: boolean;
+  translated_value?: string | null;
+  source_hash: string;
+};
+
+export type CommunityTextLocalization = {
+  resolved_locale: string;
+  items: Array<CommunityTextLocalizationItem>;
+};
+
 export type MembershipGateSummary = {
   gate_type: "nationality" | "gender" | "unique_human" | "age_over_18" | "wallet_score";
   accepted_providers?: Array<"self" | "very" | "passport"> | null;
@@ -1003,6 +1165,8 @@ export type CommunityPreview = {
   community_id: string;
   display_name: string;
   description?: string | null;
+  localized_text?: CommunityTextLocalization | null;
+  rules?: Array<CommunityPreviewRule> | null;
   avatar_ref?: string | null;
   banner_ref?: string | null;
   membership_mode: "open" | "request" | "gated";
@@ -1163,15 +1327,6 @@ export type DismissTaskRequest = {
   task_id: string;
 };
 
-type AgentActionProof = {
-  nonce: string;
-  signed_at: string;
-  canonical_request_hash: string;
-  signature: string;
-};
-
-type AgentOwnershipProvider = "self_agent_id" | "clawkey" | "very_kya";
-
 type AudioMediaDescriptor = {
   storage_ref: string;
   mime_type: string;
@@ -1196,6 +1351,8 @@ type CommunityAdultContentPolicy = {
   fetish_content: CommunityModerationDecisionLevel;
   updated_at: string;
 };
+
+type CommunityAgentResolutionOrigin = "derived" | "explicit";
 
 type CommunityAuthenticityDetectionProfileStatus = "active" | "archived";
 
@@ -1369,6 +1526,14 @@ type CommunityPricingVerificationProvider = "self";
 type CommunityProfile = {
   rules: Array<CommunityRule>;
   resource_links: Array<CommunityResourceLink>;
+};
+
+export type CommunityPreviewRule = {
+  rule_id: string;
+  title: string;
+  body: string;
+  position: number;
+  status: "active" | "archived";
 };
 
 type CommunityPromotionPolicy = {
@@ -2038,6 +2203,13 @@ export const apiRoutes = {
   verificationSessions: "/verification-sessions",
   verificationSession: (verificationSessionId: string) => `/verification-sessions/${verificationSessionId}`,
   verificationSessionComplete: (verificationSessionId: string) => `/verification-sessions/${verificationSessionId}/complete`,
+  agentOwnershipSessions: "/agent-ownership-sessions",
+  agentOwnershipSession: (agentOwnershipSessionId: string) => `/agent-ownership-sessions/${agentOwnershipSessionId}`,
+  agentOwnershipSessionComplete: (agentOwnershipSessionId: string) => `/agent-ownership-sessions/${agentOwnershipSessionId}/complete`,
+  agents: "/agents",
+  agent: (agentId: string) => `/agents/${agentId}`,
+  agentCredential: (agentId: string) => `/agents/${agentId}/credential`,
+  agentCredentialRefresh: (agentId: string) => `/agents/${agentId}/credential/refresh`,
   namespaceVerificationSessions: "/namespace-verification-sessions",
   namespaceVerificationSession: (namespaceVerificationSessionId: string) => `/namespace-verification-sessions/${namespaceVerificationSessionId}`,
   namespaceVerificationSessionComplete: (namespaceVerificationSessionId: string) => `/namespace-verification-sessions/${namespaceVerificationSessionId}/complete`,

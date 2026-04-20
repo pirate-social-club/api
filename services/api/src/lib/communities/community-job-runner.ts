@@ -9,6 +9,10 @@ import {
   updateCommentSwarmBodyRef,
 } from "../comments/community-comment-store"
 import { materializeCommentTranslation } from "../localization/comment-translation-materializer"
+import {
+  materializeCommunityTextTranslations,
+  parseCommunityTextMaterializePayload,
+} from "../localization/community-localization-service"
 import { getPostById } from "../posts/community-post-store"
 import { materializePostTranslation } from "../localization/post-translation-materializer"
 import {
@@ -19,6 +23,7 @@ import {
 } from "../swarm/swarm-publisher"
 import type { Env } from "../../types"
 import type { CommunityRepository } from "./db-community-repository"
+import { loadCommunityProjection } from "./community-create-service"
 import { openCommunityDb } from "./community-db-factory"
 import {
   findNextRunnableCommunityJob,
@@ -130,6 +135,10 @@ function parseCommentTranslationPayload(raw: string | null): CommentTranslationP
   } catch {
     return null
   }
+}
+
+type CommunityTextTranslationPayload = {
+  locale?: string | null
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -404,6 +413,36 @@ async function runCommentTranslationMaterialize(input: {
   }
 }
 
+async function runCommunityTextTranslationMaterialize(input: {
+  job: CommunityJobRow
+  env: Env
+  communityRepository: CommunityJobRepository
+}): Promise<string | null> {
+  const db = await openCommunityDb(input.env, input.communityRepository, input.job.community_id)
+  try {
+    const payload = parseCommunityTextMaterializePayload(input.job.payload_json) as CommunityTextTranslationPayload | null
+    const locale = payload?.locale ?? null
+    const communityRow = await input.communityRepository.getCommunityById(input.job.community_id)
+    if (!communityRow) {
+      throw internalError("Community is missing for text translation materialize")
+    }
+
+    const community = await loadCommunityProjection(
+      input.env,
+      input.communityRepository as CommunityRepository,
+      communityRow,
+    )
+    return await materializeCommunityTextTranslations({
+      executor: db.client,
+      env: input.env,
+      community,
+      locale,
+    })
+  } finally {
+    db.close()
+  }
+}
+
 async function runCommunityJob(input: {
   job: CommunityJobRow
   env: Env
@@ -420,6 +459,8 @@ async function runCommunityJob(input: {
       return runPostTranslationMaterialize(input)
     case "comment_translation_materialize":
       return runCommentTranslationMaterialize(input)
+    case "community_text_translation_materialize":
+      return runCommunityTextTranslationMaterialize(input)
     default:
       throw internalError(`Unsupported community job type: ${input.job.job_type}`)
   }

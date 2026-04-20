@@ -10,6 +10,11 @@ import {
 } from "./community-membership-store"
 import { openCommunityDb } from "./community-db-factory"
 import {
+  buildLocalizedCommunity,
+  buildLocalizedCommunityPreview,
+  enqueueCommunityTextTranslationOnReadIfNeeded,
+} from "../localization/community-localization-service"
+import {
   resolveCommunityAvatarRef,
   resolveCommunityBannerRef,
 } from "./community-identity-media"
@@ -22,6 +27,7 @@ import { serializeJob } from "./community-serialization"
 import type {
   Community,
   CommunityPreview,
+  CommunityPreviewRule,
   Env,
   JoinEligibility,
   Job,
@@ -68,16 +74,38 @@ export async function getCommunity(input: {
   env: Env
   userId: string
   communityId: string
+  locale?: string | null
   repository: CommunityRepository
 }): Promise<Community> {
   const community = await requireOwnedCommunity(input.repository, input.communityId, input.userId)
-  return loadCommunityProjection(input.env, input.repository, community)
+  const canonical = await loadCommunityProjection(input.env, input.repository, community)
+  if (input.locale == null) {
+    return canonical
+  }
+
+  const db = await openCommunityDb(input.env, input.repository, input.communityId)
+  try {
+    const localized = await buildLocalizedCommunity({
+      executor: db.client,
+      community: canonical,
+      locale: input.locale ?? null,
+    })
+    await enqueueCommunityTextTranslationOnReadIfNeeded({
+      executor: db.client,
+      communityId: input.communityId,
+      localization: localized.localized_text,
+    })
+    return localized
+  } finally {
+    db.close()
+  }
 }
 
 export async function getCommunityPreview(input: {
   env: Env
   userId: string
   communityId: string
+  locale?: string | null
   communityRepository: CommunityRepository
 }): Promise<CommunityPreview> {
   const community = await input.communityRepository.getCommunityById(input.communityId)
@@ -94,7 +122,8 @@ export async function getCommunityPreview(input: {
       communityId: input.communityId,
       communityDisplayName: community.display_name,
       communityCreatedAt: community.created_at,
-      rules,
+      locale: input.locale ?? null,
+      gateRules: rules,
       viewerMembershipStatus:
         membership.membership_status === "banned"
           ? "banned"
@@ -110,6 +139,7 @@ export async function getCommunityPreview(input: {
 export async function getPublicCommunityPreview(input: {
   env: Env
   communityId: string
+  locale?: string | null
   communityRepository: CommunityRepository
 }): Promise<CommunityPreview> {
   const community = await input.communityRepository.getCommunityById(input.communityId)
@@ -125,7 +155,8 @@ export async function getPublicCommunityPreview(input: {
       communityId: input.communityId,
       communityDisplayName: community.display_name,
       communityCreatedAt: community.created_at,
-      rules,
+      locale: input.locale ?? null,
+      gateRules: rules,
       viewerMembershipStatus: "not_member",
     })
   } finally {
@@ -133,12 +164,37 @@ export async function getPublicCommunityPreview(input: {
   }
 }
 
+async function listPublicCommunityRules(input: {
+  client: Awaited<ReturnType<typeof openCommunityDb>>["client"]
+  communityId: string
+}): Promise<CommunityPreviewRule[]> {
+  const result = await input.client.execute({
+    sql: `
+      SELECT rule_id, title, body, position, status
+      FROM community_rules
+      WHERE community_id = ?1
+        AND status = 'active'
+      ORDER BY position ASC, created_at ASC
+    `,
+    args: [input.communityId],
+  })
+
+  return result.rows.map((row, index) => ({
+    rule_id: String(row.rule_id),
+    title: String(row.title ?? ""),
+    body: String(row.body ?? ""),
+    position: typeof row.position === "number" ? row.position : index,
+    status: row.status === "archived" ? "archived" : "active",
+  }))
+}
+
 async function buildCommunityPreview(input: {
   client: Awaited<ReturnType<typeof openCommunityDb>>["client"]
   communityId: string
   communityDisplayName: string
   communityCreatedAt: string
-  rules: Awaited<ReturnType<typeof listActiveMembershipGateRules>>
+  locale?: string | null
+  gateRules: Awaited<ReturnType<typeof listActiveMembershipGateRules>>
   viewerMembershipStatus: CommunityPreview["viewer_membership_status"]
 }): Promise<CommunityPreview> {
   const localResult = await input.client.execute({
@@ -151,11 +207,16 @@ async function buildCommunityPreview(input: {
       ? (localRow.membership_mode as CommunityPreview["membership_mode"])
       : "open"
   const displayName = localRow?.display_name ? String(localRow.display_name) : input.communityDisplayName
+  const publicRules = await listPublicCommunityRules({
+    client: input.client,
+    communityId: input.communityId,
+  })
 
-  return {
+  const preview: CommunityPreview = {
     community_id: input.communityId,
     display_name: displayName,
     description: localRow?.description != null ? String(localRow.description) : null,
+    rules: publicRules,
     avatar_ref: resolveCommunityAvatarRef({
       communityId: input.communityId,
       displayName,
@@ -169,10 +230,26 @@ async function buildCommunityPreview(input: {
     membership_mode: membershipMode,
     human_verification_lane: "self",
     member_count: null,
-    membership_gate_summaries: input.rules.map(buildMembershipGateSummary),
+    membership_gate_summaries: input.gateRules.map(buildMembershipGateSummary),
     viewer_membership_status: input.viewerMembershipStatus,
     created_at: input.communityCreatedAt,
   }
+
+  if (input.locale == null) {
+    return preview
+  }
+
+  const localized = await buildLocalizedCommunityPreview({
+    executor: input.client,
+    preview,
+    locale: input.locale,
+  })
+  await enqueueCommunityTextTranslationOnReadIfNeeded({
+    executor: input.client,
+    communityId: input.communityId,
+    localization: localized.localized_text,
+  })
+  return localized
 }
 
 export async function getJoinEligibility(input: {

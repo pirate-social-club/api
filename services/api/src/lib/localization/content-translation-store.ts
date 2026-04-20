@@ -3,13 +3,14 @@ import { executeFirst } from "../db-helpers"
 import { makeId } from "../helpers"
 import { requiredString, rowValue, stringOrNull } from "../sql-row"
 
-export type LocalizedContentType = "post" | "comment"
+export type LocalizedContentType = "post" | "comment" | "community_text"
 export type ContentTranslationOutcome = "translated" | "same_language"
 
 export type ContentTranslationRecord = {
   content_translation_id: string
   content_type: LocalizedContentType
   content_id: string
+  field_key: string
   locale: string
   source_hash: string
   source_language: string | null
@@ -29,6 +30,7 @@ function toContentTranslationRecord(row: unknown): ContentTranslationRecord {
     content_translation_id: requiredString(row, "content_translation_id"),
     content_type: requiredString(row, "content_type") as LocalizedContentType,
     content_id: requiredString(row, "content_id"),
+    field_key: stringOrNull(rowValue(row, "field_key")) ?? "",
     locale: requiredString(row, "locale"),
     source_hash: requiredString(row, "source_hash"),
     source_language: stringOrNull(rowValue(row, "source_language")),
@@ -48,22 +50,24 @@ export async function getContentTranslation(input: {
   executor: DbExecutor
   contentType: LocalizedContentType
   contentId: string
+  fieldKey?: string | null
   locale: string
   sourceHash: string
 }): Promise<ContentTranslationRecord | null> {
   const row = await executeFirst(input.executor, {
     sql: `
-      SELECT content_translation_id, content_type, content_id, locale, source_hash,
+      SELECT content_translation_id, content_type, content_id, field_key, locale, source_hash,
              source_language, outcome, translated_title, translated_body, translated_caption, provider,
              provider_model, provider_result_json, created_at, updated_at
       FROM content_translations
       WHERE content_type = ?1
         AND content_id = ?2
-        AND locale = ?3
-        AND source_hash = ?4
+        AND field_key = ?3
+        AND locale = ?4
+        AND source_hash = ?5
       LIMIT 1
     `,
-    args: [input.contentType, input.contentId, input.locale, input.sourceHash],
+    args: [input.contentType, input.contentId, input.fieldKey ?? "", input.locale, input.sourceHash],
   })
 
   return row ? toContentTranslationRecord(row) : null
@@ -73,6 +77,7 @@ export async function upsertContentTranslation(input: {
   executor: DbExecutor
   contentType: LocalizedContentType
   contentId: string
+  fieldKey?: string | null
   locale: string
   sourceHash: string
   sourceLanguage?: string | null
@@ -88,15 +93,15 @@ export async function upsertContentTranslation(input: {
   await input.executor.execute({
     sql: `
       INSERT INTO content_translations (
-        content_translation_id, content_type, content_id, locale, source_hash,
+        content_translation_id, content_type, content_id, field_key, locale, source_hash,
         source_language, outcome, translated_title, translated_body, translated_caption, provider,
         provider_model, provider_result_json, created_at, updated_at
       ) VALUES (
-        ?1, ?2, ?3, ?4, ?5,
-        ?6, ?7, ?8, ?9, ?10, ?11,
-        ?12, ?13, ?14, ?14
+        ?1, ?2, ?3, ?4, ?5, ?6,
+        ?7, ?8, ?9, ?10, ?11, ?12,
+        ?13, ?14, ?15, ?15
       )
-      ON CONFLICT(content_type, content_id, locale, source_hash) DO UPDATE SET
+      ON CONFLICT(content_type, content_id, field_key, locale, source_hash) DO UPDATE SET
         source_language = excluded.source_language,
         outcome = excluded.outcome,
         translated_title = excluded.translated_title,
@@ -111,6 +116,7 @@ export async function upsertContentTranslation(input: {
       makeId("ctr"),
       input.contentType,
       input.contentId,
+      input.fieldKey ?? "",
       input.locale,
       input.sourceHash,
       input.sourceLanguage ?? null,

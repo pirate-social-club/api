@@ -31,6 +31,7 @@ publicCommunities.get("/:communityId", async (c) => {
   const result = await getPublicCommunityPreview({
     env: c.env,
     communityId,
+    locale: c.req.query("locale") ?? null,
     communityRepository,
   })
   return c.json(result, 200)

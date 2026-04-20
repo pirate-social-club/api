@@ -3,7 +3,7 @@ import type { Client } from "@libsql/client"
 import type { CommunityRepository } from "./db-community-repository"
 import { internalError, notFoundError } from "../errors"
 import { decryptCommunityDbCredential } from "./community-db-credential-crypto"
-import { buildLocalCommunityDbUrl, ensureCommunityDbSchema } from "./community-local-db"
+import { buildLocalCommunityDbUrl, configureLocalCommunityDbClient, ensureCommunityDbSchema } from "./community-local-db"
 import type { Env } from "../../types"
 
 type CommunityDbRepository = Pick<CommunityRepository, "getPrimaryCommunityDatabaseBinding" | "getActiveCommunityDbCredential">
@@ -22,6 +22,7 @@ export async function openCommunityDb(
 
     const databaseUrl = buildLocalCommunityDbUrl(localRoot, communityId)
     const client = createClient({ url: databaseUrl })
+    await configureLocalCommunityDbClient(client)
     await ensureCommunityDbSchema(client)
     return {
       client,
@@ -46,6 +47,9 @@ export async function openCommunityDb(
     url: binding.database_url,
     ...(authToken ? { authToken } : {}),
   })
+  if (binding.database_url.startsWith("file:")) {
+    await configureLocalCommunityDbClient(client)
+  }
   await ensureCommunityDbSchema(client)
   return {
     client,

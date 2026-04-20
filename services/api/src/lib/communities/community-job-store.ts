@@ -9,6 +9,7 @@ export type CommunityJobType =
   | "thread_snapshot_publish"
   | "post_translation_materialize"
   | "comment_translation_materialize"
+  | "community_text_translation_materialize"
 export type CommunityJobStatus = "queued" | "running" | "succeeded" | "failed"
 
 export type CommunityJobRow = {

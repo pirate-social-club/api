@@ -1,273 +1,63 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { Client } from "@libsql/client"
 import { openCommunityDb } from "../src/lib/communities/community-db-factory"
 import { enqueueCommunityJob } from "../src/lib/communities/community-job-store"
 import type { CommunityRepository } from "../src/lib/communities/db-community-repository"
-import { processAvailableCommunityJobs, processCommunityJobById, processNextCommunityJob, runCommunityJobWorkerLoop } from "../src/lib/communities/community-job-runner"
-import type { CommunityCommentProjectionRow, CommunityRow } from "../src/lib/auth/auth-db-rows"
-import type { UserRepository } from "../src/lib/auth/repositories"
+import { processAvailableCommunityJobs, processNextCommunityJob, runCommunityJobWorkerLoop } from "../src/lib/communities/community-job-runner"
+import type { CommunityRow } from "../src/lib/auth/auth-db-rows"
 import { createComment } from "../src/lib/comments/comment-service"
 import { getCommentById } from "../src/lib/comments/community-comment-store"
 import { setSwarmPublisherForTests } from "../src/lib/swarm/swarm-publisher"
-import { buildDefaultVerificationCapabilities } from "../src/lib/verification/verification-capabilities"
-import { getPostById, insertPost } from "../src/lib/posts/community-post-store"
-import { computeCommentSourceHash, computePostSourceHash } from "../src/lib/localization/content-source-hash"
-import { getContentTranslation } from "../src/lib/localization/content-translation-store"
-import type { Env, User } from "../src/types"
-
-const cleanupPaths: string[] = []
+import type { Env } from "../src/types"
+import {
+  buildCommunityRepository,
+  buildUserRepository,
+  buildVerifiedUser,
+  cleanupCommunityJobRunnerArtifacts,
+  createCommunityJobRunnerRoot,
+  fetchCommunityJobs,
+  fetchThreadSnapshots,
+  seedCommunityState,
+  type TestCommunityRepository,
+} from "./community-job-runner-test-helpers"
 const originalFetch = globalThis.fetch
 
 afterEach(async () => {
   setSwarmPublisherForTests(null)
   globalThis.fetch = originalFetch
-  await Promise.all(cleanupPaths.splice(0).map((path) => rm(path, { recursive: true, force: true })))
+  await cleanupCommunityJobRunnerArtifacts()
 })
 
-function buildVerifiedUser(userId: string): User {
-  const capabilities = buildDefaultVerificationCapabilities()
-  const now = new Date().toISOString()
-  capabilities.unique_human = {
-    state: "verified",
-    provider: "self",
-    proof_type: "unique_human",
-    mechanism: "mock",
-    verified_at: now,
-  }
-
-  return {
-    user_id: userId,
-    verification_state: "verified",
-    capability_provider: "self",
-    verification_capabilities: capabilities,
-    created_at: now,
-    updated_at: now,
-  }
-}
-
-function buildUserRepository(users: Record<string, User>): UserRepository {
-  return {
-    async getUserById(userId: string) {
-      return users[userId] ?? null
-    },
-    async getWalletAttachmentsByUserId() {
-      return []
-    },
-  }
-}
-
-function buildCommunityRow(communityId: string, now: string): CommunityRow {
-  return {
-    community_id: communityId,
-    creator_user_id: "usr_owner",
-    display_name: "Community Job Runner Test",
-    status: "active",
-    provisioning_state: "active",
-    transfer_state: "none",
-    route_slug: null,
-    namespace_verification_id: null,
-    pending_namespace_verification_session_id: null,
-    primary_database_binding_id: "cdb_jobs",
-    created_at: now,
-    updated_at: now,
-  }
-}
-
-type TestCommunityRepository = CommunityRepository & {
-  projections: Map<string, CommunityCommentProjectionRow>
-  failProjectionWrites: boolean
-}
-
-function buildCommunityRepository(databasePath: string, communityId: string): TestCommunityRepository {
-  const projections = new Map<string, CommunityCommentProjectionRow>()
-  const now = new Date().toISOString()
-  const community = buildCommunityRow(communityId, now)
-
-  const repo = {
-    projections,
-    failProjectionWrites: false,
-    async getCommunityById(requestedCommunityId: string) {
-      return requestedCommunityId === communityId ? community : null
-    },
-    async listActiveCommunities() {
-      return [community]
-    },
-    async getPrimaryCommunityDatabaseBinding(requestedCommunityId: string) {
-      if (requestedCommunityId !== communityId) {
-        return null
-      }
-      return {
-        community_database_binding_id: "cdb_jobs",
-        community_id: communityId,
-        binding_role: "primary",
-        organization_slug: "local",
-        group_name: "local",
-        group_id: null,
-        database_name: "community-jobs",
-        database_id: null,
-        database_url: `file:${databasePath}`,
-        location: null,
-        status: "active",
-        transferred_at: null,
-        created_at: now,
-        updated_at: now,
-      }
-    },
-    async getActiveCommunityDbCredential() {
-      return null
-    },
-    async recordCommunityCommentProjection(input: {
-      communityId: string
-      threadRootPostId: string
-      sourceCommentId: string
-      parentCommentId: string | null
-      depth: number
-      status: "published" | "hidden" | "removed" | "deleted"
-      sourceCreatedAt: string
-      actorUserId: string
-      createdAt: string
-    }) {
-      if (repo.failProjectionWrites) {
-        throw new Error("projection unavailable")
-      }
-      const existing = repo.projections.get(input.sourceCommentId)
-      const row: CommunityCommentProjectionRow = {
-        projection_id: existing?.projection_id ?? `ccp_${input.sourceCommentId}`,
-        community_id: input.communityId,
-        thread_root_post_id: input.threadRootPostId,
-        source_comment_id: input.sourceCommentId,
-        parent_comment_id: input.parentCommentId,
-        depth: input.depth,
-        status: input.status,
-        source_created_at: input.sourceCreatedAt,
-        created_at: existing?.created_at ?? input.createdAt,
-        updated_at: input.createdAt,
-      }
-      repo.projections.set(input.sourceCommentId, row)
-      return row
-    },
-    async getCommunityCommentProjectionByCommentId(commentId: string) {
-      return repo.projections.get(commentId) ?? null
-    },
-  }
-
-  return repo as unknown as TestCommunityRepository
-}
-
-async function seedCommunityState(input: {
-  env: Env
-  repo: CommunityRepository
-  communityId: string
-  memberUserIds: string[]
-  membershipMode?: "open" | "request" | "gated"
-}): Promise<{ postId: string }> {
-  const db = await openCommunityDb(input.env, input.repo, input.communityId)
-  try {
-    const now = new Date().toISOString()
-    await db.client.execute({
-      sql: `
-        INSERT INTO communities (
-          community_id, display_name, description, status, artist_identity_id, artist_governance_state,
-          membership_mode, default_age_gate_policy, allow_anonymous_identity, anonymous_identity_scope,
-          donation_partner_id, donation_policy_mode, donation_partner_status, governance_mode,
-          settings_json, created_by_user_id, created_at, updated_at
-        ) VALUES (
-          ?1, ?2, NULL, 'active', NULL, 'fan_run',
-          ?3, 'none', 1, 'thread_stable',
-          NULL, 'none', 'unconfigured', 'centralized',
-          NULL, ?4, ?5, ?5
-        )
-      `,
-      args: [input.communityId, "Community Job Runner Test", input.membershipMode ?? "open", "usr_owner", now],
-    })
-
-    for (const userId of input.memberUserIds) {
-      await db.client.execute({
-        sql: `
-          INSERT INTO community_memberships (
-            membership_id, community_id, user_id, status, joined_at, left_at, banned_at, created_at, updated_at
-          ) VALUES (
-            ?1, ?2, ?3, 'member', ?4, NULL, NULL, ?4, ?4
-          )
-        `,
-        args: [`mbr_${userId}`, input.communityId, userId, now],
-      })
-    }
-
-    const post = await insertPost({
-      client: db.client,
-      communityId: input.communityId,
-      authorUserId: "usr_owner",
-      body: {
-        post_type: "text",
-        title: "Runner Root",
-        body: "Top level post body",
-        idempotency_key: `seed-post-${input.communityId}`,
-      },
-      createdAt: now,
-    })
-
-    return { postId: post.post_id }
-  } finally {
-    db.close()
-  }
-}
-
-async function fetchCommunityJobs(client: Client): Promise<Array<{
-  job_id: string
-  job_type: string
-  subject_id: string
-  status: string
-  result_ref: string | null
-  error_code: string | null
-  attempt_count: number
-  available_at: string | null
-}>> {
-  const result = await client.execute(`
-    SELECT job_id, job_type, subject_id, status, result_ref, error_code, attempt_count, available_at
-    FROM community_jobs
-    ORDER BY created_at ASC, job_id ASC
-  `)
-  return result.rows.map((row) => ({
-    job_id: String(row.job_id),
-    job_type: String(row.job_type),
-    subject_id: String(row.subject_id),
-    status: String(row.status),
-    result_ref: row.result_ref == null ? null : String(row.result_ref),
-    error_code: row.error_code == null ? null : String(row.error_code),
-    attempt_count: Number(row.attempt_count),
-    available_at: row.available_at == null ? null : String(row.available_at),
-  }))
-}
-
-async function fetchThreadSnapshots(client: Client): Promise<Array<{
-  thread_root_post_id: string
-  snapshot_seq: number
-  swarm_manifest_ref: string
-  swarm_feed_ref: string | null
-  comment_count: number
-}>> {
-  const result = await client.execute(`
-    SELECT thread_root_post_id, snapshot_seq, swarm_manifest_ref, swarm_feed_ref, comment_count
-    FROM thread_snapshots
-    ORDER BY thread_root_post_id ASC, snapshot_seq ASC
-  `)
-  return result.rows.map((row) => ({
-    thread_root_post_id: String(row.thread_root_post_id),
-    snapshot_seq: Number(row.snapshot_seq),
-    swarm_manifest_ref: String(row.swarm_manifest_ref),
-    swarm_feed_ref: row.swarm_feed_ref == null ? null : String(row.swarm_feed_ref),
-    comment_count: Number(row.comment_count),
-  }))
-}
-
 describe("community-job-runner", () => {
+  test("configures local community sqlite connections for concurrent worker access", async () => {
+    const rootDir = await createCommunityJobRunnerRoot("pirate-community-job-sqlite-config-")
+    const communityId = "cmt_job_sqlite_config"
+    const env: Env = {
+      LOCAL_COMMUNITY_DB_ROOT: rootDir,
+    }
+    const repo = buildCommunityRepository(join(rootDir, "sqlite-config.db"), communityId)
+
+    await seedCommunityState({
+      env,
+      repo,
+      communityId,
+      memberUserIds: ["usr_owner"],
+    })
+
+    const db = await openCommunityDb(env, repo, communityId)
+    try {
+      const journalMode = await db.client.execute("PRAGMA journal_mode")
+      expect(String(journalMode.rows[0]?.journal_mode ?? "")).toBe("wal")
+
+      const busyTimeout = await db.client.execute("PRAGMA busy_timeout")
+      expect(Number(busyTimeout.rows[0]?.timeout ?? 0)).toBe(5000)
+    } finally {
+      db.close()
+    }
+  })
+
   test("processes projection retry jobs and repopulates comment projections", async () => {
-    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-job-runner-"))
-    cleanupPaths.push(rootDir)
+    const rootDir = await createCommunityJobRunnerRoot("pirate-community-job-runner-")
 
     const databasePath = join(rootDir, "community.db")
     const communityId = "cmt_job_runner_projection"
@@ -366,8 +156,7 @@ describe("community-job-runner", () => {
   })
 
   test("drains available jobs across active communities and the worker loop stops when idle", async () => {
-    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-job-loop-"))
-    cleanupPaths.push(rootDir)
+    const rootDir = await createCommunityJobRunnerRoot("pirate-community-job-loop-")
 
     const env: Env = {
       LOCAL_COMMUNITY_DB_ROOT: rootDir,
@@ -519,8 +308,7 @@ describe("community-job-runner", () => {
   })
 
   test("backs off failed jobs, stops retrying after the attempt cap, and preserves anonymous comment privacy in swarm payloads", async () => {
-    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-job-backoff-"))
-    cleanupPaths.push(rootDir)
+    const rootDir = await createCommunityJobRunnerRoot("pirate-community-job-backoff-")
 
     const databasePath = join(rootDir, "community.db")
     const communityId = "cmt_job_backoff"
@@ -655,8 +443,7 @@ describe("community-job-runner", () => {
   })
 
   test("skips non-public communities and throttles then deduplicates snapshots", async () => {
-    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-job-snapshot-"))
-    cleanupPaths.push(rootDir)
+    const rootDir = await createCommunityJobRunnerRoot("pirate-community-job-snapshot-")
 
     const env: Env = {
       LOCAL_COMMUNITY_DB_ROOT: rootDir,
@@ -829,390 +616,4 @@ describe("community-job-runner", () => {
     }
   })
 
-  test("materializes cached post translations through the community job worker", async () => {
-    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-job-translation-"))
-    cleanupPaths.push(rootDir)
-
-    const databasePath = join(rootDir, "community.db")
-    const communityId = "cmt_job_translation"
-    const env: Env = {
-      LOCAL_COMMUNITY_DB_ROOT: rootDir,
-      OPENROUTER_API_KEY: "test-openrouter-key",
-      OPENROUTER_TRANSLATION_MODEL: "google/gemini-2.5-flash-lite-preview-09-2025",
-    }
-    const repo = buildCommunityRepository(databasePath, communityId)
-    const { postId } = await seedCommunityState({
-      env,
-      repo,
-      communityId,
-      memberUserIds: ["usr_owner"],
-    })
-
-    const policyDb = await openCommunityDb(env, repo, communityId)
-    try {
-      await policyDb.client.execute({
-        sql: `
-          UPDATE posts
-          SET translation_policy = 'machine_allowed'
-          WHERE post_id = ?1
-        `,
-        args: [postId],
-      })
-    } finally {
-      policyDb.close()
-    }
-
-    globalThis.fetch = (async () => {
-      return new Response(JSON.stringify({
-        choices: [
-          {
-            message: {
-              content: JSON.stringify({
-                source_language: "en",
-                target_locale: "es",
-                outcome: "translated",
-                translated_title: "Titulo traducido",
-                translated_body: "Cuerpo traducido",
-                translated_caption: null,
-              }),
-            },
-          },
-        ],
-      }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      })
-    }) as typeof fetch
-
-    const db = await openCommunityDb(env, repo, communityId)
-    try {
-      await enqueueCommunityJob({
-        client: db.client,
-        communityId,
-        jobType: "post_translation_materialize",
-        subjectType: "post_translation",
-        subjectId: `${postId}:es`,
-        payloadJson: JSON.stringify({
-          post_id: postId,
-          locale: "es",
-        }),
-        createdAt: new Date().toISOString(),
-      })
-    } finally {
-      db.close()
-    }
-
-    const processed = await processNextCommunityJob({
-      env,
-      communityId,
-      communityRepository: repo,
-    })
-    expect(processed?.job_type).toBe("post_translation_materialize")
-    expect(processed?.status).toBe("succeeded")
-    expect(processed?.result_ref).toBe("es:translated")
-
-    const verifyDb = await openCommunityDb(env, repo, communityId)
-    try {
-      const post = await getPostById(verifyDb.client, postId)
-      const sourceHash = await computePostSourceHash(post!)
-      const translation = await getContentTranslation({
-        executor: verifyDb.client,
-        contentType: "post",
-        contentId: postId,
-        locale: "es",
-        sourceHash,
-      })
-      expect(translation?.outcome).toBe("translated")
-      expect(translation?.translated_title).toBe("Titulo traducido")
-      expect(translation?.translated_body).toBe("Cuerpo traducido")
-      expect(translation?.provider).toBe("openrouter")
-    } finally {
-      verifyDb.close()
-    }
-  })
-
-  test("fails post translation jobs clearly when OPENROUTER_API_KEY is missing", async () => {
-    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-job-translation-missing-key-"))
-    cleanupPaths.push(rootDir)
-
-    const databasePath = join(rootDir, "community.db")
-    const communityId = "cmt_job_translation_missing_key"
-    const env: Env = {
-      LOCAL_COMMUNITY_DB_ROOT: rootDir,
-      OPENROUTER_TRANSLATION_MODEL: "google/gemini-2.5-flash-lite-preview-09-2025",
-    }
-    const repo = buildCommunityRepository(databasePath, communityId)
-    const { postId } = await seedCommunityState({
-      env,
-      repo,
-      communityId,
-      memberUserIds: ["usr_owner"],
-    })
-
-    const setupDb = await openCommunityDb(env, repo, communityId)
-    try {
-      await setupDb.client.execute({
-        sql: `
-          UPDATE posts
-          SET translation_policy = 'machine_allowed'
-          WHERE post_id = ?1
-        `,
-        args: [postId],
-      })
-
-      await enqueueCommunityJob({
-        client: setupDb.client,
-        communityId,
-        jobType: "post_translation_materialize",
-        subjectType: "post_translation",
-        subjectId: `${postId}:es`,
-        payloadJson: JSON.stringify({
-          post_id: postId,
-          locale: "es",
-        }),
-        createdAt: new Date().toISOString(),
-      })
-    } finally {
-      setupDb.close()
-    }
-
-    const processed = await processNextCommunityJob({
-      env,
-      communityId,
-      communityRepository: repo,
-    })
-    expect(processed?.job_type).toBe("post_translation_materialize")
-    expect(processed?.status).toBe("failed")
-    expect(processed?.error_code).toBe("OPENROUTER_API_KEY is not configured")
-
-    const verifyDb = await openCommunityDb(env, repo, communityId)
-    try {
-      const jobs = await fetchCommunityJobs(verifyDb.client)
-      const translationJob = jobs.find((job) => job.subject_id === `${postId}:es`)
-      expect(translationJob?.status).toBe("failed")
-      expect(translationJob?.error_code).toBe("OPENROUTER_API_KEY is not configured")
-    } finally {
-      verifyDb.close()
-    }
-  })
-
-  test("refreshes stale cached post translations when translated titles are missing", async () => {
-    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-job-translation-refresh-"))
-    cleanupPaths.push(rootDir)
-
-    const databasePath = join(rootDir, "community.db")
-    const communityId = "cmt_job_translation_refresh"
-    const env: Env = {
-      LOCAL_COMMUNITY_DB_ROOT: rootDir,
-      OPENROUTER_API_KEY: "test-openrouter-key",
-      OPENROUTER_TRANSLATION_MODEL: "google/gemini-2.5-flash-lite-preview-09-2025",
-    }
-    const repo = buildCommunityRepository(databasePath, communityId)
-    const { postId } = await seedCommunityState({
-      env,
-      repo,
-      communityId,
-      memberUserIds: ["usr_owner"],
-    })
-
-    const setupDb = await openCommunityDb(env, repo, communityId)
-    try {
-      await setupDb.client.execute({
-        sql: `
-          UPDATE posts
-          SET translation_policy = 'machine_allowed'
-          WHERE post_id = ?1
-        `,
-        args: [postId],
-      })
-
-      const post = await getPostById(setupDb.client, postId)
-      const sourceHash = await computePostSourceHash(post!)
-      const now = new Date().toISOString()
-      await setupDb.client.execute({
-        sql: `
-          INSERT INTO content_translations (
-            content_translation_id, content_type, content_id, locale, source_hash,
-            source_language, outcome, translated_title, translated_body, translated_caption, provider,
-            provider_model, provider_result_json, created_at, updated_at
-          ) VALUES (
-            ?1, 'post', ?2, 'es', ?3,
-            'en', 'translated', NULL, 'Cuerpo traducido viejo', NULL, 'openrouter',
-            'google/gemini-2.5-flash-lite-preview-09-2025', NULL, ?4, ?4
-          )
-        `,
-        args: [`ctr_${postId}_es`, postId, sourceHash, now],
-      })
-
-      await enqueueCommunityJob({
-        client: setupDb.client,
-        communityId,
-        jobType: "post_translation_materialize",
-        subjectType: "post_translation",
-        subjectId: `${postId}:es`,
-        payloadJson: JSON.stringify({
-          post_id: postId,
-          locale: "es",
-        }),
-        createdAt: now,
-      })
-    } finally {
-      setupDb.close()
-    }
-
-    let callCount = 0
-    globalThis.fetch = (async () => {
-      callCount += 1
-      return new Response(JSON.stringify({
-        choices: [
-          {
-            message: {
-              content: JSON.stringify({
-                source_language: "en",
-                target_locale: "es",
-                outcome: "translated",
-                translated_title: "Titulo actualizado",
-                translated_body: "Cuerpo traducido actualizado",
-                translated_caption: null,
-              }),
-            },
-          },
-        ],
-      }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      })
-    }) as typeof fetch
-
-    const processed = await processNextCommunityJob({
-      env,
-      communityId,
-      communityRepository: repo,
-    })
-    expect(processed?.job_type).toBe("post_translation_materialize")
-    expect(processed?.status).toBe("succeeded")
-    expect(processed?.result_ref).toBe("es:translated")
-    expect(callCount).toBe(1)
-
-    const verifyDb = await openCommunityDb(env, repo, communityId)
-    try {
-      const post = await getPostById(verifyDb.client, postId)
-      const sourceHash = await computePostSourceHash(post!)
-      const translation = await getContentTranslation({
-        executor: verifyDb.client,
-        contentType: "post",
-        contentId: postId,
-        locale: "es",
-        sourceHash,
-      })
-      expect(translation?.translated_title).toBe("Titulo actualizado")
-      expect(translation?.translated_body).toBe("Cuerpo traducido actualizado")
-    } finally {
-      verifyDb.close()
-    }
-  })
-
-  test("materializes cached comment translations through the community job worker", async () => {
-    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-job-comment-translation-"))
-    cleanupPaths.push(rootDir)
-
-    const databasePath = join(rootDir, "community.db")
-    const communityId = "cmt_job_comment_translation"
-    const env: Env = {
-      LOCAL_COMMUNITY_DB_ROOT: rootDir,
-      OPENROUTER_API_KEY: "test-openrouter-key",
-      OPENROUTER_TRANSLATION_MODEL: "google/gemini-2.5-flash-lite-preview-09-2025",
-    }
-    const repo = buildCommunityRepository(databasePath, communityId)
-    const { postId } = await seedCommunityState({
-      env,
-      repo,
-      communityId,
-      memberUserIds: ["usr_owner"],
-    })
-
-    const comment = await createComment({
-      env,
-      userId: "usr_owner",
-      communityId,
-      threadRootPostId: postId,
-      body: { body: "Comment to translate from Pirate" },
-      userRepository: buildUserRepository({
-        usr_owner: buildVerifiedUser("usr_owner"),
-      }),
-      communityRepository: repo,
-    })
-
-    globalThis.fetch = (async () => {
-      return new Response(JSON.stringify({
-        choices: [
-          {
-            message: {
-              content: JSON.stringify({
-                source_language: "en",
-                target_locale: "es",
-                outcome: "translated",
-                translated_title: null,
-                translated_body: "Comentario traducido",
-                translated_caption: null,
-              }),
-            },
-          },
-        ],
-      }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      })
-    }) as typeof fetch
-
-    const db = await openCommunityDb(env, repo, communityId)
-    let jobId: string | null = null
-    try {
-      await enqueueCommunityJob({
-        client: db.client,
-        communityId,
-        jobType: "comment_translation_materialize",
-        subjectType: "comment_translation",
-        subjectId: `${comment.comment_id}:es`,
-        payloadJson: JSON.stringify({
-          comment_id: comment.comment_id,
-          locale: "es",
-        }),
-        createdAt: new Date().toISOString(),
-      })
-      const jobs = await fetchCommunityJobs(db.client)
-      jobId = jobs.find((job) => job.subject_id === `${comment.comment_id}:es`)?.job_id ?? null
-    } finally {
-      db.close()
-    }
-    expect(jobId).not.toBeNull()
-
-    const processed = await processCommunityJobById({
-      env,
-      communityId,
-      jobId: jobId!,
-      communityRepository: repo,
-    })
-    expect(processed?.job_type).toBe("comment_translation_materialize")
-    expect(processed?.status).toBe("succeeded")
-    expect(processed?.result_ref).toBe("es:translated")
-
-    const verifyDb = await openCommunityDb(env, repo, communityId)
-    try {
-      const storedComment = await getCommentById(verifyDb.client, comment.comment_id)
-      const sourceHash = await computeCommentSourceHash(storedComment!)
-      const translation = await getContentTranslation({
-        executor: verifyDb.client,
-        contentType: "comment",
-        contentId: comment.comment_id,
-        locale: "es",
-        sourceHash,
-      })
-      expect(translation?.outcome).toBe("translated")
-      expect(translation?.translated_body).toBe("Comentario traducido")
-      expect(translation?.provider).toBe("openrouter")
-    } finally {
-      verifyDb.close()
-    }
-  })
 })

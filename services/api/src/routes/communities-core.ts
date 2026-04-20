@@ -9,11 +9,13 @@ import {
   joinCommunity,
   setPendingNamespaceVerificationSession,
   type CreateCommunityRequestBody,
+  type UpdateCommunityRequestBody,
   type UpdateCommunityGatesRequestBody,
   type UpdateCommunityReferenceLinksRequestBody,
   type UpdateCommunitySafetyRequestBody,
   type UpdateCommunityRulesRequestBody,
   type UpdateCommunityDonationPolicyRequestBody,
+  updateCommunity,
   updateCommunityGates,
   updateCommunityReferenceLinks,
   updateCommunitySafety,
@@ -63,7 +65,22 @@ export function registerCommunityCoreRoutes(communities: Hono<AuthenticatedEnv>)
       env: c.env,
       userId: actor.userId,
       communityId,
+      locale: c.req.query("locale") ?? null,
       repository: communityRepository,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.patch("/:communityId", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const body = await c.req.json<UpdateCommunityRequestBody>().catch(() => null)
+
+    const result = await updateCommunity({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      body,
+      communityRepository,
     })
     return c.json(result, 200)
   })
@@ -74,6 +91,7 @@ export function registerCommunityCoreRoutes(communities: Hono<AuthenticatedEnv>)
       env: c.env,
       userId: actor.userId,
       communityId,
+      locale: c.req.query("locale") ?? null,
       communityRepository,
     })
     return c.json(result, 200)
@@ -246,14 +264,16 @@ export function registerCommunityCoreRoutes(communities: Hono<AuthenticatedEnv>)
   })
 
   communities.post("/:communityId/posts", async (c) => {
-    const { actor, communityId, communityRepository, userRepository } = await getResolvedCommunityRouteContext(c)
+    const { actor, communityId, communityRepository, userRepository, profileRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<CreatePostRequest>(c, "Invalid post create payload")
     const result = await createPost({
       env: c.env,
+      requestUrl: c.req.url,
       userId: actor.userId,
       communityId,
       body,
       userRepository,
+      profileRepository,
       communityRepository,
     })
     return c.json(result, result.status === "published" ? 201 : 202)
@@ -276,15 +296,17 @@ export function registerCommunityCoreRoutes(communities: Hono<AuthenticatedEnv>)
   })
 
   communities.post("/:communityId/posts/:postId/comments", async (c) => {
-    const { actor, communityId, communityRepository, userRepository } = await getResolvedCommunityRouteContext(c)
+    const { actor, communityId, communityRepository, userRepository, profileRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<CreateCommentRequest>(c, "Invalid comment create payload")
     const result = await createComment({
       env: c.env,
+      requestUrl: c.req.url,
       userId: actor.userId,
       communityId,
       threadRootPostId: c.req.param("postId"),
       body,
       userRepository,
+      profileRepository,
       communityRepository,
     })
     return c.json(result, 201)
