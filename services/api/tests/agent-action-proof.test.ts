@@ -23,6 +23,7 @@ describe("agent action proof canonicalization", () => {
     expect(canonical).toBe([
       getAgentActionProofCanonicalVersion(),
       "POST",
+      "http://pirate.test",
       "/communities/cmt_123/posts",
       "draft=false&sort=new",
       '{"body":"Hello","post_type":"text","title":"Agent post"}',
@@ -54,6 +55,7 @@ describe("agent action proof canonicalization", () => {
     expect(absent).toBe([
       getAgentActionProofCanonicalVersion(),
       "POST",
+      "http://pirate.test",
       "/communities/cmt_123/posts",
       "",
       "",
@@ -71,6 +73,7 @@ describe("agent action proof canonicalization", () => {
     expect(canonical).toBe([
       getAgentActionProofCanonicalVersion(),
       "DELETE",
+      "http://pirate.test",
       "/agents/agt_123",
       "filter=a&filter=z&mode=fast",
       "",
@@ -93,7 +96,7 @@ describe("agent action proof canonicalization", () => {
       },
     })
 
-    expect(canonical.split("\n")[4]).toBe('{"outer_a":[{"x":1,"y":2},3],"outer_b":{"a":1,"z":2}}')
+    expect(canonical.split("\n")[5]).toBe('{"outer_a":[{"x":1,"y":2},3],"outer_b":{"a":1,"z":2}}')
   })
 
   test("sorts query params and JSON object keys by UTF-8 byte order", () => {
@@ -109,10 +112,37 @@ describe("agent action proof canonicalization", () => {
     expect(canonical).toBe([
       getAgentActionProofCanonicalVersion(),
       "POST",
+      "http://pirate.test",
       "/example",
       "z=1&%C3%A4=1",
       '{"z_key":1,"ä_key":2}',
     ].join("\n"))
+  })
+
+  test("binds the canonical request hash to the request origin", async () => {
+    const httpHash = await computeAgentActionProofHash({
+      method: "POST",
+      url: "http://pirate.test/example",
+      body: { hello: "world" },
+    })
+    const httpsHash = await computeAgentActionProofHash({
+      method: "POST",
+      url: "https://pirate.test/example",
+      body: { hello: "world" },
+    })
+
+    expect(httpHash).not.toBe(httpsHash)
+  })
+
+  test("rejects circular JSON bodies", () => {
+    const body: Record<string, unknown> = { title: "loop" }
+    body.self = body
+
+    expect(() => canonicalizeAgentActionProofRequest({
+      method: "POST",
+      url: "http://pirate.test/example",
+      body,
+    })).toThrow(/cannot contain circular references/)
   })
 
   test("verifies a v0 Ed25519 signature against the canonical proof payload", () => {

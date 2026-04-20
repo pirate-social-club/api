@@ -1,12 +1,12 @@
 import { createPublicKey, verify } from "node:crypto"
-import { conflictError, eligibilityFailed } from "../errors"
+import { badRequestError, conflictError, eligibilityFailed } from "../errors"
 import { hasUniqueConstraintField } from "../auth/auth-db-query-helpers"
 import type { Client } from "../sql-client"
 import { sha256Hex } from "../crypto"
 import type { AgentActionProof } from "../../types"
 
-const CANONICAL_VERSION = "pirate-agent-action-proof-v1"
-const SIGNATURE_VERSION = "pirate-agent-action-signature-v1"
+const CANONICAL_VERSION = "pirate-agent-action-proof-v2"
+const SIGNATURE_VERSION = "pirate-agent-action-signature-v2"
 const encoder = new TextEncoder()
 
 type CanonicalJson =
@@ -61,12 +61,20 @@ function canonicalizeQuery(searchParams: URLSearchParams): string {
 }
 
 function sortJsonValue(value: CanonicalJson): CanonicalJson {
+  return sortJsonValueWithSeen(value, new WeakSet<object>())
+}
+
+function sortJsonValueWithSeen(value: CanonicalJson, seen: WeakSet<object>): CanonicalJson {
   if (Array.isArray(value)) {
-    return value.map((item) => sortJsonValue(item))
+    return value.map((item) => sortJsonValueWithSeen(item, seen))
   }
   if (value && typeof value === "object") {
+    if (seen.has(value)) {
+      throw badRequestError("agent_action_proof body cannot contain circular references")
+    }
+    seen.add(value)
     const entries = Object.entries(value).sort(([left], [right]) => compareUtf8Ascending(left, right))
-    return Object.fromEntries(entries.map(([key, child]) => [key, sortJsonValue(child)]))
+    return Object.fromEntries(entries.map(([key, child]) => [key, sortJsonValueWithSeen(child, seen)]))
   }
   return value
 }
@@ -92,8 +100,9 @@ export function canonicalizeAgentActionProofRequest(input: {
   url: string
   body?: unknown
 }): string {
-  const url = new URL(input.url, "http://pirate.local")
+  const url = new URL(input.url)
   const method = input.method.trim().toUpperCase()
+  const origin = url.origin
   const path = normalizePath(url.pathname)
   const query = canonicalizeQuery(url.searchParams)
   const body = canonicalizeBody(input.body)
@@ -101,6 +110,7 @@ export function canonicalizeAgentActionProofRequest(input: {
   return [
     CANONICAL_VERSION,
     method,
+    origin,
     path,
     query,
     body,
