@@ -306,6 +306,8 @@ export function evaluateMembershipGateRules(
 
   for (const rule of rules) {
     if (rule.gate_family !== "identity_proof") {
+      // token_holding gates are not evaluated in v0; they are also rejected at creation time
+      // by assertPublicV0GateConfiguration in community-create-validation.ts.
       mismatchReasons.push(`unsupported_gate_family:${rule.gate_family}`)
       continue
     }

@@ -149,6 +149,8 @@ export function assertPublicV0GateConfiguration(
       (rule) => rule.gate_family === "token_holding" || rule.scope === "viewer" || rule.scope === "posting",
     )
   ) {
+    // token_holding is rejected here AND has no evaluator in community-membership-store.ts;
+    // community membership gates are identity-proof only in v0.
     throw eligibilityFailed("Public v0 community creation only allows membership-scope identity-proof gates")
   }
   if (body.gate_rules?.some((rule) => rule.gate_type === "sanctions_clear")) {
