@@ -51,6 +51,7 @@ export class DatabaseProfileRepository {
   }
 
   async updateProfile(userId: string, input: UpdateProfileInput): Promise<Profile | null> {
+    await ensureProfilesPrimaryLinkedHandleColumn(this.client)
     const existing = await getProfileRow(this.client, userId)
     if (!existing) {
       return null

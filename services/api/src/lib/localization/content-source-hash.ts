@@ -6,6 +6,14 @@ function canonicalizeString(value: string | null | undefined): string | null {
   return trimmed ? trimmed : null
 }
 
+export async function computeTextSourceHash(value: string | null | undefined): Promise<string> {
+  const payload = {
+    body: canonicalizeString(value),
+  }
+
+  return `0x${await sha256Hex(JSON.stringify(payload))}`
+}
+
 export async function computePostSourceHash(post: Post): Promise<string> {
   const payload = {
     title: canonicalizeString(post.title),
@@ -17,9 +25,5 @@ export async function computePostSourceHash(post: Post): Promise<string> {
 }
 
 export async function computeCommentSourceHash(comment: Comment): Promise<string> {
-  const payload = {
-    body: canonicalizeString(comment.body),
-  }
-
-  return `0x${await sha256Hex(JSON.stringify(payload))}`
+  return computeTextSourceHash(comment.body)
 }

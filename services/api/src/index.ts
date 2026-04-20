@@ -1,9 +1,11 @@
 import { Hono } from "hono"
 import { cors } from "hono/cors"
+import agents from "./routes/agents"
 import auth from "./routes/auth"
 import communityMedia from "./routes/community-media"
 import comments from "./routes/comments"
 import communities from "./routes/communities"
+import discovery from "./routes/discovery"
 import feed from "./routes/feed"
 import jobs from "./routes/jobs"
 import notifications from "./routes/notifications"
@@ -27,11 +29,13 @@ app.use(
   cors({
     origin: "*",
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Authorization"],
+    allowHeaders: ["Content-Type", "Authorization", "X-Agent-Connection-Token"],
   }),
 )
 
 app.get("/health", (c) => c.json({ ok: true }))
+app.route("/", discovery)
+app.route("/", agents)
 app.route("/auth", auth)
 app.route("/community-media", communityMedia)
 app.route("/comments", comments)

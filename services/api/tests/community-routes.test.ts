@@ -155,6 +155,30 @@ describe("community routes", () => {
     )
     expect(rulesResponse.status).toBe(200)
 
+    const donationPolicyResponse = await app.request(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}/donation-policy`,
+      {
+        method: "PATCH",
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          donation_policy_mode: "optional_creator_sidecar",
+          donation_partner_id: "org_charity_water",
+          donation_partner: {
+            donation_partner_id: "org_charity_water",
+            display_name: "charity: water",
+            provider: "endaoment",
+            provider_partner_ref: "charity-water",
+            image_url: "https://images.example/charity-water.png",
+          },
+        }),
+      },
+      ctx.env,
+    )
+    expect(donationPolicyResponse.status).toBe(200)
+
     const createdPost = await requestJson(
       `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
       {
@@ -201,6 +225,14 @@ describe("community routes", () => {
       community_id: string
       display_name: string
       description: string | null
+      donation_policy_mode?: "none" | "optional_creator_sidecar" | null
+      donation_partner_id?: string | null
+      donation_partner?: {
+        donation_partner_id: string
+        display_name: string
+        provider_partner_ref?: string | null
+        image_url?: string | null
+      } | null
       rules?: Array<{
         rule_id: string
         title: string
@@ -220,6 +252,11 @@ describe("community routes", () => {
     expect(previewBody.community_id).toBe(communityCreateBody.community.community_id)
     expect(previewBody.display_name).toBe("Public Community Club")
     expect(previewBody.description).toBe("Readable without reconnecting.")
+    expect(previewBody.donation_policy_mode).toBe("optional_creator_sidecar")
+    expect(previewBody.donation_partner_id).toBe("org_charity_water")
+    expect(previewBody.donation_partner?.display_name).toBe("charity: water")
+    expect(previewBody.donation_partner?.provider_partner_ref).toBe("charity-water")
+    expect(previewBody.donation_partner?.image_url).toBe("https://images.example/charity-water.png")
     expect(previewBody.rules?.map((rule) => rule.title)).toEqual([
       "Respect others and be civil",
       "No spam",

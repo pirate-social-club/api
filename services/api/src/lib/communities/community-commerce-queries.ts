@@ -273,7 +273,8 @@ export async function listPurchaseRows(
     sql: `
       SELECT purchase_id, community_id, listing_id, asset_id, live_room_id, buyer_user_id,
              settlement_wallet_attachment_id, purchase_price_usd, pricing_tier, settlement_chain,
-             settlement_token, settlement_tx_ref, created_at
+             settlement_token, settlement_tx_ref, donation_partner_id, donation_share_pct,
+             donation_amount_usd, created_at
       FROM purchases
       WHERE community_id = ?1
         AND buyer_user_id = ?2
@@ -294,6 +295,9 @@ export async function listPurchaseRows(
     settlement_chain: requiredString(row, "settlement_chain"),
     settlement_token: requiredString(row, "settlement_token"),
     settlement_tx_ref: requiredString(row, "settlement_tx_ref"),
+    donation_partner_id: stringOrNull(row, "donation_partner_id"),
+    donation_share_pct: numberOrNull(row, "donation_share_pct"),
+    donation_amount_usd: numberOrNull(row, "donation_amount_usd"),
     created_at: requiredString(row, "created_at"),
   }))
 }
@@ -307,7 +311,8 @@ export async function getPurchaseRow(
     sql: `
       SELECT purchase_id, community_id, listing_id, asset_id, live_room_id, buyer_user_id,
              settlement_wallet_attachment_id, purchase_price_usd, pricing_tier, settlement_chain,
-             settlement_token, settlement_tx_ref, created_at
+             settlement_token, settlement_tx_ref, donation_partner_id, donation_share_pct,
+             donation_amount_usd, created_at
       FROM purchases
       WHERE community_id = ?1
         AND purchase_id = ?2
@@ -328,6 +333,9 @@ export async function getPurchaseRow(
     settlement_chain: requiredString(row, "settlement_chain"),
     settlement_token: requiredString(row, "settlement_token"),
     settlement_tx_ref: requiredString(row, "settlement_tx_ref"),
+    donation_partner_id: stringOrNull(row, "donation_partner_id"),
+    donation_share_pct: numberOrNull(row, "donation_share_pct"),
+    donation_amount_usd: numberOrNull(row, "donation_amount_usd"),
     created_at: requiredString(row, "created_at"),
   } : null
 }

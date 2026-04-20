@@ -22,6 +22,26 @@ import {
   resolveCommunityBannerRef,
 } from "./community-identity-media"
 
+type HumanVerificationLane = NonNullable<Community["human_verification_lane"]>
+
+function normalizeHumanVerificationLane(value: unknown): HumanVerificationLane | null {
+  return value === "self" || value === "very" ? value : null
+}
+
+function parseStoredPositiveInteger(
+  storedSettings: Record<string, unknown>,
+  key: string,
+): number | null {
+  const rawValue = storedSettings[key]
+  const parsed = typeof rawValue === "number" ? rawValue : typeof rawValue === "string" ? Number(rawValue) : NaN
+  if (!Number.isFinite(parsed)) {
+    return null
+  }
+
+  const normalized = Math.trunc(parsed)
+  return normalized > 0 ? normalized : null
+}
+
 function normalizeDonationPolicyMode(
   mode: LocalCommunitySnapshot["donation_policy_mode"] | null | undefined,
 ): "none" | "optional_creator_sidecar" {
@@ -86,6 +106,56 @@ function parseStoredReferenceLinks(
   }).sort((left, right) => left.position - right.position)
 }
 
+function parseStoredLabelPolicy(
+  storedSettings: Record<string, unknown>,
+): Community["label_policy"] {
+  const rawPolicy = storedSettings.label_policy
+  if (!rawPolicy || typeof rawPolicy !== "object" || Array.isArray(rawPolicy)) {
+    return null
+  }
+
+  const policy = rawPolicy as Record<string, unknown>
+  if (
+    typeof policy.label_enabled !== "boolean"
+    || typeof policy.require_label_on_top_level_posts !== "boolean"
+    || !Array.isArray(policy.definitions)
+  ) {
+    return null
+  }
+
+  const definitions = policy.definitions.flatMap((rawDefinition, index) => {
+    if (!rawDefinition || typeof rawDefinition !== "object" || Array.isArray(rawDefinition)) {
+      return []
+    }
+
+    const definition = rawDefinition as Record<string, unknown>
+    if (typeof definition.label_id !== "string" || typeof definition.label !== "string") {
+      return []
+    }
+
+    const allowedPostTypes = Array.isArray(definition.allowed_post_types)
+      ? definition.allowed_post_types.filter((postType): postType is "text" | "image" | "video" | "song" =>
+        postType === "text" || postType === "image" || postType === "video" || postType === "song")
+      : null
+
+    return [{
+      label_id: definition.label_id,
+      label: definition.label,
+      description: typeof definition.description === "string" ? definition.description : null,
+      color_token: typeof definition.color_token === "string" ? definition.color_token : null,
+      status: definition.status === "archived" ? "archived" : "active",
+      position: typeof definition.position === "number" ? definition.position : index,
+      allowed_post_types: allowedPostTypes,
+    } satisfies NonNullable<Community["label_policy"]>["definitions"][number]]
+  }).sort((left, right) => left.position - right.position)
+
+  return {
+    label_enabled: policy.label_enabled,
+    require_label_on_top_level_posts: policy.require_label_on_top_level_posts,
+    definitions,
+  }
+}
+
 function parseStoredDonationPartner(
   storedSettings: Record<string, unknown>,
 ): Community["donation_partner"] {
@@ -141,12 +211,135 @@ function parseStoredAllowQualifiersOnAnonymousPosts(
   return typeof rawValue === "boolean" ? rawValue : null
 }
 
+function parseStoredAgentPostingPolicy(
+  storedSettings: Record<string, unknown>,
+): Community["agent_posting_policy"] {
+  const rawValue = storedSettings.agent_posting_policy
+  if (rawValue === "review" || rawValue === "allow_with_disclosure" || rawValue === "allow") {
+    return rawValue
+  }
+  return "disallow"
+}
+
+function parseStoredAgentPostingScope(
+  storedSettings: Record<string, unknown>,
+): Community["agent_posting_scope"] {
+  const rawValue = storedSettings.agent_posting_scope
+  if (rawValue === "top_level_and_replies") {
+    return rawValue
+  }
+  return "replies_only"
+}
+
+function communityRequiresSelfLane(local: LocalCommunitySnapshot | null): boolean {
+  return (local?.gate_rules ?? []).some((rule) => {
+    if (rule.status !== "active" || rule.gate_family !== "identity_proof") {
+      return false
+    }
+
+    if (rule.gate_type === "age_over_18" || rule.gate_type === "nationality" || rule.gate_type === "gender") {
+      return true
+    }
+
+    return (rule.proof_requirements ?? []).some((requirement) => {
+      const proofType = requirement.proof_type
+      if (proofType === "age_over_18" || proofType === "nationality" || proofType === "gender") {
+        return true
+      }
+
+      const acceptedProviders = Array.isArray(requirement.accepted_providers)
+        ? requirement.accepted_providers
+        : []
+      return acceptedProviders.includes("self")
+    })
+  })
+}
+
+function communityAllowsVeryLane(local: LocalCommunitySnapshot | null): boolean {
+  return (local?.gate_rules ?? []).some((rule) => {
+    if (rule.status !== "active" || rule.gate_family !== "identity_proof") {
+      return false
+    }
+
+    if (rule.gate_type !== "unique_human") {
+      return false
+    }
+
+    return (rule.proof_requirements ?? []).some((requirement) => {
+      if (requirement.proof_type !== "unique_human") {
+        return false
+      }
+
+      const acceptedProviders = Array.isArray(requirement.accepted_providers)
+        ? requirement.accepted_providers
+        : []
+      return acceptedProviders.includes("very")
+    })
+  })
+}
+
+function parseStoredHumanVerificationLane(
+  storedSettings: Record<string, unknown>,
+  local: LocalCommunitySnapshot | null,
+): Community["human_verification_lane"] {
+  if (communityRequiresSelfLane(local)) {
+    return "self"
+  }
+
+  const explicitLane = normalizeHumanVerificationLane(storedSettings.human_verification_lane)
+  if (explicitLane) {
+    return explicitLane
+  }
+
+  if (communityAllowsVeryLane(local)) {
+    return "very"
+  }
+
+  return "self"
+}
+
+function parseStoredHumanVerificationLaneOrigin(
+  storedSettings: Record<string, unknown>,
+): "derived" | "explicit" {
+  return normalizeHumanVerificationLane(storedSettings.human_verification_lane) == null
+    ? "derived"
+    : "explicit"
+}
+
+function parseStoredAcceptedAgentOwnershipProviders(
+  storedSettings: Record<string, unknown>,
+): Community["accepted_agent_ownership_providers"] {
+  const rawProviders = storedSettings.accepted_agent_ownership_providers
+  if (!Array.isArray(rawProviders)) {
+    return []
+  }
+
+  return [...new Set(rawProviders.filter((value): value is Community["accepted_agent_ownership_providers"][number] =>
+    value === "self_agent_id" || value === "clawkey"
+  ))]
+}
+
+function parseStoredAcceptedAgentOwnershipProvidersOrigin(
+  storedSettings: Record<string, unknown>,
+): "derived" | "explicit" {
+  return Array.isArray(storedSettings.accepted_agent_ownership_providers) ? "explicit" : "derived"
+}
+
 export function serializeCommunity(row: CommunityRow, local: LocalCommunitySnapshot | null): Community {
   const storedSettings = parseStoredCommunitySettings(local)
   const referenceLinks = parseStoredReferenceLinks(storedSettings)
+  const labelPolicy = parseStoredLabelPolicy(storedSettings)
   const donationPartner = parseStoredDonationPartner(storedSettings)
   const allowedDisclosedQualifiers = parseStoredAllowedDisclosedQualifiers(storedSettings)
   const allowQualifiersOnAnonymousPosts = parseStoredAllowQualifiersOnAnonymousPosts(storedSettings)
+  const humanVerificationLane = parseStoredHumanVerificationLane(storedSettings, local)
+  const humanVerificationLaneOrigin = parseStoredHumanVerificationLaneOrigin(storedSettings)
+  const agentPostingPolicy = parseStoredAgentPostingPolicy(storedSettings)
+  const agentPostingScope = parseStoredAgentPostingScope(storedSettings)
+  const agentDailyPostCap = parseStoredPositiveInteger(storedSettings, "agent_daily_post_cap")
+  const agentDailyReplyCap = parseStoredPositiveInteger(storedSettings, "agent_daily_reply_cap")
+  const acceptedAgentOwnershipProviders = parseStoredAcceptedAgentOwnershipProviders(storedSettings)
+  const acceptedAgentOwnershipProvidersOrigin = parseStoredAcceptedAgentOwnershipProvidersOrigin(storedSettings)
   const policyUpdatedAt = local?.updated_at ?? row.created_at
   const donationPartnerStatus: Community["donation_partner_status"] =
     local?.donation_partner_status === "inactive" ? "paused" : (local?.donation_partner_status ?? "unconfigured")
@@ -187,19 +380,21 @@ export function serializeCommunity(row: CommunityRow, local: LocalCommunitySnaps
     allowed_disclosed_qualifiers: allowedDisclosedQualifiers,
     allow_qualifiers_on_anonymous_posts: allowQualifiersOnAnonymousPosts,
     governance_mode: local?.governance_mode ?? "centralized",
-    human_verification_lane: "self",
+    human_verification_lane: humanVerificationLane,
+    human_verification_lane_origin: humanVerificationLaneOrigin,
     donation_policy_mode: normalizeDonationPolicyMode(local?.donation_policy_mode),
     donation_partner_status: donationPartnerStatus,
     donation_partner_id: local?.donation_partner_id ?? null,
     donation_partner: local?.donation_partner_id ? donationPartner : null,
     default_age_gate_policy: defaultAgeGatePolicy,
-    agent_posting_policy: "disallow",
-    agent_posting_scope: "replies_only",
-    agent_daily_post_cap: null,
-    agent_daily_reply_cap: null,
+    agent_posting_policy: agentPostingPolicy,
+    agent_posting_scope: agentPostingScope,
+    agent_daily_post_cap: agentDailyPostCap,
+    agent_daily_reply_cap: agentDailyReplyCap,
     agent_min_owner_trust_tier: null,
     agent_owner_active_limit: null,
-    accepted_agent_ownership_providers: [],
+    accepted_agent_ownership_providers_origin: acceptedAgentOwnershipProvidersOrigin,
+    accepted_agent_ownership_providers: acceptedAgentOwnershipProviders,
     civic_scale_tier: "club",
     money_policy: buildDefaultMoneyPolicy(row.community_id),
     content_authenticity_policy: buildDefaultContentAuthenticityPolicy(row.community_id, policyUpdatedAt),
@@ -217,6 +412,7 @@ export function serializeCommunity(row: CommunityRow, local: LocalCommunitySnaps
     openai_moderation_settings: openAIModerationSettings ?? null,
     provenance_policy: buildDefaultProvenancePolicy(row.community_id, policyUpdatedAt),
     promotion_policy: buildDefaultPromotionPolicy(row.community_id, policyUpdatedAt),
+    label_policy: labelPolicy,
     community_profile: local
       ? {
         rules: local.rules.map((rule) => ({

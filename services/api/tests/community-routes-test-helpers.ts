@@ -186,6 +186,71 @@ export async function updateLocalCommunityAnonymousPolicy(input: {
   }
 }
 
+export async function updateLocalCommunityAgentPostingPolicy(input: {
+  communityDbRoot: string
+  communityId: string
+  agentPostingPolicy: "disallow" | "review" | "allow_with_disclosure" | "allow"
+  agentPostingScope: "replies_only" | "top_level_and_replies"
+  acceptedAgentOwnershipProviders?: Array<"self_agent_id" | "clawkey"> | null
+  humanVerificationLane?: "self" | "very" | null
+  agentDailyPostCap?: number | null
+  agentDailyReplyCap?: number | null
+}): Promise<void> {
+  const client = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+
+  try {
+    const existing = await client.execute({
+      sql: `
+        SELECT settings_json
+        FROM communities
+        WHERE community_id = ?1
+        LIMIT 1
+      `,
+      args: [input.communityId],
+    })
+
+    const currentSettings = typeof existing.rows[0]?.settings_json === "string"
+      ? JSON.parse(String(existing.rows[0]?.settings_json)) as Record<string, unknown>
+      : {}
+
+    const nextSettings = {
+      ...currentSettings,
+      agent_posting_policy: input.agentPostingPolicy,
+      agent_posting_scope: input.agentPostingScope,
+      ...(input.humanVerificationLane === undefined
+        ? {}
+        : { human_verification_lane: input.humanVerificationLane }),
+      ...(input.agentDailyPostCap === undefined
+        ? {}
+        : { agent_daily_post_cap: input.agentDailyPostCap }),
+      ...(input.agentDailyReplyCap === undefined
+        ? {}
+        : { agent_daily_reply_cap: input.agentDailyReplyCap }),
+      ...(input.acceptedAgentOwnershipProviders === undefined
+        ? {}
+        : { accepted_agent_ownership_providers: input.acceptedAgentOwnershipProviders }),
+    }
+
+    await client.execute({
+      sql: `
+        UPDATE communities
+        SET settings_json = ?2,
+            updated_at = ?3
+        WHERE community_id = ?1
+      `,
+      args: [
+        input.communityId,
+        JSON.stringify(nextSettings),
+        new Date().toISOString(),
+      ],
+    })
+  } finally {
+    client.close()
+  }
+}
+
 export async function setPassportWalletScore(
   env: Env,
   userId: string,

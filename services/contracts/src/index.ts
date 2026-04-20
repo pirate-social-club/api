@@ -239,6 +239,22 @@ export type CompleteAgentOwnershipSessionRequest = {
   provider_payload_ref?: string | null;
 };
 
+export type AgentOwnershipPairing = {
+  pairing_code: string;
+  expires_at: string;
+};
+
+export type AgentOwnershipPairingClaimRequest = {
+  pairing_code: string;
+  agent_challenge: AgentChallenge;
+};
+
+export type AgentOwnershipPairingClaimResult = {
+  agent_ownership_session_id: string;
+  registration_url: string;
+  connection_token: string;
+};
+
 export type ProviderAgentOwnershipCallbackRequest = {
   provider?: AgentOwnershipProvider;
   event_type?: string | null;
@@ -394,7 +410,6 @@ export type Community = {
   community_id: string;
   display_name: string;
   description?: string | null;
-  localized_text?: CommunityTextLocalization | null;
   avatar_ref?: string | null;
   banner_ref?: string | null;
   namespace_verification_id?: string | null;
@@ -508,6 +523,8 @@ export type CommunityListing = {
   status: "draft" | "active" | "paused" | "archived";
   price_usd: number;
   regional_pricing_enabled: boolean;
+  donation_partner_id?: string | null;
+  donation_share_pct?: number | null;
   created_by_user_id: string;
   created_at: string;
   updated_at: string;
@@ -518,12 +535,16 @@ export type CreateCommunityListingRequest = {
   live_room_id?: string | null;
   price_usd: number;
   regional_pricing_enabled: boolean;
+  donation_partner_id?: string | null;
+  donation_share_pct?: number | null;
   status: "draft" | "active" | "paused" | "archived";
 };
 
 export type UpdateCommunityListingRequest = {
   price_usd?: number;
   regional_pricing_enabled?: boolean;
+  donation_partner_id?: string | null;
+  donation_share_pct?: number | null;
   status?: "draft" | "active" | "paused" | "archived";
 };
 
@@ -544,6 +565,9 @@ export type CommunityPurchase = {
   settlement_chain: CommunityMoneyChainRef;
   settlement_token: string;
   settlement_tx_ref: string;
+  donation_partner_id?: string | null;
+  donation_share_pct?: number | null;
+  donation_amount_usd?: number | null;
   purchase_entitlement_id: string;
   entitlement_kind: "asset_access" | "live_room_access" | "replay_access" | "license";
   entitlement_target_ref: string;
@@ -645,6 +669,9 @@ export type CommunityPurchaseSettlement = {
   settlement_chain_ref: string;
   settlement_token: string;
   settlement_tx_ref: string;
+  donation_partner_id?: string | null;
+  donation_share_pct?: number | null;
+  donation_amount_usd?: number | null;
   entitlement_kind: "asset_access" | "live_room_access";
   entitlement_target_ref: string;
   purchase_entitlement_id: string;
@@ -1141,19 +1168,6 @@ export type LocalizedPostResponse = {
   source_hash: string;
 };
 
-export type CommunityTextLocalizationItem = {
-  field_key: string;
-  translation_state: "ready" | "pending" | "same_language" | "policy_blocked";
-  machine_translated: boolean;
-  translated_value?: string | null;
-  source_hash: string;
-};
-
-export type CommunityTextLocalization = {
-  resolved_locale: string;
-  items: Array<CommunityTextLocalizationItem>;
-};
-
 export type MembershipGateSummary = {
   gate_type: "nationality" | "gender" | "unique_human" | "age_over_18" | "wallet_score";
   accepted_providers?: Array<"self" | "very" | "passport"> | null;
@@ -1166,13 +1180,16 @@ export type CommunityPreview = {
   display_name: string;
   description?: string | null;
   localized_text?: CommunityTextLocalization | null;
-  rules?: Array<CommunityPreviewRule> | null;
   avatar_ref?: string | null;
   banner_ref?: string | null;
   membership_mode: "open" | "request" | "gated";
   human_verification_lane: HumanVerificationLane;
   member_count?: number | null;
+  donation_policy_mode?: "none" | "optional_creator_sidecar" | null;
+  donation_partner_id?: string | null;
+  donation_partner?: DonationPartnerSummary | null;
   membership_gate_summaries: Array<MembershipGateSummary>;
+  rules: Array<CommunityRule>;
   viewer_membership_status?: "member" | "not_member" | "banned" | null;
   created_at: string;
 };
@@ -1528,14 +1545,6 @@ type CommunityProfile = {
   resource_links: Array<CommunityResourceLink>;
 };
 
-export type CommunityPreviewRule = {
-  rule_id: string;
-  title: string;
-  body: string;
-  position: number;
-  status: "active" | "archived";
-};
-
 type CommunityPromotionPolicy = {
   community_id: string;
   policy_origin: CommunityPolicyOrigin;
@@ -1623,6 +1632,19 @@ type CommunitySourcePolicy = {
 type CommunityTextAuthenticityPolicySettings = {
   allow_ai_assisted_editing: boolean;
   allow_ai_generated: boolean;
+};
+
+type CommunityTextLocalization = {
+  resolved_locale: string;
+  items: Array<CommunityTextLocalizationItem>;
+};
+
+type CommunityTextLocalizationItem = {
+  field_key: string;
+  translation_state: "ready" | "pending" | "same_language" | "policy_blocked";
+  machine_translated: boolean;
+  translated_value?: string | null;
+  source_hash: string;
 };
 
 type CommunityVideoAuthenticityPolicySettings = {
@@ -1761,6 +1783,7 @@ type CreateCommunityProvenancePolicyInput = {
 type CreateCommunityRequestBase = {
   display_name: string;
   description?: string | null;
+  localized_text?: CommunityTextLocalization | null;
   avatar_ref?: string | null;
   banner_ref?: string | null;
   artist_identity_id?: string | null;
@@ -2204,6 +2227,8 @@ export const apiRoutes = {
   verificationSession: (verificationSessionId: string) => `/verification-sessions/${verificationSessionId}`,
   verificationSessionComplete: (verificationSessionId: string) => `/verification-sessions/${verificationSessionId}/complete`,
   agentOwnershipSessions: "/agent-ownership-sessions",
+  agentOwnershipPairing: "/agent-ownership-pairing",
+  agentOwnershipPairingClaim: "/agent-ownership-pairing/claim",
   agentOwnershipSession: (agentOwnershipSessionId: string) => `/agent-ownership-sessions/${agentOwnershipSessionId}`,
   agentOwnershipSessionComplete: (agentOwnershipSessionId: string) => `/agent-ownership-sessions/${agentOwnershipSessionId}/complete`,
   agents: "/agents",

@@ -236,7 +236,7 @@ export async function getCommunityPostProjectionRowByPostId(
 ): Promise<CommunityPostProjectionRow | null> {
   const row = await firstRow(executor, {
     sql: `
-      SELECT projection_id, community_id, source_post_id, author_user_id, identity_mode, post_type, status,
+      SELECT projection_id, community_id, source_post_id, author_user_id, identity_mode, post_type, status, visibility,
              source_created_at, projected_payload_json, upvote_count, downvote_count, comment_count, like_count,
              projection_version, created_at, updated_at
       FROM community_post_projections
@@ -245,22 +245,6 @@ export async function getCommunityPostProjectionRowByPostId(
       LIMIT 1
     `,
     args: [postId],
-  }).catch(async (error) => {
-    if (!isMissingColumnError(error, "upvote_count")) {
-      throw error
-    }
-
-    return firstRow(executor, {
-      sql: `
-        SELECT projection_id, community_id, source_post_id, author_user_id, identity_mode, post_type, status,
-               source_created_at, projected_payload_json, projection_version, created_at, updated_at
-        FROM community_post_projections
-        WHERE source_post_id = ?1
-          AND projection_version = 1
-        LIMIT 1
-      `,
-      args: [postId],
-    })
   })
 
   return row ? toCommunityPostProjectionRow(row) : null

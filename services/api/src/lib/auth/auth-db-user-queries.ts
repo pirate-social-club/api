@@ -31,7 +31,12 @@ import {
   toVerificationSessionRow,
   toWalletAttachmentRow,
 } from "./auth-db-rows"
-import { firstRow, isMissingColumnError, isMissingTableError } from "./auth-db-query-helpers"
+import {
+  ensureProfilesPrimaryLinkedHandleColumn,
+  firstRow,
+  isMissingColumnError,
+  isMissingTableError,
+} from "./auth-db-query-helpers"
 import { getLatestJobRowBySubjectAndType } from "./auth-db-community-queries"
 import type { OnboardingStatus, UpstreamIdentity } from "../../types"
 
@@ -347,7 +352,13 @@ export async function getProfileRow(executor: DbExecutor, userId: string): Promi
 
   const row = await firstRow(executor, stmt).catch(async (error) => {
     if (isMissingColumnError(error, "primary_linked_handle_id")) {
-      return await firstRow(executor, legacyStmt)
+      await ensureProfilesPrimaryLinkedHandleColumn(executor)
+      return await firstRow(executor, stmt).catch(async (retryError) => {
+        if (isMissingColumnError(retryError, "primary_linked_handle_id")) {
+          return await firstRow(executor, legacyStmt)
+        }
+        throw retryError
+      })
     }
     throw error
   })

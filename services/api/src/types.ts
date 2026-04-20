@@ -2,7 +2,7 @@ export type {
   Asset,
   AssetAccessResponse,
   AuthProof,
-  Community,
+  AgentActionProof,
   CommunityCreateAcceptedResponse,
   CommunityListing,
   CommunityListingListResponse,
@@ -18,7 +18,6 @@ export type {
   CommunityPurchaseSettlementFailureRequest,
   CommunityPurchaseSettlementRequest,
   CommunityPricingPolicy,
-  CommunityPreview,
   CompleteNamespaceVerificationSessionRequest,
   CompleteVerificationSessionRequest,
   Comment,
@@ -67,6 +66,7 @@ export type {
   NotificationTasksResponse,
   OnboardingStatus,
   Post,
+  PostLabel,
   Profile,
   RedditImportSummary,
   RedditVerification,
@@ -94,6 +94,32 @@ export type {
   VeryWidgetLaunch,
   WalletAttachmentSummary,
 } from "@pirate/api-contracts"
+
+import type {
+  Community as ContractCommunity,
+  CommunityPreview as ContractCommunityPreview,
+} from "@pirate/api-contracts"
+
+export type CommunityTextLocalizationItem = {
+  field_key: string
+  translation_state: "ready" | "pending" | "same_language" | "policy_blocked"
+  machine_translated: boolean
+  translated_value?: string | null
+  source_hash: string
+}
+
+export type CommunityTextLocalization = {
+  resolved_locale: string
+  items: CommunityTextLocalizationItem[]
+}
+
+export type Community = ContractCommunity & {
+  localized_text?: CommunityTextLocalization | null
+}
+
+export type CommunityPreview = ContractCommunityPreview & {
+  localized_text?: CommunityTextLocalization | null
+}
 
 export type HandleUpgradeQuote = {
   desired_label: string
@@ -137,6 +163,9 @@ export type Env = {
   VERY_APP_ID?: string
   VERY_VERIFY_URL?: string
   VERY_SESSIONS_URL?: string
+  VERY_CALLBACK_SHARED_SECRET?: string
+  PLATFORM_APPROVED_KYA_PROVIDERS?: string
+  CLAWKEY_API_URL?: string
   SELF_API_URL?: string
   SELF_API_KEY?: string
   SELF_APP_NAME?: string
@@ -199,6 +228,8 @@ export type Env = {
   OPENROUTER_TIMEOUT_MS?: string
   OPENROUTER_TRANSLATION_MODEL?: string
   OPENROUTER_TRANSLATION_TIMEOUT_MS?: string
+  OPENROUTER_LABELING_MODEL?: string
+  OPENROUTER_LABELING_TIMEOUT_MS?: string
   OPENAI_API_KEY?: string
   OPENAI_BASE_URL?: string
   OPENAI_MODERATION_MODEL?: string

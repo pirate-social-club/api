@@ -1,14 +1,51 @@
 import { Hono } from "hono"
 import { badRequestError, notFoundError } from "../lib/errors"
-import { getUserRepository } from "../lib/auth/repositories"
+import { getProfileRepository, getUserRepository } from "../lib/auth/repositories"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
-import { authenticate, type AuthenticatedEnv } from "../lib/auth-middleware"
+import {
+  authenticate,
+  authenticateAgentDelegatedToken,
+  authenticateUserToken,
+  requireBearerToken,
+  type AuthenticatedEnv,
+} from "../lib/auth-middleware"
 import { castCommentVote, createComment, deleteComment, getCommentContext, listCommentReplies } from "../lib/comments/comment-service"
 import type { CreateCommentRequest } from "../lib/comments/comment-types"
 
 const comments = new Hono<AuthenticatedEnv>()
 
-comments.use("*", authenticate)
+function assertAgentDelegatedReplyMatchesActor(input: {
+  actor: AuthenticatedEnv["Variables"]["actor"]
+  body: CreateCommentRequest
+}): void {
+  if (input.actor.authType !== "agent_delegated") {
+    return
+  }
+
+  if (input.body.authorship_mode !== "user_agent") {
+    throw badRequestError("Agent delegated credentials can only create user_agent writes")
+  }
+  if (input.body.agent_id?.trim() !== input.actor.delegatedAgentId) {
+    throw badRequestError("agent_id must match the delegated agent credential")
+  }
+}
+
+comments.use("*", async (c, next) => {
+  const pathname = new URL(c.req.url).pathname
+  const allowsAgentDelegation = c.req.method === "POST" && /^\/comments\/[^/]+\/replies$/.test(pathname)
+  if (allowsAgentDelegation) {
+    const token = requireBearerToken(c.req.header("authorization"))
+    try {
+      c.set("actor", await authenticateUserToken({ env: c.env, token }))
+    } catch {
+      c.set("actor", await authenticateAgentDelegatedToken({ env: c.env, token }))
+    }
+    await next()
+    return
+  }
+
+  return authenticate(c, next)
+})
 
 comments.post("/:commentId/replies", async (c) => {
   const actor = c.get("actor")
@@ -22,15 +59,18 @@ comments.post("/:commentId/replies", async (c) => {
   if (!body) {
     throw badRequestError("Invalid comment create payload")
   }
+  assertAgentDelegatedReplyMatchesActor({ actor, body })
 
   const result = await createComment({
     env: c.env,
+    requestUrl: c.req.url,
     userId: actor.userId,
     communityId: projection.community_id,
     threadRootPostId: projection.thread_root_post_id,
     parentCommentId: c.req.param("commentId"),
     body,
     userRepository: getUserRepository(c.env),
+    profileRepository: getProfileRepository(c.env),
     communityRepository,
   })
   return c.json(result, 201)

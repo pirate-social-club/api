@@ -1,226 +1,27 @@
+import { sign as signWithPrivateKey } from "node:crypto"
 import { afterEach, describe, expect, test } from "bun:test"
-import { createClient } from "@libsql/client"
 import app from "../src/index"
-import { buildLocalCommunityDbUrl } from "../src/lib/communities/community-local-db"
-import { getCommentById } from "../src/lib/comments/community-comment-store"
-import { computeCommentSourceHash } from "../src/lib/localization/content-source-hash"
-import type { Env } from "../src/types"
-import { createRouteTestContext, json, mintUpstreamJwt, resetRuntimeCaches } from "./helpers"
+import {
+  canonicalizeAgentActionProofSignaturePayload,
+  computeAgentActionProofHash,
+} from "../src/lib/agents/agent-action-proof"
+import { setClawkeyProviderForTests } from "../src/lib/agents/clawkey-provider"
+import { createRouteTestContext, json, resetRuntimeCaches } from "./helpers"
+import { createSignedAgentChallenge } from "./agent-test-helpers"
+import { updateLocalCommunityAgentPostingPolicy } from "./community-routes-test-helpers"
+import {
+  addCommunityMember,
+  completeUniqueHumanVerification,
+  createCommunity,
+  exchangeJwt,
+  insertThreadSnapshot,
+  requestJson,
+} from "./comments-routes-test-helpers"
 
 let cleanup: (() => Promise<void>) | null = null
 
-function requestJson(url: string, body: unknown, env: Env, token?: string, method = "POST"): Promise<Response> {
-  return Promise.resolve(app.request(
-    url,
-    {
-      method,
-      headers: {
-        "content-type": "application/json",
-        ...(token ? { authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify(body),
-    },
-    env,
-  ))
-}
-
-async function exchangeJwt(env: Env, sub: string): Promise<{ accessToken: string; userId: string }> {
-  const jwt = await mintUpstreamJwt(env, { sub })
-  const response = await requestJson("http://pirate.test/auth/session/exchange", {
-    proof: {
-      type: "jwt_based_auth",
-      jwt,
-    },
-  }, env)
-  const body = await json(response) as { access_token: string; user: { user_id: string } }
-  return { accessToken: body.access_token, userId: body.user.user_id }
-}
-
-async function completeUniqueHumanVerification(env: Env, accessToken: string): Promise<void> {
-  const verificationSession = await requestJson("http://pirate.test/verification-sessions", {
-    provider: "self",
-  }, env, accessToken)
-  const verificationBody = await json(verificationSession) as { verification_session_id: string }
-  await requestJson(
-    `http://pirate.test/verification-sessions/${verificationBody.verification_session_id}/complete`,
-    {},
-    env,
-    accessToken,
-  )
-}
-
-async function prepareVerifiedNamespace(env: Env, accessToken: string): Promise<string> {
-  await completeUniqueHumanVerification(env, accessToken)
-
-  const namespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
-    family: "hns",
-    root_label: "CommentRoutesCoverageRoot",
-  }, env, accessToken)
-  const namespaceBody = await json(namespaceSession) as { namespace_verification_session_id: string }
-  const completed = await requestJson(
-    `http://pirate.test/namespace-verification-sessions/${namespaceBody.namespace_verification_session_id}/complete`,
-    {},
-    env,
-    accessToken,
-  )
-  const completedBody = await json(completed) as { namespace_verification_id: string }
-  return completedBody.namespace_verification_id
-}
-
-async function createCommunity(env: Env, accessToken: string, displayName: string): Promise<{ communityId: string }> {
-  const namespaceVerificationId = await prepareVerifiedNamespace(env, accessToken)
-  const response = await requestJson("http://pirate.test/communities", {
-    display_name: displayName,
-    namespace: {
-      namespace_verification_id: namespaceVerificationId,
-    },
-  }, env, accessToken)
-  expect(response.status).toBe(202)
-  const body = await json(response) as { community: { community_id: string } }
-  return { communityId: body.community.community_id }
-}
-
-async function addCommunityMember(communityDbRoot: string, communityId: string, userId: string): Promise<void> {
-  const client = createClient({
-    url: buildLocalCommunityDbUrl(communityDbRoot, communityId),
-  })
-
-  try {
-    const now = new Date().toISOString()
-    await client.execute({
-      sql: `
-        INSERT INTO community_memberships (
-          membership_id, community_id, user_id, status, joined_at, left_at, banned_at, created_at, updated_at
-        ) VALUES (
-          ?1, ?2, ?3, 'member', ?4, NULL, NULL, ?4, ?4
-        )
-        ON CONFLICT(membership_id) DO UPDATE SET
-          status = excluded.status,
-          joined_at = excluded.joined_at,
-          left_at = excluded.left_at,
-          banned_at = excluded.banned_at,
-          updated_at = excluded.updated_at
-      `,
-      args: [`mbr_${communityId}_${userId}`, communityId, userId, now],
-    })
-  } finally {
-    client.close()
-  }
-}
-
-async function insertThreadSnapshot(input: {
-  communityDbRoot: string
-  communityId: string
-  postId: string
-  commentCount: number
-  swarmManifestRef: string
-  swarmFeedRef?: string | null
-}): Promise<void> {
-  const client = createClient({
-    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
-  })
-
-  try {
-    const now = new Date().toISOString()
-    await client.execute({
-      sql: `
-        INSERT INTO thread_snapshots (
-          thread_snapshot_id, community_id, thread_root_post_id, snapshot_seq,
-          published_through_comment_created_at, comment_count, swarm_manifest_ref,
-          swarm_feed_ref, created_at
-        ) VALUES (
-          ?1, ?2, ?3, 1,
-          ?4, ?5, ?6,
-          ?7, ?4
-        )
-      `,
-      args: [
-        `tsn_${input.postId}`,
-        input.communityId,
-        input.postId,
-        now,
-        input.commentCount,
-        input.swarmManifestRef,
-        input.swarmFeedRef ?? null,
-      ],
-    })
-  } finally {
-    client.close()
-  }
-}
-
-async function insertCommentTranslation(input: {
-  communityDbRoot: string
-  communityId: string
-  commentId: string
-  locale: string
-  translatedBody: string
-}): Promise<void> {
-  const client = createClient({
-    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
-  })
-
-  try {
-    const comment = await getCommentById(client, input.commentId)
-    expect(comment).not.toBeNull()
-    const sourceHash = await computeCommentSourceHash(comment!)
-    const now = new Date().toISOString()
-    await client.execute({
-      sql: `
-        INSERT INTO content_translations (
-          content_translation_id, content_type, content_id, locale, source_hash,
-          source_language, outcome, translated_body, translated_caption, provider,
-          provider_model, provider_result_json, created_at, updated_at
-        ) VALUES (
-          ?1, 'comment', ?2, ?3, ?4,
-          ?5, 'translated', ?6, NULL, 'test-provider',
-          'test-model', NULL, ?7, ?7
-        )
-      `,
-      args: [
-        `ctr_${input.commentId}_${input.locale}`,
-        input.commentId,
-        input.locale,
-        sourceHash,
-        comment?.source_language ?? "en",
-        input.translatedBody,
-        now,
-      ],
-    })
-  } finally {
-    client.close()
-  }
-}
-
-async function fetchCommunityJobsByType(input: {
-  communityDbRoot: string
-  communityId: string
-  jobType: string
-}): Promise<Array<{ subject_id: string; status: string }>> {
-  const client = createClient({
-    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
-  })
-
-  try {
-    const result = await client.execute({
-      sql: `
-        SELECT subject_id, status
-        FROM community_jobs
-        WHERE job_type = ?1
-        ORDER BY created_at ASC, job_id ASC
-      `,
-      args: [input.jobType],
-    })
-    return result.rows.map((row) => ({
-      subject_id: String(row.subject_id ?? ""),
-      status: String(row.status ?? ""),
-    }))
-  } finally {
-    client.close()
-  }
-}
-
 afterEach(async () => {
+  setClawkeyProviderForTests(null)
   resetRuntimeCaches()
   if (cleanup) {
     await cleanup()
@@ -229,6 +30,487 @@ afterEach(async () => {
 })
 
 describe("comments routes", () => {
+  test("user-owned agents can create top-level comments and replies in replies_only communities", async () => {
+    const ctx = await createRouteTestContext({
+      VERY_API_URL: "https://very.test",
+      VERY_API_KEY: "very-key",
+      VERY_APP_ID: "very-app",
+    })
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "comments-agent-creator")
+    const community = await createCommunity(ctx.env, creator.accessToken, "Comment Agent Club")
+    await updateLocalCommunityAgentPostingPolicy({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: community.communityId,
+      agentPostingPolicy: "allow",
+      agentPostingScope: "replies_only",
+      acceptedAgentOwnershipProviders: ["clawkey"],
+    })
+
+    const member = await exchangeJwt(ctx.env, "comments-agent-member")
+    await completeUniqueHumanVerification(ctx.env, member.accessToken)
+    await addCommunityMember(ctx.communityDbRoot, community.communityId, member.userId)
+
+    const createdPost = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Comment agent thread",
+        body: "Build the agent thread",
+        idempotency_key: "comments-agent-post-1",
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(createdPost.status).toBe(201)
+    const postBody = await json(createdPost) as { post_id: string }
+
+    const registerChallenge = createSignedAgentChallenge({
+      message: "clawkey-register-1738500002000",
+      deviceId: "claw-device-comments-reply-bot",
+    })
+    const { privateKey } = registerChallenge
+
+    setClawkeyProviderForTests({
+      startRegistration: async () => ({
+        sessionId: "cks_comments_agent_123",
+        registrationUrl: "https://clawkey.test/register/cks_comments_agent_123",
+        expiresAt: "2036-04-20T12:00:00.000Z",
+      }),
+      getRegistrationStatus: async () => ({
+        status: "completed",
+        deviceId: "claw-device-comments-reply-bot",
+        publicKey: null,
+        registeredAt: "2026-04-19T12:00:00.000Z",
+      }),
+    })
+
+    const ownershipStart = await requestJson("http://pirate.test/agent-ownership-sessions", {
+      session_kind: "register",
+      ownership_provider: "clawkey",
+      display_name: "Reply Bot",
+      agent_challenge: registerChallenge.challenge,
+    }, ctx.env, member.accessToken)
+    expect(ownershipStart.status).toBe(201)
+    const ownershipStartBody = await json(ownershipStart) as {
+      agent_ownership_session_id: string
+    }
+
+    const ownershipComplete = await requestJson(
+      `http://pirate.test/agent-ownership-sessions/${ownershipStartBody.agent_ownership_session_id}/complete`,
+      {},
+      ctx.env,
+      member.accessToken,
+    )
+    expect(ownershipComplete.status).toBe(200)
+    const ownershipCompleteBody = await json(ownershipComplete) as {
+      agent_id: string
+      resolved_agent_ownership_record_id: string
+    }
+
+    const topLevelCommentUrl = `http://pirate.test/communities/${community.communityId}/posts/${postBody.post_id}/comments`
+    const topLevelCommentPayload = {
+      body: "Reply Bot top-level comment",
+      authorship_mode: "user_agent" as const,
+      agent_id: ownershipCompleteBody.agent_id,
+    }
+    const topLevelCommentHash = await computeAgentActionProofHash({
+      method: "POST",
+      url: topLevelCommentUrl,
+      body: topLevelCommentPayload,
+    })
+    const topLevelCommentSignedAt = new Date().toISOString()
+    const topLevelCommentSignature = signWithPrivateKey(
+      null,
+      Buffer.from(canonicalizeAgentActionProofSignaturePayload({
+        nonce: "comments-agent-nonce-1",
+        signedAt: topLevelCommentSignedAt,
+        canonicalRequestHash: topLevelCommentHash,
+      }), "utf8"),
+      privateKey,
+    ).toString("base64")
+
+    const topLevelComment = await requestJson(
+      topLevelCommentUrl,
+      {
+        ...topLevelCommentPayload,
+        agent_action_proof: {
+          nonce: "comments-agent-nonce-1",
+          signed_at: topLevelCommentSignedAt,
+          canonical_request_hash: topLevelCommentHash,
+          signature: topLevelCommentSignature,
+        },
+      },
+      ctx.env,
+      member.accessToken,
+    )
+    expect(topLevelComment.status).toBe(201)
+    const topLevelBody = await json(topLevelComment) as {
+      comment_id: string
+      authorship_mode: string
+      agent_id: string | null
+      agent_ownership_record_id: string | null
+      agent_display_name_snapshot: string | null
+      agent_owner_handle_snapshot: string | null
+      agent_ownership_provider_snapshot: string | null
+    }
+    expect(topLevelBody.authorship_mode).toBe("user_agent")
+    expect(topLevelBody.agent_id).toBe(ownershipCompleteBody.agent_id)
+    expect(topLevelBody.agent_ownership_record_id).toBe(ownershipCompleteBody.resolved_agent_ownership_record_id)
+    expect(topLevelBody.agent_display_name_snapshot).toBe("Reply Bot")
+    expect(topLevelBody.agent_owner_handle_snapshot).toBeTruthy()
+    expect(topLevelBody.agent_ownership_provider_snapshot).toBe("clawkey")
+
+    const replyUrl = `http://pirate.test/comments/${topLevelBody.comment_id}/replies`
+    const replyPayload = {
+      body: "Reply Bot nested reply",
+      authorship_mode: "user_agent" as const,
+      agent_id: ownershipCompleteBody.agent_id,
+    }
+    const replyHash = await computeAgentActionProofHash({
+      method: "POST",
+      url: replyUrl,
+      body: replyPayload,
+    })
+    const replySignedAt = new Date().toISOString()
+    const replySignature = signWithPrivateKey(
+      null,
+      Buffer.from(canonicalizeAgentActionProofSignaturePayload({
+        nonce: "comments-agent-nonce-2",
+        signedAt: replySignedAt,
+        canonicalRequestHash: replyHash,
+      }), "utf8"),
+      privateKey,
+    ).toString("base64")
+
+    const reply = await requestJson(
+      replyUrl,
+      {
+        ...replyPayload,
+        agent_action_proof: {
+          nonce: "comments-agent-nonce-2",
+          signed_at: replySignedAt,
+          canonical_request_hash: replyHash,
+          signature: replySignature,
+        },
+      },
+      ctx.env,
+      member.accessToken,
+    )
+    expect(reply.status).toBe(201)
+    const replyBody = await json(reply) as {
+      parent_comment_id: string | null
+      authorship_mode: string
+      agent_id: string | null
+    }
+    expect(replyBody.parent_comment_id).toBe(topLevelBody.comment_id)
+    expect(replyBody.authorship_mode).toBe("user_agent")
+    expect(replyBody.agent_id).toBe(ownershipCompleteBody.agent_id)
+  })
+
+  test("delegated agent access tokens can create top-level comments and nested replies", async () => {
+    const ctx = await createRouteTestContext({
+      VERY_API_URL: "https://very.test",
+      VERY_API_KEY: "very-key",
+      VERY_APP_ID: "very-app",
+    })
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "comments-delegated-agent-creator")
+    const community = await createCommunity(ctx.env, creator.accessToken, "Delegated Comment Agent Club")
+    await updateLocalCommunityAgentPostingPolicy({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: community.communityId,
+      agentPostingPolicy: "allow",
+      agentPostingScope: "replies_only",
+      acceptedAgentOwnershipProviders: ["clawkey"],
+    })
+
+    const member = await exchangeJwt(ctx.env, "comments-delegated-agent-member")
+    await completeUniqueHumanVerification(ctx.env, member.accessToken)
+    await addCommunityMember(ctx.communityDbRoot, community.communityId, member.userId)
+
+    const createdPost = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Delegated comment agent thread",
+        body: "Build the delegated agent thread",
+        idempotency_key: "comments-delegated-agent-post-1",
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(createdPost.status).toBe(201)
+    const postBody = await json(createdPost) as { post_id: string }
+
+    const registerChallenge = createSignedAgentChallenge({
+      message: "clawkey-register-1738500002100",
+      deviceId: "claw-device-comments-delegated-reply-bot",
+    })
+    const { privateKey } = registerChallenge
+
+    setClawkeyProviderForTests({
+      startRegistration: async () => ({
+        sessionId: "cks_comments_delegated_agent_123",
+        registrationUrl: "https://clawkey.test/register/cks_comments_delegated_agent_123",
+        expiresAt: "2036-04-20T12:00:00.000Z",
+      }),
+      getRegistrationStatus: async () => ({
+        status: "completed",
+        deviceId: "claw-device-comments-delegated-reply-bot",
+        publicKey: null,
+        registeredAt: "2026-04-19T12:00:00.000Z",
+      }),
+    })
+
+    const ownershipStart = await requestJson("http://pirate.test/agent-ownership-sessions", {
+      session_kind: "register",
+      ownership_provider: "clawkey",
+      display_name: "Delegated Reply Bot",
+      agent_challenge: registerChallenge.challenge,
+    }, ctx.env, member.accessToken)
+    expect(ownershipStart.status).toBe(201)
+    const ownershipStartBody = await json(ownershipStart) as {
+      agent_ownership_session_id: string
+    }
+
+    const ownershipComplete = await requestJson(
+      `http://pirate.test/agent-ownership-sessions/${ownershipStartBody.agent_ownership_session_id}/complete`,
+      {},
+      ctx.env,
+      member.accessToken,
+    )
+    expect(ownershipComplete.status).toBe(200)
+    const ownershipCompleteBody = await json(ownershipComplete) as {
+      agent_id: string
+      resolved_agent_ownership_record_id: string
+    }
+
+    const issueResponse = await requestJson(
+      `http://pirate.test/agents/${ownershipCompleteBody.agent_id}/credential`,
+      {
+        current_ownership_record_id: ownershipCompleteBody.resolved_agent_ownership_record_id,
+      },
+      ctx.env,
+      member.accessToken,
+    )
+    expect(issueResponse.status).toBe(200)
+    const issueBody = await json(issueResponse) as { access_token: string }
+
+    const topLevelCommentUrl = `http://pirate.test/communities/${community.communityId}/posts/${postBody.post_id}/comments`
+    const topLevelCommentPayload = {
+      body: "Delegated Reply Bot top-level comment",
+      authorship_mode: "user_agent" as const,
+      agent_id: ownershipCompleteBody.agent_id,
+    }
+    const topLevelCommentHash = await computeAgentActionProofHash({
+      method: "POST",
+      url: topLevelCommentUrl,
+      body: topLevelCommentPayload,
+    })
+    const topLevelCommentSignedAt = new Date().toISOString()
+    const topLevelCommentSignature = signWithPrivateKey(
+      null,
+      Buffer.from(canonicalizeAgentActionProofSignaturePayload({
+        nonce: "comments-delegated-agent-nonce-1",
+        signedAt: topLevelCommentSignedAt,
+        canonicalRequestHash: topLevelCommentHash,
+      }), "utf8"),
+      privateKey,
+    ).toString("base64")
+
+    const topLevelComment = await requestJson(
+      topLevelCommentUrl,
+      {
+        ...topLevelCommentPayload,
+        agent_action_proof: {
+          nonce: "comments-delegated-agent-nonce-1",
+          signed_at: topLevelCommentSignedAt,
+          canonical_request_hash: topLevelCommentHash,
+          signature: topLevelCommentSignature,
+        },
+      },
+      ctx.env,
+      issueBody.access_token,
+    )
+    expect(topLevelComment.status).toBe(201)
+    const topLevelBody = await json(topLevelComment) as {
+      comment_id: string
+      authorship_mode: string
+      agent_id: string | null
+    }
+    expect(topLevelBody.authorship_mode).toBe("user_agent")
+    expect(topLevelBody.agent_id).toBe(ownershipCompleteBody.agent_id)
+
+    const replyUrl = `http://pirate.test/comments/${topLevelBody.comment_id}/replies`
+    const replyPayload = {
+      body: "Delegated Reply Bot nested reply",
+      authorship_mode: "user_agent" as const,
+      agent_id: ownershipCompleteBody.agent_id,
+    }
+    const replyHash = await computeAgentActionProofHash({
+      method: "POST",
+      url: replyUrl,
+      body: replyPayload,
+    })
+    const replySignedAt = new Date().toISOString()
+    const replySignature = signWithPrivateKey(
+      null,
+      Buffer.from(canonicalizeAgentActionProofSignaturePayload({
+        nonce: "comments-delegated-agent-nonce-2",
+        signedAt: replySignedAt,
+        canonicalRequestHash: replyHash,
+      }), "utf8"),
+      privateKey,
+    ).toString("base64")
+
+    const reply = await requestJson(
+      replyUrl,
+      {
+        ...replyPayload,
+        agent_action_proof: {
+          nonce: "comments-delegated-agent-nonce-2",
+          signed_at: replySignedAt,
+          canonical_request_hash: replyHash,
+          signature: replySignature,
+        },
+      },
+      ctx.env,
+      issueBody.access_token,
+    )
+    expect(reply.status).toBe(201)
+    const replyBody = await json(reply) as {
+      parent_comment_id: string | null
+      authorship_mode: string
+      agent_id: string | null
+    }
+    expect(replyBody.parent_comment_id).toBe(topLevelBody.comment_id)
+    expect(replyBody.authorship_mode).toBe("user_agent")
+    expect(replyBody.agent_id).toBe(ownershipCompleteBody.agent_id)
+  })
+
+  test("replies_only communities with a self lane reject derived clawkey agent comment writes", async () => {
+    const ctx = await createRouteTestContext({
+      VERY_API_URL: "https://very.test",
+      VERY_API_KEY: "very-key",
+      VERY_APP_ID: "very-app",
+    })
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "comments-derived-selflane-creator")
+    const community = await createCommunity(ctx.env, creator.accessToken, "Comment Derived Self Lane Club")
+    await updateLocalCommunityAgentPostingPolicy({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: community.communityId,
+      agentPostingPolicy: "allow",
+      agentPostingScope: "replies_only",
+      humanVerificationLane: "self",
+    })
+
+    const member = await exchangeJwt(ctx.env, "comments-derived-selflane-member")
+    await completeUniqueHumanVerification(ctx.env, member.accessToken)
+    await addCommunityMember(ctx.communityDbRoot, community.communityId, member.userId)
+
+    const createdPost = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Derived self lane thread",
+        body: "Build the derived self lane thread",
+        idempotency_key: "comments-derived-selflane-post-1",
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(createdPost.status).toBe(201)
+    const postBody = await json(createdPost) as { post_id: string }
+
+    const registerChallenge = createSignedAgentChallenge({
+      message: "clawkey-register-1738500002100",
+      deviceId: "claw-device-comments-self-lane",
+    })
+    const { privateKey } = registerChallenge
+
+    setClawkeyProviderForTests({
+      startRegistration: async () => ({
+        sessionId: "cks_comments_derived_selflane_123",
+        registrationUrl: "https://clawkey.test/register/cks_comments_derived_selflane_123",
+        expiresAt: "2036-04-20T12:00:00.000Z",
+      }),
+      getRegistrationStatus: async () => ({
+        status: "completed",
+        deviceId: "claw-device-comments-self-lane",
+        publicKey: null,
+        registeredAt: "2026-04-19T12:00:00.000Z",
+      }),
+    })
+
+    const ownershipStart = await requestJson("http://pirate.test/agent-ownership-sessions", {
+      session_kind: "register",
+      ownership_provider: "clawkey",
+      display_name: "Self Lane Bot",
+      agent_challenge: registerChallenge.challenge,
+    }, ctx.env, member.accessToken)
+    expect(ownershipStart.status).toBe(201)
+    const ownershipStartBody = await json(ownershipStart) as {
+      agent_ownership_session_id: string
+    }
+
+    const ownershipComplete = await requestJson(
+      `http://pirate.test/agent-ownership-sessions/${ownershipStartBody.agent_ownership_session_id}/complete`,
+      {},
+      ctx.env,
+      member.accessToken,
+    )
+    expect(ownershipComplete.status).toBe(200)
+    const ownershipCompleteBody = await json(ownershipComplete) as {
+      agent_id: string
+    }
+
+    const commentUrl = `http://pirate.test/communities/${community.communityId}/posts/${postBody.post_id}/comments`
+    const commentPayload = {
+      body: "This should fail on derived provider acceptance.",
+      authorship_mode: "user_agent" as const,
+      agent_id: ownershipCompleteBody.agent_id,
+    }
+    const commentHash = await computeAgentActionProofHash({
+      method: "POST",
+      url: commentUrl,
+      body: commentPayload,
+    })
+    const signedAt = new Date().toISOString()
+    const signature = signWithPrivateKey(
+      null,
+      Buffer.from(canonicalizeAgentActionProofSignaturePayload({
+        nonce: "comments-derived-selflane-nonce-1",
+        signedAt,
+        canonicalRequestHash: commentHash,
+      }), "utf8"),
+      privateKey,
+    ).toString("base64")
+
+    const deniedComment = await requestJson(
+      commentUrl,
+      {
+        ...commentPayload,
+        agent_action_proof: {
+          nonce: "comments-derived-selflane-nonce-1",
+          signed_at: signedAt,
+          canonical_request_hash: commentHash,
+          signature,
+        },
+      },
+      ctx.env,
+      member.accessToken,
+    )
+    expect(deniedComment.status).toBe(403)
+    const deniedCommentBody = await json(deniedComment) as { code: string; message: string }
+    expect(deniedCommentBody.code).toBe("eligibility_failed")
+    expect(deniedCommentBody.message).toContain("does not currently accept any available agent ownership provider")
+  })
+
   test("creates top-level comments, replies, and exposes paginated list/context reads", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
@@ -524,302 +806,5 @@ describe("comments routes", () => {
     const acceptedVoteBody = await json(acceptedVote) as { comment_id: string; value: number }
     expect(acceptedVoteBody.comment_id).toBe(commentBody.comment_id)
     expect(acceptedVoteBody.value).toBe(1)
-  })
-
-  test("comment read endpoints return localized projections and lazily enqueue missing translations", async () => {
-    const ctx = await createRouteTestContext()
-    cleanup = ctx.cleanup
-
-    const creator = await exchangeJwt(ctx.env, "comments-routes-localization-creator")
-    const community = await createCommunity(ctx.env, creator.accessToken, "Comment Localization Club")
-
-    const member = await exchangeJwt(ctx.env, "comments-routes-localization-member")
-    await completeUniqueHumanVerification(ctx.env, member.accessToken)
-    await addCommunityMember(ctx.communityDbRoot, community.communityId, member.userId)
-
-    const createdPost = await requestJson(
-      `http://pirate.test/communities/${community.communityId}/posts`,
-      {
-        post_type: "text",
-        title: "Localized thread",
-        body: "Thread body",
-        idempotency_key: "comments-routes-post-localization-1",
-      },
-      ctx.env,
-      creator.accessToken,
-    )
-    expect(createdPost.status).toBe(201)
-    const postBody = await json(createdPost) as { post_id: string }
-
-    const topLevelComment = await requestJson(
-      `http://pirate.test/communities/${community.communityId}/posts/${postBody.post_id}/comments`,
-      {
-        body: "Hello comment from Pirate",
-      },
-      ctx.env,
-      creator.accessToken,
-    )
-    expect(topLevelComment.status).toBe(201)
-    const topLevelBody = await json(topLevelComment) as { comment_id: string }
-
-    const reply = await requestJson(
-      `http://pirate.test/comments/${topLevelBody.comment_id}/replies`,
-      {
-        body: "Reply from Pirate",
-      },
-      ctx.env,
-      member.accessToken,
-    )
-    expect(reply.status).toBe(201)
-    const replyBody = await json(reply) as { comment_id: string }
-
-    await insertCommentTranslation({
-      communityDbRoot: ctx.communityDbRoot,
-      communityId: community.communityId,
-      commentId: topLevelBody.comment_id,
-      locale: "nl",
-      translatedBody: "Vertaalde reactie van Pirate",
-    })
-
-    const listedComments = await app.request(
-      `http://pirate.test/communities/${community.communityId}/posts/${postBody.post_id}/comments?locale=nl&limit=10`,
-      {
-        headers: {
-          authorization: `Bearer ${member.accessToken}`,
-        },
-      },
-      ctx.env,
-    )
-    expect(listedComments.status).toBe(200)
-    const listedCommentsBody = await json(listedComments) as {
-      items: Array<{
-        comment: { comment_id: string }
-        resolved_locale: string
-        translation_state: string
-        machine_translated: boolean
-        translated_body: string | null
-        source_hash: string
-      }>
-    }
-    expect(listedCommentsBody.items[0]?.comment.comment_id).toBe(topLevelBody.comment_id)
-    expect(listedCommentsBody.items[0]?.resolved_locale).toBe("nl")
-    expect(listedCommentsBody.items[0]?.translation_state).toBe("ready")
-    expect(listedCommentsBody.items[0]?.machine_translated).toBe(true)
-    expect(listedCommentsBody.items[0]?.translated_body).toBe("Vertaalde reactie van Pirate")
-    expect(typeof listedCommentsBody.items[0]?.source_hash).toBe("string")
-
-    const replies = await app.request(
-      `http://pirate.test/comments/${topLevelBody.comment_id}/replies?locale=nl&limit=10`,
-      {
-        headers: {
-          authorization: `Bearer ${member.accessToken}`,
-        },
-      },
-      ctx.env,
-    )
-    expect(replies.status).toBe(200)
-    const repliesBody = await json(replies) as {
-      items: Array<{
-        comment: { comment_id: string }
-        resolved_locale: string
-        translation_state: string
-        machine_translated: boolean
-        translated_body: string | null
-      }>
-    }
-    expect(repliesBody.items[0]?.comment.comment_id).toBe(replyBody.comment_id)
-    expect(repliesBody.items[0]?.resolved_locale).toBe("nl")
-    expect(repliesBody.items[0]?.translation_state).toBe("pending")
-    expect(repliesBody.items[0]?.machine_translated).toBe(false)
-    expect(repliesBody.items[0]?.translated_body).toBeNull()
-
-    const context = await app.request(
-      `http://pirate.test/comments/${topLevelBody.comment_id}/context?locale=nl&limit=10`,
-      {
-        headers: {
-          authorization: `Bearer ${member.accessToken}`,
-        },
-      },
-      ctx.env,
-    )
-    expect(context.status).toBe(200)
-    const contextBody = await json(context) as {
-      comment: {
-        translation_state: string
-        translated_body: string | null
-      }
-      replies: Array<{
-        comment: { comment_id: string }
-        translation_state: string
-      }>
-    }
-    expect(contextBody.comment.translation_state).toBe("ready")
-    expect(contextBody.comment.translated_body).toBe("Vertaalde reactie van Pirate")
-    expect(contextBody.replies[0]?.comment.comment_id).toBe(replyBody.comment_id)
-    expect(contextBody.replies[0]?.translation_state).toBe("pending")
-
-    const translationJobs = await fetchCommunityJobsByType({
-      communityDbRoot: ctx.communityDbRoot,
-      communityId: community.communityId,
-      jobType: "comment_translation_materialize",
-    })
-    expect(translationJobs.some((job) => job.subject_id === `${replyBody.comment_id}:nl`)).toBe(true)
-  })
-
-  test("public comment read endpoints return localized projections without auth", async () => {
-    const ctx = await createRouteTestContext()
-    cleanup = ctx.cleanup
-
-    const creator = await exchangeJwt(ctx.env, "comments-routes-public-reader-creator")
-    const community = await createCommunity(ctx.env, creator.accessToken, "Public Comment Reader Club")
-
-    const member = await exchangeJwt(ctx.env, "comments-routes-public-reader-member")
-    await completeUniqueHumanVerification(ctx.env, member.accessToken)
-    await addCommunityMember(ctx.communityDbRoot, community.communityId, member.userId)
-
-    const createdPost = await requestJson(
-      `http://pirate.test/communities/${community.communityId}/posts`,
-      {
-        post_type: "text",
-        title: "Public comment thread",
-        body: "Body",
-        idempotency_key: "comments-routes-public-thread-1",
-      },
-      ctx.env,
-      creator.accessToken,
-    )
-    expect(createdPost.status).toBe(201)
-    const postBody = await json(createdPost) as { post_id: string }
-
-    const topLevelComment = await requestJson(
-      `http://pirate.test/communities/${community.communityId}/posts/${postBody.post_id}/comments`,
-      {
-        body: "Hello from public comments",
-      },
-      ctx.env,
-      creator.accessToken,
-    )
-    expect(topLevelComment.status).toBe(201)
-    const topLevelBody = await json(topLevelComment) as { comment_id: string }
-
-    const reply = await requestJson(
-      `http://pirate.test/comments/${topLevelBody.comment_id}/replies`,
-      {
-        body: "Reply from public comments",
-      },
-      ctx.env,
-      member.accessToken,
-    )
-    expect(reply.status).toBe(201)
-    const replyBody = await json(reply) as { comment_id: string }
-
-    await insertCommentTranslation({
-      communityDbRoot: ctx.communityDbRoot,
-      communityId: community.communityId,
-      commentId: topLevelBody.comment_id,
-      locale: "zh-Hans",
-      translatedBody: "来自 Pirate 的公开评论",
-    })
-
-    const publicTopLevel = await app.request(
-      `http://pirate.test/public-comments/posts/${postBody.post_id}/comments?locale=zh-Hans&limit=10`,
-      {},
-      ctx.env,
-    )
-    expect(publicTopLevel.status).toBe(200)
-    const publicTopLevelBody = await json(publicTopLevel) as {
-      items: Array<{
-        comment: { comment_id: string }
-        resolved_locale: string
-        translation_state: string
-        translated_body: string | null
-      }>
-    }
-    expect(publicTopLevelBody.items[0]?.comment.comment_id).toBe(topLevelBody.comment_id)
-    expect(publicTopLevelBody.items[0]?.resolved_locale).toBe("zh-Hans")
-    expect(publicTopLevelBody.items[0]?.translation_state).toBe("ready")
-    expect(publicTopLevelBody.items[0]?.translated_body).toBe("来自 Pirate 的公开评论")
-
-    const publicReplies = await app.request(
-      `http://pirate.test/public-comments/${topLevelBody.comment_id}/replies?locale=zh-Hans&limit=10`,
-      {},
-      ctx.env,
-    )
-    expect(publicReplies.status).toBe(200)
-    const publicRepliesBody = await json(publicReplies) as {
-      items: Array<{
-        comment: { comment_id: string }
-        resolved_locale: string
-        translation_state: string
-      }>
-    }
-    expect(publicRepliesBody.items[0]?.comment.comment_id).toBe(replyBody.comment_id)
-    expect(publicRepliesBody.items[0]?.resolved_locale).toBe("zh-Hans")
-    expect(publicRepliesBody.items[0]?.translation_state).toBe("pending")
-  })
-
-  test("DELETE /comments/:commentId tombstones the comment and keeps it in context", async () => {
-    const ctx = await createRouteTestContext()
-    cleanup = ctx.cleanup
-
-    const creator = await exchangeJwt(ctx.env, "comments-routes-delete-creator")
-    const community = await createCommunity(ctx.env, creator.accessToken, "Comment Delete Club")
-
-    const createdPost = await requestJson(
-      `http://pirate.test/communities/${community.communityId}/posts`,
-      {
-        post_type: "text",
-        title: "Delete comment",
-        body: "Delete body",
-        idempotency_key: "comments-routes-post-delete-1",
-      },
-      ctx.env,
-      creator.accessToken,
-    )
-    expect(createdPost.status).toBe(201)
-    const postBody = await json(createdPost) as { post_id: string }
-
-    const commentResponse = await requestJson(
-      `http://pirate.test/communities/${community.communityId}/posts/${postBody.post_id}/comments`,
-      {
-        body: "Delete me",
-      },
-      ctx.env,
-      creator.accessToken,
-    )
-    expect(commentResponse.status).toBe(201)
-    const commentBody = await json(commentResponse) as { comment_id: string }
-
-    const deleted = await Promise.resolve(app.request(
-      `http://pirate.test/comments/${commentBody.comment_id}`,
-      {
-        method: "DELETE",
-        headers: {
-          authorization: `Bearer ${creator.accessToken}`,
-        },
-      },
-      ctx.env,
-    ))
-    expect(deleted.status).toBe(200)
-    const deletedBody = await json(deleted) as { comment_id: string; status: string; body: string | null }
-    expect(deletedBody.comment_id).toBe(commentBody.comment_id)
-    expect(deletedBody.status).toBe("deleted")
-    expect(deletedBody.body).toBe("[deleted]")
-
-    const context = await app.request(
-      `http://pirate.test/comments/${commentBody.comment_id}/context?limit=10`,
-      {
-        headers: {
-          authorization: `Bearer ${creator.accessToken}`,
-        },
-      },
-      ctx.env,
-    )
-    expect(context.status).toBe(200)
-    const contextBody = await json(context) as {
-      comment: { comment: { status: string; body: string | null } }
-    }
-    expect(contextBody.comment.comment.status).toBe("deleted")
-    expect(contextBody.comment.comment.body).toBe("[deleted]")
   })
 })

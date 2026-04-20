@@ -11,12 +11,14 @@ import {
   type CreateCommunityRequestBody,
   type UpdateCommunityRequestBody,
   type UpdateCommunityGatesRequestBody,
+  type UpdateCommunityLabelPolicyRequestBody,
   type UpdateCommunityReferenceLinksRequestBody,
   type UpdateCommunitySafetyRequestBody,
   type UpdateCommunityRulesRequestBody,
   type UpdateCommunityDonationPolicyRequestBody,
   updateCommunity,
   updateCommunityGates,
+  updateCommunityLabelPolicy,
   updateCommunityReferenceLinks,
   updateCommunitySafety,
   updateCommunityRules,
@@ -42,6 +44,26 @@ import {
 } from "./communities-route-helpers"
 import type { CreatePostRequest } from "../types"
 import type { CreateCommentRequest } from "../lib/comments/comment-types"
+import type { ActorContext } from "../lib/auth-middleware"
+
+function assertAgentDelegatedWriteMatchesActor(input: {
+  actor: ActorContext
+  body: {
+    authorship_mode?: "human_direct" | "user_agent"
+    agent_id?: string | null
+  }
+}): void {
+  if (input.actor.authType !== "agent_delegated") {
+    return
+  }
+
+  if (input.body.authorship_mode !== "user_agent") {
+    throw badRequestError("Agent delegated credentials can only create user_agent writes")
+  }
+  if (input.body.agent_id?.trim() !== input.actor.delegatedAgentId) {
+    throw badRequestError("agent_id must match the delegated agent credential")
+  }
+}
 
 export function registerCommunityCoreRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.post("/", async (c) => {
@@ -177,6 +199,20 @@ export function registerCommunityCoreRoutes(communities: Hono<AuthenticatedEnv>)
     return c.json(result, 200)
   })
 
+  communities.patch("/:communityId/labels", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const body = await c.req.json<UpdateCommunityLabelPolicyRequestBody>().catch(() => null)
+
+    const result = await updateCommunityLabelPolicy({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      body,
+      communityRepository,
+    })
+    return c.json(result, 200)
+  })
+
   communities.put("/:communityId/gates", async (c) => {
     const { actor, communityId, communityRepository, userRepository } = await getResolvedCommunityRouteContext(c)
     const body = await c.req.json<UpdateCommunityGatesRequestBody>().catch(() => null)
@@ -266,6 +302,7 @@ export function registerCommunityCoreRoutes(communities: Hono<AuthenticatedEnv>)
   communities.post("/:communityId/posts", async (c) => {
     const { actor, communityId, communityRepository, userRepository, profileRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<CreatePostRequest>(c, "Invalid post create payload")
+    assertAgentDelegatedWriteMatchesActor({ actor, body })
     const result = await createPost({
       env: c.env,
       requestUrl: c.req.url,
@@ -298,6 +335,7 @@ export function registerCommunityCoreRoutes(communities: Hono<AuthenticatedEnv>)
   communities.post("/:communityId/posts/:postId/comments", async (c) => {
     const { actor, communityId, communityRepository, userRepository, profileRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<CreateCommentRequest>(c, "Invalid comment create payload")
+    assertAgentDelegatedWriteMatchesActor({ actor, body })
     const result = await createComment({
       env: c.env,
       requestUrl: c.req.url,

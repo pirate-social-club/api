@@ -1,10 +1,11 @@
 import { SignJWT } from "jose"
 import { createClient, type Client } from "@libsql/client"
 import { generateKeyPairSync, randomUUID } from "node:crypto"
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Env } from "../src/types"
+import { setClawkeyProviderForTests } from "../src/lib/agents/clawkey-provider"
 import { setSelfProviderForTests } from "../src/lib/verification/self-provider"
 import { setVeryProviderForTests } from "../src/lib/verification/very-provider"
 import { setEnsResolverForTests } from "../src/lib/auth/ens-linked-handle-service"
@@ -18,6 +19,32 @@ import { setSwarmPublisherForTests } from "../src/lib/swarm/swarm-publisher"
 import { splitSqlStatements, toSqliteCompatibleStatement } from "../shared/sql-migration"
 
 const encoder = new TextEncoder()
+const ROUTE_TEST_LOCK_PATH = join(tmpdir(), "pirate-v2-route-test-lock")
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function acquireRouteTestLock(timeoutMs = 30000): Promise<() => Promise<void>> {
+  const startedAt = Date.now()
+
+  while (true) {
+    try {
+      await mkdir(ROUTE_TEST_LOCK_PATH)
+      return async () => {
+        await rm(ROUTE_TEST_LOCK_PATH, { recursive: true, force: true })
+      }
+    } catch (error) {
+      if (!(error instanceof Error) || !("code" in error) || error.code !== "EEXIST") {
+        throw error
+      }
+      if (Date.now() - startedAt >= timeoutMs) {
+        throw new Error(`Timed out waiting for route test lock after ${timeoutMs}ms`)
+      }
+      await sleep(25)
+    }
+  }
+}
 
 export function resetMemoryStore(): void {
   delete (globalThis as typeof globalThis & { __pirateMemoryAuthStore?: unknown }).__pirateMemoryAuthStore
@@ -25,6 +52,7 @@ export function resetMemoryStore(): void {
 
 export function resetRuntimeCaches(): void {
   resetMemoryStore()
+  setClawkeyProviderForTests(null)
   setSelfProviderForTests(null)
   setVeryProviderForTests(null)
   setEnsResolverForTests(null)
@@ -141,25 +169,33 @@ export async function createRouteTestContext(overrides: Partial<Env> = {}): Prom
   communityDbRoot: string
   cleanup: () => Promise<void>
 }> {
-  const controlPlane = await createControlPlaneTestClient({ includeAllMigrations: true })
-  const communityDbRoot = await mkdtemp(join(tmpdir(), "pirate-v2-community-"))
-  const env = buildTestEnv({
-    DEV_MEMORY_STORE_ENABLED: "false",
-    ENVIRONMENT: "test",
-    CONTROL_PLANE_DATABASE_URL: `file:${controlPlane.databasePath}`,
-    LOCAL_COMMUNITY_DB_ROOT: communityDbRoot,
-    ...overrides,
-  })
+  const releaseLock = await acquireRouteTestLock()
 
-  return {
-    env,
-    client: controlPlane.client,
-    controlPlaneDatabasePath: controlPlane.databasePath,
-    communityDbRoot,
-    cleanup: async () => {
-      resetRuntimeCaches()
-      await controlPlane.cleanup()
-      await rm(communityDbRoot, { recursive: true, force: true })
-    },
+  try {
+    const controlPlane = await createControlPlaneTestClient({ includeAllMigrations: true })
+    const communityDbRoot = await mkdtemp(join(tmpdir(), "pirate-v2-community-"))
+    const env = buildTestEnv({
+      DEV_MEMORY_STORE_ENABLED: "false",
+      ENVIRONMENT: "test",
+      CONTROL_PLANE_DATABASE_URL: `file:${controlPlane.databasePath}`,
+      LOCAL_COMMUNITY_DB_ROOT: communityDbRoot,
+      ...overrides,
+    })
+
+    return {
+      env,
+      client: controlPlane.client,
+      controlPlaneDatabasePath: controlPlane.databasePath,
+      communityDbRoot,
+      cleanup: async () => {
+        resetRuntimeCaches()
+        await controlPlane.cleanup()
+        await rm(communityDbRoot, { recursive: true, force: true })
+        await releaseLock()
+      },
+    }
+  } catch (error) {
+    await releaseLock()
+    throw error
   }
 }

@@ -258,6 +258,7 @@ export type CommunityPostProjectionRow = {
   identity_mode: "public" | "anonymous"
   post_type: Post["post_type"]
   status: Post["status"]
+  visibility: Post["visibility"]
   source_created_at: string
   projected_payload_json: string
   upvote_count: number
@@ -592,12 +593,13 @@ export function toCommunityPostProjectionRow(row: unknown): CommunityPostProject
     identity_mode: requiredString(row, "identity_mode") as CommunityPostProjectionRow["identity_mode"],
     post_type: requiredString(row, "post_type") as CommunityPostProjectionRow["post_type"],
     status: requiredString(row, "status") as CommunityPostProjectionRow["status"],
+    visibility: requiredString(row, "visibility") as CommunityPostProjectionRow["visibility"],
     source_created_at: requiredString(row, "source_created_at"),
     projected_payload_json: requiredString(row, "projected_payload_json"),
-    upvote_count: numberOrNull(rowValue(row, "upvote_count")) ?? 0,
-    downvote_count: numberOrNull(rowValue(row, "downvote_count")) ?? 0,
-    comment_count: numberOrNull(rowValue(row, "comment_count")) ?? 0,
-    like_count: numberOrNull(rowValue(row, "like_count")) ?? 0,
+    upvote_count: requiredNumber(row, "upvote_count"),
+    downvote_count: requiredNumber(row, "downvote_count"),
+    comment_count: requiredNumber(row, "comment_count"),
+    like_count: requiredNumber(row, "like_count"),
     projection_version: requiredNumber(row, "projection_version"),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),

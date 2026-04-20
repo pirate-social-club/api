@@ -89,6 +89,25 @@ Community-owned rows are written to the per-community DB:
 - `namespace_bindings`
 - `namespace_handle_policies`
 - `posts`
+  Includes post-level `visibility` with `public` and `members_only`.
+
+## Post Visibility
+
+Shipped post visibility is intentionally narrow:
+
+- `public`
+  Anyone can read the post.
+- `members_only`
+  Only joined members can read the post through authenticated community routes.
+
+Enforcement rules:
+
+- create-post accepts `visibility` on `CreatePostRequest`
+- the community DB `posts` row persists `visibility`
+- the control-plane `community_post_projections` row mirrors `visibility`
+- public read surfaces only return `visibility = 'public'`
+  This includes `GET /public-posts/{post_id}`, `GET /public-communities/{community}/posts`, public comment reads, and the home feed
+- authenticated member reads can still return `members_only` posts
 
 ## Local Dev
 
@@ -229,3 +248,4 @@ After `04-posts/create-post`, validate both storage layers:
 - one `community_post_projections` row exists in the control-plane DB
 - `projection_version = 1`
 - `source_post_id` matches the returned `post_id`
+- `visibility` matches the post payload and projection row

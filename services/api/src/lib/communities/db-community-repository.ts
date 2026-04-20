@@ -117,6 +117,7 @@ export interface CommunityRepository {
     identityMode: "public" | "anonymous"
     postType: "text" | "image" | "video" | "link" | "song"
     status: "draft" | "published" | "hidden" | "removed" | "deleted"
+    visibility: "public" | "members_only"
     sourceCreatedAt: string
     projectedPayloadJson: string
     actorUserId: string
@@ -286,6 +287,7 @@ export class DatabaseCommunityRepository implements CommunityRepository {
     identityMode: "public" | "anonymous"
     postType: "text" | "image" | "video" | "link" | "song"
     status: "draft" | "published" | "hidden" | "removed" | "deleted"
+    visibility: "public" | "members_only"
     sourceCreatedAt: string
     projectedPayloadJson: string
     actorUserId: string

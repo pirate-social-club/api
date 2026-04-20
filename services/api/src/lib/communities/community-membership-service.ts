@@ -23,11 +23,11 @@ import type { CommunityRepository } from "./db-community-repository"
 import { gateFailedWithDetails, internalError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import { loadCommunityProjection, requireOwnedCommunity } from "./community-create-service"
+import { parseCommunitySettingsJson, parseStoredDonationPartnerSummary } from "./community-create-validation"
 import { serializeJob } from "./community-serialization"
 import type {
   Community,
   CommunityPreview,
-  CommunityPreviewRule,
   Env,
   JoinEligibility,
   Job,
@@ -38,6 +38,8 @@ type MembershipResult = {
   community_id: string
   status: "joined" | "requested" | "left"
 }
+
+type CommunityPreviewRule = NonNullable<CommunityPreview["rules"]>[number]
 
 export function satisfiesBaselineJoinGate(user: User): boolean {
   if (user.verification_capabilities.unique_human.state === "verified") {
@@ -170,7 +172,7 @@ async function listPublicCommunityRules(input: {
 }): Promise<CommunityPreviewRule[]> {
   const result = await input.client.execute({
     sql: `
-      SELECT rule_id, title, body, position, status
+      SELECT rule_id, title, body, report_reason, position, status
       FROM community_rules
       WHERE community_id = ?1
         AND status = 'active'
@@ -183,6 +185,10 @@ async function listPublicCommunityRules(input: {
     rule_id: String(row.rule_id),
     title: String(row.title ?? ""),
     body: String(row.body ?? ""),
+    report_reason:
+      row.report_reason == null || String(row.report_reason).trim().length === 0
+        ? String(row.title ?? "")
+        : String(row.report_reason),
     position: typeof row.position === "number" ? row.position : index,
     status: row.status === "archived" ? "archived" : "active",
   }))
@@ -198,10 +204,22 @@ async function buildCommunityPreview(input: {
   viewerMembershipStatus: CommunityPreview["viewer_membership_status"]
 }): Promise<CommunityPreview> {
   const localResult = await input.client.execute({
-    sql: `SELECT display_name, description, avatar_ref, banner_ref, membership_mode FROM communities WHERE community_id = ?1 LIMIT 1`,
+    sql: `
+      SELECT display_name, description, avatar_ref, banner_ref, membership_mode,
+             donation_policy_mode, donation_partner_id, settings_json
+      FROM communities
+      WHERE community_id = ?1
+      LIMIT 1
+    `,
     args: [input.communityId],
   })
   const localRow = localResult.rows[0]
+  const settings = parseCommunitySettingsJson(localRow?.settings_json)
+  const donationPartner = parseStoredDonationPartnerSummary(settings)
+  const donationPolicyMode: CommunityPreview["donation_policy_mode"] =
+    localRow?.donation_policy_mode === "optional_creator_sidecar" || localRow?.donation_policy_mode === "fundraiser_default"
+      ? "optional_creator_sidecar"
+      : "none"
   const membershipMode: CommunityPreview["membership_mode"] =
     localRow?.membership_mode === "open" || localRow?.membership_mode === "request" || localRow?.membership_mode === "gated"
       ? (localRow.membership_mode as CommunityPreview["membership_mode"])
@@ -230,6 +248,9 @@ async function buildCommunityPreview(input: {
     membership_mode: membershipMode,
     human_verification_lane: "self",
     member_count: null,
+    donation_policy_mode: donationPolicyMode,
+    donation_partner_id: localRow?.donation_partner_id == null ? null : String(localRow.donation_partner_id),
+    donation_partner: donationPolicyMode !== "none" ? donationPartner : null,
     membership_gate_summaries: input.gateRules.map(buildMembershipGateSummary),
     viewer_membership_status: input.viewerMembershipStatus,
     created_at: input.communityCreatedAt,

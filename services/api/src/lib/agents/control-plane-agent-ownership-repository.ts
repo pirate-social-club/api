@@ -1,0 +1,221 @@
+import { globalSingleton } from "../db-helpers"
+import { getControlPlaneCacheKey, getControlPlaneClient } from "../runtime-deps"
+import type { Env } from "../../types"
+import type {
+  AgentDelegatedCredential,
+  AgentChallenge,
+  AgentOwnershipPairing,
+  AgentOwnershipPairingClaimResult,
+  AgentOwnershipSession,
+  UserAgent,
+} from "./types"
+import {
+  claimAgentOwnershipPairingCode,
+  completeAgentOwnershipSessionWithConnectionToken,
+  createAgentOwnershipPairingCode,
+  completeAgentOwnershipSessionFromCallback,
+  completeAgentOwnershipSession,
+  getAgentOwnershipSession,
+  getUserAgent,
+  issueAgentDelegatedCredential,
+  issueAgentDelegatedCredentialWithConnectionToken,
+  listUserAgents,
+  refreshAgentDelegatedCredential,
+  refreshAgentDelegatedCredentialWithConnectionToken,
+  startAgentOwnershipSession,
+  verifyAgentDelegatedAccessToken,
+} from "./control-plane-agent-ownership-service"
+import type { Client } from "../sql-client"
+
+export interface AgentOwnershipRepository {
+  createAgentOwnershipPairingCode(input: {
+    userId: string
+  }): Promise<AgentOwnershipPairing>
+  claimAgentOwnershipPairingCode(input: {
+    pairingCode: string
+    agentChallenge: AgentChallenge
+  }): Promise<AgentOwnershipPairingClaimResult>
+  startAgentOwnershipSession(input: {
+    userId: string
+    sessionKind: AgentOwnershipSession["session_kind"]
+    ownershipProvider: AgentOwnershipSession["ownership_provider"]
+    agentId?: string | null
+    displayName?: string | null
+    policyId?: string | null
+    agentChallenge: AgentChallenge
+  }): Promise<AgentOwnershipSession>
+  getAgentOwnershipSession(agentOwnershipSessionId: string, userId: string): Promise<AgentOwnershipSession | null>
+  completeAgentOwnershipSession(input: {
+    agentOwnershipSessionId: string
+    userId: string
+    providerPayloadRef?: string | null
+  }): Promise<AgentOwnershipSession | null>
+  completeAgentOwnershipSessionWithConnectionToken(input: {
+    agentOwnershipSessionId: string
+    connectionToken: string
+    providerPayloadRef?: string | null
+  }): Promise<AgentOwnershipSession | null>
+  completeAgentOwnershipSessionFromCallback(input: {
+    agentOwnershipSessionId: string
+    provider: AgentOwnershipSession["ownership_provider"] | null
+    attestationId?: string | null
+    proofHash?: string | null
+    payload?: Record<string, unknown> | null
+    callbackSecret: string | null
+  }): Promise<AgentOwnershipSession | null>
+  listUserAgents(userId: string): Promise<UserAgent[]>
+  getUserAgent(agentId: string, userId: string): Promise<UserAgent | null>
+  issueAgentDelegatedCredential(input: {
+    agentId: string
+    userId: string
+    currentOwnershipRecordId?: string | null
+  }): Promise<AgentDelegatedCredential>
+  issueAgentDelegatedCredentialWithConnectionToken(input: {
+    agentId: string
+    connectionToken: string
+    currentOwnershipRecordId?: string | null
+  }): Promise<AgentDelegatedCredential>
+  refreshAgentDelegatedCredential(input: {
+    agentId: string
+    userId: string
+    refreshToken: string
+  }): Promise<AgentDelegatedCredential>
+  refreshAgentDelegatedCredentialWithConnectionToken(input: {
+    agentId: string
+    connectionToken: string
+    refreshToken: string
+  }): Promise<AgentDelegatedCredential>
+  verifyAgentDelegatedAccessToken(input: {
+    accessToken: string
+  }): Promise<{
+    userId: string
+    agentId: string
+    currentOwnershipRecordId: string
+  }>
+}
+
+export class ControlPlaneAgentOwnershipRepository implements AgentOwnershipRepository {
+  constructor(
+    private readonly client: Client,
+    private readonly env: Env,
+  ) {}
+
+  async createAgentOwnershipPairingCode(input: {
+    userId: string
+  }): Promise<AgentOwnershipPairing> {
+    return createAgentOwnershipPairingCode(this.client, input)
+  }
+
+  async claimAgentOwnershipPairingCode(input: {
+    pairingCode: string
+    agentChallenge: AgentChallenge
+  }): Promise<AgentOwnershipPairingClaimResult> {
+    return claimAgentOwnershipPairingCode(this.client, this.env, input)
+  }
+
+  async startAgentOwnershipSession(input: {
+    userId: string
+    sessionKind: AgentOwnershipSession["session_kind"]
+    ownershipProvider: AgentOwnershipSession["ownership_provider"]
+    agentId?: string | null
+    displayName?: string | null
+    policyId?: string | null
+    agentChallenge: AgentChallenge
+  }): Promise<AgentOwnershipSession> {
+    return startAgentOwnershipSession(this.client, this.env, input)
+  }
+
+  async getAgentOwnershipSession(agentOwnershipSessionId: string, userId: string): Promise<AgentOwnershipSession | null> {
+    return getAgentOwnershipSession(this.client, agentOwnershipSessionId, userId)
+  }
+
+  async completeAgentOwnershipSession(input: {
+    agentOwnershipSessionId: string
+    userId: string
+    providerPayloadRef?: string | null
+  }): Promise<AgentOwnershipSession | null> {
+    return completeAgentOwnershipSession(this.client, this.env, input)
+  }
+
+  async completeAgentOwnershipSessionWithConnectionToken(input: {
+    agentOwnershipSessionId: string
+    connectionToken: string
+    providerPayloadRef?: string | null
+  }): Promise<AgentOwnershipSession | null> {
+    return completeAgentOwnershipSessionWithConnectionToken(this.client, this.env, input)
+  }
+
+  async completeAgentOwnershipSessionFromCallback(input: {
+    agentOwnershipSessionId: string
+    provider: AgentOwnershipSession["ownership_provider"] | null
+    attestationId?: string | null
+    proofHash?: string | null
+    payload?: Record<string, unknown> | null
+    callbackSecret: string | null
+  }): Promise<AgentOwnershipSession | null> {
+    return completeAgentOwnershipSessionFromCallback(this.client, this.env, input)
+  }
+
+  async listUserAgents(userId: string): Promise<UserAgent[]> {
+    return listUserAgents(this.client, userId)
+  }
+
+  async getUserAgent(agentId: string, userId: string): Promise<UserAgent | null> {
+    return getUserAgent(this.client, agentId, userId)
+  }
+
+  async issueAgentDelegatedCredential(input: {
+    agentId: string
+    userId: string
+    currentOwnershipRecordId?: string | null
+  }): Promise<AgentDelegatedCredential> {
+    return issueAgentDelegatedCredential(this.client, input)
+  }
+
+  async issueAgentDelegatedCredentialWithConnectionToken(input: {
+    agentId: string
+    connectionToken: string
+    currentOwnershipRecordId?: string | null
+  }): Promise<AgentDelegatedCredential> {
+    return issueAgentDelegatedCredentialWithConnectionToken(this.client, input)
+  }
+
+  async refreshAgentDelegatedCredential(input: {
+    agentId: string
+    userId: string
+    refreshToken: string
+  }): Promise<AgentDelegatedCredential> {
+    return refreshAgentDelegatedCredential(this.client, input)
+  }
+
+  async refreshAgentDelegatedCredentialWithConnectionToken(input: {
+    agentId: string
+    connectionToken: string
+    refreshToken: string
+  }): Promise<AgentDelegatedCredential> {
+    return refreshAgentDelegatedCredentialWithConnectionToken(this.client, input)
+  }
+
+  async verifyAgentDelegatedAccessToken(input: {
+    accessToken: string
+  }): Promise<{
+    userId: string
+    agentId: string
+    currentOwnershipRecordId: string
+  }> {
+    return verifyAgentDelegatedAccessToken(this.client, input)
+  }
+}
+
+export function getControlPlaneAgentOwnershipRepository(env: Env): ControlPlaneAgentOwnershipRepository {
+  const client = getControlPlaneClient(env)
+  const cacheKey = [
+    getControlPlaneCacheKey(env),
+    String(env.CLAWKEY_API_URL || ""),
+    String(env.ENVIRONMENT || ""),
+  ].join("|")
+
+  return globalSingleton("controlPlaneAgentOwnershipRepository", cacheKey, () =>
+    new ControlPlaneAgentOwnershipRepository(client, env),
+  )
+}

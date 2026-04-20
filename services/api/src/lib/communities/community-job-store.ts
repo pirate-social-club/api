@@ -7,6 +7,7 @@ export type CommunityJobType =
   | "comment_projection_sync"
   | "comment_body_mirror"
   | "thread_snapshot_publish"
+  | "post_label_materialize"
   | "post_translation_materialize"
   | "comment_translation_materialize"
   | "community_text_translation_materialize"

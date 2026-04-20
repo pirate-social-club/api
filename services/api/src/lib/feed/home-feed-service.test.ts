@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import type { CommunityMembershipProjectionRow, CommunityRow } from "../auth/auth-db-rows"
-import { filterCommunitiesWithPosts, resolveHomeFeedCommunityIds, sortCommunitySummaries } from "./home-feed-service"
+import {
+  filterCommunitiesWithPosts,
+  filterVisibleHomeFeedProjections,
+  resolveHomeFeedCommunityIds,
+  resolveJoinedHomeFeedCommunityIds,
+  sortCommunitySummaries,
+} from "./home-feed-service"
 import type { CommunityAggregate } from "./home-feed-service"
 import type { HomeFeedCommunitySummary } from "../../types"
 
@@ -85,6 +91,84 @@ describe("resolveHomeFeedCommunityIds", () => {
     })
 
     expect(communityIds).toEqual(["cmt_alpha", "cmt_beta"])
+  })
+})
+
+describe("resolveJoinedHomeFeedCommunityIds", () => {
+  test("returns only explicit member and owner communities", () => {
+    const communityIds = resolveJoinedHomeFeedCommunityIds({
+      activeCommunities: [
+        createCommunityRow({ communityId: "cmt_alpha", creatorUserId: "usr_viewer" }),
+        createCommunityRow({ communityId: "cmt_beta", creatorUserId: "usr_owner" }),
+        createCommunityRow({ communityId: "cmt_gamma", creatorUserId: "usr_owner" }),
+      ],
+      membershipRows: [
+        createMembershipRow({
+          communityId: "cmt_beta",
+          userId: "usr_viewer",
+          membershipState: "member",
+        }),
+      ],
+      userId: "usr_viewer",
+    })
+
+    expect(communityIds).toEqual(["cmt_beta", "cmt_alpha"])
+  })
+})
+
+describe("filterVisibleHomeFeedProjections", () => {
+  test("keeps members-only posts out of anonymous and fallback feeds", () => {
+    const result = filterVisibleHomeFeedProjections([
+      {
+        community_id: "cmt_alpha",
+        source_post_id: "pst_public",
+        source_created_at: "2026-04-18T00:00:00.000Z",
+        visibility: "public",
+        upvote_count: 1,
+        downvote_count: 0,
+        comment_count: 0,
+        like_count: 0,
+      },
+      {
+        community_id: "cmt_beta",
+        source_post_id: "pst_private",
+        source_created_at: "2026-04-18T00:00:00.000Z",
+        visibility: "members_only",
+        upvote_count: 1,
+        downvote_count: 0,
+        comment_count: 0,
+        like_count: 0,
+      },
+    ], new Set<string>())
+
+    expect(result.map((row) => row.source_post_id)).toEqual(["pst_public"])
+  })
+
+  test("keeps members-only posts for joined communities", () => {
+    const result = filterVisibleHomeFeedProjections([
+      {
+        community_id: "cmt_alpha",
+        source_post_id: "pst_public",
+        source_created_at: "2026-04-18T00:00:00.000Z",
+        visibility: "public",
+        upvote_count: 1,
+        downvote_count: 0,
+        comment_count: 0,
+        like_count: 0,
+      },
+      {
+        community_id: "cmt_beta",
+        source_post_id: "pst_private",
+        source_created_at: "2026-04-18T00:00:00.000Z",
+        visibility: "members_only",
+        upvote_count: 1,
+        downvote_count: 0,
+        comment_count: 0,
+        like_count: 0,
+      },
+    ], new Set<string>(["cmt_beta"]))
+
+    expect(result.map((row) => row.source_post_id)).toEqual(["pst_public", "pst_private"])
   })
 })
 

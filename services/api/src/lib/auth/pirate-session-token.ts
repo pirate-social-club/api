@@ -1,4 +1,4 @@
-import { importPKCS8, importSPKI, jwtVerify, SignJWT } from "jose"
+import { calculateJwkThumbprint, exportJWK, importPKCS8, importSPKI, jwtVerify, SignJWT } from "jose"
 import { authError } from "../errors"
 import type { Env } from "../../types"
 
@@ -74,4 +74,18 @@ export async function verifyPirateAccessToken(params: {
   }
 
   return { userId }
+}
+
+export async function getPirateAccessTokenJwks(params: {
+  env: Env
+}): Promise<{ keys: Array<Record<string, string>> }> {
+  const jwk = await exportJWK(await getPublicKey(params.env))
+  jwk.alg = SESSION_JWT_ALG
+  jwk.use = "sig"
+  jwk.key_ops = ["verify"]
+  jwk.kid = await calculateJwkThumbprint(jwk)
+
+  return {
+    keys: [jwk as Record<string, string>],
+  }
 }

@@ -1,4 +1,5 @@
 import type { DbExecutor } from "../db-helpers"
+import { getCommunityLabelById, serializeCommunityPostLabel } from "../communities/community-label-store"
 import { computePostSourceHash } from "./content-source-hash"
 import { DEFAULT_CONTENT_LOCALE, normalizeContentLocale, sameLanguageLocale } from "./content-locale"
 import { getContentTranslation } from "./content-translation-store"
@@ -28,11 +29,18 @@ export async function buildLocalizedPostResponse(input: {
 }): Promise<LocalizedPostResponse> {
   const resolvedLocale = normalizeContentLocale(input.locale) ?? DEFAULT_CONTENT_LOCALE
   const sourceHash = await computePostSourceHash(input.post)
+  const label = input.post.label_id
+    ? await getCommunityLabelById({
+        executor: input.executor,
+        communityId: input.post.community_id,
+        labelId: input.post.label_id,
+      })
+    : null
 
   const response: LocalizedPostResponse = {
     post: input.post,
     thread_snapshot: input.threadSnapshot ?? null,
-    label: null,
+    label: label ? serializeCommunityPostLabel(label) : null,
     upvote_count: input.metrics?.upvote_count ?? 0,
     downvote_count: input.metrics?.downvote_count ?? 0,
     like_count: input.metrics?.like_count ?? 0,

@@ -1,5 +1,6 @@
 import { badRequestError, notFoundError } from "../errors"
 import { makeId, nowIso } from "../helpers"
+import { loadCommunityProjection } from "./community-service"
 import { getCommunityMembershipState } from "./community-membership-store"
 import { openCommunityDb } from "./community-db-factory"
 import type { CommunityRepository } from "./db-community-repository"
@@ -9,7 +10,7 @@ import {
   getListingRowByAssetId,
   getListingRowById,
   listListingRows,
-  parseJsonValue,
+  parseListingPolicy,
   requireCommunityMember,
   requireVerifiedHuman,
   serializeListing,
@@ -22,6 +23,69 @@ import type {
   Env,
   UpdateCommunityListingRequest,
 } from "../../types"
+
+type ListingDonationConfig = {
+  donation_partner_id: string | null
+  donation_share_pct: number | null
+}
+
+async function resolveListingDonationConfig(input: {
+  env: Env
+  communityId: string
+  communityRepository: CommunityRepository
+  current: ListingDonationConfig
+  requestedPartnerId: string | null | undefined
+  requestedSharePct: number | null | undefined
+}): Promise<ListingDonationConfig> {
+  const nextSharePct = input.requestedSharePct === undefined
+    ? input.current.donation_share_pct
+    : input.requestedSharePct
+  const nextPartnerId = input.requestedPartnerId === undefined
+    ? input.current.donation_partner_id
+    : input.requestedPartnerId
+
+  if (nextSharePct == null) {
+    if (typeof nextPartnerId === "string" && nextPartnerId.trim()) {
+      throw badRequestError("donation_share_pct is required when donation_partner_id is set")
+    }
+    return {
+      donation_partner_id: null,
+      donation_share_pct: null,
+    }
+  }
+
+  if (!Number.isInteger(nextSharePct) || nextSharePct < 0 || nextSharePct > 100) {
+    throw badRequestError("donation_share_pct must be an integer between 0 and 100")
+  }
+
+  if (nextSharePct === 0) {
+    return {
+      donation_partner_id: null,
+      donation_share_pct: null,
+    }
+  }
+
+  if (!nextPartnerId?.trim()) {
+    throw badRequestError("donation_partner_id is required when donation_share_pct is greater than 0")
+  }
+
+  const communityRow = await input.communityRepository.getCommunityById(input.communityId)
+  if (!communityRow) {
+    throw notFoundError("Community not found")
+  }
+  const community = await loadCommunityProjection(input.env, input.communityRepository, communityRow)
+  if (community.donation_policy_mode === "none" || !community.donation_partner_id?.trim()) {
+    throw badRequestError("Community charity is not configured")
+  }
+  if (community.donation_partner_id !== nextPartnerId.trim()) {
+    throw badRequestError("Listing charity must match the community charity")
+  }
+
+  return {
+    donation_partner_id: nextPartnerId.trim(),
+    donation_share_pct: nextSharePct,
+  }
+}
 
 export async function listCommunityListings(input: {
   env: Env
@@ -74,6 +138,17 @@ export async function createCommunityListing(input: {
         throw badRequestError("Community regional pricing is not enabled")
       }
     }
+    const donationConfig = await resolveListingDonationConfig({
+      env: input.env,
+      communityId: input.communityId,
+      communityRepository: input.communityRepository,
+      current: {
+        donation_partner_id: null,
+        donation_share_pct: null,
+      },
+      requestedPartnerId: input.body.donation_partner_id,
+      requestedSharePct: input.body.donation_share_pct,
+    })
     const listingId = makeId("lst")
     const createdAt = nowIso()
     await db.client.execute({
@@ -93,7 +168,11 @@ export async function createCommunityListing(input: {
         input.body.live_room_id ?? null,
         input.body.status,
         input.body.price_usd,
-        JSON.stringify({ regional_pricing_enabled: input.body.regional_pricing_enabled }),
+        JSON.stringify({
+          regional_pricing_enabled: input.body.regional_pricing_enabled,
+          donation_partner_id: donationConfig.donation_partner_id,
+          donation_share_pct: donationConfig.donation_share_pct,
+        }),
         input.userId,
         createdAt,
       ],
@@ -129,9 +208,20 @@ export async function updateCommunityListing(input: {
         throw notFoundError("Listing not found")
       }
     }
+    const currentPolicy = parseListingPolicy(listing)
     const nextRegional = input.body.regional_pricing_enabled
-      ?? parseJsonValue<{ regional_pricing_enabled?: boolean }>(listing.regional_pricing_policy_json, {}).regional_pricing_enabled
-      ?? false
+      ?? currentPolicy.regionalPricingEnabled
+    const donationConfig = await resolveListingDonationConfig({
+      env: input.env,
+      communityId: input.communityId,
+      communityRepository: input.communityRepository,
+      current: {
+        donation_partner_id: currentPolicy.donationPartnerId,
+        donation_share_pct: currentPolicy.donationSharePct,
+      },
+      requestedPartnerId: input.body.donation_partner_id,
+      requestedSharePct: input.body.donation_share_pct,
+    })
     if (nextRegional) {
       const pricingPolicy = await getCommunityPricingPolicy({ env: input.env, communityId: input.communityId })
       if (!pricingPolicy.regional_pricing_enabled) {
@@ -155,6 +245,8 @@ export async function updateCommunityListing(input: {
         input.body.price_usd ?? listing.price_usd,
         JSON.stringify({
           regional_pricing_enabled: nextRegional,
+          donation_partner_id: donationConfig.donation_partner_id,
+          donation_share_pct: donationConfig.donation_share_pct,
         }),
         nowIso(),
       ],

@@ -3,9 +3,11 @@ import type { CommunityRepository } from "./db-community-repository"
 import { badRequestError, internalError, notFoundError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { openCommunityDb } from "./community-db-factory"
+import { syncCommunityLabels } from "./community-label-store"
 import {
   assertPublicV0GateConfiguration,
   assertUpdateCommunityGatesRequest,
+  assertUpdateCommunityLabelPolicyRequest,
   assertUpdateCommunityReferenceLinksRequest,
   assertUpdateCommunitySafetyRequest,
   EndaomentOrganizationSearchResult,
@@ -20,9 +22,12 @@ import {
   selectEndaomentOrganizationMatch,
   type UpdateCommunityDonationPolicyRequestBody,
   type UpdateCommunityGatesRequestBody,
+  type UpdateCommunityLabelPolicyRequestBody,
+  type UpdateCommunityRequestBody,
   type UpdateCommunityReferenceLinksRequestBody,
   type UpdateCommunityRulesRequestBody,
   type UpdateCommunitySafetyRequestBody,
+  assertUpdateCommunityRequest,
 } from "./community-create-shared"
 import type {
   Community,
@@ -194,7 +199,7 @@ export async function updateCommunitySafety(input: {
   try {
     const result = await db.client.execute({
       sql: `
-        SELECT settings_json
+        SELECT display_name, description, avatar_ref, banner_ref, settings_json
         FROM communities
         WHERE community_id = ?1
         LIMIT 1
@@ -333,6 +338,104 @@ export async function updateCommunityDonationPolicy(input: {
   return loadCommunityProjection(input.env, input.communityRepository, updated)
 }
 
+export async function updateCommunity(input: {
+  env: Env
+  userId: string
+  communityId: string
+  body: UpdateCommunityRequestBody | null
+  communityRepository: CommunityRepository
+}): Promise<Community> {
+  assertUpdateCommunityRequest(input.body)
+  await requireOwnedCommunity(input.communityRepository, input.communityId, input.userId)
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+
+  try {
+    const result = await db.client.execute({
+      sql: `
+        SELECT settings_json
+        FROM communities
+        WHERE community_id = ?1
+        LIMIT 1
+      `,
+      args: [input.communityId],
+    })
+    const row = result.rows[0]
+    const existingSettings = parseCommunitySettingsJson(row?.settings_json)
+    const nextSettings: Record<string, unknown> = {
+      ...existingSettings,
+    }
+    const nextDisplayName =
+      "display_name" in input.body
+        ? (input.body.display_name?.trim() || String(row?.display_name ?? ""))
+        : String(row?.display_name ?? "")
+    const nextDescription =
+      "description" in input.body
+        ? (input.body.description?.trim() || null)
+        : (row?.description == null ? null : String(row.description))
+    const nextAvatarRef =
+      "avatar_ref" in input.body
+        ? (input.body.avatar_ref?.trim() || null)
+        : (row?.avatar_ref == null ? null : String(row.avatar_ref))
+    const nextBannerRef =
+      "banner_ref" in input.body
+        ? (input.body.banner_ref?.trim() || null)
+        : (row?.banner_ref == null ? null : String(row.banner_ref))
+
+    if ("agent_posting_policy" in input.body) {
+      nextSettings.agent_posting_policy = input.body.agent_posting_policy ?? null
+    }
+    if ("agent_posting_scope" in input.body) {
+      nextSettings.agent_posting_scope = input.body.agent_posting_scope ?? null
+    }
+    if ("agent_daily_post_cap" in input.body) {
+      nextSettings.agent_daily_post_cap = input.body.agent_daily_post_cap ?? null
+    }
+    if ("agent_daily_reply_cap" in input.body) {
+      nextSettings.agent_daily_reply_cap = input.body.agent_daily_reply_cap ?? null
+    }
+    if ("human_verification_lane" in input.body) {
+      nextSettings.human_verification_lane = input.body.human_verification_lane ?? null
+    }
+    if ("accepted_agent_ownership_providers" in input.body) {
+      nextSettings.accepted_agent_ownership_providers = input.body.accepted_agent_ownership_providers == null
+        ? null
+        : [...new Set(input.body.accepted_agent_ownership_providers)]
+    }
+
+    const now = nowIso()
+    await db.client.execute({
+      sql: `
+        UPDATE communities
+        SET display_name = ?2,
+            description = ?3,
+            avatar_ref = ?4,
+            banner_ref = ?5,
+            settings_json = ?6,
+            updated_at = ?7
+        WHERE community_id = ?1
+      `,
+      args: [
+        input.communityId,
+        nextDisplayName,
+        nextDescription,
+        nextAvatarRef,
+        nextBannerRef,
+        JSON.stringify(nextSettings),
+        now,
+      ],
+    })
+  } finally {
+    db.close()
+  }
+
+  const updated = await input.communityRepository.getCommunityById(input.communityId)
+  if (!updated) {
+    throw notFoundError("Community not found")
+  }
+
+  return loadCommunityProjection(input.env, input.communityRepository, updated)
+}
+
 export async function getCommunityDonationPolicy(input: {
   env: Env
   userId: string
@@ -439,6 +542,117 @@ export async function updateCommunityReferenceLinks(input: {
         now,
       ],
     })
+  } finally {
+    db.close()
+  }
+
+  const updated = await input.communityRepository.getCommunityById(input.communityId)
+  if (!updated) {
+    throw notFoundError("Community not found")
+  }
+
+  return loadCommunityProjection(input.env, input.communityRepository, updated)
+}
+
+export async function updateCommunityLabelPolicy(input: {
+  env: Env
+  userId: string
+  communityId: string
+  body: UpdateCommunityLabelPolicyRequestBody | null
+  communityRepository: CommunityRepository
+}): Promise<Community> {
+  assertUpdateCommunityLabelPolicyRequest(input.body)
+  await requireOwnedCommunity(input.communityRepository, input.communityId, input.userId)
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+
+  try {
+    const result = await db.client.execute({
+      sql: `
+        SELECT settings_json
+        FROM communities
+        WHERE community_id = ?1
+        LIMIT 1
+      `,
+      args: [input.communityId],
+    })
+    const row = result.rows[0]
+    const existingSettings = parseCommunitySettingsJson(row?.settings_json)
+    const existingPolicy = existingSettings.label_policy && typeof existingSettings.label_policy === "object" && !Array.isArray(existingSettings.label_policy)
+      ? existingSettings.label_policy as Record<string, unknown>
+      : {}
+    const existingDefinitions = Array.isArray(existingPolicy.definitions)
+      ? existingPolicy.definitions as Array<Record<string, unknown>>
+      : []
+    const existingDefinitionsById = new Map(
+      existingDefinitions.flatMap((definition) => {
+        if (!definition || typeof definition.label_id !== "string") {
+          return []
+        }
+
+        return [[definition.label_id, definition] as const]
+      }),
+    )
+    const now = nowIso()
+
+    const definitions = input.body.definitions.map((definition, index) => {
+      const labelId = definition.label_id?.trim() || makeId("lbl")
+      const existingDefinition = existingDefinitionsById.get(labelId)
+
+      return {
+        label_id: labelId,
+        label: definition.label.trim(),
+        description: typeof existingDefinition?.description === "string" ? existingDefinition.description : null,
+        color_token: definition.color_token?.trim() || null,
+        status: definition.status === "archived" ? "archived" : "active",
+        position: index,
+        allowed_post_types: Array.isArray(existingDefinition?.allowed_post_types)
+          ? existingDefinition.allowed_post_types.filter((postType): postType is "text" | "image" | "video" | "song" =>
+            postType === "text" || postType === "image" || postType === "video" || postType === "song")
+          : null,
+      } satisfies NonNullable<Community["label_policy"]>["definitions"][number]
+    })
+
+    const tx = await db.client.transaction("write")
+    try {
+      await tx.execute({
+        sql: `
+          UPDATE communities
+          SET settings_json = ?2,
+              updated_at = ?3
+          WHERE community_id = ?1
+        `,
+        args: [input.communityId, JSON.stringify({
+          ...existingSettings,
+          label_policy: {
+            label_enabled: input.body.label_enabled,
+            require_label_on_top_level_posts: input.body.require_label_on_top_level_posts,
+            definitions,
+          },
+        }), now],
+      })
+
+      await syncCommunityLabels({
+        executor: tx,
+        communityId: input.communityId,
+        definitions: definitions.map((definition) => ({
+          label_id: definition.label_id,
+          label: definition.label,
+          description: definition.description,
+          color_token: definition.color_token,
+          status: definition.status,
+        })),
+        now,
+      })
+
+      await tx.commit()
+    } catch (error) {
+      try {
+        await tx.rollback()
+      } catch {}
+      throw error
+    } finally {
+      tx.close()
+    }
   } finally {
     db.close()
   }

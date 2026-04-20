@@ -11,6 +11,11 @@ const SQLITE_COMPATIBLE_CONTROL_PLANE_MIGRATIONS = new Set([
   "0036_control_plane_linked_handles.sql",
   "0037_control_plane_comment_projections.sql",
   "0038_control_plane_post_feed_metrics.sql",
+  "0039_control_plane_post_visibility.sql",
+  "0040_control_plane_agent_ownership.sql",
+  "0041_control_plane_agent_action_replays.sql",
+  "0042_control_plane_clawkey_mainline.sql",
+  "0043_control_plane_agent_pairing_codes.sql",
 ])
 
 export type LocalDevStorage = {

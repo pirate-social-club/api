@@ -1,7 +1,9 @@
 import type { Client } from "../sql-client"
 import { openCommunityDb } from "../communities/community-db-factory"
-import type { UserRepository } from "../auth/repositories"
+import type { ProfileRepository, UserRepository } from "../auth/repositories"
 import type { CommunityRepository } from "../communities/db-community-repository"
+import { loadCommunityProjection } from "../communities/community-create-repository"
+import { authorizeAgentWrite } from "../agents/agent-write-authorization"
 import { resolveStubAnalysisOutcome } from "./post-analysis"
 import {
   assertPostCreateRequest,
@@ -29,7 +31,7 @@ import {
 import { enqueueCommunityJob } from "../communities/community-job-store"
 import { analysisBlocked, badRequestError, eligibilityFailed, notFoundError, verificationRequired } from "../errors"
 import { makeId, nowIso } from "../helpers"
-import type { CreatePostRequest, Env, LocalizedPostResponse, Post } from "../../types"
+import type { Community, CreatePostRequest, Env, LocalizedPostResponse, Post } from "../../types"
 
 type CommunityFeedResponse = {
   items: LocalizedPostResponse[]
@@ -37,6 +39,10 @@ type CommunityFeedResponse = {
 }
 
 type PostFeedSort = "best" | "new" | "top"
+
+function isPubliclyReadablePost(post: Pick<Post, "status" | "visibility">): boolean {
+  return post.status === "published" && post.visibility === "public"
+}
 
 async function enqueuePostTranslationJob(input: {
   client: Client
@@ -108,6 +114,53 @@ async function enqueuePostTranslationOnReadIfNeeded(input: {
     postId: response.post.post_id,
     locale: response.resolved_locale,
     createdAt: nowIso(),
+  })
+}
+
+async function enqueuePostLabelJob(input: {
+  client: Client
+  communityId: string
+  postId: string
+  createdAt: string
+  reason?: "publish" | "edit"
+}): Promise<void> {
+  await enqueueCommunityJob({
+    client: input.client,
+    communityId: input.communityId,
+    jobType: "post_label_materialize",
+    subjectType: "post_label",
+    subjectId: input.postId,
+    payloadJson: JSON.stringify({
+      post_id: input.postId,
+      reason: input.reason ?? "publish",
+    }),
+    createdAt: input.createdAt,
+  })
+}
+
+async function enqueuePostLabelIfNeeded(input: {
+  client: Client
+  community: Pick<Community, "label_policy">
+  communityId: string
+  post: Post
+  createdAt: string
+}): Promise<void> {
+  if (input.post.status !== "published") {
+    return
+  }
+
+  const labelPolicy = input.community.label_policy
+  const hasActiveDefinitions = Boolean(labelPolicy?.definitions.some((definition) => definition.status === "active"))
+  if (!labelPolicy?.label_enabled || !hasActiveDefinitions) {
+    return
+  }
+
+  await enqueuePostLabelJob({
+    client: input.client,
+    communityId: input.communityId,
+    postId: input.post.post_id,
+    createdAt: input.createdAt,
+    reason: "publish",
   })
 }
 
@@ -204,16 +257,19 @@ function resolveAnonymousScope(input: {
 
 export async function createPost(input: {
   env: Env
+  requestUrl: string
   userId: string
   communityId: string
   body: CreatePostRequest
   userRepository: UserRepository
+  profileRepository: ProfileRepository
   communityRepository: CommunityRepository
 }): Promise<Post> {
-  const community = await input.communityRepository.getCommunityById(input.communityId)
-  if (!community || community.provisioning_state !== "active" || community.status !== "active") {
+  const communityRow = await input.communityRepository.getCommunityById(input.communityId)
+  if (!communityRow || communityRow.provisioning_state !== "active" || communityRow.status !== "active") {
     throw eligibilityFailed("Community is not available for posting")
   }
+  const community = await loadCommunityProjection(input.env, input.communityRepository, communityRow)
 
   assertPostCreateRequest(input.body, input.communityId)
 
@@ -236,6 +292,16 @@ export async function createPost(input: {
     }
 
     let writeBody = input.body
+    const agentWriteAuthorization = await authorizeAgentWrite({
+      env: input.env,
+      requestUrl: input.requestUrl,
+      userId: input.userId,
+      body: input.body,
+      community,
+      communityDbClient: db.client,
+      profileRepository: input.profileRepository,
+      writeTarget: "top_level_post",
+    })
     let analysisOverride: Pick<Post, "analysis_state" | "content_safety_state" | "age_gate_policy" | "status"> | undefined
     let resolvedSongBundleForAsset: Awaited<ReturnType<typeof resolveSongPostBundle>> | null = null
 
@@ -323,10 +389,19 @@ export async function createPost(input: {
       body: writeBody,
       createdAt,
       analysisOverride,
+      agentWriteAuthorization: agentWriteAuthorization ?? undefined,
     })
 
     await enqueuePostTranslationPrewarmJobs({
       client: db.client,
+      communityId: input.communityId,
+      post,
+      createdAt,
+    })
+
+    await enqueuePostLabelIfNeeded({
+      client: db.client,
+      community,
       communityId: input.communityId,
       post,
       createdAt,
@@ -339,6 +414,7 @@ export async function createPost(input: {
       identityMode: post.identity_mode,
       postType: post.post_type,
       status: post.status,
+      visibility: post.visibility,
       sourceCreatedAt: post.created_at,
       projectedPayloadJson: JSON.stringify(post),
       actorUserId: input.userId,
@@ -471,7 +547,7 @@ export async function getPublicPost(input: {
   const db = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
   try {
     const post = await getPostById(db.client, input.postId)
-    if (!post || post.status !== "published") {
+    if (!post || !isPubliclyReadablePost(post)) {
       throw notFoundError("Post not found")
     }
     const threadSnapshot = await getLatestThreadSnapshotForRead(db.client, post.post_id)
@@ -519,19 +595,24 @@ export async function listCommunityPosts(input: {
       flairId: input.flairId ?? null,
       sort: parsePostFeedSort(input.sort),
       cursor: parseFeedCursor(input.cursor),
+      visibility: null,
     })
 
-    const items = await Promise.all(feed.items.map((item) => buildLocalizedPostResponse({
-      executor: db.client,
-      post: item.post,
-      locale: input.locale ?? undefined,
-      metrics: {
-        upvote_count: item.upvote_count,
-        downvote_count: item.downvote_count,
-        like_count: item.like_count,
-        viewer_vote: item.viewer_vote,
-      },
-    })))
+    const items = await Promise.all(feed.items.map(async (item) => {
+      const threadSnapshot = await getLatestThreadSnapshotForRead(db.client, item.post.post_id)
+      return buildLocalizedPostResponse({
+        executor: db.client,
+        post: item.post,
+        locale: input.locale ?? undefined,
+        metrics: {
+          upvote_count: item.upvote_count,
+          downvote_count: item.downvote_count,
+          like_count: item.like_count,
+          viewer_vote: item.viewer_vote,
+        },
+        threadSnapshot,
+      })
+    }))
     for (const item of items) {
       await enqueuePostTranslationOnReadIfNeeded({
         client: db.client,
@@ -574,19 +655,24 @@ export async function listPublicCommunityPosts(input: {
       flairId: input.flairId ?? null,
       sort: parsePostFeedSort(input.sort),
       cursor: parseFeedCursor(input.cursor),
+      visibility: "public",
     })
 
-    const items = await Promise.all(feed.items.map((item) => buildLocalizedPostResponse({
-      executor: db.client,
-      post: item.post,
-      locale: input.locale ?? undefined,
-      metrics: {
-        upvote_count: item.upvote_count,
-        downvote_count: item.downvote_count,
-        like_count: item.like_count,
-        viewer_vote: item.viewer_vote,
-      },
-    })))
+    const items = await Promise.all(feed.items.map(async (item) => {
+      const threadSnapshot = await getLatestThreadSnapshotForRead(db.client, item.post.post_id)
+      return buildLocalizedPostResponse({
+        executor: db.client,
+        post: item.post,
+        locale: input.locale ?? undefined,
+        metrics: {
+          upvote_count: item.upvote_count,
+          downvote_count: item.downvote_count,
+          like_count: item.like_count,
+          viewer_vote: item.viewer_vote,
+        },
+        threadSnapshot,
+      })
+    }))
     for (const item of items) {
       await enqueuePostTranslationOnReadIfNeeded({
         client: db.client,

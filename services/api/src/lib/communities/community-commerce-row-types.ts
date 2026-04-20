@@ -51,6 +51,12 @@ export type ListingRow = {
   updated_at: string
 }
 
+export type ListingPolicySnapshot = {
+  regional_pricing_enabled?: boolean
+  donation_partner_id?: string | null
+  donation_share_pct?: number | null
+}
+
 export type PurchaseQuoteRow = {
   quote_id: string
   community_id: string
@@ -101,6 +107,9 @@ export type PurchaseRow = {
   settlement_chain: string
   settlement_token: string
   settlement_tx_ref: string
+  donation_partner_id: string | null
+  donation_share_pct: number | null
+  donation_amount_usd: number | null
   created_at: string
 }
 
@@ -170,6 +179,10 @@ export function numberOrNull(row: unknown, key: string): number | null {
   }
   if (typeof value === "bigint") {
     return Number(value)
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
   }
   return null
 }

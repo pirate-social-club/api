@@ -90,6 +90,28 @@ async function listTableNames(databasePath: string): Promise<string[]> {
   }
 }
 
+async function getSchemaMigrationChecksum(databasePath: string, migrationName: string): Promise<string | null> {
+  const client = createClient({
+    url: `file:${databasePath}`,
+  })
+
+  try {
+    const result = await client.execute({
+      sql: `
+        SELECT checksum
+        FROM schema_migrations
+        WHERE migration_name = ?1
+        LIMIT 1
+      `,
+      args: [migrationName],
+    })
+    const value = result.rows[0]?.checksum
+    return typeof value === "string" ? value : null
+  } finally {
+    client.close()
+  }
+}
+
 function buildRepository(databasePath: string): CommunityRepository {
   return {
     async getPrimaryCommunityDatabaseBinding() {
@@ -223,5 +245,52 @@ describe("openCommunityDb", () => {
     } finally {
       db.close()
     }
+  })
+
+  test.each([
+    "35dd1dca31a58d594287c4636486940611fcc9e621ddf1c52d8627719bd18673",
+    "b30841d6b60a02fe72d6ea61dbc3e7fb3459d069143b53d8a07fa8a9790f4d01",
+  ])("accepts and normalizes the legacy checksum %s for 1036_community_post_labels_ai.sql", async (legacyChecksum) => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-db-factory-checksum-"))
+    cleanupPaths.push(rootDir)
+
+    const databasePath = join(rootDir, `${randomUUID()}.db`)
+    const db = await openCommunityDb(
+      {
+        LOCAL_COMMUNITY_DB_ROOT: rootDir,
+      },
+      buildRepository(databasePath),
+      "cmt_legacy",
+    )
+
+    try {
+      await db.client.execute({
+        sql: `
+          UPDATE schema_migrations
+          SET checksum = ?2
+          WHERE migration_name = ?1
+        `,
+        args: [
+          "1036_community_post_labels_ai.sql",
+          legacyChecksum,
+        ],
+      })
+    } finally {
+      db.close()
+    }
+
+    const reopened = await openCommunityDb(
+      {
+        LOCAL_COMMUNITY_DB_ROOT: rootDir,
+      },
+      buildRepository(databasePath),
+      "cmt_legacy",
+    )
+    reopened.close()
+
+    expect(await getSchemaMigrationChecksum(
+      databasePath,
+      "1036_community_post_labels_ai.sql",
+    )).toBe("1e9a8ffcfb6cf40d60e8130f0d446a49ec17d0a481d33b9ddd4bcabb24b4f951")
   })
 })

@@ -3,6 +3,7 @@ import type { DbExecutor } from "../db-helpers"
 import { sha256Hex } from "../crypto"
 import { openCommunityDb } from "../communities/community-db-factory"
 import { enqueueCommunityJob } from "../communities/community-job-store"
+import { loadCommunityProjection } from "../communities/community-create-repository"
 import { buildLocalizedCommentListItem } from "../localization/comment-localization-service"
 import { CONTENT_TRANSLATION_PREWARM_LOCALES, detectSourceLanguageFromText, sameLanguageLocale } from "../localization/content-locale"
 import { emitCommentReply, emitPostCommented } from "../notifications/notification-service"
@@ -14,7 +15,8 @@ import {
 import type { CommunityRepository } from "../communities/db-community-repository"
 import { badRequestError, eligibilityFailed, notFoundError, verificationRequired } from "../errors"
 import { nowIso } from "../helpers"
-import type { UserRepository } from "../auth/repositories"
+import type { ProfileRepository, UserRepository } from "../auth/repositories"
+import { authorizeAgentWrite } from "../agents/agent-write-authorization"
 import { getPostById, getPostProjectionMetrics } from "../posts/community-post-store"
 import {
   assertCreateCommentRequest,
@@ -31,6 +33,13 @@ import {
 import { incrementAncestorCommentCounters, incrementThreadPostCommentCounters, insertCommentClosureRows } from "./comment-closure-store"
 import type { Comment, CommentAnonymousScope, CommentContext, CommentListResponse, CommentSort, CreateCommentRequest } from "./comment-types"
 import type { Env } from "../../types"
+
+function isPubliclyReadableThreadRoot(input: {
+  status: "draft" | "published" | "hidden" | "removed" | "deleted"
+  visibility: "public" | "members_only"
+}): boolean {
+  return input.status === "published" && input.visibility === "public"
+}
 
 async function requireMemberAccess(client: Client, communityId: string, userId: string): Promise<CommunityMembershipRow> {
   const membership = await getCommunityMembershipState(client, communityId, userId)
@@ -194,18 +203,21 @@ async function localizeCommentItems(input: {
 
 export async function createComment(input: {
   env: Env
+  requestUrl: string
   userId: string
   communityId: string
   threadRootPostId: string
   parentCommentId?: string | null
   body: CreateCommentRequest
   userRepository: UserRepository
+  profileRepository: ProfileRepository
   communityRepository: CommunityRepository
 }): Promise<Comment> {
-  const community = await input.communityRepository.getCommunityById(input.communityId)
-  if (!community || community.provisioning_state !== "active" || community.status !== "active") {
+  const communityRow = await input.communityRepository.getCommunityById(input.communityId)
+  if (!communityRow || communityRow.provisioning_state !== "active" || communityRow.status !== "active") {
     throw eligibilityFailed("Community is not available for commenting")
   }
+  const community = await loadCommunityProjection(input.env, input.communityRepository, communityRow)
 
   assertCreateCommentRequest(input.body)
 
@@ -249,6 +261,17 @@ export async function createComment(input: {
       throw eligibilityFailed("Replies are not allowed on removed or deleted comments")
     }
 
+    const agentWriteAuthorization = await authorizeAgentWrite({
+      env: input.env,
+      requestUrl: input.requestUrl,
+      userId: input.userId,
+      body: input.body,
+      community,
+      communityDbClient: db.client,
+      profileRepository: input.profileRepository,
+      writeTarget: "comment",
+    })
+
     const createdAt = nowIso()
     const depth = parentComment ? parentComment.depth + 1 : 0
     const tx = await db.client.transaction("write")
@@ -266,6 +289,7 @@ export async function createComment(input: {
         depth,
         createdAt,
         contentHash: `0x${await sha256Hex(writeBody.body.trim())}`,
+        agentWriteAuthorization: agentWriteAuthorization ?? undefined,
       })
 
       await insertCommentClosureRows({
@@ -533,7 +557,7 @@ export async function listPublicPostComments(input: {
   const db = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
   try {
     const post = await getPostById(db.client, input.threadRootPostId)
-    if (!post || post.community_id !== projection.community_id || post.status !== "published") {
+    if (!post || post.community_id !== projection.community_id || !isPubliclyReadableThreadRoot(post)) {
       throw notFoundError("Post not found")
     }
 
@@ -633,6 +657,10 @@ export async function listPublicCommentReplies(input: {
   try {
     const comment = await getCommentById(db.client, input.commentId)
     if (!comment) {
+      throw notFoundError("Comment not found")
+    }
+    const threadRootPost = await getPostById(db.client, projection.thread_root_post_id)
+    if (!threadRootPost || threadRootPost.community_id !== projection.community_id || !isPubliclyReadableThreadRoot(threadRootPost)) {
       throw notFoundError("Comment not found")
     }
 

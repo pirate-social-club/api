@@ -1,5 +1,5 @@
 import type { ActorContext, AuthenticatedEnv } from "../lib/auth-middleware"
-import { getUserRepository, type UserRepository } from "../lib/auth/repositories"
+import { getProfileRepository, getUserRepository, type ProfileRepository, type UserRepository } from "../lib/auth/repositories"
 import {
   getCommunityRepository,
   type CommunityRepository,
@@ -15,6 +15,7 @@ type CommunityRouteContext = {
   communityId: string
   communityRepository: CommunityRepository
   userRepository: UserRepository
+  profileRepository: ProfileRepository
 }
 
 type CommunityCreationRouteContext = {
@@ -43,6 +44,7 @@ export function getCommunityRouteContext(c: AuthenticatedRouteContext): Communit
     communityId: c.req.param("communityId"),
     communityRepository,
     userRepository: getUserRepository(c.env),
+    profileRepository: getProfileRepository(c.env),
   }
 }
 

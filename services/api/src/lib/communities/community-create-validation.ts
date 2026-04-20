@@ -69,6 +69,18 @@ export type UpdateCommunityReferenceLinksRequestBody = {
   }>
 }
 
+export type UpdateCommunityLabelPolicyRequestBody = {
+  label_enabled: boolean
+  require_label_on_top_level_posts: boolean
+  definitions: Array<{
+    label_id?: string | null
+    label: string
+    color_token?: string | null
+    status: "active" | "archived"
+    position?: number | null
+  }>
+}
+
 export type UpdateCommunityDonationPolicyRequestBody = {
   donation_policy_mode: "none" | "optional_creator_sidecar" | "fundraiser_default"
   donation_partner_id?: string | null
@@ -79,6 +91,19 @@ export type UpdateCommunityDonationPolicyRequestBody = {
     provider_partner_ref?: string | null
     image_url?: string | null
   } | null
+}
+
+export type UpdateCommunityRequestBody = {
+  display_name?: string | null
+  description?: string | null
+  avatar_ref?: string | null
+  banner_ref?: string | null
+  agent_posting_policy?: "disallow" | "review" | "allow_with_disclosure" | "allow" | null
+  agent_posting_scope?: "replies_only" | "top_level_and_replies" | null
+  agent_daily_post_cap?: number | null
+  agent_daily_reply_cap?: number | null
+  human_verification_lane?: "self" | "very" | null
+  accepted_agent_ownership_providers?: Array<"self_agent_id" | "clawkey"> | null
 }
 
 export function normalizeDonationPolicyMode(
@@ -433,6 +458,184 @@ export function assertUpdateCommunityReferenceLinksRequest(
     }
     if (link.label != null && typeof link.label !== "string") {
       throw badRequestError("Invalid reference link label")
+    }
+  }
+}
+
+export function assertUpdateCommunityLabelPolicyRequest(
+  body: UpdateCommunityLabelPolicyRequestBody | null,
+): asserts body is UpdateCommunityLabelPolicyRequestBody {
+  if (
+    !body
+    || typeof body.label_enabled !== "boolean"
+    || typeof body.require_label_on_top_level_posts !== "boolean"
+    || !Array.isArray(body.definitions)
+  ) {
+    throw badRequestError("Invalid community label policy payload")
+  }
+
+  const seenLabelIds = new Set<string>()
+  const seenActiveLabelNames = new Set<string>()
+
+  for (const definition of body.definitions) {
+    if (!definition || typeof definition !== "object") {
+      throw badRequestError("Invalid community label definition payload")
+    }
+    if (definition.label_id != null) {
+      if (typeof definition.label_id !== "string") {
+        throw badRequestError("Invalid label_id payload")
+      }
+
+      const normalizedLabelId = definition.label_id.trim()
+      if (normalizedLabelId.length === 0) {
+        throw badRequestError("label_id must not be blank")
+      }
+      if (seenLabelIds.has(normalizedLabelId)) {
+        throw badRequestError("Duplicate label_id payload")
+      }
+      seenLabelIds.add(normalizedLabelId)
+    }
+    if (typeof definition.label !== "string" || definition.label.trim().length === 0) {
+      throw badRequestError("Invalid label payload")
+    }
+    if (
+      definition.color_token != null
+      && (
+        typeof definition.color_token !== "string"
+        || !/^#[0-9a-fA-F]{6}$/u.test(definition.color_token.trim())
+      )
+    ) {
+      throw badRequestError("Invalid color_token payload")
+    }
+    if (definition.status !== "active" && definition.status !== "archived") {
+      throw badRequestError("Invalid label status payload")
+    }
+    if (
+      definition.position != null
+      && (!Number.isInteger(definition.position) || definition.position < 0)
+    ) {
+      throw badRequestError("Invalid label position payload")
+    }
+
+    if (definition.status === "active") {
+      const normalizedLabelName = definition.label.trim().toLowerCase()
+      if (seenActiveLabelNames.has(normalizedLabelName)) {
+        throw badRequestError("Label names must be unique")
+      }
+      seenActiveLabelNames.add(normalizedLabelName)
+    }
+  }
+}
+
+export function assertUpdateCommunityRequest(
+  body: UpdateCommunityRequestBody | null,
+): asserts body is UpdateCommunityRequestBody {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw badRequestError("Invalid community update payload")
+  }
+
+  const hasSupportedField =
+    "display_name" in body
+    || "description" in body
+    || "avatar_ref" in body
+    || "banner_ref" in body
+    || "agent_posting_policy" in body
+    || "agent_posting_scope" in body
+    || "agent_daily_post_cap" in body
+    || "agent_daily_reply_cap" in body
+    || "human_verification_lane" in body
+    || "accepted_agent_ownership_providers" in body
+
+  if (!hasSupportedField) {
+    throw badRequestError("No supported community settings were provided")
+  }
+
+  if (
+    body.display_name !== undefined
+    && body.display_name !== null
+    && (typeof body.display_name !== "string" || body.display_name.trim().length === 0)
+  ) {
+    throw badRequestError("Invalid display_name payload")
+  }
+
+  if (
+    body.description !== undefined
+    && body.description !== null
+    && typeof body.description !== "string"
+  ) {
+    throw badRequestError("Invalid description payload")
+  }
+
+  if (
+    body.avatar_ref !== undefined
+    && body.avatar_ref !== null
+    && typeof body.avatar_ref !== "string"
+  ) {
+    throw badRequestError("Invalid avatar_ref payload")
+  }
+
+  if (
+    body.banner_ref !== undefined
+    && body.banner_ref !== null
+    && typeof body.banner_ref !== "string"
+  ) {
+    throw badRequestError("Invalid banner_ref payload")
+  }
+
+  if (
+    body.agent_posting_policy !== undefined
+    && body.agent_posting_policy !== null
+    && body.agent_posting_policy !== "disallow"
+    && body.agent_posting_policy !== "review"
+    && body.agent_posting_policy !== "allow_with_disclosure"
+    && body.agent_posting_policy !== "allow"
+  ) {
+    throw badRequestError("Invalid agent_posting_policy payload")
+  }
+
+  if (
+    body.agent_posting_scope !== undefined
+    && body.agent_posting_scope !== null
+    && body.agent_posting_scope !== "replies_only"
+    && body.agent_posting_scope !== "top_level_and_replies"
+  ) {
+    throw badRequestError("Invalid agent_posting_scope payload")
+  }
+
+  if (
+    body.human_verification_lane !== undefined
+    && body.human_verification_lane !== null
+    && body.human_verification_lane !== "self"
+    && body.human_verification_lane !== "very"
+  ) {
+    throw badRequestError("Invalid human_verification_lane payload")
+  }
+
+  if (
+    body.agent_daily_post_cap !== undefined
+    && body.agent_daily_post_cap !== null
+    && (!Number.isInteger(body.agent_daily_post_cap) || body.agent_daily_post_cap < 1)
+  ) {
+    throw badRequestError("Invalid agent_daily_post_cap payload")
+  }
+
+  if (
+    body.agent_daily_reply_cap !== undefined
+    && body.agent_daily_reply_cap !== null
+    && (!Number.isInteger(body.agent_daily_reply_cap) || body.agent_daily_reply_cap < 1)
+  ) {
+    throw badRequestError("Invalid agent_daily_reply_cap payload")
+  }
+
+  if (body.accepted_agent_ownership_providers !== undefined && body.accepted_agent_ownership_providers !== null) {
+    if (!Array.isArray(body.accepted_agent_ownership_providers)) {
+      throw badRequestError("Invalid accepted_agent_ownership_providers payload")
+    }
+
+    for (const provider of body.accepted_agent_ownership_providers) {
+      if (provider !== "self_agent_id" && provider !== "clawkey") {
+        throw badRequestError("Invalid accepted_agent_ownership_providers payload")
+      }
     }
   }
 }

@@ -6,7 +6,7 @@ import { getLatestThreadSnapshotForRead } from "../comments/community-comment-st
 import { buildLocalizedPostResponse } from "../localization/post-localization-service"
 import { getPostById } from "../posts/community-post-store"
 import { getControlPlaneClient } from "../runtime-deps"
-import { requiredNumber, requiredString, rowValue, numberOrNull } from "../sql-row"
+import { numberOrNull, requiredNumber, requiredString, rowValue } from "../sql-row"
 import type { CommunityMembershipProjectionRow, CommunityRow } from "../auth/auth-db-rows"
 import type {
   Env,
@@ -20,6 +20,7 @@ type HomeFeedProjectionRow = {
   community_id: string
   source_post_id: string
   source_created_at: string
+  visibility: "public" | "members_only"
   upvote_count: number
   downvote_count: number
   comment_count: number
@@ -78,6 +79,7 @@ function toHomeFeedProjectionRow(row: unknown): HomeFeedProjectionRow {
     community_id: requiredString(row, "community_id"),
     source_post_id: requiredString(row, "source_post_id"),
     source_created_at: requiredString(row, "source_created_at"),
+    visibility: requiredString(row, "visibility") as HomeFeedProjectionRow["visibility"],
     upvote_count: requiredNumber(row, "upvote_count"),
     downvote_count: requiredNumber(row, "downvote_count"),
     comment_count: requiredNumber(row, "comment_count"),
@@ -121,38 +123,55 @@ function buildCommunitySummary(community: Awaited<ReturnType<CommunityRepository
   }
 }
 
-export function resolveHomeFeedCommunityIds(input: {
+export function resolveJoinedHomeFeedCommunityIds(input: {
   activeCommunities: CommunityRow[]
   membershipRows: CommunityMembershipProjectionRow[]
   userId: string | null
 }): string[] {
+  if (!input.userId) {
+    return []
+  }
+
   const memberCommunityIds = new Set<string>()
 
-  if (input.userId) {
-    for (const row of input.membershipRows) {
-      if (row.membership_state === "member") {
-        memberCommunityIds.add(row.community_id)
-      }
-    }
-
-    for (const community of input.activeCommunities) {
-      if (community.creator_user_id === input.userId) {
-        memberCommunityIds.add(community.community_id)
-      }
-    }
-  } else {
-    for (const community of input.activeCommunities) {
-      memberCommunityIds.add(community.community_id)
+  for (const row of input.membershipRows) {
+    if (row.membership_state === "member") {
+      memberCommunityIds.add(row.community_id)
     }
   }
 
-  if (input.userId && memberCommunityIds.size === 0) {
-    for (const community of input.activeCommunities) {
+  for (const community of input.activeCommunities) {
+    if (community.creator_user_id === input.userId) {
       memberCommunityIds.add(community.community_id)
     }
   }
 
   return [...memberCommunityIds]
+}
+
+export function resolveHomeFeedCommunityIds(input: {
+  activeCommunities: CommunityRow[]
+  membershipRows: CommunityMembershipProjectionRow[]
+  userId: string | null
+}): string[] {
+  if (!input.userId) {
+    return input.activeCommunities.map((community) => community.community_id)
+  }
+
+  const memberCommunityIds = resolveJoinedHomeFeedCommunityIds(input)
+
+  if (memberCommunityIds.length === 0) {
+    return input.activeCommunities.map((community) => community.community_id)
+  }
+
+  return memberCommunityIds
+}
+
+export function filterVisibleHomeFeedProjections(
+  rows: HomeFeedProjectionRow[],
+  memberCommunityIds: Set<string>,
+): HomeFeedProjectionRow[] {
+  return rows.filter((row) => row.visibility === "public" || memberCommunityIds.has(row.community_id))
 }
 
 export type CommunityAggregate = {
@@ -210,6 +229,11 @@ export async function listHomeFeed(input: {
   const membershipRows = input.userId
     ? await input.communityRepository.listCommunityMembershipProjectionsByUserId(input.userId)
     : []
+  const memberCommunityIdSet = new Set(resolveJoinedHomeFeedCommunityIds({
+    activeCommunities,
+    membershipRows,
+    userId: input.userId,
+  }))
   const communityIds = resolveHomeFeedCommunityIds({
     activeCommunities,
     membershipRows,
@@ -238,7 +262,7 @@ export async function listHomeFeed(input: {
   const placeholders = communityIds.map((_, index) => `?${index + 1}`).join(", ")
   const projectionResult = await controlPlaneClient.execute({
     sql: `
-      SELECT community_id, source_post_id, source_created_at, upvote_count, downvote_count, comment_count, like_count
+      SELECT community_id, source_post_id, source_created_at, visibility, upvote_count, downvote_count, comment_count, like_count
       FROM community_post_projections
       WHERE projection_version = 1
         AND status = 'published'
@@ -246,8 +270,10 @@ export async function listHomeFeed(input: {
     `,
     args: communityIds,
   })
-
-  const allRows = projectionResult.rows.map((row) => toHomeFeedProjectionRow(row))
+  const allRows = filterVisibleHomeFeedProjections(
+    projectionResult.rows.map((row) => toHomeFeedProjectionRow(row)),
+    memberCommunityIdSet,
+  )
 
   const timeRange = parseHomeFeedTimeRange(input.timeRange)
   const cutoffMs = getTimeRangeCutoffMs(timeRange, now)
@@ -324,6 +350,9 @@ export async function listHomeFeed(input: {
       for (const row of rows) {
         const post = await getPostById(db.client, row.source_post_id)
         if (!post || post.status !== "published") {
+          continue
+        }
+        if (post.visibility === "members_only" && !memberCommunityIdSet.has(communityId)) {
           continue
         }
         const threadSnapshot = await getLatestThreadSnapshotForRead(db.client, post.post_id)

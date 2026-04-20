@@ -1,5 +1,11 @@
 import { Hono } from "hono"
-import { authenticate, type AuthenticatedEnv } from "../lib/auth-middleware"
+import {
+  authenticate,
+  authenticateAgentDelegatedToken,
+  authenticateUserToken,
+  requireBearerToken,
+  type AuthenticatedEnv,
+} from "../lib/auth-middleware"
 import { registerCommunityCommerceRoutes } from "./communities-commerce"
 import { registerCommunityCoreRoutes } from "./communities-core"
 import { registerCommunitySongArtifactRoutes } from "./communities-song-artifacts"
@@ -7,13 +13,30 @@ import { registerCommunitySongArtifactRoutes } from "./communities-song-artifact
 const communities = new Hono<AuthenticatedEnv>()
 
 communities.use("*", async (c, next) => {
+  const pathname = new URL(c.req.url).pathname
   if (
     c.req.method === "GET"
-    && /^\/communities\/[^/]+\/song-artifact-uploads\/[^/]+\/content$/.test(new URL(c.req.url).pathname)
+    && /^\/communities\/[^/]+\/song-artifact-uploads\/[^/]+\/content$/.test(pathname)
   ) {
     await next()
     return
   }
+
+  const allowsAgentDelegation = c.req.method === "POST" && (
+    /^\/communities\/[^/]+\/posts$/.test(pathname)
+    || /^\/communities\/[^/]+\/posts\/[^/]+\/comments$/.test(pathname)
+  )
+  if (allowsAgentDelegation) {
+    const token = requireBearerToken(c.req.header("authorization"))
+    try {
+      c.set("actor", await authenticateUserToken({ env: c.env, token }))
+    } catch {
+      c.set("actor", await authenticateAgentDelegatedToken({ env: c.env, token }))
+    }
+    await next()
+    return
+  }
+
   return authenticate(c, next)
 })
 

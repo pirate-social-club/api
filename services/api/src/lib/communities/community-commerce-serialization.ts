@@ -6,6 +6,7 @@ import type {
 } from "../../types"
 import type {
   AssetRow,
+  ListingPolicySnapshot,
   ListingRow,
   PurchaseEntitlementRow,
   PurchaseQuoteRow,
@@ -49,7 +50,25 @@ export function serializeAsset(row: AssetRow, input?: { redactPrimaryForLocked?:
   }
 }
 
+export function parseListingPolicy(row: Pick<ListingRow, "regional_pricing_policy_json">): {
+  regionalPricingEnabled: boolean
+  donationPartnerId: string | null
+  donationSharePct: number | null
+} {
+  const parsed = parseJsonValue<ListingPolicySnapshot>(row.regional_pricing_policy_json, {})
+  return {
+    regionalPricingEnabled: parsed.regional_pricing_enabled === true,
+    donationPartnerId: typeof parsed.donation_partner_id === "string" && parsed.donation_partner_id.trim()
+      ? parsed.donation_partner_id
+      : null,
+    donationSharePct: typeof parsed.donation_share_pct === "number" && Number.isFinite(parsed.donation_share_pct)
+      ? parsed.donation_share_pct
+      : null,
+  }
+}
+
 export function serializeListing(row: ListingRow): CommunityListing {
+  const policy = parseListingPolicy(row)
   return {
     listing_id: row.listing_id,
     community_id: row.community_id,
@@ -58,10 +77,9 @@ export function serializeListing(row: ListingRow): CommunityListing {
     listing_mode: row.listing_mode,
     status: row.status,
     price_usd: row.price_usd,
-    regional_pricing_enabled: parseJsonValue<{ regional_pricing_enabled?: boolean }>(
-      row.regional_pricing_policy_json,
-      {},
-    ).regional_pricing_enabled === true,
+    regional_pricing_enabled: policy.regionalPricingEnabled,
+    donation_partner_id: policy.donationPartnerId,
+    donation_share_pct: policy.donationSharePct,
     created_by_user_id: row.created_by_user_id,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -122,6 +140,9 @@ export function serializePurchase(row: PurchaseRow, entitlement: PurchaseEntitle
     settlement_chain: settlementChain,
     settlement_token: row.settlement_token,
     settlement_tx_ref: row.settlement_tx_ref,
+    donation_partner_id: row.donation_partner_id,
+    donation_share_pct: row.donation_share_pct,
+    donation_amount_usd: row.donation_amount_usd,
     purchase_entitlement_id: entitlement.purchase_entitlement_id,
     entitlement_kind: entitlement.entitlement_kind,
     entitlement_target_ref: entitlement.target_ref,

@@ -14,6 +14,7 @@ import {
   parseCommunityTextMaterializePayload,
 } from "../localization/community-localization-service"
 import { getPostById } from "../posts/community-post-store"
+import { materializePostLabel } from "../posts/post-label-materializer"
 import { materializePostTranslation } from "../localization/post-translation-materializer"
 import {
   buildThreadFeedTopic,
@@ -55,6 +56,11 @@ type ThreadSnapshotPayload = {
 type PostTranslationPayload = {
   post_id?: string
   locale?: string | null
+}
+
+type PostLabelPayload = {
+  post_id?: string
+  reason?: "publish" | "edit"
 }
 
 type CommentTranslationPayload = {
@@ -120,6 +126,18 @@ function parsePostTranslationPayload(raw: string | null): PostTranslationPayload
   try {
     const parsed = JSON.parse(raw) as unknown
     return parsed && typeof parsed === "object" ? parsed as PostTranslationPayload : null
+  } catch {
+    return null
+  }
+}
+
+function parsePostLabelPayload(raw: string | null): PostLabelPayload | null {
+  if (!raw) {
+    return null
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    return parsed && typeof parsed === "object" ? parsed as PostLabelPayload : null
   } catch {
     return null
   }
@@ -388,6 +406,42 @@ async function runPostTranslationMaterialize(input: {
   }
 }
 
+async function runPostLabelMaterialize(input: {
+  job: CommunityJobRow
+  env: Env
+  communityRepository: CommunityJobRepository
+}): Promise<string | null> {
+  const db = await openCommunityDb(input.env, input.communityRepository, input.job.community_id)
+  try {
+    const payload = parsePostLabelPayload(input.job.payload_json)
+    const postId = payload?.post_id ?? input.job.subject_id
+    const post = await getPostById(db.client, postId)
+    if (!post) {
+      throw internalError("Post is missing for label materialize")
+    }
+
+    const communityRow = await input.communityRepository.getCommunityById(input.job.community_id)
+    if (!communityRow) {
+      throw internalError("Community is missing for label materialize")
+    }
+
+    const community = await loadCommunityProjection(
+      input.env,
+      input.communityRepository as CommunityRepository,
+      communityRow,
+    )
+
+    return await materializePostLabel({
+      executor: db.client,
+      env: input.env,
+      community,
+      post,
+    })
+  } finally {
+    db.close()
+  }
+}
+
 async function runCommentTranslationMaterialize(input: {
   job: CommunityJobRow
   env: Env
@@ -455,6 +509,8 @@ async function runCommunityJob(input: {
       return runCommentBodyMirror(input)
     case "thread_snapshot_publish":
       return runThreadSnapshotPublish(input)
+    case "post_label_materialize":
+      return runPostLabelMaterialize(input)
     case "post_translation_materialize":
       return runPostTranslationMaterialize(input)
     case "comment_translation_materialize":

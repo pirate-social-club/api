@@ -9,9 +9,11 @@ import {
   getActiveEntitlementForBuyer,
   getAssetRow,
   getEntitlementRowByPurchase,
+  getListingRowById,
   getPurchaseQuoteRow,
   getPurchaseRow,
   listPurchaseRows,
+  parseListingPolicy,
   parseJsonValue,
   requireCommunityMember,
   resolvePrimaryWalletAddress,
@@ -20,6 +22,7 @@ import {
 } from "./community-commerce-shared"
 import {
   parseQuoteSettlementAmountAtomic,
+  roundUsd,
   serializeSettlement,
 } from "./community-commerce-quote-helpers"
 import type {
@@ -63,6 +66,20 @@ export async function settleCommunityPurchase(input: {
     }
     const purchaseId = makeId("pur")
     const createdAt = nowIso()
+    const listing = await getListingRowById(db.client, input.communityId, quote.listing_id)
+    if (!listing) {
+      throw notFoundError("Listing not found")
+    }
+    const listingPolicy = parseListingPolicy(listing)
+    const donationSharePct = listingPolicy.donationPartnerId && (listingPolicy.donationSharePct ?? 0) > 0
+      ? listingPolicy.donationSharePct
+      : null
+    const donationAmountUsd = donationSharePct == null
+      ? null
+      : roundUsd(quote.final_price_usd * (donationSharePct / 100))
+    const donationPartnerId = donationSharePct != null && donationAmountUsd != null && donationAmountUsd > 0
+      ? listingPolicy.donationPartnerId
+      : null
     const settlementChain = parseJsonValue<CommunityPurchaseSettlement["settlement_chain"]>(
       quote.destination_settlement_chain_json,
       { chain_namespace: "eip155", chain_id: 1315, display_name: "Story Aeneid" },
@@ -116,8 +133,8 @@ export async function settleCommunityPurchase(input: {
         ) VALUES (
           ?1, ?2, ?3, ?4, NULL, ?5,
           ?6, ?7, ?8, ?9,
-          ?10, ?11, NULL, NULL,
-          NULL, NULL, ?12
+          ?10, ?11, ?12, ?13,
+          ?14, NULL, ?15
         )
       `,
       args: [
@@ -132,6 +149,9 @@ export async function settleCommunityPurchase(input: {
         JSON.stringify(settlementChain),
         quote.destination_settlement_token,
         canonicalSettlementTxRef,
+        donationPartnerId,
+        donationPartnerId ? donationSharePct : null,
+        donationPartnerId ? donationAmountUsd : null,
         createdAt,
       ],
     })

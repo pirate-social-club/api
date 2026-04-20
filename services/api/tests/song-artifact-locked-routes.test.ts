@@ -11,6 +11,12 @@ import {
   exchangeJwt,
   requestJson,
 } from "./song-artifact-test-helpers"
+import {
+  attachPrimaryWallet,
+  createOpenSongCommunity,
+  installLockedSongFetchMocks,
+  uploadSongArtifact,
+} from "./song-artifact-locked-test-helpers"
 
 let cleanup: (() => Promise<void>) | null = null
 let originalFetch: typeof fetch
@@ -29,260 +35,6 @@ afterEach(async () => {
 })
 
 describe("song artifact locked routes", () => {
-  test("allows locked song publication without Story runtime keys in local dev", async () => {
-    const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
-
-    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-      const request = input instanceof Request ? input : new Request(input, init)
-
-      if (request.url === "https://openrouter.test/api/v1/chat/completions") {
-        return Response.json({
-          choices: [
-            {
-              message: {
-                content: JSON.stringify({
-                  age_gate_rating: "safe",
-                  reason: "clean lyrics",
-                }),
-              },
-            },
-          ],
-        })
-      }
-
-      if (request.url === "https://acrcloud.test/v1/identify") {
-        return Response.json({
-          status: {
-            code: 0,
-            msg: "Success",
-          },
-          metadata: {
-            music: [],
-          },
-        })
-      }
-
-      if (request.url === "https://elevenlabs.test/forced-alignment") {
-        return Response.json({
-          provider: "elevenlabs",
-          segments: [
-            {
-              start_ms: 0,
-              end_ms: 1200,
-              text: "Paid line",
-            },
-          ],
-        })
-      }
-
-      if (!request.url.startsWith("https://s3.filebase.test/")) {
-        return await originalFetch(request)
-      }
-
-      if (request.method === "PUT") {
-        storedObjects.set(request.url, {
-          body: new Uint8Array(await request.arrayBuffer()),
-          contentType: request.headers.get("content-type") || "application/octet-stream",
-        })
-        return new Response(null, { status: 200 })
-      }
-
-      if (request.method === "GET") {
-        const stored = storedObjects.get(request.url)
-        if (!stored) {
-          return new Response("missing", { status: 404 })
-        }
-        return new Response(stored.body.slice().buffer, {
-          status: 200,
-          headers: {
-            "content-type": stored.contentType,
-            "content-length": String(stored.body.byteLength),
-          },
-        })
-      }
-
-      return new Response("unexpected method", { status: 500 })
-    }
-
-    const ctx = await createRouteTestContext({
-      FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
-      FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
-      FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
-      FILEBASE_S3_BUCKET_MUSIC: "pirate-song-media",
-      OPENROUTER_API_KEY: "test-openrouter-key",
-      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
-      OPENROUTER_MODEL: "google/gemini-3.1-flash-lite-preview",
-      ACRCLOUD_ACCESS_KEY: "test-acrcloud-access",
-      ACRCLOUD_ACCESS_SECRET: "test-acrcloud-secret",
-      ACRCLOUD_HOST: "acrcloud.test",
-      ELEVENLABS_API_KEY: "test-elevenlabs-key",
-      ELEVENLABS_FORCE_ALIGNMENT_URL: "https://elevenlabs.test/forced-alignment",
-    })
-    cleanup = ctx.cleanup
-
-    const author = await exchangeJwt(ctx.env, "song-author-local-story-fallback")
-    await completeUniqueHumanVerification(ctx.env, author.accessToken)
-
-    const attachedAt = new Date().toISOString()
-    await ctx.client.execute({
-      sql: `
-        INSERT INTO wallet_attachments (
-          wallet_attachment_id, user_id, chain_namespace, wallet_address_normalized, wallet_address_display,
-          source_provider, source_subject, attachment_kind, is_primary, status, attached_at, detached_at, created_at, updated_at
-        ) VALUES (
-          ?1, ?2, 'eip155:1315', ?3, ?3,
-          'test', ?2, 'external', 1, 'active', ?4, NULL, ?4, ?4
-        )
-      `,
-      args: ["wal_song_author_local_story_fallback", author.userId, "0xccc0000000000000000000000000000000000000", attachedAt],
-    })
-    await ctx.client.execute({
-      sql: `
-        UPDATE users
-        SET primary_wallet_attachment_id = ?2,
-            updated_at = ?3
-        WHERE user_id = ?1
-      `,
-      args: [author.userId, "wal_song_author_local_story_fallback", attachedAt],
-    })
-
-    const communityCreate = await requestJson("http://pirate.test/communities", {
-      display_name: "Local Story Fallback Club",
-      membership_mode: "open",
-      handle_policy: {
-        policy_template: "standard",
-      },
-    }, ctx.env, author.accessToken)
-    expect(communityCreate.status).toBe(202)
-    const communityCreateBody = await json(communityCreate) as {
-      community: {
-        community_id: string
-      }
-    }
-    const communityId = communityCreateBody.community.community_id
-
-    const primaryBytes = new Uint8Array([31, 32, 33, 34, 35, 36, 37, 38])
-    const uploadIntent = await requestJson(
-      `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
-      {
-        artifact_kind: "primary_audio",
-        mime_type: "audio/mpeg",
-        filename: "local-fallback-paid.mp3",
-        size_bytes: primaryBytes.byteLength,
-      },
-      ctx.env,
-      author.accessToken,
-    )
-    expect(uploadIntent.status).toBe(201)
-    const uploadIntentBody = await json(uploadIntent) as {
-      song_artifact_upload_id: string
-      upload_url: string
-      storage_ref: string
-    }
-
-    const uploadContent = await app.request(
-      uploadIntentBody.upload_url,
-      {
-        method: "PUT",
-        headers: {
-          authorization: `Bearer ${author.accessToken}`,
-          "content-type": "audio/mpeg",
-        },
-        body: primaryBytes.buffer,
-      },
-      ctx.env,
-    )
-    expect(uploadContent.status).toBe(200)
-
-    const bundleCreate = await requestJson(
-      `http://pirate.test/communities/${communityId}/song-artifacts`,
-      {
-        primary_audio: {
-          song_artifact_upload_id: uploadIntentBody.song_artifact_upload_id,
-        },
-        lyrics: "Paid line",
-      },
-      ctx.env,
-      author.accessToken,
-    )
-    expect(bundleCreate.status).toBe(201)
-    const bundleBody = await json(bundleCreate) as {
-      song_artifact_bundle_id: string
-    }
-
-    const lockedPostCreate = await requestJson(
-      `http://pirate.test/communities/${communityId}/posts`,
-      {
-        idempotency_key: "song-post-local-story-fallback-1",
-        post_type: "song",
-        identity_mode: "public",
-        title: "Local fallback paid anthem",
-        access_mode: "locked",
-        song_mode: "original",
-        rights_basis: "original",
-        song_artifact_bundle_id: bundleBody.song_artifact_bundle_id,
-      },
-      ctx.env,
-      author.accessToken,
-    )
-    expect(lockedPostCreate.status).toBe(201)
-    const lockedPostBody = await json(lockedPostCreate) as {
-      asset_id?: string | null
-      access_mode?: string | null
-    }
-    expect(lockedPostBody.access_mode).toBe("locked")
-    expect(typeof lockedPostBody.asset_id === "string" && lockedPostBody.asset_id.length > 0).toBe(true)
-
-    const assetId = String(lockedPostBody.asset_id)
-    const assetRead = await app.request(
-      `http://pirate.test/communities/${communityId}/assets/${assetId}`,
-      {
-        headers: {
-          authorization: `Bearer ${author.accessToken}`,
-        },
-      },
-      ctx.env,
-    )
-    expect(assetRead.status).toBe(200)
-    const assetBody = await json(assetRead) as {
-      access_mode: string
-      story_status: string
-      locked_delivery_status: string
-      primary_content_ref: string
-    }
-    expect(assetBody.access_mode).toBe("locked")
-    expect(assetBody.story_status).toBe("published")
-    expect(assetBody.locked_delivery_status).toBe("ready")
-    expect(assetBody.primary_content_ref).toBe(uploadIntentBody.storage_ref)
-
-    const encryptedContent = await app.request(
-      `http://pirate.test/communities/${communityId}/assets/${assetId}/content`,
-      {
-        headers: {
-          authorization: `Bearer ${author.accessToken}`,
-        },
-      },
-      ctx.env,
-    )
-    expect(encryptedContent.status).toBe(200)
-    expect(encryptedContent.headers.get("content-type")).toBe("application/octet-stream")
-    const ciphertext = new Uint8Array(await encryptedContent.arrayBuffer())
-    expect(ciphertext).not.toEqual(primaryBytes)
-
-    const listingCreate = await requestJson(
-      `http://pirate.test/communities/${communityId}/listings`,
-      {
-        asset_id: assetId,
-        price_usd: 6.5,
-        regional_pricing_enabled: false,
-        status: "active",
-      },
-      ctx.env,
-      author.accessToken,
-    )
-    expect(listingCreate.status).toBe(201)
-  })
-
   test("publishes a locked song, sells access, and decrypts the purchased asset", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
     const storySettlementCalls: Array<{
@@ -339,76 +91,10 @@ describe("song artifact locked routes", () => {
       },
     }))
 
-    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-      const request = input instanceof Request ? input : new Request(input, init)
-      if (request.url === "https://openrouter.test/api/v1/chat/completions") {
-        return Response.json({
-          choices: [
-            {
-              message: {
-                content: JSON.stringify({
-                  age_gate_rating: "safe",
-                  reason: "clean lyrics",
-                }),
-              },
-            },
-          ],
-        })
-      }
-
-      if (request.url === "https://acrcloud.test/v1/identify") {
-        return Response.json({
-          status: {
-            code: 0,
-            msg: "Success",
-          },
-          metadata: {
-            music: [],
-          },
-        })
-      }
-
-      if (request.url === "https://elevenlabs.test/forced-alignment") {
-        return Response.json({
-          provider: "elevenlabs",
-          segments: [
-            {
-              start_ms: 0,
-              end_ms: 1200,
-              text: "Paid line",
-            },
-          ],
-        })
-      }
-
-      if (!request.url.startsWith("https://s3.filebase.test/")) {
-        return await originalFetch(request)
-      }
-
-      if (request.method === "PUT") {
-        storedObjects.set(request.url, {
-          body: new Uint8Array(await request.arrayBuffer()),
-          contentType: request.headers.get("content-type") || "application/octet-stream",
-        })
-        return new Response(null, { status: 200 })
-      }
-
-      if (request.method === "GET") {
-        const stored = storedObjects.get(request.url)
-        if (!stored) {
-          return new Response("missing", { status: 404 })
-        }
-        return new Response(stored.body.slice().buffer, {
-          status: 200,
-          headers: {
-            "content-type": stored.contentType,
-            "content-length": String(stored.body.byteLength),
-          },
-        })
-      }
-
-      return new Response("unexpected method", { status: 500 })
-    }
+    installLockedSongFetchMocks({
+      originalFetch,
+      storedObjects,
+    })
 
     const ctx = await createRouteTestContext({
       FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
@@ -434,66 +120,45 @@ describe("song artifact locked routes", () => {
 
     const author = await exchangeJwt(ctx.env, "song-author-locked")
     const buyer = await exchangeJwt(ctx.env, "song-buyer-locked")
-    const attachedAt = new Date().toISOString()
-    await ctx.client.execute({
-      sql: `
-        INSERT INTO wallet_attachments (
-          wallet_attachment_id, user_id, chain_namespace, wallet_address_normalized, wallet_address_display,
-          source_provider, source_subject, attachment_kind, is_primary, status, attached_at, detached_at, created_at, updated_at
-        ) VALUES (
-          ?1, ?2, 'eip155:1315', ?3, ?3,
-          'test', ?2, 'external', 1, 'active', ?4, NULL, ?4, ?4
-        )
-      `,
-      args: ["wal_song_author_locked", author.userId, "0xaaa0000000000000000000000000000000000000", attachedAt],
+    await attachPrimaryWallet({
+      client: ctx.client,
+      userId: author.userId,
+      walletAttachmentId: "wal_song_author_locked",
+      walletAddress: "0xaaa0000000000000000000000000000000000000",
     })
-    await ctx.client.execute({
-      sql: `
-        UPDATE users
-        SET primary_wallet_attachment_id = ?2,
-            updated_at = ?3
-        WHERE user_id = ?1
-      `,
-      args: [author.userId, "wal_song_author_locked", attachedAt],
-    })
-    await ctx.client.execute({
-      sql: `
-        INSERT INTO wallet_attachments (
-          wallet_attachment_id, user_id, chain_namespace, wallet_address_normalized, wallet_address_display,
-          source_provider, source_subject, attachment_kind, is_primary, status, attached_at, detached_at, created_at, updated_at
-        ) VALUES (
-          ?1, ?2, 'eip155:1315', ?3, ?3,
-          'test', ?2, 'external', 1, 'active', ?4, NULL, ?4, ?4
-        )
-      `,
-      args: ["wal_song_buyer_locked", buyer.userId, "0xbbb0000000000000000000000000000000000000", attachedAt],
-    })
-    await ctx.client.execute({
-      sql: `
-        UPDATE users
-        SET primary_wallet_attachment_id = ?2,
-            updated_at = ?3
-        WHERE user_id = ?1
-      `,
-      args: [buyer.userId, "wal_song_buyer_locked", attachedAt],
+    await attachPrimaryWallet({
+      client: ctx.client,
+      userId: buyer.userId,
+      walletAttachmentId: "wal_song_buyer_locked",
+      walletAddress: "0xbbb0000000000000000000000000000000000000",
     })
     await completeUniqueHumanVerification(ctx.env, author.accessToken)
     await completeUniqueHumanVerification(ctx.env, buyer.accessToken)
 
-    const communityCreate = await requestJson("http://pirate.test/communities", {
-      display_name: "Paid Song Club",
-      membership_mode: "open",
-      handle_policy: {
-        policy_template: "standard",
+    const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "Paid Song Club")
+    const donationPolicyUpdate = await app.request(
+      `http://pirate.test/communities/${communityId}/donation-policy`,
+      {
+        method: "PATCH",
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          donation_policy_mode: "optional_creator_sidecar",
+          donation_partner_id: "don_charity_water",
+          donation_partner: {
+            donation_partner_id: "don_charity_water",
+            display_name: "charity: water",
+            provider: "endaoment",
+            provider_partner_ref: "charity-water",
+            image_url: "https://images.test/charity-water.png",
+          },
+        }),
       },
-    }, ctx.env, author.accessToken)
-    expect(communityCreate.status).toBe(202)
-    const communityCreateBody = await json(communityCreate) as {
-      community: {
-        community_id: string
-      }
-    }
-    const communityId = communityCreateBody.community.community_id
+      ctx.env,
+    )
+    expect(donationPolicyUpdate.status).toBe(200)
 
     const joinBuyer = await requestJson(
       `http://pirate.test/communities/${communityId}/join`,
@@ -506,63 +171,25 @@ describe("song artifact locked routes", () => {
     const primaryBytes = new Uint8Array([21, 22, 23, 24, 25, 26, 27, 28])
     const previewBytes = new Uint8Array([1, 2, 3, 4])
 
-    const primaryUploadIntent = await requestJson(
-      `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
-      {
-        artifact_kind: "primary_audio",
-        mime_type: "audio/mpeg",
-        filename: "paid-anthem.mp3",
-        size_bytes: primaryBytes.byteLength,
-      },
-      ctx.env,
-      author.accessToken,
-    )
-    const primaryUploadIntentBody = await json(primaryUploadIntent) as {
-      song_artifact_upload_id: string
-      storage_ref: string
-    }
+    const primaryUploadIntentBody = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "primary_audio",
+      mimeType: "audio/mpeg",
+      filename: "paid-anthem.mp3",
+      bytes: primaryBytes,
+    })
 
-    const previewUploadIntent = await requestJson(
-      `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
-      {
-        artifact_kind: "preview_audio",
-        mime_type: "audio/mpeg",
-        filename: "paid-anthem-preview.mp3",
-        size_bytes: previewBytes.byteLength,
-      },
-      ctx.env,
-      author.accessToken,
-    )
-    const previewUploadIntentBody = await json(previewUploadIntent) as {
-      song_artifact_upload_id: string
-      storage_ref: string
-    }
-
-    await app.request(
-      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${primaryUploadIntentBody.song_artifact_upload_id}/content`,
-      {
-        method: "PUT",
-        headers: {
-          authorization: `Bearer ${author.accessToken}`,
-          "content-type": "audio/mpeg",
-        },
-        body: primaryBytes.buffer,
-      },
-      ctx.env,
-    )
-
-    await app.request(
-      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${previewUploadIntentBody.song_artifact_upload_id}/content`,
-      {
-        method: "PUT",
-        headers: {
-          authorization: `Bearer ${author.accessToken}`,
-          "content-type": "audio/mpeg",
-        },
-        body: previewBytes.buffer,
-      },
-      ctx.env,
-    )
+    const previewUploadIntentBody = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "preview_audio",
+      mimeType: "audio/mpeg",
+      filename: "paid-anthem-preview.mp3",
+      bytes: previewBytes,
+    })
 
     const bundleCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifacts`,
@@ -684,6 +311,8 @@ describe("song artifact locked routes", () => {
         asset_id: assetId,
         price_usd: 4.99,
         regional_pricing_enabled: false,
+        donation_partner_id: "don_charity_water",
+        donation_share_pct: 10,
         status: "active",
       },
       ctx.env,
@@ -692,7 +321,11 @@ describe("song artifact locked routes", () => {
     expect(listingCreate.status).toBe(201)
     const listingBody = await json(listingCreate) as {
       listing_id: string
+      donation_partner_id: string | null
+      donation_share_pct: number | null
     }
+    expect(listingBody.donation_partner_id).toBe("don_charity_water")
+    expect(listingBody.donation_share_pct).toBe(10)
 
     const quoteCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/purchase-quotes`,
@@ -724,13 +357,20 @@ describe("song artifact locked routes", () => {
     )
     expect(purchaseSettle.status).toBe(201)
     const purchaseBody = await json(purchaseSettle) as {
+      purchase_id: string
       entitlement_kind: string
       entitlement_target_ref: string
       settlement_tx_ref: string
+      donation_partner_id: string | null
+      donation_share_pct: number | null
+      donation_amount_usd: number | null
     }
     expect(purchaseBody.entitlement_kind).toBe("asset_access")
     expect(purchaseBody.entitlement_target_ref).toBe(assetId)
     expect(purchaseBody.settlement_tx_ref).toBe("0xstorysettlementpaid0001")
+    expect(purchaseBody.donation_partner_id).toBe("don_charity_water")
+    expect(purchaseBody.donation_share_pct).toBe(10)
+    expect(purchaseBody.donation_amount_usd).toBe(0.5)
     expect(storySettlementCalls).toHaveLength(1)
     expect({
       amountWei: storySettlementCalls[0]?.amountWei,
@@ -743,6 +383,25 @@ describe("song artifact locked routes", () => {
     })
     expect(storySettlementCalls[0]?.purchaseRef).toMatch(/^0x[0-9a-f]{64}$/)
     expect(BigInt(storySettlementCalls[0]?.entitlementTokenId ?? "0") > 0n).toBe(true)
+
+    const purchaseRecord = await app.request(
+      `http://pirate.test/communities/${communityId}/purchases/${purchaseBody.purchase_id}`,
+      {
+        headers: {
+          authorization: `Bearer ${buyer.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(purchaseRecord.status).toBe(200)
+    const purchaseRecordBody = await json(purchaseRecord) as {
+      donation_partner_id: string | null
+      donation_share_pct: number | null
+      donation_amount_usd: number | null
+    }
+    expect(purchaseRecordBody.donation_partner_id).toBe("don_charity_water")
+    expect(purchaseRecordBody.donation_share_pct).toBe(10)
+    expect(purchaseRecordBody.donation_amount_usd).toBe(0.5)
 
     const buyerAccessAfterPurchase = await app.request(
       `http://pirate.test/communities/${communityId}/assets/${assetId}/access`,
