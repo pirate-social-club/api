@@ -1172,10 +1172,12 @@ export type LocalizedPostResponse = {
 };
 
 export type MembershipGateSummary = {
-  gate_type: "nationality" | "gender" | "unique_human" | "age_over_18" | "wallet_score";
+  gate_type: "nationality" | "gender" | "unique_human" | "age_over_18" | "wallet_score" | "erc721_holding";
   accepted_providers?: Array<"self" | "very" | "passport"> | null;
   required_value?: string | null;
   excluded_values?: Array<string> | null;
+  chain_namespace?: string | null;
+  contract_address?: string | null;
 };
 
 export type CommunityPreview = {
@@ -1207,6 +1209,7 @@ export type JoinEligibility = {
   missing_capabilities: Array<"unique_human" | "age_over_18" | "nationality" | "gender">;
   suggested_verification_provider?: "self" | "very" | null;
   suggested_verification_intent?: "community_join" | null;
+  failure_reason?: "missing_verification" | "provider_not_accepted" | "nationality_mismatch" | "gender_mismatch" | "erc721_holding_required" | "unsupported" | "banned" | null;
 };
 
 export type GateFailureDetails = {
@@ -1215,7 +1218,7 @@ export type GateFailureDetails = {
   missing_capabilities?: Array<string> | null;
   suggested_verification_provider?: "self" | "very" | null;
   suggested_verification_intent?: "community_join" | null;
-  failure_reason?: "missing_verification" | "provider_not_accepted" | "nationality_mismatch" | "gender_mismatch" | "unsupported" | "banned" | null;
+  failure_reason?: "missing_verification" | "provider_not_accepted" | "nationality_mismatch" | "gender_mismatch" | "erc721_holding_required" | "unsupported" | "banned" | null;
 };
 
 export type HomeFeedCommunitySummary = {
@@ -1911,8 +1914,8 @@ type GateRule = {
   gate_rule_id: string;
   community_id: string;
   scope: "membership" | "viewer" | "posting";
-  gate_family: "identity_proof";
-  gate_type: "unique_human" | "age_over_18" | "nationality" | "gender" | "sanctions_clear" | "wallet_score";
+  gate_family: "token_holding" | "identity_proof";
+  gate_type: "unique_human" | "age_over_18" | "nationality" | "gender" | "sanctions_clear" | "wallet_score" | "erc721_holding";
   proof_requirements?: Array<ProofRequirement> | null;
   chain_namespace?: string | null;
   gate_config?: (Record<string, unknown>) | null;
@@ -1923,8 +1926,8 @@ type GateRule = {
 
 type GateRuleInput = {
   scope: "membership" | "viewer" | "posting";
-  gate_family: "identity_proof";
-  gate_type: "unique_human" | "age_over_18" | "nationality" | "gender" | "sanctions_clear" | "wallet_score";
+  gate_family: "token_holding" | "identity_proof";
+  gate_type: "unique_human" | "age_over_18" | "nationality" | "gender" | "sanctions_clear" | "wallet_score" | "erc721_holding";
   proof_requirements?: Array<ProofRequirement> | null;
   chain_namespace?: string | null;
   gate_config?: (Record<string, unknown>) | null;
