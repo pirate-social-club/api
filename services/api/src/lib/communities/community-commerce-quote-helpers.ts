@@ -2,11 +2,13 @@ import { badRequestError } from "../errors"
 import type { UserRepository } from "../auth/repositories"
 import {
   parseJsonValue,
+  type PurchaseAllocationLegRow,
   type PurchaseEntitlementRow,
   type PurchaseQuoteRow,
   type PurchaseRow,
   toChainRefString,
 } from "./community-commerce-shared"
+import { serializePurchaseAllocationLeg } from "./community-commerce-allocation"
 import type {
   CommunityListing,
   CommunityMoneyPolicy,
@@ -60,6 +62,7 @@ export function serializeSettlement(
   purchase: PurchaseRow,
   entitlement: PurchaseEntitlementRow,
   quote: PurchaseQuoteRow,
+  allocations: PurchaseAllocationLegRow[],
 ): CommunityPurchaseSettlement {
   const settlementChain = parseJsonValue<CommunityPurchaseSettlement["settlement_chain"]>(
     purchase.settlement_chain,
@@ -80,6 +83,7 @@ export function serializeSettlement(
     settlement_chain_ref: toChainRefString(settlementChain),
     settlement_token: purchase.settlement_token,
     settlement_tx_ref: purchase.settlement_tx_ref,
+    allocations: allocations.map(serializePurchaseAllocationLeg),
     donation_partner_id: purchase.donation_partner_id,
     donation_share_pct: purchase.donation_share_pct,
     donation_amount_usd: purchase.donation_amount_usd,

@@ -10,6 +10,7 @@ import type {
   AssetRow,
   ListingRow,
   PurchaseEntitlementRow,
+  PurchaseAllocationLegRow,
   PurchaseQuoteRow,
   PurchaseRow,
 } from "./community-commerce-row-types"
@@ -210,7 +211,7 @@ export async function getPurchaseQuoteRow(
   const row = await executeFirst(client, {
     sql: `
       SELECT quote_id, community_id, listing_id, buyer_user_id, asset_id, live_room_id, base_price_usd,
-             pricing_tier, final_price_usd, funding_mode, funding_asset_json, source_chain_json,
+             pricing_tier, final_price_usd, allocation_snapshot_json, funding_mode, funding_asset_json, source_chain_json,
              route_provider, route_policy_compliant, route_live_available, policy_origin,
              destination_settlement_chain_json, destination_settlement_token, destination_settlement_amount_atomic,
              destination_settlement_decimals, treasury_denomination,
@@ -234,6 +235,7 @@ export async function getPurchaseQuoteRow(
     base_price_usd: Number(numberOrNull(row, "base_price_usd") ?? 0),
     pricing_tier: stringOrNull(row, "pricing_tier"),
     final_price_usd: Number(numberOrNull(row, "final_price_usd") ?? 0),
+    allocation_snapshot_json: stringOrNull(row, "allocation_snapshot_json"),
     funding_mode: requiredString(row, "funding_mode") as PurchaseQuoteRow["funding_mode"],
     funding_asset_json: stringOrNull(row, "funding_asset_json"),
     source_chain_json: stringOrNull(row, "source_chain_json"),
@@ -262,6 +264,40 @@ export async function getPurchaseQuoteRow(
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
   } : null
+}
+
+export async function listPurchaseAllocationLegRows(
+  client: Client,
+  purchaseId: string,
+): Promise<PurchaseAllocationLegRow[]> {
+  const result = await client.execute({
+    sql: `
+      SELECT purchase_allocation_leg_id, purchase_id, quote_id, community_id, recipient_type, recipient_ref,
+             waterfall_position, share_bps, amount_usd, settlement_strategy, status, settlement_ref,
+             failure_reason, created_at, updated_at
+      FROM purchase_allocation_legs
+      WHERE purchase_id = ?1
+      ORDER BY waterfall_position ASC, created_at ASC
+    `,
+    args: [purchaseId],
+  })
+  return result.rows.map((row) => ({
+    purchase_allocation_leg_id: requiredString(row, "purchase_allocation_leg_id"),
+    purchase_id: requiredString(row, "purchase_id"),
+    quote_id: requiredString(row, "quote_id"),
+    community_id: requiredString(row, "community_id"),
+    recipient_type: requiredString(row, "recipient_type") as PurchaseAllocationLegRow["recipient_type"],
+    recipient_ref: stringOrNull(row, "recipient_ref"),
+    waterfall_position: Number(numberOrNull(row, "waterfall_position") ?? 0),
+    share_bps: Number(numberOrNull(row, "share_bps") ?? 0),
+    amount_usd: Number(numberOrNull(row, "amount_usd") ?? 0),
+    settlement_strategy: requiredString(row, "settlement_strategy") as PurchaseAllocationLegRow["settlement_strategy"],
+    status: requiredString(row, "status") as PurchaseAllocationLegRow["status"],
+    settlement_ref: stringOrNull(row, "settlement_ref"),
+    failure_reason: stringOrNull(row, "failure_reason"),
+    created_at: requiredString(row, "created_at"),
+    updated_at: requiredString(row, "updated_at"),
+  }))
 }
 
 export async function listPurchaseRows(

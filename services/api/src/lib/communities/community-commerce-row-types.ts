@@ -4,6 +4,7 @@ import type {
   CommunityListing,
   CommunityMoneyPolicy,
   CommunityPurchase,
+  CommunityPurchaseQuote,
 } from "../../types"
 
 export type AssetRow = {
@@ -57,6 +58,10 @@ export type ListingPolicySnapshot = {
   donation_share_pct?: number | null
 }
 
+export type QuoteAllocationSnapshot = NonNullable<CommunityPurchaseQuote["allocation_snapshot"]>[number]
+
+export type PurchaseAllocationLeg = NonNullable<CommunityPurchase["allocations"]>[number]
+
 export type PurchaseQuoteRow = {
   quote_id: string
   community_id: string
@@ -67,6 +72,7 @@ export type PurchaseQuoteRow = {
   base_price_usd: number
   pricing_tier: string | null
   final_price_usd: number
+  allocation_snapshot_json: string | null
   funding_mode: "direct" | "routed"
   funding_asset_json: string | null
   source_chain_json: string | null
@@ -90,6 +96,24 @@ export type PurchaseQuoteRow = {
   expires_at: string
   consumed_at: string | null
   failed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type PurchaseAllocationLegRow = {
+  purchase_allocation_leg_id: string
+  purchase_id: string
+  quote_id: string
+  community_id: string
+  recipient_type: PurchaseAllocationLeg["recipient_type"]
+  recipient_ref: string | null
+  waterfall_position: number
+  share_bps: number
+  amount_usd: number
+  settlement_strategy: PurchaseAllocationLeg["settlement_strategy"]
+  status: PurchaseAllocationLeg["status"]
+  settlement_ref: string | null
+  failure_reason: string | null
   created_at: string
   updated_at: string
 }

@@ -329,7 +329,7 @@ export function serializeCommunity(row: CommunityRow, local: LocalCommunitySnaps
   const storedSettings = parseStoredCommunitySettings(local)
   const referenceLinks = parseStoredReferenceLinks(storedSettings)
   const labelPolicy = parseStoredLabelPolicy(storedSettings)
-  const donationPartner = parseStoredDonationPartner(storedSettings)
+  const donationPartner = local?.donation_partner ?? null
   const allowedDisclosedQualifiers = parseStoredAllowedDisclosedQualifiers(storedSettings)
   const allowQualifiersOnAnonymousPosts = parseStoredAllowQualifiersOnAnonymousPosts(storedSettings)
   const humanVerificationLane = parseStoredHumanVerificationLane(storedSettings, local)

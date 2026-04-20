@@ -6,6 +6,7 @@ import type { UserRepository } from "../auth/repositories"
 import {
   boolToSqlite,
   getListingRowById,
+  parseListingPolicy,
   getPurchaseQuoteRow,
   requireCommunityMember,
   serializeListing,
@@ -20,6 +21,10 @@ import {
   resolveRoutePolicy,
   resolveSettlementAmountSnapshot,
 } from "./community-commerce-quote-helpers"
+import {
+  assertExecutableQuoteAllocationSnapshot,
+  resolveQuoteAllocationSnapshot,
+} from "./community-commerce-allocation"
 import type {
   CommunityPurchaseQuote,
   CommunityPurchaseQuotePreflight,
@@ -102,11 +107,60 @@ export async function createCommunityPurchaseQuote(input: {
     const expiresAt = new Date(Date.now() + moneyPolicy.quote_ttl_seconds * 1000).toISOString()
     const verificationSnapshotRef = resolvedPrice.verificationSnapshot ? makeId("qvs") : null
     const settlementAmount = resolveSettlementAmountSnapshot(resolvedPrice.finalPriceUsd)
+    const listingPolicy = parseListingPolicy(listing)
+
+    if (listingPolicy.donationPartnerId) {
+      const communityResult = await db.client.execute({
+        sql: `
+          SELECT donation_policy_mode, donation_partner_status
+          FROM communities
+          WHERE community_id = ?1
+          LIMIT 1
+        `,
+        args: [input.communityId],
+      })
+      const communityRow = communityResult.rows[0]
+      const donationPolicyMode = String(communityRow?.donation_policy_mode ?? "none")
+      const donationPartnerStatus = String(communityRow?.donation_partner_status ?? "unconfigured")
+
+      if (donationPolicyMode === "none") {
+        throw eligibilityFailed("Community donation policy does not permit donations")
+      }
+      if (donationPartnerStatus !== "active") {
+        throw eligibilityFailed("Community donation partner is not active")
+      }
+
+      const partnerResult = await db.client.execute({
+        sql: `
+          SELECT status
+          FROM donation_partners
+          WHERE donation_partner_id = ?1
+          LIMIT 1
+        `,
+        args: [listingPolicy.donationPartnerId],
+      })
+      const partnerRow = partnerResult.rows[0]
+      if (!partnerRow || String(partnerRow.status) !== "active") {
+        throw eligibilityFailed("Donation partner is not available")
+      }
+
+      const sharePct = listingPolicy.donationSharePct
+      if (!Number.isInteger(sharePct) || sharePct == null || sharePct <= 0 || sharePct > 50) {
+        throw badRequestError("Invalid donation share")
+      }
+    }
+
+    const allocationSnapshot = assertExecutableQuoteAllocationSnapshot(
+      resolveQuoteAllocationSnapshot({
+        finalPriceUsd: resolvedPrice.finalPriceUsd,
+        listingPolicy,
+      }),
+    )
     await db.client.execute({
       sql: `
         INSERT INTO purchase_quotes (
           quote_id, community_id, listing_id, buyer_user_id, asset_id, live_room_id, base_price_usd,
-          pricing_tier, final_price_usd, funding_mode, funding_asset_json, source_chain_json,
+          pricing_tier, final_price_usd, allocation_snapshot_json, funding_mode, funding_asset_json, source_chain_json,
           route_provider, route_policy_compliant, route_live_available, policy_origin,
           destination_settlement_chain_json, destination_settlement_token, destination_settlement_amount_atomic,
           destination_settlement_decimals, treasury_denomination,
@@ -115,11 +169,11 @@ export async function createCommunityPurchaseQuote(input: {
           consumed_at, failed_at, created_at, updated_at
         ) VALUES (
           ?1, ?2, ?3, ?4, ?5, NULL, ?6,
-          ?7, ?8, ?9, ?10, ?11, ?12,
-          ?13, ?14, ?15, ?16, ?17, ?18,
-          ?19, ?20, ?21, ?22, ?23, ?24,
-          ?25, ?26, 'active', ?27, ?28,
-          NULL, NULL, ?27, ?27
+          ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+          ?14, ?15, ?16, ?17, ?18, ?19,
+          ?20, ?21, ?22, ?23, ?24, ?25,
+          ?26, ?27, 'active', ?28, ?29,
+          NULL, NULL, ?28, ?28
         )
       `,
       args: [
@@ -131,6 +185,7 @@ export async function createCommunityPurchaseQuote(input: {
         listing.price_usd,
         resolvedPrice.pricingTier,
         resolvedPrice.finalPriceUsd,
+        JSON.stringify(allocationSnapshot),
         route.fundingMode,
         input.body.funding_asset ? JSON.stringify(input.body.funding_asset) : null,
         input.body.source_chain ? JSON.stringify(input.body.source_chain) : null,

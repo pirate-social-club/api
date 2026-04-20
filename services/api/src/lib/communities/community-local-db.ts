@@ -66,6 +66,15 @@ export type LocalCommunitySnapshot = {
   donation_policy_mode: "none" | "optional_creator_sidecar" | "fundraiser_default"
   donation_partner_id: string | null
   donation_partner_status: "unconfigured" | "active" | "inactive"
+  donation_partner: {
+    donation_partner_id: string
+    display_name: string
+    provider: "endaoment"
+    provider_partner_ref: string | null
+    image_url: string | null
+    review_status: "pending" | "approved" | "rejected"
+    status: "active" | "paused" | "retired"
+  } | null
   governance_mode: "centralized" | "multisig" | "majeur"
   settings_json: string | null
   gate_rules: Array<{
@@ -464,6 +473,7 @@ export async function bootstrapLocalCommunityDb(input: LocalCommunityBootstrapIn
       donation_policy_mode: "none",
       donation_partner_id: null,
       donation_partner_status: "unconfigured",
+      donation_partner: null,
       governance_mode: input.governanceMode,
       settings_json: null,
       gate_rules: input.gateRules.map((rule, index) => ({

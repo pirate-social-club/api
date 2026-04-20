@@ -150,6 +150,7 @@ describe("openCommunityDb", () => {
     expect(beforeTableNames).not.toContain("comments")
     expect(beforeTableNames).not.toContain("comment_closure")
     expect(beforeTableNames).not.toContain("thread_snapshots")
+    expect(beforeTableNames).not.toContain("donation_partners")
 
     const beforePostColumns = await getTableColumns(databasePath, "posts")
     expect(beforePostColumns).not.toContain("comment_count")
@@ -171,6 +172,7 @@ describe("openCommunityDb", () => {
     expect(tableNames).toContain("comment_closure")
     expect(tableNames).toContain("comment_votes")
     expect(tableNames).toContain("thread_snapshots")
+    expect(tableNames).toContain("donation_partners")
 
     const postColumns = await getTableColumns(databasePath, "posts")
     expect(postColumns).toContain("comment_count")

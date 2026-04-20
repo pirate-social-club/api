@@ -196,6 +196,38 @@ export async function loadCommunityLocalSnapshot(
       updated_at: String(gateRow.updated_at),
     } satisfies LocalCommunitySnapshot["gate_rules"][number]))
 
+    let donation_partner: LocalCommunitySnapshot["donation_partner"] = null
+    if (row.donation_partner_id) {
+      const partnerResult = await db.client.execute({
+        sql: `
+          SELECT donation_partner_id, display_name, provider, provider_partner_ref,
+                 image_url, review_status, status
+          FROM donation_partners
+          WHERE donation_partner_id = ?1
+          LIMIT 1
+        `,
+        args: [String(row.donation_partner_id)],
+      })
+      const partnerRow = partnerResult.rows[0]
+      if (partnerRow) {
+        donation_partner = {
+          donation_partner_id: String(partnerRow.donation_partner_id),
+          display_name: String(partnerRow.display_name),
+          provider: partnerRow.provider === "endaoment" ? "endaoment" : "endaoment",
+          provider_partner_ref: partnerRow.provider_partner_ref == null ? null : String(partnerRow.provider_partner_ref),
+          image_url: partnerRow.image_url == null ? null : String(partnerRow.image_url),
+          review_status:
+            partnerRow.review_status === "pending" || partnerRow.review_status === "rejected"
+              ? partnerRow.review_status
+              : "approved",
+          status:
+            partnerRow.status === "paused" || partnerRow.status === "retired"
+              ? partnerRow.status
+              : "active",
+        }
+      }
+    }
+
     return {
       community_id: String(row.community_id),
       display_name: String(row.display_name),
@@ -212,6 +244,7 @@ export async function loadCommunityLocalSnapshot(
       donation_policy_mode: String(row.donation_policy_mode) as LocalCommunitySnapshot["donation_policy_mode"],
       donation_partner_id: row.donation_partner_id == null ? null : String(row.donation_partner_id),
       donation_partner_status: String(row.donation_partner_status) as LocalCommunitySnapshot["donation_partner_status"],
+      donation_partner,
       settings_json: row.settings_json == null ? null : String(row.settings_json),
       gate_rules,
       governance_mode: String(row.governance_mode) as LocalCommunitySnapshot["governance_mode"],

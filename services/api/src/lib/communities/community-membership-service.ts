@@ -23,7 +23,7 @@ import type { CommunityRepository } from "./db-community-repository"
 import { gateFailedWithDetails, internalError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import { loadCommunityProjection, requireOwnedCommunity } from "./community-create-service"
-import { parseCommunitySettingsJson, parseStoredDonationPartnerSummary } from "./community-create-validation"
+
 import { serializeJob } from "./community-serialization"
 import type {
   Community,
@@ -214,8 +214,39 @@ async function buildCommunityPreview(input: {
     args: [input.communityId],
   })
   const localRow = localResult.rows[0]
-  const settings = parseCommunitySettingsJson(localRow?.settings_json)
-  const donationPartner = parseStoredDonationPartnerSummary(settings)
+
+  let donationPartner: CommunityPreview["donation_partner"] = null
+  if (localRow?.donation_partner_id) {
+    const partnerResult = await input.client.execute({
+      sql: `
+        SELECT donation_partner_id, display_name, provider, provider_partner_ref,
+               image_url, review_status, status
+        FROM donation_partners
+        WHERE donation_partner_id = ?1
+        LIMIT 1
+      `,
+      args: [String(localRow.donation_partner_id)],
+    })
+    const partnerRow = partnerResult.rows[0]
+    if (partnerRow) {
+      donationPartner = {
+        donation_partner_id: String(partnerRow.donation_partner_id),
+        display_name: String(partnerRow.display_name),
+        provider: partnerRow.provider === "endaoment" ? "endaoment" : "endaoment",
+        provider_partner_ref: partnerRow.provider_partner_ref == null ? null : String(partnerRow.provider_partner_ref),
+        image_url: partnerRow.image_url == null ? null : String(partnerRow.image_url),
+        review_status:
+          partnerRow.review_status === "pending" || partnerRow.review_status === "rejected"
+            ? partnerRow.review_status
+            : "approved",
+        status:
+          partnerRow.status === "paused" || partnerRow.status === "retired"
+            ? partnerRow.status
+            : "active",
+      }
+    }
+  }
+
   const donationPolicyMode: CommunityPreview["donation_policy_mode"] =
     localRow?.donation_policy_mode === "optional_creator_sidecar" || localRow?.donation_policy_mode === "fundraiser_default"
       ? "optional_creator_sidecar"

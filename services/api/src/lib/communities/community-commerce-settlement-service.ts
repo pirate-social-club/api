@@ -9,11 +9,10 @@ import {
   getActiveEntitlementForBuyer,
   getAssetRow,
   getEntitlementRowByPurchase,
-  getListingRowById,
   getPurchaseQuoteRow,
   getPurchaseRow,
+  listPurchaseAllocationLegRows,
   listPurchaseRows,
-  parseListingPolicy,
   parseJsonValue,
   requireCommunityMember,
   resolvePrimaryWalletAddress,
@@ -22,9 +21,13 @@ import {
 } from "./community-commerce-shared"
 import {
   parseQuoteSettlementAmountAtomic,
-  roundUsd,
   serializeSettlement,
 } from "./community-commerce-quote-helpers"
+import {
+  assertExecutableQuoteAllocationSnapshot,
+  extractDonationCompatibilityFields,
+  parseQuoteAllocationSnapshot,
+} from "./community-commerce-allocation"
 import type {
   CommunityPurchase,
   CommunityPurchaseListResponse,
@@ -66,20 +69,16 @@ export async function settleCommunityPurchase(input: {
     }
     const purchaseId = makeId("pur")
     const createdAt = nowIso()
-    const listing = await getListingRowById(db.client, input.communityId, quote.listing_id)
-    if (!listing) {
-      throw notFoundError("Listing not found")
-    }
-    const listingPolicy = parseListingPolicy(listing)
-    const donationSharePct = listingPolicy.donationPartnerId && (listingPolicy.donationSharePct ?? 0) > 0
-      ? listingPolicy.donationSharePct
-      : null
-    const donationAmountUsd = donationSharePct == null
-      ? null
-      : roundUsd(quote.final_price_usd * (donationSharePct / 100))
-    const donationPartnerId = donationSharePct != null && donationAmountUsd != null && donationAmountUsd > 0
-      ? listingPolicy.donationPartnerId
-      : null
+    const allocationSnapshot = assertExecutableQuoteAllocationSnapshot(
+      parseQuoteAllocationSnapshot(quote.allocation_snapshot_json),
+    )
+    const {
+      donationAmountUsd,
+      donationPartnerId,
+      donationSharePct,
+    } = extractDonationCompatibilityFields({
+      allocationSnapshot,
+    })
     const settlementChain = parseJsonValue<CommunityPurchaseSettlement["settlement_chain"]>(
       quote.destination_settlement_chain_json,
       { chain_namespace: "eip155", chain_id: 1315, display_name: "Story Aeneid" },
@@ -155,6 +154,38 @@ export async function settleCommunityPurchase(input: {
         createdAt,
       ],
     })
+    for (const allocation of allocationSnapshot) {
+      const allocationStatus = allocation.settlement_strategy === "story_payout" ? "confirmed" : "pending"
+      const allocationSettlementRef = allocationStatus === "confirmed" ? canonicalSettlementTxRef : null
+      await db.client.execute({
+        sql: `
+          INSERT INTO purchase_allocation_legs (
+            purchase_allocation_leg_id, purchase_id, quote_id, community_id, recipient_type, recipient_ref,
+            waterfall_position, share_bps, amount_usd, settlement_strategy, status, settlement_ref,
+            failure_reason, created_at, updated_at
+          ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6,
+            ?7, ?8, ?9, ?10, ?11, ?12,
+            NULL, ?13, ?13
+          )
+        `,
+        args: [
+          makeId("pal"),
+          purchaseId,
+          quote.quote_id,
+          input.communityId,
+          allocation.recipient_type,
+          allocation.recipient_ref ?? null,
+          allocation.waterfall_position,
+          allocation.share_bps,
+          allocation.amount_usd,
+          allocation.settlement_strategy,
+          allocationStatus,
+          allocationSettlementRef,
+          createdAt,
+        ],
+      })
+    }
     let entitlement = quote.asset_id
       ? await getActiveEntitlementForBuyer(db.client, input.communityId, input.userId, quote.asset_id)
       : null
@@ -209,7 +240,8 @@ export async function settleCommunityPurchase(input: {
     if (!purchase) {
       throw notFoundError("Purchase not found")
     }
-    return serializeSettlement(purchase, entitlement, quote)
+    const allocations = await listPurchaseAllocationLegRows(db.client, purchaseId)
+    return serializeSettlement(purchase, entitlement, quote, allocations)
   } finally {
     db.close()
   }
@@ -229,7 +261,8 @@ export async function listCommunityPurchases(input: {
     for (const purchase of purchases) {
       const entitlement = await getEntitlementRowByPurchase(db.client, purchase.purchase_id)
       if (entitlement) {
-        items.push(serializePurchase(purchase, entitlement))
+        const allocations = await listPurchaseAllocationLegRows(db.client, purchase.purchase_id)
+        items.push(serializePurchase(purchase, entitlement, allocations))
       }
     }
     return { items }
@@ -256,7 +289,8 @@ export async function getCommunityPurchase(input: {
     if (!entitlement) {
       throw notFoundError("Purchase not found")
     }
-    return serializePurchase(purchase, entitlement)
+    const allocations = await listPurchaseAllocationLegRows(db.client, purchase.purchase_id)
+    return serializePurchase(purchase, entitlement, allocations)
   } finally {
     db.close()
   }

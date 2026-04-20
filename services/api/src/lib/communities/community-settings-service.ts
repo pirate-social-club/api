@@ -17,7 +17,6 @@ import {
   normalizeInputRules,
   parseCommunitySettingsJson,
   parseEndaomentLookupTerm,
-  parseStoredDonationPartnerSummary,
   requireOwnedCommunity,
   selectEndaomentOrganizationMatch,
   type UpdateCommunityDonationPolicyRequestBody,
@@ -299,33 +298,63 @@ export async function updateCommunityDonationPolicy(input: {
     const now = nowIso()
     const partnerStatus = donation_policy_mode === "none" ? "unconfigured" : "active"
     const resolvedPartnerId = donation_policy_mode === "none" ? null : (donation_partner_id ?? null)
-    const nextSettings = {
-      ...existingSettings,
-      donation_partner: donation_policy_mode === "none" || !donation_partner
-        ? null
-        : {
-          donation_partner_id: donation_partner.donation_partner_id,
-          display_name: donation_partner.display_name.trim(),
-          provider: "endaoment" as const,
-          provider_partner_ref: donation_partner.provider_partner_ref?.trim() || null,
-          image_url: donation_partner.image_url?.trim() || null,
-          review_status: "approved" as const,
-          status: "active" as const,
-        },
-    }
 
-    await db.client.execute({
-      sql: `
-        UPDATE communities
-        SET donation_policy_mode = ?2,
-            donation_partner_id = ?3,
-            donation_partner_status = ?4,
-            settings_json = ?5,
-            updated_at = ?6
-        WHERE community_id = ?1
-      `,
-      args: [input.communityId, donation_policy_mode, resolvedPartnerId, partnerStatus, JSON.stringify(nextSettings), now],
-    })
+    delete existingSettings.donation_partner
+    const nextSettings = { ...existingSettings }
+
+    const tx = await db.client.transaction("write")
+    try {
+      if (resolvedPartnerId && donation_partner) {
+        await tx.execute({
+          sql: `
+            INSERT INTO donation_partners (
+              donation_partner_id, display_name, provider, provider_partner_ref,
+              image_url, review_status, status, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
+            ON CONFLICT(donation_partner_id) DO UPDATE SET
+              display_name = excluded.display_name,
+              provider = excluded.provider,
+              provider_partner_ref = excluded.provider_partner_ref,
+              image_url = excluded.image_url,
+              review_status = excluded.review_status,
+              status = excluded.status,
+              updated_at = excluded.updated_at
+          `,
+          args: [
+            donation_partner.donation_partner_id.trim(),
+            donation_partner.display_name.trim(),
+            "endaoment",
+            donation_partner.provider_partner_ref?.trim() || null,
+            donation_partner.image_url?.trim() || null,
+            "approved",
+            "active",
+            now,
+          ],
+        })
+      }
+
+      await tx.execute({
+        sql: `
+          UPDATE communities
+          SET donation_policy_mode = ?2,
+              donation_partner_id = ?3,
+              donation_partner_status = ?4,
+              settings_json = ?5,
+              updated_at = ?6
+          WHERE community_id = ?1
+        `,
+        args: [input.communityId, donation_policy_mode, resolvedPartnerId, partnerStatus, JSON.stringify(nextSettings), now],
+      })
+
+      await tx.commit()
+    } catch (error) {
+      try {
+        await tx.rollback()
+      } catch {}
+      throw error
+    } finally {
+      tx.close()
+    }
   } finally {
     db.close()
   }
@@ -451,7 +480,7 @@ export async function getCommunityDonationPolicy(input: {
 }> {
   await requireOwnedCommunity(input.communityRepository, input.communityId, input.userId)
   const local = await loadCommunityLocalSnapshot(input.env, input.communityRepository, input.communityId)
-  const storedPartner = parseStoredDonationPartnerSummary(parseCommunitySettingsJson(local?.settings_json))
+  const partner = local?.donation_partner
 
   const mode = normalizeDonationPolicyMode(local?.donation_policy_mode)
   const status = local?.donation_partner_status ?? "unconfigured"
@@ -463,7 +492,7 @@ export async function getCommunityDonationPolicy(input: {
     donation_policy_mode: mode,
     donation_partner_status: status === "inactive" ? "paused" : status,
     donation_partner_id: partnerId,
-    donation_partner: partnerId && storedPartner ? storedPartner : null,
+    donation_partner: partnerId && partner ? partner : null,
     updated_at: updatedAt,
   }
 }

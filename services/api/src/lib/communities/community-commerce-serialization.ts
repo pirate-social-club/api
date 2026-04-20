@@ -9,9 +9,14 @@ import type {
   ListingPolicySnapshot,
   ListingRow,
   PurchaseEntitlementRow,
+  PurchaseAllocationLegRow,
   PurchaseQuoteRow,
   PurchaseRow,
 } from "./community-commerce-row-types"
+import {
+  parseQuoteAllocationSnapshot,
+  serializePurchaseAllocationLeg,
+} from "./community-commerce-allocation"
 import {
   parseJsonValue,
 } from "./community-commerce-row-types"
@@ -101,6 +106,7 @@ export function serializeQuote(row: PurchaseQuoteRow): CommunityPurchaseQuote {
     base_price_usd: row.base_price_usd,
     pricing_tier: row.pricing_tier,
     final_price_usd: row.final_price_usd,
+    allocation_snapshot: parseQuoteAllocationSnapshot(row.allocation_snapshot_json),
     funding_mode: row.funding_mode,
     funding_asset: parseJsonValue(row.funding_asset_json, null),
     source_chain: parseJsonValue(row.source_chain_json, null),
@@ -122,7 +128,11 @@ export function serializeQuote(row: PurchaseQuoteRow): CommunityPurchaseQuote {
   }
 }
 
-export function serializePurchase(row: PurchaseRow, entitlement: PurchaseEntitlementRow): CommunityPurchase {
+export function serializePurchase(
+  row: PurchaseRow,
+  entitlement: PurchaseEntitlementRow,
+  allocations: PurchaseAllocationLegRow[],
+): CommunityPurchase {
   const settlementChain = parseJsonValue<CommunityPurchase["settlement_chain"]>(
     row.settlement_chain,
     { chain_namespace: "eip155", chain_id: 1315, display_name: "Story Aeneid" },
@@ -140,6 +150,7 @@ export function serializePurchase(row: PurchaseRow, entitlement: PurchaseEntitle
     settlement_chain: settlementChain,
     settlement_token: row.settlement_token,
     settlement_tx_ref: row.settlement_tx_ref,
+    allocations: allocations.map(serializePurchaseAllocationLeg),
     donation_partner_id: row.donation_partner_id,
     donation_share_pct: row.donation_share_pct,
     donation_amount_usd: row.donation_amount_usd,
