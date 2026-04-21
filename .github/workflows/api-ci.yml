@@ -26,20 +26,9 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Check out shared workspace fixtures
-        uses: actions/checkout@v4
-        with:
-          repository: pirate-social-club/core
-          path: core-shared
-          sparse-checkout: |
-            db
-            specs
-          sparse-checkout-cone-mode: false
-
-      - name: Link shared workspace fixtures
+      - name: Link shared database fixtures
         run: |
-          ln -sfn "$GITHUB_WORKSPACE/core-shared/db" "$GITHUB_WORKSPACE/../db"
-          ln -sfn "$GITHUB_WORKSPACE/core-shared/specs" "$GITHUB_WORKSPACE/../specs"
+          ln -sfn "$GITHUB_WORKSPACE/services/api/test-fixtures/db" "$GITHUB_WORKSPACE/../db"
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
