@@ -4,6 +4,7 @@ import { setErc721OwnershipCheckerForTests } from "../src/lib/communities/commun
 import {
   clearErc721InventoryMatchCacheForTests,
   evaluateErc721InventoryMatch,
+  normalizeInventoryMetadata,
   setErc721InventoryMatcherForTests,
 } from "../src/lib/communities/community-token-inventory-gates"
 import { buildDefaultVerificationCapabilities } from "../src/lib/verification/verification-capabilities"
@@ -145,6 +146,50 @@ describe("erc721 gate evaluation", () => {
     expect(summary.asset_filter_label).toBe("pokemon charizard")
   })
 
+  test("builds erc721 inventory match summary from canonical match config", () => {
+    const summary = buildMembershipGateSummary(makeCourtyardInventoryRule({
+      asset_filter: undefined,
+      match: {
+        category: "watch",
+        brand: "Rolex",
+        model: "Submariner",
+        reference: "124060",
+      },
+    }))
+    expect(summary.gate_type).toBe("erc721_inventory_match")
+    expect(summary.inventory_provider).toBe("courtyard")
+    expect(summary.min_quantity).toBe(3)
+    expect(summary.asset_category).toBe("watch")
+    expect(summary.asset_filter_label).toBe("rolex submariner 124060")
+  })
+
+  test("normalizes Alchemy/OpenSea-style metadata into Courtyard inventory facts", () => {
+    const facts = normalizeInventoryMetadata({
+      collection: "Courtyard Watches",
+      name: "Rolex Submariner No Date",
+      attributes: [
+        { trait_type: "Brand", value: "Rolex" },
+        { trait_type: "Model", value: "Submariner" },
+        { trait_type: "Reference", value: "124060" },
+        { trait_type: "Condition", value: "Unworn" },
+      ],
+    })
+
+    expect(facts).toEqual({
+      category: "watch",
+      franchise: null,
+      subject: null,
+      brand: "rolex",
+      model: "submariner",
+      reference: "124060",
+      set: null,
+      year: null,
+      grader: null,
+      grade: null,
+      condition: "unworn",
+    })
+  })
+
   test("returns erc721_inventory_match_required when attached wallets do not hold enough matching assets", async () => {
     setErc721InventoryMatcherForTests(async ({ walletAddresses }) => {
       expect(walletAddresses).toEqual([
@@ -221,7 +266,7 @@ describe("erc721 gate evaluation", () => {
     })
   })
 
-  test("rejects Courtyard assets when the observed schema no longer identifies a supported category", async () => {
+  test("normalizes TCG metadata without relying on the collection name containing card", async () => {
     globalThis.fetch = async () => new Response(JSON.stringify({
       total: 1,
       assets: [{
@@ -245,8 +290,47 @@ describe("erc721 gate evaluation", () => {
       walletAttachments,
     })
 
-    expect(result.satisfied).toBe(false)
-    expect(result.mismatchReasons).toContain("erc721_inventory_match_required")
+    expect(result.satisfied).toBe(true)
+    expect(result.mismatchReasons).toEqual([])
+  })
+
+  test("evaluates canonical match config against normalized watch metadata", async () => {
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      total: 1,
+      assets: [{
+        chain: "polygon",
+        collection: "Watches",
+        contract: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+        owner: { address: "0x3333333333333333333333333333333333333333" },
+        title: "Rolex Submariner No Date",
+        token_id: "watch-token",
+        attributes: [
+          { name: "Brand", value: "Rolex" },
+          { name: "Model", value: "Submariner" },
+          { name: "Reference", value: "124060" },
+          { name: "Condition", value: "Unworn" },
+        ],
+      }],
+    })) as Response
+
+    const result = await evaluateMembershipGateRules({
+      env: { COURTYARD_INVENTORY_CACHE_TTL_MS: "0" },
+      rules: [makeCourtyardInventoryRule({
+        min_quantity: 1,
+        asset_filter: undefined,
+        match: {
+          category: "watch",
+          brand: "Rolex",
+          model: "Submariner",
+          reference: "124060",
+        },
+      })],
+      user: makeUser(),
+      walletAttachments,
+    })
+
+    expect(result.satisfied).toBe(true)
+    expect(result.mismatchReasons).toEqual([])
   })
 
   test("deduplicates the same Courtyard token across Polygon wallets", async () => {

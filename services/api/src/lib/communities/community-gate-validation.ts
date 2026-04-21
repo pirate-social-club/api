@@ -3,8 +3,9 @@ import { eligibilityFailed } from "../errors"
 import { normalizeIdentityCountryCode, normalizeIdentityCountryCodes } from "../identity/country-codes"
 import { normalizeEthereumAddress } from "./community-token-gates"
 import {
+  getInventoryMatchKeys,
   isAllowedCourtyardRegistry,
-  normalizeAssetFilter,
+  normalizeAssetMatch,
   normalizeInventoryText,
 } from "./community-token-inventory-gates"
 
@@ -108,20 +109,21 @@ function assertErc721InventoryMatchGate(rule: GateRuleInput, config: Record<stri
   if (!Number.isInteger(config.min_quantity) || (config.min_quantity as number) < 1 || (config.min_quantity as number) > 100) {
     throw eligibilityFailed("ERC-721 inventory gates require min_quantity from 1 to 100")
   }
-  if (!config.asset_filter || typeof config.asset_filter !== "object" || Array.isArray(config.asset_filter)) {
-    throw eligibilityFailed("ERC-721 inventory gates require asset_filter")
+  const rawMatch = config.match ?? config.asset_filter
+  if (!rawMatch || typeof rawMatch !== "object" || Array.isArray(rawMatch)) {
+    throw eligibilityFailed("ERC-721 inventory gates require match")
   }
-  const filter = config.asset_filter as Record<string, unknown>
-  const allowedKeys = new Set(["category", "franchise", "subject", "brand", "model"])
+  const filter = rawMatch as Record<string, unknown>
+  const allowedKeys = new Set(getInventoryMatchKeys())
   const invalidKeys = Object.keys(filter).filter((key) => !allowedKeys.has(key))
   if (invalidKeys.length > 0) {
-    throw eligibilityFailed(`ERC-721 inventory asset_filter has unsupported keys: ${invalidKeys.join(", ")}`)
+    throw eligibilityFailed(`ERC-721 inventory match has unsupported keys: ${invalidKeys.join(", ")}`)
   }
-  if (!normalizeAssetFilter(config.asset_filter)) {
-    throw eligibilityFailed("ERC-721 inventory asset_filter must include category plus a supported matching field")
+  if (!normalizeAssetMatch(rawMatch)) {
+    throw eligibilityFailed("ERC-721 inventory match must include category plus a supported matching field")
   }
   if (Object.values(filter).some((value) => typeof value === "string" && normalizeInventoryText(value) == null)) {
-    throw eligibilityFailed("ERC-721 inventory asset_filter values must be non-empty strings")
+    throw eligibilityFailed("ERC-721 inventory match values must be non-empty strings")
   }
 }
 

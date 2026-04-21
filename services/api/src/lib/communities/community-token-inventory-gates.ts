@@ -4,20 +4,27 @@ import { normalizeEthereumAddress } from "./community-token-gates"
 
 export type Erc721InventoryProvider = "courtyard"
 export type Erc721InventoryAssetCategory = "trading_card" | "watch"
-export type Erc721InventoryAssetFilter = {
+export type Erc721InventoryAssetMatch = {
   category?: Erc721InventoryAssetCategory
   franchise?: string
   subject?: string
   brand?: string
   model?: string
+  reference?: string
+  set?: string
+  year?: string
+  grader?: string
+  grade?: string
+  condition?: string
 }
+export type Erc721InventoryAssetFilter = Erc721InventoryAssetMatch
 
 export type Erc721InventoryMatchConfig = {
   chainNamespace: "eip155:137"
   contractAddress: string
   inventoryProvider: Erc721InventoryProvider
   minQuantity: number
-  assetFilter: Erc721InventoryAssetFilter
+  assetFilter: Erc721InventoryAssetMatch
 }
 
 export type Erc721InventoryAsset = {
@@ -30,10 +37,16 @@ export type Erc721InventoryAsset = {
   subject: string | null
   brand: string | null
   model: string | null
+  reference: string | null
+  set: string | null
+  year: string | null
+  grader: string | null
+  grade: string | null
+  condition: string | null
 }
 
 type CourtyardAsset = {
-  attributes?: Array<{ name?: string; value?: string }>
+  attributes?: RawInventoryAttribute[]
   chain?: string
   collection?: string
   contract?: string
@@ -41,6 +54,25 @@ type CourtyardAsset = {
   title?: string
   token_id?: string
 }
+
+export type RawInventoryAttribute = {
+  name?: string
+  trait_type?: string
+  traitType?: string
+  value?: unknown
+}
+
+export type RawInventoryMetadata = {
+  attributes?: RawInventoryAttribute[]
+  collection?: string
+  title?: string
+  name?: string
+}
+
+type NormalizedInventoryFacts = Omit<
+  Erc721InventoryAsset,
+  "chainNamespace" | "contractAddress" | "tokenId" | "ownerAddress"
+>
 
 type CourtyardInventoryCacheEntry = {
   matchedQuantity: number
@@ -122,7 +154,7 @@ export function readInventoryMatchConfig(gateConfig: Record<string, unknown> | n
   if (!Number.isInteger(gateConfig.min_quantity) || (gateConfig.min_quantity as number) < 1 || (gateConfig.min_quantity as number) > 100) {
     return null
   }
-  const assetFilter = normalizeAssetFilter(gateConfig.asset_filter)
+  const assetFilter = normalizeAssetMatch(gateConfig.match ?? gateConfig.asset_filter)
   if (!assetFilter) {
     return null
   }
@@ -136,13 +168,31 @@ export function readInventoryMatchConfig(gateConfig: Record<string, unknown> | n
   }
 }
 
-export function normalizeAssetFilter(value: unknown): Erc721InventoryAssetFilter | null {
+const INVENTORY_MATCH_KEYS = [
+  "category",
+  "franchise",
+  "subject",
+  "brand",
+  "model",
+  "reference",
+  "set",
+  "year",
+  "grader",
+  "grade",
+  "condition",
+] as const
+
+export function getInventoryMatchKeys(): readonly string[] {
+  return INVENTORY_MATCH_KEYS
+}
+
+export function normalizeAssetMatch(value: unknown): Erc721InventoryAssetMatch | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null
   }
 
   const raw = value as Record<string, unknown>
-  const allowedKeys = new Set(["category", "franchise", "subject", "brand", "model"])
+  const allowedKeys = new Set<string>(INVENTORY_MATCH_KEYS)
   if (Object.keys(raw).some((key) => !allowedKeys.has(key))) {
     return null
   }
@@ -152,15 +202,14 @@ export function normalizeAssetFilter(value: unknown): Erc721InventoryAssetFilter
     return null
   }
 
-  const filter: Erc721InventoryAssetFilter = { category }
-  const franchise = normalizeInventoryText(raw.franchise)
-  const subject = normalizeInventoryText(raw.subject)
-  const brand = normalizeInventoryText(raw.brand)
-  const model = normalizeInventoryText(raw.model)
-  if (franchise) filter.franchise = franchise
-  if (subject) filter.subject = subject
-  if (brand) filter.brand = brand
-  if (model) filter.model = model
+  const filter: Erc721InventoryAssetMatch = { category }
+  for (const key of INVENTORY_MATCH_KEYS) {
+    if (key === "category") continue
+    const normalized = normalizeInventoryText(raw[key])
+    if (normalized) {
+      filter[key] = normalized
+    }
+  }
 
   if (Object.keys(filter).length <= 1) {
     return null
@@ -175,24 +224,75 @@ export function normalizeAssetFilter(value: unknown): Erc721InventoryAssetFilter
   return filter
 }
 
-export function formatAssetFilterLabel(filter: Erc721InventoryAssetFilter): string {
-  const values = [
-    filter.franchise,
-    filter.subject,
-    filter.brand,
-    filter.model,
-  ].filter((value): value is string => Boolean(value))
+export const normalizeAssetFilter = normalizeAssetMatch
+
+export function formatAssetFilterLabel(filter: Erc721InventoryAssetMatch): string {
+  const values = INVENTORY_MATCH_KEYS
+    .filter((key) => key !== "category")
+    .map((key) => filter[key])
+    .filter((value): value is string => Boolean(value))
   return values.join(" ")
 }
 
-function readCourtyardAttributes(asset: CourtyardAsset): Record<string, string> {
+function readRawInventoryAttributes(attributes: RawInventoryAttribute[] | undefined): Record<string, string> {
   const values: Record<string, string> = {}
-  for (const attribute of asset.attributes ?? []) {
-    const key = normalizeInventoryText(attribute.name)
+  for (const attribute of attributes ?? []) {
+    const key = normalizeInventoryText(attribute.name ?? attribute.trait_type ?? attribute.traitType)
     const value = normalizeInventoryText(attribute.value)
     if (key && value) values[key] = value
   }
   return values
+}
+
+function firstAttribute(attributes: Record<string, string>, keys: string[]): string | null {
+  for (const key of keys) {
+    const normalizedKey = normalizeInventoryText(key)
+    if (normalizedKey && attributes[normalizedKey]) {
+      return attributes[normalizedKey]
+    }
+  }
+  return null
+}
+
+export function normalizeInventoryMetadata(input: RawInventoryMetadata): NormalizedInventoryFacts {
+  const attributes = readRawInventoryAttributes(input.attributes)
+  const collection = normalizeInventoryText(input.collection) ?? ""
+  const title = normalizeInventoryText(input.title ?? input.name) ?? ""
+  const categoryAttribute = firstAttribute(attributes, ["category", "asset category", "type"])
+  const subject = firstAttribute(attributes, ["title/subject", "title/pkmn", "subject", "character", "player"])
+  const brand = firstAttribute(attributes, ["brand", "manufacturer", "maker"])
+  const model = firstAttribute(attributes, ["model"])
+  const reference = firstAttribute(attributes, ["reference", "ref", "reference number"])
+  const set = firstAttribute(attributes, ["set", "card set"])
+  const year = firstAttribute(attributes, ["year"])
+  const grader = firstAttribute(attributes, ["grader", "grading company"])
+  const grade = firstAttribute(attributes, ["grade"])
+  const condition = firstAttribute(attributes, ["condition"])
+  const category = collection.includes("watch")
+    || title.includes("watch")
+    || categoryAttribute === "watches"
+    || Boolean(brand && (model || reference))
+    ? "watch"
+    : collection.includes("card")
+      || collection.includes("booster")
+      || collection.includes("tcg")
+      || Boolean(subject || set || grader || grade)
+      ? "trading_card"
+      : "unknown"
+
+  return {
+    category,
+    franchise: category === "trading_card" ? categoryAttribute ?? null : null,
+    subject,
+    brand,
+    model,
+    reference,
+    set,
+    year,
+    grader,
+    grade,
+    condition,
+  }
 }
 
 // Courtyard eligibility depends on this observed /index/ownership shape:
@@ -206,35 +306,30 @@ function normalizeCourtyardAsset(asset: CourtyardAsset): Erc721InventoryAsset | 
     return null
   }
 
-  const attributes = readCourtyardAttributes(asset)
-  const collection = normalizeInventoryText(asset.collection) ?? ""
-  const title = normalizeInventoryText(asset.title) ?? ""
   const chainNamespace = asset.chain === "polygon" ? "eip155:137" : asset.chain ?? "unknown"
-  const category = collection.includes("watch") || title.includes("watch")
-    ? "watch"
-    : collection.includes("card") || collection.includes("booster") || attributes.grader || attributes.grade
-      ? "trading_card"
-      : "unknown"
+  const facts = normalizeInventoryMetadata(asset)
 
   return {
     chainNamespace,
     contractAddress,
     tokenId: asset.token_id,
     ownerAddress,
-    category,
-    franchise: category === "trading_card" ? attributes.category ?? null : null,
-    subject: attributes["title/subject"] ?? attributes["title/pkmn"] ?? null,
-    brand: attributes.brand ?? null,
-    model: attributes.model ?? attributes.reference ?? null,
+    ...facts,
   }
 }
 
-function assetMatchesFilter(asset: Erc721InventoryAsset, filter: Erc721InventoryAssetFilter): boolean {
+function assetMatchesFilter(asset: Erc721InventoryAsset, filter: Erc721InventoryAssetMatch): boolean {
   if (filter.category && asset.category !== filter.category) return false
   if (filter.franchise && asset.franchise !== filter.franchise) return false
   if (filter.subject && !asset.subject?.includes(filter.subject)) return false
   if (filter.brand && asset.brand !== filter.brand) return false
   if (filter.model && !asset.model?.includes(filter.model)) return false
+  if (filter.reference && asset.reference !== filter.reference) return false
+  if (filter.set && asset.set !== filter.set) return false
+  if (filter.year && asset.year !== filter.year) return false
+  if (filter.grader && asset.grader !== filter.grader) return false
+  if (filter.grade && asset.grade !== filter.grade) return false
+  if (filter.condition && asset.condition !== filter.condition) return false
   return true
 }
 

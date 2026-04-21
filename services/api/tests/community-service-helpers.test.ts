@@ -207,6 +207,30 @@ describe("community-service helpers", () => {
       ).not.toThrow()
     })
 
+    test("allows Courtyard erc721 inventory match gate with canonical match config", () => {
+      expect(() =>
+        assertCreateRequest(makeCreateBody({
+          gate_rules: [{
+            scope: "membership",
+            gate_family: "token_holding",
+            gate_type: "erc721_inventory_match",
+            chain_namespace: "eip155:137",
+            gate_config: {
+              contract_address: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+              inventory_provider: "courtyard",
+              min_quantity: 5,
+              match: {
+                category: "watch",
+                brand: "rolex",
+                model: "submariner",
+                reference: "124060",
+              },
+            },
+          }],
+        }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+      ).not.toThrow()
+    })
+
     test("rejects Courtyard inventory gate outside Polygon", () => {
       expect(() =>
         assertCreateRequest(makeCreateBody({
@@ -242,7 +266,7 @@ describe("community-service helpers", () => {
             },
           }],
         }), { uniqueHumanVerified: true, ageOver18Verified: false }),
-      ).toThrow("ERC-721 inventory asset_filter has unsupported keys: regex")
+      ).toThrow("ERC-721 inventory match has unsupported keys: regex")
     })
 
     test("rejects Courtyard inventory gate with invalid quantity", () => {
@@ -280,7 +304,7 @@ describe("community-service helpers", () => {
             },
           }],
         }), { uniqueHumanVerified: true, ageOver18Verified: false }),
-      ).toThrow("ERC-721 inventory asset_filter must include category plus a supported matching field")
+      ).toThrow("ERC-721 inventory match must include category plus a supported matching field")
     })
 
     test("rejects erc721_holding gate with invalid chain namespace", () => {
