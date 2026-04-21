@@ -16,6 +16,7 @@ function makeTestUser(overrides: Partial<User["verification_capabilities"]> = {}
     verification_capabilities: {
       unique_human: { state: "verified", provider: "self" },
       age_over_18: { state: "unverified", provider: null },
+      minimum_age: { state: "unverified", provider: null, value: null },
       nationality: { state: "unverified", provider: null, value: null },
       gender: { state: "unverified", provider: null, value: null },
       sanctions_clear: { state: "unverified", provider: null },

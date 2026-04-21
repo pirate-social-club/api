@@ -160,7 +160,7 @@ describe("community membership gate routes", () => {
     expect(previewBody.membership_mode).toBe("gated")
     expect(previewBody.membership_gate_summaries).toHaveLength(1)
     expect(previewBody.membership_gate_summaries[0].gate_type).toBe("nationality")
-    expect(previewBody.membership_gate_summaries[0].required_value).toBe("AR")
+    expect(previewBody.membership_gate_summaries[0].required_value).toBe("ARG")
     expect(previewBody.membership_gate_summaries[0].accepted_providers).toEqual(["self"])
     expect(previewBody.viewer_membership_status).toBe("member")
   })

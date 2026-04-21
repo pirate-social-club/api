@@ -9,6 +9,7 @@ import type {
 import { getPrimaryWalletSnapshot } from "./community-serialization"
 import type { LocalCommunitySnapshot } from "./community-local-db"
 import { normalizeEthereumAddress } from "./community-token-gates"
+import { normalizeIdentityCountryCode, normalizeIdentityCountryCodes } from "../identity/country-codes"
 
 export type CreateCommunityRequestBody = CreateCommunityRequest
 
@@ -119,6 +120,7 @@ export function normalizeDonationPolicyMode(
 const VALID_PUBLIC_V0_PROVIDERS_BY_PROOF_TYPE = {
   unique_human: new Set(["self", "very"]),
   age_over_18: new Set(["self"]),
+  minimum_age: new Set(["self"]),
   nationality: new Set(["self"]),
   gender: new Set(["self"]),
   wallet_score: new Set(["passport"]),
@@ -173,6 +175,7 @@ export function assertPublicV0GateConfiguration(
   }
   let nationalityGateCount = 0
   let genderGateCount = 0
+  let minimumAgeGateCount = 0
   for (const rule of body.gate_rules ?? []) {
     for (const requirement of rule.proof_requirements ?? []) {
       const acceptedProviders = requirement.accepted_providers ?? []
@@ -198,6 +201,31 @@ export function assertPublicV0GateConfiguration(
   for (const rule of body.gate_rules ?? []) {
     if (rule.gate_type !== "nationality") {
       if (rule.gate_type !== "gender") {
+        if (rule.gate_type !== "minimum_age") {
+          continue
+        }
+
+        minimumAgeGateCount += 1
+        if (minimumAgeGateCount > 1) {
+          throw eligibilityFailed("Public v0 communities support at most one minimum_age gate")
+        }
+
+        const requirements = rule.proof_requirements ?? []
+        if (requirements.length !== 1 || requirements[0].proof_type !== "minimum_age") {
+          throw eligibilityFailed("Minimum age gate must have exactly one minimum_age proof requirement")
+        }
+
+        const requirement = requirements[0]
+        const acceptedProviders = requirement.accepted_providers ?? []
+        if (acceptedProviders.length !== 1 || acceptedProviders[0] !== "self") {
+          throw eligibilityFailed("Minimum age gate accepted_providers must be exactly [\"self\"]")
+        }
+
+        const config = (requirement.config ?? rule.gate_config ?? {}) as Record<string, unknown>
+        const minimumAge = typeof config.minimum_age === "number" ? config.minimum_age : null
+        if (minimumAge == null || !Number.isInteger(minimumAge) || minimumAge < 1 || minimumAge > 125) {
+          throw eligibilityFailed("Minimum age gate minimum_age must be an integer from 1 to 125")
+        }
         continue
       }
 
@@ -245,12 +273,23 @@ export function assertPublicV0GateConfiguration(
     }
 
     const config = (requirement.config ?? rule.gate_config ?? {}) as Record<string, unknown>
-    const requiredValue = typeof config.required_value === "string" ? config.required_value : null
-    if (!requiredValue) {
-      throw eligibilityFailed("Nationality gate requires a required_value in config")
+    const legacyRequiredValue = normalizeIdentityCountryCode(config.required_value)
+    const requiredValues = new Set<string>()
+    if (legacyRequiredValue) {
+      requiredValues.add(legacyRequiredValue)
     }
-    if (!/^[A-Z]{2}$/.test(requiredValue)) {
-      throw eligibilityFailed("Nationality gate required_value must match ^[A-Z]{2}$")
+    for (const value of normalizeIdentityCountryCodes(config.required_values)) {
+      requiredValues.add(value)
+    }
+    if (requiredValues.size === 0) {
+      throw eligibilityFailed("Nationality gate requires required_value or required_values in config")
+    }
+    const rawRequiredValues = Array.isArray(config.required_values) ? config.required_values : []
+    if (
+      (config.required_value != null && !legacyRequiredValue)
+      || rawRequiredValues.some((value) => normalizeIdentityCountryCode(value) == null)
+    ) {
+      throw eligibilityFailed("Nationality gate country codes must be valid ISO-2 or ISO-3 codes")
     }
   }
 }

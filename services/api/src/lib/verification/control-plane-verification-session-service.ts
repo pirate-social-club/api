@@ -14,10 +14,12 @@ import type {
 import type { VerySessionOutcome } from "./very-provider"
 import { getVeryProvider } from "./very-provider"
 import type { SelfSessionOutcome } from "./self-provider"
-import { canonicalizeRequestedCapabilities, getSelfProvider } from "./self-provider"
+import { canonicalizeRequestedCapabilities, getSelfProvider, normalizeVerificationRequirements } from "./self-provider"
+import { normalizeIdentityCountryCode } from "../identity/country-codes"
 import type {
   Env,
   RequestedVerificationCapability,
+  VerificationRequirement,
   VerificationIntent,
   VerificationSession,
   VerificationSessionLaunch,
@@ -27,6 +29,45 @@ import {
   getVerificationSessionRowForUser,
 } from "./control-plane-verification-shared"
 
+function parseVerificationRequirements(raw: string | null | undefined): VerificationRequirement[] {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((requirement): requirement is VerificationRequirement =>
+      requirement != null
+      && typeof requirement === "object"
+      && (requirement as VerificationRequirement).proof_type === "minimum_age"
+      && Number.isInteger((requirement as VerificationRequirement).minimum_age),
+    )
+  } catch {
+    return []
+  }
+}
+
+function resolveMinimumAgeToMint(
+  requestedCapabilities: RequestedVerificationCapability[],
+  verificationRequirements: VerificationRequirement[],
+  selfClaims: { age_over_18: boolean; minimum_age?: number | null } | null | undefined,
+): number | null {
+  const candidates: number[] = []
+  for (const requirement of verificationRequirements) {
+    if (requirement.proof_type === "minimum_age") {
+      candidates.push(requirement.minimum_age)
+    }
+  }
+  if (requestedCapabilities.includes("age_over_18")) {
+    candidates.push(18)
+  }
+  if (selfClaims?.minimum_age != null) {
+    candidates.push(selfClaims.minimum_age)
+  }
+  if (candidates.length === 0) {
+    return null
+  }
+  return Math.max(...candidates)
+}
+
 export async function startVerificationSession(
   client: Client,
   env: Env,
@@ -34,12 +75,14 @@ export async function startVerificationSession(
     userId: string
     provider: "self" | "very"
     requestedCapabilities?: RequestedVerificationCapability[] | null
+    verificationRequirements?: VerificationRequirement[] | null
     walletAttachmentId?: string | null
     verificationIntent?: VerificationIntent | null
     policyId?: string | null
   },
 ): Promise<VerificationSession> {
   const requestedCapabilities = canonicalizeRequestedCapabilities(input.provider, (input.requestedCapabilities?.length ? input.requestedCapabilities : ["unique_human"]) as RequestedVerificationCapability[])
+  const verificationRequirements = normalizeVerificationRequirements(input.provider, input.verificationRequirements)
   const now = new Date()
   const createdAt = now.toISOString()
   const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString()
@@ -71,6 +114,7 @@ export async function startVerificationSession(
     const result = await provider.startSession({
       userId: input.userId,
       requestedCapabilities,
+      verificationRequirements,
       verificationIntent: input.verificationIntent ?? null,
       policyId: input.policyId ?? null,
     })
@@ -82,16 +126,17 @@ export async function startVerificationSession(
     sql: `
       INSERT INTO verification_sessions (
         verification_session_id, user_id, provider, session_kind, requested_capabilities_json,
-        status, upstream_session_ref, result_ref, failure_code,
+        verification_requirements_json, status, upstream_session_ref, result_ref, failure_code,
         wallet_attachment_id, verification_intent, policy_id,
         started_at, completed_at, expires_at, created_at, updated_at
-      ) VALUES (?1, ?2, ?3, 'identity_proof', ?4, 'pending', ?5, NULL, NULL, ?6, ?7, ?8, ?9, NULL, ?10, ?9, ?9)
+      ) VALUES (?1, ?2, ?3, 'identity_proof', ?4, ?5, 'pending', ?6, NULL, NULL, ?7, ?8, ?9, ?10, NULL, ?11, ?10, ?10)
     `,
     args: [
       verificationSessionId,
       input.userId,
       input.provider,
       JSON.stringify(requestedCapabilities),
+      JSON.stringify(verificationRequirements),
       upstreamSessionRef,
       input.walletAttachmentId ?? null,
       input.verificationIntent ?? null,
@@ -212,7 +257,7 @@ async function completeVerySession(
       verificationSessionId: input.verificationSessionId,
       outcome: outcome.status,
     })
-    return finalizeVerification(client, row, input, null, null, outcome.attestationData)
+    return finalizeVerification(client, row, input, null, null, null, outcome.attestationData)
   }
 
   if (outcome.status === "pending") {
@@ -294,9 +339,15 @@ async function completeSelfSession(
 
   if (outcome.status === "verified") {
     const requestedCapabilities = JSON.parse(row.requested_capabilities_json) as RequestedVerificationCapability[]
+    const verificationRequirements = parseVerificationRequirements(row.verification_requirements_json)
     const missingClaims: string[] = []
     if (requestedCapabilities.includes("age_over_18") && outcome.claims.age_over_18 !== true) {
       missingClaims.push("age_over_18")
+    }
+    for (const requirement of verificationRequirements) {
+      if (requirement.proof_type === "minimum_age" && (outcome.claims.minimum_age == null || outcome.claims.minimum_age < requirement.minimum_age)) {
+        missingClaims.push(`minimum_age:${requirement.minimum_age}`)
+      }
     }
     if (requestedCapabilities.includes("nationality") && !outcome.claims.nationality) {
       missingClaims.push("nationality")
@@ -313,7 +364,7 @@ async function completeSelfSession(
       const updatedRow = await getVerificationSessionRowForUser(client, input.verificationSessionId, input.userId)
       return serializeVerificationSession({ row: updatedRow!, attestationRows: [] })
     }
-    return finalizeVerification(client, row, input, requestedCapabilities, outcome.claims)
+    return finalizeVerification(client, row, input, requestedCapabilities, verificationRequirements, outcome.claims)
   }
 
   if (outcome.status === "pending") {
@@ -354,7 +405,8 @@ async function finalizeVerification(
     proofHash?: string | null
   },
   requestedCapabilities?: RequestedVerificationCapability[] | null,
-  selfClaims?: { age_over_18: boolean; nationality: string | null; gender: "M" | "F" | null } | null,
+  verificationRequirements?: VerificationRequirement[] | null,
+  selfClaims?: { age_over_18: boolean; minimum_age?: number | null; nationality: string | null; gender: "M" | "F" | null } | null,
   attestationData?: Record<string, unknown>,
 ): Promise<VerificationSession> {
   const existingAttestations = await getAttestationsBySourceSessionId(client, input.verificationSessionId, input.userId)
@@ -373,6 +425,7 @@ async function finalizeVerification(
   const capabilities = parseVerificationCapabilities(userRow.verification_capabilities_json)
 
   const capsToMint = requestedCapabilities ?? ["unique_human"]
+  const minimumAgeToMint = resolveMinimumAgeToMint(capsToMint, verificationRequirements ?? [], selfClaims)
   const attestationInserts: InStatement[] = []
 
   capabilities.unique_human = {
@@ -411,8 +464,28 @@ async function finalizeVerification(
     })
   }
 
+  if (minimumAgeToMint != null && row.provider === "self") {
+    capabilities.minimum_age = {
+      state: "verified",
+      value: minimumAgeToMint,
+      provider: "self",
+      proof_type: "minimum_age",
+      mechanism: "self_disclosure",
+      verified_at: updatedAt,
+    }
+    attestationInserts.push({
+      sql: `
+        INSERT INTO user_attestations (
+          user_attestation_id, user_id, source_verification_session_id, provider, attestation_type,
+          capability_key, status, value_json, verified_at, expires_at, revoked_at, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, 'minimum_age', 'minimum_age', 'accepted', ?5, ?6, ?7, NULL, ?6, ?6)
+      `,
+      args: [makeId("att"), input.userId, input.verificationSessionId, row.provider, JSON.stringify({ state: "verified", minimum_age: minimumAgeToMint }), updatedAt, expiresAt],
+    })
+  }
+
   if (capsToMint.includes("nationality") && row.provider === "self") {
-    const nationalityValue = selfClaims?.nationality ?? null
+    const nationalityValue = normalizeIdentityCountryCode(selfClaims?.nationality) ?? null
     capabilities.nationality = {
       state: "verified",
       value: nationalityValue,

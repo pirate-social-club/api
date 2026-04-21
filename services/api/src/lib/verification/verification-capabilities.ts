@@ -18,6 +18,7 @@ export function buildDefaultVerificationCapabilities(): VerificationCapabilities
   return {
     unique_human: { state: "unverified", provider: null, proof_type: null, mechanism: null, verified_at: null },
     age_over_18: { state: "unverified", provider: null, proof_type: null, mechanism: null, verified_at: null },
+    minimum_age: { state: "unverified", value: null, provider: null, proof_type: null, mechanism: null, verified_at: null },
     nationality: { state: "unverified", value: null, provider: null, proof_type: null, mechanism: null, verified_at: null },
     gender: { state: "unverified", value: null, provider: null, proof_type: null, mechanism: null, verified_at: null },
     sanctions_clear: { state: "unverified", provider: null, proof_type: null, mechanism: null, verified_at: null },
@@ -44,6 +45,7 @@ export function applyLazyCapabilityExpiry(
   const next: VerificationCapabilities = {
     unique_human: { ...capabilities.unique_human },
     age_over_18: { ...capabilities.age_over_18 },
+    minimum_age: { ...capabilities.minimum_age },
     nationality: { ...capabilities.nationality },
     gender: { ...capabilities.gender },
     sanctions_clear: { ...capabilities.sanctions_clear },
@@ -58,7 +60,7 @@ export function applyLazyCapabilityExpiry(
     next.unique_human.state = "expired"
   }
 
-  for (const capability of [next.age_over_18, next.nationality, next.gender] as const) {
+  for (const capability of [next.age_over_18, next.minimum_age, next.nationality, next.gender] as const) {
     if (
       capability.state === "verified"
       && capability.provider === "self"

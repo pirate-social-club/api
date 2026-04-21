@@ -17,6 +17,7 @@ import type {
   NamespaceVerification,
   NamespaceVerificationSession,
   RequestedVerificationCapability,
+  VerificationRequirement,
   VerificationIntent,
   VerificationSession,
 } from "../../types"
@@ -30,6 +31,7 @@ export interface VerificationRepository {
     userId: string
     provider: "self" | "very"
     requestedCapabilities?: RequestedVerificationCapability[] | null
+    verificationRequirements?: VerificationRequirement[] | null
     walletAttachmentId?: string | null
     verificationIntent?: VerificationIntent | null
     policyId?: string | null
@@ -71,6 +73,7 @@ export class ControlPlaneVerificationRepository implements VerificationRepositor
     userId: string
     provider: "self" | "very"
     requestedCapabilities?: RequestedVerificationCapability[] | null
+    verificationRequirements?: VerificationRequirement[] | null
     walletAttachmentId?: string | null
     verificationIntent?: VerificationIntent | null
     policyId?: string | null

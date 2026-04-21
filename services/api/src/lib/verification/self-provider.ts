@@ -1,6 +1,7 @@
 import { badRequestError, providerUnavailable } from "../errors"
 import { makeId } from "../helpers"
-import type { Env, RequestedVerificationCapability, SelfVerificationDisclosures, SelfVerificationLaunch, VerificationIntent } from "../../types"
+import { normalizeIdentityCountryCode } from "../identity/country-codes"
+import type { Env, RequestedVerificationCapability, SelfVerificationDisclosures, SelfVerificationLaunch, VerificationIntent, VerificationRequirement } from "../../types"
 
 const SELF_TIMEOUT_MS = 15_000
 
@@ -23,8 +24,9 @@ function normalizeGenderClaim(value: unknown): "M" | "F" | null {
   return null
 }
 
-function encodeDevStubSessionRef(requestedCapabilities: RequestedVerificationCapability[]): string {
-  return `${SELF_DEV_STUB_REF_PREFIX}:${encodeURIComponent(requestedCapabilities.join(","))}:${makeId("ss")}`
+function encodeDevStubSessionRef(requestedCapabilities: RequestedVerificationCapability[], verificationRequirements: VerificationRequirement[]): string {
+  const minimumAge = resolveRequestedMinimumAge(requestedCapabilities, verificationRequirements) ?? ""
+  return `${SELF_DEV_STUB_REF_PREFIX}:${encodeURIComponent(requestedCapabilities.join(","))}:${minimumAge}:${makeId("ss")}`
 }
 
 function decodeDevStubCapabilities(upstreamSessionRef: string): Set<RequestedVerificationCapability> {
@@ -40,6 +42,16 @@ function decodeDevStubCapabilities(upstreamSessionRef: string): Set<RequestedVer
       .map((cap) => cap.trim())
       .filter((cap): cap is RequestedVerificationCapability => SELF_CAPABILITY_ORDER.includes(cap as RequestedVerificationCapability)),
   )
+}
+
+function decodeDevStubMinimumAge(upstreamSessionRef: string): number | null {
+  if (!upstreamSessionRef.startsWith(`${SELF_DEV_STUB_REF_PREFIX}:`)) {
+    return null
+  }
+
+  const [, , rawMinimumAge] = upstreamSessionRef.split(":", 4)
+  const minimumAge = Number(rawMinimumAge)
+  return Number.isInteger(minimumAge) && minimumAge > 0 ? minimumAge : null
 }
 
 export function canonicalizeRequestedCapabilities(
@@ -61,11 +73,13 @@ export function canonicalizeRequestedCapabilities(
 
 export function mapCapabilitiesToDisclosures(
   capabilities: RequestedVerificationCapability[],
+  verificationRequirements: VerificationRequirement[] = [],
 ): SelfVerificationDisclosures {
   const set = new Set(capabilities)
   const disclosures: SelfVerificationDisclosures = {}
-  if (set.has("age_over_18")) {
-    disclosures.minimum_age = 18
+  const minimumAge = resolveRequestedMinimumAge(capabilities, verificationRequirements)
+  if (minimumAge != null) {
+    disclosures.minimum_age = minimumAge
   }
   if (set.has("nationality")) {
     disclosures.nationality = true
@@ -76,6 +90,41 @@ export function mapCapabilitiesToDisclosures(
   return disclosures
 }
 
+export function normalizeVerificationRequirements(
+  provider: "self" | "very",
+  requirements: VerificationRequirement[] | null | undefined,
+): VerificationRequirement[] {
+  if (provider === "very") return []
+  const normalized: VerificationRequirement[] = []
+  for (const requirement of requirements ?? []) {
+    if (requirement?.proof_type !== "minimum_age") {
+      throw badRequestError(`Unsupported Self verification requirement: ${String(requirement?.proof_type ?? "unknown")}`)
+    }
+    const minimumAge = Number(requirement.minimum_age)
+    if (!Number.isInteger(minimumAge) || minimumAge < 1 || minimumAge > 125) {
+      throw badRequestError("minimum_age verification requirement must be an integer from 1 to 125")
+    }
+    normalized.push({ proof_type: "minimum_age", minimum_age: minimumAge })
+  }
+  return normalized
+}
+
+function resolveRequestedMinimumAge(
+  capabilities: RequestedVerificationCapability[],
+  verificationRequirements: VerificationRequirement[],
+): number | null {
+  const minimumAges = verificationRequirements
+    .filter((requirement) => requirement.proof_type === "minimum_age")
+    .map((requirement) => requirement.minimum_age)
+  if (capabilities.includes("age_over_18")) {
+    minimumAges.push(18)
+  }
+  if (minimumAges.length === 0) {
+    return null
+  }
+  return Math.max(...minimumAges)
+}
+
 export type SelfStartResult = {
   upstreamSessionRef: string
   launch: SelfVerificationLaunch
@@ -83,6 +132,7 @@ export type SelfStartResult = {
 
 export type SelfVerifiedClaims = {
   age_over_18: boolean
+  minimum_age?: number | null
   nationality: string | null
   gender: "M" | "F" | null
 }
@@ -97,6 +147,7 @@ export interface SelfProvider {
   startSession(input: {
     userId: string
     requestedCapabilities: RequestedVerificationCapability[]
+    verificationRequirements?: VerificationRequirement[]
     verificationIntent: VerificationIntent | null
     policyId: string | null
   }): Promise<SelfStartResult>
@@ -166,10 +217,17 @@ async function verifySelfProof(input: {
     }
 
     if (status === "verified" || status === "success" || status === "completed" || body.verified === true) {
-      const disclosures = body.disclosures as Record<string, unknown> | undefined
+      const disclosures = (
+        body.disclosures
+        ?? body.discloseOutput
+        ?? body.disclose_output
+        ?? {}
+      ) as Record<string, unknown>
+      const minimumAge = parseMinimumAgeDisclosure(disclosures)
       const claims: SelfVerifiedClaims = {
-        age_over_18: disclosures?.minimum_age != null || disclosures?.date_of_birth != null,
-        nationality: typeof disclosures?.nationality === "string" ? disclosures.nationality : null,
+        age_over_18: minimumAge != null ? minimumAge >= 18 : disclosures?.date_of_birth != null,
+        minimum_age: minimumAge,
+        nationality: normalizeIdentityCountryCode(disclosures?.nationality),
         gender: normalizeGenderClaim(disclosures?.gender ?? body.gender),
       }
       return { status: "verified", claims }
@@ -193,6 +251,18 @@ async function verifySelfProof(input: {
   }
 }
 
+function parseMinimumAgeDisclosure(disclosures: Record<string, unknown>): number | null {
+  const value = disclosures.minimum_age ?? disclosures.minimumAge ?? disclosures.olderThan
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) {
+    return value
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value)
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : null
+  }
+  return null
+}
+
 let testOverride: SelfProvider | null = null
 
 export function getSelfProvider(env: Env): SelfProvider {
@@ -211,8 +281,8 @@ export function getSelfProvider(env: Env): SelfProvider {
 
     return {
       async startSession(input) {
-        const upstreamSessionRef = encodeDevStubSessionRef(input.requestedCapabilities)
-        const disclosures = mapCapabilitiesToDisclosures(input.requestedCapabilities)
+        const upstreamSessionRef = encodeDevStubSessionRef(input.requestedCapabilities, input.verificationRequirements ?? [])
+        const disclosures = mapCapabilitiesToDisclosures(input.requestedCapabilities, input.verificationRequirements ?? [])
 
         return {
           upstreamSessionRef,
@@ -231,11 +301,13 @@ export function getSelfProvider(env: Env): SelfProvider {
 
       async getSessionOutcome(input) {
         const capabilities = decodeDevStubCapabilities(input.upstreamSessionRef)
+        const minimumAge = decodeDevStubMinimumAge(input.upstreamSessionRef)
         return {
           status: "verified",
           claims: {
-            age_over_18: capabilities.has("age_over_18"),
-            nationality: capabilities.has("nationality") ? "US" : null,
+            age_over_18: capabilities.has("age_over_18") || (minimumAge != null && minimumAge >= 18),
+            minimum_age: minimumAge ?? (capabilities.has("age_over_18") ? 18 : null),
+            nationality: capabilities.has("nationality") ? "USA" : null,
             gender: capabilities.has("gender") ? "F" : null,
           },
         }
@@ -248,7 +320,7 @@ export function getSelfProvider(env: Env): SelfProvider {
   return {
     async startSession(input) {
       const upstreamSessionRef = makeId("ss")
-      const disclosures = mapCapabilitiesToDisclosures(input.requestedCapabilities)
+      const disclosures = mapCapabilitiesToDisclosures(input.requestedCapabilities, input.verificationRequirements ?? [])
 
       return {
         upstreamSessionRef,

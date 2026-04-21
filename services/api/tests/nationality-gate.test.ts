@@ -31,6 +31,21 @@ function makeNationalityRule(requiredValue: string): CommunityGateRuleRow {
   }
 }
 
+function makeNationalityValuesRule(requiredValues: string[]): CommunityGateRuleRow {
+  return {
+    gate_rule_id: "gr_values",
+    scope: "membership",
+    gate_family: "identity_proof",
+    gate_type: "nationality",
+    proof_requirements_json: JSON.stringify([
+      { proof_type: "nationality", accepted_providers: ["self"], config: { required_values: requiredValues } },
+    ]),
+    chain_namespace: null,
+    gate_config_json: null,
+    status: "active",
+  }
+}
+
 function makeUniqueHumanRule(): CommunityGateRuleRow {
   return {
     gate_rule_id: "gr_uh",
@@ -76,7 +91,7 @@ describe("buildMembershipGateSummary", () => {
     const summary = buildMembershipGateSummary(rule)
     expect(summary.gate_type).toBe("nationality")
     expect(summary.accepted_providers).toEqual(["self"])
-    expect(summary.required_value).toBe("US")
+    expect(summary.required_value).toBe("USA")
   })
 
   test("builds nationality summary from gate_config fallback", () => {
@@ -93,7 +108,7 @@ describe("buildMembershipGateSummary", () => {
       status: "active",
     }
     const summary = buildMembershipGateSummary(rule)
-    expect(summary.required_value).toBe("AR")
+    expect(summary.required_value).toBe("ARG")
   })
 
   test("builds summary for unique_human gate", () => {
@@ -101,6 +116,11 @@ describe("buildMembershipGateSummary", () => {
     const summary = buildMembershipGateSummary(rule)
     expect(summary.gate_type).toBe("unique_human")
     expect(summary.accepted_providers).toEqual(["self"])
+  })
+
+  test("builds nationality summary with required_values", () => {
+    const summary = buildMembershipGateSummary(makeNationalityValuesRule(["AR", "BRA", "CHL"]))
+    expect(summary.required_values).toEqual(["ARG", "BRA", "CHL"])
   })
 })
 
@@ -112,6 +132,12 @@ describe("evaluateMembershipGateRules", () => {
     expect(result.satisfied).toBe(true)
     expect(result.missingCapabilities).toEqual([])
     expect(result.mismatchReasons).toEqual([])
+  })
+
+  test("returns satisfied when nationality is in required_values", async () => {
+    const user = makeUser({ nationality: { state: "verified", provider: "self", value: "BRA" } })
+    const result = await evaluateMembershipGateRules({ env: {}, rules: [makeNationalityValuesRule(["ARG", "BRA", "CHL"])], user, walletAttachments: [] })
+    expect(result.satisfied).toBe(true)
   })
 
   test("returns missing nationality when user lacks verification", async () => {
@@ -210,7 +236,7 @@ describe("evaluateMembershipGateRules", () => {
     }
     const summary = buildMembershipGateSummary(rule)
     expect(summary.gate_type).toBe("nationality")
-    expect(summary.required_value).toBe("US")
-    expect(summary.excluded_values).toEqual(["AR", "IR"])
+    expect(summary.required_value).toBe("USA")
+    expect(summary.excluded_values).toEqual(["ARG", "IRN"])
   })
 })

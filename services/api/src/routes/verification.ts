@@ -2,7 +2,7 @@ import { Hono } from "hono"
 import { badRequestError, notFoundError } from "../lib/errors"
 import { getControlPlaneVerificationRepository } from "../lib/verification/control-plane-verification-repository"
 import { authenticate, type AuthenticatedEnv } from "../lib/auth-middleware"
-import type { Env, RequestedVerificationCapability, VerificationIntent } from "../types"
+import type { Env, RequestedVerificationCapability, VerificationIntent, VerificationRequirement } from "../types"
 
 const verification = new Hono<{ Bindings: Env }>()
 const authenticatedVerification = new Hono<AuthenticatedEnv>()
@@ -15,6 +15,7 @@ authenticatedVerification.post("/verification-sessions", async (c) => {
     provider?: "self" | "very"
     provider_mode?: "qr_deeplink" | "widget" | null
     requested_capabilities?: RequestedVerificationCapability[] | null
+    verification_requirements?: VerificationRequirement[] | null
     wallet_attachment_id?: string | null
     verification_intent?: string | null
     policy_id?: string | null
@@ -28,6 +29,7 @@ authenticatedVerification.post("/verification-sessions", async (c) => {
     userId: actor.userId,
     provider: body.provider,
     requestedCapabilities: body.requested_capabilities ?? null,
+    verificationRequirements: body.verification_requirements ?? null,
     walletAttachmentId: body.wallet_attachment_id ?? null,
     verificationIntent: (body.verification_intent as VerificationIntent | undefined) ?? null,
     policyId: body.policy_id ?? null,

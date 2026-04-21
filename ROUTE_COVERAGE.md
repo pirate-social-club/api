@@ -49,9 +49,9 @@ Mounted in `services/api/src/index.ts`:
 | `/communities/*/song-artifact-*` | `src/routes/communities-song-artifacts.ts` | `tests/song-artifact-routes.test.ts`, `tests/song-artifact-catalog-*.test.ts`, `tests/song-artifact-locked-routes.test.ts` | direct | Covers song uploads, bundles, locked assets, catalog sync, and local fallback paths. |
 | `/comments/*` | `src/routes/comments.ts` | `tests/comments-routes.test.ts`, `tests/comments-read-routes.test.ts`, `tests/comment-service*.test.ts` | direct | Covers create/read/replies/context/vote/delete through route and service tests. |
 | `/public-comments/*` | `src/routes/public-comments.ts` | `tests/comments-read-routes.test.ts` | direct | Covers public post comments and public replies. |
-| `/feed/home` | `src/routes/feed.ts` | `src/lib/feed/home-feed-service.test.ts`, broader public-post tests | indirect | Service coverage exists; route-level coverage should be added. |
+| `/feed/home` | `src/routes/feed.ts` | `tests/feed-routes.test.ts`, `src/lib/feed/home-feed-service.test.ts`, broader public-post tests | direct | Route coverage includes the empty-feed/community-summary path; service tests cover ranking helpers. |
 | `/jobs/:jobId` | `src/routes/jobs.ts` | `tests/jobs-posts-routes.test.ts`, `tests/community-routes.test.ts` | direct | Dedicated jobs coverage now exists, with broader assertions still present in community flows. |
-| `/notifications/*` | `src/routes/notifications.ts` | none located | gap | Add direct route coverage for summary, tasks, feed, mark-read, and dismiss-task. |
+| `/notifications/*` | `src/routes/notifications.ts` | `tests/notifications-routes.test.ts` | direct | Covers auth requirement, summary, tasks, feed, mark-read, and dismiss-task. |
 | `/posts/:postId` and `/posts/:postId/vote` | `src/routes/posts.ts` | `tests/jobs-posts-routes.test.ts`, `tests/community-routes.test.ts` | direct | Dedicated post read/vote coverage now exists, with broader post lifecycle coverage still present in community flows. |
 | `/public-posts/:postId` | `src/routes/public-posts.ts` | `tests/community-routes.test.ts`, `tests/public-communities-routes.test.ts`, `tests/jobs-posts-routes.test.ts` | direct/indirect | Public visibility behavior is exercised from community/post flows. |
 | `/public-communities/*` | `src/routes/public-communities.ts` | `tests/public-communities-routes.test.ts` | direct | Covers public community reads/listings/posts. |
@@ -64,12 +64,10 @@ Mounted in `services/api/src/index.ts`:
 ## Weak Spots
 
 - `routes/communities.ts` has been split, but community behavior is still tested through several large suites, which makes coverage easy to overestimate.
-- `/notifications/*` appears to lack direct route-level coverage.
-- `/feed/home` has service coverage, but route-level coverage should be added.
-- Story/CDR-related commerce behavior is exercised from `song-artifact-routes.test.ts`, but this area needs a more explicit proof of which Story/CDR paths are truly covered versus merely reachable.
+- Story/CDR-related commerce behavior is exercised from route tests with deterministic test doubles. Keep [STORY_CDR_PATHS.md](STORY_CDR_PATHS.md) current as the live path map.
 
 ## Priority Follow-Up
 
-1. Add direct route coverage for `/notifications/*` and `/feed/home`.
-2. Add an explicit Story/CDR coverage note once the intended code paths are pinned down.
-3. Keep splitting large community and song-artifact suites where a route group can stand on its own.
+1. Keep splitting large community and song-artifact suites where a route group can stand on its own.
+2. Add live-infrastructure Story/CDR validation when a stable test environment exists.
+3. Keep `STORY_CDR_PATHS.md` updated when a new Story/CDR entry point is added.

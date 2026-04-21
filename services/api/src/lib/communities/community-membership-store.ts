@@ -3,6 +3,7 @@ import { executeFirst } from "../db-helpers"
 import { makeId } from "../helpers"
 import { requiredString, rowValue, stringOrNull } from "../sql-row"
 import type { Env, MembershipGateSummary, User, WalletAttachmentSummary } from "../../types"
+import { normalizeIdentityCountryCode, normalizeIdentityCountryCodes } from "../identity/country-codes"
 import {
   anyAttachedEthereumWalletOwnsErc721Collection,
   hasEthereumRpcConfig,
@@ -155,26 +156,75 @@ function includesAcceptedProvider(acceptedProviders: string[] | null | undefined
   return provider != null && acceptedProviders.includes(provider)
 }
 
+function readRequiredCountryValues(config: Record<string, unknown>): string[] {
+  const values = new Set<string>()
+  const legacyRequiredValue = normalizeIdentityCountryCode(config.required_value)
+  if (legacyRequiredValue) {
+    values.add(legacyRequiredValue)
+  }
+  for (const value of normalizeIdentityCountryCodes(config.required_values)) {
+    values.add(value)
+  }
+  return Array.from(values)
+}
+
+function readExcludedCountryValues(config: Record<string, unknown>): string[] {
+  return normalizeIdentityCountryCodes(config.excluded_values)
+}
+
+function readMinimumAge(config: Record<string, unknown>, fallback: number | null): number | null {
+  const value = config.minimum_age ?? config.required_minimum_age
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) {
+    return value
+  }
+  return fallback
+}
+
+function satisfiesMinimumAgeRequirement(
+  user: User,
+  acceptedProviders: string[] | null | undefined,
+  minimumAge: number,
+): boolean {
+  const minimumAgeCapability = user.verification_capabilities.minimum_age
+  if (
+    minimumAgeCapability.state === "verified"
+    && typeof minimumAgeCapability.value === "number"
+    && minimumAgeCapability.value >= minimumAge
+    && includesAcceptedProvider(acceptedProviders, minimumAgeCapability.provider)
+  ) {
+    return true
+  }
+
+  return minimumAge <= 18
+    && user.verification_capabilities.age_over_18.state === "verified"
+    && includesAcceptedProvider(acceptedProviders, user.verification_capabilities.age_over_18.provider)
+}
+
 function satisfiesProofRequirement(user: User, requirement: ProofRequirement, gateConfig: Record<string, unknown> | null): boolean {
   switch (requirement.proof_type) {
     case "unique_human":
       return user.verification_capabilities.unique_human.state === "verified"
         && includesAcceptedProvider(requirement.accepted_providers, user.verification_capabilities.unique_human.provider)
     case "age_over_18":
-      return user.verification_capabilities.age_over_18.state === "verified"
-        && includesAcceptedProvider(requirement.accepted_providers, user.verification_capabilities.age_over_18.provider)
+      return satisfiesMinimumAgeRequirement(user, requirement.accepted_providers, 18)
+    case "minimum_age": {
+      const config = (requirement.config ?? gateConfig ?? {}) as Record<string, unknown>
+      const minimumAge = readMinimumAge(config, null)
+      return minimumAge != null && satisfiesMinimumAgeRequirement(user, requirement.accepted_providers, minimumAge)
+    }
     case "nationality": {
       const capability = user.verification_capabilities.nationality
       if (capability.state !== "verified" || !includesAcceptedProvider(requirement.accepted_providers, capability.provider)) {
         return false
       }
       const config = (requirement.config ?? gateConfig ?? {}) as Record<string, unknown>
-      const requiredValue = typeof config.required_value === "string" ? config.required_value : null
-      const excludedValues = Array.isArray(config.excluded_values) ? config.excluded_values.filter((value): value is string => typeof value === "string") : []
-      if (requiredValue && capability.value !== requiredValue) {
+      const capabilityValue = normalizeIdentityCountryCode(capability.value)
+      const requiredValues = readRequiredCountryValues(config)
+      const excludedValues = readExcludedCountryValues(config)
+      if (requiredValues.length > 0 && (!capabilityValue || !requiredValues.includes(capabilityValue))) {
         return false
       }
-      if (capability.value && excludedValues.includes(capability.value)) {
+      if (capabilityValue && excludedValues.includes(capabilityValue)) {
         return false
       }
       return true
@@ -266,7 +316,7 @@ export async function upsertMembershipRequest(input: {
 
 export type MembershipGateEvaluation = {
   satisfied: boolean
-  missingCapabilities: Array<"unique_human" | "age_over_18" | "nationality" | "gender">
+  missingCapabilities: Array<"unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender">
   mismatchReasons: string[]
   suggestedVerificationProvider: "self" | "very" | null
 }
@@ -288,13 +338,27 @@ export function buildMembershipGateSummary(rule: CommunityGateRuleRow): Membersh
     summary.accepted_providers = primaryReq.accepted_providers as MembershipGateSummary["accepted_providers"]
   }
 
-  if (rule.gate_type === "nationality" || rule.gate_type === "gender") {
+  if (rule.gate_type === "nationality" || rule.gate_type === "gender" || rule.gate_type === "minimum_age") {
     const config = (primaryReq?.config ?? gateConfig ?? {}) as Record<string, unknown>
-    if (typeof config.required_value === "string") {
+    if (rule.gate_type === "nationality") {
+      const requiredValues = readRequiredCountryValues(config)
+      if (requiredValues.length === 1) {
+        summary.required_value = requiredValues[0]
+      }
+      if (requiredValues.length > 1) {
+        summary.required_values = requiredValues
+      }
+      const excludedValues = readExcludedCountryValues(config)
+      if (excludedValues.length > 0) {
+        summary.excluded_values = excludedValues
+      }
+    } else if (rule.gate_type === "minimum_age") {
+      const minimumAge = readMinimumAge(config, null)
+      if (minimumAge != null) {
+        summary.required_minimum_age = minimumAge
+      }
+    } else if (typeof config.required_value === "string") {
       summary.required_value = config.required_value
-    }
-    if (rule.gate_type === "nationality" && Array.isArray(config.excluded_values)) {
-      summary.excluded_values = config.excluded_values.filter((v): v is string => typeof v === "string")
     }
   }
 
@@ -386,14 +450,13 @@ export async function evaluateMembershipGateRules(input: {
           } else if (!includesAcceptedProvider(requirement.accepted_providers, capability.provider)) {
             mismatchReasons.push("provider_not_accepted")
           } else {
-            const requiredValue = typeof config.required_value === "string" ? config.required_value : null
-            const excludedValues = Array.isArray(config.excluded_values)
-              ? config.excluded_values.filter((v): v is string => typeof v === "string")
-              : []
-            if (requiredValue && capability.value !== requiredValue) {
+            const capabilityValue = normalizeIdentityCountryCode(capability.value)
+            const requiredValues = readRequiredCountryValues(config)
+            const excludedValues = readExcludedCountryValues(config)
+            if (requiredValues.length > 0 && (!capabilityValue || !requiredValues.includes(capabilityValue))) {
               mismatchReasons.push("nationality_mismatch")
             }
-            if (capability.value && excludedValues.includes(capability.value)) {
+            if (capabilityValue && excludedValues.includes(capabilityValue)) {
               mismatchReasons.push("nationality_excluded")
             }
           }
@@ -415,14 +478,29 @@ export async function evaluateMembershipGateRules(input: {
           break
         }
         case "age_over_18": {
-          const capability = user.verification_capabilities.age_over_18
-          if (capability.state !== "verified") {
+          if (!satisfiesMinimumAgeRequirement(user, requirement.accepted_providers, 18)) {
             missingCapabilities.push("age_over_18")
             if (includesAcceptedProvider(requirement.accepted_providers, "self")) {
               suggestedProvider = suggestedProvider ?? "self"
             }
-          } else if (!includesAcceptedProvider(requirement.accepted_providers, capability.provider)) {
-            mismatchReasons.push("provider_not_accepted")
+          }
+          break
+        }
+        case "minimum_age": {
+          const minimumAge = readMinimumAge(config, null)
+          if (minimumAge == null) {
+            mismatchReasons.push("unsupported_gate_config")
+          } else if (!satisfiesMinimumAgeRequirement(user, requirement.accepted_providers, minimumAge)) {
+            const hasSomeAgeProof = user.verification_capabilities.minimum_age.state === "verified"
+              || user.verification_capabilities.age_over_18.state === "verified"
+            if (hasSomeAgeProof) {
+              mismatchReasons.push("minimum_age_mismatch")
+            } else {
+              missingCapabilities.push("minimum_age")
+              if (includesAcceptedProvider(requirement.accepted_providers, "self")) {
+                suggestedProvider = suggestedProvider ?? "self"
+              }
+            }
           }
           break
         }

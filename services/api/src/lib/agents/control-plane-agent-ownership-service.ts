@@ -42,6 +42,14 @@ import {
 } from "./agent-serializers"
 import { assertVerifiedAgentChallenge, normalizeClawkeyPublicKeyToPem } from "./agent-challenge"
 import {
+  formatAgentHandleLabel,
+  isReservedAgentHandleLabel,
+  normalizeAgentHandleLookupLabel,
+  normalizeDesiredAgentHandleLabel,
+  resolveRequestedAgentDisplayName,
+  slugifyAgentHandleCandidate,
+} from "./agent-handle-policy"
+import {
   assertAgentOwnershipRecordStateTransition,
   assertAgentOwnershipSessionStatusTransition,
   assertUserAgentStatusTransition,
@@ -52,19 +60,6 @@ const AGENT_ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000
 const AGENT_REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000
 const AGENT_PAIRING_CODE_TTL_MS = 10 * 60 * 1000
 const AGENT_PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-const GENERIC_AGENT_DISPLAY_NAMES = new Set(["agent", "openclaw agent"])
-const AGENT_HANDLE_SUFFIX = ".clawitzer"
-const RESERVED_AGENT_HANDLE_LABELS = new Set([
-  "admin",
-  "support",
-  "pirate",
-  "clawitzer",
-  "help",
-  "mod",
-  "staff",
-  "official",
-  "security",
-])
 
 function parseIsoMs(iso: string): number | null {
   const parsed = new Date(iso).getTime()
@@ -215,51 +210,6 @@ async function getUserAgentRowById(executor: DbExecutor, agentId: string): Promi
   return row ? toUserAgentRow(row) : null
 }
 
-function normalizeDesiredAgentHandleLabel(desiredLabel: string): {
-  labelNormalized: string
-  labelDisplay: string
-} {
-  const trimmed = desiredLabel.trim().toLowerCase()
-  const withoutSuffix = trimmed.endsWith(AGENT_HANDLE_SUFFIX)
-    ? trimmed.slice(0, -AGENT_HANDLE_SUFFIX.length)
-    : trimmed
-
-  if (!withoutSuffix || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(withoutSuffix)) {
-    throw badRequestError("Invalid desired_label")
-  }
-  if (RESERVED_AGENT_HANDLE_LABELS.has(withoutSuffix)) {
-    throw eligibilityFailed("Desired agent handle is reserved")
-  }
-
-  return {
-    labelNormalized: withoutSuffix,
-    labelDisplay: `${withoutSuffix}${AGENT_HANDLE_SUFFIX}`,
-  }
-}
-
-function normalizeAgentHandleLookupLabel(handleLabel: string): string {
-  const trimmed = handleLabel.trim().toLowerCase()
-  const withoutSuffix = trimmed.endsWith(AGENT_HANDLE_SUFFIX)
-    ? trimmed.slice(0, -AGENT_HANDLE_SUFFIX.length)
-    : trimmed
-
-  if (!withoutSuffix || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(withoutSuffix)) {
-    throw badRequestError("Invalid handle label")
-  }
-  return withoutSuffix
-}
-
-function slugifyAgentHandleCandidate(value: string): string | null {
-  const normalized = value
-    .trim()
-    .toLowerCase()
-    .replace(/\.clawitzer$/iu, "")
-    .replace(/[^a-z0-9]+/gu, "-")
-    .replace(/^-+|-+$/gu, "")
-    .replace(/-+/gu, "-")
-  return normalized && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(normalized) ? normalized : null
-}
-
 function isAgentHandleLabelUniqueError(error: unknown): boolean {
   return hasUniqueConstraintField(error, "agent_handles.label_normalized")
     || hasUniqueConstraintField(error, "label_normalized")
@@ -336,7 +286,7 @@ async function allocateInitialAgentHandle(
   },
 ): Promise<AgentHandleRow | null> {
   const baseCandidate = slugifyAgentHandleCandidate(input.displayName)
-  if (!baseCandidate || RESERVED_AGENT_HANDLE_LABELS.has(baseCandidate)) {
+  if (!baseCandidate || isReservedAgentHandleLabel(baseCandidate)) {
     return null
   }
 
@@ -352,14 +302,14 @@ async function allocateInitialAgentHandle(
             redirect_target_agent_handle_id, issued_at, replaced_at, created_at, updated_at
           ) VALUES (?1, ?2, ?3, ?4, 'active', NULL, ?5, NULL, ?5, ?5)
         `,
-        args: [
-          makeId("agh"),
-          input.agentId,
-          labelNormalized,
-          `${labelNormalized}${AGENT_HANDLE_SUFFIX}`,
-          input.createdAt,
-        ],
-      })
+          args: [
+            makeId("agh"),
+            input.agentId,
+            labelNormalized,
+            formatAgentHandleLabel(labelNormalized),
+            input.createdAt,
+          ],
+        })
       return await getActiveAgentHandleRow(executor, input.agentId)
     } catch (error) {
       if (!isAgentHandleLabelUniqueError(error)) {
@@ -527,23 +477,6 @@ async function getOwnerAgentDisplayNameFallback(
     }
   }
   return `Agent ${agentId.slice(-6)}`
-}
-
-function resolveRequestedAgentDisplayName(value: string | null | undefined): string | null {
-  const trimmed = value?.trim()
-  if (!trimmed) {
-    return null
-  }
-
-  if (GENERIC_AGENT_DISPLAY_NAMES.has(trimmed.toLowerCase())) {
-    return null
-  }
-
-  if (/^agent [a-z0-9]{6}$/iu.test(trimmed)) {
-    return null
-  }
-
-  return trimmed
 }
 
 function deriveEvidenceRef(providerSessionRef: string | null, registeredAt?: string | null): string | null {
@@ -1446,7 +1379,7 @@ export async function resolvePublicAgentByHandle(
 
   return {
     is_canonical: requestedHandleRow.agent_handle_id === resolvedHandleRow.agent_handle_id,
-    requested_handle_label: `${requestedLabelNormalized}${AGENT_HANDLE_SUFFIX}`,
+    requested_handle_label: formatAgentHandleLabel(requestedLabelNormalized),
     resolved_handle_label: resolvedHandleRow.label_display,
     agent: {
       agent_id: agentRow.agent_id,

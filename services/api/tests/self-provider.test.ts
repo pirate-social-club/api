@@ -50,7 +50,8 @@ describe("self-provider capability canonicalization", () => {
       status: "verified",
       claims: {
         age_over_18: false,
-        nationality: "US",
+        minimum_age: null,
+        nationality: "USA",
         gender: "F",
       },
     })

@@ -434,7 +434,9 @@ export async function getJoinEligibility(input: {
 
     const failureReason = evaluation.mismatchReasons.includes("erc721_holding_required")
       ? "erc721_holding_required"
-      : null
+      : evaluation.mismatchReasons.includes("minimum_age_mismatch")
+        ? "minimum_age_mismatch"
+        : null
     return {
       community_id: input.communityId,
       membership_mode: membershipMode,
@@ -567,6 +569,12 @@ export async function joinCommunity(input: {
         throw gateFailedWithDetails("Your verified gender does not satisfy this community requirement", {
           membership_gate_summaries: gateSummaries,
           failure_reason: "gender_mismatch",
+        })
+      }
+      if (evaluation.mismatchReasons.includes("minimum_age_mismatch")) {
+        throw gateFailedWithDetails("Your verified age does not satisfy this community requirement", {
+          membership_gate_summaries: gateSummaries,
+          failure_reason: "minimum_age_mismatch",
         })
       }
       if (evaluation.mismatchReasons.includes("erc721_holding_required")) {

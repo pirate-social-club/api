@@ -87,6 +87,7 @@ export type VerificationSessionRow = {
   user_id: string
   provider: "self" | "very" | "passport"
   requested_capabilities_json: string
+  verification_requirements_json: string | null
   status: "pending" | "verified" | "failed" | "expired" | "canceled"
   upstream_session_ref: string | null
   result_ref: string | null
@@ -406,6 +407,7 @@ export function toVerificationSessionRow(row: unknown): VerificationSessionRow {
     user_id: requiredString(row, "user_id"),
     provider: requiredString(row, "provider") as VerificationSessionRow["provider"],
     requested_capabilities_json: requiredString(row, "requested_capabilities_json"),
+    verification_requirements_json: stringOrNull(rowValue(row, "verification_requirements_json")),
     status: requiredString(row, "status") as VerificationSessionRow["status"],
     upstream_session_ref: stringOrNull(rowValue(row, "upstream_session_ref")),
     result_ref: stringOrNull(rowValue(row, "result_ref")),

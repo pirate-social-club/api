@@ -34,6 +34,10 @@ export type VerificationCapabilities = {
   age_over_18: (VerifiedCapabilityState & {
     proof_type?: "age_over_18" | null;
   });
+  minimum_age: (VerifiedCapabilityState & {
+    proof_type?: "minimum_age" | null;
+    value?: number | null;
+  });
   nationality: (VerifiedCapabilityState & {
     proof_type?: "nationality" | null;
     value?: string | null;
@@ -147,6 +151,7 @@ export type VerificationSession = {
   provider_mode?: "qr_deeplink" | "widget" | null;
   wallet_attachment_id?: string | null;
   requested_capabilities: Array<RequestedVerificationCapability>;
+  verification_requirements?: Array<VerificationRequirement>;
   verification_intent?: VerificationIntent | null;
   policy_id?: string | null;
   status: "pending" | "verified" | "failed" | "expired";
@@ -177,7 +182,12 @@ export type VeryWidgetLaunch = {
   verify_url: string;
 };
 
-export type RequestedVerificationCapability = "unique_human" | "age_over_18" | "nationality" | "gender";
+export type RequestedVerificationCapability = "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender";
+
+export type VerificationRequirement = {
+  proof_type: "minimum_age";
+  minimum_age: number;
+};
 
 export type VerificationIntent = "profile_verification" | "community_creation" | "community_join" | "post_access_18_plus" | "commerce_pricing" | "qualifier_disclosure";
 
@@ -796,6 +806,7 @@ export type StartVerificationSessionRequest = {
   provider: "self" | "very";
   provider_mode?: "qr_deeplink" | "widget" | null;
   requested_capabilities?: Array<RequestedVerificationCapability>;
+  verification_requirements?: Array<VerificationRequirement> | null;
   wallet_attachment_id?: string | null;
   verification_intent?: VerificationIntent | null;
   policy_id?: string | null;
@@ -1247,10 +1258,12 @@ export type LocalizedPostResponse = {
 };
 
 export type MembershipGateSummary = {
-  gate_type: "nationality" | "gender" | "unique_human" | "age_over_18" | "wallet_score" | "erc721_holding";
+  gate_type: "nationality" | "gender" | "unique_human" | "age_over_18" | "minimum_age" | "wallet_score" | "erc721_holding";
   accepted_providers?: Array<"self" | "very" | "passport"> | null;
   required_value?: string | null;
+  required_values?: Array<string> | null;
   excluded_values?: Array<string> | null;
+  required_minimum_age?: number | null;
   chain_namespace?: string | null;
   contract_address?: string | null;
 };
@@ -1281,10 +1294,10 @@ export type JoinEligibility = {
   joinable_now: boolean;
   status: "joinable" | "requestable" | "verification_required" | "gate_failed" | "already_joined" | "banned";
   membership_gate_summaries: Array<MembershipGateSummary>;
-  missing_capabilities: Array<"unique_human" | "age_over_18" | "nationality" | "gender">;
+  missing_capabilities: Array<"unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender">;
   suggested_verification_provider?: "self" | "very" | null;
   suggested_verification_intent?: "community_join" | null;
-  failure_reason?: "missing_verification" | "provider_not_accepted" | "nationality_mismatch" | "gender_mismatch" | "erc721_holding_required" | "unsupported" | "banned" | null;
+  failure_reason?: "missing_verification" | "provider_not_accepted" | "nationality_mismatch" | "gender_mismatch" | "minimum_age_mismatch" | "erc721_holding_required" | "unsupported" | "banned" | null;
 };
 
 export type GateFailureDetails = {
@@ -1293,7 +1306,7 @@ export type GateFailureDetails = {
   missing_capabilities?: Array<string> | null;
   suggested_verification_provider?: "self" | "very" | null;
   suggested_verification_intent?: "community_join" | null;
-  failure_reason?: "missing_verification" | "provider_not_accepted" | "nationality_mismatch" | "gender_mismatch" | "erc721_holding_required" | "unsupported" | "banned" | null;
+  failure_reason?: "missing_verification" | "provider_not_accepted" | "nationality_mismatch" | "gender_mismatch" | "minimum_age_mismatch" | "erc721_holding_required" | "unsupported" | "banned" | null;
 };
 
 export type HomeFeedCommunitySummary = {
@@ -1992,7 +2005,7 @@ type GateRule = {
   community_id: string;
   scope: "membership" | "viewer" | "posting";
   gate_family: "token_holding" | "identity_proof";
-  gate_type: "unique_human" | "age_over_18" | "nationality" | "gender" | "sanctions_clear" | "wallet_score" | "erc721_holding";
+  gate_type: "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "sanctions_clear" | "wallet_score" | "erc721_holding";
   proof_requirements?: Array<ProofRequirement> | null;
   chain_namespace?: string | null;
   gate_config?: (Record<string, unknown>) | null;
@@ -2004,7 +2017,7 @@ type GateRule = {
 type GateRuleInput = {
   scope: "membership" | "viewer" | "posting";
   gate_family: "token_holding" | "identity_proof";
-  gate_type: "unique_human" | "age_over_18" | "nationality" | "gender" | "sanctions_clear" | "wallet_score" | "erc721_holding";
+  gate_type: "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "sanctions_clear" | "wallet_score" | "erc721_holding";
   proof_requirements?: Array<ProofRequirement> | null;
   chain_namespace?: string | null;
   gate_config?: (Record<string, unknown>) | null;
@@ -2195,7 +2208,7 @@ type PromotionDisclosureInput = {
 };
 
 type ProofRequirement = {
-  proof_type: "unique_human" | "biometric_liveness" | "wallet_score" | "gov_id" | "age_over_18" | "nationality" | "gender" | "sanctions_clear" | "phone";
+  proof_type: "unique_human" | "biometric_liveness" | "wallet_score" | "gov_id" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "sanctions_clear" | "phone";
   accepted_providers?: Array<"self" | "very" | "passport"> | null;
   accepted_mechanisms?: Array<string> | null;
   config?: (Record<string, unknown>) | null;
@@ -2288,7 +2301,7 @@ type VerificationCapabilityState = {
 type VerifiedCapabilityState = {
   state: "unverified" | "verified" | "expired";
   provider?: "self" | null;
-  proof_type?: "age_over_18" | "nationality" | "gender" | null;
+  proof_type?: "age_over_18" | "minimum_age" | "nationality" | "gender" | null;
   mechanism?: string | null;
   verified_at?: string | null;
 };

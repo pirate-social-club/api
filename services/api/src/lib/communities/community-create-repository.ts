@@ -351,6 +351,7 @@ function resolveScopeUniqueHumanProvider(
       if (
         requirement.proof_type !== "unique_human"
         && requirement.proof_type !== "age_over_18"
+        && requirement.proof_type !== "minimum_age"
         && requirement.proof_type !== "nationality"
         && requirement.proof_type !== "gender"
       ) {

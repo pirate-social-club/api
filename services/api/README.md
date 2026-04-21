@@ -78,6 +78,8 @@ Story/CDR code is active commerce infrastructure, not dead code. It is reached t
 
 Local development has an intentional fallback for locked delivery when Story runtime signing keys are not configured. Production-like environments should configure the Story/CDR keys and treat fallback behavior as local-only.
 
+The detailed route-to-service map is maintained in [Story/CDR Path Map](../../STORY_CDR_PATHS.md).
+
 The DB-backed API now reads and writes control-plane rows such as:
 
 - `users`

@@ -71,6 +71,7 @@ export type {
   RedditImportSummary,
   RedditVerification,
   RequestedVerificationCapability,
+  VerificationRequirement,
   SelfVerificationDisclosures,
   SelfVerificationLaunch,
   SessionExchangeRequest,

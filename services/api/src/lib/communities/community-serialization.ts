@@ -205,13 +205,13 @@ function communityRequiresSelfLane(local: LocalCommunitySnapshot | null): boolea
       return false
     }
 
-    if (rule.gate_type === "age_over_18" || rule.gate_type === "nationality" || rule.gate_type === "gender") {
+    if (rule.gate_type === "age_over_18" || rule.gate_type === "minimum_age" || rule.gate_type === "nationality" || rule.gate_type === "gender") {
       return true
     }
 
     return (rule.proof_requirements ?? []).some((requirement) => {
       const proofType = requirement.proof_type
-      if (proofType === "age_over_18" || proofType === "nationality" || proofType === "gender") {
+      if (proofType === "age_over_18" || proofType === "minimum_age" || proofType === "nationality" || proofType === "gender") {
         return true
       }
 

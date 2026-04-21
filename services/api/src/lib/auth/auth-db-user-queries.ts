@@ -47,7 +47,7 @@ type AuthProviderLinkRow = {
 async function getLatestVerificationSessionRow(executor: DbExecutor, userId: string): Promise<VerificationSessionRow | null> {
   const row = await firstRow(executor, {
     sql: `
-      SELECT verification_session_id, user_id, provider, requested_capabilities_json,
+      SELECT verification_session_id, user_id, provider, requested_capabilities_json, verification_requirements_json,
              status, result_ref, failure_code, completed_at, expires_at, created_at, updated_at
       FROM verification_sessions
       WHERE user_id = ?1

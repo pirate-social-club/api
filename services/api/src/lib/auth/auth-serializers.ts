@@ -45,6 +45,7 @@ export function parseVerificationCapabilities(raw: string | null | undefined): V
     return applyLazyCapabilityExpiry({
       unique_human: parsed.unique_human ?? defaults.unique_human,
       age_over_18: parsed.age_over_18 ?? defaults.age_over_18,
+      minimum_age: parsed.minimum_age ?? defaults.minimum_age,
       nationality: parsed.nationality ?? defaults.nationality,
       gender: parsed.gender ?? defaults.gender,
       sanctions_clear: parsed.sanctions_clear ?? defaults.sanctions_clear,
@@ -197,6 +198,9 @@ export function serializeVerificationSession(input: {
   launch?: VerificationSessionLaunch | null
 }): VerificationSession {
   const requestedCapabilities = JSON.parse(input.row.requested_capabilities_json) as VerificationSession["requested_capabilities"]
+  const verificationRequirements = input.row.verification_requirements_json
+    ? JSON.parse(input.row.verification_requirements_json) as VerificationSession["verification_requirements"]
+    : []
   return {
     verification_session_id: input.row.verification_session_id,
     user_id: input.row.user_id,
@@ -204,6 +208,7 @@ export function serializeVerificationSession(input: {
     provider_mode: input.row.provider === "very" && input.row.upstream_session_ref ? "widget" : null,
     wallet_attachment_id: input.row.wallet_attachment_id,
     requested_capabilities: requestedCapabilities,
+    verification_requirements: verificationRequirements,
     verification_intent: input.row.verification_intent as VerificationSession["verification_intent"],
     policy_id: input.row.policy_id,
     status: input.row.status === "canceled" ? "failed" : input.row.status,
