@@ -75,6 +75,19 @@ export function hasUniqueConstraintField(error: unknown, field: string): boolean
   return parseUniqueConstraintFields(error).includes(field)
 }
 
+export function hasUniqueConstraintName(error: unknown, constraintName: string): boolean {
+  const exposedConstraint = typeof error === "object" && error && "constraint" in error
+    ? String((error as { constraint?: unknown }).constraint || "")
+    : ""
+  if (exposedConstraint === constraintName) {
+    return true
+  }
+
+  const message = error instanceof Error ? error.message : String(error)
+  return message.includes(`constraint "${constraintName}"`)
+    || message.includes(`constraint '${constraintName}'`)
+}
+
 export function isMissingTableError(error: unknown, tableName: string): boolean {
   const code = typeof error === "object" && error && "code" in error ? String((error as { code?: unknown }).code) : ""
   if (code === "42P01") {

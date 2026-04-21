@@ -11,6 +11,7 @@ import {
   listCreatedCommunityRowsByCreatorUserId,
   getProfileRow,
   getUserRow,
+  hasUniqueConstraintName,
   hasUniqueConstraintField,
   listActiveWalletAttachmentRows,
   loadSnapshot,
@@ -170,6 +171,13 @@ export class DatabaseIdentityRepository {
       } catch {}
 
       if (hasUniqueConstraintField(error, "auth_provider_links.provider_subject")) {
+        const existing = await findActiveAuthProviderLink(this.client, provider, providerSubject)
+        if (existing) {
+          resolvedUserId = existing.user_id
+        } else {
+          throw error
+        }
+      } else if (hasUniqueConstraintName(error, "idx_wallet_attachments_active_primary")) {
         const existing = await findActiveAuthProviderLink(this.client, provider, providerSubject)
         if (existing) {
           resolvedUserId = existing.user_id
