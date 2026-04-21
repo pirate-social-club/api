@@ -189,6 +189,8 @@ export type AgentOwnershipSessionStatus = "pending" | "awaiting_owner" | "proof_
 
 export type UserAgentStatus = "pending" | "active" | "suspended" | "revoked" | "transferred" | "deregistered";
 
+export type AgentHandleStatus = "active" | "redirect" | "retired";
+
 export type AgentOwnershipState = "pending" | "verified" | "expired" | "revoked" | "transferred";
 
 export type AgentChallenge = {
@@ -322,6 +324,7 @@ export type UserAgent = {
   agent_id: string;
   owner_user_id: string;
   display_name: string;
+  handle?: AgentHandle | null;
   status: UserAgentStatus;
   current_ownership_record_id?: string | null;
   current_ownership?: AgentOwnershipRecord | null;
@@ -333,8 +336,44 @@ export type UserAgentListResponse = {
   items: Array<UserAgent>;
 };
 
+export type AgentHandle = {
+  agent_handle_id: string;
+  agent_id: string;
+  label_normalized: string;
+  label_display: string;
+  status: AgentHandleStatus;
+  redirect_target_agent_handle_id?: string | null;
+  issued_at: string;
+  replaced_at?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type UpdateAgentHandleRequest = {
+  desired_label: string;
+};
+
 export type UpdateUserAgentRequest = {
   display_name: string;
+};
+
+export type PublicAgentResolution = {
+  is_canonical: boolean;
+  requested_handle_label: string;
+  resolved_handle_label: string;
+  agent: {
+    agent_id: string;
+    display_name?: string | null;
+    handle: AgentHandle;
+    ownership_provider?: AgentOwnershipProvider | null;
+    created_at: string;
+    updated_at: string;
+  };
+  owner: {
+    user_id: string;
+    display_name?: string | null;
+    global_handle: GlobalHandle;
+  };
 };
 
 export type NamespaceVerificationAssertions = {
@@ -566,6 +605,7 @@ export type CommunityPurchase = {
   settlement_wallet_attachment_id: string;
   purchase_price_usd: number;
   pricing_tier?: string | null;
+  settlement_mode: CommunityPurchaseSettlementMode;
   settlement_chain: CommunityMoneyChainRef;
   settlement_token: string;
   settlement_tx_ref: string;
@@ -633,6 +673,7 @@ export type CommunityPurchaseQuote = {
   base_price_usd: number;
   pricing_tier?: string | null;
   final_price_usd: number;
+  settlement_mode: CommunityPurchaseSettlementMode;
   allocation_snapshot: Array<CommunitySaleAllocationSnapshot>;
   funding_mode: CommunityPurchaseFundingMode;
   funding_asset?: CommunityMoneyAssetRef | null;
@@ -671,6 +712,7 @@ export type CommunityPurchaseSettlement = {
   settlement_wallet_attachment_id: string;
   purchase_price_usd: number;
   pricing_tier?: string | null;
+  settlement_mode: CommunityPurchaseSettlementMode;
   settlement_chain: CommunityMoneyChainRef;
   settlement_chain_ref: string;
   settlement_token: string;
@@ -861,6 +903,17 @@ export type Asset = {
   story_status: "none" | "requested" | "published" | "failed";
   story_error?: string | null;
   story_ip_id?: string | null;
+  story_ip_nft_contract?: string | null;
+  story_ip_nft_token_id?: string | null;
+  story_publish_model?: "pirate_v1" | "story_ip_v1";
+  story_license_terms_id?: string | null;
+  story_license_template?: string | null;
+  story_royalty_policy?: string | null;
+  story_royalty_policy_id?: string | null;
+  story_derivative_parent_ip_ids?: Array<string> | null;
+  story_derivative_registered_at?: string | null;
+  story_revenue_token?: string | null;
+  story_royalty_registration_status?: "none" | "pending" | "registered" | "failed";
   story_publish_tx_ref?: string | null;
   story_asset_version_id?: string | null;
   story_cdr_vault_uuid?: number | null;
@@ -969,6 +1022,7 @@ export type Post = {
   identity_mode: "public" | "anonymous";
   anonymous_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null;
   anonymous_label?: string | null;
+  agent_handle_snapshot?: string | null;
   agent_display_name_snapshot?: string | null;
   agent_owner_handle_snapshot?: string | null;
   agent_ownership_provider_snapshot?: string | null;
@@ -1013,6 +1067,7 @@ export type Comment = {
   identity_mode: "public" | "anonymous";
   anonymous_scope: "community_stable" | "thread_stable" | null;
   anonymous_label: string | null;
+  agent_handle_snapshot?: string | null;
   agent_display_name_snapshot?: string | null;
   agent_owner_handle_snapshot?: string | null;
   agent_ownership_provider_snapshot?: AgentOwnershipProvider | null;
@@ -1578,6 +1633,8 @@ type CommunityProvenancePolicy = {
 };
 
 type CommunityPurchaseFundingMode = "direct" | "routed";
+
+type CommunityPurchaseSettlementMode = "delivery_only_story_settlement" | "royalty_native_story_payment";
 
 type CommunityReferenceLinkMetadata = {
   display_name?: string | null;
@@ -2264,8 +2321,10 @@ export const apiRoutes = {
   agentOwnershipSessionComplete: (agentOwnershipSessionId: string) => `/agent-ownership-sessions/${agentOwnershipSessionId}/complete`,
   agents: "/agents",
   agent: (agentId: string) => `/agents/${agentId}`,
+  agentHandle: (agentId: string) => `/agents/${agentId}/handle`,
   agentCredential: (agentId: string) => `/agents/${agentId}/credential`,
   agentCredentialRefresh: (agentId: string) => `/agents/${agentId}/credential/refresh`,
+  publicAgent: (handleLabel: string) => `/public-agents/${handleLabel}`,
   namespaceVerificationSessions: "/namespace-verification-sessions",
   namespaceVerificationSession: (namespaceVerificationSessionId: string) => `/namespace-verification-sessions/${namespaceVerificationSessionId}`,
   namespaceVerificationSessionComplete: (namespaceVerificationSessionId: string) => `/namespace-verification-sessions/${namespaceVerificationSessionId}/complete`,
