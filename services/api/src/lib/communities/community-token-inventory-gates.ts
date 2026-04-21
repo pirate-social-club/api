@@ -1,5 +1,5 @@
 import type { Env, WalletAttachmentSummary } from "../../types"
-import { COURTYARD_API_URL, COURTYARD_REGISTRIES } from "./courtyard-registry-config"
+import { DEFAULT_COURTYARD_API_URL, COURTYARD_REGISTRIES } from "./courtyard-registry-config"
 import { normalizeEthereumAddress } from "./community-token-gates"
 
 export type Erc721InventoryProvider = "courtyard"
@@ -42,11 +42,19 @@ type CourtyardAsset = {
   token_id?: string
 }
 
+type CourtyardInventoryCacheEntry = {
+  matchedQuantity: number
+  expiresAtMs: number
+}
+
 let erc721InventoryMatcherForTests: ((input: {
   env: Env
   walletAddresses: string[]
   config: Erc721InventoryMatchConfig
 }) => Promise<{ matchedQuantity: number; unavailable?: boolean }>) | null = null
+
+const courtyardInventoryMatchCache = new Map<string, CourtyardInventoryCacheEntry>()
+const DEFAULT_COURTYARD_INVENTORY_CACHE_TTL_MS = 60_000
 
 export function setErc721InventoryMatcherForTests(
   matcher: ((input: {
@@ -58,18 +66,22 @@ export function setErc721InventoryMatcherForTests(
   erc721InventoryMatcherForTests = matcher
 }
 
+export function clearErc721InventoryMatchCacheForTests(): void {
+  courtyardInventoryMatchCache.clear()
+}
+
 export function normalizeInventoryText(value: unknown): string | null {
   if (typeof value !== "string") return null
   const normalized = value.trim().normalize("NFC").normalize("NFD").replace(/\p{Mark}/gu, "").toLowerCase()
   return normalized.length > 0 ? normalized : null
 }
 
-export function listAttachedEvmWalletAddresses(walletAttachments: WalletAttachmentSummary[]): string[] {
+export function listAttachedPolygonWalletAddresses(walletAttachments: WalletAttachmentSummary[]): string[] {
   const seen = new Set<string>()
   const addresses: string[] = []
 
   for (const attachment of walletAttachments) {
-    if (!attachment.chain_namespace.startsWith("eip155:")) {
+    if (attachment.chain_namespace !== "eip155:137") {
       continue
     }
     const normalized = normalizeEthereumAddress(attachment.wallet_address)
@@ -183,6 +195,10 @@ function readCourtyardAttributes(asset: CourtyardAsset): Record<string, string> 
   return values
 }
 
+// Courtyard eligibility depends on this observed /index/ownership shape:
+// chain=polygon, contract, token_id, owner.address, collection/title, and normalized attributes.
+// We intentionally treat franchise/brand as exact facets and subject/model as contains filters
+// so broad UI values like "Charizard" or "Submariner" match graded/variant titles.
 function normalizeCourtyardAsset(asset: CourtyardAsset): Erc721InventoryAsset | null {
   const contractAddress = normalizeEthereumAddress(asset.contract)
   const ownerAddress = normalizeEthereumAddress(asset.owner?.address)
@@ -223,11 +239,13 @@ function assetMatchesFilter(asset: Erc721InventoryAsset, filter: Erc721Inventory
 }
 
 async function fetchCourtyardOwnershipPage(input: {
+  env: Env
   owner: string
   offset: number
   limit: number
 }): Promise<{ assets: CourtyardAsset[]; total: number }> {
-  const url = new URL("/index/ownership", COURTYARD_API_URL)
+  const configuredApiUrl = String(input.env.COURTYARD_API_URL || DEFAULT_COURTYARD_API_URL).trim() || DEFAULT_COURTYARD_API_URL
+  const url = new URL("/index/ownership", configuredApiUrl)
   url.searchParams.set("owner", input.owner)
   url.searchParams.set("walletType", "both")
   url.searchParams.set("offset", String(input.offset))
@@ -247,18 +265,18 @@ async function fetchCourtyardOwnershipPage(input: {
 }
 
 async function countCourtyardInventoryMatches(input: {
+  env: Env
   walletAddresses: string[]
   config: Erc721InventoryMatchConfig
 }): Promise<number> {
   let matchedQuantity = 0
   const seenTokenKeys = new Set<string>()
   const pageLimit = 100
-  const maxAssetsPerWallet = 1_000
 
   for (const walletAddress of input.walletAddresses) {
     let offset = 0
-    while (offset < maxAssetsPerWallet) {
-      const page = await fetchCourtyardOwnershipPage({ owner: walletAddress, offset, limit: pageLimit })
+    while (true) {
+      const page = await fetchCourtyardOwnershipPage({ env: input.env, owner: walletAddress, offset, limit: pageLimit })
       for (const rawAsset of page.assets) {
         const asset = normalizeCourtyardAsset(rawAsset)
         if (!asset) continue
@@ -287,37 +305,94 @@ async function countCourtyardInventoryMatches(input: {
   return matchedQuantity
 }
 
+function resolveCourtyardInventoryCacheTtlMs(env: Env): number {
+  const raw = String(env.COURTYARD_INVENTORY_CACHE_TTL_MS || "").trim()
+  if (!raw) {
+    return DEFAULT_COURTYARD_INVENTORY_CACHE_TTL_MS
+  }
+  const parsed = Number(raw)
+  if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 300_000) {
+    return parsed
+  }
+  return DEFAULT_COURTYARD_INVENTORY_CACHE_TTL_MS
+}
+
+function buildInventoryMatchCacheKey(input: {
+  walletAddresses: string[]
+  config: Erc721InventoryMatchConfig
+}): string {
+  return JSON.stringify({
+    wallets: [...input.walletAddresses].sort(),
+    chainNamespace: input.config.chainNamespace,
+    contractAddress: input.config.contractAddress,
+    inventoryProvider: input.config.inventoryProvider,
+    minQuantity: input.config.minQuantity,
+    assetFilter: input.config.assetFilter,
+  })
+}
+
+function logCourtyardInventoryProviderError(input: {
+  error: unknown
+  walletCount: number
+  contractAddress: string
+}): void {
+  const error = input.error
+  console.warn("[courtyard-inventory-gate] provider unavailable", {
+    error_name: error instanceof Error ? error.name : typeof error,
+    error_message: error instanceof Error ? error.message : String(error),
+    wallet_count: input.walletCount,
+    contract_address: input.contractAddress,
+  })
+}
+
 export async function evaluateErc721InventoryMatch(input: {
   env: Env
   walletAttachments: WalletAttachmentSummary[]
   config: Erc721InventoryMatchConfig
 }): Promise<{ matchedQuantity: number; unavailable: boolean }> {
-  const walletAddresses = listAttachedEvmWalletAddresses(input.walletAttachments)
+  const walletAddresses = listAttachedPolygonWalletAddresses(input.walletAttachments)
   if (walletAddresses.length === 0) {
     return { matchedQuantity: 0, unavailable: false }
   }
 
-  if (erc721InventoryMatcherForTests) {
-    const result = await erc721InventoryMatcherForTests({
-      env: input.env,
-      walletAddresses,
-      config: input.config,
-    })
-    return {
-      matchedQuantity: result.matchedQuantity,
-      unavailable: result.unavailable === true,
-    }
+  const cacheKey = buildInventoryMatchCacheKey({ walletAddresses, config: input.config })
+  const cacheTtlMs = resolveCourtyardInventoryCacheTtlMs(input.env)
+  const cached = courtyardInventoryMatchCache.get(cacheKey)
+  const nowMs = Date.now()
+  if (cacheTtlMs > 0 && cached && cached.expiresAtMs > nowMs) {
+    return { matchedQuantity: cached.matchedQuantity, unavailable: false }
   }
 
   try {
-    return {
-      matchedQuantity: await countCourtyardInventoryMatches({
+    const result = erc721InventoryMatcherForTests
+      ? await erc721InventoryMatcherForTests({
+        env: input.env,
         walletAddresses,
         config: input.config,
-      }),
-      unavailable: false,
+      })
+      : {
+        matchedQuantity: await countCourtyardInventoryMatches({
+          env: input.env,
+          walletAddresses,
+          config: input.config,
+        }),
+      }
+    if (result.unavailable === true) {
+      return { matchedQuantity: result.matchedQuantity, unavailable: true }
     }
-  } catch {
+    if (cacheTtlMs > 0) {
+      courtyardInventoryMatchCache.set(cacheKey, {
+        matchedQuantity: result.matchedQuantity,
+        expiresAtMs: nowMs + cacheTtlMs,
+      })
+    }
+    return { matchedQuantity: result.matchedQuantity, unavailable: false }
+  } catch (error) {
+    logCourtyardInventoryProviderError({
+      error,
+      walletCount: walletAddresses.length,
+      contractAddress: input.config.contractAddress,
+    })
     return { matchedQuantity: 0, unavailable: true }
   }
 }

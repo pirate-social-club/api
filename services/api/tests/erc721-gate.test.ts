@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { buildMembershipGateSummary, evaluateMembershipGateRules } from "../src/lib/communities/community-membership-store"
 import { setErc721OwnershipCheckerForTests } from "../src/lib/communities/community-token-gates"
-import { setErc721InventoryMatcherForTests } from "../src/lib/communities/community-token-inventory-gates"
+import {
+  clearErc721InventoryMatchCacheForTests,
+  evaluateErc721InventoryMatch,
+  setErc721InventoryMatcherForTests,
+} from "../src/lib/communities/community-token-inventory-gates"
 import { buildDefaultVerificationCapabilities } from "../src/lib/verification/verification-capabilities"
 import type { User, WalletAttachmentSummary } from "../src/types"
 
@@ -81,9 +85,15 @@ const walletAttachments: WalletAttachmentSummary[] = [
   },
 ]
 
+const originalFetch = globalThis.fetch
+const originalConsoleWarn = console.warn
+
 afterEach(() => {
   setErc721OwnershipCheckerForTests(null)
   setErc721InventoryMatcherForTests(null)
+  clearErc721InventoryMatchCacheForTests()
+  globalThis.fetch = originalFetch
+  console.warn = originalConsoleWarn
 })
 
 describe("erc721 gate evaluation", () => {
@@ -138,7 +148,6 @@ describe("erc721 gate evaluation", () => {
   test("returns erc721_inventory_match_required when attached wallets do not hold enough matching assets", async () => {
     setErc721InventoryMatcherForTests(async ({ walletAddresses }) => {
       expect(walletAddresses).toEqual([
-        "0x2222222222222222222222222222222222222222",
         "0x3333333333333333333333333333333333333333",
       ])
       return { matchedQuantity: 2 }
@@ -182,5 +191,138 @@ describe("erc721 gate evaluation", () => {
 
     expect(result.satisfied).toBe(false)
     expect(result.mismatchReasons).toContain("token_inventory_unavailable")
+  })
+
+  test("fails closed and logs when the inventory provider throws", async () => {
+    const warnCalls: unknown[][] = []
+    console.warn = (...args: unknown[]) => {
+      warnCalls.push(args)
+    }
+    setErc721InventoryMatcherForTests(async () => {
+      throw new Error("courtyard down")
+    })
+
+    const result = await evaluateMembershipGateRules({
+      env: {},
+      rules: [makeCourtyardInventoryRule()],
+      user: makeUser(),
+      walletAttachments,
+    })
+
+    expect(result.satisfied).toBe(false)
+    expect(result.mismatchReasons).toContain("token_inventory_unavailable")
+    expect(warnCalls.length).toBe(1)
+    expect(String(warnCalls[0]?.[0])).toContain("courtyard-inventory-gate")
+    expect(warnCalls[0]?.[1]).toEqual({
+      error_name: "Error",
+      error_message: "courtyard down",
+      wallet_count: 1,
+      contract_address: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+    })
+  })
+
+  test("rejects Courtyard assets when the observed schema no longer identifies a supported category", async () => {
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      total: 1,
+      assets: [{
+        chain: "polygon",
+        collection: "Pokemon TCG",
+        contract: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+        owner: { address: "0x3333333333333333333333333333333333333333" },
+        title: "Charizard V",
+        token_id: "1",
+        attributes: [
+          { name: "Category", value: "Pokemon" },
+          { name: "Title/Subject", value: "Charizard V" },
+        ],
+      }],
+    })) as Response
+
+    const result = await evaluateMembershipGateRules({
+      env: { COURTYARD_INVENTORY_CACHE_TTL_MS: "0" },
+      rules: [makeCourtyardInventoryRule({ min_quantity: 1 })],
+      user: makeUser(),
+      walletAttachments,
+    })
+
+    expect(result.satisfied).toBe(false)
+    expect(result.mismatchReasons).toContain("erc721_inventory_match_required")
+  })
+
+  test("deduplicates the same Courtyard token across Polygon wallets", async () => {
+    let fetchCount = 0
+    globalThis.fetch = async () => {
+      fetchCount += 1
+      return new Response(JSON.stringify({
+        total: 1,
+        assets: [{
+          chain: "polygon",
+          collection: "Graded Cards",
+          contract: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+          owner: { address: "0x3333333333333333333333333333333333333333" },
+          title: "Charizard V",
+          token_id: "shared-token",
+          attributes: [
+            { name: "Category", value: "Pokemon" },
+            { name: "Title/Subject", value: "Charizard V" },
+          ],
+        }],
+      })) as Response
+    }
+
+    const result = await evaluateMembershipGateRules({
+      env: { COURTYARD_INVENTORY_CACHE_TTL_MS: "0" },
+      rules: [makeCourtyardInventoryRule({ min_quantity: 2 })],
+      user: makeUser(),
+      walletAttachments: [
+        ...walletAttachments,
+        {
+          wallet_attachment_id: "wal_polygon_2",
+          chain_namespace: "eip155:137",
+          wallet_address: "0x4444444444444444444444444444444444444444",
+          is_primary: false,
+        },
+      ],
+    })
+
+    expect(fetchCount).toBe(2)
+    expect(result.satisfied).toBe(false)
+    expect(result.mismatchReasons).toContain("erc721_inventory_match_required")
+  })
+
+  test("caches successful Courtyard inventory matches briefly", async () => {
+    let fetchCount = 0
+    const config = {
+      chainNamespace: "eip155:137" as const,
+      contractAddress: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+      inventoryProvider: "courtyard" as const,
+      minQuantity: 1,
+      assetFilter: { category: "trading_card" as const, franchise: "pokemon", subject: "charizard" },
+    }
+    globalThis.fetch = async () => {
+      fetchCount += 1
+      return new Response(JSON.stringify({
+        total: 1,
+        assets: [{
+          chain: "polygon",
+          collection: "Graded Cards",
+          contract: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+          owner: { address: "0x3333333333333333333333333333333333333333" },
+          title: "Charizard V",
+          token_id: "cached-token",
+          attributes: [
+            { name: "Category", value: "Pokemon" },
+            { name: "Title/Subject", value: "Charizard V" },
+          ],
+        }],
+      })) as Response
+    }
+
+    const first = await evaluateErc721InventoryMatch({ env: {}, walletAttachments, config })
+    const second = await evaluateErc721InventoryMatch({ env: {}, walletAttachments, config })
+
+    expect(first).toEqual({ matchedQuantity: 1, unavailable: false })
+    expect(second).toEqual({ matchedQuantity: 1, unavailable: false })
+    expect(fetchCount).toBe(1)
   })
 })

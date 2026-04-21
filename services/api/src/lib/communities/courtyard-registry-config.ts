@@ -12,4 +12,4 @@ export const COURTYARD_REGISTRIES: CourtyardRegistryConfig[] = [
   },
 ]
 
-export const COURTYARD_API_URL = "https://api.courtyard.io"
+export const DEFAULT_COURTYARD_API_URL = "https://api.courtyard.io"
