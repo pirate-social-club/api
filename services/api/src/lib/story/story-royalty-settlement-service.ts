@@ -1,0 +1,192 @@
+import { StoryClient, WIP_TOKEN_ADDRESS } from "@story-protocol/core-sdk"
+import { JsonRpcProvider, Wallet, getAddress } from "ethers"
+import { http, zeroAddress } from "viem"
+import { privateKeyToAccount } from "viem/accounts"
+import type { Env } from "../../types"
+import { resolveDirectTxGasPolicy, sendContractTxWithPolicy } from "../evm-direct-tx"
+import { parseExpectedEvmAddress } from "../evm-signer"
+import { resolveStorySettlementDirectSigner } from "./story-direct-signer"
+import { ensureStoryEntitlementMinterAuthorized } from "./story-runtime-authorization"
+import {
+  STORY_DELIVERY_CONTRACTS,
+  resolveStoryChainId,
+  resolveStoryRpcUrl,
+  resolveStoryTxWaitTimeoutMs,
+} from "./story-runtime-config"
+
+const PURCHASE_ENTITLEMENT_TOKEN_ABI = [
+  "function mintEntitlement(address to, uint256 tokenId, bytes32 purchaseRef) returns (bool)",
+] as const
+
+export type StoryRoyaltyPurchaseSettlementInput = {
+  env: Env
+  purchaseRef: `0x${string}`
+  buyerAddress: string
+  receiverIpId: string
+  payerIpId?: string | null
+  entitlementTokenId?: bigint | null
+  amount: bigint
+}
+
+export type StoryRoyaltyPurchaseSettlementResult = {
+  royaltyTxHash: string
+  entitlementTxHash: string | null
+  settlementTxHash: string
+}
+
+export type StoryRoyaltyPaymentResult = StoryRoyaltyPurchaseSettlementResult & {
+  entitlementHandled: boolean
+}
+
+let testRoyaltySettlementExecutor:
+  | ((input: StoryRoyaltyPurchaseSettlementInput) => Promise<StoryRoyaltyPurchaseSettlementResult>)
+  | null = null
+
+export function setStoryRoyaltyPurchaseSettlementExecutorForTests(
+  executor: ((input: StoryRoyaltyPurchaseSettlementInput) => Promise<StoryRoyaltyPurchaseSettlementResult>) | null,
+): void {
+  testRoyaltySettlementExecutor = executor
+}
+
+function resolveStoryChainName(env: Pick<Env, "STORY_CHAIN_ID">): "aeneid" | "mainnet" {
+  return resolveStoryChainId(env) === 1514 ? "mainnet" : "aeneid"
+}
+
+export async function payStoryRoyaltyOnBehalfForPurchase(input: StoryRoyaltyPurchaseSettlementInput): Promise<StoryRoyaltyPaymentResult> {
+  if (testRoyaltySettlementExecutor) {
+    return {
+      ...await testRoyaltySettlementExecutor(input),
+      entitlementHandled: true,
+    }
+  }
+
+  const settlementConfig = resolveStorySettlementDirectSigner(input.env)
+  if (!settlementConfig.ok) throw new Error(settlementConfig.error)
+  if (!settlementConfig.value) {
+    throw new Error("MUSIC_PURCHASE_STORY_SETTLEMENT_PRIVATE_KEY missing/invalid")
+  }
+
+  const buyerAddress = parseExpectedEvmAddress(input.buyerAddress)
+  if (!buyerAddress) throw new Error("buyerAddress missing/invalid")
+  const receiverIpId = parseExpectedEvmAddress(input.receiverIpId)
+  if (!receiverIpId) throw new Error("receiverIpId missing/invalid")
+  const payerIpId = parseExpectedEvmAddress(input.payerIpId) ?? zeroAddress
+  if (input.amount <= 0n) throw new Error("royalty settlement amount must be positive")
+
+  const storyClient = StoryClient.newClient({
+    account: privateKeyToAccount(settlementConfig.value.privateKey as `0x${string}`),
+    transport: http(resolveStoryRpcUrl(input.env)),
+    chainId: resolveStoryChainName(input.env),
+  })
+  const royalty = await storyClient.royalty.payRoyaltyOnBehalf({
+    receiverIpId: receiverIpId as `0x${string}`,
+    payerIpId: payerIpId as `0x${string}`,
+    token: WIP_TOKEN_ADDRESS,
+    amount: input.amount,
+    options: {
+      wipOptions: {
+        enableAutoWrapIp: true,
+        enableAutoApprove: true,
+      },
+    },
+  })
+  const royaltyTxHash = String(royalty.txHash || "")
+  if (!royaltyTxHash) {
+    throw new Error("story_royalty_payment_missing_tx_hash")
+  }
+
+  return {
+    royaltyTxHash,
+    entitlementTxHash: null,
+    settlementTxHash: royaltyTxHash,
+    entitlementHandled: false,
+  }
+}
+
+export async function mintStoryRoyaltyPurchaseEntitlement(input: {
+  env: Env
+  purchaseRef: `0x${string}`
+  buyerAddress: string
+  entitlementTokenId: bigint
+}): Promise<string> {
+  const settlementConfig = resolveStorySettlementDirectSigner(input.env)
+  if (!settlementConfig.ok) throw new Error(settlementConfig.error)
+  if (!settlementConfig.value) {
+    throw new Error("MUSIC_PURCHASE_STORY_SETTLEMENT_PRIVATE_KEY missing/invalid")
+  }
+
+  const buyerAddress = parseExpectedEvmAddress(input.buyerAddress)
+  if (!buyerAddress) throw new Error("buyerAddress missing/invalid")
+  if (input.entitlementTokenId == null) {
+    throw new Error("entitlementTokenId missing/invalid")
+  }
+
+  const provider = new JsonRpcProvider(resolveStoryRpcUrl(input.env), resolveStoryChainId(input.env))
+  const settlementSigner = new Wallet(settlementConfig.value.privateKey, provider)
+  await ensureStoryEntitlementMinterAuthorized({
+    env: input.env,
+    provider,
+    minterAddress: settlementSigner.address,
+  })
+  const gasPolicy = resolveDirectTxGasPolicy({
+    maxFeePerGasCapWeiRaw: input.env.STORY_DIRECT_TX_MAX_FEE_PER_GAS_WEI,
+    maxPriorityFeePerGasCapWeiRaw: input.env.STORY_DIRECT_TX_MAX_PRIORITY_FEE_PER_GAS_WEI,
+    gasLimitCapRaw: input.env.STORY_DIRECT_TX_GAS_LIMIT_MAX,
+    gasEstimateBufferBpsRaw: input.env.STORY_DIRECT_TX_GAS_ESTIMATE_BUFFER_BPS,
+    maxFeePerGasCapField: "STORY_DIRECT_TX_MAX_FEE_PER_GAS_WEI",
+    maxPriorityFeePerGasCapField: "STORY_DIRECT_TX_MAX_PRIORITY_FEE_PER_GAS_WEI",
+    gasLimitCapField: "STORY_DIRECT_TX_GAS_LIMIT_MAX",
+    gasEstimateBufferBpsField: "STORY_DIRECT_TX_GAS_ESTIMATE_BUFFER_BPS",
+  })
+  if (!gasPolicy.ok) throw new Error(gasPolicy.error)
+
+  const entitlementTx = await sendContractTxWithPolicy({
+    provider,
+    signer: settlementSigner,
+    contractAddress: STORY_DELIVERY_CONTRACTS.purchaseEntitlementToken,
+    abi: PURCHASE_ENTITLEMENT_TOKEN_ABI,
+    functionName: "mintEntitlement",
+    args: [
+      getAddress(buyerAddress),
+      input.entitlementTokenId,
+      input.purchaseRef,
+    ],
+    gasPolicy: gasPolicy.value,
+  })
+  const entitlementReceipt = await provider.waitForTransaction(
+    String(entitlementTx.hash || ""),
+    1,
+    resolveStoryTxWaitTimeoutMs(input.env),
+  )
+  if (!entitlementReceipt || entitlementReceipt.status !== 1) {
+    throw new Error("story_royalty_entitlement_mint_failed")
+  }
+  const entitlementTxHash = String(entitlementTx.hash || "")
+  if (!entitlementTxHash) {
+    throw new Error("story_royalty_entitlement_missing_tx_hash")
+  }
+  return entitlementTxHash
+}
+
+export async function settlePurchaseViaStoryRoyalty(input: StoryRoyaltyPurchaseSettlementInput): Promise<StoryRoyaltyPurchaseSettlementResult> {
+  const royalty = await payStoryRoyaltyOnBehalfForPurchase(input)
+  if (input.entitlementTokenId == null || royalty.entitlementHandled) {
+    return {
+      royaltyTxHash: royalty.royaltyTxHash,
+      entitlementTxHash: royalty.entitlementTxHash,
+      settlementTxHash: royalty.settlementTxHash,
+    }
+  }
+
+  const entitlementTxHash = await mintStoryRoyaltyPurchaseEntitlement({
+    env: input.env,
+    purchaseRef: input.purchaseRef,
+    buyerAddress: input.buyerAddress,
+    entitlementTokenId: input.entitlementTokenId,
+  })
+  return {
+    royaltyTxHash: royalty.royaltyTxHash,
+    entitlementTxHash,
+    settlementTxHash: royalty.settlementTxHash,
+  }
+}

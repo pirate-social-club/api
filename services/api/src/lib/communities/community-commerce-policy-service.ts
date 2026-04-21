@@ -11,6 +11,9 @@ import {
   sqliteToBool,
   stringOrNull,
 } from "./community-commerce-shared"
+import {
+  buildDefaultPirateCheckoutMoneyPolicy,
+} from "./community-commerce-checkout-config"
 import type {
   CommunityMoneyPolicy,
   CommunityPricingPolicy,
@@ -19,37 +22,8 @@ import type {
   UpdateCommunityPricingPolicyRequest,
 } from "../../types"
 
-function defaultMoneyPolicy(communityId: string): CommunityMoneyPolicy {
-  return {
-    community_id: communityId,
-    policy_origin: "default",
-    funding_preference: "WIP",
-    accepted_funding_assets: [{
-      asset_symbol: "WIP",
-      chain_namespace: "eip155",
-      chain_id: 1315,
-      display_name: "WIP",
-    }],
-    accepted_source_chains: [{
-      chain_namespace: "eip155",
-      chain_id: 1315,
-      display_name: "Story Aeneid",
-    }],
-    approved_route_providers: null,
-    destination_settlement_chain: {
-      chain_namespace: "eip155",
-      chain_id: 1315,
-      display_name: "Story Aeneid",
-    },
-    destination_settlement_token: "WIP",
-    treasury_denomination: "WIP",
-    max_slippage_bps: 150,
-    quote_ttl_seconds: 900,
-    route_required: false,
-    route_status_policy: "fail",
-    route_hop_tolerance: 0,
-    updated_at: new Date(0).toISOString(),
-  }
+function defaultMoneyPolicy(env: Env, communityId: string): CommunityMoneyPolicy {
+  return buildDefaultPirateCheckoutMoneyPolicy({ env, communityId })
 }
 
 function defaultPricingPolicy(communityId: string): CommunityPricingPolicy {
@@ -86,7 +60,7 @@ export async function getCommunityMoneyPolicy(input: {
     args: [input.communityId],
   })
   if (!row) {
-    return defaultMoneyPolicy(input.communityId)
+    return defaultMoneyPolicy(input.env, input.communityId)
   }
   return {
     community_id: requiredString(row, "community_id"),

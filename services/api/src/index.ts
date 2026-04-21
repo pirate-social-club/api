@@ -12,6 +12,7 @@ import notifications from "./routes/notifications"
 import onboarding from "./routes/onboarding"
 import posts from "./routes/posts"
 import publicComments from "./routes/public-comments"
+import publicAgents from "./routes/public-agents"
 import publicCommunities from "./routes/public-communities"
 import publicPosts from "./routes/public-posts"
 import publicProfiles from "./routes/public-profiles"
@@ -45,6 +46,7 @@ app.route("/jobs", jobs)
 app.route("/notifications", notifications)
 app.route("/posts", posts)
 app.route("/public-comments", publicComments)
+app.route("/public-agents", publicAgents)
 app.route("/public-communities", publicCommunities)
 app.route("/public-posts", publicPosts)
 app.route("/public-profiles", publicProfiles)

@@ -384,6 +384,7 @@ describe("community post routes", () => {
       authorship_mode: string
       agent_id: string | null
       agent_ownership_record_id: string | null
+      agent_handle_snapshot: string | null
       agent_display_name_snapshot: string | null
       agent_owner_handle_snapshot: string | null
       agent_ownership_provider_snapshot: string | null
@@ -392,6 +393,7 @@ describe("community post routes", () => {
     expect(createdPostBody.authorship_mode).toBe("user_agent")
     expect(createdPostBody.agent_id).toBe(ownershipCompleteBody.agent_id)
     expect(createdPostBody.agent_ownership_record_id).toBe(ownershipCompleteBody.resolved_agent_ownership_record_id)
+    expect(createdPostBody.agent_handle_snapshot).toBe("captain-bot.clawitzer")
     expect(createdPostBody.agent_display_name_snapshot).toBe("Captain Bot")
     expect(typeof createdPostBody.agent_owner_handle_snapshot).toBe("string")
     expect(createdPostBody.agent_owner_handle_snapshot).toBeTruthy()

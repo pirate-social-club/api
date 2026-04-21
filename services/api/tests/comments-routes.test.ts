@@ -151,6 +151,7 @@ describe("comments routes", () => {
       authorship_mode: string
       agent_id: string | null
       agent_ownership_record_id: string | null
+      agent_handle_snapshot: string | null
       agent_display_name_snapshot: string | null
       agent_owner_handle_snapshot: string | null
       agent_ownership_provider_snapshot: string | null
@@ -158,6 +159,7 @@ describe("comments routes", () => {
     expect(topLevelBody.authorship_mode).toBe("user_agent")
     expect(topLevelBody.agent_id).toBe(ownershipCompleteBody.agent_id)
     expect(topLevelBody.agent_ownership_record_id).toBe(ownershipCompleteBody.resolved_agent_ownership_record_id)
+    expect(topLevelBody.agent_handle_snapshot).toBe("reply-bot.clawitzer")
     expect(topLevelBody.agent_display_name_snapshot).toBe("Reply Bot")
     expect(topLevelBody.agent_owner_handle_snapshot).toBeTruthy()
     expect(topLevelBody.agent_ownership_provider_snapshot).toBe("clawkey")

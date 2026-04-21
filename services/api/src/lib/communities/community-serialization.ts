@@ -1,4 +1,4 @@
-import type { User } from "../../types"
+import type { Env, User } from "../../types"
 import type { CommunityRow, JobRow } from "../auth/auth-db-rows"
 import type { LocalCommunitySnapshot } from "./community-local-db"
 import type { Community, Job } from "../../types"
@@ -156,38 +156,6 @@ function parseStoredLabelPolicy(
   }
 }
 
-function parseStoredDonationPartner(
-  storedSettings: Record<string, unknown>,
-): Community["donation_partner"] {
-  const rawPartner = storedSettings.donation_partner
-  if (!rawPartner || typeof rawPartner !== "object" || Array.isArray(rawPartner)) {
-    return null
-  }
-
-  const partner = rawPartner as Record<string, unknown>
-  if (
-    typeof partner.donation_partner_id !== "string"
-    || typeof partner.display_name !== "string"
-    || partner.provider !== "endaoment"
-  ) {
-    return null
-  }
-
-  return {
-    donation_partner_id: partner.donation_partner_id,
-    display_name: partner.display_name,
-    provider: "endaoment" as const,
-    provider_partner_ref: typeof partner.provider_partner_ref === "string" ? partner.provider_partner_ref : null,
-    image_url: typeof partner.image_url === "string" ? partner.image_url : null,
-    review_status: partner.review_status === "pending" || partner.review_status === "rejected"
-      ? partner.review_status
-      : "approved",
-    status: partner.status === "paused" || partner.status === "retired"
-      ? partner.status
-      : "active",
-  }
-}
-
 function parseStoredAllowedDisclosedQualifiers(
   storedSettings: Record<string, unknown>,
 ): Community["allowed_disclosed_qualifiers"] {
@@ -325,11 +293,21 @@ function parseStoredAcceptedAgentOwnershipProvidersOrigin(
   return Array.isArray(storedSettings.accepted_agent_ownership_providers) ? "explicit" : "derived"
 }
 
-export function serializeCommunity(row: CommunityRow, local: LocalCommunitySnapshot | null): Community {
+export function serializeCommunity(env: Env, row: CommunityRow, local: LocalCommunitySnapshot | null): Community {
   const storedSettings = parseStoredCommunitySettings(local)
   const referenceLinks = parseStoredReferenceLinks(storedSettings)
   const labelPolicy = parseStoredLabelPolicy(storedSettings)
-  const donationPartner = local?.donation_partner ?? null
+  const donationPartner = local?.donation_partner
+    ? {
+        donation_partner_id: local.donation_partner.donation_partner_id,
+        display_name: local.donation_partner.display_name,
+        provider: local.donation_partner.provider,
+        provider_partner_ref: local.donation_partner.provider_partner_ref,
+        image_url: local.donation_partner.image_url,
+        review_status: local.donation_partner.review_status,
+        status: local.donation_partner.status,
+      }
+    : null
   const allowedDisclosedQualifiers = parseStoredAllowedDisclosedQualifiers(storedSettings)
   const allowQualifiersOnAnonymousPosts = parseStoredAllowQualifiersOnAnonymousPosts(storedSettings)
   const humanVerificationLane = parseStoredHumanVerificationLane(storedSettings, local)
@@ -396,7 +374,7 @@ export function serializeCommunity(row: CommunityRow, local: LocalCommunitySnaps
     accepted_agent_ownership_providers_origin: acceptedAgentOwnershipProvidersOrigin,
     accepted_agent_ownership_providers: acceptedAgentOwnershipProviders,
     civic_scale_tier: "club",
-    money_policy: buildDefaultMoneyPolicy(row.community_id),
+    money_policy: buildDefaultMoneyPolicy(env, row.community_id),
     content_authenticity_policy: buildDefaultContentAuthenticityPolicy(row.community_id, policyUpdatedAt),
     content_authenticity_detection_policy: buildDefaultContentAuthenticityDetectionPolicy(row.community_id, policyUpdatedAt),
     market_context_policy: buildDefaultMarketContextPolicy(row.community_id, policyUpdatedAt),

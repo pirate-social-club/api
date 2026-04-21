@@ -7,6 +7,7 @@ import { processAvailableCommunityJobs, processNextCommunityJob, runCommunityJob
 import type { CommunityRow } from "../src/lib/auth/auth-db-rows"
 import { createComment } from "../src/lib/comments/comment-service"
 import { getCommentById } from "../src/lib/comments/community-comment-store"
+import { getPostById, insertPost } from "../src/lib/posts/community-post-store"
 import { setSwarmPublisherForTests } from "../src/lib/swarm/swarm-publisher"
 import type { Env } from "../src/types"
 import {
@@ -613,6 +614,90 @@ describe("community-job-runner", () => {
       expect(snapshotJob?.result_ref).toBe("skipped:non_public_community")
     } finally {
       verifyGatedDb.close()
+    }
+  })
+
+  test("fetches link preview images into link posts", async () => {
+    const rootDir = await createCommunityJobRunnerRoot("pirate-community-link-preview-")
+    const communityId = "cmt_job_link_preview"
+    const env: Env = {
+      LOCAL_COMMUNITY_DB_ROOT: rootDir,
+    }
+    const repo = buildCommunityRepository(join(rootDir, "link-preview.db"), communityId)
+
+    await seedCommunityState({
+      env,
+      repo,
+      communityId,
+      memberUserIds: ["usr_owner"],
+    })
+
+    let linkPostId = ""
+    const db = await openCommunityDb(env, repo, communityId)
+    try {
+      const now = new Date().toISOString()
+      const linkPost = await insertPost({
+        client: db.client,
+        communityId,
+        authorUserId: "usr_owner",
+        body: {
+          post_type: "link",
+          title: "Link Preview",
+          link_url: "https://example.com/posts/story",
+          idempotency_key: "link-preview-post",
+        },
+        createdAt: now,
+      })
+      linkPostId = linkPost.post_id
+
+      await enqueueCommunityJob({
+        client: db.client,
+        communityId,
+        jobType: "link_preview_fetch",
+        subjectType: "link_preview",
+        subjectId: linkPost.post_id,
+        payloadJson: JSON.stringify({
+          post_id: linkPost.post_id,
+          link_url: linkPost.link_url,
+        }),
+        createdAt: now,
+      })
+    } finally {
+      db.close()
+    }
+
+    globalThis.fetch = (async (input) => {
+      expect(input instanceof Request ? input.url : String(input)).toBe("https://example.com/posts/story")
+      return new Response(`
+        <html>
+          <head>
+            <meta property="og:image" content="/assets/story-card.jpg">
+          </head>
+        </html>
+      `, {
+        headers: {
+          "content-type": "text/html",
+        },
+      })
+    }) as typeof fetch
+
+    const processed = await processNextCommunityJob({
+      env,
+      communityId,
+      communityRepository: repo,
+    })
+
+    expect(processed?.job_type).toBe("link_preview_fetch")
+    expect(processed?.status).toBe("succeeded")
+    expect(processed?.result_ref).toBe("https://example.com/assets/story-card.jpg")
+
+    const verifyDb = await openCommunityDb(env, repo, communityId)
+    try {
+      const post = await getPostById(verifyDb.client, linkPostId)
+      expect(post?.title).toBeNull()
+      expect(post?.link_og_image_url).toBe("https://example.com/assets/story-card.jpg")
+    } finally {
+      verifyDb.close()
     }
   })
 

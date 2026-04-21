@@ -1,4 +1,6 @@
 import type { Community } from "../../types"
+import type { Env } from "../../types"
+import { buildDefaultPirateCheckoutMoneyPolicy } from "./community-commerce-checkout-config"
 
 function defaultPolicyFields(communityId: string, updatedAt: string) {
   return {
@@ -39,37 +41,8 @@ export function buildDefaultContentAuthenticityPolicy(communityId: string, updat
   }
 }
 
-export function buildDefaultMoneyPolicy(communityId: string): Community["money_policy"] {
-  return {
-    community_id: communityId,
-    policy_origin: "default",
-    funding_preference: "WIP",
-    accepted_funding_assets: [{
-      asset_symbol: "WIP",
-      chain_namespace: "eip155",
-      chain_id: 1315,
-      display_name: "WIP",
-    }],
-    accepted_source_chains: [{
-      chain_namespace: "eip155",
-      chain_id: 1315,
-      display_name: "Story Aeneid",
-    }],
-    approved_route_providers: null,
-    destination_settlement_chain: {
-      chain_namespace: "eip155",
-      chain_id: 1315,
-      display_name: "Story Aeneid",
-    },
-    destination_settlement_token: "WIP",
-    treasury_denomination: "WIP",
-    max_slippage_bps: 150,
-    quote_ttl_seconds: 900,
-    route_required: false,
-    route_status_policy: "fail",
-    route_hop_tolerance: 0,
-    updated_at: new Date(0).toISOString(),
-  }
+export function buildDefaultMoneyPolicy(env: Env, communityId: string): Community["money_policy"] {
+  return buildDefaultPirateCheckoutMoneyPolicy({ env, communityId })
 }
 
 export function buildDefaultSourcePolicy(communityId: string, updatedAt: string): Community["source_policy"] {

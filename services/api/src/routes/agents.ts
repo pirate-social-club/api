@@ -11,6 +11,13 @@ import type { Env } from "../types"
 
 const agents = new Hono<{ Bindings: Env }>()
 
+function requireString(value: unknown, field: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw badRequestError(`Invalid ${field}`)
+  }
+  return value.trim()
+}
+
 agents.post("/agent-ownership-pairing", authenticate, async (c) => {
   const actor = c.get("actor")
   const repo = getControlPlaneAgentOwnershipRepository(c.env)
@@ -142,6 +149,61 @@ agents.get("/agents/:agentId", authenticate, async (c) => {
     throw notFoundError("Agent not found")
   }
   return c.json(agent, 200)
+})
+
+agents.patch("/agents/:agentId", authenticate, async (c) => {
+  const actor = c.get("actor")
+  const body = await c.req.json<{ display_name?: unknown }>().catch(() => null)
+  if (!body || typeof body !== "object") {
+    throw badRequestError("Invalid agent update payload")
+  }
+
+  const repo = getControlPlaneAgentOwnershipRepository(c.env)
+  const agent = await repo.updateUserAgentDisplayName({
+    agentId: c.req.param("agentId"),
+    userId: actor.userId,
+    displayName: requireString(body.display_name, "display_name"),
+  })
+  if (!agent) {
+    throw notFoundError("Agent not found")
+  }
+  return c.json(agent, 200)
+})
+
+agents.get("/agents/:agentId/handle", authenticate, async (c) => {
+  const actor = c.get("actor")
+  const repo = getControlPlaneAgentOwnershipRepository(c.env)
+  const handle = await repo.getUserAgentHandle({
+    agentId: c.req.param("agentId"),
+    userId: actor.userId,
+  })
+  if (!handle) {
+    const agent = await repo.getUserAgent(c.req.param("agentId"), actor.userId)
+    if (!agent) {
+      throw notFoundError("Agent not found")
+    }
+    throw notFoundError("Agent handle not found")
+  }
+  return c.json(handle, 200)
+})
+
+agents.post("/agents/:agentId/handle", authenticate, async (c) => {
+  const actor = c.get("actor")
+  const body = await c.req.json<{ desired_label?: unknown }>().catch(() => null)
+  if (!body || typeof body !== "object") {
+    throw badRequestError("Invalid agent handle payload")
+  }
+
+  const repo = getControlPlaneAgentOwnershipRepository(c.env)
+  const handle = await repo.claimUserAgentHandle({
+    agentId: c.req.param("agentId"),
+    userId: actor.userId,
+    desiredLabel: requireString(body.desired_label, "desired_label"),
+  })
+  if (!handle) {
+    throw notFoundError("Agent not found")
+  }
+  return c.json(handle, 200)
 })
 
 agents.post("/agents/:agentId/credential", authenticateOptional, async (c) => {

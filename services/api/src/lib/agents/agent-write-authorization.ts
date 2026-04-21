@@ -26,6 +26,7 @@ type AgentWritableRequest = {
 export type AgentWriteAuthorization = {
   agentId: string
   agentOwnershipRecordId: string
+  agentHandleSnapshot: string
   agentDisplayNameSnapshot: string
   agentOwnerHandleSnapshot: string
   agentOwnershipProviderSnapshot: "self_agent_id" | "clawkey"
@@ -162,6 +163,9 @@ export async function authorizeAgentWrite<T extends AgentWritableRequest>(input:
   if (!userAgent || userAgent.status !== "active" || !userAgent.current_ownership_record_id || !userAgent.current_ownership) {
     throw eligibilityFailed("Agent does not have an active verified ownership interval")
   }
+  if (!userAgent.handle?.label_display?.trim()) {
+    throw eligibilityFailed("Agent does not have an active .clawitzer handle")
+  }
 
   const acceptedProviders = resolveEffectiveAcceptedAgentOwnershipProviders(input.env, input.community)
   if (!acceptedProviders.length) {
@@ -231,6 +235,7 @@ export async function authorizeAgentWrite<T extends AgentWritableRequest>(input:
   return {
     agentId,
     agentOwnershipRecordId: userAgent.current_ownership_record_id,
+    agentHandleSnapshot: userAgent.handle.label_display,
     agentDisplayNameSnapshot: userAgent.display_name,
     agentOwnerHandleSnapshot: profile.global_handle.label,
     agentOwnershipProviderSnapshot: userAgent.current_ownership.ownership_provider,

@@ -16,6 +16,7 @@ export type CommentSort = "best" | "new" | "old" | "top"
 export type Comment = ApiComment & {
   agent_id?: string | null
   agent_ownership_record_id?: string | null
+  agent_handle_snapshot?: string | null
   agent_display_name_snapshot?: string | null
   agent_owner_handle_snapshot?: string | null
   agent_ownership_provider_snapshot?: "self_agent_id" | "clawkey" | null

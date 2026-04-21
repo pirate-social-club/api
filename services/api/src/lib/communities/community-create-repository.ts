@@ -201,7 +201,7 @@ export async function loadCommunityLocalSnapshot(
       const partnerResult = await db.client.execute({
         sql: `
           SELECT donation_partner_id, display_name, provider, provider_partner_ref,
-                 image_url, review_status, status
+                 payout_destination_ref, image_url, review_status, status
           FROM donation_partners
           WHERE donation_partner_id = ?1
           LIMIT 1
@@ -215,6 +215,8 @@ export async function loadCommunityLocalSnapshot(
           display_name: String(partnerRow.display_name),
           provider: partnerRow.provider === "endaoment" ? "endaoment" : "endaoment",
           provider_partner_ref: partnerRow.provider_partner_ref == null ? null : String(partnerRow.provider_partner_ref),
+          payout_destination_ref:
+            partnerRow.payout_destination_ref == null ? null : String(partnerRow.payout_destination_ref),
           image_url: partnerRow.image_url == null ? null : String(partnerRow.image_url),
           review_status:
             partnerRow.review_status === "pending" || partnerRow.review_status === "rejected"
@@ -266,7 +268,7 @@ export async function loadCommunityProjection(
   communityRow: CommunityRow,
 ): Promise<Community> {
   const local = await loadCommunityLocalSnapshot(env, repo, communityRow.community_id)
-  return serializeCommunity(communityRow, local)
+  return serializeCommunity(env, communityRow, local)
 }
 
 export async function requireOwnedCommunity(

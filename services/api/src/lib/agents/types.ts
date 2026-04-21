@@ -1,3 +1,5 @@
+import type { GlobalHandle } from "../../types"
+
 export type AgentOwnershipProvider = "self_agent_id" | "clawkey"
 export type AgentOwnershipSessionKind = "register" | "refresh" | "transfer" | "deregister"
 export type AgentOwnershipPairingStatus = "pending" | "claimed" | "completed" | "expired"
@@ -11,6 +13,7 @@ export type AgentOwnershipSessionStatus =
   | "cancelled"
 export type UserAgentStatus = "pending" | "active" | "suspended" | "revoked" | "transferred" | "deregistered"
 export type AgentOwnershipState = "pending" | "verified" | "expired" | "revoked" | "transferred"
+export type AgentHandleStatus = "active" | "redirect" | "retired"
 
 export type AgentChallenge = {
   device_id: string
@@ -97,6 +100,7 @@ export type UserAgent = {
   agent_id: string
   owner_user_id: string
   display_name: string
+  handle: AgentHandle | null
   status: UserAgentStatus
   current_ownership_record_id: string | null
   current_ownership: AgentOwnershipRecord | null
@@ -106,6 +110,38 @@ export type UserAgent = {
 
 export type UserAgentListResponse = {
   items: UserAgent[]
+}
+
+export type AgentHandle = {
+  agent_handle_id: string
+  agent_id: string
+  label_normalized: string
+  label_display: string
+  status: AgentHandleStatus
+  redirect_target_agent_handle_id: string | null
+  issued_at: string
+  replaced_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type PublicAgentResolution = {
+  is_canonical: boolean
+  requested_handle_label: string
+  resolved_handle_label: string
+  agent: {
+    agent_id: string
+    display_name: string | null
+    handle: AgentHandle
+    ownership_provider: AgentOwnershipProvider | null
+    created_at: string
+    updated_at: string
+  }
+  owner: {
+    user_id: string
+    display_name: string | null
+    global_handle: GlobalHandle
+  }
 }
 
 export type AgentOwnershipPairing = {

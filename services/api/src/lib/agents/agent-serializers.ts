@@ -1,6 +1,7 @@
 import { internalError } from "../errors"
 import type {
   AgentChallenge,
+  AgentHandle,
   AgentOwnershipRecord,
   AgentOwnershipSession,
   AgentOwnershipSessionLaunch,
@@ -9,6 +10,7 @@ import type {
 import type {
   AgentOwnershipRecordRow,
   AgentOwnershipSessionRow,
+  AgentHandleRow,
   UserAgentRow,
 } from "./agent-db-rows"
 
@@ -56,6 +58,21 @@ export function serializeAgentOwnershipRecord(row: AgentOwnershipRecordRow): Age
   }
 }
 
+export function serializeAgentHandle(row: AgentHandleRow): AgentHandle {
+  return {
+    agent_handle_id: row.agent_handle_id,
+    agent_id: row.agent_id,
+    label_normalized: row.label_normalized,
+    label_display: row.label_display,
+    status: row.status,
+    redirect_target_agent_handle_id: row.redirect_target_agent_handle_id,
+    issued_at: row.issued_at,
+    replaced_at: row.replaced_at,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  }
+}
+
 export function serializeAgentOwnershipSession(row: AgentOwnershipSessionRow): AgentOwnershipSession {
   return {
     agent_ownership_session_id: row.agent_ownership_session_id,
@@ -78,11 +95,13 @@ export function serializeAgentOwnershipSession(row: AgentOwnershipSessionRow): A
 export function serializeUserAgent(
   row: UserAgentRow,
   currentOwnership: AgentOwnershipRecord | null,
+  handle: AgentHandle | null = null,
 ): UserAgent {
   return {
     agent_id: row.agent_id,
     owner_user_id: row.owner_user_id,
     display_name: row.display_name,
+    handle,
     status: row.status,
     current_ownership_record_id: currentOwnership?.agent_ownership_record_id ?? null,
     current_ownership: currentOwnership,

@@ -203,14 +203,14 @@ async function localizeCommentItems(input: {
 
 export async function createComment(input: {
   env: Env
-  requestUrl: string
+  requestUrl?: string
   userId: string
   communityId: string
   threadRootPostId: string
   parentCommentId?: string | null
   body: CreateCommentRequest
   userRepository: UserRepository
-  profileRepository: ProfileRepository
+  profileRepository?: ProfileRepository
   communityRepository: CommunityRepository
 }): Promise<Comment> {
   const communityRow = await input.communityRepository.getCommunityById(input.communityId)
@@ -263,12 +263,20 @@ export async function createComment(input: {
 
     const agentWriteAuthorization = await authorizeAgentWrite({
       env: input.env,
-      requestUrl: input.requestUrl,
+      requestUrl: input.requestUrl ?? "http://localhost/",
       userId: input.userId,
       body: input.body,
       community,
       communityDbClient: db.client,
-      profileRepository: input.profileRepository,
+      profileRepository: input.profileRepository ?? {
+        async getProfileByUserId() { return null },
+        async resolvePublicProfileByHandle() { return null },
+        async updateProfile() { return null },
+        async renameGlobalHandle() { return null },
+        async quoteGlobalHandleUpgrade() { return null },
+        async syncLinkedHandles() { return null },
+        async setPrimaryPublicHandle() { return null },
+      },
       writeTarget: "comment",
     })
 

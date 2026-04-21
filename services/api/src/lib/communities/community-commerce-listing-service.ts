@@ -17,6 +17,8 @@ import {
 } from "./community-commerce-shared"
 import { getCommunityPricingPolicy } from "./community-commerce-policy-service"
 import { assertValidDonationSharePct } from "./community-commerce-quote-helpers"
+import { assertAssetReadyForStoryRoyaltyCommerce } from "./community-commerce-story-royalty"
+import { assertEndaomentPayoutConfigured } from "./community-commerce-endaoment-payout-service"
 import type {
   CommunityListing,
   CommunityListingListResponse,
@@ -45,7 +47,14 @@ async function resolveListingDonationConfig(input: {
     ? input.current.donation_partner_id
     : input.requestedPartnerId
 
-  if (nextSharePct == null || nextSharePct === 0) {
+  if (nextSharePct === 0) {
+    return {
+      donation_partner_id: null,
+      donation_share_pct: null,
+    }
+  }
+
+  if (nextSharePct == null) {
     if (typeof nextPartnerId === "string" && nextPartnerId.trim()) {
       throw badRequestError("donation_share_pct is required when donation_partner_id is set")
     }
@@ -71,6 +80,15 @@ async function resolveListingDonationConfig(input: {
   }
   if (community.donation_partner_id !== nextPartnerId.trim()) {
     throw badRequestError("Listing charity must match the community charity")
+  }
+  if (community.donation_partner?.provider === "endaoment") {
+    try {
+      assertEndaomentPayoutConfigured(input.env)
+    } catch {
+      throw badRequestError("Community charity payout provider is not available")
+    }
+  } else {
+    throw badRequestError("Community charity provider is not supported")
   }
 
   return {
@@ -116,6 +134,7 @@ export async function createCommunityListing(input: {
       if (!asset) {
         throw notFoundError("Asset not found")
       }
+      assertAssetReadyForStoryRoyaltyCommerce(asset)
       if (asset.creator_user_id !== input.userId) {
         const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
         if (membership.role_status !== "active") {
@@ -199,6 +218,13 @@ export async function updateCommunityListing(input: {
       if (membership.role_status !== "active") {
         throw notFoundError("Listing not found")
       }
+    }
+    if (listing.asset_id?.trim() && (input.body.status ?? listing.status) === "active") {
+      const asset = await getAssetRow(db.client, input.communityId, listing.asset_id)
+      if (!asset) {
+        throw notFoundError("Asset not found")
+      }
+      assertAssetReadyForStoryRoyaltyCommerce(asset)
     }
     const currentPolicy = parseListingPolicy(listing)
     const nextRegional = input.body.regional_pricing_enabled

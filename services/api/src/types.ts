@@ -3,6 +3,8 @@ export type {
   AssetAccessResponse,
   AuthProof,
   AgentActionProof,
+  AgentHandle,
+  AgentHandleStatus,
   CommunityCreateAcceptedResponse,
   CommunityListing,
   CommunityListingListResponse,
@@ -33,7 +35,6 @@ export type {
   CreateCommentRequest,
   CreateSongArtifactBundleRequest,
   CreateSongArtifactUploadRequest,
-  CreatePostRequest,
   DismissTaskRequest,
   ErrorResponse,
   GateFailureDetails,
@@ -65,9 +66,8 @@ export type {
   NotificationSummary,
   NotificationTasksResponse,
   OnboardingStatus,
-  Post,
-  PostLabel,
   Profile,
+  PublicAgentResolution,
   RedditImportSummary,
   RedditVerification,
   RequestedVerificationCapability,
@@ -82,6 +82,7 @@ export type {
   UpdateCommunityListingRequest,
   UpdateCommunityMoneyPolicyRequest,
   UpdateCommunityPricingPolicyRequest,
+  UpdateAgentHandleRequest,
   User,
   UserReport,
   UserTask,
@@ -98,7 +99,32 @@ export type {
 import type {
   Community as ContractCommunity,
   CommunityPreview as ContractCommunityPreview,
+  CreatePostRequest as ContractCreatePostRequest,
+  Post as ContractPost,
 } from "@pirate/api-contracts"
+
+export type PostLabel = {
+  label_id: string
+  label: string
+  color_token?: string | null
+  status: "active" | "archived"
+}
+
+export type PostLabelAssignmentStatus = "pending" | "assigned" | "failed" | "skipped"
+
+export type Post = ContractPost & {
+  label_assignment_status?: PostLabelAssignmentStatus | null
+  label_assigned_by?: "moderator" | "ai" | null
+  label_assigned_at?: string | null
+  label_ai_confidence?: number | null
+  label_assignment_error?: string | null
+  label_assignment_model?: string | null
+  label_assignment_result_json?: Record<string, unknown> | null
+}
+
+export type CreatePostRequest = ContractCreatePostRequest & {
+  title?: string | null
+}
 
 export type CommunityTextLocalizationItem = {
   field_key: string
@@ -183,9 +209,22 @@ export type Env = {
   SWARM_FEED_PRIVATE_KEY?: string
   SWARM_FEED_TOPIC_NAMESPACE?: string
   ETHEREUM_RPC_URL?: string
+  BASE_MAINNET_RPC_URL?: string
+  BASE_SEPOLIA_RPC_URL?: string
+  PIRATE_CHECKOUT_OPERATOR_ADDRESS?: string
+  PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY?: string
+  PIRATE_CHECKOUT_RPC_URL?: string
+  PIRATE_CHECKOUT_SOURCE_CHAIN_ID?: string
+  PIRATE_CHECKOUT_USDC_TOKEN_ADDRESS?: string
+  PIRATE_CHECKOUT_TX_WAIT_TIMEOUT_MS?: string
   STORY_CHAIN_ID?: string
   STORY_RPC_URL?: string
   STORY_RPC_FALLBACK_URLS?: string
+  STORY_ROYALTY_SPG_NFT_CONTRACT?: string
+  STORY_ROYALTY_COMMERCIAL_REV_SHARE_PCT?: string
+  STORY_ROYALTY_DEFAULT_MINTING_FEE_WEI?: string
+  STORY_ROYALTY_MAX_LICENSE_TOKENS?: string
+  STORY_ROYALTY_POLICY_LAP_ADDRESS?: string
   COMMUNITY_JOB_WORKER_INTERVAL_MS?: string
   COMMUNITY_JOB_WORKER_MAX_JOBS_PER_COMMUNITY?: string
   COMMUNITY_JOB_WORKER_MAX_COMMUNITIES_PER_TICK?: string
@@ -220,6 +259,12 @@ export type Env = {
   LIT_CHIPOTLE_STORY_SETTLEMENT_API_KEY?: string
   STORY_SETTLEMENT_ACTION_CID_SETTLE?: string
   STORY_SETTLEMENT_ACTION_CID_ROYALTY_SYNC?: string
+  ENDAOMENT_PAYOUT_PRIVATE_KEY?: string
+  ENDAOMENT_RPC_URL?: string
+  ENDAOMENT_CHAIN_ID?: string
+  ENDAOMENT_USDC_TOKEN_ADDRESS?: string
+  ENDAOMENT_REGISTRY_ADDRESS?: string
+  ENDAOMENT_TX_WAIT_TIMEOUT_MS?: string
   STORY_CONTRACT_OWNER_PRIVATE_KEY?: string
   STORY_RUNTIME_FUNDER_PRIVATE_KEY?: string
   OPENROUTER_API_KEY?: string

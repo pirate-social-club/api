@@ -233,7 +233,7 @@ async function createNamespacelessCommunity(input: {
     } catch {}
 
     return {
-      community: serializeCommunity(finalized.community, localSnapshot),
+      community: serializeCommunity(input.env, finalized.community, localSnapshot),
       job: serializeJob(finalized.job),
     }
   } catch (error) {
@@ -280,7 +280,7 @@ async function finalizeExistingCommunity(input: {
   })
   const local = await loadCommunityLocalSnapshot(input.env, input.communityRepository, input.existingCommunity.community_id)
   return {
-    community: serializeCommunity(finalized.community, local),
+    community: serializeCommunity(input.env, finalized.community, local),
     job: serializeJob(finalized.job),
   }
 }
@@ -401,7 +401,7 @@ async function provisionNamespacedCommunity(input: {
     provisioningCompleted = true
 
     return {
-      community: serializeCommunity(provisioningFinalized.community, localSnapshot),
+      community: serializeCommunity(input.env, provisioningFinalized.community, localSnapshot),
       job: serializeJob(provisioningFinalized.job),
     }
   } catch (error) {
@@ -430,7 +430,7 @@ async function provisionNamespacedCommunity(input: {
     }
 
     return {
-      community: serializeCommunity(communityRow, localSnapshot),
+      community: serializeCommunity(input.env, communityRow, localSnapshot),
       job: serializeJob(provisioningFinalized.job),
     }
   }

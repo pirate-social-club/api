@@ -5,19 +5,6 @@ import { dirname, isAbsolute, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { splitSqlStatements, toSqliteCompatibleStatement } from "../../shared/sql-migration"
 
-const SQLITE_COMPATIBLE_CONTROL_PLANE_MIGRATIONS = new Set([
-  "0034_control_plane_communities_pending_namespace.sql",
-  "0035_control_plane_namespace_setup_nameservers.sql",
-  "0036_control_plane_linked_handles.sql",
-  "0037_control_plane_comment_projections.sql",
-  "0038_control_plane_post_feed_metrics.sql",
-  "0039_control_plane_post_visibility.sql",
-  "0040_control_plane_agent_ownership.sql",
-  "0041_control_plane_agent_action_replays.sql",
-  "0042_control_plane_clawkey_mainline.sql",
-  "0043_control_plane_agent_pairing_codes.sql",
-])
-
 export type LocalDevStorage = {
   repoRoot: string
   controlPlaneDbUrl: string
@@ -104,33 +91,6 @@ async function applySqlFile(client: Client, path: string): Promise<void> {
   }
 }
 
-async function hasTable(client: Client, tableName: string): Promise<boolean> {
-  const result = await client.execute({
-    sql: `
-      SELECT name
-      FROM sqlite_master
-      WHERE type = 'table' AND name = ?1
-      LIMIT 1
-    `,
-    args: [tableName],
-  })
-
-  return result.rows.length > 0
-}
-
-async function hasColumn(client: Client, tableName: string, columnName: string): Promise<boolean> {
-  const result = await client.execute(`PRAGMA table_info(${tableName})`)
-
-  for (const row of result.rows) {
-    const name = row.name
-    if (typeof name === "string" && name === columnName) {
-      return true
-    }
-  }
-
-  return false
-}
-
 async function ensureSchemaMigrationsTable(client: Client): Promise<void> {
   await client.execute(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -171,9 +131,6 @@ async function recordAppliedMigration(
     sql: `
       INSERT INTO schema_migrations (migration_name, migration_label, checksum)
       VALUES (?1, 'control-plane', ?2)
-      ON CONFLICT(migration_name) DO UPDATE SET
-        migration_label = excluded.migration_label,
-        checksum = excluded.checksum
     `,
     args: [migrationName, checksum],
   })
@@ -200,64 +157,13 @@ export async function applyLocalControlPlaneMigrations(storage: LocalDevStorage)
     await ensureSchemaMigrationsTable(client)
 
     const appliedChecksum = await getAppliedChecksum(client, baselineMigrationName)
-    const hasBootstrappedSchema = await hasTable(client, "auth_provider_links")
     if (appliedChecksum) {
-      if (appliedChecksum !== baselineChecksum && !hasBootstrappedSchema) {
+      if (appliedChecksum !== baselineChecksum) {
         throw new Error(`baseline checksum mismatch for ${baselineMigrationName}`)
       }
-    } else if (hasBootstrappedSchema) {
-      await recordAppliedMigration(client, baselineMigrationName, baselineChecksum)
     } else {
       await applySqlFile(client, baselineMigrationPath)
       await recordAppliedMigration(client, baselineMigrationName, baselineChecksum)
-    }
-
-    for (const entry of entries) {
-      if (entry === baselineMigrationName || !SQLITE_COMPATIBLE_CONTROL_PLANE_MIGRATIONS.has(entry)) {
-        continue
-      }
-
-      const migrationPath = join(migrationsDir, entry)
-      const migrationSql = await readFile(migrationPath, "utf8")
-      const migrationChecksum = createHash("sha256").update(migrationSql).digest("hex")
-      const appliedMigrationChecksum = await getAppliedChecksum(client, entry)
-      if (appliedMigrationChecksum) {
-        if (appliedMigrationChecksum !== migrationChecksum) {
-          throw new Error(`checksum mismatch for ${entry}`)
-        }
-        continue
-      }
-
-      // The rolling baseline can already contain columns introduced by a later
-      // SQLite-compatible migration. Record it as applied instead of replaying
-      // the ALTER TABLE and failing on fresh local databases.
-      if (
-        entry === "0034_control_plane_communities_pending_namespace.sql"
-        && await hasColumn(client, "communities", "pending_namespace_verification_session_id")
-      ) {
-        await recordAppliedMigration(client, entry, migrationChecksum)
-        continue
-      }
-
-      if (
-        entry === "0035_control_plane_namespace_setup_nameservers.sql"
-        && await hasColumn(client, "namespace_verification_sessions", "setup_nameservers_json")
-      ) {
-        await recordAppliedMigration(client, entry, migrationChecksum)
-        continue
-      }
-
-      if (
-        entry === "0036_control_plane_linked_handles.sql"
-        && await hasTable(client, "linked_handles")
-        && await hasColumn(client, "profiles", "primary_linked_handle_id")
-      ) {
-        await recordAppliedMigration(client, entry, migrationChecksum)
-        continue
-      }
-
-      await applySqlFile(client, migrationPath)
-      await recordAppliedMigration(client, entry, migrationChecksum)
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)

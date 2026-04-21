@@ -6,6 +6,8 @@ import {
 import type {
   AgentOwnershipPairingStatus,
   AgentOwnershipRecord,
+  AgentHandle,
+  AgentHandleStatus,
   AgentOwnershipProvider,
   AgentOwnershipSessionKind,
   AgentOwnershipSessionStatus,
@@ -57,6 +59,19 @@ export type UserAgentRow = {
   owner_user_id: string
   display_name: string
   status: UserAgentStatus
+  created_at: string
+  updated_at: string
+}
+
+export type AgentHandleRow = {
+  agent_handle_id: string
+  agent_id: string
+  label_normalized: string
+  label_display: string
+  status: AgentHandleStatus
+  redirect_target_agent_handle_id: string | null
+  issued_at: string
+  replaced_at: string | null
   created_at: string
   updated_at: string
 }
@@ -139,6 +154,21 @@ export function toUserAgentRow(row: unknown): UserAgentRow {
     owner_user_id: requiredString(row, "owner_user_id"),
     display_name: requiredString(row, "display_name"),
     status: requiredString(row, "status") as UserAgent["status"],
+    created_at: requiredString(row, "created_at"),
+    updated_at: requiredString(row, "updated_at"),
+  }
+}
+
+export function toAgentHandleRow(row: unknown): AgentHandleRow {
+  return {
+    agent_handle_id: requiredString(row, "agent_handle_id"),
+    agent_id: requiredString(row, "agent_id"),
+    label_normalized: requiredString(row, "label_normalized"),
+    label_display: requiredString(row, "label_display"),
+    status: requiredString(row, "status") as AgentHandle["status"],
+    redirect_target_agent_handle_id: stringOrNull(rowValue(row, "redirect_target_agent_handle_id")),
+    issued_at: requiredString(row, "issued_at"),
+    replaced_at: stringOrNull(rowValue(row, "replaced_at")),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
   }

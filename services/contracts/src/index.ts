@@ -684,6 +684,9 @@ export type CommunityPurchaseQuote = {
   policy_origin: CommunityPolicyOrigin;
   destination_settlement_chain: CommunityMoneyChainRef;
   destination_settlement_token: string;
+  destination_settlement_amount_atomic?: string | null;
+  destination_settlement_decimals?: number | null;
+  funding_destination_address?: string | null;
   treasury_denomination?: string | null;
   quote_ttl_seconds: number;
   route_required: boolean;
@@ -698,6 +701,7 @@ export type CommunityPurchaseQuote = {
 export type CommunityPurchaseSettlementRequest = {
   quote_id: string;
   settlement_wallet_attachment_id: string;
+  funding_tx_ref: string;
   settlement_tx_ref: string;
 };
 
@@ -839,16 +843,20 @@ export type CreatePostRequest = (((unknown & {
   body?: string;
 }) | {
   post_type: "image";
+  title?: string | null;
   media_refs: Array<ImageMediaDescriptor>;
 } | {
   post_type: "video";
+  title?: string | null;
   media_refs: Array<VideoMediaDescriptor>;
 } | {
   post_type: "link";
+  link_url: string;
 } | (unknown & {
   post_type: "song";
   identity_mode: "public";
   access_mode?: "public" | "locked";
+  title?: string | null;
   media_refs?: Array<AudioMediaDescriptor>;
 })) & {
   idempotency_key: string;
@@ -860,8 +868,14 @@ export type CreatePostRequest = (((unknown & {
   disclosed_qualifier_ids?: Array<string> | null;
   parent_post_id?: string | null;
   label_id?: string | null;
+  label_assignment_status?: "pending" | "assigned" | "failed" | "skipped" | null;
+  label_assigned_by?: "moderator" | "ai" | null;
+  label_assigned_at?: string | null;
+  label_ai_confidence?: number | null;
+  label_assignment_error?: string | null;
+  label_assignment_model?: string | null;
+  label_assignment_result_json?: (Record<string, unknown>) | null;
   post_type: "text" | "image" | "video" | "link" | "song";
-  title?: string | null;
   body?: string | null;
   caption?: string | null;
   link_url?: string | null;
@@ -1035,6 +1049,7 @@ export type Post = {
   body?: string | null;
   caption?: string | null;
   link_url?: string | null;
+  link_og_image_url?: string | null;
   media_refs?: Array<MediaDescriptor>;
   creator_relation?: PostCreatorRelation | null;
   promotion_disclosure?: PromotionDisclosure | null;

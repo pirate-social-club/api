@@ -34,6 +34,7 @@ import {
 } from "../story/story-cdr"
 import { resolveStoryCdrWriterDirectSigner } from "../story/story-direct-signer"
 import { publishLockedAssetVersionToStory } from "../story/story-publish-service"
+import { maybeRegisterStoryRoyaltyForAsset } from "../story/story-royalty-registration-service"
 import { assertStoryRuntimeSignerFunding } from "../story/story-runtime-funding"
 import {
   resolveStoryChainId,
@@ -248,9 +249,15 @@ async function prepareLockedSongAssetDelivery(input: {
   assetId: string
   creatorWalletAddress: string
   bundle: SongArtifactBundle
+  rightsBasis: Post["rights_basis"]
+  upstreamAssetRefs: string[] | null
 }): Promise<{
   storyStatus: Asset["story_status"]
   storyPublishTxRef: string
+  storyIpId: string | null
+  storyRoyaltyPolicyId: string | null
+  storyDerivativeParentIpIdsJson: string | null
+  storyRoyaltyRegistrationStatus: "none" | "pending" | "registered" | "failed" | null
   storyAssetVersionId: string
   storyCdrVaultUuid: number
   storyNamespace: string
@@ -298,6 +305,9 @@ async function prepareLockedSongAssetDelivery(input: {
   const entitlementTokenId = deriveEntitlementTokenId(assetVersionId)
   const readConditionAddress = STORY_DELIVERY_CONTRACTS.tokenGateCondition
   const writeConditionAddress = STORY_DELIVERY_CONTRACTS.signedAccessConditionV1
+  const storyPublishRightsBasis = input.rightsBasis === "original" || input.rightsBasis === "derivative"
+    ? input.rightsBasis
+    : "none"
   try {
     const cdrWriterMinimumBalanceWei = await estimateStoryCdrLockedPublishMinimumBalanceWei(input.env)
     await assertStoryRuntimeSignerFunding(input.env, [
@@ -344,6 +354,8 @@ async function prepareLockedSongAssetDelivery(input: {
         entitlementTokenId,
         readConditionAddress,
         writeConditionAddress,
+        rightsBasis: storyPublishRightsBasis,
+        upstreamAssetRefs: input.upstreamAssetRefs,
       })
     } catch (error) {
       throw new Error(`story_publish_failed:${error instanceof Error ? error.message : String(error)}`)
@@ -352,6 +364,12 @@ async function prepareLockedSongAssetDelivery(input: {
     return {
       storyStatus: "published",
       storyPublishTxRef: storyPublish.publishTxHash,
+      storyIpId: storyPublish.storyIpId ?? null,
+      storyRoyaltyPolicyId: storyPublish.storyRoyaltyPolicyId ?? null,
+      storyDerivativeParentIpIdsJson: storyPublish.storyDerivativeParentIpIds
+        ? JSON.stringify(storyPublish.storyDerivativeParentIpIds)
+        : null,
+      storyRoyaltyRegistrationStatus: storyPublish.storyRoyaltyRegistrationStatus ?? null,
       storyAssetVersionId: assetVersionId,
       storyCdrVaultUuid: cdrUpload.cdrVaultUuid,
       storyNamespace: namespace,
@@ -377,6 +395,10 @@ async function prepareLockedSongAssetDelivery(input: {
       return {
         storyStatus: "published",
         storyPublishTxRef: hashBytes32FromParts("local-story-publish", assetVersionId),
+        storyIpId: null,
+        storyRoyaltyPolicyId: null,
+        storyDerivativeParentIpIdsJson: null,
+        storyRoyaltyRegistrationStatus: null,
         storyAssetVersionId: assetVersionId,
         storyCdrVaultUuid: Number.parseInt(assetVersionId.slice(-8), 16) || 1,
         storyNamespace: namespace,
@@ -437,6 +459,19 @@ export async function createSongAssetForPost(input: {
   let lockedDeliveryMetadataJson: string | null = null
   let storyStatus: Asset["story_status"] = "none"
   let storyError: string | null = null
+  let storyIpId: string | null = null
+  let storyIpNftContract: string | null = null
+  let storyIpNftTokenId: string | null = null
+  let storyPublishModel: "pirate_v1" | "story_ip_v1" = "pirate_v1"
+  let storyLicenseTermsId: string | null = null
+  let storyLicenseTemplate: string | null = null
+  let storyRoyaltyPolicy: string | null = null
+  let storyRoyaltyPolicyId: string | null = null
+  let storyDerivativeParentIpIdsJson: string | null = null
+  let storyDerivativeRegisteredAt: string | null = null
+  let storyRevenueToken: string | null = null
+  let storyRoyaltyRegistrationStatus: "none" | "pending" | "registered" | "failed" =
+    input.post.rights_basis === "original" || input.post.rights_basis === "derivative" ? "pending" : "none"
   let storyPublishTxRef: string | null = null
   let storyAssetVersionId: string | null = null
   let storyCdrVaultUuid: number | null = null
@@ -444,10 +479,11 @@ export async function createSongAssetForPost(input: {
   let storyEntitlementTokenId: string | null = null
   let storyReadCondition: string | null = null
   let storyWriteCondition: string | null = null
+  let creatorWalletAddress: string | null = null
 
   if ((input.post.access_mode ?? "public") === "locked") {
     try {
-      const creatorWalletAddress = await resolvePrimaryWalletAddress({
+      creatorWalletAddress = await resolvePrimaryWalletAddress({
         env: input.env,
         userRepository: input.userRepository,
         userId: input.post.author_user_id ?? "",
@@ -458,9 +494,17 @@ export async function createSongAssetForPost(input: {
         assetId: input.post.asset_id,
         creatorWalletAddress,
         bundle: input.bundle,
+        rightsBasis: input.post.rights_basis ?? "none",
+        upstreamAssetRefs: input.post.upstream_asset_refs ?? null,
       })
       storyStatus = lockedDelivery.storyStatus
       storyPublishTxRef = lockedDelivery.storyPublishTxRef
+      storyIpId = lockedDelivery.storyIpId
+      storyRoyaltyPolicyId = lockedDelivery.storyRoyaltyPolicyId
+      storyDerivativeParentIpIdsJson = lockedDelivery.storyDerivativeParentIpIdsJson
+      if (lockedDelivery.storyRoyaltyRegistrationStatus) {
+        storyRoyaltyRegistrationStatus = lockedDelivery.storyRoyaltyRegistrationStatus
+      }
       storyAssetVersionId = lockedDelivery.storyAssetVersionId
       storyCdrVaultUuid = lockedDelivery.storyCdrVaultUuid
       storyNamespace = lockedDelivery.storyNamespace
@@ -474,10 +518,56 @@ export async function createSongAssetForPost(input: {
     } catch (error) {
       storyStatus = "failed"
       storyError = error instanceof Error ? error.message : String(error)
+      if ((input.post.rights_basis ?? "none") === "derivative") {
+        storyRoyaltyRegistrationStatus = "failed"
+      }
       lockedDeliveryStatus = "failed"
       lockedDeliveryError = storyError
       throw badRequestError(`Locked delivery preparation failed: ${lockedDeliveryError}`)
     }
+  }
+
+  try {
+    if (!creatorWalletAddress) {
+      creatorWalletAddress = await resolvePrimaryWalletAddress({
+        env: input.env,
+        userRepository: input.userRepository,
+        userId: input.post.author_user_id ?? "",
+      })
+    }
+    const royaltyRegistration = await maybeRegisterStoryRoyaltyForAsset({
+      env: input.env,
+      client: input.client,
+      communityId: input.communityId,
+      assetId: input.post.asset_id,
+      creatorWalletAddress,
+      title: input.post.title ?? null,
+      rightsBasis: input.post.rights_basis ?? "none",
+      upstreamAssetRefs: input.post.upstream_asset_refs ?? null,
+      bundle: input.bundle,
+      primaryContentHash:
+        (input.bundle.primary_audio.content_hash?.trim() || `0x${await sha256Hex(input.bundle.primary_audio.storage_ref)}`) as `0x${string}`,
+    })
+    if (royaltyRegistration) {
+      storyIpId = royaltyRegistration.storyIpId
+      storyIpNftContract = royaltyRegistration.storyIpNftContract
+      storyIpNftTokenId = royaltyRegistration.storyIpNftTokenId
+      storyPublishModel = "story_ip_v1"
+      storyLicenseTermsId = royaltyRegistration.storyLicenseTermsId
+      storyLicenseTemplate = royaltyRegistration.storyLicenseTemplate
+      storyRoyaltyPolicy = royaltyRegistration.storyRoyaltyPolicy
+      storyRoyaltyPolicyId = royaltyRegistration.storyRoyaltyPolicy
+      storyDerivativeParentIpIdsJson = royaltyRegistration.storyDerivativeParentIpIds
+        ? JSON.stringify(royaltyRegistration.storyDerivativeParentIpIds)
+        : null
+      storyDerivativeRegisteredAt = royaltyRegistration.storyDerivativeRegisteredAt
+      storyRevenueToken = royaltyRegistration.storyRevenueToken
+      storyRoyaltyRegistrationStatus = royaltyRegistration.storyRoyaltyRegistrationStatus
+    }
+  } catch (error) {
+    const registrationError = error instanceof Error ? error.message : String(error)
+    storyRoyaltyRegistrationStatus = "failed"
+    storyError = storyError ? `${storyError};royalty_registration_failed:${registrationError}` : `royalty_registration_failed:${registrationError}`
   }
 
   await input.client.execute({
@@ -485,17 +575,22 @@ export async function createSongAssetForPost(input: {
       INSERT INTO assets (
         asset_id, community_id, source_post_id, song_artifact_bundle_id, creator_user_id, asset_kind,
         rights_basis, access_mode, primary_content_ref, primary_content_hash, publication_status,
-        story_status, story_error, story_ip_id, locked_delivery_status, locked_delivery_ref,
+        story_status, story_error, story_ip_id, story_ip_nft_contract, story_ip_nft_token_id,
+        story_publish_model, story_license_terms_id, story_license_template, story_royalty_policy,
+        story_royalty_policy_id, story_derivative_parent_ip_ids_json, story_derivative_registered_at,
+        story_revenue_token, story_royalty_registration_status, locked_delivery_status, locked_delivery_ref,
         locked_delivery_error, created_at, updated_at, story_publish_tx_ref, story_asset_version_id,
         story_cdr_vault_uuid, story_namespace, story_entitlement_token_id, story_read_condition,
         story_write_condition, locked_delivery_storage_ref, locked_delivery_secret_json
       ) VALUES (
         ?1, ?2, ?3, ?4, ?5, 'song_audio',
         ?6, ?7, ?8, ?9, 'draft',
-        ?10, ?11, NULL, ?12, ?13,
-        ?14, ?15, ?15, ?16, ?17,
-        ?18, ?19, ?20, ?21, ?22,
-        ?23, ?24
+        ?10, ?11, ?12, ?13, ?14,
+        ?15, ?16, ?17, ?18, ?19,
+        ?20, ?21, ?22, ?23, ?24,
+        ?25, ?26, ?27, ?27, ?28,
+        ?29, ?30, ?31, ?32, ?33,
+        ?34, ?35, ?36
       )
     `,
     args: [
@@ -510,6 +605,18 @@ export async function createSongAssetForPost(input: {
       input.bundle.primary_audio.content_hash ?? `0x${await sha256Hex(input.bundle.primary_audio.storage_ref)}`,
       storyStatus,
       storyError,
+      storyIpId,
+      storyIpNftContract,
+      storyIpNftTokenId,
+      storyPublishModel,
+      storyLicenseTermsId,
+      storyLicenseTemplate,
+      storyRoyaltyPolicy,
+      storyRoyaltyPolicyId,
+      storyDerivativeParentIpIdsJson,
+      storyDerivativeRegisteredAt,
+      storyRevenueToken,
+      storyRoyaltyRegistrationStatus,
       lockedDeliveryStatus,
       lockedDeliveryRef,
       lockedDeliveryError,

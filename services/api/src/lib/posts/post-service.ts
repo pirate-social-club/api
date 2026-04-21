@@ -138,6 +138,30 @@ async function enqueuePostLabelJob(input: {
   })
 }
 
+async function enqueueLinkPreviewFetchIfNeeded(input: {
+  client: Client
+  communityId: string
+  post: Post
+  createdAt: string
+}): Promise<void> {
+  if (input.post.post_type !== "link" || !input.post.link_url?.trim()) {
+    return
+  }
+
+  await enqueueCommunityJob({
+    client: input.client,
+    communityId: input.communityId,
+    jobType: "link_preview_fetch",
+    subjectType: "link_preview",
+    subjectId: input.post.post_id,
+    payloadJson: JSON.stringify({
+      post_id: input.post.post_id,
+      link_url: input.post.link_url,
+    }),
+    createdAt: input.createdAt,
+  })
+}
+
 async function enqueuePostLabelIfNeeded(input: {
   client: Client
   community: Pick<Community, "label_policy">
@@ -402,6 +426,13 @@ export async function createPost(input: {
     await enqueuePostLabelIfNeeded({
       client: db.client,
       community,
+      communityId: input.communityId,
+      post,
+      createdAt,
+    })
+
+    await enqueueLinkPreviewFetchIfNeeded({
+      client: db.client,
       communityId: input.communityId,
       post,
       createdAt,

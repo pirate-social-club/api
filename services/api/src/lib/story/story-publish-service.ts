@@ -23,6 +23,10 @@ const ASSET_PUBLISH_COORDINATOR_ABI = [
 export type StoryAssetPublishResult = {
   entitlementConfiguredTxHash: string
   publishTxHash: string
+  storyIpId?: string | null
+  storyRoyaltyPolicyId?: string | null
+  storyDerivativeParentIpIds?: string[] | null
+  storyRoyaltyRegistrationStatus?: "none" | "pending" | "registered" | "failed" | null
 }
 
 let testPublisher: ((input: {
@@ -36,6 +40,8 @@ let testPublisher: ((input: {
   entitlementTokenId: bigint
   readConditionAddress: string
   writeConditionAddress: string
+  rightsBasis: "none" | "original" | "derivative"
+  upstreamAssetRefs: string[] | null
 }) => Promise<StoryAssetPublishResult>) | null = null
 
 export function setStoryAssetPublisherForTests(
@@ -50,6 +56,8 @@ export function setStoryAssetPublisherForTests(
     entitlementTokenId: bigint
     readConditionAddress: string
     writeConditionAddress: string
+    rightsBasis: "none" | "original" | "derivative"
+    upstreamAssetRefs: string[] | null
   }) => Promise<StoryAssetPublishResult>) | null,
 ): void {
   testPublisher = publisher
@@ -73,6 +81,8 @@ export async function publishLockedAssetVersionToStory(input: {
   entitlementTokenId: bigint
   readConditionAddress: string
   writeConditionAddress: string
+  rightsBasis: "none" | "original" | "derivative"
+  upstreamAssetRefs: string[] | null
 }): Promise<StoryAssetPublishResult> {
   if (testPublisher) {
     return await testPublisher(input)

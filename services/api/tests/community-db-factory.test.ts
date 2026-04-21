@@ -90,28 +90,6 @@ async function listTableNames(databasePath: string): Promise<string[]> {
   }
 }
 
-async function getSchemaMigrationChecksum(databasePath: string, migrationName: string): Promise<string | null> {
-  const client = createClient({
-    url: `file:${databasePath}`,
-  })
-
-  try {
-    const result = await client.execute({
-      sql: `
-        SELECT checksum
-        FROM schema_migrations
-        WHERE migration_name = ?1
-        LIMIT 1
-      `,
-      args: [migrationName],
-    })
-    const value = result.rows[0]?.checksum
-    return typeof value === "string" ? value : null
-  } finally {
-    client.close()
-  }
-}
-
 function buildRepository(databasePath: string): CommunityRepository {
   return {
     async getPrimaryCommunityDatabaseBinding() {
@@ -173,11 +151,35 @@ describe("openCommunityDb", () => {
     expect(tableNames).toContain("comment_votes")
     expect(tableNames).toContain("thread_snapshots")
     expect(tableNames).toContain("donation_partners")
+    expect(tableNames).toContain("purchase_settlement_effects")
 
     const postColumns = await getTableColumns(databasePath, "posts")
     expect(postColumns).toContain("comment_count")
     expect(postColumns).toContain("top_level_comment_count")
     expect(postColumns).toContain("last_comment_at")
+
+    const assetColumns = await getTableColumns(databasePath, "assets")
+    expect(assetColumns).toContain("story_royalty_policy_id")
+    expect(assetColumns).toContain("story_derivative_parent_ip_ids_json")
+    expect(assetColumns).toContain("story_royalty_registration_status")
+
+    const donationPartnerColumns = await getTableColumns(databasePath, "donation_partners")
+    expect(donationPartnerColumns).toContain("payout_destination_ref")
+
+    const allocationLegColumns = await getTableColumns(databasePath, "purchase_allocation_legs")
+    expect(allocationLegColumns).toContain("provider_receipt_ref")
+    expect(allocationLegColumns).toContain("tax_receipt_ref")
+    expect(allocationLegColumns).toContain("attempt_count")
+
+    const purchaseQuoteColumns = await getTableColumns(databasePath, "purchase_quotes")
+    expect(purchaseQuoteColumns).toContain("settlement_mode")
+    expect(purchaseQuoteColumns).toContain("funding_destination_address")
+
+    const settlementEffectColumns = await getTableColumns(databasePath, "purchase_settlement_effects")
+    expect(settlementEffectColumns).toContain("metadata_json")
+
+    const purchaseColumns = await getTableColumns(databasePath, "purchases")
+    expect(purchaseColumns).toContain("settlement_mode")
 
     const moderationCaseColumns = await getTableColumns(databasePath, "moderation_cases")
     expect(moderationCaseColumns).toContain("comment_id")
@@ -247,52 +249,5 @@ describe("openCommunityDb", () => {
     } finally {
       db.close()
     }
-  })
-
-  test.each([
-    "35dd1dca31a58d594287c4636486940611fcc9e621ddf1c52d8627719bd18673",
-    "b30841d6b60a02fe72d6ea61dbc3e7fb3459d069143b53d8a07fa8a9790f4d01",
-  ])("accepts and normalizes the legacy checksum %s for 1036_community_post_labels_ai.sql", async (legacyChecksum) => {
-    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-db-factory-checksum-"))
-    cleanupPaths.push(rootDir)
-
-    const databasePath = join(rootDir, `${randomUUID()}.db`)
-    const db = await openCommunityDb(
-      {
-        LOCAL_COMMUNITY_DB_ROOT: rootDir,
-      },
-      buildRepository(databasePath),
-      "cmt_legacy",
-    )
-
-    try {
-      await db.client.execute({
-        sql: `
-          UPDATE schema_migrations
-          SET checksum = ?2
-          WHERE migration_name = ?1
-        `,
-        args: [
-          "1036_community_post_labels_ai.sql",
-          legacyChecksum,
-        ],
-      })
-    } finally {
-      db.close()
-    }
-
-    const reopened = await openCommunityDb(
-      {
-        LOCAL_COMMUNITY_DB_ROOT: rootDir,
-      },
-      buildRepository(databasePath),
-      "cmt_legacy",
-    )
-    reopened.close()
-
-    expect(await getSchemaMigrationChecksum(
-      databasePath,
-      "1036_community_post_labels_ai.sql",
-    )).toBe("1e9a8ffcfb6cf40d60e8130f0d446a49ec17d0a481d33b9ddd4bcabb24b4f951")
   })
 })

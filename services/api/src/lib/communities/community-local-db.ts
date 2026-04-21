@@ -7,12 +7,6 @@ import type { Client } from "@libsql/client"
 import { internalError } from "../errors"
 
 const LOCAL_SQLITE_BUSY_TIMEOUT_MS = 5000
-const LEGACY_COMMUNITY_MIGRATION_CHECKSUMS: Record<string, string[]> = {
-  "1036_community_post_labels_ai.sql": [
-    "35dd1dca31a58d594287c4636486940611fcc9e621ddf1c52d8627719bd18673",
-    "b30841d6b60a02fe72d6ea61dbc3e7fb3459d069143b53d8a07fa8a9790f4d01",
-  ],
-}
 
 export type LocalCommunityBootstrapInput = {
   rootDir: string
@@ -71,6 +65,7 @@ export type LocalCommunitySnapshot = {
     display_name: string
     provider: "endaoment"
     provider_partner_ref: string | null
+    payout_destination_ref: string | null
     image_url: string | null
     review_status: "pending" | "approved" | "rejected"
     status: "active" | "paused" | "retired"
@@ -172,24 +167,8 @@ async function applyMigrationFile(client: Client, migrationFilePath: string): Pr
   })
   const existingChecksum = existing.rows[0]?.checksum
   if (typeof existingChecksum === "string") {
-    const acceptedChecksums = new Set([
-      checksum,
-      ...(LEGACY_COMMUNITY_MIGRATION_CHECKSUMS[migrationName] ?? []),
-    ])
-
-    if (!acceptedChecksums.has(existingChecksum)) {
-      throw internalError(`Migration checksum mismatch for ${migrationName}`)
-    }
-
     if (existingChecksum !== checksum) {
-      await client.execute({
-        sql: `
-          UPDATE schema_migrations
-          SET checksum = ?2
-          WHERE migration_name = ?1
-        `,
-        args: [migrationName, checksum],
-      })
+      throw internalError(`Migration checksum mismatch for ${migrationName}`)
     }
     return
   }

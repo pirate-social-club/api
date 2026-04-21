@@ -14,6 +14,11 @@ const MARKETPLACE_SETTLEMENT_ABI = [
   "function setSettlementOperator(address operator, bool active)",
 ] as const
 
+const PURCHASE_ENTITLEMENT_TOKEN_ABI = [
+  "function isSettlementMinter(address minter) view returns (bool)",
+  "function setSettlementMinter(address minter, bool active)",
+] as const
+
 const PIRATE_SIGNER_REGISTRY_ABI = [
   "function isActiveSigner(address signer) view returns (bool)",
   "function setSigner(address signer, bool active)",
@@ -128,6 +133,36 @@ export async function ensureStorySettlementOperatorAuthorized(params: {
     abi: MARKETPLACE_SETTLEMENT_ABI,
     functionName: "setSettlementOperator",
     args: [operatorAddress, true],
+  })
+}
+
+export async function ensureStoryEntitlementMinterAuthorized(params: {
+  env: Pick<
+    Env,
+    | "STORY_CONTRACT_OWNER_PRIVATE_KEY"
+    | "STORY_DIRECT_TX_MAX_FEE_PER_GAS_WEI"
+    | "STORY_DIRECT_TX_MAX_PRIORITY_FEE_PER_GAS_WEI"
+    | "STORY_DIRECT_TX_GAS_LIMIT_MAX"
+    | "STORY_DIRECT_TX_GAS_ESTIMATE_BUFFER_BPS"
+  >
+  provider: JsonRpcProvider
+  minterAddress: string
+}): Promise<void> {
+  const minterAddress = getAddress(params.minterAddress)
+  const contract = new Contract(
+    STORY_DELIVERY_CONTRACTS.purchaseEntitlementToken,
+    PURCHASE_ENTITLEMENT_TOKEN_ABI,
+    params.provider,
+  )
+  const active = Boolean(await contract.isSettlementMinter(minterAddress))
+  if (active) return
+  await ensureOwnerAuthorizedCall({
+    env: params.env,
+    provider: params.provider,
+    contractAddress: STORY_DELIVERY_CONTRACTS.purchaseEntitlementToken,
+    abi: PURCHASE_ENTITLEMENT_TOKEN_ABI,
+    functionName: "setSettlementMinter",
+    args: [minterAddress, true],
   })
 }
 

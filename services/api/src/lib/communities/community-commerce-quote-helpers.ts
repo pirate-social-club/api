@@ -6,6 +6,7 @@ import {
   type PurchaseEntitlementRow,
   type PurchaseQuoteRow,
   type PurchaseRow,
+  type PurchaseSettlementMode,
   toChainRefString,
 } from "./community-commerce-shared"
 import { serializePurchaseAllocationLeg } from "./community-commerce-allocation"
@@ -45,6 +46,15 @@ export function resolveSettlementAmountSnapshot(finalPriceUsd: number): {
   }
 }
 
+export function resolvePurchaseSettlementMode(input: {
+  storyRoyaltyRegistrationStatus?: string | null
+  storyIpId?: string | null
+}): PurchaseSettlementMode {
+  return input.storyRoyaltyRegistrationStatus === "registered" && Boolean(input.storyIpId?.trim())
+    ? "royalty_native_story_payment"
+    : "delivery_only_story_settlement"
+}
+
 export function parseQuoteSettlementAmountAtomic(quote: PurchaseQuoteRow): bigint {
   const raw = String(quote.destination_settlement_amount_atomic || "").trim()
   if (raw) {
@@ -58,6 +68,19 @@ export function parseQuoteSettlementAmountAtomic(quote: PurchaseQuoteRow): bigin
     }
   }
   return BigInt(resolveSettlementAmountSnapshot(quote.final_price_usd).amountAtomic)
+}
+
+export function resolveAllocationSettlementAmountAtomic(input: {
+  allocations: PurchaseAllocationLegRow[] | Array<{
+    amount_usd: number
+    settlement_strategy: string
+  }>
+  settlementStrategy: string
+}): bigint {
+  const amountUsd = input.allocations
+    .filter((allocation) => allocation.settlement_strategy === input.settlementStrategy)
+    .reduce((sum, allocation) => sum + allocation.amount_usd, 0)
+  return BigInt(resolveSettlementAmountSnapshot(roundUsd(amountUsd)).amountAtomic)
 }
 
 function toSettlementEntitlementKind(
@@ -87,6 +110,7 @@ export function serializeSettlement(
     settlement_wallet_attachment_id: purchase.settlement_wallet_attachment_id,
     purchase_price_usd: purchase.purchase_price_usd,
     pricing_tier: purchase.pricing_tier,
+    settlement_mode: purchase.settlement_mode,
     settlement_chain: settlementChain,
     settlement_chain_ref: toChainRefString(settlementChain),
     settlement_token: purchase.settlement_token,

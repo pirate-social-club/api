@@ -28,6 +28,7 @@ type PostRow = {
   identity_mode: Post["identity_mode"]
   anonymous_scope: Post["anonymous_scope"]
   anonymous_label: string | null
+  agent_handle_snapshot: string | null
   agent_display_name_snapshot: string | null
   agent_owner_handle_snapshot: string | null
   agent_ownership_provider_snapshot: string | null
@@ -48,6 +49,7 @@ type PostRow = {
   caption: string | null
   lyrics: string | null
   link_url: string | null
+  link_og_image_url: string | null
   media_refs_json: string | null
   song_artifact_bundle_id: string | null
   source_language: string | null
@@ -55,6 +57,7 @@ type PostRow = {
   access_mode: Post["access_mode"]
   asset_id: string | null
   parent_post_id: string | null
+  upstream_asset_refs_json: string | null
   song_mode: Post["song_mode"]
   rights_basis: Post["rights_basis"]
   analysis_state: Post["analysis_state"]
@@ -118,6 +121,7 @@ function toPostRow(row: unknown): PostRow {
     identity_mode: requiredString(row, "identity_mode") as Post["identity_mode"],
     anonymous_scope: stringOrNull(rowValue(row, "anonymous_scope")) as Post["anonymous_scope"],
     anonymous_label: stringOrNull(rowValue(row, "anonymous_label")),
+    agent_handle_snapshot: stringOrNull(rowValue(row, "agent_handle_snapshot")),
     agent_display_name_snapshot: stringOrNull(rowValue(row, "agent_display_name_snapshot")),
     agent_owner_handle_snapshot: stringOrNull(rowValue(row, "agent_owner_handle_snapshot")),
     agent_ownership_provider_snapshot: stringOrNull(rowValue(row, "agent_ownership_provider_snapshot")),
@@ -138,6 +142,7 @@ function toPostRow(row: unknown): PostRow {
     caption: stringOrNull(rowValue(row, "caption")),
     lyrics: stringOrNull(rowValue(row, "lyrics")),
     link_url: stringOrNull(rowValue(row, "link_url")),
+    link_og_image_url: stringOrNull(rowValue(row, "link_og_image_url")),
     media_refs_json: stringOrNull(rowValue(row, "media_refs_json")),
     song_artifact_bundle_id: stringOrNull(rowValue(row, "song_artifact_bundle_id")),
     source_language: stringOrNull(rowValue(row, "source_language")),
@@ -145,6 +150,7 @@ function toPostRow(row: unknown): PostRow {
     access_mode: stringOrNull(rowValue(row, "access_mode")) as Post["access_mode"],
     asset_id: stringOrNull(rowValue(row, "asset_id")),
     parent_post_id: stringOrNull(rowValue(row, "parent_post_id")),
+    upstream_asset_refs_json: stringOrNull(rowValue(row, "upstream_asset_refs_json")),
     song_mode: stringOrNull(rowValue(row, "song_mode")) as Post["song_mode"],
     rights_basis: stringOrNull(rowValue(row, "rights_basis")) as Post["rights_basis"],
     analysis_state: requiredString(row, "analysis_state") as Post["analysis_state"],
@@ -168,6 +174,7 @@ function serializePost(row: PostRow): Post {
     identity_mode: row.identity_mode,
     anonymous_scope: row.anonymous_scope,
     anonymous_label: row.anonymous_label,
+    agent_handle_snapshot: row.agent_handle_snapshot,
     agent_display_name_snapshot: row.agent_display_name_snapshot,
     agent_owner_handle_snapshot: row.agent_owner_handle_snapshot,
     agent_ownership_provider_snapshot: row.agent_ownership_provider_snapshot,
@@ -187,6 +194,7 @@ function serializePost(row: PostRow): Post {
     body: row.body,
     caption: row.caption,
     link_url: row.link_url,
+    link_og_image_url: row.link_og_image_url,
     media_refs: parseMediaRefs(row.media_refs_json),
     song_artifact_bundle_id: row.song_artifact_bundle_id,
     source_language: row.source_language,
@@ -194,6 +202,7 @@ function serializePost(row: PostRow): Post {
     access_mode: row.access_mode,
     asset_id: row.asset_id,
     parent_post_id: row.parent_post_id,
+    upstream_asset_refs: parseJsonArray<string>(row.upstream_asset_refs_json) ?? undefined,
     song_mode: row.song_mode,
     rights_basis: row.rights_basis,
     analysis_state: row.analysis_state,
@@ -217,12 +226,12 @@ export async function findPostByIdempotencyKey(input: {
       sql: `
         SELECT post_id, community_id, author_user_id, authorship_mode, agent_id, agent_ownership_record_id,
                identity_mode, anonymous_scope, anonymous_label, agent_display_name_snapshot,
-               agent_owner_handle_snapshot, agent_ownership_provider_snapshot, disclosed_qualifiers_json,
+               agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot, disclosed_qualifiers_json,
                label_id, label_assignment_status, label_assigned_by, label_assigned_at, label_ai_confidence,
                label_assignment_error, label_assignment_model, label_assignment_result_json,
                post_type, status, visibility, title, body, caption, lyrics,
-               link_url, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
-               access_mode, asset_id, parent_post_id, song_mode, rights_basis, analysis_state, analysis_result_ref,
+               link_url, link_og_image_url, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
+               access_mode, asset_id, parent_post_id, upstream_asset_refs_json, song_mode, rights_basis, analysis_state, analysis_result_ref,
                content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
         FROM posts
         WHERE community_id = ?1
@@ -247,6 +256,7 @@ export async function insertPost(input: {
   agentWriteAuthorization?: {
     agentId: string
     agentOwnershipRecordId: string
+    agentHandleSnapshot: string
     agentDisplayNameSnapshot: string
     agentOwnerHandleSnapshot: string
     agentOwnershipProviderSnapshot: NonNullable<Post["agent_ownership_provider_snapshot"]>
@@ -271,9 +281,11 @@ export async function insertPost(input: {
     ? JSON.stringify(disclosedQualifierSnapshots)
     : null
   const mediaRefsJson = input.body.media_refs ? JSON.stringify(input.body.media_refs) : null
+  const upstreamAssetRefsJson = input.body.upstream_asset_refs ? JSON.stringify(input.body.upstream_asset_refs) : null
   const translationPolicy = input.body.translation_policy ?? "none"
   const visibility = input.body.visibility ?? "public"
   const idempotencyKey = input.body.idempotency_key?.trim() ?? ""
+  const title = postType === "link" ? null : input.body.title ?? null
   const labelAssignmentStatus: NonNullable<Post["label_assignment_status"]> = input.body.label_id ? "assigned" : "pending"
   const labelAssignedAt = input.body.label_id ? input.createdAt : null
   const stubAnalysis = resolveStubAnalysisOutcome(input.body)
@@ -282,7 +294,7 @@ export async function insertPost(input: {
   const status = input.analysisOverride?.status ?? stubAnalysis.status
   const ageGatePolicy = input.analysisOverride?.age_gate_policy ?? "none"
   const sourceLanguage = detectSourceLanguageFromText([
-    input.body.title,
+    title,
     input.body.body,
     input.body.caption,
     input.body.lyrics,
@@ -297,15 +309,15 @@ export async function insertPost(input: {
         label_assigned_by, label_assigned_at, label_ai_confidence, label_assignment_error, label_assignment_model,
         label_assignment_result_json, post_type, status, song_mode, title, body, caption, visibility, lyrics,
         link_url, media_refs_json, song_artifact_bundle_id, source_language, translation_policy, rights_basis,
-        access_mode, asset_id, parent_post_id, analysis_state, analysis_result_ref, content_safety_state,
-        age_gate_policy, created_at, updated_at, idempotency_key
+        access_mode, asset_id, parent_post_id, upstream_asset_refs_json, analysis_state, analysis_result_ref, content_safety_state,
+        age_gate_policy, created_at, updated_at, idempotency_key, agent_handle_snapshot
       ) VALUES (
         ?1, ?2, ?3, ?4, ?5, ?6,
         ?7, ?8, ?9, ?10, ?11, ?12,
         ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22,
         ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32,
-        ?33, ?34, ?35, ?36, ?37, ?38, ?39, NULL, ?40, ?41,
-        ?42, ?42, ?43
+        ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, NULL, ?41,
+        ?42, ?43, ?43, ?44, ?45
       )
     `,
     args: [
@@ -333,7 +345,7 @@ export async function insertPost(input: {
       postType,
       status,
       input.body.song_mode ?? null,
-      input.body.title ?? null,
+      title,
       input.body.body ?? null,
       input.body.caption ?? null,
       visibility,
@@ -347,11 +359,13 @@ export async function insertPost(input: {
       input.body.access_mode ?? (postType === "song" ? "public" : null),
       input.body.asset_id ?? null,
       input.body.parent_post_id ?? null,
+      upstreamAssetRefsJson,
       analysisState,
       contentSafetyState,
       ageGatePolicy,
       input.createdAt,
       idempotencyKey,
+      input.agentWriteAuthorization?.agentHandleSnapshot ?? null,
     ],
   })
 
@@ -367,19 +381,19 @@ export async function getPostById(client: DbExecutor, postId: string): Promise<P
     sql: `
       SELECT post_id, community_id, author_user_id, authorship_mode, agent_id, agent_ownership_record_id,
              identity_mode, anonymous_scope, anonymous_label, agent_display_name_snapshot,
-             agent_owner_handle_snapshot, agent_ownership_provider_snapshot, disclosed_qualifiers_json,
+             agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot, disclosed_qualifiers_json,
              label_id, label_assignment_status, label_assigned_by, label_assigned_at, label_ai_confidence,
              label_assignment_error, label_assignment_model, label_assignment_result_json,
              post_type, status, visibility, title, body, caption, lyrics,
-             link_url, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
-             access_mode, asset_id, parent_post_id, song_mode, rights_basis, analysis_state, analysis_result_ref,
+             link_url, link_og_image_url, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
+             access_mode, asset_id, parent_post_id, upstream_asset_refs_json, song_mode, rights_basis, analysis_state, analysis_result_ref,
              content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
       FROM posts
       WHERE post_id = ?1
       LIMIT 1
     `,
     args: [postId],
-  } as const
+  }
 
   const row = await executeFirst(client, stmtWithVisibility).catch(async (error) => {
     if (!isMissingColumnError(error, "visibility")) {
@@ -390,12 +404,12 @@ export async function getPostById(client: DbExecutor, postId: string): Promise<P
       sql: `
         SELECT post_id, community_id, author_user_id, authorship_mode, agent_id, agent_ownership_record_id,
                identity_mode, anonymous_scope, anonymous_label, agent_display_name_snapshot,
-               agent_owner_handle_snapshot, agent_ownership_provider_snapshot, disclosed_qualifiers_json,
+               agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot, disclosed_qualifiers_json,
                label_id, label_assignment_status, label_assigned_by, label_assigned_at, label_ai_confidence,
                label_assignment_error, label_assignment_model, label_assignment_result_json,
                post_type, status, 'public' AS visibility, title, body, caption, lyrics,
-               link_url, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
-               access_mode, asset_id, parent_post_id, song_mode, rights_basis, analysis_state, analysis_result_ref,
+               link_url, NULL AS link_og_image_url, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
+               access_mode, asset_id, parent_post_id, upstream_asset_refs_json, song_mode, rights_basis, analysis_state, analysis_result_ref,
                content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
         FROM posts
         WHERE post_id = ?1
@@ -406,6 +420,28 @@ export async function getPostById(client: DbExecutor, postId: string): Promise<P
   })
 
   return row ? serializePost(toPostRow(row)) : null
+}
+
+export async function updatePostLinkOgImageUrl(input: {
+  client: DbExecutor
+  postId: string
+  linkOgImageUrl: string | null
+  updatedAt: string
+}): Promise<void> {
+  await input.client.execute({
+    sql: `
+      UPDATE posts
+      SET link_og_image_url = ?2,
+          updated_at = ?3
+      WHERE post_id = ?1
+        AND post_type = 'link'
+    `,
+    args: [
+      input.postId,
+      input.linkOgImageUrl,
+      input.updatedAt,
+    ],
+  })
 }
 
 export async function getCommunityPostPolicy(
@@ -499,12 +535,12 @@ export async function listPublishedLocalizedPosts(input: {
     sql: `
       SELECT post_id, community_id, author_user_id, authorship_mode, agent_id, agent_ownership_record_id,
              identity_mode, anonymous_scope, anonymous_label, agent_display_name_snapshot,
-             agent_owner_handle_snapshot, agent_ownership_provider_snapshot, disclosed_qualifiers_json,
+             agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot, disclosed_qualifiers_json,
              label_id, label_assignment_status, label_assigned_by, label_assigned_at, label_ai_confidence,
              label_assignment_error, label_assignment_model, label_assignment_result_json,
              post_type, status, visibility, title, body, caption, lyrics,
-             link_url, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
-             access_mode, asset_id, parent_post_id, song_mode, rights_basis, analysis_state, analysis_result_ref,
+             link_url, link_og_image_url, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
+             access_mode, asset_id, parent_post_id, upstream_asset_refs_json, song_mode, rights_basis, analysis_state, analysis_result_ref,
              content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at,
              (
                SELECT COUNT(*)
@@ -764,6 +800,9 @@ export function assertPostCreateRequest(body: CreatePostRequest, _communityId: s
   }
   if (body.post_type === "link" && !body.link_url?.trim()) {
     throw badRequestError("link_url is required for link posts")
+  }
+  if (body.post_type === "link" && body.title != null) {
+    throw badRequestError("title is not allowed for link posts")
   }
   if (body.visibility && body.visibility !== "public" && body.visibility !== "members_only") {
     throw badRequestError("visibility must be public or members_only")

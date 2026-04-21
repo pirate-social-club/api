@@ -1,0 +1,18 @@
+title = "pirate-api secret scanning"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Documented placeholders and deterministic test fixtures"
+paths = [
+  '''^services/api/\.dev\.vars\.example$''',
+  '''^services/api/bruno/README\.md$''',
+]
+regexTarget = "match"
+regexes = [
+  '''0x(?:0{64}|1{64}|2{64}|3{64}|4{64}|5{64}|6{64}|9{64}|a{64}|b{64})''',
+  '''0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef''',
+  '''abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234''',
+  '''replace-me(?:-with-a-long-random-secret)?''',
+]

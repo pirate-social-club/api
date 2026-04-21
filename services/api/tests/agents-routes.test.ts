@@ -253,6 +253,7 @@ describe("agent routes", () => {
       items: Array<{
         agent_id: string
         display_name: string
+        handle: { label_display: string } | null
         current_ownership_record_id: string | null
         current_ownership: { ownership_provider: string; public_key: string | null } | null
       }>
@@ -260,6 +261,7 @@ describe("agent routes", () => {
     expect(agentsBody.items).toHaveLength(1)
     expect(agentsBody.items[0]?.agent_id).toBe(completedBody.agent_id)
     expect(agentsBody.items[0]?.display_name).toBe("Palm Agent")
+    expect(agentsBody.items[0]?.handle?.label_display).toBe("palm-agent.clawitzer")
     expect(agentsBody.items[0]?.current_ownership_record_id).toBe(completedBody.resolved_agent_ownership_record_id)
     expect(agentsBody.items[0]?.current_ownership?.ownership_provider).toBe("clawkey")
     expect(agentsBody.items[0]?.current_ownership?.public_key?.trim()).toBe(registerChallenge.publicKeyPem.trim())
@@ -277,12 +279,223 @@ describe("agent routes", () => {
     const agentBody = await json(agentResponse) as {
       agent_id: string
       display_name: string
+      handle: { label_display: string } | null
       current_ownership: { device_id: string | null; evidence_ref: string | null } | null
     }
     expect(agentBody.agent_id).toBe(completedBody.agent_id)
     expect(agentBody.display_name).toBe("Palm Agent")
+    expect(agentBody.handle?.label_display).toBe("palm-agent.clawitzer")
     expect(agentBody.current_ownership?.device_id).toBe("claw-device-verified")
     expect(agentBody.current_ownership?.evidence_ref).toBe(registeredAt)
+
+    const handleResponse = await app.request(
+      `http://pirate.test/agents/${completedBody.agent_id}/handle`,
+      {
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(handleResponse.status).toBe(200)
+    const handleBody = await json(handleResponse) as {
+      agent_id: string
+      label_display: string
+      status: string
+    }
+    expect(handleBody.agent_id).toBe(completedBody.agent_id)
+    expect(handleBody.label_display).toBe("palm-agent.clawitzer")
+    expect(handleBody.status).toBe("active")
+
+    const claimedHandleResponse = await app.request(
+      `http://pirate.test/agents/${completedBody.agent_id}/handle`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ desired_label: "night-signal" }),
+      },
+      ctx.env,
+    )
+    expect(claimedHandleResponse.status).toBe(200)
+    const claimedHandleBody = await json(claimedHandleResponse) as {
+      label_display: string
+      status: string
+    }
+    expect(claimedHandleBody.label_display).toBe("night-signal.clawitzer")
+    expect(claimedHandleBody.status).toBe("active")
+
+    const publicAgentResponse = await app.request("http://pirate.test/public-agents/night-signal", {}, ctx.env)
+    expect(publicAgentResponse.status).toBe(200)
+    const publicAgentBody = await json(publicAgentResponse) as {
+      is_canonical: boolean
+      resolved_handle_label: string
+      agent: { agent_id: string; handle: { label_display: string } }
+      owner: { global_handle: { label: string } }
+    }
+    expect(publicAgentBody.is_canonical).toBe(true)
+    expect(publicAgentBody.resolved_handle_label).toBe("night-signal.clawitzer")
+    expect(publicAgentBody.agent.agent_id).toBe(completedBody.agent_id)
+    expect(publicAgentBody.agent.handle.label_display).toBe("night-signal.clawitzer")
+    expect(publicAgentBody.owner.global_handle.label).toMatch(/\.pirate$/)
+
+    const redirectedPublicAgentResponse = await app.request("http://pirate.test/public-agents/palm-agent", {}, ctx.env)
+    expect(redirectedPublicAgentResponse.status).toBe(200)
+    const redirectedPublicAgentBody = await json(redirectedPublicAgentResponse) as {
+      is_canonical: boolean
+      requested_handle_label: string
+      resolved_handle_label: string
+    }
+    expect(redirectedPublicAgentBody.is_canonical).toBe(false)
+    expect(redirectedPublicAgentBody.requested_handle_label).toBe("palm-agent.clawitzer")
+    expect(redirectedPublicAgentBody.resolved_handle_label).toBe("night-signal.clawitzer")
+  })
+
+  test("verified owner can rename an agent", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "agent-rename-user")
+    await createSelfVerifiedSession(ctx.env, session.accessToken)
+
+    setClawkeyProviderForTests({
+      startRegistration: async () => ({
+        sessionId: "cks_agent_rename_123",
+        registrationUrl: "https://clawkey.test/register/cks_agent_rename_123",
+        expiresAt: "2036-04-20T12:00:00.000Z",
+      }),
+      getRegistrationStatus: async () => ({
+        status: "completed",
+        deviceId: "claw-device-rename",
+        publicKey: null,
+        registeredAt: "2026-04-19T12:34:56.000Z",
+      }),
+    })
+
+    const registerChallenge = createSignedAgentChallenge({
+      message: "clawkey-register-1738500000400",
+      deviceId: "claw-device-rename",
+    })
+
+    const createdResponse = await requestJson("http://pirate.test/agent-ownership-sessions", {
+      session_kind: "register",
+      ownership_provider: "clawkey",
+      display_name: "Palm Agent",
+      agent_challenge: registerChallenge.challenge,
+    }, ctx.env, session.accessToken)
+    expect(createdResponse.status).toBe(201)
+    const createdBody = await json(createdResponse) as {
+      agent_ownership_session_id: string
+    }
+
+    const completedResponse = await requestJson(
+      `http://pirate.test/agent-ownership-sessions/${createdBody.agent_ownership_session_id}/complete`,
+      {},
+      ctx.env,
+      session.accessToken,
+    )
+    expect(completedResponse.status).toBe(200)
+    const completedBody = await json(completedResponse) as {
+      agent_id: string
+    }
+
+    const updatedResponse = await app.request(
+      `http://pirate.test/agents/${completedBody.agent_id}`,
+      {
+        method: "PATCH",
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ display_name: "Night Signal" }),
+      },
+      ctx.env,
+    )
+    expect(updatedResponse.status).toBe(200)
+    const updatedBody = await json(updatedResponse) as {
+      agent_id: string
+      display_name: string
+    }
+    expect(updatedBody.agent_id).toBe(completedBody.agent_id)
+    expect(updatedBody.display_name).toBe("Night Signal")
+  })
+
+  test("generic agent names fall back to the owner's global handle", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "agent-generic-name-user")
+    await createSelfVerifiedSession(ctx.env, session.accessToken)
+
+    const meResponse = await app.request(
+      "http://pirate.test/profiles/me",
+      {
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(meResponse.status).toBe(200)
+    const meBody = await json(meResponse) as {
+      global_handle: { label: string }
+    }
+    const expectedDisplayName = `${meBody.global_handle.label.replace(/\.pirate$/u, "")} Agent`
+
+    setClawkeyProviderForTests({
+      startRegistration: async () => ({
+        sessionId: "cks_agent_generic_name_123",
+        registrationUrl: "https://clawkey.test/register/cks_agent_generic_name_123",
+        expiresAt: "2036-04-20T12:00:00.000Z",
+      }),
+      getRegistrationStatus: async () => ({
+        status: "completed",
+        deviceId: "claw-device-generic-name",
+        publicKey: null,
+        registeredAt: "2026-04-19T12:34:56.000Z",
+      }),
+    })
+
+    const registerChallenge = createSignedAgentChallenge({
+      message: "clawkey-register-1738500000300",
+      deviceId: "claw-device-generic-name",
+    })
+
+    const createdResponse = await requestJson("http://pirate.test/agent-ownership-sessions", {
+      session_kind: "register",
+      ownership_provider: "clawkey",
+      display_name: "OpenClaw Agent",
+      agent_challenge: registerChallenge.challenge,
+    }, ctx.env, session.accessToken)
+    expect(createdResponse.status).toBe(201)
+    const createdBody = await json(createdResponse) as {
+      agent_ownership_session_id: string
+    }
+
+    const completedResponse = await requestJson(
+      `http://pirate.test/agent-ownership-sessions/${createdBody.agent_ownership_session_id}/complete`,
+      {},
+      ctx.env,
+      session.accessToken,
+    )
+    expect(completedResponse.status).toBe(200)
+
+    const agentsResponse = await app.request(
+      "http://pirate.test/agents",
+      {
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(agentsResponse.status).toBe(200)
+    const agentsBody = await json(agentsResponse) as {
+      items: Array<{ display_name: string }>
+    }
+    expect(agentsBody.items[0]?.display_name).toBe(expectedDisplayName)
   })
 
   test("agents list returns an empty result on legacy databases without agent tables", async () => {

@@ -36,6 +36,7 @@ type CommentRow = {
   identity_mode: CommentIdentityMode
   anonymous_scope: CommentAnonymousScope
   anonymous_label: string | null
+  agent_handle_snapshot: string | null
   agent_display_name_snapshot: string | null
   agent_owner_handle_snapshot: string | null
   agent_ownership_provider_snapshot: string | null
@@ -91,6 +92,7 @@ function toCommentRow(row: unknown): CommentRow {
     identity_mode: requiredString(row, "identity_mode") as CommentIdentityMode,
     anonymous_scope: stringOrNull(rowValue(row, "anonymous_scope")) as CommentAnonymousScope,
     anonymous_label: stringOrNull(rowValue(row, "anonymous_label")),
+    agent_handle_snapshot: stringOrNull(rowValue(row, "agent_handle_snapshot")),
     agent_display_name_snapshot: stringOrNull(rowValue(row, "agent_display_name_snapshot")),
     agent_owner_handle_snapshot: stringOrNull(rowValue(row, "agent_owner_handle_snapshot")),
     agent_ownership_provider_snapshot: stringOrNull(rowValue(row, "agent_ownership_provider_snapshot")),
@@ -124,6 +126,7 @@ function serializeComment(row: CommentRow): Comment {
     identity_mode: row.identity_mode,
     anonymous_scope: row.anonymous_scope,
     anonymous_label: row.anonymous_label,
+    agent_handle_snapshot: row.agent_handle_snapshot,
     agent_display_name_snapshot: row.agent_display_name_snapshot,
     agent_owner_handle_snapshot: row.agent_owner_handle_snapshot,
     agent_ownership_provider_snapshot: row.agent_ownership_provider_snapshot as Comment["agent_ownership_provider_snapshot"],
@@ -358,6 +361,7 @@ export async function insertComment(input: {
   agentWriteAuthorization?: {
     agentId: string
     agentOwnershipRecordId: string
+    agentHandleSnapshot: string
     agentDisplayNameSnapshot: string
     agentOwnerHandleSnapshot: string
     agentOwnershipProviderSnapshot: NonNullable<Comment["agent_ownership_provider_snapshot"]>
@@ -382,13 +386,13 @@ export async function insertComment(input: {
         authorship_mode, agent_id, agent_ownership_record_id, identity_mode, anonymous_scope,
         anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot,
         body, source_language, status, depth, direct_reply_count, descendant_count, upvote_count, downvote_count, score,
-        last_reply_at, content_hash, swarm_body_ref, created_at, updated_at
+        last_reply_at, content_hash, swarm_body_ref, created_at, updated_at, agent_handle_snapshot
       ) VALUES (
         ?1, ?2, ?3, ?4, ?5,
         ?6, ?7, ?8, ?9, ?10,
         ?11, ?12, ?13, ?14,
         ?15, ?16, 'published', ?17, 0, 0, 0, 0, 0,
-        NULL, ?18, NULL, ?19, ?19
+        NULL, ?18, NULL, ?19, ?19, ?20
       )
     `,
     args: [
@@ -411,6 +415,7 @@ export async function insertComment(input: {
       input.depth,
       input.contentHash,
       input.createdAt,
+      input.agentWriteAuthorization?.agentHandleSnapshot ?? null,
     ],
   })
 
@@ -426,7 +431,7 @@ export async function getCommentById(executor: DbExecutor, commentId: string): P
     sql: `
       SELECT comment_id, community_id, thread_root_post_id, parent_comment_id, author_user_id,
              authorship_mode, agent_id, agent_ownership_record_id, identity_mode, anonymous_scope,
-             anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot,
+             anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot,
              body, source_language, status, depth,
              direct_reply_count, descendant_count, upvote_count, downvote_count, score,
              last_reply_at, content_hash, swarm_body_ref, created_at, updated_at
@@ -448,7 +453,7 @@ export async function listThreadCommentsForSnapshot(
     sql: `
       SELECT comment_id, community_id, thread_root_post_id, parent_comment_id, author_user_id,
              authorship_mode, agent_id, agent_ownership_record_id, identity_mode, anonymous_scope,
-             anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot,
+             anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot,
              body, source_language, status, depth,
              direct_reply_count, descendant_count, upvote_count, downvote_count, score,
              last_reply_at, content_hash, swarm_body_ref, created_at, updated_at
@@ -618,7 +623,7 @@ export async function listTopLevelComments(input: {
     sql: `
       SELECT comment_id, community_id, thread_root_post_id, parent_comment_id, author_user_id,
              authorship_mode, agent_id, agent_ownership_record_id, identity_mode, anonymous_scope,
-             anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot,
+             anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot,
              body, source_language, status, depth,
              direct_reply_count, descendant_count, upvote_count, downvote_count, score,
              last_reply_at, content_hash, swarm_body_ref, created_at, updated_at,
@@ -659,7 +664,7 @@ export async function listReplies(input: {
     sql: `
       SELECT comment_id, community_id, thread_root_post_id, parent_comment_id, author_user_id,
              authorship_mode, agent_id, agent_ownership_record_id, identity_mode, anonymous_scope,
-             anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot,
+             anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot,
              body, source_language, status, depth,
              direct_reply_count, descendant_count, upvote_count, downvote_count, score,
              last_reply_at, content_hash, swarm_body_ref, created_at, updated_at,
@@ -724,7 +729,7 @@ export async function getCommentContext(input: {
     sql: `
       SELECT comment_id, community_id, thread_root_post_id, parent_comment_id, author_user_id,
              authorship_mode, agent_id, agent_ownership_record_id, identity_mode, anonymous_scope,
-             anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot,
+             anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot,
              body, source_language, status, depth,
              direct_reply_count, descendant_count, upvote_count, downvote_count, score,
              last_reply_at, content_hash, swarm_body_ref, created_at, updated_at,

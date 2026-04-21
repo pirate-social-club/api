@@ -22,6 +22,17 @@ export type AssetRow = {
   story_status: Asset["story_status"]
   story_error: string | null
   story_ip_id: string | null
+  story_ip_nft_contract: string | null
+  story_ip_nft_token_id: string | null
+  story_publish_model: "pirate_v1" | "story_ip_v1"
+  story_license_terms_id: string | null
+  story_license_template: string | null
+  story_royalty_policy: string | null
+  story_royalty_policy_id: string | null
+  story_derivative_parent_ip_ids_json: string | null
+  story_derivative_registered_at: string | null
+  story_revenue_token: string | null
+  story_royalty_registration_status: "none" | "pending" | "registered" | "failed"
   story_publish_tx_ref: string | null
   story_asset_version_id: string | null
   story_cdr_vault_uuid: number | null
@@ -62,6 +73,8 @@ export type QuoteAllocationSnapshot = NonNullable<CommunityPurchaseQuote["alloca
 
 export type PurchaseAllocationLeg = NonNullable<CommunityPurchase["allocations"]>[number]
 
+export type PurchaseSettlementMode = "delivery_only_story_settlement" | "royalty_native_story_payment"
+
 export type PurchaseQuoteRow = {
   quote_id: string
   community_id: string
@@ -77,6 +90,7 @@ export type PurchaseQuoteRow = {
   funding_asset_json: string | null
   source_chain_json: string | null
   route_provider: string | null
+  funding_destination_address: string | null
   route_policy_compliant: boolean
   route_live_available: boolean | null
   policy_origin: CommunityMoneyPolicy["policy_origin"]
@@ -89,6 +103,7 @@ export type PurchaseQuoteRow = {
   route_required: boolean
   route_status_policy: CommunityMoneyPolicy["route_status_policy"]
   route_hop_tolerance: number
+  settlement_mode: PurchaseSettlementMode
   verification_snapshot_ref: string | null
   pricing_policy_version: string | null
   status: "active" | "expired" | "consumed" | "failed"
@@ -113,6 +128,12 @@ export type PurchaseAllocationLegRow = {
   settlement_strategy: PurchaseAllocationLeg["settlement_strategy"]
   status: PurchaseAllocationLeg["status"]
   settlement_ref: string | null
+  provider_receipt_ref: string | null
+  tax_receipt_ref: string | null
+  submitted_at: string | null
+  confirmed_at: string | null
+  failed_at: string | null
+  attempt_count: number
   failure_reason: string | null
   created_at: string
   updated_at: string
@@ -128,6 +149,7 @@ export type PurchaseRow = {
   settlement_wallet_attachment_id: string
   purchase_price_usd: number
   pricing_tier: string | null
+  settlement_mode: PurchaseSettlementMode
   settlement_chain: string
   settlement_token: string
   settlement_tx_ref: string

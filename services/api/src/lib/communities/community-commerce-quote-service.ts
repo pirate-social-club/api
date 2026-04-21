@@ -5,6 +5,7 @@ import type { CommunityRepository } from "./db-community-repository"
 import type { UserRepository } from "../auth/repositories"
 import {
   boolToSqlite,
+  getAssetRow,
   getListingRowById,
   parseListingPolicy,
   getPurchaseQuoteRow,
@@ -16,11 +17,18 @@ import {
   getCommunityMoneyPolicy,
   getCommunityPricingPolicy,
 } from "./community-commerce-policy-service"
+import { assertAssetReadyForStoryRoyaltyCommerce } from "./community-commerce-story-royalty"
+import { resolveStorySettlementDirectSigner } from "../story/story-direct-signer"
+import {
+  resolvePirateCheckoutOperatorAddress,
+} from "./community-commerce-checkout-config"
+import { assertEndaomentPayoutConfigured } from "./community-commerce-endaoment-payout-service"
 import {
   assertValidDonationSharePct,
+  resolveAllocationSettlementAmountAtomic,
+  resolvePurchaseSettlementMode,
   resolveRegionalPrice,
   resolveRoutePolicy,
-  resolveSettlementAmountSnapshot,
 } from "./community-commerce-quote-helpers"
 import {
   assertExecutableQuoteAllocationSnapshot,
@@ -91,6 +99,18 @@ export async function createCommunityPurchaseQuote(input: {
     if (!listing || listing.status !== "active") {
       throw notFoundError("Listing not found")
     }
+    let settlementMode = resolvePurchaseSettlementMode({})
+    if (listing.asset_id?.trim()) {
+      const asset = await getAssetRow(db.client, input.communityId, listing.asset_id)
+      if (!asset) {
+        throw notFoundError("Asset not found")
+      }
+      assertAssetReadyForStoryRoyaltyCommerce(asset)
+      settlementMode = resolvePurchaseSettlementMode({
+        storyRoyaltyRegistrationStatus: asset.story_royalty_registration_status,
+        storyIpId: asset.story_ip_id,
+      })
+    }
     const moneyPolicy = await getCommunityMoneyPolicy({ env: input.env, communityId: input.communityId })
     const route = resolveRoutePolicy({ moneyPolicy, body: input.body })
     if (!route.eligible) {
@@ -107,7 +127,6 @@ export async function createCommunityPurchaseQuote(input: {
     const quotedAt = nowIso()
     const expiresAt = new Date(Date.now() + moneyPolicy.quote_ttl_seconds * 1000).toISOString()
     const verificationSnapshotRef = resolvedPrice.verificationSnapshot ? makeId("qvs") : null
-    const settlementAmount = resolveSettlementAmountSnapshot(resolvedPrice.finalPriceUsd)
     const listingPolicy = parseListingPolicy(listing)
 
     if (listingPolicy.donationPartnerId) {
@@ -133,7 +152,7 @@ export async function createCommunityPurchaseQuote(input: {
 
       const partnerResult = await db.client.execute({
         sql: `
-          SELECT status
+          SELECT provider, review_status, status, payout_destination_ref
           FROM donation_partners
           WHERE donation_partner_id = ?1
           LIMIT 1
@@ -141,8 +160,24 @@ export async function createCommunityPurchaseQuote(input: {
         args: [listingPolicy.donationPartnerId],
       })
       const partnerRow = partnerResult.rows[0]
-      if (!partnerRow || String(partnerRow.status) !== "active") {
+      if (
+        !partnerRow
+        || String(partnerRow.review_status) !== "approved"
+        || String(partnerRow.status) !== "active"
+      ) {
         throw eligibilityFailed("Donation partner is not available")
+      }
+      if (!String(partnerRow.payout_destination_ref ?? "").trim()) {
+        throw eligibilityFailed("Donation partner payout destination is not configured")
+      }
+      if (String(partnerRow.provider) === "endaoment") {
+        try {
+          assertEndaomentPayoutConfigured(input.env)
+        } catch {
+          throw eligibilityFailed("Donation partner payout provider is not available")
+        }
+      } else {
+        throw eligibilityFailed("Donation partner provider is not supported")
       }
 
       assertValidDonationSharePct(listingPolicy.donationSharePct)
@@ -154,24 +189,45 @@ export async function createCommunityPurchaseQuote(input: {
         listingPolicy,
       }),
     )
+    const settlementAmount = {
+      amountAtomic: resolveAllocationSettlementAmountAtomic({
+        allocations: allocationSnapshot,
+        settlementStrategy: "story_payout",
+      }).toString(),
+      decimals: 18,
+    }
+    let fundingDestinationAddress: string | null = null
+    if (settlementMode === "royalty_native_story_payment") {
+      if (route.fundingMode !== "routed") {
+        throw eligibilityFailed("Story royalty commerce requires routed buyer funding")
+      }
+      const settlementSigner = resolveStorySettlementDirectSigner(input.env)
+      if (!settlementSigner.ok) {
+        throw eligibilityFailed(settlementSigner.error)
+      }
+      if (!settlementSigner.value) {
+        throw eligibilityFailed("Story settlement operator is not configured")
+      }
+      fundingDestinationAddress = resolvePirateCheckoutOperatorAddress(input.env)
+    }
     await db.client.execute({
       sql: `
         INSERT INTO purchase_quotes (
           quote_id, community_id, listing_id, buyer_user_id, asset_id, live_room_id, base_price_usd,
           pricing_tier, final_price_usd, allocation_snapshot_json, funding_mode, funding_asset_json, source_chain_json,
-          route_provider, route_policy_compliant, route_live_available, policy_origin,
+          route_provider, funding_destination_address, route_policy_compliant, route_live_available, policy_origin,
           destination_settlement_chain_json, destination_settlement_token, destination_settlement_amount_atomic,
           destination_settlement_decimals, treasury_denomination,
           quote_ttl_seconds, route_required, route_status_policy, route_hop_tolerance,
-          verification_snapshot_ref, pricing_policy_version, status, quoted_at, expires_at,
+          settlement_mode, verification_snapshot_ref, pricing_policy_version, status, quoted_at, expires_at,
           consumed_at, failed_at, created_at, updated_at
         ) VALUES (
           ?1, ?2, ?3, ?4, ?5, NULL, ?6,
           ?7, ?8, ?9, ?10, ?11, ?12, ?13,
           ?14, ?15, ?16, ?17, ?18, ?19,
           ?20, ?21, ?22, ?23, ?24, ?25,
-          ?26, ?27, 'active', ?28, ?29,
-          NULL, NULL, ?28, ?28
+          ?26, ?27, ?28, ?29, 'active', ?30, ?31,
+          NULL, NULL, ?30, ?30
         )
       `,
       args: [
@@ -188,6 +244,7 @@ export async function createCommunityPurchaseQuote(input: {
         input.body.funding_asset ? JSON.stringify(input.body.funding_asset) : null,
         input.body.source_chain ? JSON.stringify(input.body.source_chain) : null,
         input.body.route_provider ?? null,
+        fundingDestinationAddress,
         boolToSqlite(route.routePolicyCompliant),
         route.routeLiveAvailable == null ? null : boolToSqlite(route.routeLiveAvailable),
         moneyPolicy.policy_origin,
@@ -200,6 +257,7 @@ export async function createCommunityPurchaseQuote(input: {
         boolToSqlite(moneyPolicy.route_required),
         moneyPolicy.route_status_policy,
         moneyPolicy.route_hop_tolerance,
+        settlementMode,
         verificationSnapshotRef,
         resolvedPrice.pricingTier ? pricingPolicy.pricing_policy_version : null,
         quotedAt,

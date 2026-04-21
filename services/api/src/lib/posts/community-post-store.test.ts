@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
-import type { Post } from "../../types"
-import { sortPublishedLocalizedPostFeedItems } from "./community-post-store"
+import type { CreatePostRequest, Post } from "../../types"
+import { assertPostCreateRequest, sortPublishedLocalizedPostFeedItems } from "./community-post-store"
 
 function createFeedItem(input: {
   body?: string
@@ -29,6 +29,7 @@ function createFeedItem(input: {
       identity_mode: "public",
       anonymous_scope: null,
       anonymous_label: null,
+      agent_handle_snapshot: null,
       agent_display_name_snapshot: null,
       agent_owner_handle_snapshot: null,
       agent_ownership_provider_snapshot: null,
@@ -126,5 +127,18 @@ describe("sortPublishedLocalizedPostFeedItems", () => {
       "pst_recent",
       "pst_engaged",
     ])
+  })
+})
+
+describe("assertPostCreateRequest", () => {
+  test("rejects titles on link posts", () => {
+    const body = {
+      idempotency_key: "link-title",
+      post_type: "link",
+      title: "User-authored link title",
+      link_url: "https://example.com/story",
+    } as unknown as CreatePostRequest
+
+    expect(() => assertPostCreateRequest(body, "cmt_test")).toThrow("title is not allowed for link posts")
   })
 })

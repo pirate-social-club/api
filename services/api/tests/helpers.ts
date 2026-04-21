@@ -12,9 +12,13 @@ import { setEnsResolverForTests } from "../src/lib/auth/ens-linked-handle-servic
 import { setStoryAccessProofSignerForTests } from "../src/lib/story/story-access-proof-service"
 import { setStoryCdrUploaderForTests } from "../src/lib/story/story-cdr"
 import { setStoryAssetPublisherForTests } from "../src/lib/story/story-publish-service"
+import { setStoryRoyaltyRegistrarForTests } from "../src/lib/story/story-royalty-registration-service"
+import { setStoryRoyaltyPurchaseSettlementExecutorForTests } from "../src/lib/story/story-royalty-settlement-service"
 import { setStoryRuntimeFundingAssertionForTests } from "../src/lib/story/story-runtime-funding"
 import { setStoryPurchaseSettlementExecutorForTests } from "../src/lib/story/story-settlement-service"
 import { setSwarmPublisherForTests } from "../src/lib/swarm/swarm-publisher"
+import { setCommunityCommerceCharityPayoutExecutorForTests } from "../src/lib/communities/community-commerce-charity-payout-service"
+import { setCommunityCommerceBuyerFundingVerifierForTests } from "../src/lib/communities/community-commerce-funding-proof-service"
 
 import { splitSqlStatements, toSqliteCompatibleStatement } from "../shared/sql-migration"
 
@@ -59,9 +63,13 @@ export function resetRuntimeCaches(): void {
   setStoryAccessProofSignerForTests(null)
   setStoryCdrUploaderForTests(null)
   setStoryAssetPublisherForTests(null)
+  setStoryRoyaltyRegistrarForTests(null)
+  setStoryRoyaltyPurchaseSettlementExecutorForTests(null)
   setStoryRuntimeFundingAssertionForTests(null)
   setStoryPurchaseSettlementExecutorForTests(null)
   setSwarmPublisherForTests(null)
+  setCommunityCommerceCharityPayoutExecutorForTests(null)
+  setCommunityCommerceBuyerFundingVerifierForTests(null)
   const scope = globalThis as typeof globalThis & {
     __pirateSingletons?: Map<string, unknown>
   }
@@ -179,6 +187,10 @@ export async function createRouteTestContext(overrides: Partial<Env> = {}): Prom
       ENVIRONMENT: "test",
       CONTROL_PLANE_DATABASE_URL: `file:${controlPlane.databasePath}`,
       LOCAL_COMMUNITY_DB_ROOT: communityDbRoot,
+      MUSIC_PURCHASE_STORY_SETTLEMENT_PRIVATE_KEY: "0x5000000000000000000000000000000000000000000000000000000000000005",
+      PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY: "0x6000000000000000000000000000000000000000000000000000000000000006",
+      PIRATE_CHECKOUT_RPC_URL: "http://127.0.0.1:8545",
+      ENDAOMENT_REGISTRY_ADDRESS: "0x7777777777777777777777777777777777777777",
       ...overrides,
     })
 

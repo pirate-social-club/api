@@ -13,7 +13,8 @@ import {
   materializeCommunityTextTranslations,
   parseCommunityTextMaterializePayload,
 } from "../localization/community-localization-service"
-import { getPostById } from "../posts/community-post-store"
+import { getPostById, updatePostLinkOgImageUrl } from "../posts/community-post-store"
+import { fetchLinkPreviewMetadata } from "../posts/link-preview-fetcher"
 import { materializePostLabel } from "../posts/post-label-materializer"
 import { materializePostTranslation } from "../localization/post-translation-materializer"
 import {
@@ -61,6 +62,11 @@ type PostTranslationPayload = {
 type PostLabelPayload = {
   post_id?: string
   reason?: "publish" | "edit"
+}
+
+type LinkPreviewFetchPayload = {
+  post_id?: string
+  link_url?: string | null
 }
 
 type CommentTranslationPayload = {
@@ -138,6 +144,18 @@ function parsePostLabelPayload(raw: string | null): PostLabelPayload | null {
   try {
     const parsed = JSON.parse(raw) as unknown
     return parsed && typeof parsed === "object" ? parsed as PostLabelPayload : null
+  } catch {
+    return null
+  }
+}
+
+function parseLinkPreviewFetchPayload(raw: string | null): LinkPreviewFetchPayload | null {
+  if (!raw) {
+    return null
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    return parsed && typeof parsed === "object" ? parsed as LinkPreviewFetchPayload : null
   } catch {
     return null
   }
@@ -442,6 +460,49 @@ async function runPostLabelMaterialize(input: {
   }
 }
 
+async function runLinkPreviewFetch(input: {
+  job: CommunityJobRow
+  env: Env
+  communityRepository: CommunityJobRepository
+}): Promise<string | null> {
+  const db = await openCommunityDb(input.env, input.communityRepository, input.job.community_id)
+  try {
+    const payload = parseLinkPreviewFetchPayload(input.job.payload_json)
+    const postId = payload?.post_id ?? input.job.subject_id
+    const post = await getPostById(db.client, postId)
+    if (!post) {
+      throw internalError("Post is missing for link preview fetch")
+    }
+    if (post.post_type !== "link") {
+      return "skipped:not_link_post"
+    }
+    if (post.link_og_image_url) {
+      return post.link_og_image_url
+    }
+
+    const linkUrl = post.link_url ?? payload?.link_url ?? null
+    if (!linkUrl?.trim()) {
+      return "skipped:missing_link_url"
+    }
+
+    const metadata = await fetchLinkPreviewMetadata({ url: linkUrl })
+    if (!metadata.imageUrl) {
+      return "skipped:no_og_image"
+    }
+
+    await updatePostLinkOgImageUrl({
+      client: db.client,
+      postId: post.post_id,
+      linkOgImageUrl: metadata.imageUrl,
+      updatedAt: nowIso(),
+    })
+
+    return metadata.imageUrl
+  } finally {
+    db.close()
+  }
+}
+
 async function runCommentTranslationMaterialize(input: {
   job: CommunityJobRow
   env: Env
@@ -509,6 +570,8 @@ async function runCommunityJob(input: {
       return runCommentBodyMirror(input)
     case "thread_snapshot_publish":
       return runThreadSnapshotPublish(input)
+    case "link_preview_fetch":
+      return runLinkPreviewFetch(input)
     case "post_label_materialize":
       return runPostLabelMaterialize(input)
     case "post_translation_materialize":

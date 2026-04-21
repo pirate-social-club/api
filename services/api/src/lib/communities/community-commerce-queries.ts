@@ -30,7 +30,11 @@ export async function getAssetRow(
     sql: `
       SELECT asset_id, community_id, source_post_id, song_artifact_bundle_id, creator_user_id, asset_kind,
              rights_basis, access_mode, primary_content_ref, primary_content_hash, publication_status,
-             story_status, story_error, story_ip_id, story_publish_tx_ref, story_asset_version_id,
+             story_status, story_error, story_ip_id, story_ip_nft_contract, story_ip_nft_token_id,
+             story_publish_model, story_license_terms_id, story_license_template, story_royalty_policy,
+             story_royalty_policy_id, story_derivative_parent_ip_ids_json, story_derivative_registered_at,
+             story_revenue_token, story_royalty_registration_status,
+             story_publish_tx_ref, story_asset_version_id,
              story_cdr_vault_uuid, story_namespace, story_entitlement_token_id, story_read_condition,
              story_write_condition, locked_delivery_status, locked_delivery_ref, locked_delivery_error,
              locked_delivery_storage_ref, locked_delivery_secret_json, created_at, updated_at
@@ -59,6 +63,18 @@ export async function getAssetRow(
     story_status: requiredString(row, "story_status") as Asset["story_status"],
     story_error: stringOrNull(row, "story_error"),
     story_ip_id: stringOrNull(row, "story_ip_id"),
+    story_ip_nft_contract: stringOrNull(row, "story_ip_nft_contract"),
+    story_ip_nft_token_id: stringOrNull(row, "story_ip_nft_token_id"),
+    story_publish_model: requiredString(row, "story_publish_model") as AssetRow["story_publish_model"],
+    story_license_terms_id: stringOrNull(row, "story_license_terms_id"),
+    story_license_template: stringOrNull(row, "story_license_template"),
+    story_royalty_policy: stringOrNull(row, "story_royalty_policy"),
+    story_royalty_policy_id: stringOrNull(row, "story_royalty_policy_id"),
+    story_derivative_parent_ip_ids_json: stringOrNull(row, "story_derivative_parent_ip_ids_json"),
+    story_derivative_registered_at: stringOrNull(row, "story_derivative_registered_at"),
+    story_revenue_token: stringOrNull(row, "story_revenue_token"),
+    story_royalty_registration_status:
+      requiredString(row, "story_royalty_registration_status") as AssetRow["story_royalty_registration_status"],
     story_publish_tx_ref: stringOrNull(row, "story_publish_tx_ref"),
     story_asset_version_id: stringOrNull(row, "story_asset_version_id"),
     story_cdr_vault_uuid: numberOrNull(row, "story_cdr_vault_uuid"),
@@ -212,11 +228,11 @@ export async function getPurchaseQuoteRow(
     sql: `
       SELECT quote_id, community_id, listing_id, buyer_user_id, asset_id, live_room_id, base_price_usd,
              pricing_tier, final_price_usd, allocation_snapshot_json, funding_mode, funding_asset_json, source_chain_json,
-             route_provider, route_policy_compliant, route_live_available, policy_origin,
+             route_provider, funding_destination_address, route_policy_compliant, route_live_available, policy_origin,
              destination_settlement_chain_json, destination_settlement_token, destination_settlement_amount_atomic,
              destination_settlement_decimals, treasury_denomination,
              quote_ttl_seconds, route_required, route_status_policy, route_hop_tolerance,
-             verification_snapshot_ref, pricing_policy_version, status, quoted_at, expires_at,
+             settlement_mode, verification_snapshot_ref, pricing_policy_version, status, quoted_at, expires_at,
              consumed_at, failed_at, created_at, updated_at
       FROM purchase_quotes
       WHERE community_id = ?1
@@ -240,6 +256,7 @@ export async function getPurchaseQuoteRow(
     funding_asset_json: stringOrNull(row, "funding_asset_json"),
     source_chain_json: stringOrNull(row, "source_chain_json"),
     route_provider: stringOrNull(row, "route_provider"),
+    funding_destination_address: stringOrNull(row, "funding_destination_address"),
     route_policy_compliant: sqliteToBool((row as Record<string, unknown>).route_policy_compliant),
     route_live_available: (row as Record<string, unknown>).route_live_available == null
       ? null
@@ -254,6 +271,7 @@ export async function getPurchaseQuoteRow(
     route_required: sqliteToBool((row as Record<string, unknown>).route_required),
     route_status_policy: requiredString(row, "route_status_policy") as CommunityMoneyPolicy["route_status_policy"],
     route_hop_tolerance: Number(numberOrNull(row, "route_hop_tolerance") ?? 0),
+    settlement_mode: requiredString(row, "settlement_mode") as PurchaseQuoteRow["settlement_mode"],
     verification_snapshot_ref: stringOrNull(row, "verification_snapshot_ref"),
     pricing_policy_version: stringOrNull(row, "pricing_policy_version"),
     status: requiredString(row, "status") as PurchaseQuoteRow["status"],
@@ -274,6 +292,7 @@ export async function listPurchaseAllocationLegRows(
     sql: `
       SELECT purchase_allocation_leg_id, purchase_id, quote_id, community_id, recipient_type, recipient_ref,
              waterfall_position, share_bps, amount_usd, settlement_strategy, status, settlement_ref,
+             provider_receipt_ref, tax_receipt_ref, submitted_at, confirmed_at, failed_at, attempt_count,
              failure_reason, created_at, updated_at
       FROM purchase_allocation_legs
       WHERE purchase_id = ?1
@@ -294,6 +313,12 @@ export async function listPurchaseAllocationLegRows(
     settlement_strategy: requiredString(row, "settlement_strategy") as PurchaseAllocationLegRow["settlement_strategy"],
     status: requiredString(row, "status") as PurchaseAllocationLegRow["status"],
     settlement_ref: stringOrNull(row, "settlement_ref"),
+    provider_receipt_ref: stringOrNull(row, "provider_receipt_ref"),
+    tax_receipt_ref: stringOrNull(row, "tax_receipt_ref"),
+    submitted_at: stringOrNull(row, "submitted_at"),
+    confirmed_at: stringOrNull(row, "confirmed_at"),
+    failed_at: stringOrNull(row, "failed_at"),
+    attempt_count: Number(numberOrNull(row, "attempt_count") ?? 0),
     failure_reason: stringOrNull(row, "failure_reason"),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
@@ -308,7 +333,7 @@ export async function listPurchaseRows(
   const result = await client.execute({
     sql: `
       SELECT purchase_id, community_id, listing_id, asset_id, live_room_id, buyer_user_id,
-             settlement_wallet_attachment_id, purchase_price_usd, pricing_tier, settlement_chain,
+             settlement_wallet_attachment_id, purchase_price_usd, pricing_tier, settlement_mode, settlement_chain,
              settlement_token, settlement_tx_ref, donation_partner_id, donation_share_pct,
              donation_amount_usd, created_at
       FROM purchases
@@ -328,6 +353,7 @@ export async function listPurchaseRows(
     settlement_wallet_attachment_id: requiredString(row, "settlement_wallet_attachment_id"),
     purchase_price_usd: Number(numberOrNull(row, "purchase_price_usd") ?? 0),
     pricing_tier: stringOrNull(row, "pricing_tier"),
+    settlement_mode: requiredString(row, "settlement_mode") as PurchaseRow["settlement_mode"],
     settlement_chain: requiredString(row, "settlement_chain"),
     settlement_token: requiredString(row, "settlement_token"),
     settlement_tx_ref: requiredString(row, "settlement_tx_ref"),
@@ -346,7 +372,7 @@ export async function getPurchaseRow(
   const row = await executeFirst(client, {
     sql: `
       SELECT purchase_id, community_id, listing_id, asset_id, live_room_id, buyer_user_id,
-             settlement_wallet_attachment_id, purchase_price_usd, pricing_tier, settlement_chain,
+             settlement_wallet_attachment_id, purchase_price_usd, pricing_tier, settlement_mode, settlement_chain,
              settlement_token, settlement_tx_ref, donation_partner_id, donation_share_pct,
              donation_amount_usd, created_at
       FROM purchases
@@ -366,6 +392,7 @@ export async function getPurchaseRow(
     settlement_wallet_attachment_id: requiredString(row, "settlement_wallet_attachment_id"),
     purchase_price_usd: Number(numberOrNull(row, "purchase_price_usd") ?? 0),
     pricing_tier: stringOrNull(row, "pricing_tier"),
+    settlement_mode: requiredString(row, "settlement_mode") as PurchaseRow["settlement_mode"],
     settlement_chain: requiredString(row, "settlement_chain"),
     settlement_token: requiredString(row, "settlement_token"),
     settlement_tx_ref: requiredString(row, "settlement_tx_ref"),

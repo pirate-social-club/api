@@ -4,25 +4,31 @@ import type { Env } from "../../types"
 import type {
   AgentDelegatedCredential,
   AgentChallenge,
+  AgentHandle,
   AgentOwnershipPairing,
   AgentOwnershipPairingClaimResult,
   AgentOwnershipSession,
+  PublicAgentResolution,
   UserAgent,
 } from "./types"
 import {
   claimAgentOwnershipPairingCode,
+  claimUserAgentHandle,
   completeAgentOwnershipSessionWithConnectionToken,
   createAgentOwnershipPairingCode,
   completeAgentOwnershipSessionFromCallback,
   completeAgentOwnershipSession,
   getAgentOwnershipSession,
+  getUserAgentHandle,
   getUserAgent,
   issueAgentDelegatedCredential,
   issueAgentDelegatedCredentialWithConnectionToken,
   listUserAgents,
   refreshAgentDelegatedCredential,
   refreshAgentDelegatedCredentialWithConnectionToken,
+  resolvePublicAgentByHandle,
   startAgentOwnershipSession,
+  updateUserAgentDisplayName,
   verifyAgentDelegatedAccessToken,
 } from "./control-plane-agent-ownership-service"
 import type { Client } from "../sql-client"
@@ -65,6 +71,21 @@ export interface AgentOwnershipRepository {
   }): Promise<AgentOwnershipSession | null>
   listUserAgents(userId: string): Promise<UserAgent[]>
   getUserAgent(agentId: string, userId: string): Promise<UserAgent | null>
+  updateUserAgentDisplayName(input: {
+    agentId: string
+    userId: string
+    displayName: string
+  }): Promise<UserAgent | null>
+  getUserAgentHandle(input: {
+    agentId: string
+    userId: string
+  }): Promise<AgentHandle | null>
+  claimUserAgentHandle(input: {
+    agentId: string
+    userId: string
+    desiredLabel: string
+  }): Promise<AgentHandle | null>
+  resolvePublicAgentByHandle(handleLabel: string): Promise<PublicAgentResolution | null>
   issueAgentDelegatedCredential(input: {
     agentId: string
     userId: string
@@ -162,6 +183,33 @@ export class ControlPlaneAgentOwnershipRepository implements AgentOwnershipRepos
 
   async getUserAgent(agentId: string, userId: string): Promise<UserAgent | null> {
     return getUserAgent(this.client, agentId, userId)
+  }
+
+  async updateUserAgentDisplayName(input: {
+    agentId: string
+    userId: string
+    displayName: string
+  }): Promise<UserAgent | null> {
+    return updateUserAgentDisplayName(this.client, input)
+  }
+
+  async getUserAgentHandle(input: {
+    agentId: string
+    userId: string
+  }): Promise<AgentHandle | null> {
+    return getUserAgentHandle(this.client, input)
+  }
+
+  async claimUserAgentHandle(input: {
+    agentId: string
+    userId: string
+    desiredLabel: string
+  }): Promise<AgentHandle | null> {
+    return claimUserAgentHandle(this.client, input)
+  }
+
+  async resolvePublicAgentByHandle(handleLabel: string): Promise<PublicAgentResolution | null> {
+    return resolvePublicAgentByHandle(this.client, handleLabel)
   }
 
   async issueAgentDelegatedCredential(input: {
