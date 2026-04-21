@@ -101,8 +101,8 @@ export function normalizeVerificationRequirements(
       throw badRequestError(`Unsupported Self verification requirement: ${String(requirement?.proof_type ?? "unknown")}`)
     }
     const minimumAge = Number(requirement.minimum_age)
-    if (!Number.isInteger(minimumAge) || minimumAge < 1 || minimumAge > 125) {
-      throw badRequestError("minimum_age verification requirement must be an integer from 1 to 125")
+    if (!Number.isInteger(minimumAge) || minimumAge < 18 || minimumAge > 125) {
+      throw badRequestError("minimum_age verification requirement must be an integer from 18 to 125")
     }
     normalized.push({ proof_type: "minimum_age", minimum_age: minimumAge })
   }

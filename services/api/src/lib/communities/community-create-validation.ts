@@ -223,8 +223,8 @@ export function assertPublicV0GateConfiguration(
 
         const config = (requirement.config ?? rule.gate_config ?? {}) as Record<string, unknown>
         const minimumAge = typeof config.minimum_age === "number" ? config.minimum_age : null
-        if (minimumAge == null || !Number.isInteger(minimumAge) || minimumAge < 1 || minimumAge > 125) {
-          throw eligibilityFailed("Minimum age gate minimum_age must be an integer from 1 to 125")
+        if (minimumAge == null || !Number.isInteger(minimumAge) || minimumAge < 18 || minimumAge > 125) {
+          throw eligibilityFailed("Minimum age gate minimum_age must be an integer from 18 to 125")
         }
         continue
       }
