@@ -14,8 +14,8 @@ import { openCommunityDb } from "./community-db-factory"
 import type {
   CreateCommunityAuth,
   CreateCommunityRequestBody,
-  UpdateCommunityRulesRequestBody,
 } from "./community-create-validation"
+import type { UpdateCommunityRulesRequestBody } from "./community-update-validation"
 
 export function resolveCommunityDbRoot(env: Env): string {
   const configured = String(env.LOCAL_COMMUNITY_DB_ROOT || "").trim()

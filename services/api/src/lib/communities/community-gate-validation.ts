@@ -1,0 +1,222 @@
+import type { CreateCommunityRequest } from "../../types"
+import { eligibilityFailed } from "../errors"
+import { normalizeIdentityCountryCode, normalizeIdentityCountryCodes } from "../identity/country-codes"
+import { normalizeEthereumAddress } from "./community-token-gates"
+
+type PublicV0GateValidationBody = {
+  membership_mode?: "open" | "request" | "gated" | null
+  default_age_gate_policy?: "none" | "18_plus" | null
+  anonymous_identity_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null
+  gate_rules?: CreateCommunityRequest["gate_rules"]
+}
+
+type GateRuleInput = NonNullable<CreateCommunityRequest["gate_rules"]>[number]
+
+const VALID_PUBLIC_V0_PROVIDERS_BY_PROOF_TYPE = {
+  unique_human: new Set(["self", "very"]),
+  age_over_18: new Set(["self"]),
+  minimum_age: new Set(["self"]),
+  nationality: new Set(["self"]),
+  gender: new Set(["self"]),
+  wallet_score: new Set(["passport"]),
+  sanctions_clear: new Set(["passport"]),
+} as const
+
+export function assertPublicV0GateConfiguration(
+  body: PublicV0GateValidationBody,
+  input: {
+    ageOver18Verified: boolean
+  },
+): void {
+  assertPublicV0MembershipBasics(body, input)
+
+  const gateRules = body.gate_rules ?? []
+  assertPublicV0TokenGateConfiguration(gateRules)
+  assertPublicV0AcceptedProviders(gateRules)
+  assertPublicV0IdentityGateConfiguration(gateRules)
+}
+
+function assertPublicV0MembershipBasics(
+  body: PublicV0GateValidationBody,
+  input: {
+    ageOver18Verified: boolean
+  },
+): void {
+  if (!["open", "request", "gated"].includes(body.membership_mode ?? "open")) {
+    throw eligibilityFailed("Public v0 community creation only allows open, request, or gated membership")
+  }
+  if ((body.anonymous_identity_scope ?? null) === "post_ephemeral") {
+    throw eligibilityFailed("post_ephemeral anonymous scope is not allowed in public v0 community creation")
+  }
+  if ((body.default_age_gate_policy ?? "none") === "18_plus" && !input.ageOver18Verified) {
+    throw eligibilityFailed("age_over_18 verification is required for 18_plus communities")
+  }
+  if (body.gate_rules?.some((rule) => rule.scope === "viewer" || rule.scope === "posting")) {
+    throw eligibilityFailed("Public v0 community creation only allows membership-scope gates")
+  }
+  if (body.gate_rules?.some((rule) => rule.gate_type === "sanctions_clear")) {
+    throw eligibilityFailed("Public v0 community creation does not support sanctions_clear gates")
+  }
+}
+
+function assertPublicV0TokenGateConfiguration(gateRules: GateRuleInput[]): void {
+  for (const rule of gateRules) {
+    if ((rule.gate_family as string) !== "token_holding") {
+      continue
+    }
+
+    if (rule.gate_type !== "erc721_holding") {
+      throw eligibilityFailed("Public v0 community creation only supports Ethereum ERC-721 collection token gates")
+    }
+    if ((rule.chain_namespace ?? null) !== "eip155:1") {
+      throw eligibilityFailed("ERC-721 community gates must target Ethereum mainnet (eip155:1)")
+    }
+    if ((rule.proof_requirements?.length ?? 0) > 0) {
+      throw eligibilityFailed("ERC-721 community gates do not accept proof_requirements")
+    }
+
+    const config = (rule.gate_config ?? {}) as Record<string, unknown>
+    if (!normalizeEthereumAddress(config.contract_address)) {
+      throw eligibilityFailed("ERC-721 community gates require a valid Ethereum contract_address")
+    }
+  }
+}
+
+function assertPublicV0AcceptedProviders(gateRules: GateRuleInput[]): void {
+  for (const rule of gateRules) {
+    for (const requirement of rule.proof_requirements ?? []) {
+      const acceptedProviders = requirement.accepted_providers ?? []
+      if (acceptedProviders.length === 0) {
+        continue
+      }
+
+      const validProviders = VALID_PUBLIC_V0_PROVIDERS_BY_PROOF_TYPE[
+        requirement.proof_type as keyof typeof VALID_PUBLIC_V0_PROVIDERS_BY_PROOF_TYPE
+      ]
+      if (!validProviders) {
+        continue
+      }
+
+      const providerSet = validProviders as ReadonlySet<string>
+      const invalidProviders = acceptedProviders.filter((provider) => !providerSet.has(provider))
+      if (invalidProviders.length > 0) {
+        throw eligibilityFailed(
+          `Invalid accepted_providers for ${requirement.proof_type}: ${invalidProviders.join(", ")}`,
+        )
+      }
+    }
+  }
+}
+
+function assertPublicV0IdentityGateConfiguration(gateRules: GateRuleInput[]): void {
+  let nationalityGateCount = 0
+  let genderGateCount = 0
+  let minimumAgeGateCount = 0
+
+  for (const rule of gateRules) {
+    if (rule.gate_type === "minimum_age") {
+      minimumAgeGateCount += 1
+      assertSingleIdentityGateCount(minimumAgeGateCount, "minimum_age")
+      assertMinimumAgeGate(rule)
+      continue
+    }
+    if (rule.gate_type === "gender") {
+      genderGateCount += 1
+      assertSingleIdentityGateCount(genderGateCount, "gender")
+      assertGenderGate(rule)
+      continue
+    }
+    if (rule.gate_type === "nationality") {
+      nationalityGateCount += 1
+      assertSingleIdentityGateCount(nationalityGateCount, "nationality")
+      assertNationalityGate(rule)
+    }
+  }
+}
+
+function assertSingleIdentityGateCount(
+  count: number,
+  gateType: "minimum_age" | "gender" | "nationality",
+): void {
+  if (count <= 1) {
+    return
+  }
+
+  const gateName = gateType === "minimum_age" ? "minimum_age" : gateType
+  throw eligibilityFailed(`Public v0 communities support at most one ${gateName} gate`)
+}
+
+function assertMinimumAgeGate(rule: GateRuleInput): void {
+  const requirements = rule.proof_requirements ?? []
+  if (requirements.length !== 1 || requirements[0].proof_type !== "minimum_age") {
+    throw eligibilityFailed("Minimum age gate must have exactly one minimum_age proof requirement")
+  }
+
+  const requirement = requirements[0]
+  const acceptedProviders = requirement.accepted_providers ?? []
+  if (acceptedProviders.length !== 1 || acceptedProviders[0] !== "self") {
+    throw eligibilityFailed("Minimum age gate accepted_providers must be exactly [\"self\"]")
+  }
+
+  const config = (requirement.config ?? rule.gate_config ?? {}) as Record<string, unknown>
+  const minimumAge = typeof config.minimum_age === "number" ? config.minimum_age : null
+  if (minimumAge == null || !Number.isInteger(minimumAge) || minimumAge < 18 || minimumAge > 125) {
+    throw eligibilityFailed("Minimum age gate minimum_age must be an integer from 18 to 125")
+  }
+}
+
+function assertGenderGate(rule: GateRuleInput): void {
+  const requirements = rule.proof_requirements ?? []
+  if (requirements.length !== 1 || requirements[0].proof_type !== "gender") {
+    throw eligibilityFailed("Gender gate must have exactly one gender proof requirement")
+  }
+
+  const requirement = requirements[0]
+  const acceptedProviders = requirement.accepted_providers ?? []
+  if (acceptedProviders.length !== 1 || acceptedProviders[0] !== "self") {
+    throw eligibilityFailed("Gender gate accepted_providers must be exactly [\"self\"]")
+  }
+
+  const config = (requirement.config ?? rule.gate_config ?? {}) as Record<string, unknown>
+  const requiredValue = typeof config.required_value === "string" ? config.required_value : null
+  if (!requiredValue) {
+    throw eligibilityFailed("Gender gate requires a required_value in config")
+  }
+  if (requiredValue !== "M" && requiredValue !== "F") {
+    throw eligibilityFailed("Gender gate required_value must be either \"M\" or \"F\"")
+  }
+}
+
+function assertNationalityGate(rule: GateRuleInput): void {
+  const requirements = rule.proof_requirements ?? []
+  if (requirements.length !== 1 || requirements[0].proof_type !== "nationality") {
+    throw eligibilityFailed("Nationality gate must have exactly one nationality proof requirement")
+  }
+
+  const requirement = requirements[0]
+  const acceptedProviders = requirement.accepted_providers ?? []
+  if (acceptedProviders.length !== 1 || acceptedProviders[0] !== "self") {
+    throw eligibilityFailed("Nationality gate accepted_providers must be exactly [\"self\"]")
+  }
+
+  const config = (requirement.config ?? rule.gate_config ?? {}) as Record<string, unknown>
+  const legacyRequiredValue = normalizeIdentityCountryCode(config.required_value)
+  const requiredValues = new Set<string>()
+  if (legacyRequiredValue) {
+    requiredValues.add(legacyRequiredValue)
+  }
+  for (const value of normalizeIdentityCountryCodes(config.required_values)) {
+    requiredValues.add(value)
+  }
+  if (requiredValues.size === 0) {
+    throw eligibilityFailed("Nationality gate requires required_value or required_values in config")
+  }
+
+  const rawRequiredValues = Array.isArray(config.required_values) ? config.required_values : []
+  if (
+    (config.required_value != null && !legacyRequiredValue)
+    || rawRequiredValues.some((value) => normalizeIdentityCountryCode(value) == null)
+  ) {
+    throw eligibilityFailed("Nationality gate country codes must be valid ISO-2 or ISO-3 codes")
+  }
+}
