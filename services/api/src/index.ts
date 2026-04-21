@@ -20,7 +20,7 @@ import profileMedia from "./routes/profile-media"
 import profiles from "./routes/profiles"
 import users from "./routes/users"
 import verification from "./routes/verification"
-import { errorResponse } from "./lib/errors"
+import { HttpError, errorResponse } from "./lib/errors"
 import type { Env } from "./types"
 
 const app = new Hono<{ Bindings: Env }>()
@@ -59,7 +59,9 @@ app.route("/", verification)
 app.notFound((c) => c.json({ code: "not_found", message: "Not found" }, 404))
 
 app.onError((error) => {
-  console.error("[api-worker]", error)
+  if (!(error instanceof HttpError) || error.status >= 500) {
+    console.error("[api-worker]", error)
+  }
   const response = errorResponse(error)
   return new Response(JSON.stringify(response.body), {
     status: response.status,
