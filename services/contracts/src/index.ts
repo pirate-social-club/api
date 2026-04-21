@@ -333,6 +333,10 @@ export type UserAgentListResponse = {
   items: Array<UserAgent>;
 };
 
+export type UpdateUserAgentRequest = {
+  display_name: string;
+};
+
 export type NamespaceVerificationAssertions = {
   root_exists?: boolean | null;
   root_control_verified?: boolean | null;
