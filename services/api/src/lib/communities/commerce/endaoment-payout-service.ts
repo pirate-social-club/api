@@ -1,14 +1,14 @@
 import { Contract, JsonRpcProvider, Wallet, getAddress } from "ethers"
-import type { Env } from "../../types"
-import { badRequestError } from "../errors"
-import { parseExpectedEvmAddress } from "../evm-signer"
-import { normalizeDirectSignerPrivateKey } from "../story/story-direct-signer"
-import type { CharityPayoutExecutionInput, CharityPayoutExecutionResult } from "./community-commerce-charity-payout-service"
+import type { Env } from "../../../types"
+import { badRequestError } from "../../errors"
+import { parseExpectedEvmAddress } from "../../evm-signer"
+import { normalizeDirectSignerPrivateKey } from "../../story/story-direct-signer"
+import type { CharityPayoutExecutionInput, CharityPayoutExecutionResult } from "./charity-payout-service"
 import {
   resolvePirateCheckoutRpcUrl,
   resolvePirateCheckoutSourceChainId,
   resolvePirateCheckoutUsdcTokenAddress,
-} from "./community-commerce-checkout-config"
+} from "./checkout-config"
 
 const ERC20_ABI = [
   "function decimals() view returns (uint8)",

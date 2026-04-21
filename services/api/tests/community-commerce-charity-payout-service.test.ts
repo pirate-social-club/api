@@ -3,7 +3,7 @@ import { createClient } from "@libsql/client"
 import {
   executeCharityPayoutsForSettlement,
   setCommunityCommerceCharityPayoutExecutorForTests,
-} from "../src/lib/communities/community-commerce-charity-payout-service"
+} from "../src/lib/communities/commerce/charity-payout-service"
 
 afterEach(() => {
   setCommunityCommerceCharityPayoutExecutorForTests(null)

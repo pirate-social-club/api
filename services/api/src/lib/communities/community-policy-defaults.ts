@@ -1,6 +1,6 @@
 import type { Community } from "../../types"
 import type { Env } from "../../types"
-import { buildDefaultPirateCheckoutMoneyPolicy } from "./community-commerce-checkout-config"
+import { buildDefaultPirateCheckoutMoneyPolicy } from "./commerce/checkout-config"
 
 function defaultPolicyFields(communityId: string, updatedAt: string) {
   return {

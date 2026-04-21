@@ -5,8 +5,8 @@ import { setStoryRoyaltyRegistrarForTests } from "../src/lib/story/story-royalty
 import { setStoryRoyaltyPurchaseSettlementExecutorForTests } from "../src/lib/story/story-royalty-settlement-service"
 import { setStoryRuntimeFundingAssertionForTests } from "../src/lib/story/story-runtime-funding"
 import { setStoryPurchaseSettlementExecutorForTests } from "../src/lib/story/story-settlement-service"
-import { setCommunityCommerceBuyerFundingVerifierForTests } from "../src/lib/communities/community-commerce-funding-proof-service"
-import { setCommunityCommerceCharityPayoutExecutorForTests } from "../src/lib/communities/community-commerce-charity-payout-service"
+import { setCommunityCommerceBuyerFundingVerifierForTests } from "../src/lib/communities/commerce/funding-proof-service"
+import { setCommunityCommerceCharityPayoutExecutorForTests } from "../src/lib/communities/commerce/charity-payout-service"
 import { openCommunityDb } from "../src/lib/communities/community-db-factory"
 import type { CommunityRepository } from "../src/lib/communities/db-community-repository"
 import {

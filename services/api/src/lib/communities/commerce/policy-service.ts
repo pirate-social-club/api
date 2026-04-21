@@ -1,7 +1,7 @@
-import { executeFirst } from "../db-helpers"
-import { nowIso } from "../helpers"
-import { getControlPlaneClient } from "../runtime-deps"
-import type { CommunityRepository } from "./db-community-repository"
+import { executeFirst } from "../../db-helpers"
+import { nowIso } from "../../helpers"
+import { getControlPlaneClient } from "../../runtime-deps"
+import type { CommunityRepository } from "../db-community-repository"
 import {
   boolToSqlite,
   numberOrNull,
@@ -10,17 +10,17 @@ import {
   requiredString,
   sqliteToBool,
   stringOrNull,
-} from "./community-commerce-shared"
+} from "./shared"
 import {
   buildDefaultPirateCheckoutMoneyPolicy,
-} from "./community-commerce-checkout-config"
+} from "./checkout-config"
 import type {
   CommunityMoneyPolicy,
   CommunityPricingPolicy,
   Env,
   UpdateCommunityMoneyPolicyRequest,
   UpdateCommunityPricingPolicyRequest,
-} from "../../types"
+} from "../../../types"
 
 function defaultMoneyPolicy(env: Env, communityId: string): CommunityMoneyPolicy {
   return buildDefaultPirateCheckoutMoneyPolicy({ env, communityId })

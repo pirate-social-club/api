@@ -1,8 +1,8 @@
-import { eligibilityFailed, notFoundError } from "../errors"
-import { makeId, nowIso } from "../helpers"
-import { openCommunityDb } from "./community-db-factory"
-import type { CommunityRepository } from "./db-community-repository"
-import type { UserRepository } from "../auth/repositories"
+import { eligibilityFailed, notFoundError } from "../../errors"
+import { makeId, nowIso } from "../../helpers"
+import { openCommunityDb } from "../community-db-factory"
+import type { CommunityRepository } from "../db-community-repository"
+import type { UserRepository } from "../../auth/repositories"
 import {
   boolToSqlite,
   getAssetRow,
@@ -12,28 +12,28 @@ import {
   requireCommunityMember,
   serializeListing,
   serializeQuote,
-} from "./community-commerce-shared"
+} from "./shared"
 import {
   getCommunityMoneyPolicy,
   getCommunityPricingPolicy,
-} from "./community-commerce-policy-service"
-import { assertAssetReadyForStoryRoyaltyCommerce } from "./community-commerce-story-royalty"
-import { resolveStorySettlementDirectSigner } from "../story/story-direct-signer"
+} from "./policy-service"
+import { assertAssetReadyForStoryRoyaltyCommerce } from "./story-royalty"
+import { resolveStorySettlementDirectSigner } from "../../story/story-direct-signer"
 import {
   resolvePirateCheckoutOperatorAddress,
-} from "./community-commerce-checkout-config"
-import { assertEndaomentPayoutConfigured } from "./community-commerce-endaoment-payout-service"
+} from "./checkout-config"
+import { assertEndaomentPayoutConfigured } from "./endaoment-payout-service"
 import {
   assertValidDonationSharePct,
   resolveAllocationSettlementAmountAtomic,
   resolvePurchaseSettlementMode,
   resolveRegionalPrice,
   resolveRoutePolicy,
-} from "./community-commerce-quote-helpers"
+} from "./quote-helpers"
 import {
   assertExecutableQuoteAllocationSnapshot,
   resolveQuoteAllocationSnapshot,
-} from "./community-commerce-allocation"
+} from "./allocation"
 import type {
   CommunityPurchaseQuote,
   CommunityPurchaseQuotePreflight,
@@ -42,7 +42,7 @@ import type {
   CommunityPurchaseSettlementFailure,
   CommunityPurchaseSettlementFailureRequest,
   Env,
-} from "../../types"
+} from "../../../types"
 
 export async function preflightCommunityPurchaseQuote(input: {
   env: Env

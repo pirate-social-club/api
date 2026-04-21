@@ -3,7 +3,7 @@ import {
   assertExecutableQuoteAllocationSnapshot,
   extractDonationCompatibilityFields,
   resolveQuoteAllocationSnapshot,
-} from "../src/lib/communities/community-commerce-allocation"
+} from "../src/lib/communities/commerce/allocation"
 
 describe("community commerce allocation", () => {
   test("builds a creator-only allocation snapshot when no donation partner is configured", () => {

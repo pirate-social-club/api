@@ -17,8 +17,8 @@ import { setStoryRoyaltyPurchaseSettlementExecutorForTests } from "../src/lib/st
 import { setStoryRuntimeFundingAssertionForTests } from "../src/lib/story/story-runtime-funding"
 import { setStoryPurchaseSettlementExecutorForTests } from "../src/lib/story/story-settlement-service"
 import { setSwarmPublisherForTests } from "../src/lib/swarm/swarm-publisher"
-import { setCommunityCommerceCharityPayoutExecutorForTests } from "../src/lib/communities/community-commerce-charity-payout-service"
-import { setCommunityCommerceBuyerFundingVerifierForTests } from "../src/lib/communities/community-commerce-funding-proof-service"
+import { setCommunityCommerceCharityPayoutExecutorForTests } from "../src/lib/communities/commerce/charity-payout-service"
+import { setCommunityCommerceBuyerFundingVerifierForTests } from "../src/lib/communities/commerce/funding-proof-service"
 
 import { splitSqlStatements, toSqliteCompatibleStatement } from "../shared/sql-migration"
 

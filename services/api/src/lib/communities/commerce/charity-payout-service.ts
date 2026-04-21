@@ -1,15 +1,15 @@
-import type { Client } from "../sql-client"
-import { badRequestError } from "../errors"
-import type { Env } from "../../types"
-import type { QuoteAllocationSnapshot } from "./community-commerce-row-types"
-import { requiredString, stringOrNull } from "./community-commerce-row-types"
-import { resolveSettlementAmountSnapshot } from "./community-commerce-quote-helpers"
+import type { Client } from "../../sql-client"
+import { badRequestError } from "../../errors"
+import type { Env } from "../../../types"
+import type { QuoteAllocationSnapshot } from "./row-types"
+import { requiredString, stringOrNull } from "./row-types"
+import { resolveSettlementAmountSnapshot } from "./quote-helpers"
 import {
   beginPurchaseSettlementEffectAttempt,
   confirmPurchaseSettlementEffect,
   failPurchaseSettlementEffect,
-} from "./community-commerce-settlement-effects"
-import { executeEndaomentUsdcDonation } from "./community-commerce-endaoment-payout-service"
+} from "./settlement-effects"
+import { executeEndaomentUsdcDonation } from "./endaoment-payout-service"
 
 export type CharityPayoutExecutionInput = {
   env: Env

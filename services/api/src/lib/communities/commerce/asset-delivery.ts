@@ -1,17 +1,17 @@
 import { AbiCoder } from "ethers"
-import { badRequestError, notFoundError } from "../errors"
-import { isLocalEnvironment } from "../helpers"
-import { getControlPlaneClient } from "../runtime-deps"
+import { badRequestError, notFoundError } from "../../errors"
+import { isLocalEnvironment } from "../../helpers"
+import { getControlPlaneClient } from "../../runtime-deps"
 import {
   fetchSongArtifactBytes,
   sha256Hex,
   uploadFilebaseObject,
-} from "../song-artifacts/song-artifact-storage"
-import { findUploadedSongArtifactByStorageRef } from "../song-artifacts/song-artifact-repository"
+} from "../../song-artifacts/song-artifact-storage"
+import { findUploadedSongArtifactByStorageRef } from "../../song-artifacts/song-artifact-repository"
 import {
   generateStorySignedAccessProof,
   type StoryAccessScope,
-} from "../story/story-access-proof-service"
+} from "../../story/story-access-proof-service"
 import {
   deriveEntitlementTokenId,
   deriveStorageRefHash,
@@ -20,32 +20,32 @@ import {
   encodeTokenGateConditionData,
   encodeWriteConditionOperatorData,
   hashBytes32FromParts,
-} from "../story/story-identifiers"
+} from "../../story/story-identifiers"
 import {
   estimateStoryCdrLockedPublishMinimumBalanceWei,
   resolveStoryCdrContracts,
   uploadCdrEncryptedDataKey,
-} from "../story/story-cdr"
-import { resolveStoryCdrWriterDirectSigner } from "../story/story-direct-signer"
-import { publishLockedAssetVersionToStory } from "../story/story-publish-service"
-import { assertStoryRuntimeSignerFunding } from "../story/story-runtime-funding"
+} from "../../story/story-cdr"
+import { resolveStoryCdrWriterDirectSigner } from "../../story/story-direct-signer"
+import { publishLockedAssetVersionToStory } from "../../story/story-publish-service"
+import { assertStoryRuntimeSignerFunding } from "../../story/story-runtime-funding"
 import {
   resolveStoryChainId,
   resolveStoryRpcUrl,
   STORY_DELIVERY_CONTRACTS,
-} from "../story/story-runtime-config"
+} from "../../story/story-runtime-config"
 import {
   type AssetRow,
   buildAssetContentPath,
   parseJsonValue,
-} from "./community-commerce-shared"
+} from "./shared"
 import type {
   Asset,
   AssetAccessResponse,
   Env,
   Post,
   SongArtifactBundle,
-} from "../../types"
+} from "../../../types"
 
 type LockedDeliverySecret = {
   algorithm: "AES-GCM"

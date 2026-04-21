@@ -18,7 +18,7 @@ import {
   consumeSongPostBundle,
   resolveSongPostBundle,
 } from "../song-artifacts/song-artifact-service"
-import { createSongAssetForPost } from "../communities/community-commerce-service"
+import { createSongAssetForPost } from "../communities/commerce/service"
 import {
   requireMemberAccess,
   requireVerifiedHuman,

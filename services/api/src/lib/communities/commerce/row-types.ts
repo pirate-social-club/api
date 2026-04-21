@@ -1,11 +1,11 @@
-import { notFoundError } from "../errors"
+import { notFoundError } from "../../errors"
 import type {
   Asset,
   CommunityListing,
   CommunityMoneyPolicy,
   CommunityPurchase,
   CommunityPurchaseQuote,
-} from "../../types"
+} from "../../../types"
 
 export type AssetRow = {
   asset_id: string

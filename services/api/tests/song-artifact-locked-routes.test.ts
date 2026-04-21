@@ -8,7 +8,7 @@ import { setStoryRoyaltyPurchaseSettlementExecutorForTests } from "../src/lib/st
 import { setStoryCdrUploaderForTests } from "../src/lib/story/story-cdr"
 import { setStoryRuntimeFundingAssertionForTests } from "../src/lib/story/story-runtime-funding"
 import { setStoryPurchaseSettlementExecutorForTests } from "../src/lib/story/story-settlement-service"
-import { setCommunityCommerceBuyerFundingVerifierForTests } from "../src/lib/communities/community-commerce-funding-proof-service"
+import { setCommunityCommerceBuyerFundingVerifierForTests } from "../src/lib/communities/commerce/funding-proof-service"
 import {
   completeUniqueHumanVerification,
   exchangeJwt,
@@ -20,7 +20,7 @@ import {
   installLockedSongFetchMocks,
   uploadSongArtifact,
 } from "./song-artifact-locked-test-helpers"
-import { setCommunityCommerceCharityPayoutExecutorForTests } from "../src/lib/communities/community-commerce-charity-payout-service"
+import { setCommunityCommerceCharityPayoutExecutorForTests } from "../src/lib/communities/commerce/charity-payout-service"
 
 let cleanup: (() => Promise<void>) | null = null
 let originalFetch: typeof fetch

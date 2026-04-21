@@ -3,7 +3,7 @@ import type {
   CommunityListing,
   CommunityPurchase,
   CommunityPurchaseQuote,
-} from "../../types"
+} from "../../../types"
 import type {
   AssetRow,
   ListingPolicySnapshot,
@@ -12,14 +12,14 @@ import type {
   PurchaseAllocationLegRow,
   PurchaseQuoteRow,
   PurchaseRow,
-} from "./community-commerce-row-types"
+} from "./row-types"
 import {
   parseQuoteAllocationSnapshot,
   serializePurchaseAllocationLeg,
-} from "./community-commerce-allocation"
+} from "./allocation"
 import {
   parseJsonValue,
-} from "./community-commerce-row-types"
+} from "./row-types"
 
 export function serializeAsset(row: AssetRow, input?: { redactPrimaryForLocked?: boolean }): Asset {
   const primaryContentRef = input?.redactPrimaryForLocked && row.access_mode === "locked"

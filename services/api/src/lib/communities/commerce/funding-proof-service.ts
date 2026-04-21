@@ -1,21 +1,21 @@
 import { Interface, JsonRpcProvider, getAddress, zeroPadValue } from "ethers"
-import { badRequestError } from "../errors"
-import type { Env } from "../../types"
-import type { Client } from "../sql-client"
-import { parseJsonValue, type PurchaseQuoteRow } from "./community-commerce-row-types"
-import { toChainRefString } from "./community-commerce-shared"
+import { badRequestError } from "../../errors"
+import type { Env } from "../../../types"
+import type { Client } from "../../sql-client"
+import { parseJsonValue, type PurchaseQuoteRow } from "./row-types"
+import { toChainRefString } from "./shared"
 import {
   resolvePirateCheckoutOperatorAddress,
   resolvePirateCheckoutRpcUrl,
   resolvePirateCheckoutSourceChainId,
   resolvePirateCheckoutTxWaitTimeoutMs,
   resolvePirateCheckoutUsdcTokenAddress,
-} from "./community-commerce-checkout-config"
+} from "./checkout-config"
 import {
   beginPurchaseSettlementEffectAttempt,
   confirmPurchaseSettlementEffect,
   failPurchaseSettlementEffect,
-} from "./community-commerce-settlement-effects"
+} from "./settlement-effects"
 
 const ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 const ERC20_TRANSFER_INTERFACE = new Interface([

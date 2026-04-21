@@ -1,16 +1,16 @@
-import type { Client } from "../sql-client"
-import { badRequestError, notFoundError } from "../errors"
-import { nowIso } from "../helpers"
-import { getCommunityMembershipState } from "./community-membership-store"
-import { openCommunityDb } from "./community-db-factory"
-import type { CommunityRepository } from "./db-community-repository"
-import { getPostById } from "../posts/community-post-store"
+import type { Client } from "../../sql-client"
+import { badRequestError, notFoundError } from "../../errors"
+import { nowIso } from "../../helpers"
+import { getCommunityMembershipState } from "../community-membership-store"
+import { openCommunityDb } from "../community-db-factory"
+import type { CommunityRepository } from "../db-community-repository"
+import { getPostById } from "../../posts/community-post-store"
 import {
   fetchSongArtifactBytes,
   sha256Hex,
-} from "../song-artifacts/song-artifact-storage"
-import type { UserRepository } from "../auth/repositories"
-import { maybeRegisterStoryRoyaltyForAsset } from "../story/story-royalty-registration-service"
+} from "../../song-artifacts/song-artifact-storage"
+import type { UserRepository } from "../../auth/repositories"
+import { maybeRegisterStoryRoyaltyForAsset } from "../../story/story-royalty-registration-service"
 import {
   buildAssetContentPath,
   getActiveEntitlementForBuyer,
@@ -18,19 +18,19 @@ import {
   requireCommunityMember,
   resolvePrimaryWalletAddress,
   serializeAsset,
-} from "./community-commerce-shared"
+} from "./shared"
 import {
   buildStoryCdrAccessPackage,
   fetchPrimarySongAssetContent,
   prepareLockedSongAssetDelivery,
-} from "./community-commerce-asset-delivery"
+} from "./asset-delivery"
 import type {
   Asset,
   AssetAccessResponse,
   Env,
   Post,
   SongArtifactBundle,
-} from "../../types"
+} from "../../../types"
 
 export async function createSongAssetForPost(input: {
   env: Env
@@ -424,5 +424,5 @@ export async function fetchCommunityAssetContent(input: {
   }
 }
 
-export * from "./community-commerce-policy-service"
-export * from "./community-commerce-purchase-service"
+export * from "./policy-service"
+export * from "./purchase-service"

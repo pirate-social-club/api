@@ -17,7 +17,7 @@ import {
   updateCommunityMoneyPolicy,
   updateCommunityPricingPolicy,
   updateCommunityListing,
-} from "../lib/communities/community-commerce-service"
+} from "../lib/communities/commerce/service"
 import { getCommunity } from "../lib/communities/community-service"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import {

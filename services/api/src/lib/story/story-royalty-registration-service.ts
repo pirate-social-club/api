@@ -7,7 +7,7 @@ import type { Env, Post, SongArtifactBundle } from "../../types"
 import { nowIso } from "../helpers"
 import { resolveStoryOperatorDirectSigner } from "./story-direct-signer"
 import { resolveStoryChainId, resolveStoryRpcUrl } from "./story-runtime-config"
-import { getAssetRow } from "../communities/community-commerce-queries"
+import { getAssetRow } from "../communities/commerce/queries"
 
 type StoryRoyaltyRightsBasis = "none" | "original" | "derivative"
 

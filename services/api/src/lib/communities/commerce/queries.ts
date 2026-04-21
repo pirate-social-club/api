@@ -1,11 +1,11 @@
-import type { Client } from "../sql-client"
-import { executeFirst } from "../db-helpers"
+import type { Client } from "../../sql-client"
+import { executeFirst } from "../../db-helpers"
 import type {
   Asset,
   CommunityListing,
   CommunityMoneyPolicy,
   CommunityPurchase,
-} from "../../types"
+} from "../../../types"
 import type {
   AssetRow,
   ListingRow,
@@ -13,13 +13,13 @@ import type {
   PurchaseAllocationLegRow,
   PurchaseQuoteRow,
   PurchaseRow,
-} from "./community-commerce-row-types"
+} from "./row-types"
 import {
   numberOrNull,
   requiredString,
   sqliteToBool,
   stringOrNull,
-} from "./community-commerce-row-types"
+} from "./row-types"
 
 export async function getAssetRow(
   client: Client,

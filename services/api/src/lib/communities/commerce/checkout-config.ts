@@ -1,8 +1,8 @@
 import { Wallet, getAddress } from "ethers"
-import type { Env } from "../../types"
-import { badRequestError } from "../errors"
-import { parseExpectedEvmAddress } from "../evm-signer"
-import { normalizeDirectSignerPrivateKey } from "../story/story-direct-signer"
+import type { Env } from "../../../types"
+import { badRequestError } from "../../errors"
+import { parseExpectedEvmAddress } from "../../evm-signer"
+import { normalizeDirectSignerPrivateKey } from "../../story/story-direct-signer"
 
 const BASE_MAINNET_CHAIN_ID = 8453
 const BASE_SEPOLIA_CHAIN_ID = 84532

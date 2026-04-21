@@ -1,13 +1,13 @@
-import { badRequestError, notFoundError } from "../errors"
-import { makeId, nowIso } from "../helpers"
-import { openCommunityDb } from "./community-db-factory"
-import type { CommunityRepository } from "./db-community-repository"
-import { derivePurchaseRef } from "../story/story-identifiers"
+import { badRequestError, notFoundError } from "../../errors"
+import { makeId, nowIso } from "../../helpers"
+import { openCommunityDb } from "../community-db-factory"
+import type { CommunityRepository } from "../db-community-repository"
+import { derivePurchaseRef } from "../../story/story-identifiers"
 import {
   mintStoryRoyaltyPurchaseEntitlement,
   payStoryRoyaltyOnBehalfForPurchase,
-} from "../story/story-royalty-settlement-service"
-import type { UserRepository } from "../auth/repositories"
+} from "../../story/story-royalty-settlement-service"
+import type { UserRepository } from "../../auth/repositories"
 import {
   getActiveEntitlementForBuyer,
   getAssetRow,
@@ -20,34 +20,34 @@ import {
   requireCommunityMember,
   resolveWalletAttachmentAddress,
   serializePurchase,
-} from "./community-commerce-shared"
+} from "./shared"
 import {
   resolveAllocationSettlementAmountAtomic,
   serializeSettlement,
-} from "./community-commerce-quote-helpers"
+} from "./quote-helpers"
 import {
   assertExecutableQuoteAllocationSnapshot,
   extractDonationCompatibilityFields,
   parseQuoteAllocationSnapshot,
-} from "./community-commerce-allocation"
+} from "./allocation"
 import {
   executeCharityPayoutsForSettlement,
   getAllocationExecutionKey,
   type ResolvedCharityPayout,
-} from "./community-commerce-charity-payout-service"
-import { confirmBuyerFundingForSettlement } from "./community-commerce-funding-proof-service"
+} from "./charity-payout-service"
+import { confirmBuyerFundingForSettlement } from "./funding-proof-service"
 import {
   beginPurchaseSettlementEffectAttempt,
   confirmPurchaseSettlementEffect,
   failPurchaseSettlementEffect,
-} from "./community-commerce-settlement-effects"
+} from "./settlement-effects"
 import type {
   CommunityPurchase,
   CommunityPurchaseListResponse,
   CommunityPurchaseSettlement,
   CommunityPurchaseSettlementRequest,
   Env,
-} from "../../types"
+} from "../../../types"
 
 function derivePurchaseIdForQuote(quoteId: string): string {
   return `pur_${quoteId.replace(/^quo_/, "")}`

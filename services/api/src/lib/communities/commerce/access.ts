@@ -1,14 +1,14 @@
-import type { Client } from "../sql-client"
-import { badRequestError, notFoundError, verificationRequired } from "../errors"
-import { getCommunityMembershipState } from "./community-membership-store"
-import type { CommunityRepository } from "./db-community-repository"
-import type { UserRepository } from "../auth/repositories"
-import { getPrimaryWalletSnapshot } from "./community-serialization"
+import type { Client } from "../../sql-client"
+import { badRequestError, notFoundError, verificationRequired } from "../../errors"
+import { getCommunityMembershipState } from "../community-membership-store"
+import type { CommunityRepository } from "../db-community-repository"
+import type { UserRepository } from "../../auth/repositories"
+import { getPrimaryWalletSnapshot } from "../community-serialization"
 import {
   resolveStoryCdrWriterDirectSigner,
   resolveStoryOperatorDirectSigner,
-} from "../story/story-direct-signer"
-import type { Env } from "../../types"
+} from "../../story/story-direct-signer"
+import type { Env } from "../../../types"
 
 export async function requireCommunityMember(
   client: Client,

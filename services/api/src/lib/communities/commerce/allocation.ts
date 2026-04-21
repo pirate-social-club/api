@@ -1,10 +1,10 @@
-import { badRequestError } from "../errors"
+import { badRequestError } from "../../errors"
 import type {
   PurchaseAllocationLeg,
   PurchaseAllocationLegRow,
   QuoteAllocationSnapshot,
-} from "./community-commerce-row-types"
-import { parseJsonValue } from "./community-commerce-row-types"
+} from "./row-types"
+import { parseJsonValue } from "./row-types"
 
 const TOTAL_SHARE_BPS = 10_000
 

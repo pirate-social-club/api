@@ -1,5 +1,5 @@
-import { badRequestError } from "../errors"
-import type { UserRepository } from "../auth/repositories"
+import { badRequestError } from "../../errors"
+import type { UserRepository } from "../../auth/repositories"
 import {
   parseJsonValue,
   type PurchaseAllocationLegRow,
@@ -8,8 +8,8 @@ import {
   type PurchaseRow,
   type PurchaseSettlementMode,
   toChainRefString,
-} from "./community-commerce-shared"
-import { serializePurchaseAllocationLeg } from "./community-commerce-allocation"
+} from "./shared"
+import { serializePurchaseAllocationLeg } from "./allocation"
 import type {
   CommunityListing,
   CommunityMoneyPolicy,
@@ -17,7 +17,7 @@ import type {
   CommunityPurchaseQuotePreflightRequest,
   CommunityPurchaseSettlement,
   CommunityPricingPolicy,
-} from "../../types"
+} from "../../../types"
 
 export function roundUsd(value: number): number {
   return Math.round(value * 100) / 100
