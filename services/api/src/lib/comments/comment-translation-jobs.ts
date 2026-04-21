@@ -1,6 +1,6 @@
 import type { Client } from "../sql-client"
 import type { DbExecutor } from "../db-helpers"
-import { enqueueCommunityJob } from "../communities/community-job-store"
+import { enqueueCommunityJob } from "../communities/jobs/store"
 import { buildLocalizedCommentListItem } from "../localization/comment-localization-service"
 import { CONTENT_TRANSLATION_PREWARM_LOCALES, sameLanguageLocale } from "../localization/content-locale"
 import { nowIso } from "../helpers"

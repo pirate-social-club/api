@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { join } from "node:path"
 import { openCommunityDb } from "../src/lib/communities/community-db-factory"
-import { processNextCommunityJob } from "../src/lib/communities/community-job-runner"
+import { processNextCommunityJob } from "../src/lib/communities/jobs/runner"
 import { buildLocalizedPostResponse } from "../src/lib/localization/post-localization-service"
 import { getPostById } from "../src/lib/posts/community-post-store"
 import type { Env } from "../src/types"

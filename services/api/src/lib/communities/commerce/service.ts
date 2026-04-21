@@ -1,7 +1,7 @@
 import type { Client } from "../../sql-client"
 import { badRequestError, notFoundError } from "../../errors"
 import { nowIso } from "../../helpers"
-import { getCommunityMembershipState } from "../community-membership-store"
+import { getCommunityMembershipState } from "../membership/store"
 import { openCommunityDb } from "../community-db-factory"
 import type { CommunityRepository } from "../db-community-repository"
 import { getPostById } from "../../posts/community-post-store"

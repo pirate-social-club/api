@@ -1,7 +1,7 @@
 import { badRequestError, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
 import { loadCommunityProjection } from "../community-service"
-import { getCommunityMembershipState } from "../community-membership-store"
+import { getCommunityMembershipState } from "../membership/store"
 import { openCommunityDb } from "../community-db-factory"
 import type { CommunityRepository } from "../db-community-repository"
 import type { UserRepository } from "../../auth/repositories"

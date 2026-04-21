@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { buildMembershipGateSummary, evaluateMembershipGateRules } from "../src/lib/communities/community-membership-store"
+import { buildMembershipGateSummary, evaluateMembershipGateRules } from "../src/lib/communities/membership/store"
 import { buildDefaultVerificationCapabilities } from "../src/lib/verification/verification-capabilities"
 import type { User } from "../src/types"
 

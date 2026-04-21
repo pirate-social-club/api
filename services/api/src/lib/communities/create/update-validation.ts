@@ -1,6 +1,6 @@
-import type { Community, CreateCommunityRequest } from "../../types"
-import type { LocalCommunitySnapshot } from "./community-local-db"
-import { badRequestError } from "../errors"
+import type { Community, CreateCommunityRequest } from "../../../types"
+import type { LocalCommunitySnapshot } from "../community-local-db"
+import { badRequestError } from "../../errors"
 
 export type UpdateCommunityRulesRequestBody = {
   rules: Array<{

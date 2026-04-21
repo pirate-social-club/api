@@ -1,7 +1,7 @@
-import type { DbExecutor } from "../db-helpers"
-import { executeFirst } from "../db-helpers"
-import { makeId } from "../helpers"
-import { requiredNumber, requiredString, rowValue, stringOrNull } from "../sql-row"
+import type { DbExecutor } from "../../db-helpers"
+import { executeFirst } from "../../db-helpers"
+import { makeId } from "../../helpers"
+import { requiredNumber, requiredString, rowValue, stringOrNull } from "../../sql-row"
 
 export type CommunityJobType =
   | "comment_projection_sync"

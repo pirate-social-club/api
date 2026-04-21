@@ -1,4 +1,4 @@
-import type { CommunityRepository } from "./db-community-repository"
+import type { CommunityRepository } from "../db-community-repository"
 
 export const COMMUNITY_JOB_MAX_ATTEMPTS = 8
 export const COMMUNITY_JOB_RETRY_BASE_MS = 30_000

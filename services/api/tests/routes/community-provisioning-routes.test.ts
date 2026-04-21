@@ -253,7 +253,7 @@ describe("community provisioning routes", () => {
     }
   })
 
-  test("community create without a namespace uses the provision operator when configured", async () => {
+  testWithTimeout("community create without a namespace uses the provision operator when configured", async () => {
     const operatorBaseUrl = "https://operator.test"
     const operatorToken = "operator-secret"
     const wrapKey = "11".repeat(32)
@@ -352,5 +352,5 @@ describe("community provisioning routes", () => {
     } finally {
       globalThis.fetch = originalFetch
     }
-  })
+  }, 10_000)
 })

@@ -1,6 +1,6 @@
 import type { Client } from "../../sql-client"
 import { badRequestError, notFoundError, verificationRequired } from "../../errors"
-import { getCommunityMembershipState } from "../community-membership-store"
+import { getCommunityMembershipState } from "../membership/store"
 import type { CommunityRepository } from "../db-community-repository"
 import type { UserRepository } from "../../auth/repositories"
 import { getPrimaryWalletSnapshot } from "../community-serialization"

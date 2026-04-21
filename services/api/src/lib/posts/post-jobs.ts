@@ -1,5 +1,5 @@
 import type { Client } from "../sql-client"
-import { enqueueCommunityJob } from "../communities/community-job-store"
+import { enqueueCommunityJob } from "../communities/jobs/store"
 import { CONTENT_TRANSLATION_PREWARM_LOCALES, sameLanguageLocale } from "../localization/content-locale"
 import { nowIso } from "../helpers"
 import type { Community, LocalizedPostResponse, Post } from "../../types"

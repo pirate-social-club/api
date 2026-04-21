@@ -33,7 +33,7 @@ export {
   markCommunityProvisioningSucceeded,
   persistProvisionedCommunityDatabaseAccess,
   markCommunityProvisioningFailed,
-} from "./community-provisioning-repository"
+} from "./provisioning/repository"
 
 export { recordCommunityPostProjection } from "./community-post-projection-repository"
 export {
@@ -41,7 +41,7 @@ export {
   updateCommunityPostProjectionStatus,
 } from "./community-post-projection-repository"
 export { recordCommunityCommentProjection } from "./community-comment-projection-repository"
-export { upsertCommunityMembershipProjection } from "./community-membership-projection-repository"
+export { upsertCommunityMembershipProjection } from "./membership/projection-repository"
 
 export {
   attachNamespaceToCommunity,
@@ -64,14 +64,14 @@ import {
   markCommunityProvisioningSucceeded,
   persistProvisionedCommunityDatabaseAccess,
   markCommunityProvisioningFailed,
-} from "./community-provisioning-repository"
+} from "./provisioning/repository"
 import {
   recordCommunityPostProjection,
   updateCommunityPostProjectionMetrics,
   updateCommunityPostProjectionStatus,
 } from "./community-post-projection-repository"
 import { recordCommunityCommentProjection } from "./community-comment-projection-repository"
-import { upsertCommunityMembershipProjection } from "./community-membership-projection-repository"
+import { upsertCommunityMembershipProjection } from "./membership/projection-repository"
 import {
   attachNamespaceToCommunity,
   setPendingNamespaceVerificationSession,

@@ -39,7 +39,7 @@ import {
 import {
   canAccessCommunity,
   getCommunityMembershipState,
-} from "../communities/community-membership-store"
+} from "../communities/membership/store"
 
 type CommunityMembershipRow = Awaited<ReturnType<typeof getCommunityMembershipState>>
 

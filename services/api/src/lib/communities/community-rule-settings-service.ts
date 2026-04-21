@@ -7,7 +7,7 @@ import {
   normalizeInputRules,
   requireOwnedCommunity,
   type UpdateCommunityRulesRequestBody,
-} from "./community-create-shared"
+} from "./create/shared"
 import type {
   Community,
   Env,

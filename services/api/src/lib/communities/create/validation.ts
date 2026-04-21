@@ -1,13 +1,13 @@
-import type { UserRepository } from "../auth/repositories"
-import { badRequestError, eligibilityFailed, internalError } from "../errors"
-import { nowIso } from "../helpers"
+import type { UserRepository } from "../../auth/repositories"
+import { badRequestError, eligibilityFailed, internalError } from "../../errors"
+import { nowIso } from "../../helpers"
 import type {
   Community,
   CreateCommunityRequest,
   User,
-} from "../../types"
-import { getPrimaryWalletSnapshot } from "./community-serialization"
-import { assertPublicV0GateConfiguration } from "./community-gate-validation"
+} from "../../../types"
+import { getPrimaryWalletSnapshot } from "../community-serialization"
+import { assertPublicV0GateConfiguration } from "../community-gate-validation"
 
 export type CreateCommunityRequestBody = CreateCommunityRequest
 

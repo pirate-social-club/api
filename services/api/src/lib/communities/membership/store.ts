@@ -1,11 +1,11 @@
-import type { Client } from "../sql-client"
-import { executeFirst } from "../db-helpers"
-import { makeId } from "../helpers"
-import { requiredString, rowValue, stringOrNull } from "../sql-row"
+import type { Client } from "../../sql-client"
+import { executeFirst } from "../../db-helpers"
+import { makeId } from "../../helpers"
+import { requiredString, rowValue, stringOrNull } from "../../sql-row"
 import {
   type CommunityGateRuleRow,
   toCommunityGateRuleRow,
-} from "./community-membership-gates"
+} from "./gates"
 
 export {
   buildMembershipGateSummary,
@@ -13,7 +13,7 @@ export {
   satisfiesMembershipGateRules,
   type CommunityGateRuleRow,
   type MembershipGateEvaluation,
-} from "./community-membership-gates"
+} from "./gates"
 
 export type CommunityMembershipRow = {
   membership_status: "member" | "left" | "banned" | null

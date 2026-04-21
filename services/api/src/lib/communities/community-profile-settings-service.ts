@@ -8,7 +8,7 @@ import {
   parseCommunitySettingsJson,
   requireOwnedCommunity,
   type UpdateCommunityRequestBody,
-} from "./community-create-shared"
+} from "./create/shared"
 import type {
   Community,
   Env,

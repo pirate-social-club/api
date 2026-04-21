@@ -1,23 +1,23 @@
-import { encryptCommunityDbCredential } from "./community-db-credential-crypto"
-import { buildLocalCommunityDbUrl } from "./community-local-db"
+import { encryptCommunityDbCredential } from "../community-db-credential-crypto"
+import { buildLocalCommunityDbUrl } from "../community-local-db"
 import {
   isCommunityProvisionOperatorConfigured,
   provisionCommunityViaOperator,
-} from "./community-provision-operator-client"
-import type { UserRepository } from "../auth/repositories"
-import type { CommunityDatabaseBindingRow, CommunityRow, JobRow } from "../auth/auth-db-rows"
-import type { CommunityRepository } from "./db-community-repository"
-import { eligibilityFailed, internalError, notFoundError } from "../errors"
-import { makeId, nowIso } from "../helpers"
-import type { VerificationRepository } from "../verification/control-plane-verification-repository"
-import { createNamespaceVerificationTask, resolveNamespaceVerificationTask } from "../notifications/notification-service"
+} from "./operator-client"
+import type { UserRepository } from "../../auth/repositories"
+import type { CommunityDatabaseBindingRow, CommunityRow, JobRow } from "../../auth/auth-db-rows"
+import type { CommunityRepository } from "../db-community-repository"
+import { eligibilityFailed, internalError, notFoundError } from "../../errors"
+import { makeId, nowIso } from "../../helpers"
+import type { VerificationRepository } from "../../verification/control-plane-verification-repository"
+import { createNamespaceVerificationTask, resolveNamespaceVerificationTask } from "../../notifications/notification-service"
 import type {
   Community,
   CommunityCreateAcceptedResponse,
   Env,
-} from "../../types"
-import { serializeCommunity, serializeJob } from "./community-serialization"
-import { openCommunityDb } from "./community-db-factory"
+} from "../../../types"
+import { serializeCommunity, serializeJob } from "../community-serialization"
+import { openCommunityDb } from "../community-db-factory"
 import {
   bootstrapCommunityLocalSnapshot,
   buildPendingCommunityDatabaseUrl,
@@ -34,7 +34,7 @@ import {
   resolveCommunityProvisionGroupLocation,
   resolveCreateCommunityAuth,
   resolveProvisioningRetryAction,
-} from "./community-create-shared"
+} from "../create/shared"
 
 function requireProvisionedCredentialId(communityId: string, credentialId: string): string {
   const trimmed = credentialId.trim()

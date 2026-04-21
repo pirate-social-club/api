@@ -11,7 +11,7 @@ import {
   requireOwnedCommunity,
   type UpdateCommunityLabelPolicyRequestBody,
   type UpdateCommunityReferenceLinksRequestBody,
-} from "./community-create-shared"
+} from "./create/shared"
 import type {
   Community,
   Env,

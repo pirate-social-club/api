@@ -9,7 +9,7 @@ import {
   loadCommunityProjection,
   requireOwnedCommunity,
   type UpdateCommunityGatesRequestBody,
-} from "./community-create-shared"
+} from "./create/shared"
 import type {
   Community,
   Env,

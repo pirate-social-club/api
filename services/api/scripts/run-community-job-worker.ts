@@ -1,5 +1,5 @@
 import { getCommunityRepository } from "../src/lib/communities/db-community-repository"
-import { processAvailableCommunityJobs } from "../src/lib/communities/community-job-runner"
+import { processAvailableCommunityJobs } from "../src/lib/communities/jobs/runner"
 import type { Env } from "../src/types"
 import { readDevVarsFromCwd } from "./_lib/dev-vars"
 import {

@@ -1,5 +1,5 @@
 import { openCommunityDb } from "../communities/community-db-factory"
-import { canAccessCommunity, getCommunityMembershipState } from "../communities/community-membership-store"
+import { canAccessCommunity, getCommunityMembershipState } from "../communities/membership/store"
 import type { CommunityRepository } from "../communities/db-community-repository"
 import type { UserRepository } from "../auth/repositories"
 import type { DbExecutor } from "../db-helpers"

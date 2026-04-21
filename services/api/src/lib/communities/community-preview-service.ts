@@ -3,7 +3,7 @@ import {
   canAccessCommunity,
   getCommunityMembershipState,
   listActiveMembershipGateRules,
-} from "./community-membership-store"
+} from "./membership/store"
 import { openCommunityDb } from "./community-db-factory"
 import {
   buildLocalizedCommunityPreview,

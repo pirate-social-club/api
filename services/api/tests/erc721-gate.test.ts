@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { buildMembershipGateSummary, evaluateMembershipGateRules } from "../src/lib/communities/community-membership-store"
+import { buildMembershipGateSummary, evaluateMembershipGateRules } from "../src/lib/communities/membership/store"
 import { setErc721OwnershipCheckerForTests } from "../src/lib/communities/community-token-gates"
 import {
   clearErc721InventoryMatchCacheForTests,

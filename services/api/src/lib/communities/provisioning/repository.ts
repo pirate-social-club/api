@@ -1,18 +1,18 @@
-import type { Client } from "../sql-client"
-import { internalError } from "../errors"
-import { makeId } from "../helpers"
+import type { Client } from "../../sql-client"
+import { internalError } from "../../errors"
+import { makeId } from "../../helpers"
 import {
   getCommunityRowById,
   getCommunityDatabaseBindingRowById,
   getJobRowById,
   getLatestCommunityProvisioningJobRow,
   getPrimaryCommunityDatabaseBindingRow,
-} from "../auth/auth-db-queries"
+} from "../../auth/auth-db-queries"
 import type {
   CommunityDatabaseBindingRow,
   CommunityRow,
   JobRow,
-} from "../auth/auth-db-rows"
+} from "../../auth/auth-db-rows"
 
 export async function createCommunityProvisioningRequest(
   client: Client,

@@ -1,6 +1,6 @@
-import { nowIso } from "../helpers"
-import type { Env } from "../../types"
-import { openCommunityDb } from "./community-db-factory"
+import { nowIso } from "../../helpers"
+import type { Env } from "../../../types"
+import { openCommunityDb } from "../community-db-factory"
 import {
   findNextRunnableCommunityJob,
   getCommunityJobById,
@@ -8,14 +8,14 @@ import {
   markCommunityJobRunning,
   markCommunityJobSucceeded,
   type CommunityJobRow,
-} from "./community-job-store"
-import { runCommunityJob } from "./community-job-handlers"
+} from "./store"
+import { runCommunityJob } from "./handlers"
 import {
   COMMUNITY_JOB_MAX_ATTEMPTS,
   COMMUNITY_JOB_RETRY_BASE_MS,
   COMMUNITY_JOB_RETRY_MAX_MS,
   type CommunityJobRepository,
-} from "./community-job-runner-types"
+} from "./runner-types"
 
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms))

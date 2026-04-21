@@ -7,33 +7,33 @@ import {
   listActiveMembershipGateRules,
   upsertCommunityMembership,
   upsertMembershipRequest,
-} from "./community-membership-store"
-import { openCommunityDb } from "./community-db-factory"
+} from "./store"
+import { openCommunityDb } from "../community-db-factory"
 import {
   buildLocalizedCommunity,
   enqueueCommunityTextTranslationOnReadIfNeeded,
-} from "../localization/community-localization-service"
-import type { UserRepository } from "../auth/repositories"
-import type { CommunityRepository } from "./db-community-repository"
-import { gateFailedWithDetails, internalError, notFoundError } from "../errors"
-import { nowIso } from "../helpers"
-import { loadCommunityProjection, requireOwnedCommunity } from "./community-create-service"
+} from "../../localization/community-localization-service"
+import type { UserRepository } from "../../auth/repositories"
+import type { CommunityRepository } from "../db-community-repository"
+import { gateFailedWithDetails, internalError, notFoundError } from "../../errors"
+import { nowIso } from "../../helpers"
+import { loadCommunityProjection, requireOwnedCommunity } from "../create/service"
 
-import { serializeJob } from "./community-serialization"
+import { serializeJob } from "../community-serialization"
 import type {
   Community,
   Env,
   JoinEligibility,
   Job,
   User,
-} from "../../types"
+} from "../../../types"
 
 type MembershipResult = {
   community_id: string
   status: "joined" | "requested" | "left"
 }
 
-export { getCommunityPreview, getPublicCommunityPreview } from "./community-preview-service"
+export { getCommunityPreview, getPublicCommunityPreview } from "../community-preview-service"
 
 export function satisfiesBaselineJoinGate(user: User): boolean {
   if (user.verification_capabilities.unique_human.state === "verified") {

@@ -2,15 +2,15 @@ import type { Client } from "../sql-client"
 import type { DbExecutor } from "../db-helpers"
 import { sha256Hex } from "../crypto"
 import { openCommunityDb } from "../communities/community-db-factory"
-import { enqueueCommunityJob } from "../communities/community-job-store"
-import { loadCommunityProjection } from "../communities/community-create-repository"
+import { enqueueCommunityJob } from "../communities/jobs/store"
+import { loadCommunityProjection } from "../communities/create/repository"
 import { detectSourceLanguageFromText } from "../localization/content-locale"
 import { emitCommentReply, emitPostCommented } from "../notifications/notification-service"
 import {
   canAccessCommunity,
   getCommunityMembershipState,
   type CommunityMembershipRow,
-} from "../communities/community-membership-store"
+} from "../communities/membership/store"
 import type { CommunityRepository } from "../communities/db-community-repository"
 import { badRequestError, eligibilityFailed, notFoundError, verificationRequired } from "../errors"
 import { nowIso } from "../helpers"

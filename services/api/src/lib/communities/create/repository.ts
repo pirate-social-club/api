@@ -2,20 +2,20 @@ import {
   bootstrapLocalCommunityDb,
   type LocalCommunityRule,
   type LocalCommunitySnapshot,
-} from "./community-local-db"
-import { normalizeCommunityMediaRef } from "./community-identity-media"
-import type { CommunityDatabaseBindingRow, CommunityRow, JobRow } from "../auth/auth-db-rows"
-import type { CommunityRepository } from "./db-community-repository"
-import { eligibilityFailed, internalError, notFoundError } from "../errors"
-import { makeId } from "../helpers"
-import type { Community, Env } from "../../types"
-import { serializeCommunity } from "./community-serialization"
-import { openCommunityDb } from "./community-db-factory"
+} from "../community-local-db"
+import { normalizeCommunityMediaRef } from "../community-identity-media"
+import type { CommunityDatabaseBindingRow, CommunityRow, JobRow } from "../../auth/auth-db-rows"
+import type { CommunityRepository } from "../db-community-repository"
+import { eligibilityFailed, internalError, notFoundError } from "../../errors"
+import { makeId } from "../../helpers"
+import type { Community, Env } from "../../../types"
+import { serializeCommunity } from "../community-serialization"
+import { openCommunityDb } from "../community-db-factory"
 import type {
   CreateCommunityAuth,
   CreateCommunityRequestBody,
-} from "./community-create-validation"
-import type { UpdateCommunityRulesRequestBody } from "./community-update-validation"
+} from "./validation"
+import type { UpdateCommunityRulesRequestBody } from "./update-validation"
 
 export function resolveCommunityDbRoot(env: Env): string {
   const configured = String(env.LOCAL_COMMUNITY_DB_ROOT || "").trim()

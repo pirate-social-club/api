@@ -1,6 +1,6 @@
-import type { Client } from "../sql-client"
-import { upsertCommunityMembershipProjectionRow } from "../auth/auth-db-queries"
-import type { CommunityMembershipProjectionRow } from "../auth/auth-db-rows"
+import type { Client } from "../../sql-client"
+import { upsertCommunityMembershipProjectionRow } from "../../auth/auth-db-queries"
+import type { CommunityMembershipProjectionRow } from "../../auth/auth-db-rows"
 
 export async function upsertCommunityMembershipProjection(
   client: Client,

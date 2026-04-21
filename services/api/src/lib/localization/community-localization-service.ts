@@ -5,7 +5,7 @@ import type {
   CommunityTextLocalizationItem,
   Env,
 } from "../../types"
-import { enqueueCommunityJob } from "../communities/community-job-store"
+import { enqueueCommunityJob } from "../communities/jobs/store"
 import type { DbExecutor } from "../db-helpers"
 import { nowIso } from "../helpers"
 import {

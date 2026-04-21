@@ -1,5 +1,5 @@
-import { internalError } from "../errors"
-import { nowIso } from "../helpers"
+import { internalError } from "../../errors"
+import { nowIso } from "../../helpers"
 import {
   getCommentById,
   getCommunityVisibility,
@@ -7,31 +7,31 @@ import {
   insertThreadSnapshot,
   listThreadCommentsForSnapshot,
   updateCommentSwarmBodyRef,
-} from "../comments/community-comment-store"
-import { materializeCommentTranslation } from "../localization/comment-translation-materializer"
+} from "../../comments/community-comment-store"
+import { materializeCommentTranslation } from "../../localization/comment-translation-materializer"
 import {
   materializeCommunityTextTranslations,
   parseCommunityTextMaterializePayload,
-} from "../localization/community-localization-service"
-import { getPostById, updatePostLinkPreviewMetadata } from "../posts/community-post-store"
-import { fetchLinkPreviewMetadata } from "../posts/link-preview-fetcher"
-import { materializePostLabel } from "../posts/post-label-materializer"
-import { materializePostTranslation } from "../localization/post-translation-materializer"
+} from "../../localization/community-localization-service"
+import { getPostById, updatePostLinkPreviewMetadata } from "../../posts/community-post-store"
+import { fetchLinkPreviewMetadata } from "../../posts/link-preview-fetcher"
+import { materializePostLabel } from "../../posts/post-label-materializer"
+import { materializePostTranslation } from "../../localization/post-translation-materializer"
 import {
   buildThreadFeedTopic,
   publishCollectionToSwarm,
   publishFeedReference,
   publishJsonToSwarm,
-} from "../swarm/swarm-publisher"
-import type { Env } from "../../types"
-import type { CommunityRepository } from "./db-community-repository"
-import { loadCommunityProjection } from "./community-create-service"
-import { openCommunityDb } from "./community-db-factory"
-import type { CommunityJobRow } from "./community-job-store"
+} from "../../swarm/swarm-publisher"
+import type { Env } from "../../../types"
+import type { CommunityRepository } from "../db-community-repository"
+import { loadCommunityProjection } from "../create/service"
+import { openCommunityDb } from "../community-db-factory"
+import type { CommunityJobRow } from "./store"
 import {
   type CommunityJobRepository,
   THREAD_SNAPSHOT_MIN_INTERVAL_MS,
-} from "./community-job-runner-types"
+} from "./runner-types"
 
 type CommentProjectionSyncPayload = {
   comment_id?: string

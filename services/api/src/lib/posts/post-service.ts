@@ -2,7 +2,7 @@ import type { Client } from "../sql-client"
 import { openCommunityDb } from "../communities/community-db-factory"
 import type { ProfileRepository, UserRepository } from "../auth/repositories"
 import type { CommunityRepository } from "../communities/db-community-repository"
-import { loadCommunityProjection } from "../communities/community-create-repository"
+import { loadCommunityProjection } from "../communities/create/repository"
 import { authorizeAgentWrite } from "../agents/agent-write-authorization"
 import { resolveStubAnalysisOutcome } from "./post-analysis"
 import {

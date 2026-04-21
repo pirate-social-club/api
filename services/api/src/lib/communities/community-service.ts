@@ -8,7 +8,7 @@ export type {
   UpdateCommunitySafetyRequestBody,
   UpdateCommunityRulesRequestBody,
   UpdateCommunityDonationPolicyRequestBody,
-} from "./community-create-service"
+} from "./create/service"
 export {
   createCommunity,
   attachNamespaceToCommunity,
@@ -28,8 +28,8 @@ export {
   updateCommunityDonationPolicy,
   getCommunityDonationPolicy,
   resolveCommunityDonationPartner,
-} from "./community-create-service"
-export type { ProvisioningRetryAction } from "./community-create-service"
+} from "./create/service"
+export type { ProvisioningRetryAction } from "./create/service"
 
 export {
   getCommunity,
@@ -40,6 +40,6 @@ export {
   getJob,
   satisfiesBaselineJoinGate,
   setPendingNamespaceVerificationSession,
-} from "./community-membership-service"
+} from "./membership/service"
 
 export { getPrimaryWalletSnapshot, serializeCommunity, serializeJob } from "./community-serialization"

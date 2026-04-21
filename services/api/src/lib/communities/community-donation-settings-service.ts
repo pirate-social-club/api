@@ -12,7 +12,7 @@ import {
   requireOwnedCommunity,
   selectEndaomentOrganizationMatch,
   type UpdateCommunityDonationPolicyRequestBody,
-} from "./community-create-shared"
+} from "./create/shared"
 import type {
   Community,
   Env,

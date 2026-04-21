@@ -1,5 +1,5 @@
-import { internalError } from "../errors"
-import type { Env } from "../../types"
+import { internalError } from "../../errors"
+import type { Env } from "../../../types"
 
 type OperatorBootstrapPayload = {
   description?: string | null

@@ -1,16 +1,16 @@
-import type { Env, MembershipGateSummary, User, WalletAttachmentSummary } from "../../types"
-import { normalizeIdentityCountryCode, normalizeIdentityCountryCodes } from "../identity/country-codes"
-import { requiredString, rowValue, stringOrNull } from "../sql-row"
+import type { Env, MembershipGateSummary, User, WalletAttachmentSummary } from "../../../types"
+import { normalizeIdentityCountryCode, normalizeIdentityCountryCodes } from "../../identity/country-codes"
+import { requiredString, rowValue, stringOrNull } from "../../sql-row"
 import {
   anyAttachedEthereumWalletOwnsErc721Collection,
   hasEthereumRpcConfig,
   normalizeEthereumAddress,
-} from "./community-token-gates"
+} from "../community-token-gates"
 import {
   evaluateErc721InventoryMatch,
   formatAssetFilterLabel,
   readInventoryMatchConfig,
-} from "./community-token-inventory-gates"
+} from "../community-token-inventory-gates"
 
 export type CommunityGateRuleRow = {
   gate_rule_id: string
