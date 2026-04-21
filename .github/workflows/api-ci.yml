@@ -35,6 +35,15 @@ jobs:
         working-directory: services/contracts
         run: bun install --frozen-lockfile
 
+      - name: Check generated contracts freshness when specs are available
+        working-directory: services/contracts
+        run: |
+          if [ -f ../../../specs/api/scripts/generate-api-contracts.ts ]; then
+            bun run check:fresh
+          else
+            echo "Skipping contracts freshness check; sibling specs checkout not available."
+          fi
+
       - name: Typecheck generated contracts package
         working-directory: services/contracts
         run: bun run check

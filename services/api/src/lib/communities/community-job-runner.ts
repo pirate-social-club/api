@@ -89,85 +89,13 @@ type CommunityJobRepository = Pick<
   | "getCommunityCommentProjectionByCommentId"
 >
 
-function parseCommentProjectionPayload(raw: string | null): CommentProjectionSyncPayload | null {
+function parseJobPayload<T extends object>(raw: string | null): T | null {
   if (!raw) {
     return null
   }
   try {
     const parsed = JSON.parse(raw) as unknown
-    return parsed && typeof parsed === "object" ? parsed as CommentProjectionSyncPayload : null
-  } catch {
-    return null
-  }
-}
-
-function parseCommentBodyMirrorPayload(raw: string | null): CommentBodyMirrorPayload | null {
-  if (!raw) {
-    return null
-  }
-  try {
-    const parsed = JSON.parse(raw) as unknown
-    return parsed && typeof parsed === "object" ? parsed as CommentBodyMirrorPayload : null
-  } catch {
-    return null
-  }
-}
-
-function parseThreadSnapshotPayload(raw: string | null): ThreadSnapshotPayload | null {
-  if (!raw) {
-    return null
-  }
-  try {
-    const parsed = JSON.parse(raw) as unknown
-    return parsed && typeof parsed === "object" ? parsed as ThreadSnapshotPayload : null
-  } catch {
-    return null
-  }
-}
-
-function parsePostTranslationPayload(raw: string | null): PostTranslationPayload | null {
-  if (!raw) {
-    return null
-  }
-  try {
-    const parsed = JSON.parse(raw) as unknown
-    return parsed && typeof parsed === "object" ? parsed as PostTranslationPayload : null
-  } catch {
-    return null
-  }
-}
-
-function parsePostLabelPayload(raw: string | null): PostLabelPayload | null {
-  if (!raw) {
-    return null
-  }
-  try {
-    const parsed = JSON.parse(raw) as unknown
-    return parsed && typeof parsed === "object" ? parsed as PostLabelPayload : null
-  } catch {
-    return null
-  }
-}
-
-function parseLinkPreviewFetchPayload(raw: string | null): LinkPreviewFetchPayload | null {
-  if (!raw) {
-    return null
-  }
-  try {
-    const parsed = JSON.parse(raw) as unknown
-    return parsed && typeof parsed === "object" ? parsed as LinkPreviewFetchPayload : null
-  } catch {
-    return null
-  }
-}
-
-function parseCommentTranslationPayload(raw: string | null): CommentTranslationPayload | null {
-  if (!raw) {
-    return null
-  }
-  try {
-    const parsed = JSON.parse(raw) as unknown
-    return parsed && typeof parsed === "object" ? parsed as CommentTranslationPayload : null
+    return parsed && typeof parsed === "object" ? parsed as T : null
   } catch {
     return null
   }
@@ -197,7 +125,7 @@ async function runCommentProjectionSync(input: {
 }): Promise<string | null> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.job.community_id)
   try {
-    const payload = parseCommentProjectionPayload(input.job.payload_json)
+    const payload = parseJobPayload<CommentProjectionSyncPayload>(input.job.payload_json)
     const commentId = payload?.comment_id ?? input.job.subject_id
     const comment = await getCommentById(db.client, commentId)
     if (!comment) {
@@ -245,7 +173,7 @@ async function runCommentBodyMirror(input: {
 }): Promise<string | null> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.job.community_id)
   try {
-    const payload = parseCommentBodyMirrorPayload(input.job.payload_json)
+    const payload = parseJobPayload<CommentBodyMirrorPayload>(input.job.payload_json)
     const commentId = payload?.comment_id ?? input.job.subject_id
     const comment = await getCommentById(db.client, commentId)
     if (!comment) {
@@ -297,7 +225,7 @@ async function runThreadSnapshotPublish(input: {
 }): Promise<string | null> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.job.community_id)
   try {
-    const payload = parseThreadSnapshotPayload(input.job.payload_json)
+    const payload = parseJobPayload<ThreadSnapshotPayload>(input.job.payload_json)
     const threadRootPostId = payload?.thread_root_post_id ?? input.job.subject_id
     const community = await getCommunityVisibility(db.client, input.job.community_id)
     if (!community || community.status !== "active") {
@@ -406,7 +334,7 @@ async function runPostTranslationMaterialize(input: {
 }): Promise<string | null> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.job.community_id)
   try {
-    const payload = parsePostTranslationPayload(input.job.payload_json)
+    const payload = parseJobPayload<PostTranslationPayload>(input.job.payload_json)
     const postId = payload?.post_id ?? input.job.subject_id.split(":")[0] ?? input.job.subject_id
     const locale = payload?.locale ?? null
     const post = await getPostById(db.client, postId)
@@ -431,7 +359,7 @@ async function runPostLabelMaterialize(input: {
 }): Promise<string | null> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.job.community_id)
   try {
-    const payload = parsePostLabelPayload(input.job.payload_json)
+    const payload = parseJobPayload<PostLabelPayload>(input.job.payload_json)
     const postId = payload?.post_id ?? input.job.subject_id
     const post = await getPostById(db.client, postId)
     if (!post) {
@@ -467,7 +395,7 @@ async function runLinkPreviewFetch(input: {
 }): Promise<string | null> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.job.community_id)
   try {
-    const payload = parseLinkPreviewFetchPayload(input.job.payload_json)
+    const payload = parseJobPayload<LinkPreviewFetchPayload>(input.job.payload_json)
     const postId = payload?.post_id ?? input.job.subject_id
     const post = await getPostById(db.client, postId)
     if (!post) {
@@ -511,7 +439,7 @@ async function runCommentTranslationMaterialize(input: {
 }): Promise<string | null> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.job.community_id)
   try {
-    const payload = parseCommentTranslationPayload(input.job.payload_json)
+    const payload = parseJobPayload<CommentTranslationPayload>(input.job.payload_json)
     const commentId = payload?.comment_id ?? input.job.subject_id.split(":")[0] ?? input.job.subject_id
     const locale = payload?.locale ?? null
     const comment = await getCommentById(db.client, commentId)

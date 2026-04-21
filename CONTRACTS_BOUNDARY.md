@@ -54,6 +54,7 @@ This:
 Inside `pirate-api` CI, the repo can currently enforce:
 
 - `services/contracts` typecheck
+- generated contracts freshness when the sibling `specs/api` checkout is present
 - API and CLI typecheck/test flows that consume the generated contracts
 
 ## What CI Still Cannot Enforce Alone
@@ -63,6 +64,8 @@ Until repo boundaries change, `pirate-api` CI cannot, by itself:
 - watch `specs/api/**` as a trigger source
 - regenerate contracts from the upstream spec source
 - prove generated freshness from source-of-truth inputs
+
+The workflow includes a conditional freshness step. It runs `rtk bun run check:fresh` when `../../../specs/api/scripts/generate-api-contracts.ts` exists and skips when `pirate-api` is checked out by itself.
 
 ## Long-Term Fix Options
 

@@ -7,19 +7,26 @@ Local Worker for the current Pirate API surface.
 Current route surface:
 
 - `GET /health`
+- discovery routes mounted at `/`
+  `GET /.well-known/jwks.json`, `GET /.well-known/oauth-protected-resource`
 - `POST /auth/session/exchange`
 - `GET /users/me`
-- `GET /onboarding/status`
+- onboarding routes
+  `GET /onboarding/status`, Reddit verification/import endpoints under `/onboarding/reddit-*`
 - verification routes mounted at `/`
-  `POST /verification-sessions`, `GET /verification-sessions/{verification_session_id}`, `POST /verification-sessions/{verification_session_id}/complete`, `POST /namespace-verification-sessions`, `GET /namespace-verification-sessions/{namespace_verification_session_id}`, `POST /namespace-verification-sessions/{namespace_verification_session_id}/complete`, `GET /namespace-verifications/{namespace_verification_id}`
+  `POST /verification-sessions`, `GET /verification-sessions/{verification_session_id}`, `POST /verification-sessions/{verification_session_id}/complete`, local Very verification, namespace verification sessions, and namespace verification reads
 - profile routes
   `GET /profiles/me`, `PATCH /profiles/me`, handle rename/upgrade/sync endpoints under `/profiles/me/*`, `GET /profiles/{user_id}`
-- public profile route
-  `GET /public-profiles/{handle_label}`
+- public profile and agent routes
+  `GET /public-profiles/{handle_label}`, `GET /public-agents/{handle_label}`
 - media routes
   `POST /profile-media`, `POST /community-media`
 - jobs and posts
-  `GET /jobs/{job_id}`, `GET /posts/{post_id}`, `POST /posts/{post_id}/vote`
+  `GET /jobs/{job_id}`, `GET /posts/{post_id}`, `POST /posts/{post_id}/vote`, public post and comment read endpoints
+- comments, feed, and notifications
+  authenticated comment replies/context/vote/delete, `GET /feed/home`, and notification summary/task/feed read and mutation endpoints
+- agents
+  ownership pairing/session, user-agent handle, delegated credential, and public resolution endpoints
 - communities
   create/read/preview, join eligibility, join, namespace attach, pending namespace session, rules, gates, safety, posts, money policy, pricing policy, asset access/content, listings, purchases, purchase quotes/settlements, song artifact uploads, and song artifact bundles under `/communities/{community_id}/*`
 
@@ -64,6 +71,12 @@ Route registration now lives under `src/routes/`. The community router is intent
 - `communities-song-artifacts.ts`
 
 with shared request helpers in `communities-route-helpers.ts`.
+
+## Story/CDR Surface
+
+Story/CDR code is active commerce infrastructure, not dead code. It is reached through locked song assets, asset access, purchase settlement, royalty registration, and runtime signer maintenance.
+
+Local development has an intentional fallback for locked delivery when Story runtime signing keys are not configured. Production-like environments should configure the Story/CDR keys and treat fallback behavior as local-only.
 
 The DB-backed API now reads and writes control-plane rows such as:
 
@@ -128,8 +141,8 @@ Control-plane DB mode:
 6. For the real song pipeline and machine translations, set `OPENROUTER_API_KEY`, `ACRCLOUD_ACCESS_KEY`, `ACRCLOUD_ACCESS_SECRET`, `ACRCLOUD_HOST`, and `ELEVENLABS_API_KEY`. Optional overrides: `OPENROUTER_BASE_URL`, `OPENROUTER_MODEL`, `ACRCLOUD_IDENTIFY_PATH`, and `ELEVENLABS_FORCE_ALIGNMENT_URL`.
 7. Fill in `AUTH_UPSTREAM_JWT_SHARED_SECRET`, `AUTH_UPSTREAM_JWT_ISSUER`, and `AUTH_UPSTREAM_JWT_AUDIENCE`.
 8. Fill in `PIRATE_APP_JWT_PRIVATE_KEY` and `PIRATE_APP_JWT_PUBLIC_KEY`.
-10. Start `rtk bun run dev:local` for the API only, or `rtk bun run dev:local:full` to run the API and the community job worker together. The local server bootstraps the control-plane migrations automatically for local file-backed DBs.
-11. Post and comment translations require the worker to be running with `OPENROUTER_API_KEY` in the environment. If you use Infisical locally, prefer `rtk infisical run --env=dev --path=/services/api -- rtk bun run dev:local:full`.
+9. Start `rtk bun run dev:local` for the API only, or `rtk bun run dev:local:full` to run the API and the community job worker together. The local server bootstraps the control-plane migrations automatically for local file-backed DBs.
+10. Post and comment translations require the worker to be running with `OPENROUTER_API_KEY` in the environment. If you use Infisical locally, prefer `rtk infisical run --env=dev --path=/services/api -- rtk bun run dev:local:full`.
 
 ## Full Local Setup
 
