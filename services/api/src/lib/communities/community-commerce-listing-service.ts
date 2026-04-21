@@ -134,7 +134,7 @@ export async function createCommunityListing(input: {
       if (!asset) {
         throw notFoundError("Asset not found")
       }
-      assertAssetReadyForStoryRoyaltyCommerce(asset)
+      assertAssetReadyForStoryRoyaltyCommerce(asset, input.env)
       if (asset.creator_user_id !== input.userId) {
         const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
         if (membership.role_status !== "active") {
@@ -224,7 +224,7 @@ export async function updateCommunityListing(input: {
       if (!asset) {
         throw notFoundError("Asset not found")
       }
-      assertAssetReadyForStoryRoyaltyCommerce(asset)
+      assertAssetReadyForStoryRoyaltyCommerce(asset, input.env)
     }
     const currentPolicy = parseListingPolicy(listing)
     const nextRegional = input.body.regional_pricing_enabled

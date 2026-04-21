@@ -105,7 +105,7 @@ export async function createCommunityPurchaseQuote(input: {
       if (!asset) {
         throw notFoundError("Asset not found")
       }
-      assertAssetReadyForStoryRoyaltyCommerce(asset)
+      assertAssetReadyForStoryRoyaltyCommerce(asset, input.env)
       settlementMode = resolvePurchaseSettlementMode({
         storyRoyaltyRegistrationStatus: asset.story_royalty_registration_status,
         storyIpId: asset.story_ip_id,
