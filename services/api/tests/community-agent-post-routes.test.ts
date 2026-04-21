@@ -34,7 +34,6 @@ describe("community agent post routes", () => {
   test("community post create accepts a verified user-owned agent post and rejects nonce replay", async () => {
     const ctx = await createRouteTestContext({
       VERY_API_URL: "https://very.test",
-      VERY_API_KEY: "very-key",
       VERY_APP_ID: "very-app",
     })
     cleanup = ctx.cleanup
@@ -215,7 +214,6 @@ describe("community agent post routes", () => {
   test("delegated agent access tokens can create top-level posts", async () => {
     const ctx = await createRouteTestContext({
       VERY_API_URL: "https://very.test",
-      VERY_API_KEY: "very-key",
       VERY_APP_ID: "very-app",
     })
     cleanup = ctx.cleanup
@@ -352,7 +350,6 @@ describe("community agent post routes", () => {
   test("community post create derives clawkey acceptance from the very lane and enforces the daily agent post cap", async () => {
     const ctx = await createRouteTestContext({
       VERY_API_URL: "https://very.test",
-      VERY_API_KEY: "very-key",
       VERY_APP_ID: "very-app",
     })
     cleanup = ctx.cleanup
@@ -512,7 +509,6 @@ describe("community agent post routes", () => {
   test("community post create rejects derived very-lane agent writes when the platform KYA allowlist is explicitly empty", async () => {
     const ctx = await createRouteTestContext({
       VERY_API_URL: "https://very.test",
-      VERY_API_KEY: "very-key",
       VERY_APP_ID: "very-app",
       PLATFORM_APPROVED_KYA_PROVIDERS: "",
     })
@@ -634,7 +630,6 @@ describe("community agent post routes", () => {
   test("community post create rejects a future-dated agent action proof", async () => {
     const ctx = await createRouteTestContext({
       VERY_API_URL: "https://very.test",
-      VERY_API_KEY: "very-key",
       VERY_APP_ID: "very-app",
     })
     cleanup = ctx.cleanup

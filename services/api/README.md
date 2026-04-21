@@ -168,10 +168,8 @@ This resets:
 For local Very widget testing:
 
 - set `VERY_APP_ID`
-- leave `VERY_API_KEY` unset if you want the local dev-only verifier path
-- in `ENVIRONMENT=development`, the API intentionally omits `launch.verify_url` for anonymous Very fallback sessions
-- the web app then targets the local `POST /very/verify` route, which returns `{"status":"valid"}` only in development without a Very API key
-- this is a local happy-path shortcut only; production or any upstream-backed setup should use the real Very verifier flow
+- optionally set `VERY_API_URL` or `VERY_VERIFY_URL` when testing against a non-default Very endpoint
+- the API returns `launch.verify_url` for the Very widget; there is no local verifier proxy
 
 3. Start the Bun local API plus the community job worker:
 

@@ -186,11 +186,8 @@ export type Env = {
   REDDIT_PROFILE_CHECK_USER_AGENT?: string
   REDDIT_PULLPUSH_BASE_URL?: string
   VERY_API_URL?: string
-  VERY_API_KEY?: string
   VERY_APP_ID?: string
   VERY_VERIFY_URL?: string
-  VERY_SESSIONS_URL?: string
-  VERY_CALLBACK_SHARED_SECRET?: string
   PLATFORM_APPROVED_KYA_PROVIDERS?: string
   CLAWKEY_API_URL?: string
   SELF_API_URL?: string

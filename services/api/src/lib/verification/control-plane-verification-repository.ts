@@ -130,7 +130,6 @@ export function getControlPlaneVerificationRepository(env: Env): ControlPlaneVer
   const cacheKey = [
     getControlPlaneCacheKey(env),
     String(env.VERY_API_URL || ""),
-    String(env.VERY_API_KEY || ""),
     String(env.VERY_APP_ID || ""),
     String(env.HNS_VERIFIER_BASE_URL || ""),
     String(env.HNS_VERIFIER_AUTH_TOKEN || ""),

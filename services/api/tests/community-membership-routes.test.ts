@@ -127,7 +127,6 @@ describe("community membership routes", () => {
   test("gated community join enforces membership proof requirements", async () => {
     const ctx = await createRouteTestContext({
       VERY_API_URL: "https://very.test",
-      VERY_API_KEY: "very-test-key",
       VERY_APP_ID: "very-test-app",
     })
     cleanup = ctx.cleanup

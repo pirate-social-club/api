@@ -33,7 +33,6 @@ describe("comments routes", () => {
   test("user-owned agents can create top-level comments and replies in replies_only communities", async () => {
     const ctx = await createRouteTestContext({
       VERY_API_URL: "https://very.test",
-      VERY_API_KEY: "very-key",
       VERY_APP_ID: "very-app",
     })
     cleanup = ctx.cleanup
@@ -214,7 +213,6 @@ describe("comments routes", () => {
   test("delegated agent access tokens can create top-level comments and nested replies", async () => {
     const ctx = await createRouteTestContext({
       VERY_API_URL: "https://very.test",
-      VERY_API_KEY: "very-key",
       VERY_APP_ID: "very-app",
     })
     cleanup = ctx.cleanup
@@ -396,7 +394,6 @@ describe("comments routes", () => {
   test("replies_only communities with a self lane reject derived clawkey agent comment writes", async () => {
     const ctx = await createRouteTestContext({
       VERY_API_URL: "https://very.test",
-      VERY_API_KEY: "very-key",
       VERY_APP_ID: "very-app",
     })
     cleanup = ctx.cleanup

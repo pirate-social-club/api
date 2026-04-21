@@ -68,27 +68,6 @@ authenticatedVerification.post("/verification-sessions/:verificationSessionId/co
   return c.json(result, 200)
 })
 
-verification.post("/very/verify", async (c) => {
-  const body = (await c.req.json<{ proof?: string | null }>().catch(() => null)) ?? null
-  const proof = body?.proof?.trim() ?? ""
-  if (!proof) {
-    throw badRequestError("Missing proof")
-  }
-
-  const hasApiKey = Boolean(String(c.env.VERY_API_KEY || "").trim())
-  const isDev = String(c.env.ENVIRONMENT || "").trim().toLowerCase() === "development"
-  if (!hasApiKey && isDev) {
-    console.warn("[very-verify] trusting local widget proof in development")
-    return c.json({ status: "valid" }, 200)
-  }
-
-  if (hasApiKey) {
-    return c.json({ status: "invalid", error: "use_upstream_verifier" }, 400)
-  }
-
-  return c.json({ status: "invalid", error: "local_proxy_unavailable" }, 502)
-})
-
 authenticatedVerification.post("/namespace-verification-sessions", async (c) => {
   const actor = c.get("actor")
   const body = await c.req.json<{ family?: "hns" | "spaces"; root_label?: string }>().catch(() => null)
