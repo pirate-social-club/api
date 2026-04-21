@@ -15,7 +15,8 @@
     "deploy": "wrangler deploy",
     "check": "tsc --noEmit",
     "test": "bun test",
-    "mint:dev-jwt": "bun run scripts/mint-dev-jwt.ts"
+    "mint:dev-jwt": "bun run scripts/mint-dev-jwt.ts",
+    "spike:courtyard-inventory-source": "bun run scripts/spike-courtyard-inventory-source.ts"
   },
   "dependencies": {
     "@ethersphere/bee-js": "^11.1.1",
