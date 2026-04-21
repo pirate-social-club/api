@@ -1050,6 +1050,7 @@ export type Post = {
   caption?: string | null;
   link_url?: string | null;
   link_og_image_url?: string | null;
+  link_og_title?: string | null;
   media_refs?: Array<MediaDescriptor>;
   creator_relation?: PostCreatorRelation | null;
   promotion_disclosure?: PromotionDisclosure | null;

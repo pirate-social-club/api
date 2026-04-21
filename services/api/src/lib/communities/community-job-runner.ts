@@ -13,7 +13,7 @@ import {
   materializeCommunityTextTranslations,
   parseCommunityTextMaterializePayload,
 } from "../localization/community-localization-service"
-import { getPostById, updatePostLinkOgImageUrl } from "../posts/community-post-store"
+import { getPostById, updatePostLinkPreviewMetadata } from "../posts/community-post-store"
 import { fetchLinkPreviewMetadata } from "../posts/link-preview-fetcher"
 import { materializePostLabel } from "../posts/post-label-materializer"
 import { materializePostTranslation } from "../localization/post-translation-materializer"
@@ -476,7 +476,7 @@ async function runLinkPreviewFetch(input: {
     if (post.post_type !== "link") {
       return "skipped:not_link_post"
     }
-    if (post.link_og_image_url) {
+    if (post.link_og_image_url && post.link_og_title) {
       return post.link_og_image_url
     }
 
@@ -486,18 +486,19 @@ async function runLinkPreviewFetch(input: {
     }
 
     const metadata = await fetchLinkPreviewMetadata({ url: linkUrl })
-    if (!metadata.imageUrl) {
-      return "skipped:no_og_image"
+    if (!metadata.imageUrl && !metadata.title) {
+      return "skipped:no_preview_metadata"
     }
 
-    await updatePostLinkOgImageUrl({
+    await updatePostLinkPreviewMetadata({
       client: db.client,
       postId: post.post_id,
       linkOgImageUrl: metadata.imageUrl,
+      linkOgTitle: metadata.title,
       updatedAt: nowIso(),
     })
 
-    return metadata.imageUrl
+    return metadata.imageUrl ?? metadata.title
   } finally {
     db.close()
   }

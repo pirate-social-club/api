@@ -617,7 +617,7 @@ describe("community-job-runner", () => {
     }
   })
 
-  test("fetches link preview images into link posts", async () => {
+  test("fetches link preview metadata into link posts", async () => {
     const rootDir = await createCommunityJobRunnerRoot("pirate-community-link-preview-")
     const communityId = "cmt_job_link_preview"
     const env: Env = {
@@ -671,6 +671,7 @@ describe("community-job-runner", () => {
       return new Response(`
         <html>
           <head>
+            <meta property="og:title" content="Example story title">
             <meta property="og:image" content="/assets/story-card.jpg">
           </head>
         </html>
@@ -695,6 +696,7 @@ describe("community-job-runner", () => {
     try {
       const post = await getPostById(verifyDb.client, linkPostId)
       expect(post?.title).toBeNull()
+      expect(post?.link_og_title).toBe("Example story title")
       expect(post?.link_og_image_url).toBe("https://example.com/assets/story-card.jpg")
     } finally {
       verifyDb.close()

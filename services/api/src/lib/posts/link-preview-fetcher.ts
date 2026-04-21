@@ -1,11 +1,22 @@
 export type LinkPreviewMetadata = {
   imageUrl: string | null
+  title: string | null
 }
 
 const LINK_PREVIEW_FETCH_TIMEOUT_MS = 8_000
 const LINK_PREVIEW_FALLBACK_MAX_BYTES = 128 * 1024
 
 type MetaImageCandidate = {
+  priority: number
+  value: string
+}
+
+type RawLinkPreviewMetadata = {
+  imageUrl: string | null
+  title: string | null
+}
+
+type MetaTitleCandidate = {
   priority: number
   value: string
 }
@@ -26,6 +37,41 @@ function normalizePreviewUrl(value: string | null | undefined, baseUrl: string):
   }
 }
 
+function decodeHtmlEntities(value: string): string {
+  return value.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/giu, (match, entity: string) => {
+    const normalized = entity.toLowerCase()
+    if (normalized.startsWith("#x")) {
+      const codePoint = Number.parseInt(normalized.slice(2), 16)
+      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : match
+    }
+    if (normalized.startsWith("#")) {
+      const codePoint = Number.parseInt(normalized.slice(1), 10)
+      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : match
+    }
+    switch (normalized) {
+      case "amp":
+        return "&"
+      case "apos":
+        return "'"
+      case "gt":
+        return ">"
+      case "lt":
+        return "<"
+      case "quot":
+        return '"'
+      default:
+        return match
+    }
+  })
+}
+
+function normalizePreviewTitle(value: string | null | undefined): string | null {
+  const trimmed = decodeHtmlEntities(String(value ?? ""))
+    .replace(/\s+/gu, " ")
+    .trim()
+  return trimmed ? trimmed.slice(0, 300) : null
+}
+
 function getMetaImagePriority(name: string | null | undefined): number {
   const normalized = String(name ?? "").trim().toLowerCase()
   if (normalized === "og:image:secure_url") {
@@ -36,6 +82,17 @@ function getMetaImagePriority(name: string | null | undefined): number {
   }
   if (normalized === "twitter:image" || normalized === "twitter:image:src") {
     return 1
+  }
+  return 0
+}
+
+function getMetaTitlePriority(name: string | null | undefined): number {
+  const normalized = String(name ?? "").trim().toLowerCase()
+  if (normalized === "og:title") {
+    return 3
+  }
+  if (normalized === "twitter:title") {
+    return 2
   }
   return 0
 }
@@ -54,6 +111,25 @@ function chooseMetaImageCandidate(
     return {
       priority,
       value: trimmed,
+    }
+  }
+  return current
+}
+
+function chooseMetaTitleCandidate(
+  current: MetaTitleCandidate | null,
+  name: string | null | undefined,
+  content: string | null | undefined,
+): MetaTitleCandidate | null {
+  const priority = getMetaTitlePriority(name)
+  const title = normalizePreviewTitle(content)
+  if (priority === 0 || !title) {
+    return current
+  }
+  if (!current || priority > current.priority) {
+    return {
+      priority,
+      value: title,
     }
   }
   return current
@@ -90,24 +166,38 @@ async function consumeRewrittenResponse(response: Response, shouldStop: () => bo
   }
 }
 
-async function extractOgImageWithHtmlRewriter(response: Response): Promise<string | null> {
+async function extractMetadataWithHtmlRewriter(response: Response): Promise<RawLinkPreviewMetadata | null> {
   if (typeof HTMLRewriter === "undefined") {
     return null
   }
 
-  let candidate: MetaImageCandidate | null = null
+  let imageCandidate: MetaImageCandidate | null = null
+  let titleCandidate: MetaTitleCandidate | null = null
+  let documentTitle = ""
   const rewritten = new HTMLRewriter()
     .on("meta", {
       element(element) {
         const name = element.getAttribute("property") ?? element.getAttribute("name")
-        candidate = chooseMetaImageCandidate(candidate, name, element.getAttribute("content"))
+        imageCandidate = chooseMetaImageCandidate(imageCandidate, name, element.getAttribute("content"))
+        titleCandidate = chooseMetaTitleCandidate(titleCandidate, name, element.getAttribute("content"))
+      },
+    })
+    .on("title", {
+      text(text) {
+        documentTitle += text.text
       },
     })
     .transform(response)
 
-  await consumeRewrittenResponse(rewritten, () => Boolean(candidate && candidate.priority >= 2))
-  const found = candidate as MetaImageCandidate | null
-  return found?.value ?? null
+  await consumeRewrittenResponse(rewritten, () => Boolean(
+    imageCandidate && imageCandidate.priority >= 2 && titleCandidate,
+  ))
+  const foundImage = imageCandidate as MetaImageCandidate | null
+  const foundTitle = titleCandidate as MetaTitleCandidate | null
+  return {
+    imageUrl: foundImage?.value ?? null,
+    title: foundTitle?.value ?? normalizePreviewTitle(documentTitle),
+  }
 }
 
 async function readResponseTextLimit(response: Response, maxBytes: number): Promise<string> {
@@ -152,19 +242,25 @@ function readAttribute(tag: string, attributeName: string): string | null {
   return match?.[1] ?? match?.[2] ?? match?.[3] ?? null
 }
 
-async function extractOgImageWithBoundedText(response: Response): Promise<string | null> {
+async function extractMetadataWithBoundedText(response: Response): Promise<RawLinkPreviewMetadata> {
   const html = await readResponseTextLimit(response, LINK_PREVIEW_FALLBACK_MAX_BYTES)
-  let candidate: MetaImageCandidate | null = null
+  let imageCandidate: MetaImageCandidate | null = null
+  let titleCandidate: MetaTitleCandidate | null = null
   const metaTagPattern = /<meta\b[^>]*>/giu
   for (const match of html.matchAll(metaTagPattern)) {
     const tag = match[0]
     const name = readAttribute(tag, "property") ?? readAttribute(tag, "name")
-    candidate = chooseMetaImageCandidate(candidate, name, readAttribute(tag, "content"))
-    if (candidate?.priority && candidate.priority >= 2) {
+    imageCandidate = chooseMetaImageCandidate(imageCandidate, name, readAttribute(tag, "content"))
+    titleCandidate = chooseMetaTitleCandidate(titleCandidate, name, readAttribute(tag, "content"))
+    if (imageCandidate?.priority && imageCandidate.priority >= 2 && titleCandidate) {
       break
     }
   }
-  return candidate?.value ?? null
+  const titleMatch = /<title\b[^>]*>([\s\S]*?)<\/title>/iu.exec(html)
+  return {
+    imageUrl: imageCandidate?.value ?? null,
+    title: titleCandidate?.value ?? normalizePreviewTitle(titleMatch?.[1]),
+  }
 }
 
 export async function extractLinkPreviewMetadata(input: {
@@ -172,15 +268,15 @@ export async function extractLinkPreviewMetadata(input: {
   pageUrl: string
 }): Promise<LinkPreviewMetadata> {
   if (!canParseAsHtml(input.response)) {
-    return { imageUrl: null }
+    return { imageUrl: null, title: null }
   }
 
-  const rawImageUrl = typeof HTMLRewriter === "undefined"
-    ? await extractOgImageWithBoundedText(input.response)
-    : await extractOgImageWithHtmlRewriter(input.response)
+  const metadata = await extractMetadataWithHtmlRewriter(input.response)
+    ?? await extractMetadataWithBoundedText(input.response)
 
   return {
-    imageUrl: normalizePreviewUrl(rawImageUrl, input.pageUrl),
+    imageUrl: normalizePreviewUrl(metadata.imageUrl, input.pageUrl),
+    title: metadata.title,
   }
 }
 
@@ -191,7 +287,7 @@ export async function fetchLinkPreviewMetadata(input: {
 }): Promise<LinkPreviewMetadata> {
   const pageUrl = normalizePreviewUrl(input.url, input.url)
   if (!pageUrl) {
-    return { imageUrl: null }
+    return { imageUrl: null, title: null }
   }
 
   const controller = new AbortController()
@@ -211,7 +307,7 @@ export async function fetchLinkPreviewMetadata(input: {
     })
 
     if (!response.ok) {
-      return { imageUrl: null }
+      return { imageUrl: null, title: null }
     }
 
     return extractLinkPreviewMetadata({

@@ -50,6 +50,7 @@ type PostRow = {
   lyrics: string | null
   link_url: string | null
   link_og_image_url: string | null
+  link_og_title: string | null
   media_refs_json: string | null
   song_artifact_bundle_id: string | null
   source_language: string | null
@@ -143,6 +144,7 @@ function toPostRow(row: unknown): PostRow {
     lyrics: stringOrNull(rowValue(row, "lyrics")),
     link_url: stringOrNull(rowValue(row, "link_url")),
     link_og_image_url: stringOrNull(rowValue(row, "link_og_image_url")),
+    link_og_title: stringOrNull(rowValue(row, "link_og_title")),
     media_refs_json: stringOrNull(rowValue(row, "media_refs_json")),
     song_artifact_bundle_id: stringOrNull(rowValue(row, "song_artifact_bundle_id")),
     source_language: stringOrNull(rowValue(row, "source_language")),
@@ -195,6 +197,7 @@ function serializePost(row: PostRow): Post {
     caption: row.caption,
     link_url: row.link_url,
     link_og_image_url: row.link_og_image_url,
+    link_og_title: row.link_og_title,
     media_refs: parseMediaRefs(row.media_refs_json),
     song_artifact_bundle_id: row.song_artifact_bundle_id,
     source_language: row.source_language,
@@ -230,7 +233,7 @@ export async function findPostByIdempotencyKey(input: {
                label_id, label_assignment_status, label_assigned_by, label_assigned_at, label_ai_confidence,
                label_assignment_error, label_assignment_model, label_assignment_result_json,
                post_type, status, visibility, title, body, caption, lyrics,
-               link_url, link_og_image_url, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
+               link_url, link_og_image_url, link_og_title, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
                access_mode, asset_id, parent_post_id, upstream_asset_refs_json, song_mode, rights_basis, analysis_state, analysis_result_ref,
                content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
         FROM posts
@@ -385,7 +388,7 @@ export async function getPostById(client: DbExecutor, postId: string): Promise<P
              label_id, label_assignment_status, label_assigned_by, label_assigned_at, label_ai_confidence,
              label_assignment_error, label_assignment_model, label_assignment_result_json,
              post_type, status, visibility, title, body, caption, lyrics,
-             link_url, link_og_image_url, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
+             link_url, link_og_image_url, link_og_title, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
              access_mode, asset_id, parent_post_id, upstream_asset_refs_json, song_mode, rights_basis, analysis_state, analysis_result_ref,
              content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
       FROM posts
@@ -408,7 +411,7 @@ export async function getPostById(client: DbExecutor, postId: string): Promise<P
                label_id, label_assignment_status, label_assigned_by, label_assigned_at, label_ai_confidence,
                label_assignment_error, label_assignment_model, label_assignment_result_json,
                post_type, status, 'public' AS visibility, title, body, caption, lyrics,
-               link_url, NULL AS link_og_image_url, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
+               link_url, NULL AS link_og_image_url, NULL AS link_og_title, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
                access_mode, asset_id, parent_post_id, upstream_asset_refs_json, song_mode, rights_basis, analysis_state, analysis_result_ref,
                content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
         FROM posts
@@ -422,23 +425,26 @@ export async function getPostById(client: DbExecutor, postId: string): Promise<P
   return row ? serializePost(toPostRow(row)) : null
 }
 
-export async function updatePostLinkOgImageUrl(input: {
+export async function updatePostLinkPreviewMetadata(input: {
   client: DbExecutor
   postId: string
   linkOgImageUrl: string | null
+  linkOgTitle: string | null
   updatedAt: string
 }): Promise<void> {
   await input.client.execute({
     sql: `
       UPDATE posts
       SET link_og_image_url = ?2,
-          updated_at = ?3
+          link_og_title = ?3,
+          updated_at = ?4
       WHERE post_id = ?1
         AND post_type = 'link'
     `,
     args: [
       input.postId,
       input.linkOgImageUrl,
+      input.linkOgTitle,
       input.updatedAt,
     ],
   })
@@ -539,7 +545,7 @@ export async function listPublishedLocalizedPosts(input: {
              label_id, label_assignment_status, label_assigned_by, label_assigned_at, label_ai_confidence,
              label_assignment_error, label_assignment_model, label_assignment_result_json,
              post_type, status, visibility, title, body, caption, lyrics,
-             link_url, link_og_image_url, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
+             link_url, link_og_image_url, link_og_title, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
              access_mode, asset_id, parent_post_id, upstream_asset_refs_json, song_mode, rights_basis, analysis_state, analysis_result_ref,
              content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at,
              (
