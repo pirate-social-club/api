@@ -121,6 +121,18 @@ function isDuplicateColumnError(error: unknown, columnName: string): boolean {
 
 export async function ensureProfilesPrimaryLinkedHandleColumn(executor: DbExecutor): Promise<void> {
   try {
+    await executor.execute({
+      sql: "SELECT primary_linked_handle_id FROM profiles LIMIT 0",
+      args: [],
+    })
+    return
+  } catch (error) {
+    if (!isMissingColumnError(error, "primary_linked_handle_id")) {
+      throw error
+    }
+  }
+
+  try {
     await executor.execute("ALTER TABLE profiles ADD COLUMN primary_linked_handle_id TEXT")
   } catch (error) {
     if (isDuplicateColumnError(error, "primary_linked_handle_id")) {

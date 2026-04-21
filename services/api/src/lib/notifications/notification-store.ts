@@ -12,6 +12,27 @@ import type {
   UserTaskType,
 } from "../../types"
 
+function isMissingTableError(error: unknown, tableName: string): boolean {
+  const code = typeof error === "object" && error && "code" in error ? String((error as { code?: unknown }).code) : ""
+  if (code === "42P01") {
+    return true
+  }
+  const message = error instanceof Error ? error.message : String(error)
+  return (message.includes("no such table") || message.includes("does not exist")) && message.includes(tableName)
+}
+
+async function tableExists(executor: DbExecutor, tableName: string): Promise<boolean> {
+  try {
+    await executor.execute(`SELECT 1 FROM ${tableName} LIMIT 0`)
+    return true
+  } catch (error) {
+    if (isMissingTableError(error, tableName)) {
+      return false
+    }
+    throw error
+  }
+}
+
 function rowToUserTask(row: Record<string, unknown>): UserTask {
   return {
     task_id: String(row.task_id),
@@ -30,6 +51,13 @@ function rowToUserTask(row: Record<string, unknown>): UserTask {
 }
 
 export async function ensureNotificationTables(executor: DbExecutor): Promise<void> {
+  const hasTables = await tableExists(executor, "user_tasks")
+    && await tableExists(executor, "notification_events")
+    && await tableExists(executor, "notification_receipts")
+  if (hasTables) {
+    return
+  }
+
   await executor.execute(`
     CREATE TABLE IF NOT EXISTS user_tasks (
       task_id TEXT PRIMARY KEY,

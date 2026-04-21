@@ -51,10 +51,10 @@ function normalizeRows(rows: unknown[]): QueryResultRow[] {
 function postgresifySql(sql: string): string {
   const normalized = sql.replace(/\?(\d+)/g, (_, index: string) => `$${index}`)
 
-  if (/INSERT OR IGNORE INTO wallet_attachments\b/i.test(normalized)) {
+  if (/INSERT OR IGNORE INTO (wallet_attachments|notification_receipts)\b/i.test(normalized)) {
     return normalized.replace(
-      /INSERT OR IGNORE INTO wallet_attachments\b([\s\S]*?)\)\s*$/i,
-      "INSERT INTO wallet_attachments$1)\n      ON CONFLICT DO NOTHING",
+      /INSERT OR IGNORE INTO (\w+)\b([\s\S]*?)\)\s*$/i,
+      "INSERT INTO $1$2)\n      ON CONFLICT DO NOTHING",
     )
   }
 
