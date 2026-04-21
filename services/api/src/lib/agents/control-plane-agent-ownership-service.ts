@@ -1,8 +1,9 @@
 import type { DbExecutor } from "../db-helpers"
 import type { Client, Transaction } from "../sql-client"
-import { firstRow, isMissingTableError } from "../auth/auth-db-query-helpers"
+import { firstRow, hasUniqueConstraintField, isMissingTableError } from "../auth/auth-db-query-helpers"
 import { getUserRow } from "../auth/auth-db-user-queries"
-import { parseVerificationCapabilities } from "../auth/auth-serializers"
+import { getGlobalHandleRow, getProfileRow } from "../auth/auth-db-user-queries"
+import { parseVerificationCapabilities, serializeGlobalHandle } from "../auth/auth-serializers"
 import { authError, badRequestError, conflictError, eligibilityFailed, internalError, notFoundError, notImplementedError, verificationRequired } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { sha256Hex } from "../crypto"
@@ -10,13 +11,16 @@ import type { Env } from "../../types"
 import type {
   AgentDelegatedCredential,
   AgentChallenge,
+  AgentHandle,
   AgentOwnershipPairing,
   AgentOwnershipPairingClaimResult,
   AgentOwnershipSession,
   AgentOwnershipSessionLaunch,
+  PublicAgentResolution,
   UserAgent,
 } from "./types"
 import {
+  type AgentHandleRow,
   type AgentDelegatedCredentialRow,
   type AgentPairingCodeRow,
   type AgentOwnershipRecordRow,
@@ -26,12 +30,14 @@ import {
   toAgentDelegatedCredentialRow,
   toAgentOwnershipRecordRow,
   toAgentOwnershipSessionRow,
+  toAgentHandleRow,
   toUserAgentRow,
 } from "./agent-db-rows"
 import {
   parseAgentChallenge,
   serializeAgentOwnershipRecord,
   serializeAgentOwnershipSession,
+  serializeAgentHandle,
   serializeUserAgent,
 } from "./agent-serializers"
 import { assertVerifiedAgentChallenge, normalizeClawkeyPublicKeyToPem } from "./agent-challenge"
@@ -46,6 +52,19 @@ const AGENT_ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000
 const AGENT_REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000
 const AGENT_PAIRING_CODE_TTL_MS = 10 * 60 * 1000
 const AGENT_PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+const GENERIC_AGENT_DISPLAY_NAMES = new Set(["agent", "openclaw agent"])
+const AGENT_HANDLE_SUFFIX = ".clawitzer"
+const RESERVED_AGENT_HANDLE_LABELS = new Set([
+  "admin",
+  "support",
+  "pirate",
+  "clawitzer",
+  "help",
+  "mod",
+  "staff",
+  "official",
+  "security",
+])
 
 function parseIsoMs(iso: string): number | null {
   const parsed = new Date(iso).getTime()
@@ -196,6 +215,162 @@ async function getUserAgentRowById(executor: DbExecutor, agentId: string): Promi
   return row ? toUserAgentRow(row) : null
 }
 
+function normalizeDesiredAgentHandleLabel(desiredLabel: string): {
+  labelNormalized: string
+  labelDisplay: string
+} {
+  const trimmed = desiredLabel.trim().toLowerCase()
+  const withoutSuffix = trimmed.endsWith(AGENT_HANDLE_SUFFIX)
+    ? trimmed.slice(0, -AGENT_HANDLE_SUFFIX.length)
+    : trimmed
+
+  if (!withoutSuffix || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(withoutSuffix)) {
+    throw badRequestError("Invalid desired_label")
+  }
+  if (RESERVED_AGENT_HANDLE_LABELS.has(withoutSuffix)) {
+    throw eligibilityFailed("Desired agent handle is reserved")
+  }
+
+  return {
+    labelNormalized: withoutSuffix,
+    labelDisplay: `${withoutSuffix}${AGENT_HANDLE_SUFFIX}`,
+  }
+}
+
+function normalizeAgentHandleLookupLabel(handleLabel: string): string {
+  const trimmed = handleLabel.trim().toLowerCase()
+  const withoutSuffix = trimmed.endsWith(AGENT_HANDLE_SUFFIX)
+    ? trimmed.slice(0, -AGENT_HANDLE_SUFFIX.length)
+    : trimmed
+
+  if (!withoutSuffix || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(withoutSuffix)) {
+    throw badRequestError("Invalid handle label")
+  }
+  return withoutSuffix
+}
+
+function slugifyAgentHandleCandidate(value: string): string | null {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/\.clawitzer$/iu, "")
+    .replace(/[^a-z0-9]+/gu, "-")
+    .replace(/^-+|-+$/gu, "")
+    .replace(/-+/gu, "-")
+  return normalized && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(normalized) ? normalized : null
+}
+
+function isAgentHandleLabelUniqueError(error: unknown): boolean {
+  return hasUniqueConstraintField(error, "agent_handles.label_normalized")
+    || hasUniqueConstraintField(error, "label_normalized")
+}
+
+function isAgentHandleAgentUniqueError(error: unknown): boolean {
+  return hasUniqueConstraintField(error, "agent_handles.agent_id")
+    || hasUniqueConstraintField(error, "agent_id")
+}
+
+async function getActiveAgentHandleRow(
+  executor: DbExecutor,
+  agentId: string,
+): Promise<AgentHandleRow | null> {
+  const row = await firstRow(executor, {
+    sql: `
+      SELECT agent_handle_id, agent_id, label_normalized, label_display, status,
+             redirect_target_agent_handle_id, issued_at, replaced_at, created_at, updated_at
+      FROM agent_handles
+      WHERE agent_id = ?1
+        AND status = 'active'
+      LIMIT 1
+    `,
+    args: [agentId],
+  })
+
+  return row ? toAgentHandleRow(row) : null
+}
+
+async function getAgentHandleRowByLabel(
+  executor: DbExecutor,
+  labelNormalized: string,
+): Promise<AgentHandleRow | null> {
+  const row = await firstRow(executor, {
+    sql: `
+      SELECT agent_handle_id, agent_id, label_normalized, label_display, status,
+             redirect_target_agent_handle_id, issued_at, replaced_at, created_at, updated_at
+      FROM agent_handles
+      WHERE label_normalized = ?1
+        AND status IN ('active', 'redirect')
+      ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, updated_at DESC
+      LIMIT 1
+    `,
+    args: [labelNormalized],
+  })
+
+  return row ? toAgentHandleRow(row) : null
+}
+
+async function getAgentHandleRowById(
+  executor: DbExecutor,
+  agentHandleId: string,
+): Promise<AgentHandleRow | null> {
+  const row = await firstRow(executor, {
+    sql: `
+      SELECT agent_handle_id, agent_id, label_normalized, label_display, status,
+             redirect_target_agent_handle_id, issued_at, replaced_at, created_at, updated_at
+      FROM agent_handles
+      WHERE agent_handle_id = ?1
+      LIMIT 1
+    `,
+    args: [agentHandleId],
+  })
+
+  return row ? toAgentHandleRow(row) : null
+}
+
+async function allocateInitialAgentHandle(
+  executor: DbExecutor,
+  input: {
+    agentId: string
+    displayName: string
+    createdAt: string
+  },
+): Promise<AgentHandleRow | null> {
+  const baseCandidate = slugifyAgentHandleCandidate(input.displayName)
+  if (!baseCandidate || RESERVED_AGENT_HANDLE_LABELS.has(baseCandidate)) {
+    return null
+  }
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const labelNormalized = attempt === 0
+      ? baseCandidate
+      : `${baseCandidate}-${input.agentId.slice(-4 - attempt).replace(/[^a-z0-9]/giu, "") || attempt}`
+    try {
+      await executor.execute({
+        sql: `
+          INSERT INTO agent_handles (
+            agent_handle_id, agent_id, label_normalized, label_display, status,
+            redirect_target_agent_handle_id, issued_at, replaced_at, created_at, updated_at
+          ) VALUES (?1, ?2, ?3, ?4, 'active', NULL, ?5, NULL, ?5, ?5)
+        `,
+        args: [
+          makeId("agh"),
+          input.agentId,
+          labelNormalized,
+          `${labelNormalized}${AGENT_HANDLE_SUFFIX}`,
+          input.createdAt,
+        ],
+      })
+      return await getActiveAgentHandleRow(executor, input.agentId)
+    } catch (error) {
+      if (!isAgentHandleLabelUniqueError(error)) {
+        throw error
+      }
+    }
+  }
+
+  return null
+}
+
 async function getCurrentOwnershipRecordRowForAgent(
   executor: DbExecutor,
   agentId: string,
@@ -338,8 +513,37 @@ function buildLaunch(input: {
   }
 }
 
-function defaultAgentDisplayName(agentId: string): string {
+async function getOwnerAgentDisplayNameFallback(
+  executor: DbExecutor,
+  ownerUserId: string,
+  agentId: string,
+): Promise<string> {
+  const profileRow = await getProfileRow(executor, ownerUserId)
+  if (profileRow) {
+    const globalHandleRow = await getGlobalHandleRow(executor, profileRow.global_handle_id)
+    const ownerHandleLabel = globalHandleRow?.label_display?.replace(/\.pirate$/iu, "").trim()
+    if (ownerHandleLabel) {
+      return `${ownerHandleLabel} Agent`
+    }
+  }
   return `Agent ${agentId.slice(-6)}`
+}
+
+function resolveRequestedAgentDisplayName(value: string | null | undefined): string | null {
+  const trimmed = value?.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  if (GENERIC_AGENT_DISPLAY_NAMES.has(trimmed.toLowerCase())) {
+    return null
+  }
+
+  if (/^agent [a-z0-9]{6}$/iu.test(trimmed)) {
+    return null
+  }
+
+  return trimmed
 }
 
 function deriveEvidenceRef(providerSessionRef: string | null, registeredAt?: string | null): string | null {
@@ -503,7 +707,8 @@ async function createVerifiedAgentOwnership(
     throw conflictError("Agent already exists")
   }
 
-  const displayName = sessionRow.display_name?.trim() || defaultAgentDisplayName(agentId)
+  const displayName = resolveRequestedAgentDisplayName(sessionRow.display_name)
+    ?? await getOwnerAgentDisplayNameFallback(tx, sessionRow.owner_user_id, agentId)
   const ownershipRecordId = makeId("aor")
   assertUserAgentStatusTransition(null, "active")
   assertAgentOwnershipRecordStateTransition(null, "verified")
@@ -516,6 +721,12 @@ async function createVerifiedAgentOwnership(
       ) VALUES (?1, ?2, ?3, 'active', ?4, ?4)
     `,
     args: [agentId, sessionRow.owner_user_id, displayName, createdAt],
+  })
+
+  await allocateInitialAgentHandle(tx, {
+    agentId,
+    displayName,
+    createdAt,
   })
 
   await tx.execute({
@@ -954,7 +1165,17 @@ export async function getUserAgent(
     return null
   }
   const currentOwnershipRow = await getCurrentOwnershipRecordRowForAgent(client, agentId, userId)
-  return serializeUserAgent(row, currentOwnershipRow ? serializeAgentOwnershipRecord(currentOwnershipRow) : null)
+  const handleRow = await getActiveAgentHandleRow(client, agentId).catch((error) => {
+    if (isMissingTableError(error, "agent_handles")) {
+      return null
+    }
+    throw error
+  })
+  return serializeUserAgent(
+    row,
+    currentOwnershipRow ? serializeAgentOwnershipRecord(currentOwnershipRow) : null,
+    handleRow ? serializeAgentHandle(handleRow) : null,
+  )
 }
 
 export async function listUserAgents(
@@ -970,11 +1191,277 @@ export async function listUserAgents(
   const items: UserAgent[] = []
   for (const row of rows) {
     const currentOwnershipRow = await getCurrentOwnershipRecordRowForAgent(client, row.agent_id, userId)
+    const handleRow = await getActiveAgentHandleRow(client, row.agent_id).catch((error) => {
+      if (isMissingTableError(error, "agent_handles")) {
+        return null
+      }
+      throw error
+    })
     items.push(
-      serializeUserAgent(row, currentOwnershipRow ? serializeAgentOwnershipRecord(currentOwnershipRow) : null),
+      serializeUserAgent(
+        row,
+        currentOwnershipRow ? serializeAgentOwnershipRecord(currentOwnershipRow) : null,
+        handleRow ? serializeAgentHandle(handleRow) : null,
+      ),
     )
   }
   return items
+}
+
+export async function updateUserAgentDisplayName(
+  client: Client,
+  input: {
+    agentId: string
+    userId: string
+    displayName: string
+  },
+): Promise<UserAgent | null> {
+  const existingRow = await getUserAgentRowForOwner(client, input.agentId, input.userId).catch((error) => {
+    if (isMissingTableError(error, "user_agents")) {
+      return null
+    }
+    throw error
+  })
+  if (!existingRow) {
+    return null
+  }
+
+  const updatedAt = nowIso()
+  await client.execute({
+    sql: `
+      UPDATE user_agents
+      SET display_name = ?3,
+          updated_at = ?4
+      WHERE agent_id = ?1
+        AND owner_user_id = ?2
+    `,
+    args: [input.agentId, input.userId, input.displayName.trim(), updatedAt],
+  })
+
+  const row = await getUserAgentRowForOwner(client, input.agentId, input.userId)
+  if (!row) {
+    throw internalError("Updated agent row is missing")
+  }
+  const currentOwnershipRow = await getCurrentOwnershipRecordRowForAgent(client, input.agentId, input.userId)
+  const handleRow = await getActiveAgentHandleRow(client, input.agentId).catch((error) => {
+    if (isMissingTableError(error, "agent_handles")) {
+      return null
+    }
+    throw error
+  })
+  return serializeUserAgent(
+    row,
+    currentOwnershipRow ? serializeAgentOwnershipRecord(currentOwnershipRow) : null,
+    handleRow ? serializeAgentHandle(handleRow) : null,
+  )
+}
+
+export async function getUserAgentHandle(
+  client: Client,
+  input: {
+    agentId: string
+    userId: string
+  },
+): Promise<AgentHandle | null> {
+  const agentRow = await getUserAgentRowForOwner(client, input.agentId, input.userId).catch((error) => {
+    if (isMissingTableError(error, "user_agents")) {
+      return null
+    }
+    throw error
+  })
+  if (!agentRow) {
+    return null
+  }
+
+  const handleRow = await getActiveAgentHandleRow(client, input.agentId).catch((error) => {
+    if (isMissingTableError(error, "agent_handles")) {
+      return null
+    }
+    throw error
+  })
+  return handleRow ? serializeAgentHandle(handleRow) : null
+}
+
+export async function claimUserAgentHandle(
+  client: Client,
+  input: {
+    agentId: string
+    userId: string
+    desiredLabel: string
+  },
+): Promise<AgentHandle | null> {
+  const agentRow = await getUserAgentRowForOwner(client, input.agentId, input.userId).catch((error) => {
+    if (isMissingTableError(error, "user_agents")) {
+      return null
+    }
+    throw error
+  })
+  if (!agentRow) {
+    return null
+  }
+  if (agentRow.status !== "active") {
+    throw eligibilityFailed("Agent is not active")
+  }
+
+  const desired = normalizeDesiredAgentHandleLabel(input.desiredLabel)
+  const existingLabelRow = await getAgentHandleRowByLabel(client, desired.labelNormalized).catch((error) => {
+    if (isMissingTableError(error, "agent_handles")) {
+      throw internalError("Agent handle storage is not available")
+    }
+    throw error
+  })
+  if (existingLabelRow && existingLabelRow.agent_id !== input.agentId) {
+    throw conflictError("Desired agent handle is unavailable")
+  }
+
+  const activeRow = await getActiveAgentHandleRow(client, input.agentId)
+  if (activeRow?.label_normalized === desired.labelNormalized) {
+    return serializeAgentHandle(activeRow)
+  }
+  if (existingLabelRow) {
+    throw conflictError("Desired agent handle is unavailable")
+  }
+
+  const tx = await client.transaction()
+  try {
+    const now = nowIso()
+    const nextHandleId = makeId("agh")
+
+    if (activeRow) {
+      await tx.execute({
+        sql: `
+          UPDATE agent_handles
+          SET status = 'redirect',
+              replaced_at = ?2,
+              updated_at = ?2
+          WHERE agent_handle_id = ?1
+        `,
+        args: [activeRow.agent_handle_id, now],
+      })
+    }
+
+    await tx.execute({
+      sql: `
+        INSERT INTO agent_handles (
+          agent_handle_id, agent_id, label_normalized, label_display, status,
+          redirect_target_agent_handle_id, issued_at, replaced_at, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, 'active', NULL, ?5, NULL, ?5, ?5)
+      `,
+      args: [nextHandleId, input.agentId, desired.labelNormalized, desired.labelDisplay, now],
+    })
+
+    if (activeRow) {
+      await tx.execute({
+        sql: `
+          UPDATE agent_handles
+          SET redirect_target_agent_handle_id = ?2,
+              updated_at = ?3
+          WHERE agent_handle_id = ?1
+        `,
+        args: [activeRow.agent_handle_id, nextHandleId, now],
+      })
+    }
+
+    await tx.commit()
+    tx.close()
+  } catch (error) {
+    try {
+      await tx.rollback()
+    } catch {}
+    tx.close()
+    if (isAgentHandleLabelUniqueError(error) || isAgentHandleAgentUniqueError(error)) {
+      throw conflictError("Desired agent handle is unavailable")
+    }
+    throw error
+  }
+
+  const handleRow = await getActiveAgentHandleRow(client, input.agentId)
+  if (!handleRow) {
+    throw internalError("Agent handle row is missing after claim")
+  }
+  return serializeAgentHandle(handleRow)
+}
+
+async function resolveAgentHandleChain(
+  client: Client,
+  startHandleRow: AgentHandleRow,
+): Promise<AgentHandleRow | null> {
+  const seen = new Set<string>()
+  let current: AgentHandleRow | null = startHandleRow
+
+  while (current) {
+    if (current.status === "active") {
+      return current
+    }
+
+    if (current.status !== "redirect" || !current.redirect_target_agent_handle_id) {
+      return null
+    }
+
+    if (seen.has(current.agent_handle_id)) {
+      return null
+    }
+
+    seen.add(current.agent_handle_id)
+    current = await getAgentHandleRowById(client, current.redirect_target_agent_handle_id)
+  }
+
+  return null
+}
+
+export async function resolvePublicAgentByHandle(
+  client: Client,
+  handleLabel: string,
+): Promise<PublicAgentResolution | null> {
+  const requestedLabelNormalized = normalizeAgentHandleLookupLabel(handleLabel)
+  const requestedHandleRow = await getAgentHandleRowByLabel(client, requestedLabelNormalized).catch((error) => {
+    if (isMissingTableError(error, "agent_handles")) {
+      return null
+    }
+    throw error
+  })
+  if (!requestedHandleRow) {
+    return null
+  }
+
+  const resolvedHandleRow = await resolveAgentHandleChain(client, requestedHandleRow)
+  if (!resolvedHandleRow) {
+    return null
+  }
+
+  const agentRow = await getUserAgentRowById(client, resolvedHandleRow.agent_id)
+  if (!agentRow || agentRow.status !== "active") {
+    return null
+  }
+
+  const profileRow = await getProfileRow(client, agentRow.owner_user_id)
+  if (!profileRow) {
+    return null
+  }
+  const globalHandleRow = await getGlobalHandleRow(client, profileRow.global_handle_id)
+  if (!globalHandleRow || globalHandleRow.status !== "active") {
+    return null
+  }
+  const currentOwnershipRow = await getCurrentOwnershipRecordRowForAgent(client, agentRow.agent_id, agentRow.owner_user_id)
+
+  return {
+    is_canonical: requestedHandleRow.agent_handle_id === resolvedHandleRow.agent_handle_id,
+    requested_handle_label: `${requestedLabelNormalized}${AGENT_HANDLE_SUFFIX}`,
+    resolved_handle_label: resolvedHandleRow.label_display,
+    agent: {
+      agent_id: agentRow.agent_id,
+      display_name: agentRow.display_name,
+      handle: serializeAgentHandle(resolvedHandleRow),
+      ownership_provider: currentOwnershipRow?.ownership_provider ?? null,
+      created_at: agentRow.created_at,
+      updated_at: agentRow.updated_at,
+    },
+    owner: {
+      user_id: agentRow.owner_user_id,
+      display_name: profileRow.display_name,
+      global_handle: serializeGlobalHandle(globalHandleRow),
+    },
+  }
 }
 
 export async function issueAgentDelegatedCredential(
