@@ -225,11 +225,15 @@ export async function getJoinEligibility(input: {
       }
     }
 
-    const failureReason = evaluation.mismatchReasons.includes("erc721_holding_required")
-      ? "erc721_holding_required"
-      : evaluation.mismatchReasons.includes("minimum_age_mismatch")
-        ? "minimum_age_mismatch"
-        : null
+    const failureReason = evaluation.mismatchReasons.includes("token_inventory_unavailable")
+      ? "token_inventory_unavailable"
+      : evaluation.mismatchReasons.includes("erc721_inventory_match_required")
+        ? "erc721_inventory_match_required"
+        : evaluation.mismatchReasons.includes("erc721_holding_required")
+          ? "erc721_holding_required"
+          : evaluation.mismatchReasons.includes("minimum_age_mismatch")
+            ? "minimum_age_mismatch"
+            : null
     return {
       community_id: input.communityId,
       membership_mode: membershipMode,
@@ -374,6 +378,18 @@ export async function joinCommunity(input: {
         throw gateFailedWithDetails("A linked Ethereum wallet holding this NFT collection is required to join", {
           membership_gate_summaries: gateSummaries,
           failure_reason: "erc721_holding_required",
+        })
+      }
+      if (evaluation.mismatchReasons.includes("token_inventory_unavailable")) {
+        throw gateFailedWithDetails("Collectible inventory could not be checked right now", {
+          membership_gate_summaries: gateSummaries,
+          failure_reason: "token_inventory_unavailable",
+        })
+      }
+      if (evaluation.mismatchReasons.includes("erc721_inventory_match_required")) {
+        throw gateFailedWithDetails("A linked wallet holding the required collectible inventory is required to join", {
+          membership_gate_summaries: gateSummaries,
+          failure_reason: "erc721_inventory_match_required",
         })
       }
       throw gateFailedWithDetails("Community membership requirements are not satisfied", {

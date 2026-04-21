@@ -188,6 +188,101 @@ describe("community-service helpers", () => {
       ).not.toThrow()
     })
 
+    test("allows Courtyard erc721 inventory match gate with valid Polygon config", () => {
+      expect(() =>
+        assertCreateRequest(makeCreateBody({
+          gate_rules: [{
+            scope: "membership",
+            gate_family: "token_holding",
+            gate_type: "erc721_inventory_match",
+            chain_namespace: "eip155:137",
+            gate_config: {
+              contract_address: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+              inventory_provider: "courtyard",
+              min_quantity: 3,
+              asset_filter: { category: "trading_card", franchise: "pokemon", subject: "charizard" },
+            },
+          }],
+        }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+      ).not.toThrow()
+    })
+
+    test("rejects Courtyard inventory gate outside Polygon", () => {
+      expect(() =>
+        assertCreateRequest(makeCreateBody({
+          gate_rules: [{
+            scope: "membership",
+            gate_family: "token_holding",
+            gate_type: "erc721_inventory_match",
+            chain_namespace: "eip155:1",
+            gate_config: {
+              contract_address: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+              inventory_provider: "courtyard",
+              min_quantity: 3,
+              asset_filter: { category: "trading_card", franchise: "pokemon", subject: "charizard" },
+            },
+          }],
+        }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+      ).toThrow("Courtyard inventory gates must target Polygon (eip155:137)")
+    })
+
+    test("rejects Courtyard inventory gate with unsupported filter key", () => {
+      expect(() =>
+        assertCreateRequest(makeCreateBody({
+          gate_rules: [{
+            scope: "membership",
+            gate_family: "token_holding",
+            gate_type: "erc721_inventory_match",
+            chain_namespace: "eip155:137",
+            gate_config: {
+              contract_address: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+              inventory_provider: "courtyard",
+              min_quantity: 3,
+              asset_filter: { category: "trading_card", franchise: "pokemon", subject: "charizard", regex: ".*" },
+            },
+          }],
+        }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+      ).toThrow("ERC-721 inventory asset_filter has unsupported keys: regex")
+    })
+
+    test("rejects Courtyard inventory gate with invalid quantity", () => {
+      expect(() =>
+        assertCreateRequest(makeCreateBody({
+          gate_rules: [{
+            scope: "membership",
+            gate_family: "token_holding",
+            gate_type: "erc721_inventory_match",
+            chain_namespace: "eip155:137",
+            gate_config: {
+              contract_address: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+              inventory_provider: "courtyard",
+              min_quantity: 0,
+              asset_filter: { category: "watch", brand: "rolex" },
+            },
+          }],
+        }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+      ).toThrow("ERC-721 inventory gates require min_quantity from 1 to 100")
+    })
+
+    test("rejects Courtyard inventory gate with empty category-only filter", () => {
+      expect(() =>
+        assertCreateRequest(makeCreateBody({
+          gate_rules: [{
+            scope: "membership",
+            gate_family: "token_holding",
+            gate_type: "erc721_inventory_match",
+            chain_namespace: "eip155:137",
+            gate_config: {
+              contract_address: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+              inventory_provider: "courtyard",
+              min_quantity: 5,
+              asset_filter: { category: "watch" },
+            },
+          }],
+        }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+      ).toThrow("ERC-721 inventory asset_filter must include category plus a supported matching field")
+    })
+
     test("rejects erc721_holding gate with invalid chain namespace", () => {
       expect(() =>
         assertCreateRequest(makeCreateBody({

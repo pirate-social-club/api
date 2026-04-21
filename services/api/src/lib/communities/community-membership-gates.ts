@@ -6,6 +6,11 @@ import {
   hasEthereumRpcConfig,
   normalizeEthereumAddress,
 } from "./community-token-gates"
+import {
+  evaluateErc721InventoryMatch,
+  formatAssetFilterLabel,
+  readInventoryMatchConfig,
+} from "./community-token-inventory-gates"
 
 export type CommunityGateRuleRow = {
   gate_rule_id: string
@@ -239,6 +244,20 @@ export function buildMembershipGateSummary(rule: CommunityGateRuleRow): Membersh
     }
   }
 
+  if (rule.gate_type === "erc721_inventory_match") {
+    const config = readInventoryMatchConfig(gateConfig, rule.chain_namespace)
+    if (config) {
+      summary.chain_namespace = config.chainNamespace
+      summary.contract_address = config.contractAddress
+      summary.inventory_provider = config.inventoryProvider
+      summary.min_quantity = config.minQuantity
+      summary.asset_category = config.assetFilter.category ?? null
+      summary.asset_filter_label = formatAssetFilterLabel(config.assetFilter)
+    } else if (rule.chain_namespace) {
+      summary.chain_namespace = rule.chain_namespace
+    }
+  }
+
   return summary
 }
 
@@ -265,8 +284,26 @@ export async function evaluateMembershipGateRules(input: {
   for (const rule of rules) {
     if (rule.gate_family === "token_holding") {
       const gateConfig = parseGateConfig(rule.gate_config_json)
-      if (rule.gate_type !== "erc721_holding") {
+      if (rule.gate_type !== "erc721_holding" && rule.gate_type !== "erc721_inventory_match") {
         mismatchReasons.push(`unsupported_gate_type:${rule.gate_type}`)
+        continue
+      }
+      if (rule.gate_type === "erc721_inventory_match") {
+        const config = readInventoryMatchConfig(gateConfig, rule.chain_namespace)
+        if (!config) {
+          mismatchReasons.push("unsupported_gate_config")
+          continue
+        }
+        const result = await evaluateErc721InventoryMatch({
+          env,
+          walletAttachments,
+          config,
+        })
+        if (result.unavailable) {
+          mismatchReasons.push("token_inventory_unavailable")
+        } else if (result.matchedQuantity < config.minQuantity) {
+          mismatchReasons.push("erc721_inventory_match_required")
+        }
         continue
       }
       if ((rule.chain_namespace ?? null) !== "eip155:1") {

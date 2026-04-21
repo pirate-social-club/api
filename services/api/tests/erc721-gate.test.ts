@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { buildMembershipGateSummary, evaluateMembershipGateRules } from "../src/lib/communities/community-membership-store"
 import { setErc721OwnershipCheckerForTests } from "../src/lib/communities/community-token-gates"
+import { setErc721InventoryMatcherForTests } from "../src/lib/communities/community-token-inventory-gates"
 import { buildDefaultVerificationCapabilities } from "../src/lib/verification/verification-capabilities"
 import type { User, WalletAttachmentSummary } from "../src/types"
 
@@ -24,6 +25,25 @@ function makeErc721Rule(contractAddress: string): CommunityGateRuleRow {
     proof_requirements_json: null,
     chain_namespace: "eip155:1",
     gate_config_json: JSON.stringify({ contract_address: contractAddress }),
+    status: "active",
+  }
+}
+
+function makeCourtyardInventoryRule(config: Record<string, unknown> = {}): CommunityGateRuleRow {
+  return {
+    gate_rule_id: "gr_inventory",
+    scope: "membership",
+    gate_family: "token_holding",
+    gate_type: "erc721_inventory_match",
+    proof_requirements_json: null,
+    chain_namespace: "eip155:137",
+    gate_config_json: JSON.stringify({
+      contract_address: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+      inventory_provider: "courtyard",
+      min_quantity: 3,
+      asset_filter: { category: "trading_card", franchise: "pokemon", subject: "charizard" },
+      ...config,
+    }),
     status: "active",
   }
 }
@@ -53,10 +73,17 @@ const walletAttachments: WalletAttachmentSummary[] = [
     wallet_address: "0x2222222222222222222222222222222222222222",
     is_primary: true,
   },
+  {
+    wallet_attachment_id: "wal_polygon",
+    chain_namespace: "eip155:137",
+    wallet_address: "0x3333333333333333333333333333333333333333",
+    is_primary: false,
+  },
 ]
 
 afterEach(() => {
   setErc721OwnershipCheckerForTests(null)
+  setErc721InventoryMatcherForTests(null)
 })
 
 describe("erc721 gate evaluation", () => {
@@ -95,5 +122,65 @@ describe("erc721 gate evaluation", () => {
 
     expect(result.satisfied).toBe(true)
     expect(result.mismatchReasons).toEqual([])
+  })
+
+  test("builds erc721 inventory match summary with public metadata", () => {
+    const summary = buildMembershipGateSummary(makeCourtyardInventoryRule())
+    expect(summary.gate_type).toBe("erc721_inventory_match")
+    expect(summary.chain_namespace).toBe("eip155:137")
+    expect(summary.contract_address).toBe("0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD")
+    expect(summary.inventory_provider).toBe("courtyard")
+    expect(summary.min_quantity).toBe(3)
+    expect(summary.asset_category).toBe("trading_card")
+    expect(summary.asset_filter_label).toBe("pokemon charizard")
+  })
+
+  test("returns erc721_inventory_match_required when attached wallets do not hold enough matching assets", async () => {
+    setErc721InventoryMatcherForTests(async ({ walletAddresses }) => {
+      expect(walletAddresses).toEqual([
+        "0x2222222222222222222222222222222222222222",
+        "0x3333333333333333333333333333333333333333",
+      ])
+      return { matchedQuantity: 2 }
+    })
+
+    const result = await evaluateMembershipGateRules({
+      env: {},
+      rules: [makeCourtyardInventoryRule()],
+      user: makeUser(),
+      walletAttachments,
+    })
+
+    expect(result.satisfied).toBe(false)
+    expect(result.missingCapabilities).toEqual([])
+    expect(result.mismatchReasons).toContain("erc721_inventory_match_required")
+  })
+
+  test("returns satisfied when attached wallets aggregate enough matching inventory", async () => {
+    setErc721InventoryMatcherForTests(async () => ({ matchedQuantity: 3 }))
+
+    const result = await evaluateMembershipGateRules({
+      env: {},
+      rules: [makeCourtyardInventoryRule()],
+      user: makeUser(),
+      walletAttachments,
+    })
+
+    expect(result.satisfied).toBe(true)
+    expect(result.mismatchReasons).toEqual([])
+  })
+
+  test("fails closed when the inventory provider is unavailable", async () => {
+    setErc721InventoryMatcherForTests(async () => ({ matchedQuantity: 0, unavailable: true }))
+
+    const result = await evaluateMembershipGateRules({
+      env: {},
+      rules: [makeCourtyardInventoryRule()],
+      user: makeUser(),
+      walletAttachments,
+    })
+
+    expect(result.satisfied).toBe(false)
+    expect(result.mismatchReasons).toContain("token_inventory_unavailable")
   })
 })

@@ -2,6 +2,11 @@ import type { CreateCommunityRequest } from "../../types"
 import { eligibilityFailed } from "../errors"
 import { normalizeIdentityCountryCode, normalizeIdentityCountryCodes } from "../identity/country-codes"
 import { normalizeEthereumAddress } from "./community-token-gates"
+import {
+  isAllowedCourtyardRegistry,
+  normalizeAssetFilter,
+  normalizeInventoryText,
+} from "./community-token-inventory-gates"
 
 type PublicV0GateValidationBody = {
   membership_mode?: "open" | "request" | "gated" | null
@@ -65,20 +70,58 @@ function assertPublicV0TokenGateConfiguration(gateRules: GateRuleInput[]): void 
       continue
     }
 
-    if (rule.gate_type !== "erc721_holding") {
-      throw eligibilityFailed("Public v0 community creation only supports Ethereum ERC-721 collection token gates")
-    }
-    if ((rule.chain_namespace ?? null) !== "eip155:1") {
-      throw eligibilityFailed("ERC-721 community gates must target Ethereum mainnet (eip155:1)")
+    if (rule.gate_type !== "erc721_holding" && rule.gate_type !== "erc721_inventory_match") {
+      throw eligibilityFailed("Public v0 community creation only supports ERC-721 token gates")
     }
     if ((rule.proof_requirements?.length ?? 0) > 0) {
       throw eligibilityFailed("ERC-721 community gates do not accept proof_requirements")
     }
 
     const config = (rule.gate_config ?? {}) as Record<string, unknown>
-    if (!normalizeEthereumAddress(config.contract_address)) {
-      throw eligibilityFailed("ERC-721 community gates require a valid Ethereum contract_address")
+    if (rule.gate_type === "erc721_holding") {
+      if ((rule.chain_namespace ?? null) !== "eip155:1") {
+        throw eligibilityFailed("ERC-721 community gates must target Ethereum mainnet (eip155:1)")
+      }
+      if (!normalizeEthereumAddress(config.contract_address)) {
+        throw eligibilityFailed("ERC-721 community gates require a valid Ethereum contract_address")
+      }
+      continue
     }
+
+    assertErc721InventoryMatchGate(rule, config)
+  }
+}
+
+function assertErc721InventoryMatchGate(rule: GateRuleInput, config: Record<string, unknown>): void {
+  if ((rule.chain_namespace ?? null) !== "eip155:137") {
+    throw eligibilityFailed("Courtyard inventory gates must target Polygon (eip155:137)")
+  }
+  if (!normalizeEthereumAddress(config.contract_address)) {
+    throw eligibilityFailed("Courtyard inventory gates require a valid contract_address")
+  }
+  if (!isAllowedCourtyardRegistry({ chainNamespace: rule.chain_namespace, contractAddress: config.contract_address })) {
+    throw eligibilityFailed("Courtyard inventory gates require an allowlisted Courtyard contract")
+  }
+  if (config.inventory_provider !== "courtyard") {
+    throw eligibilityFailed("ERC-721 inventory gates require inventory_provider courtyard")
+  }
+  if (!Number.isInteger(config.min_quantity) || (config.min_quantity as number) < 1 || (config.min_quantity as number) > 100) {
+    throw eligibilityFailed("ERC-721 inventory gates require min_quantity from 1 to 100")
+  }
+  if (!config.asset_filter || typeof config.asset_filter !== "object" || Array.isArray(config.asset_filter)) {
+    throw eligibilityFailed("ERC-721 inventory gates require asset_filter")
+  }
+  const filter = config.asset_filter as Record<string, unknown>
+  const allowedKeys = new Set(["category", "franchise", "subject", "brand", "model"])
+  const invalidKeys = Object.keys(filter).filter((key) => !allowedKeys.has(key))
+  if (invalidKeys.length > 0) {
+    throw eligibilityFailed(`ERC-721 inventory asset_filter has unsupported keys: ${invalidKeys.join(", ")}`)
+  }
+  if (!normalizeAssetFilter(config.asset_filter)) {
+    throw eligibilityFailed("ERC-721 inventory asset_filter must include category plus a supported matching field")
+  }
+  if (Object.values(filter).some((value) => typeof value === "string" && normalizeInventoryText(value) == null)) {
+    throw eligibilityFailed("ERC-721 inventory asset_filter values must be non-empty strings")
   }
 }
 
