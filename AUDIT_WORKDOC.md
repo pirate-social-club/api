@@ -139,8 +139,8 @@ Problem:
 Evidence:
 
 - `services/api/tests/helpers.ts:89`
-- `services/api/tests/song-artifact-routes.test.ts`
-- `services/api/tests/verification-routes.test.ts`
+- `services/api/tests/routes/song-artifact-routes.test.ts`
+- `services/api/tests/routes/verification-routes.test.ts`
 
 Observed symptoms during review:
 
