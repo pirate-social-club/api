@@ -5,7 +5,7 @@ import {
   emitPostCommented,
 } from "../../src/lib/notifications/notification-service"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../helpers"
-import { exchangeJwt } from "./community-routes-test-helpers"
+import { exchangeJwt } from "./communities/community-routes-test-helpers"
 
 let cleanup: (() => Promise<void>) | null = null
 
