@@ -87,6 +87,7 @@ let erc721InventoryMatcherForTests: ((input: {
 
 const courtyardInventoryMatchCache = new Map<string, CourtyardInventoryCacheEntry>()
 const DEFAULT_COURTYARD_INVENTORY_CACHE_TTL_MS = 60_000
+const MAX_COURTYARD_INVENTORY_CACHE_ENTRIES = 1_000
 
 export function setErc721InventoryMatcherForTests(
   matcher: ((input: {
@@ -426,6 +427,26 @@ function buildInventoryMatchCacheKey(input: {
   })
 }
 
+function sweepExpiredCourtyardInventoryCache(nowMs: number): void {
+  for (const [key, entry] of courtyardInventoryMatchCache) {
+    if (entry.expiresAtMs <= nowMs) {
+      courtyardInventoryMatchCache.delete(key)
+    }
+  }
+}
+
+function setCourtyardInventoryCacheEntry(key: string, entry: CourtyardInventoryCacheEntry, nowMs: number): void {
+  sweepExpiredCourtyardInventoryCache(nowMs)
+  courtyardInventoryMatchCache.set(key, entry)
+  while (courtyardInventoryMatchCache.size > MAX_COURTYARD_INVENTORY_CACHE_ENTRIES) {
+    const oldestKey = courtyardInventoryMatchCache.keys().next().value
+    if (typeof oldestKey !== "string") {
+      break
+    }
+    courtyardInventoryMatchCache.delete(oldestKey)
+  }
+}
+
 function logCourtyardInventoryProviderError(input: {
   error: unknown
   walletCount: number
@@ -476,10 +497,10 @@ export async function evaluateErc721InventoryMatch(input: {
       return { matchedQuantity: result.matchedQuantity, unavailable: true }
     }
     if (cacheTtlMs > 0) {
-      courtyardInventoryMatchCache.set(cacheKey, {
+      setCourtyardInventoryCacheEntry(cacheKey, {
         matchedQuantity: result.matchedQuantity,
         expiresAtMs: nowMs + cacheTtlMs,
-      })
+      }, nowMs)
     }
     return { matchedQuantity: result.matchedQuantity, unavailable: false }
   } catch (error) {

@@ -409,4 +409,46 @@ describe("erc721 gate evaluation", () => {
     expect(second).toEqual({ matchedQuantity: 1, unavailable: false })
     expect(fetchCount).toBe(1)
   })
+
+  test("bounds the Courtyard inventory match cache", async () => {
+    let matcherCalls = 0
+    setErc721InventoryMatcherForTests(async () => {
+      matcherCalls += 1
+      return { matchedQuantity: 1 }
+    })
+    const config = {
+      chainNamespace: "eip155:137" as const,
+      contractAddress: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+      inventoryProvider: "courtyard" as const,
+      minQuantity: 1,
+      assetFilter: { category: "watch" as const, brand: "rolex" },
+    }
+
+    for (let index = 0; index < 1_001; index += 1) {
+      const suffix = index.toString(16).padStart(40, "0")
+      await evaluateErc721InventoryMatch({
+        env: {},
+        walletAttachments: [{
+          wallet_attachment_id: `wal_${index}`,
+          chain_namespace: "eip155:137",
+          wallet_address: `0x${suffix}`,
+          is_primary: false,
+        }],
+        config,
+      })
+    }
+
+    await evaluateErc721InventoryMatch({
+      env: {},
+      walletAttachments: [{
+        wallet_attachment_id: "wal_0",
+        chain_namespace: "eip155:137",
+        wallet_address: "0x0000000000000000000000000000000000000000",
+        is_primary: false,
+      }],
+      config,
+    })
+
+    expect(matcherCalls).toBe(1_002)
+  })
 })
