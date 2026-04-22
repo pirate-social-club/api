@@ -274,6 +274,8 @@ function summarizeVeryVerifyResponse(input: {
     responseStatus: input.responseStatus,
     upstreamSessionRef: input.upstreamSessionRef,
     bodyKeys: bodyRecord ? Object.keys(bodyRecord).sort() : [],
+    code: typeof bodyRecord?.code === "string" || typeof bodyRecord?.code === "number" ? bodyRecord.code : null,
+    message: typeof bodyRecord?.message === "string" ? bodyRecord.message : null,
     status: typeof body?.status === "string" ? body.status : null,
     error: typeof body?.error === "string" ? body.error : null,
     failureReason: typeof body?.failure_reason === "string" ? body.failure_reason : null,
