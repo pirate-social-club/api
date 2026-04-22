@@ -188,6 +188,7 @@ export type Env = {
   VERY_API_URL?: string
   VERY_APP_ID?: string
   VERY_VERIFY_URL?: string
+  VERY_TRUST_LOCAL_WIDGET_COMPLETION?: string
   PLATFORM_APPROVED_KYA_PROVIDERS?: string
   CLAWKEY_API_URL?: string
   SELF_APP_NAME?: string

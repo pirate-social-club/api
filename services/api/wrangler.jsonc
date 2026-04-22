@@ -80,7 +80,7 @@
         "PIRATE_APP_JWT_AUDIENCE": "pirate-app",
         "PIRATE_APP_JWT_TTL_SECONDS": "3600",
         "PRIVY_APP_ID": "cmnbdx9xk00ty0clapn2q8pdj",
-        "VERY_APP_ID": "very_6b072af6378545afaf81847dda730b18",
+        "VERY_APP_ID": "4d87383a-1f3e-486d-8df4-38a8ead86d10",
         "FILEBASE_MEDIA_BUCKET": "psc-media-bucket",
         "FILEBASE_S3_ENDPOINT": "https://s3.filebase.com",
         "FILEBASE_S3_REGION": "us-east-1",

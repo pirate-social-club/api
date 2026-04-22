@@ -1,5 +1,5 @@
 import { internalError, providerUnavailable } from "../errors"
-import { makeId } from "../helpers"
+import { envFlag, makeId } from "../helpers"
 import { sha256Hex } from "../crypto"
 import type { Env, VerificationIntent, VeryWidgetLaunch } from "../../types"
 
@@ -56,6 +56,10 @@ function trimEnv(value: string | null | undefined): string {
 
 function isDevelopmentEnv(env: Env): boolean {
   return String(env.ENVIRONMENT || "").trim().toLowerCase() === "development"
+}
+
+function shouldTrustLocalWidgetCompletion(env: Env): boolean {
+  return envFlag(env.VERY_TRUST_LOCAL_WIDGET_COMPLETION, isDevelopmentEnv(env))
 }
 
 function requireConfiguredVery(env: Env): {
@@ -460,8 +464,8 @@ export function getVeryProvider(env: Env): VeryProvider {
       if (!input.providerPayloadRef?.trim()) {
         return { status: "pending" }
       }
-      if (isDevelopmentEnv(env)) {
-        console.warn("[very-provider] trusting local widget completion in development")
+      if (shouldTrustLocalWidgetCompletion(env)) {
+        console.warn("[very-provider] trusting local widget completion")
         return {
           status: "verified",
           attestationData: {

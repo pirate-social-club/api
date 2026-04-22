@@ -447,6 +447,35 @@ describe("Very provider development fallback", () => {
     }
   })
 
+  test("getSessionOutcome can force real verifier in development", async () => {
+    const { getVeryProvider } = require("../src/lib/verification/very-provider") as typeof import("../src/lib/verification/very-provider")
+    const env = {
+      VERY_APP_ID: "dev-app",
+      VERY_TRUST_LOCAL_WIDGET_COMPLETION: "false",
+      ENVIRONMENT: "development",
+    } as any
+    const provider = getVeryProvider(env)
+    const originalFetch = globalThis.fetch
+    let requestedUrl = ""
+    globalThis.fetch = (async (url) => {
+      requestedUrl = String(url)
+      return new Response(JSON.stringify({ status: "valid" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }) as typeof globalThis.fetch
+    try {
+      const outcome = await provider.getSessionOutcome({
+        upstreamSessionRef: "local-ref",
+        providerPayloadRef: "some-proof",
+      })
+      expect(outcome.status).toBe("verified")
+      expect(requestedUrl).toBe("https://verify.very.org/api/v1/verify")
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   test("getSessionOutcome returns pending when no providerPayloadRef", async () => {
     const { getVeryProvider } = require("../src/lib/verification/very-provider") as typeof import("../src/lib/verification/very-provider")
     const env = {
