@@ -124,6 +124,38 @@ describe("Very provider adapter", () => {
     expect(startResult.launch.verify_url).toBe("https://api.pirate.sc/verification-sessions/very-widget-verify")
   })
 
+  test("startSession emits a Very ZK query within the documented timestamp range", async () => {
+    const { getVeryProvider } = require("../src/lib/verification/very-provider") as typeof import("../src/lib/verification/very-provider")
+    const env = {
+      VERY_API_URL: "https://very.example.com",
+      VERY_APP_ID: "test-app",
+    } as any
+    const provider = getVeryProvider(env)
+
+    const startResult = await provider.startSession({
+      userId: "user-1",
+      requestedCapabilities: ["unique_human"],
+      walletAttachmentId: null,
+      verificationIntent: "community_creation",
+      policyId: null,
+    })
+    const query = startResult.launch.query as {
+      conditions?: Array<{ value?: { from?: string; to?: string } }>
+      options?: Record<string, unknown>
+    }
+    const lowerBound = Number(query.conditions?.[0]?.value?.from)
+    const upperBound = Number(query.conditions?.[0]?.value?.to)
+
+    expect(Number.isInteger(lowerBound)).toBe(true)
+    expect(Number.isInteger(upperBound)).toBe(true)
+    expect(lowerBound).toBeGreaterThan(0)
+    expect(upperBound).toBeGreaterThan(lowerBound)
+    expect(upperBound <= 2_043_436_800).toBe(true)
+    expect(query.options?.expiredAtLowerBound).toBe(String(lowerBound))
+    expect(query.options?.pseudonym).toBe("0")
+    expect(query.options ? "sessionId" in query.options : true).toBe(false)
+  })
+
   test("configured provider verifies a proof payload through the Very verifier endpoint", async () => {
     const { getVeryProvider } = require("../src/lib/verification/very-provider") as typeof import("../src/lib/verification/very-provider")
     const env = {

@@ -233,11 +233,12 @@ function buildVeryQuery(input: {
   includeSessionId?: boolean
 }): Record<string, unknown> {
   const nowSeconds = Math.floor(Date.now() / 1000)
-  // Use a broad validity window for anonymous ZK mode. The Very docs example
-  // shows a wide timestamp range, and a narrow "now -> +1y" window can reject
-  // otherwise valid palm proofs if `val` is not minted at the moment of scan.
-  const lowerBoundSeconds = 0
-  const upperBoundSeconds = 4_102_444_800 // 2100-01-01T00:00:00Z
+  // Keep the ZK timestamp range inside signed 32-bit Unix time. Very's mobile
+  // proof generator can fail before returning a proof when handed larger values.
+  const tenYearsSeconds = 10 * 365 * 24 * 60 * 60
+  const maxDocumentedUpperBoundSeconds = 2_043_436_800
+  const lowerBoundSeconds = nowSeconds
+  const upperBoundSeconds = Math.min(nowSeconds + tenYearsSeconds, maxDocumentedUpperBoundSeconds)
   const options: Record<string, unknown> = {
     expiredAtLowerBound: String(nowSeconds),
     externalNullifier: buildExternalNullifier(input),
