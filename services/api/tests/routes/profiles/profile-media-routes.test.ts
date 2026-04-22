@@ -168,7 +168,7 @@ describe("profile media routes", () => {
     expect(response.status).toBe(400)
     const body = await json(response) as { code: string; message: string }
     expect(body.code).toBe("bad_request")
-    expect(body.message).toBe("avatar must be a JPEG, PNG, WebP, or GIF image")
+    expect(body.message).toBe("avatar must be a JPEG, PNG, WebP, GIF, or AVIF image")
     expect(filebaseCalled).toBe(false)
   })
 })

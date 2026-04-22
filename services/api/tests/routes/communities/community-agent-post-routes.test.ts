@@ -5,7 +5,8 @@ import {
   computeAgentActionProofHash,
 } from "../../../src/lib/agents/agent-action-proof"
 import { setClawkeyProviderForTests } from "../../../src/lib/agents/clawkey-provider"
-import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
+import { setSelfProviderForTests } from "../../../src/lib/verification/self-provider"
+import { buildVerifiedSelfProvider, createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { createSignedAgentChallenge } from "../../agent-test-helpers"
 import {
   addCommunityMember,
@@ -20,6 +21,7 @@ let cleanup: (() => Promise<void>) | null = null
 
 beforeEach(() => {
   resetRuntimeCaches()
+  setSelfProviderForTests(buildVerifiedSelfProvider("self-community-agent-post-test-ref"))
 })
 
 afterEach(async () => {
@@ -63,6 +65,32 @@ describe("community agent post routes", () => {
     const member = await exchangeJwt(ctx.env, "community-agent-post-member")
     await completeUniqueHumanVerification(ctx.env, member.accessToken)
     await addCommunityMember(ctx.communityDbRoot, communityCreateBody.community.community_id, member.userId)
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO linked_handles (
+          linked_handle_id,
+          user_id,
+          wallet_attachment_id,
+          kind,
+          label_normalized,
+          label_display,
+          verification_state,
+          metadata_json,
+          created_at,
+          updated_at
+        ) VALUES ('lnk_agent_post_owner_ens', ?1, NULL, 'ens', 'communityagent.eth', 'communityagent.eth', 'verified', '{}', ?2, ?2)
+      `,
+      args: [member.userId, "2026-04-19T12:30:00.000Z"],
+    })
+    await ctx.client.execute({
+      sql: `
+        UPDATE profiles
+        SET primary_linked_handle_id = 'lnk_agent_post_owner_ens',
+            updated_at = ?2
+        WHERE user_id = ?1
+      `,
+      args: [member.userId, "2026-04-19T12:30:00.000Z"],
+    })
 
     const registerChallenge = createSignedAgentChallenge({
       message: "clawkey-register-1738500001000",
@@ -166,8 +194,7 @@ describe("community agent post routes", () => {
     expect(createdPostBody.agent_ownership_record_id).toBe(ownershipCompleteBody.resolved_agent_ownership_record_id)
     expect(createdPostBody.agent_handle_snapshot).toBe("captain-bot.clawitzer")
     expect(createdPostBody.agent_display_name_snapshot).toBe("Captain Bot")
-    expect(typeof createdPostBody.agent_owner_handle_snapshot).toBe("string")
-    expect(createdPostBody.agent_owner_handle_snapshot).toBeTruthy()
+    expect(createdPostBody.agent_owner_handle_snapshot).toBe("communityagent.eth")
     expect(createdPostBody.agent_ownership_provider_snapshot).toBe("clawkey")
 
     const replayPayload = {

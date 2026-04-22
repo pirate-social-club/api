@@ -1,6 +1,6 @@
 import type { Client } from "../sql-client"
-import { getGlobalHandleRow, getProfileRow } from "../auth/auth-db-user-queries"
-import { serializeGlobalHandle } from "../auth/auth-serializers"
+import { getGlobalHandleRow, getProfileRow, listLinkedHandleRows } from "../auth/auth-db-user-queries"
+import { assembleProfile } from "../auth/auth-serializers"
 import { conflictError, eligibilityFailed, internalError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { isMissingTableError } from "../auth/auth-db-query-helpers"
@@ -324,6 +324,8 @@ export async function resolvePublicAgentByHandle(
   if (!globalHandleRow || globalHandleRow.status !== "active") {
     return null
   }
+  const linkedHandleRows = await listLinkedHandleRows(client, agentRow.owner_user_id)
+  const ownerProfile = assembleProfile(profileRow, globalHandleRow, linkedHandleRows)
   const currentOwnershipRow = await getCurrentOwnershipRecordRowForAgent(client, agentRow.agent_id, agentRow.owner_user_id)
 
   return {
@@ -341,8 +343,8 @@ export async function resolvePublicAgentByHandle(
     owner: {
       user_id: agentRow.owner_user_id,
       display_name: profileRow.display_name,
-      global_handle: serializeGlobalHandle(globalHandleRow),
+      global_handle: ownerProfile.global_handle,
+      primary_public_handle: ownerProfile.primary_public_handle ?? null,
     },
   }
 }
-

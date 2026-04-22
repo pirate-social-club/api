@@ -130,6 +130,16 @@ export function assembleProfile(
   }
 }
 
+type PublicHandleProfile = Pick<Profile, "global_handle" | "primary_public_handle">
+
+export function getProfilePublicHandleLabel(profile: PublicHandleProfile): string {
+  return profile.primary_public_handle?.label ?? profile.global_handle.label
+}
+
+export function getProfilePublicHandleStem(profile: PublicHandleProfile): string {
+  return getProfilePublicHandleLabel(profile).replace(/\.pirate$/iu, "").trim()
+}
+
 export function serializeWalletAttachments(rows: WalletAttachmentRow[]): WalletAttachmentSummary[] {
   return rows.map((row) => ({
     wallet_attachment_id: row.wallet_attachment_id,

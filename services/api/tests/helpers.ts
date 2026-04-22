@@ -7,7 +7,7 @@ import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import type { Env } from "../src/types"
 import { setClawkeyProviderForTests } from "../src/lib/agents/clawkey-provider"
-import { setSelfProviderForTests } from "../src/lib/verification/self-provider"
+import { setSelfProviderForTests, type SelfProvider } from "../src/lib/verification/self-provider"
 import { setVeryProviderForTests } from "../src/lib/verification/very-provider"
 import { setEnsResolverForTests } from "../src/lib/auth/ens-linked-handle-service"
 import { setStoryAccessProofSignerForTests } from "../src/lib/story/story-access-proof-service"
@@ -79,6 +79,28 @@ export function resetRuntimeCaches(): void {
     __pirateSingletons?: Map<string, unknown>
   }
   scope.__pirateSingletons?.clear()
+}
+
+export function buildVerifiedSelfProvider(upstreamSessionRef: string): SelfProvider {
+  return {
+    startSession: async () => ({
+      upstreamSessionRef,
+      launch: {
+        app_name: "Pirate",
+        endpoint: "https://self.xyz",
+        endpoint_type: "https",
+        scope: "profile_verification",
+        session_id: upstreamSessionRef,
+        user_id: "test",
+        user_id_type: "uuid",
+        disclosures: { date_of_birth: true },
+      },
+    }),
+    getSessionOutcome: async () => ({
+      status: "verified",
+      claims: { age_over_18: true, nationality: null, gender: null, ofac_clear: null },
+    }),
+  }
 }
 
 export function buildTestEnv(overrides: Partial<Env> = {}): Env {

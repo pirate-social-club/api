@@ -1,4 +1,4 @@
-import type { GlobalHandle } from "../../types"
+import type { GlobalHandle, LinkedHandle } from "../../types"
 
 export type AgentOwnershipProvider = "self_agent_id" | "clawkey"
 export type AgentOwnershipSessionKind = "register" | "refresh" | "transfer" | "deregister"
@@ -141,6 +141,7 @@ export type PublicAgentResolution = {
     user_id: string
     display_name: string | null
     global_handle: GlobalHandle
+    primary_public_handle: LinkedHandle | null
   }
 }
 

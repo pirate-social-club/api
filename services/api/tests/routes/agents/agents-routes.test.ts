@@ -1,8 +1,16 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import app from "../../../src/index"
 import { setClawkeyProviderForTests } from "../../../src/lib/agents/clawkey-provider"
+import { setSelfProviderForTests } from "../../../src/lib/verification/self-provider"
 import appWorker from "../../../src/index"
-import { buildTestEnv, createControlPlaneTestClient, createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
+import {
+  buildTestEnv,
+  buildVerifiedSelfProvider,
+  createControlPlaneTestClient,
+  createRouteTestContext,
+  json,
+  resetRuntimeCaches,
+} from "../../helpers"
 import { createSignedAgentChallenge } from "../../agent-test-helpers"
 import { createSelfVerifiedSession, exchangeJwt, requestJson } from "../verification/verification-test-helpers"
 
@@ -10,6 +18,7 @@ let cleanup: (() => Promise<void>) | null = null
 
 beforeEach(() => {
   resetRuntimeCaches()
+  setSelfProviderForTests(buildVerifiedSelfProvider("self-agent-route-test-ref"))
 })
 
 afterEach(async () => {
@@ -327,19 +336,55 @@ describe("agent routes", () => {
     expect(claimedHandleBody.label_display).toBe("night-signal.clawitzer")
     expect(claimedHandleBody.status).toBe("active")
 
+    const linkedHandleAt = "2026-04-19T12:45:00.000Z"
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO linked_handles (
+          linked_handle_id,
+          user_id,
+          wallet_attachment_id,
+          kind,
+          label_normalized,
+          label_display,
+          verification_state,
+          metadata_json,
+          created_at,
+          updated_at
+        ) VALUES (?1, ?2, NULL, 'ens', ?3, ?4, 'verified', ?5, ?6, ?6)
+      `,
+      args: [
+        "lnk_agent_owner_ens",
+        session.userId,
+        "agentowner.eth",
+        "agentowner.eth",
+        JSON.stringify({ source: "test" }),
+        linkedHandleAt,
+      ],
+    })
+    await ctx.client.execute({
+      sql: `
+        UPDATE profiles
+        SET primary_linked_handle_id = ?2,
+            updated_at = ?3
+        WHERE user_id = ?1
+      `,
+      args: [session.userId, "lnk_agent_owner_ens", linkedHandleAt],
+    })
+
     const publicAgentResponse = await app.request("http://pirate.test/public-agents/night-signal", {}, ctx.env)
     expect(publicAgentResponse.status).toBe(200)
     const publicAgentBody = await json(publicAgentResponse) as {
       is_canonical: boolean
       resolved_handle_label: string
       agent: { agent_id: string; handle: { label_display: string } }
-      owner: { global_handle: { label: string } }
+      owner: { global_handle: { label: string }; primary_public_handle: { label: string } | null }
     }
     expect(publicAgentBody.is_canonical).toBe(true)
     expect(publicAgentBody.resolved_handle_label).toBe("night-signal.clawitzer")
     expect(publicAgentBody.agent.agent_id).toBe(completedBody.agent_id)
     expect(publicAgentBody.agent.handle.label_display).toBe("night-signal.clawitzer")
     expect(publicAgentBody.owner.global_handle.label).toMatch(/\.pirate$/)
+    expect(publicAgentBody.owner.primary_public_handle?.label).toBe("agentowner.eth")
 
     const redirectedPublicAgentResponse = await app.request("http://pirate.test/public-agents/palm-agent", {}, ctx.env)
     expect(redirectedPublicAgentResponse.status).toBe(200)
@@ -422,12 +467,38 @@ describe("agent routes", () => {
     expect(updatedBody.display_name).toBe("Night Signal")
   })
 
-  test("generic agent names fall back to the owner's global handle", async () => {
+  test("generic agent names fall back to the owner's primary public handle", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
 
     const session = await exchangeJwt(ctx.env, "agent-generic-name-user")
     await createSelfVerifiedSession(ctx.env, session.accessToken)
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO linked_handles (
+          linked_handle_id,
+          user_id,
+          wallet_attachment_id,
+          kind,
+          label_normalized,
+          label_display,
+          verification_state,
+          metadata_json,
+          created_at,
+          updated_at
+        ) VALUES ('lnk_agent_generic_owner_ens', ?1, NULL, 'ens', 'agentgeneric.eth', 'agentgeneric.eth', 'verified', '{}', ?2, ?2)
+      `,
+      args: [session.userId, "2026-04-19T12:50:00.000Z"],
+    })
+    await ctx.client.execute({
+      sql: `
+        UPDATE profiles
+        SET primary_linked_handle_id = 'lnk_agent_generic_owner_ens',
+            updated_at = ?2
+        WHERE user_id = ?1
+      `,
+      args: [session.userId, "2026-04-19T12:50:00.000Z"],
+    })
 
     const meResponse = await app.request(
       "http://pirate.test/profiles/me",
@@ -440,9 +511,11 @@ describe("agent routes", () => {
     )
     expect(meResponse.status).toBe(200)
     const meBody = await json(meResponse) as {
+      primary_public_handle: { label: string } | null
       global_handle: { label: string }
     }
-    const expectedDisplayName = `${meBody.global_handle.label.replace(/\.pirate$/u, "")} Agent`
+    expect(meBody.primary_public_handle?.label).toBe("agentgeneric.eth")
+    const expectedDisplayName = `${meBody.primary_public_handle?.label} Agent`
 
     setClawkeyProviderForTests({
       startRegistration: async () => ({

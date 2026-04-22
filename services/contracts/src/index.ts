@@ -383,6 +383,7 @@ export type PublicAgentResolution = {
     user_id: string;
     display_name?: string | null;
     global_handle: GlobalHandle;
+    primary_public_handle: LinkedHandle | null;
   };
 };
 

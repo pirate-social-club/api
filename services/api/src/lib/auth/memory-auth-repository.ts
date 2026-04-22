@@ -9,6 +9,7 @@ import {
   isCleanupRenameAvailable,
 } from "./global-handle-policy"
 import { checkRedditVerificationCode, importRedditSnapshot, makeRedditVerificationCode } from "../onboarding/reddit-bootstrap"
+import { getProfilePublicHandleLabel } from "./auth-serializers"
 import type {
   Env,
   GlobalHandle,
@@ -242,18 +243,23 @@ export class MemoryAuthRepository {
       ? trimmedHandleLabel
       : `${trimmedHandleLabel}.pirate`
 
-    const record = [...getMemoryStore().byUserId.values()].find((candidate) => (
+    const pirateRecord = [...getMemoryStore().byUserId.values()].find((candidate) => (
       candidate.profile.global_handle.label.toLowerCase() === normalizedHandleLabel
+    ))
+    const record = pirateRecord ?? [...getMemoryStore().byUserId.values()].find((candidate) => (
+      candidate.profile.primary_public_handle?.label.toLowerCase() === trimmedHandleLabel
     ))
     if (!record) {
       return null
     }
+    const publicHandle = getProfilePublicHandleLabel(record.profile)
+    const requestedHandle = pirateRecord ? normalizedHandleLabel : publicHandle
 
     return {
       profile: record.profile,
-      requested_handle_label: normalizedHandleLabel,
-      resolved_handle_label: record.profile.global_handle.label,
-      is_canonical: true,
+      requested_handle_label: requestedHandle,
+      resolved_handle_label: publicHandle,
+      is_canonical: publicHandle.toLowerCase() === requestedHandle.toLowerCase(),
       created_communities: [],
     }
   }

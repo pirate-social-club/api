@@ -1,10 +1,11 @@
 import { assertMediaObject, fetchMedia, uploadMedia } from "../media-storage"
 import type { Env } from "../../types"
 
-export type CommunityMediaKind = "avatar" | "banner"
+export type CommunityMediaKind = "avatar" | "banner" | "post_image"
 const maxBytesByKind: Record<CommunityMediaKind, number> = {
   avatar: 5 * 1024 * 1024,
   banner: 12 * 1024 * 1024,
+  post_image: 20 * 1024 * 1024,
 }
 
 export async function uploadCommunityMedia(input: {
@@ -38,7 +39,7 @@ export function assertCommunityMediaObject(input: {
   return assertMediaObject({
     kind: input.kind,
     objectName: input.objectName,
-    allowedKinds: ["avatar", "banner"],
+    allowedKinds: ["avatar", "banner", "post_image"],
     objectKeyPrefix: "community-media",
     notFoundMessage: "Community media not found",
   })

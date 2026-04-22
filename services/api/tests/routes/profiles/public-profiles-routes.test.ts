@@ -209,8 +209,38 @@ describe("public profile routes", () => {
     expect(selected.status).toBe(200)
     const selectedBody = await json(selected) as {
       primary_public_handle: { linked_handle_id: string; label: string } | null
+      global_handle: { label: string }
     }
     expect(selectedBody.primary_public_handle?.label).toBe("blackbeard.eth")
+
+    const ensProfile = await app.request("http://pirate.test/public-profiles/blackbeard.eth", {}, ctx.env)
+    expect(ensProfile.status).toBe(200)
+    const ensProfileBody = await json(ensProfile) as {
+      requested_handle_label: string
+      resolved_handle_label: string
+      is_canonical: boolean
+      profile: { user_id: string; primary_public_handle: { label: string } | null; global_handle: { label: string } }
+    }
+    expect(ensProfileBody.requested_handle_label).toBe("blackbeard.eth")
+    expect(ensProfileBody.resolved_handle_label).toBe("blackbeard.eth")
+    expect(ensProfileBody.is_canonical).toBe(true)
+    expect(ensProfileBody.profile.user_id).toBe(session.userId)
+    expect(ensProfileBody.profile.primary_public_handle?.label).toBe("blackbeard.eth")
+
+    const pirateProfile = await app.request(
+      `http://pirate.test/public-profiles/${encodeURIComponent(selectedBody.global_handle.label)}`,
+      {},
+      ctx.env,
+    )
+    expect(pirateProfile.status).toBe(200)
+    const pirateProfileBody = await json(pirateProfile) as {
+      requested_handle_label: string
+      resolved_handle_label: string
+      is_canonical: boolean
+    }
+    expect(pirateProfileBody.requested_handle_label).toBe(selectedBody.global_handle.label)
+    expect(pirateProfileBody.resolved_handle_label).toBe("blackbeard.eth")
+    expect(pirateProfileBody.is_canonical).toBe(false)
   })
 
   test("linked handle sync marks stale ENS handles and clears stale primary selection", async () => {

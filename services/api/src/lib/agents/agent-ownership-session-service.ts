@@ -1,6 +1,7 @@
 import type { DbExecutor } from "../db-helpers"
 import type { Client, Transaction } from "../sql-client"
-import { getGlobalHandleRow, getProfileRow } from "../auth/auth-db-user-queries"
+import { getGlobalHandleRow, getProfileRow, listLinkedHandleRows } from "../auth/auth-db-user-queries"
+import { assembleProfile, getProfilePublicHandleStem } from "../auth/auth-serializers"
 import { conflictError, internalError, notFoundError, notImplementedError, authError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { sha256Hex } from "../crypto"
@@ -58,7 +59,9 @@ async function getOwnerAgentDisplayNameFallback(
   const profileRow = await getProfileRow(executor, ownerUserId)
   if (profileRow) {
     const globalHandleRow = await getGlobalHandleRow(executor, profileRow.global_handle_id)
-    const ownerHandleLabel = globalHandleRow?.label_display?.replace(/\.pirate$/iu, "").trim()
+    const linkedHandleRows = await listLinkedHandleRows(executor, ownerUserId)
+    const ownerProfile = globalHandleRow ? assembleProfile(profileRow, globalHandleRow, linkedHandleRows) : null
+    const ownerHandleLabel = ownerProfile ? getProfilePublicHandleStem(ownerProfile) : null
     if (ownerHandleLabel) {
       return `${ownerHandleLabel} Agent`
     }

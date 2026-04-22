@@ -1,12 +1,13 @@
 import { sign as signWithPrivateKey } from "node:crypto"
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import app from "../../../src/index"
 import {
   canonicalizeAgentActionProofSignaturePayload,
   computeAgentActionProofHash,
 } from "../../../src/lib/agents/agent-action-proof"
 import { setClawkeyProviderForTests } from "../../../src/lib/agents/clawkey-provider"
-import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
+import { setSelfProviderForTests } from "../../../src/lib/verification/self-provider"
+import { buildVerifiedSelfProvider, createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { createSignedAgentChallenge } from "../../agent-test-helpers"
 import { updateLocalCommunityAgentPostingPolicy } from "../communities/community-routes-test-helpers"
 import {
@@ -19,6 +20,11 @@ import {
 } from "./comments-routes-test-helpers"
 
 let cleanup: (() => Promise<void>) | null = null
+
+beforeEach(() => {
+  resetRuntimeCaches()
+  setSelfProviderForTests(buildVerifiedSelfProvider("self-comments-route-test-ref"))
+})
 
 afterEach(async () => {
   setClawkeyProviderForTests(null)
@@ -50,6 +56,32 @@ describe("comments routes", () => {
     const member = await exchangeJwt(ctx.env, "comments-agent-member")
     await completeUniqueHumanVerification(ctx.env, member.accessToken)
     await addCommunityMember(ctx.communityDbRoot, community.communityId, member.userId)
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO linked_handles (
+          linked_handle_id,
+          user_id,
+          wallet_attachment_id,
+          kind,
+          label_normalized,
+          label_display,
+          verification_state,
+          metadata_json,
+          created_at,
+          updated_at
+        ) VALUES ('lnk_comment_agent_owner_ens', ?1, NULL, 'ens', 'commentagent.eth', 'commentagent.eth', 'verified', '{}', ?2, ?2)
+      `,
+      args: [member.userId, "2026-04-19T12:31:00.000Z"],
+    })
+    await ctx.client.execute({
+      sql: `
+        UPDATE profiles
+        SET primary_linked_handle_id = 'lnk_comment_agent_owner_ens',
+            updated_at = ?2
+        WHERE user_id = ?1
+      `,
+      args: [member.userId, "2026-04-19T12:31:00.000Z"],
+    })
 
     const createdPost = await requestJson(
       `http://pirate.test/communities/${community.communityId}/posts`,
@@ -160,7 +192,7 @@ describe("comments routes", () => {
     expect(topLevelBody.agent_ownership_record_id).toBe(ownershipCompleteBody.resolved_agent_ownership_record_id)
     expect(topLevelBody.agent_handle_snapshot).toBe("reply-bot.clawitzer")
     expect(topLevelBody.agent_display_name_snapshot).toBe("Reply Bot")
-    expect(topLevelBody.agent_owner_handle_snapshot).toBeTruthy()
+    expect(topLevelBody.agent_owner_handle_snapshot).toBe("commentagent.eth")
     expect(topLevelBody.agent_ownership_provider_snapshot).toBe("clawkey")
 
     const replyUrl = `http://pirate.test/comments/${topLevelBody.comment_id}/replies`

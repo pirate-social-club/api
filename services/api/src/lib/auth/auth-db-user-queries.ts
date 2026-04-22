@@ -167,6 +167,30 @@ export async function getLinkedHandleRow(
   return row ? toLinkedHandleRow(row) : null
 }
 
+export async function getVerifiedLinkedHandleRowByLabelNormalized(
+  executor: DbExecutor,
+  labelNormalized: string,
+): Promise<LinkedHandleRow | null> {
+  const row = await firstRow(executor, {
+    sql: `
+      SELECT linked_handle_id, user_id, wallet_attachment_id, kind, label_normalized, label_display,
+             verification_state, metadata_json, created_at, updated_at
+      FROM linked_handles
+      WHERE label_normalized = ?1
+        AND verification_state = 'verified'
+      LIMIT 1
+    `,
+    args: [labelNormalized],
+  }).catch((error) => {
+    if (isMissingTableError(error, "linked_handles")) {
+      return null
+    }
+    throw error
+  })
+
+  return row ? toLinkedHandleRow(row) : null
+}
+
 export async function getGlobalHandleRow(executor: DbExecutor, globalHandleId: string): Promise<GlobalHandleRow | null> {
   const stmt = {
     sql: `

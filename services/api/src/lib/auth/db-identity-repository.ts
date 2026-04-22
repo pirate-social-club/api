@@ -7,6 +7,7 @@ import {
   findActiveAuthProviderLink,
   getGlobalHandleRow,
   getGlobalHandleRowByLabelNormalized,
+  getVerifiedLinkedHandleRowByLabelNormalized,
   listLinkedHandleRows,
   listCreatedCommunityRowsByCreatorUserId,
   getProfileRow,
@@ -17,7 +18,7 @@ import {
   loadSnapshot,
   reconcileWalletAttachments,
 } from "./auth-db-queries"
-import { assembleProfile, serializeUser, serializeWalletAttachments } from "./auth-serializers"
+import { assembleProfile, getProfilePublicHandleLabel, serializeUser, serializeWalletAttachments } from "./auth-serializers"
 import type { SessionSnapshot } from "./auth-db-rows"
 import { makeId, nowIso } from "../helpers"
 import type { OnboardingStatus, Profile, UpstreamIdentity, User, WalletAttachmentSummary } from "../../types"
@@ -36,6 +37,10 @@ function normalizePublicHandleLabel(value: string): {
     labelDisplay: `${withoutSuffix}.pirate`,
     labelNormalized: withoutSuffix,
   }
+}
+
+function normalizePublicLinkedHandleLabel(value: string): string {
+  return value.trim().toLowerCase().replace(/^@+/u, "")
 }
 
 export class DatabaseIdentityRepository {
@@ -244,7 +249,7 @@ export class DatabaseIdentityRepository {
       requestedHandle.labelNormalized,
     )
     if (!requestedHandleRow) {
-      return null
+      return await this.resolvePublicProfileByLinkedHandle(handleLabel)
     }
 
     const canonicalHandleRow = requestedHandleRow.status === "redirect" && requestedHandleRow.redirect_target_global_handle_id
@@ -262,11 +267,52 @@ export class DatabaseIdentityRepository {
     const linkedHandleRows = await listLinkedHandleRows(this.client, canonicalHandleRow.user_id)
     const createdCommunityRows = await listCreatedCommunityRowsByCreatorUserId(this.client, canonicalHandleRow.user_id)
 
+    const profile = assembleProfile(profileRow, canonicalHandleRow, linkedHandleRows)
+    const resolvedPublicHandle = getProfilePublicHandleLabel(profile)
+    const canonicalPirateRequest = requestedHandleRow.global_handle_id === canonicalHandleRow.global_handle_id
+
     return {
-      profile: assembleProfile(profileRow, canonicalHandleRow, linkedHandleRows),
+      profile,
       requested_handle_label: requestedHandle.labelDisplay,
-      resolved_handle_label: canonicalHandleRow.label_display,
-      is_canonical: requestedHandleRow.global_handle_id === canonicalHandleRow.global_handle_id,
+      resolved_handle_label: resolvedPublicHandle,
+      is_canonical: canonicalPirateRequest && resolvedPublicHandle === canonicalHandleRow.label_display,
+      created_communities: createdCommunityRows.map((row) => ({
+        community_id: row.community_id,
+        display_name: row.display_name,
+        route_slug: row.route_slug,
+        created_at: row.created_at,
+      })),
+    }
+  }
+
+  async resolvePublicProfileByLinkedHandle(handleLabel: string): Promise<PublicProfileResolution | null> {
+    const requestedLinkedHandleLabel = normalizePublicLinkedHandleLabel(handleLabel)
+    const linkedHandleRow = await getVerifiedLinkedHandleRowByLabelNormalized(
+      this.client,
+      requestedLinkedHandleLabel,
+    )
+    if (!linkedHandleRow) {
+      return null
+    }
+
+    const profileRow = await getProfileRow(this.client, linkedHandleRow.user_id)
+    if (!profileRow || profileRow.primary_linked_handle_id !== linkedHandleRow.linked_handle_id) {
+      return null
+    }
+
+    const globalHandleRow = await getGlobalHandleRow(this.client, profileRow.global_handle_id)
+    if (!globalHandleRow) {
+      return null
+    }
+
+    const linkedHandleRows = await listLinkedHandleRows(this.client, linkedHandleRow.user_id)
+    const createdCommunityRows = await listCreatedCommunityRowsByCreatorUserId(this.client, linkedHandleRow.user_id)
+
+    return {
+      profile: assembleProfile(profileRow, globalHandleRow, linkedHandleRows),
+      requested_handle_label: linkedHandleRow.label_display,
+      resolved_handle_label: linkedHandleRow.label_display,
+      is_canonical: true,
       created_communities: createdCommunityRows.map((row) => ({
         community_id: row.community_id,
         display_name: row.display_name,

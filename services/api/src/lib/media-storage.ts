@@ -41,6 +41,7 @@ const allowedMimeTypes = new Set([
   "image/png",
   "image/webp",
   "image/gif",
+  "image/avif",
 ])
 
 function requireTrimmedEnv(value: string | undefined, message: string): string {
@@ -68,8 +69,41 @@ function resolveFilebaseConfig(env: Env): MediaFilebaseConfig {
 
 function assertSupportedMimeType(kind: string, mimeType: string): void {
   if (!allowedMimeTypes.has(mimeType)) {
-    throw badRequestError(`${kind} must be a JPEG, PNG, WebP, or GIF image`)
+    throw badRequestError(`${kind} must be a JPEG, PNG, WebP, GIF, or AVIF image`)
   }
+}
+
+function inferMimeTypeFromFilename(filename: string): string | null {
+  const normalized = filename.trim().toLowerCase()
+  if (normalized.endsWith(".jpg") || normalized.endsWith(".jpeg")) {
+    return "image/jpeg"
+  }
+  if (normalized.endsWith(".png")) {
+    return "image/png"
+  }
+  if (normalized.endsWith(".webp")) {
+    return "image/webp"
+  }
+  if (normalized.endsWith(".gif")) {
+    return "image/gif"
+  }
+  if (normalized.endsWith(".avif")) {
+    return "image/avif"
+  }
+  return null
+}
+
+function resolveImageMimeType(file: File): string {
+  const declaredMimeType = file.type.trim().toLowerCase()
+  if (allowedMimeTypes.has(declaredMimeType)) {
+    return declaredMimeType
+  }
+
+  if (!declaredMimeType || declaredMimeType === "application/octet-stream") {
+    return inferMimeTypeFromFilename(file.name) ?? declaredMimeType
+  }
+
+  return declaredMimeType
 }
 
 function assertFileSize(kind: string, sizeBytes: number, maxBytes: number): void {
@@ -92,6 +126,8 @@ function extensionForMimeType(mimeType: string): string {
       return "webp"
     case "image/gif":
       return "gif"
+    case "image/avif":
+      return "avif"
     default:
       throw badRequestError("Unsupported media type")
   }
@@ -252,7 +288,7 @@ export async function uploadMedia<TKind extends string>(input: UploadMediaInput<
   storage_bucket: string
   storage_object_key: string
 }> {
-  const mimeType = input.file.type.trim().toLowerCase()
+  const mimeType = resolveImageMimeType(input.file)
   assertSupportedMimeType(input.kind, mimeType)
   assertFileSize(input.kind, input.file.size, input.maxBytesByKind[input.kind])
 

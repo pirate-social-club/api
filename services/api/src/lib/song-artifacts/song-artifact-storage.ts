@@ -74,6 +74,7 @@ const allowedMimeTypesByKind: Record<SongArtifactKind, Set<string>> = {
     "audio/x-wav",
   ]),
   cover_art: new Set([
+    "image/avif",
     "image/gif",
     "image/jpeg",
     "image/png",
@@ -157,6 +158,8 @@ function extensionForMimeType(mimeType: string): string {
       return "webm"
     case "image/gif":
       return "gif"
+    case "image/avif":
+      return "avif"
     case "image/jpeg":
       return "jpg"
     case "image/png":

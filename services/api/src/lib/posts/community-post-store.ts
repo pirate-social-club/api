@@ -411,6 +411,25 @@ export function assertPostCreateRequest(body: CreatePostRequest, _communityId: s
   if (body.post_type === "link" && !body.link_url?.trim()) {
     throw badRequestError("link_url is required for link posts")
   }
+  if (body.post_type === "image") {
+    const primaryImage = body.media_refs?.[0]
+    if (!primaryImage?.storage_ref?.trim()) {
+      throw badRequestError("media_refs is required for image posts")
+    }
+    if (!primaryImage.mime_type?.trim()) {
+      throw badRequestError("image media_refs must include mime_type")
+    }
+    const mimeType = primaryImage.mime_type.trim().toLowerCase()
+    if (
+      mimeType !== "image/jpeg"
+      && mimeType !== "image/png"
+      && mimeType !== "image/webp"
+      && mimeType !== "image/gif"
+      && mimeType !== "image/avif"
+    ) {
+      throw badRequestError("image posts require JPEG, PNG, WebP, GIF, or AVIF media")
+    }
+  }
   if (body.post_type === "link" && body.title != null) {
     throw badRequestError("title is not allowed for link posts")
   }

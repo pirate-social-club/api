@@ -2,6 +2,7 @@ import type { ProfileRepository } from "../auth/repositories"
 import { badRequestError, eligibilityFailed } from "../errors"
 import type { Community, Env } from "../../types"
 import type { Client } from "../sql-client"
+import { getProfilePublicHandleLabel } from "../auth/auth-serializers"
 import { getControlPlaneAgentOwnershipRepository } from "./control-plane-agent-ownership-repository"
 import { dedupeStrings, splitCsv } from "../helpers"
 import {
@@ -237,7 +238,7 @@ export async function authorizeAgentWrite<T extends AgentWritableRequest>(input:
     agentOwnershipRecordId: userAgent.current_ownership_record_id,
     agentHandleSnapshot: userAgent.handle.label_display,
     agentDisplayNameSnapshot: userAgent.display_name,
-    agentOwnerHandleSnapshot: profile.global_handle.label,
+    agentOwnerHandleSnapshot: getProfilePublicHandleLabel(profile),
     agentOwnershipProviderSnapshot: userAgent.current_ownership.ownership_provider,
   }
 }

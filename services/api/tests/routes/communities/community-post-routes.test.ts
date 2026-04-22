@@ -216,6 +216,93 @@ describe("community post routes", () => {
     expect(deniedBody.message).toBe("link_url is required for link posts")
   })
 
+  test("image post create stores image media refs", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "community-image-post")
+    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, session.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Pirate Images Club",
+      namespace: {
+        namespace_verification_id: namespaceVerificationId,
+      },
+    }, ctx.env, session.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: { community_id: string }
+    }
+
+    const createdPost = await requestJson(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      {
+        post_type: "image",
+        title: "Backstage",
+        caption: "Right before the set.",
+        media_refs: [{
+          storage_ref: "http://pirate.test/community-media/post_image/post_image_test.gif",
+          mime_type: "image/gif",
+          size_bytes: 12,
+        }],
+        idempotency_key: "post-key-image-create",
+      },
+      ctx.env,
+      session.accessToken,
+    )
+
+    expect(createdPost.status).toBe(201)
+    const postBody = await json(createdPost) as {
+      post_type: string
+      title?: string | null
+      caption?: string | null
+      media_refs?: Array<{ storage_ref: string; mime_type?: string | null; size_bytes?: number | null }>
+    }
+    expect(postBody.post_type).toBe("image")
+    expect(postBody.title).toBe("Backstage")
+    expect(postBody.caption).toBe("Right before the set.")
+    expect(postBody.media_refs?.[0]).toEqual({
+      storage_ref: "http://pirate.test/community-media/post_image/post_image_test.gif",
+      mime_type: "image/gif",
+      size_bytes: 12,
+    })
+  })
+
+  test("image post create returns 400 when media refs are missing", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "community-image-post-invalid")
+    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, session.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Pirate Broken Images Club",
+      namespace: {
+        namespace_verification_id: namespaceVerificationId,
+      },
+    }, ctx.env, session.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: { community_id: string }
+    }
+
+    const deniedPost = await requestJson(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      {
+        post_type: "image",
+        title: "Missing image",
+        idempotency_key: "post-key-image-missing-media",
+      },
+      ctx.env,
+      session.accessToken,
+    )
+
+    expect(deniedPost.status).toBe(400)
+    const deniedBody = await json(deniedPost) as { code: string; message: string }
+    expect(deniedBody.code).toBe("bad_request")
+    expect(deniedBody.message).toBe("media_refs is required for image posts")
+  })
+
   test("post create returns 400 when community_id is repeated in the body", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
