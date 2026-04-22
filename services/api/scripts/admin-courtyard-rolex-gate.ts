@@ -293,7 +293,7 @@ async function main(): Promise<void> {
     communityId: communityId ?? null,
     createGateRule: buildGateRule(minQuantity),
     updateGatesRequest: {
-      method: "PATCH",
+      method: "PUT",
       path: communityId ? `/communities/${communityId}/gates` : "/communities/{communityId}/gates",
       body: buildGatesPatchBody(minQuantity),
     },
