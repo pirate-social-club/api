@@ -1,3 +1,6 @@
+import { schnorr } from "@noble/curves/secp256k1"
+import { sha256 } from "@noble/hashes/sha2"
+import { bytesToHex } from "@noble/hashes/utils"
 import { badRequestError, internalError, providerUnavailable } from "../errors"
 import type { Env } from "../../types"
 import { sha256Hex } from "../crypto"
@@ -69,7 +72,25 @@ export type SpacesChallengePayload = {
   expires_at: string
   message: string
   digest: string
+  signing_method?: "akron_nostr_event"
+  nostr_event?: SpacesUnsignedNostrEvent
 }
+
+export type SpacesUnsignedNostrEvent = {
+  created_at: number
+  kind: number
+  tags: string[][]
+  content: string
+}
+
+export type SpacesSignedNostrEvent = SpacesUnsignedNostrEvent & {
+  id?: string
+  pubkey?: string
+  sig?: string
+  proof?: string
+}
+
+const SPACES_NOSTR_EVENT_KIND = 27235
 
 function requireSpacesVerifierBaseUrl(env: Env): string {
   const baseUrl = String(env.SPACES_VERIFIER_BASE_URL || "").trim()
@@ -220,6 +241,145 @@ export async function verifySpacesSignature(
   }
 }
 
+function isHex(value: string, bytes: number): boolean {
+  return new RegExp(`^[0-9a-f]{${bytes * 2}}$`, "u").test(value)
+}
+
+function readTag(event: SpacesUnsignedNostrEvent, name: string): string | null {
+  const tag = event.tags.find((entry) => entry[0] === name && typeof entry[1] === "string")
+  return tag?.[1] ?? null
+}
+
+function parseSpacesSignedNostrEvent(value: unknown): SpacesSignedNostrEvent | null {
+  if (!value || typeof value !== "object") {
+    return null
+  }
+  const event = value as Record<string, unknown>
+  if (
+    typeof event.created_at !== "number" ||
+    !Number.isSafeInteger(event.created_at) ||
+    typeof event.kind !== "number" ||
+    !Number.isSafeInteger(event.kind) ||
+    !Array.isArray(event.tags) ||
+    typeof event.content !== "string"
+  ) {
+    return null
+  }
+  const tags = event.tags.map((tag) => {
+    if (!Array.isArray(tag)) {
+      return null
+    }
+    const values = tag.map((part) => typeof part === "string" ? part : null)
+    return values.every((part): part is string => typeof part === "string") ? values : null
+  })
+  if (tags.some((tag) => tag == null)) {
+    return null
+  }
+  return {
+    id: typeof event.id === "string" ? event.id.toLowerCase() : undefined,
+    pubkey: typeof event.pubkey === "string" ? event.pubkey.toLowerCase() : undefined,
+    created_at: event.created_at,
+    kind: event.kind,
+    tags: tags as string[][],
+    content: event.content,
+    sig: typeof event.sig === "string" ? event.sig.toLowerCase() : undefined,
+    proof: typeof event.proof === "string" ? event.proof : undefined,
+  }
+}
+
+function computeNostrEventId(event: SpacesSignedNostrEvent): string | null {
+  if (!event.pubkey || !isHex(event.pubkey, 32)) {
+    return null
+  }
+  const serialized = JSON.stringify([
+    0,
+    event.pubkey,
+    event.created_at,
+    event.kind,
+    event.tags,
+    event.content,
+  ])
+  return bytesToHex(sha256(new TextEncoder().encode(serialized)))
+}
+
+export function verifySpacesNostrEvent(input: {
+  challengePayload: SpacesChallengePayload
+  signedEvent: unknown
+}): SpacesSignatureVerification {
+  const event = parseSpacesSignedNostrEvent(input.signedEvent)
+  if (!event || !event.id || !event.pubkey || !event.sig) {
+    return {
+      validSignature: false,
+      wrongSigner: false,
+      observationProvider: "akron_nostr_event",
+      failureReason: "invalid_signed_event",
+    }
+  }
+
+  const expectedRoot = `@${normalizeRootLabel(input.challengePayload.root_label)}`
+  const expectedUnsignedEvent = input.challengePayload.nostr_event ?? null
+  const expectedKind = expectedUnsignedEvent?.kind ?? SPACES_NOSTR_EVENT_KIND
+  const expectedCreatedAt = expectedUnsignedEvent?.created_at ?? null
+  if (
+    event.kind !== expectedKind ||
+    (expectedCreatedAt != null && event.created_at !== expectedCreatedAt) ||
+    event.content !== input.challengePayload.message ||
+    readTag(event, "space") !== expectedRoot ||
+    readTag(event, "pirate") !== "namespace-verification" ||
+    readTag(event, "domain") !== input.challengePayload.domain ||
+    readTag(event, "nonce") !== input.challengePayload.nonce ||
+    readTag(event, "root") !== expectedRoot
+  ) {
+    return {
+      validSignature: false,
+      wrongSigner: false,
+      observationProvider: "akron_nostr_event",
+      failureReason: "challenge_mismatch",
+    }
+  }
+
+  if (!isHex(event.id, 32) || !isHex(event.pubkey, 32) || !isHex(event.sig, 64)) {
+    return {
+      validSignature: false,
+      wrongSigner: false,
+      observationProvider: "akron_nostr_event",
+      failureReason: "invalid_signed_event",
+    }
+  }
+
+  if (event.pubkey !== input.challengePayload.root_pubkey.toLowerCase()) {
+    return {
+      validSignature: false,
+      wrongSigner: true,
+      observationProvider: "akron_nostr_event",
+      failureReason: "wrong_signer",
+    }
+  }
+
+  const computedId = computeNostrEventId(event)
+  if (!computedId || computedId !== event.id) {
+    return {
+      validSignature: false,
+      wrongSigner: false,
+      observationProvider: "akron_nostr_event",
+      failureReason: "invalid_event_id",
+    }
+  }
+
+  let valid = false
+  try {
+    valid = schnorr.verify(event.sig, computedId, event.pubkey)
+  } catch {
+    valid = false
+  }
+  return {
+    validSignature: valid,
+    wrongSigner: false,
+    observationProvider: "akron_nostr_event",
+    failureReason: valid ? null : "invalid_signature",
+  }
+}
+
 function randomNonceHex(bytes = 16): string {
   const value = crypto.getRandomValues(new Uint8Array(bytes))
   return Array.from(value, (part) => part.toString(16).padStart(2, "0")).join("")
@@ -252,6 +412,19 @@ export async function mintSpacesChallenge(
     `expires_at=${challengeExpiresAt}`,
     `domain=${domain}`,
   ].join("\n")
+  const canonicalRoot = `@${normalizeRootLabel(normalizedRootLabel)}`
+  const nostrEvent: SpacesUnsignedNostrEvent = {
+    created_at: Math.floor(issuedAt.getTime() / 1000),
+    kind: SPACES_NOSTR_EVENT_KIND,
+    tags: [
+      ["space", canonicalRoot],
+      ["pirate", "namespace-verification"],
+      ["domain", domain],
+      ["nonce", nonce],
+      ["root", canonicalRoot],
+    ],
+    content: message,
+  }
 
   return {
     challengeExpiresAt,
@@ -265,6 +438,8 @@ export async function mintSpacesChallenge(
       expires_at: challengeExpiresAt,
       message,
       digest: await sha256Hex(message),
+      signing_method: "akron_nostr_event",
+      nostr_event: nostrEvent,
     },
   }
 }

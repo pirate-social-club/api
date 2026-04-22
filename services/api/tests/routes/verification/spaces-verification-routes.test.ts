@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { schnorr } from "@noble/curves/secp256k1"
+import { sha256 } from "@noble/hashes/sha2"
+import { bytesToHex } from "@noble/hashes/utils"
 import app from "../../../src/index"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import {
@@ -9,6 +12,38 @@ import {
 } from "./verification-test-helpers"
 
 let cleanup: (() => Promise<void>) | null = null
+const spacesTestPrivateKey = "11".repeat(32)
+const spacesTestRootPubkey = bytesToHex(schnorr.getPublicKey(spacesTestPrivateKey))
+
+function signNostrChallengeEvent(event: {
+  created_at: number
+  kind: number
+  tags: string[][]
+  content: string
+}) {
+  const unsigned = {
+    ...event,
+    pubkey: spacesTestRootPubkey,
+  }
+  const serialized = JSON.stringify([
+    0,
+    unsigned.pubkey,
+    unsigned.created_at,
+    unsigned.kind,
+    unsigned.tags,
+    unsigned.content,
+  ])
+  const id = bytesToHex(sha256(new TextEncoder().encode(serialized)))
+  return {
+    id,
+    pubkey: unsigned.pubkey,
+    created_at: unsigned.created_at,
+    kind: unsigned.kind,
+    tags: unsigned.tags,
+    content: unsigned.content,
+    sig: bytesToHex(schnorr.sign(id, spacesTestPrivateKey)),
+  }
+}
 
 beforeEach(() => {
   resetRuntimeCaches()
@@ -32,9 +67,6 @@ describe("spaces verification routes", () => {
     const session = await exchangeJwt(ctx.env, "verification-spaces-user")
 
     await createSelfVerifiedSession(ctx.env, session.accessToken)
-    let expectedDigest: string | null = null
-    let expectedRootPubkey: string | null = null
-
     const originalFetch = globalThis.fetch
     await withFetchMock(async (input, init) => {
       const url = typeof input === "string" ? input : input.toString()
@@ -42,7 +74,7 @@ describe("spaces verification routes", () => {
         return new Response(JSON.stringify({
           root_exists: true,
           root_key_proof_verified: true,
-          root_pubkey: "spaces-root-pubkey",
+          root_pubkey: spacesTestRootPubkey,
           control_class: "single_holder_root",
           operation_class: "owner_managed_namespace",
           observation_provider: "spaces_verifier",
@@ -51,19 +83,6 @@ describe("spaces verification routes", () => {
           accepted_anchor_root_hash: "anchor-root",
           proof_root_hash: "proof-root",
           anchor_fresh_enough: true,
-        }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        })
-      }
-      if (url === "http://spaces-verifier.test/verify-signature") {
-        const body = JSON.parse(String(init?.body))
-        expect(body.digest).toBe(expectedDigest)
-        expect(body.signature).toBe("spaces-signature")
-        expect(body.root_pubkey).toBe(expectedRootPubkey)
-        return new Response(JSON.stringify({
-          valid_signature: true,
-          observation_provider: "spaces_verifier",
         }), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -80,21 +99,32 @@ describe("spaces verification routes", () => {
         namespace_verification_session_id: string
         family: string
         challenge_kind: string | null
-        challenge_payload: { digest?: string; root_pubkey?: string } | null
+        challenge_payload: {
+          digest?: string
+          root_pubkey?: string
+          nostr_event?: {
+            created_at: number
+            kind: number
+            tags: string[][]
+            content: string
+          }
+          signing_method?: string
+        } | null
       }
       expect(createdBody.family).toBe("spaces")
       expect(createdBody.challenge_kind).toBe("schnorr_sign")
-      expect(createdBody.challenge_payload?.root_pubkey).toBe("spaces-root-pubkey")
-      expectedDigest = createdBody.challenge_payload?.digest ?? null
-      expectedRootPubkey = createdBody.challenge_payload?.root_pubkey ?? null
+      expect(createdBody.challenge_payload?.root_pubkey).toBe(spacesTestRootPubkey)
+      expect(createdBody.challenge_payload?.signing_method).toBe("akron_nostr_event")
+      expect(createdBody.challenge_payload?.nostr_event?.tags.some((tag) =>
+        tag[0] === "space" && tag[1] === "@pirate-space-root"
+      )).toBe(true)
+      const signedEvent = signNostrChallengeEvent(createdBody.challenge_payload?.nostr_event!)
 
       const completedNamespaceSession = await requestJson(
         `http://pirate.test/namespace-verification-sessions/${createdBody.namespace_verification_session_id}/complete`,
         {
           signature_payload: {
-            digest: "client-digest-ignored",
-            signature: "spaces-signature",
-            root_pubkey: "client-root-pubkey-ignored",
+            signed_event: signedEvent,
           },
         },
         ctx.env,

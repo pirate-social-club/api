@@ -10,6 +10,7 @@ import {
 } from "./hns-verifier"
 import type { HnsVerifyTxtResult } from "./hns-verifier"
 import {
+  verifySpacesNostrEvent,
   verifySpacesSignature,
 } from "./spaces-verifier"
 import type {
@@ -114,16 +115,22 @@ export async function completeNamespaceVerificationSession(
       throw badRequestError("signature_payload is required to complete a spaces namespace verification")
     }
     const storedChallenge = parseStoredSpacesChallenge(row.challenge_payload_json)
+    const signedEvent = signaturePayload.signed_event ?? null
     const signature = typeof signaturePayload.signature === "string" ? signaturePayload.signature : null
-    if (!signature) {
-      throw badRequestError("signature_payload.signature is required")
+    if (!signedEvent && !signature) {
+      throw badRequestError("signature_payload.signed_event is required")
     }
-    const verification = await verifySpacesSignature(env, {
-      digest: storedChallenge.digest,
-      signature,
-      rootPubkey: storedChallenge.root_pubkey,
-      signerPubkey: typeof signaturePayload.signer_pubkey === "string" ? signaturePayload.signer_pubkey : null,
-    })
+    const verification = signedEvent
+      ? verifySpacesNostrEvent({
+        challengePayload: storedChallenge,
+        signedEvent,
+      })
+      : await verifySpacesSignature(env, {
+        digest: storedChallenge.digest,
+        signature: signature as string,
+        rootPubkey: storedChallenge.root_pubkey,
+        signerPubkey: typeof signaturePayload.signer_pubkey === "string" ? signaturePayload.signer_pubkey : null,
+      })
     if (!verification.validSignature) {
       await client.execute({
         sql: `
