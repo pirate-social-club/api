@@ -191,8 +191,12 @@ function buildWidgetVerifyUrl(input: {
   publicOrigin?: string | null
   providerVerifyUrl: string
 }): string {
+  const requestOrigin = normalizeOrigin(input.publicOrigin)
+  if (isDevelopmentEnv(input.env) && requestOrigin) {
+    return `${requestOrigin}/verification-sessions/very-widget-verify`
+  }
   const origin = normalizeOrigin(input.env.PIRATE_API_PUBLIC_ORIGIN)
-    ?? normalizeOrigin(input.publicOrigin)
+    ?? requestOrigin
   if (!origin) {
     return input.providerVerifyUrl
   }

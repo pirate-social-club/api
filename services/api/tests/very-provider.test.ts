@@ -154,6 +154,27 @@ describe("Very provider adapter", () => {
     expect(startResult.launch.verify_url).toBe("https://api.pirate.sc/verification-sessions/very-widget-verify")
   })
 
+  test("startSession prefers request origin for widget verify URL in development", async () => {
+    const { getVeryProvider } = require("../src/lib/verification/very-provider") as typeof import("../src/lib/verification/very-provider")
+    const env = {
+      ENVIRONMENT: "development",
+      PIRATE_API_PUBLIC_ORIGIN: "https://stale-tunnel.example.com",
+      VERY_APP_ID: "test-app",
+    } as any
+    const provider = getVeryProvider(env)
+
+    const startResult = await provider.startSession({
+      userId: "user-1",
+      requestedCapabilities: ["unique_human"],
+      walletAttachmentId: null,
+      verificationIntent: null,
+      policyId: null,
+      publicOrigin: "http://127.0.0.1:8787",
+    })
+
+    expect(startResult.launch.verify_url).toBe("http://127.0.0.1:8787/verification-sessions/very-widget-verify")
+  })
+
   test("startSession emits a Very ZK query within the documented timestamp range", async () => {
     const { getVeryProvider } = require("../src/lib/verification/very-provider") as typeof import("../src/lib/verification/very-provider")
     const env = {
