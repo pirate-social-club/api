@@ -299,10 +299,8 @@ function buildVeryQuery(input: {
   upstreamSessionRef: string
   includeSessionId?: boolean
 }): Record<string, unknown> {
-  const documentedLowerBoundSeconds = 1_743_436_800
-  const documentedUpperBoundSeconds = 2_043_436_800
-  const lowerBoundSeconds = documentedLowerBoundSeconds
-  const upperBoundSeconds = documentedUpperBoundSeconds
+  const lowerBoundSeconds = 0
+  const upperBoundSeconds = 2_043_436_800
   const options: Record<string, unknown> = {
     expiredAtLowerBound: String(lowerBoundSeconds),
     externalNullifier: buildExternalNullifier(input),
