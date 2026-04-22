@@ -198,6 +198,44 @@ describe("Very provider adapter", () => {
       globalThis.fetch = originalFetch
     }
   })
+
+  test("configured provider accepts alternate successful verifier response shapes", async () => {
+    const { getVeryProvider } = require("../src/lib/verification/very-provider") as typeof import("../src/lib/verification/very-provider")
+    const env = {
+      VERY_API_URL: "https://very.example.com",
+      VERY_APP_ID: "test-app",
+    } as any
+    const provider = getVeryProvider(env)
+
+    const responses = [
+      { isValid: true },
+      { is_valid: true },
+      { result: true },
+      { result: { valid: true } },
+      { data: { verified: true } },
+    ]
+    const originalFetch = globalThis.fetch
+    let responseIndex = 0
+    globalThis.fetch = (async () => {
+      const body = responses[responseIndex++]
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }) as typeof globalThis.fetch
+
+    try {
+      for (const response of responses) {
+        const outcome = await provider.getSessionOutcome({
+          upstreamSessionRef: "very-upstream-ref-123",
+          providerPayloadRef: `proof-for-${Object.keys(response)[0]}`,
+        })
+        expect(outcome.status).toBe("verified")
+      }
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
 })
 
 describe("Very provider mock integration", () => {

@@ -37,12 +37,15 @@ export interface VeryProvider {
 type VeryVerifyResponse = {
   status?: string
   valid?: boolean
+  isValid?: boolean
+  is_valid?: boolean
   verified?: boolean
   success?: boolean
   expired?: boolean
   failure_reason?: string | null
   error?: string | null
   data?: Record<string, unknown> | null
+  result?: boolean | Record<string, unknown> | null
 }
 
 let testOverride: VeryProvider | null = null
@@ -226,6 +229,62 @@ function normalizeVerificationIntent(intent: string | null): string {
   }
 }
 
+function getNestedBoolean(value: unknown, keys: string[]): boolean | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null
+  }
+  const record = value as Record<string, unknown>
+  for (const key of keys) {
+    if (typeof record[key] === "boolean") {
+      return record[key]
+    }
+  }
+  return null
+}
+
+function getVeryVerifySuccess(body: VeryVerifyResponse): boolean {
+  const nestedResult = getNestedBoolean(body.result, ["valid", "verified", "success", "isValid", "is_valid"])
+  const nestedData = getNestedBoolean(body.data, ["valid", "verified", "success", "isValid", "is_valid"])
+  return body.verified === true
+    || body.valid === true
+    || body.isValid === true
+    || body.is_valid === true
+    || body.success === true
+    || body.result === true
+    || nestedResult === true
+    || nestedData === true
+}
+
+function summarizeVeryVerifyResponse(input: {
+  body: VeryVerifyResponse | null
+  proofHash: string
+  responseStatus: number
+  upstreamSessionRef: string
+}): Record<string, unknown> {
+  const body = input.body
+  const bodyRecord = body && typeof body === "object" && !Array.isArray(body)
+    ? body as Record<string, unknown>
+    : null
+  return {
+    proofHashPrefix: input.proofHash.slice(0, 12),
+    responseStatus: input.responseStatus,
+    upstreamSessionRef: input.upstreamSessionRef,
+    bodyKeys: bodyRecord ? Object.keys(bodyRecord).sort() : [],
+    status: typeof body?.status === "string" ? body.status : null,
+    error: typeof body?.error === "string" ? body.error : null,
+    failureReason: typeof body?.failure_reason === "string" ? body.failure_reason : null,
+    valid: body?.valid === true,
+    isValid: body?.isValid === true,
+    is_valid: body?.is_valid === true,
+    verified: body?.verified === true,
+    success: body?.success === true,
+    resultType: body?.result == null ? null : typeof body.result,
+    resultBoolean: typeof body?.result === "boolean" ? body.result : null,
+    nestedResult: getNestedBoolean(body?.result, ["valid", "verified", "success", "isValid", "is_valid"]),
+    nestedData: getNestedBoolean(body?.data, ["valid", "verified", "success", "isValid", "is_valid"]),
+  }
+}
+
 function buildVeryQuery(input: {
   userId: string
   walletAttachmentId: string | null
@@ -298,19 +357,23 @@ async function verifyVeryPayload(input: {
     }
 
     const status = String(body.status || "").trim().toLowerCase()
+    const proofHash = await sha256Hex(input.providerPayloadRef)
     if (body.expired === true || status === "expired") {
+      console.warn("[very-provider] verifier returned expired", summarizeVeryVerifyResponse({
+        body,
+        proofHash,
+        responseStatus: response.status,
+        upstreamSessionRef: input.upstreamSessionRef,
+      }))
       return { status: "expired" }
     }
     if (
-      body.verified === true
-      || body.valid === true
-      || body.success === true
+      getVeryVerifySuccess(body)
       || status === "valid"
       || status === "verified"
       || status === "success"
       || status === "completed"
     ) {
-      const proofHash = await sha256Hex(input.providerPayloadRef)
       return {
         status: "verified",
         attestationData: {
@@ -322,9 +385,21 @@ async function verifyVeryPayload(input: {
       }
     }
     if (status === "pending" || status === "processing") {
+      console.info("[very-provider] verifier returned pending", summarizeVeryVerifyResponse({
+        body,
+        proofHash,
+        responseStatus: response.status,
+        upstreamSessionRef: input.upstreamSessionRef,
+      }))
       return { status: "pending" }
     }
 
+    console.warn("[very-provider] verifier returned failed", summarizeVeryVerifyResponse({
+      body,
+      proofHash,
+      responseStatus: response.status,
+      upstreamSessionRef: input.upstreamSessionRef,
+    }))
     return {
       status: "failed",
       failureReason: body.failure_reason || body.error || status || "verification_failed",
