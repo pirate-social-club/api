@@ -49,8 +49,8 @@ export async function openCommunityDb(
   })
   if (binding.database_url.startsWith("file:")) {
     await configureLocalCommunityDbClient(client)
+    await ensureCommunityDbSchema(client)
   }
-  await ensureCommunityDbSchema(client)
   return {
     client,
     databaseUrl: binding.database_url,

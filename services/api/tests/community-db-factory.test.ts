@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createClient } from "@libsql/client"
 import { openCommunityDb } from "../src/lib/communities/community-db-factory"
+import { encryptCommunityDbCredential } from "../src/lib/communities/community-db-credential-crypto"
 import { enqueueCommunityJob } from "../src/lib/communities/jobs/store"
 import type { CommunityRepository } from "../src/lib/communities/db-community-repository"
 import { splitSqlStatements, toSqliteCompatibleStatement } from "../shared/sql-migration"
@@ -117,6 +118,63 @@ function buildRepository(databasePath: string): CommunityRepository {
 }
 
 describe("openCommunityDb", () => {
+  test("does not run local migrations for remote provisioned community databases", async () => {
+    const wrapKey = "11".repeat(32)
+    const databaseUrl = "libsql://main-cmt-remote-test-pirate-social.aws-us-east-1.turso.io"
+    const now = new Date().toISOString()
+    const repo = {
+      async getPrimaryCommunityDatabaseBinding() {
+        return {
+          community_database_binding_id: "cdb_remote",
+          community_id: "cmt_remote",
+          binding_role: "primary",
+          organization_slug: "pirate-social",
+          group_name: "club-cmt-remote",
+          group_id: "grp_remote",
+          database_name: "main-cmt-remote-test",
+          database_id: "db_remote",
+          database_url: databaseUrl,
+          location: "aws-us-east-1",
+          status: "active",
+          transferred_at: null,
+          created_at: now,
+          updated_at: now,
+        }
+      },
+      async getActiveCommunityDbCredential() {
+        return {
+          community_db_credential_id: "cdc_remote",
+          community_database_binding_id: "cdb_remote",
+          credential_kind: "database_token",
+          token_name: "worker-cmt_remote-v1",
+          encrypted_token: encryptCommunityDbCredential({
+            plaintextToken: "remote-token",
+            wrapKey,
+          }),
+          encryption_key_version: 1,
+          token_scope: "database",
+          status: "active",
+          issued_at: now,
+          invalidated_at: null,
+          expires_at: null,
+          created_at: now,
+          updated_at: now,
+        }
+      },
+    } as unknown as CommunityRepository
+
+    const db = await openCommunityDb(
+      {
+        TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
+      },
+      repo,
+      "cmt_remote",
+    )
+
+    expect(db.databaseUrl).toBe(databaseUrl)
+    db.close()
+  })
+
   test("applies pending template migrations for legacy community databases", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-db-factory-"))
     cleanupPaths.push(rootDir)
