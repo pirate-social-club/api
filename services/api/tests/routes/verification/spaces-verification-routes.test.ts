@@ -1,7 +1,4 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { schnorr } from "@noble/curves/secp256k1"
-import { sha256 } from "@noble/hashes/sha2"
-import { bytesToHex } from "@noble/hashes/utils"
 import app from "../../../src/index"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import {
@@ -12,38 +9,6 @@ import {
 } from "./verification-test-helpers"
 
 let cleanup: (() => Promise<void>) | null = null
-const spacesTestPrivateKey = "11".repeat(32)
-const spacesTestRootPubkey = bytesToHex(schnorr.getPublicKey(spacesTestPrivateKey))
-
-function signNostrChallengeEvent(event: {
-  created_at: number
-  kind: number
-  tags: string[][]
-  content: string
-}) {
-  const unsigned = {
-    ...event,
-    pubkey: spacesTestRootPubkey,
-  }
-  const serialized = JSON.stringify([
-    0,
-    unsigned.pubkey,
-    unsigned.created_at,
-    unsigned.kind,
-    unsigned.tags,
-    unsigned.content,
-  ])
-  const id = bytesToHex(sha256(new TextEncoder().encode(serialized)))
-  return {
-    id,
-    pubkey: unsigned.pubkey,
-    created_at: unsigned.created_at,
-    kind: unsigned.kind,
-    tags: unsigned.tags,
-    content: unsigned.content,
-    sig: bytesToHex(schnorr.sign(id, spacesTestPrivateKey)),
-  }
-}
 
 beforeEach(() => {
   resetRuntimeCaches()
@@ -56,8 +21,27 @@ afterEach(async () => {
   }
 })
 
+function spacesInspectResponse() {
+  return new Response(JSON.stringify({
+    root_exists: true,
+    root_key_proof_verified: true,
+    root_pubkey: "spaces-root-pubkey",
+    control_class: "single_holder_root",
+    operation_class: "owner_managed_namespace",
+    observation_provider: "spaces_verifier",
+    accepted_anchor_height: 42,
+    accepted_anchor_block_hash: "block-hash",
+    accepted_anchor_root_hash: "anchor-root",
+    proof_root_hash: "proof-root",
+    anchor_fresh_enough: true,
+  }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  })
+}
+
 describe("spaces verification routes", () => {
-  test("spaces namespace verification starts and completes with a signed challenge payload", async () => {
+  test("spaces namespace verification starts and completes after Fabric publish verification", async () => {
     const ctx = await createRouteTestContext({
       SPACES_VERIFIER_BASE_URL: "http://spaces-verifier.test",
       SPACES_VERIFIER_CHALLENGE_DOMAIN: "pirate.sc",
@@ -65,24 +49,42 @@ describe("spaces verification routes", () => {
     cleanup = ctx.cleanup
 
     const session = await exchangeJwt(ctx.env, "verification-spaces-user")
-
     await createSelfVerifiedSession(ctx.env, session.accessToken)
+
     const originalFetch = globalThis.fetch
+    let expectedTxtValue: string | null = null
     await withFetchMock(async (input, init) => {
       const url = typeof input === "string" ? input : input.toString()
       if (url.startsWith("http://spaces-verifier.test/inspect?")) {
+        return spacesInspectResponse()
+      }
+      if (url === "http://spaces-verifier.test/verify-publish") {
+        const body = JSON.parse(String(init?.body)) as {
+          root_label: string
+          txt_key: string
+          txt_value: string
+          web_url: string
+          freedom_url: string
+        }
+        expect(body.root_label).toBe("pirate-space-root")
+        expect(body.txt_key).toBe("pirate-verify")
+        expect(body.txt_value).toBe(expectedTxtValue)
+        expect(body.web_url).toBe("https://pirate.sc/c/@pirate-space-root")
+        expect(body.freedom_url).toBe("https://pirate.sc/c/@pirate-space-root")
         return new Response(JSON.stringify({
-          root_exists: true,
+          fabric_publish_verified: true,
           root_key_proof_verified: true,
-          root_pubkey: spacesTestRootPubkey,
-          control_class: "single_holder_root",
-          operation_class: "owner_managed_namespace",
-          observation_provider: "spaces_verifier",
-          accepted_anchor_height: 42,
-          accepted_anchor_block_hash: "block-hash",
-          accepted_anchor_root_hash: "anchor-root",
-          proof_root_hash: "proof-root",
-          anchor_fresh_enough: true,
+          web_target_verified: true,
+          freedom_target_verified: true,
+          observed_web_url: body.web_url,
+          observed_freedom_url: body.freedom_url,
+          observed_txt_values: [body.txt_value],
+          records: {
+            "pirate-verify": [body.txt_value],
+            web: [body.web_url],
+            freedom: [body.freedom_url],
+          },
+          observation_provider: "spaces_verifier+fabric_zone",
         }), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -100,33 +102,24 @@ describe("spaces verification routes", () => {
         family: string
         challenge_kind: string | null
         challenge_payload: {
-          digest?: string
           root_pubkey?: string
-          nostr_event?: {
-            created_at: number
-            kind: number
-            tags: string[][]
-            content: string
-          }
-          signing_method?: string
+          txt_key?: string
+          txt_value?: string
+          web_url?: string
+          freedom_url?: string
         } | null
       }
       expect(createdBody.family).toBe("spaces")
-      expect(createdBody.challenge_kind).toBe("schnorr_sign")
-      expect(createdBody.challenge_payload?.root_pubkey).toBe(spacesTestRootPubkey)
-      expect(createdBody.challenge_payload?.signing_method).toBe("akron_nostr_event")
-      expect(createdBody.challenge_payload?.nostr_event?.tags.some((tag) =>
-        tag[0] === "space" && tag[1] === "@pirate-space-root"
-      )).toBe(true)
-      const signedEvent = signNostrChallengeEvent(createdBody.challenge_payload?.nostr_event!)
+      expect(createdBody.challenge_kind).toBe("fabric_txt_publish")
+      expect(createdBody.challenge_payload?.root_pubkey).toBe("spaces-root-pubkey")
+      expect(createdBody.challenge_payload?.txt_key).toBe("pirate-verify")
+      expect(createdBody.challenge_payload?.txt_value).toContain("pirate-space-verify=nvs_")
+      expect(createdBody.challenge_payload?.web_url).toBe("https://pirate.sc/c/@pirate-space-root")
+      expectedTxtValue = createdBody.challenge_payload?.txt_value ?? null
 
       const completedNamespaceSession = await requestJson(
         `http://pirate.test/namespace-verification-sessions/${createdBody.namespace_verification_session_id}/complete`,
-        {
-          signature_payload: {
-            signed_event: signedEvent,
-          },
-        },
+        {},
         ctx.env,
         session.accessToken,
       )
@@ -153,7 +146,7 @@ describe("spaces verification routes", () => {
       const fetchedBody = await json(fetchedNamespaceVerification) as {
         assertions?: {
           root_key_proof_verified?: boolean | null
-          live_signature_verified?: boolean | null
+          fabric_publish_verified?: boolean | null
           anchor_fresh_enough?: boolean | null
         } | null
         capabilities?: {
@@ -162,51 +155,39 @@ describe("spaces verification routes", () => {
         } | null
       }
       expect(fetchedBody.assertions?.root_key_proof_verified).toBe(true)
-      expect(fetchedBody.assertions?.live_signature_verified).toBe(true)
+      expect(fetchedBody.assertions?.fabric_publish_verified).toBe(true)
       expect(fetchedBody.assertions?.anchor_fresh_enough).toBe(true)
       expect(fetchedBody.capabilities?.owner_signed_record_updates_allowed).toBe(false)
       expect(fetchedBody.capabilities?.pirate_subspace_issuance_allowed).toBe(false)
     })
   })
 
-  test("spaces completion verifies against the stored challenge and fails invalid signatures", async () => {
+  test("spaces completion stays pending while Fabric records are not published", async () => {
     const ctx = await createRouteTestContext({
       SPACES_VERIFIER_BASE_URL: "http://spaces-verifier.test",
       SPACES_VERIFIER_CHALLENGE_DOMAIN: "pirate.sc",
     })
     cleanup = ctx.cleanup
 
-    const session = await exchangeJwt(ctx.env, "verification-spaces-invalid-sig-user")
+    const session = await exchangeJwt(ctx.env, "verification-spaces-pending-user")
     await createSelfVerifiedSession(ctx.env, session.accessToken)
 
-    let expectedDigest: string | null = null
-    let expectedRootPubkey: string | null = null
     const originalFetch = globalThis.fetch
-
     await withFetchMock(async (input, init) => {
       const url = typeof input === "string" ? input : input.toString()
       if (url.startsWith("http://spaces-verifier.test/inspect?")) {
-        return new Response(JSON.stringify({
-          root_exists: true,
-          root_key_proof_verified: true,
-          root_pubkey: "spaces-root-pubkey",
-          control_class: "single_holder_root",
-          operation_class: "owner_managed_namespace",
-          observation_provider: "spaces_verifier",
-          anchor_fresh_enough: true,
-        }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        })
+        return spacesInspectResponse()
       }
-      if (url === "http://spaces-verifier.test/verify-signature") {
-        const body = JSON.parse(String(init?.body))
-        expect(body.digest).toBe(expectedDigest)
-        expect(body.root_pubkey).toBe(expectedRootPubkey)
-        expect(body.signature).toBe("bad-signature")
+      if (url === "http://spaces-verifier.test/verify-publish") {
         return new Response(JSON.stringify({
-          valid_signature: false,
-          observation_provider: "spaces_verifier",
+          fabric_publish_verified: false,
+          root_key_proof_verified: true,
+          web_target_verified: false,
+          freedom_target_verified: false,
+          observed_txt_values: [],
+          records: {},
+          observation_provider: "spaces_verifier+fabric_zone",
+          failure_reason: "pirate_verify_record_missing",
         }), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -216,129 +197,7 @@ describe("spaces verification routes", () => {
     }, async () => {
       const createdNamespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
         family: "spaces",
-        root_label: "@pirate-invalid-sig-root",
-      }, ctx.env, session.accessToken)
-      const createdBody = await json(createdNamespaceSession) as {
-        namespace_verification_session_id: string
-        challenge_payload?: { digest?: string; root_pubkey?: string } | null
-      }
-      expectedDigest = createdBody.challenge_payload?.digest ?? null
-      expectedRootPubkey = createdBody.challenge_payload?.root_pubkey ?? null
-
-      const completedNamespaceSession = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${createdBody.namespace_verification_session_id}/complete`,
-        {
-          signature_payload: {
-            digest: "ignored-digest",
-            root_pubkey: "ignored-root-pubkey",
-            signature: "bad-signature",
-          },
-        },
-        ctx.env,
-        session.accessToken,
-      )
-      expect(completedNamespaceSession.status).toBe(200)
-      const completedBody = await json(completedNamespaceSession) as {
-        status: string
-        failure_reason: string | null
-      }
-      expect(completedBody.status).toBe("failed")
-      expect(completedBody.failure_reason).toBe("invalid_signature")
-    })
-  })
-
-  test("spaces completion marks wrong signer distinctly", async () => {
-    const ctx = await createRouteTestContext({
-      SPACES_VERIFIER_BASE_URL: "http://spaces-verifier.test",
-    })
-    cleanup = ctx.cleanup
-
-    const session = await exchangeJwt(ctx.env, "verification-spaces-wrong-signer-user")
-    await createSelfVerifiedSession(ctx.env, session.accessToken)
-
-    const originalFetch = globalThis.fetch
-    await withFetchMock(async (input, init) => {
-      const url = typeof input === "string" ? input : input.toString()
-      if (url.startsWith("http://spaces-verifier.test/inspect?")) {
-        return new Response(JSON.stringify({
-          root_exists: true,
-          root_key_proof_verified: true,
-          root_pubkey: "spaces-root-pubkey",
-          observation_provider: "spaces_verifier",
-        }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        })
-      }
-      if (url === "http://spaces-verifier.test/verify-signature") {
-        return new Response(JSON.stringify({
-          valid_signature: false,
-          wrong_signer: true,
-          observation_provider: "spaces_verifier",
-        }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        })
-      }
-      return originalFetch(input, init)
-    }, async () => {
-      const createdNamespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
-        family: "spaces",
-        root_label: "@pirate-wrong-signer-root",
-      }, ctx.env, session.accessToken)
-      const createdBody = await json(createdNamespaceSession) as {
-        namespace_verification_session_id: string
-      }
-
-      const completedNamespaceSession = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${createdBody.namespace_verification_session_id}/complete`,
-        {
-          signature_payload: {
-            signature: "spaces-signature",
-            signer_pubkey: "different-pubkey",
-          },
-        },
-        ctx.env,
-        session.accessToken,
-      )
-      expect(completedNamespaceSession.status).toBe(200)
-      const completedBody = await json(completedNamespaceSession) as {
-        status: string
-        failure_reason: string | null
-      }
-      expect(completedBody.status).toBe("failed")
-      expect(completedBody.failure_reason).toBe("wrong_signer")
-    })
-  })
-
-  test("spaces completion requires a signature payload", async () => {
-    const ctx = await createRouteTestContext({
-      SPACES_VERIFIER_BASE_URL: "http://spaces-verifier.test",
-    })
-    cleanup = ctx.cleanup
-
-    const session = await exchangeJwt(ctx.env, "verification-spaces-missing-signature-user")
-    await createSelfVerifiedSession(ctx.env, session.accessToken)
-
-    const originalFetch = globalThis.fetch
-    await withFetchMock(async (input, init) => {
-      const url = typeof input === "string" ? input : input.toString()
-      if (url.startsWith("http://spaces-verifier.test/inspect?")) {
-        return new Response(JSON.stringify({
-          root_exists: true,
-          root_key_proof_verified: true,
-          root_pubkey: "spaces-root-pubkey",
-          observation_provider: "spaces_verifier",
-        }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        })
-      }
-      return originalFetch(input, init)
-    }, async () => {
-      const createdNamespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
-        family: "spaces",
-        root_label: "@pirate-missing-signature-root",
+        root_label: "@pirate-pending-root",
       }, ctx.env, session.accessToken)
       const createdBody = await json(createdNamespaceSession) as {
         namespace_verification_session_id: string
@@ -350,7 +209,73 @@ describe("spaces verification routes", () => {
         ctx.env,
         session.accessToken,
       )
-      expect(completedNamespaceSession.status).toBe(400)
+      expect(completedNamespaceSession.status).toBe(200)
+      const completedBody = await json(completedNamespaceSession) as {
+        status: string
+        failure_reason: string | null
+      }
+      expect(completedBody.status).toBe("challenge_pending")
+      expect(completedBody.failure_reason).toBeNull()
+    })
+  })
+
+  test("spaces completion fails when published Fabric records do not match the challenge", async () => {
+    const ctx = await createRouteTestContext({
+      SPACES_VERIFIER_BASE_URL: "http://spaces-verifier.test",
+    })
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-spaces-mismatch-user")
+    await createSelfVerifiedSession(ctx.env, session.accessToken)
+
+    const originalFetch = globalThis.fetch
+    await withFetchMock(async (input, init) => {
+      const url = typeof input === "string" ? input : input.toString()
+      if (url.startsWith("http://spaces-verifier.test/inspect?")) {
+        return spacesInspectResponse()
+      }
+      if (url === "http://spaces-verifier.test/verify-publish") {
+        return new Response(JSON.stringify({
+          fabric_publish_verified: false,
+          root_key_proof_verified: true,
+          web_target_verified: false,
+          freedom_target_verified: true,
+          observed_web_url: "https://example.com/",
+          observed_freedom_url: "https://pirate.sc/c/@pirate-mismatch-root",
+          observed_txt_values: ["pirate-space-verify=wrong"],
+          records: {
+            "pirate-verify": ["pirate-space-verify=wrong"],
+          },
+          observation_provider: "spaces_verifier+fabric_zone",
+          failure_reason: "pirate_verify_record_mismatch",
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
+      return originalFetch(input, init)
+    }, async () => {
+      const createdNamespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
+        family: "spaces",
+        root_label: "@pirate-mismatch-root",
+      }, ctx.env, session.accessToken)
+      const createdBody = await json(createdNamespaceSession) as {
+        namespace_verification_session_id: string
+      }
+
+      const completedNamespaceSession = await requestJson(
+        `http://pirate.test/namespace-verification-sessions/${createdBody.namespace_verification_session_id}/complete`,
+        {},
+        ctx.env,
+        session.accessToken,
+      )
+      expect(completedNamespaceSession.status).toBe(200)
+      const completedBody = await json(completedNamespaceSession) as {
+        status: string
+        failure_reason: string | null
+      }
+      expect(completedBody.status).toBe("failed")
+      expect(completedBody.failure_reason).toBe("pirate_verify_record_mismatch")
     })
   })
 })

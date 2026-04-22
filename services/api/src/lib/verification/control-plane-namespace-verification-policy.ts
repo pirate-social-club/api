@@ -61,7 +61,7 @@ type NamespaceVerificationOperationClass =
 export type SpacesAcceptedSnapshot = {
   rootExists: number
   rootControlVerified: number
-  liveSignatureVerified: number
+  fabricPublishVerified: number
   expiryHorizonSufficient: number | null
   routingEnabled: number | null
   pirateDnsAuthorityVerified: number
@@ -209,7 +209,7 @@ export function deriveAcceptedHnsSnapshot(
 export function deriveSpacesAcceptedSnapshot(row: NamespaceVerificationSessionRow): SpacesAcceptedSnapshot {
   const rootControlVerified = row.root_control_verified === 1 ? 1 : 0
   const expiryHorizonSufficient = row.expiry_horizon_sufficient ?? null
-  const routingEnabled = row.routing_enabled ?? null
+  const routingEnabled = 1
   const operationClass = row.operation_class ?? null
   const ownerSignedRecordUpdatesAllowed =
     rootControlVerified === 1 && operationClass === "owner_signed_updates_namespace" ? 1 : 0
@@ -217,7 +217,7 @@ export function deriveSpacesAcceptedSnapshot(row: NamespaceVerificationSessionRo
   return {
     rootExists: 1,
     rootControlVerified,
-    liveSignatureVerified: 1,
+    fabricPublishVerified: 1,
     expiryHorizonSufficient,
     routingEnabled,
     pirateDnsAuthorityVerified: 0,
@@ -246,15 +246,17 @@ export function parseStoredSpacesChallenge(
   }
 
   if (
-    parsed.kind !== "schnorr_sign"
-    || typeof parsed.digest !== "string"
+    parsed.kind !== "fabric_txt_publish"
     || typeof parsed.root_pubkey !== "string"
     || typeof parsed.nonce !== "string"
     || typeof parsed.root_label !== "string"
     || typeof parsed.domain !== "string"
     || typeof parsed.issued_at !== "string"
     || typeof parsed.expires_at !== "string"
-    || typeof parsed.message !== "string"
+    || parsed.txt_key !== "pirate-verify"
+    || typeof parsed.txt_value !== "string"
+    || typeof parsed.web_url !== "string"
+    || typeof parsed.freedom_url !== "string"
   ) {
     throw internalError("session challenge payload is missing required fields")
   }
@@ -276,7 +278,7 @@ export function makeNamespaceAssertionStatements(input: {
       | "routing_enabled"
       | "pirate_dns_authority_verified"
       | "root_key_proof_verified"
-      | "live_signature_verified"
+      | "fabric_publish_verified"
       | "anchor_fresh_enough"
       | "owner_signed_updates_verified"
     value: number | null

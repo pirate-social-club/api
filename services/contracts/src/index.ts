@@ -394,7 +394,7 @@ export type NamespaceVerificationAssertions = {
   routing_enabled?: boolean | null;
   pirate_dns_authority_verified?: boolean | null;
   root_key_proof_verified?: boolean | null;
-  live_signature_verified?: boolean | null;
+  fabric_publish_verified?: boolean | null;
   anchor_fresh_enough?: boolean | null;
   owner_signed_updates_verified?: boolean | null;
 };
@@ -415,7 +415,7 @@ export type NamespaceVerificationSession = {
   submitted_root_label: string;
   normalized_root_label?: string | null;
   status: "draft" | "inspecting" | "dns_setup_required" | "challenge_required" | "challenge_pending" | "verifying" | "verified" | "failed" | "expired" | "disputed";
-  challenge_kind?: "dns_txt" | "schnorr_sign" | null;
+  challenge_kind?: "dns_txt" | "fabric_txt_publish" | null;
   challenge_host?: string | null;
   challenge_txt_value?: string | null;
   challenge_payload?: (Record<string, unknown>) | null;
@@ -827,7 +827,6 @@ export type StartNamespaceVerificationSessionRequest = {
 
 export type CompleteNamespaceVerificationSessionRequest = {
   restart_challenge?: boolean | null;
-  signature_payload?: (Record<string, unknown>) | null;
 };
 
 export type CreateSongArtifactUploadRequest = {
@@ -842,7 +841,6 @@ export type CreateSongArtifactBundleRequest = {
   primary_audio: SongArtifactUploadRef;
   lyrics: string;
   cover_art?: SongArtifactUploadRef | null;
-  /** @deprecated Preview audio is generated from preview_window server-side. */
   preview_audio?: SongArtifactUploadRef | null;
   preview_window?: SongPreviewWindow | null;
   canvas_video?: SongArtifactUploadRef | null;

@@ -172,7 +172,7 @@ function buildNamespaceAssertions(input: {
   routing_enabled: number | null
   pirate_dns_authority_verified: number | null
   root_key_proof_verified: number | null
-  live_signature_verified: number | null
+  fabric_publish_verified: number | null
   anchor_fresh_enough: number | null
   owner_signed_updates_verified: number | null
 }): NamespaceVerificationAssertions {
@@ -183,7 +183,7 @@ function buildNamespaceAssertions(input: {
     routing_enabled: boolOrNull(input.routing_enabled),
     pirate_dns_authority_verified: boolOrNull(input.pirate_dns_authority_verified),
     root_key_proof_verified: boolOrNull(input.root_key_proof_verified),
-    live_signature_verified: boolOrNull(input.live_signature_verified),
+    fabric_publish_verified: boolOrNull(input.fabric_publish_verified),
     anchor_fresh_enough: boolOrNull(input.anchor_fresh_enough),
     owner_signed_updates_verified: boolOrNull(input.owner_signed_updates_verified),
   }

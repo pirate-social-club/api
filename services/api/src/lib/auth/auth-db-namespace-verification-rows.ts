@@ -30,7 +30,7 @@ export type NamespaceVerificationSessionRow = {
   routing_enabled: number | null
   pirate_dns_authority_verified: number | null
   root_key_proof_verified: number | null
-  live_signature_verified: number | null
+  fabric_publish_verified: number | null
   anchor_fresh_enough: number | null
   owner_signed_updates_verified: number | null
   club_attach_allowed: number | null
@@ -65,7 +65,7 @@ export type NamespaceVerificationRow = {
   routing_enabled: number | null
   pirate_dns_authority_verified: number | null
   root_key_proof_verified: number | null
-  live_signature_verified: number | null
+  fabric_publish_verified: number | null
   anchor_fresh_enough: number | null
   owner_signed_updates_verified: number | null
   club_attach_allowed: number
@@ -108,7 +108,7 @@ export function toNamespaceVerificationSessionRow(row: unknown): NamespaceVerifi
     routing_enabled: numberOrNull(rowValue(row, "routing_enabled")),
     pirate_dns_authority_verified: numberOrNull(rowValue(row, "pirate_dns_authority_verified")),
     root_key_proof_verified: numberOrNull(rowValue(row, "root_key_proof_verified")),
-    live_signature_verified: numberOrNull(rowValue(row, "live_signature_verified")),
+    fabric_publish_verified: numberOrNull(rowValue(row, "fabric_publish_verified")),
     anchor_fresh_enough: numberOrNull(rowValue(row, "anchor_fresh_enough")),
     owner_signed_updates_verified: numberOrNull(rowValue(row, "owner_signed_updates_verified")),
     club_attach_allowed: numberOrNull(rowValue(row, "club_attach_allowed")),
@@ -145,7 +145,7 @@ export function toNamespaceVerificationRow(row: unknown): NamespaceVerificationR
     routing_enabled: numberOrNull(rowValue(row, "routing_enabled")),
     pirate_dns_authority_verified: numberOrNull(rowValue(row, "pirate_dns_authority_verified")),
     root_key_proof_verified: numberOrNull(rowValue(row, "root_key_proof_verified")),
-    live_signature_verified: numberOrNull(rowValue(row, "live_signature_verified")),
+    fabric_publish_verified: numberOrNull(rowValue(row, "fabric_publish_verified")),
     anchor_fresh_enough: numberOrNull(rowValue(row, "anchor_fresh_enough")),
     owner_signed_updates_verified: numberOrNull(rowValue(row, "owner_signed_updates_verified")),
     club_attach_allowed: requiredNumber(row, "club_attach_allowed"),

@@ -75,7 +75,7 @@ async function restartSpacesChallenge(input: {
       UPDATE namespace_verification_sessions
       SET namespace_verification_id = NULL,
           status = 'challenge_required',
-          challenge_kind = 'schnorr_sign',
+          challenge_kind = 'fabric_txt_publish',
           challenge_payload_json = ?2,
           challenge_expires_at = ?3,
           root_exists = 1,

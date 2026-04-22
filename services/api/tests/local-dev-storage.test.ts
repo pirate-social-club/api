@@ -117,6 +117,7 @@ describe("applyLocalControlPlaneMigrations", () => {
     expect(await listMigrationNames(databasePath)).toEqual([
       "0000_control_plane_baseline_postgres.sql",
       "0047_control_plane_notifications.sql",
+      "0048_control_plane_spaces_fabric_publish_verification.sql",
     ])
     expect(await listTableColumns(databasePath, "community_post_projections")).toContain("visibility")
     expect(await listTableColumns(databasePath, "community_post_projections")).toContain("upvote_count")

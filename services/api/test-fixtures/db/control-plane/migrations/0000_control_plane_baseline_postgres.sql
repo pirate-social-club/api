@@ -618,7 +618,7 @@ CREATE TABLE namespace_verification_sessions (
     challenge_txt_value TEXT,
     setup_nameservers_json JSONB,
     challenge_kind TEXT CHECK (
-        challenge_kind IS NULL OR challenge_kind IN ('dns_txt', 'schnorr_sign')
+        challenge_kind IS NULL OR challenge_kind IN ('dns_txt', 'fabric_txt_publish')
     ),
     challenge_payload_json JSONB,
     challenge_expires_at TIMESTAMPTZ,
@@ -743,7 +743,7 @@ CREATE TABLE namespace_verification_evidence_bundles (
             'delegation_snapshot',
             'anchor_snapshot',
             'space_proof_snapshot',
-            'challenge_signature',
+            'fabric_publish',
             'accepted_snapshot',
             'revalidation_snapshot'
         )
@@ -780,7 +780,7 @@ CREATE TABLE namespace_verification_assertions (
             'routing_enabled',
             'pirate_dns_authority_verified',
             'root_key_proof_verified',
-            'live_signature_verified',
+            'fabric_publish_verified',
             'anchor_fresh_enough',
             'owner_signed_updates_verified'
         )

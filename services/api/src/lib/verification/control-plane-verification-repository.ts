@@ -64,7 +64,6 @@ export interface VerificationRepository {
     namespaceVerificationSessionId: string
     userId: string
     restartChallenge?: boolean | null
-    signaturePayload?: Record<string, unknown> | null
   }): Promise<NamespaceVerificationSession | null>
   getNamespaceVerification(namespaceVerificationId: string, userId: string): Promise<NamespaceVerification | null>
 }
@@ -129,7 +128,6 @@ export class ControlPlaneVerificationRepository implements VerificationRepositor
     namespaceVerificationSessionId: string
     userId: string
     restartChallenge?: boolean | null
-    signaturePayload?: Record<string, unknown> | null
   }): Promise<NamespaceVerificationSession | null> {
     return completeNamespaceVerificationSession(this.client, this.env, input)
   }

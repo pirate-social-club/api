@@ -21,7 +21,7 @@ ALTER TABLE namespace_verification_evidence_bundles
 
 ALTER TABLE namespace_verification_sessions
     ADD COLUMN IF NOT EXISTS challenge_kind TEXT CHECK (
-        challenge_kind IS NULL OR challenge_kind IN ('dns_txt', 'schnorr_sign')
+        challenge_kind IS NULL OR challenge_kind IN ('dns_txt', 'fabric_txt_publish')
     ),
     ADD COLUMN IF NOT EXISTS challenge_payload_json JSONB,
     ADD COLUMN IF NOT EXISTS anchor_height BIGINT,
@@ -103,7 +103,7 @@ ALTER TABLE namespace_verification_assertions
             'routing_enabled',
             'pirate_dns_authority_verified',
             'root_key_proof_verified',
-            'live_signature_verified',
+            'fabric_publish_verified',
             'anchor_fresh_enough',
             'owner_signed_updates_verified'
         )
@@ -121,7 +121,7 @@ ALTER TABLE namespace_verification_evidence_bundles
             'delegation_snapshot',
             'anchor_snapshot',
             'space_proof_snapshot',
-            'challenge_signature',
+            'fabric_publish',
             'accepted_snapshot',
             'revalidation_snapshot'
         )

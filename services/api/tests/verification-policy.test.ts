@@ -31,7 +31,7 @@ function stubRow(overrides: Partial<NamespaceVerificationSessionRow> = {}): Name
     routing_enabled: null,
     pirate_dns_authority_verified: null,
     root_key_proof_verified: null,
-    live_signature_verified: null,
+    fabric_publish_verified: null,
     anchor_fresh_enough: null,
     owner_signed_updates_verified: null,
     club_attach_allowed: null,
@@ -58,15 +58,17 @@ function stubRow(overrides: Partial<NamespaceVerificationSessionRow> = {}): Name
 
 function stubChallengePayload(overrides: Partial<SpacesChallengePayload> = {}): SpacesChallengePayload {
   return {
-    kind: "schnorr_sign",
+    kind: "fabric_txt_publish",
     domain: "pirate.sc",
     root_label: "testroot",
     root_pubkey: "test-pubkey",
-    nonce: "pirate-space-verify=nvs_test:abc123",
+    nonce: "nvs_test:abc123",
     issued_at: new Date().toISOString(),
     expires_at: new Date(Date.now() + 600_000).toISOString(),
-    message: "pirate.space.verify\nroot=@testroot\nroot_pubkey=test-pubkey\nnonce=pirate-space-verify=nvs_test:abc123",
-    digest: "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
+    txt_key: "pirate-verify",
+    txt_value: "pirate-space-verify=nvs_test:abc123",
+    web_url: "https://pirate.sc/c/@testroot",
+    freedom_url: "https://pirate.sc/c/@testroot",
     ...overrides,
   }
 }
@@ -323,7 +325,7 @@ describe("deriveSpacesAcceptedSnapshot", () => {
     const snapshot = deriveSpacesAcceptedSnapshot(row)
     expect(snapshot.rootExists).toBe(1)
     expect(snapshot.rootControlVerified).toBe(1)
-    expect(snapshot.liveSignatureVerified).toBe(1)
+    expect(snapshot.fabricPublishVerified).toBe(1)
     expect(snapshot.expiryHorizonSufficient).toBe(1)
     expect(snapshot.routingEnabled).toBe(1)
     expect(snapshot.pirateDnsAuthorityVerified).toBe(0)
@@ -393,8 +395,10 @@ describe("parseStoredSpacesChallenge", () => {
   test("parses a valid challenge payload", () => {
     const payload = stubChallengePayload()
     const result = parseStoredSpacesChallenge(JSON.stringify(payload))
-    expect(result.kind).toBe("schnorr_sign")
-    expect(result.digest).toBe(payload.digest)
+    expect(result.kind).toBe("fabric_txt_publish")
+    expect(result.txt_key).toBe("pirate-verify")
+    expect(result.txt_value).toBe(payload.txt_value)
+    expect(result.web_url).toBe(payload.web_url)
     expect(result.root_pubkey).toBe(payload.root_pubkey)
     expect(result.nonce).toBe(payload.nonce)
     expect(result.root_label).toBe(payload.root_label)
@@ -414,10 +418,10 @@ describe("parseStoredSpacesChallenge", () => {
     expect(() => parseStoredSpacesChallenge(JSON.stringify(payload))).toThrow()
   })
 
-  test("throws when digest is missing", () => {
+  test("throws when txt_value is missing", () => {
     const payload = stubChallengePayload()
-    const withoutDigest = { ...payload, digest: undefined }
-    expect(() => parseStoredSpacesChallenge(JSON.stringify(withoutDigest))).toThrow()
+    const withoutTxtValue = { ...payload, txt_value: undefined }
+    expect(() => parseStoredSpacesChallenge(JSON.stringify(withoutTxtValue))).toThrow()
   })
 
   test("throws when root_pubkey is missing", () => {
@@ -438,9 +442,9 @@ describe("parseStoredSpacesChallenge", () => {
     expect(() => parseStoredSpacesChallenge(JSON.stringify(withoutRootLabel))).toThrow()
   })
 
-  test("throws when message is missing", () => {
+  test("throws when web_url is missing", () => {
     const payload = stubChallengePayload()
-    const withoutMessage = { ...payload, message: undefined }
-    expect(() => parseStoredSpacesChallenge(JSON.stringify(withoutMessage))).toThrow()
+    const withoutWebUrl = { ...payload, web_url: undefined }
+    expect(() => parseStoredSpacesChallenge(JSON.stringify(withoutWebUrl))).toThrow()
   })
 })

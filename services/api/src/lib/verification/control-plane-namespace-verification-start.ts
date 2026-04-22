@@ -89,7 +89,7 @@ export async function startNamespaceVerificationSession(
           evidence_bundle_ref, failure_reason, accepted_at, anchor_height, anchor_block_hash, anchor_root_hash, proof_root_hash,
           expires_at, created_at, updated_at
         ) VALUES (
-          ?1, NULL, ?2, 'spaces', ?3, ?4, 'challenge_required', 'schnorr_sign', ?5, ?6,
+          ?1, NULL, ?2, 'spaces', ?3, ?4, 'challenge_required', 'fabric_txt_publish', ?5, ?6,
           1, ?7, ?8, NULL, NULL, NULL, NULL, NULL, ?9, ?10, ?11,
           NULL, NULL, NULL, ?12, ?13, ?14, ?15, ?16, ?17, ?17
         )

@@ -1,5 +1,5 @@
 import type { Client } from "../sql-client"
-import { badRequestError, providerUnavailable } from "../errors"
+import { providerUnavailable } from "../errors"
 import { makeId } from "../helpers"
 import {
   serializeNamespaceVerification,
@@ -10,8 +10,7 @@ import {
 } from "./hns-verifier"
 import type { HnsVerifyTxtResult } from "./hns-verifier"
 import {
-  verifySpacesNostrEvent,
-  verifySpacesSignature,
+  verifySpacesFabricPublish,
 } from "./spaces-verifier"
 import type {
   Env,
@@ -55,7 +54,6 @@ export async function completeNamespaceVerificationSession(
     namespaceVerificationSessionId: string
     userId: string
     restartChallenge?: boolean | null
-    signaturePayload?: Record<string, unknown> | null
   },
 ): Promise<NamespaceVerificationSession | null> {
   const row = await getNamespaceVerificationSessionRowForUser(client, input.namespaceVerificationSessionId, input.userId)
@@ -110,41 +108,38 @@ export async function completeNamespaceVerificationSession(
   const expiresAt = row.expires_at
 
   if (row.family === "spaces") {
-    const signaturePayload = input.signaturePayload ?? null
-    if (!signaturePayload || typeof signaturePayload !== "object") {
-      throw badRequestError("signature_payload is required to complete a spaces namespace verification")
-    }
     const storedChallenge = parseStoredSpacesChallenge(row.challenge_payload_json)
-    const signedEvent = signaturePayload.signed_event ?? null
-    const signature = typeof signaturePayload.signature === "string" ? signaturePayload.signature : null
-    if (!signedEvent && !signature) {
-      throw badRequestError("signature_payload.signed_event is required")
-    }
-    const verification = signedEvent
-      ? verifySpacesNostrEvent({
-        challengePayload: storedChallenge,
-        signedEvent,
-      })
-      : await verifySpacesSignature(env, {
-        digest: storedChallenge.digest,
-        signature: signature as string,
-        rootPubkey: storedChallenge.root_pubkey,
-        signerPubkey: typeof signaturePayload.signer_pubkey === "string" ? signaturePayload.signer_pubkey : null,
-      })
-    if (!verification.validSignature) {
+    const verification = await verifySpacesFabricPublish(env, {
+      rootLabel: storedChallenge.root_label,
+      txtKey: storedChallenge.txt_key,
+      txtValue: storedChallenge.txt_value,
+      webUrl: storedChallenge.web_url,
+      freedomUrl: storedChallenge.freedom_url,
+    })
+    if (!verification.fabricPublishVerified) {
+      const challengeExpiresAtMs = row.challenge_expires_at ? Date.parse(row.challenge_expires_at) : Number.NaN
+      const challengeStillValid = Number.isFinite(challengeExpiresAtMs) && challengeExpiresAtMs > now.getTime()
+      const pendingReasons = new Set([
+        "pirate_verify_record_missing",
+        "web_target_missing",
+        "freedom_target_missing",
+      ])
+      const isPending = challengeStillValid && pendingReasons.has(verification.failureReason ?? "")
+
       await client.execute({
         sql: `
           UPDATE namespace_verification_sessions
-          SET status = 'failed',
-              observation_provider = ?2,
-              failure_reason = ?3,
-              updated_at = ?4
+          SET status = ?2,
+              observation_provider = ?3,
+              failure_reason = ?4,
+              updated_at = ?5
           WHERE namespace_verification_session_id = ?1
         `,
         args: [
           input.namespaceVerificationSessionId,
+          isPending ? "challenge_pending" : "failed",
           verification.observationProvider ?? row.observation_provider ?? "spaces_verifier",
-          verification.failureReason ?? (verification.wrongSigner ? "wrong_signer" : "invalid_signature"),
+          isPending ? null : (verification.failureReason ?? "fabric_publish_not_verified"),
           updatedAt,
         ],
       })
@@ -240,7 +235,7 @@ export async function completeNamespaceVerificationSession(
           INSERT INTO namespace_verification_evidence_bundles (
             evidence_bundle_id, namespace_verification_session_id, namespace_verification_id, family, normalized_root_label,
             evidence_kind, provider, resolver_path_json, raw_response_json, evidence_hash, observed_at, created_at, updated_at
-          ) VALUES (?1, ?2, ?3, 'spaces', ?4, 'challenge_signature', ?5, ?6, ?7, NULL, ?8, ?8, ?8)
+          ) VALUES (?1, ?2, ?3, 'spaces', ?4, 'fabric_publish', ?5, ?6, ?7, NULL, ?8, ?8, ?8)
         `,
         args: [
           evidenceBundleId,
@@ -249,7 +244,7 @@ export async function completeNamespaceVerificationSession(
           acceptedRootLabel,
           observationProvider,
           JSON.stringify([observationProvider]),
-          JSON.stringify({ verification, challenge_payload: storedChallenge, signature_payload: signaturePayload }),
+          JSON.stringify({ verification, challenge_payload: storedChallenge }),
           updatedAt,
         ],
       },
@@ -266,7 +261,7 @@ export async function completeNamespaceVerificationSession(
           { name: "routing_enabled", value: snapshot.routingEnabled },
           { name: "pirate_dns_authority_verified", value: snapshot.pirateDnsAuthorityVerified },
           { name: "root_key_proof_verified", value: snapshot.rootControlVerified },
-          { name: "live_signature_verified", value: snapshot.liveSignatureVerified },
+          { name: "fabric_publish_verified", value: snapshot.fabricPublishVerified },
           { name: "anchor_fresh_enough", value: snapshot.expiryHorizonSufficient },
           {
             name: "owner_signed_updates_verified",

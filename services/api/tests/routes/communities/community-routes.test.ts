@@ -144,10 +144,18 @@ describe("community routes", () => {
           headers: { "content-type": "application/json" },
         })
       }
-      if (url === "http://spaces-verifier.test/verify-signature") {
+      if (url === "http://spaces-verifier.test/verify-publish") {
+        const body = JSON.parse(String(init?.body)) as { txt_value: string; web_url: string; freedom_url: string }
         return new Response(JSON.stringify({
-          valid_signature: true,
-          observation_provider: "spaces_verifier",
+          fabric_publish_verified: true,
+          root_key_proof_verified: true,
+          web_target_verified: true,
+          freedom_target_verified: true,
+          observed_web_url: body.web_url,
+          observed_freedom_url: body.freedom_url,
+          observed_txt_values: [body.txt_value],
+          records: { "pirate-verify": [body.txt_value] },
+          observation_provider: "spaces_verifier+fabric_zone",
         }), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -165,7 +173,7 @@ describe("community routes", () => {
       const namespaceBody = await json(namespaceSession) as { namespace_verification_session_id: string }
       const completed = await requestJson(
         `http://pirate.test/namespace-verification-sessions/${namespaceBody.namespace_verification_session_id}/complete`,
-        { signature_payload: { signature: "spaces-signature" } },
+        {},
         ctx.env,
         session.accessToken,
       )

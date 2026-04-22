@@ -161,14 +161,12 @@ authenticatedVerification.post("/namespace-verification-sessions/:namespaceVerif
   const actor = c.get("actor")
   const body = (await c.req.json<{
     restart_challenge?: boolean | null
-    signature_payload?: Record<string, unknown> | null
   }>().catch(() => null)) ?? null
   const repo = getControlPlaneVerificationRepository(c.env)
   const result = await repo.completeNamespaceVerificationSession({
     namespaceVerificationSessionId: c.req.param("namespaceVerificationSessionId"),
     userId: actor.userId,
     restartChallenge: body?.restart_challenge ?? null,
-    signaturePayload: body?.signature_payload ?? null,
   })
   if (!result) {
     throw notFoundError("Namespace verification session not found")

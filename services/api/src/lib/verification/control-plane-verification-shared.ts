@@ -116,11 +116,11 @@ export async function getNamespaceVerificationSessionRowForUser(
           FROM namespace_verification_assertions AS nva
           WHERE nva.namespace_verification_session_id = nvs.namespace_verification_session_id
             AND nva.namespace_verification_id IS NULL
-            AND nva.assertion_name = 'live_signature_verified'
+            AND nva.assertion_name = 'fabric_publish_verified'
             AND nva.status = 'accepted'
           ORDER BY nva.updated_at DESC
           LIMIT 1
-        ) AS live_signature_verified,
+        ) AS fabric_publish_verified,
         (
           SELECT assertion_value
           FROM namespace_verification_assertions AS nva
@@ -219,11 +219,11 @@ export async function getNamespaceVerificationRowForUser(
           SELECT assertion_value
           FROM namespace_verification_assertions AS nva
           WHERE nva.namespace_verification_id = nv.namespace_verification_id
-            AND nva.assertion_name = 'live_signature_verified'
+            AND nva.assertion_name = 'fabric_publish_verified'
             AND nva.status = 'accepted'
           ORDER BY nva.updated_at DESC
           LIMIT 1
-        ) AS live_signature_verified,
+        ) AS fabric_publish_verified,
         (
           SELECT assertion_value
           FROM namespace_verification_assertions AS nva

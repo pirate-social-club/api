@@ -39,16 +39,15 @@ describe("mintSpacesChallenge", () => {
     const result = await mintSpacesChallenge(env, "myspace", "test-pubkey", "nvs_123")
     const payload = result.challengePayload
 
-    expect(payload.kind).toBe("schnorr_sign")
+    expect(payload.kind).toBe("fabric_txt_publish")
     expect(payload.domain).toBe("pirate.sc")
     expect(payload.root_label).toBe("myspace")
     expect(payload.root_pubkey).toBe("test-pubkey")
-    expect(payload.nonce).toContain("pirate-space-verify=nvs_123:")
-    expect(payload.message).toContain("pirate.space.verify")
-    expect(payload.message).toContain("root=@myspace")
-    expect(payload.message).toContain("root_pubkey=test-pubkey")
-    expect(typeof payload.digest).toBe("string")
-    expect(payload.digest.length).toBe(64)
+    expect(payload.nonce).toContain("nvs_123:")
+    expect(payload.txt_key).toBe("pirate-verify")
+    expect(payload.txt_value).toContain("pirate-space-verify=nvs_123:")
+    expect(payload.web_url).toBe("https://pirate.sc/c/@myspace")
+    expect(payload.freedom_url).toBe("https://pirate.sc/c/@myspace")
   })
 
   test("challenge expiry is 10 minutes after issue", async () => {
@@ -61,7 +60,7 @@ describe("mintSpacesChallenge", () => {
   test("normalizes root label in the payload", async () => {
     const result = await mintSpacesChallenge(env, "@MySpace", "test-pubkey", "nvs_123")
     expect(result.challengePayload.root_label).toBe("myspace")
-    expect(result.challengePayload.message).toContain("root=@myspace")
+    expect(result.challengePayload.web_url).toBe("https://pirate.sc/c/@myspace")
   })
 
   test("uses default domain when env var is empty", async () => {
@@ -74,7 +73,7 @@ describe("mintSpacesChallenge", () => {
     const customEnv = { SPACES_VERIFIER_CHALLENGE_DOMAIN: "custom.sc" } as any
     const result = await mintSpacesChallenge(customEnv, "myspace", "test-pubkey", "nvs_123")
     expect(result.challengePayload.domain).toBe("custom.sc")
-    expect(result.challengePayload.message).toContain("domain=custom.sc")
+    expect(result.challengePayload.web_url).toBe("https://custom.sc/c/@myspace")
   })
 
   test("throws on empty root pubkey", async () => {
@@ -85,12 +84,9 @@ describe("mintSpacesChallenge", () => {
     expect(mintSpacesChallenge(env, "myspace", "   ", "nvs_123")).rejects.toThrow()
   })
 
-  test("digest is a deterministic SHA-256 of the message", async () => {
-    const encoder = new TextEncoder()
+  test("txt value contains the session-bound nonce", async () => {
     const result = await mintSpacesChallenge(env, "myspace", "test-pubkey", "nvs_123")
-    const expectedDigest = await crypto.subtle.digest("SHA-256", encoder.encode(result.challengePayload.message))
-    const expectedHex = Array.from(new Uint8Array(expectedDigest), (b) => b.toString(16).padStart(2, "0")).join("")
-    expect(result.challengePayload.digest).toBe(expectedHex)
+    expect(result.challengePayload.txt_value).toBe(`pirate-space-verify=${result.challengePayload.nonce}`)
   })
 })
 
