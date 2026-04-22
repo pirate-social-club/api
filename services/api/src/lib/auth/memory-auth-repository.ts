@@ -63,6 +63,18 @@ function makeProviderKey(provider: string, subject: string): string {
   return `${provider}:${subject}`
 }
 
+function getPrimaryWalletAddress(record: Pick<RepositoryRecord, "user" | "walletAttachments">): string | null {
+  return (
+    (record.user.primary_wallet_attachment_id
+      ? record.walletAttachments.find((attachment) => (
+        attachment.wallet_attachment_id === record.user.primary_wallet_attachment_id
+      ))
+      : null)
+    ?? record.walletAttachments.find((attachment) => attachment.is_primary)
+    ?? null
+  )?.wallet_address ?? null
+}
+
 function buildNewRecord(identity: UpstreamIdentity): RepositoryRecord {
   const timestamp = nowIso()
   const userId = makeId("usr")
@@ -116,6 +128,7 @@ function buildNewRecord(identity: UpstreamIdentity): RepositoryRecord {
         },
       ],
       primary_public_handle: null,
+      primary_wallet_address: primaryWalletAddress,
       global_handle: globalHandle,
       created_at: timestamp,
       updated_at: timestamp,
@@ -201,6 +214,7 @@ export class MemoryAuthRepository {
       record.walletAttachments.find((attachment) => attachment.is_primary)?.wallet_attachment_id ?? null
     record.user.updated_at = updatedAt
     record.profile.updated_at = updatedAt
+    record.profile.primary_wallet_address = getPrimaryWalletAddress(record)
     if (!record.providerLinks.some((link) => link.provider === identity.provider && link.providerSubject === identity.providerSubject)) {
       record.providerLinks.push({
         provider: identity.provider,

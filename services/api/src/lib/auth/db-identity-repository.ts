@@ -18,7 +18,13 @@ import {
   loadSnapshot,
   reconcileWalletAttachments,
 } from "./auth-db-queries"
-import { assembleProfile, getProfilePublicHandleLabel, serializeUser, serializeWalletAttachments } from "./auth-serializers"
+import {
+  assembleProfile,
+  getPrimaryWalletAddressFromRows,
+  getProfilePublicHandleLabel,
+  serializeUser,
+  serializeWalletAttachments,
+} from "./auth-serializers"
 import type { SessionSnapshot } from "./auth-db-rows"
 import { makeId, nowIso } from "../helpers"
 import type { OnboardingStatus, Profile, UpstreamIdentity, User, WalletAttachmentSummary } from "../../types"
@@ -230,6 +236,10 @@ export class DatabaseIdentityRepository {
   }
 
   async getProfileByUserId(userId: string): Promise<Profile | null> {
+    const userRow = await getUserRow(this.client, userId)
+    if (!userRow) {
+      return null
+    }
     const profileRow = await getProfileRow(this.client, userId)
     if (!profileRow) {
       return null
@@ -239,7 +249,12 @@ export class DatabaseIdentityRepository {
       return null
     }
     const linkedHandleRows = await listLinkedHandleRows(this.client, userId)
-    return assembleProfile(profileRow, globalHandleRow, linkedHandleRows)
+    const walletRows = await listActiveWalletAttachmentRows(this.client, userId)
+    const primaryWalletAddress = getPrimaryWalletAddressFromRows(
+      userRow.primary_wallet_attachment_id,
+      walletRows,
+    )
+    return assembleProfile(profileRow, globalHandleRow, linkedHandleRows, primaryWalletAddress)
   }
 
   async resolvePublicProfileByHandle(handleLabel: string): Promise<PublicProfileResolution | null> {
@@ -265,9 +280,15 @@ export class DatabaseIdentityRepository {
     }
 
     const linkedHandleRows = await listLinkedHandleRows(this.client, canonicalHandleRow.user_id)
+    const walletRows = await listActiveWalletAttachmentRows(this.client, canonicalHandleRow.user_id)
     const createdCommunityRows = await listCreatedCommunityRowsByCreatorUserId(this.client, canonicalHandleRow.user_id)
 
-    const profile = assembleProfile(profileRow, canonicalHandleRow, linkedHandleRows)
+    const profile = assembleProfile(
+      profileRow,
+      canonicalHandleRow,
+      linkedHandleRows,
+      getPrimaryWalletAddressFromRows(null, walletRows),
+    )
     const resolvedPublicHandle = getProfilePublicHandleLabel(profile)
     const canonicalPirateRequest = requestedHandleRow.global_handle_id === canonicalHandleRow.global_handle_id
 
@@ -306,10 +327,16 @@ export class DatabaseIdentityRepository {
     }
 
     const linkedHandleRows = await listLinkedHandleRows(this.client, linkedHandleRow.user_id)
+    const walletRows = await listActiveWalletAttachmentRows(this.client, linkedHandleRow.user_id)
     const createdCommunityRows = await listCreatedCommunityRowsByCreatorUserId(this.client, linkedHandleRow.user_id)
 
     return {
-      profile: assembleProfile(profileRow, globalHandleRow, linkedHandleRows),
+      profile: assembleProfile(
+        profileRow,
+        globalHandleRow,
+        linkedHandleRows,
+        getPrimaryWalletAddressFromRows(null, walletRows),
+      ),
       requested_handle_label: linkedHandleRow.label_display,
       resolved_handle_label: linkedHandleRow.label_display,
       is_canonical: true,

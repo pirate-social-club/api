@@ -109,6 +109,7 @@ export function assembleProfile(
   profileRow: ProfileRow,
   globalHandleRow: GlobalHandleRow,
   linkedHandleRows: LinkedHandleRow[] = [],
+  primaryWalletAddress: string | null = null,
 ): Profile {
   const externalLinkedHandles = linkedHandleRows.map(serializeLinkedHandleRow)
   const primaryPublicHandle = profileRow.primary_linked_handle_id
@@ -124,10 +125,25 @@ export function assembleProfile(
     preferred_locale: profileRow.preferred_locale,
     linked_handles: [serializePirateLinkedHandle(globalHandleRow), ...externalLinkedHandles],
     primary_public_handle: primaryPublicHandle,
+    primary_wallet_address: primaryWalletAddress,
     global_handle: serializeGlobalHandle(globalHandleRow),
     created_at: profileRow.created_at,
     updated_at: profileRow.updated_at,
   }
+}
+
+export function getPrimaryWalletAddressFromRows(
+  primaryWalletAttachmentId: string | null,
+  walletRows: WalletAttachmentRow[],
+): string | null {
+  const primaryWalletRow =
+    (primaryWalletAttachmentId
+      ? walletRows.find((row) => row.wallet_attachment_id === primaryWalletAttachmentId)
+      : null)
+    ?? walletRows.find((row) => row.is_primary === 1)
+    ?? null
+
+  return primaryWalletRow?.wallet_address_display ?? null
 }
 
 type PublicHandleProfile = Pick<Profile, "global_handle" | "primary_public_handle">

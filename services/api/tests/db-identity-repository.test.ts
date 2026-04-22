@@ -48,6 +48,7 @@ describe("control-plane identity repository", () => {
     expect(first.wallet_attachments).toHaveLength(2)
     expect(first.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_address).toBe(WALLET_A)
     expect(first.user.primary_wallet_attachment_id).toBe(first.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_attachment_id)
+    expect(first.profile.primary_wallet_address).toBe(WALLET_A)
 
     const second = await repo.exchangeIdentity({
       provider: "privy",
@@ -61,5 +62,6 @@ describe("control-plane identity repository", () => {
     expect(second.wallet_attachments).toHaveLength(2)
     expect(second.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_address).toBe(WALLET_B)
     expect(second.user.primary_wallet_attachment_id).toBe(second.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_attachment_id)
+    expect(second.profile.primary_wallet_address).toBe(WALLET_B)
   })
 })

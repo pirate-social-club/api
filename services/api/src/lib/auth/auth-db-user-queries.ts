@@ -3,6 +3,7 @@ import { internalError } from "../errors"
 import { makeId } from "../helpers"
 import {
   assembleProfile,
+  getPrimaryWalletAddressFromRows,
   serializeUser,
   serializeWalletAttachments,
 } from "./auth-serializers"
@@ -422,9 +423,14 @@ export async function loadSnapshot(executor: DbExecutor, userId: string): Promis
   const walletRows = await listActiveWalletAttachmentRows(executor, userId)
   const linkedHandleRows = await listLinkedHandleRows(executor, userId)
 
+  const primaryWalletAddress = getPrimaryWalletAddressFromRows(
+    userRow.primary_wallet_attachment_id,
+    walletRows,
+  )
+
   return {
     user: serializeUser(userRow),
-    profile: assembleProfile(profileRow, globalHandleRow, linkedHandleRows),
+    profile: assembleProfile(profileRow, globalHandleRow, linkedHandleRows, primaryWalletAddress),
     onboarding: await deriveOnboardingStatus(executor, userRow, globalHandleRow),
     wallet_attachments: serializeWalletAttachments(walletRows),
   }
