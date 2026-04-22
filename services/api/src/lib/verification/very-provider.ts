@@ -303,10 +303,11 @@ function buildVeryQuery(input: {
   upstreamSessionRef: string
   includeSessionId?: boolean
 }): Record<string, unknown> {
+  const nowSeconds = Math.floor(Date.now() / 1000)
   const lowerBoundSeconds = 0
   const upperBoundSeconds = 2_043_436_800
   const options: Record<string, unknown> = {
-    expiredAtLowerBound: String(lowerBoundSeconds),
+    expiredAtLowerBound: String(nowSeconds),
     externalNullifier: buildExternalNullifier(input),
     equalCheckId: "0",
     pseudonym: input.includeSessionId === false
