@@ -13,8 +13,8 @@ import {
   materializeCommunityTextTranslations,
   parseCommunityTextMaterializePayload,
 } from "../../localization/community-localization-service"
-import { getPostById, updatePostLinkPreviewMetadata } from "../../posts/community-post-store"
-import { fetchLinkPreviewMetadata } from "../../posts/link-preview-fetcher"
+import { getPostById } from "../../posts/community-post-store"
+import { hydrateLinkPostEmbed } from "../../posts/embed-hydrator"
 import { materializePostLabel } from "../../posts/post-label-materializer"
 import { materializePostTranslation } from "../../localization/post-translation-materializer"
 import { generateSongPreviewForBundle } from "../../song-artifacts/song-artifact-service"
@@ -62,7 +62,7 @@ type PostLabelPayload = {
   reason?: "publish" | "edit"
 }
 
-type LinkPreviewFetchPayload = {
+type EmbedHydratePayload = {
   post_id?: string
   link_url?: string | null
 }
@@ -367,45 +367,28 @@ async function runPostLabelMaterialize(input: {
   }
 }
 
-async function runLinkPreviewFetch(input: {
+async function runEmbedHydrate(input: {
   job: CommunityJobRow
   env: Env
   communityRepository: CommunityJobRepository
 }): Promise<string | null> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.job.community_id)
   try {
-    const payload = parseJobPayload<LinkPreviewFetchPayload>(input.job.payload_json)
+    const payload = parseJobPayload<EmbedHydratePayload>(input.job.payload_json)
     const postId = payload?.post_id ?? input.job.subject_id
     const post = await getPostById(db.client, postId)
     if (!post) {
-      throw internalError("Post is missing for link preview fetch")
-    }
-    if (post.post_type !== "link") {
-      return "skipped:not_link_post"
-    }
-    if (post.link_og_image_url && post.link_og_title) {
-      return post.link_og_image_url
+      throw internalError("Post is missing for embed hydration")
     }
 
-    const linkUrl = post.link_url ?? payload?.link_url ?? null
-    if (!linkUrl?.trim()) {
-      return "skipped:missing_link_url"
-    }
-
-    const metadata = await fetchLinkPreviewMetadata({ url: linkUrl })
-    if (!metadata.imageUrl && !metadata.title) {
-      return "skipped:no_preview_metadata"
-    }
-
-    await updatePostLinkPreviewMetadata({
+    return await hydrateLinkPostEmbed({
       client: db.client,
-      postId: post.post_id,
-      linkOgImageUrl: metadata.imageUrl,
-      linkOgTitle: metadata.title,
-      updatedAt: nowIso(),
+      post: {
+        ...post,
+        link_url: post.link_url ?? payload?.link_url ?? null,
+      },
+      checkedAt: nowIso(),
     })
-
-    return metadata.imageUrl ?? metadata.title
   } finally {
     db.close()
   }
@@ -492,8 +475,9 @@ export async function runCommunityJob(input: {
       return runCommentBodyMirror(input)
     case "thread_snapshot_publish":
       return runThreadSnapshotPublish(input)
+    case "embed_hydrate":
     case "link_preview_fetch":
-      return runLinkPreviewFetch(input)
+      return runEmbedHydrate(input)
     case "post_label_materialize":
       return runPostLabelMaterialize(input)
     case "post_translation_materialize":

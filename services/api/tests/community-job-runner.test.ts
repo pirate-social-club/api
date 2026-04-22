@@ -617,7 +617,7 @@ describe("community-job-runner", () => {
     }
   })
 
-  test("fetches link preview metadata into link posts", async () => {
+  test("hydrates generic link preview metadata into link posts", async () => {
     const rootDir = await createCommunityJobRunnerRoot("pirate-community-link-preview-")
     const communityId = "cmt_job_link_preview"
     const env: Env = {
@@ -653,8 +653,8 @@ describe("community-job-runner", () => {
       await enqueueCommunityJob({
         client: db.client,
         communityId,
-        jobType: "link_preview_fetch",
-        subjectType: "link_preview",
+        jobType: "embed_hydrate",
+        subjectType: "post_embed",
         subjectId: linkPost.post_id,
         payloadJson: JSON.stringify({
           post_id: linkPost.post_id,
@@ -688,7 +688,8 @@ describe("community-job-runner", () => {
       communityRepository: repo,
     })
 
-    expect(processed?.job_type).toBe("link_preview_fetch")
+    expect(processed?.job_type).toBe("embed_hydrate")
+    expect(processed?.error_code).toBeNull()
     expect(processed?.status).toBe("succeeded")
     expect(processed?.result_ref).toBe("https://example.com/assets/story-card.jpg")
 
@@ -698,6 +699,127 @@ describe("community-job-runner", () => {
       expect(post?.title).toBeNull()
       expect(post?.link_og_title).toBe("Example story title")
       expect(post?.link_og_image_url).toBe("https://example.com/assets/story-card.jpg")
+      expect(post?.embeds).toBe(undefined)
+    } finally {
+      verifyDb.close()
+    }
+  })
+
+  test("hydrates X embeds idempotently into link posts", async () => {
+    const rootDir = await createCommunityJobRunnerRoot("pirate-community-x-embed-")
+    const communityId = "cmt_job_x_embed"
+    const env: Env = {
+      LOCAL_COMMUNITY_DB_ROOT: rootDir,
+    }
+    const repo = buildCommunityRepository(join(rootDir, "x-embed.db"), communityId)
+
+    await seedCommunityState({
+      env,
+      repo,
+      communityId,
+      memberUserIds: ["usr_owner"],
+    })
+
+    let linkPostId = ""
+    const db = await openCommunityDb(env, repo, communityId)
+    try {
+      const now = new Date().toISOString()
+      const linkPost = await insertPost({
+        client: db.client,
+        communityId,
+        authorUserId: "usr_owner",
+        body: {
+          post_type: "link",
+          link_url: "https://x.com/pirate/status/1234567890123456789?s=20",
+          idempotency_key: "x-embed-post",
+        },
+        createdAt: now,
+      })
+      linkPostId = linkPost.post_id
+
+      await enqueueCommunityJob({
+        client: db.client,
+        communityId,
+        jobType: "embed_hydrate",
+        subjectType: "post_embed",
+        subjectId: linkPost.post_id,
+        payloadJson: JSON.stringify({
+          post_id: linkPost.post_id,
+          link_url: linkPost.link_url,
+        }),
+        createdAt: now,
+      })
+    } finally {
+      db.close()
+    }
+
+    globalThis.fetch = (async (input) => {
+      const requestUrl = input instanceof Request ? input.url : String(input)
+      const parsed = new URL(requestUrl)
+      expect(parsed.origin + parsed.pathname).toBe("https://publish.x.com/oembed")
+      expect(parsed.searchParams.get("url")).toBe("https://x.com/pirate/status/1234567890123456789")
+      expect(parsed.searchParams.get("omit_script")).toBe("1")
+      expect(parsed.searchParams.get("dnt")).toBe("true")
+      return Response.json({
+        author_name: "Pirate",
+        author_url: "https://x.com/pirate",
+        cache_age: "3153600000",
+        html: `<blockquote class="twitter-tweet"><p lang="en" dir="ltr">X embed text</p>&mdash; Pirate <a href="https://x.com/pirate/status/1234567890123456789">April 23, 2026</a></blockquote><script async src="https://platform.x.com/widgets.js"></script>`,
+      })
+    }) as typeof fetch
+
+    const processed = await processNextCommunityJob({
+      env,
+      communityId,
+      communityRepository: repo,
+    })
+
+    expect(processed?.job_type).toBe("embed_hydrate")
+    expect(processed?.error_code).toBeNull()
+    expect(processed?.status).toBe("succeeded")
+    expect(processed?.result_ref).toBe("https://x.com/pirate/status/1234567890123456789")
+
+    const rerunDb = await openCommunityDb(env, repo, communityId)
+    try {
+      const job = await enqueueCommunityJob({
+        client: rerunDb.client,
+        communityId,
+        jobType: "embed_hydrate",
+        subjectType: "post_embed",
+        subjectId: `${linkPostId}:rerun`,
+        payloadJson: JSON.stringify({
+          post_id: linkPostId,
+          link_url: "https://twitter.com/pirate/status/1234567890123456789",
+        }),
+        createdAt: new Date().toISOString(),
+      })
+      await processNextCommunityJob({
+        env,
+        communityId,
+        communityRepository: repo,
+      })
+      expect(job.job_type).toBe("embed_hydrate")
+    } finally {
+      rerunDb.close()
+    }
+
+    const verifyDb = await openCommunityDb(env, repo, communityId)
+    try {
+      const post = await getPostById(verifyDb.client, linkPostId)
+      expect(post?.link_og_title).toBe("X embed text")
+      expect(post?.link_og_image_url).toBeNull()
+      expect(post?.embeds?.length).toBe(1)
+      expect(post?.embeds?.[0]?.provider).toBe("x")
+      expect(post?.embeds?.[0]?.provider_ref).toBe("1234567890123456789")
+      expect(post?.embeds?.[0]?.canonical_url).toBe("https://x.com/pirate/status/1234567890123456789")
+      expect(post?.embeds?.[0]?.state).toBe("embed")
+      expect(post?.embeds?.[0]?.oembed_html).toContain("twitter-tweet")
+      expect(post?.embeds?.[0]?.oembed_html).not.toContain("<script")
+      const rows = await verifyDb.client.execute({
+        sql: "SELECT COUNT(*) AS count FROM post_embeds WHERE embed_key = ?1",
+        args: ["x:1234567890123456789"],
+      })
+      expect(Number(rows.rows[0]?.count ?? 0)).toBe(1)
     } finally {
       verifyDb.close()
     }

@@ -24,7 +24,7 @@ import {
   requireVerifiedHuman,
 } from "./post-access"
 import {
-  enqueueLinkPreviewFetchIfNeeded,
+  enqueueEmbedHydrateIfNeeded,
   enqueuePostLabelIfNeeded,
   enqueuePostTranslationPrewarmJobs,
 } from "./post-jobs"
@@ -237,7 +237,7 @@ export async function createPost(input: {
       createdAt,
     })
 
-    await enqueueLinkPreviewFetchIfNeeded({
+    await enqueueEmbedHydrateIfNeeded({
       client: db.client,
       communityId: input.communityId,
       post,

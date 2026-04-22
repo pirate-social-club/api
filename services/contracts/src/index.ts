@@ -1068,6 +1068,7 @@ export type Post = {
   link_url?: string | null;
   link_og_image_url?: string | null;
   link_og_title?: string | null;
+  embeds?: Array<PostEmbed> | null;
   media_refs?: Array<MediaDescriptor>;
   creator_relation?: PostCreatorRelation | null;
   promotion_disclosure?: PromotionDisclosure | null;
@@ -2211,6 +2212,8 @@ type NamespaceAttachmentInput = {
 
 type PostCreatorRelation = "captured" | "created" | "subject" | "authorized_repost" | "fan_work" | "found";
 
+type PostEmbed = XPostEmbed;
+
 type PostLabel = {
   label_id: string;
   label: string;
@@ -2354,6 +2357,30 @@ type WalletScoreCapabilityState = {
     stamp_name?: string;
     stamp_score?: number;
   }> | null;
+};
+
+type XEmbedPreview = {
+  author_name?: string | null;
+  author_url?: string | null;
+  text?: string | null;
+  has_media?: boolean;
+  media_url?: string | null;
+  created_at?: string | null;
+};
+
+type XPostEmbed = {
+  embed_id: string;
+  embed_key: string;
+  provider: "x";
+  provider_ref?: string | null;
+  canonical_url: string;
+  original_url: string;
+  state: "pending" | "preview" | "embed" | "unavailable";
+  preview?: XEmbedPreview | null;
+  oembed_html?: string | null;
+  oembed_cache_age?: number | null;
+  unavailable_reason?: "deleted" | "withheld" | "private" | "unsupported" | "unknown" | null;
+  last_checked_at?: string | null;
 };
 
 export const apiRoutes = {

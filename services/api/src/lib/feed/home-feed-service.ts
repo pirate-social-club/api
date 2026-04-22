@@ -5,6 +5,7 @@ import type { CommunityRepository } from "../communities/db-community-repository
 import { isMissingColumnError } from "../auth/auth-db-query-helpers"
 import { getLatestThreadSnapshotForRead } from "../comments/community-comment-store"
 import { buildLocalizedPostResponse } from "../localization/post-localization-service"
+import { enqueueEmbedHydrateOnReadIfNeeded } from "../posts/post-jobs"
 import { getPostById } from "../posts/community-post-store"
 import { getControlPlaneClient } from "../runtime-deps"
 import { numberOrNull, requiredNumber, requiredString, rowValue } from "../sql-row"
@@ -416,6 +417,11 @@ export async function listHomeFeed(input: {
             like_count: row.like_count,
             viewer_vote: viewerVote,
           },
+        })
+        await enqueueEmbedHydrateOnReadIfNeeded({
+          client: db.client,
+          communityId,
+          post,
         })
         const community = communitySummaryById[communityId]
         if (!community) {

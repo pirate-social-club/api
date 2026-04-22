@@ -12,7 +12,7 @@ import {
   isPubliclyReadablePost,
   requireMemberAccess,
 } from "./post-access"
-import { enqueuePostTranslationOnReadIfNeeded } from "./post-jobs"
+import { enqueueEmbedHydrateOnReadIfNeeded, enqueuePostTranslationOnReadIfNeeded } from "./post-jobs"
 import type { Env, LocalizedPostResponse } from "../../types"
 
 type CommunityFeedResponse = {
@@ -80,6 +80,11 @@ export async function getPost(input: {
       communityId: projection.community_id,
       response,
     })
+    await enqueueEmbedHydrateOnReadIfNeeded({
+      client: db.client,
+      communityId: projection.community_id,
+      post,
+    })
     return response
   } finally {
     db.close()
@@ -119,6 +124,11 @@ export async function getPublicPost(input: {
       client: db.client,
       communityId: projection.community_id,
       response,
+    })
+    await enqueueEmbedHydrateOnReadIfNeeded({
+      client: db.client,
+      communityId: projection.community_id,
+      post,
     })
     return response
   } finally {
@@ -176,6 +186,11 @@ export async function listCommunityPosts(input: {
         client: db.client,
         communityId: input.communityId,
         response: item,
+      })
+      await enqueueEmbedHydrateOnReadIfNeeded({
+        client: db.client,
+        communityId: input.communityId,
+        post: item.post,
       })
     }
 
@@ -236,6 +251,11 @@ export async function listPublicCommunityPosts(input: {
         client: db.client,
         communityId: input.communityId,
         response: item,
+      })
+      await enqueueEmbedHydrateOnReadIfNeeded({
+        client: db.client,
+        communityId: input.communityId,
+        post: item.post,
       })
     }
 

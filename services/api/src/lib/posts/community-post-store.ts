@@ -41,7 +41,7 @@ export async function findPostByIdempotencyKey(input: {
                label_id, label_assignment_status, label_assigned_by, label_assigned_at, label_ai_confidence,
                label_assignment_error, label_assignment_model, label_assignment_result_json,
                post_type, status, visibility, title, body, caption, lyrics,
-               link_url, link_og_image_url, link_og_title, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
+               link_url, link_og_image_url, link_og_title, embeds_json, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
                access_mode, asset_id, parent_post_id, upstream_asset_refs_json, song_mode, rights_basis, analysis_state, analysis_result_ref,
                content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
         FROM posts
@@ -196,7 +196,7 @@ export async function getPostById(client: DbExecutor, postId: string): Promise<P
              label_id, label_assignment_status, label_assigned_by, label_assigned_at, label_ai_confidence,
              label_assignment_error, label_assignment_model, label_assignment_result_json,
              post_type, status, visibility, title, body, caption, lyrics,
-             link_url, link_og_image_url, link_og_title, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
+             link_url, link_og_image_url, link_og_title, embeds_json, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
              access_mode, asset_id, parent_post_id, upstream_asset_refs_json, song_mode, rights_basis, analysis_state, analysis_result_ref,
              content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
       FROM posts
@@ -219,7 +219,7 @@ export async function getPostById(client: DbExecutor, postId: string): Promise<P
                label_id, label_assignment_status, label_assigned_by, label_assigned_at, label_ai_confidence,
                label_assignment_error, label_assignment_model, label_assignment_result_json,
                post_type, status, 'public' AS visibility, title, body, caption, lyrics,
-               link_url, NULL AS link_og_image_url, NULL AS link_og_title, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
+               link_url, NULL AS link_og_image_url, NULL AS link_og_title, NULL AS embeds_json, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
                access_mode, asset_id, parent_post_id, upstream_asset_refs_json, song_mode, rights_basis, analysis_state, analysis_result_ref,
                content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
         FROM posts

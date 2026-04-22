@@ -36,6 +36,7 @@ export type PostRow = {
   link_url: string | null
   link_og_image_url: string | null
   link_og_title: string | null
+  embeds_json: string | null
   media_refs_json: string | null
   song_artifact_bundle_id: string | null
   source_language: string | null
@@ -94,6 +95,11 @@ function parseMediaRefs(value: string | null): Post["media_refs"] {
   return parsed ? (parsed as Post["media_refs"]) : undefined
 }
 
+function parseEmbeds(value: string | null): Post["embeds"] {
+  const parsed = parseJsonArray<Post["embeds"] extends Array<infer T> | null | undefined ? T : never>(value)
+  return parsed ? (parsed as Post["embeds"]) : undefined
+}
+
 export function toPostRow(row: unknown): PostRow {
   return {
     post_id: requiredString(row, "post_id"),
@@ -128,6 +134,7 @@ export function toPostRow(row: unknown): PostRow {
     link_url: stringOrNull(rowValue(row, "link_url")),
     link_og_image_url: stringOrNull(rowValue(row, "link_og_image_url")),
     link_og_title: stringOrNull(rowValue(row, "link_og_title")),
+    embeds_json: stringOrNull(rowValue(row, "embeds_json")),
     media_refs_json: stringOrNull(rowValue(row, "media_refs_json")),
     song_artifact_bundle_id: stringOrNull(rowValue(row, "song_artifact_bundle_id")),
     source_language: stringOrNull(rowValue(row, "source_language")),
@@ -181,6 +188,7 @@ export function serializePost(row: PostRow): Post {
     link_url: row.link_url,
     link_og_image_url: row.link_og_image_url,
     link_og_title: row.link_og_title,
+    embeds: parseEmbeds(row.embeds_json),
     media_refs: parseMediaRefs(row.media_refs_json),
     song_artifact_bundle_id: row.song_artifact_bundle_id,
     source_language: row.source_language,

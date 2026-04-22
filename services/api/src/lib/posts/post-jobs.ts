@@ -4,6 +4,8 @@ import { CONTENT_TRANSLATION_PREWARM_LOCALES, sameLanguageLocale } from "../loca
 import { nowIso } from "../helpers"
 import type { Community, LocalizedPostResponse, Post } from "../../types"
 
+const EMBED_RECHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
+
 async function enqueuePostTranslationJob(input: {
   client: Client
   communityId: string
@@ -98,7 +100,7 @@ async function enqueuePostLabelJob(input: {
   })
 }
 
-export async function enqueueLinkPreviewFetchIfNeeded(input: {
+export async function enqueueEmbedHydrateIfNeeded(input: {
   client: Client
   communityId: string
   post: Post
@@ -111,14 +113,49 @@ export async function enqueueLinkPreviewFetchIfNeeded(input: {
   await enqueueCommunityJob({
     client: input.client,
     communityId: input.communityId,
-    jobType: "link_preview_fetch",
-    subjectType: "link_preview",
+    jobType: "embed_hydrate",
+    subjectType: "post_embed",
     subjectId: input.post.post_id,
     payloadJson: JSON.stringify({
       post_id: input.post.post_id,
       link_url: input.post.link_url,
     }),
     createdAt: input.createdAt,
+  })
+}
+
+export async function enqueueEmbedHydrateOnReadIfNeeded(input: {
+  client: Client
+  communityId: string
+  post: Post
+  now?: string
+}): Promise<void> {
+  if (input.post.post_type !== "link" || !input.post.link_url?.trim() || !input.post.embeds?.length) {
+    return
+  }
+
+  const now = input.now ?? nowIso()
+  const nowMs = Date.parse(now)
+  const hasStaleEmbed = input.post.embeds.some((embed) => {
+    const checkedAtMs = Date.parse(embed.last_checked_at ?? "")
+    return !Number.isFinite(checkedAtMs) || !Number.isFinite(nowMs) || nowMs - checkedAtMs >= EMBED_RECHECK_INTERVAL_MS
+  })
+  if (!hasStaleEmbed) {
+    return
+  }
+
+  await enqueueCommunityJob({
+    client: input.client,
+    communityId: input.communityId,
+    jobType: "embed_hydrate",
+    subjectType: "post_embed",
+    subjectId: input.post.post_id,
+    payloadJson: JSON.stringify({
+      post_id: input.post.post_id,
+      link_url: input.post.link_url,
+      reason: "read_recheck",
+    }),
+    createdAt: now,
   })
 }
 
