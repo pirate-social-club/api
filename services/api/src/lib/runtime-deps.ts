@@ -48,7 +48,7 @@ function normalizeRows(rows: unknown[]): QueryResultRow[] {
   })
 }
 
-function postgresifySql(sql: string): string {
+export function postgresifySql(sql: string): string {
   const normalized = sql.replace(/\?(\d+)/g, (_, index: string) => `$${index}`)
 
   if (/INSERT OR IGNORE INTO (wallet_attachments|notification_receipts)\b/i.test(normalized)) {
@@ -59,7 +59,8 @@ function postgresifySql(sql: string): string {
   }
 
   if (/INSERT OR REPLACE INTO namespace_verification_capabilities\b/i.test(normalized)) {
-    return `${normalized}
+    const insertSql = normalized.replace(/\bINSERT\s+OR\s+REPLACE\s+INTO\b/i, "INSERT INTO")
+    return `${insertSql}
       ON CONFLICT (capability_record_id) DO UPDATE SET
         namespace_verification_session_id = EXCLUDED.namespace_verification_session_id,
         namespace_verification_id = EXCLUDED.namespace_verification_id,
@@ -75,7 +76,8 @@ function postgresifySql(sql: string): string {
   }
 
   if (/INSERT OR REPLACE INTO namespace_verifications\b/i.test(normalized)) {
-    return `${normalized}
+    const insertSql = normalized.replace(/\bINSERT\s+OR\s+REPLACE\s+INTO\b/i, "INSERT INTO")
+    return `${insertSql}
       ON CONFLICT (namespace_verification_id) DO UPDATE SET
         source_namespace_verification_session_id = EXCLUDED.source_namespace_verification_session_id,
         user_id = EXCLUDED.user_id,
