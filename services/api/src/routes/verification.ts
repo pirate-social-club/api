@@ -1,6 +1,7 @@
 import { Hono } from "hono"
 import { badRequestError, notFoundError } from "../lib/errors"
 import { getControlPlaneVerificationRepository } from "../lib/verification/control-plane-verification-repository"
+import { verifyVeryWidgetProof } from "../lib/verification/very-provider"
 import { authenticate, type AuthenticatedEnv } from "../lib/auth-middleware"
 import type { Env, RequestedVerificationCapability, VerificationIntent, VerificationRequirement } from "../types"
 
@@ -21,6 +22,24 @@ verification.post("/verification-sessions/:verificationSessionId/self-callback",
     throw notFoundError("Verification session not found")
   }
   return c.json({ status: result.status, verification_session_id: result.verification_session_id }, 200)
+})
+
+verification.post("/verification-sessions/very-widget-verify", async (c) => {
+  const payload = (await c.req.json<{ proof?: unknown }>().catch(() => null)) ?? null
+  const proof = typeof payload?.proof === "string" ? payload.proof.trim() : ""
+  if (!proof) {
+    return c.json({ status: "invalid", error: "missing_proof" }, 200)
+  }
+
+  try {
+    const result = await verifyVeryWidgetProof(c.env, proof)
+    return c.json(result, 200)
+  } catch (error) {
+    return c.json({
+      status: "invalid",
+      error: error instanceof Error ? error.message : "very_verification_failed",
+    }, 200)
+  }
 })
 
 authenticatedVerification.use("*", authenticate)

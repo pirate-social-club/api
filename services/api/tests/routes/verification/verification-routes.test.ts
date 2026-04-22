@@ -350,7 +350,18 @@ describe("verification routes", () => {
       }
       expect(createdBody.status).toBe("pending")
       expect(createdBody.provider_mode).toBe("widget")
-      expect(createdBody.launch?.very_widget?.verify_url).toBe("https://very.test/api/v1/verify")
+      expect(createdBody.launch?.very_widget?.verify_url).toBe("http://pirate.test/verification-sessions/very-widget-verify")
+
+      const widgetVerification = await requestJson(
+        createdBody.launch?.very_widget?.verify_url ?? "",
+        {
+          proof: "very-zk-proof-123",
+        },
+        ctx.env,
+      )
+      expect(widgetVerification.status).toBe(200)
+      const widgetVerificationBody = await json(widgetVerification) as { status: string }
+      expect(widgetVerificationBody.status).toBe("valid")
 
       const completedVerification = await requestJson(
         `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/complete`,

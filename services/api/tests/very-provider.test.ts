@@ -104,6 +104,26 @@ describe("Very provider adapter", () => {
     expect(outcome.status).toBe("pending")
   })
 
+  test("startSession returns a Pirate API widget verify URL when a public origin is known", async () => {
+    const { getVeryProvider } = require("../src/lib/verification/very-provider") as typeof import("../src/lib/verification/very-provider")
+    const env = {
+      VERY_API_URL: "https://very.example.com",
+      VERY_APP_ID: "test-app",
+    } as any
+    const provider = getVeryProvider(env)
+
+    const startResult = await provider.startSession({
+      userId: "user-1",
+      requestedCapabilities: ["unique_human"],
+      walletAttachmentId: null,
+      verificationIntent: null,
+      policyId: null,
+      publicOrigin: "https://api.pirate.sc/some/path",
+    })
+
+    expect(startResult.launch.verify_url).toBe("https://api.pirate.sc/verification-sessions/very-widget-verify")
+  })
+
   test("configured provider verifies a proof payload through the Very verifier endpoint", async () => {
     const { getVeryProvider } = require("../src/lib/verification/very-provider") as typeof import("../src/lib/verification/very-provider")
     const env = {

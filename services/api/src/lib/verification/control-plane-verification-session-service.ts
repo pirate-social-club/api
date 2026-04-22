@@ -118,6 +118,7 @@ export async function startVerificationSession(
       walletAttachmentId: input.walletAttachmentId ?? null,
       verificationIntent: input.verificationIntent ?? null,
       policyId: input.policyId ?? null,
+      publicOrigin: input.publicOrigin ?? null,
     })
     upstreamSessionRef = result.upstreamSessionRef
     launch = { mode: "widget", very_widget: result.launch }

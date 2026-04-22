@@ -23,6 +23,7 @@ export interface VeryProvider {
     walletAttachmentId: string | null
     verificationIntent: string | null
     policyId: string | null
+    publicOrigin?: string | null
   }): Promise<VeryStartResult>
 
   getSessionOutcome(input: {
@@ -44,7 +45,7 @@ type VeryVerifyResponse = {
 
 let testOverride: VeryProvider | null = null
 
-function trimEnv(value: string | undefined): string {
+function trimEnv(value: string | null | undefined): string {
   return String(value || "").trim()
 }
 
@@ -78,6 +79,31 @@ function deriveVeryVerifyUrl(apiUrl: string): string {
   } catch {
     throw internalError("VERY_API_URL is not a valid URL")
   }
+}
+
+function normalizeOrigin(value: string | null | undefined): string | null {
+  const trimmed = trimEnv(value)
+  if (!trimmed) {
+    return null
+  }
+  try {
+    return new URL(trimmed).origin
+  } catch {
+    return null
+  }
+}
+
+function buildWidgetVerifyUrl(input: {
+  env: Env
+  publicOrigin?: string | null
+  providerVerifyUrl: string
+}): string {
+  const origin = normalizeOrigin(input.env.PIRATE_API_PUBLIC_ORIGIN)
+    ?? normalizeOrigin(input.publicOrigin)
+  if (!origin) {
+    return input.providerVerifyUrl
+  }
+  return `${origin}/verification-sessions/very-widget-verify`
 }
 
 function buildExternalNullifier(input: {
@@ -250,7 +276,11 @@ export function getVeryProvider(env: Env): VeryProvider {
             upstreamSessionRef,
             includeSessionId: false,
           }),
-          verify_url: verifyUrl,
+          verify_url: buildWidgetVerifyUrl({
+            env,
+            publicOrigin: input.publicOrigin ?? null,
+            providerVerifyUrl: verifyUrl,
+          }),
         },
       }
     },
@@ -277,6 +307,27 @@ export function getVeryProvider(env: Env): VeryProvider {
         upstreamSessionRef: input.upstreamSessionRef,
       })
     },
+  }
+}
+
+export async function verifyVeryWidgetProof(env: Env, proof: string): Promise<{
+  status: "valid" | "pending" | "expired" | "invalid"
+  error?: string
+}> {
+  const provider = getVeryProvider(env)
+  const outcome = await provider.getSessionOutcome({
+    upstreamSessionRef: "very-widget",
+    providerPayloadRef: proof,
+  })
+  switch (outcome.status) {
+    case "verified":
+      return { status: "valid" }
+    case "pending":
+      return { status: "pending" }
+    case "expired":
+      return { status: "expired" }
+    case "failed":
+      return { status: "invalid", error: outcome.failureReason }
   }
 }
 
