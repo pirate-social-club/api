@@ -93,6 +93,98 @@ describe("community settings routes", () => {
     )
   })
 
+  test("community owner can reattach a newly verified session for the same namespace root", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "community-same-namespace-reattach-user")
+    await completeUniqueHumanVerification(ctx.env, session.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Same Namespace Club",
+      handle_policy: {
+        policy_template: "standard",
+      },
+    }, ctx.env, session.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: {
+        community_id: string
+      }
+    }
+
+    const firstNamespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
+      family: "hns",
+      root_label: "SameNamespaceRoot",
+    }, ctx.env, session.accessToken)
+    const firstNamespaceSessionBody = await json(firstNamespaceSession) as {
+      namespace_verification_session_id: string
+    }
+    const firstCompleted = await requestJson(
+      `http://pirate.test/namespace-verification-sessions/${firstNamespaceSessionBody.namespace_verification_session_id}/complete`,
+      {},
+      ctx.env,
+      session.accessToken,
+    )
+    const firstCompletedBody = await json(firstCompleted) as { namespace_verification_id: string }
+
+    const firstAttach = await requestJson(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}/namespace`,
+      { namespace_verification_id: firstCompletedBody.namespace_verification_id },
+      ctx.env,
+      session.accessToken,
+    )
+    expect(firstAttach.status).toBe(200)
+
+    const secondNamespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
+      family: "hns",
+      root_label: "SameNamespaceRoot",
+    }, ctx.env, session.accessToken)
+    const secondNamespaceSessionBody = await json(secondNamespaceSession) as {
+      namespace_verification_session_id: string
+    }
+    const secondCompleted = await requestJson(
+      `http://pirate.test/namespace-verification-sessions/${secondNamespaceSessionBody.namespace_verification_session_id}/complete`,
+      {},
+      ctx.env,
+      session.accessToken,
+    )
+    const secondCompletedBody = await json(secondCompleted) as { namespace_verification_id: string }
+    expect(secondCompletedBody.namespace_verification_id).not.toBe(firstCompletedBody.namespace_verification_id)
+
+    const pendingUpdate = await Promise.resolve(app.request(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}/pending-namespace-session`,
+      {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${session.accessToken}`,
+        },
+        body: JSON.stringify({
+          namespace_verification_session_id: secondNamespaceSessionBody.namespace_verification_session_id,
+        }),
+      },
+      ctx.env,
+    ))
+    expect(pendingUpdate.status).toBe(200)
+
+    const secondAttach = await requestJson(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}/namespace`,
+      { namespace_verification_id: secondCompletedBody.namespace_verification_id },
+      ctx.env,
+      session.accessToken,
+    )
+    expect(secondAttach.status).toBe(200)
+    const secondAttachBody = await json(secondAttach) as {
+      namespace_verification_id: string | null
+      pending_namespace_verification_session_id: string | null
+      route_slug: string | null
+    }
+    expect(secondAttachBody.namespace_verification_id).toBe(firstCompletedBody.namespace_verification_id)
+    expect(secondAttachBody.pending_namespace_verification_session_id).toBeNull()
+    expect(secondAttachBody.route_slug).toBe("samenamespaceroot")
+  })
+
   test("community owner can persist safety moderation settings", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup

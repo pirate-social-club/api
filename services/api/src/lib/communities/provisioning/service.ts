@@ -56,6 +56,13 @@ function namespaceRouteSlug(namespaceVerification: Pick<NamespaceVerification, "
     : namespaceVerification.normalized_root_label
 }
 
+function isSameNamespaceRoot(
+  left: Pick<NamespaceVerification, "family" | "normalized_root_label">,
+  right: Pick<NamespaceVerification, "family" | "normalized_root_label">,
+): boolean {
+  return left.family === right.family && left.normalized_root_label === right.normalized_root_label
+}
+
 async function upsertLocalNamespaceAttachment(input: {
   env: Env
   repo: CommunityRepository
@@ -532,10 +539,6 @@ export async function attachNamespaceToCommunity(input: {
   communityRepository: CommunityRepository
 }): Promise<Community> {
   const community = await requireOwnedCommunity(input.communityRepository, input.communityId, input.userId)
-  if (community.namespace_verification_id && community.namespace_verification_id !== input.namespaceVerificationId) {
-    throw eligibilityFailed("Community already has a different namespace attached")
-  }
-
   const namespaceVerification = await input.verificationRepository.getNamespaceVerification(
     input.namespaceVerificationId,
     input.userId,
@@ -551,22 +554,59 @@ export async function attachNamespaceToCommunity(input: {
   }
 
   const createdAt = nowIso()
-  const routeSlug = namespaceRouteSlug(namespaceVerification)
-  const attachedCommunity = community.namespace_verification_id === input.namespaceVerificationId
-    ? community
-    : await input.communityRepository.attachNamespaceToCommunity({
+  let effectiveNamespaceVerification = namespaceVerification
+  let attachedCommunity = community
+
+  if (community.namespace_verification_id === input.namespaceVerificationId) {
+    if (community.pending_namespace_verification_session_id) {
+      await input.communityRepository.setPendingNamespaceVerificationSession({
+        communityId: input.communityId,
+        sessionId: null,
+        updatedAt: createdAt,
+      })
+      attachedCommunity = {
+        ...community,
+        pending_namespace_verification_session_id: null,
+        updated_at: createdAt,
+      }
+    }
+  } else if (community.namespace_verification_id) {
+    const existingNamespaceVerification = await input.verificationRepository.getNamespaceVerification(
+      community.namespace_verification_id,
+      input.userId,
+    )
+    if (!existingNamespaceVerification || !isSameNamespaceRoot(existingNamespaceVerification, namespaceVerification)) {
+      throw eligibilityFailed("Community already has a different namespace attached")
+    }
+    effectiveNamespaceVerification = existingNamespaceVerification
+    if (community.pending_namespace_verification_session_id) {
+      await input.communityRepository.setPendingNamespaceVerificationSession({
+        communityId: input.communityId,
+        sessionId: null,
+        updatedAt: createdAt,
+      })
+      attachedCommunity = {
+        ...community,
+        pending_namespace_verification_session_id: null,
+        updated_at: createdAt,
+      }
+    }
+  } else {
+    const routeSlug = namespaceRouteSlug(namespaceVerification)
+    attachedCommunity = await input.communityRepository.attachNamespaceToCommunity({
         communityId: input.communityId,
         namespaceVerificationId: input.namespaceVerificationId,
         routeSlug,
         updatedAt: createdAt,
       })
+  }
 
   await upsertLocalNamespaceAttachment({
     env: input.env,
     repo: input.communityRepository,
     communityId: input.communityId,
-    namespaceVerificationId: input.namespaceVerificationId,
-    namespaceLabel: routeSlug,
+    namespaceVerificationId: attachedCommunity.namespace_verification_id ?? input.namespaceVerificationId,
+    namespaceLabel: namespaceRouteSlug(effectiveNamespaceVerification),
     now: createdAt,
   })
 
