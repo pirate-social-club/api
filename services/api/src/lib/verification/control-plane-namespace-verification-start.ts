@@ -13,6 +13,7 @@ import {
 import {
   inspectSpacesNamespace,
   mintSpacesChallenge,
+  normalizeRootLabel,
 } from "./spaces-verifier"
 import type { Env, NamespaceVerificationSession } from "../../types"
 import {
@@ -49,7 +50,9 @@ export async function startNamespaceVerificationSession(
   const now = new Date()
   const createdAt = now.toISOString()
   const expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
-  const normalizedRootLabel = input.rootLabel.trim().toLowerCase()
+  const normalizedRootLabel = input.family === "spaces"
+    ? normalizeRootLabel(input.rootLabel)
+    : input.rootLabel.trim().toLowerCase()
   const sessionId = makeId("nvs")
   if (input.family === "spaces") {
     if (!isSpacesVerifierConfigured(env)) {

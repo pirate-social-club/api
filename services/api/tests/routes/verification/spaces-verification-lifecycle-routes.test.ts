@@ -21,6 +21,51 @@ afterEach(async () => {
 })
 
 describe("spaces verification lifecycle routes", () => {
+  test("spaces session start stores canonical IDNA labels", async () => {
+    const ctx = await createRouteTestContext({
+      SPACES_VERIFIER_BASE_URL: "http://spaces-verifier.test",
+    })
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-spaces-idna-user")
+    await createSelfVerifiedSession(ctx.env, session.accessToken)
+
+    const originalFetch = globalThis.fetch
+    let capturedInspectUrl: string | null = null
+    await withFetchMock(async (input, init) => {
+      const url = typeof input === "string" ? input : input.toString()
+      if (url.startsWith("http://spaces-verifier.test/inspect?")) {
+        capturedInspectUrl = url
+        return new Response(JSON.stringify({
+          root_exists: true,
+          root_key_proof_verified: true,
+          root_pubkey: "spaces-root-pubkey",
+          observation_provider: "spaces_verifier",
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
+      return originalFetch(input, init)
+    }, async () => {
+      const createdNamespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
+        family: "spaces",
+        root_label: "\u{1F1F5}\u{1F1F8}",
+      }, ctx.env, session.accessToken)
+
+      expect(createdNamespaceSession.status).toBe(201)
+      const createdBody = await json(createdNamespaceSession) as {
+        normalized_root_label: string | null
+        challenge_payload?: { root_label?: string; message?: string } | null
+      }
+
+      expect(capturedInspectUrl).toBe("http://spaces-verifier.test/inspect?root_label=xn--t77hga")
+      expect(createdBody.normalized_root_label).toBe("xn--t77hga")
+      expect(createdBody.challenge_payload?.root_label).toBe("xn--t77hga")
+      expect(createdBody.challenge_payload?.message).toContain("root=@xn--t77hga")
+    })
+  })
+
   test("spaces sessions respect challenge and session expiry", async () => {
     const ctx = await createRouteTestContext({
       SPACES_VERIFIER_BASE_URL: "http://spaces-verifier.test",

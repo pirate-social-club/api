@@ -25,6 +25,7 @@ describe("normalizeRootLabel", () => {
 
   test("canonicalizes IDNA emoji labels", () => {
     expect(normalizeRootLabel("@☠️")).toBe("xn--h4h")
+    expect(normalizeRootLabel("@\u{1F1F5}\u{1F1F8}")).toBe("xn--t77hga")
   })
 })
 

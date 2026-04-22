@@ -15,6 +15,7 @@ import type {
   Community,
   CommunityCreateAcceptedResponse,
   Env,
+  NamespaceVerification,
 } from "../../../types"
 import { serializeCommunity, serializeJob } from "../community-serialization"
 import { openCommunityDb } from "../community-db-factory"
@@ -47,6 +48,12 @@ function resolveProvisionedCredentialId(communityId: string, credentialId: strin
     credentialId: fallbackId,
   })
   return fallbackId
+}
+
+function namespaceRouteSlug(namespaceVerification: Pick<NamespaceVerification, "family" | "normalized_root_label">): string {
+  return namespaceVerification.family === "spaces"
+    ? `@${namespaceVerification.normalized_root_label}`
+    : namespaceVerification.normalized_root_label
 }
 
 async function upsertLocalNamespaceAttachment(input: {
@@ -268,7 +275,7 @@ async function finalizeExistingCommunity(input: {
   binding: CommunityDatabaseBindingRow
   communityRepository: CommunityRepository
   namespaceVerificationId: string
-  namespaceVerification: { normalized_root_label: string }
+  namespaceVerification: Pick<NamespaceVerification, "family" | "normalized_root_label">
 }): Promise<CommunityCreateAcceptedResponse> {
   const finalized = await input.communityRepository.markCommunityProvisioningSucceeded({
     communityId: input.existingCommunity.community_id,
@@ -296,10 +303,11 @@ async function provisionNamespacedCommunity(input: {
   auth: CreateCommunityAuth
   existingCommunity: CommunityRow | null
   namespaceVerificationId: string
-  namespaceVerification: { normalized_root_label: string }
+  namespaceVerification: Pick<NamespaceVerification, "family" | "normalized_root_label">
   communityRepository: CommunityRepository
 }): Promise<CommunityCreateAcceptedResponse> {
   const { env, body, auth, existingCommunity, namespaceVerificationId, namespaceVerification, communityRepository: repo } = input
+  const routeSlug = namespaceRouteSlug(namespaceVerification)
   const communityId = existingCommunity?.community_id ?? makeId("cmt")
   const bindingId = existingCommunity?.primary_database_binding_id ?? makeId("cdb")
   const jobId = makeId("job")
@@ -315,7 +323,7 @@ async function provisionNamespacedCommunity(input: {
           fallbackBindingId: bindingId,
           jobId,
           namespaceVerificationId,
-          routeSlug: namespaceVerification.normalized_root_label,
+          routeSlug,
           databaseUrl,
           createdAt: auth.createdAt,
         })
@@ -327,7 +335,7 @@ async function provisionNamespacedCommunity(input: {
           displayName: auth.communityDisplayName,
           membershipMode: body.membership_mode ?? "open",
           namespaceVerificationId,
-          routeSlug: namespaceVerification.normalized_root_label,
+          routeSlug,
           databaseUrl,
           createdAt: auth.createdAt,
         })
@@ -349,7 +357,7 @@ async function provisionNamespacedCommunity(input: {
         groupLocation: resolveCommunityProvisionGroupLocation(env),
         bootstrapPayload: buildProvisionOperatorBootstrapPayload(
           body,
-          namespaceVerification.normalized_root_label,
+          routeSlug,
         ),
       })
       const encryptedToken = encryptCommunityDbCredential({
@@ -382,7 +390,7 @@ async function provisionNamespacedCommunity(input: {
         auth,
         communityId,
         namespaceVerificationId,
-        namespaceLabel: namespaceVerification.normalized_root_label,
+        namespaceLabel: routeSlug,
       })
     }
 
@@ -543,12 +551,13 @@ export async function attachNamespaceToCommunity(input: {
   }
 
   const createdAt = nowIso()
+  const routeSlug = namespaceRouteSlug(namespaceVerification)
   const attachedCommunity = community.namespace_verification_id === input.namespaceVerificationId
     ? community
     : await input.communityRepository.attachNamespaceToCommunity({
         communityId: input.communityId,
         namespaceVerificationId: input.namespaceVerificationId,
-        routeSlug: namespaceVerification.normalized_root_label,
+        routeSlug,
         updatedAt: createdAt,
       })
 
@@ -557,7 +566,7 @@ export async function attachNamespaceToCommunity(input: {
     repo: input.communityRepository,
     communityId: input.communityId,
     namespaceVerificationId: input.namespaceVerificationId,
-    namespaceLabel: namespaceVerification.normalized_root_label,
+    namespaceLabel: routeSlug,
     now: createdAt,
   })
 

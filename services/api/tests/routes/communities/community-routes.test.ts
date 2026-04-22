@@ -107,6 +107,97 @@ describe("community routes", () => {
     expect(postsBySlug.status).toBe(200)
   })
 
+  test("spaces namespace attach uses @ route slug", async () => {
+    const ctx = await createRouteTestContext({
+      SPACES_VERIFIER_BASE_URL: "http://spaces-verifier.test",
+    })
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "community-spaces-route-user")
+    await completeUniqueHumanVerification(ctx.env, session.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Spaces Route Club",
+      handle_policy: {
+        policy_template: "standard",
+      },
+    }, ctx.env, session.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: {
+        community_id: string
+      }
+    }
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (input, init) => {
+      const url = typeof input === "string" ? input : input.toString()
+      if (url.startsWith("http://spaces-verifier.test/inspect?")) {
+        return new Response(JSON.stringify({
+          root_exists: true,
+          root_key_proof_verified: true,
+          root_pubkey: "spaces-root-pubkey",
+          observation_provider: "spaces_verifier",
+          anchor_fresh_enough: true,
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
+      if (url === "http://spaces-verifier.test/verify-signature") {
+        return new Response(JSON.stringify({
+          valid_signature: true,
+          observation_provider: "spaces_verifier",
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
+      return originalFetch(input, init)
+    }) as typeof fetch
+
+    try {
+      const namespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
+        family: "spaces",
+        root_label: "\u{1F1F5}\u{1F1F8}",
+      }, ctx.env, session.accessToken)
+      expect(namespaceSession.status).toBe(201)
+      const namespaceBody = await json(namespaceSession) as { namespace_verification_session_id: string }
+      const completed = await requestJson(
+        `http://pirate.test/namespace-verification-sessions/${namespaceBody.namespace_verification_session_id}/complete`,
+        { signature_payload: { signature: "spaces-signature" } },
+        ctx.env,
+        session.accessToken,
+      )
+      expect(completed.status).toBe(200)
+      const completedBody = await json(completed) as { namespace_verification_id: string }
+
+      const attachResponse = await requestJson(
+        `http://pirate.test/communities/${communityCreateBody.community.community_id}/namespace`,
+        {
+          namespace_verification_id: completedBody.namespace_verification_id,
+        },
+        ctx.env,
+        session.accessToken,
+      )
+      expect(attachResponse.status).toBe(200)
+      const attachedCommunity = await json(attachResponse) as {
+        community_id: string
+        route_slug: string | null
+      }
+      expect(attachedCommunity.route_slug).toBe("@xn--t77hga")
+
+      const communityBySlug = await app.request("http://pirate.test/communities/@xn--t77hga", {
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+        },
+      }, ctx.env)
+      expect(communityBySlug.status).toBe(200)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   test("public community routes return preview and published posts without auth", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
