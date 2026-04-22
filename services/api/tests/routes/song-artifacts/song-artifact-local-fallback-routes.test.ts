@@ -83,6 +83,7 @@ describe("song artifact local fallback routes", () => {
       ACRCLOUD_HOST: "acrcloud.test",
       ELEVENLABS_API_KEY: "test-elevenlabs-key",
       ELEVENLABS_FORCE_ALIGNMENT_URL: "https://elevenlabs.test/forced-alignment",
+      SONG_PREVIEW_FFMPEG_BIN: "__test_passthrough__",
     })
     cleanup = ctx.cleanup
 
