@@ -1,4 +1,4 @@
-import { internalError } from "../errors"
+import { badRequestError, internalError, providerUnavailable } from "../errors"
 import type { Env } from "../../types"
 import { sha256Hex } from "../crypto"
 import { normalizeRootLabel } from "./labels"
@@ -6,6 +6,7 @@ import { normalizeRootLabel } from "./labels"
 export { normalizeRootLabel }
 
 const SPACES_VERIFIER_TIMEOUT_MS = 8_000
+const MAX_SPACES_ROOT_LABEL_LENGTH = 62
 
 type SpacesInspectResponse = {
   root_exists?: boolean
@@ -82,6 +83,24 @@ function getSpacesChallengeDomain(env: Env): string {
   return String(env.SPACES_VERIFIER_CHALLENGE_DOMAIN || "").trim() || "pirate.sc"
 }
 
+function assertSpacesRootLabel(value: string): void {
+  if (!value || value.length > MAX_SPACES_ROOT_LABEL_LENGTH) {
+    throw badRequestError("Spaces root label must be a protocol root label")
+  }
+
+  const verifyRange = value.startsWith("xn--") && value.length > "xn--".length
+    ? value.slice("xn--".length)
+    : value
+
+  if (!verifyRange || verifyRange.startsWith("-") || verifyRange.endsWith("-") || verifyRange.includes("--")) {
+    throw badRequestError("Spaces root label must be a protocol root label")
+  }
+
+  if (!/^[a-z0-9-]+$/u.test(verifyRange)) {
+    throw badRequestError("Spaces root label must be a protocol root label")
+  }
+}
+
 async function spacesVerifierRequest<T>(
   env: Env,
   input: {
@@ -118,6 +137,12 @@ async function spacesVerifierRequest<T>(
       const message = body && typeof body === "object" && "error" in body && typeof body.error === "string"
         ? body.error
         : "Spaces verifier request failed"
+      if (response.status >= 500) {
+        throw providerUnavailable(message)
+      }
+      if (response.status >= 400 && response.status < 500) {
+        throw badRequestError(message)
+      }
       throw internalError(message)
     }
     if (body == null || typeof body !== "object") {
@@ -127,7 +152,7 @@ async function spacesVerifierRequest<T>(
     return body as T
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
-      throw internalError("Spaces verifier request timed out")
+      throw providerUnavailable("Spaces verifier request timed out")
     }
     throw error
   } finally {
@@ -137,6 +162,7 @@ async function spacesVerifierRequest<T>(
 
 export async function inspectSpacesNamespace(env: Env, rootLabel: string): Promise<SpacesInspection> {
   const normalizedRootLabel = normalizeRootLabel(rootLabel)
+  assertSpacesRootLabel(normalizedRootLabel)
   const result = await spacesVerifierRequest<SpacesInspectResponse>(env, {
     path: `/inspect?root_label=${encodeURIComponent(normalizedRootLabel)}`,
   })

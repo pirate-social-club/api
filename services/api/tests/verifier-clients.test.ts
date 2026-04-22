@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { normalizeRootLabel, mintSpacesChallenge } from "../src/lib/verification/spaces-verifier"
+import { inspectSpacesNamespace, normalizeRootLabel, mintSpacesChallenge } from "../src/lib/verification/spaces-verifier"
 import { getHnsVerifierBaseUrl, isHnsVerifierConfigured } from "../src/lib/verification/hns-verifier"
 
 describe("normalizeRootLabel", () => {
@@ -21,6 +21,10 @@ describe("normalizeRootLabel", () => {
 
   test("handles already-normalized input", () => {
     expect(normalizeRootLabel("myspace")).toBe("myspace")
+  })
+
+  test("canonicalizes IDNA emoji labels", () => {
+    expect(normalizeRootLabel("@☠️")).toBe("xn--h4h")
   })
 })
 
@@ -86,6 +90,85 @@ describe("mintSpacesChallenge", () => {
     const expectedDigest = await crypto.subtle.digest("SHA-256", encoder.encode(result.challengePayload.message))
     const expectedHex = Array.from(new Uint8Array(expectedDigest), (b) => b.toString(16).padStart(2, "0")).join("")
     expect(result.challengePayload.digest).toBe(expectedHex)
+  })
+})
+
+describe("inspectSpacesNamespace", () => {
+  const env = {
+    SPACES_VERIFIER_BASE_URL: "http://spaces-verifier.test",
+  } as any
+
+  test("canonicalizes emoji labels before calling the verifier", async () => {
+    const originalFetch = globalThis.fetch
+    let capturedUrl: string | null = null
+    globalThis.fetch = (async (input) => {
+      capturedUrl = typeof input === "string" ? input : input.toString()
+      return new Response(JSON.stringify({
+        root_exists: true,
+        root_key_proof_verified: true,
+        root_pubkey: "spaces-root-pubkey",
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }) as typeof fetch
+
+    try {
+      const result = await inspectSpacesNamespace(env, "@☠️")
+      expect(result.rootExists).toBe(true)
+      expect(capturedUrl).toBe("http://spaces-verifier.test/inspect?root_label=xn--h4h")
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("rejects unsupported raw Unicode labels before calling the verifier", async () => {
+    const originalFetch = globalThis.fetch
+    let called = false
+    globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
+      called = true
+      return originalFetch(...args)
+    }) as typeof fetch
+
+    try {
+      try {
+        await inspectSpacesNamespace(env, "@🏴‍☠️")
+        throw new Error("expected inspectSpacesNamespace to reject")
+      } catch (error) {
+        expect(error).toMatchObject({
+          status: 400,
+          code: "bad_request",
+        })
+      }
+      expect(called).toBe(false)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("maps verifier 5xx responses to provider unavailable", async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      error: "spaced rpc request failed",
+    }), {
+      status: 500,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch
+
+    try {
+      try {
+        await inspectSpacesNamespace(env, "@pirate")
+        throw new Error("expected inspectSpacesNamespace to reject")
+      } catch (error) {
+        expect(error).toMatchObject({
+          status: 502,
+          code: "provider_unavailable",
+          retryable: true,
+        })
+      }
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 })
 
