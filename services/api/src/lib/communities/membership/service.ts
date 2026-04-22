@@ -8,6 +8,7 @@ import {
   upsertCommunityMembership,
   upsertMembershipRequest,
 } from "./store"
+import type { CommunityGateRuleRow } from "./gates"
 import { openCommunityDb } from "../community-db-factory"
 import {
   buildLocalizedCommunity,
@@ -43,6 +44,31 @@ export function satisfiesBaselineJoinGate(user: User): boolean {
   return user.verification_capabilities.wallet_score.state === "verified"
     && user.verification_capabilities.wallet_score.provider === "passport"
     && user.verification_capabilities.wallet_score.passing_score === true
+}
+
+function getRequiredWalletScore(rules: CommunityGateRuleRow[]): number | null {
+  let requiredScore: number | null = null
+  for (const summary of rules.map(buildMembershipGateSummary)) {
+    if (summary.gate_type !== "wallet_score" || typeof summary.minimum_score !== "number") {
+      continue
+    }
+    requiredScore = requiredScore == null ? summary.minimum_score : Math.max(requiredScore, summary.minimum_score)
+  }
+  return requiredScore
+}
+
+function buildWalletScoreStatus(user: User, rules: CommunityGateRuleRow[]): JoinEligibility["wallet_score_status"] {
+  const requiredScore = getRequiredWalletScore(rules)
+  if (requiredScore == null) {
+    return null
+  }
+  const capability = user.verification_capabilities.wallet_score
+  return {
+    current_score: typeof capability.score === "number" ? capability.score : null,
+    required_score: requiredScore,
+    passing_score: typeof capability.passing_score === "boolean" ? capability.passing_score : null,
+    last_score_timestamp: capability.last_score_timestamp ?? null,
+  }
 }
 
 export async function setPendingNamespaceVerificationSession(input: {
@@ -190,6 +216,7 @@ export async function getJoinEligibility(input: {
 
     const rules = await listActiveMembershipGateRules(db.client, input.communityId)
     const gateSummaries = rules.map(buildMembershipGateSummary)
+    const walletScoreStatus = buildWalletScoreStatus(user, rules)
     const walletAttachments = await input.userRepository.getWalletAttachmentsByUserId(input.userId)
     const evaluation = await evaluateMembershipGateRules({
       env: input.env,
@@ -218,6 +245,7 @@ export async function getJoinEligibility(input: {
         status: "verification_required",
         membership_gate_summaries: gateSummaries,
         missing_capabilities: evaluation.missingCapabilities,
+        ...(walletScoreStatus ? { wallet_score_status: walletScoreStatus } : {}),
         suggested_verification_provider: evaluation.suggestedVerificationProvider,
         suggested_verification_intent: evaluation.suggestedVerificationProvider === "self"
           ? "community_join"
@@ -245,6 +273,7 @@ export async function getJoinEligibility(input: {
       membership_gate_summaries: gateSummaries,
       missing_capabilities: [],
       failure_reason: failureReason,
+      ...(walletScoreStatus ? { wallet_score_status: walletScoreStatus } : {}),
     }
   } finally {
     db.close()
@@ -339,6 +368,7 @@ export async function joinCommunity(input: {
 
     const rules = await listActiveMembershipGateRules(db.client, input.communityId)
     const gateSummaries = rules.map(buildMembershipGateSummary)
+    const walletScoreStatus = buildWalletScoreStatus(user, rules)
     const walletAttachments = await input.userRepository.getWalletAttachmentsByUserId(input.userId)
     const evaluation = await evaluateMembershipGateRules({
       env: input.env,
@@ -356,6 +386,7 @@ export async function joinCommunity(input: {
             ? "community_join"
             : null,
           failure_reason: "missing_verification",
+          ...(walletScoreStatus ? { wallet_score_status: walletScoreStatus } : {}),
         })
       }
       if (evaluation.mismatchReasons.includes("nationality_mismatch")) {
@@ -374,6 +405,7 @@ export async function joinCommunity(input: {
         throw gateFailedWithDetails("Your Passport score does not satisfy this community requirement", {
           membership_gate_summaries: gateSummaries,
           failure_reason: "wallet_score_too_low",
+          ...(walletScoreStatus ? { wallet_score_status: walletScoreStatus } : {}),
         })
       }
       if (evaluation.mismatchReasons.includes("minimum_age_mismatch")) {

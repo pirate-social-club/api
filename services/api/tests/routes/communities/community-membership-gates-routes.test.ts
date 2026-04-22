@@ -125,12 +125,19 @@ describe("community membership gate routes", () => {
       suggested_verification_provider: string | null
       suggested_verification_intent: string | null
       membership_gate_summaries: Array<{ gate_type: string; minimum_score?: number }>
+      wallet_score_status?: { current_score: number | null; required_score: number | null; passing_score: boolean | null; last_score_timestamp: string | null }
     }
     expect(eligibilityBody.status).toBe("verification_required")
     expect(eligibilityBody.missing_capabilities).toContain("wallet_score")
     expect(eligibilityBody.suggested_verification_provider).toBe("passport")
     expect(eligibilityBody.suggested_verification_intent).toBeNull()
     expect(eligibilityBody.membership_gate_summaries[0].minimum_score).toBe(20)
+    expect(eligibilityBody.wallet_score_status).toEqual({
+      current_score: null,
+      required_score: 20,
+      passing_score: null,
+      last_score_timestamp: null,
+    })
   })
 
   test("join-eligibility returns wallet_score_too_low when Passport score is below threshold", async () => {
@@ -176,10 +183,17 @@ describe("community membership gate routes", () => {
       status: string
       failure_reason: string | null
       missing_capabilities: string[]
+      wallet_score_status?: { current_score: number | null; required_score: number | null; passing_score: boolean | null; last_score_timestamp: string | null }
     }
     expect(eligibilityBody.status).toBe("gate_failed")
     expect(eligibilityBody.failure_reason).toBe("wallet_score_too_low")
     expect(eligibilityBody.missing_capabilities).toEqual([])
+    expect(eligibilityBody.wallet_score_status).toMatchObject({
+      current_score: 24,
+      required_score: 30,
+      passing_score: true,
+    })
+    expect(typeof eligibilityBody.wallet_score_status?.last_score_timestamp).toBe("string")
   })
 
   test("join mutation succeeds when Passport score meets threshold", async () => {
