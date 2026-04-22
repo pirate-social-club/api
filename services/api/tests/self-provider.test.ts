@@ -114,5 +114,27 @@ describe("self-provider capability canonicalization", () => {
     expect(started.launch.user_id).toMatch(/^[0-9a-f-]{36}$/u)
     expect(started.launch.user_defined_data).toContain("ver_self_sdk")
     expect(started.upstreamSessionRef).toContain("\"kind\":\"self-sdk\"")
+    expect(started.upstreamSessionRef).toContain("\"mockPassport\":true")
+  })
+
+  test("production Self sessions use real passport verification without an API key", async () => {
+    const provider = getSelfProvider(buildTestEnv({
+      ENVIRONMENT: "production",
+      PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
+    }))
+    const started = await provider.startSession({
+      verificationSessionId: "ver_self_prod",
+      userId: "usr_test",
+      requestedCapabilities: ["unique_human", "nationality"],
+      verificationRequirements: [{ proof_type: "sanctions_clear" }],
+      verificationIntent: "community_join",
+      policyId: null,
+    })
+
+    expect(started.launch.endpoint).toBe("https://api.pirate.test/verification-sessions/ver_self_prod/self-callback")
+    expect(started.launch.endpoint_type).toBe("https")
+    expect(started.launch.disclosures.ofac).toBe(true)
+    expect(started.upstreamSessionRef).toContain("\"kind\":\"self-sdk\"")
+    expect(started.upstreamSessionRef).toContain("\"mockPassport\":false")
   })
 })

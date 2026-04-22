@@ -1,10 +1,8 @@
-import {
-  AllIds,
-  DefaultConfigStore,
+import type {
+  AttestationId,
   SelfBackendVerifier,
-  type AttestationId,
-  type VerificationConfig,
-  type VerificationResult,
+  VerificationConfig,
+  VerificationResult,
 } from "@selfxyz/core"
 import { badRequestError, providerUnavailable } from "../errors"
 import { makeId } from "../helpers"
@@ -14,6 +12,15 @@ import type { Env, RequestedVerificationCapability, SelfVerificationDisclosures,
 const SELF_CAPABILITY_ORDER: readonly RequestedVerificationCapability[] = ["unique_human", "age_over_18", "nationality", "gender"]
 const SELF_DEV_STUB_REF_PREFIX = "self-dev-stub"
 const SELF_SDK_REF_PREFIX = "self-sdk"
+
+type SelfCoreModule = typeof import("@selfxyz/core")
+
+let selfCoreModulePromise: Promise<SelfCoreModule> | null = null
+
+function loadSelfCoreModule(): Promise<SelfCoreModule> {
+  selfCoreModulePromise ??= import("@selfxyz/core")
+  return selfCoreModulePromise
+}
 
 type SelfProofPayload = {
   attestationId: AttestationId
@@ -457,6 +464,7 @@ export function getSelfProvider(env: Env): SelfProvider {
       }
 
       try {
+        const { AllIds, DefaultConfigStore, SelfBackendVerifier } = await loadSelfCoreModule()
         const verifier = new SelfBackendVerifier(
           sessionRef.scope,
           sessionRef.endpoint,
