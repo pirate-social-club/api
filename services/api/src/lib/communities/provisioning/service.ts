@@ -36,12 +36,17 @@ import {
   resolveProvisioningRetryAction,
 } from "../create/shared"
 
-function requireProvisionedCredentialId(communityId: string, credentialId: string): string {
+function resolveProvisionedCredentialId(communityId: string, credentialId: string): string {
   const trimmed = credentialId.trim()
-  if (trimmed.length === 0) {
-    throw new Error(`Provision operator returned empty credential_id for community ${communityId}`)
+  if (trimmed.length > 0) {
+    return trimmed
   }
-  return trimmed
+  const fallbackId = makeId("cdc")
+  console.warn("[community-provisioning] operator omitted credential_id; generated fallback", {
+    communityId,
+    credentialId: fallbackId,
+  })
+  return fallbackId
 }
 
 async function upsertLocalNamespaceAttachment(input: {
@@ -166,7 +171,7 @@ async function createNamespacelessCommunity(input: {
         plaintextToken: provisioned.plaintextToken,
         wrapKey: resolveCommunityDbWrapKey(input.env),
       })
-      const communityDbCredentialId = requireProvisionedCredentialId(communityId, provisioned.credentialId)
+      const communityDbCredentialId = resolveProvisionedCredentialId(communityId, provisioned.credentialId)
       await input.communityRepository.persistProvisionedCommunityDatabaseAccess({
         communityDatabaseBindingId: prepared.binding.community_database_binding_id,
         communityDbCredentialId,
@@ -351,7 +356,7 @@ async function provisionNamespacedCommunity(input: {
         plaintextToken: provisioned.plaintextToken,
         wrapKey: resolveCommunityDbWrapKey(env),
       })
-      const communityDbCredentialId = requireProvisionedCredentialId(communityId, provisioned.credentialId)
+      const communityDbCredentialId = resolveProvisionedCredentialId(communityId, provisioned.credentialId)
       await repo.persistProvisionedCommunityDatabaseAccess({
         communityDatabaseBindingId: prepared.binding.community_database_binding_id,
         communityDbCredentialId,

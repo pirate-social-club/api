@@ -174,7 +174,7 @@ describe("community provisioning routes", () => {
     }
   }, 10_000)
 
-  test("community create fails when operator omits credential_id", async () => {
+  test("community create generates a fallback credential id when operator omits credential_id", async () => {
     const operatorBaseUrl = "https://operator.test"
     const operatorToken = "operator-secret"
     const originalFetch = globalThis.fetch
@@ -233,11 +233,7 @@ describe("community provisioning routes", () => {
         },
       }, ctx.env, session.accessToken)
 
-      expect(response.status).toBe(500)
-      expect(await json(response)).toMatchObject({
-        code: "internal_error",
-        message: "Community provisioning failed",
-      })
+      expect(response.status).toBe(202)
 
       const credentialRows = await ctx.client.execute({
         sql: `
@@ -247,7 +243,8 @@ describe("community provisioning routes", () => {
         `,
         args: ["worker-cmt_no_cred-v1"],
       })
-      expect(credentialRows.rows.length).toBe(0)
+      expect(credentialRows.rows.length).toBe(1)
+      expect(String(credentialRows.rows[0]?.community_db_credential_id)).toMatch(/^cdc_/)
     } finally {
       globalThis.fetch = originalFetch
     }
