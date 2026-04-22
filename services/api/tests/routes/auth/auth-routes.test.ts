@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test"
 import app from "../../../src/index"
 import { setPrivyAccessProofVerifierForTests } from "../../../src/lib/auth/privy-auth"
 import type { Env } from "../../../src/types"
-import { buildTestEnv, json, mintUpstreamJwt, resetMemoryStore } from "../../helpers"
+import { buildTestEnv, createRouteTestContext, json, mintUpstreamJwt, resetMemoryStore } from "../../helpers"
 
 function makeJsonRequest(url: string, body: unknown, env: Env): Promise<Response> {
   return Promise.resolve(app.request(
@@ -61,6 +61,30 @@ describe("auth routes", () => {
     expect(body.profile.global_handle.free_rename_consumed).toBe(false)
     expect(body.onboarding.generated_handle_assigned).toBe(true)
     expect(body.onboarding.cleanup_rename_available).toBe(true)
+  })
+
+  test("session exchange works against the local migration-backed control-plane schema", async () => {
+    const ctx = await createRouteTestContext()
+
+    try {
+      const jwt = await mintUpstreamJwt(ctx.env, { sub: "db-backed-signup" })
+      const response = await makeJsonRequest("http://pirate.test/auth/session/exchange", {
+        proof: {
+          type: "jwt_based_auth",
+          jwt,
+        },
+      }, ctx.env)
+
+      expect(response.status).toBe(200)
+      const body = await json(response) as {
+        user: { user_id: string }
+        onboarding: { missing_requirements: string[] }
+      }
+      expect(typeof body.user.user_id).toBe("string")
+      expect(body.onboarding.missing_requirements).toEqual(["unique_human_verification", "namespace_verification"])
+    } finally {
+      await ctx.cleanup()
+    }
   })
 
   test("re-exchanging the same upstream JWT resolves the same user", async () => {

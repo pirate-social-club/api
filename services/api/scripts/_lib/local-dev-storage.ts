@@ -165,6 +165,29 @@ async function updateAppliedMigrationChecksum(
   })
 }
 
+async function listTableColumns(client: Client, tableName: string): Promise<Set<string>> {
+  const result = await client.execute(`PRAGMA table_info(${tableName})`)
+  return new Set(result.rows.map((row) => String(row.name)))
+}
+
+async function ensureColumn(
+  client: Client,
+  tableName: string,
+  columnName: string,
+  columnDefinition: string,
+): Promise<void> {
+  const columns = await listTableColumns(client, tableName)
+  if (columns.has(columnName)) {
+    return
+  }
+
+  await client.execute(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`)
+}
+
+async function ensureLocalBaselineSnapshotCompatibility(client: Client): Promise<void> {
+  await ensureColumn(client, "verification_sessions", "verification_requirements_json", "TEXT NOT NULL DEFAULT '[]'")
+}
+
 function isSupersededByLocalBaseline(migrationName: string, baselineMigrationName: string): boolean {
   return migrationName !== baselineMigrationName && migrationName < FIRST_LOCAL_POST_BASELINE_MIGRATION
 }
@@ -198,6 +221,8 @@ export async function applyLocalControlPlaneMigrations(storage: LocalDevStorage)
       await applySqlFile(client, baselineMigrationPath)
       await recordAppliedMigration(client, baselineMigrationName, baselineChecksum)
     }
+
+    await ensureLocalBaselineSnapshotCompatibility(client)
 
     const appliedMigrations = await getAppliedMigrations(client)
     for (const migrationName of entries) {

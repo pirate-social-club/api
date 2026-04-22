@@ -86,6 +86,18 @@ async function setMigrationChecksum(databasePath: string, migrationName: string,
   }
 }
 
+async function dropColumn(databasePath: string, tableName: string, columnName: string): Promise<void> {
+  const client = createClient({
+    url: `file:${databasePath}`,
+  })
+
+  try {
+    await client.execute(`ALTER TABLE ${tableName} DROP COLUMN ${columnName}`)
+  } finally {
+    client.close()
+  }
+}
+
 function buildStorage(rootDir: string, databasePath: string) {
   const serviceRoot = fileURLToPath(new URL("..", import.meta.url))
   return resolveLocalDevStorage({
@@ -130,6 +142,21 @@ describe("applyLocalControlPlaneMigrations", () => {
     await applyLocalControlPlaneMigrations(storage)
 
     expect(await getMigrationChecksum(databasePath, "0000_control_plane_baseline_postgres.sql")).toBe(currentChecksum)
+  })
+
+  test("backfills columns added to the local baseline after an existing database was created", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-local-dev-storage-stale-column-"))
+    cleanupPaths.push(rootDir)
+
+    const databasePath = join(rootDir, "control-plane.db")
+    const storage = buildStorage(rootDir, databasePath)
+    await applyLocalControlPlaneMigrations(storage)
+    await dropColumn(databasePath, "verification_sessions", "verification_requirements_json")
+    expect(await listTableColumns(databasePath, "verification_sessions")).not.toContain("verification_requirements_json")
+
+    await applyLocalControlPlaneMigrations(storage)
+
+    expect(await listTableColumns(databasePath, "verification_sessions")).toContain("verification_requirements_json")
   })
 
   test("rejects local control-plane databases with stale post-baseline checksums", async () => {

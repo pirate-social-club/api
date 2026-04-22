@@ -1,9 +1,10 @@
 import { SignJWT } from "jose"
 import { createClient, type Client } from "@libsql/client"
 import { generateKeyPairSync, randomUUID } from "node:crypto"
-import { mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import type { Env } from "../src/types"
 import { setClawkeyProviderForTests } from "../src/lib/agents/clawkey-provider"
 import { setSelfProviderForTests } from "../src/lib/verification/self-provider"
@@ -19,6 +20,10 @@ import { setStoryPurchaseSettlementExecutorForTests } from "../src/lib/story/sto
 import { setSwarmPublisherForTests } from "../src/lib/swarm/swarm-publisher"
 import { setCommunityCommerceCharityPayoutExecutorForTests } from "../src/lib/communities/commerce/charity-payout-service"
 import { setCommunityCommerceBuyerFundingVerifierForTests } from "../src/lib/communities/commerce/funding-proof-service"
+import {
+  applyLocalControlPlaneMigrations,
+  resolveLocalDevStorage,
+} from "../scripts/_lib/local-dev-storage"
 
 import { splitSqlStatements, toSqliteCompatibleStatement } from "../shared/sql-migration"
 
@@ -147,15 +152,12 @@ export async function createControlPlaneTestClient(options?: {
   })
 
   if (options?.includeAllMigrations) {
-    const migrationsDir = new URL("../../../../db/control-plane/migrations/", import.meta.url)
-    const entries = (await readdir(migrationsDir))
-      .filter((entry) => entry.endsWith(".sql"))
-      .sort()
-    const baselineEntry = entries.find((entry) => entry.startsWith("0000_") && entry.includes("baseline"))
-    const entriesToApply = baselineEntry ? [baselineEntry] : entries
-    for (const entry of entriesToApply) {
-      await applySqlFile(client, new URL(entry, migrationsDir))
-    }
+    const serviceRoot = fileURLToPath(new URL("..", import.meta.url))
+    const storage = resolveLocalDevStorage({
+      CONTROL_PLANE_DATABASE_URL: `file:${databasePath}`,
+      LOCAL_COMMUNITY_DB_ROOT: join(tmpdir(), `pirate-v2-community-${randomUUID()}`),
+    }, serviceRoot)
+    await applyLocalControlPlaneMigrations(storage)
   } else {
     await applySqlFile(client, new URL("../../../../db/control-plane/migrations/0001_control_plane_identity.sql", import.meta.url))
   }
