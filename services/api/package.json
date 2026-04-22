@@ -17,7 +17,8 @@
     "test": "bun test",
     "mint:dev-jwt": "bun run scripts/mint-dev-jwt.ts",
     "spike:courtyard-inventory-source": "bun run scripts/spike-courtyard-inventory-source.ts",
-    "admin:courtyard-rolex-gate": "bun run scripts/admin-courtyard-rolex-gate.ts"
+    "admin:courtyard-rolex-gate": "bun run scripts/admin-courtyard-rolex-gate.ts",
+    "admin:courtyard-asset-gate": "bun run scripts/admin-courtyard-asset-gate.ts"
   },
   "dependencies": {
     "@ethersphere/bee-js": "^11.1.1",
