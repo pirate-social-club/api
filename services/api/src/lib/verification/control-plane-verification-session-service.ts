@@ -26,6 +26,7 @@ import type {
 } from "../../types"
 import {
   getAttestationsBySourceSessionId,
+  getVerificationSessionRow,
   getVerificationSessionRowForUser,
 } from "./control-plane-verification-shared"
 
@@ -91,6 +92,7 @@ export async function startVerificationSession(
     walletAttachmentId?: string | null
     verificationIntent?: VerificationIntent | null
     policyId?: string | null
+    publicOrigin?: string | null
   },
 ): Promise<VerificationSession> {
   const requestedCapabilities = canonicalizeRequestedCapabilities(input.provider, (input.requestedCapabilities?.length ? input.requestedCapabilities : ["unique_human"]) as RequestedVerificationCapability[])
@@ -124,7 +126,9 @@ export async function startVerificationSession(
   if (input.provider === "self") {
     const provider = getSelfProvider(env)
     const result = await provider.startSession({
+      verificationSessionId,
       userId: input.userId,
+      publicOrigin: input.publicOrigin ?? null,
       requestedCapabilities,
       verificationRequirements,
       verificationIntent: input.verificationIntent ?? null,
@@ -185,9 +189,9 @@ export async function completeVerificationSession(
     verificationSessionId: string
     userId: string
     attestationId?: string | null
-    proof?: string | null
+    proof?: unknown
     proofHash?: string | null
-    providerPayloadRef?: string | null
+    providerPayloadRef?: unknown
   },
 ): Promise<VerificationSession | null> {
   const row = await getVerificationSessionRowForUser(client, input.verificationSessionId, input.userId)
@@ -220,6 +224,40 @@ export async function completeVerificationSession(
   return finalizeVerification(client, row, input)
 }
 
+export async function completeSelfVerificationCallback(
+  client: Client,
+  env: Env,
+  input: {
+    verificationSessionId: string
+    payload: Record<string, unknown>
+  },
+): Promise<VerificationSession | null> {
+  const row = await getVerificationSessionRow(client, input.verificationSessionId)
+  if (!row) {
+    return null
+  }
+  if (row.provider !== "self") {
+    throw badRequestError("Verification session is not a Self session")
+  }
+  const providerPayload = input.payload.payload != null
+    && typeof input.payload.payload === "object"
+    && !Array.isArray(input.payload.payload)
+    ? input.payload.payload as Record<string, unknown>
+    : input.payload
+  return completeSelfSession(client, env, row, {
+    verificationSessionId: input.verificationSessionId,
+    userId: row.user_id,
+    attestationId: typeof providerPayload.attestationId === "string"
+      ? providerPayload.attestationId
+      : typeof providerPayload.attestation_id === "string"
+        ? providerPayload.attestation_id
+        : null,
+    proof: null,
+    proofHash: null,
+    providerPayloadRef: JSON.stringify(providerPayload),
+  })
+}
+
 function isTerminalStatus(status: string): boolean {
   return status === "verified" || status === "failed" || status === "expired"
 }
@@ -232,9 +270,9 @@ async function completeVerySession(
     verificationSessionId: string
     userId: string
     attestationId?: string | null
-    proof?: string | null
+    proof?: unknown
     proofHash?: string | null
-    providerPayloadRef?: string | null
+    providerPayloadRef?: unknown
   },
 ): Promise<VerificationSession> {
   if (!row.upstream_session_ref) {
@@ -254,9 +292,14 @@ async function completeVerySession(
   let outcome: VerySessionOutcome
   try {
     const provider = getVeryProvider(env)
+    const providerPayloadRef = typeof input.providerPayloadRef === "string"
+      ? input.providerPayloadRef
+      : typeof input.proof === "string"
+        ? input.proof
+        : null
     outcome = await provider.getSessionOutcome({
       upstreamSessionRef: row.upstream_session_ref,
-      providerPayloadRef: input.providerPayloadRef ?? input.proof ?? null,
+      providerPayloadRef,
     })
   } catch (error) {
     throw providerUnavailable(
@@ -320,9 +363,9 @@ async function completeSelfSession(
     verificationSessionId: string
     userId: string
     attestationId?: string | null
-    proof?: string | null
+    proof?: unknown
     proofHash?: string | null
-    providerPayloadRef?: string | null
+    providerPayloadRef?: unknown
   },
 ): Promise<VerificationSession> {
   const sessionExpiresAt = row.expires_at
@@ -340,6 +383,7 @@ async function completeSelfSession(
     const provider = getSelfProvider(env)
     outcome = await provider.getSessionOutcome({
       upstreamSessionRef: row.upstream_session_ref ?? input.verificationSessionId,
+      attestationId: input.attestationId ?? null,
       proof: input.proof ?? null,
       providerPayloadRef: input.providerPayloadRef ?? null,
     })
@@ -422,7 +466,7 @@ async function finalizeVerification(
     verificationSessionId: string
     userId: string
     attestationId?: string | null
-    proof?: string | null
+    proof?: unknown
     proofHash?: string | null
   },
   requestedCapabilities?: RequestedVerificationCapability[] | null,

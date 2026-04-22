@@ -7,6 +7,22 @@ import type { Env, RequestedVerificationCapability, VerificationIntent, Verifica
 const verification = new Hono<{ Bindings: Env }>()
 const authenticatedVerification = new Hono<AuthenticatedEnv>()
 
+verification.post("/verification-sessions/:verificationSessionId/self-callback", async (c) => {
+  const payload = (await c.req.json<Record<string, unknown>>().catch(() => null)) ?? null
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw badRequestError("Invalid Self verification callback payload")
+  }
+  const repo = getControlPlaneVerificationRepository(c.env)
+  const result = await repo.completeSelfVerificationCallback({
+    verificationSessionId: c.req.param("verificationSessionId"),
+    payload,
+  })
+  if (!result) {
+    throw notFoundError("Verification session not found")
+  }
+  return c.json({ status: result.status, verification_session_id: result.verification_session_id }, 200)
+})
+
 authenticatedVerification.use("*", authenticate)
 
 authenticatedVerification.post("/verification-sessions", async (c) => {
@@ -25,6 +41,7 @@ authenticatedVerification.post("/verification-sessions", async (c) => {
   }
 
   const repo = getControlPlaneVerificationRepository(c.env)
+  const publicOrigin = new URL(c.req.url).origin
   const created = await repo.startVerificationSession({
     userId: actor.userId,
     provider: body.provider,
@@ -33,6 +50,7 @@ authenticatedVerification.post("/verification-sessions", async (c) => {
     walletAttachmentId: body.wallet_attachment_id ?? null,
     verificationIntent: (body.verification_intent as VerificationIntent | undefined) ?? null,
     policyId: body.policy_id ?? null,
+    publicOrigin,
   })
   return c.json(created, 201)
 })
@@ -51,7 +69,7 @@ authenticatedVerification.post("/verification-sessions/:verificationSessionId/co
   const actor = c.get("actor")
   const body =
     (await c.req
-      .json<{ attestation_id?: string | null; proof?: string | null; proof_hash?: string | null; provider_payload_ref?: string | null }>()
+      .json<{ attestation_id?: string | null; proof?: unknown; proof_hash?: string | null; provider_payload_ref?: unknown }>()
       .catch(() => null)) ?? null
   const repo = getControlPlaneVerificationRepository(c.env)
   const result = await repo.completeVerificationSession({

@@ -814,9 +814,9 @@ export type StartVerificationSessionRequest = {
 
 export type CompleteVerificationSessionRequest = {
   attestation_id?: string | null;
-  proof?: string | null;
+  proof?: (string | Record<string, unknown> | Array<unknown>) | null;
   proof_hash?: string | null;
-  provider_payload_ref?: string | null;
+  provider_payload_ref?: (string | Record<string, unknown>) | null;
 };
 
 export type StartNamespaceVerificationSessionRequest = {

@@ -41,6 +41,7 @@ describe("self-provider capability canonicalization", () => {
   test("non-production self stub returns requested nationality and gender claims", async () => {
     const provider = getSelfProvider(buildTestEnv({ ENVIRONMENT: "test" }))
     const started = await provider.startSession({
+      verificationSessionId: "ver_self_stub",
       userId: "usr_test",
       requestedCapabilities: ["unique_human", "nationality", "gender"],
       verificationIntent: "community_join",
@@ -68,6 +69,7 @@ describe("self-provider capability canonicalization", () => {
   test("non-production self stub returns OFAC clear when requested", async () => {
     const provider = getSelfProvider(buildTestEnv({ ENVIRONMENT: "test" }))
     const started = await provider.startSession({
+      verificationSessionId: "ver_self_stub_ofac",
       userId: "usr_test",
       requestedCapabilities: ["unique_human", "nationality"],
       verificationRequirements: [{ proof_type: "sanctions_clear" }],
@@ -93,5 +95,24 @@ describe("self-provider capability canonicalization", () => {
         ofac_clear: true,
       },
     })
+  })
+
+  test("configured Self sessions use the SDK endpoint without an API key", async () => {
+    const provider = getSelfProvider(buildTestEnv({ ENVIRONMENT: "staging" }))
+    const started = await provider.startSession({
+      verificationSessionId: "ver_self_sdk",
+      userId: "usr_test",
+      publicOrigin: "https://api.pirate.test",
+      requestedCapabilities: ["unique_human", "nationality"],
+      verificationRequirements: [{ proof_type: "sanctions_clear" }],
+      verificationIntent: "community_join",
+      policyId: null,
+    })
+
+    expect(started.launch.endpoint).toBe("https://api.pirate.test/verification-sessions/ver_self_sdk/self-callback")
+    expect(started.launch.endpoint_type).toBe("staging_https")
+    expect(started.launch.user_id).toMatch(/^[0-9a-f-]{36}$/u)
+    expect(started.launch.user_defined_data).toContain("ver_self_sdk")
+    expect(started.upstreamSessionRef).toContain("\"kind\":\"self-sdk\"")
   })
 })

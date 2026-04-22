@@ -5,6 +5,7 @@ import {
   startVerificationSession,
   getVerificationSession,
   completeVerificationSession,
+  completeSelfVerificationCallback,
 } from "./control-plane-verification-session-service"
 import {
   startNamespaceVerificationSession,
@@ -35,15 +36,20 @@ export interface VerificationRepository {
     walletAttachmentId?: string | null
     verificationIntent?: VerificationIntent | null
     policyId?: string | null
+    publicOrigin?: string | null
   }): Promise<VerificationSession>
   getVerificationSession(verificationSessionId: string, userId: string): Promise<VerificationSession | null>
   completeVerificationSession(input: {
     verificationSessionId: string
     userId: string
     attestationId?: string | null
-    proof?: string | null
+    proof?: unknown
     proofHash?: string | null
-    providerPayloadRef?: string | null
+    providerPayloadRef?: unknown
+  }): Promise<VerificationSession | null>
+  completeSelfVerificationCallback(input: {
+    verificationSessionId: string
+    payload: Record<string, unknown>
   }): Promise<VerificationSession | null>
   startNamespaceVerificationSession(input: {
     userId: string
@@ -77,6 +83,7 @@ export class ControlPlaneVerificationRepository implements VerificationRepositor
     walletAttachmentId?: string | null
     verificationIntent?: VerificationIntent | null
     policyId?: string | null
+    publicOrigin?: string | null
   }): Promise<VerificationSession> {
     return startVerificationSession(this.client, this.env, input)
   }
@@ -89,11 +96,18 @@ export class ControlPlaneVerificationRepository implements VerificationRepositor
     verificationSessionId: string
     userId: string
     attestationId?: string | null
-    proof?: string | null
+    proof?: unknown
     proofHash?: string | null
-    providerPayloadRef?: string | null
+    providerPayloadRef?: unknown
   }): Promise<VerificationSession | null> {
     return completeVerificationSession(this.client, this.env, input)
+  }
+
+  async completeSelfVerificationCallback(input: {
+    verificationSessionId: string
+    payload: Record<string, unknown>
+  }): Promise<VerificationSession | null> {
+    return completeSelfVerificationCallback(this.client, this.env, input)
   }
 
   async startNamespaceVerificationSession(input: {

@@ -1,12 +1,36 @@
+import {
+  AllIds,
+  DefaultConfigStore,
+  SelfBackendVerifier,
+  type AttestationId,
+  type VerificationConfig,
+  type VerificationResult,
+} from "@selfxyz/core"
 import { badRequestError, providerUnavailable } from "../errors"
 import { makeId } from "../helpers"
 import { normalizeIdentityCountryCode } from "../identity/country-codes"
 import type { Env, RequestedVerificationCapability, SelfVerificationDisclosures, SelfVerificationLaunch, VerificationIntent, VerificationRequirement } from "../../types"
 
-const SELF_TIMEOUT_MS = 15_000
-
 const SELF_CAPABILITY_ORDER: readonly RequestedVerificationCapability[] = ["unique_human", "age_over_18", "nationality", "gender"]
 const SELF_DEV_STUB_REF_PREFIX = "self-dev-stub"
+const SELF_SDK_REF_PREFIX = "self-sdk"
+
+type SelfProofPayload = {
+  attestationId: AttestationId
+  proof: Parameters<SelfBackendVerifier["verify"]>[1]
+  publicSignals: Parameters<SelfBackendVerifier["verify"]>[2]
+  userContextData: string
+}
+
+type SelfSdkSessionRef = {
+  kind: "self-sdk"
+  endpoint: string
+  mockPassport: boolean
+  scope: string
+  selfUserId: string
+  userDefinedData: string
+  verificationConfig: VerificationConfig
+}
 
 function normalizeGenderClaim(value: unknown): "M" | "F" | null {
   if (typeof value !== "string") {
@@ -66,6 +90,34 @@ function decodeDevStubOfac(upstreamSessionRef: string): boolean {
 
   const [, , , rawOfac] = upstreamSessionRef.split(":", 5)
   return rawOfac === "ofac"
+}
+
+function encodeSelfSdkSessionRef(input: Omit<SelfSdkSessionRef, "kind">): string {
+  return `${SELF_SDK_REF_PREFIX}:${JSON.stringify({ kind: SELF_SDK_REF_PREFIX, ...input })}`
+}
+
+function decodeSelfSdkSessionRef(upstreamSessionRef: string): SelfSdkSessionRef | null {
+  if (!upstreamSessionRef.startsWith(`${SELF_SDK_REF_PREFIX}:`)) {
+    return null
+  }
+  try {
+    const parsed = JSON.parse(upstreamSessionRef.slice(SELF_SDK_REF_PREFIX.length + 1)) as Partial<SelfSdkSessionRef>
+    if (
+      parsed.kind !== SELF_SDK_REF_PREFIX
+      || typeof parsed.endpoint !== "string"
+      || typeof parsed.mockPassport !== "boolean"
+      || typeof parsed.scope !== "string"
+      || typeof parsed.selfUserId !== "string"
+      || typeof parsed.userDefinedData !== "string"
+      || parsed.verificationConfig == null
+      || typeof parsed.verificationConfig !== "object"
+    ) {
+      return null
+    }
+    return parsed as SelfSdkSessionRef
+  } catch {
+    return null
+  }
 }
 
 export function canonicalizeRequestedCapabilities(
@@ -171,7 +223,9 @@ export type SelfSessionOutcome =
 
 export interface SelfProvider {
   startSession(input: {
+    verificationSessionId: string
     userId: string
+    publicOrigin?: string | null
     requestedCapabilities: RequestedVerificationCapability[]
     verificationRequirements?: VerificationRequirement[]
     verificationIntent: VerificationIntent | null
@@ -180,8 +234,9 @@ export interface SelfProvider {
 
   getSessionOutcome(input: {
     upstreamSessionRef: string
-    proof: string | null
-    providerPayloadRef: string | null
+    attestationId?: string | null
+    proof: unknown
+    providerPayloadRef: unknown
   }): Promise<SelfSessionOutcome>
 }
 
@@ -189,123 +244,16 @@ function trimEnv(value: string | undefined): string {
   return String(value || "").trim()
 }
 
-function requireConfiguredSelf(env: Env): { apiUrl: string; apiKey: string; appName: string } {
-  const apiUrl = trimEnv(env.SELF_API_URL)
-  const apiKey = trimEnv(env.SELF_API_KEY)
-  const appName = trimEnv(env.SELF_APP_NAME) || "Pirate"
-  if (!apiUrl || !apiKey) {
-    throw providerUnavailable("Self provider not configured: SELF_API_URL and SELF_API_KEY must be set")
-  }
-  return { apiUrl, apiKey, appName }
-}
-
 function isProductionEnv(env: Env): boolean {
   return String(env.ENVIRONMENT || "").trim().toLowerCase() === "production"
 }
 
-async function verifySelfProof(input: {
-  apiUrl: string
-  apiKey: string
-  proof: string
-  upstreamSessionRef: string
-}): Promise<SelfSessionOutcome> {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), SELF_TIMEOUT_MS)
-
-  try {
-    const response = await fetch(`${input.apiUrl}/v1/verify`, {
-      method: "POST",
-      headers: {
-        accept: "application/json",
-        "content-type": "application/json",
-        authorization: `Bearer ${input.apiKey}`,
-      },
-      body: JSON.stringify({
-        proof: input.proof,
-        session_id: input.upstreamSessionRef,
-      }),
-      signal: controller.signal,
-    })
-
-    const body = await response.json().catch(() => null) as Record<string, unknown> | null
-    if (!response.ok) {
-      const message = (body?.error as string) || `Self verification request failed with status ${response.status}`
-      throw providerUnavailable(message)
-    }
-
-    if (!body || typeof body !== "object") {
-      throw providerUnavailable("Self verification response was invalid")
-    }
-
-    const status = String(body.status || "").trim().toLowerCase()
-    if (body.expired === true || status === "expired") {
-      return { status: "expired" }
-    }
-
-    if (status === "verified" || status === "success" || status === "completed" || body.verified === true) {
-      const disclosures = (
-        body.disclosures
-        ?? body.discloseOutput
-        ?? body.disclose_output
-        ?? {}
-      ) as Record<string, unknown>
-      const minimumAge = parseMinimumAgeDisclosure(disclosures)
-      const claims: SelfVerifiedClaims = {
-        age_over_18: minimumAge != null ? minimumAge >= 18 : disclosures?.date_of_birth != null,
-        minimum_age: minimumAge,
-        nationality: normalizeIdentityCountryCode(disclosures?.nationality),
-        gender: normalizeGenderClaim(disclosures?.gender ?? body.gender),
-        ofac_clear: parseOfacClear(body),
-      }
-      return { status: "verified", claims }
-    }
-
-    if (status === "pending" || status === "processing") {
-      return { status: "pending" }
-    }
-
-    return {
-      status: "failed",
-      failureReason: (body.error as string) || (body.failure_reason as string) || status || "verification_failed",
-    }
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      throw providerUnavailable("Self verification request timed out")
-    }
-    throw error
-  } finally {
-    clearTimeout(timeout)
-  }
-}
-
-function parseOfacClear(body: Record<string, unknown>): boolean | null {
-  const isValidDetails = body.isValidDetails ?? body.is_valid_details
-  if (isValidDetails && typeof isValidDetails === "object" && !Array.isArray(isValidDetails)) {
-    const details = isValidDetails as Record<string, unknown>
-    const value = details.isOfacValid ?? details.is_ofac_valid
-    if (typeof value === "boolean") {
-      return value
-    }
-  }
-
-  const disclosures = (
-    body.disclosures
-    ?? body.discloseOutput
-    ?? body.disclose_output
-    ?? {}
-  ) as Record<string, unknown>
-  const ofac = disclosures.ofac
-  if (Array.isArray(ofac) && ofac.every((value) => typeof value === "boolean")) {
-    return ofac.length > 0 ? ofac.every(Boolean) : null
-  }
-  if (typeof ofac === "boolean") {
-    return ofac
-  }
-  return null
+function isAutomatedTestEnv(env: Env): boolean {
+  return String(env.ENVIRONMENT || "").trim().toLowerCase() === "test"
 }
 
 function parseMinimumAgeDisclosure(disclosures: Record<string, unknown>): number | null {
-  const value = disclosures.minimum_age ?? disclosures.minimumAge ?? disclosures.olderThan
+  const value = disclosures.minimumAge ?? disclosures.minimum_age ?? disclosures.olderThan
   if (typeof value === "number" && Number.isInteger(value) && value > 0) {
     return value
   }
@@ -316,6 +264,104 @@ function parseMinimumAgeDisclosure(disclosures: Record<string, unknown>): number
   return null
 }
 
+function buildVerificationConfig(
+  capabilities: RequestedVerificationCapability[],
+  verificationRequirements: VerificationRequirement[],
+): VerificationConfig {
+  const minimumAge = resolveRequestedMinimumAge(capabilities, verificationRequirements)
+  return {
+    ...(minimumAge != null ? { minimumAge } : {}),
+    ...(hasSelfOfacRequirement(verificationRequirements) ? { ofac: true } : {}),
+  }
+}
+
+function buildSelfEndpoint(env: Env, verificationSessionId: string, publicOrigin?: string | null): string {
+  const rawEndpoint = trimEnv(env.SELF_ENDPOINT)
+  if (rawEndpoint) {
+    return rawEndpoint.replace(/\{verification_session_id\}/g, encodeURIComponent(verificationSessionId))
+  }
+  const origin = trimEnv(env.PIRATE_API_PUBLIC_ORIGIN) || trimEnv(publicOrigin ?? undefined)
+  if (!origin) {
+    throw providerUnavailable("Self provider not configured: PIRATE_API_PUBLIC_ORIGIN or SELF_ENDPOINT must be set")
+  }
+  return `${origin.replace(/\/+$/u, "")}/verification-sessions/${encodeURIComponent(verificationSessionId)}/self-callback`
+}
+
+function endpointTypeForEnvironment(env: Env): SelfVerificationLaunch["endpoint_type"] {
+  const configured = trimEnv(env.SELF_ENDPOINT_TYPE)
+  if (configured === "https" || configured === "staging_https" || configured === "celo" || configured === "staging_celo") {
+    return configured
+  }
+  return isProductionEnv(env) ? "https" : "staging_https"
+}
+
+function parseProviderPayload(value: unknown): Record<string, unknown> | null {
+  if (value == null) {
+    return null
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim()
+    if (!trimmed) return null
+    try {
+      const parsed = JSON.parse(trimmed) as unknown
+      return parsed != null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null
+    } catch {
+      return null
+    }
+  }
+  return typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+
+function parseSelfProofPayload(input: {
+  attestationId?: string | null
+  proof: unknown
+  providerPayloadRef: unknown
+}): SelfProofPayload | null {
+  const body = parseProviderPayload(input.providerPayloadRef) ?? parseProviderPayload(input.proof)
+  if (!body) {
+    return null
+  }
+  const rawAttestationId = body.attestationId ?? body.attestation_id ?? input.attestationId
+  const attestationId = Number(rawAttestationId)
+  const proof = body.proof
+  const publicSignals = body.publicSignals ?? body.public_signals
+  const userContextData = body.userContextData ?? body.user_context_data
+  if (
+    (attestationId !== 1 && attestationId !== 2 && attestationId !== 3 && attestationId !== 4)
+    || proof == null
+    || typeof proof !== "object"
+    || !Array.isArray(publicSignals)
+    || typeof userContextData !== "string"
+  ) {
+    return null
+  }
+  return {
+    attestationId,
+    proof: proof as SelfProofPayload["proof"],
+    publicSignals: publicSignals as SelfProofPayload["publicSignals"],
+    userContextData,
+  }
+}
+
+function buildClaimsFromVerificationResult(result: VerificationResult, expectedConfig: VerificationConfig): SelfVerifiedClaims | null {
+  if (result.isValidDetails.isValid !== true) {
+    return null
+  }
+  const disclosures = result.discloseOutput as unknown as Record<string, unknown>
+  const minimumAge = parseMinimumAgeDisclosure(disclosures)
+  const ofacFlags = Array.isArray(result.discloseOutput.ofac)
+    ? result.discloseOutput.ofac.filter((value): value is boolean => typeof value === "boolean")
+    : []
+  const isSanctioned = result.isValidDetails.isOfacValid === true || ofacFlags.some(Boolean)
+  return {
+    age_over_18: minimumAge != null ? minimumAge >= 18 : Boolean(result.discloseOutput.dateOfBirth),
+    minimum_age: minimumAge,
+    nationality: normalizeIdentityCountryCode(result.discloseOutput.nationality),
+    gender: normalizeGenderClaim(result.discloseOutput.gender),
+    ofac_clear: expectedConfig.ofac === true ? !isSanctioned : null,
+  }
+}
+
 let testOverride: SelfProvider | null = null
 
 export function getSelfProvider(env: Env): SelfProvider {
@@ -323,17 +369,18 @@ export function getSelfProvider(env: Env): SelfProvider {
     return testOverride
   }
 
-  const endpoint = trimEnv(env.SELF_ENDPOINT) || "https://self.xyz"
-  const endpointType = (trimEnv(env.SELF_ENDPOINT_TYPE) || "https") as SelfVerificationLaunch["endpoint_type"]
+  const endpointType = endpointTypeForEnvironment(env)
   const appName = trimEnv(env.SELF_APP_NAME) || "Pirate"
 
-  if (!trimEnv(env.SELF_API_URL) || !trimEnv(env.SELF_API_KEY)) {
-    if (isProductionEnv(env)) {
-      requireConfiguredSelf(env)
-    }
-
-    return {
-      async startSession(input) {
+  return {
+    async startSession(input) {
+      if (
+        isAutomatedTestEnv(env)
+        || (!trimEnv(env.PIRATE_API_PUBLIC_ORIGIN) && !trimEnv(env.SELF_ENDPOINT) && !trimEnv(input.publicOrigin ?? undefined))
+      ) {
+        if (isProductionEnv(env)) {
+          buildSelfEndpoint(env, input.verificationSessionId, input.publicOrigin)
+        }
         const upstreamSessionRef = encodeDevStubSessionRef(input.requestedCapabilities, input.verificationRequirements ?? [])
         const disclosures = mapCapabilitiesToDisclosures(input.requestedCapabilities, input.verificationRequirements ?? [])
 
@@ -341,8 +388,8 @@ export function getSelfProvider(env: Env): SelfProvider {
           upstreamSessionRef,
           launch: {
             app_name: appName,
-            endpoint,
-            endpoint_type: endpointType,
+            endpoint: "https://redirect.self.xyz",
+            endpoint_type: "staging_https",
             scope: input.verificationIntent ?? "profile_verification",
             session_id: upstreamSessionRef,
             user_id: input.userId,
@@ -350,9 +397,45 @@ export function getSelfProvider(env: Env): SelfProvider {
             disclosures,
           },
         }
-      },
+      }
 
-      async getSessionOutcome(input) {
+      const disclosures = mapCapabilitiesToDisclosures(input.requestedCapabilities, input.verificationRequirements ?? [])
+      const verificationConfig = buildVerificationConfig(input.requestedCapabilities, input.verificationRequirements ?? [])
+      const endpoint = buildSelfEndpoint(env, input.verificationSessionId, input.publicOrigin)
+      const scope = input.verificationIntent ?? "profile_verification"
+      const selfUserId = crypto.randomUUID()
+      const userDefinedData = JSON.stringify({
+        verification_session_id: input.verificationSessionId,
+        user_id: input.userId,
+      })
+      const upstreamSessionRef = encodeSelfSdkSessionRef({
+        endpoint,
+        mockPassport: !isProductionEnv(env),
+        scope,
+        selfUserId,
+        userDefinedData,
+        verificationConfig,
+      })
+
+      return {
+        upstreamSessionRef,
+        launch: {
+          app_name: appName,
+          endpoint,
+          endpoint_type: endpointType,
+          scope,
+          session_id: upstreamSessionRef,
+          user_id: selfUserId,
+          user_id_type: "uuid",
+          disclosures,
+          user_defined_data: userDefinedData,
+          version: 2,
+        },
+      }
+    },
+
+    async getSessionOutcome(input) {
+      if (input.upstreamSessionRef.startsWith(`${SELF_DEV_STUB_REF_PREFIX}:`)) {
         const capabilities = decodeDevStubCapabilities(input.upstreamSessionRef)
         const minimumAge = decodeDevStubMinimumAge(input.upstreamSessionRef)
         return {
@@ -365,44 +448,46 @@ export function getSelfProvider(env: Env): SelfProvider {
             ofac_clear: decodeDevStubOfac(input.upstreamSessionRef) ? true : null,
           },
         }
-      },
-    }
-  }
-
-  const { apiUrl, apiKey } = requireConfiguredSelf(env)
-
-  return {
-    async startSession(input) {
-      const upstreamSessionRef = makeId("ss")
-      const disclosures = mapCapabilitiesToDisclosures(input.requestedCapabilities, input.verificationRequirements ?? [])
-
-      return {
-        upstreamSessionRef,
-        launch: {
-          app_name: appName,
-          endpoint,
-          endpoint_type: endpointType,
-          scope: input.verificationIntent ?? "profile_verification",
-          session_id: upstreamSessionRef,
-          user_id: input.userId,
-          user_id_type: "uuid",
-          disclosures,
-        },
       }
-    },
 
-    async getSessionOutcome(input) {
-      const proof = input.proof?.trim()
-      if (!proof) {
+      const sessionRef = decodeSelfSdkSessionRef(input.upstreamSessionRef)
+      const payload = parseSelfProofPayload(input)
+      if (!sessionRef || !payload) {
         return { status: "pending" }
       }
 
-      return await verifySelfProof({
-        apiUrl,
-        apiKey,
-        proof,
-        upstreamSessionRef: input.upstreamSessionRef,
-      })
+      try {
+        const verifier = new SelfBackendVerifier(
+          sessionRef.scope,
+          sessionRef.endpoint,
+          sessionRef.mockPassport,
+          AllIds,
+          new DefaultConfigStore(sessionRef.verificationConfig),
+          "uuid",
+        )
+        const result = await verifier.verify(
+          payload.attestationId,
+          payload.proof,
+          payload.publicSignals,
+          payload.userContextData,
+        )
+        if (
+          result.userData.userIdentifier !== sessionRef.selfUserId
+          || result.userData.userDefinedData !== sessionRef.userDefinedData
+        ) {
+          return { status: "failed", failureReason: "self_user_context_mismatch" }
+        }
+        const claims = buildClaimsFromVerificationResult(result, sessionRef.verificationConfig)
+        if (!claims) {
+          return { status: "failed", failureReason: "self_proof_invalid" }
+        }
+        return { status: "verified", claims }
+      } catch (error) {
+        return {
+          status: "failed",
+          failureReason: error instanceof Error ? error.message : "self_verification_failed",
+        }
+      }
     },
   }
 }

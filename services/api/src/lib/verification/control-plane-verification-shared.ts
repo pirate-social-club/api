@@ -36,6 +36,26 @@ export async function getVerificationSessionRowForUser(
   return row ? toVerificationSessionRow(row) : null
 }
 
+export async function getVerificationSessionRow(
+  client: Client,
+  verificationSessionId: string,
+): Promise<VerificationSessionRow | null> {
+  const row = await executeFirst(client, {
+    sql: `
+      SELECT verification_session_id, user_id, provider, requested_capabilities_json, verification_requirements_json,
+             status, upstream_session_ref, result_ref, failure_code,
+             wallet_attachment_id, verification_intent, policy_id,
+             completed_at, expires_at, created_at, updated_at
+      FROM verification_sessions
+      WHERE verification_session_id = ?1
+      LIMIT 1
+    `,
+    args: [verificationSessionId],
+  })
+
+  return row ? toVerificationSessionRow(row) : null
+}
+
 export async function getAttestationsBySourceSessionId(
   client: Client,
   verificationSessionId: string,

@@ -147,6 +147,81 @@ describe("verification routes", () => {
     })
   })
 
+  test("self verification callback completes an SDK session payload", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-self-callback-user")
+    setSelfProviderForTests({
+      startSession: async () => ({
+        upstreamSessionRef: "self-callback-test-ref",
+        launch: {
+          app_name: "Pirate",
+          endpoint: "https://api.pirate.test/verification-sessions/ver_self_callback/self-callback",
+          endpoint_type: "staging_https",
+          scope: "community_join",
+          session_id: "self-callback-test-ref",
+          user_id: "00000000-0000-4000-8000-000000000001",
+          user_id_type: "uuid",
+          disclosures: { nationality: true, ofac: true },
+          version: 2,
+        },
+      }),
+      getSessionOutcome: async (input) => {
+        expect(input.attestationId).toBe("1")
+        const payload = JSON.parse(String(input.providerPayloadRef)) as { userContextData?: string }
+        expect(payload.userContextData).toBe("0xself")
+        return {
+          status: "verified",
+          claims: {
+            age_over_18: true,
+            minimum_age: null,
+            nationality: "USA",
+            gender: null,
+            ofac_clear: true,
+          },
+        }
+      },
+    } satisfies import("../../../src/lib/verification/self-provider").SelfProvider)
+
+    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "self",
+      requested_capabilities: ["nationality"],
+      verification_requirements: [{ proof_type: "sanctions_clear" }],
+      verification_intent: "community_join",
+    }, ctx.env, session.accessToken)
+    expect(createdVerification.status).toBe(201)
+    const createdBody = await json(createdVerification) as { verification_session_id: string }
+
+    const callback = await app.request(
+      `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/self-callback`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          provider: "self",
+          event_type: "proof_submitted",
+          payload: {
+            attestationId: "1",
+            proof: {},
+            publicSignals: [],
+            userContextData: "0xself",
+          },
+        }),
+      },
+      ctx.env,
+    )
+    setSelfProviderForTests(null)
+
+    expect(callback.status).toBe(200)
+    const callbackBody = await json(callback) as {
+      status: string
+      verification_session_id: string
+    }
+    expect(callbackBody.status).toBe("verified")
+    expect(callbackBody.verification_session_id).toBe(createdBody.verification_session_id)
+  })
+
   test("verification and namespace endpoints work through the full route stack", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
