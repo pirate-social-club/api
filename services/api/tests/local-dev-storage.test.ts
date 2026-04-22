@@ -45,6 +45,47 @@ async function listMigrationNames(databasePath: string): Promise<string[]> {
   }
 }
 
+async function getMigrationChecksum(databasePath: string, migrationName: string): Promise<string | null> {
+  const client = createClient({
+    url: `file:${databasePath}`,
+  })
+
+  try {
+    const result = await client.execute({
+      sql: `
+        SELECT checksum
+        FROM schema_migrations
+        WHERE migration_name = ?1
+        LIMIT 1
+      `,
+      args: [migrationName],
+    })
+    const checksum = result.rows[0]?.checksum
+    return checksum === undefined ? null : String(checksum)
+  } finally {
+    client.close()
+  }
+}
+
+async function setMigrationChecksum(databasePath: string, migrationName: string, checksum: string): Promise<void> {
+  const client = createClient({
+    url: `file:${databasePath}`,
+  })
+
+  try {
+    await client.execute({
+      sql: `
+        UPDATE schema_migrations
+        SET checksum = ?2
+        WHERE migration_name = ?1
+      `,
+      args: [migrationName, checksum],
+    })
+  } finally {
+    client.close()
+  }
+}
+
 function buildStorage(rootDir: string, databasePath: string) {
   const serviceRoot = fileURLToPath(new URL("..", import.meta.url))
   return resolveLocalDevStorage({
@@ -54,7 +95,7 @@ function buildStorage(rootDir: string, databasePath: string) {
 }
 
 describe("applyLocalControlPlaneMigrations", () => {
-  test("applies the current baseline to fresh local control-plane databases", async () => {
+  test("applies the current baseline and post-baseline migrations to fresh local control-plane databases", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-local-dev-storage-"))
     cleanupPaths.push(rootDir)
 
@@ -63,6 +104,7 @@ describe("applyLocalControlPlaneMigrations", () => {
 
     expect(await listMigrationNames(databasePath)).toEqual([
       "0000_control_plane_baseline_postgres.sql",
+      "0047_control_plane_notifications.sql",
     ])
     expect(await listTableColumns(databasePath, "community_post_projections")).toContain("visibility")
     expect(await listTableColumns(databasePath, "community_post_projections")).toContain("upvote_count")
@@ -70,33 +112,45 @@ describe("applyLocalControlPlaneMigrations", () => {
     expect(await listTableColumns(databasePath, "agent_handles")).toContain("label_normalized")
     expect(await listTableColumns(databasePath, "agent_ownership_records")).toContain("device_id")
     expect(await listTableColumns(databasePath, "agent_action_nonce_replays")).toContain("nonce")
+    expect(await listTableColumns(databasePath, "user_tasks")).toContain("task_id")
+    expect(await listTableColumns(databasePath, "notification_events")).toContain("event_id")
   })
 
-  test("rejects local control-plane databases with stale baseline checksums", async () => {
+  test("repairs stale local baseline checksums", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-local-dev-storage-stale-"))
     cleanupPaths.push(rootDir)
 
     const databasePath = join(rootDir, "control-plane.db")
+    const storage = buildStorage(rootDir, databasePath)
+    await applyLocalControlPlaneMigrations(storage)
+    const currentChecksum = await getMigrationChecksum(databasePath, "0000_control_plane_baseline_postgres.sql")
+    expect(currentChecksum).not.toBeNull()
+    await setMigrationChecksum(databasePath, "0000_control_plane_baseline_postgres.sql", "stale-checksum")
+
+    await applyLocalControlPlaneMigrations(storage)
+
+    expect(await getMigrationChecksum(databasePath, "0000_control_plane_baseline_postgres.sql")).toBe(currentChecksum)
+  })
+
+  test("rejects local control-plane databases with stale post-baseline checksums", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-local-dev-storage-stale-post-baseline-"))
+    cleanupPaths.push(rootDir)
+
+    const databasePath = join(rootDir, "control-plane.db")
+    await applyLocalControlPlaneMigrations(buildStorage(rootDir, databasePath))
     const client = createClient({
       url: `file:${databasePath}`,
     })
 
     try {
-      await client.execute(`
-        CREATE TABLE schema_migrations (
-          migration_name TEXT PRIMARY KEY,
-          migration_label TEXT NOT NULL,
-          checksum TEXT NOT NULL,
-          applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-      `)
       await client.execute({
         sql: `
-          INSERT INTO schema_migrations (migration_name, migration_label, checksum)
-          VALUES (?1, 'control-plane', ?2)
+          UPDATE schema_migrations
+          SET checksum = ?2
+          WHERE migration_name = ?1
         `,
         args: [
-          "0000_control_plane_baseline_postgres.sql",
+          "0047_control_plane_notifications.sql",
           "stale-checksum",
         ],
       })
@@ -106,6 +160,6 @@ describe("applyLocalControlPlaneMigrations", () => {
 
     await expect(applyLocalControlPlaneMigrations(
       buildStorage(rootDir, databasePath),
-    )).rejects.toThrow("baseline checksum mismatch for 0000_control_plane_baseline_postgres.sql")
+    )).rejects.toThrow("migration checksum mismatch for 0047_control_plane_notifications.sql")
   })
 })

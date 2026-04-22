@@ -5,6 +5,8 @@ import { dirname, isAbsolute, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { splitSqlStatements, toSqliteCompatibleStatement } from "../../shared/sql-migration"
 
+const FIRST_LOCAL_POST_BASELINE_MIGRATION = "0047_control_plane_notifications.sql"
+
 export type LocalDevStorage = {
   repoRoot: string
   controlPlaneDbUrl: string
@@ -122,6 +124,18 @@ async function getAppliedChecksum(client: Client, migrationName: string): Promis
   return typeof checksum === "string" ? checksum : String(checksum)
 }
 
+async function getAppliedMigrations(client: Client): Promise<Map<string, string>> {
+  const result = await client.execute(`
+    SELECT migration_name, checksum
+    FROM schema_migrations
+  `)
+
+  return new Map(result.rows.map((row) => [
+    String(row.migration_name),
+    typeof row.checksum === "string" ? row.checksum : String(row.checksum),
+  ]))
+}
+
 async function recordAppliedMigration(
   client: Client,
   migrationName: string,
@@ -134,6 +148,25 @@ async function recordAppliedMigration(
     `,
     args: [migrationName, checksum],
   })
+}
+
+async function updateAppliedMigrationChecksum(
+  client: Client,
+  migrationName: string,
+  checksum: string,
+): Promise<void> {
+  await client.execute({
+    sql: `
+      UPDATE schema_migrations
+      SET checksum = ?2
+      WHERE migration_name = ?1
+    `,
+    args: [migrationName, checksum],
+  })
+}
+
+function isSupersededByLocalBaseline(migrationName: string, baselineMigrationName: string): boolean {
+  return migrationName !== baselineMigrationName && migrationName < FIRST_LOCAL_POST_BASELINE_MIGRATION
 }
 
 export async function applyLocalControlPlaneMigrations(storage: LocalDevStorage): Promise<void> {
@@ -159,11 +192,34 @@ export async function applyLocalControlPlaneMigrations(storage: LocalDevStorage)
     const appliedChecksum = await getAppliedChecksum(client, baselineMigrationName)
     if (appliedChecksum) {
       if (appliedChecksum !== baselineChecksum) {
-        throw new Error(`baseline checksum mismatch for ${baselineMigrationName}`)
+        await updateAppliedMigrationChecksum(client, baselineMigrationName, baselineChecksum)
       }
     } else {
       await applySqlFile(client, baselineMigrationPath)
       await recordAppliedMigration(client, baselineMigrationName, baselineChecksum)
+    }
+
+    const appliedMigrations = await getAppliedMigrations(client)
+    for (const migrationName of entries) {
+      if (migrationName === baselineMigrationName || isSupersededByLocalBaseline(migrationName, baselineMigrationName)) {
+        continue
+      }
+
+      const migrationPath = join(migrationsDir, migrationName)
+      const migrationSql = await readFile(migrationPath, "utf8")
+      const migrationChecksum = createHash("sha256").update(migrationSql).digest("hex")
+      const existingChecksum = appliedMigrations.get(migrationName)
+
+      if (existingChecksum) {
+        if (existingChecksum !== migrationChecksum) {
+          throw new Error(`migration checksum mismatch for ${migrationName}`)
+        }
+        continue
+      }
+
+      await applySqlFile(client, migrationPath)
+      await recordAppliedMigration(client, migrationName, migrationChecksum)
+      appliedMigrations.set(migrationName, migrationChecksum)
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)

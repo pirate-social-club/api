@@ -80,6 +80,10 @@ export function toSqliteCompatibleStatement(statement: string): string | null {
     return null
   }
 
+  if (normalized.startsWith("GRANT ")) {
+    return null
+  }
+
   if (normalized.startsWith("ALTER TABLE") && normalized.includes(" DROP CONSTRAINT ")) {
     return null
   }
