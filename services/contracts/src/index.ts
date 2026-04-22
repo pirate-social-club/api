@@ -841,6 +841,7 @@ export type CreateSongArtifactBundleRequest = {
   primary_audio: SongArtifactUploadRef;
   lyrics: string;
   cover_art?: SongArtifactUploadRef | null;
+  /** @deprecated Preview audio is generated from preview_window server-side. */
   preview_audio?: SongArtifactUploadRef | null;
   preview_window?: SongPreviewWindow | null;
   canvas_video?: SongArtifactUploadRef | null;
@@ -1035,6 +1036,12 @@ export type SongArtifactBundle = {
   moderation_result?: (Record<string, unknown>) | null;
   created_at: string;
   updated_at: string;
+};
+
+export type SongPreviewGeneratePayload = {
+  song_artifact_bundle_id?: string | null;
+  primary_audio_content_hash?: string | null;
+  preview_window?: SongPreviewWindow | null;
 };
 
 export type Post = {

@@ -153,6 +153,7 @@ export async function createPost(input: {
     }
 
     if (input.body.post_type === "song") {
+      const accessMode = input.body.access_mode ?? "public"
       const resolvedBundle = await resolveSongPostBundle({
         env: input.env,
         userId: input.userId,
@@ -160,10 +161,10 @@ export async function createPost(input: {
         songArtifactBundleId: input.body.song_artifact_bundle_id || "",
         rightsBasis: input.body.rights_basis,
         upstreamAssetRefs: input.body.upstream_asset_refs ?? null,
+        accessMode,
       })
       resolvedSongBundleForAsset = resolvedBundle
 
-      const accessMode = input.body.access_mode ?? "public"
       const mediaRefs = accessMode === "locked"
         ? resolvedBundle.bundle.preview_audio?.storage_ref && resolvedBundle.bundle.preview_audio?.mime_type
           ? [{

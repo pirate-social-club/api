@@ -17,6 +17,7 @@ import { getPostById, updatePostLinkPreviewMetadata } from "../../posts/communit
 import { fetchLinkPreviewMetadata } from "../../posts/link-preview-fetcher"
 import { materializePostLabel } from "../../posts/post-label-materializer"
 import { materializePostTranslation } from "../../localization/post-translation-materializer"
+import { generateSongPreviewForBundle } from "../../song-artifacts/song-artifact-service"
 import {
   buildThreadFeedTopic,
   publishCollectionToSwarm,
@@ -73,6 +74,15 @@ type CommentTranslationPayload = {
 
 type CommunityTextTranslationPayload = {
   locale?: string | null
+}
+
+type SongPreviewGeneratePayload = {
+  song_artifact_bundle_id?: string | null
+  primary_audio_content_hash?: string | null
+  preview_window?: {
+    start_ms: number
+    duration_ms: number
+  } | null
 }
 
 function parseJobPayload<T extends object>(raw: string | null): T | null {
@@ -456,6 +466,20 @@ async function runCommunityTextTranslationMaterialize(input: {
   }
 }
 
+async function runSongPreviewGenerate(input: {
+  job: CommunityJobRow
+  env: Env
+  communityRepository: CommunityJobRepository
+}): Promise<string | null> {
+  const payload = parseJobPayload<SongPreviewGeneratePayload>(input.job.payload_json)
+  return await generateSongPreviewForBundle({
+    env: input.env,
+    communityId: input.job.community_id,
+    songArtifactBundleId: payload?.song_artifact_bundle_id ?? input.job.subject_id,
+    expectedPrimaryAudioContentHash: payload?.primary_audio_content_hash ?? null,
+  })
+}
+
 export async function runCommunityJob(input: {
   job: CommunityJobRow
   env: Env
@@ -478,6 +502,8 @@ export async function runCommunityJob(input: {
       return runCommentTranslationMaterialize(input)
     case "community_text_translation_materialize":
       return runCommunityTextTranslationMaterialize(input)
+    case "song_preview_generate":
+      return runSongPreviewGenerate(input)
     default:
       throw internalError(`Unsupported community job type: ${input.job.job_type}`)
   }

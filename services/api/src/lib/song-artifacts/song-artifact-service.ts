@@ -24,6 +24,7 @@ import {
   markSongArtifactUploadUploaded,
   requireSongArtifactUpload,
   updateSongArtifactBundleModerationResult,
+  updateSongArtifactBundlePreview,
 } from "./song-artifact-repository"
 import { analyzeSongBundle } from "./song-artifact-analysis"
 import { syncSongBundleToAcrCloudCatalog } from "./song-artifact-catalog"
@@ -40,8 +41,10 @@ import {
   canAccessCommunity,
   getCommunityMembershipState,
 } from "../communities/membership/store"
+import { enqueueCommunityJob } from "../communities/jobs/store"
 
 type CommunityMembershipRow = Awaited<ReturnType<typeof getCommunityMembershipState>>
+type SongPreviewWindow = NonNullable<CreateSongArtifactBundleRequest["preview_window"]>
 
 export type ResolvedSongPostBundle = {
   bundle: SongArtifactBundle
@@ -82,6 +85,9 @@ async function requireActiveCommunity(
 
 function assertUploadRequest(input: CreateSongArtifactUploadRequest): void {
   const kind = input.artifact_kind as SongArtifactKind
+  if (kind === "preview_audio") {
+    throw badRequestError("preview_audio upload intents are not supported; use preview_window")
+  }
   const mimeType = input.mime_type.trim().toLowerCase()
   if (!mimeType) {
     throw badRequestError("mime_type is required")
@@ -101,6 +107,129 @@ function validateUploadMatch(upload: SongArtifactUpload, bytes: Uint8Array): voi
   assertSongArtifactSize(upload.artifact_kind as SongArtifactKind, bytes.byteLength)
   if (upload.size_bytes != null && upload.size_bytes !== bytes.byteLength) {
     throw badRequestError(`Uploaded byte count does not match the declared size for ${upload.song_artifact_upload_id}`)
+  }
+}
+
+function resolveWorkerPublicOrigin(env: Env): string {
+  return String(env.PIRATE_API_PUBLIC_ORIGIN || "http://pirate.test").trim()
+}
+
+function parseSongPreviewWindow(input: CreateSongArtifactBundleRequest["preview_window"]): SongPreviewWindow | null {
+  if (!input) {
+    return null
+  }
+  const startMs = Math.max(0, Math.trunc(Number(input.start_ms)))
+  const durationMs = Math.max(1, Math.trunc(Number(input.duration_ms)))
+  if (!Number.isFinite(startMs) || !Number.isFinite(durationMs)) {
+    throw badRequestError("preview_window must include numeric start_ms and duration_ms")
+  }
+  return {
+    start_ms: startMs,
+    duration_ms: Math.min(durationMs, 30_000),
+  }
+}
+
+async function cropAudioPreviewWithFfmpeg(input: {
+  env: Env
+  sourceBytes: Uint8Array
+  sourceMimeType: string
+  previewWindow: SongPreviewWindow
+}): Promise<{ bytes: Uint8Array; durationMs: number | null }> {
+  const [
+    childProcess,
+    fs,
+    os,
+    path,
+  ] = await Promise.all([
+    import("node:child_process"),
+    import("node:fs/promises"),
+    import("node:os"),
+    import("node:path"),
+  ])
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pirate-song-preview-"))
+  const inputPath = path.join(tempDir, `input.${input.sourceMimeType.includes("wav") ? "wav" : "audio"}`)
+  const outputPath = path.join(tempDir, "preview.mp3")
+  const ffmpegBin = String(input.env.SONG_PREVIEW_FFMPEG_BIN || "ffmpeg").trim() || "ffmpeg"
+  const ffprobeBin = String(input.env.SONG_PREVIEW_FFPROBE_BIN || "ffprobe").trim() || "ffprobe"
+  const startSeconds = String(input.previewWindow.start_ms / 1000)
+  const durationSeconds = String(input.previewWindow.duration_ms / 1000)
+
+  try {
+    await fs.writeFile(inputPath, input.sourceBytes)
+    await new Promise<void>((resolve, reject) => {
+      const child = childProcess.spawn(ffmpegBin, [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-ss",
+        startSeconds,
+        "-t",
+        durationSeconds,
+        "-i",
+        inputPath,
+        "-vn",
+        "-codec:a",
+        "libmp3lame",
+        "-b:a",
+        "192k",
+        "-f",
+        "mp3",
+        outputPath,
+      ], { stdio: ["ignore", "ignore", "pipe"] })
+      let stderr = ""
+      child.stderr?.setEncoding("utf8")
+      child.stderr?.on("data", (chunk) => {
+        stderr += String(chunk)
+      })
+      child.on("error", reject)
+      child.on("close", (code) => {
+        if (code === 0) {
+          resolve()
+          return
+        }
+        reject(new Error(`ffmpeg exited with code ${code}${stderr.trim() ? `: ${stderr.trim()}` : ""}`))
+      })
+    })
+    const probeOutput = await new Promise<string>((resolve, reject) => {
+      const child = childProcess.spawn(ffprobeBin, [
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        outputPath,
+      ], { stdio: ["ignore", "pipe", "pipe"] })
+      let stdout = ""
+      let stderr = ""
+      child.stdout?.setEncoding("utf8")
+      child.stderr?.setEncoding("utf8")
+      child.stdout?.on("data", (chunk) => {
+        stdout += String(chunk)
+      })
+      child.stderr?.on("data", (chunk) => {
+        stderr += String(chunk)
+      })
+      child.on("error", reject)
+      child.on("close", (code) => {
+        if (code === 0) {
+          resolve(stdout)
+          return
+        }
+        reject(new Error(`ffprobe exited with code ${code}${stderr.trim() ? `: ${stderr.trim()}` : ""}`))
+      })
+    })
+    const durationSecondsParsed = Number.parseFloat(probeOutput.trim())
+    const durationMs = Number.isFinite(durationSecondsParsed)
+      ? Math.max(1, Math.round(durationSecondsParsed * 1000))
+      : null
+    return {
+      bytes: new Uint8Array(await fs.readFile(outputPath)),
+      durationMs,
+    }
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined)
   }
 }
 
@@ -327,6 +456,10 @@ export async function createSongArtifactBundle(input: {
   if (!lyrics) {
     throw badRequestError("lyrics is required")
   }
+  if (input.body.preview_audio) {
+    throw badRequestError("preview_audio uploads are not supported; use preview_window")
+  }
+  const previewWindow = parseSongPreviewWindow(input.body.preview_window)
 
   await requireActiveCommunity(input.communityRepository, input.communityId)
 
@@ -349,15 +482,6 @@ export async function createSongArtifactBundle(input: {
           userId: input.userId,
           ref: input.body.cover_art,
           expectedKind: "cover_art",
-        })
-      : null
-    const previewAudioUpload = input.body.preview_audio
-      ? await requireResolvedUpload({
-          client,
-          communityId: input.communityId,
-          userId: input.userId,
-          ref: input.body.preview_audio,
-          expectedKind: "preview_audio",
         })
       : null
     const canvasVideoUpload = input.body.canvas_video
@@ -398,10 +522,11 @@ export async function createSongArtifactBundle(input: {
       body: {
         ...input.body,
         lyrics,
+        preview_window: previewWindow,
       },
       primaryAudio: descriptorFromUpload(primaryAudioUpload),
       coverArt: coverArtUpload ? imageDescriptorFromUpload(coverArtUpload) : null,
-      previewAudio: previewAudioUpload ? descriptorFromUpload(previewAudioUpload) : null,
+      previewAudio: null,
       canvasVideo: canvasVideoUpload ? videoDescriptorFromUpload(canvasVideoUpload) : null,
       instrumentalAudio: instrumentalAudioUpload ? descriptorFromUpload(instrumentalAudioUpload) : null,
       vocalAudio: vocalAudioUpload ? descriptorFromUpload(vocalAudioUpload) : null,
@@ -434,10 +559,26 @@ export async function createSongArtifactBundle(input: {
       moderationError: analysis.moderationError,
       moderationResultRef: null,
       moderationResult: analysis.moderationResult,
-      previewStatus: "completed",
+      previewStatus: previewWindow ? "pending" : "completed",
       previewError: null,
       updatedAt: nowIso(),
     })
+
+    if (finalized.preview_status === "pending") {
+      await enqueueCommunityJob({
+        client: db.client,
+        communityId: input.communityId,
+        jobType: "song_preview_generate",
+        subjectType: "song_artifact_bundle",
+        subjectId: finalized.song_artifact_bundle_id,
+        payloadJson: JSON.stringify({
+          song_artifact_bundle_id: finalized.song_artifact_bundle_id,
+          primary_audio_content_hash: finalized.primary_audio.content_hash ?? null,
+          preview_window: finalized.preview_window,
+        }),
+        createdAt: nowIso(),
+      })
+    }
 
     if (analysis.analysisState === "blocked") {
       throw analysisBlocked("Song artifact analysis blocked publication")
@@ -473,6 +614,7 @@ export async function resolveSongPostBundle(input: {
   songArtifactBundleId: string
   rightsBasis: Post["rights_basis"] | null | undefined
   upstreamAssetRefs: string[] | null | undefined
+  accessMode?: Extract<CreatePostRequest, { post_type: "song" }>["access_mode"] | null
 }): Promise<ResolvedSongPostBundle> {
   const client = getControlPlaneClient(input.env)
   const bundle = await getSongArtifactBundle(client, input.communityId, input.songArtifactBundleId)
@@ -496,6 +638,12 @@ export async function resolveSongPostBundle(input: {
   ) {
     throw badRequestError("Matched audio requires derivative rights_basis and upstream_asset_refs")
   }
+  if (
+    input.accessMode === "locked"
+    && (bundle.preview_status !== "completed" || !bundle.preview_audio?.storage_ref || !bundle.preview_audio.mime_type)
+  ) {
+    throw badRequestError("Song preview is not ready for locked publishing")
+  }
   if (!bundle.media_refs?.length) {
     throw badRequestError("Song artifact bundle does not contain any media refs")
   }
@@ -507,6 +655,125 @@ export async function resolveSongPostBundle(input: {
     analysisState: bundleAnalysis.analysisState,
     contentSafetyState: bundleAnalysis.contentSafetyState,
     ageGatePolicy: bundleAnalysis.ageGatePolicy,
+  }
+}
+
+export async function generateSongPreviewForBundle(input: {
+  env: Env
+  communityId: string
+  songArtifactBundleId: string
+  expectedPrimaryAudioContentHash?: string | null
+}): Promise<string> {
+  const client = getControlPlaneClient(input.env)
+  const bundle = await getSongArtifactBundle(client, input.communityId, input.songArtifactBundleId)
+  if (!bundle) {
+    throw notFoundError("Song artifact bundle not found")
+  }
+  if (bundle.preview_audio?.storage_ref && bundle.preview_status === "completed") {
+    return bundle.preview_audio.storage_ref
+  }
+  if (!bundle.preview_window) {
+    throw badRequestError("Song artifact bundle does not have a preview window")
+  }
+  if (
+    input.expectedPrimaryAudioContentHash
+    && bundle.primary_audio.content_hash
+    && input.expectedPrimaryAudioContentHash !== bundle.primary_audio.content_hash
+  ) {
+    throw badRequestError("Song artifact bundle primary audio changed before preview generation")
+  }
+
+  const primaryAudioUpload = await findUploadedSongArtifactByStorageRef({
+    client,
+    communityId: input.communityId,
+    storageRef: bundle.primary_audio.storage_ref,
+    artifactKind: "primary_audio",
+  })
+  if (!primaryAudioUpload?.storage_object_key) {
+    throw badRequestError("Primary audio upload is missing storage metadata")
+  }
+
+  try {
+    const primaryResponse = await fetchSongArtifactBytes({
+      env: input.env,
+      objectKey: primaryAudioUpload.storage_object_key,
+    })
+    const preview = await cropAudioPreviewWithFfmpeg({
+      env: input.env,
+      sourceBytes: new Uint8Array(await primaryResponse.arrayBuffer()),
+      sourceMimeType: primaryAudioUpload.mime_type,
+      previewWindow: bundle.preview_window,
+    })
+
+    const now = nowIso()
+    const previewUploadId = makeId("sau")
+    const origin = resolveWorkerPublicOrigin(input.env)
+    await createSongArtifactUploadIntent({
+      client,
+      communityId: input.communityId,
+      userId: bundle.creator_user_id,
+      songArtifactUploadId: previewUploadId,
+      storageRef: buildSongArtifactContentUrl(origin, input.communityId, previewUploadId),
+      body: {
+        artifact_kind: "preview_audio",
+        mime_type: "audio/mpeg",
+        filename: `${bundle.song_artifact_bundle_id}-preview.mp3`,
+        size_bytes: preview.bytes.byteLength,
+        content_hash: `0x${await sha256Hex(preview.bytes)}`,
+      },
+      createdAt: now,
+    })
+    const storage = await uploadSongArtifactBytes({
+      env: input.env,
+      communityId: input.communityId,
+      songArtifactUploadId: previewUploadId,
+      artifactKind: "preview_audio",
+      mimeType: "audio/mpeg",
+      bytes: preview.bytes,
+      origin,
+    })
+    const uploaded = await markSongArtifactUploadUploaded({
+      client,
+      communityId: input.communityId,
+      songArtifactUploadId: previewUploadId,
+      mimeType: "audio/mpeg",
+      sizeBytes: preview.bytes.byteLength,
+      contentHash: storage.contentHash,
+      storageProvider: storage.storageProvider,
+      storageBucket: storage.storageBucket,
+      storageObjectKey: storage.storageObjectKey,
+      storageEndpoint: storage.storageEndpoint,
+      gatewayUrl: storage.gatewayUrl,
+      updatedAt: nowIso(),
+    })
+    const updated = await updateSongArtifactBundlePreview({
+      client,
+      communityId: input.communityId,
+      songArtifactBundleId: input.songArtifactBundleId,
+      previewAudio: {
+        storage_ref: uploaded.gateway_url || uploaded.storage_ref,
+        mime_type: uploaded.mime_type,
+        size_bytes: uploaded.size_bytes,
+        content_hash: uploaded.content_hash,
+        duration_ms: preview.durationMs,
+      },
+      previewStatus: "completed",
+      previewError: null,
+      updatedAt: nowIso(),
+    })
+    return updated.preview_audio?.storage_ref ?? uploaded.storage_ref
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    await updateSongArtifactBundlePreview({
+      client,
+      communityId: input.communityId,
+      songArtifactBundleId: input.songArtifactBundleId,
+      previewAudio: null,
+      previewStatus: "failed",
+      previewError: message || "preview_generation_failed",
+      updatedAt: nowIso(),
+    })
+    throw error
   }
 }
 

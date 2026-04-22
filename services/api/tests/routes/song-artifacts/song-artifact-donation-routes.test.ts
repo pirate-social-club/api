@@ -9,6 +9,9 @@ import { setCommunityCommerceBuyerFundingVerifierForTests } from "../../../src/l
 import { setCommunityCommerceCharityPayoutExecutorForTests } from "../../../src/lib/communities/commerce/charity-payout-service"
 import { openCommunityDb } from "../../../src/lib/communities/community-db-factory"
 import type { CommunityRepository } from "../../../src/lib/communities/db-community-repository"
+import { updateSongArtifactBundlePreview } from "../../../src/lib/song-artifacts/song-artifact-repository"
+import { getControlPlaneClient } from "../../../src/lib/runtime-deps"
+import type { Env } from "../../../src/types"
 import {
   completeUniqueHumanVerification,
   exchangeJwt,
@@ -39,6 +42,30 @@ const routedCheckoutQuoteFields = {
   route_provider: "pirate_checkout",
   client_estimated_slippage_bps: 0,
   client_estimated_hop_count: 1,
+}
+
+async function markGeneratedPreviewReady(input: {
+  env: Env
+  communityId: string
+  songArtifactBundleId: string
+  previewStorageRef: string
+  previewSizeBytes: number
+}): Promise<void> {
+  await updateSongArtifactBundlePreview({
+    client: getControlPlaneClient(input.env),
+    communityId: input.communityId,
+    songArtifactBundleId: input.songArtifactBundleId,
+    previewAudio: {
+      storage_ref: input.previewStorageRef,
+      mime_type: "audio/mpeg",
+      size_bytes: input.previewSizeBytes,
+      content_hash: null,
+      duration_ms: 30_000,
+    },
+    previewStatus: "completed",
+    previewError: null,
+    updatedAt: new Date().toISOString(),
+  })
 }
 
 beforeEach(() => {
@@ -157,21 +184,13 @@ describe("song artifact donation routes", () => {
       bytes: primaryBytes,
     })
 
-    const previewUploadIntentBody = await uploadSongArtifact({
-      env: ctx.env,
-      communityId,
-      accessToken: author.accessToken,
-      artifactKind: "preview_audio",
-      mimeType: "audio/mpeg",
-      filename: "no-donation-preview.mp3",
-      bytes: previewBytes,
-    })
+    const previewStorageRef = `http://pirate.test/generated-preview/${communityId}/no-donation.mp3`
 
     const bundleCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifacts`,
       {
         primary_audio: { song_artifact_upload_id: primaryUploadIntentBody.song_artifact_upload_id },
-        preview_audio: { song_artifact_upload_id: previewUploadIntentBody.song_artifact_upload_id },
+        preview_window: { start_ms: 0, duration_ms: 30_000 },
         lyrics: "No donation line",
       },
       ctx.env,
@@ -179,6 +198,13 @@ describe("song artifact donation routes", () => {
     )
     expect(bundleCreate.status).toBe(201)
     const bundleBody = await json(bundleCreate) as { song_artifact_bundle_id: string }
+    await markGeneratedPreviewReady({
+      env: ctx.env,
+      communityId,
+      songArtifactBundleId: bundleBody.song_artifact_bundle_id,
+      previewStorageRef,
+      previewSizeBytes: previewBytes.byteLength,
+    })
 
     const lockedPostCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/posts`,
@@ -372,24 +398,14 @@ describe("song artifact donation routes", () => {
       filename: "public-royalty.mp3",
       bytes: new Uint8Array([41, 42, 43, 44]),
     })
-    const previewUploadIntentBody = await uploadSongArtifact({
-      env: ctx.env,
-      communityId,
-      accessToken: author.accessToken,
-      artifactKind: "preview_audio",
-      mimeType: "audio/mpeg",
-      filename: "public-royalty-preview.mp3",
-      bytes: new Uint8Array([45, 46, 47, 48]),
-    })
+    const previewStorageRef = `http://pirate.test/generated-preview/${communityId}/public-royalty.mp3`
     const bundleCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifacts`,
       {
         primary_audio: {
           song_artifact_upload_id: primaryUploadIntentBody.song_artifact_upload_id,
         },
-        preview_audio: {
-          song_artifact_upload_id: previewUploadIntentBody.song_artifact_upload_id,
-        },
+        preview_window: { start_ms: 0, duration_ms: 30_000 },
         lyrics: "Public royalty line",
       },
       ctx.env,
@@ -397,6 +413,13 @@ describe("song artifact donation routes", () => {
     )
     expect(bundleCreate.status).toBe(201)
     const bundleBody = await json(bundleCreate) as { song_artifact_bundle_id: string }
+    await markGeneratedPreviewReady({
+      env: ctx.env,
+      communityId,
+      songArtifactBundleId: bundleBody.song_artifact_bundle_id,
+      previewStorageRef,
+      previewSizeBytes: 4,
+    })
 
     const postCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/posts`,
@@ -604,21 +627,13 @@ describe("song artifact donation routes", () => {
       bytes: primaryBytes,
     })
 
-    const previewUploadIntentBody = await uploadSongArtifact({
-      env: ctx.env,
-      communityId,
-      accessToken: author.accessToken,
-      artifactKind: "preview_audio",
-      mimeType: "audio/mpeg",
-      filename: "clear-donation-preview.mp3",
-      bytes: previewBytes,
-    })
+    const previewStorageRef = `http://pirate.test/generated-preview/${communityId}/clear-donation.mp3`
 
     const bundleCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifacts`,
       {
         primary_audio: { song_artifact_upload_id: primaryUploadIntentBody.song_artifact_upload_id },
-        preview_audio: { song_artifact_upload_id: previewUploadIntentBody.song_artifact_upload_id },
+        preview_window: { start_ms: 0, duration_ms: 30_000 },
         lyrics: "Clear donation line",
       },
       ctx.env,
@@ -626,6 +641,13 @@ describe("song artifact donation routes", () => {
     )
     expect(bundleCreate.status).toBe(201)
     const bundleBody = await json(bundleCreate) as { song_artifact_bundle_id: string }
+    await markGeneratedPreviewReady({
+      env: ctx.env,
+      communityId,
+      songArtifactBundleId: bundleBody.song_artifact_bundle_id,
+      previewStorageRef,
+      previewSizeBytes: previewBytes.byteLength,
+    })
 
     const lockedPostCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/posts`,
@@ -816,21 +838,13 @@ describe("song artifact donation routes", () => {
       bytes: primaryBytes,
     })
 
-    const previewUploadIntentBody = await uploadSongArtifact({
-      env: ctx.env,
-      communityId,
-      accessToken: author.accessToken,
-      artifactKind: "preview_audio",
-      mimeType: "audio/mpeg",
-      filename: "paused-partner-preview.mp3",
-      bytes: previewBytes,
-    })
+    const previewStorageRef = `http://pirate.test/generated-preview/${communityId}/paused-partner.mp3`
 
     const bundleCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifacts`,
       {
         primary_audio: { song_artifact_upload_id: primaryUploadIntentBody.song_artifact_upload_id },
-        preview_audio: { song_artifact_upload_id: previewUploadIntentBody.song_artifact_upload_id },
+        preview_window: { start_ms: 0, duration_ms: 30_000 },
         lyrics: "Paused partner line",
       },
       ctx.env,
@@ -838,6 +852,13 @@ describe("song artifact donation routes", () => {
     )
     expect(bundleCreate.status).toBe(201)
     const bundleBody = await json(bundleCreate) as { song_artifact_bundle_id: string }
+    await markGeneratedPreviewReady({
+      env: ctx.env,
+      communityId,
+      songArtifactBundleId: bundleBody.song_artifact_bundle_id,
+      previewStorageRef,
+      previewSizeBytes: previewBytes.byteLength,
+    })
 
     const lockedPostCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/posts`,

@@ -336,6 +336,42 @@ export async function finalizeSongArtifactBundle(input: {
   return serializeSongArtifactBundle(updated)
 }
 
+export async function updateSongArtifactBundlePreview(input: {
+  client: Client
+  communityId: string
+  songArtifactBundleId: string
+  previewAudio: SongArtifactBundle["preview_audio"]
+  previewStatus: SongArtifactBundle["preview_status"]
+  previewError: string | null
+  updatedAt: string
+}): Promise<SongArtifactBundle> {
+  await input.client.execute({
+    sql: `
+      UPDATE song_artifact_bundles
+      SET preview_audio_json = ?3,
+          preview_status = ?4,
+          preview_error = ?5,
+          updated_at = ?6
+      WHERE community_id = ?1
+        AND song_artifact_bundle_id = ?2
+    `,
+    args: [
+      input.communityId,
+      input.songArtifactBundleId,
+      input.previewAudio ? JSON.stringify(input.previewAudio) : null,
+      input.previewStatus,
+      input.previewError,
+      input.updatedAt,
+    ],
+  })
+
+  const updated = await getSongArtifactBundleRow(input.client, input.communityId, input.songArtifactBundleId)
+  if (!updated) {
+    throw internalError("Song artifact bundle is missing after preview update")
+  }
+  return serializeSongArtifactBundle(updated)
+}
+
 export async function getSongArtifactBundle(
   client: Client,
   communityId: string,

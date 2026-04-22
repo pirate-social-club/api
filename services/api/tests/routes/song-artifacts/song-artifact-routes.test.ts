@@ -1,14 +1,54 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import app from "../../../src/index"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
+import { getCommunityRepository } from "../../../src/lib/communities/db-community-repository"
+import { processCommunityJobsForCommunity } from "../../../src/lib/communities/jobs/runner"
+import { setStoryAccessProofSignerForTests } from "../../../src/lib/story/story-access-proof-service"
+import { setStoryAssetPublisherForTests } from "../../../src/lib/story/story-publish-service"
+import { setStoryCdrUploaderForTests } from "../../../src/lib/story/story-cdr"
+import { setStoryRuntimeFundingAssertionForTests } from "../../../src/lib/story/story-runtime-funding"
 import {
   completeUniqueHumanVerification,
   exchangeJwt,
   requestJson,
 } from "./song-artifact-test-helpers"
+import { attachPrimaryWallet } from "./song-artifact-locked-test-helpers"
+
+const testWithTimeout = test as unknown as (name: string, fn: () => Promise<void>, timeout: number) => void
 
 let cleanup: (() => Promise<void>) | null = null
 let originalFetch: typeof fetch
+
+function makeSilentWavBytes(durationSeconds = 2): Uint8Array {
+  const sampleRate = 8000
+  const channelCount = 1
+  const bytesPerSample = 2
+  const sampleCount = sampleRate * durationSeconds
+  const dataSize = sampleCount * channelCount * bytesPerSample
+  const buffer = new ArrayBuffer(44 + dataSize)
+  const view = new DataView(buffer)
+  const writeAscii = (offset: number, text: string) => {
+    for (let index = 0; index < text.length; index += 1) {
+      view.setUint8(offset + index, text.charCodeAt(index))
+    }
+  }
+
+  writeAscii(0, "RIFF")
+  view.setUint32(4, 36 + dataSize, true)
+  writeAscii(8, "WAVE")
+  writeAscii(12, "fmt ")
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true)
+  view.setUint16(22, channelCount, true)
+  view.setUint32(24, sampleRate, true)
+  view.setUint32(28, sampleRate * channelCount * bytesPerSample, true)
+  view.setUint16(32, channelCount * bytesPerSample, true)
+  view.setUint16(34, bytesPerSample * 8, true)
+  writeAscii(36, "data")
+  view.setUint32(40, dataSize, true)
+
+  return new Uint8Array(buffer)
+}
 
 beforeEach(() => {
   resetRuntimeCaches()
@@ -24,6 +64,297 @@ afterEach(async () => {
 })
 
 describe("song artifact routes", () => {
+  testWithTimeout("generates a server-side preview crop and uses it for locked song publication", async () => {
+    const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
+
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      if (request.url === "https://openrouter.test/api/v1/chat/completions") {
+        return Response.json({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  age_gate_rating: "safe",
+                  reason: "clean lyrics",
+                }),
+              },
+            },
+          ],
+        })
+      }
+
+      if (request.url === "https://acrcloud.test/v1/identify") {
+        return Response.json({
+          status: {
+            code: 0,
+            msg: "Success",
+          },
+          metadata: {
+            music: [],
+          },
+        })
+      }
+
+      if (request.url === "https://console-v2.acrcloud.test/api/buckets/30358/files") {
+        return Response.json({
+          data: {
+            id: 42,
+            acr_id: "acr_test_preview_crop",
+            state: 0,
+          },
+        })
+      }
+
+      if (request.url === "https://elevenlabs.test/forced-alignment") {
+        return Response.json({
+          provider: "elevenlabs",
+          segments: [
+            {
+              start_ms: 0,
+              end_ms: 1200,
+              text: "Paid line",
+            },
+          ],
+        })
+      }
+
+      if (!request.url.startsWith("https://s3.filebase.test/")) {
+        return await originalFetch(request)
+      }
+
+      if (request.method === "PUT") {
+        storedObjects.set(request.url, {
+          body: new Uint8Array(await request.arrayBuffer()),
+          contentType: request.headers.get("content-type") || "application/octet-stream",
+        })
+        return new Response(null, { status: 200 })
+      }
+
+      if (request.method === "GET") {
+        const stored = storedObjects.get(request.url)
+        if (!stored) {
+          return new Response("missing", { status: 404 })
+        }
+        return new Response(stored.body.slice().buffer, {
+          status: 200,
+          headers: {
+            "content-type": stored.contentType,
+            "content-length": String(stored.body.byteLength),
+          },
+        })
+      }
+
+      return new Response("unexpected method", { status: 500 })
+    }
+
+    setStoryRuntimeFundingAssertionForTests(async () => {})
+    setStoryCdrUploaderForTests(async () => ({
+      cdrVaultUuid: 4242,
+      writerAddress: "0x0000000000000000000000000000000000000cd1",
+      txHashes: {
+        allocate: "0xalloc",
+        write: "0xwrite",
+      },
+    }))
+    setStoryAssetPublisherForTests(async () => ({
+      entitlementConfiguredTxHash: "0xconfigure",
+      publishTxHash: "0xpublish",
+    }))
+    setStoryAccessProofSignerForTests(async (input) => ({
+      digest: "0xd1e57",
+      signature: `0x${"11".repeat(65)}` as `0x${string}`,
+      signerAddress: "0x0000000000000000000000000000000000000acc",
+      proof: {
+        vaultUuid: input.vaultUuid,
+        caller: input.callerAddress,
+        accessRef: input.accessRef,
+        scope: "0xb8c1a2b531e7c9d996686b1cc6dcd49d2d7037be365b6d380ebaf489440d4f18",
+        expiry: input.expiry,
+        namespace: input.namespace,
+      },
+    }))
+
+    const ctx = await createRouteTestContext({
+      FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
+      FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
+      FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
+      FILEBASE_S3_BUCKET_MUSIC: "pirate-song-media",
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      OPENROUTER_MODEL: "google/gemini-3.1-flash-lite-preview",
+      ACRCLOUD_ACCESS_KEY: "test-acrcloud-access",
+      ACRCLOUD_ACCESS_SECRET: "test-acrcloud-secret",
+      ACRCLOUD_HOST: "acrcloud.test",
+      ACRCLOUD_PERSONAL_ACCESS_TOKEN: "test-acrcloud-pat",
+      ACRCLOUD_BUCKET_ID: "30358",
+      ACRCLOUD_CONSOLE_BASE_URL: "https://console-v2.acrcloud.test/api",
+      ELEVENLABS_API_KEY: "test-elevenlabs-key",
+      ELEVENLABS_FORCE_ALIGNMENT_URL: "https://elevenlabs.test/forced-alignment",
+      PIRATE_API_PUBLIC_ORIGIN: "http://pirate.test",
+      SONG_PREVIEW_FFMPEG_BIN: "ffmpeg",
+    })
+    cleanup = ctx.cleanup
+
+    const author = await exchangeJwt(ctx.env, "song-preview-crop-author")
+    await attachPrimaryWallet({
+      client: ctx.client,
+      userId: author.userId,
+      walletAttachmentId: "wal_song_preview_crop_author",
+      walletAddress: "0xaaa0000000000000000000000000000000000001",
+    })
+    await completeUniqueHumanVerification(ctx.env, author.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Preview Crop Club",
+      membership_mode: "open",
+      handle_policy: {
+        policy_template: "standard",
+      },
+    }, ctx.env, author.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: {
+        community_id: string
+      }
+    }
+    const communityId = communityCreateBody.community.community_id
+    const primaryBytes = makeSilentWavBytes()
+
+    const uploadIntent = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
+      {
+        artifact_kind: "primary_audio",
+        mime_type: "audio/wav",
+        filename: "preview-source.wav",
+        size_bytes: primaryBytes.byteLength,
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(uploadIntent.status).toBe(201)
+    const uploadIntentBody = await json(uploadIntent) as {
+      song_artifact_upload_id: string
+      upload_url: string
+    }
+    const primaryBody = new ArrayBuffer(primaryBytes.byteLength)
+    new Uint8Array(primaryBody).set(primaryBytes)
+
+    const uploadContent = await app.request(
+      uploadIntentBody.upload_url,
+      {
+        method: "PUT",
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+          "content-type": "audio/wav",
+        },
+        body: primaryBody,
+      },
+      ctx.env,
+    )
+    expect(uploadContent.status).toBe(200)
+
+    const bundleCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifacts`,
+      {
+        primary_audio: {
+          song_artifact_upload_id: uploadIntentBody.song_artifact_upload_id,
+        },
+        preview_window: {
+          start_ms: 0,
+          duration_ms: 30_000,
+        },
+        lyrics: "Paid line",
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(bundleCreate.status).toBe(201)
+    const pendingBundle = await json(bundleCreate) as {
+      song_artifact_bundle_id: string
+      preview_audio?: unknown | null
+      preview_status: string
+      preview_window?: { start_ms: number; duration_ms: number } | null
+    }
+    expect(pendingBundle.preview_audio).toBeNull()
+    expect(pendingBundle.preview_status).toBe("pending")
+    expect(pendingBundle.preview_window).toEqual({
+      start_ms: 0,
+      duration_ms: 30_000,
+    })
+
+    const jobSummary = await processCommunityJobsForCommunity({
+      env: ctx.env,
+      communityId,
+      communityRepository: getCommunityRepository(ctx.env),
+      maxJobs: 1,
+    })
+    expect(jobSummary.processed_jobs).toBe(1)
+    expect(jobSummary.jobs[0]?.job_type).toBe("song_preview_generate")
+    expect(jobSummary.jobs[0]?.status).toBe("succeeded")
+
+    const completedBundleRead = await app.request(
+      `http://pirate.test/communities/${communityId}/song-artifacts/${pendingBundle.song_artifact_bundle_id}`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(completedBundleRead.status).toBe(200)
+    const completedBundle = await json(completedBundleRead) as {
+      preview_audio?: {
+        storage_ref: string
+        mime_type: string
+        size_bytes?: number | null
+        duration_ms?: number | null
+      } | null
+      preview_status: string
+    }
+    expect(completedBundle.preview_status).toBe("completed")
+    expect(completedBundle.preview_audio?.mime_type).toBe("audio/mpeg")
+    expect(completedBundle.preview_audio?.storage_ref).toContain(
+      `/communities/${communityId}/song-artifact-uploads/`,
+    )
+    expect((completedBundle.preview_audio?.size_bytes ?? 0) > 0).toBe(true)
+    expect((completedBundle.preview_audio?.duration_ms ?? 0) > 0).toBe(true)
+    expect((completedBundle.preview_audio?.duration_ms ?? 0) < 30_000).toBe(true)
+
+    const previewContent = await app.request(
+      completedBundle.preview_audio?.storage_ref ?? "",
+      {},
+      ctx.env,
+    )
+    expect(previewContent.status).toBe(200)
+    expect(previewContent.headers.get("content-type")).toBe("audio/mpeg")
+    expect((await previewContent.arrayBuffer()).byteLength).toBe(completedBundle.preview_audio?.size_bytes)
+
+    const lockedPostCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        idempotency_key: "song-preview-crop-locked-post",
+        post_type: "song",
+        identity_mode: "public",
+        title: "Paid preview crop",
+        access_mode: "locked",
+        song_mode: "original",
+        rights_basis: "original",
+        song_artifact_bundle_id: pendingBundle.song_artifact_bundle_id,
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(lockedPostCreate.status).toBe(201)
+    const lockedPost = await json(lockedPostCreate) as {
+      access_mode?: string | null
+      media_refs?: Array<{ storage_ref: string; mime_type?: string }>
+    }
+    expect(lockedPost.access_mode).toBe("locked")
+    expect(lockedPost.media_refs?.[0]?.storage_ref).toBe(completedBundle.preview_audio?.storage_ref)
+    expect(lockedPost.media_refs?.[0]?.mime_type).toBe("audio/mpeg")
+  }, 15000)
+
 test("uploads a song artifact bundle and publishes a song post", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
     let openRouterCallCount = 0
@@ -180,6 +511,19 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     expect(uploadIntentBody.status).toBe("pending_upload")
     expect(uploadIntentBody.upload_url).toContain(`/communities/${communityId}/song-artifact-uploads/`)
 
+    const previewUploadIntent = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
+      {
+        artifact_kind: "preview_audio",
+        mime_type: "audio/mpeg",
+        filename: "uploaded-preview.mp3",
+        size_bytes: 4,
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(previewUploadIntent.status).toBe(400)
+
     const uploadContent = await app.request(
       uploadIntentBody.upload_url,
       {
@@ -288,6 +632,54 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     expect(bundleReadBody.moderation_result?.catalog_sync?.file_id).toBe(42)
   expect(bundleReadBody.moderation_result?.catalog_sync?.acr_id).toBe("acr_test_song_42")
   expect(acrCloudCatalogCallCount).toBe(1)
+
+    const previewWindowBundleCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifacts`,
+      {
+        primary_audio: {
+          song_artifact_upload_id: uploadIntentBody.song_artifact_upload_id,
+        },
+        lyrics: "Preview line one\nPreview line two",
+        preview_window: {
+          start_ms: 42_000,
+          duration_ms: 30_000,
+        },
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(previewWindowBundleCreate.status).toBe(201)
+    const previewWindowBundleBody = await json(previewWindowBundleCreate) as {
+      preview_audio?: unknown | null
+      preview_status: string
+      preview_window?: { start_ms: number; duration_ms: number } | null
+    }
+    expect(previewWindowBundleBody.preview_audio).toBeNull()
+    expect(previewWindowBundleBody.preview_status).toBe("pending")
+    expect(previewWindowBundleBody.preview_window).toEqual({
+      start_ms: 42_000,
+      duration_ms: 30_000,
+    })
+
+    const conflictingPreviewCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifacts`,
+      {
+        primary_audio: {
+          song_artifact_upload_id: uploadIntentBody.song_artifact_upload_id,
+        },
+        lyrics: "Conflicting preview source",
+        preview_audio: {
+          song_artifact_upload_id: "sau_conflicting_preview",
+        },
+        preview_window: {
+          start_ms: 0,
+          duration_ms: 30_000,
+        },
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(conflictingPreviewCreate.status).toBe(400)
   })
 
   test("allows song publication when ACRCloud is not configured in local dev", async () => {

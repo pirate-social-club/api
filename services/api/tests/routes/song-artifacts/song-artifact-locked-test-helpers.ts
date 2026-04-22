@@ -132,7 +132,7 @@ export async function uploadSongArtifact(input: {
   env: Env
   communityId: string
   accessToken: string
-  artifactKind: "primary_audio" | "preview_audio"
+  artifactKind: "primary_audio"
   mimeType: string
   filename: string
   bytes: Uint8Array
