@@ -35,9 +35,11 @@ verification.post("/verification-sessions/very-widget-verify", async (c) => {
     const result = await verifyVeryWidgetProof(c.env, proof)
     return c.json(result, 200)
   } catch (error) {
+    const diag = error instanceof Error ? (error as unknown as { _diag?: Record<string, unknown> })._diag : undefined
     return c.json({
       status: "invalid",
       error: error instanceof Error ? error.message : "very_verification_failed",
+      _diag: typeof diag === "object" && diag !== null ? diag : undefined,
     }, 200)
   }
 })

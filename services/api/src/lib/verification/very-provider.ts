@@ -14,9 +14,9 @@ export type VeryStartResult = {
 
 export type VerySessionOutcome =
   | { status: "verified"; attestationData: Record<string, unknown> }
-  | { status: "pending" }
-  | { status: "failed"; failureReason: string }
-  | { status: "expired" }
+  | { status: "pending"; _diag?: Record<string, unknown> }
+  | { status: "failed"; failureReason: string; _diag?: Record<string, unknown> }
+  | { status: "expired"; _diag?: Record<string, unknown> }
 
 export interface VeryProvider {
   startSession(input: {
@@ -352,24 +352,28 @@ async function verifyVeryPayload(input: {
     })
 
     const body = await response.json().catch(() => null) as VeryVerifyResponse | null
+    const proofHash = await sha256Hex(input.providerPayloadRef)
     if (!response.ok) {
-      const message = body?.error || body?.failure_reason || `Very verification request failed with status ${response.status}`
-      throw providerUnavailable(message)
+      const diag = summarizeVeryVerifyResponse({ body, proofHash, responseStatus: response.status, upstreamSessionRef: input.upstreamSessionRef })
+      console.warn("[very-provider] verifier returned non-ok", diag)
+      const err = providerUnavailable(body?.error || body?.failure_reason || `Very verification request failed with status ${response.status}`)
+      Object.defineProperty(err, "_diag", { value: diag, enumerable: false, writable: false })
+      throw err
     }
     if (!body || typeof body !== "object") {
       throw providerUnavailable("Very verification response was invalid")
     }
 
     const status = String(body.status || "").trim().toLowerCase()
-    const proofHash = await sha256Hex(input.providerPayloadRef)
     if (body.expired === true || status === "expired") {
-      console.warn("[very-provider] verifier returned expired", summarizeVeryVerifyResponse({
+      const diag = summarizeVeryVerifyResponse({
         body,
         proofHash,
         responseStatus: response.status,
         upstreamSessionRef: input.upstreamSessionRef,
-      }))
-      return { status: "expired" }
+      })
+      console.warn("[very-provider] verifier returned expired", diag)
+      return { status: "expired", _diag: diag }
     }
     if (
       getVeryVerifySuccess(body)
@@ -389,24 +393,22 @@ async function verifyVeryPayload(input: {
       }
     }
     if (status === "pending" || status === "processing") {
-      console.info("[very-provider] verifier returned pending", summarizeVeryVerifyResponse({
+      const diag = summarizeVeryVerifyResponse({
         body,
         proofHash,
         responseStatus: response.status,
         upstreamSessionRef: input.upstreamSessionRef,
-      }))
-      return { status: "pending" }
+      })
+      console.info("[very-provider] verifier returned pending", diag)
+      return { status: "pending", _diag: diag }
     }
 
-    console.warn("[very-provider] verifier returned failed", summarizeVeryVerifyResponse({
-      body,
-      proofHash,
-      responseStatus: response.status,
-      upstreamSessionRef: input.upstreamSessionRef,
-    }))
+    const diag = summarizeVeryVerifyResponse({ body, proofHash, responseStatus: response.status, upstreamSessionRef: input.upstreamSessionRef })
+    console.warn("[very-provider] verifier returned failed", diag)
     return {
       status: "failed",
       failureReason: body.failure_reason || body.error || status || "verification_failed",
+      _diag: diag,
     }
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
@@ -476,10 +478,13 @@ export function getVeryProvider(env: Env): VeryProvider {
   }
 }
 
-export async function verifyVeryWidgetProof(env: Env, proof: string): Promise<{
+type VeryWidgetVerifyResult = {
   status: "valid" | "pending" | "expired" | "invalid"
   error?: string
-}> {
+  _diag?: Record<string, unknown>
+}
+
+export async function verifyVeryWidgetProof(env: Env, proof: string): Promise<VeryWidgetVerifyResult> {
   const provider = getVeryProvider(env)
   const outcome = await provider.getSessionOutcome({
     upstreamSessionRef: "very-widget",
@@ -489,11 +494,11 @@ export async function verifyVeryWidgetProof(env: Env, proof: string): Promise<{
     case "verified":
       return { status: "valid" }
     case "pending":
-      return { status: "pending" }
+      return { status: "pending", _diag: outcome._diag }
     case "expired":
-      return { status: "expired" }
+      return { status: "expired", _diag: outcome._diag }
     case "failed":
-      return { status: "invalid", error: outcome.failureReason }
+      return { status: "invalid", error: outcome.failureReason, _diag: outcome._diag ?? { outcomeStatus: outcome.status, failureReason: outcome.failureReason } }
   }
 }
 
