@@ -34,15 +34,26 @@ function parseVerificationRequirements(raw: string | null | undefined): Verifica
   try {
     const parsed = JSON.parse(raw) as unknown
     if (!Array.isArray(parsed)) return []
-    return parsed.filter((requirement): requirement is VerificationRequirement =>
-      requirement != null
-      && typeof requirement === "object"
-      && (requirement as VerificationRequirement).proof_type === "minimum_age"
-      && Number.isInteger((requirement as VerificationRequirement).minimum_age),
-    )
+    return parsed.flatMap((requirement): VerificationRequirement[] => {
+      if (requirement == null || typeof requirement !== "object") {
+        return []
+      }
+      const typed = requirement as VerificationRequirement
+      if (typed.proof_type === "sanctions_clear") {
+        return [{ proof_type: "sanctions_clear" }]
+      }
+      if (typed.proof_type === "minimum_age" && Number.isInteger(typed.minimum_age)) {
+        return [typed]
+      }
+      return []
+    })
   } catch {
     return []
   }
+}
+
+function hasSelfOfacRequirement(verificationRequirements: VerificationRequirement[]): boolean {
+  return verificationRequirements.some((requirement) => requirement.proof_type === "sanctions_clear")
 }
 
 function resolveMinimumAgeToMint(
@@ -52,8 +63,9 @@ function resolveMinimumAgeToMint(
 ): number | null {
   const candidates: number[] = []
   for (const requirement of verificationRequirements) {
-    if (requirement.proof_type === "minimum_age") {
-      candidates.push(requirement.minimum_age)
+    const minimumAge = requirement.minimum_age
+    if (requirement.proof_type === "minimum_age" && typeof minimumAge === "number" && Number.isInteger(minimumAge)) {
+      candidates.push(minimumAge)
     }
   }
   if (requestedCapabilities.includes("age_over_18")) {
@@ -345,8 +357,17 @@ async function completeSelfSession(
       missingClaims.push("age_over_18")
     }
     for (const requirement of verificationRequirements) {
-      if (requirement.proof_type === "minimum_age" && (outcome.claims.minimum_age == null || outcome.claims.minimum_age < requirement.minimum_age)) {
-        missingClaims.push(`minimum_age:${requirement.minimum_age}`)
+      const minimumAge = requirement.minimum_age
+      if (
+        requirement.proof_type === "minimum_age"
+        && typeof minimumAge === "number"
+        && Number.isInteger(minimumAge)
+        && (outcome.claims.minimum_age == null || outcome.claims.minimum_age < minimumAge)
+      ) {
+        missingClaims.push(`minimum_age:${minimumAge}`)
+      }
+      if (requirement.proof_type === "sanctions_clear" && outcome.claims.ofac_clear !== true) {
+        missingClaims.push("sanctions_clear")
       }
     }
     if (requestedCapabilities.includes("nationality") && !outcome.claims.nationality) {
@@ -406,7 +427,7 @@ async function finalizeVerification(
   },
   requestedCapabilities?: RequestedVerificationCapability[] | null,
   verificationRequirements?: VerificationRequirement[] | null,
-  selfClaims?: { age_over_18: boolean; minimum_age?: number | null; nationality: string | null; gender: "M" | "F" | null } | null,
+  selfClaims?: { age_over_18: boolean; minimum_age?: number | null; nationality: string | null; gender: "M" | "F" | null; ofac_clear?: boolean | null } | null,
   attestationData?: Record<string, unknown>,
 ): Promise<VerificationSession> {
   const existingAttestations = await getAttestationsBySourceSessionId(client, input.verificationSessionId, input.userId)
@@ -426,6 +447,9 @@ async function finalizeVerification(
 
   const capsToMint = requestedCapabilities ?? ["unique_human"]
   const minimumAgeToMint = resolveMinimumAgeToMint(capsToMint, verificationRequirements ?? [], selfClaims)
+  const shouldMintSelfOfac = row.provider === "self"
+    && hasSelfOfacRequirement(verificationRequirements ?? [])
+    && selfClaims?.ofac_clear === true
   const attestationInserts: InStatement[] = []
 
   capabilities.unique_human = {
@@ -523,6 +547,33 @@ async function finalizeVerification(
         ) VALUES (?1, ?2, ?3, ?4, 'gender', 'gender', 'accepted', ?5, ?6, ?7, NULL, ?6, ?6)
       `,
       args: [makeId("att"), input.userId, input.verificationSessionId, row.provider, JSON.stringify({ state: "verified", gender: genderValue }), updatedAt, expiresAt],
+    })
+  }
+
+  if (shouldMintSelfOfac) {
+    capabilities.sanctions_clear = {
+      state: "verified",
+      provider: "self",
+      proof_type: "sanctions_clear",
+      mechanism: "self_ofac",
+      verified_at: updatedAt,
+    }
+    attestationInserts.push({
+      sql: `
+        INSERT INTO user_attestations (
+          user_attestation_id, user_id, source_verification_session_id, provider, attestation_type,
+          capability_key, status, value_json, verified_at, expires_at, revoked_at, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, 'sanctions_clear', 'sanctions_clear', 'accepted', ?5, ?6, ?7, NULL, ?6, ?6)
+      `,
+      args: [
+        makeId("att"),
+        input.userId,
+        input.verificationSessionId,
+        row.provider,
+        JSON.stringify({ state: "verified", mechanism: "self_ofac" }),
+        updatedAt,
+        expiresAt,
+      ],
     })
   }
 

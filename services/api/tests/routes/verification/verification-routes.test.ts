@@ -64,7 +64,7 @@ describe("verification routes", () => {
       }),
       getSessionOutcome: async () => ({
         status: "verified",
-        claims: { age_over_18: true, nationality: null, gender: null },
+        claims: { age_over_18: true, nationality: null, gender: null, ofac_clear: null },
       }),
     } satisfies import("../../../src/lib/verification/self-provider").SelfProvider)
 
@@ -91,6 +91,60 @@ describe("verification routes", () => {
     }
     expect(completedBody.status).toBe("failed")
     expect(completedBody.failure_reason).toBe("missing_required_claims:gender")
+  })
+
+  test("self verification can require OFAC and mint sanctions_clear", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-self-ofac-user")
+
+    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "self",
+      requested_capabilities: ["nationality"],
+      verification_requirements: [{ proof_type: "sanctions_clear" }],
+      verification_intent: "community_join",
+    }, ctx.env, session.accessToken)
+    expect(createdVerification.status).toBe(201)
+    const createdBody = await json(createdVerification) as {
+      verification_session_id: string
+      requested_capabilities: string[]
+      launch?: { self_app?: { disclosures?: { nationality?: boolean; ofac?: boolean } } }
+    }
+    expect(createdBody.requested_capabilities).toEqual(["unique_human", "nationality"])
+    expect(createdBody.launch?.self_app?.disclosures?.nationality).toBe(true)
+    expect(createdBody.launch?.self_app?.disclosures?.ofac).toBe(true)
+
+    const completedVerification = await requestJson(
+      `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/complete`,
+      {},
+      ctx.env,
+      session.accessToken,
+    )
+    expect(completedVerification.status).toBe(200)
+    const completedBody = await json(completedVerification) as { status: string }
+    expect(completedBody.status).toBe("verified")
+
+    const me = await app.request("http://pirate.test/users/me", {
+      headers: { authorization: `Bearer ${session.accessToken}` },
+    }, ctx.env)
+    expect(me.status).toBe(200)
+    const meBody = await json(me) as {
+      verification_capabilities: {
+        nationality: { state: string; provider: string | null; value: string | null }
+        sanctions_clear: { state: string; provider: string | null; mechanism: string | null }
+      }
+    }
+    expect(meBody.verification_capabilities.nationality).toMatchObject({
+      state: "verified",
+      provider: "self",
+      value: "USA",
+    })
+    expect(meBody.verification_capabilities.sanctions_clear).toMatchObject({
+      state: "verified",
+      provider: "self",
+      mechanism: "self_ofac",
+    })
   })
 
   test("verification and namespace endpoints work through the full route stack", async () => {

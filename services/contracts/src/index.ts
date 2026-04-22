@@ -185,8 +185,8 @@ export type VeryWidgetLaunch = {
 export type RequestedVerificationCapability = "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender";
 
 export type VerificationRequirement = {
-  proof_type: "minimum_age";
-  minimum_age: number;
+  proof_type: "minimum_age" | "sanctions_clear";
+  minimum_age?: number;
 };
 
 export type VerificationIntent = "profile_verification" | "community_creation" | "community_join" | "post_access_18_plus" | "commerce_pricing" | "qualifier_disclosure";
@@ -2261,9 +2261,9 @@ type RootPostQuotaRule = {
 
 type SanctionsClearCapabilityState = {
   state: "unverified" | "verified" | "expired";
-  provider?: "passport" | null;
+  provider?: "self" | "passport" | null;
   proof_type?: "sanctions_clear" | null;
-  mechanism?: "CleanHands" | null;
+  mechanism?: "self_ofac" | "passport_clean_hands" | "CleanHands" | null;
   verified_at?: string | null;
 };
 

@@ -379,7 +379,24 @@ describe("community-service helpers", () => {
       ).not.toThrow()
     })
 
-    test("rejects sanctions_clear gate without Passport provider", () => {
+    test("allows sanctions_clear gate in public v0 with Self OFAC mechanism", () => {
+      expect(() =>
+        assertCreateRequest(makeCreateBody({
+          gate_rules: [{
+            scope: "membership",
+            gate_family: "identity_proof",
+            gate_type: "sanctions_clear",
+            proof_requirements: [{
+              proof_type: "sanctions_clear",
+              accepted_providers: ["self"],
+              accepted_mechanisms: ["self_ofac"],
+            }],
+          }],
+        }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+      ).not.toThrow()
+    })
+
+    test("rejects sanctions_clear gate with Self provider but missing Self OFAC mechanism", () => {
       expect(() =>
         assertCreateRequest(makeCreateBody({
           gate_rules: [{
@@ -389,7 +406,7 @@ describe("community-service helpers", () => {
             proof_requirements: [{ proof_type: "sanctions_clear", accepted_providers: ["self"] }],
           }],
         }), { uniqueHumanVerified: true, ageOver18Verified: false }),
-      ).toThrow("Invalid accepted_providers for sanctions_clear: self")
+      ).toThrow("Self sanctions clear gate must accept self_ofac")
     })
 
     test("rejects post_ephemeral anonymous scope in v0", () => {

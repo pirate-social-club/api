@@ -108,12 +108,12 @@ describe("community gender and request gate routes", () => {
           session_id: "self-test-ref",
           user_id: "test",
           user_id_type: "uuid",
-          disclosures: { gender: true },
+          disclosures: { gender: true, ofac: true },
         },
       }),
       getSessionOutcome: async () => ({
         status: "verified",
-        claims: { age_over_18: true, nationality: null, gender: "F" },
+        claims: { age_over_18: true, nationality: null, gender: "F", ofac_clear: true },
       }),
     } satisfies SelfProvider)
     await completeGenderVerification(ctx.env, joiner.accessToken)
@@ -171,12 +171,12 @@ describe("community gender and request gate routes", () => {
           session_id: "self-test-ref",
           user_id: "test",
           user_id_type: "uuid",
-          disclosures: { gender: true },
+          disclosures: { gender: true, ofac: true },
         },
       }),
       getSessionOutcome: async () => ({
         status: "verified",
-        claims: { age_over_18: true, nationality: null, gender: "F" },
+        claims: { age_over_18: true, nationality: null, gender: "F", ofac_clear: true },
       }),
     } satisfies SelfProvider)
     await completeGenderVerification(ctx.env, joiner.accessToken)

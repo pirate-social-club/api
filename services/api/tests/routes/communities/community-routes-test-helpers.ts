@@ -83,6 +83,7 @@ export async function completeNationalityVerification(
   const verificationSession = await requestJson("http://pirate.test/verification-sessions", {
     provider: "self",
     requested_capabilities: ["nationality"],
+    verification_requirements: [{ proof_type: "sanctions_clear" }],
   }, env, accessToken)
   const verificationBody = await json(verificationSession) as { verification_session_id: string }
   await requestJson(
@@ -100,6 +101,7 @@ export async function completeGenderVerification(
   const verificationSession = await requestJson("http://pirate.test/verification-sessions", {
     provider: "self",
     requested_capabilities: ["gender"],
+    verification_requirements: [{ proof_type: "sanctions_clear" }],
   }, env, accessToken)
   const verificationBody = await json(verificationSession) as { verification_session_id: string }
   await requestJson(
@@ -117,6 +119,7 @@ export async function completeAgeOver18Verification(
   const verificationSession = await requestJson("http://pirate.test/verification-sessions", {
     provider: "self",
     requested_capabilities: ["age_over_18"],
+    verification_requirements: [{ proof_type: "sanctions_clear" }],
   }, env, accessToken)
   const verificationBody = await json(verificationSession) as { verification_session_id: string }
   await requestJson(

@@ -31,6 +31,13 @@ describe("self-provider capability canonicalization", () => {
     })
   })
 
+  test("maps sanctions requirement to self OFAC disclosure", () => {
+    expect(mapCapabilitiesToDisclosures(["unique_human", "nationality"], [{ proof_type: "sanctions_clear" }])).toEqual({
+      nationality: true,
+      ofac: true,
+    })
+  })
+
   test("non-production self stub returns requested nationality and gender claims", async () => {
     const provider = getSelfProvider(buildTestEnv({ ENVIRONMENT: "test" }))
     const started = await provider.startSession({
@@ -53,6 +60,37 @@ describe("self-provider capability canonicalization", () => {
         minimum_age: null,
         nationality: "USA",
         gender: "F",
+        ofac_clear: null,
+      },
+    })
+  })
+
+  test("non-production self stub returns OFAC clear when requested", async () => {
+    const provider = getSelfProvider(buildTestEnv({ ENVIRONMENT: "test" }))
+    const started = await provider.startSession({
+      userId: "usr_test",
+      requestedCapabilities: ["unique_human", "nationality"],
+      verificationRequirements: [{ proof_type: "sanctions_clear" }],
+      verificationIntent: "community_join",
+      policyId: null,
+    })
+
+    expect(started.launch.disclosures.ofac).toBe(true)
+
+    const outcome = await provider.getSessionOutcome({
+      upstreamSessionRef: started.upstreamSessionRef,
+      proof: null,
+      providerPayloadRef: null,
+    })
+
+    expect(outcome).toEqual({
+      status: "verified",
+      claims: {
+        age_over_18: false,
+        minimum_age: null,
+        nationality: "USA",
+        gender: null,
+        ofac_clear: true,
       },
     })
   })

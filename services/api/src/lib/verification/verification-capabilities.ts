@@ -72,6 +72,7 @@ export function applyLazyCapabilityExpiry(
 
   if (
     next.sanctions_clear.state === "verified"
+    && next.sanctions_clear.provider === "self"
     && isOlderThanTtl(next.sanctions_clear.verified_at, INTERACTIVE_VERIFICATION_TTL_MS, nowMs)
   ) {
     next.sanctions_clear.state = "expired"

@@ -263,7 +263,9 @@ export async function getJoinEligibility(input: {
             ? "minimum_age_mismatch"
             : evaluation.mismatchReasons.includes("wallet_score_too_low")
               ? "wallet_score_too_low"
-              : null
+              : evaluation.mismatchReasons.includes("mechanism_not_accepted")
+                ? "provider_not_accepted"
+                : null
     return {
       community_id: input.communityId,
       membership_mode: membershipMode,
@@ -399,6 +401,12 @@ export async function joinCommunity(input: {
         throw gateFailedWithDetails("Your verified gender does not satisfy this community requirement", {
           membership_gate_summaries: gateSummaries,
           failure_reason: "gender_mismatch",
+        })
+      }
+      if (evaluation.mismatchReasons.includes("mechanism_not_accepted")) {
+        throw gateFailedWithDetails("Your verification method does not satisfy this community requirement", {
+          membership_gate_summaries: gateSummaries,
+          failure_reason: "provider_not_accepted",
         })
       }
       if (evaluation.mismatchReasons.includes("wallet_score_too_low")) {

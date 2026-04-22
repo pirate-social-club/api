@@ -17,6 +17,8 @@ type PublicV0GateValidationBody = {
 }
 
 type GateRuleInput = NonNullable<CreateCommunityRequest["gate_rules"]>[number]
+type GateProofRequirementInput = NonNullable<GateRuleInput["proof_requirements"]>[number]
+type GateAcceptedProvider = NonNullable<GateProofRequirementInput["accepted_providers"]>[number]
 
 const VALID_PUBLIC_V0_PROVIDERS_BY_PROOF_TYPE = {
   unique_human: new Set(["self", "very"]),
@@ -25,8 +27,12 @@ const VALID_PUBLIC_V0_PROVIDERS_BY_PROOF_TYPE = {
   nationality: new Set(["self"]),
   gender: new Set(["self"]),
   wallet_score: new Set(["passport"]),
-  sanctions_clear: new Set(["passport"]),
+  sanctions_clear: new Set(["self", "passport"]),
 } as const
+
+const SELF_OFAC_MECHANISM = "self_ofac"
+const PASSPORT_CLEAN_HANDS_MECHANISM = "passport_clean_hands"
+const PASSPORT_CLEAN_HANDS_LEGACY_MECHANISM = "CleanHands"
 
 export function assertPublicV0GateConfiguration(
   body: PublicV0GateValidationBody,
@@ -34,12 +40,76 @@ export function assertPublicV0GateConfiguration(
     ageOver18Verified: boolean
   },
 ): void {
+  body.gate_rules = normalizePublicV0GateRules(body.gate_rules ?? [])
   assertPublicV0MembershipBasics(body, input)
 
   const gateRules = body.gate_rules ?? []
   assertPublicV0TokenGateConfiguration(gateRules)
   assertPublicV0AcceptedProviders(gateRules)
   assertPublicV0IdentityGateConfiguration(gateRules)
+}
+
+export function normalizePublicV0GateRules(gateRules: GateRuleInput[]): GateRuleInput[] {
+  const normalized = gateRules.map((rule) => ({ ...rule }))
+  if (!hasSelfBackedIdentityGate(normalized)) {
+    return normalized
+  }
+
+  const sanctionsIndex = normalized.findIndex((rule) => rule.gate_type === "sanctions_clear")
+  if (sanctionsIndex >= 0) {
+    const existing = normalized[sanctionsIndex]
+    const requirement = existing.proof_requirements?.[0] ?? { proof_type: "sanctions_clear" as const }
+    normalized[sanctionsIndex] = {
+      ...existing,
+      gate_family: "identity_proof",
+      gate_type: "sanctions_clear",
+      proof_requirements: [{
+        ...requirement,
+        proof_type: "sanctions_clear",
+        accepted_providers: mergeAcceptedProviders(requirement.accepted_providers, ["self"]),
+        accepted_mechanisms: mergeStrings(requirement.accepted_mechanisms, [SELF_OFAC_MECHANISM]),
+      }],
+    }
+    return normalized
+  }
+
+  normalized.push({
+    scope: "membership",
+    gate_family: "identity_proof",
+    gate_type: "sanctions_clear",
+    proof_requirements: [{
+      proof_type: "sanctions_clear",
+      accepted_providers: ["self"],
+      accepted_mechanisms: [SELF_OFAC_MECHANISM],
+    }],
+  })
+  return normalized
+}
+
+function mergeAcceptedProviders(
+  current: GateProofRequirementInput["accepted_providers"],
+  additions: GateAcceptedProvider[],
+): GateAcceptedProvider[] {
+  return Array.from(new Set([...(current ?? []), ...additions]))
+}
+
+function mergeStrings(current: string[] | null | undefined, additions: string[]): string[] {
+  return Array.from(new Set([...(current ?? []), ...additions]))
+}
+
+function hasSelfBackedIdentityGate(gateRules: GateRuleInput[]): boolean {
+  return gateRules.some((rule) => {
+    if (rule.gate_family !== "identity_proof" || rule.gate_type === "sanctions_clear") {
+      return false
+    }
+    return (rule.proof_requirements ?? []).some((requirement) =>
+      requirement.accepted_providers?.includes("self")
+      || (
+        requirement.accepted_providers == null
+        && ["unique_human", "age_over_18", "minimum_age", "nationality", "gender"].includes(requirement.proof_type)
+      )
+    )
+  })
 }
 
 function assertPublicV0MembershipBasics(
@@ -209,8 +279,33 @@ function assertSanctionsClearGate(rule: GateRuleInput): void {
   }
 
   const acceptedProviders = requirements[0].accepted_providers ?? []
-  if (acceptedProviders.length !== 1 || acceptedProviders[0] !== "passport") {
-    throw eligibilityFailed("Sanctions clear gate accepted_providers must be exactly [\"passport\"]")
+  const uniqueProviders = Array.from(new Set(acceptedProviders))
+  if (uniqueProviders.length === 0 || uniqueProviders.some((provider) => provider !== "self" && provider !== "passport")) {
+    throw eligibilityFailed("Sanctions clear gate accepted_providers must include self or passport")
+  }
+
+  const acceptedMechanisms = requirements[0].accepted_mechanisms ?? []
+  const uniqueMechanisms = Array.from(new Set(acceptedMechanisms))
+  const providerSupportsMechanism = (mechanism: string): boolean => {
+    if (mechanism === SELF_OFAC_MECHANISM) return uniqueProviders.includes("self")
+    if (mechanism === PASSPORT_CLEAN_HANDS_MECHANISM || mechanism === PASSPORT_CLEAN_HANDS_LEGACY_MECHANISM) {
+      return uniqueProviders.includes("passport")
+    }
+    return false
+  }
+  const invalidMechanisms = uniqueMechanisms.filter((mechanism) => !providerSupportsMechanism(mechanism))
+  if (invalidMechanisms.length > 0) {
+    throw eligibilityFailed(`Invalid accepted_mechanisms for sanctions_clear: ${invalidMechanisms.join(", ")}`)
+  }
+  if (uniqueProviders.includes("self") && !uniqueMechanisms.includes(SELF_OFAC_MECHANISM)) {
+    throw eligibilityFailed("Self sanctions clear gate must accept self_ofac")
+  }
+  if (
+    uniqueProviders.includes("passport")
+    && uniqueMechanisms.length > 0
+    && !uniqueMechanisms.some((mechanism) => mechanism === PASSPORT_CLEAN_HANDS_MECHANISM || mechanism === PASSPORT_CLEAN_HANDS_LEGACY_MECHANISM)
+  ) {
+    throw eligibilityFailed("Passport sanctions clear gate must accept passport_clean_hands")
   }
 }
 
