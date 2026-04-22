@@ -76,14 +76,22 @@ export async function anyAttachedEthereumWalletOwnsErc721Collection(input: {
   env: Env
   walletAttachments: WalletAttachmentSummary[]
 }): Promise<boolean> {
+  return (await evaluateAttachedEthereumWalletErc721CollectionOwnership(input)).owns
+}
+
+export async function evaluateAttachedEthereumWalletErc721CollectionOwnership(input: {
+  contractAddress: string
+  env: Env
+  walletAttachments: WalletAttachmentSummary[]
+}): Promise<{ owns: boolean; unavailable: boolean }> {
   const normalizedContractAddress = normalizeEthereumAddress(input.contractAddress)
   if (!normalizedContractAddress) {
-    return false
+    return { owns: false, unavailable: false }
   }
 
   const walletAddresses = listEthereumMainnetWalletAddresses(input.walletAttachments)
   if (walletAddresses.length === 0) {
-    return false
+    return { owns: false, unavailable: false }
   }
 
   if (erc721OwnershipCheckerForTests) {
@@ -93,28 +101,29 @@ export async function anyAttachedEthereumWalletOwnsErc721Collection(input: {
         env: input.env,
         walletAddress,
       })) {
-        return true
+        return { owns: true, unavailable: false }
       }
     }
-    return false
+    return { owns: false, unavailable: false }
   }
 
   const provider = getEthereumProvider(input.env)
   if (!provider) {
-    return false
+    return { owns: false, unavailable: true }
   }
 
   const contract = new Contract(normalizedContractAddress, ERC721_COLLECTION_ABI, provider)
+  let unavailable = false
   for (const walletAddress of walletAddresses) {
     try {
       const balance = await contract.balanceOf(walletAddress) as bigint
       if (balance > 0n) {
-        return true
+        return { owns: true, unavailable: false }
       }
     } catch {
-      continue
+      unavailable = true
     }
   }
 
-  return false
+  return { owns: false, unavailable }
 }

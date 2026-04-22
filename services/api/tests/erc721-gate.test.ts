@@ -122,6 +122,19 @@ describe("erc721 gate evaluation", () => {
     expect(result.mismatchReasons).toContain("erc721_holding_required")
   })
 
+  test("returns token_inventory_unavailable when ERC-721 ownership lookup cannot run", async () => {
+    const result = await evaluateMembershipGateRules({
+      env: {},
+      rules: [makeErc721Rule("0x1111111111111111111111111111111111111111")],
+      user: makeUser(),
+      walletAttachments,
+    })
+
+    expect(result.satisfied).toBe(false)
+    expect(result.mismatchReasons).toContain("token_inventory_unavailable")
+    expect(result.mismatchReasons).not.toContain("erc721_holding_required")
+  })
+
   test("returns satisfied when an attached wallet holds the collection", async () => {
     setErc721OwnershipCheckerForTests(async ({ walletAddress }) => (
       walletAddress === "0x2222222222222222222222222222222222222222"

@@ -2,7 +2,7 @@ import type { Env, MembershipGateSummary, User, WalletAttachmentSummary } from "
 import { normalizeIdentityCountryCode, normalizeIdentityCountryCodes } from "../../identity/country-codes"
 import { requiredString, rowValue, stringOrNull } from "../../sql-row"
 import {
-  anyAttachedEthereumWalletOwnsErc721Collection,
+  evaluateAttachedEthereumWalletErc721CollectionOwnership,
   hasEthereumRpcConfig,
   normalizeEthereumAddress,
 } from "../community-token-gates"
@@ -334,16 +334,18 @@ export async function evaluateMembershipGateRules(input: {
       }
 
       if (!hasEthereumRpcConfig(env)) {
-        mismatchReasons.push("unsupported")
+        mismatchReasons.push("token_inventory_unavailable")
         continue
       }
 
-      const holdsRequiredCollection = await anyAttachedEthereumWalletOwnsErc721Collection({
+      const ownership = await evaluateAttachedEthereumWalletErc721CollectionOwnership({
         contractAddress,
         env,
         walletAttachments,
       })
-      if (!holdsRequiredCollection) {
+      if (ownership.unavailable) {
+        mismatchReasons.push("token_inventory_unavailable")
+      } else if (!ownership.owns) {
         mismatchReasons.push("erc721_holding_required")
       }
       continue

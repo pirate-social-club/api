@@ -94,6 +94,48 @@ describe("community settings gates routes", () => {
     expect(updatedCommunity.gate_rules?.[0]?.gate_type).toBe("gender")
     expect(updatedCommunity.gate_rules?.[0]?.proof_requirements?.[0]?.config?.required_value).toBe("F")
 
+    const auditRows = await ctx.client.execute({
+      sql: `
+        SELECT actor_type, actor_id, action, target_type, target_id, community_id, metadata_json
+        FROM audit_log
+        WHERE community_id = ?1 AND action = 'community.gates_updated'
+      `,
+      args: [communityCreateBody.community.community_id],
+    })
+    expect(auditRows.rows).toHaveLength(1)
+    expect(auditRows.rows[0]?.actor_type).toBe("user")
+    expect(auditRows.rows[0]?.actor_id).toBe(session.userId)
+    expect(auditRows.rows[0]?.target_type).toBe("community")
+    expect(auditRows.rows[0]?.target_id).toBe(communityCreateBody.community.community_id)
+    const auditMetadata = JSON.parse(String(auditRows.rows[0]?.metadata_json)) as {
+      previous_access: {
+        membership_mode: string
+      }
+      next_access: {
+        membership_mode: string
+        default_age_gate_policy: string
+        allow_anonymous_identity: boolean
+        anonymous_identity_scope: string | null
+      }
+      previous_gate_rules: unknown[]
+      next_gate_rules: Array<{
+        gate_type: string
+        proof_requirements?: Array<{
+          config?: Record<string, unknown> | null
+        }> | null
+      }>
+    }
+    expect(auditMetadata.previous_access.membership_mode).toBe("open")
+    expect(auditMetadata.next_access).toEqual({
+      membership_mode: "gated",
+      default_age_gate_policy: "18_plus",
+      allow_anonymous_identity: true,
+      anonymous_identity_scope: "thread_stable",
+    })
+    expect(auditMetadata.previous_gate_rules).toEqual([])
+    expect(auditMetadata.next_gate_rules[0]?.gate_type).toBe("gender")
+    expect(auditMetadata.next_gate_rules[0]?.proof_requirements?.[0]?.config?.required_value).toBe("F")
+
     const fetchedCommunity = await app.request(
       `http://pirate.test/communities/${communityCreateBody.community.community_id}`,
       {

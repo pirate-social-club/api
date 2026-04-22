@@ -1,7 +1,8 @@
 import type { UserRepository } from "../auth/repositories"
 import type { CommunityRepository } from "./db-community-repository"
 import { internalError, notFoundError } from "../errors"
-import { nowIso } from "../helpers"
+import { makeId, nowIso } from "../helpers"
+import { getControlPlaneClient } from "../runtime-deps"
 import { openCommunityDb } from "./community-db-factory"
 import {
   assertPublicV0GateConfiguration,
@@ -14,6 +15,90 @@ import type {
   Community,
   Env,
 } from "../../types"
+
+type CommunityAccessAuditSnapshot = {
+  membership_mode: string
+  default_age_gate_policy: string
+  allow_anonymous_identity: boolean
+  anonymous_identity_scope: string | null
+}
+
+type CommunityGateRuleAuditSnapshot = {
+  gate_rule_id: string
+  scope: string
+  gate_family: string
+  gate_type: string
+  proof_requirements: unknown
+  chain_namespace: string | null
+  gate_config: unknown
+  status: string
+}
+
+function parseJsonSnapshot(value: unknown): unknown {
+  if (typeof value !== "string" || value.length === 0) {
+    return null
+  }
+  try {
+    return JSON.parse(value)
+  } catch {
+    return value
+  }
+}
+
+function accessSnapshotFromRow(row: Record<string, unknown>): CommunityAccessAuditSnapshot {
+  return {
+    membership_mode: String(row.membership_mode),
+    default_age_gate_policy: String(row.default_age_gate_policy),
+    allow_anonymous_identity: Number(row.allow_anonymous_identity) === 1,
+    anonymous_identity_scope: row.anonymous_identity_scope == null ? null : String(row.anonymous_identity_scope),
+  }
+}
+
+function gateRuleSnapshotFromRow(row: Record<string, unknown>): CommunityGateRuleAuditSnapshot {
+  return {
+    gate_rule_id: String(row.gate_rule_id),
+    scope: String(row.scope),
+    gate_family: String(row.gate_family),
+    gate_type: String(row.gate_type),
+    proof_requirements: parseJsonSnapshot(row.proof_requirements_json),
+    chain_namespace: row.chain_namespace == null ? null : String(row.chain_namespace),
+    gate_config: parseJsonSnapshot(row.gate_config_json),
+    status: String(row.status),
+  }
+}
+
+async function recordCommunityGateUpdateAudit(input: {
+  env: Env
+  actorUserId: string
+  communityId: string
+  previousAccess: CommunityAccessAuditSnapshot | null
+  nextAccess: CommunityAccessAuditSnapshot
+  previousGateRules: CommunityGateRuleAuditSnapshot[]
+  nextGateRules: CommunityGateRuleAuditSnapshot[]
+  createdAt: string
+}): Promise<void> {
+  await getControlPlaneClient(input.env).execute({
+    sql: `
+      INSERT INTO audit_log (
+        audit_event_id, actor_type, actor_id, action, target_type, target_id, community_id, metadata_json, created_at
+      ) VALUES (
+        ?1, 'user', ?2, 'community.gates_updated', 'community', ?3, ?3, ?4, ?5
+      )
+    `,
+    args: [
+      makeId("aud"),
+      input.actorUserId,
+      input.communityId,
+      JSON.stringify({
+        previous_access: input.previousAccess,
+        next_access: input.nextAccess,
+        previous_gate_rules: input.previousGateRules,
+        next_gate_rules: input.nextGateRules,
+      }),
+      input.createdAt,
+    ],
+  })
+}
 
 export async function updateCommunityGates(input: {
   env: Env
@@ -39,8 +124,41 @@ export async function updateCommunityGates(input: {
 
   try {
     const now = nowIso()
+    let previousAccess: CommunityAccessAuditSnapshot | null = null
+    let previousGateRules: CommunityGateRuleAuditSnapshot[] = []
+    const nextAccess: CommunityAccessAuditSnapshot = {
+      membership_mode: input.body.membership_mode,
+      default_age_gate_policy: input.body.default_age_gate_policy ?? "none",
+      allow_anonymous_identity: input.body.allow_anonymous_identity,
+      anonymous_identity_scope: input.body.allow_anonymous_identity ? (input.body.anonymous_identity_scope ?? null) : null,
+    }
+    const nextGateRules: CommunityGateRuleAuditSnapshot[] = []
     const tx = await db.client.transaction("write")
     try {
+      const currentAccessRows = await tx.execute({
+        sql: `
+          SELECT membership_mode, default_age_gate_policy, allow_anonymous_identity, anonymous_identity_scope
+          FROM communities
+          WHERE community_id = ?1
+        `,
+        args: [input.communityId],
+      })
+      previousAccess = currentAccessRows.rows[0]
+        ? accessSnapshotFromRow(currentAccessRows.rows[0] as Record<string, unknown>)
+        : null
+
+      const currentGateRuleRows = await tx.execute({
+        sql: `
+          SELECT gate_rule_id, scope, gate_family, gate_type, proof_requirements_json,
+                 chain_namespace, gate_config_json, status
+          FROM community_gate_rules
+          WHERE community_id = ?1
+          ORDER BY created_at ASC, gate_rule_id ASC
+        `,
+        args: [input.communityId],
+      })
+      previousGateRules = currentGateRuleRows.rows.map((row) => gateRuleSnapshotFromRow(row as Record<string, unknown>))
+
       await tx.execute({
         sql: `
           UPDATE communities
@@ -74,6 +192,18 @@ export async function updateCommunityGates(input: {
           ? rule.gate_rule_id.trim()
           : null
         const gateRuleId = existingId ?? `grl_${input.communityId}_${index}_${nowIso().replace(/[^a-zA-Z0-9]/g, "")}_${index}`
+        const proofRequirementsJson = rule.proof_requirements ? JSON.stringify(rule.proof_requirements) : null
+        const gateConfigJson = rule.gate_config ? JSON.stringify(rule.gate_config) : null
+        nextGateRules.push({
+          gate_rule_id: gateRuleId,
+          scope: rule.scope,
+          gate_family: rule.gate_family,
+          gate_type: rule.gate_type,
+          proof_requirements: rule.proof_requirements ?? null,
+          chain_namespace: rule.chain_namespace ?? null,
+          gate_config: rule.gate_config ?? null,
+          status: "active",
+        })
         await tx.execute({
           sql: `
             INSERT INTO community_gate_rules (
@@ -90,9 +220,9 @@ export async function updateCommunityGates(input: {
             rule.scope,
             rule.gate_family,
             rule.gate_type,
-            rule.proof_requirements ? JSON.stringify(rule.proof_requirements) : null,
+            proofRequirementsJson,
             rule.chain_namespace ?? null,
-            rule.gate_config ? JSON.stringify(rule.gate_config) : null,
+            gateConfigJson,
             now,
           ],
         })
@@ -107,6 +237,16 @@ export async function updateCommunityGates(input: {
     } finally {
       tx.close()
     }
+    await recordCommunityGateUpdateAudit({
+      env: input.env,
+      actorUserId: input.userId,
+      communityId: input.communityId,
+      previousAccess,
+      nextAccess,
+      previousGateRules,
+      nextGateRules,
+      createdAt: now,
+    })
   } finally {
     db.close()
   }
