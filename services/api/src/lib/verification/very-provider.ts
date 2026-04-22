@@ -80,7 +80,11 @@ function deriveVeryVerifyUrl(apiUrl: string): string {
     if (pathname.endsWith("/api/v1/verify") || pathname.endsWith("/verify")) {
       return url.toString()
     }
-    url.pathname = pathname ? `${pathname}/api/v1/verify` : "/api/v1/verify"
+    url.pathname = pathname.endsWith("/api/v1")
+      ? `${pathname}/verify`
+      : pathname
+        ? `${pathname}/api/v1/verify`
+        : "/api/v1/verify"
     return url.toString()
   } catch {
     throw internalError("VERY_API_URL is not a valid URL")

@@ -104,6 +104,36 @@ describe("Very provider adapter", () => {
     expect(outcome.status).toBe("pending")
   })
 
+  test("getVeryProvider derives verify URLs from pathful Very API URLs without duplicating api/v1", async () => {
+    const { getVeryProvider } = require("../src/lib/verification/very-provider") as typeof import("../src/lib/verification/very-provider")
+
+    const apiV1Provider = getVeryProvider({
+      VERY_API_URL: "https://very.example.com/api/v1/",
+      VERY_APP_ID: "test-app",
+    } as any)
+    const apiV1Result = await apiV1Provider.startSession({
+      userId: "user-1",
+      requestedCapabilities: ["unique_human"],
+      walletAttachmentId: null,
+      verificationIntent: null,
+      policyId: null,
+    })
+    expect(apiV1Result.launch.verify_url).toBe("https://very.example.com/api/v1/verify")
+
+    const verifyProvider = getVeryProvider({
+      VERY_API_URL: "https://very.example.com/api/v1/verify",
+      VERY_APP_ID: "test-app",
+    } as any)
+    const verifyResult = await verifyProvider.startSession({
+      userId: "user-1",
+      requestedCapabilities: ["unique_human"],
+      walletAttachmentId: null,
+      verificationIntent: null,
+      policyId: null,
+    })
+    expect(verifyResult.launch.verify_url).toBe("https://very.example.com/api/v1/verify")
+  })
+
   test("startSession returns a Pirate API widget verify URL when a public origin is known", async () => {
     const { getVeryProvider } = require("../src/lib/verification/very-provider") as typeof import("../src/lib/verification/very-provider")
     const env = {
