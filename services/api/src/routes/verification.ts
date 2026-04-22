@@ -1,7 +1,7 @@
 import { Hono } from "hono"
 import { badRequestError, notFoundError } from "../lib/errors"
 import { getControlPlaneVerificationRepository } from "../lib/verification/control-plane-verification-repository"
-import { verifyVeryWidgetProof } from "../lib/verification/very-provider"
+import { proxyVeryBridgeRequest, verifyVeryWidgetProof } from "../lib/verification/very-provider"
 import { authenticate, type AuthenticatedEnv } from "../lib/auth-middleware"
 import type { Env, RequestedVerificationCapability, VerificationIntent, VerificationRequirement } from "../types"
 
@@ -43,6 +43,30 @@ verification.post("/verification-sessions/very-widget-verify", async (c) => {
 })
 
 authenticatedVerification.use("*", authenticate)
+
+authenticatedVerification.post("/verification-sessions/very-bridge/sessions", async (c) => {
+  const body = await c.req.text()
+  const result = await proxyVeryBridgeRequest({
+    body,
+    env: c.env,
+    method: "POST",
+    path: "sessions",
+  })
+  return c.json(result.body, result.status as 200)
+})
+
+authenticatedVerification.get("/verification-sessions/very-bridge/session/:providerSessionId", async (c) => {
+  const providerSessionId = c.req.param("providerSessionId").trim()
+  if (!providerSessionId || providerSessionId.includes("/")) {
+    throw badRequestError("Invalid Very bridge session id")
+  }
+  const result = await proxyVeryBridgeRequest({
+    env: c.env,
+    method: "GET",
+    path: `session/${encodeURIComponent(providerSessionId)}`,
+  })
+  return c.json(result.body, result.status as 200)
+})
 
 authenticatedVerification.post("/verification-sessions", async (c) => {
   const actor = c.get("actor")

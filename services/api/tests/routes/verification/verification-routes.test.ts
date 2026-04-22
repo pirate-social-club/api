@@ -312,6 +312,72 @@ describe("verification routes", () => {
     expect(fetchedNamespaceBody.capabilities.club_attach_allowed).toBe(true)
   })
 
+  test("very bridge session proxy forwards authenticated widget session creation", async () => {
+    const ctx = await createRouteTestContext({
+      VERY_BRIDGE_API_URL: "https://bridge.very.test/api/v1/",
+    })
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-very-bridge-session-user")
+    await withFetchMock(async (input, init) => {
+      expect(String(input)).toBe("https://bridge.very.test/api/v1/sessions")
+      expect(init?.method).toBe("POST")
+      expect(init?.body).toBe("{\"iv\":\"iv-1\",\"payload\":\"payload-1\"}")
+      return Response.json({
+        iv: "iv-1",
+        key: "key-1",
+        sessionAuthToken: "token-1",
+        sessionId: "very-session-1",
+      })
+    }, async () => {
+      const response = await app.request(
+        "http://pirate.test/verification-sessions/very-bridge/sessions",
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${session.accessToken}`,
+            "content-type": "application/json",
+          },
+          body: "{\"iv\":\"iv-1\",\"payload\":\"payload-1\"}",
+        },
+        ctx.env,
+      )
+
+      expect(response.status).toBe(200)
+      const body = await json(response) as { sessionId?: string }
+      expect(body.sessionId).toBe("very-session-1")
+    })
+  })
+
+  test("very bridge status proxy returns widget-readable errors when upstream fails", async () => {
+    const ctx = await createRouteTestContext({
+      VERY_BRIDGE_API_URL: "https://bridge.very.test/api/v1/",
+    })
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-very-bridge-status-user")
+    await withFetchMock(async (input, init) => {
+      expect(String(input)).toBe("https://bridge.very.test/api/v1/session/very-session-1")
+      expect(init?.method).toBe("GET")
+      return new Response("Service Unavailable", { status: 503 })
+    }, async () => {
+      const response = await app.request(
+        "http://pirate.test/verification-sessions/very-bridge/session/very-session-1",
+        {
+          headers: {
+            authorization: `Bearer ${session.accessToken}`,
+          },
+        },
+        ctx.env,
+      )
+
+      expect(response.status).toBe(502)
+      const body = await json(response) as { status?: string; userMessage?: string }
+      expect(body.status).toBe("error")
+      expect(body.userMessage).toBe("Very bridge response was invalid")
+    })
+  })
+
   test("very verification completes only after the provider confirms the submitted proof", async () => {
     const ctx = await createRouteTestContext({
       VERY_API_URL: "https://very.test",

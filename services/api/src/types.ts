@@ -193,6 +193,7 @@ export type Env = {
   SELF_APP_NAME?: string
   SELF_ENDPOINT?: string
   SELF_ENDPOINT_TYPE?: string
+  VERY_BRIDGE_API_URL?: string
   FILEBASE_S3_ACCESS_KEY?: string
   FILEBASE_S3_SECRET_KEY?: string
   FILEBASE_S3_BUCKET_MUSIC?: string

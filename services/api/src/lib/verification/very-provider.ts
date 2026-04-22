@@ -4,6 +4,7 @@ import { sha256Hex } from "../crypto"
 import type { Env, VerificationIntent, VeryWidgetLaunch } from "../../types"
 
 const VERY_TIMEOUT_MS = 15_000
+const VERY_BRIDGE_API_URL = "https://bridge.very.org/api/v1/"
 
 export type VeryStartResult = {
   upstreamSessionRef: string
@@ -78,6 +79,89 @@ function deriveVeryVerifyUrl(apiUrl: string): string {
     return url.toString()
   } catch {
     throw internalError("VERY_API_URL is not a valid URL")
+  }
+}
+
+function buildVeryBridgeUrl(env: Env, path: string): string {
+  const baseUrl = trimEnv(env.VERY_BRIDGE_API_URL) || VERY_BRIDGE_API_URL
+  try {
+    return new URL(path, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).toString()
+  } catch {
+    throw internalError("VERY_BRIDGE_API_URL is not a valid URL")
+  }
+}
+
+export async function proxyVeryBridgeRequest(input: {
+  body?: string | null
+  env: Env
+  method: "GET" | "POST"
+  path: string
+}): Promise<{ body: Record<string, unknown>; status: number }> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), VERY_TIMEOUT_MS)
+
+  try {
+    const response = await fetch(buildVeryBridgeUrl(input.env, input.path), {
+      method: input.method,
+      headers: {
+        accept: "application/json",
+        ...(input.body != null ? { "content-type": "application/json" } : {}),
+      },
+      ...(input.body != null ? { body: input.body } : {}),
+      signal: controller.signal,
+    })
+    const rawBody = await response.text().catch(() => "")
+    const body = rawBody
+      ? JSON.parse(rawBody) as unknown
+      : null
+
+    if (body && typeof body === "object" && !Array.isArray(body)) {
+      if (response.ok) {
+        return { body: body as Record<string, unknown>, status: response.status }
+      }
+      return {
+        body: {
+          ...(body as Record<string, unknown>),
+          status: "error",
+          userMessage: typeof (body as { userMessage?: unknown }).userMessage === "string"
+            ? (body as { userMessage: string }).userMessage
+            : `Very bridge request failed with status ${response.status}`,
+        },
+        status: response.status,
+      }
+    }
+
+    return {
+      body: {
+        status: "error",
+        userMessage: response.ok
+          ? "Very bridge response was invalid"
+          : `Very bridge request failed with status ${response.status}`,
+      },
+      status: response.ok ? 502 : response.status,
+    }
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      return {
+        body: { status: "error", userMessage: "Very bridge request timed out" },
+        status: 504,
+      }
+    }
+    if (error instanceof SyntaxError) {
+      return {
+        body: { status: "error", userMessage: "Very bridge response was invalid" },
+        status: 502,
+      }
+    }
+    return {
+      body: {
+        status: "error",
+        userMessage: error instanceof Error ? error.message : "Very bridge request failed",
+      },
+      status: 502,
+    }
+  } finally {
+    clearTimeout(timeout)
   }
 }
 
