@@ -193,10 +193,20 @@ describe("community membership routes", () => {
     expect(deniedJoin.status).toBe(403)
     const deniedBody = await json(deniedJoin) as { code: string; message: string }
     expect(deniedBody.code).toBe("gate_failed")
-    expect(deniedBody.message).toBe("Community membership requirements are not satisfied")
+    expect(deniedBody.message).toBe("Verification is required to join this community")
 
     const selfJoiner = await exchangeJwt(ctx.env, "community-gated-self-joiner")
-    await completeUniqueHumanVerification(ctx.env, selfJoiner.accessToken, "self")
+    const selfVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "self",
+      verification_requirements: [{ proof_type: "sanctions_clear" }],
+    }, ctx.env, selfJoiner.accessToken)
+    const selfVerificationBody = await json(selfVerification) as { verification_session_id: string }
+    await requestJson(
+      `http://pirate.test/verification-sessions/${selfVerificationBody.verification_session_id}/complete`,
+      {},
+      ctx.env,
+      selfJoiner.accessToken,
+    )
 
     const allowedJoin = await app.request(
       `http://pirate.test/communities/${communityCreateBody.community.community_id}/join`,

@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import app from "../../../src/index"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
+import { getCommunityRepository } from "../../../src/lib/communities/db-community-repository"
+import { processCommunityJobsForCommunity } from "../../../src/lib/communities/jobs/runner"
 import {
   exchangeJwt,
   requestJson,
@@ -15,6 +17,37 @@ import {
 
 let cleanup: (() => Promise<void>) | null = null
 let originalFetch: typeof fetch
+
+function makeSilentWavBytes(durationSeconds = 2): Uint8Array {
+  const sampleRate = 8000
+  const channelCount = 1
+  const bytesPerSample = 2
+  const sampleCount = sampleRate * durationSeconds
+  const dataSize = sampleCount * channelCount * bytesPerSample
+  const buffer = new ArrayBuffer(44 + dataSize)
+  const view = new DataView(buffer)
+  const writeAscii = (offset: number, text: string) => {
+    for (let index = 0; index < text.length; index += 1) {
+      view.setUint8(offset + index, text.charCodeAt(index))
+    }
+  }
+
+  writeAscii(0, "RIFF")
+  view.setUint32(4, 36 + dataSize, true)
+  writeAscii(8, "WAVE")
+  writeAscii(12, "fmt ")
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true)
+  view.setUint16(22, channelCount, true)
+  view.setUint32(24, sampleRate, true)
+  view.setUint32(28, sampleRate * channelCount * bytesPerSample, true)
+  view.setUint16(32, channelCount * bytesPerSample, true)
+  view.setUint16(34, bytesPerSample * 8, true)
+  writeAscii(36, "data")
+  view.setUint32(40, dataSize, true)
+
+  return new Uint8Array(buffer)
+}
 
 beforeEach(() => {
   resetRuntimeCaches()
@@ -64,14 +97,14 @@ describe("song artifact local fallback routes", () => {
 
     const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "Local Story Fallback Club")
 
-    const primaryBytes = new Uint8Array([31, 32, 33, 34, 35, 36, 37, 38])
+    const primaryBytes = makeSilentWavBytes()
     const primaryUpload = await uploadSongArtifact({
       env: ctx.env,
       communityId,
       accessToken: author.accessToken,
       artifactKind: "primary_audio",
-      mimeType: "audio/mpeg",
-      filename: "local-fallback-paid.mp3",
+      mimeType: "audio/wav",
+      filename: "local-fallback-paid.wav",
       bytes: primaryBytes,
     })
 
@@ -80,6 +113,10 @@ describe("song artifact local fallback routes", () => {
       {
         primary_audio: {
           song_artifact_upload_id: primaryUpload.song_artifact_upload_id,
+        },
+        preview_window: {
+          start_ms: 0,
+          duration_ms: 30_000,
         },
         lyrics: "Paid line",
       },
@@ -90,6 +127,15 @@ describe("song artifact local fallback routes", () => {
     const bundleBody = await json(bundleCreate) as {
       song_artifact_bundle_id: string
     }
+
+    const jobSummary = await processCommunityJobsForCommunity({
+      env: ctx.env,
+      communityId,
+      communityRepository: getCommunityRepository(ctx.env),
+      maxJobs: 1,
+    })
+    expect(jobSummary.jobs[0]?.job_type).toBe("song_preview_generate")
+    expect(jobSummary.jobs[0]?.status).toBe("succeeded")
 
     const lockedPostCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/posts`,

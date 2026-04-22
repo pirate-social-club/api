@@ -39,6 +39,7 @@ describe("notification routes", () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
     const session = await exchangeJwt(ctx.env, "notification-route-user")
+    const actorSession = await exchangeJwt(ctx.env, "notification-route-actor")
 
     const task = await createNamespaceVerificationTask({
       env: ctx.env,
@@ -49,7 +50,7 @@ describe("notification routes", () => {
 
     await emitPostCommented({
       env: ctx.env,
-      actorUserId: "usr_notification_actor",
+      actorUserId: actorSession.userId,
       postAuthorUserId: session.userId,
       communityId: "cmt_notifications",
       commentExcerpt: "A direct route notification",
