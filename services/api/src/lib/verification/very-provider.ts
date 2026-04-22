@@ -299,13 +299,10 @@ function buildVeryQuery(input: {
   upstreamSessionRef: string
   includeSessionId?: boolean
 }): Record<string, unknown> {
-  // Keep the ZK timestamp range inside signed 32-bit Unix time. Very's mobile
-  // proof generator can fail before returning a proof when handed larger values.
-  // Keep the lower bound broad so existing Very identities minted before this
-  // Pirate session can still satisfy the widget query.
-  const lowerBoundSeconds = 0
-  const maxDocumentedUpperBoundSeconds = 2_043_436_800
-  const upperBoundSeconds = maxDocumentedUpperBoundSeconds
+  const documentedLowerBoundSeconds = 1_743_436_800
+  const documentedUpperBoundSeconds = 2_043_436_800
+  const lowerBoundSeconds = documentedLowerBoundSeconds
+  const upperBoundSeconds = documentedUpperBoundSeconds
   const options: Record<string, unknown> = {
     expiredAtLowerBound: String(lowerBoundSeconds),
     externalNullifier: buildExternalNullifier(input),
