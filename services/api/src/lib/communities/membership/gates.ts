@@ -30,7 +30,7 @@ type ProofRequirement = {
   config?: Record<string, unknown> | null
 }
 
-type MissingMembershipCapability = "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score"
+type MissingMembershipCapability = "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "sanctions_clear"
 type SuggestedVerificationProvider = "self" | "very" | "passport"
 
 export type MembershipGateEvaluation = {
@@ -459,6 +459,18 @@ export async function evaluateMembershipGateRules(input: {
             if (capability.passing_score !== true || !scoreMeetsMinimum) {
               mismatchReasons.push("wallet_score_too_low")
             }
+          }
+          break
+        }
+        case "sanctions_clear": {
+          const capability = user.verification_capabilities.sanctions_clear
+          if (capability.state !== "verified") {
+            missingCapabilities.push("sanctions_clear")
+            if (includesAcceptedProvider(requirement.accepted_providers, "passport")) {
+              suggestedProvider = suggestedProvider ?? "passport"
+            }
+          } else if (!includesAcceptedProvider(requirement.accepted_providers, capability.provider)) {
+            mismatchReasons.push("provider_not_accepted")
           }
           break
         }

@@ -60,9 +60,6 @@ function assertPublicV0MembershipBasics(
   if (body.gate_rules?.some((rule) => rule.scope === "viewer" || rule.scope === "posting")) {
     throw eligibilityFailed("Public v0 community creation only allows membership-scope gates")
   }
-  if (body.gate_rules?.some((rule) => rule.gate_type === "sanctions_clear")) {
-    throw eligibilityFailed("Public v0 community creation does not support sanctions_clear gates")
-  }
 }
 
 function assertPublicV0TokenGateConfiguration(gateRules: GateRuleInput[]): void {
@@ -158,8 +155,15 @@ function assertPublicV0IdentityGateConfiguration(gateRules: GateRuleInput[]): vo
   let genderGateCount = 0
   let minimumAgeGateCount = 0
   let walletScoreGateCount = 0
+  let sanctionsClearGateCount = 0
 
   for (const rule of gateRules) {
+    if (rule.gate_type === "sanctions_clear") {
+      sanctionsClearGateCount += 1
+      assertSingleIdentityGateCount(sanctionsClearGateCount, "sanctions_clear")
+      assertSanctionsClearGate(rule)
+      continue
+    }
     if (rule.gate_type === "wallet_score") {
       walletScoreGateCount += 1
       assertSingleIdentityGateCount(walletScoreGateCount, "wallet_score")
@@ -188,7 +192,7 @@ function assertPublicV0IdentityGateConfiguration(gateRules: GateRuleInput[]): vo
 
 function assertSingleIdentityGateCount(
   count: number,
-  gateType: "minimum_age" | "gender" | "nationality" | "wallet_score",
+  gateType: "minimum_age" | "gender" | "nationality" | "wallet_score" | "sanctions_clear",
 ): void {
   if (count <= 1) {
     return
@@ -196,6 +200,18 @@ function assertSingleIdentityGateCount(
 
   const gateName = gateType === "minimum_age" ? "minimum_age" : gateType
   throw eligibilityFailed(`Public v0 communities support at most one ${gateName} gate`)
+}
+
+function assertSanctionsClearGate(rule: GateRuleInput): void {
+  const requirements = rule.proof_requirements ?? []
+  if (requirements.length !== 1 || requirements[0].proof_type !== "sanctions_clear") {
+    throw eligibilityFailed("Sanctions clear gate must have exactly one sanctions_clear proof requirement")
+  }
+
+  const acceptedProviders = requirements[0].accepted_providers ?? []
+  if (acceptedProviders.length !== 1 || acceptedProviders[0] !== "passport") {
+    throw eligibilityFailed("Sanctions clear gate accepted_providers must be exactly [\"passport\"]")
+  }
 }
 
 function assertWalletScoreGate(rule: GateRuleInput): void {

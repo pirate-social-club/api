@@ -366,7 +366,7 @@ describe("community-service helpers", () => {
       ).toThrow("Gender gate required_value must be either \"M\" or \"F\"")
     })
 
-    test("rejects sanctions_clear gate in public v0", () => {
+    test("allows sanctions_clear gate in public v0 with Passport provider", () => {
       expect(() =>
         assertCreateRequest(makeCreateBody({
           gate_rules: [{
@@ -376,7 +376,20 @@ describe("community-service helpers", () => {
             proof_requirements: [{ proof_type: "sanctions_clear", accepted_providers: ["passport"] }],
           }],
         }), { uniqueHumanVerified: true, ageOver18Verified: false }),
-      ).toThrow("Public v0 community creation does not support sanctions_clear gates")
+      ).not.toThrow()
+    })
+
+    test("rejects sanctions_clear gate without Passport provider", () => {
+      expect(() =>
+        assertCreateRequest(makeCreateBody({
+          gate_rules: [{
+            scope: "membership",
+            gate_family: "identity_proof",
+            gate_type: "sanctions_clear",
+            proof_requirements: [{ proof_type: "sanctions_clear", accepted_providers: ["self"] }],
+          }],
+        }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+      ).toThrow("Invalid accepted_providers for sanctions_clear: self")
     })
 
     test("rejects post_ephemeral anonymous scope in v0", () => {

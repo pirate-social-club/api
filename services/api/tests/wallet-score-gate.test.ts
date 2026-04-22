@@ -29,6 +29,21 @@ function makeWalletScoreRule(minimumScore: number): CommunityGateRuleRow {
   }
 }
 
+function makeSanctionsClearRule(): CommunityGateRuleRow {
+  return {
+    gate_rule_id: "gr_sanctions_clear",
+    scope: "membership",
+    gate_family: "identity_proof",
+    gate_type: "sanctions_clear",
+    proof_requirements_json: JSON.stringify([
+      { proof_type: "sanctions_clear", accepted_providers: ["passport"] },
+    ]),
+    chain_namespace: null,
+    gate_config_json: null,
+    status: "active",
+  }
+}
+
 function makeUser(score: number | null, passingScore = true): User {
   const caps = buildDefaultVerificationCapabilities()
   return {
@@ -74,6 +89,28 @@ describe("wallet score gate evaluation", () => {
 
   test("returns satisfied when score meets threshold", async () => {
     const result = await evaluateMembershipGateRules({ env: {}, rules: [makeWalletScoreRule(20)], user: makeUser(20), walletAttachments: [] })
+    expect(result.satisfied).toBe(true)
+    expect(result.mismatchReasons).toEqual([])
+  })
+
+  test("returns missing sanctions_clear when user lacks Passport sanctions clearance", async () => {
+    const result = await evaluateMembershipGateRules({ env: {}, rules: [makeSanctionsClearRule()], user: makeUser(20), walletAttachments: [] })
+    expect(result.satisfied).toBe(false)
+    expect(result.missingCapabilities).toEqual(["sanctions_clear"])
+    expect(result.suggestedVerificationProvider).toBe("passport")
+  })
+
+  test("returns satisfied when Passport sanctions clearance is verified", async () => {
+    const user = makeUser(20)
+    user.verification_capabilities.sanctions_clear = {
+      state: "verified",
+      provider: "passport",
+      proof_type: "sanctions_clear",
+      mechanism: "CleanHands",
+      verified_at: new Date().toISOString(),
+    }
+
+    const result = await evaluateMembershipGateRules({ env: {}, rules: [makeSanctionsClearRule()], user, walletAttachments: [] })
     expect(result.satisfied).toBe(true)
     expect(result.mismatchReasons).toEqual([])
   })
