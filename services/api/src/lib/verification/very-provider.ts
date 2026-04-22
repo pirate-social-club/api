@@ -5,6 +5,7 @@ import type { Env, VerificationIntent, VeryWidgetLaunch } from "../../types"
 
 const VERY_TIMEOUT_MS = 15_000
 const VERY_BRIDGE_API_URL = "https://bridge.very.org/api/v1/"
+const VERY_VERIFY_API_URL = "https://verify.very.org/api/v1/verify"
 
 export type VeryStartResult = {
   upstreamSessionRef: string
@@ -58,13 +59,14 @@ function requireConfiguredVery(env: Env): {
   appId: string
   verifyUrl: string
 } {
-  const apiUrl = trimEnv(env.VERY_API_URL) || "https://api.very.org"
   const appId = trimEnv(env.VERY_APP_ID)
   if (!appId) {
     throw providerUnavailable("Very provider not configured: VERY_APP_ID must be set")
   }
 
-  const verifyUrl = trimEnv(env.VERY_VERIFY_URL) || deriveVeryVerifyUrl(apiUrl)
+  const configuredApiUrl = trimEnv(env.VERY_API_URL)
+  const verifyUrl = trimEnv(env.VERY_VERIFY_URL)
+    || (configuredApiUrl ? deriveVeryVerifyUrl(configuredApiUrl) : VERY_VERIFY_API_URL)
   return { appId, verifyUrl }
 }
 

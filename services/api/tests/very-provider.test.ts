@@ -336,7 +336,7 @@ describe("Very provider development fallback", () => {
       verificationIntent: null,
       policyId: null,
     })
-    expect(result.launch.verify_url).toBe("https://api.very.org/api/v1/verify")
+    expect(result.launch.verify_url).toBe("https://verify.very.org/api/v1/verify")
     expect(result.launch.app_id).toBe("fallback-app-id")
   })
 
