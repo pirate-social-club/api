@@ -231,7 +231,26 @@ describe("community-service helpers", () => {
       ).not.toThrow()
     })
 
-    test("rejects Courtyard inventory gate outside Polygon", () => {
+    test("allows Courtyard erc721 inventory match gate with valid Ethereum config", () => {
+      expect(() =>
+        assertCreateRequest(makeCreateBody({
+          gate_rules: [{
+            scope: "membership",
+            gate_family: "token_holding",
+            gate_type: "erc721_inventory_match",
+            chain_namespace: "eip155:1",
+            gate_config: {
+              contract_address: "0xd4ac3CE8e1E14CD60666D49AC34Ff2d2937cF6FA",
+              inventory_provider: "courtyard",
+              min_quantity: 1,
+              match: { category: "watch", brand: "rolex" },
+            },
+          }],
+        }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+      ).not.toThrow()
+    })
+
+    test("rejects Courtyard inventory gate with mismatched chain and registry contract", () => {
       expect(() =>
         assertCreateRequest(makeCreateBody({
           gate_rules: [{
@@ -247,7 +266,7 @@ describe("community-service helpers", () => {
             },
           }],
         }), { uniqueHumanVerified: true, ageOver18Verified: false }),
-      ).toThrow("Courtyard inventory gates must target Polygon (eip155:137)")
+      ).toThrow("Courtyard inventory gates require an allowlisted Courtyard contract")
     })
 
     test("rejects Courtyard inventory gate with unsupported filter key", () => {

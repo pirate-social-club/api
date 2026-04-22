@@ -233,7 +233,9 @@ export async function getJoinEligibility(input: {
           ? "erc721_holding_required"
           : evaluation.mismatchReasons.includes("minimum_age_mismatch")
             ? "minimum_age_mismatch"
-            : null
+            : evaluation.mismatchReasons.includes("wallet_score_too_low")
+              ? "wallet_score_too_low"
+              : null
     return {
       community_id: input.communityId,
       membership_mode: membershipMode,
@@ -366,6 +368,12 @@ export async function joinCommunity(input: {
         throw gateFailedWithDetails("Your verified gender does not satisfy this community requirement", {
           membership_gate_summaries: gateSummaries,
           failure_reason: "gender_mismatch",
+        })
+      }
+      if (evaluation.mismatchReasons.includes("wallet_score_too_low")) {
+        throw gateFailedWithDetails("Your Passport score does not satisfy this community requirement", {
+          membership_gate_summaries: gateSummaries,
+          failure_reason: "wallet_score_too_low",
         })
       }
       if (evaluation.mismatchReasons.includes("minimum_age_mismatch")) {

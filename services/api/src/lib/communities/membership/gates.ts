@@ -30,11 +30,14 @@ type ProofRequirement = {
   config?: Record<string, unknown> | null
 }
 
+type MissingMembershipCapability = "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score"
+type SuggestedVerificationProvider = "self" | "very" | "passport"
+
 export type MembershipGateEvaluation = {
   satisfied: boolean
-  missingCapabilities: Array<"unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender">
+  missingCapabilities: MissingMembershipCapability[]
   mismatchReasons: string[]
-  suggestedVerificationProvider: "self" | "very" | null
+  suggestedVerificationProvider: SuggestedVerificationProvider | null
 }
 
 export function toCommunityGateRuleRow(row: unknown): CommunityGateRuleRow {
@@ -100,6 +103,14 @@ function readExcludedCountryValues(config: Record<string, unknown>): string[] {
 function readMinimumAge(config: Record<string, unknown>, fallback: number | null): number | null {
   const value = config.minimum_age ?? config.required_minimum_age
   if (typeof value === "number" && Number.isInteger(value) && value > 0) {
+    return value
+  }
+  return fallback
+}
+
+function readMinimumScore(config: Record<string, unknown>, fallback: number | null): number | null {
+  const value = config.minimum_score
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
     return value
   }
   return fallback
@@ -210,7 +221,7 @@ export function buildMembershipGateSummary(rule: CommunityGateRuleRow): Membersh
     summary.accepted_providers = primaryReq.accepted_providers as MembershipGateSummary["accepted_providers"]
   }
 
-  if (rule.gate_type === "nationality" || rule.gate_type === "gender" || rule.gate_type === "minimum_age") {
+  if (rule.gate_type === "nationality" || rule.gate_type === "gender" || rule.gate_type === "minimum_age" || rule.gate_type === "wallet_score") {
     const config = (primaryReq?.config ?? gateConfig ?? {}) as Record<string, unknown>
     if (rule.gate_type === "nationality") {
       const requiredValues = readRequiredCountryValues(config)
@@ -228,6 +239,11 @@ export function buildMembershipGateSummary(rule: CommunityGateRuleRow): Membersh
       const minimumAge = readMinimumAge(config, null)
       if (minimumAge != null) {
         summary.required_minimum_age = minimumAge
+      }
+    } else if (rule.gate_type === "wallet_score") {
+      const minimumScore = readMinimumScore(config, null)
+      if (minimumScore != null) {
+        summary.minimum_score = minimumScore
       }
     } else if (typeof config.required_value === "string") {
       summary.required_value = config.required_value
@@ -279,7 +295,7 @@ export async function evaluateMembershipGateRules(input: {
 
   const missingCapabilities: MembershipGateEvaluation["missingCapabilities"] = []
   const mismatchReasons: string[] = []
-  let suggestedProvider: "self" | "very" | null = null
+  let suggestedProvider: SuggestedVerificationProvider | null = null
 
   for (const rule of rules) {
     if (rule.gate_family === "token_holding") {
@@ -421,6 +437,25 @@ export async function evaluateMembershipGateRules(input: {
             const requiredValue = typeof config.required_value === "string" ? config.required_value : null
             if (requiredValue && capability.value !== requiredValue) {
               mismatchReasons.push("gender_mismatch")
+            }
+          }
+          break
+        }
+        case "wallet_score": {
+          const capability = user.verification_capabilities.wallet_score
+          if (capability.state !== "verified") {
+            missingCapabilities.push("wallet_score")
+            if (includesAcceptedProvider(requirement.accepted_providers, "passport")) {
+              suggestedProvider = suggestedProvider ?? "passport"
+            }
+          } else if (!includesAcceptedProvider(requirement.accepted_providers, capability.provider)) {
+            mismatchReasons.push("provider_not_accepted")
+          } else {
+            const minimumScore = readMinimumScore(config, null)
+            const scoreMeetsMinimum = minimumScore == null
+              || (typeof capability.score === "number" && capability.score >= minimumScore)
+            if (capability.passing_score !== true || !scoreMeetsMinimum) {
+              mismatchReasons.push("wallet_score_too_low")
             }
           }
           break

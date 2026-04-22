@@ -265,7 +265,17 @@ export async function setPassportWalletScore(
   })
 
   try {
-    const capabilities = buildDefaultVerificationCapabilities()
+    const userResult = await client.execute({
+      sql: `SELECT verification_capabilities_json FROM users WHERE user_id = ?1 LIMIT 1`,
+      args: [userId],
+    })
+    const currentCapabilities = typeof userResult.rows[0]?.verification_capabilities_json === "string"
+      ? JSON.parse(String(userResult.rows[0]?.verification_capabilities_json)) as ReturnType<typeof buildDefaultVerificationCapabilities>
+      : buildDefaultVerificationCapabilities()
+    const capabilities = {
+      ...buildDefaultVerificationCapabilities(),
+      ...currentCapabilities,
+    }
     capabilities.wallet_score = {
       state: "verified",
       provider: "passport",

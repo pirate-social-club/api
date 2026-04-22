@@ -9,6 +9,7 @@ import {
   exchangeJwt,
   prepareVerifiedNamespace,
   requestJson,
+  setPassportWalletScore,
 } from "./community-routes-test-helpers"
 import { createMembershipGatedCommunity } from "./community-membership-gate-test-helpers"
 
@@ -27,6 +28,202 @@ afterEach(async () => {
 })
 
 describe("community membership gate routes", () => {
+  test("create wallet score-gated community succeeds with valid config", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "wallet-score-gate-creator")
+    const created = await createMembershipGatedCommunity({
+      env: ctx.env,
+      creatorAccessToken: session.accessToken,
+      displayName: "Passport Score Club",
+      gateRule: {
+        scope: "membership",
+        gate_family: "identity_proof",
+        gate_type: "wallet_score",
+        proof_requirements: [
+          {
+            proof_type: "wallet_score",
+            accepted_providers: ["passport"],
+            config: { minimum_score: 20 },
+          },
+        ],
+      },
+    })
+
+    expect(created.membershipMode).toBe("gated")
+  })
+
+  test("create wallet score gate missing minimum_score fails with eligibility_failed", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "wallet-score-gate-invalid-creator")
+    await completeUniqueHumanVerification(ctx.env, session.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Invalid Passport Score Club",
+      membership_mode: "gated",
+      gate_rules: [
+        {
+          scope: "membership",
+          gate_family: "identity_proof",
+          gate_type: "wallet_score",
+          proof_requirements: [
+            {
+              proof_type: "wallet_score",
+              accepted_providers: ["passport"],
+            },
+          ],
+        },
+      ],
+    }, ctx.env, session.accessToken)
+    expect(communityCreate.status).toBe(403)
+    const body = await json(communityCreate) as { code: string; message: string }
+    expect(body.code).toBe("eligibility_failed")
+    expect(body.message).toMatch(/minimum_score/)
+  })
+
+  test("join-eligibility returns verification_required when wallet score is missing", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "wallet-score-elig-creator")
+    const created = await createMembershipGatedCommunity({
+      env: ctx.env,
+      creatorAccessToken: creator.accessToken,
+      displayName: "Missing Passport Score Club",
+      gateRule: {
+        scope: "membership",
+        gate_family: "identity_proof",
+        gate_type: "wallet_score",
+        proof_requirements: [
+          {
+            proof_type: "wallet_score",
+            accepted_providers: ["passport"],
+            config: { minimum_score: 20 },
+          },
+        ],
+      },
+    })
+
+    const joiner = await exchangeJwt(ctx.env, "wallet-score-elig-joiner")
+    await completeUniqueHumanVerification(ctx.env, joiner.accessToken)
+
+    const eligibility = await app.request(
+      `http://pirate.test/communities/${created.communityId}/join-eligibility`,
+      {
+        headers: { authorization: `Bearer ${joiner.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(eligibility.status).toBe(200)
+    const eligibilityBody = await json(eligibility) as {
+      status: string
+      missing_capabilities: string[]
+      suggested_verification_provider: string | null
+      suggested_verification_intent: string | null
+      membership_gate_summaries: Array<{ gate_type: string; minimum_score?: number }>
+    }
+    expect(eligibilityBody.status).toBe("verification_required")
+    expect(eligibilityBody.missing_capabilities).toContain("wallet_score")
+    expect(eligibilityBody.suggested_verification_provider).toBe("passport")
+    expect(eligibilityBody.suggested_verification_intent).toBeNull()
+    expect(eligibilityBody.membership_gate_summaries[0].minimum_score).toBe(20)
+  })
+
+  test("join-eligibility returns wallet_score_too_low when Passport score is below threshold", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "wallet-score-low-creator")
+    const created = await createMembershipGatedCommunity({
+      env: ctx.env,
+      creatorAccessToken: creator.accessToken,
+      displayName: "Low Passport Score Club",
+      gateRule: {
+        scope: "membership",
+        gate_family: "identity_proof",
+        gate_type: "wallet_score",
+        proof_requirements: [
+          {
+            proof_type: "wallet_score",
+            accepted_providers: ["passport"],
+            config: { minimum_score: 30 },
+          },
+        ],
+      },
+    })
+
+    const joiner = await exchangeJwt(ctx.env, "wallet-score-low-joiner")
+    await completeUniqueHumanVerification(ctx.env, joiner.accessToken)
+    await setPassportWalletScore(ctx.env, joiner.userId, {
+      score: 24,
+      scoreThreshold: 20,
+      passingScore: true,
+    })
+
+    const eligibility = await app.request(
+      `http://pirate.test/communities/${created.communityId}/join-eligibility`,
+      {
+        headers: { authorization: `Bearer ${joiner.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(eligibility.status).toBe(200)
+    const eligibilityBody = await json(eligibility) as {
+      status: string
+      failure_reason: string | null
+      missing_capabilities: string[]
+    }
+    expect(eligibilityBody.status).toBe("gate_failed")
+    expect(eligibilityBody.failure_reason).toBe("wallet_score_too_low")
+    expect(eligibilityBody.missing_capabilities).toEqual([])
+  })
+
+  test("join mutation succeeds when Passport score meets threshold", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "wallet-score-join-creator")
+    const created = await createMembershipGatedCommunity({
+      env: ctx.env,
+      creatorAccessToken: creator.accessToken,
+      displayName: "Passing Passport Score Club",
+      gateRule: {
+        scope: "membership",
+        gate_family: "identity_proof",
+        gate_type: "wallet_score",
+        proof_requirements: [
+          {
+            proof_type: "wallet_score",
+            accepted_providers: ["passport"],
+            config: { minimum_score: 30 },
+          },
+        ],
+      },
+    })
+
+    const joiner = await exchangeJwt(ctx.env, "wallet-score-joiner")
+    await setPassportWalletScore(ctx.env, joiner.userId, {
+      score: 35,
+      scoreThreshold: 20,
+      passingScore: true,
+    })
+
+    const joined = await app.request(
+      `http://pirate.test/communities/${created.communityId}/join`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${joiner.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(joined.status).toBe(200)
+    const joinedBody = await json(joined) as { status: string }
+    expect(joinedBody.status).toBe("joined")
+  })
+
   test("create nationality-gated community succeeds with valid config", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup

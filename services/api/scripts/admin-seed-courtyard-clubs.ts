@@ -52,7 +52,6 @@ type CreateCommunityPayload = {
   membership_mode: "gated"
   default_age_gate_policy: "none"
   allow_anonymous_identity: false
-  human_verification_lane: "self"
   handle_policy: { policy_template: "standard" }
   namespace?: { namespace_verification_id: string }
   gate_rules: GateRuleInput[]
@@ -247,7 +246,6 @@ function buildCreatePayload(input: {
     membership_mode: "gated",
     default_age_gate_policy: "none",
     allow_anonymous_identity: false,
-    human_verification_lane: "self",
     handle_policy: { policy_template: "standard" },
     ...(input.namespaceVerificationId
       ? { namespace: { namespace_verification_id: input.namespaceVerificationId } }

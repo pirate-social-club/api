@@ -157,8 +157,15 @@ function assertPublicV0IdentityGateConfiguration(gateRules: GateRuleInput[]): vo
   let nationalityGateCount = 0
   let genderGateCount = 0
   let minimumAgeGateCount = 0
+  let walletScoreGateCount = 0
 
   for (const rule of gateRules) {
+    if (rule.gate_type === "wallet_score") {
+      walletScoreGateCount += 1
+      assertSingleIdentityGateCount(walletScoreGateCount, "wallet_score")
+      assertWalletScoreGate(rule)
+      continue
+    }
     if (rule.gate_type === "minimum_age") {
       minimumAgeGateCount += 1
       assertSingleIdentityGateCount(minimumAgeGateCount, "minimum_age")
@@ -181,7 +188,7 @@ function assertPublicV0IdentityGateConfiguration(gateRules: GateRuleInput[]): vo
 
 function assertSingleIdentityGateCount(
   count: number,
-  gateType: "minimum_age" | "gender" | "nationality",
+  gateType: "minimum_age" | "gender" | "nationality" | "wallet_score",
 ): void {
   if (count <= 1) {
     return
@@ -189,6 +196,25 @@ function assertSingleIdentityGateCount(
 
   const gateName = gateType === "minimum_age" ? "minimum_age" : gateType
   throw eligibilityFailed(`Public v0 communities support at most one ${gateName} gate`)
+}
+
+function assertWalletScoreGate(rule: GateRuleInput): void {
+  const requirements = rule.proof_requirements ?? []
+  if (requirements.length !== 1 || requirements[0].proof_type !== "wallet_score") {
+    throw eligibilityFailed("Wallet score gate must have exactly one wallet_score proof requirement")
+  }
+
+  const requirement = requirements[0]
+  const acceptedProviders = requirement.accepted_providers ?? []
+  if (acceptedProviders.length !== 1 || acceptedProviders[0] !== "passport") {
+    throw eligibilityFailed("Wallet score gate accepted_providers must be exactly [\"passport\"]")
+  }
+
+  const config = (requirement.config ?? rule.gate_config ?? {}) as Record<string, unknown>
+  const minimumScore = typeof config.minimum_score === "number" ? config.minimum_score : null
+  if (minimumScore == null || !Number.isFinite(minimumScore) || minimumScore < 0 || minimumScore > 100) {
+    throw eligibilityFailed("Wallet score gate minimum_score must be a number from 0 to 100")
+  }
 }
 
 function assertMinimumAgeGate(rule: GateRuleInput): void {
