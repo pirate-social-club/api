@@ -120,8 +120,7 @@ describe("Very provider adapter", () => {
       expect(headers.has("authorization")).toBe(false)
       expect(headers.has("x-api-key")).toBe(false)
       const body = JSON.parse(String(init?.body))
-      expect(body.proof).toBe("proof-payload-123")
-      expect(body.session_id).toBe("very-upstream-ref-123")
+      expect(body).toEqual({ proof: "proof-payload-123" })
       return new Response(JSON.stringify({
         status: "valid",
         data: {

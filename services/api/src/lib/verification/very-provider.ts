@@ -171,7 +171,6 @@ async function verifyVeryPayload(input: {
       },
       body: JSON.stringify({
         proof: input.providerPayloadRef,
-        session_id: input.upstreamSessionRef,
       }),
       signal: controller.signal,
     })

@@ -326,8 +326,7 @@ describe("verification routes", () => {
       expect(url).toBe("https://very.test/api/v1/verify")
       expect(init?.method).toBe("POST")
       const body = JSON.parse(String(init?.body))
-      expect(body.proof).toBe("very-zk-proof-123")
-      expect(typeof body.session_id).toBe("string")
+      expect(body).toEqual({ proof: "very-zk-proof-123" })
       return new Response(JSON.stringify({
         status: "valid",
         data: {
