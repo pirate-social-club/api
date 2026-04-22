@@ -148,7 +148,7 @@ describe("Very provider adapter", () => {
 
     expect(Number.isInteger(lowerBound)).toBe(true)
     expect(Number.isInteger(upperBound)).toBe(true)
-    expect(lowerBound).toBeGreaterThan(0)
+    expect(lowerBound).toBe(0)
     expect(upperBound).toBeGreaterThan(lowerBound)
     expect(upperBound <= 2_043_436_800).toBe(true)
     expect(query.options?.expiredAtLowerBound).toBe(String(lowerBound))
