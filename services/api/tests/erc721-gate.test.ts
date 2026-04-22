@@ -34,16 +34,19 @@ function makeErc721Rule(contractAddress: string): CommunityGateRuleRow {
   }
 }
 
-function makeCourtyardInventoryRule(config: Record<string, unknown> = {}): CommunityGateRuleRow {
+function makeCourtyardInventoryRule(config: Record<string, unknown> = {}, chainNamespace = "eip155:137"): CommunityGateRuleRow {
+  const contractAddress = chainNamespace === "eip155:1"
+    ? "0xd4ac3CE8e1E14CD60666D49AC34Ff2d2937cF6FA"
+    : "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD"
   return {
     gate_rule_id: "gr_inventory",
     scope: "membership",
     gate_family: "token_holding",
     gate_type: "erc721_inventory_match",
     proof_requirements_json: null,
-    chain_namespace: "eip155:137",
+    chain_namespace: chainNamespace,
     gate_config_json: JSON.stringify({
-      contract_address: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+      contract_address: contractAddress,
       inventory_provider: "courtyard",
       min_quantity: 3,
       asset_filter: { category: "trading_card", franchise: "pokemon", subject: "charizard" },
@@ -208,6 +211,30 @@ describe("erc721 gate evaluation", () => {
     expect(result.satisfied).toBe(false)
     expect(result.missingCapabilities).toEqual([])
     expect(result.mismatchReasons).toContain("erc721_inventory_match_required")
+  })
+
+  test("evaluates Ethereum Courtyard inventory gates against Ethereum wallets", async () => {
+    setErc721InventoryMatcherForTests(async ({ walletAddresses, config }) => {
+      expect(config.chainNamespace).toBe("eip155:1")
+      expect(config.contractAddress.toLowerCase()).toBe("0xd4ac3ce8e1e14cd60666d49ac34ff2d2937cf6fa")
+      expect(walletAddresses).toEqual([
+        "0x2222222222222222222222222222222222222222",
+      ])
+      return { matchedQuantity: 1 }
+    })
+
+    const result = await evaluateMembershipGateRules({
+      env: {},
+      rules: [makeCourtyardInventoryRule({
+        min_quantity: 1,
+        match: { category: "watch", brand: "Rolex" },
+      }, "eip155:1")],
+      user: makeUser(),
+      walletAttachments,
+    })
+
+    expect(result.satisfied).toBe(true)
+    expect(result.mismatchReasons).toEqual([])
   })
 
   test("returns satisfied when attached wallets aggregate enough matching inventory", async () => {

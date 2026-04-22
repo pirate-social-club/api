@@ -20,7 +20,7 @@ export type Erc721InventoryAssetMatch = {
 export type Erc721InventoryAssetFilter = Erc721InventoryAssetMatch
 
 export type Erc721InventoryMatchConfig = {
-  chainNamespace: "eip155:137"
+  chainNamespace: "eip155:1" | "eip155:137"
   contractAddress: string
   inventoryProvider: Erc721InventoryProvider
   minQuantity: number
@@ -109,12 +109,15 @@ export function normalizeInventoryText(value: unknown): string | null {
   return normalized.length > 0 ? normalized : null
 }
 
-export function listAttachedPolygonWalletAddresses(walletAttachments: WalletAttachmentSummary[]): string[] {
+export function listAttachedWalletAddressesForChain(
+  walletAttachments: WalletAttachmentSummary[],
+  chainNamespace: Erc721InventoryMatchConfig["chainNamespace"],
+): string[] {
   const seen = new Set<string>()
   const addresses: string[] = []
 
   for (const attachment of walletAttachments) {
-    if (attachment.chain_namespace !== "eip155:137") {
+    if (attachment.chain_namespace !== chainNamespace) {
       continue
     }
     const normalized = normalizeEthereumAddress(attachment.wallet_address)
@@ -126,6 +129,10 @@ export function listAttachedPolygonWalletAddresses(walletAttachments: WalletAtta
   }
 
   return addresses
+}
+
+export function listAttachedPolygonWalletAddresses(walletAttachments: WalletAttachmentSummary[]): string[] {
+  return listAttachedWalletAddressesForChain(walletAttachments, "eip155:137")
 }
 
 export function isAllowedCourtyardRegistry(input: {
@@ -141,7 +148,7 @@ export function isAllowedCourtyardRegistry(input: {
 }
 
 export function readInventoryMatchConfig(gateConfig: Record<string, unknown> | null, chainNamespace: string | null): Erc721InventoryMatchConfig | null {
-  if (!gateConfig || chainNamespace !== "eip155:137") {
+  if (!gateConfig || (chainNamespace !== "eip155:1" && chainNamespace !== "eip155:137")) {
     return null
   }
 
@@ -307,7 +314,7 @@ function normalizeCourtyardAsset(asset: CourtyardAsset): Erc721InventoryAsset | 
     return null
   }
 
-  const chainNamespace = asset.chain === "polygon" ? "eip155:137" : asset.chain ?? "unknown"
+  const chainNamespace = normalizeCourtyardChainNamespace(asset.chain)
   const facts = normalizeInventoryMetadata(asset)
 
   return {
@@ -317,6 +324,17 @@ function normalizeCourtyardAsset(asset: CourtyardAsset): Erc721InventoryAsset | 
     ownerAddress,
     ...facts,
   }
+}
+
+function normalizeCourtyardChainNamespace(chain: string | undefined): string {
+  const normalized = normalizeInventoryText(chain)
+  if (normalized === "polygon" || normalized === "matic" || normalized === "polygon pos") {
+    return "eip155:137"
+  }
+  if (normalized === "ethereum" || normalized === "eth" || normalized === "mainnet" || normalized === "homestead") {
+    return "eip155:1"
+  }
+  return chain ?? "unknown"
 }
 
 function assetMatchesFilter(asset: Erc721InventoryAsset, filter: Erc721InventoryAssetMatch): boolean {
@@ -466,7 +484,7 @@ export async function evaluateErc721InventoryMatch(input: {
   walletAttachments: WalletAttachmentSummary[]
   config: Erc721InventoryMatchConfig
 }): Promise<{ matchedQuantity: number; unavailable: boolean }> {
-  const walletAddresses = listAttachedPolygonWalletAddresses(input.walletAttachments)
+  const walletAddresses = listAttachedWalletAddressesForChain(input.walletAttachments, input.config.chainNamespace)
   if (walletAddresses.length === 0) {
     return { matchedQuantity: 0, unavailable: false }
   }

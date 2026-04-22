@@ -94,8 +94,8 @@ function assertPublicV0TokenGateConfiguration(gateRules: GateRuleInput[]): void 
 }
 
 function assertErc721InventoryMatchGate(rule: GateRuleInput, config: Record<string, unknown>): void {
-  if ((rule.chain_namespace ?? null) !== "eip155:137") {
-    throw eligibilityFailed("Courtyard inventory gates must target Polygon (eip155:137)")
+  if ((rule.chain_namespace ?? null) !== "eip155:1" && (rule.chain_namespace ?? null) !== "eip155:137") {
+    throw eligibilityFailed("Courtyard inventory gates must target an allowlisted Courtyard chain")
   }
   if (!normalizeEthereumAddress(config.contract_address)) {
     throw eligibilityFailed("Courtyard inventory gates require a valid contract_address")
