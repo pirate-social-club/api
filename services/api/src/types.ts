@@ -157,14 +157,19 @@ export type HandleUpgradeQuote = {
 }
 
 export type Env = {
+  // Runtime
   ENVIRONMENT?: string
   DEV_MEMORY_STORE_ENABLED?: string
   CONTROL_PLANE_DATABASE_URL?: string
+
+  // Analytics
   ANALYTICS_ENABLED?: string
   ANALYTICS_HMAC_SECRET?: string
   TINYBIRD_HOST?: string
   TINYBIRD_INGEST_TOKEN?: string
   TINYBIRD_EVENTS_DATASOURCE?: string
+
+  // Community databases and provisioning
   TURSO_COMMUNITY_DB_WRAP_KEY?: string
   TURSO_COMMUNITY_DB_WRAP_KEY_VERSION?: string
   LOCAL_COMMUNITY_DB_ROOT?: string
@@ -173,6 +178,8 @@ export type Env = {
   COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS?: string
   COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION?: string
   COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS?: string
+
+  // Auth and identity
   JWT_BASED_AUTH_ENABLED?: string
   JWT_BASED_AUTH_SHARED_SECRET?: string
   JWT_BASED_AUTH_ISSUERS?: string
@@ -201,6 +208,8 @@ export type Env = {
   SELF_ENDPOINT?: string
   SELF_ENDPOINT_TYPE?: string
   VERY_BRIDGE_API_URL?: string
+
+  // Media storage
   FILEBASE_S3_ACCESS_KEY?: string
   FILEBASE_S3_SECRET_KEY?: string
   FILEBASE_S3_BUCKET_MUSIC?: string
@@ -213,6 +222,8 @@ export type Env = {
   SWARM_POSTAGE_BATCH_ID?: string
   SWARM_FEED_PRIVATE_KEY?: string
   SWARM_FEED_TOPIC_NAMESPACE?: string
+
+  // EVM and commerce
   ETHEREUM_RPC_URL?: string
   COURTYARD_API_URL?: string
   COURTYARD_INVENTORY_CACHE_TTL_MS?: string
@@ -224,6 +235,8 @@ export type Env = {
   PIRATE_CHECKOUT_SOURCE_CHAIN_ID?: string
   PIRATE_CHECKOUT_USDC_TOKEN_ADDRESS?: string
   PIRATE_CHECKOUT_TX_WAIT_TIMEOUT_MS?: string
+
+  // Story and song processing
   STORY_CHAIN_ID?: string
   STORY_RPC_URL?: string
   STORY_RPC_FALLBACK_URLS?: string
@@ -268,6 +281,8 @@ export type Env = {
   LIT_CHIPOTLE_STORY_SETTLEMENT_API_KEY?: string
   STORY_SETTLEMENT_ACTION_CID_SETTLE?: string
   STORY_SETTLEMENT_ACTION_CID_ROYALTY_SYNC?: string
+
+  // Payouts and funding
   ENDAOMENT_PAYOUT_PRIVATE_KEY?: string
   ENDAOMENT_RPC_URL?: string
   ENDAOMENT_CHAIN_ID?: string
@@ -276,6 +291,8 @@ export type Env = {
   ENDAOMENT_TX_WAIT_TIMEOUT_MS?: string
   STORY_CONTRACT_OWNER_PRIVATE_KEY?: string
   STORY_RUNTIME_FUNDER_PRIVATE_KEY?: string
+
+  // AI and external analysis
   OPENROUTER_API_KEY?: string
   OPENROUTER_BASE_URL?: string
   OPENROUTER_MODEL?: string
@@ -299,6 +316,8 @@ export type Env = {
   ACRCLOUD_PERSONAL_ACCESS_TOKEN?: string
   ACRCLOUD_BUCKET_ID?: string
   ACRCLOUD_CONSOLE_BASE_URL?: string
+
+  // Namespace verifiers
   SPACES_VERIFIER_BASE_URL?: string
   SPACES_VERIFIER_AUTH_TOKEN?: string
   SPACES_VERIFIER_CHALLENGE_DOMAIN?: string
