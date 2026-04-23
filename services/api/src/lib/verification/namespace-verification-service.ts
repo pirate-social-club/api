@@ -28,10 +28,10 @@ import {
   makeNamespaceAssertionStatements,
   makeNamespaceCapabilityStatements,
   parseStoredSpacesChallenge,
-} from "./control-plane-verification-shared"
-import { restartNamespaceVerificationChallenge } from "./control-plane-namespace-verification-restart"
+} from "./verification-shared"
+import { restartNamespaceVerificationChallenge } from "./namespace-verification-restart"
 
-export { startNamespaceVerificationSession } from "./control-plane-namespace-verification-start"
+export { startNamespaceVerificationSession } from "./namespace-verification-start"
 
 export async function getNamespaceVerificationSession(
   client: Client,

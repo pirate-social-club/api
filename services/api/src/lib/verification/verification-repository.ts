@@ -6,13 +6,13 @@ import {
   getVerificationSession,
   completeVerificationSession,
   completeSelfVerificationCallback,
-} from "./control-plane-verification-session-service"
+} from "./verification-session-service"
 import {
   startNamespaceVerificationSession,
   getNamespaceVerificationSession,
   completeNamespaceVerificationSession,
   getNamespaceVerification,
-} from "./control-plane-namespace-verification-service"
+} from "./namespace-verification-service"
 import type {
   Env,
   NamespaceVerification,
@@ -23,9 +23,9 @@ import type {
   VerificationSession,
 } from "../../types"
 
-export * from "./control-plane-verification-shared"
-export * from "./control-plane-verification-session-service"
-export * from "./control-plane-namespace-verification-service"
+export * from "./verification-shared"
+export * from "./verification-session-service"
+export * from "./namespace-verification-service"
 
 export interface VerificationRepository {
   startVerificationSession(input: {

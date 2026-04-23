@@ -12,7 +12,7 @@ import {
   toUserAttestationRow,
   toVerificationSessionRow,
 } from "../auth/auth-db-rows"
-export * from "./control-plane-namespace-verification-policy"
+export * from "./namespace-verification-policy"
 
 export async function getVerificationSessionRowForUser(
   client: Client,

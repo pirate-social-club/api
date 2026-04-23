@@ -1,6 +1,6 @@
 import { createMiddleware } from "hono/factory"
 import { authError } from "./errors"
-import { getControlPlaneAgentOwnershipRepository } from "./agents/control-plane-agent-ownership-repository"
+import { getControlPlaneAgentOwnershipRepository } from "./agents/agent-ownership-repository"
 import { verifyPirateAccessToken } from "./auth/pirate-session-token"
 import type { Env } from "../types"
 

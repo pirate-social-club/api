@@ -30,7 +30,7 @@ import {
   startAgentOwnershipSession,
   updateUserAgentDisplayName,
   verifyAgentDelegatedAccessToken,
-} from "./control-plane-agent-ownership-service"
+} from "./agent-ownership-service"
 import type { Client } from "../sql-client"
 
 export interface AgentOwnershipRepository {

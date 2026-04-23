@@ -3,7 +3,7 @@ import { badRequestError, eligibilityFailed } from "../errors"
 import type { Community, Env } from "../../types"
 import type { Client } from "../sql-client"
 import { getProfilePublicHandleLabel } from "../auth/auth-serializers"
-import { getControlPlaneAgentOwnershipRepository } from "./control-plane-agent-ownership-repository"
+import { getControlPlaneAgentOwnershipRepository } from "./agent-ownership-repository"
 import { dedupeStrings, splitCsv } from "../helpers"
 import {
   computeAgentActionProofHash,

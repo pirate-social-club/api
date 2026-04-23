@@ -28,7 +28,7 @@ import {
   getAttestationsBySourceSessionId,
   getVerificationSessionRow,
   getVerificationSessionRowForUser,
-} from "./control-plane-verification-shared"
+} from "./verification-shared"
 
 function parseVerificationRequirements(raw: string | null | undefined): VerificationRequirement[] {
   if (!raw) return []

@@ -9,7 +9,7 @@ import type { CommunityDatabaseBindingRow, CommunityRow, JobRow } from "../../au
 import type { CommunityRepository } from "../db-community-repository"
 import { eligibilityFailed, internalError, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
-import type { VerificationRepository } from "../../verification/control-plane-verification-repository"
+import type { VerificationRepository } from "../../verification/verification-repository"
 import { createNamespaceVerificationTask, resolveNamespaceVerificationTask } from "../../notifications/notification-service"
 import type {
   Community,

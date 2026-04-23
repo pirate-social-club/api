@@ -1,7 +1,7 @@
 import { Hono } from "hono"
 import { authError, badRequestError, notFoundError } from "../lib/errors"
 import { authenticate, authenticateOptional } from "../lib/auth-middleware"
-import { getControlPlaneAgentOwnershipRepository } from "../lib/agents/control-plane-agent-ownership-repository"
+import { getControlPlaneAgentOwnershipRepository } from "../lib/agents/agent-ownership-repository"
 import type { ActorContext } from "../lib/auth-middleware"
 import type {
   AgentChallenge,

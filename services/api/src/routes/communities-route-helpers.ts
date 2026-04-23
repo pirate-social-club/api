@@ -8,7 +8,7 @@ import { resolveCommunityIdentifier } from "../lib/communities/community-identif
 import {
   getControlPlaneVerificationRepository,
   type VerificationRepository,
-} from "../lib/verification/control-plane-verification-repository"
+} from "../lib/verification/verification-repository"
 import { badRequestError } from "../lib/errors"
 
 type CommunityRouteContext = {

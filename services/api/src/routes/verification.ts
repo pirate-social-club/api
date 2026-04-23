@@ -1,6 +1,6 @@
 import { Hono } from "hono"
 import { badRequestError, notFoundError } from "../lib/errors"
-import { getControlPlaneVerificationRepository } from "../lib/verification/control-plane-verification-repository"
+import { getControlPlaneVerificationRepository } from "../lib/verification/verification-repository"
 import { proxyVeryBridgeRequest, verifyVeryWidgetProof } from "../lib/verification/very-provider"
 import { authenticate, type AuthenticatedEnv } from "../lib/auth-middleware"
 import type { Env, RequestedVerificationCapability, VerificationIntent, VerificationRequirement } from "../types"

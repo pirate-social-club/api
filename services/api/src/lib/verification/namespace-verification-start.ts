@@ -27,7 +27,7 @@ import {
   serializeSetupNameservers,
   shouldRequireHnsDnsSetup,
   type HnsSessionAssertionSnapshot,
-} from "./control-plane-verification-shared"
+} from "./verification-shared"
 
 export async function startNamespaceVerificationSession(
   client: Client,
