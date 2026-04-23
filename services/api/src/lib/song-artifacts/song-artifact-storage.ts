@@ -1,6 +1,7 @@
-import { badRequestError, internalError, notFoundError, providerUnavailable } from "../errors"
+import { badRequestError, notFoundError, providerUnavailable } from "../errors"
 import { sha256Hex, toArrayBuffer } from "../crypto"
-import { buildS3SignedRequest, EMPTY_SHA256_HEX, type S3SigningConfig } from "../storage/s3-signing"
+import { resolveFilebaseConfig } from "../storage/filebase-config"
+import { buildS3SignedRequest, EMPTY_SHA256_HEX } from "../storage/s3-signing"
 import type { Env } from "../../types"
 
 export type SongArtifactKind =
@@ -10,8 +11,6 @@ export type SongArtifactKind =
   | "canvas_video"
   | "instrumental_audio"
   | "vocal_audio"
-
-type ResolvedFilebaseConfig = S3SigningConfig
 
 const allowedMimeTypesByKind: Record<SongArtifactKind, Set<string>> = {
   primary_audio: new Set([
@@ -87,29 +86,6 @@ const maxBytesByKind: Record<SongArtifactKind, number> = {
   vocal_audio: 64 * 1024 * 1024,
   cover_art: 12 * 1024 * 1024,
   canvas_video: 64 * 1024 * 1024,
-}
-
-function requireTrimmedEnv(value: string | undefined, message: string): string {
-  const trimmed = String(value || "").trim()
-  if (!trimmed) {
-    throw internalError(message)
-  }
-  return trimmed
-}
-
-function resolveFilebaseConfig(env: Env): ResolvedFilebaseConfig {
-  const endpointValue = String(env.FILEBASE_S3_ENDPOINT || "https://s3.filebase.com").trim()
-
-  return {
-    accessKey: requireTrimmedEnv(env.FILEBASE_S3_ACCESS_KEY, "FILEBASE_S3_ACCESS_KEY is not configured"),
-    secretKey: requireTrimmedEnv(env.FILEBASE_S3_SECRET_KEY, "FILEBASE_S3_SECRET_KEY is not configured"),
-    bucket: requireTrimmedEnv(
-      env.FILEBASE_S3_BUCKET_MUSIC || env.FILEBASE_MEDIA_BUCKET,
-      "FILEBASE_S3_BUCKET_MUSIC is not configured",
-    ),
-    endpoint: new URL(endpointValue),
-    region: String(env.FILEBASE_S3_REGION || "us-east-1").trim() || "us-east-1",
-  }
 }
 
 export function assertSongArtifactMimeType(kind: SongArtifactKind, mimeType: string): void {
@@ -214,7 +190,7 @@ export async function uploadFilebaseObject(input: {
   const payloadHash = await sha256Hex(input.bytes)
   const request = await buildS3SignedRequest({
     method: "PUT",
-    config: resolveFilebaseConfig(input.env),
+    config: resolveFilebaseConfig(input.env, "music"),
     objectKey: input.objectKey,
     payloadHash,
     headers: {
@@ -230,7 +206,7 @@ export async function uploadFilebaseObject(input: {
     )
   }
 
-  const config = resolveFilebaseConfig(input.env)
+  const config = resolveFilebaseConfig(input.env, "music")
   return {
     storageBucket: config.bucket,
     storageObjectKey: input.objectKey,
@@ -269,7 +245,7 @@ export async function uploadSongArtifactBytes(input: {
   )
   const request = await buildS3SignedRequest({
     method: "PUT",
-    config: resolveFilebaseConfig(input.env),
+    config: resolveFilebaseConfig(input.env, "music"),
     objectKey,
     payloadHash,
     headers: {
@@ -285,7 +261,7 @@ export async function uploadSongArtifactBytes(input: {
     )
   }
 
-  const config = resolveFilebaseConfig(input.env)
+  const config = resolveFilebaseConfig(input.env, "music")
   const storageRef = buildSongArtifactContentUrl(input.origin, input.communityId, input.songArtifactUploadId)
   return {
     storageRef,
@@ -304,7 +280,7 @@ export async function fetchSongArtifactBytes(input: {
 }): Promise<Response> {
   const request = await buildS3SignedRequest({
     method: "GET",
-    config: resolveFilebaseConfig(input.env),
+    config: resolveFilebaseConfig(input.env, "music"),
     objectKey: input.objectKey,
     payloadHash: EMPTY_SHA256_HEX,
   })

@@ -1,10 +1,9 @@
-import { badRequestError, internalError, notFoundError, providerUnavailable } from "./errors"
+import { badRequestError, notFoundError, providerUnavailable } from "./errors"
 import { makeId } from "./helpers"
 import { sha256Hex } from "./crypto"
-import { buildS3SignedRequest, EMPTY_SHA256_HEX, type S3SigningConfig } from "./storage/s3-signing"
+import { resolveFilebaseConfig } from "./storage/filebase-config"
+import { buildS3SignedRequest, EMPTY_SHA256_HEX } from "./storage/s3-signing"
 import type { Env } from "../types"
-
-type MediaFilebaseConfig = S3SigningConfig
 
 type UploadMediaInput<TKind extends string> = {
   env: Env
@@ -37,29 +36,6 @@ const allowedMimeTypes = new Set([
   "image/gif",
   "image/avif",
 ])
-
-function requireTrimmedEnv(value: string | undefined, message: string): string {
-  const trimmed = String(value || "").trim()
-  if (!trimmed) {
-    throw internalError(message)
-  }
-  return trimmed
-}
-
-function resolveFilebaseConfig(env: Env): MediaFilebaseConfig {
-  const endpointValue = String(env.FILEBASE_S3_ENDPOINT || "https://s3.filebase.com").trim()
-
-  return {
-    accessKey: requireTrimmedEnv(env.FILEBASE_S3_ACCESS_KEY, "FILEBASE_S3_ACCESS_KEY is not configured"),
-    secretKey: requireTrimmedEnv(env.FILEBASE_S3_SECRET_KEY, "FILEBASE_S3_SECRET_KEY is not configured"),
-    bucket: requireTrimmedEnv(
-      env.FILEBASE_MEDIA_BUCKET || env.FILEBASE_S3_BUCKET_MUSIC,
-      "FILEBASE_MEDIA_BUCKET is not configured",
-    ),
-    endpoint: new URL(endpointValue),
-    region: String(env.FILEBASE_S3_REGION || "us-east-1").trim() || "us-east-1",
-  }
-}
 
 function assertSupportedMimeType(kind: string, mimeType: string): void {
   if (!allowedMimeTypes.has(mimeType)) {
@@ -160,7 +136,7 @@ export async function uploadMedia<TKind extends string>(input: UploadMediaInput<
   const { objectKey, objectName } = resolveObjectKey(input.objectKeyPrefix, input.kind, mimeType)
   const request = await buildS3SignedRequest({
     method: "PUT",
-    config: resolveFilebaseConfig(input.env),
+    config: resolveFilebaseConfig(input.env, "media"),
     objectKey,
     payloadHash,
     headers: {
@@ -181,7 +157,7 @@ export async function uploadMedia<TKind extends string>(input: UploadMediaInput<
     media_ref: buildMediaRef(input.origin, input.routePrefix, input.kind, objectName),
     mime_type: mimeType,
     size_bytes: input.file.size,
-    storage_bucket: resolveFilebaseConfig(input.env).bucket,
+    storage_bucket: resolveFilebaseConfig(input.env, "media").bucket,
     storage_object_key: objectKey,
   }
 }
@@ -209,7 +185,7 @@ export function assertMediaObject<TKind extends string>(input: AssertMediaObject
 export async function fetchMedia(input: FetchMediaInput): Promise<Response> {
   const request = await buildS3SignedRequest({
     method: "GET",
-    config: resolveFilebaseConfig(input.env),
+    config: resolveFilebaseConfig(input.env, "media"),
     objectKey: input.objectKey,
     payloadHash: EMPTY_SHA256_HEX,
   })
