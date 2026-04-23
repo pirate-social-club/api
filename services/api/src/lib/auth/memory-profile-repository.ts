@@ -1,0 +1,175 @@
+import { conflictError } from "../errors"
+import { makeId, nowIso } from "../helpers"
+import { getProfilePublicHandleLabel } from "./auth-serializers"
+import {
+  assertFreeCleanupRenameEligible,
+  buildHandleUpgradeQuote,
+  isCleanupRenameAvailable,
+  normalizeDesiredGlobalHandleLabel,
+} from "./global-handle-policy"
+import { getMemoryRecordByUserId, getMemoryStore } from "./memory-auth-store"
+import type { GlobalHandle, HandleUpgradeQuote, Profile } from "../../types"
+import type { PublicProfileResolution, UpdateProfileInput } from "./repositories"
+
+export class MemoryProfileRepository {
+  async getProfileByUserId(userId: string): Promise<Profile | null> {
+    return getMemoryRecordByUserId(userId)?.profile ?? null
+  }
+
+  async resolvePublicProfileByHandle(handleLabel: string): Promise<PublicProfileResolution | null> {
+    const trimmedHandleLabel = handleLabel.trim().toLowerCase()
+    const normalizedHandleLabel = trimmedHandleLabel.endsWith(".pirate")
+      ? trimmedHandleLabel
+      : `${trimmedHandleLabel}.pirate`
+
+    const pirateRecord = [...getMemoryStore().byUserId.values()].find((candidate) => (
+      candidate.profile.global_handle.label.toLowerCase() === normalizedHandleLabel
+    ))
+    const record = pirateRecord ?? [...getMemoryStore().byUserId.values()].find((candidate) => (
+      candidate.profile.primary_public_handle?.label.toLowerCase() === trimmedHandleLabel
+    ))
+    if (!record) {
+      return null
+    }
+    const publicHandle = getProfilePublicHandleLabel(record.profile)
+    const requestedHandle = pirateRecord ? normalizedHandleLabel : publicHandle
+
+    return {
+      profile: record.profile,
+      requested_handle_label: requestedHandle,
+      resolved_handle_label: publicHandle,
+      is_canonical: publicHandle.toLowerCase() === requestedHandle.toLowerCase(),
+      created_communities: [],
+    }
+  }
+
+  async updateProfile(userId: string, input: UpdateProfileInput): Promise<Profile | null> {
+    const record = getMemoryRecordByUserId(userId)
+    if (!record) {
+      return null
+    }
+
+    record.profile = {
+      ...record.profile,
+      display_name: input.display_name !== undefined ? input.display_name : record.profile.display_name,
+      avatar_ref: input.avatar_ref !== undefined ? input.avatar_ref : record.profile.avatar_ref,
+      cover_ref: input.cover_ref !== undefined ? input.cover_ref : record.profile.cover_ref,
+      bio: input.bio !== undefined ? input.bio : record.profile.bio,
+      preferred_locale: input.preferred_locale !== undefined ? input.preferred_locale : record.profile.preferred_locale,
+      updated_at: nowIso(),
+    }
+    return record.profile
+  }
+
+  async syncLinkedHandles(userId: string): Promise<Profile | null> {
+    return getMemoryRecordByUserId(userId)?.profile ?? null
+  }
+
+  async setPrimaryPublicHandle(userId: string, linkedHandleId: string | null): Promise<Profile | null> {
+    const record = getMemoryRecordByUserId(userId)
+    if (!record) {
+      return null
+    }
+
+    record.profile = {
+      ...record.profile,
+      primary_public_handle: linkedHandleId == null
+        ? null
+        : (record.profile.linked_handles ?? []).find((handle) => handle.linked_handle_id === linkedHandleId) ?? null,
+      updated_at: nowIso(),
+    }
+
+    return record.profile
+  }
+
+  async renameGlobalHandle(userId: string, desiredLabel: string): Promise<GlobalHandle | null> {
+    const record = getMemoryRecordByUserId(userId)
+    if (!record) {
+      return null
+    }
+
+    const desired = normalizeDesiredGlobalHandleLabel(desiredLabel)
+    if (desired.labelDisplay === record.profile.global_handle.label) {
+      return record.profile.global_handle
+    }
+
+    assertFreeCleanupRenameEligible({
+      desiredLabel: desired.labelDisplay,
+      labelNormalized: desired.labelNormalized,
+      activeGlobalHandle: record.profile.global_handle,
+      userCreatedAt: record.user.created_at,
+    })
+
+    const store = getMemoryStore()
+    for (const candidateRecord of store.byUserId.values()) {
+      if (
+        candidateRecord.user.user_id !== userId
+        && candidateRecord.profile.global_handle.status === "active"
+        && candidateRecord.profile.global_handle.label.toLowerCase() === desired.labelDisplay.toLowerCase()
+      ) {
+        throw conflictError("Desired label is unavailable")
+      }
+    }
+
+    const updatedAt = nowIso()
+    const next: GlobalHandle = {
+      global_handle_id: makeId("ghl"),
+      label: desired.labelDisplay,
+      tier: "standard",
+      status: "active",
+      issuance_source: "free_cleanup_rename",
+      redirect_target_global_handle_id: null,
+      price_paid_usd: null,
+      free_rename_consumed: true,
+      issued_at: updatedAt,
+      replaced_at: null,
+    }
+
+    record.profile = {
+      ...record.profile,
+      global_handle: next,
+      linked_handles: [
+        {
+          linked_handle_id: `global:${next.global_handle_id}`,
+          label: next.label,
+          kind: "pirate",
+          verification_state: "verified",
+        },
+        ...(record.profile.linked_handles ?? []).filter((handle) => handle.kind !== "pirate"),
+      ],
+      updated_at: updatedAt,
+    }
+    record.onboarding = {
+      ...record.onboarding,
+      generated_handle_assigned: false,
+      cleanup_rename_available: false,
+    }
+    return next
+  }
+
+  async quoteGlobalHandleUpgrade(userId: string, desiredLabel: string): Promise<HandleUpgradeQuote | null> {
+    const record = getMemoryRecordByUserId(userId)
+    if (!record) {
+      return null
+    }
+
+    const desired = normalizeDesiredGlobalHandleLabel(desiredLabel)
+    const store = getMemoryStore()
+    const labelAvailable = ![...store.byUserId.values()].some((candidateRecord) => (
+      candidateRecord.user.user_id !== userId
+      && candidateRecord.profile.global_handle.status === "active"
+      && candidateRecord.profile.global_handle.label.toLowerCase() === desired.labelDisplay.toLowerCase()
+    ))
+
+    return buildHandleUpgradeQuote({
+      desiredLabel: desired.labelDisplay,
+      labelNormalized: desired.labelNormalized,
+      currentActiveLabelNormalized: record.profile.global_handle.label.replace(/\.pirate$/i, "").toLowerCase(),
+      cleanupRenameAvailable: isCleanupRenameAvailable({
+        userCreatedAt: record.user.created_at,
+        activeGlobalHandle: record.profile.global_handle,
+      }),
+      labelAvailable,
+    })
+  }
+}

@@ -19,8 +19,12 @@ import type { SessionSnapshot } from "./auth-db-rows"
 import { requireControlPlaneDbUrl } from "./auth-db-queries"
 import { DatabaseIdentityRepository } from "./db-identity-repository"
 import { DatabaseProfileRepository, type UpdateProfileInput } from "./db-profile-repository"
-import { MemoryAuthRepository } from "./memory-auth-repository"
+import { MemoryOnboardingStatusRepository } from "./memory-onboarding-status-repository"
+import { MemoryProfileRepository } from "./memory-profile-repository"
+import { MemorySessionRepository } from "./memory-session-repository"
+import { MemoryUserRepository } from "./memory-user-repository"
 import { DatabaseRedditOnboardingRepository } from "../onboarding/db-reddit-onboarding-repository"
+import { MemoryRedditOnboardingRepository } from "../onboarding/memory-reddit-onboarding-repository"
 
 export type { UpdateProfileInput }
 
@@ -80,6 +84,14 @@ type DatabaseRepositoryBundle = {
   redditOnboarding: DatabaseRedditOnboardingRepository
 }
 
+type MemoryRepositoryBundle = {
+  session: MemorySessionRepository
+  user: MemoryUserRepository
+  onboardingStatus: MemoryOnboardingStatusRepository
+  profile: MemoryProfileRepository
+  redditOnboarding: MemoryRedditOnboardingRepository
+}
+
 function getDatabaseRepositoryBundle(env: Env): DatabaseRepositoryBundle {
   const url = requireControlPlaneDbUrl(env)
   const buildBundle = (): DatabaseRepositoryBundle => {
@@ -99,8 +111,14 @@ function getDatabaseRepositoryBundle(env: Env): DatabaseRepositoryBundle {
   return globalSingleton("controlPlaneRepositoryBundle", cacheKey, buildBundle)
 }
 
-function getMemoryAuthRepository(): MemoryAuthRepository {
-  return globalSingleton("memoryAuthRepository", "singleton", () => new MemoryAuthRepository())
+function getMemoryRepositoryBundle(): MemoryRepositoryBundle {
+  return globalSingleton("memoryRepositoryBundle", "singleton", () => ({
+    session: new MemorySessionRepository(),
+    user: new MemoryUserRepository(),
+    onboardingStatus: new MemoryOnboardingStatusRepository(),
+    profile: new MemoryProfileRepository(),
+    redditOnboarding: new MemoryRedditOnboardingRepository(),
+  }))
 }
 
 function usingMemoryStore(env: Env): boolean {
@@ -115,35 +133,35 @@ function usingMemoryStore(env: Env): boolean {
 
 export function getSessionRepository(env: Env): SessionRepository {
   if (usingMemoryStore(env)) {
-    return getMemoryAuthRepository()
+    return getMemoryRepositoryBundle().session
   }
   return getDatabaseRepositoryBundle(env).identity
 }
 
 export function getUserRepository(env: Env): UserRepository {
   if (usingMemoryStore(env)) {
-    return getMemoryAuthRepository()
+    return getMemoryRepositoryBundle().user
   }
   return getDatabaseRepositoryBundle(env).identity
 }
 
 export function getOnboardingStatusRepository(env: Env): OnboardingStatusRepository {
   if (usingMemoryStore(env)) {
-    return getMemoryAuthRepository()
+    return getMemoryRepositoryBundle().onboardingStatus
   }
   return getDatabaseRepositoryBundle(env).identity
 }
 
 export function getProfileRepository(env: Env): ProfileRepository {
   if (usingMemoryStore(env)) {
-    return getMemoryAuthRepository()
+    return getMemoryRepositoryBundle().profile
   }
   return getDatabaseRepositoryBundle(env).profile
 }
 
 export function getRedditOnboardingRepository(env: Env): RedditOnboardingRepository {
   if (usingMemoryStore(env)) {
-    return getMemoryAuthRepository()
+    return getMemoryRepositoryBundle().redditOnboarding
   }
   return getDatabaseRepositoryBundle(env).redditOnboarding
 }
