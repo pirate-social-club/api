@@ -118,7 +118,10 @@ describe("applyLocalControlPlaneMigrations", () => {
       "0000_control_plane_baseline_postgres.sql",
       "0047_control_plane_notifications.sql",
       "0048_control_plane_spaces_fabric_publish_verification.sql",
+      "0049_control_plane_community_follows.sql",
     ])
+    expect(await listTableColumns(databasePath, "communities")).toContain("projected_follower_count")
+    expect(await listTableColumns(databasePath, "community_follow_projections")).toContain("follow_state")
     expect(await listTableColumns(databasePath, "community_post_projections")).toContain("visibility")
     expect(await listTableColumns(databasePath, "community_post_projections")).toContain("upvote_count")
     expect(await listTableColumns(databasePath, "user_agents")).toContain("agent_id")

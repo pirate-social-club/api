@@ -244,7 +244,6 @@ CREATE TABLE communities (
     registry_error_code TEXT,
     projected_member_count INTEGER,
     projected_qualified_member_count INTEGER,
-    projected_follower_count INTEGER NOT NULL DEFAULT 0,
     registry_last_mutation_published_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL,
@@ -417,27 +416,6 @@ CREATE UNIQUE INDEX idx_community_membership_projections_unique
 
 CREATE INDEX idx_community_membership_projections_user_state
     ON community_membership_projections(user_id, membership_state);
-
-CREATE TABLE community_follow_projections (
-    projection_id TEXT PRIMARY KEY,
-    community_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    follow_state TEXT NOT NULL CHECK (
-        follow_state IN ('active', 'inactive')
-    ),
-    source_updated_at TIMESTAMPTZ NOT NULL,
-    unfollowed_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL,
-    FOREIGN KEY (community_id) REFERENCES communities(community_id),
-    FOREIGN KEY (user_id) REFERENCES users(user_id)
-);
-
-CREATE UNIQUE INDEX idx_community_follow_projections_unique
-    ON community_follow_projections(community_id, user_id);
-
-CREATE INDEX idx_community_follow_projections_user_state
-    ON community_follow_projections(user_id, follow_state);
 
 CREATE TABLE scrobble_ingest_events (
     scrobble_id TEXT PRIMARY KEY,
