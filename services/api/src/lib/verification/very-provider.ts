@@ -361,7 +361,10 @@ async function verifyVeryPayload(input: {
     if (!response.ok) {
       const diag = summarizeVeryVerifyResponse({ body, proofHash, responseStatus: response.status, upstreamSessionRef: input.upstreamSessionRef })
       console.warn("[very-provider] verifier returned non-ok", diag)
-      const err = providerUnavailable(body?.error || body?.failure_reason || `Very verification request failed with status ${response.status}`)
+      const err = providerUnavailable(
+        body?.error || body?.failure_reason || `Very verification request failed with status ${response.status}`,
+        { _diag: diag },
+      )
       Object.defineProperty(err, "_diag", { value: diag, enumerable: false, writable: false })
       throw err
     }

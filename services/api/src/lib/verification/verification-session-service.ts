@@ -263,6 +263,21 @@ function isTerminalStatus(status: string): boolean {
   return status === "verified" || status === "failed" || status === "expired"
 }
 
+function providerErrorDetails(error: unknown): Record<string, unknown> | null {
+  if (!(error instanceof Error)) {
+    return null
+  }
+  const details = (error as Error & { details?: unknown }).details
+  if (details && typeof details === "object" && !Array.isArray(details)) {
+    return details as Record<string, unknown>
+  }
+  const diag = (error as Error & { _diag?: unknown })._diag
+  if (diag && typeof diag === "object" && !Array.isArray(diag)) {
+    return { _diag: diag as Record<string, unknown> }
+  }
+  return null
+}
+
 async function completeVerySession(
   client: Client,
   env: Env,
@@ -303,8 +318,10 @@ async function completeVerySession(
       providerPayloadRef,
     })
   } catch (error) {
+    const details = providerErrorDetails(error)
     throw providerUnavailable(
-      error instanceof Error ? error.message : "Very provider is unavailable"
+      error instanceof Error ? error.message : "Very provider is unavailable",
+      details,
     )
   }
 

@@ -452,4 +452,59 @@ describe("verification routes", () => {
       expect(verifierCalls).toBe(1)
     })
   })
+
+  test("very verification preserves verifier diagnostics when completion fails", async () => {
+    const ctx = await createRouteTestContext({
+      VERY_API_URL: "https://very.test",
+      VERY_APP_ID: "very-app",
+    })
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-very-failure-user")
+
+    await withFetchMock(async (input, init) => {
+      const url = typeof input === "string" ? input : input.toString()
+      expect(url).toBe("https://very.test/api/v1/verify")
+      expect(init?.method).toBe("POST")
+      const body = JSON.parse(String(init?.body))
+      expect(body).toEqual({ proof: "very-zk-proof-500" })
+      return new Response(JSON.stringify({
+        code: "INTERNAL_ERROR",
+        message: "Internal server error",
+      }), {
+        status: 500,
+        headers: { "content-type": "application/json" },
+      })
+    }, async () => {
+      const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+        provider: "very",
+        verification_intent: "community_creation",
+      }, ctx.env, session.accessToken)
+      expect(createdVerification.status).toBe(201)
+      const createdBody = await json(createdVerification) as { verification_session_id: string }
+
+      const completedVerification = await requestJson(
+        `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/complete`,
+        {
+          proof: "very-zk-proof-500",
+        },
+        ctx.env,
+        session.accessToken,
+      )
+      expect(completedVerification.status).toBe(502)
+      const completedBody = await json(completedVerification) as {
+        code: string
+        message: string
+        retryable?: boolean
+        details?: { _diag?: Record<string, unknown> }
+      }
+      expect(completedBody.code).toBe("provider_unavailable")
+      expect(completedBody.message).toBe("Very verification request failed with status 500")
+      expect(completedBody.retryable).toBe(true)
+      expect(completedBody.details?._diag?.responseStatus).toBe(500)
+      expect(completedBody.details?._diag?.code).toBe("INTERNAL_ERROR")
+      expect(completedBody.details?._diag?.message).toBe("Internal server error")
+      expect(completedBody.details?._diag?.bodyKeys).toEqual(["code", "message"])
+    })
+  })
 })

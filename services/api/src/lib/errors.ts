@@ -51,8 +51,8 @@ export function notFoundError(message: string): HttpError {
   return new HttpError(404, "not_found", message)
 }
 
-export function providerUnavailable(message: string): HttpError {
-  return new HttpError(502, "provider_unavailable", message, true)
+export function providerUnavailable(message: string, details: Record<string, unknown> | null = null): HttpError {
+  return new HttpError(502, "provider_unavailable", message, true, details)
 }
 
 export function internalError(message: string): HttpError {
