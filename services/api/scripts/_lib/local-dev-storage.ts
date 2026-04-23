@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { splitSqlStatements, toSqliteCompatibleStatement } from "../../shared/sql-migration"
 
-const FIRST_LOCAL_POST_BASELINE_MIGRATION = "0047_control_plane_notifications.sql"
+export const FIRST_LOCAL_POST_BASELINE_MIGRATION = "0047_control_plane_notifications.sql"
 
 export type LocalDevStorage = {
   repoRoot: string

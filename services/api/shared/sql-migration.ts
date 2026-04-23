@@ -66,15 +66,28 @@ export function splitSqlStatements(sql: string): string[] {
   }
 
   const trailing = current.trim()
-  if (trailing) {
+  if (trailing && !isSqlCommentOnly(trailing)) {
     statements.push(trailing)
   }
 
   return statements
 }
 
+function isSqlCommentOnly(statement: string): boolean {
+  return statement
+    .split("\n")
+    .every((line) => {
+      const trimmed = line.trim()
+      return trimmed === "" || trimmed.startsWith("--")
+    })
+}
+
 export function toSqliteCompatibleStatement(statement: string): string | null {
   const normalized = statement.trim().replace(/\s+/g, " ").toUpperCase()
+
+  if (isSqlCommentOnly(statement)) {
+    return null
+  }
 
   if (normalized.startsWith("DO ")) {
     return null

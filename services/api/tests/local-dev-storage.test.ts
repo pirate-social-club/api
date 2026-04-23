@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, readdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { createClient } from "@libsql/client"
 import {
   applyLocalControlPlaneMigrations,
+  FIRST_LOCAL_POST_BASELINE_MIGRATION,
   resolveLocalDevStorage,
+  type LocalDevStorage,
 } from "../scripts/_lib/local-dev-storage"
 
 const cleanupPaths: string[] = []
@@ -106,20 +108,28 @@ function buildStorage(rootDir: string, databasePath: string) {
   }, serviceRoot)
 }
 
+async function listExpectedLocalMigrationNames(storage: LocalDevStorage): Promise<string[]> {
+  const entries = (await readdir(join(storage.repoRoot, "db/control-plane/migrations")))
+    .filter((entry) => entry.endsWith(".sql"))
+    .sort()
+  const baselineEntry = entries.find((entry) => entry.startsWith("0000_") && entry.includes("baseline"))
+  const baselineMigrationName = baselineEntry ?? entries[0]
+
+  return entries.filter((entry) =>
+    entry === baselineMigrationName || entry >= FIRST_LOCAL_POST_BASELINE_MIGRATION
+  )
+}
+
 describe("applyLocalControlPlaneMigrations", () => {
   test("applies the current baseline and post-baseline migrations to fresh local control-plane databases", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-local-dev-storage-"))
     cleanupPaths.push(rootDir)
 
     const databasePath = join(rootDir, "control-plane.db")
-    await applyLocalControlPlaneMigrations(buildStorage(rootDir, databasePath))
+    const storage = buildStorage(rootDir, databasePath)
+    await applyLocalControlPlaneMigrations(storage)
 
-    expect(await listMigrationNames(databasePath)).toEqual([
-      "0000_control_plane_baseline_postgres.sql",
-      "0047_control_plane_notifications.sql",
-      "0048_control_plane_spaces_fabric_publish_verification.sql",
-      "0049_control_plane_community_follows.sql",
-    ])
+    expect(await listMigrationNames(databasePath)).toEqual(await listExpectedLocalMigrationNames(storage))
     expect(await listTableColumns(databasePath, "communities")).toContain("projected_follower_count")
     expect(await listTableColumns(databasePath, "community_follow_projections")).toContain("follow_state")
     expect(await listTableColumns(databasePath, "community_post_projections")).toContain("visibility")

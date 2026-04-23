@@ -48,4 +48,14 @@ describe("sql migration helpers", () => {
 
     expect(toSqliteCompatibleStatement("DO $$ BEGIN SELECT 1; END $$;")).toBeNull()
   })
+
+  test("ignores comment-only migrations", () => {
+    const sql = `
+      -- Retired before runtime wiring.
+      -- No schema changes remain.
+    `
+
+    expect(splitSqlStatements(sql)).toEqual([])
+    expect(toSqliteCompatibleStatement(sql)).toBeNull()
+  })
 })
