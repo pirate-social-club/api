@@ -24,7 +24,6 @@ export type UserRow = {
   capability_provider: User["capability_provider"] | "passport" | "zkpass"
   verification_capabilities_json: string
   verified_at: string | null
-  nationality: string | null
   current_verification_session_id: string | null
   created_at: string
   updated_at: string
@@ -148,7 +147,6 @@ export function toUserRow(row: unknown): UserRow {
     capability_provider: (stringOrNull(rowValue(row, "capability_provider")) as User["capability_provider"] | "passport" | "zkpass"),
     verification_capabilities_json: requiredString(row, "verification_capabilities_json"),
     verified_at: stringOrNull(rowValue(row, "verified_at")),
-    nationality: stringOrNull(rowValue(row, "nationality")),
     current_verification_session_id: stringOrNull(rowValue(row, "current_verification_session_id")),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),

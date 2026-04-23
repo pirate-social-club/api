@@ -12,7 +12,6 @@ CREATE TABLE users (
     ),
     verification_capabilities_json JSONB NOT NULL,
     verified_at TIMESTAMPTZ,
-    nationality TEXT,
     current_verification_session_id TEXT,
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL
@@ -228,23 +227,6 @@ CREATE TABLE communities (
     namespace_verification_id TEXT,
     pending_namespace_verification_session_id TEXT,
     primary_database_binding_id TEXT,
-    registry_publication_state TEXT NOT NULL DEFAULT 'not_started' CHECK (
-        registry_publication_state IN (
-            'not_started',
-            'pending_create',
-            'pending_seed',
-            'published',
-            'stale',
-            'publication_error'
-        )
-    ),
-    registry_attempt_id TEXT,
-    registry_published_at TIMESTAMPTZ,
-    registry_publication_job_id TEXT,
-    registry_error_code TEXT,
-    projected_member_count INTEGER,
-    projected_qualified_member_count INTEGER,
-    registry_last_mutation_published_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL,
     FOREIGN KEY (creator_user_id) REFERENCES users(user_id)
@@ -256,13 +238,6 @@ CREATE INDEX idx_communities_status_provisioning
 CREATE UNIQUE INDEX idx_communities_route_slug
     ON communities(route_slug)
     WHERE route_slug IS NOT NULL;
-
-CREATE INDEX idx_communities_registry_publication_state
-    ON communities(registry_publication_state, updated_at DESC);
-
-CREATE INDEX idx_communities_registry_attempt
-    ON communities(registry_attempt_id)
-    WHERE registry_attempt_id IS NOT NULL;
 
 CREATE TABLE community_database_bindings (
     community_database_binding_id TEXT PRIMARY KEY,

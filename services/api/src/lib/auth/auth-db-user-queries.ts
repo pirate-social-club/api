@@ -66,7 +66,7 @@ export async function getUserRow(executor: DbExecutor, userId: string): Promise<
   const row = await firstRow(executor, {
     sql: `
       SELECT user_id, primary_wallet_attachment_id, verification_state, capability_provider,
-             verification_capabilities_json, verified_at, nationality, current_verification_session_id,
+             verification_capabilities_json, verified_at, current_verification_session_id,
              created_at, updated_at
       FROM users
       WHERE user_id = ?1

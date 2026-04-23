@@ -21,10 +21,10 @@ describe("community comment projection repository", () => {
       sql: `
         INSERT INTO users (
           user_id, primary_wallet_attachment_id, verification_state, capability_provider,
-          verification_capabilities_json, verified_at, nationality, current_verification_session_id, created_at, updated_at
+          verification_capabilities_json, verified_at, current_verification_session_id, created_at, updated_at
         ) VALUES (
           ?1, NULL, 'verified', NULL,
-          ?2, NULL, NULL, NULL, ?3, ?3
+          ?2, NULL, NULL, ?3, ?3
         )
       `,
       args: ["usr_comment_projection", "{}", now],

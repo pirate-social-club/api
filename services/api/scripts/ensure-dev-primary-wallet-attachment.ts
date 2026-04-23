@@ -46,7 +46,6 @@ async function main(): Promise<void> {
             capability_provider,
             verification_capabilities_json,
             verified_at,
-            nationality,
             current_verification_session_id,
             created_at,
             updated_at
@@ -56,7 +55,6 @@ async function main(): Promise<void> {
             'unverified',
             NULL,
             ?2,
-            NULL,
             NULL,
             NULL,
             ?3,

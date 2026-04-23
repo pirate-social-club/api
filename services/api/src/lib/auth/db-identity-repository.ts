@@ -82,11 +82,10 @@ export class DatabaseIdentityRepository {
               capability_provider,
               verification_capabilities_json,
               verified_at,
-              nationality,
               current_verification_session_id,
               created_at,
               updated_at
-            ) VALUES (?1, NULL, 'unverified', NULL, ?2, NULL, NULL, NULL, ?3, ?3)
+            ) VALUES (?1, NULL, 'unverified', NULL, ?2, NULL, NULL, ?3, ?3)
           `,
           args: [userId, JSON.stringify(buildDefaultVerificationCapabilities()), createdAt],
         })
