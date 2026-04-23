@@ -202,7 +202,7 @@ describe("Very provider adapter", () => {
     expect(lowerBound).toBe(0)
     expect(upperBound).toBeGreaterThan(lowerBound)
     expect(upperBound).toBe(2_043_436_800)
-    expect(query.options?.expiredAtLowerBound).toBe(String(lowerBound))
+    expect(Number(query.options?.expiredAtLowerBound)).toBeGreaterThan(0)
     expect(query.options?.pseudonym).toBe("0")
     expect(query.options ? "sessionId" in query.options : true).toBe(false)
   })

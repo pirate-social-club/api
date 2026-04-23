@@ -36,7 +36,8 @@ verification.post("/verification-sessions/very-widget-verify", async (c) => {
 
 authenticatedVerification.use("*", authenticate)
 
-authenticatedVerification.post("/verification-sessions/very-bridge/sessions", async (c) => {
+authenticatedVerification.post("/verification-sessions/:verificationSessionId/very-bridge/sessions", async (c) => {
+  const actor = c.get("actor")
   const body = await c.req.text()
   const result = await proxyVeryBridgeRequest({
     body,
@@ -44,10 +45,28 @@ authenticatedVerification.post("/verification-sessions/very-bridge/sessions", as
     method: "POST",
     path: "sessions",
   })
+  const providerSessionId = typeof result.body.sessionId === "string" ? result.body.sessionId.trim() : ""
+  if (providerSessionId) {
+    const repo = getControlPlaneVerificationRepository(c.env)
+    const recorded = await repo.recordVeryBridgeSession({
+      verificationSessionId: c.req.param("verificationSessionId"),
+      userId: actor.userId,
+      providerSessionId,
+    })
+    if (!recorded) {
+      throw notFoundError("Verification session not found")
+    }
+  }
   return c.json(result.body, result.status as 200)
 })
 
-authenticatedVerification.get("/verification-sessions/very-bridge/session/:providerSessionId", async (c) => {
+authenticatedVerification.get("/verification-sessions/:verificationSessionId/very-bridge/session/:providerSessionId", async (c) => {
+  const actor = c.get("actor")
+  const repo = getControlPlaneVerificationRepository(c.env)
+  const session = await repo.getVerificationSession(c.req.param("verificationSessionId"), actor.userId)
+  if (!session) {
+    throw notFoundError("Verification session not found")
+  }
   const providerSessionId = c.req.param("providerSessionId").trim()
   if (!providerSessionId || providerSessionId.includes("/")) {
     throw badRequestError("Invalid Very bridge session id")

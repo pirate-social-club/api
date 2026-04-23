@@ -314,11 +314,18 @@ describe("verification routes", () => {
 
   test("very bridge session proxy forwards authenticated widget session creation", async () => {
     const ctx = await createRouteTestContext({
+      VERY_APP_ID: "very-app",
       VERY_BRIDGE_API_URL: "https://bridge.very.test/api/v1/",
     })
     cleanup = ctx.cleanup
 
     const session = await exchangeJwt(ctx.env, "verification-very-bridge-session-user")
+    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "very",
+      verification_intent: "community_creation",
+    }, ctx.env, session.accessToken)
+    expect(createdVerification.status).toBe(201)
+    const createdBody = await json(createdVerification) as { verification_session_id: string }
     await withFetchMock(async (input, init) => {
       expect(String(input)).toBe("https://bridge.very.test/api/v1/sessions")
       expect(init?.method).toBe("POST")
@@ -331,7 +338,7 @@ describe("verification routes", () => {
       })
     }, async () => {
       const response = await app.request(
-        "http://pirate.test/verification-sessions/very-bridge/sessions",
+        `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/very-bridge/sessions`,
         {
           method: "POST",
           headers: {
@@ -349,20 +356,109 @@ describe("verification routes", () => {
     })
   })
 
+  test("very completion trusts stored bridge completion when verifier returns 5xx", async () => {
+    const ctx = await createRouteTestContext({
+      VERY_API_URL: "https://very.test",
+      VERY_APP_ID: "very-app",
+      VERY_BRIDGE_API_URL: "https://bridge.very.test/api/v1/",
+      VERY_TRUST_BRIDGE_COMPLETION_ON_VERIFIER_5XX: "true",
+    })
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-very-bridge-fallback-user")
+    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "very",
+      verification_intent: "community_creation",
+    }, ctx.env, session.accessToken)
+    expect(createdVerification.status).toBe(201)
+    const createdBody = await json(createdVerification) as { verification_session_id: string }
+
+    await withFetchMock(async (input, init) => {
+      const url = String(input)
+      if (url === "https://bridge.very.test/api/v1/sessions") {
+        expect(init?.method).toBe("POST")
+        return Response.json({
+          sessionId: "0e16c1fe-78f7-4116-83bf-a2072aca6c7c",
+          sessionAuthToken: "token-1",
+        })
+      }
+      if (url === "https://very.test/api/v1/verify") {
+        expect(init?.method).toBe("POST")
+        const body = JSON.parse(String(init?.body))
+        expect(body).toEqual({ proof: "very-zk-proof-500" })
+        return new Response(JSON.stringify({
+          code: "INTERNAL_ERROR",
+          message: "Internal server error",
+        }), {
+          status: 500,
+          headers: { "content-type": "application/json" },
+        })
+      }
+      if (url === "https://bridge.very.test/api/v1/session/0e16c1fe-78f7-4116-83bf-a2072aca6c7c") {
+        expect(init?.method).toBe("GET")
+        return Response.json({
+          status: "completed",
+          response: {
+            iv: "iv-1",
+            payload: "payload-1",
+          },
+        })
+      }
+      throw new Error(`Unexpected fetch ${url}`)
+    }, async () => {
+      const bridgeSession = await app.request(
+        `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/very-bridge/sessions`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${session.accessToken}`,
+            "content-type": "application/json",
+          },
+          body: "{\"iv\":\"iv-1\",\"payload\":\"payload-1\"}",
+        },
+        ctx.env,
+      )
+      expect(bridgeSession.status).toBe(200)
+
+      const completedVerification = await requestJson(
+        `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/complete`,
+        {
+          provider_payload_ref: "very-zk-proof-500",
+        },
+        ctx.env,
+        session.accessToken,
+      )
+      expect(completedVerification.status).toBe(200)
+      const completedBody = await json(completedVerification) as {
+        status: string
+        proof_hash: string | null
+      }
+      expect(completedBody.status).toBe("verified")
+      expect(typeof completedBody.proof_hash).toBe("string")
+    })
+  })
+
   test("very bridge status proxy returns widget-readable errors when upstream fails", async () => {
     const ctx = await createRouteTestContext({
+      VERY_APP_ID: "very-app",
       VERY_BRIDGE_API_URL: "https://bridge.very.test/api/v1/",
     })
     cleanup = ctx.cleanup
 
     const session = await exchangeJwt(ctx.env, "verification-very-bridge-status-user")
+    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "very",
+      verification_intent: "community_creation",
+    }, ctx.env, session.accessToken)
+    expect(createdVerification.status).toBe(201)
+    const createdBody = await json(createdVerification) as { verification_session_id: string }
     await withFetchMock(async (input, init) => {
       expect(String(input)).toBe("https://bridge.very.test/api/v1/session/very-session-1")
       expect(init?.method).toBe("GET")
       return new Response("Service Unavailable", { status: 503 })
     }, async () => {
       const response = await app.request(
-        "http://pirate.test/verification-sessions/very-bridge/session/very-session-1",
+        `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/very-bridge/session/very-session-1`,
         {
           headers: {
             authorization: `Bearer ${session.accessToken}`,
@@ -375,6 +471,75 @@ describe("verification routes", () => {
       const body = await json(response) as { status?: string; userMessage?: string }
       expect(body.status).toBe("error")
       expect(body.userMessage).toBe("Very bridge response was invalid")
+    })
+  })
+
+  test("very completion does not trust bridge completion when verifier returns 5xx and fallback flag is disabled", async () => {
+    const ctx = await createRouteTestContext({
+      VERY_API_URL: "https://very.test",
+      VERY_APP_ID: "very-app",
+      VERY_BRIDGE_API_URL: "https://bridge.very.test/api/v1/",
+    })
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-very-bridge-no-fallback-user")
+    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "very",
+      verification_intent: "community_creation",
+    }, ctx.env, session.accessToken)
+    expect(createdVerification.status).toBe(201)
+    const createdBody = await json(createdVerification) as { verification_session_id: string }
+
+    await withFetchMock(async (input, init) => {
+      const url = String(input)
+      if (url === "https://bridge.very.test/api/v1/sessions") {
+        expect(init?.method).toBe("POST")
+        return Response.json({
+          sessionId: "0e16c1fe-78f7-4116-83bf-a2072aca6c7c",
+          sessionAuthToken: "token-1",
+        })
+      }
+      if (url === "https://very.test/api/v1/verify") {
+        expect(init?.method).toBe("POST")
+        return new Response(JSON.stringify({
+          code: "INTERNAL_ERROR",
+          message: "Internal server error",
+        }), {
+          status: 500,
+          headers: { "content-type": "application/json" },
+        })
+      }
+      throw new Error(`Unexpected fetch ${url}`)
+    }, async () => {
+      const bridgeSession = await app.request(
+        `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/very-bridge/sessions`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${session.accessToken}`,
+            "content-type": "application/json",
+          },
+          body: "{\"iv\":\"iv-1\",\"payload\":\"payload-1\"}",
+        },
+        ctx.env,
+      )
+      expect(bridgeSession.status).toBe(200)
+
+      const completedVerification = await requestJson(
+        `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/complete`,
+        {
+          provider_payload_ref: "very-zk-proof-500",
+        },
+        ctx.env,
+        session.accessToken,
+      )
+      expect(completedVerification.status).toBe(502)
+      const completedBody = await json(completedVerification) as {
+        code: string
+        message: string
+      }
+      expect(completedBody.code).toBe("provider_unavailable")
+      expect(completedBody.message).toContain("status 500")
     })
   })
 

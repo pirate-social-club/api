@@ -4,6 +4,7 @@ import { getControlPlaneCacheKey, getControlPlaneClient } from "../runtime-deps"
 import {
   startVerificationSession,
   getVerificationSession,
+  recordVeryBridgeSession,
   completeVerificationSession,
   completeSelfVerificationCallback,
 } from "./verification-session-service"
@@ -39,6 +40,11 @@ export interface VerificationRepository {
     publicOrigin?: string | null
   }): Promise<VerificationSession>
   getVerificationSession(verificationSessionId: string, userId: string): Promise<VerificationSession | null>
+  recordVeryBridgeSession(input: {
+    verificationSessionId: string
+    userId: string
+    providerSessionId: string
+  }): Promise<boolean | null>
   completeVerificationSession(input: {
     verificationSessionId: string
     userId: string
@@ -89,6 +95,14 @@ export class ControlPlaneVerificationRepository implements VerificationRepositor
 
   async getVerificationSession(verificationSessionId: string, userId: string): Promise<VerificationSession | null> {
     return getVerificationSession(this.client, verificationSessionId, userId)
+  }
+
+  async recordVeryBridgeSession(input: {
+    verificationSessionId: string
+    userId: string
+    providerSessionId: string
+  }): Promise<boolean | null> {
+    return recordVeryBridgeSession(this.client, input)
   }
 
   async completeVerificationSession(input: {

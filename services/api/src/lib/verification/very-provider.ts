@@ -62,6 +62,10 @@ function shouldTrustLocalWidgetCompletion(env: Env): boolean {
   return envFlag(env.VERY_TRUST_LOCAL_WIDGET_COMPLETION, isDevelopmentEnv(env))
 }
 
+function shouldTrustBridgeCompletionOnVerifier5xx(env: Env): boolean {
+  return envFlag(env.VERY_TRUST_BRIDGE_COMPLETION_ON_VERIFIER_5XX, false)
+}
+
 function requireConfiguredVery(env: Env): {
   appId: string
   verifyUrl: string
@@ -299,6 +303,30 @@ function summarizeVeryVerifyResponse(input: {
   }
 }
 
+function isVerifier5xx(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false
+  }
+  const responseStatus = (error as Error & { details?: { _diag?: { responseStatus?: unknown } } }).details?._diag?.responseStatus
+  return typeof responseStatus === "number" && responseStatus >= 500
+}
+
+function isVeryBridgeSessionId(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value)
+}
+
+async function getVeryBridgeSessionStatus(input: {
+  env: Env
+  sessionId: string
+}): Promise<Record<string, unknown>> {
+  const response = await proxyVeryBridgeRequest({
+    env: input.env,
+    method: "GET",
+    path: `session/${encodeURIComponent(input.sessionId)}`,
+  })
+  return response.body
+}
+
 function buildVeryQuery(input: {
   userId: string
   walletAttachmentId: string | null
@@ -307,11 +335,14 @@ function buildVeryQuery(input: {
   upstreamSessionRef: string
   includeSessionId?: boolean
 }): Record<string, unknown> {
-  const lowerBoundSeconds = 0
-  const upperBoundSeconds = 2_043_436_800
+  const nowSeconds = Math.floor(Date.now() / 1000)
+  const conditionRangeStartSeconds = 0
+  const conditionRangeEndSeconds = 2_043_436_800
   const options: Record<string, unknown> = {
-    expiredAtLowerBound: String(lowerBoundSeconds),
-    externalNullifier: buildExternalNullifier(input),
+    // Keep the proof fresh for the verifier. Using 0 here regressed local
+    // widget proof generation back into the "generated proof is null" state.
+    expiredAtLowerBound: String(nowSeconds),
+    externalNullifier: buildExternalNullifier({ ...input, includeSessionId: undefined }),
     equalCheckId: "0",
     pseudonym: input.includeSessionId === false
       ? (input.walletAttachmentId ?? "0")
@@ -326,8 +357,8 @@ function buildVeryQuery(input: {
         identifier: "val",
         operation: "IN",
         value: {
-          from: String(lowerBoundSeconds),
-          to: String(upperBoundSeconds),
+          from: String(conditionRangeStartSeconds),
+          to: String(conditionRangeEndSeconds),
         },
       },
     ],
@@ -359,13 +390,17 @@ async function verifyVeryPayload(input: {
     const body = await response.json().catch(() => null) as VeryVerifyResponse | null
     const proofHash = await sha256Hex(input.providerPayloadRef)
     if (!response.ok) {
-      const diag = summarizeVeryVerifyResponse({ body, proofHash, responseStatus: response.status, upstreamSessionRef: input.upstreamSessionRef })
+      const diag = summarizeVeryVerifyResponse({
+        body,
+        proofHash,
+        responseStatus: response.status,
+        upstreamSessionRef: input.upstreamSessionRef,
+      })
       console.warn("[very-provider] verifier returned non-ok", diag)
       const err = providerUnavailable(
         body?.error || body?.failure_reason || `Very verification request failed with status ${response.status}`,
         { _diag: diag },
       )
-      Object.defineProperty(err, "_diag", { value: diag, enumerable: false, writable: false })
       throw err
     }
     if (!body || typeof body !== "object") {
@@ -411,7 +446,12 @@ async function verifyVeryPayload(input: {
       return { status: "pending", _diag: diag }
     }
 
-    const diag = summarizeVeryVerifyResponse({ body, proofHash, responseStatus: response.status, upstreamSessionRef: input.upstreamSessionRef })
+    const diag = summarizeVeryVerifyResponse({
+      body,
+      proofHash,
+      responseStatus: response.status,
+      upstreamSessionRef: input.upstreamSessionRef,
+    })
     console.warn("[very-provider] verifier returned failed", diag)
     return {
       status: "failed",
@@ -477,11 +517,39 @@ export function getVeryProvider(env: Env): VeryProvider {
           },
         }
       }
-      return await verifyVeryPayload({
-        verifyUrl,
-        providerPayloadRef: input.providerPayloadRef.trim(),
-        upstreamSessionRef: input.upstreamSessionRef,
-      })
+      try {
+        return await verifyVeryPayload({
+          verifyUrl,
+          providerPayloadRef: input.providerPayloadRef.trim(),
+          upstreamSessionRef: input.upstreamSessionRef,
+        })
+      } catch (error) {
+        if (
+          !shouldTrustBridgeCompletionOnVerifier5xx(env)
+          || !isVerifier5xx(error)
+          || !isVeryBridgeSessionId(input.upstreamSessionRef)
+        ) {
+          throw error
+        }
+        const bridgeStatus = await getVeryBridgeSessionStatus({
+          env,
+          sessionId: input.upstreamSessionRef,
+        })
+        if (bridgeStatus.status !== "completed" || !bridgeStatus.response) {
+          throw error
+        }
+        console.warn("[very-provider] trusting completed bridge session after verifier 5xx", {
+          upstreamSessionRef: input.upstreamSessionRef,
+        })
+        return {
+          status: "verified",
+          attestationData: {
+            proof_hash: await sha256Hex(input.providerPayloadRef.trim()),
+            provider_session_ref: input.upstreamSessionRef,
+            provider_status: "bridge_completed_verifier_5xx",
+          },
+        }
+      }
     },
   }
 }
