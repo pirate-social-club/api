@@ -7,6 +7,7 @@ import {
   serializeNamespaceVerificationSession,
 } from "../auth/auth-serializers"
 import {
+  assertHnsRootLabel,
   inspectHnsRoot,
   publishHnsTxtRecord,
 } from "./hns-verifier"
@@ -115,6 +116,7 @@ export async function startNamespaceVerificationSession(
       ],
     })
   } else {
+    assertHnsRootLabel(normalizedRootLabel)
     const challengeExpiresAt = new Date(now.getTime() + getHnsChallengeTtlHours(env) * 60 * 60 * 1000).toISOString()
     const challengeHost = `_pirate.${normalizedRootLabel}`
     const challengeTxtValue = `pirate-verification=${sessionId}`

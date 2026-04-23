@@ -1,4 +1,4 @@
-import { providerUnavailable } from "../errors"
+import { badRequestError, providerUnavailable } from "../errors"
 import type { Env } from "../../types"
 
 export type HnsInspectResult = {
@@ -46,6 +46,26 @@ export type HnsVerifyTxtResult = {
   challenge_name?: string
 }
 
+const MAX_HNS_ROOT_LABEL_LENGTH = 63
+
+function isProductionEnvironment(env: Env): boolean {
+  return String(env.ENVIRONMENT || "").trim().toLowerCase() === "production"
+}
+
+export function assertHnsRootLabel(value: string): void {
+  if (!value || value.length > MAX_HNS_ROOT_LABEL_LENGTH) {
+    throw badRequestError("HNS root label must be a protocol root label")
+  }
+
+  if (value.startsWith("-") || value.endsWith("-") || value.includes(".") || value.includes("--")) {
+    throw badRequestError("HNS root label must be a protocol root label")
+  }
+
+  if (!/^[a-z0-9-]+$/u.test(value)) {
+    throw badRequestError("HNS root label must be a protocol root label")
+  }
+}
+
 export function getHnsVerifierBaseUrl(env: Env): string | null {
   const raw = env.HNS_VERIFIER_BASE_URL?.trim()
   if (!raw) {
@@ -85,6 +105,9 @@ async function request<T>(env: Env, path: string, init?: RequestInit): Promise<T
   }
 
   const authToken = getHnsVerifierAuthToken(env)
+  if (!authToken && isProductionEnvironment(env)) {
+    throw providerUnavailable("HNS verifier auth token is not configured")
+  }
   if (authToken) {
     headers.authorization = `Bearer ${authToken}`
   }
@@ -116,6 +139,7 @@ export async function inspectHnsRoot(
     challengeHost?: string | null
   },
 ): Promise<HnsInspectResult> {
+  assertHnsRootLabel(input.rootLabel)
   const params = new URLSearchParams({
     root_label: input.rootLabel,
   })
@@ -133,6 +157,7 @@ export async function publishHnsTxtRecord(
     challengeTxtValue: string
   },
 ): Promise<HnsPublishTxtResult> {
+  assertHnsRootLabel(input.rootLabel)
   return request<HnsPublishTxtResult>(env, "/publish-txt", {
     method: "POST",
     body: JSON.stringify({
@@ -151,6 +176,7 @@ export async function verifyHnsTxtRecord(
     challengeTxtValue: string
   },
 ): Promise<HnsVerifyTxtResult> {
+  assertHnsRootLabel(input.rootLabel)
   return request<HnsVerifyTxtResult>(env, "/verify-txt", {
     method: "POST",
     body: JSON.stringify({

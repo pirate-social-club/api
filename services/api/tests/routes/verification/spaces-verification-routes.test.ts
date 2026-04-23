@@ -278,4 +278,77 @@ describe("spaces verification routes", () => {
       expect(completedBody.failure_reason).toBe("pirate_verify_record_mismatch")
     })
   })
+
+  test("spaces completion fails closed when verifier success conflicts with component checks", async () => {
+    const ctx = await createRouteTestContext({
+      SPACES_VERIFIER_BASE_URL: "http://spaces-verifier.test",
+    })
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-spaces-inconsistent-user")
+    await createSelfVerifiedSession(ctx.env, session.accessToken)
+
+    const originalFetch = globalThis.fetch
+    await withFetchMock(async (input, init) => {
+      const url = typeof input === "string" ? input : input.toString()
+      if (url.startsWith("http://spaces-verifier.test/inspect?")) {
+        return spacesInspectResponse()
+      }
+      if (url === "http://spaces-verifier.test/verify-publish") {
+        const body = JSON.parse(String(init?.body)) as {
+          txt_value: string
+          web_url: string
+          freedom_url: string
+        }
+        return new Response(JSON.stringify({
+          fabric_publish_verified: true,
+          root_key_proof_verified: true,
+          web_target_verified: false,
+          freedom_target_verified: true,
+          observed_web_url: body.web_url,
+          observed_freedom_url: body.freedom_url,
+          observed_txt_values: [body.txt_value],
+          records: {
+            "pirate-verify": [body.txt_value],
+          },
+          observation_provider: "spaces_verifier+fabric_zone",
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
+      return originalFetch(input, init)
+    }, async () => {
+      const createdNamespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
+        family: "spaces",
+        root_label: "@pirate-inconsistent-root",
+      }, ctx.env, session.accessToken)
+      const createdBody = await json(createdNamespaceSession) as {
+        namespace_verification_session_id: string
+      }
+
+      const completedNamespaceSession = await requestJson(
+        `http://pirate.test/namespace-verification-sessions/${createdBody.namespace_verification_session_id}/complete`,
+        {},
+        ctx.env,
+        session.accessToken,
+      )
+      expect(completedNamespaceSession.status).toBe(502)
+      const completedBody = await json(completedNamespaceSession) as {
+        code: string
+      }
+      expect(completedBody.code).toBe("provider_unavailable")
+
+      const row = await ctx.client.execute({
+        sql: `
+          SELECT status, accepted_at
+          FROM namespace_verification_sessions
+          WHERE namespace_verification_session_id = ?1
+        `,
+        args: [createdBody.namespace_verification_session_id],
+      })
+      expect(row.rows[0]?.status).toBe("challenge_required")
+      expect(row.rows[0]?.accepted_at).toBeNull()
+    })
+  })
 })

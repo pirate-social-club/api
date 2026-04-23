@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test"
-import { inspectSpacesNamespace, normalizeRootLabel, mintSpacesChallenge } from "../src/lib/verification/spaces-verifier"
-import { getHnsVerifierBaseUrl, isHnsVerifierConfigured } from "../src/lib/verification/hns-verifier"
+import {
+  inspectSpacesNamespace,
+  normalizeRootLabel,
+  mintSpacesChallenge,
+  verifySpacesFabricPublish,
+} from "../src/lib/verification/spaces-verifier"
+import { getHnsVerifierBaseUrl, inspectHnsRoot, isHnsVerifierConfigured } from "../src/lib/verification/hns-verifier"
 
 describe("normalizeRootLabel", () => {
   test("strips leading @ and lowercases", () => {
@@ -167,6 +172,104 @@ describe("inspectSpacesNamespace", () => {
       globalThis.fetch = originalFetch
     }
   })
+
+  test("requires a verifier auth token in production", async () => {
+    const originalFetch = globalThis.fetch
+    let called = false
+    globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
+      called = true
+      return originalFetch(...args)
+    }) as typeof fetch
+
+    try {
+      try {
+        await inspectSpacesNamespace({
+          ENVIRONMENT: "production",
+          SPACES_VERIFIER_BASE_URL: "http://spaces-verifier.test",
+        } as any, "@pirate")
+        throw new Error("expected inspectSpacesNamespace to reject")
+      } catch (error) {
+        expect(error).toMatchObject({
+          status: 502,
+          code: "provider_unavailable",
+        })
+      }
+      expect(called).toBe(false)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+})
+
+describe("verifySpacesFabricPublish", () => {
+  const env = {
+    SPACES_VERIFIER_BASE_URL: "http://spaces-verifier.test",
+  } as any
+
+  test("rejects malformed root labels before calling the verifier", async () => {
+    const originalFetch = globalThis.fetch
+    let called = false
+    globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
+      called = true
+      return originalFetch(...args)
+    }) as typeof fetch
+
+    try {
+      try {
+        await verifySpacesFabricPublish(env, {
+          rootLabel: "bad.root",
+          txtKey: "pirate-verify",
+          txtValue: "pirate-space-verify=nvs_123",
+          webUrl: "https://pirate.sc/c/@bad.root",
+          freedomUrl: "https://pirate.sc/c/@bad.root",
+        })
+        throw new Error("expected verifySpacesFabricPublish to reject")
+      } catch (error) {
+        expect(error).toMatchObject({
+          status: 400,
+          code: "bad_request",
+        })
+      }
+      expect(called).toBe(false)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("fails closed when aggregate publish success conflicts with component checks", async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      fabric_publish_verified: true,
+      root_key_proof_verified: true,
+      web_target_verified: false,
+      freedom_target_verified: true,
+      observation_provider: "spaces_verifier+fabric_zone",
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch
+
+    try {
+      try {
+        await verifySpacesFabricPublish(env, {
+          rootLabel: "pirate",
+          txtKey: "pirate-verify",
+          txtValue: "pirate-space-verify=nvs_123",
+          webUrl: "https://pirate.sc/c/@pirate",
+          freedomUrl: "https://pirate.sc/c/@pirate",
+        })
+        throw new Error("expected verifySpacesFabricPublish to reject")
+      } catch (error) {
+        expect(error).toMatchObject({
+          status: 502,
+          code: "provider_unavailable",
+          retryable: true,
+        })
+      }
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
 })
 
 describe("getHnsVerifierBaseUrl", () => {
@@ -206,5 +309,64 @@ describe("isHnsVerifierConfigured", () => {
 
   test("returns true when configured", () => {
     expect(isHnsVerifierConfigured({ HNS_VERIFIER_BASE_URL: "http://hns.test" } as any)).toBe(true)
+  })
+})
+
+describe("inspectHnsRoot", () => {
+  test("rejects malformed root labels before calling the verifier", async () => {
+    const originalFetch = globalThis.fetch
+    let called = false
+    globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
+      called = true
+      return originalFetch(...args)
+    }) as typeof fetch
+
+    try {
+      try {
+        await inspectHnsRoot({
+          HNS_VERIFIER_BASE_URL: "http://hns.test",
+        } as any, {
+          rootLabel: "bad.root",
+        })
+        throw new Error("expected inspectHnsRoot to reject")
+      } catch (error) {
+        expect(error).toMatchObject({
+          status: 400,
+          code: "bad_request",
+        })
+      }
+      expect(called).toBe(false)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("requires a verifier auth token in production", async () => {
+    const originalFetch = globalThis.fetch
+    let called = false
+    globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
+      called = true
+      return originalFetch(...args)
+    }) as typeof fetch
+
+    try {
+      try {
+        await inspectHnsRoot({
+          ENVIRONMENT: "production",
+          HNS_VERIFIER_BASE_URL: "http://hns.test",
+        } as any, {
+          rootLabel: "pirate",
+        })
+        throw new Error("expected inspectHnsRoot to reject")
+      } catch (error) {
+        expect(error).toMatchObject({
+          status: 502,
+          code: "provider_unavailable",
+        })
+      }
+      expect(called).toBe(false)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 })

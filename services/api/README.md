@@ -203,6 +203,17 @@ The script reads:
 
 from `.dev.vars` or the current shell environment.
 
+## JWT-Based Upstream Auth
+
+`jwt_based_auth` is a service-to-service exchange path. In staging and production it must only trust an environment-specific issuer and audience, with `AUTH_UPSTREAM_JWT_SHARED_SECRET` stored as a secret outside `wrangler.jsonc`.
+
+Production currently expects:
+
+- `AUTH_UPSTREAM_JWT_ISSUER=pirate-production-upstream`
+- `AUTH_UPSTREAM_JWT_AUDIENCE=api-core`
+
+Rotate the upstream shared secret through the secret manager, and do not reuse development or staging issuers/secrets in production.
+
 ## Pirate Session JWT
 
 Pirate bearer tokens are signed with `RS256`.

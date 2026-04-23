@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { hasUniqueConstraintName, isMissingColumnError } from "./auth-db-query-helpers"
+import { hasUniqueConstraintName, isMissingColumnError, normalizeControlPlaneDbUrl } from "./auth-db-query-helpers"
 
 describe("isMissingColumnError", () => {
   test("recognizes PostgreSQL undefined-column messages without an exposed code", () => {
@@ -29,5 +29,18 @@ describe("hasUniqueConstraintName", () => {
     const error = new Error('duplicate key value violates unique constraint "idx_wallet_attachments_active_primary"')
 
     expect(hasUniqueConstraintName(error, "idx_wallet_attachments_active_primary")).toBe(true)
+  })
+})
+
+describe("normalizeControlPlaneDbUrl", () => {
+  test("preserves Postgres TLS parameters", () => {
+    const url = "postgresql://control_plane_api_rw:secret@example.neon.tech/pirate?sslmode=require&channel_binding=require"
+
+    expect(normalizeControlPlaneDbUrl(url)).toBe(url)
+  })
+
+  test("strips libsql-unsupported TLS parameters from non-Postgres URLs", () => {
+    expect(normalizeControlPlaneDbUrl("libsql://example.turso.io?sslmode=require&channel_binding=require&foo=bar"))
+      .toBe("libsql://example.turso.io?foo=bar")
   })
 })

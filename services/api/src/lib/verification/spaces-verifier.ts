@@ -100,6 +100,10 @@ function requireSpacesVerifierBaseUrl(env: Env): string {
   return baseUrl
 }
 
+function isProductionEnvironment(env: Env): boolean {
+  return String(env.ENVIRONMENT || "").trim().toLowerCase() === "production"
+}
+
 function getSpacesChallengeDomain(env: Env): string {
   return String(env.SPACES_VERIFIER_CHALLENGE_DOMAIN || "").trim() || "pirate.sc"
 }
@@ -132,6 +136,9 @@ async function spacesVerifierRequest<T>(
 ): Promise<T> {
   const baseUrl = requireSpacesVerifierBaseUrl(env)
   const authToken = String(env.SPACES_VERIFIER_AUTH_TOKEN || "").trim()
+  if (!authToken && isProductionEnvironment(env)) {
+    throw providerUnavailable("Spaces verifier auth token is not configured")
+  }
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), SPACES_VERIFIER_TIMEOUT_MS)
 
@@ -219,6 +226,7 @@ export async function verifySpacesFabricPublish(
     freedomUrl: string
   },
 ): Promise<SpacesPublishVerification> {
+  assertSpacesRootLabel(input.rootLabel)
   const result = await spacesVerifierRequest<SpacesVerifyPublishResponse>(env, {
     path: "/verify-publish",
     method: "POST",
@@ -233,6 +241,17 @@ export async function verifySpacesFabricPublish(
 
   if (!("fabric_publish_verified" in result)) {
     throw internalError("Spaces verifier publish response missing fabric_publish_verified")
+  }
+
+  if (
+    result.fabric_publish_verified === true
+    && (
+      result.root_key_proof_verified !== true
+      || result.web_target_verified !== true
+      || result.freedom_target_verified !== true
+    )
+  ) {
+    throw providerUnavailable("Spaces verifier publish response was internally inconsistent")
   }
 
   return {

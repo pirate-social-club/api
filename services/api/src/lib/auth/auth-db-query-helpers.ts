@@ -15,8 +15,17 @@ export function requireControlPlaneDbUrl(env: Env): string {
 
 const UNSUPPORTED_LIBSQL_URL_PARAMS = ["channel_binding", "sslmode"] as const
 
+function isPostgresUrl(value: string): boolean {
+  const normalized = value.trim().toLowerCase()
+  return normalized.startsWith("postgres://") || normalized.startsWith("postgresql://")
+}
+
 export function normalizeControlPlaneDbUrl(rawUrl: string): string {
   if (!rawUrl) {
+    return rawUrl
+  }
+
+  if (isPostgresUrl(rawUrl)) {
     return rawUrl
   }
 
