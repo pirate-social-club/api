@@ -266,6 +266,7 @@ describe("Very provider adapter", () => {
     const responses = [
       { isValid: true, pseudonym: "ver_test" },
       { is_valid: true, pseudonym: "ver_test" },
+      { result: true, pseudonym: "ver_test" },
       { result: { valid: true, pseudonym: "ver_test" } },
       { data: { verified: true, pseudonym: "ver_test" } },
     ]
