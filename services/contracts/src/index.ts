@@ -527,7 +527,6 @@ export type Community = {
   community_stage?: "initial";
   member_count?: number | null;
   qualified_member_count?: number | null;
-  follower_count?: number | null;
   stage_entered_at?: string | null;
   governance_mode: "centralized" | "multisig" | "majeur";
   governance_backend?: CommunityGovernanceBackend | null;
@@ -758,6 +757,12 @@ export type CommunityPurchaseSettlementFailure = {
 export type MembershipResult = {
   community_id: string;
   status: "joined" | "requested" | "left";
+};
+
+export type CommunityFollowResponse = {
+  community_id: string;
+  following: boolean;
+  follower_count?: number | null;
 };
 
 export type Job = {
@@ -1302,12 +1307,6 @@ export type CommunityPreview = {
   viewer_membership_status?: "member" | "not_member" | "banned" | null;
   viewer_following?: boolean | null;
   created_at: string;
-};
-
-export type CommunityFollowResponse = {
-  community_id: string;
-  following: boolean;
-  follower_count?: number | null;
 };
 
 export type JoinEligibility = {
@@ -2457,6 +2456,7 @@ export const apiRoutes = {
   communityPurchaseQuotes: (communityId: string) => `/communities/${communityId}/purchase-quotes`,
   communityPurchaseSettlements: (communityId: string) => `/communities/${communityId}/purchase-settlements`,
   communityPurchaseSettlementFailures: (communityId: string) => `/communities/${communityId}/purchase-settlements/fail`,
+  communityFollow: (communityId: string) => `/communities/${communityId}/follow`,
   communityPosts: (communityId: string) => `/communities/${communityId}/posts`,
   communityPostComments: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/comments`,
   communityPostReports: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/reports`,
@@ -2465,7 +2465,6 @@ export const apiRoutes = {
   communityModerationCase: (communityId: string, moderationCaseId: string) => `/communities/${communityId}/moderation/cases/${moderationCaseId}`,
   communityModerationCaseActions: (communityId: string, moderationCaseId: string) => `/communities/${communityId}/moderation/cases/${moderationCaseId}/actions`,
   communityPreview: (communityId: string) => `/communities/${communityId}/preview`,
-  communityFollow: (communityId: string) => `/communities/${communityId}/follow`,
   communityJoinEligibility: (communityId: string) => `/communities/${communityId}/join-eligibility`,
   communitySongArtifactUploads: (communityId: string) => `/communities/${communityId}/song-artifact-uploads`,
   communitySongArtifactUploadContent: (communityId: string, songArtifactUploadId: string) => `/communities/${communityId}/song-artifact-uploads/${songArtifactUploadId}/content`,

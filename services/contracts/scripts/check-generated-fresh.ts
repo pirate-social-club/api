@@ -2,12 +2,13 @@ import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { resolveCoreRepoRoot } from "./core-paths.js"
 
 const scriptDir = dirname(fileURLToPath(import.meta.url))
 const contractsDir = resolve(scriptDir, "..")
 const repoRoot = resolve(contractsDir, "..", "..")
-const workspaceRoot = resolve(repoRoot, "..")
-const generatorPath = resolve(workspaceRoot, "specs/api/scripts/generate-api-contracts.ts")
+const coreRepoRoot = resolveCoreRepoRoot(repoRoot)
+const generatorPath = resolve(coreRepoRoot, "specs/api/scripts/generate-api-contracts.ts")
 const generatedFile = resolve(contractsDir, "src/index.ts")
 
 async function main() {
@@ -17,7 +18,7 @@ async function main() {
   try {
     const proc = Bun.spawn({
       cmd: ["bun", generatorPath],
-      cwd: workspaceRoot,
+      cwd: coreRepoRoot,
       env: {
         ...process.env,
         API_CONTRACTS_OUTPUT_FILE: tempOutput,

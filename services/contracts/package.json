@@ -8,7 +8,7 @@
   },
   "types": "./src/index.ts",
   "scripts": {
-    "generate": "cd ../../.. && API_CONTRACTS_OUTPUT_FILE=pirate-api/services/contracts/src/index.ts bun specs/api/scripts/generate-api-contracts.ts",
+    "generate": "bun run scripts/generate-from-core.ts",
     "check:fresh": "bun run scripts/check-generated-fresh.ts",
     "check": "tsc --noEmit"
   },
