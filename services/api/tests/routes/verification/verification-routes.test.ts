@@ -387,7 +387,9 @@ describe("verification routes", () => {
 
     const session = await exchangeJwt(ctx.env, "verification-very-user")
 
+    let verifierCalls = 0
     await withFetchMock(async (input, init) => {
+      verifierCalls += 1
       const url = typeof input === "string" ? input : input.toString()
       expect(url).toBe("https://very.test/api/v1/verify")
       expect(init?.method).toBe("POST")
@@ -428,6 +430,7 @@ describe("verification routes", () => {
       expect(widgetVerification.status).toBe(200)
       const widgetVerificationBody = await json(widgetVerification) as { status: string }
       expect(widgetVerificationBody.status).toBe("valid")
+      expect(verifierCalls).toBe(0)
 
       const completedVerification = await requestJson(
         `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/complete`,
@@ -446,6 +449,7 @@ describe("verification routes", () => {
       expect(completedBody.status).toBe("verified")
       expect(typeof completedBody.proof_hash).toBe("string")
       expect(typeof completedBody.attestation_id).toBe("string")
+      expect(verifierCalls).toBe(1)
     })
   })
 })

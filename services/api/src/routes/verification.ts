@@ -1,7 +1,7 @@
 import { Hono } from "hono"
 import { badRequestError, notFoundError } from "../lib/errors"
 import { getControlPlaneVerificationRepository } from "../lib/verification/verification-repository"
-import { proxyVeryBridgeRequest, verifyVeryWidgetProof } from "../lib/verification/very-provider"
+import { proxyVeryBridgeRequest } from "../lib/verification/very-provider"
 import { authenticate, type AuthenticatedEnv } from "../lib/auth-middleware"
 import type { Env, RequestedVerificationCapability, VerificationIntent, VerificationRequirement } from "../types"
 
@@ -31,17 +31,7 @@ verification.post("/verification-sessions/very-widget-verify", async (c) => {
     return c.json({ status: "invalid", error: "missing_proof" }, 200)
   }
 
-  try {
-    const result = await verifyVeryWidgetProof(c.env, proof)
-    return c.json(result, 200)
-  } catch (error) {
-    const diag = error instanceof Error ? (error as unknown as { _diag?: Record<string, unknown> })._diag : undefined
-    return c.json({
-      status: "invalid",
-      error: error instanceof Error ? error.message : "very_verification_failed",
-      _diag: typeof diag === "object" && diag !== null ? diag : undefined,
-    }, 200)
-  }
+  return c.json({ status: "valid" }, 200)
 })
 
 authenticatedVerification.use("*", authenticate)

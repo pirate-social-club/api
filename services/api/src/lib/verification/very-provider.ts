@@ -483,30 +483,6 @@ export function getVeryProvider(env: Env): VeryProvider {
   }
 }
 
-type VeryWidgetVerifyResult = {
-  status: "valid" | "pending" | "expired" | "invalid"
-  error?: string
-  _diag?: Record<string, unknown>
-}
-
-export async function verifyVeryWidgetProof(env: Env, proof: string): Promise<VeryWidgetVerifyResult> {
-  const provider = getVeryProvider(env)
-  const outcome = await provider.getSessionOutcome({
-    upstreamSessionRef: "very-widget",
-    providerPayloadRef: proof,
-  })
-  switch (outcome.status) {
-    case "verified":
-      return { status: "valid" }
-    case "pending":
-      return { status: "pending", _diag: outcome._diag }
-    case "expired":
-      return { status: "expired", _diag: outcome._diag }
-    case "failed":
-      return { status: "invalid", error: outcome.failureReason, _diag: outcome._diag ?? { outcomeStatus: outcome.status, failureReason: outcome.failureReason } }
-  }
-}
-
 export function setVeryProviderForTests(override: VeryProvider | null): void {
   testOverride = override
 }
