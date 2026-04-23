@@ -1,6 +1,7 @@
 import type { Client, InStatement } from "../sql-client"
 import { badRequestError, eligibilityFailed, internalError, providerUnavailable } from "../errors"
 import { makeId } from "../helpers"
+import { sha256Hex } from "../crypto"
 import {
   getUserRow,
 } from "../auth/auth-db-queries"
@@ -12,7 +13,7 @@ import type {
   VerificationSessionRow,
 } from "../auth/auth-db-rows"
 import type { VerySessionOutcome } from "./very-provider"
-import { getVeryProvider } from "./very-provider"
+import { buildVerySessionBinding, getVeryProvider, VERY_UNIQUE_HUMAN_DOMAIN } from "./very-provider"
 import type { SelfSessionOutcome } from "./self-provider"
 import { canonicalizeRequestedCapabilities, getSelfProvider, normalizeVerificationRequirements } from "./self-provider"
 import { normalizeIdentityCountryCode } from "../identity/country-codes"
@@ -51,10 +52,6 @@ function parseVerificationRequirements(raw: string | null | undefined): Verifica
   } catch {
     return []
   }
-}
-
-function hasSelfOfacRequirement(verificationRequirements: VerificationRequirement[]): boolean {
-  return verificationRequirements.some((requirement) => requirement.proof_type === "sanctions_clear")
 }
 
 function resolveMinimumAgeToMint(
@@ -113,11 +110,13 @@ export async function startVerificationSession(
     }
     const provider = getVeryProvider(env)
     const result = await provider.startSession({
+      verificationSessionId,
       userId: input.userId,
       requestedCapabilities: requestedCapabilities.filter((c): c is "unique_human" => c === "unique_human"),
       walletAttachmentId: input.walletAttachmentId ?? null,
       verificationIntent: input.verificationIntent ?? null,
       policyId: input.policyId ?? null,
+      challengeExpiresAt: expiresAt,
       publicOrigin: input.publicOrigin ?? null,
     })
     upstreamSessionRef = result.upstreamSessionRef
@@ -341,6 +340,10 @@ async function completeVerySession(
     outcome = await provider.getSessionOutcome({
       upstreamSessionRef: row.upstream_session_ref,
       providerPayloadRef,
+      expectedBinding: buildVerySessionBinding({
+        verificationSessionId: input.verificationSessionId,
+        challengeExpiresAt: row.expires_at ?? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      }),
     })
   } catch (error) {
     const details = providerErrorDetails(error)
@@ -453,9 +456,6 @@ async function completeSelfSession(
       ) {
         missingClaims.push(`minimum_age:${minimumAge}`)
       }
-      if (requirement.proof_type === "sanctions_clear" && outcome.claims.ofac_clear !== true) {
-        missingClaims.push("sanctions_clear")
-      }
     }
     if (requestedCapabilities.includes("nationality") && !outcome.claims.nationality) {
       missingClaims.push("nationality")
@@ -502,6 +502,60 @@ async function completeSelfSession(
   return serializeVerificationSession({ row, attestationRows: [] })
 }
 
+type IdentityNullifierInput = {
+  provider: "self" | "very"
+  mechanism: "zk-nullifier" | "palm-nullifier"
+  nullifierHash: string
+}
+
+function getRecordString(record: Record<string, unknown> | null | undefined, keys: string[]): string | null {
+  if (!record) return null
+  for (const key of keys) {
+    const value = record[key]
+    if (typeof value === "string" && value.trim()) {
+      return value.trim()
+    }
+  }
+  return null
+}
+
+function normalizeHashLike(value: string): string | null {
+  const trimmed = value.trim()
+  return /^[0-9a-f]{64}$/iu.test(trimmed) ? trimmed.toLowerCase() : null
+}
+
+async function resolveIdentityNullifier(input: {
+  row: VerificationSessionRow
+  selfClaims?: { nullifier?: string | null } | null
+  attestationData?: Record<string, unknown>
+}): Promise<IdentityNullifierInput> {
+  if (input.row.provider === "self") {
+    const nullifier = input.selfClaims?.nullifier?.trim() ?? ""
+    if (!nullifier) {
+      throw providerUnavailable("Self verification did not return a stable nullifier")
+    }
+    return {
+      provider: "self",
+      mechanism: "zk-nullifier",
+      nullifierHash: normalizeHashLike(nullifier) ?? await sha256Hex(`self:zk-nullifier:${nullifier}`),
+    }
+  }
+
+  if (input.row.provider === "very") {
+    const raw = getRecordString(input.attestationData, ["nullifier_hash", "nullifierHash", "nullifier"])
+    if (!raw) {
+      throw providerUnavailable("Very verification did not return a stable nullifier")
+    }
+    return {
+      provider: "very",
+      mechanism: "palm-nullifier",
+      nullifierHash: normalizeHashLike(raw) ?? await sha256Hex(`${VERY_UNIQUE_HUMAN_DOMAIN}:palm-nullifier:${raw}`),
+    }
+  }
+
+  throw internalError("Unsupported identity nullifier provider")
+}
+
 async function finalizeVerification(
   client: Client,
   row: VerificationSessionRow,
@@ -514,7 +568,7 @@ async function finalizeVerification(
   },
   requestedCapabilities?: RequestedVerificationCapability[] | null,
   verificationRequirements?: VerificationRequirement[] | null,
-  selfClaims?: { age_over_18: boolean; minimum_age?: number | null; nationality: string | null; gender: "M" | "F" | null; ofac_clear?: boolean | null } | null,
+  selfClaims?: { age_over_18: boolean; minimum_age?: number | null; nationality: string | null; gender: "M" | "F" | null; ofac_clear?: boolean | null; nullifier?: string | null } | null,
   attestationData?: Record<string, unknown>,
 ): Promise<VerificationSession> {
   const existingAttestations = await getAttestationsBySourceSessionId(client, input.verificationSessionId, input.userId)
@@ -534,10 +588,27 @@ async function finalizeVerification(
 
   const capsToMint = requestedCapabilities ?? ["unique_human"]
   const minimumAgeToMint = resolveMinimumAgeToMint(capsToMint, verificationRequirements ?? [], selfClaims)
-  const shouldMintSelfOfac = row.provider === "self"
-    && hasSelfOfacRequirement(verificationRequirements ?? [])
-    && selfClaims?.ofac_clear === true
+  const identityNullifier = await resolveIdentityNullifier({ row, selfClaims, attestationData })
+  const activeNullifier = await client.execute({
+    sql: `
+      SELECT user_id
+      FROM identity_nullifiers
+      WHERE provider = ?1
+        AND mechanism = ?2
+        AND nullifier_hash = ?3
+        AND status = 'active'
+      LIMIT 1
+    `,
+    args: [identityNullifier.provider, identityNullifier.mechanism, identityNullifier.nullifierHash],
+  })
+  const activeNullifierUserId = typeof activeNullifier.rows[0]?.user_id === "string"
+    ? activeNullifier.rows[0].user_id
+    : null
+  if (activeNullifierUserId && activeNullifierUserId !== input.userId) {
+    throw eligibilityFailed("Identity proof is already linked to another user")
+  }
   const attestationInserts: InStatement[] = []
+  const uniqueHumanAttestationId = makeId("att")
 
   capabilities.unique_human = {
     state: "verified",
@@ -553,7 +624,7 @@ async function finalizeVerification(
         capability_key, status, value_json, verified_at, expires_at, revoked_at, created_at, updated_at
       ) VALUES (?1, ?2, ?3, ?4, 'unique_human', 'unique_human', 'accepted', ?5, ?6, ?7, NULL, ?6, ?6)
     `,
-    args: [makeId("att"), input.userId, input.verificationSessionId, row.provider, JSON.stringify({ state: "verified" }), updatedAt, expiresAt],
+    args: [uniqueHumanAttestationId, input.userId, input.verificationSessionId, row.provider, JSON.stringify({ state: "verified" }), updatedAt, expiresAt],
   })
 
   if (capsToMint.includes("age_over_18") && row.provider === "self") {
@@ -637,35 +708,29 @@ async function finalizeVerification(
     })
   }
 
-  if (shouldMintSelfOfac) {
-    capabilities.sanctions_clear = {
-      state: "verified",
-      provider: "self",
-      proof_type: "sanctions_clear",
-      mechanism: "self_ofac",
-      verified_at: updatedAt,
-    }
+  const attestationProofHash = typeof attestationData?.proof_hash === "string" ? attestationData.proof_hash : null
+  const resultRef = input.proofHash ?? attestationProofHash ?? null
+  if (!activeNullifierUserId) {
     attestationInserts.push({
       sql: `
-        INSERT INTO user_attestations (
-          user_attestation_id, user_id, source_verification_session_id, provider, attestation_type,
-          capability_key, status, value_json, verified_at, expires_at, revoked_at, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, 'sanctions_clear', 'sanctions_clear', 'accepted', ?5, ?6, ?7, NULL, ?6, ?6)
+        INSERT INTO identity_nullifiers (
+          identity_nullifier_id, user_id, provider, mechanism, nullifier_hash,
+          source_verification_session_id, source_user_attestation_id, status,
+          first_seen_at, revoked_at, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'active', ?8, NULL, ?8, ?8)
       `,
       args: [
-        makeId("att"),
+        makeId("nul"),
         input.userId,
+        identityNullifier.provider,
+        identityNullifier.mechanism,
+        identityNullifier.nullifierHash,
         input.verificationSessionId,
-        row.provider,
-        JSON.stringify({ state: "verified", mechanism: "self_ofac" }),
+        uniqueHumanAttestationId,
         updatedAt,
-        expiresAt,
       ],
     })
   }
-
-  const attestationProofHash = typeof attestationData?.proof_hash === "string" ? attestationData.proof_hash : null
-  const resultRef = input.proofHash ?? attestationProofHash ?? null
 
   const batchStatements: InStatement[] = [
     {

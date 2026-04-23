@@ -99,7 +99,7 @@ export function buildVerifiedSelfProvider(upstreamSessionRef: string): SelfProvi
     }),
     getSessionOutcome: async () => ({
       status: "verified",
-      claims: { age_over_18: true, nationality: null, gender: null, ofac_clear: null },
+      claims: { age_over_18: true, nationality: null, gender: null, ofac_clear: null, nullifier: upstreamSessionRef },
     }),
   }
 }
@@ -183,6 +183,9 @@ export async function createControlPlaneTestClient(options?: {
     await applyLocalControlPlaneMigrations(storage)
   } else {
     await applySqlFile(client, resolveCoreRepoPath("db/control-plane/migrations/0001_control_plane_identity.sql", {
+      serviceRoot,
+    }))
+    await applySqlFile(client, resolveCoreRepoPath("db/control-plane/migrations/0054_control_plane_identity_nullifiers.sql", {
       serviceRoot,
     }))
   }

@@ -456,12 +456,10 @@ describe("community membership gate routes", () => {
       viewer_membership_status: string
     }
     expect(previewBody.membership_mode).toBe("gated")
-    expect(previewBody.membership_gate_summaries).toHaveLength(2)
+    expect(previewBody.membership_gate_summaries).toHaveLength(1)
     const nationalitySummary = previewBody.membership_gate_summaries.find((gate) => gate.gate_type === "nationality")
-    const sanctionsSummary = previewBody.membership_gate_summaries.find((gate) => gate.gate_type === "sanctions_clear")
     expect(nationalitySummary?.required_value).toBe("ARG")
     expect(nationalitySummary?.accepted_providers).toEqual(["self"])
-    expect(sanctionsSummary?.accepted_providers).toEqual(["self"])
     expect(previewBody.viewer_membership_status).toBe("member")
   })
 
@@ -547,12 +545,12 @@ describe("community membership gate routes", () => {
           session_id: "self-test-ref",
           user_id: "test",
           user_id_type: "uuid",
-          disclosures: { nationality: true, ofac: true },
+          disclosures: { nationality: true },
         },
       }),
       getSessionOutcome: async () => ({
         status: "verified",
-        claims: { age_over_18: true, nationality: "AR", gender: null, ofac_clear: true },
+        claims: { age_over_18: true, nationality: "AR", gender: null, ofac_clear: null, nullifier: "self-test-ref:ar-elig" },
       }),
     } satisfies SelfProvider)
     await completeNationalityVerification(ctx.env, joiner.accessToken)
@@ -607,12 +605,12 @@ describe("community membership gate routes", () => {
           session_id: "self-test-ref",
           user_id: "test",
           user_id_type: "uuid",
-          disclosures: { nationality: true, ofac: true },
+          disclosures: { nationality: true },
         },
       }),
       getSessionOutcome: async () => ({
         status: "verified",
-        claims: { age_over_18: true, nationality: "US", gender: null, ofac_clear: true },
+        claims: { age_over_18: true, nationality: "US", gender: null, ofac_clear: null, nullifier: "self-test-ref:us-elig" },
       }),
     } satisfies SelfProvider)
     await completeNationalityVerification(ctx.env, joiner.accessToken)
@@ -713,12 +711,12 @@ describe("community membership gate routes", () => {
           session_id: "self-test-ref",
           user_id: "test",
           user_id_type: "uuid",
-          disclosures: { nationality: true, ofac: true },
+          disclosures: { nationality: true },
         },
       }),
       getSessionOutcome: async () => ({
         status: "verified",
-        claims: { age_over_18: true, nationality: "AR", gender: null, ofac_clear: true },
+        claims: { age_over_18: true, nationality: "AR", gender: null, ofac_clear: null, nullifier: "self-test-ref:ar-join" },
       }),
     } satisfies SelfProvider)
     await completeNationalityVerification(ctx.env, joiner.accessToken)
@@ -776,12 +774,12 @@ describe("community membership gate routes", () => {
           session_id: "self-test-ref",
           user_id: "test",
           user_id_type: "uuid",
-          disclosures: { nationality: true, ofac: true },
+          disclosures: { nationality: true },
         },
       }),
       getSessionOutcome: async () => ({
         status: "verified",
-        claims: { age_over_18: true, nationality: "US", gender: null, ofac_clear: true },
+        claims: { age_over_18: true, nationality: "US", gender: null, ofac_clear: null, nullifier: "self-test-ref:us-join" },
       }),
     } satisfies SelfProvider)
     await completeNationalityVerification(ctx.env, joiner.accessToken)

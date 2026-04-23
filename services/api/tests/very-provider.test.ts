@@ -17,6 +17,21 @@ type TrackedFn = {
   calls: unknown[][]
 }
 
+function veryStartInput(
+  overrides: Partial<Parameters<VeryProvider["startSession"]>[0]> = {},
+): Parameters<VeryProvider["startSession"]>[0] {
+  return {
+    verificationSessionId: "ver_test",
+    challengeExpiresAt: "2099-01-01T00:00:00.000Z",
+    userId: "user-1",
+    requestedCapabilities: ["unique_human"],
+    walletAttachmentId: null,
+    verificationIntent: null,
+    policyId: null,
+    ...overrides,
+  }
+}
+
 function trackFn<T extends (...args: any[]) => Promise<unknown>>(fn: T): T & TrackedFn {
   const calls: unknown[][] = []
   const tracked = async (...args: unknown[]) => {
@@ -46,6 +61,12 @@ function createMockVeryProvider(overrides?: {
       type_id: "palm_scan",
       query: { session: "very-upstream-ref-123" },
       verify_url: "https://verify.very.org/session/very-upstream-ref-123",
+      session_binding: {
+        uniqueness_domain: "pirate-unique-human-v0",
+        binding_value: "ver_test",
+        binding_field: "pseudonym",
+        challenge_expires_at: "2099-01-01T00:00:00.000Z",
+      },
     },
     ...overrides?.startResult,
   }))
@@ -86,13 +107,7 @@ describe("Very provider adapter", () => {
     } as any
     const provider = getVeryProvider(env)
 
-    const startResult = await provider.startSession({
-      userId: "user-1",
-      requestedCapabilities: ["unique_human"],
-      walletAttachmentId: null,
-      verificationIntent: null,
-      policyId: null,
-    })
+    const startResult = await provider.startSession(veryStartInput())
     expect(typeof startResult.upstreamSessionRef).toBe("string")
     expect(startResult.launch.app_id).toBe("test-app")
     expect(startResult.launch.verify_url).toBe("https://very.example.com/api/v1/verify")
@@ -111,26 +126,14 @@ describe("Very provider adapter", () => {
       VERY_API_URL: "https://very.example.com/api/v1/",
       VERY_APP_ID: "test-app",
     } as any)
-    const apiV1Result = await apiV1Provider.startSession({
-      userId: "user-1",
-      requestedCapabilities: ["unique_human"],
-      walletAttachmentId: null,
-      verificationIntent: null,
-      policyId: null,
-    })
+    const apiV1Result = await apiV1Provider.startSession(veryStartInput())
     expect(apiV1Result.launch.verify_url).toBe("https://very.example.com/api/v1/verify")
 
     const verifyProvider = getVeryProvider({
       VERY_API_URL: "https://very.example.com/api/v1/verify",
       VERY_APP_ID: "test-app",
     } as any)
-    const verifyResult = await verifyProvider.startSession({
-      userId: "user-1",
-      requestedCapabilities: ["unique_human"],
-      walletAttachmentId: null,
-      verificationIntent: null,
-      policyId: null,
-    })
+    const verifyResult = await verifyProvider.startSession(veryStartInput())
     expect(verifyResult.launch.verify_url).toBe("https://very.example.com/api/v1/verify")
   })
 
@@ -142,14 +145,9 @@ describe("Very provider adapter", () => {
     } as any
     const provider = getVeryProvider(env)
 
-    const startResult = await provider.startSession({
-      userId: "user-1",
-      requestedCapabilities: ["unique_human"],
-      walletAttachmentId: null,
-      verificationIntent: null,
-      policyId: null,
+    const startResult = await provider.startSession(veryStartInput({
       publicOrigin: "https://api.pirate.sc/some/path",
-    })
+    }))
 
     expect(startResult.launch.verify_url).toBe("https://api.pirate.sc/verification-sessions/very-widget-verify")
   })
@@ -163,14 +161,9 @@ describe("Very provider adapter", () => {
     } as any
     const provider = getVeryProvider(env)
 
-    const startResult = await provider.startSession({
-      userId: "user-1",
-      requestedCapabilities: ["unique_human"],
-      walletAttachmentId: null,
-      verificationIntent: null,
-      policyId: null,
+    const startResult = await provider.startSession(veryStartInput({
       publicOrigin: "http://127.0.0.1:8787",
-    })
+    }))
 
     expect(startResult.launch.verify_url).toBe("http://127.0.0.1:8787/verification-sessions/very-widget-verify")
   })
@@ -183,13 +176,9 @@ describe("Very provider adapter", () => {
     } as any
     const provider = getVeryProvider(env)
 
-    const startResult = await provider.startSession({
-      userId: "user-1",
-      requestedCapabilities: ["unique_human"],
-      walletAttachmentId: null,
+    const startResult = await provider.startSession(veryStartInput({
       verificationIntent: "community_creation",
-      policyId: null,
-    })
+    }))
     const query = startResult.launch.query as {
       conditions?: Array<{ value?: { from?: string; to?: string } }>
       options?: Record<string, unknown>
@@ -203,7 +192,14 @@ describe("Very provider adapter", () => {
     expect(upperBound).toBeGreaterThan(lowerBound)
     expect(upperBound).toBe(2_043_436_800)
     expect(Number(query.options?.expiredAtLowerBound)).toBeGreaterThan(0)
-    expect(query.options?.pseudonym).toBe("0")
+    expect(query.options?.externalNullifier).toBe("pirate-unique-human-v0")
+    expect(query.options?.pseudonym).toBe("ver_test")
+    expect(startResult.launch.session_binding).toEqual({
+      uniqueness_domain: "pirate-unique-human-v0",
+      binding_value: "ver_test",
+      binding_field: "pseudonym",
+      challenge_expires_at: "2099-01-01T00:00:00.000Z",
+    })
     expect(query.options ? "sessionId" in query.options : true).toBe(false)
   })
 
@@ -228,6 +224,9 @@ describe("Very provider adapter", () => {
         status: "valid",
         data: {
           attestation_id: "very-att-1",
+          externalNullifier: "pirate-unique-human-v0",
+          pseudonym: "ver_test",
+          nullifier: "very-nullifier-1",
         },
       }), {
         status: 200,
@@ -239,6 +238,12 @@ describe("Very provider adapter", () => {
       const outcome = await provider.getSessionOutcome({
         upstreamSessionRef: "very-upstream-ref-123",
         providerPayloadRef: "proof-payload-123",
+        expectedBinding: {
+          uniqueness_domain: "pirate-unique-human-v0",
+          binding_value: "ver_test",
+          binding_field: "pseudonym",
+          challenge_expires_at: "2099-01-01T00:00:00.000Z",
+        },
       })
       expect(outcome.status).toBe("verified")
       if (outcome.status === "verified") {
@@ -259,11 +264,10 @@ describe("Very provider adapter", () => {
     const provider = getVeryProvider(env)
 
     const responses = [
-      { isValid: true },
-      { is_valid: true },
-      { result: true },
-      { result: { valid: true } },
-      { data: { verified: true } },
+      { isValid: true, pseudonym: "ver_test" },
+      { is_valid: true, pseudonym: "ver_test" },
+      { result: { valid: true, pseudonym: "ver_test" } },
+      { data: { verified: true, pseudonym: "ver_test" } },
     ]
     const originalFetch = globalThis.fetch
     let responseIndex = 0
@@ -280,6 +284,12 @@ describe("Very provider adapter", () => {
         const outcome = await provider.getSessionOutcome({
           upstreamSessionRef: "very-upstream-ref-123",
           providerPayloadRef: `proof-for-${Object.keys(response)[0]}`,
+          expectedBinding: {
+            uniqueness_domain: "pirate-unique-human-v0",
+            binding_value: "ver_test",
+            binding_field: "pseudonym",
+            challenge_expires_at: "2099-01-01T00:00:00.000Z",
+          },
         })
         expect(outcome.status).toBe("verified")
       }
@@ -292,13 +302,7 @@ describe("Very provider adapter", () => {
 describe("Very provider mock integration", () => {
   test("startSession returns upstream ref and launch data", async () => {
     const provider = createMockVeryProvider()
-    const result = await provider.startSession({
-      userId: "user-1",
-      requestedCapabilities: ["unique_human"],
-      walletAttachmentId: null,
-      verificationIntent: null,
-      policyId: null,
-    })
+    const result = await provider.startSession(veryStartInput())
 
     expect(result.upstreamSessionRef).toBe("very-upstream-ref-123")
     expect(result.launch.app_id).toBe("test-app-id")
@@ -382,13 +386,12 @@ describe("Very provider mock integration", () => {
   test("startSession and getSessionOutcome are called with correct arguments", async () => {
     const provider = createMockVeryProvider()
 
-    await provider.startSession({
+    await provider.startSession(veryStartInput({
       userId: "user-abc",
-      requestedCapabilities: ["unique_human"],
       walletAttachmentId: "wallet-123",
       verificationIntent: "community_creation",
       policyId: "policy-1",
-    })
+    }))
 
     expect(provider.startSession.callCount).toBe(1)
     const startArgs = provider.startSession.calls[0][0] as any
@@ -418,13 +421,7 @@ describe("Very provider development fallback", () => {
       ENVIRONMENT: "development",
     } as any
     const provider = getVeryProvider(env)
-    const result = await provider.startSession({
-      userId: "user-1",
-      requestedCapabilities: ["unique_human"],
-      walletAttachmentId: null,
-      verificationIntent: null,
-      policyId: null,
-    })
+    const result = await provider.startSession(veryStartInput())
     expect(result.launch.verify_url).toBe("https://verify.very.org/api/v1/verify")
     expect(result.launch.app_id).toBe("fallback-app-id")
   })

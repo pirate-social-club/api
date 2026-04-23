@@ -1,11 +1,14 @@
 import { internalError, providerUnavailable } from "../errors"
 import { envFlag, makeId } from "../helpers"
 import { sha256Hex } from "../crypto"
-import type { Env, VerificationIntent, VeryWidgetLaunch } from "../../types"
+import type { Env, VeryWidgetLaunch } from "../../types"
 
 const VERY_TIMEOUT_MS = 15_000
 const VERY_BRIDGE_API_URL = "https://bridge.very.org/api/v1/"
 const VERY_VERIFY_API_URL = "https://verify.very.org/api/v1/verify"
+export const VERY_UNIQUE_HUMAN_DOMAIN = "pirate-unique-human-v0"
+
+type VerySessionBinding = VeryWidgetLaunch["session_binding"]
 
 export type VeryStartResult = {
   upstreamSessionRef: string
@@ -20,17 +23,20 @@ export type VerySessionOutcome =
 
 export interface VeryProvider {
   startSession(input: {
+    verificationSessionId: string
     userId: string
     requestedCapabilities: Array<"unique_human">
     walletAttachmentId: string | null
     verificationIntent: string | null
     policyId: string | null
+    challengeExpiresAt: string
     publicOrigin?: string | null
   }): Promise<VeryStartResult>
 
   getSessionOutcome(input: {
     upstreamSessionRef: string
     providerPayloadRef: string | null
+    expectedBinding?: VerySessionBinding | null
   }): Promise<VerySessionOutcome>
 }
 
@@ -211,37 +217,15 @@ function buildWidgetVerifyUrl(input: {
   return `${origin}/verification-sessions/very-widget-verify`
 }
 
-function buildExternalNullifier(input: {
-  verificationIntent: string | null
-  policyId: string | null
-  upstreamSessionRef: string
-  includeSessionId?: boolean
-}): string {
-  const intent = normalizeVerificationIntent(input.verificationIntent)
-  if (input.policyId) {
-    return `Pirate - ${intent} - ${input.policyId}`
-  }
-  if (input.includeSessionId === false) {
-    return `Pirate - ${intent}`
-  }
-  return `Pirate - ${intent} - ${input.upstreamSessionRef}`
-}
-
-function normalizeVerificationIntent(intent: string | null): string {
-  switch (intent as VerificationIntent | null) {
-    case "community_creation":
-      return "Community Creation"
-    case "community_join":
-      return "Community Join"
-    case "post_access_18_plus":
-      return "18+ Post Access"
-    case "commerce_pricing":
-      return "Commerce Pricing"
-    case "qualifier_disclosure":
-      return "Qualifier Disclosure"
-    case "profile_verification":
-    default:
-      return "Profile Verification"
+export function buildVerySessionBinding(input: {
+  verificationSessionId: string
+  challengeExpiresAt: string
+}): VerySessionBinding {
+  return {
+    uniqueness_domain: VERY_UNIQUE_HUMAN_DOMAIN,
+    binding_value: input.verificationSessionId,
+    binding_field: "pseudonym",
+    challenge_expires_at: input.challengeExpiresAt,
   }
 }
 
@@ -254,6 +238,50 @@ function getNestedBoolean(value: unknown, keys: string[]): boolean | null {
     if (typeof record[key] === "boolean") {
       return record[key]
     }
+  }
+  return null
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function getVeryResponseRecord(body: VeryVerifyResponse): Record<string, unknown> {
+  return {
+    ...(objectRecord(body.result) ?? {}),
+    ...(objectRecord(body.data) ?? {}),
+    ...body,
+  }
+}
+
+function getStringValue(record: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = record[key]
+    if (typeof value === "string" && value.trim()) {
+      return value.trim()
+    }
+  }
+  return null
+}
+
+function validateVeryBinding(input: {
+  body: VeryVerifyResponse
+  expectedBinding?: VerySessionBinding | null
+}): string | null {
+  const binding = input.expectedBinding
+  if (!binding) {
+    return null
+  }
+  const record = getVeryResponseRecord(input.body)
+  const actualBindingValue = getStringValue(record, [binding.binding_field ?? "pseudonym", "pseudonym", "challenge"])
+  if (actualBindingValue !== binding.binding_value) {
+    return "very_session_binding_mismatch"
+  }
+  const actualDomain = getStringValue(record, ["externalNullifier", "external_nullifier", "uniqueness_domain"])
+  if (actualDomain != null && actualDomain !== binding.uniqueness_domain) {
+    return "very_uniqueness_domain_mismatch"
   }
   return null
 }
@@ -333,7 +361,7 @@ function buildVeryQuery(input: {
   verificationIntent: string | null
   policyId: string | null
   upstreamSessionRef: string
-  includeSessionId?: boolean
+  sessionBinding: VerySessionBinding
 }): Record<string, unknown> {
   const nowSeconds = Math.floor(Date.now() / 1000)
   const conditionRangeStartSeconds = 0
@@ -342,14 +370,9 @@ function buildVeryQuery(input: {
     // Keep the proof fresh for the verifier. Using 0 here regressed local
     // widget proof generation back into the "generated proof is null" state.
     expiredAtLowerBound: String(nowSeconds),
-    externalNullifier: buildExternalNullifier({ ...input, includeSessionId: undefined }),
+    externalNullifier: input.sessionBinding.uniqueness_domain,
     equalCheckId: "0",
-    pseudonym: input.includeSessionId === false
-      ? (input.walletAttachmentId ?? "0")
-      : (input.walletAttachmentId ?? input.userId),
-  }
-  if (input.includeSessionId !== false) {
-    options.sessionId = input.upstreamSessionRef
+    pseudonym: input.sessionBinding.binding_value,
   }
   return {
     conditions: [
@@ -370,6 +393,7 @@ async function verifyVeryPayload(input: {
   verifyUrl: string
   providerPayloadRef: string
   upstreamSessionRef: string
+  expectedBinding?: VerySessionBinding | null
 }): Promise<VerySessionOutcome> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), VERY_TIMEOUT_MS)
@@ -425,12 +449,22 @@ async function verifyVeryPayload(input: {
       || status === "success"
       || status === "completed"
     ) {
+      const bindingFailure = validateVeryBinding({ body, expectedBinding: input.expectedBinding })
+      if (bindingFailure) {
+        return { status: "failed", failureReason: bindingFailure }
+      }
       return {
         status: "verified",
         attestationData: {
           proof_hash: proofHash,
           provider_session_ref: input.upstreamSessionRef,
           provider_status: status || "verified",
+          ...(input.expectedBinding
+            ? {
+              uniqueness_domain: input.expectedBinding.uniqueness_domain,
+              [input.expectedBinding.binding_field ?? "pseudonym"]: input.expectedBinding.binding_value,
+            }
+            : {}),
           ...(body.data && typeof body.data === "object" ? body.data : {}),
         },
       }
@@ -478,6 +512,10 @@ export function getVeryProvider(env: Env): VeryProvider {
   return {
     async startSession(input) {
       const upstreamSessionRef = makeId("vs")
+      const sessionBinding = buildVerySessionBinding({
+        verificationSessionId: input.verificationSessionId,
+        challengeExpiresAt: input.challengeExpiresAt,
+      })
       return {
         upstreamSessionRef,
         launch: {
@@ -490,13 +528,14 @@ export function getVeryProvider(env: Env): VeryProvider {
             verificationIntent: input.verificationIntent,
             policyId: input.policyId,
             upstreamSessionRef,
-            includeSessionId: false,
+            sessionBinding,
           }),
           verify_url: buildWidgetVerifyUrl({
             env,
             publicOrigin: input.publicOrigin ?? null,
             providerVerifyUrl: verifyUrl,
           }),
+          session_binding: sessionBinding,
         },
       }
     },
@@ -514,6 +553,9 @@ export function getVeryProvider(env: Env): VeryProvider {
             proof_hash: await sha256Hex(input.providerPayloadRef.trim()),
             provider_session_ref: input.upstreamSessionRef,
             provider_status: "local_widget_verified",
+            uniqueness_domain: input.expectedBinding?.uniqueness_domain ?? VERY_UNIQUE_HUMAN_DOMAIN,
+            pseudonym: input.expectedBinding?.binding_value ?? input.upstreamSessionRef,
+            nullifier_hash: await sha256Hex(`${VERY_UNIQUE_HUMAN_DOMAIN}:${input.providerPayloadRef.trim()}`),
           },
         }
       }
@@ -522,12 +564,14 @@ export function getVeryProvider(env: Env): VeryProvider {
           verifyUrl,
           providerPayloadRef: input.providerPayloadRef.trim(),
           upstreamSessionRef: input.upstreamSessionRef,
+          expectedBinding: input.expectedBinding ?? null,
         })
       } catch (error) {
         if (
           !shouldTrustBridgeCompletionOnVerifier5xx(env)
           || !isVerifier5xx(error)
           || !isVeryBridgeSessionId(input.upstreamSessionRef)
+          || input.expectedBinding
         ) {
           throw error
         }

@@ -55,14 +55,9 @@ function normalizeGenderClaim(value: unknown): "M" | "F" | null {
   return null
 }
 
-function hasSelfOfacRequirement(verificationRequirements: VerificationRequirement[]): boolean {
-  return verificationRequirements.some((requirement) => requirement.proof_type === "sanctions_clear")
-}
-
 function encodeDevStubSessionRef(requestedCapabilities: RequestedVerificationCapability[], verificationRequirements: VerificationRequirement[]): string {
   const minimumAge = resolveRequestedMinimumAge(requestedCapabilities, verificationRequirements) ?? ""
-  const ofac = hasSelfOfacRequirement(verificationRequirements) ? "ofac" : ""
-  return `${SELF_DEV_STUB_REF_PREFIX}:${encodeURIComponent(requestedCapabilities.join(","))}:${minimumAge}:${ofac}:${makeId("ss")}`
+  return `${SELF_DEV_STUB_REF_PREFIX}:${encodeURIComponent(requestedCapabilities.join(","))}:${minimumAge}:${makeId("ss")}`
 }
 
 function decodeDevStubCapabilities(upstreamSessionRef: string): Set<RequestedVerificationCapability> {
@@ -88,15 +83,6 @@ function decodeDevStubMinimumAge(upstreamSessionRef: string): number | null {
   const [, , rawMinimumAge] = upstreamSessionRef.split(":", 4)
   const minimumAge = Number(rawMinimumAge)
   return Number.isInteger(minimumAge) && minimumAge > 0 ? minimumAge : null
-}
-
-function decodeDevStubOfac(upstreamSessionRef: string): boolean {
-  if (!upstreamSessionRef.startsWith(`${SELF_DEV_STUB_REF_PREFIX}:`)) {
-    return false
-  }
-
-  const [, , , rawOfac] = upstreamSessionRef.split(":", 5)
-  return rawOfac === "ofac"
 }
 
 function encodeSelfSdkSessionRef(input: Omit<SelfSdkSessionRef, "kind">): string {
@@ -160,9 +146,6 @@ export function mapCapabilitiesToDisclosures(
   if (set.has("gender")) {
     disclosures.gender = true
   }
-  if (hasSelfOfacRequirement(verificationRequirements)) {
-    disclosures.ofac = true
-  }
   return disclosures
 }
 
@@ -174,8 +157,7 @@ export function normalizeVerificationRequirements(
   const normalized: VerificationRequirement[] = []
   for (const requirement of requirements ?? []) {
     if (requirement?.proof_type === "sanctions_clear") {
-      normalized.push({ proof_type: "sanctions_clear" })
-      continue
+      throw badRequestError("Self sanctions_clear verification is not supported")
     }
     if (requirement?.proof_type !== "minimum_age") {
       throw badRequestError(`Unsupported Self verification requirement: ${String(requirement?.proof_type ?? "unknown")}`)
@@ -220,6 +202,7 @@ export type SelfVerifiedClaims = {
   nationality: string | null
   gender: "M" | "F" | null
   ofac_clear: boolean | null
+  nullifier: string | null
 }
 
 export type SelfSessionOutcome =
@@ -278,7 +261,6 @@ function buildVerificationConfig(
   const minimumAge = resolveRequestedMinimumAge(capabilities, verificationRequirements)
   return {
     ...(minimumAge != null ? { minimumAge } : {}),
-    ...(hasSelfOfacRequirement(verificationRequirements) ? { ofac: true } : {}),
   }
 }
 
@@ -350,22 +332,22 @@ function parseSelfProofPayload(input: {
   }
 }
 
-function buildClaimsFromVerificationResult(result: VerificationResult, expectedConfig: VerificationConfig): SelfVerifiedClaims | null {
+function buildClaimsFromVerificationResult(result: VerificationResult): SelfVerifiedClaims | null {
   if (result.isValidDetails.isValid !== true) {
     return null
   }
   const disclosures = result.discloseOutput as unknown as Record<string, unknown>
   const minimumAge = parseMinimumAgeDisclosure(disclosures)
-  const ofacFlags = Array.isArray(result.discloseOutput.ofac)
-    ? result.discloseOutput.ofac.filter((value): value is boolean => typeof value === "boolean")
-    : []
-  const isSanctioned = result.isValidDetails.isOfacValid === true || ofacFlags.some(Boolean)
+  const nullifier = typeof disclosures.nullifier === "string" && disclosures.nullifier.trim()
+    ? disclosures.nullifier.trim()
+    : null
   return {
     age_over_18: minimumAge != null ? minimumAge >= 18 : Boolean(result.discloseOutput.dateOfBirth),
     minimum_age: minimumAge,
     nationality: normalizeIdentityCountryCode(result.discloseOutput.nationality),
     gender: normalizeGenderClaim(result.discloseOutput.gender),
-    ofac_clear: expectedConfig.ofac === true ? !isSanctioned : null,
+    ofac_clear: null,
+    nullifier,
   }
 }
 
@@ -452,7 +434,8 @@ export function getSelfProvider(env: Env): SelfProvider {
             minimum_age: minimumAge ?? (capabilities.has("age_over_18") ? 18 : null),
             nationality: capabilities.has("nationality") ? "USA" : null,
             gender: capabilities.has("gender") ? "F" : null,
-            ofac_clear: decodeDevStubOfac(input.upstreamSessionRef) ? true : null,
+            ofac_clear: null,
+            nullifier: input.upstreamSessionRef,
           },
         }
       }
@@ -485,7 +468,7 @@ export function getSelfProvider(env: Env): SelfProvider {
         ) {
           return { status: "failed", failureReason: "self_user_context_mismatch" }
         }
-        const claims = buildClaimsFromVerificationResult(result, sessionRef.verificationConfig)
+        const claims = buildClaimsFromVerificationResult(result)
         if (!claims) {
           return { status: "failed", failureReason: "self_proof_invalid" }
         }

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import app from "../../../src/index"
 import { json, createRouteTestContext, resetRuntimeCaches } from "../../helpers"
 import { setSelfProviderForTests } from "../../../src/lib/verification/self-provider"
+import { setVeryProviderForTests } from "../../../src/lib/verification/very-provider"
 import {
   exchangeJwt,
   requestJson,
@@ -64,7 +65,7 @@ describe("verification routes", () => {
       }),
       getSessionOutcome: async () => ({
         status: "verified",
-        claims: { age_over_18: true, nationality: null, gender: null, ofac_clear: null },
+        claims: { age_over_18: true, nationality: null, gender: null, ofac_clear: null, nullifier: "self-test-ref" },
       }),
     } satisfies import("../../../src/lib/verification/self-provider").SelfProvider)
 
@@ -93,11 +94,11 @@ describe("verification routes", () => {
     expect(completedBody.failure_reason).toBe("missing_required_claims:gender")
   })
 
-  test("self verification can require OFAC and mint sanctions_clear", async () => {
+  test("self verification rejects sanctions_clear requirements", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
 
-    const session = await exchangeJwt(ctx.env, "verification-self-ofac-user")
+    const session = await exchangeJwt(ctx.env, "verification-self-sanctions-user")
 
     const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
       provider: "self",
@@ -105,46 +106,9 @@ describe("verification routes", () => {
       verification_requirements: [{ proof_type: "sanctions_clear" }],
       verification_intent: "community_join",
     }, ctx.env, session.accessToken)
-    expect(createdVerification.status).toBe(201)
-    const createdBody = await json(createdVerification) as {
-      verification_session_id: string
-      requested_capabilities: string[]
-      launch?: { self_app?: { disclosures?: { nationality?: boolean; ofac?: boolean } } }
-    }
-    expect(createdBody.requested_capabilities).toEqual(["unique_human", "nationality"])
-    expect(createdBody.launch?.self_app?.disclosures?.nationality).toBe(true)
-    expect(createdBody.launch?.self_app?.disclosures?.ofac).toBe(true)
-
-    const completedVerification = await requestJson(
-      `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/complete`,
-      {},
-      ctx.env,
-      session.accessToken,
-    )
-    expect(completedVerification.status).toBe(200)
-    const completedBody = await json(completedVerification) as { status: string }
-    expect(completedBody.status).toBe("verified")
-
-    const me = await app.request("http://pirate.test/users/me", {
-      headers: { authorization: `Bearer ${session.accessToken}` },
-    }, ctx.env)
-    expect(me.status).toBe(200)
-    const meBody = await json(me) as {
-      verification_capabilities: {
-        nationality: { state: string; provider: string | null; value: string | null }
-        sanctions_clear: { state: string; provider: string | null; mechanism: string | null }
-      }
-    }
-    expect(meBody.verification_capabilities.nationality).toMatchObject({
-      state: "verified",
-      provider: "self",
-      value: "USA",
-    })
-    expect(meBody.verification_capabilities.sanctions_clear).toMatchObject({
-      state: "verified",
-      provider: "self",
-      mechanism: "self_ofac",
-    })
+    expect(createdVerification.status).toBe(400)
+    const body = await json(createdVerification) as { message: string }
+    expect(body.message).toContain("Self sanctions_clear verification is not supported")
   })
 
   test("self verification callback completes an SDK session payload", async () => {
@@ -163,7 +127,7 @@ describe("verification routes", () => {
           session_id: "self-callback-test-ref",
           user_id: "00000000-0000-4000-8000-000000000001",
           user_id_type: "uuid",
-          disclosures: { nationality: true, ofac: true },
+          disclosures: { nationality: true },
           version: 2,
         },
       }),
@@ -178,7 +142,8 @@ describe("verification routes", () => {
             minimum_age: null,
             nationality: "USA",
             gender: null,
-            ofac_clear: true,
+            ofac_clear: null,
+            nullifier: "self-callback-test-ref",
           },
         }
       },
@@ -187,7 +152,6 @@ describe("verification routes", () => {
     const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
       provider: "self",
       requested_capabilities: ["nationality"],
-      verification_requirements: [{ proof_type: "sanctions_clear" }],
       verification_intent: "community_join",
     }, ctx.env, session.accessToken)
     expect(createdVerification.status).toBe(201)
@@ -356,7 +320,7 @@ describe("verification routes", () => {
     })
   })
 
-  test("very completion trusts stored bridge completion when verifier returns 5xx", async () => {
+  test("very completion does not trust stored bridge completion when verifier cannot validate binding", async () => {
     const ctx = await createRouteTestContext({
       VERY_API_URL: "https://very.test",
       VERY_APP_ID: "very-app",
@@ -428,13 +392,13 @@ describe("verification routes", () => {
         ctx.env,
         session.accessToken,
       )
-      expect(completedVerification.status).toBe(200)
+      expect(completedVerification.status).toBe(502)
       const completedBody = await json(completedVerification) as {
-        status: string
-        proof_hash: string | null
+        code: string
+        message: string
       }
-      expect(completedBody.status).toBe("verified")
-      expect(typeof completedBody.proof_hash).toBe("string")
+      expect(completedBody.code).toBe("provider_unavailable")
+      expect(completedBody.message).toContain("status 500")
     })
   })
 
@@ -553,6 +517,7 @@ describe("verification routes", () => {
     const session = await exchangeJwt(ctx.env, "verification-very-user")
 
     let verifierCalls = 0
+    let expectedPseudonym = ""
     await withFetchMock(async (input, init) => {
       verifierCalls += 1
       const url = typeof input === "string" ? input : input.toString()
@@ -564,6 +529,9 @@ describe("verification routes", () => {
         status: "valid",
         data: {
           palm_scan: true,
+          externalNullifier: "pirate-unique-human-v0",
+          pseudonym: expectedPseudonym,
+          nullifier: "very-nullifier-route-1",
         },
       }), {
         status: 200,
@@ -579,8 +547,9 @@ describe("verification routes", () => {
         verification_session_id: string
         status: string
         provider_mode: string | null
-        launch?: { very_widget?: { verify_url?: string } }
+        launch?: { very_widget?: { verify_url?: string; session_binding?: { binding_value?: string } } }
       }
+      expectedPseudonym = createdBody.launch?.very_widget?.session_binding?.binding_value ?? ""
       expect(createdBody.status).toBe("pending")
       expect(createdBody.provider_mode).toBe("widget")
       expect(createdBody.launch?.very_widget?.verify_url).toBe("http://pirate.test/verification-sessions/very-widget-verify")
@@ -616,6 +585,73 @@ describe("verification routes", () => {
       expect(typeof completedBody.attestation_id).toBe("string")
       expect(verifierCalls).toBe(1)
     })
+  })
+
+  test("very verification rejects a reused active nullifier for another user", async () => {
+    const ctx = await createRouteTestContext({
+      VERY_APP_ID: "very-app",
+    })
+    cleanup = ctx.cleanup
+
+    setVeryProviderForTests({
+      startSession: async (input) => ({
+        upstreamSessionRef: `very-test-ref:${input.verificationSessionId}`,
+        launch: {
+          app_id: "very-app",
+          context: "verification",
+          type_id: "palm_scan",
+          query: {},
+          verify_url: "https://verify.very.org/test",
+          session_binding: {
+            uniqueness_domain: "pirate-unique-human-v0",
+            binding_value: input.verificationSessionId,
+            binding_field: "pseudonym",
+            challenge_expires_at: input.challengeExpiresAt,
+          },
+        },
+      }),
+      getSessionOutcome: async (input) => ({
+        status: "verified",
+        attestationData: {
+          externalNullifier: input.expectedBinding?.uniqueness_domain ?? "pirate-unique-human-v0",
+          pseudonym: input.expectedBinding?.binding_value ?? "ver_test",
+          nullifier: "very-reused-nullifier",
+        },
+      }),
+    } satisfies import("../../../src/lib/verification/very-provider").VeryProvider)
+
+    const first = await exchangeJwt(ctx.env, "very-nullifier-first-user")
+    const firstSession = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "very",
+    }, ctx.env, first.accessToken)
+    expect(firstSession.status).toBe(201)
+    const firstBody = await json(firstSession) as { verification_session_id: string }
+    const firstComplete = await requestJson(
+      `http://pirate.test/verification-sessions/${firstBody.verification_session_id}/complete`,
+      { proof: "first-proof" },
+      ctx.env,
+      first.accessToken,
+    )
+    expect(firstComplete.status).toBe(200)
+
+    const second = await exchangeJwt(ctx.env, "very-nullifier-second-user")
+    const secondSession = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "very",
+    }, ctx.env, second.accessToken)
+    expect(secondSession.status).toBe(201)
+    const secondBody = await json(secondSession) as { verification_session_id: string }
+    const secondComplete = await requestJson(
+      `http://pirate.test/verification-sessions/${secondBody.verification_session_id}/complete`,
+      { proof: "second-proof" },
+      ctx.env,
+      second.accessToken,
+    )
+
+    setVeryProviderForTests(null)
+
+    expect(secondComplete.status).toBe(403)
+    const secondCompleteBody = await json(secondComplete) as { message: string }
+    expect(secondCompleteBody.message).toBe("Identity proof is already linked to another user")
   })
 
   test("very verification preserves verifier diagnostics when completion fails", async () => {

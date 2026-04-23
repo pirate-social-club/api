@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
 import { buildTestEnv } from "./helpers"
-import { canonicalizeRequestedCapabilities, getSelfProvider, mapCapabilitiesToDisclosures } from "../src/lib/verification/self-provider"
+import { canonicalizeRequestedCapabilities, getSelfProvider, mapCapabilitiesToDisclosures, normalizeVerificationRequirements } from "../src/lib/verification/self-provider"
 
 describe("self-provider capability canonicalization", () => {
   test("adds unique_human when age_over_18 is requested", () => {
@@ -31,10 +31,9 @@ describe("self-provider capability canonicalization", () => {
     })
   })
 
-  test("maps sanctions requirement to self OFAC disclosure", () => {
+  test("does not map sanctions requirements to Self disclosures", () => {
     expect(mapCapabilitiesToDisclosures(["unique_human", "nationality"], [{ proof_type: "sanctions_clear" }])).toEqual({
       nationality: true,
-      ofac: true,
     })
   })
 
@@ -62,39 +61,14 @@ describe("self-provider capability canonicalization", () => {
         nationality: "USA",
         gender: "F",
         ofac_clear: null,
+        nullifier: started.upstreamSessionRef,
       },
     })
   })
 
-  test("non-production self stub returns OFAC clear when requested", async () => {
-    const provider = getSelfProvider(buildTestEnv({ ENVIRONMENT: "test" }))
-    const started = await provider.startSession({
-      verificationSessionId: "ver_self_stub_ofac",
-      userId: "usr_test",
-      requestedCapabilities: ["unique_human", "nationality"],
-      verificationRequirements: [{ proof_type: "sanctions_clear" }],
-      verificationIntent: "community_join",
-      policyId: null,
-    })
-
-    expect(started.launch.disclosures.ofac).toBe(true)
-
-    const outcome = await provider.getSessionOutcome({
-      upstreamSessionRef: started.upstreamSessionRef,
-      proof: null,
-      providerPayloadRef: null,
-    })
-
-    expect(outcome).toEqual({
-      status: "verified",
-      claims: {
-        age_over_18: false,
-        minimum_age: null,
-        nationality: "USA",
-        gender: null,
-        ofac_clear: true,
-      },
-    })
+  test("rejects Self sanctions_clear requirements", () => {
+    expect(() => normalizeVerificationRequirements("self", [{ proof_type: "sanctions_clear" }]))
+      .toThrow("Self sanctions_clear verification is not supported")
   })
 
   test("configured Self sessions use the SDK endpoint without an API key", async () => {
@@ -104,7 +78,6 @@ describe("self-provider capability canonicalization", () => {
       userId: "usr_test",
       publicOrigin: "https://api.pirate.test",
       requestedCapabilities: ["unique_human", "nationality"],
-      verificationRequirements: [{ proof_type: "sanctions_clear" }],
       verificationIntent: "community_join",
       policyId: null,
     })
@@ -126,14 +99,12 @@ describe("self-provider capability canonicalization", () => {
       verificationSessionId: "ver_self_prod",
       userId: "usr_test",
       requestedCapabilities: ["unique_human", "nationality"],
-      verificationRequirements: [{ proof_type: "sanctions_clear" }],
       verificationIntent: "community_join",
       policyId: null,
     })
 
     expect(started.launch.endpoint).toBe("https://api.pirate.test/verification-sessions/ver_self_prod/self-callback")
     expect(started.launch.endpoint_type).toBe("https")
-    expect(started.launch.disclosures.ofac).toBe(true)
     expect(started.upstreamSessionRef).toContain("\"kind\":\"self-sdk\"")
     expect(started.upstreamSessionRef).toContain("\"mockPassport\":false")
   })

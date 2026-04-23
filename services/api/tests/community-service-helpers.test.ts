@@ -373,7 +373,7 @@ describe("community-service helpers", () => {
       ).not.toThrow()
     })
 
-    test("allows sanctions_clear gate in public v0 with Self OFAC mechanism", () => {
+    test("rejects sanctions_clear gate in public v0 with Self provider", () => {
       expect(() =>
         assertCreateRequest(makeCreateBody({
           gate_rules: [{
@@ -387,10 +387,10 @@ describe("community-service helpers", () => {
             }],
           }],
         }), { ageOver18Verified: false }),
-      ).not.toThrow()
+      ).toThrow("Invalid accepted_providers for sanctions_clear: self")
     })
 
-    test("rejects sanctions_clear gate with Self provider but missing Self OFAC mechanism", () => {
+    test("rejects sanctions_clear gate with Self provider", () => {
       expect(() =>
         assertCreateRequest(makeCreateBody({
           gate_rules: [{
@@ -400,7 +400,7 @@ describe("community-service helpers", () => {
             proof_requirements: [{ proof_type: "sanctions_clear", accepted_providers: ["self"] }],
           }],
         }), { ageOver18Verified: false }),
-      ).toThrow("Self sanctions clear gate must accept self_ofac")
+      ).toThrow("Invalid accepted_providers for sanctions_clear: self")
     })
 
     test("rejects post_ephemeral anonymous scope in v0", () => {

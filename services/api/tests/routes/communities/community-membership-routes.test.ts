@@ -169,11 +169,21 @@ describe("community membership routes", () => {
           type_id: "palm_scan",
           query: {},
           verify_url: "https://verify.very.org/test",
+          session_binding: {
+            uniqueness_domain: "pirate-unique-human-v0",
+            binding_value: "ver_test",
+            binding_field: "pseudonym",
+            challenge_expires_at: "2099-01-01T00:00:00.000Z",
+          },
         },
       }),
       getSessionOutcome: async () => ({
         status: "verified",
-        attestationData: {},
+        attestationData: {
+          externalNullifier: "pirate-unique-human-v0",
+          pseudonym: "ver_test",
+          nullifier: "very-membership-route-nullifier",
+        },
       }),
     } satisfies VeryProvider)
     await completeUniqueHumanVerification(ctx.env, veryJoiner.accessToken, "very")
@@ -193,12 +203,11 @@ describe("community membership routes", () => {
     expect(deniedJoin.status).toBe(403)
     const deniedBody = await json(deniedJoin) as { code: string; message: string }
     expect(deniedBody.code).toBe("gate_failed")
-    expect(deniedBody.message).toBe("Verification is required to join this community")
+    expect(deniedBody.message).toBe("Community membership requirements are not satisfied")
 
     const selfJoiner = await exchangeJwt(ctx.env, "community-gated-self-joiner")
     const selfVerification = await requestJson("http://pirate.test/verification-sessions", {
       provider: "self",
-      verification_requirements: [{ proof_type: "sanctions_clear" }],
     }, ctx.env, selfJoiner.accessToken)
     const selfVerificationBody = await json(selfVerification) as { verification_session_id: string }
     await requestJson(
