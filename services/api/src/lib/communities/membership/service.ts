@@ -18,7 +18,7 @@ import {
 } from "../../localization/community-localization-service"
 import type { UserRepository } from "../../auth/repositories"
 import type { CommunityRepository } from "../db-community-repository"
-import { gateFailedWithDetails, internalError, notFoundError } from "../../errors"
+import { conflictError, gateFailedWithDetails, internalError, notFoundError } from "../../errors"
 import { nowIso } from "../../helpers"
 import { loadCommunityProjection, requireOwnedCommunity } from "../create/service"
 
@@ -382,6 +382,11 @@ export async function unfollowCommunity(input: {
 
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
+    const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
+    if (canAccessCommunity(membership)) {
+      throw conflictError("Citizens cannot unfollow. Leave the community first.")
+    }
+
     const now = nowIso()
     const result = await setCommunityFollowInactive({
       client: db.client,
