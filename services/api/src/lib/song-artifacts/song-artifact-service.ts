@@ -5,6 +5,7 @@ import { openCommunityDb } from "../communities/community-db-factory"
 import { analysisBlocked, badRequestError, eligibilityFailed, notFoundError, verificationRequired } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
+import { sha256Hex } from "../crypto"
 import type {
   CreatePostRequest,
   CreateSongArtifactBundleRequest,
@@ -33,7 +34,6 @@ import {
   assertSongArtifactSize,
   buildSongArtifactContentUrl,
   fetchSongArtifactBytes,
-  sha256Hex,
   type SongArtifactKind,
   uploadSongArtifactBytes,
 } from "./song-artifact-storage"

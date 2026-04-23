@@ -4,9 +4,9 @@ import { isLocalEnvironment } from "../../helpers"
 import { getControlPlaneClient } from "../../runtime-deps"
 import {
   fetchSongArtifactBytes,
-  sha256Hex,
   uploadFilebaseObject,
 } from "../../song-artifacts/song-artifact-storage"
+import { sha256Hex } from "../../crypto"
 import { findUploadedSongArtifactByStorageRef } from "../../song-artifacts/song-artifact-repository"
 import {
   generateStorySignedAccessProof,

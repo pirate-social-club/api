@@ -5,10 +5,8 @@ import { getCommunityMembershipState } from "../membership/store"
 import { openCommunityDb } from "../community-db-factory"
 import type { CommunityRepository } from "../db-community-repository"
 import { getPostById } from "../../posts/community-post-store"
-import {
-  fetchSongArtifactBytes,
-  sha256Hex,
-} from "../../song-artifacts/song-artifact-storage"
+import { fetchSongArtifactBytes } from "../../song-artifacts/song-artifact-storage"
+import { sha256Hex } from "../../crypto"
 import type { UserRepository } from "../../auth/repositories"
 import { maybeRegisterStoryRoyaltyForAsset } from "../../story/story-royalty-registration-service"
 import {

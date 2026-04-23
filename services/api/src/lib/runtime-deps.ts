@@ -48,65 +48,70 @@ function normalizeRows(rows: unknown[]): QueryResultRow[] {
   })
 }
 
-export function postgresifySql(sql: string): string {
-  const normalized = sql.replace(/\?(\d+)/g, (_, index: string) => `$${index}`)
+const postgresUpsertConflictTargets = new Map<string, readonly string[]>([
+  ["namespace_verification_capabilities", ["capability_record_id"]],
+  ["namespace_verifications", ["namespace_verification_id"]],
+])
 
-  if (/INSERT OR IGNORE INTO (wallet_attachments|notification_receipts)\b/i.test(normalized)) {
-    return normalized.replace(
-      /INSERT OR IGNORE INTO (\w+)\b([\s\S]*?)\)\s*$/i,
-      "INSERT INTO $1$2)\n      ON CONFLICT DO NOTHING",
+function appendPostgresClause(sql: string, clause: string): string {
+  const trimmed = sql.trimEnd()
+  const hasSemicolon = trimmed.endsWith(";")
+  const base = hasSemicolon ? trimmed.slice(0, -1).trimEnd() : trimmed
+  return `${base}\n      ${clause}${hasSemicolon ? ";" : ""}`
+}
+
+function parseInsertColumns(columnList: string): string[] {
+  return columnList
+    .split(",")
+    .map((column) => column.trim())
+    .filter(Boolean)
+}
+
+function translateInsertOrIgnore(sql: string): string {
+  if (!/\bINSERT\s+OR\s+IGNORE\s+INTO\b/i.test(sql)) {
+    return sql
+  }
+
+  return appendPostgresClause(
+    sql.replace(/\bINSERT\s+OR\s+IGNORE\s+INTO\b/i, "INSERT INTO"),
+    "ON CONFLICT DO NOTHING",
+  )
+}
+
+function translateInsertOrReplace(sql: string): string {
+  const match = sql.match(/\bINSERT\s+OR\s+REPLACE\s+INTO\s+(\w+)\s*\(([\s\S]*?)\)\s*VALUES\b/i)
+  if (!match) {
+    return sql
+  }
+
+  const [, tableName, columnList] = match
+  const conflictTarget = postgresUpsertConflictTargets.get(tableName)
+  if (!conflictTarget) {
+    return sql
+  }
+
+  const conflictColumns = new Set(conflictTarget)
+  const updateColumns = parseInsertColumns(columnList).filter((column) => !conflictColumns.has(column))
+  const insertSql = sql.replace(/\bINSERT\s+OR\s+REPLACE\s+INTO\b/i, "INSERT INTO")
+  if (updateColumns.length === 0) {
+    return appendPostgresClause(
+      insertSql,
+      `ON CONFLICT (${conflictTarget.join(", ")}) DO NOTHING`,
     )
   }
 
-  if (/INSERT OR REPLACE INTO namespace_verification_capabilities\b/i.test(normalized)) {
-    const insertSql = normalized.replace(/\bINSERT\s+OR\s+REPLACE\s+INTO\b/i, "INSERT INTO")
-    return `${insertSql}
-      ON CONFLICT (capability_record_id) DO UPDATE SET
-        namespace_verification_session_id = EXCLUDED.namespace_verification_session_id,
-        namespace_verification_id = EXCLUDED.namespace_verification_id,
-        family = EXCLUDED.family,
-        capability_name = EXCLUDED.capability_name,
-        capability_value = EXCLUDED.capability_value,
-        source_evidence_bundle_id = EXCLUDED.source_evidence_bundle_id,
-        status = EXCLUDED.status,
-        first_accepted_at = EXCLUDED.first_accepted_at,
-        last_revalidated_at = EXCLUDED.last_revalidated_at,
-        created_at = EXCLUDED.created_at,
-        updated_at = EXCLUDED.updated_at`
-  }
+  return appendPostgresClause(
+    insertSql,
+    [
+      `ON CONFLICT (${conflictTarget.join(", ")}) DO UPDATE SET`,
+      ...updateColumns.map((column) => `        ${column} = EXCLUDED.${column}`),
+    ].join("\n"),
+  )
+}
 
-  if (/INSERT OR REPLACE INTO namespace_verifications\b/i.test(normalized)) {
-    const insertSql = normalized.replace(/\bINSERT\s+OR\s+REPLACE\s+INTO\b/i, "INSERT INTO")
-    return `${insertSql}
-      ON CONFLICT (namespace_verification_id) DO UPDATE SET
-        source_namespace_verification_session_id = EXCLUDED.source_namespace_verification_session_id,
-        user_id = EXCLUDED.user_id,
-        family = EXCLUDED.family,
-        normalized_root_label = EXCLUDED.normalized_root_label,
-        status = EXCLUDED.status,
-        root_exists = EXCLUDED.root_exists,
-        root_control_verified = EXCLUDED.root_control_verified,
-        expiry_horizon_sufficient = EXCLUDED.expiry_horizon_sufficient,
-        routing_enabled = EXCLUDED.routing_enabled,
-        pirate_dns_authority_verified = EXCLUDED.pirate_dns_authority_verified,
-        club_attach_allowed = EXCLUDED.club_attach_allowed,
-        pirate_web_routing_allowed = EXCLUDED.pirate_web_routing_allowed,
-        pirate_subdomain_issuance_allowed = EXCLUDED.pirate_subdomain_issuance_allowed,
-        control_class = EXCLUDED.control_class,
-        operation_class = EXCLUDED.operation_class,
-        observation_provider = EXCLUDED.observation_provider,
-        evidence_bundle_ref = EXCLUDED.evidence_bundle_ref,
-        accepted_at = EXCLUDED.accepted_at,
-        expires_at = EXCLUDED.expires_at,
-        created_at = EXCLUDED.created_at,
-        updated_at = EXCLUDED.updated_at,
-        anchor_height = EXCLUDED.anchor_height,
-        anchor_block_hash = EXCLUDED.anchor_block_hash,
-        anchor_root_hash = EXCLUDED.anchor_root_hash,
-        proof_root_hash = EXCLUDED.proof_root_hash`
-  }
-
-  return normalized
+export function postgresifySql(sql: string): string {
+  const normalized = sql.replace(/\?(\d+)/g, (_, index: string) => `$${index}`)
+  return translateInsertOrReplace(translateInsertOrIgnore(normalized))
 }
 
 async function executePostgresStatement(queryable: PostgresQueryable, statement: InStatement | string): Promise<QueryResult> {

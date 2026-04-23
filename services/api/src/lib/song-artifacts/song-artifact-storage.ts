@@ -13,8 +13,6 @@ export type SongArtifactKind =
 
 type ResolvedFilebaseConfig = S3SigningConfig
 
-export { sha256Hex }
-
 const allowedMimeTypesByKind: Record<SongArtifactKind, Set<string>> = {
   primary_audio: new Set([
     "audio/aac",
