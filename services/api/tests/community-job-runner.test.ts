@@ -825,7 +825,9 @@ describe("community-job-runner", () => {
       expect(post?.embeds?.[0]?.provider_ref).toBe("1234567890123456789")
       expect(post?.embeds?.[0]?.canonical_url).toBe("https://x.com/pirate/status/1234567890123456789")
       expect(post?.embeds?.[0]?.state).toBe("embed")
-      expect(post?.embeds?.[0]?.preview?.media_url).toBe("https://pbs.twimg.com/media/example.jpg")
+      const embed = post?.embeds?.[0]
+      if (embed?.provider !== "x") throw new Error("expected X embed")
+      expect(embed.preview?.media_url).toBe("https://pbs.twimg.com/media/example.jpg")
       expect(post?.embeds?.[0]?.oembed_html).toContain("twitter-tweet")
       expect(post?.embeds?.[0]?.oembed_html).not.toContain("<script")
       const rows = await verifyDb.client.execute({
@@ -833,6 +835,108 @@ describe("community-job-runner", () => {
         args: ["x:1234567890123456789"],
       })
       expect(Number(rows.rows[0]?.count ?? 0)).toBe(1)
+    } finally {
+      verifyDb.close()
+    }
+  })
+
+  test("hydrates YouTube embeds into link posts", async () => {
+    const rootDir = await createCommunityJobRunnerRoot("pirate-community-youtube-embed-")
+    const communityId = "cmt_job_youtube_embed"
+    const env: Env = {
+      LOCAL_COMMUNITY_DB_ROOT: rootDir,
+    }
+    const repo = buildCommunityRepository(join(rootDir, "youtube-embed.db"), communityId)
+
+    await seedCommunityState({
+      env,
+      repo,
+      communityId,
+      memberUserIds: ["usr_owner"],
+    })
+
+    let linkPostId = ""
+    const db = await openCommunityDb(env, repo, communityId)
+    try {
+      const now = new Date().toISOString()
+      const linkPost = await insertPost({
+        client: db.client,
+        communityId,
+        authorUserId: "usr_owner",
+        body: {
+          post_type: "link",
+          link_url: "https://youtu.be/dQw4w9WgXcQ?si=test",
+          idempotency_key: "youtube-embed-post",
+        },
+        createdAt: now,
+      })
+      linkPostId = linkPost.post_id
+
+      await enqueueCommunityJob({
+        client: db.client,
+        communityId,
+        jobType: "embed_hydrate",
+        subjectType: "post_embed",
+        subjectId: linkPost.post_id,
+        payloadJson: JSON.stringify({
+          post_id: linkPost.post_id,
+          link_url: linkPost.link_url,
+        }),
+        createdAt: now,
+      })
+    } finally {
+      db.close()
+    }
+
+    globalThis.fetch = (async (input) => {
+      const requestUrl = input instanceof Request ? input.url : String(input)
+      const parsed = new URL(requestUrl)
+      expect(parsed.origin + parsed.pathname).toBe("https://www.youtube.com/oembed")
+      expect(parsed.searchParams.get("url")).toBe("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+      expect(parsed.searchParams.get("format")).toBe("json")
+      return Response.json({
+        author_name: "Rick Astley",
+        author_url: "https://www.youtube.com/@RickAstley",
+        html: `<iframe src="https://www.youtube.com/embed/dQw4w9WgXcQ"></iframe><script>alert(1)</script>`,
+        thumbnail_height: 360,
+        thumbnail_url: "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
+        thumbnail_width: 480,
+        title: "Never Gonna Give You Up",
+      }, {
+        headers: {
+          "cache-control": "public, max-age=86400",
+        },
+      })
+    }) as typeof fetch
+
+    const processed = await processNextCommunityJob({
+      env,
+      communityId,
+      communityRepository: repo,
+    })
+
+    expect(processed?.job_type).toBe("embed_hydrate")
+    expect(processed?.error_code).toBeNull()
+    expect(processed?.status).toBe("succeeded")
+    expect(processed?.result_ref).toBe("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+
+    const verifyDb = await openCommunityDb(env, repo, communityId)
+    try {
+      const post = await getPostById(verifyDb.client, linkPostId)
+      expect(post?.link_og_title).toBe("Never Gonna Give You Up")
+      expect(post?.link_og_image_url).toBe("https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg")
+      expect(post?.embeds?.length).toBe(1)
+      const embed = post?.embeds?.[0]
+      if (embed?.provider !== "youtube") throw new Error("expected YouTube embed")
+      expect(embed.provider_ref).toBe("dQw4w9WgXcQ")
+      expect(embed.canonical_url).toBe("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+      expect(embed.state).toBe("embed")
+      expect(embed.preview?.title).toBe("Never Gonna Give You Up")
+      expect(embed.preview?.author_name).toBe("Rick Astley")
+      expect(embed.preview?.thumbnail_url).toBe("https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg")
+      expect(embed.oembed_cache_age).toBe(86400)
+      expect(embed.oembed_html).toContain("youtube-nocookie.com/embed/dQw4w9WgXcQ")
+      expect(embed.oembed_html).not.toContain("<script")
     } finally {
       verifyDb.close()
     }

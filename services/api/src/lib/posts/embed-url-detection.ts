@@ -1,15 +1,30 @@
-export type SupportedEmbedTarget = {
-  provider: "x"
+type EmbedTargetBase = {
   providerRef: string
   embedKey: string
   canonicalUrl: string
   originalUrl: string
 }
+export type XEmbedTarget = EmbedTargetBase & {
+  provider: "x"
+}
+export type YouTubeEmbedTarget = EmbedTargetBase & {
+  provider: "youtube"
+}
+export type SupportedEmbedTarget = XEmbedTarget | YouTubeEmbedTarget
 
 const X_HOSTS = new Set([
   "x.com",
   "twitter.com",
   "mobile.twitter.com",
+])
+const YOUTUBE_HOSTS = new Set([
+  "youtube.com",
+  "www.youtube.com",
+  "m.youtube.com",
+  "music.youtube.com",
+])
+const YOUTUBE_SHORT_HOSTS = new Set([
+  "youtu.be",
 ])
 
 function normalizeHost(hostname: string): string {
@@ -66,11 +81,46 @@ function detectXEmbed(url: URL, originalUrl: string): SupportedEmbedTarget | nul
   }
 }
 
+function normalizeYouTubeVideoId(value: string | null | undefined): string | null {
+  const videoId = String(value ?? "").trim()
+  return /^[a-z0-9_-]{11}$/iu.test(videoId) ? videoId : null
+}
+
+function detectYouTubeEmbed(url: URL, originalUrl: string): SupportedEmbedTarget | null {
+  const host = normalizeHost(url.hostname)
+  let videoId: string | null = null
+
+  if (YOUTUBE_SHORT_HOSTS.has(host)) {
+    videoId = normalizeYouTubeVideoId(url.pathname.split("/").filter(Boolean)[0])
+  } else if (YOUTUBE_HOSTS.has(host)) {
+    const segments = url.pathname.split("/").filter(Boolean)
+    if (url.pathname === "/watch") {
+      videoId = normalizeYouTubeVideoId(url.searchParams.get("v"))
+    } else if (segments[0] === "shorts" || segments[0] === "embed" || segments[0] === "live") {
+      videoId = normalizeYouTubeVideoId(segments[1])
+    }
+  }
+
+  if (!videoId) {
+    return null
+  }
+
+  return {
+    provider: "youtube",
+    providerRef: videoId,
+    embedKey: `youtube:${videoId}`,
+    canonicalUrl: `https://www.youtube.com/watch?v=${videoId}`,
+    originalUrl,
+  }
+}
+
 export function detectSupportedEmbedTarget(linkUrl: string | null | undefined): SupportedEmbedTarget | null {
   const parsed = normalizeHttpUrl(linkUrl)
   if (!parsed) {
     return null
   }
 
-  return detectXEmbed(parsed, String(linkUrl ?? "").trim())
+  const originalUrl = String(linkUrl ?? "").trim()
+  return detectXEmbed(parsed, originalUrl)
+    ?? detectYouTubeEmbed(parsed, originalUrl)
 }

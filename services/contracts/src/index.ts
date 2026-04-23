@@ -2215,7 +2215,7 @@ type NamespaceAttachmentInput = {
 
 type PostCreatorRelation = "captured" | "created" | "subject" | "authorized_repost" | "fan_work" | "found";
 
-type PostEmbed = XPostEmbed;
+type PostEmbed = (XPostEmbed | YouTubeVideoEmbed);
 
 type PostLabel = {
   label_id: string;
@@ -2380,6 +2380,30 @@ type XPostEmbed = {
   original_url: string;
   state: "pending" | "preview" | "embed" | "unavailable";
   preview?: XEmbedPreview | null;
+  oembed_html?: string | null;
+  oembed_cache_age?: number | null;
+  unavailable_reason?: "deleted" | "withheld" | "private" | "unsupported" | "unknown" | null;
+  last_checked_at?: string | null;
+};
+
+type YouTubeEmbedPreview = {
+  title?: string | null;
+  author_name?: string | null;
+  author_url?: string | null;
+  thumbnail_url?: string | null;
+  thumbnail_width?: number | null;
+  thumbnail_height?: number | null;
+};
+
+type YouTubeVideoEmbed = {
+  embed_id: string;
+  embed_key: string;
+  provider: "youtube";
+  provider_ref?: string | null;
+  canonical_url: string;
+  original_url: string;
+  state: "pending" | "preview" | "embed" | "unavailable";
+  preview?: YouTubeEmbedPreview | null;
   oembed_html?: string | null;
   oembed_cache_age?: number | null;
   unavailable_reason?: "deleted" | "withheld" | "private" | "unsupported" | "unknown" | null;
