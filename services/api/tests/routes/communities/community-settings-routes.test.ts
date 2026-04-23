@@ -301,6 +301,7 @@ describe("community settings routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Gates Club",
+      default_age_gate_policy: "18_plus",
       handle_policy: {
         policy_template: "standard",
       },
@@ -393,6 +394,7 @@ describe("community settings routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Gates Preserve Club",
+      default_age_gate_policy: "18_plus",
       handle_policy: {
         policy_template: "standard",
       },

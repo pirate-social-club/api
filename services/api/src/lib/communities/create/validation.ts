@@ -14,7 +14,6 @@ export type CreateCommunityRequestBody = CreateCommunityRequest
 export function assertCreateRequest(
   body: CreateCommunityRequestBody,
   input: {
-    uniqueHumanVerified: boolean
     ageOver18Verified: boolean
   },
 ): asserts body is CreateCommunityRequestBody & {
@@ -31,9 +30,6 @@ export function assertCreateRequest(
   }
   if (body.namespace != null && !body.namespace.namespace_verification_id?.trim()) {
     throw badRequestError("namespace.namespace_verification_id is required when namespace is provided")
-  }
-  if (!input.uniqueHumanVerified) {
-    throw eligibilityFailed("unique_human verification is required")
   }
   if ((body.governance_mode ?? "centralized") !== "centralized") {
     throw eligibilityFailed("Only centralized community creation is allowed in public v0")
@@ -70,7 +66,6 @@ export async function resolveCreateCommunityAuth(input: {
   }
 
   assertCreateRequest(input.body, {
-    uniqueHumanVerified: user.verification_capabilities.unique_human.state === "verified",
     ageOver18Verified: user.verification_capabilities.age_over_18.state === "verified",
   })
 

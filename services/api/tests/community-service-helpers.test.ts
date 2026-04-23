@@ -138,39 +138,33 @@ describe("community-service helpers", () => {
   })
 
   describe("assertCreateRequest", () => {
-    test("passes for valid minimal request with unique_human verified", () => {
+    test("passes for valid minimal request", () => {
       expect(() =>
-        assertCreateRequest(makeCreateBody(), { uniqueHumanVerified: true, ageOver18Verified: false }),
+        assertCreateRequest(makeCreateBody(), { ageOver18Verified: false }),
       ).not.toThrow()
     })
 
     test("rejects missing display_name", () => {
       expect(() =>
-        assertCreateRequest(makeCreateBody({ display_name: "" }), { uniqueHumanVerified: true, ageOver18Verified: false }),
-      ).toThrow()
-    })
-
-    test("rejects when unique_human is not verified", () => {
-      expect(() =>
-        assertCreateRequest(makeCreateBody(), { uniqueHumanVerified: false, ageOver18Verified: false }),
+        assertCreateRequest(makeCreateBody({ display_name: "" }), { ageOver18Verified: false }),
       ).toThrow()
     })
 
     test("rejects 18_plus age gate without age verification", () => {
       expect(() =>
-        assertCreateRequest(makeCreateBody({ default_age_gate_policy: "18_plus" }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+        assertCreateRequest(makeCreateBody({ default_age_gate_policy: "18_plus" }), { ageOver18Verified: false }),
       ).toThrow()
     })
 
     test("allows 18_plus age gate with age verification", () => {
       expect(() =>
-        assertCreateRequest(makeCreateBody({ default_age_gate_policy: "18_plus" }), { uniqueHumanVerified: true, ageOver18Verified: true }),
+        assertCreateRequest(makeCreateBody({ default_age_gate_policy: "18_plus" }), { ageOver18Verified: true }),
       ).not.toThrow()
     })
 
     test("rejects donation_policy in v0", () => {
       expect(() =>
-        assertCreateRequest(makeCreateBody({ donation_policy: { mode: "optional" } as any }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+        assertCreateRequest(makeCreateBody({ donation_policy: { mode: "optional" } as any }), { ageOver18Verified: false }),
       ).toThrow()
     })
 
@@ -184,7 +178,7 @@ describe("community-service helpers", () => {
             chain_namespace: "eip155:1",
             gate_config: { contract_address: "0x1111111111111111111111111111111111111111" },
           }],
-        }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+        }), { ageOver18Verified: false }),
       ).not.toThrow()
     })
 
@@ -203,7 +197,7 @@ describe("community-service helpers", () => {
               asset_filter: { category: "trading_card", franchise: "pokemon", subject: "charizard" },
             },
           }],
-        }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+        }), { ageOver18Verified: false }),
       ).not.toThrow()
     })
 
@@ -227,7 +221,7 @@ describe("community-service helpers", () => {
               },
             },
           }],
-        }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+        }), { ageOver18Verified: false }),
       ).not.toThrow()
     })
 
@@ -246,7 +240,7 @@ describe("community-service helpers", () => {
               match: { category: "watch", brand: "rolex" },
             },
           }],
-        }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+        }), { ageOver18Verified: false }),
       ).not.toThrow()
     })
 
@@ -265,7 +259,7 @@ describe("community-service helpers", () => {
               asset_filter: { category: "trading_card", franchise: "pokemon", subject: "charizard" },
             },
           }],
-        }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+        }), { ageOver18Verified: false }),
       ).toThrow("Courtyard inventory gates require an allowlisted Courtyard contract")
     })
 
@@ -284,7 +278,7 @@ describe("community-service helpers", () => {
               asset_filter: { category: "trading_card", franchise: "pokemon", subject: "charizard", regex: ".*" },
             },
           }],
-        }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+        }), { ageOver18Verified: false }),
       ).toThrow("ERC-721 inventory match has unsupported keys: regex")
     })
 
@@ -303,7 +297,7 @@ describe("community-service helpers", () => {
               asset_filter: { category: "watch", brand: "rolex" },
             },
           }],
-        }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+        }), { ageOver18Verified: false }),
       ).toThrow("ERC-721 inventory gates require min_quantity from 1 to 100")
     })
 
@@ -322,7 +316,7 @@ describe("community-service helpers", () => {
               asset_filter: { category: "watch" },
             },
           }],
-        }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+        }), { ageOver18Verified: false }),
       ).toThrow("ERC-721 inventory match must include category plus a supported matching field")
     })
 
@@ -336,7 +330,7 @@ describe("community-service helpers", () => {
             chain_namespace: "eip155:8453",
             gate_config: { contract_address: "0x1111111111111111111111111111111111111111" },
           }],
-        }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+        }), { ageOver18Verified: false }),
       ).toThrow("ERC-721 community gates must target Ethereum mainnet (eip155:1)")
     })
 
@@ -349,7 +343,7 @@ describe("community-service helpers", () => {
             gate_type: "gender",
             proof_requirements: [{ proof_type: "gender", accepted_providers: ["self"], config: { required_value: "M" } }],
           }],
-        }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+        }), { ageOver18Verified: false }),
       ).not.toThrow()
     })
 
@@ -362,7 +356,7 @@ describe("community-service helpers", () => {
             gate_type: "gender",
             proof_requirements: [{ proof_type: "gender", accepted_providers: ["self"], config: { required_value: "male" } }],
           }],
-        }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+        }), { ageOver18Verified: false }),
       ).toThrow("Gender gate required_value must be either \"M\" or \"F\"")
     })
 
@@ -375,7 +369,7 @@ describe("community-service helpers", () => {
             gate_type: "sanctions_clear",
             proof_requirements: [{ proof_type: "sanctions_clear", accepted_providers: ["passport"] }],
           }],
-        }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+        }), { ageOver18Verified: false }),
       ).not.toThrow()
     })
 
@@ -392,7 +386,7 @@ describe("community-service helpers", () => {
               accepted_mechanisms: ["self_ofac"],
             }],
           }],
-        }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+        }), { ageOver18Verified: false }),
       ).not.toThrow()
     })
 
@@ -405,7 +399,7 @@ describe("community-service helpers", () => {
             gate_type: "sanctions_clear",
             proof_requirements: [{ proof_type: "sanctions_clear", accepted_providers: ["self"] }],
           }],
-        }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+        }), { ageOver18Verified: false }),
       ).toThrow("Self sanctions clear gate must accept self_ofac")
     })
 
@@ -414,13 +408,13 @@ describe("community-service helpers", () => {
         assertCreateRequest(makeCreateBody({
           allow_anonymous_identity: true,
           anonymous_identity_scope: "post_ephemeral",
-        }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+        }), { ageOver18Verified: false }),
       ).toThrow()
     })
 
     test("rejects namespace without namespace_verification_id", () => {
       expect(() =>
-        assertCreateRequest(makeCreateBody({ namespace: {} as any }), { uniqueHumanVerified: true, ageOver18Verified: false }),
+        assertCreateRequest(makeCreateBody({ namespace: {} as any }), { ageOver18Verified: false }),
       ).toThrow()
     })
   })

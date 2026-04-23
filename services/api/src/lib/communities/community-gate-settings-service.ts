@@ -1,6 +1,6 @@
 import type { UserRepository } from "../auth/repositories"
 import type { CommunityRepository } from "./db-community-repository"
-import { internalError, notFoundError } from "../errors"
+import { eligibilityFailed, internalError, notFoundError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
 import { openCommunityDb } from "./community-db-factory"
@@ -146,6 +146,13 @@ export async function updateCommunityGates(input: {
       previousAccess = currentAccessRows.rows[0]
         ? accessSnapshotFromRow(currentAccessRows.rows[0] as Record<string, unknown>)
         : null
+
+      if (
+        previousAccess?.default_age_gate_policy !== "18_plus"
+        && nextAccess.default_age_gate_policy === "18_plus"
+      ) {
+        throw eligibilityFailed("18_plus can only be set during community creation")
+      }
 
       const currentGateRuleRows = await tx.execute({
         sql: `

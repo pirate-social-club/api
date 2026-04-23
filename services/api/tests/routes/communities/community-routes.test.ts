@@ -4,6 +4,7 @@ import app from "../../../src/index"
 import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import {
+  completeAgeOver18Verification,
   completeUniqueHumanVerification,
   exchangeJwt,
   getCommunityControlPlaneState,
@@ -25,6 +26,59 @@ afterEach(async () => {
 })
 
 describe("community routes", () => {
+  test("community create succeeds without unique_human verification", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "community-create-without-unique-human-user")
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Open Create Club",
+      handle_policy: {
+        policy_template: "standard",
+      },
+    }, ctx.env, session.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: {
+        community_id: string
+        display_name: string
+      }
+    }
+    expect(communityCreateBody.community.display_name).toBe("Open Create Club")
+    expect(communityCreateBody.community.community_id.startsWith("cmt_")).toBe(true)
+  })
+
+  test("18_plus community create requires age verification but not unique_human", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "community-create-adult-age-only-user")
+
+    const deniedCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Adults Only Club",
+      default_age_gate_policy: "18_plus",
+      handle_policy: {
+        policy_template: "standard",
+      },
+    }, ctx.env, session.accessToken)
+    expect(deniedCreate.status).toBe(403)
+    const deniedBody = await json(deniedCreate) as { code: string; message: string }
+    expect(deniedBody.code).toBe("eligibility_failed")
+    expect(deniedBody.message).toBe("age_over_18 verification is required for 18_plus communities")
+
+    await completeAgeOver18Verification(ctx.env, session.accessToken)
+
+    const allowedCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Adults Only Club",
+      default_age_gate_policy: "18_plus",
+      handle_policy: {
+        policy_template: "standard",
+      },
+    }, ctx.env, session.accessToken)
+    expect(allowedCreate.status).toBe(202)
+  })
+
   test("community create succeeds without a namespace and can attach one later", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup

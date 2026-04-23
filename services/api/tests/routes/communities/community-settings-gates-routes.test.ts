@@ -32,6 +32,7 @@ describe("community settings gates routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Gates Club",
+      default_age_gate_policy: "18_plus",
       handle_policy: {
         policy_template: "standard",
       },
@@ -110,6 +111,7 @@ describe("community settings gates routes", () => {
     const auditMetadata = JSON.parse(String(auditRows.rows[0]?.metadata_json)) as {
       previous_access: {
         membership_mode: string
+        default_age_gate_policy: string | null
       }
       next_access: {
         membership_mode: string
@@ -126,6 +128,7 @@ describe("community settings gates routes", () => {
       }>
     }
     expect(auditMetadata.previous_access.membership_mode).toBe("open")
+    expect(auditMetadata.previous_access.default_age_gate_policy).toBe("18_plus")
     expect(auditMetadata.next_access).toEqual({
       membership_mode: "gated",
       default_age_gate_policy: "18_plus",
@@ -166,6 +169,7 @@ describe("community settings gates routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Gates Preserve Club",
+      default_age_gate_policy: "18_plus",
       handle_policy: {
         policy_template: "standard",
       },
@@ -262,6 +266,51 @@ describe("community settings gates routes", () => {
     }
     expect(secondUpdateBody.gate_rules?.[0]?.gate_rule_id).toBe(originalGateRuleId)
     expect(secondUpdateBody.gate_rules?.[0]?.proof_requirements?.[0]?.config?.required_value).toBe("M")
+  })
+
+  test("community gates update rejects changing a normal community to 18_plus", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "community-gates-late-adult-user")
+    await completeUniqueHumanVerification(ctx.env, session.accessToken)
+    await completeAgeOver18Verification(ctx.env, session.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Late Adult Gate Club",
+      handle_policy: {
+        policy_template: "standard",
+      },
+    }, ctx.env, session.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: {
+        community_id: string
+      }
+    }
+
+    const gatesUpdate = await Promise.resolve(app.request(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}/gates`,
+      {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${session.accessToken}`,
+        },
+        body: JSON.stringify({
+          membership_mode: "gated",
+          default_age_gate_policy: "18_plus",
+          allow_anonymous_identity: false,
+          anonymous_identity_scope: null,
+          gate_rules: [],
+        }),
+      },
+      ctx.env,
+    ))
+    expect(gatesUpdate.status).toBe(403)
+    const body = await json(gatesUpdate) as { code: string; message: string }
+    expect(body.code).toBe("eligibility_failed")
+    expect(body.message).toBe("18_plus can only be set during community creation")
   })
 
   test("community gates update rejects duplicate or blank gate_rule_id payloads", async () => {
