@@ -110,7 +110,7 @@ export async function insertPost(input: {
   const translationPolicy = input.body.translation_policy ?? "none"
   const visibility = input.body.visibility ?? "public"
   const idempotencyKey = input.body.idempotency_key?.trim() ?? ""
-  const title = postType === "link" ? null : input.body.title ?? null
+  const title = input.body.title ?? null
   const labelAssignmentStatus: NonNullable<Post["label_assignment_status"]> = input.body.label_id ? "assigned" : "pending"
   const labelAssignedAt = input.body.label_id ? input.createdAt : null
   const stubAnalysis = resolveStubAnalysisOutcome(input.body)
@@ -427,9 +427,6 @@ export function assertPostCreateRequest(body: CreatePostRequest, _communityId: s
     ) {
       throw badRequestError("image posts require JPEG, PNG, WebP, GIF, or AVIF media")
     }
-  }
-  if (body.post_type === "link" && body.title != null) {
-    throw badRequestError("title is not allowed for link posts")
   }
   if (body.visibility && body.visibility !== "public" && body.visibility !== "members_only") {
     throw badRequestError("visibility must be public or members_only")

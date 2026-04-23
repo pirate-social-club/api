@@ -862,6 +862,8 @@ export type CreatePostRequest = (((unknown & {
   media_refs: Array<VideoMediaDescriptor>;
 } | {
   post_type: "link";
+  title?: string | null;
+  body?: string | null;
   link_url: string;
 } | (unknown & {
   post_type: "song";

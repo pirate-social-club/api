@@ -238,7 +238,6 @@ CREATE TABLE posts (
     ),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    CHECK (post_type <> 'link' OR title IS NULL),
     FOREIGN KEY (community_id) REFERENCES communities(community_id),
     FOREIGN KEY (label_id) REFERENCES labels(label_id),
     FOREIGN KEY (parent_post_id) REFERENCES posts(post_id)

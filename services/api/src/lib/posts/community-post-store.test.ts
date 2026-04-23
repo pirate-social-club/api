@@ -131,14 +131,15 @@ describe("sortPublishedLocalizedPostFeedItems", () => {
 })
 
 describe("assertPostCreateRequest", () => {
-  test("rejects titles on link posts", () => {
+  test("allows titles and body text on link posts", () => {
     const body = {
       idempotency_key: "link-title",
       post_type: "link",
       title: "User-authored link title",
+      body: "User-authored commentary.",
       link_url: "https://example.com/story",
-    } as unknown as CreatePostRequest
+    } satisfies CreatePostRequest
 
-    expect(() => assertPostCreateRequest(body, "cmt_test")).toThrow("title is not allowed for link posts")
+    expect(() => assertPostCreateRequest(body, "cmt_test")).not.toThrow()
   })
 })
