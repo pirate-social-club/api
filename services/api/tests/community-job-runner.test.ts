@@ -642,7 +642,6 @@ describe("community-job-runner", () => {
         authorUserId: "usr_owner",
         body: {
           post_type: "link",
-          title: "Link Preview",
           link_url: "https://example.com/posts/story",
           idempotency_key: "link-preview-post",
         },
@@ -756,15 +755,28 @@ describe("community-job-runner", () => {
     globalThis.fetch = (async (input) => {
       const requestUrl = input instanceof Request ? input.url : String(input)
       const parsed = new URL(requestUrl)
-      expect(parsed.origin + parsed.pathname).toBe("https://publish.x.com/oembed")
-      expect(parsed.searchParams.get("url")).toBe("https://x.com/pirate/status/1234567890123456789")
-      expect(parsed.searchParams.get("omit_script")).toBe("1")
-      expect(parsed.searchParams.get("dnt")).toBe("true")
-      return Response.json({
-        author_name: "Pirate",
-        author_url: "https://x.com/pirate",
-        cache_age: "3153600000",
-        html: `<blockquote class="twitter-tweet"><p lang="en" dir="ltr">X embed text</p>&mdash; Pirate <a href="https://x.com/pirate/status/1234567890123456789">April 23, 2026</a></blockquote><script async src="https://platform.x.com/widgets.js"></script>`,
+      if (parsed.origin + parsed.pathname === "https://publish.x.com/oembed") {
+        expect(parsed.searchParams.get("url")).toBe("https://x.com/pirate/status/1234567890123456789")
+        expect(parsed.searchParams.get("omit_script")).toBe("1")
+        expect(parsed.searchParams.get("dnt")).toBe("true")
+        return Response.json({
+          author_name: "Pirate",
+          author_url: "https://x.com/pirate",
+          cache_age: "3153600000",
+          html: `<blockquote class="twitter-tweet"><p lang="en" dir="ltr">X embed text</p>&mdash; Pirate <a href="https://x.com/pirate/status/1234567890123456789">April 23, 2026</a></blockquote><script async src="https://platform.x.com/widgets.js"></script>`,
+        })
+      }
+      expect(requestUrl).toBe("https://x.com/pirate/status/1234567890123456789")
+      return new Response(`
+        <html>
+          <head>
+            <meta property="og:image" content="https://pbs.twimg.com/media/example.jpg">
+          </head>
+        </html>
+      `, {
+        headers: {
+          "content-type": "text/html",
+        },
       })
     }) as typeof fetch
 
@@ -807,12 +819,13 @@ describe("community-job-runner", () => {
     try {
       const post = await getPostById(verifyDb.client, linkPostId)
       expect(post?.link_og_title).toBe("X embed text")
-      expect(post?.link_og_image_url).toBeNull()
+      expect(post?.link_og_image_url).toBe("https://pbs.twimg.com/media/example.jpg")
       expect(post?.embeds?.length).toBe(1)
       expect(post?.embeds?.[0]?.provider).toBe("x")
       expect(post?.embeds?.[0]?.provider_ref).toBe("1234567890123456789")
       expect(post?.embeds?.[0]?.canonical_url).toBe("https://x.com/pirate/status/1234567890123456789")
       expect(post?.embeds?.[0]?.state).toBe("embed")
+      expect(post?.embeds?.[0]?.preview?.media_url).toBe("https://pbs.twimg.com/media/example.jpg")
       expect(post?.embeds?.[0]?.oembed_html).toContain("twitter-tweet")
       expect(post?.embeds?.[0]?.oembed_html).not.toContain("<script")
       const rows = await verifyDb.client.execute({

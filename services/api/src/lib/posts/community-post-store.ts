@@ -11,7 +11,13 @@ import {
 import { detectSourceLanguageFromText } from "../localization/content-locale"
 import { resolveStubAnalysisOutcome } from "./post-analysis"
 import { requiredNumber, rowValue, stringOrNull } from "../sql-row"
-import { serializePost, toPostRow } from "./community-post-serialization"
+import {
+  POST_SELECT_COLUMNS,
+  POST_SELECT_COLUMNS_LEGACY,
+  POST_SELECT_COLUMNS_VISIBILITY_LEGACY,
+  serializePost,
+  toPostRow,
+} from "./community-post-serialization"
 import type { CreatePostRequest, Post } from "../../types"
 
 export {
@@ -35,15 +41,7 @@ export async function findPostByIdempotencyKey(input: {
     input.client,
     {
       sql: `
-        SELECT post_id, community_id, author_user_id, authorship_mode, agent_id, agent_ownership_record_id,
-               identity_mode, anonymous_scope, anonymous_label, agent_display_name_snapshot,
-               agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot, disclosed_qualifiers_json,
-               label_id, label_assignment_status, label_assigned_by, label_assigned_at, label_ai_confidence,
-               label_assignment_error, label_assignment_model, label_assignment_result_json,
-               post_type, status, visibility, title, body, caption, lyrics,
-               link_url, link_og_image_url, link_og_title, embeds_json, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
-               access_mode, asset_id, parent_post_id, upstream_asset_refs_json, song_mode, rights_basis, analysis_state, analysis_result_ref,
-               content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
+        SELECT ${POST_SELECT_COLUMNS}
         FROM posts
         WHERE community_id = ?1
           AND author_user_id = ?2
@@ -52,7 +50,23 @@ export async function findPostByIdempotencyKey(input: {
       `,
       args: [input.communityId, input.authorUserId, input.idempotencyKey],
     },
-  )
+  ).catch(async (error) => {
+    if (!isMissingColumnError(error, "embeds_json")) {
+      throw error
+    }
+
+    return executeFirst(input.client, {
+      sql: `
+        SELECT ${POST_SELECT_COLUMNS_LEGACY}
+        FROM posts
+        WHERE community_id = ?1
+          AND author_user_id = ?2
+          AND idempotency_key = ?3
+        LIMIT 1
+      `,
+      args: [input.communityId, input.authorUserId, input.idempotencyKey],
+    })
+  })
 
   return row ? serializePost(toPostRow(row)) : null
 }
@@ -190,15 +204,7 @@ export async function insertPost(input: {
 export async function getPostById(client: DbExecutor, postId: string): Promise<Post | null> {
   const stmtWithVisibility = {
     sql: `
-      SELECT post_id, community_id, author_user_id, authorship_mode, agent_id, agent_ownership_record_id,
-             identity_mode, anonymous_scope, anonymous_label, agent_display_name_snapshot,
-             agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot, disclosed_qualifiers_json,
-             label_id, label_assignment_status, label_assigned_by, label_assigned_at, label_ai_confidence,
-             label_assignment_error, label_assignment_model, label_assignment_result_json,
-             post_type, status, visibility, title, body, caption, lyrics,
-             link_url, link_og_image_url, link_og_title, embeds_json, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
-             access_mode, asset_id, parent_post_id, upstream_asset_refs_json, song_mode, rights_basis, analysis_state, analysis_result_ref,
-             content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
+      SELECT ${POST_SELECT_COLUMNS}
       FROM posts
       WHERE post_id = ?1
       LIMIT 1
@@ -207,21 +213,13 @@ export async function getPostById(client: DbExecutor, postId: string): Promise<P
   }
 
   const row = await executeFirst(client, stmtWithVisibility).catch(async (error) => {
-    if (!isMissingColumnError(error, "visibility")) {
+    if (!isMissingColumnError(error, "visibility") && !isMissingColumnError(error, "embeds_json")) {
       throw error
     }
 
     return executeFirst(client, {
       sql: `
-        SELECT post_id, community_id, author_user_id, authorship_mode, agent_id, agent_ownership_record_id,
-               identity_mode, anonymous_scope, anonymous_label, agent_display_name_snapshot,
-               agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot, disclosed_qualifiers_json,
-               label_id, label_assignment_status, label_assigned_by, label_assigned_at, label_ai_confidence,
-               label_assignment_error, label_assignment_model, label_assignment_result_json,
-               post_type, status, 'public' AS visibility, title, body, caption, lyrics,
-               link_url, NULL AS link_og_image_url, NULL AS link_og_title, NULL AS embeds_json, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
-               access_mode, asset_id, parent_post_id, upstream_asset_refs_json, song_mode, rights_basis, analysis_state, analysis_result_ref,
-               content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
+        SELECT ${isMissingColumnError(error, "visibility") ? POST_SELECT_COLUMNS_VISIBILITY_LEGACY : POST_SELECT_COLUMNS_LEGACY}
         FROM posts
         WHERE post_id = ?1
         LIMIT 1

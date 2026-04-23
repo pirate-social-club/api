@@ -151,12 +151,10 @@ export async function hydrateLinkPostEmbed(input: {
     canonicalUrl: target.canonicalUrl,
     fetcher,
   })
-  const fallbackMetadata = oembed
-    ? null
-    : await fetchLinkPreviewMetadata({
-        fetcher,
-        url: target.canonicalUrl,
-      })
+  const fallbackMetadata = await fetchLinkPreviewMetadata({
+    fetcher,
+    url: target.canonicalUrl,
+  })
 
   const preview: Extract<XPostEmbed, { provider: "x" }>["preview"] = {
     author_name: oembed?.authorName ?? null,
