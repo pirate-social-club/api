@@ -2,6 +2,7 @@ import type { Client } from "../sql-client"
 import { getControlPlaneClient } from "../runtime-deps"
 import {
   getCommunityCommentProjectionRowByCommentId,
+  listCommunityFollowProjectionRowsByUserId,
   getCommunityPostProjectionRowByPostId,
   listCommunityMembershipProjectionRowsByUserId,
 } from "../auth/auth-db-queries"
@@ -9,6 +10,7 @@ import type {
   CommunityCommentProjectionRow,
   CommunityDbCredentialRow,
   CommunityDatabaseBindingRow,
+  CommunityFollowProjectionRow,
   CommunityMembershipProjectionRow,
   CommunityPostProjectionRow,
   CommunityRow,
@@ -41,7 +43,11 @@ export {
   updateCommunityPostProjectionStatus,
 } from "./community-post-projection-repository"
 export { recordCommunityCommentProjection } from "./community-comment-projection-repository"
-export { upsertCommunityMembershipProjection } from "./membership/projection-repository"
+export {
+  incrementCommunityFollowerCount,
+  upsertCommunityFollowProjection,
+  upsertCommunityMembershipProjection,
+} from "./membership/projection-repository"
 
 export {
   attachNamespaceToCommunity,
@@ -71,7 +77,11 @@ import {
   updateCommunityPostProjectionStatus,
 } from "./community-post-projection-repository"
 import { recordCommunityCommentProjection } from "./community-comment-projection-repository"
-import { upsertCommunityMembershipProjection } from "./membership/projection-repository"
+import {
+  incrementCommunityFollowerCount,
+  upsertCommunityFollowProjection,
+  upsertCommunityMembershipProjection,
+} from "./membership/projection-repository"
 import {
   attachNamespaceToCommunity,
   setPendingNamespaceVerificationSession,
@@ -98,6 +108,13 @@ export async function listCommunityMembershipProjectionsByUserId(
   return listCommunityMembershipProjectionRowsByUserId(client, userId)
 }
 
+export async function listCommunityFollowProjectionsByUserId(
+  client: Client,
+  userId: string,
+): Promise<CommunityFollowProjectionRow[]> {
+  return listCommunityFollowProjectionRowsByUserId(client, userId)
+}
+
 export interface CommunityRepository {
   getCommunityById(communityId: string): Promise<CommunityRow | null>
   getCommunityByRouteSlug(routeSlug: string): Promise<CommunityRow | null>
@@ -110,6 +127,7 @@ export interface CommunityRepository {
   getCommunityPostProjectionByPostId(postId: string): Promise<CommunityPostProjectionRow | null>
   getCommunityCommentProjectionByCommentId(commentId: string): Promise<CommunityCommentProjectionRow | null>
   listCommunityMembershipProjectionsByUserId(userId: string): Promise<CommunityMembershipProjectionRow[]>
+  listCommunityFollowProjectionsByUserId(userId: string): Promise<CommunityFollowProjectionRow[]>
   recordCommunityPostProjection(input: {
     communityId: string
     sourcePostId: string
@@ -140,6 +158,19 @@ export interface CommunityRepository {
     membershipState: CommunityMembershipProjectionRow["membership_state"]
     sourceUpdatedAt: string
     createdAt: string
+  }): Promise<void>
+  upsertCommunityFollowProjection(input: {
+    communityId: string
+    userId: string
+    followState: CommunityFollowProjectionRow["follow_state"]
+    sourceUpdatedAt: string
+    unfollowedAt: string | null
+    createdAt: string
+  }): Promise<void>
+  incrementCommunityFollowerCount(input: {
+    communityId: string
+    delta: 1 | -1
+    updatedAt: string
   }): Promise<void>
   updateCommunityPostProjectionStatus(input: {
     postId: string
@@ -280,6 +311,10 @@ export class DatabaseCommunityRepository implements CommunityRepository {
     return listCommunityMembershipProjectionRowsByUserId(this.client, userId)
   }
 
+  async listCommunityFollowProjectionsByUserId(userId: string): Promise<CommunityFollowProjectionRow[]> {
+    return listCommunityFollowProjectionRowsByUserId(this.client, userId)
+  }
+
   async recordCommunityPostProjection(input: {
     communityId: string
     sourcePostId: string
@@ -318,6 +353,25 @@ export class DatabaseCommunityRepository implements CommunityRepository {
     createdAt: string
   }): Promise<void> {
     return upsertCommunityMembershipProjection(this.client, input)
+  }
+
+  async upsertCommunityFollowProjection(input: {
+    communityId: string
+    userId: string
+    followState: CommunityFollowProjectionRow["follow_state"]
+    sourceUpdatedAt: string
+    unfollowedAt: string | null
+    createdAt: string
+  }): Promise<void> {
+    return upsertCommunityFollowProjection(this.client, input)
+  }
+
+  async incrementCommunityFollowerCount(input: {
+    communityId: string
+    delta: 1 | -1
+    updatedAt: string
+  }): Promise<void> {
+    return incrementCommunityFollowerCount(this.client, input)
   }
 
   async updateCommunityPostProjectionStatus(input: {

@@ -9,7 +9,7 @@ import { enqueueEmbedHydrateOnReadIfNeeded } from "../posts/post-jobs"
 import { getPostById } from "../posts/community-post-store"
 import { getControlPlaneClient } from "../runtime-deps"
 import { numberOrNull, requiredNumber, requiredString, rowValue } from "../sql-row"
-import type { CommunityMembershipProjectionRow, CommunityRow } from "../auth/auth-db-rows"
+import type { CommunityFollowProjectionRow, CommunityMembershipProjectionRow, CommunityRow } from "../auth/auth-db-rows"
 import type {
   Env,
   HomeFeedCommunitySummary,
@@ -121,6 +121,7 @@ function buildCommunitySummary(community: Awaited<ReturnType<CommunityRepository
     route_slug: community.route_slug,
     avatar_ref: null,
     member_count: null,
+    follower_count: community.projected_follower_count,
     updated_at: community.updated_at,
   }
 }
@@ -153,6 +154,7 @@ export function resolveJoinedHomeFeedCommunityIds(input: {
 
 export function resolveHomeFeedCommunityIds(input: {
   activeCommunities: CommunityRow[]
+  followRows: CommunityFollowProjectionRow[]
   membershipRows: CommunityMembershipProjectionRow[]
   userId: string | null
 }): string[] {
@@ -160,13 +162,15 @@ export function resolveHomeFeedCommunityIds(input: {
     return input.activeCommunities.map((community) => community.community_id)
   }
 
-  const memberCommunityIds = resolveJoinedHomeFeedCommunityIds(input)
-
-  if (memberCommunityIds.length === 0) {
-    return input.activeCommunities.map((community) => community.community_id)
+  const activeCommunityIds = new Set(input.activeCommunities.map((community) => community.community_id))
+  const followedCommunityIds = new Set<string>()
+  for (const row of input.followRows) {
+    if (row.follow_state === "active" && activeCommunityIds.has(row.community_id)) {
+      followedCommunityIds.add(row.community_id)
+    }
   }
 
-  return memberCommunityIds
+  return [...followedCommunityIds]
 }
 
 export function filterVisibleHomeFeedProjections(
@@ -284,6 +288,9 @@ export async function listHomeFeed(input: {
   const membershipRows = input.userId
     ? await input.communityRepository.listCommunityMembershipProjectionsByUserId(input.userId)
     : []
+  const followRows = input.userId
+    ? await input.communityRepository.listCommunityFollowProjectionsByUserId(input.userId)
+    : []
   const memberCommunityIdSet = new Set(resolveJoinedHomeFeedCommunityIds({
     activeCommunities,
     membershipRows,
@@ -291,6 +298,7 @@ export async function listHomeFeed(input: {
   }))
   const communityIds = resolveHomeFeedCommunityIds({
     activeCommunities,
+    followRows,
     membershipRows,
     userId: input.userId,
   })

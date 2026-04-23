@@ -3,6 +3,7 @@ import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import {
   attachNamespaceToCommunity,
   createCommunity,
+  followCommunity,
   getCommunity,
   getCommunityPreview,
   getJoinEligibility,
@@ -23,6 +24,7 @@ import {
   updateCommunitySafety,
   updateCommunityRules,
   updateCommunityDonationPolicy,
+  unfollowCommunity,
   getCommunityDonationPolicy,
   resolveCommunityDonationPartner,
 } from "../lib/communities/community-service"
@@ -294,6 +296,28 @@ export function registerCommunityCoreRoutes(communities: Hono<AuthenticatedEnv>)
       userId: actor.userId,
       communityId,
       userRepository,
+      communityRepository,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.put("/:communityId/follow", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await followCommunity({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      communityRepository,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.delete("/:communityId/follow", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await unfollowCommunity({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
       communityRepository,
     })
     return c.json(result, 200)

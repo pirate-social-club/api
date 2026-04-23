@@ -5,6 +5,8 @@ import {
   getCommunityJoinMode,
   getCommunityMembershipState,
   listActiveMembershipGateRules,
+  setCommunityFollowActive,
+  setCommunityFollowInactive,
   upsertCommunityMembership,
   upsertMembershipRequest,
 } from "./store"
@@ -32,6 +34,12 @@ import type {
 type MembershipResult = {
   community_id: string
   status: "joined" | "requested" | "left"
+}
+
+type CommunityFollowResult = {
+  community_id: string
+  following: boolean
+  follower_count: number | null
 }
 
 export { getCommunityPreview, getPublicCommunityPreview } from "../community-preview-service"
@@ -68,6 +76,60 @@ function buildWalletScoreStatus(user: User, rules: CommunityGateRuleRow[]): Join
     required_score: requiredScore,
     passing_score: typeof capability.passing_score === "boolean" ? capability.passing_score : null,
     last_score_timestamp: capability.last_score_timestamp ?? null,
+  }
+}
+
+async function syncCommunityFollowProjection(input: {
+  communityRepository: CommunityRepository
+  communityId: string
+  userId: string
+  followState: "active" | "inactive"
+  changed: boolean
+  now: string
+}): Promise<void> {
+  await input.communityRepository.upsertCommunityFollowProjection({
+    communityId: input.communityId,
+    userId: input.userId,
+    followState: input.followState,
+    sourceUpdatedAt: input.now,
+    unfollowedAt: input.followState === "inactive" ? input.now : null,
+    createdAt: input.now,
+  })
+  if (input.changed) {
+    await input.communityRepository.incrementCommunityFollowerCount({
+      communityId: input.communityId,
+      delta: input.followState === "active" ? 1 : -1,
+      updatedAt: input.now,
+    })
+  }
+}
+
+async function followCommunityForHomeFeed(input: {
+  db: Awaited<ReturnType<typeof openCommunityDb>>
+  communityRepository: CommunityRepository
+  communityId: string
+  userId: string
+  now: string
+}): Promise<CommunityFollowResult> {
+  const result = await setCommunityFollowActive({
+    client: input.db.client,
+    communityId: input.communityId,
+    userId: input.userId,
+    now: input.now,
+  })
+  await syncCommunityFollowProjection({
+    communityRepository: input.communityRepository,
+    communityId: input.communityId,
+    userId: input.userId,
+    followState: "active",
+    changed: result.changed,
+    now: input.now,
+  })
+
+  return {
+    community_id: input.communityId,
+    following: true,
+    follower_count: result.followerCount,
   }
 }
 
@@ -282,6 +344,70 @@ export async function getJoinEligibility(input: {
   }
 }
 
+export async function followCommunity(input: {
+  env: Env
+  userId: string
+  communityId: string
+  communityRepository: CommunityRepository
+}): Promise<CommunityFollowResult> {
+  const community = await input.communityRepository.getCommunityById(input.communityId)
+  if (!community || community.provisioning_state !== "active" || community.status !== "active") {
+    throw notFoundError("Community not found")
+  }
+
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  try {
+    return await followCommunityForHomeFeed({
+      db,
+      communityRepository: input.communityRepository,
+      communityId: input.communityId,
+      userId: input.userId,
+      now: nowIso(),
+    })
+  } finally {
+    db.close()
+  }
+}
+
+export async function unfollowCommunity(input: {
+  env: Env
+  userId: string
+  communityId: string
+  communityRepository: CommunityRepository
+}): Promise<CommunityFollowResult> {
+  const community = await input.communityRepository.getCommunityById(input.communityId)
+  if (!community || community.provisioning_state !== "active" || community.status !== "active") {
+    throw notFoundError("Community not found")
+  }
+
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  try {
+    const now = nowIso()
+    const result = await setCommunityFollowInactive({
+      client: db.client,
+      communityId: input.communityId,
+      userId: input.userId,
+      now,
+    })
+    await syncCommunityFollowProjection({
+      communityRepository: input.communityRepository,
+      communityId: input.communityId,
+      userId: input.userId,
+      followState: "inactive",
+      changed: result.changed,
+      now,
+    })
+
+    return {
+      community_id: input.communityId,
+      following: false,
+      follower_count: result.followerCount,
+    }
+  } finally {
+    db.close()
+  }
+}
+
 export async function joinCommunity(input: {
   env: Env
   userId: string
@@ -341,6 +467,13 @@ export async function joinCommunity(input: {
         membershipState: "member",
         sourceUpdatedAt: now,
         createdAt: now,
+      })
+      await followCommunityForHomeFeed({
+        db,
+        communityRepository: input.communityRepository,
+        communityId: input.communityId,
+        userId: input.userId,
+        now,
       })
       return {
         community_id: input.communityId,
@@ -457,6 +590,13 @@ export async function joinCommunity(input: {
       membershipState: "member",
       sourceUpdatedAt: now,
       createdAt: now,
+    })
+    await followCommunityForHomeFeed({
+      db,
+      communityRepository: input.communityRepository,
+      communityId: input.communityId,
+      userId: input.userId,
+      now,
     })
     return {
       community_id: input.communityId,

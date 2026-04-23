@@ -17,6 +17,7 @@ export type CommunityRow = {
   namespace_verification_id: string | null
   pending_namespace_verification_session_id: string | null
   primary_database_binding_id: string | null
+  projected_follower_count: number | null
   created_at: string
   updated_at: string
 }
@@ -102,6 +103,17 @@ export type CommunityMembershipProjectionRow = {
   updated_at: string
 }
 
+export type CommunityFollowProjectionRow = {
+  projection_id: string
+  community_id: string
+  user_id: string
+  follow_state: "active" | "inactive"
+  source_updated_at: string
+  unfollowed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
 export type CommunityCommentProjectionRow = {
   projection_id: string
   community_id: string
@@ -127,6 +139,9 @@ export function toCommunityRow(row: unknown): CommunityRow {
     namespace_verification_id: stringOrNull(rowValue(row, "namespace_verification_id")),
     pending_namespace_verification_session_id: stringOrNull(rowValue(row, "pending_namespace_verification_session_id")),
     primary_database_binding_id: stringOrNull(rowValue(row, "primary_database_binding_id")),
+    projected_follower_count: typeof rowValue(row, "projected_follower_count") === "number"
+      ? rowValue(row, "projected_follower_count") as number
+      : null,
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
   }
@@ -218,6 +233,19 @@ export function toCommunityMembershipProjectionRow(row: unknown): CommunityMembe
     membership_state: requiredString(row, "membership_state") as CommunityMembershipProjectionRow["membership_state"],
     role_summary_json: stringOrNull(rowValue(row, "role_summary_json")),
     source_updated_at: requiredString(row, "source_updated_at"),
+    created_at: requiredString(row, "created_at"),
+    updated_at: requiredString(row, "updated_at"),
+  }
+}
+
+export function toCommunityFollowProjectionRow(row: unknown): CommunityFollowProjectionRow {
+  return {
+    projection_id: requiredString(row, "projection_id"),
+    community_id: requiredString(row, "community_id"),
+    user_id: requiredString(row, "user_id"),
+    follow_state: requiredString(row, "follow_state") as CommunityFollowProjectionRow["follow_state"],
+    source_updated_at: requiredString(row, "source_updated_at"),
+    unfollowed_at: stringOrNull(rowValue(row, "unfollowed_at")),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
   }

@@ -1,6 +1,9 @@
 import {
   buildMembershipGateSummary,
   canAccessCommunity,
+  getCommunityFollowStatus,
+  getCommunityFollowerCount,
+  getCommunityMemberCount,
   getCommunityMembershipState,
   listActiveMembershipGateRules,
 } from "./membership/store"
@@ -38,6 +41,7 @@ export async function getCommunityPreview(input: {
   try {
     const rules = await listActiveMembershipGateRules(db.client, input.communityId)
     const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
+    const followStatus = await getCommunityFollowStatus(db.client, input.communityId, input.userId)
     return await buildCommunityPreview({
       client: db.client,
       communityId: input.communityId,
@@ -51,6 +55,7 @@ export async function getCommunityPreview(input: {
           : canAccessCommunity(membership)
             ? "member"
             : "not_member",
+      viewerFollowing: followStatus === "active",
     })
   } finally {
     db.close()
@@ -79,6 +84,7 @@ export async function getPublicCommunityPreview(input: {
       locale: input.locale ?? null,
       gateRules: rules,
       viewerMembershipStatus: "not_member",
+      viewerFollowing: false,
     })
   } finally {
     db.close()
@@ -121,6 +127,7 @@ async function buildCommunityPreview(input: {
   locale?: string | null
   gateRules: Awaited<ReturnType<typeof listActiveMembershipGateRules>>
   viewerMembershipStatus: CommunityPreview["viewer_membership_status"]
+  viewerFollowing: boolean
 }): Promise<CommunityPreview> {
   const localResult = await input.client.execute({
     sql: `
@@ -179,6 +186,8 @@ async function buildCommunityPreview(input: {
     client: input.client,
     communityId: input.communityId,
   })
+  const followerCount = await getCommunityFollowerCount(input.client, input.communityId)
+  const memberCount = await getCommunityMemberCount(input.client, input.communityId)
 
   const preview: CommunityPreview = {
     community_id: input.communityId,
@@ -197,12 +206,14 @@ async function buildCommunityPreview(input: {
     }),
     membership_mode: membershipMode,
     human_verification_lane: "self",
-    member_count: null,
+    member_count: memberCount,
+    follower_count: followerCount,
     donation_policy_mode: donationPolicyMode,
     donation_partner_id: localRow?.donation_partner_id == null ? null : String(localRow.donation_partner_id),
     donation_partner: donationPolicyMode !== "none" ? donationPartner : null,
     membership_gate_summaries: input.gateRules.map(buildMembershipGateSummary),
     viewer_membership_status: input.viewerMembershipStatus,
+    viewer_following: input.viewerFollowing,
     created_at: input.communityCreatedAt,
   }
 

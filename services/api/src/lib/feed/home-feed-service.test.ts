@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { CommunityMembershipProjectionRow, CommunityRow } from "../auth/auth-db-rows"
+import type { CommunityFollowProjectionRow, CommunityMembershipProjectionRow, CommunityRow } from "../auth/auth-db-rows"
 import {
   filterCommunitiesWithPosts,
   filterVisibleHomeFeedProjections,
@@ -25,6 +25,7 @@ function createCommunityRow(input: {
     namespace_verification_id: null,
     pending_namespace_verification_session_id: null,
     primary_database_binding_id: null,
+    projected_follower_count: 0,
     created_at: "2026-04-18T00:00:00.000Z",
     updated_at: "2026-04-18T00:00:00.000Z",
   }
@@ -47,12 +48,56 @@ function createMembershipRow(input: {
   }
 }
 
+function createFollowRow(input: {
+  communityId: string
+  userId: string
+  followState: CommunityFollowProjectionRow["follow_state"]
+}): CommunityFollowProjectionRow {
+  return {
+    projection_id: `cfp_${input.communityId}_${input.userId}`,
+    community_id: input.communityId,
+    user_id: input.userId,
+    follow_state: input.followState,
+    source_updated_at: "2026-04-18T00:00:00.000Z",
+    unfollowed_at: input.followState === "inactive" ? "2026-04-19T00:00:00.000Z" : null,
+    created_at: "2026-04-18T00:00:00.000Z",
+    updated_at: "2026-04-18T00:00:00.000Z",
+  }
+}
+
 describe("resolveHomeFeedCommunityIds", () => {
-  test("returns member communities for an established signed-in user", () => {
+  test("returns actively followed communities for a signed-in user", () => {
     const communityIds = resolveHomeFeedCommunityIds({
       activeCommunities: [
         createCommunityRow({ communityId: "cmt_alpha", creatorUserId: "usr_owner" }),
         createCommunityRow({ communityId: "cmt_beta", creatorUserId: "usr_owner" }),
+      ],
+      followRows: [
+        createFollowRow({
+          communityId: "cmt_beta",
+          userId: "usr_viewer",
+          followState: "active",
+        }),
+      ],
+      membershipRows: [],
+      userId: "usr_viewer",
+    })
+
+    expect(communityIds).toEqual(["cmt_beta"])
+  })
+
+  test("does not include citizen communities after the viewer unfollows them", () => {
+    const communityIds = resolveHomeFeedCommunityIds({
+      activeCommunities: [
+        createCommunityRow({ communityId: "cmt_alpha", creatorUserId: "usr_owner" }),
+        createCommunityRow({ communityId: "cmt_beta", creatorUserId: "usr_owner" }),
+      ],
+      followRows: [
+        createFollowRow({
+          communityId: "cmt_beta",
+          userId: "usr_viewer",
+          followState: "inactive",
+        }),
       ],
       membershipRows: [
         createMembershipRow({
@@ -64,20 +109,21 @@ describe("resolveHomeFeedCommunityIds", () => {
       userId: "usr_viewer",
     })
 
-    expect(communityIds).toEqual(["cmt_beta"])
+    expect(communityIds).toEqual([])
   })
 
-  test("falls back to active communities for a fresh signed-in user", () => {
+  test("returns no communities for a signed-in user without active follows", () => {
     const communityIds = resolveHomeFeedCommunityIds({
       activeCommunities: [
         createCommunityRow({ communityId: "cmt_alpha", creatorUserId: "usr_owner" }),
         createCommunityRow({ communityId: "cmt_beta", creatorUserId: "usr_owner" }),
       ],
+      followRows: [],
       membershipRows: [],
       userId: "usr_fresh",
     })
 
-    expect(communityIds).toEqual(["cmt_alpha", "cmt_beta"])
+    expect(communityIds).toEqual([])
   })
 
   test("returns all active communities for an anonymous viewer", () => {
@@ -86,6 +132,7 @@ describe("resolveHomeFeedCommunityIds", () => {
         createCommunityRow({ communityId: "cmt_alpha", creatorUserId: "usr_owner" }),
         createCommunityRow({ communityId: "cmt_beta", creatorUserId: "usr_owner" }),
       ],
+      followRows: [],
       membershipRows: [],
       userId: null,
     })

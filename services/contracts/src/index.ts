@@ -527,6 +527,7 @@ export type Community = {
   community_stage?: "initial";
   member_count?: number | null;
   qualified_member_count?: number | null;
+  follower_count?: number | null;
   stage_entered_at?: string | null;
   governance_mode: "centralized" | "multisig" | "majeur";
   governance_backend?: CommunityGovernanceBackend | null;
@@ -1292,13 +1293,21 @@ export type CommunityPreview = {
   membership_mode: "open" | "request" | "gated";
   human_verification_lane: HumanVerificationLane;
   member_count?: number | null;
+  follower_count?: number | null;
   donation_policy_mode?: "none" | "optional_creator_sidecar" | null;
   donation_partner_id?: string | null;
   donation_partner?: DonationPartnerSummary | null;
   membership_gate_summaries: Array<MembershipGateSummary>;
   rules: Array<CommunityRule>;
   viewer_membership_status?: "member" | "not_member" | "banned" | null;
+  viewer_following?: boolean | null;
   created_at: string;
+};
+
+export type CommunityFollowResponse = {
+  community_id: string;
+  following: boolean;
+  follower_count?: number | null;
 };
 
 export type JoinEligibility = {
@@ -1341,6 +1350,7 @@ export type HomeFeedCommunitySummary = {
   route_slug?: string | null;
   avatar_ref?: string | null;
   member_count?: number | null;
+  follower_count?: number | null;
   updated_at: string;
 };
 
@@ -2455,6 +2465,7 @@ export const apiRoutes = {
   communityModerationCase: (communityId: string, moderationCaseId: string) => `/communities/${communityId}/moderation/cases/${moderationCaseId}`,
   communityModerationCaseActions: (communityId: string, moderationCaseId: string) => `/communities/${communityId}/moderation/cases/${moderationCaseId}/actions`,
   communityPreview: (communityId: string) => `/communities/${communityId}/preview`,
+  communityFollow: (communityId: string) => `/communities/${communityId}/follow`,
   communityJoinEligibility: (communityId: string) => `/communities/${communityId}/join-eligibility`,
   communitySongArtifactUploads: (communityId: string) => `/communities/${communityId}/song-artifact-uploads`,
   communitySongArtifactUploadContent: (communityId: string, songArtifactUploadId: string) => `/communities/${communityId}/song-artifact-uploads/${songArtifactUploadId}/content`,
