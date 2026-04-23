@@ -51,7 +51,7 @@ describe("community provisioning routes", () => {
           binding_id: "cdb_operator_runtime",
           credential_id: "cdc_operator_runtime",
           organization_slug: "pirate-org",
-          group_name: "club-cmt-operator-test",
+          group_name: "region-aws-ap-south-1",
           group_id: "grp_operator_test",
           database_name: "main-cmt-operator-test",
           database_id: "db_operator_test",
@@ -133,7 +133,7 @@ describe("community provisioning routes", () => {
         args: [body.community.community_id],
       })
       expect(bindingRows.rows[0]?.organization_slug).toBe("pirate-org")
-      expect(bindingRows.rows[0]?.group_name).toBe("club-cmt-operator-test")
+      expect(bindingRows.rows[0]?.group_name).toBe("region-aws-ap-south-1")
       expect(bindingRows.rows[0]?.database_name).toBe("main-cmt-operator-test")
       expect(bindingRows.rows[0]?.database_url).toBe("libsql://main-cmt-operator-test-pirate-org.aws-ap-south-1.turso.io")
       expect(bindingRows.rows[0]?.location).toBe("aws-ap-south-1")
@@ -190,7 +190,7 @@ describe("community provisioning routes", () => {
           binding_id: "cdb_operator_no_cred",
           credential_id: "",
           organization_slug: "pirate-org",
-          group_name: "club-cmt-no-cred",
+          group_name: "region-iad",
           group_id: "grp_no_cred",
           database_name: "main-cmt-no-cred",
           database_id: "db_no_cred",
@@ -313,7 +313,7 @@ describe("community provisioning routes", () => {
           binding_id: "cdb_operator_namespaceless",
           credential_id: "cdc_operator_namespaceless",
           organization_slug: "pirate-org",
-          group_name: "club-cmt-operator-namespaceless",
+          group_name: "region-iad",
           group_id: "grp_operator_namespaceless",
           database_name: "main-cmt-operator-namespaceless",
           database_id: "db_operator_namespaceless",

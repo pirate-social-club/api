@@ -129,7 +129,7 @@ describe("openCommunityDb", () => {
           community_id: "cmt_remote",
           binding_role: "primary",
           organization_slug: "pirate-social",
-          group_name: "club-cmt-remote",
+          group_name: "region-aws-us-east-1",
           group_id: "grp_remote",
           database_name: "main-cmt-remote-test",
           database_id: "db_remote",
