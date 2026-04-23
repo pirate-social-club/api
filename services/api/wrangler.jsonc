@@ -31,6 +31,7 @@
     "ELEVENLABS_FORCE_ALIGNMENT_URL": "https://api.elevenlabs.io/v1/forced-alignment",
     "COMMUNITY_PROVISION_OPERATOR_BASE_URL": "https://spaces.pirate.sc",
     "COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION": "aws-us-east-1",
+    "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
     "COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS": "60000"
   },
   "env": {
@@ -63,6 +64,7 @@
         "TURSO_COMMUNITY_DB_WRAP_KEY_VERSION": "2",
         "COMMUNITY_PROVISION_OPERATOR_BASE_URL": "https://spaces.pirate.sc",
         "COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION": "aws-us-east-1",
+        "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
         "COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS": "60000"
       }
     },
@@ -100,6 +102,7 @@
         "TURSO_COMMUNITY_DB_WRAP_KEY_VERSION": "2",
         "COMMUNITY_PROVISION_OPERATOR_BASE_URL": "https://spaces.pirate.sc/prod",
         "COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION": "aws-us-east-1",
+        "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
         "COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS": "60000"
       }
     }

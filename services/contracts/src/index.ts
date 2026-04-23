@@ -1924,6 +1924,7 @@ type CreateCommunityProvenancePolicyInput = {
 type CreateCommunityRequestBase = {
   display_name: string;
   description?: string | null;
+  database_region?: "auto" | "aws-us-east-1" | "aws-us-east-2" | "aws-us-west-2" | "aws-eu-west-1" | "aws-ap-south-1" | "aws-ap-northeast-1" | null;
   localized_text?: CommunityTextLocalization | null;
   avatar_ref?: string | null;
   banner_ref?: string | null;

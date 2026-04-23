@@ -148,6 +148,9 @@ async function createNamespacelessCommunity(input: {
   const bindingId = makeId("cdb")
   const jobId = makeId("job")
   const useProvisionOperator = isCommunityProvisionOperatorConfigured(input.env)
+  const groupLocation = useProvisionOperator
+    ? resolveCommunityProvisionGroupLocation(input.env, input.body.database_region)
+    : "local"
   const databaseUrl = useProvisionOperator
     ? buildPendingCommunityDatabaseUrl(communityId)
     : buildLocalCommunityDbUrl(resolveCommunityDbRoot(input.env), communityId)
@@ -175,7 +178,7 @@ async function createNamespacelessCommunity(input: {
         creatorUserId: input.auth.userId,
         displayName: input.auth.communityDisplayName,
         namespaceVerificationId: null,
-        groupLocation: resolveCommunityProvisionGroupLocation(input.env),
+        groupLocation,
         bootstrapPayload: buildProvisionOperatorBootstrapPayload(
           input.body,
           null,
@@ -319,6 +322,9 @@ async function provisionNamespacedCommunity(input: {
   const bindingId = existingCommunity?.primary_database_binding_id ?? makeId("cdb")
   const jobId = makeId("job")
   const useProvisionOperator = isCommunityProvisionOperatorConfigured(env)
+  const groupLocation = useProvisionOperator
+    ? resolveCommunityProvisionGroupLocation(env, body.database_region)
+    : "local"
   const databaseUrl = useProvisionOperator
     ? buildPendingCommunityDatabaseUrl(communityId)
     : buildLocalCommunityDbUrl(resolveCommunityDbRoot(env), communityId)
@@ -361,7 +367,7 @@ async function provisionNamespacedCommunity(input: {
         creatorUserId: auth.userId,
         displayName: auth.communityDisplayName,
         namespaceVerificationId,
-        groupLocation: resolveCommunityProvisionGroupLocation(env),
+        groupLocation,
         bootstrapPayload: buildProvisionOperatorBootstrapPayload(
           body,
           routeSlug,

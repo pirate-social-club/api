@@ -6,7 +6,7 @@ import {
 import { normalizeCommunityMediaRef } from "../community-identity-media"
 import type { CommunityDatabaseBindingRow, CommunityRow, JobRow } from "../../auth/auth-db-rows"
 import type { CommunityRepository } from "../db-community-repository"
-import { eligibilityFailed, internalError, notFoundError } from "../../errors"
+import { badRequestError, eligibilityFailed, internalError, notFoundError } from "../../errors"
 import { makeId } from "../../helpers"
 import type { Community, Env } from "../../../types"
 import { serializeCommunity } from "../community-serialization"
@@ -26,13 +26,33 @@ export function resolveCommunityDbRoot(env: Env): string {
   throw internalError("LOCAL_COMMUNITY_DB_ROOT is not configured")
 }
 
-export function resolveCommunityProvisionGroupLocation(env: Env): string {
+function parseAllowedCommunityProvisionGroupLocations(env: Env): Set<string> {
+  return new Set(
+    String(env.COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS || "")
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean),
+  )
+}
+
+export function resolveCommunityProvisionGroupLocation(
+  env: Env,
+  requestedLocation?: string | null,
+): string {
   const configured = String(env.COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION || "").trim()
-  if (configured) {
-    return configured
+  const requested = String(requestedLocation || "").trim()
+  const resolved = !requested || requested === "auto" ? configured : requested
+
+  if (!resolved) {
+    throw internalError("COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION is not configured")
   }
 
-  throw internalError("COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION is not configured")
+  const allowed = parseAllowedCommunityProvisionGroupLocations(env)
+  if (allowed.size > 0 && !allowed.has(resolved)) {
+    throw badRequestError("database_region is not supported")
+  }
+
+  return resolved
 }
 
 export function resolveCommunityDbWrapKey(env: Env): string {
