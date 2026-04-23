@@ -25,6 +25,7 @@ import {
   resolveLocalDevStorage,
 } from "../scripts/_lib/local-dev-storage"
 
+import { resolveCoreRepoPath } from "../shared/core-repo-paths"
 import { splitSqlStatements, toSqliteCompatibleStatement } from "../shared/sql-migration"
 
 const encoder = new TextEncoder()
@@ -181,7 +182,9 @@ export async function createControlPlaneTestClient(options?: {
     }, serviceRoot)
     await applyLocalControlPlaneMigrations(storage)
   } else {
-    await applySqlFile(client, new URL("../../../../db/control-plane/migrations/0001_control_plane_identity.sql", import.meta.url))
+    await applySqlFile(client, resolveCoreRepoPath("db/control-plane/migrations/0001_control_plane_identity.sql", {
+      serviceRoot,
+    }))
   }
 
   return {

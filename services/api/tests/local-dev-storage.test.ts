@@ -109,7 +109,7 @@ function buildStorage(rootDir: string, databasePath: string) {
 }
 
 async function listExpectedLocalMigrationNames(storage: LocalDevStorage): Promise<string[]> {
-  const entries = (await readdir(join(storage.repoRoot, "db/control-plane/migrations")))
+  const entries = (await readdir(join(storage.coreRepoRoot, "db/control-plane/migrations")))
     .filter((entry) => entry.endsWith(".sql"))
     .sort()
   const baselineEntry = entries.find((entry) => entry.startsWith("0000_") && entry.includes("baseline"))

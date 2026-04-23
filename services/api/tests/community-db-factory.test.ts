@@ -3,11 +3,13 @@ import { createHash, randomUUID } from "node:crypto"
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { createClient } from "@libsql/client"
 import { openCommunityDb } from "../src/lib/communities/community-db-factory"
 import { encryptCommunityDbCredential } from "../src/lib/communities/community-db-credential-crypto"
 import { enqueueCommunityJob } from "../src/lib/communities/jobs/store"
 import type { CommunityRepository } from "../src/lib/communities/db-community-repository"
+import { resolveCoreRepoPath } from "../shared/core-repo-paths"
 import { splitSqlStatements, toSqliteCompatibleStatement } from "../shared/sql-migration"
 
 const cleanupPaths: string[] = []
@@ -31,14 +33,16 @@ async function applyLegacyCommunitySchema(databasePath: string): Promise<void> {
       )
     `)
 
-    const migrationsDir = new URL("../../../../db/community-template/migrations/", import.meta.url)
+    const migrationsDir = resolveCoreRepoPath("db/community-template/migrations", {
+      serviceRoot: fileURLToPath(new URL("..", import.meta.url)),
+    })
     const entries = (await readdir(migrationsDir))
       .filter((entry) => entry.endsWith(".sql"))
       .sort()
       .filter((entry) => Number.parseInt(entry.slice(0, 4), 10) <= 1023)
 
     for (const entry of entries) {
-      const sql = await readFile(new URL(entry, migrationsDir), "utf8")
+      const sql = await readFile(join(migrationsDir, entry), "utf8")
       for (const statement of splitSqlStatements(sql)) {
         const sqliteStatement = toSqliteCompatibleStatement(statement)
         if (!sqliteStatement) {

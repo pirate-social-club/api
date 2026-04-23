@@ -3,12 +3,14 @@ import { createHash } from "node:crypto"
 import { mkdir, readFile, readdir } from "node:fs/promises"
 import { dirname, isAbsolute, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { resolveCoreRepoRoot } from "../../shared/core-repo-paths"
 import { splitSqlStatements, toSqliteCompatibleStatement } from "../../shared/sql-migration"
 
 export const FIRST_LOCAL_POST_BASELINE_MIGRATION = "0047_control_plane_notifications.sql"
 
 export type LocalDevStorage = {
   repoRoot: string
+  coreRepoRoot: string
   controlPlaneDbUrl: string
   controlPlaneDbPath: string | null
   communityDbRoot: string
@@ -44,6 +46,10 @@ export function resolveLocalDevStorage(
   serviceRoot = process.cwd(),
 ): LocalDevStorage {
   const repoRoot = resolve(serviceRoot, "../../..")
+  const coreRepoRoot = resolveCoreRepoRoot({
+    override: values.PIRATE_CORE_REPO,
+    serviceRoot,
+  })
   const defaultDataRoot = resolve(serviceRoot, ".local")
   const configuredDbUrl = String(values.CONTROL_PLANE_DATABASE_URL || "").trim()
   const configuredCommunityRoot = String(values.LOCAL_COMMUNITY_DB_ROOT || "").trim()
@@ -59,6 +65,7 @@ export function resolveLocalDevStorage(
 
   return {
     repoRoot,
+    coreRepoRoot,
     controlPlaneDbUrl,
     controlPlaneDbPath,
     communityDbRoot,
@@ -197,7 +204,7 @@ export async function applyLocalControlPlaneMigrations(storage: LocalDevStorage)
   const client = createClient({ url: storage.controlPlaneDbUrl })
 
   try {
-    const migrationsDir = resolve(storage.repoRoot, "db/control-plane/migrations")
+    const migrationsDir = resolve(storage.coreRepoRoot, "db/control-plane/migrations")
     const entries = (await readdir(migrationsDir))
       .filter((entry) => entry.endsWith(".sql"))
       .sort()

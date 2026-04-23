@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { createClient } from "@libsql/client"
 import type { Client } from "@libsql/client"
+import { resolveCoreRepoPath } from "../../../shared/core-repo-paths"
 import { internalError } from "../errors"
 
 const LOCAL_SQLITE_BUSY_TIMEOUT_MS = 5000
@@ -91,7 +92,9 @@ export type LocalCommunitySnapshot = {
 }
 
 function resolveCommunityTemplateMigrationsDir(): string {
-  return fileURLToPath(new URL("../../../../../../db/community-template/migrations/", import.meta.url))
+  return resolveCoreRepoPath("db/community-template/migrations", {
+    serviceRoot: fileURLToPath(new URL("../../..", import.meta.url)),
+  })
 }
 
 function splitSqlStatements(sql: string): string[] {
