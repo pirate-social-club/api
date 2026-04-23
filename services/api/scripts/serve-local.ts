@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import app from "../src/index"
 import type { Env } from "../src/types"
 import { readDevVarsFromCwd, readWranglerVarsFromCwd } from "./_lib/dev-vars"
+import { sanitizeLocalDevEnv } from "./_lib/local-dev-runtime"
 import {
   applyLocalControlPlaneMigrations,
   ensureLocalDevStorage,
@@ -75,7 +76,19 @@ async function main(): Promise<void> {
     ...devVars,
     ...process.env,
   }
-  const localDevStorage = resolveLocalDevStorage(baseEnv)
+  const { values: sanitizedEnv, warnings } = await sanitizeLocalDevEnv(baseEnv)
+  const localDevStorage = resolveLocalDevStorage(sanitizedEnv)
+  for (const warning of warnings) {
+    console.warn(`warning: ${warning}`)
+  }
+  if (localDevStorage.controlPlaneDbRehomedFromPath) {
+    console.warn(
+      [
+        "warning: CONTROL_PLANE_DATABASE_URL pointed to a missing local file;",
+        `using ${localDevStorage.controlPlaneDbPath} instead of ${localDevStorage.controlPlaneDbRehomedFromPath}.`,
+      ].join(" "),
+    )
+  }
   await ensureLocalDevStorage(localDevStorage)
 
   if (localDevStorage.controlPlaneDbPath) {
@@ -91,7 +104,7 @@ async function main(): Promise<void> {
   }
 
   const env = {
-    ...baseEnv,
+    ...sanitizedEnv,
     CONTROL_PLANE_DATABASE_URL: localDevStorage.controlPlaneDbUrl,
     LOCAL_COMMUNITY_DB_ROOT: localDevStorage.communityDbRoot,
   } as Env

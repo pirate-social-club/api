@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtemp, readdir, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { createClient } from "@libsql/client"
 import {
   applyLocalControlPlaneMigrations,
@@ -202,5 +202,32 @@ describe("applyLocalControlPlaneMigrations", () => {
     await expect(applyLocalControlPlaneMigrations(
       buildStorage(rootDir, databasePath),
     )).rejects.toThrow("migration checksum mismatch for 0047_control_plane_notifications.sql")
+  })
+
+  test("rehomes stale configured local control-plane database paths into the current service .local when the same db already exists", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-local-dev-storage-rehome-"))
+    cleanupPaths.push(rootDir)
+
+    const serviceRoot = join(rootDir, "workspace", "services", "api")
+    const currentLocalDir = join(serviceRoot, ".local")
+    await mkdir(currentLocalDir, { recursive: true })
+
+    const dbFilename = "turso-live-smoke-control-plane.db"
+    const currentDbPath = join(currentLocalDir, dbFilename)
+    await writeFile(currentDbPath, "")
+
+    const staleDbPath = join(rootDir, "old-checkout", "services", "api", ".local", dbFilename)
+    const fakeCoreRepoRoot = join(rootDir, "pirate-core")
+    await mkdir(join(fakeCoreRepoRoot, "db", "control-plane", "migrations"), { recursive: true })
+
+    const storage = resolveLocalDevStorage({
+      CONTROL_PLANE_DATABASE_URL: `file:${staleDbPath}`,
+      PIRATE_CORE_REPO: fakeCoreRepoRoot,
+    }, serviceRoot)
+
+    expect(storage.controlPlaneDbConfiguredPath).toBe(staleDbPath)
+    expect(storage.controlPlaneDbRehomedFromPath).toBe(staleDbPath)
+    expect(storage.controlPlaneDbPath).toBe(currentDbPath)
+    expect(storage.controlPlaneDbUrl).toBe(pathToFileURL(currentDbPath).href)
   })
 })

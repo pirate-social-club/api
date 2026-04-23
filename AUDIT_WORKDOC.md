@@ -15,7 +15,7 @@ Scope:
 
 Repo root:
 
-- `/home/t42/Documents/pirate-v2/pirate-api`
+- `/home/t42/Documents/pirate-workspace/api`
 
 ## Current Assessment
 
@@ -59,7 +59,7 @@ Use this order:
 Suggested commands:
 
 ```bash
-cd /home/t42/Documents/pirate-v2/pirate-api
+cd /home/t42/Documents/pirate-workspace/api
 rtk git status --short
 rtk rg --files services/api/src services/api/tests services/cli/src services/contracts/src
 rtk bun run test
@@ -68,10 +68,10 @@ rtk bun run test
 Repo-native checks:
 
 ```bash
-cd /home/t42/Documents/pirate-v2/pirate-api/services/cli
+cd /home/t42/Documents/pirate-workspace/api/services/cli
 rtk bun run test
 
-cd /home/t42/Documents/pirate-v2/pirate-api/services/api
+cd /home/t42/Documents/pirate-workspace/api/services/api
 rtk bun run test
 ```
 

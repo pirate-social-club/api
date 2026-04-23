@@ -1,7 +1,8 @@
 import { createClient, type Client } from "@libsql/client"
 import { createHash } from "node:crypto"
+import { existsSync } from "node:fs"
 import { mkdir, readFile, readdir } from "node:fs/promises"
-import { dirname, isAbsolute, join, resolve } from "node:path"
+import { basename, dirname, isAbsolute, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { resolveCoreRepoRoot } from "../../shared/core-repo-paths"
 import { splitSqlStatements, toSqliteCompatibleStatement } from "../../shared/sql-migration"
@@ -12,7 +13,9 @@ export type LocalDevStorage = {
   repoRoot: string
   coreRepoRoot: string
   controlPlaneDbUrl: string
+  controlPlaneDbConfiguredPath: string | null
   controlPlaneDbPath: string | null
+  controlPlaneDbRehomedFromPath: string | null
   communityDbRoot: string
 }
 
@@ -41,6 +44,44 @@ function toLocalFilePath(value: string, baseDir: string): string | null {
   return resolveLocalPath(value, baseDir)
 }
 
+function rehomeMissingConfiguredLocalDb(input: {
+  configuredDbUrl: string
+  defaultDataRoot: string
+  resolvedDbPath: string | null
+}): {
+  configuredPath: string | null
+  dbPath: string | null
+  dbUrl: string
+  rehomedFromPath: string | null
+} {
+  const configuredPath = input.resolvedDbPath
+  if (!input.configuredDbUrl || !configuredPath || existsSync(configuredPath)) {
+    return {
+      configuredPath,
+      dbPath: configuredPath,
+      dbUrl: input.configuredDbUrl,
+      rehomedFromPath: null,
+    }
+  }
+
+  const rehomedPath = resolve(input.defaultDataRoot, basename(configuredPath))
+  if (rehomedPath === configuredPath || !existsSync(rehomedPath)) {
+    return {
+      configuredPath,
+      dbPath: configuredPath,
+      dbUrl: input.configuredDbUrl,
+      rehomedFromPath: null,
+    }
+  }
+
+  return {
+    configuredPath,
+    dbPath: rehomedPath,
+    dbUrl: pathToFileURL(rehomedPath).href,
+    rehomedFromPath: configuredPath,
+  }
+}
+
 export function resolveLocalDevStorage(
   values: Record<string, string | undefined>,
   serviceRoot = process.cwd(),
@@ -54,11 +95,15 @@ export function resolveLocalDevStorage(
   const configuredDbUrl = String(values.CONTROL_PLANE_DATABASE_URL || "").trim()
   const configuredCommunityRoot = String(values.LOCAL_COMMUNITY_DB_ROOT || "").trim()
 
-  const controlPlaneDbUrl = configuredDbUrl
+  const initialControlPlaneDbUrl = configuredDbUrl
     ? (configuredDbUrl.startsWith("file:") ? normalizeFileUrl(configuredDbUrl, serviceRoot) : configuredDbUrl)
     : pathToFileURL(resolve(defaultDataRoot, "control-plane.db")).href
 
-  const controlPlaneDbPath = toLocalFilePath(controlPlaneDbUrl, serviceRoot)
+  const resolvedConfiguredDb = rehomeMissingConfiguredLocalDb({
+    configuredDbUrl: initialControlPlaneDbUrl,
+    defaultDataRoot,
+    resolvedDbPath: toLocalFilePath(initialControlPlaneDbUrl, serviceRoot),
+  })
   const communityDbRoot = configuredCommunityRoot
     ? resolveLocalPath(configuredCommunityRoot, serviceRoot)
     : resolve(defaultDataRoot, "community-dbs")
@@ -66,8 +111,10 @@ export function resolveLocalDevStorage(
   return {
     repoRoot,
     coreRepoRoot,
-    controlPlaneDbUrl,
-    controlPlaneDbPath,
+    controlPlaneDbUrl: resolvedConfiguredDb.dbUrl,
+    controlPlaneDbConfiguredPath: resolvedConfiguredDb.configuredPath,
+    controlPlaneDbPath: resolvedConfiguredDb.dbPath,
+    controlPlaneDbRehomedFromPath: resolvedConfiguredDb.rehomedFromPath,
     communityDbRoot,
   }
 }

@@ -150,7 +150,7 @@ export async function json(response: Response): Promise<unknown> {
   return await response.json()
 }
 
-async function applySqlFile(client: Client, path: URL): Promise<void> {
+async function applySqlFile(client: Client, path: string | URL): Promise<void> {
   const rawSql = await readFile(path, "utf8")
   const statements = splitSqlStatements(rawSql)
   for (const statement of statements) {
@@ -169,13 +169,13 @@ export async function createControlPlaneTestClient(options?: {
   databasePath: string
   cleanup: () => Promise<void>
 }> {
+  const serviceRoot = fileURLToPath(new URL("..", import.meta.url))
   const databasePath = join(tmpdir(), `pirate-v2-auth-${randomUUID()}.db`)
   const client = createClient({
     url: `file:${databasePath}`,
   })
 
   if (options?.includeAllMigrations) {
-    const serviceRoot = fileURLToPath(new URL("..", import.meta.url))
     const storage = resolveLocalDevStorage({
       CONTROL_PLANE_DATABASE_URL: `file:${databasePath}`,
       LOCAL_COMMUNITY_DB_ROOT: join(tmpdir(), `pirate-v2-community-${randomUUID()}`),

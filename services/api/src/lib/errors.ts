@@ -55,8 +55,8 @@ export function providerUnavailable(message: string, details: Record<string, unk
   return new HttpError(502, "provider_unavailable", message, true, details)
 }
 
-export function internalError(message: string): HttpError {
-  return new HttpError(500, "internal_error", message)
+export function internalError(message: string, details: Record<string, unknown> | null = null): HttpError {
+  return new HttpError(500, "internal_error", message, false, details)
 }
 
 export function notImplementedError(message: string): HttpError {

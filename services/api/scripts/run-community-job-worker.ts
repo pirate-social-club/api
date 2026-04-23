@@ -2,6 +2,7 @@ import { getCommunityRepository } from "../src/lib/communities/db-community-repo
 import { processAvailableCommunityJobs } from "../src/lib/communities/jobs/runner"
 import type { Env } from "../src/types"
 import { readDevVarsFromCwd } from "./_lib/dev-vars"
+import { sanitizeLocalDevEnv } from "./_lib/local-dev-runtime"
 import {
   applyLocalControlPlaneMigrations,
   ensureLocalDevStorage,
@@ -22,11 +23,23 @@ function hasConfiguredValue(value: string | undefined): boolean {
 }
 
 async function main(): Promise<void> {
-  const baseEnv = {
+  const rawEnv = {
     ...readDevVarsFromCwd(),
     ...process.env,
   }
+  const { values: baseEnv, warnings } = await sanitizeLocalDevEnv(rawEnv)
   const localDevStorage = resolveLocalDevStorage(baseEnv)
+  for (const warning of warnings) {
+    console.warn(`community job worker warning: ${warning}`)
+  }
+  if (localDevStorage.controlPlaneDbRehomedFromPath) {
+    console.warn(
+      [
+        "community job worker warning: CONTROL_PLANE_DATABASE_URL pointed to a missing local file;",
+        `using ${localDevStorage.controlPlaneDbPath} instead of ${localDevStorage.controlPlaneDbRehomedFromPath}.`,
+      ].join(" "),
+    )
+  }
   await ensureLocalDevStorage(localDevStorage)
 
   if (localDevStorage.controlPlaneDbPath) {

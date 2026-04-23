@@ -38,7 +38,7 @@ Because of that:
 For local and shared-workspace verification, `services/contracts` now provides:
 
 ```bash
-cd /home/t42/Documents/pirate-v2/pirate-api/services/contracts
+cd /home/t42/Documents/pirate-workspace/api/services/contracts
 rtk bun run check:fresh
 ```
 
@@ -81,7 +81,7 @@ One of these needs to happen:
 If you change API spec inputs under `specs/api`, also run:
 
 ```bash
-cd /home/t42/Documents/pirate-v2/pirate-api/services/contracts
+cd /home/t42/Documents/pirate-workspace/api/services/contracts
 rtk bun run generate
 rtk bun run check:fresh
 ```

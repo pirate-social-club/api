@@ -36,6 +36,7 @@ import {
   resolveCreateCommunityAuth,
   resolveProvisioningRetryAction,
 } from "../create/shared"
+import { HttpError } from "../../errors"
 
 function resolveProvisionedCredentialId(communityId: string, credentialId: string): string {
   const trimmed = credentialId.trim()
@@ -61,6 +62,23 @@ function isSameNamespaceRoot(
   right: Pick<NamespaceVerification, "family" | "normalized_root_label">,
 ): boolean {
   return left.family === right.family && left.normalized_root_label === right.normalized_root_label
+}
+
+function communityProvisioningFailureDetails(
+  error: unknown,
+  mode: "local_stub" | "turso_operator",
+): Record<string, unknown> {
+  const details: Record<string, unknown> = {
+    mode,
+    cause: error instanceof Error ? error.message : String(error),
+  }
+
+  if (error instanceof HttpError) {
+    details["error_code"] = error.code
+    details["error_status"] = error.status
+  }
+
+  return details
 }
 
 async function upsertLocalNamespaceAttachment(input: {
@@ -272,7 +290,10 @@ async function createNamespacelessCommunity(input: {
       },
     }).catch(() => {})
 
-    throw internalError("Community provisioning failed")
+    throw internalError(
+      "Community provisioning failed",
+      communityProvisioningFailureDetails(error, useProvisionOperator ? "turso_operator" : "local_stub"),
+    )
   }
 }
 
@@ -447,7 +468,10 @@ async function provisionNamespacedCommunity(input: {
         },
       }).catch(() => {})
 
-      throw internalError("Community provisioning failed")
+      throw internalError(
+        "Community provisioning failed",
+        communityProvisioningFailureDetails(error, useProvisionOperator ? "turso_operator" : "local_stub"),
+      )
     }
 
     const communityRow = await repo.getCommunityById(communityId)
