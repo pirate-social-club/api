@@ -10,25 +10,10 @@ import {
   type AuthenticatedEnv,
 } from "../lib/auth-middleware"
 import { castCommentVote, createComment, deleteComment, getCommentContext, listCommentReplies } from "../lib/comments/comment-service"
+import { assertAgentDelegatedWriteMatchesActor } from "../lib/agents/agent-write-authorization"
 import type { CreateCommentRequest } from "../lib/comments/comment-types"
 
 const comments = new Hono<AuthenticatedEnv>()
-
-function assertAgentDelegatedReplyMatchesActor(input: {
-  actor: AuthenticatedEnv["Variables"]["actor"]
-  body: CreateCommentRequest
-}): void {
-  if (input.actor.authType !== "agent_delegated") {
-    return
-  }
-
-  if (input.body.authorship_mode !== "user_agent") {
-    throw badRequestError("Agent delegated credentials can only create user_agent writes")
-  }
-  if (input.body.agent_id?.trim() !== input.actor.delegatedAgentId) {
-    throw badRequestError("agent_id must match the delegated agent credential")
-  }
-}
 
 comments.use("*", async (c, next) => {
   const pathname = new URL(c.req.url).pathname
@@ -59,7 +44,7 @@ comments.post("/:commentId/replies", async (c) => {
   if (!body) {
     throw badRequestError("Invalid comment create payload")
   }
-  assertAgentDelegatedReplyMatchesActor({ actor, body })
+  assertAgentDelegatedWriteMatchesActor({ actor, body })
 
   const result = await createComment({
     env: c.env,

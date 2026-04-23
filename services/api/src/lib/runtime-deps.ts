@@ -111,15 +111,11 @@ export function postgresifySql(sql: string): string {
 
 async function executePostgresStatement(queryable: PostgresQueryable, statement: InStatement | string): Promise<QueryResult> {
   const normalized = normalizeStatement(statement)
-  const result = await queryable.query(postgresqlDdlCompat(postgresifySql(normalized.sql)), normalizeArgs(normalized.args ?? []))
+  const result = await queryable.query(postgresifySql(normalized.sql), normalizeArgs(normalized.args ?? []))
   return {
     rows: normalizeRows(result.rows),
     rowsAffected: result.rowCount ?? undefined,
   }
-}
-
-function postgresqlDdlCompat(sql: string): string {
-  return sql
 }
 
 class LibsqlTransactionAdapter implements Transaction {

@@ -11,6 +11,7 @@ import {
   verifyAgentActionProofSignature,
 } from "./agent-action-proof"
 import { getControlPlaneClient } from "../runtime-deps"
+import type { ActorContext } from "../auth-middleware"
 
 type AgentWritableRequest = {
   authorship_mode?: "human_direct" | "user_agent"
@@ -31,6 +32,22 @@ export type AgentWriteAuthorization = {
   agentDisplayNameSnapshot: string
   agentOwnerHandleSnapshot: string
   agentOwnershipProviderSnapshot: "self_agent_id" | "clawkey"
+}
+
+export function assertAgentDelegatedWriteMatchesActor(input: {
+  actor: ActorContext
+  body: Pick<AgentWritableRequest, "authorship_mode" | "agent_id">
+}): void {
+  if (input.actor.authType !== "agent_delegated") {
+    return
+  }
+
+  if (input.body.authorship_mode !== "user_agent") {
+    throw badRequestError("Agent delegated credentials can only create user_agent writes")
+  }
+  if (input.body.agent_id?.trim() !== input.actor.delegatedAgentId) {
+    throw badRequestError("agent_id must match the delegated agent credential")
+  }
 }
 
 const AGENT_ACTION_PROOF_FRESHNESS_MS = 5 * 60 * 1000

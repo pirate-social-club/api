@@ -4,6 +4,7 @@ import {
   getCommunityRepository,
   type CommunityRepository,
 } from "../lib/communities/db-community-repository"
+import { resolveCommunityIdentifier } from "../lib/communities/community-identifier"
 import {
   getControlPlaneVerificationRepository,
   type VerificationRepository,
@@ -37,7 +38,7 @@ type AuthenticatedRouteContext = {
   get(key: "actor"): ActorContext
 }
 
-export function getCommunityRouteContext(c: AuthenticatedRouteContext): CommunityRouteContext {
+function getCommunityRouteContext(c: AuthenticatedRouteContext): CommunityRouteContext {
   const communityRepository = getCommunityRepository(c.env)
   return {
     actor: c.get("actor"),
@@ -48,28 +49,11 @@ export function getCommunityRouteContext(c: AuthenticatedRouteContext): Communit
   }
 }
 
-async function resolveCommunityIdentifier(
-  communityRepository: CommunityRepository,
-  communityIdentifier: string,
-): Promise<string> {
-  const byId = await communityRepository.getCommunityById(communityIdentifier)
-  if (byId) {
-    return byId.community_id
-  }
-
-  const byRouteSlug = await communityRepository.getCommunityByRouteSlug(communityIdentifier)
-  if (byRouteSlug) {
-    return byRouteSlug.community_id
-  }
-
-  return communityIdentifier
-}
-
 export async function getResolvedCommunityRouteContext(c: AuthenticatedRouteContext): Promise<CommunityRouteContext> {
   const base = getCommunityRouteContext(c)
   return {
     ...base,
-    communityId: await resolveCommunityIdentifier(base.communityRepository, base.communityId),
+    communityId: await resolveCommunityIdentifier(base.communityRepository, base.communityId) ?? base.communityId,
   }
 }
 

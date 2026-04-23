@@ -2,6 +2,7 @@ import { Hono } from "hono"
 import { authError, badRequestError, notFoundError } from "../lib/errors"
 import { authenticate, authenticateOptional } from "../lib/auth-middleware"
 import { getControlPlaneAgentOwnershipRepository } from "../lib/agents/control-plane-agent-ownership-repository"
+import type { ActorContext } from "../lib/auth-middleware"
 import type {
   AgentChallenge,
   AgentOwnershipProvider,
@@ -16,6 +17,21 @@ function requireString(value: unknown, field: string): string {
     throw badRequestError(`Invalid ${field}`)
   }
   return value.trim()
+}
+
+async function resolveActorOrConnectionToken<T>(input: {
+  actor: ActorContext | undefined
+  connectionToken: string | null
+  withActor: (userId: string) => Promise<T>
+  withConnectionToken: (connectionToken: string) => Promise<T>
+}): Promise<T> {
+  if (input.actor?.userId) {
+    return await input.withActor(input.actor.userId)
+  }
+  if (input.connectionToken) {
+    return await input.withConnectionToken(input.connectionToken)
+  }
+  throw authError("Authentication failed")
 }
 
 agents.post("/agent-ownership-pairing", authenticate, async (c) => {
@@ -90,21 +106,21 @@ agents.post("/agent-ownership-sessions/:agentOwnershipSessionId/complete", authe
   }>().catch(() => null)) ?? null
   const repo = getControlPlaneAgentOwnershipRepository(c.env)
   const connectionToken = c.req.header("x-agent-connection-token")?.trim() ?? null
-  const session = actor?.userId
-    ? await repo.completeAgentOwnershipSession({
-      agentOwnershipSessionId: c.req.param("agentOwnershipSessionId"),
-      userId: actor.userId,
+  const agentOwnershipSessionId = c.req.param("agentOwnershipSessionId")
+  const session = await resolveActorOrConnectionToken({
+    actor,
+    connectionToken,
+    withActor: (userId) => repo.completeAgentOwnershipSession({
+      agentOwnershipSessionId,
+      userId,
       providerPayloadRef: body?.provider_payload_ref ?? null,
-    })
-    : connectionToken
-      ? await repo.completeAgentOwnershipSessionWithConnectionToken({
-        agentOwnershipSessionId: c.req.param("agentOwnershipSessionId"),
-        connectionToken,
-        providerPayloadRef: body?.provider_payload_ref ?? null,
-      })
-      : (() => {
-        throw authError("Authentication failed")
-      })()
+    }),
+    withConnectionToken: (token) => repo.completeAgentOwnershipSessionWithConnectionToken({
+      agentOwnershipSessionId,
+      connectionToken: token,
+      providerPayloadRef: body?.provider_payload_ref ?? null,
+    }),
+  })
   if (!session) {
     throw notFoundError("Agent ownership session not found")
   }
@@ -213,21 +229,21 @@ agents.post("/agents/:agentId/credential", authenticateOptional, async (c) => {
   }>().catch(() => null)) ?? null
   const repo = getControlPlaneAgentOwnershipRepository(c.env)
   const connectionToken = c.req.header("x-agent-connection-token")?.trim() ?? null
-  const credential = actor?.userId
-    ? await repo.issueAgentDelegatedCredential({
-      agentId: c.req.param("agentId"),
-      userId: actor.userId,
+  const agentId = c.req.param("agentId")
+  const credential = await resolveActorOrConnectionToken({
+    actor,
+    connectionToken,
+    withActor: (userId) => repo.issueAgentDelegatedCredential({
+      agentId,
+      userId,
       currentOwnershipRecordId: body?.current_ownership_record_id ?? null,
-    })
-    : connectionToken
-      ? await repo.issueAgentDelegatedCredentialWithConnectionToken({
-        agentId: c.req.param("agentId"),
-        connectionToken,
-        currentOwnershipRecordId: body?.current_ownership_record_id ?? null,
-      })
-      : (() => {
-        throw authError("Authentication failed")
-      })()
+    }),
+    withConnectionToken: (token) => repo.issueAgentDelegatedCredentialWithConnectionToken({
+      agentId,
+      connectionToken: token,
+      currentOwnershipRecordId: body?.current_ownership_record_id ?? null,
+    }),
+  })
   return c.json(credential, 200)
 })
 
@@ -239,23 +255,24 @@ agents.post("/agents/:agentId/credential/refresh", authenticateOptional, async (
   if (!body?.refresh_token) {
     throw badRequestError("refresh_token is required")
   }
+  const refreshToken = body.refresh_token
   const repo = getControlPlaneAgentOwnershipRepository(c.env)
   const connectionToken = c.req.header("x-agent-connection-token")?.trim() ?? null
-  const credential = actor?.userId
-    ? await repo.refreshAgentDelegatedCredential({
-      agentId: c.req.param("agentId"),
-      userId: actor.userId,
-      refreshToken: body.refresh_token,
-    })
-    : connectionToken
-      ? await repo.refreshAgentDelegatedCredentialWithConnectionToken({
-        agentId: c.req.param("agentId"),
-        connectionToken,
-        refreshToken: body.refresh_token,
-      })
-      : (() => {
-        throw authError("Authentication failed")
-      })()
+  const agentId = c.req.param("agentId")
+  const credential = await resolveActorOrConnectionToken({
+    actor,
+    connectionToken,
+    withActor: (userId) => repo.refreshAgentDelegatedCredential({
+      agentId,
+      userId,
+      refreshToken,
+    }),
+    withConnectionToken: (token) => repo.refreshAgentDelegatedCredentialWithConnectionToken({
+      agentId,
+      connectionToken: token,
+      refreshToken,
+    }),
+  })
   return c.json(credential, 200)
 })
 

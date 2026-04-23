@@ -31,6 +31,7 @@ import {
 import { badRequestError } from "../lib/errors"
 import { createPost, listCommunityPosts } from "../lib/posts/post-service"
 import { createComment, listPostComments } from "../lib/comments/comment-service"
+import { assertAgentDelegatedWriteMatchesActor } from "../lib/agents/agent-write-authorization"
 import {
   getModerationCaseDetail,
   listCommunityModerationCases,
@@ -46,26 +47,6 @@ import {
 } from "./communities-route-helpers"
 import type { CreatePostRequest } from "../types"
 import type { CreateCommentRequest } from "../lib/comments/comment-types"
-import type { ActorContext } from "../lib/auth-middleware"
-
-function assertAgentDelegatedWriteMatchesActor(input: {
-  actor: ActorContext
-  body: {
-    authorship_mode?: "human_direct" | "user_agent"
-    agent_id?: string | null
-  }
-}): void {
-  if (input.actor.authType !== "agent_delegated") {
-    return
-  }
-
-  if (input.body.authorship_mode !== "user_agent") {
-    throw badRequestError("Agent delegated credentials can only create user_agent writes")
-  }
-  if (input.body.agent_id?.trim() !== input.actor.delegatedAgentId) {
-    throw badRequestError("agent_id must match the delegated agent credential")
-  }
-}
 
 export function registerCommunityCoreRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.post("/", async (c) => {

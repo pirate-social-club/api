@@ -1,14 +1,10 @@
 import { badRequestError, internalError, notFoundError, providerUnavailable } from "./errors"
 import { makeId } from "./helpers"
+import { sha256Hex } from "./crypto"
+import { buildS3SignedRequest, EMPTY_SHA256_HEX, type S3SigningConfig } from "./storage/s3-signing"
 import type { Env } from "../types"
 
-type MediaFilebaseConfig = {
-  accessKey: string
-  secretKey: string
-  bucket: string
-  endpoint: URL
-  region: string
-}
+type MediaFilebaseConfig = S3SigningConfig
 
 type UploadMediaInput<TKind extends string> = {
   env: Env
@@ -34,8 +30,6 @@ type FetchMediaInput = {
   notFoundMessage: string
 }
 
-const encoder = new TextEncoder()
-const EMPTY_SHA256_HEX = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 const allowedMimeTypes = new Set([
   "image/jpeg",
   "image/png",
@@ -145,137 +139,6 @@ function resolveObjectKey<TKind extends string>(
   }
 }
 
-function encodeObjectKeyPath(objectKey: string): string {
-  return objectKey
-    .split("/")
-    .map((segment) => encodeURIComponent(segment))
-    .join("/")
-}
-
-function bytesToHex(bytes: Uint8Array): string {
-  let hex = ""
-  for (const byte of bytes) {
-    hex += byte.toString(16).padStart(2, "0")
-  }
-  return hex
-}
-
-function toArrayBuffer(value: ArrayBuffer | Uint8Array | string): ArrayBuffer {
-  if (typeof value === "string") {
-    return encoder.encode(value).buffer.slice(0)
-  }
-
-  if (value instanceof Uint8Array) {
-    const buffer = new ArrayBuffer(value.byteLength)
-    new Uint8Array(buffer).set(value)
-    return buffer
-  }
-
-  return value
-}
-
-async function sha256Hex(value: ArrayBuffer | Uint8Array | string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", toArrayBuffer(value))
-  return bytesToHex(new Uint8Array(digest))
-}
-
-async function hmacSha256(
-  key: ArrayBuffer | Uint8Array | string,
-  value: string,
-): Promise<ArrayBuffer> {
-  const imported = await crypto.subtle.importKey(
-    "raw",
-    toArrayBuffer(key),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  )
-  return await crypto.subtle.sign("HMAC", imported, encoder.encode(value))
-}
-
-async function buildSigningKey(secretKey: string, dateStamp: string, region: string): Promise<ArrayBuffer> {
-  const kDate = await hmacSha256(`AWS4${secretKey}`, dateStamp)
-  const kRegion = await hmacSha256(kDate, region)
-  const kService = await hmacSha256(kRegion, "s3")
-  return await hmacSha256(kService, "aws4_request")
-}
-
-async function buildSignedRequest(input: {
-  method: "GET" | "PUT"
-  env: Env
-  objectKey: string
-  payloadHash: string
-  headers?: Record<string, string>
-  body?: ArrayBuffer
-}): Promise<Request> {
-  const config = resolveFilebaseConfig(input.env)
-  const url = new URL(config.endpoint.toString())
-  url.pathname = `/${encodeURIComponent(config.bucket)}/${encodeObjectKeyPath(input.objectKey)}`
-
-  const now = new Date()
-  const iso = now.toISOString().replace(/[:-]|\.\d{3}/g, "")
-  const amzDate = `${iso.slice(0, 8)}T${iso.slice(9, 15)}Z`
-  const dateStamp = amzDate.slice(0, 8)
-  const host = url.host
-  const canonicalHeaders = new Map<string, string>([
-    ["host", host],
-    ["x-amz-content-sha256", input.payloadHash],
-    ["x-amz-date", amzDate],
-  ])
-
-  for (const [key, value] of Object.entries(input.headers ?? {})) {
-    canonicalHeaders.set(key.toLowerCase(), value.trim())
-  }
-
-  const sortedEntries = [...canonicalHeaders.entries()].sort(([a], [b]) => a.localeCompare(b))
-  const canonicalHeaderString = sortedEntries
-    .map(([key, value]) => `${key}:${value}`)
-    .join("\n")
-  const signedHeaders = sortedEntries.map(([key]) => key).join(";")
-  const canonicalRequest = [
-    input.method,
-    url.pathname,
-    "",
-    `${canonicalHeaderString}\n`,
-    signedHeaders,
-    input.payloadHash,
-  ].join("\n")
-
-  const scope = `${dateStamp}/${config.region}/s3/aws4_request`
-  const stringToSign = [
-    "AWS4-HMAC-SHA256",
-    amzDate,
-    scope,
-    await sha256Hex(canonicalRequest),
-  ].join("\n")
-  const signingKey = await buildSigningKey(config.secretKey, dateStamp, config.region)
-  const signature = bytesToHex(new Uint8Array(await hmacSha256(signingKey, stringToSign)))
-  const authorization = [
-    "AWS4-HMAC-SHA256 Credential=",
-    `${config.accessKey}/${scope}, `,
-    `SignedHeaders=${signedHeaders}, `,
-    `Signature=${signature}`,
-  ].join("")
-
-  const headers = new Headers()
-  headers.set("authorization", authorization)
-  headers.set("x-amz-content-sha256", input.payloadHash)
-  headers.set("x-amz-date", amzDate)
-
-  for (const [key, value] of sortedEntries) {
-    if (key === "host" || key === "x-amz-content-sha256" || key === "x-amz-date") {
-      continue
-    }
-    headers.set(key, value)
-  }
-
-  return new Request(url.toString(), {
-    method: input.method,
-    headers,
-    body: input.body,
-  })
-}
-
 function buildMediaRef(origin: string, routePrefix: string, kind: string, objectName: string): string {
   return new URL(`/${routePrefix}/${kind}/${objectName}`, origin).toString()
 }
@@ -295,9 +158,9 @@ export async function uploadMedia<TKind extends string>(input: UploadMediaInput<
   const fileBytes = await input.file.arrayBuffer()
   const payloadHash = await sha256Hex(fileBytes)
   const { objectKey, objectName } = resolveObjectKey(input.objectKeyPrefix, input.kind, mimeType)
-  const request = await buildSignedRequest({
+  const request = await buildS3SignedRequest({
     method: "PUT",
-    env: input.env,
+    config: resolveFilebaseConfig(input.env),
     objectKey,
     payloadHash,
     headers: {
@@ -344,9 +207,9 @@ export function assertMediaObject<TKind extends string>(input: AssertMediaObject
 }
 
 export async function fetchMedia(input: FetchMediaInput): Promise<Response> {
-  const request = await buildSignedRequest({
+  const request = await buildS3SignedRequest({
     method: "GET",
-    env: input.env,
+    config: resolveFilebaseConfig(input.env),
     objectKey: input.objectKey,
     payloadHash: EMPTY_SHA256_HEX,
   })
