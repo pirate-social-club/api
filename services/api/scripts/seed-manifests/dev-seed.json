@@ -71,6 +71,48 @@
         "cover_ref": "ipfs://seed-dev-cover-library",
         "preferred_locale": "en-US"
       }
+    },
+    {
+      "key": "samira",
+      "subject": "seed-dev-samira-haddad",
+      "synthetic": true,
+      "verification_provider": "very",
+      "profile": {
+        "display_name": "Samira Haddad",
+        "desired_handle": "samira-haddad",
+        "bio": "Tests Arabic-first reading flows, translation quality, and moderation language.",
+        "avatar_ref": "ipfs://seed-dev-avatar-samira",
+        "cover_ref": "ipfs://seed-dev-cover-courtyard",
+        "preferred_locale": "ar"
+      }
+    },
+    {
+      "key": "lin",
+      "subject": "seed-dev-lin-wei",
+      "synthetic": true,
+      "verification_provider": "very",
+      "profile": {
+        "display_name": "Lin Wei",
+        "desired_handle": "lin-wei-dev",
+        "bio": "Checks Mandarin localization, mobile reading density, and global community launches.",
+        "avatar_ref": "ipfs://seed-dev-avatar-lin",
+        "cover_ref": "ipfs://seed-dev-cover-river",
+        "preferred_locale": "zh-Hans"
+      }
+    },
+    {
+      "key": "diego",
+      "subject": "seed-dev-diego-alvarez",
+      "synthetic": true,
+      "verification_provider": "very",
+      "profile": {
+        "display_name": "Diego Alvarez",
+        "desired_handle": "diego-alvarez",
+        "bio": "Follows Spanish and Portuguese creator communities and marketplace onboarding.",
+        "avatar_ref": "ipfs://seed-dev-avatar-diego",
+        "cover_ref": "ipfs://seed-dev-cover-plaza",
+        "preferred_locale": "es"
+      }
     }
   ],
   "communities": [
@@ -88,8 +130,8 @@
           "policy_template": "standard"
         }
       },
-      "members": ["maya", "eli", "nadia", "omar", "jules"],
-      "followers": ["maya", "eli", "nadia", "omar", "jules"],
+      "members": ["maya", "eli", "nadia", "omar", "jules", "samira", "lin", "diego"],
+      "followers": ["maya", "eli", "nadia", "omar", "jules", "samira", "lin", "diego"],
       "posts": [
         {
           "key": "first-week",
@@ -99,6 +141,7 @@
             "title": "What should a first week here feel like?",
             "body": "I want a new board to feel lived-in without feeling staged. Good prompts, clear norms, and a few real introductions seem better than inflated metrics.",
             "idempotency_key": "seed-dev-founders-first-week",
+            "translation_policy": "machine_allowed",
             "visibility": "public"
           },
           "votes": [
@@ -138,6 +181,7 @@
             "title": "Members-only launch checklist",
             "body": "Before opening wider: owner profile, three starter prompts, two reference links, moderation defaults, and at least one real reply per prompt.",
             "idempotency_key": "seed-dev-founders-internal-checklist",
+            "translation_policy": "machine_allowed",
             "visibility": "members_only"
           }
         }
@@ -157,8 +201,8 @@
           "policy_template": "standard"
         }
       },
-      "members": ["omar", "maya", "eli", "nadia"],
-      "followers": ["omar", "maya", "eli", "nadia", "jules"],
+      "members": ["omar", "maya", "eli", "nadia", "samira", "diego"],
+      "followers": ["omar", "maya", "eli", "nadia", "jules", "samira", "lin", "diego"],
       "posts": [
         {
           "key": "sunday-listening",
@@ -168,6 +212,7 @@
             "title": "Sunday listening: records that sound better after midnight",
             "body": "Mine is Alice Coltrane, Journey in Satchidananda. Curious what everyone reaches for when the room gets quiet.",
             "idempotency_key": "seed-dev-vinyl-sunday-listening",
+            "translation_policy": "machine_allowed",
             "visibility": "public"
           },
           "votes": [
@@ -196,6 +241,7 @@
             "body": "Worth having around before anyone starts posting marketplace finds.",
             "link_url": "https://www.goldminemag.com/collector-resources/record-grading-101",
             "idempotency_key": "seed-dev-vinyl-record-grading-link",
+            "translation_policy": "machine_allowed",
             "visibility": "public"
           },
           "votes": [
@@ -218,8 +264,8 @@
           "policy_template": "standard"
         }
       },
-      "members": ["eli", "maya", "jules"],
-      "followers": ["eli", "maya", "nadia", "jules"],
+      "members": ["eli", "maya", "jules", "lin", "diego"],
+      "followers": ["eli", "maya", "nadia", "jules", "samira", "lin", "diego"],
       "posts": [
         {
           "key": "imported-spaces",
@@ -229,6 +275,7 @@
             "title": "How should imported spaces show provenance?",
             "body": "If a board starts from an existing TLD or space, I think the first screen should say where it came from and who verified it.",
             "idempotency_key": "seed-dev-namespace-imported-spaces",
+            "translation_policy": "machine_allowed",
             "visibility": "public"
           },
           "votes": [
@@ -241,6 +288,122 @@
               "author": "jules",
               "body": "Agree. A simple provenance line near the community title would do more than a long explanation page."
             }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "locale-lab",
+      "owner": "samira",
+      "create": {
+        "display_name": "Locale Lab",
+        "description": "A board for checking translated feeds, right-to-left layouts, and mixed-language posts.",
+        "governance_mode": "centralized",
+        "membership_mode": "open",
+        "default_age_gate_policy": "none",
+        "allow_anonymous_identity": false,
+        "handle_policy": {
+          "policy_template": "standard"
+        }
+      },
+      "members": ["samira", "lin", "diego", "maya", "jules"],
+      "followers": ["samira", "lin", "diego", "maya", "eli", "nadia", "omar", "jules"],
+      "posts": [
+        {
+          "key": "arabic-browser-check",
+          "author": "samira",
+          "body": {
+            "post_type": "text",
+            "title": "Arabic browser check",
+            "body": "This English seed post should appear translated when the reader asks for Arabic, Mandarin, Spanish, or any other supported content locale.",
+            "idempotency_key": "seed-dev-locale-arabic-browser-check",
+            "translation_policy": "machine_allowed",
+            "visibility": "public"
+          },
+          "votes": [
+            { "voter": "lin", "value": 1 },
+            { "voter": "diego", "value": 1 }
+          ],
+          "comments": [
+            {
+              "key": "lin-confirms",
+              "author": "lin",
+              "body": "I will use this to compare the feed in Simplified Chinese and Traditional Chinese."
+            },
+            {
+              "key": "diego-confirms",
+              "author": "diego",
+              "body": "This is also useful for checking Spanish and Portuguese fallback behavior."
+            }
+          ]
+        },
+        {
+          "key": "arabic-source",
+          "author": "samira",
+          "body": {
+            "post_type": "text",
+            "title": "ملاحظة اختبار بالعربية",
+            "body": "هذا منشور تجريبي باللغة العربية للتأكد من أن المحتوى الأصلي يبقى واضحا وأن اللغات الأخرى تحصل على ترجمة.",
+            "idempotency_key": "seed-dev-locale-arabic-source",
+            "translation_policy": "machine_allowed",
+            "visibility": "public"
+          },
+          "votes": [
+            { "voter": "maya", "value": 1 }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "global-launch-desk",
+      "owner": "lin",
+      "create": {
+        "display_name": "Global Launch Desk",
+        "description": "Coordination notes for international launch copy, onboarding, and marketplace examples.",
+        "governance_mode": "centralized",
+        "membership_mode": "open",
+        "default_age_gate_policy": "none",
+        "allow_anonymous_identity": false,
+        "handle_policy": {
+          "policy_template": "standard"
+        }
+      },
+      "members": ["lin", "diego", "samira", "eli", "nadia"],
+      "followers": ["lin", "diego", "samira", "maya", "eli", "nadia", "omar", "jules"],
+      "posts": [
+        {
+          "key": "marketplace-copy",
+          "author": "diego",
+          "body": {
+            "post_type": "text",
+            "title": "Marketplace copy for a global launch",
+            "body": "The same listing should explain price, provenance, delivery, and community rules without sounding like a machine-translated support article.",
+            "idempotency_key": "seed-dev-global-marketplace-copy",
+            "translation_policy": "machine_allowed",
+            "visibility": "public"
+          },
+          "comments": [
+            {
+              "key": "nadia-tone",
+              "author": "nadia",
+              "body": "Tone matters here. The translated version should still feel direct and calm."
+            }
+          ]
+        },
+        {
+          "key": "mandarin-source",
+          "author": "lin",
+          "body": {
+            "post_type": "text",
+            "title": "中文种子帖",
+            "body": "这是一个中文测试帖，用来确认英文、阿拉伯语、西班牙语和其他语言的翻译是否已经生成。",
+            "idempotency_key": "seed-dev-global-mandarin-source",
+            "translation_policy": "machine_allowed",
+            "visibility": "public"
+          },
+          "votes": [
+            { "voter": "samira", "value": 1 },
+            { "voter": "eli", "value": 1 }
           ]
         }
       ]

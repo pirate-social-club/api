@@ -2,6 +2,7 @@ import { Hono } from "hono"
 import { authError, badRequestError, notFoundError } from "../lib/errors"
 import { getProfileRepository } from "../lib/auth/repositories"
 import { authenticate, type AuthenticatedEnv } from "../lib/auth-middleware"
+import { trackApiEvent } from "../lib/analytics/track"
 
 const profiles = new Hono<AuthenticatedEnv>()
 
@@ -124,6 +125,40 @@ profiles.post("/me/global-handle/rename", async (c) => {
   if (!globalHandle) {
     throw authError("Authentication failed")
   }
+  await trackApiEvent(c.env, c.req, {
+    eventName: "handle_claim_succeeded",
+    userId: actor.userId,
+    properties: {
+      source: globalHandle.issuance_source,
+      tier: globalHandle.tier,
+      handle_length: globalHandle.label.replace(/\.pirate$/i, "").length,
+    },
+  })
+  return c.json(globalHandle, 200)
+})
+
+profiles.post("/me/global-handle/reddit-claim", async (c) => {
+  const actor = c.get("actor")
+  const body = await c.req.json<{ desired_label?: unknown }>().catch(() => null)
+  if (!body || typeof body.desired_label !== "string") {
+    throw badRequestError("Invalid reddit handle claim payload")
+  }
+
+  const repository = getProfileRepository(c.env)
+  const globalHandle = await repository.claimRedditGlobalHandle(actor.userId, body.desired_label)
+  if (!globalHandle) {
+    throw authError("Authentication failed")
+  }
+  await trackApiEvent(c.env, c.req, {
+    eventName: "handle_claim_succeeded",
+    userId: actor.userId,
+    properties: {
+      source: "verified_reddit_username",
+      tier: globalHandle.tier,
+      handle_length: globalHandle.label.replace(/\.pirate$/i, "").length,
+      shorter_by: Math.max(0, 8 - globalHandle.label.replace(/\.pirate$/i, "").length),
+    },
+  })
   return c.json(globalHandle, 200)
 })
 

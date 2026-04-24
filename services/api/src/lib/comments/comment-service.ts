@@ -186,6 +186,7 @@ export async function createComment(input: {
         async resolvePublicProfileByHandle() { return null },
         async updateProfile() { return null },
         async renameGlobalHandle() { return null },
+        async claimRedditGlobalHandle() { return null },
         async quoteGlobalHandleUpgrade() { return null },
         async syncLinkedHandles() { return null },
         async setPrimaryPublicHandle() { return null },

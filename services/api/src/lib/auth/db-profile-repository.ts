@@ -9,6 +9,8 @@ import {
   ensureProfilesSourceColumns,
   firstRow,
   getGlobalHandleRow,
+  getLatestExternalReputationSnapshotRow,
+  getLatestRedditVerificationSessionRowForUsername,
   getLinkedHandleRow,
   getProfileRow,
   getUserRow,
@@ -16,13 +18,14 @@ import {
   listActiveWalletAttachmentRows,
   listLinkedHandleRows,
 } from "./auth-db-queries"
-import { serializeGlobalHandle } from "./auth-serializers"
+import { parseRedditImportSummary, serializeGlobalHandle } from "./auth-serializers"
 import {
   assertFreeCleanupRenameEligible,
   buildHandleUpgradeQuote,
   isCleanupRenameAvailable,
   normalizeDesiredGlobalHandleLabel,
 } from "./global-handle-policy"
+import { assertRedditHandleClaimEligible, buildRedditHandleClaimQuote } from "./reddit-handle-claim-policy"
 import { makeId } from "../helpers"
 import { resolveVerifiedEnsProfile } from "./ens-linked-handle-service"
 import type { PublicProfileResolution } from "./repositories"
@@ -285,6 +288,118 @@ export class DatabaseProfileRepository {
     return nextGlobalHandleRow ? serializeGlobalHandle(nextGlobalHandleRow) : null
   }
 
+  async claimRedditGlobalHandle(userId: string, desiredLabel: string): Promise<GlobalHandle | null> {
+    const userRow = await getUserRow(this.client, userId)
+    const profileRow = await getProfileRow(this.client, userId)
+    if (!userRow || !profileRow) {
+      return null
+    }
+
+    const activeGlobalHandleRow = await getGlobalHandleRow(this.client, profileRow.global_handle_id)
+    if (!activeGlobalHandleRow) {
+      return null
+    }
+
+    const desired = normalizeDesiredGlobalHandleLabel(desiredLabel)
+    if (desired.labelDisplay === activeGlobalHandleRow.label_display) {
+      return serializeGlobalHandle(activeGlobalHandleRow)
+    }
+
+    const activeLabelOwnerUserId = await this.getActiveGlobalHandleOwnerUserId(desired.labelNormalized)
+    const latestRedditVerification = await getLatestRedditVerificationSessionRowForUsername(this.client, userId, desired.labelNormalized)
+    const latestRedditSnapshot = await getLatestExternalReputationSnapshotRow(this.client, userId)
+    const latestRedditImportSummary = latestRedditSnapshot?.source_account_handle === desired.labelNormalized
+      ? parseRedditImportSummary(latestRedditSnapshot.snapshot_payload_json)
+      : null
+    const quote = buildRedditHandleClaimQuote({
+      desiredLabel: desired.labelDisplay,
+      labelNormalized: desired.labelNormalized,
+      currentActiveLabelNormalized: activeGlobalHandleRow.label_normalized,
+      labelAvailable: activeLabelOwnerUserId == null || activeLabelOwnerUserId === userId,
+      verifiedRedditUsername: latestRedditVerification?.status === "verified" ? latestRedditVerification.reddit_username : null,
+      latestImportSummary: latestRedditImportSummary,
+    })
+    assertRedditHandleClaimEligible(quote)
+
+    const tx = await this.client.transaction("write")
+    try {
+      const updatedAt = nowIso()
+      const nextGlobalHandleId = makeId("ghd")
+
+      await tx.execute({
+        sql: `
+          UPDATE global_handles
+          SET status = 'redirect',
+              redirect_target_global_handle_id = NULL,
+              replaced_at = ?2,
+              updated_at = ?2
+          WHERE global_handle_id = ?1
+        `,
+        args: [activeGlobalHandleRow.global_handle_id, updatedAt],
+      })
+
+      await tx.execute({
+        sql: `
+          INSERT INTO global_handles (
+            global_handle_id,
+            user_id,
+            label_normalized,
+            label_display,
+            status,
+            tier,
+            issuance_source,
+            redirect_target_global_handle_id,
+            price_paid_usd,
+            free_rename_consumed,
+            issued_at,
+            replaced_at,
+            created_at,
+            updated_at
+          ) VALUES (
+            ?1, ?2, ?3, ?4, 'active', ?5, 'reddit_verified_claim', NULL, NULL, 1, ?6, NULL, ?6, ?6
+          )
+        `,
+        args: [nextGlobalHandleId, userId, desired.labelNormalized, desired.labelDisplay, quote.tier, updatedAt],
+      })
+
+      await tx.execute({
+        sql: `
+          UPDATE global_handles
+          SET redirect_target_global_handle_id = ?2,
+              updated_at = ?3
+          WHERE global_handle_id = ?1
+        `,
+        args: [activeGlobalHandleRow.global_handle_id, nextGlobalHandleId, updatedAt],
+      })
+
+      await tx.execute({
+        sql: `
+          UPDATE profiles
+          SET global_handle_id = ?2,
+              updated_at = ?3
+          WHERE user_id = ?1
+        `,
+        args: [userId, nextGlobalHandleId, updatedAt],
+      })
+
+      await tx.commit()
+    } catch (error) {
+      try {
+        await tx.rollback()
+      } catch {}
+      if (hasUniqueConstraintField(error, "global_handles.label_normalized")) {
+        throw conflictError("Desired label is unavailable")
+      }
+      throw error
+    } finally {
+      tx.close()
+    }
+
+    const nextGlobalHandleRow = await getProfileRow(this.client, userId)
+      .then((nextProfile) => nextProfile ? getGlobalHandleRow(this.client, nextProfile.global_handle_id) : null)
+    return nextGlobalHandleRow ? serializeGlobalHandle(nextGlobalHandleRow) : null
+  }
+
   async quoteGlobalHandleUpgrade(userId: string, desiredLabel: string): Promise<HandleUpgradeQuote | null> {
     const userRow = await getUserRow(this.client, userId)
     const profileRow = await getProfileRow(this.client, userId)
@@ -298,17 +413,24 @@ export class DatabaseProfileRepository {
     }
 
     const desired = normalizeDesiredGlobalHandleLabel(desiredLabel)
-    const activeRow = await this.client.execute({
-      sql: `
-        SELECT user_id
-        FROM global_handles
-        WHERE label_normalized = ?1
-          AND status = 'active'
-        LIMIT 1
-      `,
-      args: [desired.labelNormalized],
+    const activeLabelOwnerUserId = await this.getActiveGlobalHandleOwnerUserId(desired.labelNormalized)
+    const labelAvailable = activeLabelOwnerUserId == null || activeLabelOwnerUserId === userId
+    const latestRedditVerification = await getLatestRedditVerificationSessionRowForUsername(this.client, userId, desired.labelNormalized)
+    const latestRedditSnapshot = await getLatestExternalReputationSnapshotRow(this.client, userId)
+    const latestRedditImportSummary = latestRedditSnapshot?.source_account_handle === desired.labelNormalized
+      ? parseRedditImportSummary(latestRedditSnapshot.snapshot_payload_json)
+      : null
+    const redditQuote = buildRedditHandleClaimQuote({
+      desiredLabel: desired.labelDisplay,
+      labelNormalized: desired.labelNormalized,
+      currentActiveLabelNormalized: activeGlobalHandleRow.label_normalized,
+      labelAvailable,
+      verifiedRedditUsername: latestRedditVerification?.status === "verified" ? latestRedditVerification.reddit_username : null,
+      latestImportSummary: latestRedditImportSummary,
     })
-    const activeLabelOwnerUserId = activeRow.rows[0]?.user_id == null ? null : String(activeRow.rows[0]?.user_id)
+    if (redditQuote.eligible || redditQuote.reason !== "Desired label must match a verified Reddit username") {
+      return redditQuote
+    }
 
     return buildHandleUpgradeQuote({
       desiredLabel: desired.labelDisplay,
@@ -318,8 +440,22 @@ export class DatabaseProfileRepository {
         userCreatedAt: userRow.created_at,
         activeGlobalHandle: serializeGlobalHandle(activeGlobalHandleRow),
       }),
-      labelAvailable: activeLabelOwnerUserId == null || activeLabelOwnerUserId === userId,
+      labelAvailable,
     })
+  }
+
+  private async getActiveGlobalHandleOwnerUserId(labelNormalized: string): Promise<string | null> {
+    const activeRow = await this.client.execute({
+      sql: `
+        SELECT user_id
+        FROM global_handles
+        WHERE label_normalized = ?1
+          AND status = 'active'
+        LIMIT 1
+      `,
+      args: [labelNormalized],
+    })
+    return activeRow.rows[0]?.user_id == null ? null : String(activeRow.rows[0]?.user_id)
   }
 
   async syncLinkedHandles(userId: string): Promise<Profile | null> {

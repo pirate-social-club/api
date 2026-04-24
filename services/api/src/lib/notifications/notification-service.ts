@@ -91,7 +91,7 @@ export async function emitMembershipRequestReceived(input: {
         applicant_handle: input.applicantHandle ?? null,
         membership_request_id: input.requestId,
         request_count: input.requestCount,
-        target_path: `/c/${input.communityId}/mod/membership-requests`,
+        target_path: `/c/${input.communityId}/mod/requests`,
       },
       createdAt: nowIso(),
     })

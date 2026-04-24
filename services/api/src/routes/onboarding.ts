@@ -9,6 +9,17 @@ const onboarding = new Hono<AuthenticatedEnv>()
 
 onboarding.use("*", authenticate)
 
+function importedRedditScoreBucket(score: number | null | undefined): string {
+  if (typeof score !== "number" || !Number.isFinite(score)) {
+    return "unknown"
+  }
+  if (score >= 100_000) return "100k_plus"
+  if (score >= 50_000) return "50k_100k"
+  if (score >= 10_000) return "10k_50k"
+  if (score >= 1_000) return "1k_10k"
+  return "under_1k"
+}
+
 onboarding.get("/status", async (c) => {
   const actor = c.get("actor")
   const repository = getOnboardingStatusRepository(c.env)
@@ -94,10 +105,20 @@ onboarding.post("/reddit-imports", async (c) => {
     properties: { job_status: result.job.status },
   })
   if (result.job.status === "succeeded" || result.job.status === "failed") {
+    const summary = result.job.status === "succeeded"
+      ? await repository.getLatestRedditImportSummary(actor.userId).catch(() => null)
+      : null
     await trackApiEvent(c.env, c.req, {
       eventName: result.job.status === "succeeded" ? "reddit_import_succeeded" : "reddit_import_failed",
       userId: actor.userId,
-      properties: { failure_code: result.job.error_code ?? null },
+      properties: result.job.status === "succeeded"
+        ? {
+            imported_reddit_score_bucket: importedRedditScoreBucket(summary?.imported_reddit_score),
+            top_subreddit_count: summary?.top_subreddits.length ?? 0,
+            suggested_community_count: summary?.suggested_communities.length ?? 0,
+            has_imported_reddit_score: typeof summary?.imported_reddit_score === "number",
+          }
+        : { failure_code: result.job.error_code ?? null },
     })
   }
   return c.json(result, 202)

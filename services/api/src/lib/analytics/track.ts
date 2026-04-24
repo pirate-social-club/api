@@ -65,7 +65,7 @@ const propertyAllowlist: Partial<Record<AnalyticsEventName, readonly string[]>> 
   auth_started: ["provider"],
   unique_human_verification_started: ["provider", "intent"],
   reddit_verification_started: ["surface"],
-  handle_claim_started: ["surface"],
+  handle_claim_started: ["surface", "source", "handle_length"],
   home_feed_viewed: ["sort", "page_depth"],
   community_viewed: ["tab"],
   community_join_requested: ["membership_mode", "status"],

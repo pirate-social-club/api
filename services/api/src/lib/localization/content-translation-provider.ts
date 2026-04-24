@@ -1,4 +1,5 @@
 import type { Env } from "../../types"
+import { normalizeContentLocale } from "./content-locale"
 
 export type ContentTranslationProviderResult = {
   provider: "openrouter"
@@ -27,6 +28,69 @@ function normalizeMessageContent(content: unknown): string {
     .filter((part) => part && typeof part === "object" && (part as { type?: string }).type === "text")
     .map((part) => String((part as { text?: string }).text ?? ""))
     .join("")
+}
+
+type ParsedContentTranslation = {
+  source_language: string
+  target_locale: string
+  outcome: "translated" | "same_language"
+  translated_title: string | null
+  translated_body: string | null
+  translated_caption: string | null
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string"
+}
+
+function targetLocaleMatchesRequested(parsedTargetLocale: string, requestedTargetLocale: string): boolean {
+  const parsed = normalizeContentLocale(parsedTargetLocale)
+  const requested = normalizeContentLocale(requestedTargetLocale)
+  if (!parsed || !requested) {
+    return false
+  }
+  if (parsed === requested) {
+    return true
+  }
+
+  const [parsedLanguage] = parsed.split("-")
+  const [requestedLanguage] = requested.split("-")
+  return Boolean(parsedLanguage && requestedLanguage && parsedLanguage === requestedLanguage && parsed === parsedLanguage)
+}
+
+function validateParsedContentTranslation(value: unknown, requestedTargetLocale: string): ParsedContentTranslation {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("OpenRouter translation response schema mismatch: expected object")
+  }
+
+  const parsed = value as Record<string, unknown>
+  if (typeof parsed.source_language !== "string" || !parsed.source_language.trim()) {
+    throw new Error("OpenRouter translation response schema mismatch: invalid source_language")
+  }
+  if (typeof parsed.target_locale !== "string" || !targetLocaleMatchesRequested(parsed.target_locale, requestedTargetLocale)) {
+    throw new Error("OpenRouter translation response schema mismatch: target_locale mismatch")
+  }
+  if (parsed.outcome !== "translated" && parsed.outcome !== "same_language") {
+    throw new Error("OpenRouter translation response schema mismatch: invalid outcome")
+  }
+  if (!isNullableString(parsed.translated_title)) {
+    throw new Error("OpenRouter translation response schema mismatch: invalid translated_title")
+  }
+  if (!isNullableString(parsed.translated_body)) {
+    throw new Error("OpenRouter translation response schema mismatch: invalid translated_body")
+  }
+  if (!isNullableString(parsed.translated_caption)) {
+    throw new Error("OpenRouter translation response schema mismatch: invalid translated_caption")
+  }
+
+  return {
+    source_language: parsed.source_language,
+    target_locale: parsed.target_locale,
+    outcome: parsed.outcome,
+    translated_title: parsed.translated_title,
+    translated_body: parsed.translated_body,
+    translated_caption: parsed.translated_caption,
+  }
 }
 
 export async function requestContentTranslation(input: {
@@ -134,14 +198,7 @@ export async function requestContentTranslation(input: {
       throw new Error("OpenRouter translation response was empty")
     }
 
-    const parsed = JSON.parse(normalizedContent) as {
-      source_language: string
-      target_locale: string
-      outcome: "translated" | "same_language"
-      translated_title: string | null
-      translated_body: string | null
-      translated_caption: string | null
-    }
+    const parsed = validateParsedContentTranslation(JSON.parse(normalizedContent), input.targetLocale)
 
     return {
       provider: "openrouter",

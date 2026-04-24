@@ -60,6 +60,7 @@ export interface ProfileRepository {
   resolvePublicProfileByHandle(handleLabel: string): Promise<PublicProfileResolution | null>
   updateProfile(userId: string, input: UpdateProfileInput): Promise<Profile | null>
   renameGlobalHandle(userId: string, desiredLabel: string): Promise<GlobalHandle | null>
+  claimRedditGlobalHandle(userId: string, desiredLabel: string): Promise<GlobalHandle | null>
   quoteGlobalHandleUpgrade(userId: string, desiredLabel: string): Promise<HandleUpgradeQuote | null>
   syncLinkedHandles(userId: string): Promise<Profile | null>
   setPrimaryPublicHandle(userId: string, linkedHandleId: string | null): Promise<Profile | null>

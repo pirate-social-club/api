@@ -7,6 +7,7 @@ import {
   isCleanupRenameAvailable,
   normalizeDesiredGlobalHandleLabel,
 } from "./global-handle-policy"
+import { assertRedditHandleClaimEligible, buildRedditHandleClaimQuote } from "./reddit-handle-claim-policy"
 import { exposeMemoryProfile, getMemoryRecordByUserId, getMemoryStore } from "./memory-auth-store"
 import type { GlobalHandle, HandleUpgradeQuote, Profile } from "../../types"
 import type { PublicProfileResolution, UpdateProfileInput } from "./repositories"
@@ -167,6 +168,64 @@ export class MemoryProfileRepository {
     return next
   }
 
+  async claimRedditGlobalHandle(userId: string, desiredLabel: string): Promise<GlobalHandle | null> {
+    const record = getMemoryRecordByUserId(userId)
+    if (!record) {
+      return null
+    }
+
+    const desired = normalizeDesiredGlobalHandleLabel(desiredLabel)
+    if (desired.labelDisplay === record.profile.global_handle.label) {
+      return record.profile.global_handle
+    }
+
+    const labelAvailable = this.isGlobalHandleAvailable(userId, desired.labelDisplay)
+    const quote = buildRedditHandleClaimQuote({
+      desiredLabel: desired.labelDisplay,
+      labelNormalized: desired.labelNormalized,
+      currentActiveLabelNormalized: record.profile.global_handle.label.replace(/\.pirate$/i, "").toLowerCase(),
+      labelAvailable,
+      verifiedRedditUsername: record.redditVerification?.status === "verified" ? record.redditVerification.reddit_username : null,
+      latestImportSummary: record.redditImportSummary,
+    })
+    assertRedditHandleClaimEligible(quote)
+
+    const updatedAt = nowIso()
+    const next: GlobalHandle = {
+      global_handle_id: makeId("ghl"),
+      label: desired.labelDisplay,
+      tier: quote.tier,
+      status: "active",
+      issuance_source: "reddit_verified_claim",
+      redirect_target_global_handle_id: null,
+      price_paid_usd: null,
+      free_rename_consumed: true,
+      issued_at: updatedAt,
+      replaced_at: null,
+    }
+
+    record.profile = {
+      ...record.profile,
+      global_handle: next,
+      linked_handles: [
+        {
+          linked_handle_id: `global:${next.global_handle_id}`,
+          label: next.label,
+          kind: "pirate",
+          verification_state: "verified",
+        },
+        ...(record.profile.linked_handles ?? []).filter((handle) => handle.kind !== "pirate"),
+      ],
+      updated_at: updatedAt,
+    }
+    record.onboarding = {
+      ...record.onboarding,
+      generated_handle_assigned: false,
+      cleanup_rename_available: false,
+    }
+    return next
+  }
+
   async quoteGlobalHandleUpgrade(userId: string, desiredLabel: string): Promise<HandleUpgradeQuote | null> {
     const record = getMemoryRecordByUserId(userId)
     if (!record) {
@@ -174,12 +233,18 @@ export class MemoryProfileRepository {
     }
 
     const desired = normalizeDesiredGlobalHandleLabel(desiredLabel)
-    const store = getMemoryStore()
-    const labelAvailable = ![...store.byUserId.values()].some((candidateRecord) => (
-      candidateRecord.user.user_id !== userId
-      && candidateRecord.profile.global_handle.status === "active"
-      && candidateRecord.profile.global_handle.label.toLowerCase() === desired.labelDisplay.toLowerCase()
-    ))
+    const labelAvailable = this.isGlobalHandleAvailable(userId, desired.labelDisplay)
+    const redditQuote = buildRedditHandleClaimQuote({
+      desiredLabel: desired.labelDisplay,
+      labelNormalized: desired.labelNormalized,
+      currentActiveLabelNormalized: record.profile.global_handle.label.replace(/\.pirate$/i, "").toLowerCase(),
+      labelAvailable,
+      verifiedRedditUsername: record.redditVerification?.status === "verified" ? record.redditVerification.reddit_username : null,
+      latestImportSummary: record.redditImportSummary,
+    })
+    if (redditQuote.eligible || redditQuote.reason !== "Desired label must match a verified Reddit username") {
+      return redditQuote
+    }
 
     return buildHandleUpgradeQuote({
       desiredLabel: desired.labelDisplay,
@@ -191,5 +256,14 @@ export class MemoryProfileRepository {
       }),
       labelAvailable,
     })
+  }
+
+  private isGlobalHandleAvailable(userId: string, labelDisplay: string): boolean {
+    const store = getMemoryStore()
+    return ![...store.byUserId.values()].some((candidateRecord) => (
+      candidateRecord.user.user_id !== userId
+      && candidateRecord.profile.global_handle.status === "active"
+      && candidateRecord.profile.global_handle.label.toLowerCase() === labelDisplay.toLowerCase()
+    ))
   }
 }

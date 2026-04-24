@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import app from "../../../src/index"
+import { setRedditSnapshotImporterForTests, setRedditVerificationCheckerForTests } from "../../../src/lib/onboarding/reddit-bootstrap"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { exchangeJwt, requestJson } from "./profiles-test-helpers"
 
@@ -7,9 +8,13 @@ let cleanup: (() => Promise<void>) | null = null
 
 beforeEach(() => {
   resetRuntimeCaches()
+  setRedditVerificationCheckerForTests(null)
+  setRedditSnapshotImporterForTests(null)
 })
 
 afterEach(async () => {
+  setRedditVerificationCheckerForTests(null)
+  setRedditSnapshotImporterForTests(null)
   if (cleanup) {
     await cleanup()
     cleanup = null
@@ -239,7 +244,10 @@ describe("profile routes", () => {
   })
 
   test("free cleanup rename updates the active global handle and consumes rename availability", async () => {
-    const ctx = await createRouteTestContext()
+    const ctx = await createRouteTestContext({
+      ANALYTICS_ENABLED: "true",
+      ANALYTICS_HMAC_SECRET: "analytics-secret",
+    })
     cleanup = ctx.cleanup
 
     const session = await exchangeJwt(ctx.env, "profile-rename-user")
@@ -279,6 +287,24 @@ describe("profile routes", () => {
     expect(onboarding.status).toBe(200)
     const onboardingBody = await json(onboarding) as { cleanup_rename_available: boolean }
     expect(onboardingBody.cleanup_rename_available).toBe(false)
+
+    const analytics = await ctx.client.execute({
+      sql: `
+        SELECT properties_json
+        FROM analytics_outbox
+        WHERE event_name = 'handle_claim_succeeded'
+        ORDER BY created_at DESC
+        LIMIT 1
+      `,
+    })
+    const analyticsProperties = JSON.parse(String(analytics.rows[0]?.properties_json ?? "{}")) as {
+      source?: string
+      tier?: string
+      handle_length?: number
+    }
+    expect(analyticsProperties.source).toBe("free_cleanup_rename")
+    expect(analyticsProperties.tier).toBe("standard")
+    expect(analyticsProperties.handle_length).toBe(12)
   })
 
   test("global handle rename returns conflict when the desired label is already active", async () => {
@@ -341,6 +367,103 @@ describe("profile routes", () => {
     expect(premiumQuoteBody.price_usd).toBe(250)
     expect(premiumQuoteBody.eligible).toBe(true)
     expect(premiumQuoteBody.reason ?? null).toBeNull()
+  })
+
+  test("reddit claim can issue a shorter verified username handle without using the cleanup rename path", async () => {
+    const ctx = await createRouteTestContext({
+      ANALYTICS_ENABLED: "true",
+      ANALYTICS_HMAC_SECRET: "analytics-secret",
+    })
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "profile-reddit-claim-user")
+    const createdVerification = await requestJson("http://pirate.test/onboarding/reddit-verification", "POST", {
+      reddit_username: "captain",
+    }, ctx.env, session.accessToken)
+    expect(createdVerification.status).toBe(200)
+
+    setRedditVerificationCheckerForTests(async () => ({ status: "verified" }))
+    const verified = await requestJson("http://pirate.test/onboarding/reddit-verification", "POST", {
+      reddit_username: "captain",
+    }, ctx.env, session.accessToken)
+    expect(verified.status).toBe(200)
+
+    setRedditSnapshotImporterForTests(async ({ redditUsername }) => ({
+      reddit_username: redditUsername,
+      imported_at: "2026-04-24T10:00:00.000Z",
+      account_age_days: 900,
+      imported_reddit_score: 12_000,
+      top_subreddits: [
+        {
+          subreddit: "pirate",
+          karma: 12_000,
+          posts: 10,
+          rank_source: "karma",
+        },
+      ],
+      moderator_of: [],
+      inferred_interests: [],
+      suggested_communities: [],
+      coverage_note: "Historical archival snapshot.",
+    }))
+    const imported = await requestJson("http://pirate.test/onboarding/reddit-imports", "POST", {
+      reddit_username: "captain",
+    }, ctx.env, session.accessToken)
+    expect(imported.status).toBe(202)
+
+    const quote = await requestJson("http://pirate.test/profiles/me/global-handle/upgrade-quote", "POST", {
+      desired_label: "captain",
+    }, ctx.env, session.accessToken)
+    expect(quote.status).toBe(200)
+    const quoteBody = await json(quote) as {
+      desired_label: string
+      tier: string
+      price_usd: number
+      eligible: boolean
+      benefit_source: string | null
+      reputation_discount_usd: number | null
+    }
+    expect(quoteBody.desired_label).toBe("captain.pirate")
+    expect(quoteBody.tier).toBe("premium")
+    expect(quoteBody.price_usd).toBe(0)
+    expect(quoteBody.eligible).toBe(true)
+    expect(quoteBody.benefit_source).toBe("verified_reddit_username")
+    expect(quoteBody.reputation_discount_usd).toBe(250)
+
+    const claimed = await requestJson("http://pirate.test/profiles/me/global-handle/reddit-claim", "POST", {
+      desired_label: "captain",
+    }, ctx.env, session.accessToken)
+    expect(claimed.status).toBe(200)
+    const claimedBody = await json(claimed) as {
+      label: string
+      tier: string
+      issuance_source: string
+      free_rename_consumed: boolean
+    }
+    expect(claimedBody.label).toBe("captain.pirate")
+    expect(claimedBody.tier).toBe("premium")
+    expect(claimedBody.issuance_source).toBe("reddit_verified_claim")
+    expect(claimedBody.free_rename_consumed).toBe(true)
+
+    const analytics = await ctx.client.execute({
+      sql: `
+        SELECT properties_json
+        FROM analytics_outbox
+        WHERE event_name = 'handle_claim_succeeded'
+        ORDER BY created_at DESC
+        LIMIT 1
+      `,
+    })
+    const analyticsProperties = JSON.parse(String(analytics.rows[0]?.properties_json ?? "{}")) as {
+      source?: string
+      tier?: string
+      handle_length?: number
+      shorter_by?: number
+    }
+    expect(analyticsProperties.source).toBe("verified_reddit_username")
+    expect(analyticsProperties.tier).toBe("premium")
+    expect(analyticsProperties.handle_length).toBe(7)
+    expect(analyticsProperties.shorter_by).toBe(1)
   })
 
 })

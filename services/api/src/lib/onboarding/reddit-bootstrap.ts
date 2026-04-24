@@ -93,7 +93,7 @@ async function defaultRedditImporter(input: {
   const accountAgeDays = earliestEpoch == null
     ? null
     : Math.max(0, Math.floor((Date.now() - (earliestEpoch * 1000)) / 86_400_000))
-  const globalKarma = allThings.reduce(
+  const importedRedditScore = allThings.reduce(
     (total, thing) => total + (typeof thing.score === "number" ? thing.score : 0),
     0,
   )
@@ -103,7 +103,7 @@ async function defaultRedditImporter(input: {
     reddit_username: input.redditUsername,
     imported_at: nowIso(),
     account_age_days: accountAgeDays,
-    global_karma: allThings.length > 0 ? globalKarma : null,
+    imported_reddit_score: allThings.length > 0 ? importedRedditScore : null,
     top_subreddits: topSubreddits,
     moderator_of: [],
     inferred_interests: [],

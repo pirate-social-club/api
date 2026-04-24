@@ -83,7 +83,10 @@ describe("onboarding reddit routes", () => {
   })
 
   test("reddit verification and import summary work through the full route stack", async () => {
-    const ctx = await createRouteTestContext()
+    const ctx = await createRouteTestContext({
+      ANALYTICS_ENABLED: "true",
+      ANALYTICS_HMAC_SECRET: "analytics-secret",
+    })
     cleanup = ctx.cleanup
 
     const session = await exchangeJwt(ctx.env, "reddit-onboarding-user")
@@ -134,7 +137,7 @@ describe("onboarding reddit routes", () => {
       reddit_username: redditUsername,
       imported_at: "2026-04-10T12:00:00.000Z",
       account_age_days: 1200,
-      global_karma: 42000,
+      imported_reddit_score: 42000,
       top_subreddits: [
         {
           subreddit: "hiphopheads",
@@ -189,16 +192,36 @@ describe("onboarding reddit routes", () => {
     expect(summary.status).toBe(200)
     const summaryBody = await json(summary) as {
       reddit_username: string
-      global_karma: number | null
+      imported_reddit_score: number | null
       suggested_communities: Array<{ community_id: string; name: string; reason: string }>
     }
     expect(summaryBody.reddit_username).toBe("technohippie")
-    expect(summaryBody.global_karma).toBe(42000)
+    expect(summaryBody.imported_reddit_score).toBe(42000)
     expect(summaryBody.suggested_communities).toEqual([{
       community_id: "cmt_hiphop",
       name: "Hip Hop",
       reason: "Based on your Reddit history",
     }])
+
+    const analytics = await ctx.client.execute({
+      sql: `
+        SELECT properties_json
+        FROM analytics_outbox
+        WHERE event_name = 'reddit_import_succeeded'
+        ORDER BY created_at DESC
+        LIMIT 1
+      `,
+    })
+    const analyticsProperties = JSON.parse(String(analytics.rows[0]?.properties_json ?? "{}")) as {
+      imported_reddit_score_bucket?: string
+      top_subreddit_count?: number
+      suggested_community_count?: number
+      has_imported_reddit_score?: boolean
+    }
+    expect(analyticsProperties.imported_reddit_score_bucket).toBe("10k_50k")
+    expect(analyticsProperties.top_subreddit_count).toBe(1)
+    expect(analyticsProperties.suggested_community_count).toBe(1)
+    expect(analyticsProperties.has_imported_reddit_score).toBe(true)
   })
 
   test("dismiss persists onboarding completion without consuming cleanup rename", async () => {

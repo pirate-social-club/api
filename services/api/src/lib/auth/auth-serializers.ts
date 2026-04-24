@@ -368,12 +368,13 @@ export function serializeRedditVerification(row: RedditVerificationSessionRow): 
 }
 
 export function parseRedditImportSummary(raw: string): RedditImportSummary {
-  const parsed = JSON.parse(raw) as RedditImportSummary
+  const parsed = JSON.parse(raw) as RedditImportSummary & { global_karma?: number | null }
+  const importedRedditScore = parsed.imported_reddit_score ?? parsed.global_karma ?? null
   return {
     reddit_username: parsed.reddit_username,
     imported_at: parsed.imported_at,
     account_age_days: parsed.account_age_days ?? null,
-    global_karma: parsed.global_karma ?? null,
+    imported_reddit_score: importedRedditScore,
     top_subreddits: Array.isArray(parsed.top_subreddits) ? parsed.top_subreddits : [],
     moderator_of: Array.isArray(parsed.moderator_of) ? parsed.moderator_of : [],
     inferred_interests: Array.isArray(parsed.inferred_interests) ? parsed.inferred_interests : [],

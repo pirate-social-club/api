@@ -113,6 +113,8 @@ export type RedditImportSummary = {
   reddit_username: string;
   imported_at: string;
   account_age_days?: number | null;
+  imported_reddit_score?: number | null;
+  /** @deprecated Use imported_reddit_score. */
   global_karma?: number | null;
   top_subreddits: Array<{
     subreddit: string;
