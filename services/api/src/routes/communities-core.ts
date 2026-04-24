@@ -29,6 +29,11 @@ import {
   resolveCommunityDonationPartner,
 } from "../lib/communities/community-service"
 import { badRequestError } from "../lib/errors"
+import {
+  getCommunityMachineAccessPolicy,
+  updateCommunityMachineAccessPolicy,
+  type CommunityMachineAccessPolicyPatch,
+} from "../lib/communities/community-machine-access-service"
 import { createPost, listCommunityPosts } from "../lib/posts/post-service"
 import { createComment, listPostComments } from "../lib/comments/comment-service"
 import { assertAgentDelegatedWriteMatchesActor } from "../lib/agents/agent-write-authorization"
@@ -72,6 +77,30 @@ export function registerCommunityCoreRoutes(communities: Hono<AuthenticatedEnv>)
       communityId,
       locale: c.req.query("locale") ?? null,
       repository: communityRepository,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.get("/:communityId/machine-access-policy", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await getCommunityMachineAccessPolicy({
+      env: c.env,
+      communityRepository,
+      communityId,
+      userId: actor.userId,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.patch("/:communityId/machine-access-policy", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const body = await c.req.json<CommunityMachineAccessPolicyPatch>().catch(() => null)
+    const result = await updateCommunityMachineAccessPolicy({
+      env: c.env,
+      communityRepository,
+      communityId,
+      userId: actor.userId,
+      body,
     })
     return c.json(result, 200)
   })

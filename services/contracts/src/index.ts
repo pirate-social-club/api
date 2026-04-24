@@ -180,6 +180,14 @@ export type VeryWidgetLaunch = {
   type_id: string;
   query: Record<string, unknown>;
   verify_url: string;
+  session_binding: VerySessionBinding;
+};
+
+export type VerySessionBinding = {
+  uniqueness_domain: string;
+  binding_value: string;
+  binding_field?: "pseudonym" | "challenge" | null;
+  challenge_expires_at: string;
 };
 
 export type RequestedVerificationCapability = "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender";
@@ -2282,9 +2290,9 @@ type RootPostQuotaRule = {
 
 type SanctionsClearCapabilityState = {
   state: "unverified" | "verified" | "expired";
-  provider?: "self" | "passport" | null;
+  provider?: "passport" | null;
   proof_type?: "sanctions_clear" | null;
-  mechanism?: "self_ofac" | "passport_clean_hands" | "CleanHands" | null;
+  mechanism?: "passport_clean_hands" | "CleanHands" | null;
   verified_at?: string | null;
 };
 

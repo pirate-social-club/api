@@ -47,6 +47,107 @@ describe("community routes", () => {
     }
     expect(communityCreateBody.community.display_name).toBe("Open Create Club")
     expect(communityCreateBody.community.community_id.startsWith("cmt_")).toBe(true)
+
+    const policyResponse = await app.request(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}/machine-access-policy`,
+      {
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(policyResponse.status).toBe(200)
+    const policy = await json(policyResponse) as {
+      community_id: string
+      policy_origin: string
+      access_mode: string
+      included_surfaces: {
+        community_identity: boolean
+        community_stats: boolean
+        thread_cards: boolean
+        thread_bodies: boolean
+        top_comments: boolean
+        events: boolean
+      }
+      allowed_uses: {
+        summarization: boolean
+        analytics: boolean
+        ai_training: string
+      }
+      operational_limits: {
+        anonymous_rate_tier: string
+        authenticated_rate_tier: string
+        top_comments_limit: number
+        max_lookback_window: string
+      }
+    }
+    expect(policy.community_id).toBe(communityCreateBody.community.community_id)
+    expect(policy.policy_origin).toBe("default")
+    expect(policy.access_mode).toBe("structured_api")
+    expect(policy.included_surfaces).toEqual({
+      community_identity: true,
+      community_stats: true,
+      thread_cards: true,
+      thread_bodies: true,
+      top_comments: true,
+      events: true,
+    })
+    expect(policy.allowed_uses).toEqual({
+      summarization: true,
+      analytics: true,
+      ai_training: "prohibited",
+    })
+    expect(policy.operational_limits).toEqual({
+      anonymous_rate_tier: "low",
+      authenticated_rate_tier: "standard",
+      top_comments_limit: 10,
+      max_lookback_window: "all_time",
+    })
+
+    const patchPolicyResponse = await app.request(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}/machine-access-policy`,
+      {
+        method: "PATCH",
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          included_surfaces: {
+            community_stats: false,
+            top_comments: false,
+          },
+        }),
+      },
+      ctx.env,
+    )
+    expect(patchPolicyResponse.status).toBe(200)
+    const patchedPolicy = await json(patchPolicyResponse) as typeof policy
+    expect(patchedPolicy.policy_origin).toBe("explicit")
+    expect(patchedPolicy.included_surfaces).toEqual({
+      community_identity: true,
+      community_stats: false,
+      thread_cards: true,
+      thread_bodies: true,
+      top_comments: false,
+      events: true,
+    })
+
+    const persistedPolicyResponse = await app.request(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}/machine-access-policy`,
+      {
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(persistedPolicyResponse.status).toBe(200)
+    const persistedPolicy = await json(persistedPolicyResponse) as typeof policy
+    expect(persistedPolicy.policy_origin).toBe("explicit")
+    expect(persistedPolicy.included_surfaces.community_stats).toBe(false)
+    expect(persistedPolicy.included_surfaces.top_comments).toBe(false)
   })
 
   test("18_plus community create requires age verification but not unique_human", async () => {
@@ -400,6 +501,12 @@ describe("community routes", () => {
           translation_state: string
         }>
       } | null
+      omitted_surfaces: unknown[]
+      links: {
+        self: { href: string; type: string }
+        markdown: { href: string; type: string }
+        posts: { href: string; type: string }
+      }
       viewer_membership_status: string | null
     }
     expect(previewBody.community_id).toBe(communityCreateBody.community.community_id)
@@ -419,6 +526,20 @@ describe("community routes", () => {
     expect(previewBody.localized_text?.items.some((item) => /^community\.rule\..+\.title$/.test(item.field_key))).toBe(true)
     expect(previewBody.localized_text?.items.some((item) => /^community\.rule\..+\.body$/.test(item.field_key))).toBe(true)
     expect(previewBody.viewer_membership_status).toBe("not_member")
+    expect(preview.headers.get("link")).toContain("/public-communities/")
+    expect(previewBody.omitted_surfaces).toEqual([])
+    expect(previewBody.links.self.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.community_id}`)
+    expect(previewBody.links.markdown.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.community_id}?format=markdown`)
+    expect(previewBody.links.posts.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.community_id}/posts`)
+
+    const previewMarkdown = await app.request(
+      `http://pirate.test/public-communities/${communityCreateBody.community.community_id}?format=markdown`,
+      {},
+      ctx.env,
+    )
+    expect(previewMarkdown.status).toBe(200)
+    expect(previewMarkdown.headers.get("content-type")).toContain("text/markdown")
+    expect(await previewMarkdown.text()).toContain("# Public Community Club")
 
     const posts = await app.request(
       `http://pirate.test/public-communities/${communityCreateBody.community.route_slug ?? communityCreateBody.community.community_id}/posts`,
@@ -427,8 +548,22 @@ describe("community routes", () => {
     )
     expect(posts.status).toBe(200)
     const postsBody = await json(posts) as {
-      items: Array<{ post: { post_id: string; title: string | null } }>
+      items: Array<{
+        post: { post_id: string; title: string | null }
+        omitted_surfaces: unknown[]
+        links: {
+          self: { href: string; type: string }
+          community: { href: string; type: string }
+          markdown: { href: string; type: string }
+          top_comments: { href: string; type: string }
+        }
+      }>
       next_cursor: string | null
+      omitted_surfaces: unknown[]
+      links: {
+        self: { href: string; type: string }
+        community: { href: string; type: string }
+      }
     }
     expect(postsBody.items).toHaveLength(2)
     expect(postsBody.items[0]?.post.post_id).toBe(secondPostBody.post_id)
@@ -436,6 +571,22 @@ describe("community routes", () => {
     expect(postsBody.items[1]?.post.post_id).toBe(createdPostBody.post_id)
     expect(postsBody.items[1]?.post.title).toBe("Public route post")
     expect(postsBody.next_cursor).toBeNull()
+    expect(posts.headers.get("link")).toContain("/public-communities/")
+    expect(postsBody.omitted_surfaces).toEqual([])
+    expect(postsBody.links.community.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.community_id}`)
+    expect(postsBody.items[0]?.omitted_surfaces).toEqual([])
+    expect(postsBody.items[0]?.links.self.href).toBe(`http://pirate.test/public-posts/${secondPostBody.post_id}`)
+    expect(postsBody.items[0]?.links.markdown.href).toBe(`http://pirate.test/public-posts/${secondPostBody.post_id}?format=markdown`)
+    expect(postsBody.items[0]?.links.top_comments.href).toBe(`http://pirate.test/public-posts/${secondPostBody.post_id}/top-comments`)
+
+    const postsMarkdown = await app.request(
+      `http://pirate.test/public-communities/${communityCreateBody.community.community_id}/posts?format=markdown`,
+      {},
+      ctx.env,
+    )
+    expect(postsMarkdown.status).toBe(200)
+    expect(postsMarkdown.headers.get("content-type")).toContain("text/markdown")
+    expect(await postsMarkdown.text()).toContain("Second public route post")
 
     const publicPost = await app.request(
       `http://pirate.test/public-posts/${createdPostBody.post_id}?locale=zh-Hans`,
@@ -447,11 +598,153 @@ describe("community routes", () => {
       post: { post_id: string; title: string | null }
       resolved_locale: string
       translation_state: string
+      omitted_surfaces: unknown[]
+      links: {
+        self: { href: string; type: string }
+        community: { href: string; type: string }
+        markdown: { href: string; type: string }
+        top_comments: { href: string; type: string }
+      }
     }
     expect(publicPostBody.post.post_id).toBe(createdPostBody.post_id)
     expect(publicPostBody.post.title).toBe("Public route post")
     expect(publicPostBody.resolved_locale).toBe("zh-Hans")
     expect(publicPostBody.translation_state).toBe("policy_blocked")
+    expect(publicPost.headers.get("link")).toContain("/public-posts/")
+    expect(publicPostBody.omitted_surfaces).toEqual([])
+    expect(publicPostBody.links.self.href).toBe(`http://pirate.test/public-posts/${createdPostBody.post_id}`)
+    expect(publicPostBody.links.community.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.community_id}`)
+    expect(publicPostBody.links.markdown.href).toBe(`http://pirate.test/public-posts/${createdPostBody.post_id}?format=markdown`)
+    expect(publicPostBody.links.top_comments.href).toBe(`http://pirate.test/public-posts/${createdPostBody.post_id}/top-comments`)
+
+    const publicPostMarkdown = await app.request(
+      `http://pirate.test/public-posts/${createdPostBody.post_id}?format=markdown`,
+      {},
+      ctx.env,
+    )
+    expect(publicPostMarkdown.status).toBe(200)
+    expect(publicPostMarkdown.headers.get("content-type")).toContain("text/markdown")
+    expect(await publicPostMarkdown.text()).toContain("This should be visible without a session.")
+
+    const topComments = await app.request(
+      `http://pirate.test/public-posts/${createdPostBody.post_id}/top-comments`,
+      {},
+      ctx.env,
+    )
+    expect(topComments.status).toBe(200)
+    const topCommentsBody = await json(topComments) as {
+      items: unknown[]
+      top_comments_limit: number
+      links: {
+        self: { href: string; type: string }
+        markdown: { href: string; type: string }
+        post: { href: string; type: string }
+        community: { href: string; type: string }
+      }
+    }
+    expect(topCommentsBody.items).toEqual([])
+    expect(topCommentsBody.top_comments_limit).toBe(10)
+    expect(topCommentsBody.links.self.href).toBe(`http://pirate.test/public-posts/${createdPostBody.post_id}/top-comments`)
+    expect(topCommentsBody.links.markdown.href).toBe(`http://pirate.test/public-posts/${createdPostBody.post_id}/top-comments?format=markdown`)
+    expect(topCommentsBody.links.post.href).toBe(`http://pirate.test/public-posts/${createdPostBody.post_id}`)
+    expect(topCommentsBody.links.community.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.community_id}`)
+
+    const topCommentsMarkdown = await app.request(
+      `http://pirate.test/public-posts/${createdPostBody.post_id}/top-comments?format=markdown`,
+      {},
+      ctx.env,
+    )
+    expect(topCommentsMarkdown.status).toBe(200)
+    expect(topCommentsMarkdown.headers.get("content-type")).toContain("text/markdown")
+    expect(await topCommentsMarkdown.text()).toContain("# Top comments for Public route post")
+
+    const patchPolicyResponse = await app.request(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}/machine-access-policy`,
+      {
+        method: "PATCH",
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          included_surfaces: {
+            community_stats: false,
+            thread_bodies: false,
+            top_comments: false,
+          },
+        }),
+      },
+      ctx.env,
+    )
+    expect(patchPolicyResponse.status).toBe(200)
+
+    const disabledPreview = await app.request(
+      `http://pirate.test/public-communities/${communityCreateBody.community.community_id}`,
+      {},
+      ctx.env,
+    )
+    expect(disabledPreview.status).toBe(200)
+    const disabledPreviewBody = await json(disabledPreview) as {
+      omitted_surfaces: Array<{ surface: string; reason: string }>
+      member_count?: number
+      follower_count?: number
+    }
+    expect("member_count" in disabledPreviewBody).toBe(false)
+    expect("follower_count" in disabledPreviewBody).toBe(false)
+    expect(disabledPreviewBody.omitted_surfaces).toEqual([
+      { surface: "community_stats", reason: "community_opt_out" },
+    ])
+
+    const disabledPosts = await app.request(
+      `http://pirate.test/public-communities/${communityCreateBody.community.community_id}/posts`,
+      {},
+      ctx.env,
+    )
+    expect(disabledPosts.status).toBe(200)
+    const disabledPostsBody = await json(disabledPosts) as {
+      omitted_surfaces: Array<{ surface: string; reason: string }>
+      items: Array<{
+        post: Record<string, unknown>
+        omitted_surfaces: Array<{ surface: string; reason: string }>
+        links: Record<string, unknown>
+      }>
+    }
+    expect(disabledPostsBody.omitted_surfaces).toEqual([
+      { surface: "thread_bodies", reason: "community_opt_out" },
+      { surface: "top_comments", reason: "community_opt_out" },
+    ])
+    expect("body" in disabledPostsBody.items[0]!.post).toBe(false)
+    expect("top_comments" in disabledPostsBody.items[0]!.links).toBe(false)
+    expect(disabledPostsBody.items[0]!.omitted_surfaces).toEqual(disabledPostsBody.omitted_surfaces)
+
+    const disabledPublicPost = await app.request(
+      `http://pirate.test/public-posts/${createdPostBody.post_id}`,
+      {},
+      ctx.env,
+    )
+    expect(disabledPublicPost.status).toBe(200)
+    const disabledPublicPostBody = await json(disabledPublicPost) as {
+      post: Record<string, unknown>
+      omitted_surfaces: Array<{ surface: string; reason: string }>
+      links: Record<string, unknown>
+    }
+    expect("body" in disabledPublicPostBody.post).toBe(false)
+    expect("top_comments" in disabledPublicPostBody.links).toBe(false)
+    expect(disabledPublicPostBody.omitted_surfaces).toEqual([
+      { surface: "thread_bodies", reason: "community_opt_out" },
+      { surface: "top_comments", reason: "community_opt_out" },
+    ])
+
+    const disabledTopComments = await app.request(
+      `http://pirate.test/public-posts/${createdPostBody.post_id}/top-comments`,
+      {},
+      ctx.env,
+    )
+    expect(disabledTopComments.status).toBe(403)
+    const disabledTopCommentsBody = await json(disabledTopComments) as {
+      code: string
+    }
+    expect(disabledTopCommentsBody.code).toBe("structured_surface_disabled")
   })
 
   test("community reads expose localized text overlays and enqueue one batch translation job per locale", async () => {

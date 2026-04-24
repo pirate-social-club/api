@@ -83,23 +83,28 @@ export function resetRuntimeCaches(): void {
 }
 
 export function buildVerifiedSelfProvider(upstreamSessionRef: string): SelfProvider {
+  let sessionCounter = 0
   return {
-    startSession: async () => ({
-      upstreamSessionRef,
-      launch: {
-        app_name: "Pirate",
-        endpoint: "https://self.xyz",
-        endpoint_type: "https",
-        scope: "profile_verification",
-        session_id: upstreamSessionRef,
-        user_id: "test",
-        user_id_type: "uuid",
-        disclosures: { date_of_birth: true },
-      },
-    }),
-    getSessionOutcome: async () => ({
+    startSession: async () => {
+      sessionCounter += 1
+      const sessionRef = `${upstreamSessionRef}:${sessionCounter}`
+      return {
+        upstreamSessionRef: sessionRef,
+        launch: {
+          app_name: "Pirate",
+          endpoint: "https://self.xyz",
+          endpoint_type: "https",
+          scope: "profile_verification",
+          session_id: sessionRef,
+          user_id: "test",
+          user_id_type: "uuid",
+          disclosures: { date_of_birth: true },
+        },
+      }
+    },
+    getSessionOutcome: async (input) => ({
       status: "verified",
-      claims: { age_over_18: true, nationality: null, gender: null, ofac_clear: null, nullifier: upstreamSessionRef },
+      claims: { age_over_18: true, nationality: null, gender: null, ofac_clear: null, nullifier: input.upstreamSessionRef },
     }),
   }
 }

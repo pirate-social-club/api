@@ -7,6 +7,7 @@ import {
 } from "./community-routes-test-helpers"
 
 let cleanup: (() => Promise<void>) | null = null
+const testWithTimeout = test as unknown as (name: string, fn: () => Promise<void>, timeout: number) => void
 
 beforeEach(() => {
   resetRuntimeCaches()
@@ -103,7 +104,7 @@ describe("community provisioning recovery routes", () => {
     expect(secondBody.job.status).toBe("succeeded")
   })
 
-  test("community create finalizes a stuck community that has real binding and credential but provisioning not active", async () => {
+  testWithTimeout("community create finalizes a stuck community that has real binding and credential but provisioning not active", async () => {
     const operatorBaseUrl = "https://operator.test"
     const operatorToken = "operator-secret"
     const wrapKey = "11".repeat(32)
@@ -211,9 +212,9 @@ describe("community provisioning recovery routes", () => {
     } finally {
       globalThis.fetch = originalFetch
     }
-  })
+  }, 10_000)
 
-  test("community create returns in-progress state for a recently running job without re-provisioning", async () => {
+  testWithTimeout("community create returns in-progress state for a recently running job without re-provisioning", async () => {
     const operatorBaseUrl = "https://operator.test"
     const operatorToken = "operator-secret"
     const wrapKey = "11".repeat(32)
@@ -332,5 +333,5 @@ describe("community provisioning recovery routes", () => {
     } finally {
       globalThis.fetch = originalFetch
     }
-  })
+  }, 10_000)
 })

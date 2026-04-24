@@ -46,7 +46,6 @@ export type {
   Job,
   JoinEligibility,
   LinkedHandle,
-  LocalizedPostResponse,
   MarkNotificationsReadRequest,
   MembershipGateSummary,
   ModerationAction,
@@ -101,6 +100,7 @@ import type {
   Community as ContractCommunity,
   CommunityPreview as ContractCommunityPreview,
   CreatePostRequest as ContractCreatePostRequest,
+  LocalizedPostResponse as ContractLocalizedPostResponse,
   Post as ContractPost,
 } from "@pirate/api-contracts"
 
@@ -114,6 +114,7 @@ export type PostLabel = {
 export type PostLabelAssignmentStatus = "pending" | "assigned" | "failed" | "skipped"
 
 export type Post = ContractPost & {
+  lyrics?: string | null
   label_assignment_status?: PostLabelAssignmentStatus | null
   label_assigned_by?: "moderator" | "ai" | null
   label_assigned_at?: string | null
@@ -125,6 +126,10 @@ export type Post = ContractPost & {
 
 export type CreatePostRequest = ContractCreatePostRequest & {
   title?: string | null
+}
+
+export type LocalizedPostResponse = Omit<ContractLocalizedPostResponse, "post"> & {
+  post: Post
 }
 
 export type CommunityTextLocalizationItem = {

@@ -221,6 +221,7 @@ export function serializePost(row: PostRow): Post {
     title: row.title,
     body: row.body,
     caption: row.caption,
+    lyrics: row.lyrics,
     link_url: row.link_url,
     link_og_image_url: row.link_og_image_url,
     link_og_title: row.link_og_title,
