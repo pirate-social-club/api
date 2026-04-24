@@ -20,18 +20,73 @@ import {
 } from "./auth-db-rows"
 import { firstRow, isMissingColumnError, isMissingTableError } from "./auth-db-query-helpers"
 
+const COMMUNITY_ROW_COLUMNS = `
+  community_id, creator_user_id, display_name, status, provisioning_state,
+  transfer_state, route_slug, namespace_verification_id, pending_namespace_verification_session_id,
+  primary_database_binding_id, projected_follower_count, created_at, updated_at
+`
+
+const LEGACY_COMMUNITY_ROW_COLUMNS = `
+  community_id, creator_user_id, display_name, status, provisioning_state,
+  transfer_state, route_slug, namespace_verification_id, pending_namespace_verification_session_id,
+  primary_database_binding_id, NULL AS projected_follower_count, created_at, updated_at
+`
+
+async function firstCommunityRow(
+  executor: DbExecutor,
+  buildSql: (columns: string) => string,
+  args: unknown[],
+): Promise<unknown | null> {
+  try {
+    return await firstRow(executor, {
+      sql: buildSql(COMMUNITY_ROW_COLUMNS),
+      args,
+    })
+  } catch (error) {
+    if (!isMissingColumnError(error, "projected_follower_count")) {
+      throw error
+    }
+    return await firstRow(executor, {
+      sql: buildSql(LEGACY_COMMUNITY_ROW_COLUMNS),
+      args,
+    })
+  }
+}
+
+async function listCommunityRows(
+  executor: DbExecutor,
+  buildSql: (columns: string) => string,
+  args: unknown[] = [],
+): Promise<CommunityRow[]> {
+  try {
+    const result = await executor.execute({
+      sql: buildSql(COMMUNITY_ROW_COLUMNS),
+      args,
+    })
+    return result.rows.map((row) => toCommunityRow(row))
+  } catch (error) {
+    if (!isMissingColumnError(error, "projected_follower_count")) {
+      throw error
+    }
+    const result = await executor.execute({
+      sql: buildSql(LEGACY_COMMUNITY_ROW_COLUMNS),
+      args,
+    })
+    return result.rows.map((row) => toCommunityRow(row))
+  }
+}
+
 export async function getCommunityRowById(executor: DbExecutor, communityId: string): Promise<CommunityRow | null> {
-  const row = await firstRow(executor, {
-    sql: `
-      SELECT community_id, creator_user_id, display_name, status, provisioning_state,
-             transfer_state, route_slug, namespace_verification_id, pending_namespace_verification_session_id,
-             primary_database_binding_id, projected_follower_count, created_at, updated_at
+  const row = await firstCommunityRow(
+    executor,
+    (columns) => `
+      SELECT ${columns}
       FROM communities
       WHERE community_id = ?1
       LIMIT 1
     `,
-    args: [communityId],
-  })
+    [communityId],
+  )
 
   return row ? toCommunityRow(row) : null
 }
@@ -40,17 +95,16 @@ export async function getCommunityRowByRouteSlug(
   executor: DbExecutor,
   routeSlug: string,
 ): Promise<CommunityRow | null> {
-  const row = await firstRow(executor, {
-    sql: `
-      SELECT community_id, creator_user_id, display_name, status, provisioning_state,
-             transfer_state, route_slug, namespace_verification_id, pending_namespace_verification_session_id,
-             primary_database_binding_id, projected_follower_count, created_at, updated_at
+  const row = await firstCommunityRow(
+    executor,
+    (columns) => `
+      SELECT ${columns}
       FROM communities
       WHERE route_slug = ?1
       LIMIT 1
     `,
-    args: [routeSlug],
-  })
+    [routeSlug],
+  )
 
   return row ? toCommunityRow(row) : null
 }
@@ -59,17 +113,16 @@ export async function getCommunityRowByNamespaceVerificationId(
   executor: DbExecutor,
   namespaceVerificationId: string,
 ): Promise<CommunityRow | null> {
-  const row = await firstRow(executor, {
-    sql: `
-      SELECT community_id, creator_user_id, display_name, status, provisioning_state,
-             transfer_state, route_slug, namespace_verification_id, pending_namespace_verification_session_id,
-             primary_database_binding_id, projected_follower_count, created_at, updated_at
+  const row = await firstCommunityRow(
+    executor,
+    (columns) => `
+      SELECT ${columns}
       FROM communities
       WHERE namespace_verification_id = ?1
       LIMIT 1
     `,
-    args: [namespaceVerificationId],
-  })
+    [namespaceVerificationId],
+  )
 
   return row ? toCommunityRow(row) : null
 }
@@ -78,37 +131,31 @@ export async function listCreatedCommunityRowsByCreatorUserId(
   executor: DbExecutor,
   creatorUserId: string,
 ): Promise<CommunityRow[]> {
-  const result = await executor.execute({
-    sql: `
-      SELECT community_id, creator_user_id, display_name, status, provisioning_state,
-             transfer_state, route_slug, namespace_verification_id, pending_namespace_verification_session_id,
-             primary_database_binding_id, projected_follower_count, created_at, updated_at
+  return listCommunityRows(
+    executor,
+    (columns) => `
+      SELECT ${columns}
       FROM communities
       WHERE creator_user_id = ?1
         AND status = 'active'
         AND provisioning_state = 'active'
       ORDER BY created_at DESC
     `,
-    args: [creatorUserId],
-  })
-
-  return result.rows.map((row) => toCommunityRow(row))
+    [creatorUserId],
+  )
 }
 
 export async function listActiveCommunityRows(executor: DbExecutor): Promise<CommunityRow[]> {
-  const result = await executor.execute({
-    sql: `
-      SELECT community_id, creator_user_id, display_name, status, provisioning_state,
-             transfer_state, route_slug, namespace_verification_id, pending_namespace_verification_session_id,
-             primary_database_binding_id, projected_follower_count, created_at, updated_at
+  return listCommunityRows(
+    executor,
+    (columns) => `
+      SELECT ${columns}
       FROM communities
       WHERE status = 'active'
         AND provisioning_state = 'active'
       ORDER BY created_at ASC, community_id ASC
     `,
-  })
-
-  return result.rows.map((row) => toCommunityRow(row))
+  )
 }
 
 export async function getCommunityDatabaseBindingRowById(
