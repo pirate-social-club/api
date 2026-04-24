@@ -1,6 +1,6 @@
 # Database Migrations
 
-Pirate v2 now has two relational migration roots:
+Pirate has two relational migration roots:
 
 - `db/control-plane/migrations/`
   Central Pirate-owned control-plane schema for identity, auth links, verification, community routing, encrypted community credentials, global scrobble and track anchor state, projections, jobs, and audit.
@@ -10,14 +10,14 @@ Pirate v2 now has two relational migration roots:
 Runtime note:
 
 - `db/` is the canonical migration source for operational docs and bootstrap commands.
-- The API test suite (`pirate-api/services/api/tests/helpers.ts`) uses a SQLite-compatible baseline snapshot (`pirate-api/services/api/tests/fixtures/control-plane-baseline-sqlite.sql`) derived from the canonical Postgres schema. The historical migration chain in `db/control-plane/migrations/` is PostgreSQL-first and cannot be replayed against SQLite/libSQL. When the canonical schema changes, the test fixture must be regenerated.
+- The API test suite (`api/services/api/tests/helpers.ts`) uses a SQLite-compatible baseline snapshot (`api/services/api/tests/fixtures/control-plane-baseline-sqlite.sql`) derived from the canonical Postgres schema. The historical migration chain in `db/control-plane/migrations/` is PostgreSQL-first and cannot be replayed against SQLite/libSQL. When the canonical schema changes, the test fixture must be regenerated.
 - Keep the community-template trees in sync.
 
 Related docs:
 
-- [control-plane-schema.md](../docs/control-plane/control-plane-schema.md)
-- [turso-provisioning-contract.md](../docs/control-plane/turso-provisioning-contract.md)
-- [turso-data-boundaries.md](../docs/control-plane/turso-data-boundaries.md)
+- `core/docs/control-plane/control-plane-schema.md`
+- `core/docs/control-plane/turso-provisioning-contract.md`
+- `core/docs/control-plane/turso-data-boundaries.md`
 
 ## Current Scope
 
@@ -97,33 +97,23 @@ The runner:
 - skips already-applied migrations when the checksum matches
 - fails if a previously applied migration file has changed
 
-## Local Fixtures
+## Local Fixtures And Smoke Seeds
 
-Control-plane fixture seed for the JWT-first, no-browser path:
-
-```bash
-rtk infisical run --env dev --path /services/api -- \
-  bun scripts/control-plane/seed-control-plane-fixtures.ts \
-    --database-url-env CONTROL_PLANE_DATABASE_URL \
-    --user-id usr_demo_01 \
-    --subject demo-subject-01 \
-    --handle demo \
-    --namespace-label demo
-```
-
-Local community bootstrap using the seeded namespace verification:
+The API package now seeds end-to-end local state through the HTTP API instead of the older direct DB bootstrap scripts. Start the local service, then run:
 
 ```bash
-rtk infisical run --env dev --path /services/api -- \
-  bun scripts/community/bootstrap-community-slice.ts \
-    --database-url-env CONTROL_PLANE_DATABASE_URL \
-    --community-db /tmp/pirate-community-demo.db \
-    --community-id cmt_demo_01 \
-    --user-id usr_demo_01 \
-    --display-name "Demo Community" \
-    --namespace-verification-id nv_demo_usr_demo_01 \
-    --namespace-label demo
+cd services/api
+rtk bun run seed:local-smoke -- --execute
 ```
+
+The local smoke manifest creates synthetic JWT users, completes dev Very widget-trust verification, creates a community, joins/follows users, creates public and members-only posts, adds comments/replies/votes, and verifies public structured surfaces such as markdown, Link headers, and top comments. It intentionally skips namespace verification so it does not need an HNS/Spaces verifier.
+
+Staging and production templates live in `scripts/seed-manifests/`:
+
+- `staging-seed.json`
+  May use synthetic users, synthetic votes, and imported TLD/Spaces entries for demos. Imported namespaces should use real `namespace_verification_id` values.
+- `prod-launch.json`
+  Requires real access tokens and namespace verification IDs, and the harness rejects synthetic users and vote seeding.
 
 ## Notes
 
@@ -131,4 +121,4 @@ rtk infisical run --env dev --path /services/api -- \
 - The control-plane migration files are PostgreSQL-first and apply directly to Neon from `db/control-plane/migrations/`.
 - Post visibility is part of the mainline schema now. New environments should include both the community `posts.visibility` column and the control-plane `community_post_projections.visibility` column from the checked-in migrations and baseline snapshot.
 - Community databases intentionally do not define a `users` table. They reference central Pirate `user_id` values as foreign identifiers, not local user rows.
-- This repo now includes migration runners in [scripts/community/apply-sqlite-migrations.sh](../scripts/community/apply-sqlite-migrations.sh) and [scripts/control-plane/apply-postgres-migrations.ts](../scripts/control-plane/apply-postgres-migrations.ts), plus [scripts/control-plane/seed-control-plane-fixtures.ts](../scripts/control-plane/seed-control-plane-fixtures.ts) and [scripts/community/bootstrap-community-slice.ts](../scripts/community/bootstrap-community-slice.ts) for Neon-backed local slice bootstrapping.
+- Local smoke seeding is intentionally API-driven so route auth, verification, membership, posting, comments, voting, and public read projections are exercised together.

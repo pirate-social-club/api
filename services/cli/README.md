@@ -1,6 +1,6 @@
 # Pirate CLI
 
-Thin terminal client for the first executable Pirate API slice.
+Command-line client for the first executable Pirate API slice.
 
 ## Scope
 
@@ -41,18 +41,18 @@ The file is written with mode `0600`.
 
 ## Usage
 
-1. Start the API worker in `pirate-api/services/api`.
+1. Start the API worker in `api/services/api`.
 2. Mint an upstream JWT in the API service:
 
 ```bash
-cd pirate-api/services/api
+cd api/services/api
 rtk bun run mint:dev-jwt --sub demo-subject-01
 ```
 
 3. Log in through the CLI:
 
 ```bash
-cd pirate-api/services/cli
+cd api/services/cli
 rtk bun run src/index.ts auth login --jwt REPLACE_WITH_JWT
 ```
 

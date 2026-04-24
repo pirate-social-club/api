@@ -49,8 +49,8 @@ Recent related commits:
 Use this order:
 
 1. Read this file.
-2. Read `pirate-api/README.md`.
-3. Read `pirate-api/services/api/README.md`.
+2. Read `README.md`.
+3. Read `api/services/api/README.md`.
 4. Read `pirate-api/.github/workflows/api-ci.yml`.
 5. Inspect `services/api/src/index.ts` and `services/api/src/routes/*.ts`.
 6. Inspect large files under `services/api/src/lib/`.

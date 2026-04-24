@@ -1,0 +1,95 @@
+{
+  "name": "local-smoke",
+  "description": "Synthetic end-to-end community lifecycle seed for local dev only.",
+  "users": [
+    {
+      "key": "owner",
+      "subject": "seed-local-owner",
+      "synthetic": true,
+      "verification_provider": "very"
+    },
+    {
+      "key": "alice",
+      "subject": "seed-local-alice",
+      "synthetic": true,
+      "verification_provider": "very"
+    },
+    {
+      "key": "bob",
+      "subject": "seed-local-bob",
+      "synthetic": true,
+      "verification_provider": "very"
+    },
+    {
+      "key": "carol",
+      "subject": "seed-local-carol",
+      "synthetic": true,
+      "verification_provider": "very"
+    }
+  ],
+  "communities": [
+    {
+      "key": "smoke",
+      "owner": "owner",
+      "create": {
+        "display_name": "Pirate Local Smoke",
+        "description": "Synthetic lifecycle board for local seed and smoke verification.",
+        "governance_mode": "centralized",
+        "membership_mode": "open",
+        "default_age_gate_policy": "none",
+        "allow_anonymous_identity": false,
+        "handle_policy": {
+          "policy_template": "standard"
+        }
+      },
+      "members": ["owner", "alice", "bob", "carol"],
+      "followers": ["owner", "alice", "bob", "carol"],
+      "posts": [
+        {
+          "key": "welcome",
+          "author": "owner",
+          "body": {
+            "post_type": "text",
+            "title": "Welcome to the local smoke board",
+            "body": "This post exercises public reads, markdown negotiation, comments, replies, and vote metrics.",
+            "idempotency_key": "seed-local-smoke-welcome",
+            "visibility": "public"
+          },
+          "votes": [
+            { "voter": "alice", "value": 1 },
+            { "voter": "bob", "value": 1 },
+            { "voter": "carol", "value": -1 }
+          ],
+          "comments": [
+            {
+              "key": "alice-note",
+              "author": "alice",
+              "body": "First local smoke comment.",
+              "votes": [
+                { "voter": "bob", "value": 1 }
+              ],
+              "replies": [
+                {
+                  "key": "owner-reply",
+                  "author": "owner",
+                  "body": "Reply path is alive."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "key": "members-only",
+          "author": "bob",
+          "body": {
+            "post_type": "text",
+            "title": "Members only local smoke note",
+            "body": "This verifies authenticated member-only creation without exposing the post on public routes.",
+            "idempotency_key": "seed-local-smoke-members-only",
+            "visibility": "members_only"
+          }
+        }
+      ]
+    }
+  ]
+}

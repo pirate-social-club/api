@@ -153,7 +153,7 @@ This is the shortest path to a real local worker that matches the Bruno collecti
 1. Prepare fresh local Bruno state:
 
 ```bash
-cd pirate-api/services/api
+cd api/services/api
 rtk bun run bruno:prepare:local
 ```
 
@@ -163,7 +163,7 @@ This resets:
 - the local community DB root resolved from `LOCAL_COMMUNITY_DB_ROOT`, or `services/api/.local/community-dbs` when unset
 - `specs/api/bruno/environments/local.bru` with fresh JWT fixtures and a new subject
 
-2. Ensure `.dev.vars` in `pirate-api/services/api` is populated for local file-backed Bun runs.
+2. Ensure `.dev.vars` in `api/services/api` is populated for local file-backed Bun runs.
 
 For local Very widget testing:
 
@@ -174,7 +174,7 @@ For local Very widget testing:
 3. Start the Bun local API plus the community job worker:
 
 ```bash
-cd pirate-api/services/api
+cd api/services/api
 rtk bun run dev:local:full
 ```
 
@@ -183,7 +183,7 @@ rtk bun run dev:local:full
 4. Run the Bruno collection from the service repo wrapper:
 
 ```bash
-cd pirate-api/services/api
+cd api/services/api
 rtk bun run bruno:test:local
 ```
 
@@ -202,6 +202,34 @@ The script reads:
 - `AUTH_UPSTREAM_JWT_AUDIENCE` or `JWT_BASED_AUTH_AUDIENCE`
 
 from `.dev.vars` or the current shell environment.
+
+## Seed And Smoke
+
+The API package includes a manifest-driven lifecycle harness for creating or reusing users and communities through the public HTTP API:
+
+```bash
+rtk bun run seed:local-smoke -- --execute
+```
+
+Default manifests live under `scripts/seed-manifests/`:
+
+- `local-smoke.json`
+  Synthetic local users, dev Very widget-trust verification, open community creation, joins/follows, public and members-only posts, comments, replies, votes, public markdown, Link header, and top-comment checks. It intentionally does not require namespace verification so it can run without an HNS/Spaces verifier.
+- `staging-seed.json`
+  Richer staging/demo seed. Synthetic users and votes are allowed. Imported TLDs/spaces should be represented with `namespace.provenance` and a real `namespace_verification_id`. Non-prod verification seeding uses the Very local-widget trust path, so staging must explicitly enable that trust setting if synthetic verification is desired.
+- `prod-launch.json`
+  Production template. Requires real access tokens from `access_token_env`, requires `--confirm-production`, rejects JWT-subject users, rejects synthetic users, and rejects vote seeding.
+
+Useful commands:
+
+```bash
+rtk bun run seed:local-smoke
+rtk bun run seed:local-smoke -- --execute
+rtk env PIRATE_API_URL=https://staging-api.example.com bun run seed:staging -- --execute
+rtk env PIRATE_API_URL=https://api.pirate.sc bun run seed:prod-launch -- --execute --confirm-production
+```
+
+Run `seed:prod-launch` only after replacing the template content with real curated launch content and real namespace verification IDs. Production launch content should come from staff/founding accounts or imported content with provenance; synthetic engagement belongs in local and staging only.
 
 ## JWT-Based Upstream Auth
 
@@ -240,12 +268,12 @@ curl -X POST http://127.0.0.1:8787/auth/session/exchange \
 
 ## Bruno
 
-The live API acceptance collection is under [specs/api/bruno](/home/t42/Documents/pirate-v2/specs/api/bruno).
+The live API acceptance collection is under [specs/api/bruno](/home/t42/Documents/pirate-workspace/core/specs/api/bruno).
 
 Recommended local run:
 
 ```bash
-cd pirate-api/services/api
+cd api/services/api
 rtk bun run bruno:prepare:local
 rtk bun run dev:local
 ```
@@ -253,7 +281,7 @@ rtk bun run dev:local
 Then in a second terminal:
 
 ```bash
-cd pirate-api/services/api
+cd api/services/api
 rtk bun run bruno:test:local
 ```
 

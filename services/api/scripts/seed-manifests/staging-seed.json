@@ -1,0 +1,83 @@
+{
+  "name": "staging-seed",
+  "description": "Synthetic staging/demo board seed. Synthetic users and votes are allowed here.",
+  "users": [
+    {
+      "key": "staff",
+      "subject": "seed-staging-staff",
+      "synthetic": true,
+      "verification_provider": "very"
+    },
+    {
+      "key": "founder-a",
+      "subject": "seed-staging-founder-a",
+      "synthetic": true,
+      "verification_provider": "very"
+    },
+    {
+      "key": "founder-b",
+      "subject": "seed-staging-founder-b",
+      "synthetic": true,
+      "verification_provider": "very"
+    },
+    {
+      "key": "collector",
+      "subject": "seed-staging-collector",
+      "synthetic": true,
+      "verification_provider": "very"
+    }
+  ],
+  "communities": [
+    {
+      "key": "imported-space",
+      "owner": "staff",
+      "namespace": {
+        "family": "spaces",
+        "root_label": "@staging-rolex",
+        "namespace_verification_id": "${PIRATE_STAGING_IMPORTED_NAMESPACE_VERIFICATION_ID}",
+        "provenance": "imported_space"
+      },
+      "create": {
+        "display_name": "@staging-rolex",
+        "description": "Staging imported Spaces board with synthetic launch activity.",
+        "governance_mode": "centralized",
+        "membership_mode": "open",
+        "default_age_gate_policy": "none",
+        "allow_anonymous_identity": false,
+        "handle_policy": {
+          "policy_template": "standard"
+        }
+      },
+      "members": ["staff", "founder-a", "founder-b", "collector"],
+      "followers": ["staff", "founder-a", "founder-b", "collector"],
+      "posts": [
+        {
+          "key": "starter-thread",
+          "author": "staff",
+          "body": {
+            "post_type": "text",
+            "title": "What should this imported space become?",
+            "body": "Synthetic staging thread for validating imported namespace setup, public traversal, and comments.",
+            "idempotency_key": "seed-staging-imported-space-starter",
+            "visibility": "public"
+          },
+          "votes": [
+            { "voter": "founder-a", "value": 1 },
+            { "voter": "founder-b", "value": 1 },
+            { "voter": "collector", "value": 1 }
+          ],
+          "comments": [
+            {
+              "key": "collector-prompt",
+              "author": "collector",
+              "body": "Start with collection provenance and market context.",
+              "votes": [
+                { "voter": "founder-a", "value": 1 }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

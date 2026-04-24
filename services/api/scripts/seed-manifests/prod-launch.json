@@ -1,0 +1,50 @@
+{
+  "name": "prod-launch",
+  "description": "Production launch template. Uses real tokens, curated content, and no synthetic engagement.",
+  "users": [
+    {
+      "key": "staff",
+      "access_token_env": "PIRATE_PROD_STAFF_ACCESS_TOKEN",
+      "synthetic": false,
+      "verify_unique_human": false
+    }
+  ],
+  "communities": [
+    {
+      "key": "launch-board",
+      "owner": "staff",
+      "namespace": {
+        "family": "spaces",
+        "root_label": "@example",
+        "namespace_verification_id": "${PIRATE_PROD_NAMESPACE_VERIFICATION_ID}",
+        "provenance": "curated_launch"
+      },
+      "create": {
+        "display_name": "@example",
+        "description": "Curated launch board. Replace this with a real imported space or TLD before execution.",
+        "governance_mode": "centralized",
+        "membership_mode": "open",
+        "default_age_gate_policy": "none",
+        "allow_anonymous_identity": false,
+        "handle_policy": {
+          "policy_template": "standard"
+        }
+      },
+      "members": ["staff"],
+      "followers": ["staff"],
+      "posts": [
+        {
+          "key": "launch-prompt",
+          "author": "staff",
+          "body": {
+            "post_type": "text",
+            "title": "Welcome to @example",
+            "body": "Replace this template with a real editorial starter prompt before production execution.",
+            "idempotency_key": "prod-launch-example-prompt",
+            "visibility": "public"
+          }
+        }
+      ]
+    }
+  ]
+}
