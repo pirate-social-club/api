@@ -231,6 +231,8 @@ rtk env PIRATE_API_URL=https://api.pirate.sc bun run seed:prod-launch -- --execu
 
 Dry-runs print planned counts and preflight warnings without mutating remote state. `--execute` upgrades missing env placeholders, unknown user references, duplicate keys, missing post idempotency keys, and missing imported namespace IDs into hard failures before creating content.
 
+Until community creation has an API-level idempotency key, staging and production manifests should provide `community_id` for reruns after the first creation. Otherwise, rerunning a create-mode manifest can create duplicate communities even though posts are protected by `idempotency_key`.
+
 Run `seed:prod-launch` only after replacing the template content with real curated launch content and real namespace verification IDs. Production launch content should come from staff/founding accounts or imported content with provenance; synthetic engagement belongs in local and staging only.
 
 ## JWT-Based Upstream Auth

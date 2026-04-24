@@ -110,6 +110,8 @@ The local smoke manifest creates synthetic JWT users, completes dev Very widget-
 
 Dry-runs print planned counts and preflight warnings. Executed runs fail before mutation when the manifest has duplicate keys, unknown user references, missing post idempotency keys, missing env placeholders, or missing imported namespace IDs.
 
+For staging and production reruns, set `community_id` once a community exists. Community creation itself is not idempotent yet; post creation is protected by per-post `idempotency_key`.
+
 Staging and production templates live in `scripts/seed-manifests/`:
 
 - `staging-seed.json`

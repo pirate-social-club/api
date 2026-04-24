@@ -14,7 +14,7 @@ export function deriveStoryAssetVersionId(input: {
   primaryContentHash: string
 }): `0x${string}` {
   return hashBytes32FromParts(
-    "pirate-v2",
+    "pirate",
     "asset-version",
     input.communityId,
     input.assetId,
@@ -24,7 +24,7 @@ export function deriveStoryAssetVersionId(input: {
 }
 
 export function deriveStoryNamespace(assetVersionId: `0x${string}`): `0x${string}` {
-  return hashBytes32FromParts("pirate-v2", "asset-namespace", assetVersionId)
+  return hashBytes32FromParts("pirate", "asset-namespace", assetVersionId)
 }
 
 export function deriveEntitlementTokenId(assetVersionId: string): bigint {
@@ -36,7 +36,7 @@ export function derivePurchaseRef(input: {
   purchaseId: string
   assetId: string
 }): `0x${string}` {
-  return hashBytes32FromParts("pirate-v2", "purchase-ref", input.communityId, input.purchaseId, input.assetId)
+  return hashBytes32FromParts("pirate", "purchase-ref", input.communityId, input.purchaseId, input.assetId)
 }
 
 export function deriveStorageRefHash(storageRef: string): `0x${string}` {

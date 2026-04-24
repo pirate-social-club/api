@@ -15,9 +15,11 @@ export function resolveCoreRepoRoot(input?: {
     input?.override?.trim(),
     process.env.PIRATE_CORE_REPO?.trim(),
     workspaceRoot,
-    resolve(workspaceRoot, "../pirate-v2"),
+    resolve(serviceRoot, "../core"),
+    resolve(serviceRoot, "../../core"),
+    resolve(serviceRoot, "../../../core"),
+    resolve(workspaceRoot, "core"),
     resolve(workspaceRoot, "../core"),
-    resolve(workspaceRoot, "../../pirate-v2"),
   ].filter((value): value is string => Boolean(value))
 
   for (const candidate of new Set(candidates)) {

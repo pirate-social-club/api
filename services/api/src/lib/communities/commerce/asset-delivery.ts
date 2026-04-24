@@ -124,7 +124,7 @@ function buildStoryAccessRef(input: {
   decisionReason: AssetAccessResponse["decision_reason"]
 }): `0x${string}` {
   return hashBytes32FromParts(
-    "pirate-v2",
+    "pirate",
     "story-access",
     input.communityId,
     input.assetId,

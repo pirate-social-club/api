@@ -29,7 +29,7 @@ import { resolveCoreRepoPath } from "../shared/core-repo-paths"
 import { splitSqlStatements, toSqliteCompatibleStatement } from "../shared/sql-migration"
 
 const encoder = new TextEncoder()
-const ROUTE_TEST_LOCK_PATH = join(tmpdir(), "pirate-v2-route-test-lock")
+const ROUTE_TEST_LOCK_PATH = join(tmpdir(), "pirate-api-route-test-lock")
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -175,7 +175,7 @@ export async function createControlPlaneTestClient(options?: {
   cleanup: () => Promise<void>
 }> {
   const serviceRoot = fileURLToPath(new URL("..", import.meta.url))
-  const databasePath = join(tmpdir(), `pirate-v2-auth-${randomUUID()}.db`)
+  const databasePath = join(tmpdir(), `pirate-api-auth-${randomUUID()}.db`)
   const client = createClient({
     url: `file:${databasePath}`,
   })
@@ -183,7 +183,7 @@ export async function createControlPlaneTestClient(options?: {
   if (options?.includeAllMigrations) {
     const storage = resolveLocalDevStorage({
       CONTROL_PLANE_DATABASE_URL: `file:${databasePath}`,
-      LOCAL_COMMUNITY_DB_ROOT: join(tmpdir(), `pirate-v2-community-${randomUUID()}`),
+      LOCAL_COMMUNITY_DB_ROOT: join(tmpdir(), `pirate-api-community-${randomUUID()}`),
     }, serviceRoot)
     await applyLocalControlPlaneMigrations(storage)
   } else {
@@ -216,7 +216,7 @@ export async function createRouteTestContext(overrides: Partial<Env> = {}): Prom
 
   try {
     const controlPlane = await createControlPlaneTestClient({ includeAllMigrations: true })
-    const communityDbRoot = await mkdtemp(join(tmpdir(), "pirate-v2-community-"))
+    const communityDbRoot = await mkdtemp(join(tmpdir(), "pirate-api-community-"))
     const env = buildTestEnv({
       DEV_MEMORY_STORE_ENABLED: "false",
       ENVIRONMENT: "test",

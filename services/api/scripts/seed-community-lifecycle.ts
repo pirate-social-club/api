@@ -75,6 +75,12 @@ type ManifestStats = {
   votes: number
 }
 
+const localDevVars = readDevVarsFromCwd()
+const resolvedEnv: Record<string, string | undefined> = {
+  ...localDevVars,
+  ...process.env,
+}
+
 function readArg(name: string): string | null {
   const index = process.argv.indexOf(name)
   return index === -1 ? null : process.argv[index + 1] ?? null
@@ -110,7 +116,7 @@ function stringArray(value: unknown, label: string): string[] {
 
 function expandEnv(value: unknown): unknown {
   if (typeof value === "string") {
-    return value.replace(/\$\{([A-Z0-9_]+)\}/gu, (_match, name: string) => process.env[name] ?? "")
+    return value.replace(/\$\{([A-Z0-9_]+)\}/gu, (_match, name: string) => envValue(name))
   }
   if (Array.isArray(value)) return value.map(expandEnv)
   if (!record(value)) return value
@@ -230,7 +236,7 @@ function parseManifest(raw: unknown): SeedManifest {
 }
 
 function envValue(name: string): string {
-  return process.env[name] || readDevVarsFromCwd()[name] || ""
+  return resolvedEnv[name] || ""
 }
 
 function countCommentVotes(comments: CommentSeed[]): number {
@@ -324,6 +330,9 @@ function validateManifest(input: {
     if (!community.community_id && !community.create) {
       throw new Error(`community ${community.key} needs create payload or community_id`)
     }
+    if (input.mode !== "local-smoke" && !community.community_id) {
+      warnings.push(`community ${community.key} has no community_id; re-executing this manifest can create duplicate communities`)
+    }
     if (community.namespace?.provenance?.includes("imported") && !community.namespace.namespace_verification_id) {
       const message = `community ${community.key} imported namespace requires namespace_verification_id before execution`
       if (input.execute) throw new Error(message)
@@ -346,6 +355,9 @@ function validateManifest(input: {
     const syntheticVerifiedUsers = input.manifest.users.filter((user) => user.synthetic && user.verify_unique_human !== false)
     if (syntheticVerifiedUsers.some((user) => (user.verification_provider ?? "very") === "very")) {
       warnings.push("staging synthetic verification uses Very widget-trust; confirm VERY_TRUST_LOCAL_WIDGET_COMPLETION is enabled before --execute")
+    }
+    if (syntheticVerifiedUsers.some((user) => user.verification_provider === "self")) {
+      warnings.push("staging synthetic verification uses Self; confirm SELF_ENDPOINT or PIRATE_API_PUBLIC_ORIGIN is configured and completion proofs will verify before --execute")
     }
   }
 
@@ -619,7 +631,16 @@ async function seedPosts(ctx: SeedContext, community: CommunitySeed, communityId
     for (const comment of post.comments ?? []) {
       await seedComment(ctx, community, communityId, created.body.post_id, comment, `${key}.${comment.key}`)
     }
-    if ((created.body.visibility ?? post.body.visibility ?? "public") === "public") await verifyPost(ctx, created.body.post_id)
+    const resolvedVisibility = typeof created.body.visibility === "string"
+      ? created.body.visibility
+      : typeof post.body.visibility === "string"
+        ? post.body.visibility
+        : null
+    if (resolvedVisibility === "public") {
+      await verifyPost(ctx, created.body.post_id)
+    } else if (resolvedVisibility === null) {
+      ctx.warnings.push(`skipped public verification for ${key}; API response and manifest did not declare visibility`)
+    }
   }
 }
 

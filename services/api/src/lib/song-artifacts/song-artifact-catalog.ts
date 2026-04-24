@@ -110,7 +110,7 @@ export async function syncSongBundleToAcrCloudCatalog(input: {
     body.set("title", title)
     body.set("data_type", "audio")
     body.set("user_defined", JSON.stringify({
-      source: "pirate-v2",
+      source: "pirate",
       community_id: input.communityId,
       song_artifact_bundle_id: input.songArtifactBundleId,
       content_hash: contentHash || null,
