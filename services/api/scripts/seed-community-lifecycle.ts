@@ -3,8 +3,17 @@ import { resolve } from "node:path"
 import { SignJWT } from "jose"
 import { readDevVarsFromCwd } from "./_lib/dev-vars"
 
-type SeedMode = "local-smoke" | "staging-seed" | "prod-launch-seed"
+type SeedMode = "local-smoke" | "dev-seed" | "staging-seed" | "prod-launch-seed"
 type HttpMethod = "GET" | "POST" | "PUT" | "PATCH"
+
+type ProfileSeed = {
+  display_name?: string
+  bio?: string | null
+  avatar_ref?: string | null
+  cover_ref?: string | null
+  preferred_locale?: string | null
+  desired_handle?: string
+}
 
 type SeedUser = {
   key: string
@@ -13,6 +22,7 @@ type SeedUser = {
   synthetic?: boolean
   verify_unique_human?: boolean
   verification_provider?: "self" | "very"
+  profile?: ProfileSeed
 }
 
 type VoteSeed = { voter: string; value: -1 | 1 }
@@ -100,8 +110,8 @@ function str(value: unknown, label: string): string {
 }
 
 function modeFromArg(value: string | null): SeedMode {
-  if (value === "local-smoke" || value === "staging-seed" || value === "prod-launch-seed") return value
-  throw new Error("--mode must be local-smoke, staging-seed, or prod-launch-seed")
+  if (value === "local-smoke" || value === "dev-seed" || value === "staging-seed" || value === "prod-launch-seed") return value
+  throw new Error("--mode must be local-smoke, dev-seed, staging-seed, or prod-launch-seed")
 }
 
 function optionalString(value: unknown): string | undefined {
@@ -153,6 +163,19 @@ function parseNamespace(value: unknown, label: string): NamespaceSeed | undefine
     root_label: str(value.root_label, `${label}.root_label`),
     namespace_verification_id: optionalString(value.namespace_verification_id),
     provenance: optionalString(value.provenance),
+  }
+}
+
+function parseProfile(value: unknown, label: string): ProfileSeed | undefined {
+  if (value == null) return undefined
+  if (!record(value)) throw new Error(`${label} must be an object`)
+  return {
+    display_name: optionalString(value.display_name),
+    bio: value.bio === null ? null : optionalString(value.bio),
+    avatar_ref: value.avatar_ref === null ? null : optionalString(value.avatar_ref),
+    cover_ref: value.cover_ref === null ? null : optionalString(value.cover_ref),
+    preferred_locale: value.preferred_locale === null ? null : optionalString(value.preferred_locale),
+    desired_handle: optionalString(value.desired_handle),
   }
 }
 
@@ -216,6 +239,7 @@ function parseManifest(raw: unknown): SeedManifest {
         verification_provider: user.verification_provider === "self" || user.verification_provider === "very"
           ? user.verification_provider
           : undefined,
+        profile: parseProfile(user.profile, `users[${index}].profile`),
       }
     }),
     communities: value.communities.map((community, index) => {
@@ -320,6 +344,10 @@ function validateManifest(input: {
   const userKeys = new Set(input.manifest.users.map((user) => user.key))
   assertUnique(input.manifest.users.map((user) => user.key), "users")
   assertUnique(input.manifest.communities.map((community) => community.key), "communities")
+  assertUnique(
+    input.manifest.users.flatMap((user) => user.profile?.desired_handle ? [user.profile.desired_handle.toLowerCase()] : []),
+    "profile desired handles",
+  )
 
   const requireKnownUser = (key: string, label: string) => {
     if (!userKeys.has(key)) throw new Error(`${label} references unknown user ${key}`)
@@ -330,7 +358,7 @@ function validateManifest(input: {
     if (!community.community_id && !community.create) {
       throw new Error(`community ${community.key} needs create payload or community_id`)
     }
-    if (input.mode !== "local-smoke" && !community.community_id) {
+    if ((input.mode === "dev-seed" || input.mode === "staging-seed" || input.mode === "prod-launch-seed") && !community.community_id) {
       warnings.push(`community ${community.key} has no community_id; re-executing this manifest can create duplicate communities`)
     }
     if (community.namespace?.provenance?.includes("imported") && !community.namespace.namespace_verification_id) {
@@ -351,13 +379,13 @@ function validateManifest(input: {
     }
   }
 
-  if (input.mode === "staging-seed") {
+  if (input.mode === "dev-seed" || input.mode === "staging-seed") {
     const syntheticVerifiedUsers = input.manifest.users.filter((user) => user.synthetic && user.verify_unique_human !== false)
     if (syntheticVerifiedUsers.some((user) => (user.verification_provider ?? "very") === "very")) {
-      warnings.push("staging synthetic verification uses Very widget-trust; confirm VERY_TRUST_LOCAL_WIDGET_COMPLETION is enabled before --execute")
+      warnings.push(`${input.mode} synthetic verification uses Very widget-trust; confirm VERY_TRUST_LOCAL_WIDGET_COMPLETION is enabled before --execute`)
     }
     if (syntheticVerifiedUsers.some((user) => user.verification_provider === "self")) {
-      warnings.push("staging synthetic verification uses Self; confirm SELF_ENDPOINT or PIRATE_API_PUBLIC_ORIGIN is configured and completion proofs will verify before --execute")
+      warnings.push(`${input.mode} synthetic verification uses Self; confirm SELF_ENDPOINT or PIRATE_API_PUBLIC_ORIGIN is configured and completion proofs will verify before --execute`)
     }
   }
 
@@ -462,6 +490,53 @@ async function completeUniqueHuman(ctx: SeedContext, session: SessionUser): Prom
   ctx.report.push(`completed ${provider} unique_human for ${session.key}`)
 }
 
+async function applyProfile(ctx: SeedContext, session: SessionUser): Promise<void> {
+  if (!session.profile) return
+
+  const patchBody: Record<string, unknown> = {}
+  for (const key of ["display_name", "bio", "avatar_ref", "cover_ref", "preferred_locale"] as const) {
+    if (session.profile[key] !== undefined) patchBody[key] = session.profile[key]
+  }
+  if (Object.keys(patchBody).length > 0) {
+    await requestJson<unknown>({
+      apiUrl: ctx.apiUrl,
+      method: "PATCH",
+      path: "/profiles/me",
+      token: session.accessToken,
+      body: patchBody,
+    })
+    ctx.report.push(`updated profile for ${session.key}`)
+  }
+
+  if (session.profile.desired_handle) {
+    const current = await requestJson<{ global_handle?: { label?: string } }>({
+      apiUrl: ctx.apiUrl,
+      method: "GET",
+      path: "/profiles/me",
+      token: session.accessToken,
+    })
+    const desired = normalizeHandleLabel(session.profile.desired_handle)
+    const currentLabel = current.body.global_handle?.label?.toLowerCase() ?? ""
+    if (currentLabel === desired) {
+      ctx.report.push(`kept existing handle ${desired} for ${session.key}`)
+      return
+    }
+    await requestJson<unknown>({
+      apiUrl: ctx.apiUrl,
+      method: "POST",
+      path: "/profiles/me/global-handle/rename",
+      token: session.accessToken,
+      body: { desired_label: session.profile.desired_handle },
+    })
+    ctx.report.push(`renamed handle for ${session.key} -> ${desired}`)
+  }
+}
+
+function normalizeHandleLabel(value: string): string {
+  const normalized = value.trim().toLowerCase()
+  return normalized.endsWith(".pirate") ? normalized : `${normalized}.pirate`
+}
+
 async function resolveUsers(ctx: SeedContext, manifest: SeedManifest): Promise<void> {
   for (const seedUser of manifest.users) {
     const envToken = seedUser.access_token_env ? envValue(seedUser.access_token_env) : ""
@@ -474,8 +549,10 @@ async function resolveUsers(ctx: SeedContext, manifest: SeedManifest): Promise<v
       })
       const userId = me.body.user_id ?? me.body.user?.user_id
       if (!userId) throw new Error(`/users/me did not return user_id for ${seedUser.key}`)
-      ctx.users.set(seedUser.key, { ...seedUser, accessToken: envToken, userId })
+      const session = { ...seedUser, accessToken: envToken, userId }
+      ctx.users.set(seedUser.key, session)
       ctx.report.push(`resolved token user ${seedUser.key} -> ${userId}`)
+      await applyProfile(ctx, session)
       continue
     }
     if (!seedUser.subject) throw new Error(`User ${seedUser.key} needs subject or access_token_env`)
@@ -489,6 +566,7 @@ async function resolveUsers(ctx: SeedContext, manifest: SeedManifest): Promise<v
     const session = { ...seedUser, accessToken: exchanged.body.access_token, userId: exchanged.body.user.user_id }
     ctx.users.set(seedUser.key, session)
     ctx.report.push(`exchanged jwt user ${seedUser.key} -> ${session.userId}`)
+    await applyProfile(ctx, session)
     if (seedUser.verify_unique_human !== false && ctx.mode !== "prod-launch-seed") await completeUniqueHuman(ctx, session)
   }
 }

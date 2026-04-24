@@ -1,0 +1,249 @@
+{
+  "name": "dev-seed",
+  "description": "Synthetic dev boards with realistic profiles, handles, posts, comments, and light engagement.",
+  "users": [
+    {
+      "key": "maya",
+      "subject": "seed-dev-maya-chen",
+      "synthetic": true,
+      "verification_provider": "very",
+      "profile": {
+        "display_name": "Maya Chen",
+        "desired_handle": "maya-chen",
+        "bio": "Curates strange domain projects, archival links, and small internet communities.",
+        "avatar_ref": "ipfs://seed-dev-avatar-maya",
+        "cover_ref": "ipfs://seed-dev-cover-field-notes",
+        "preferred_locale": "en-US"
+      }
+    },
+    {
+      "key": "eli",
+      "subject": "seed-dev-eli-ramos",
+      "synthetic": true,
+      "verification_provider": "very",
+      "profile": {
+        "display_name": "Eli Ramos",
+        "desired_handle": "eli-ramos",
+        "bio": "Builds tools for collectors and writes notes on provenance, markets, and UX.",
+        "avatar_ref": "ipfs://seed-dev-avatar-eli",
+        "cover_ref": "ipfs://seed-dev-cover-workbench",
+        "preferred_locale": "en-US"
+      }
+    },
+    {
+      "key": "nadia",
+      "subject": "seed-dev-nadia-park",
+      "synthetic": true,
+      "verification_provider": "very",
+      "profile": {
+        "display_name": "Nadia Park",
+        "desired_handle": "nadia-park",
+        "bio": "Designer interested in quiet spaces, good prompts, and community rituals.",
+        "avatar_ref": "ipfs://seed-dev-avatar-nadia",
+        "cover_ref": "ipfs://seed-dev-cover-studio",
+        "preferred_locale": "en-US"
+      }
+    },
+    {
+      "key": "omar",
+      "subject": "seed-dev-omar-singh",
+      "synthetic": true,
+      "verification_provider": "very",
+      "profile": {
+        "display_name": "Omar Singh",
+        "desired_handle": "omar-singh",
+        "bio": "Follows onchain culture, independent music, and pragmatic moderation systems.",
+        "avatar_ref": "ipfs://seed-dev-avatar-omar",
+        "cover_ref": "ipfs://seed-dev-cover-night-market",
+        "preferred_locale": "en-US"
+      }
+    },
+    {
+      "key": "jules",
+      "subject": "seed-dev-jules-morgan",
+      "synthetic": true,
+      "verification_provider": "very",
+      "profile": {
+        "display_name": "Jules Morgan",
+        "desired_handle": "jules-morgan",
+        "bio": "Writes prompts for launch communities and keeps checklists for good first threads.",
+        "avatar_ref": "ipfs://seed-dev-avatar-jules",
+        "cover_ref": "ipfs://seed-dev-cover-library",
+        "preferred_locale": "en-US"
+      }
+    }
+  ],
+  "communities": [
+    {
+      "key": "founders-corner",
+      "owner": "maya",
+      "create": {
+        "display_name": "Founders Corner",
+        "description": "A practical board for early community builders testing launch mechanics.",
+        "governance_mode": "centralized",
+        "membership_mode": "open",
+        "default_age_gate_policy": "none",
+        "allow_anonymous_identity": false,
+        "handle_policy": {
+          "policy_template": "standard"
+        }
+      },
+      "members": ["maya", "eli", "nadia", "omar", "jules"],
+      "followers": ["maya", "eli", "nadia", "omar", "jules"],
+      "posts": [
+        {
+          "key": "first-week",
+          "author": "maya",
+          "body": {
+            "post_type": "text",
+            "title": "What should a first week here feel like?",
+            "body": "I want a new board to feel lived-in without feeling staged. Good prompts, clear norms, and a few real introductions seem better than inflated metrics.",
+            "idempotency_key": "seed-dev-founders-first-week",
+            "visibility": "public"
+          },
+          "votes": [
+            { "voter": "eli", "value": 1 },
+            { "voter": "nadia", "value": 1 },
+            { "voter": "jules", "value": 1 }
+          ],
+          "comments": [
+            {
+              "key": "nadia-rituals",
+              "author": "nadia",
+              "body": "I would start with a weekly intro ritual and one pinned question that changes every Friday.",
+              "votes": [
+                { "voter": "maya", "value": 1 },
+                { "voter": "jules", "value": 1 }
+              ],
+              "replies": [
+                {
+                  "key": "jules-template",
+                  "author": "jules",
+                  "body": "A template helps too: what are you building, what do you need, what did you learn this week?"
+                }
+              ]
+            },
+            {
+              "key": "eli-metrics",
+              "author": "eli",
+              "body": "I would hide sparse counts for a bit and highlight unanswered threads instead."
+            }
+          ]
+        },
+        {
+          "key": "internal-checklist",
+          "author": "jules",
+          "body": {
+            "post_type": "text",
+            "title": "Members-only launch checklist",
+            "body": "Before opening wider: owner profile, three starter prompts, two reference links, moderation defaults, and at least one real reply per prompt.",
+            "idempotency_key": "seed-dev-founders-internal-checklist",
+            "visibility": "members_only"
+          }
+        }
+      ]
+    },
+    {
+      "key": "vinyl-afterhours",
+      "owner": "omar",
+      "create": {
+        "display_name": "Vinyl Afterhours",
+        "description": "Listening notes, collection stories, and late-night record recommendations.",
+        "governance_mode": "centralized",
+        "membership_mode": "open",
+        "default_age_gate_policy": "none",
+        "allow_anonymous_identity": false,
+        "handle_policy": {
+          "policy_template": "standard"
+        }
+      },
+      "members": ["omar", "maya", "eli", "nadia"],
+      "followers": ["omar", "maya", "eli", "nadia", "jules"],
+      "posts": [
+        {
+          "key": "sunday-listening",
+          "author": "omar",
+          "body": {
+            "post_type": "text",
+            "title": "Sunday listening: records that sound better after midnight",
+            "body": "Mine is Alice Coltrane, Journey in Satchidananda. Curious what everyone reaches for when the room gets quiet.",
+            "idempotency_key": "seed-dev-vinyl-sunday-listening",
+            "visibility": "public"
+          },
+          "votes": [
+            { "voter": "maya", "value": 1 },
+            { "voter": "nadia", "value": 1 }
+          ],
+          "comments": [
+            {
+              "key": "maya-pick",
+              "author": "maya",
+              "body": "Talk Talk's Spirit of Eden. It changes shape when there is no background noise."
+            },
+            {
+              "key": "eli-pick",
+              "author": "eli",
+              "body": "Floating Points and Pharoah Sanders, Promises. Not exactly vinyl-first for me, but it fits the hour."
+            }
+          ]
+        },
+        {
+          "key": "record-store-link",
+          "author": "eli",
+          "body": {
+            "post_type": "link",
+            "title": "A useful guide to grading used records",
+            "body": "Worth having around before anyone starts posting marketplace finds.",
+            "link_url": "https://www.goldminemag.com/collector-resources/record-grading-101",
+            "idempotency_key": "seed-dev-vinyl-record-grading-link",
+            "visibility": "public"
+          },
+          "votes": [
+            { "voter": "omar", "value": 1 }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "namespace-watch",
+      "owner": "eli",
+      "create": {
+        "display_name": "Namespace Watch",
+        "description": "Tracking interesting Handshake, Spaces, and identity namespace experiments.",
+        "governance_mode": "centralized",
+        "membership_mode": "open",
+        "default_age_gate_policy": "none",
+        "allow_anonymous_identity": false,
+        "handle_policy": {
+          "policy_template": "standard"
+        }
+      },
+      "members": ["eli", "maya", "jules"],
+      "followers": ["eli", "maya", "nadia", "jules"],
+      "posts": [
+        {
+          "key": "imported-spaces",
+          "author": "eli",
+          "body": {
+            "post_type": "text",
+            "title": "How should imported spaces show provenance?",
+            "body": "If a board starts from an existing TLD or space, I think the first screen should say where it came from and who verified it.",
+            "idempotency_key": "seed-dev-namespace-imported-spaces",
+            "visibility": "public"
+          },
+          "votes": [
+            { "voter": "maya", "value": 1 },
+            { "voter": "jules", "value": 1 }
+          ],
+          "comments": [
+            {
+              "key": "jules-copy",
+              "author": "jules",
+              "body": "Agree. A simple provenance line near the community title would do more than a long explanation page."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

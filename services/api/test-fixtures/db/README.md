@@ -114,6 +114,8 @@ For staging and production reruns, set `community_id` once a community exists. C
 
 Staging and production templates live in `scripts/seed-manifests/`:
 
+- `dev-seed.json`
+  Uses synthetic profiles, global handle renames, realistic boards, starter posts, comments, replies, and light engagement for dev/demo environments.
 - `staging-seed.json`
   May use synthetic users, synthetic votes, and imported TLD/Spaces entries for demos. Imported namespaces should use real `namespace_verification_id` values.
 - `prod-launch.json`

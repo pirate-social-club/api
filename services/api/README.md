@@ -146,6 +146,15 @@ Control-plane DB mode:
 9. Start `rtk bun run dev:local` for the API only, or `rtk bun run dev:local:full` to run the API and the community job worker together. The local server bootstraps the control-plane migrations automatically for local file-backed DBs.
 10. Post and comment translations require the worker to be running with `OPENROUTER_API_KEY` in the environment. If you use Infisical locally, prefer `rtk infisical run --env=dev --path=/services/api -- rtk bun run dev:local:full`.
 
+If local startup fails with a migration checksum mismatch, reset only the local file-backed dev DBs:
+
+```bash
+rtk bun run dev:local:reset -- --yes
+rtk bun run dev:local:full
+```
+
+The reset command refuses to touch paths outside `services/api/.local`.
+
 ## Full Local Setup
 
 This is the shortest path to a real local worker that matches the Bruno collection.
@@ -215,6 +224,8 @@ Default manifests live under `scripts/seed-manifests/`:
 
 - `local-smoke.json`
   Synthetic local users, dev Very widget-trust verification, open community creation, joins/follows, public and members-only posts, comments, replies, votes, public markdown, Link header, and top-comment checks. It intentionally does not require namespace verification so it can run without an HNS/Spaces verifier.
+- `dev-seed.json`
+  Synthetic dev users with profile names, global handles, bios, three realistic boards, starter posts, comments, replies, and light engagement.
 - `staging-seed.json`
   Richer staging/demo seed. Synthetic users and votes are allowed. Imported TLDs/spaces should be represented with `namespace.provenance` and a real `namespace_verification_id`. Non-prod verification seeding uses the Very local-widget trust path, so staging must explicitly enable that trust setting if synthetic verification is desired.
 - `prod-launch.json`
@@ -225,6 +236,7 @@ Useful commands:
 ```bash
 rtk bun run seed:local-smoke
 rtk bun run seed:local-smoke -- --execute
+rtk env PIRATE_API_URL=https://dev-api.example.com bun run seed:dev -- --execute
 rtk env PIRATE_API_URL=https://staging-api.example.com bun run seed:staging -- --execute
 rtk env PIRATE_API_URL=https://api.pirate.sc bun run seed:prod-launch -- --execute --confirm-production
 ```
