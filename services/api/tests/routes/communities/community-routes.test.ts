@@ -658,6 +658,59 @@ describe("community routes", () => {
     expect(topCommentsMarkdown.headers.get("content-type")).toContain("text/markdown")
     expect(await topCommentsMarkdown.text()).toContain("# Top comments for Public route post")
 
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO machine_access_overrides (
+          machine_access_override_id, community_id, surface, effect, reason_code, note, created_at
+        )
+        VALUES (?1, ?2, 'top_comments', 'disable', 'abuse_response', 'route test override', ?3)
+      `,
+      args: [
+        "mao_route_top_comments",
+        communityCreateBody.community.community_id,
+        "2026-04-24T00:00:00.000Z",
+      ],
+    })
+
+    const platformDisabledPublicPost = await app.request(
+      `http://pirate.test/public-posts/${createdPostBody.post_id}`,
+      {},
+      ctx.env,
+    )
+    expect(platformDisabledPublicPost.status).toBe(200)
+    const platformDisabledPublicPostBody = await json(platformDisabledPublicPost) as {
+      omitted_surfaces: Array<{ surface: string; reason: string }>
+      links: Record<string, unknown>
+    }
+    expect("top_comments" in platformDisabledPublicPostBody.links).toBe(false)
+    expect(platformDisabledPublicPostBody.omitted_surfaces).toEqual([
+      { surface: "top_comments", reason: "platform_disabled" },
+    ])
+
+    const platformDisabledTopComments = await app.request(
+      `http://pirate.test/public-posts/${createdPostBody.post_id}/top-comments`,
+      {},
+      ctx.env,
+    )
+    expect(platformDisabledTopComments.status).toBe(403)
+    const platformDisabledTopCommentsBody = await json(platformDisabledTopComments) as {
+      code: string
+      details?: { reason?: string; surface?: string }
+    }
+    expect(platformDisabledTopCommentsBody.code).toBe("structured_surface_disabled")
+    expect(platformDisabledTopCommentsBody.details?.surface).toBe("top_comments")
+    expect(platformDisabledTopCommentsBody.details?.reason).toBe("platform_disabled")
+
+    await ctx.client.execute({
+      sql: `
+        UPDATE machine_access_overrides
+        SET revoked_at = ?2,
+            revoked_reason = 'route test complete'
+        WHERE machine_access_override_id = ?1
+      `,
+      args: ["mao_route_top_comments", "2026-04-24T00:01:00.000Z"],
+    })
+
     const patchPolicyResponse = await app.request(
       `http://pirate.test/communities/${communityCreateBody.community.community_id}/machine-access-policy`,
       {
@@ -743,8 +796,11 @@ describe("community routes", () => {
     expect(disabledTopComments.status).toBe(403)
     const disabledTopCommentsBody = await json(disabledTopComments) as {
       code: string
+      details?: { reason?: string; surface?: string }
     }
     expect(disabledTopCommentsBody.code).toBe("structured_surface_disabled")
+    expect(disabledTopCommentsBody.details?.surface).toBe("top_comments")
+    expect(disabledTopCommentsBody.details?.reason).toBe("community_opt_out")
   })
 
   test("community reads expose localized text overlays and enqueue one batch translation job per locale", async () => {

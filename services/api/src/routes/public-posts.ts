@@ -1,8 +1,9 @@
 import { Hono } from "hono"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import {
-  getResolvedCommunityMachineAccessPolicy,
   omittedSurfacesForPolicy,
+  omittedSurfaceForPolicy,
+  resolveEffectiveCommunityMachineAccessPolicy,
   topCommentsLimit,
   type OmittedStructuredSurface,
 } from "../lib/communities/community-machine-access-service"
@@ -156,16 +157,18 @@ publicPosts.get("/:postId/top-comments", async (c) => {
     locale: c.req.query("locale") ?? null,
     communityRepository,
   })
-  const policy = await getResolvedCommunityMachineAccessPolicy({
+  const policy = await resolveEffectiveCommunityMachineAccessPolicy({
     env: c.env,
     communityRepository,
     communityId: post.post.community_id,
   })
   if (!policy.included_surfaces.top_comments) {
+    const omittedSurface = omittedSurfaceForPolicy(policy, "top_comments")
     throw structuredSurfaceDisabled("Top comments are not available for structured access", {
       community_id: post.post.community_id,
       post_id: post.post.post_id,
       surface: "top_comments",
+      reason: omittedSurface?.reason ?? "community_opt_out",
     })
   }
   const result = await listPublicPostComments({
@@ -226,16 +229,18 @@ publicPosts.get("/:postId", async (c) => {
     locale: c.req.query("locale") ?? null,
     communityRepository,
   })
-  const policy = await getResolvedCommunityMachineAccessPolicy({
+  const policy = await resolveEffectiveCommunityMachineAccessPolicy({
     env: c.env,
     communityRepository,
     communityId: result.post.community_id,
   })
   if (!policy.included_surfaces.thread_cards) {
+    const omittedSurface = omittedSurfaceForPolicy(policy, "thread_cards")
     throw structuredSurfaceDisabled("Thread cards are not available for structured access", {
       community_id: result.post.community_id,
       post_id: result.post.post_id,
       surface: "thread_cards",
+      reason: omittedSurface?.reason ?? "community_opt_out",
     })
   }
   const links = publicPostLinks({

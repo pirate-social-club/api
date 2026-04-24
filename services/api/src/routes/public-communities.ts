@@ -3,8 +3,9 @@ import { getCommunityRepository } from "../lib/communities/db-community-reposito
 import { resolveCommunityIdentifier } from "../lib/communities/community-identifier"
 import { getPublicCommunityPreview } from "../lib/communities/community-service"
 import {
-  getResolvedCommunityMachineAccessPolicy,
   omittedSurfacesForPolicy,
+  omittedSurfaceForPolicy,
+  resolveEffectiveCommunityMachineAccessPolicy,
   type OmittedStructuredSurface,
 } from "../lib/communities/community-machine-access-service"
 import { listPublicCommunityPosts } from "../lib/posts/post-service"
@@ -232,7 +233,7 @@ function omitThreadBody<T extends LocalizedPostResponse>(response: T): T {
 publicCommunities.get("/:communityId", async (c) => {
   const communityRepository = getCommunityRepository(c.env)
   const communityId = await resolveCommunityId(c.env, c.req.param("communityId"))
-  const policy = await getResolvedCommunityMachineAccessPolicy({
+  const policy = await resolveEffectiveCommunityMachineAccessPolicy({
     env: c.env,
     communityRepository,
     communityId,
@@ -299,15 +300,17 @@ publicCommunities.get("/", async (c) => {
 publicCommunities.get("/:communityId/posts", async (c) => {
   const communityRepository = getCommunityRepository(c.env)
   const communityId = await resolveCommunityId(c.env, c.req.param("communityId"))
-  const policy = await getResolvedCommunityMachineAccessPolicy({
+  const policy = await resolveEffectiveCommunityMachineAccessPolicy({
     env: c.env,
     communityRepository,
     communityId,
   })
   if (!policy.included_surfaces.thread_cards) {
+    const omittedSurface = omittedSurfaceForPolicy(policy, "thread_cards")
     throw structuredSurfaceDisabled("Thread cards are not available for structured access", {
       community_id: communityId,
       surface: "thread_cards",
+      reason: omittedSurface?.reason ?? "community_opt_out",
     })
   }
   const result = await listPublicCommunityPosts({

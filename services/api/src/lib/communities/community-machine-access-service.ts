@@ -1,6 +1,8 @@
 import type { CommunityRepository } from "./db-community-repository"
+import { isMissingTableError } from "../auth/auth-db-query-helpers"
 import { badRequestError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
+import { getControlPlaneClient } from "../runtime-deps"
 import { openCommunityDb } from "./community-db-factory"
 import {
   parseCommunitySettingsJson,
@@ -43,10 +45,26 @@ export type CommunityMachineAccessPolicyPatch = {
 }
 
 export type MachineAccessSurface = keyof CommunityMachineAccessPolicy["included_surfaces"]
+export type ConfigurableMachineAccessSurface = Exclude<MachineAccessSurface, "community_identity">
+export type OmittedStructuredSurfaceReason =
+  | "community_opt_out"
+  | "platform_disabled"
+  | "not_visible"
+  | "not_in_v0"
 
 export type OmittedStructuredSurface = {
-  surface: Exclude<MachineAccessSurface, "community_identity">
-  reason: "community_opt_out" | "platform_disabled" | "not_visible" | "not_in_v0"
+  surface: ConfigurableMachineAccessSurface
+  reason: OmittedStructuredSurfaceReason
+}
+
+export type CommunityMachineAccessEffectivePolicy = CommunityMachineAccessPolicy & {
+  omitted_surface_reasons: Partial<Record<ConfigurableMachineAccessSurface, OmittedStructuredSurfaceReason>>
+}
+
+type CommunityMachineAccessPlatformOverride = {
+  surface: ConfigurableMachineAccessSurface | "all"
+  reason: "platform_disabled"
+  expires_at: string | null
 }
 
 const configurableSurfaces = [
@@ -55,7 +73,7 @@ const configurableSurfaces = [
   "thread_bodies",
   "top_comments",
   "events",
-] as const satisfies Array<Exclude<MachineAccessSurface, "community_identity">>
+] as const satisfies ConfigurableMachineAccessSurface[]
 
 const machineAccessSurfaces = [
   "community_identity",
@@ -183,19 +201,115 @@ function assertCommunityMachineAccessPolicyPatch(
   }
 }
 
-export function omittedSurface(surface: Exclude<MachineAccessSurface, "community_identity">): OmittedStructuredSurface {
-  return {
-    surface,
-    reason: "community_opt_out",
+async function listActiveMachineAccessPlatformOverrides(_input: {
+  env: Env
+  communityId: string
+}): Promise<CommunityMachineAccessPlatformOverride[]> {
+  const client = getControlPlaneClient(_input.env)
+  try {
+    const result = await client.execute({
+      sql: `
+        SELECT surface, expires_at
+        FROM machine_access_overrides
+        WHERE community_id = ?1
+          AND effect = 'disable'
+          AND revoked_at IS NULL
+        ORDER BY created_at DESC
+      `,
+      args: [_input.communityId],
+    })
+    const now = Date.now()
+
+    return result.rows.flatMap((row) => {
+      const surface = row.surface === "all" || configurableSurfaces.includes(row.surface as ConfigurableMachineAccessSurface)
+        ? row.surface as CommunityMachineAccessPlatformOverride["surface"]
+        : null
+      if (!surface) {
+        return []
+      }
+
+      const expiresAt = row.expires_at == null ? null : String(row.expires_at)
+      if (expiresAt && Date.parse(expiresAt) <= now) {
+        return []
+      }
+
+      return [{
+        surface,
+        reason: "platform_disabled" as const,
+        expires_at: expiresAt,
+      }]
+    })
+  } catch (error) {
+    if (isMissingTableError(error, "machine_access_overrides")) {
+      return []
+    }
+    throw error
   }
 }
 
+function applyMachineAccessPlatformOverrides(input: {
+  policy: CommunityMachineAccessPolicy
+  overrides: CommunityMachineAccessPlatformOverride[]
+}): CommunityMachineAccessEffectivePolicy {
+  const effectivePolicy: CommunityMachineAccessEffectivePolicy = {
+    ...input.policy,
+    included_surfaces: {
+      ...input.policy.included_surfaces,
+    },
+    omitted_surface_reasons: {},
+  }
+
+  for (const surface of configurableSurfaces) {
+    if (!input.policy.included_surfaces[surface]) {
+      effectivePolicy.omitted_surface_reasons[surface] = "community_opt_out"
+    }
+  }
+
+  for (const override of input.overrides) {
+    const surfaces = override.surface === "all"
+      ? configurableSurfaces
+      : [override.surface]
+    for (const surface of surfaces) {
+      effectivePolicy.included_surfaces[surface] = false
+      effectivePolicy.omitted_surface_reasons[surface] = override.reason
+    }
+  }
+
+  return effectivePolicy
+}
+
+export function omittedSurface(
+  surface: ConfigurableMachineAccessSurface,
+  reason: OmittedStructuredSurfaceReason = "community_opt_out",
+): OmittedStructuredSurface {
+  return {
+    surface,
+    reason,
+  }
+}
+
+export function omittedSurfaceForPolicy(
+  policy: CommunityMachineAccessPolicy | CommunityMachineAccessEffectivePolicy,
+  surface: ConfigurableMachineAccessSurface,
+): OmittedStructuredSurface | null {
+  if (policy.included_surfaces[surface]) {
+    return null
+  }
+  const omittedSurfaceReasons = "omitted_surface_reasons" in policy
+    ? policy.omitted_surface_reasons
+    : {}
+
+  return omittedSurface(surface, omittedSurfaceReasons[surface] ?? "community_opt_out")
+}
+
 export function omittedSurfacesForPolicy(
-  policy: CommunityMachineAccessPolicy,
-  surfaces: Array<Exclude<MachineAccessSurface, "community_identity">>,
+  policy: CommunityMachineAccessPolicy | CommunityMachineAccessEffectivePolicy,
+  surfaces: ConfigurableMachineAccessSurface[],
 ): OmittedStructuredSurface[] {
-  return surfaces.flatMap((surface) =>
-    policy.included_surfaces[surface] ? [] : [omittedSurface(surface)])
+  return surfaces.flatMap((surface) => {
+    const omitted = omittedSurfaceForPolicy(policy, surface)
+    return omitted ? [omitted] : []
+  })
 }
 
 export function topCommentsLimit(): number {
@@ -263,6 +377,23 @@ export async function getResolvedCommunityMachineAccessPolicy(input: {
     communityRepository: input.communityRepository,
     communityId: community.community_id,
     updatedAt: community.updated_at,
+  })
+}
+
+export async function resolveEffectiveCommunityMachineAccessPolicy(input: {
+  env: Env
+  communityRepository: CommunityRepository
+  communityId: string
+}): Promise<CommunityMachineAccessEffectivePolicy> {
+  const policy = await getResolvedCommunityMachineAccessPolicy(input)
+  const overrides = await listActiveMachineAccessPlatformOverrides({
+    env: input.env,
+    communityId: policy.community_id,
+  })
+
+  return applyMachineAccessPlatformOverrides({
+    policy,
+    overrides,
   })
 }
 
