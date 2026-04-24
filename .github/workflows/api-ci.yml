@@ -35,6 +35,9 @@ jobs:
         with:
           bun-version: 1.2.21
 
+      - name: Run repo hygiene checks
+        run: node scripts/check-repo-hygiene.mjs
+
       - name: Install contracts dependencies
         working-directory: services/contracts
         run: bun install --frozen-lockfile

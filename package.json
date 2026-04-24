@@ -1,0 +1,11 @@
+{
+  "name": "@pirate/api-repo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node scripts/check-repo-hygiene.mjs && bun run --cwd services/contracts check && bun run --cwd services/api check",
+    "check:hygiene": "node scripts/check-repo-hygiene.mjs",
+    "test": "bun run --cwd services/api test && bun run --cwd services/cli test",
+    "check:cli": "bun run --cwd services/cli check"
+  }
+}
