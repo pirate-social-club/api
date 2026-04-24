@@ -3,7 +3,8 @@ import { authError } from "../lib/errors"
 import { verifyJwtBasedAuth } from "../lib/auth/jwt-based-auth"
 import { mintPirateAccessToken } from "../lib/auth/pirate-session-token"
 import { verifyPrivyAccessProof } from "../lib/auth/privy-auth"
-import { getSessionRepository } from "../lib/auth/repositories"
+import { getProfileRepository, getSessionRepository } from "../lib/auth/repositories"
+import { trackApiEvent } from "../lib/analytics/track"
 import type { Env, SessionExchangeRequest } from "../types"
 
 const auth = new Hono<{ Bindings: Env }>()
@@ -29,15 +30,24 @@ auth.post("/session/exchange", async (c) => {
 
   const repository = getSessionRepository(c.env)
   const session = await repository.exchangeIdentity(upstreamIdentity)
+  const syncedProfile = await getProfileRepository(c.env)
+    .syncLinkedHandles(session.user.user_id)
+    .catch(() => null)
   const accessToken = await mintPirateAccessToken({
     env: c.env,
     userId: session.user.user_id,
+  })
+  await trackApiEvent(c.env, c.req, {
+    eventName: "auth_session_exchanged",
+    userId: session.user.user_id,
+    properties: { provider: upstreamIdentity.provider },
   })
 
   return c.json(
     {
       access_token: accessToken,
       ...session,
+      profile: syncedProfile ?? session.profile,
     },
     200,
   )

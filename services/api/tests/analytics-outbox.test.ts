@@ -2,9 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test"
 import {
   buildAnalyticsEvent,
   enqueueAnalyticsEvent,
+  flushAnalyticsOutbox,
   hmacUserId,
   isAnalyticsEnabled,
 } from "../src/lib/analytics"
+import app from "../src/index"
 import { buildTestEnv, createControlPlaneTestClient } from "./helpers"
 
 let cleanup: (() => Promise<void>) | null = null
@@ -70,5 +72,78 @@ describe("analytics outbox", () => {
     expect(result.rows[0]?.properties_json).toBe(JSON.stringify({ post_type: "text" }))
     expect(result.rows[0]?.status).toBe("pending")
   })
-})
 
+  test("marks sending events failed when Tinybird fetch throws", async () => {
+    const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanup = setup.cleanup
+    const env = buildTestEnv({
+      ANALYTICS_ENABLED: "true",
+      ANALYTICS_HMAC_SECRET: "analytics-secret",
+      TINYBIRD_INGEST_TOKEN: "tb_test",
+    })
+    const event = await buildAnalyticsEvent(env, {
+      eventId: "evt_test_analytics_fetch_error",
+      eventName: "post_created",
+      source: "api",
+      appSurface: "api",
+      userId: "usr_test",
+    })
+    await enqueueAnalyticsEvent(setup.client, event)
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (() => {
+      throw new Error("network_down")
+    }) as typeof fetch
+    try {
+      const result = await flushAnalyticsOutbox(env, setup.client)
+      expect(result).toEqual({ attempted: 1, sent: 0, failed: 1 })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+
+    const row = await setup.client.execute({
+      sql: "SELECT status, attempt_count, last_error FROM analytics_outbox WHERE analytics_event_id = ?1",
+      args: [event.event_id],
+    })
+    expect(row.rows[0]?.status).toBe("failed")
+    expect(row.rows[0]?.attempt_count).toBe(1)
+    expect(String(row.rows[0]?.last_error)).toContain("network_down")
+  })
+
+  test("accepts allowlisted client events through the API proxy", async () => {
+    const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanup = setup.cleanup
+    const env = buildTestEnv({
+      DEV_MEMORY_STORE_ENABLED: "false",
+      CONTROL_PLANE_DATABASE_URL: `file:${setup.databasePath}`,
+      ANALYTICS_ENABLED: "true",
+      ANALYTICS_HMAC_SECRET: "analytics-secret",
+      ENVIRONMENT: "staging",
+    })
+
+    const response = await app.request("http://pirate.test/analytics/events", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        event_id: "evt_client_page_viewed",
+        event_name: "page_viewed",
+        anonymous_id: "anon_test",
+        properties: {
+          pathname: "/c/infinity",
+          reddit_username: "should_not_leave_api",
+        },
+      }),
+    }, env)
+
+    expect(response.status).toBe(202)
+    const result = await setup.client.execute({
+      sql: "SELECT event_name, source, app_surface, anonymous_id, properties_json FROM analytics_outbox WHERE analytics_event_id = ?1",
+      args: ["evt_client_page_viewed"],
+    })
+    expect(result.rows[0]?.event_name).toBe("page_viewed")
+    expect(result.rows[0]?.source).toBe("web")
+    expect(result.rows[0]?.app_surface).toBe("web")
+    expect(result.rows[0]?.anonymous_id).toBe("anon_test")
+    expect(result.rows[0]?.properties_json).toBe(JSON.stringify({ pathname: "/c/infinity" }))
+  })
+})

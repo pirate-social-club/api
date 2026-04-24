@@ -7,6 +7,7 @@ export type AnalyticsSource = "web" | "api" | "job" | "backfill"
 export type AnalyticsAppSurface = "web" | "api" | "worker"
 
 export type AnalyticsEventName =
+  | "page_viewed"
   | "auth_started"
   | "auth_session_exchanged"
   | "unique_human_verification_started"
@@ -191,4 +192,3 @@ export async function buildAnalyticsEvent(env: Env, input: AnalyticsEventInput):
     properties_json: JSON.stringify(input.properties ?? {}),
   }
 }
-

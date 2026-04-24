@@ -9,6 +9,7 @@ import {
   requireBearerToken,
   type AuthenticatedEnv,
 } from "../lib/auth-middleware"
+import { trackApiEvent } from "../lib/analytics/track"
 import { castCommentVote, createComment, deleteComment, getCommentContext, listCommentReplies } from "../lib/comments/comment-service"
 import { assertAgentDelegatedWriteMatchesActor } from "../lib/agents/agent-write-authorization"
 import type { CreateCommentRequest } from "../lib/comments/comment-types"
@@ -58,6 +59,16 @@ comments.post("/:commentId/replies", async (c) => {
     profileRepository: getProfileRepository(c.env),
     communityRepository,
   })
+  await trackApiEvent(c.env, c.req, {
+    eventName: "comment_created",
+    userId: actor.userId,
+    communityId: projection.community_id,
+    postId: projection.thread_root_post_id,
+    commentId: result.comment_id,
+    properties: {
+      depth: result.depth,
+    },
+  })
   return c.json(result, 201)
 })
 
@@ -104,6 +115,12 @@ comments.post("/:commentId/vote", async (c) => {
     value: body.value,
     userRepository: getUserRepository(c.env),
     communityRepository: getCommunityRepository(c.env),
+  })
+  await trackApiEvent(c.env, c.req, {
+    eventName: "comment_voted",
+    userId: actor.userId,
+    commentId: result.comment_id,
+    properties: { value: result.value },
   })
   return c.json(result, 200)
 })

@@ -221,6 +221,7 @@ export async function flushAnalyticsOutbox(
 
   const limit = Math.max(1, Math.min(options.limit ?? 500, 1000))
   const now = nowIso()
+  const staleSendingBefore = new Date(Date.now() - 5 * 60_000).toISOString()
   const result = await db.execute({
     sql: `
       SELECT
@@ -246,12 +247,17 @@ export async function flushAnalyticsOutbox(
         idempotency_key,
         properties_json
       FROM analytics_outbox
-      WHERE status IN ('pending', 'failed')
-      AND next_attempt_at <= ?1
+      WHERE (
+        status IN ('pending', 'failed')
+        AND next_attempt_at <= ?1
+      ) OR (
+        status = 'sending'
+        AND updated_at <= ?3
+      )
       ORDER BY created_at ASC
       LIMIT ?2
     `,
-    args: [now, limit],
+    args: [now, limit, staleSendingBefore],
   })
 
   const rows = result.rows as unknown as AnalyticsOutboxRow[]
@@ -263,14 +269,22 @@ export async function flushAnalyticsOutbox(
   await updateOutboxRows(db, ids, "sending")
 
   const events = rows.map(outboxRowToEvent)
-  const response = await fetch(tinybirdEventsUrl(env), {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${token}`,
-      "content-type": "application/x-ndjson",
-    },
-    body: toNdjson(events),
-  })
+  let response: Response
+  try {
+    response = await fetch(tinybirdEventsUrl(env), {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/x-ndjson",
+      },
+      body: toNdjson(events),
+    })
+  } catch (error) {
+    await updateOutboxRows(db, ids, "failed", {
+      error: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+    })
+    return { attempted: rows.length, sent: 0, failed: rows.length }
+  }
 
   if (response.ok) {
     await updateOutboxRows(db, ids, "sent", {

@@ -3,6 +3,7 @@ import { badRequestError, notFoundError } from "../lib/errors"
 import { getControlPlaneVerificationRepository } from "../lib/verification/verification-repository"
 import { proxyVeryBridgeRequest } from "../lib/verification/very-provider"
 import { authenticate, type AuthenticatedEnv } from "../lib/auth-middleware"
+import { trackApiEvent } from "../lib/analytics/track"
 import type { Env, RequestedVerificationCapability, VerificationIntent, VerificationRequirement } from "../types"
 
 const verification = new Hono<{ Bindings: Env }>()
@@ -21,6 +22,16 @@ verification.post("/verification-sessions/:verificationSessionId/self-callback",
   if (!result) {
     throw notFoundError("Verification session not found")
   }
+  await trackApiEvent(c.env, c.req, {
+    eventName: result.status === "verified" ? "unique_human_verification_succeeded" : "unique_human_verification_failed",
+    userId: result.user_id,
+    verificationSessionId: result.verification_session_id,
+    properties: {
+      provider: "self",
+      intent: result.verification_intent ?? null,
+      failure_code: result.status === "verified" ? null : result.failure_reason ?? result.status,
+    },
+  })
   return c.json({ status: result.status, verification_session_id: result.verification_session_id }, 200)
 })
 
@@ -106,6 +117,15 @@ authenticatedVerification.post("/verification-sessions", async (c) => {
     policyId: body.policy_id ?? null,
     publicOrigin,
   })
+  await trackApiEvent(c.env, c.req, {
+    eventName: "unique_human_verification_started",
+    userId: actor.userId,
+    verificationSessionId: created.verification_session_id,
+    properties: {
+      provider: body.provider,
+      intent: body.verification_intent ?? null,
+    },
+  })
   return c.json(created, 201)
 })
 
@@ -115,6 +135,18 @@ authenticatedVerification.get("/verification-sessions/:verificationSessionId", a
   const result = await repo.getVerificationSession(c.req.param("verificationSessionId"), actor.userId)
   if (!result) {
     throw notFoundError("Verification session not found")
+  }
+  if (result.status === "verified" || result.status === "failed" || result.status === "expired") {
+    await trackApiEvent(c.env, c.req, {
+      eventName: result.status === "verified" ? "unique_human_verification_succeeded" : "unique_human_verification_failed",
+      userId: actor.userId,
+      verificationSessionId: result.verification_session_id,
+      properties: {
+        provider: result.provider,
+        intent: result.verification_intent ?? null,
+        failure_code: result.status === "verified" ? null : result.failure_reason ?? result.status,
+      },
+    })
   }
   return c.json(result, 200)
 })
@@ -153,6 +185,11 @@ authenticatedVerification.post("/namespace-verification-sessions", async (c) => 
     family: body.family,
     rootLabel: body.root_label,
   })
+  await trackApiEvent(c.env, c.req, {
+    eventName: "namespace_verification_started",
+    userId: actor.userId,
+    properties: { tld: body.family },
+  })
   return c.json(created, 201)
 })
 
@@ -162,6 +199,16 @@ authenticatedVerification.get("/namespace-verification-sessions/:namespaceVerifi
   const result = await repo.getNamespaceVerificationSession(c.req.param("namespaceVerificationSessionId"), actor.userId)
   if (!result) {
     throw notFoundError("Namespace verification session not found")
+  }
+  if (result.status === "verified" || result.status === "failed" || result.status === "expired") {
+    await trackApiEvent(c.env, c.req, {
+      eventName: result.status === "verified" ? "namespace_verification_succeeded" : "namespace_verification_failed",
+      userId: actor.userId,
+      properties: {
+        tld: result.family,
+        failure_code: result.status === "verified" ? null : result.failure_reason ?? result.status,
+      },
+    })
   }
   return c.json(result, 200)
 })

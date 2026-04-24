@@ -7,7 +7,9 @@ import {
   getCommunity,
   getCommunityPreview,
   getJoinEligibility,
+  listMembershipRequests,
   joinCommunity,
+  reviewMembershipRequest,
   setPendingNamespaceVerificationSession,
   type CreateCommunityRequestBody,
   type UpdateCommunityRequestBody,
@@ -37,6 +39,7 @@ import {
 import { createPost, listCommunityPosts } from "../lib/posts/post-service"
 import { createComment, listPostComments } from "../lib/comments/comment-service"
 import { assertAgentDelegatedWriteMatchesActor } from "../lib/agents/agent-write-authorization"
+import { trackApiEvent } from "../lib/analytics/track"
 import {
   getModerationCaseDetail,
   listCommunityModerationCases,
@@ -66,6 +69,33 @@ export function registerCommunityCoreRoutes(communities: Hono<AuthenticatedEnv>)
       verificationRepository,
       communityRepository,
     })
+    await trackApiEvent(c.env, c.req, {
+      eventName: "community_create_submitted",
+      userId: actor.userId,
+      communityId: result.community.community_id,
+      properties: {
+        membership_mode: result.community.membership_mode,
+        namespace_attached: Boolean(result.community.namespace_verification_id),
+      },
+    })
+    await trackApiEvent(c.env, c.req, {
+      eventName: "community_provisioning_requested",
+      userId: actor.userId,
+      communityId: result.community.community_id,
+      properties: {
+        job_status: result.job.status,
+      },
+    })
+    if (result.job.status === "succeeded" || result.job.status === "failed") {
+      await trackApiEvent(c.env, c.req, {
+        eventName: result.job.status === "succeeded" ? "community_provisioning_succeeded" : "community_provisioning_failed",
+        userId: actor.userId,
+        communityId: result.community.community_id,
+        properties: {
+          failure_code: result.job.error_code ?? null,
+        },
+      })
+    }
     return c.json(result, 202)
   })
 
@@ -300,13 +330,66 @@ export function registerCommunityCoreRoutes(communities: Hono<AuthenticatedEnv>)
   })
 
   communities.post("/:communityId/join", async (c) => {
-    const { actor, communityId, communityRepository, userRepository } = await getResolvedCommunityRouteContext(c)
+    const { actor, communityId, communityRepository, userRepository, profileRepository } = await getResolvedCommunityRouteContext(c)
+    const body = await c.req.json<{ note?: string | null }>().catch(() => null)
     const result = await joinCommunity({
       env: c.env,
       userId: actor.userId,
       communityId,
+      note: body?.note ?? null,
       userRepository,
+      profileRepository,
       communityRepository,
+    })
+    if (result.status === "joined") {
+      await trackApiEvent(c.env, c.req, {
+        eventName: "community_join_succeeded",
+        userId: actor.userId,
+        communityId,
+      })
+    }
+    return c.json(result, 200)
+  })
+
+  communities.get("/:communityId/membership-requests", async (c) => {
+    const { actor, communityId, communityRepository, profileRepository } = await getResolvedCommunityRouteContext(c)
+    const limitRaw = Number(c.req.query("limit") ?? "")
+    const result = await listMembershipRequests({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      cursor: c.req.query("cursor") ?? null,
+      limit: Number.isFinite(limitRaw) ? Math.trunc(limitRaw) : undefined,
+      communityRepository,
+      profileRepository,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.post("/:communityId/membership-requests/:requestId/approve", async (c) => {
+    const { actor, communityId, communityRepository, profileRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await reviewMembershipRequest({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      requestId: c.req.param("requestId"),
+      decision: "approved",
+      communityRepository,
+      profileRepository,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.post("/:communityId/membership-requests/:requestId/reject", async (c) => {
+    const { actor, communityId, communityRepository, profileRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await reviewMembershipRequest({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      requestId: c.req.param("requestId"),
+      decision: "rejected",
+      communityRepository,
+      profileRepository,
     })
     return c.json(result, 200)
   })
@@ -319,6 +402,13 @@ export function registerCommunityCoreRoutes(communities: Hono<AuthenticatedEnv>)
       communityId,
       communityRepository,
     })
+    if (result.following) {
+      await trackApiEvent(c.env, c.req, {
+        eventName: "community_followed",
+        userId: actor.userId,
+        communityId,
+      })
+    }
     return c.json(result, 200)
   })
 
@@ -346,6 +436,17 @@ export function registerCommunityCoreRoutes(communities: Hono<AuthenticatedEnv>)
       userRepository,
       profileRepository,
       communityRepository,
+    })
+    await trackApiEvent(c.env, c.req, {
+      eventName: "post_created",
+      userId: actor.userId,
+      communityId,
+      postId: result.post_id,
+      idempotencyKey: body.idempotency_key ?? null,
+      properties: {
+        post_type: result.post_type,
+        status: result.status,
+      },
     })
     return c.json(result, result.status === "published" ? 201 : 202)
   })
@@ -380,6 +481,16 @@ export function registerCommunityCoreRoutes(communities: Hono<AuthenticatedEnv>)
       userRepository,
       profileRepository,
       communityRepository,
+    })
+    await trackApiEvent(c.env, c.req, {
+      eventName: "comment_created",
+      userId: actor.userId,
+      communityId,
+      postId: c.req.param("postId"),
+      commentId: result.comment_id,
+      properties: {
+        depth: result.depth,
+      },
     })
     return c.json(result, 201)
   })

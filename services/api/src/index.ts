@@ -1,6 +1,7 @@
 import { Hono } from "hono"
 import { cors } from "hono/cors"
 import agents from "./routes/agents"
+import analytics from "./routes/analytics"
 import auth from "./routes/auth"
 import communityMedia from "./routes/community-media"
 import comments from "./routes/comments"
@@ -20,7 +21,9 @@ import profileMedia from "./routes/profile-media"
 import profiles from "./routes/profiles"
 import users from "./routes/users"
 import verification from "./routes/verification"
+import { flushAnalyticsOutbox, isAnalyticsEnabled } from "./lib/analytics"
 import { HttpError, errorResponse } from "./lib/errors"
+import { getControlPlaneClient } from "./lib/runtime-deps"
 import type { Env } from "./types"
 
 const app = new Hono<{ Bindings: Env }>()
@@ -30,13 +33,20 @@ app.use(
   cors({
     origin: "*",
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Authorization", "X-Agent-Connection-Token"],
+    allowHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Agent-Connection-Token",
+      "X-Pirate-Anonymous-Id",
+      "X-Pirate-Session-Id",
+    ],
   }),
 )
 
 app.get("/health", (c) => c.json({ ok: true }))
 app.route("/", discovery)
 app.route("/", agents)
+app.route("/analytics", analytics)
 app.route("/auth", auth)
 app.route("/community-media", communityMedia)
 app.route("/comments", comments)
@@ -70,5 +80,26 @@ app.onError((error) => {
     },
   })
 })
+
+type ScheduledApp = typeof app & {
+  scheduled: NonNullable<ExportedHandler<Env>["scheduled"]>
+}
+
+;(app as ScheduledApp).scheduled = async (_controller, env, ctx) => {
+  ctx.waitUntil((async () => {
+    if (!isAnalyticsEnabled(env)) {
+      return
+    }
+
+    const db = getControlPlaneClient(env)
+    try {
+      await flushAnalyticsOutbox(env, db)
+    } catch (error) {
+      console.error("[analytics] scheduled flush failed", error)
+    } finally {
+      db.close?.()
+    }
+  })())
+}
 
 export default app

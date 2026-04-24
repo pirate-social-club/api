@@ -3,6 +3,7 @@ import { badRequestError } from "../lib/errors"
 import { getUserRepository } from "../lib/auth/repositories"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { authenticate, type AuthenticatedEnv } from "../lib/auth-middleware"
+import { trackApiEvent } from "../lib/analytics/track"
 import { castPostVote, getPost } from "../lib/posts/post-service"
 
 const posts = new Hono<AuthenticatedEnv>()
@@ -36,6 +37,12 @@ posts.post("/:postId/vote", async (c) => {
     value: body.value,
     userRepository: getUserRepository(c.env),
     communityRepository: getCommunityRepository(c.env),
+  })
+  await trackApiEvent(c.env, c.req, {
+    eventName: "post_voted",
+    userId: actor.userId,
+    postId: result.post_id,
+    properties: { value: result.value },
   })
   return c.json(result, 200)
 })
