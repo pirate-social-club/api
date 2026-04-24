@@ -25,6 +25,7 @@ import {
 import { assertEndaomentPayoutConfigured } from "./endaoment-payout-service"
 import {
   assertValidDonationSharePct,
+  resolveBestVerifiedRegionalPrice,
   resolveAllocationSettlementAmountAtomic,
   resolvePurchaseSettlementMode,
   resolveRegionalPrice,
@@ -57,6 +58,28 @@ export async function preflightCommunityPurchaseQuote(input: {
     await requireCommunityMember(db.client, input.communityId, input.userId)
     const moneyPolicy = await getCommunityMoneyPolicy({ env: input.env, communityId: input.communityId })
     const route = resolveRoutePolicy({ moneyPolicy, body: input.body })
+    const pricingPolicy = await getCommunityPricingPolicy({ env: input.env, communityId: input.communityId })
+    const buyer = await input.userRepository.getUserById(input.userId)
+    const listing = input.body.listing_id
+      ? await getListingRowById(db.client, input.communityId, input.body.listing_id)
+      : null
+    if (input.body.listing_id && (!listing || listing.status !== "active")) {
+      throw notFoundError("Listing not found")
+    }
+    const serializedListing = listing ? serializeListing(listing) : null
+    const resolvedPrice = serializedListing
+      ? resolveRegionalPrice({
+        listing: serializedListing,
+        pricingPolicy,
+        buyer,
+      })
+      : null
+    const bestVerifiedPrice = serializedListing
+      ? resolveBestVerifiedRegionalPrice({
+        listing: serializedListing,
+        pricingPolicy,
+      })
+      : null
     const quotedAt = nowIso()
     const expiresAt = new Date(Date.now() + moneyPolicy.quote_ttl_seconds * 1000).toISOString()
     return {
@@ -76,6 +99,11 @@ export async function preflightCommunityPurchaseQuote(input: {
       route_required: moneyPolicy.route_required,
       route_status_policy: moneyPolicy.route_status_policy,
       route_hop_tolerance: moneyPolicy.route_hop_tolerance,
+      base_price_usd: serializedListing?.price_usd ?? null,
+      viewer_price_usd: resolvedPrice?.finalPriceUsd ?? null,
+      best_verified_price_usd: bestVerifiedPrice?.bestVerifiedPriceUsd ?? null,
+      max_self_discount_percent: bestVerifiedPrice?.maxSelfDiscountPercent ?? null,
+      verification_required_provider: bestVerifiedPrice?.verificationRequiredProvider ?? null,
       quoted_at: quotedAt,
       expires_at: expiresAt,
     }

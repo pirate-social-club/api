@@ -649,6 +649,7 @@ export type CommunityPurchaseListResponse = {
 };
 
 export type CommunityPurchaseQuotePreflightRequest = {
+  listing_id?: string | null;
   funding_asset?: CommunityMoneyAssetRef | null;
   source_chain?: CommunityMoneyChainRef | null;
   route_provider?: string | null;
@@ -674,6 +675,11 @@ export type CommunityPurchaseQuotePreflight = {
   route_required: boolean;
   route_status_policy: CommunityFundingRouteStatusPolicy;
   route_hop_tolerance: number;
+  base_price_usd?: number | null;
+  viewer_price_usd?: number | null;
+  best_verified_price_usd?: number | null;
+  max_self_discount_percent?: number | null;
+  verification_required_provider?: CommunityPricingVerificationProvider | null;
   quoted_at: string;
   expires_at: string;
 };

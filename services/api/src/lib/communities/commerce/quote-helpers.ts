@@ -163,6 +163,74 @@ export function resolveRegionalPrice(input: {
   }
 }
 
+export function resolveBestVerifiedRegionalPrice(input: {
+  listing: CommunityListing
+  pricingPolicy: CommunityPricingPolicy
+}): {
+  bestVerifiedPriceUsd: number | null
+  maxSelfDiscountPercent: number | null
+  verificationRequiredProvider: "self" | null
+} {
+  const basePriceUsd = input.listing.price_usd
+  if (
+    !input.listing.regional_pricing_enabled
+    || !input.pricingPolicy.regional_pricing_enabled
+    || input.pricingPolicy.tiers.length === 0
+    || !Number.isFinite(basePriceUsd)
+    || basePriceUsd <= 0
+  ) {
+    return {
+      bestVerifiedPriceUsd: null,
+      maxSelfDiscountPercent: null,
+      verificationRequiredProvider: null,
+    }
+  }
+
+  const reachableTierKeys = new Set<string>()
+  if (input.pricingPolicy.default_tier_key) {
+    reachableTierKeys.add(input.pricingPolicy.default_tier_key)
+  }
+  for (const assignment of input.pricingPolicy.country_assignments) {
+    reachableTierKeys.add(assignment.tier_key)
+  }
+  if (reachableTierKeys.size === 0) {
+    return {
+      bestVerifiedPriceUsd: null,
+      maxSelfDiscountPercent: null,
+      verificationRequiredProvider: null,
+    }
+  }
+
+  const reachableTiers = input.pricingPolicy.tiers.filter((tier) => reachableTierKeys.has(tier.tier_key))
+  if (reachableTiers.length === 0) {
+    return {
+      bestVerifiedPriceUsd: null,
+      maxSelfDiscountPercent: null,
+      verificationRequiredProvider: null,
+    }
+  }
+
+  const bestVerifiedPriceUsd = reachableTiers.reduce((bestPrice, tier) => {
+    const tierPrice = roundUsd(basePriceUsd * tier.adjustment_value)
+    return Math.min(bestPrice, tierPrice)
+  }, basePriceUsd)
+
+  if (bestVerifiedPriceUsd >= basePriceUsd) {
+    return {
+      bestVerifiedPriceUsd: basePriceUsd,
+      maxSelfDiscountPercent: null,
+      verificationRequiredProvider: input.pricingPolicy.verification_provider_requirement ?? "self",
+    }
+  }
+
+  const maxSelfDiscountPercent = Math.round(((basePriceUsd - bestVerifiedPriceUsd) / basePriceUsd) * 1000) / 10
+  return {
+    bestVerifiedPriceUsd,
+    maxSelfDiscountPercent,
+    verificationRequiredProvider: input.pricingPolicy.verification_provider_requirement ?? "self",
+  }
+}
+
 export function resolveRoutePolicy(input: {
   moneyPolicy: CommunityMoneyPolicy
   body: CommunityPurchaseQuotePreflightRequest
