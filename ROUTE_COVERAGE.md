@@ -12,6 +12,7 @@ It only maps the live route surface to where direct route-level coverage appears
 Mounted in `services/api/src/index.ts`:
 
 - `/auth`
+- `/analytics`
 - `/` for discovery routes
 - `/` for agent routes
 - `/community-media`
@@ -37,6 +38,7 @@ Mounted in `services/api/src/index.ts`:
 
 | Route Group | Main Route File | Primary Test Files | Coverage Status | Notes |
 | --- | --- | --- | --- | --- |
+| `/analytics/*` | `src/routes/analytics.ts` | no direct route test yet | gap | Client analytics ingestion is mounted; add route coverage before expanding behavior. |
 | discovery routes under `/` | `src/routes/discovery.ts` | `tests/routes/discovery-routes.test.ts` | direct | Covers well-known discovery responses. |
 | `/auth/session/exchange` | `src/routes/auth.ts` | `tests/routes/auth/auth-routes.test.ts` | direct | Also exercised by many other route suites for setup. |
 | `/users/me` | `src/routes/users.ts` | `tests/routes/auth/auth-routes.test.ts` | direct | Covered via auth flow tests. |
