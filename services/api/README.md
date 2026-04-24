@@ -229,6 +229,8 @@ rtk env PIRATE_API_URL=https://staging-api.example.com bun run seed:staging -- -
 rtk env PIRATE_API_URL=https://api.pirate.sc bun run seed:prod-launch -- --execute --confirm-production
 ```
 
+Dry-runs print planned counts and preflight warnings without mutating remote state. `--execute` upgrades missing env placeholders, unknown user references, duplicate keys, missing post idempotency keys, and missing imported namespace IDs into hard failures before creating content.
+
 Run `seed:prod-launch` only after replacing the template content with real curated launch content and real namespace verification IDs. Production launch content should come from staff/founding accounts or imported content with provenance; synthetic engagement belongs in local and staging only.
 
 ## JWT-Based Upstream Auth

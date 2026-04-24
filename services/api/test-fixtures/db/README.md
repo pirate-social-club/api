@@ -108,6 +108,8 @@ rtk bun run seed:local-smoke -- --execute
 
 The local smoke manifest creates synthetic JWT users, completes dev Very widget-trust verification, creates a community, joins/follows users, creates public and members-only posts, adds comments/replies/votes, and verifies public structured surfaces such as markdown, Link headers, and top comments. It intentionally skips namespace verification so it does not need an HNS/Spaces verifier.
 
+Dry-runs print planned counts and preflight warnings. Executed runs fail before mutation when the manifest has duplicate keys, unknown user references, missing post idempotency keys, missing env placeholders, or missing imported namespace IDs.
+
 Staging and production templates live in `scripts/seed-manifests/`:
 
 - `staging-seed.json`
