@@ -4,7 +4,9 @@ import { nowIso } from "../helpers"
 import type { Env, GlobalHandle, HandleUpgradeQuote, Profile } from "../../types"
 import { DatabaseIdentityRepository } from "./db-identity-repository"
 import {
+  ensureProfilesNationalityBadgeColumn,
   ensureProfilesPrimaryLinkedHandleColumn,
+  ensureProfilesSourceColumns,
   firstRow,
   getGlobalHandleRow,
   getLinkedHandleRow,
@@ -12,6 +14,7 @@ import {
   getUserRow,
   hasUniqueConstraintField,
   listActiveWalletAttachmentRows,
+  listLinkedHandleRows,
 } from "./auth-db-queries"
 import { serializeGlobalHandle } from "./auth-serializers"
 import {
@@ -21,15 +24,43 @@ import {
   normalizeDesiredGlobalHandleLabel,
 } from "./global-handle-policy"
 import { makeId } from "../helpers"
-import { resolveVerifiedEnsName } from "./ens-linked-handle-service"
+import { resolveVerifiedEnsProfile } from "./ens-linked-handle-service"
 import type { PublicProfileResolution } from "./repositories"
 
 export type UpdateProfileInput = {
   display_name?: string | null
   avatar_ref?: string | null
+  avatar_source?: Profile["avatar_source"]
   cover_ref?: string | null
+  cover_source?: Profile["cover_source"]
   bio?: string | null
+  bio_source?: Profile["bio_source"]
   preferred_locale?: string | null
+  display_verified_nationality_badge?: boolean | null
+}
+
+function parseLinkedHandleMetadata(raw: string | null): Record<string, unknown> | null {
+  if (!raw) {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null
+  } catch {
+    return null
+  }
+}
+
+function stringMetadataValue(metadata: Record<string, unknown> | null, key: string): string | null {
+  const value = metadata?.[key]
+  return typeof value === "string" && value.trim() ? value.trim() : null
+}
+
+function shouldUseEnsValue(currentRef: string | null, currentSource: "ens" | "upload" | "none" | "manual" | null): boolean {
+  return currentSource === "ens" || (currentSource == null && currentRef == null)
 }
 
 export class DatabaseProfileRepository {
@@ -52,10 +83,68 @@ export class DatabaseProfileRepository {
 
   async updateProfile(userId: string, input: UpdateProfileInput): Promise<Profile | null> {
     await ensureProfilesPrimaryLinkedHandleColumn(this.client)
+    await ensureProfilesNationalityBadgeColumn(this.client)
+    await ensureProfilesSourceColumns(this.client)
     const existing = await getProfileRow(this.client, userId)
     if (!existing) {
       return null
     }
+
+    let ensMetadata: Record<string, unknown> | null = null
+    if (input.avatar_source === "ens" || input.cover_source === "ens" || input.bio_source === "ens") {
+      const verifiedEnsHandle = (await listLinkedHandleRows(this.client, userId))
+        .find((handle) => handle.kind === "ens" && handle.verification_state === "verified")
+      ensMetadata = parseLinkedHandleMetadata(verifiedEnsHandle?.metadata_json ?? null)
+    }
+
+    const ensAvatar = stringMetadataValue(ensMetadata, "avatar")
+    const ensCover = stringMetadataValue(ensMetadata, "header")
+    const ensBio = stringMetadataValue(ensMetadata, "description")
+
+    const avatarRef = input.avatar_source === "ens"
+      ? ensAvatar
+      : input.avatar_source === "none"
+        ? null
+        : input.avatar_ref !== undefined
+          ? input.avatar_ref
+          : existing.avatar_ref
+    const avatarSource = input.avatar_source === "ens"
+      ? (ensAvatar ? "ens" : null)
+      : input.avatar_source === "none"
+        ? "none"
+        : input.avatar_ref !== undefined
+          ? (input.avatar_ref == null ? "none" : "upload")
+          : existing.avatar_source
+
+    const coverRef = input.cover_source === "ens"
+      ? ensCover
+      : input.cover_source === "none"
+        ? null
+        : input.cover_ref !== undefined
+          ? input.cover_ref
+          : existing.cover_ref
+    const coverSource = input.cover_source === "ens"
+      ? (ensCover ? "ens" : null)
+      : input.cover_source === "none"
+        ? "none"
+        : input.cover_ref !== undefined
+          ? (input.cover_ref == null ? "none" : "upload")
+          : existing.cover_source
+
+    const bio = input.bio_source === "ens"
+      ? ensBio
+      : input.bio_source === "none"
+        ? null
+        : input.bio !== undefined
+          ? input.bio
+          : existing.bio
+    const bioSource = input.bio_source === "ens"
+      ? (ensBio ? "ens" : null)
+      : input.bio_source === "none"
+        ? "none"
+        : input.bio !== undefined
+          ? (input.bio == null ? "none" : "manual")
+          : existing.bio_source
 
     const updatedAt = nowIso()
     await this.client.execute({
@@ -66,16 +155,26 @@ export class DatabaseProfileRepository {
             cover_ref = ?4,
             bio = ?5,
             preferred_locale = ?6,
-            updated_at = ?7
+            display_verified_nationality_badge = ?7,
+            avatar_source = ?8,
+            cover_source = ?9,
+            bio_source = ?10,
+            updated_at = ?11
         WHERE user_id = ?1
       `,
       args: [
         userId,
         input.display_name !== undefined ? input.display_name : existing.display_name,
-        input.avatar_ref !== undefined ? input.avatar_ref : existing.avatar_ref,
-        input.cover_ref !== undefined ? input.cover_ref : existing.cover_ref,
-        input.bio !== undefined ? input.bio : existing.bio,
+        avatarRef,
+        coverRef,
+        bio,
         input.preferred_locale !== undefined ? input.preferred_locale : existing.preferred_locale,
+        input.display_verified_nationality_badge !== undefined
+          ? (input.display_verified_nationality_badge ? 1 : 0)
+          : existing.display_verified_nationality_badge,
+        avatarSource,
+        coverSource,
+        bioSource,
         updatedAt,
       ],
     })
@@ -224,6 +323,7 @@ export class DatabaseProfileRepository {
   }
 
   async syncLinkedHandles(userId: string): Promise<Profile | null> {
+    await ensureProfilesSourceColumns(this.client)
     const userRow = await getUserRow(this.client, userId)
     const profileRow = await getProfileRow(this.client, userId)
     if (!userRow || !profileRow) {
@@ -240,7 +340,7 @@ export class DatabaseProfileRepository {
       return await this.identityRepository.getProfileByUserId(userId)
     }
 
-    const resolvedEnsName = await resolveVerifiedEnsName(this.env, primaryWalletRow.wallet_address_display)
+    const resolvedEnsProfile = await resolveVerifiedEnsProfile(this.env, primaryWalletRow.wallet_address_display)
     const updatedAt = nowIso()
     const tx = await this.client.transaction("write")
 
@@ -257,8 +357,13 @@ export class DatabaseProfileRepository {
       })
 
       let verifiedLinkedHandleId: string | null = null
-      if (resolvedEnsName) {
+      if (resolvedEnsProfile) {
+        const resolvedEnsName = resolvedEnsProfile.name
         const normalizedLabel = resolvedEnsName.toLowerCase()
+        const metadataJson = JSON.stringify({
+          ...resolvedEnsProfile.metadata,
+          wallet_address: primaryWalletRow.wallet_address_display,
+        })
         const existingRow = await firstRow(tx, {
           sql: `
             SELECT linked_handle_id
@@ -287,7 +392,7 @@ export class DatabaseProfileRepository {
               verifiedLinkedHandleId,
               primaryWalletRow.wallet_attachment_id,
               resolvedEnsName,
-              JSON.stringify({ wallet_address: primaryWalletRow.wallet_address_display }),
+              metadataJson,
               updatedAt,
             ],
           })
@@ -314,11 +419,54 @@ export class DatabaseProfileRepository {
               primaryWalletRow.wallet_attachment_id,
               normalizedLabel,
               resolvedEnsName,
-              JSON.stringify({ wallet_address: primaryWalletRow.wallet_address_display }),
+              metadataJson,
               updatedAt,
             ],
           })
         }
+
+        const nextAvatarRef = shouldUseEnsValue(profileRow.avatar_ref, profileRow.avatar_source)
+          ? resolvedEnsProfile.metadata.avatar ?? null
+          : profileRow.avatar_ref
+        const nextAvatarSource = shouldUseEnsValue(profileRow.avatar_ref, profileRow.avatar_source)
+          ? (resolvedEnsProfile.metadata.avatar ? "ens" : null)
+          : profileRow.avatar_source
+        const nextCoverRef = shouldUseEnsValue(profileRow.cover_ref, profileRow.cover_source)
+          ? resolvedEnsProfile.metadata.header ?? null
+          : profileRow.cover_ref
+        const nextCoverSource = shouldUseEnsValue(profileRow.cover_ref, profileRow.cover_source)
+          ? (resolvedEnsProfile.metadata.header ? "ens" : null)
+          : profileRow.cover_source
+        const nextBio = shouldUseEnsValue(profileRow.bio, profileRow.bio_source)
+          ? resolvedEnsProfile.metadata.description ?? null
+          : profileRow.bio
+        const nextBioSource = shouldUseEnsValue(profileRow.bio, profileRow.bio_source)
+          ? (resolvedEnsProfile.metadata.description ? "ens" : null)
+          : profileRow.bio_source
+
+        await tx.execute({
+          sql: `
+            UPDATE profiles
+            SET avatar_ref = ?2,
+                cover_ref = ?3,
+                bio = ?4,
+                avatar_source = ?5,
+                cover_source = ?6,
+                bio_source = ?7,
+                updated_at = ?8
+            WHERE user_id = ?1
+          `,
+          args: [
+            userId,
+            nextAvatarRef,
+            nextCoverRef,
+            nextBio,
+            nextAvatarSource,
+            nextCoverSource,
+            nextBioSource,
+            updatedAt,
+          ],
+        })
       }
 
       if (profileRow.primary_linked_handle_id && profileRow.primary_linked_handle_id !== verifiedLinkedHandleId) {

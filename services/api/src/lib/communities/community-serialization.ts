@@ -68,7 +68,7 @@ function parseStoredCommunitySettings(
   return {}
 }
 
-function parseStoredReferenceLinks(
+export function parseStoredReferenceLinks(
   storedSettings: Record<string, unknown>,
 ): NonNullable<Community["reference_links"]> {
   const rawLinks = storedSettings.reference_links

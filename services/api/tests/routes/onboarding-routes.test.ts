@@ -200,4 +200,38 @@ describe("onboarding reddit routes", () => {
       reason: "Based on your Reddit history",
     }])
   })
+
+  test("dismiss persists onboarding completion without consuming cleanup rename", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "reddit-onboarding-dismiss-user")
+
+    const dismissResponse = await app.request("http://pirate.test/onboarding/dismiss", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${session.accessToken}`,
+      },
+    }, ctx.env)
+    expect(dismissResponse.status).toBe(200)
+    const dismissBody = await json(dismissResponse) as {
+      cleanup_rename_available: boolean
+      onboarding_dismissed_at: string | null
+    }
+    expect(dismissBody.cleanup_rename_available).toBe(true)
+    expect(typeof dismissBody.onboarding_dismissed_at).toBe("string")
+
+    const onboarding = await app.request("http://pirate.test/onboarding/status", {
+      headers: {
+        authorization: `Bearer ${session.accessToken}`,
+      },
+    }, ctx.env)
+    expect(onboarding.status).toBe(200)
+    const onboardingBody = await json(onboarding) as {
+      cleanup_rename_available: boolean
+      onboarding_dismissed_at: string | null
+    }
+    expect(onboardingBody.cleanup_rename_available).toBe(true)
+    expect(onboardingBody.onboarding_dismissed_at).toBe(dismissBody.onboarding_dismissed_at)
+  })
 })

@@ -65,6 +65,61 @@ export async function resolveNamespaceVerificationTask(input: {
   }
 }
 
+export async function emitMembershipRequestReceived(input: {
+  env: Env
+  reviewerUserId: string
+  communityId: string
+  communityDisplayName: string
+  applicantUserId: string
+  applicantHandle?: string | null
+  requestCount: number
+  requestId: string
+}): Promise<UserTask> {
+  const client = getControlPlaneClient(input.env)
+  try {
+    await ensureNotificationTables(client)
+    return await upsertUserTask({
+      executor: client,
+      userId: input.reviewerUserId,
+      type: "membership_review",
+      subjectType: "community",
+      subjectId: input.communityId,
+      priority: 20,
+      payload: {
+        community_display_name: input.communityDisplayName,
+        applicant_user_id: input.applicantUserId,
+        applicant_handle: input.applicantHandle ?? null,
+        membership_request_id: input.requestId,
+        request_count: input.requestCount,
+        target_path: `/c/${input.communityId}/mod/membership-requests`,
+      },
+      createdAt: nowIso(),
+    })
+  } finally {
+    client.close?.()
+  }
+}
+
+export async function resolveMembershipReviewTask(input: {
+  env: Env
+  reviewerUserId: string
+  communityId: string
+}): Promise<void> {
+  const client = getControlPlaneClient(input.env)
+  try {
+    await ensureNotificationTables(client)
+    await resolveUserTask({
+      executor: client,
+      userId: input.reviewerUserId,
+      type: "membership_review",
+      subjectId: input.communityId,
+      resolvedAt: nowIso(),
+    })
+  } finally {
+    client.close?.()
+  }
+}
+
 export async function emitCommentReply(input: {
   env: Env
   actorUserId: string

@@ -4,6 +4,7 @@ import { resolve } from "node:path"
 export function resolveCoreRepoRoot(repoRoot: string): string {
   const candidates = [
     process.env.PIRATE_CORE_REPO?.trim(),
+    resolve(repoRoot, "../core"),
     resolve(repoRoot, "../../../core"),
     resolve(repoRoot, "../../core"),
   ].filter((value): value is string => Boolean(value))

@@ -188,20 +188,91 @@ describe("public profile routes", () => {
       args: [session.userId, "wal_ens_primary", attachedAt],
     })
 
-    setEnsResolverForTests(async () => "blackbeard.eth")
+    setEnsResolverForTests(async () => ({
+      name: "blackbeard.eth",
+      metadata: {
+        avatar: "https://example.com/blackbeard.png",
+        description: "Captain of the Queen Anne's Revenge.",
+        header: "ipfs://bafyblackbeard/header.png",
+        social: {
+          discord: "javascript:alert(1)",
+          github: "blackbeard",
+          twitter: "@blackbeard",
+        },
+        url: "https://blackbeard.example",
+      },
+    }))
 
     const synced = await requestJson("http://pirate.test/profiles/me/linked-handles/sync", "POST", {}, ctx.env, session.accessToken)
     expect(synced.status).toBe(200)
     const syncedBody = await json(synced) as {
-      linked_handles: Array<{ linked_handle_id: string; label: string; kind: string; verification_state: string }>
+      avatar_ref: string | null
+      avatar_source: string | null
+      bio: string | null
+      bio_source: string | null
+      cover_ref: string | null
+      cover_source: string | null
+      linked_handles: Array<{ linked_handle_id: string; label: string; kind: string; metadata?: Record<string, unknown> | null; verification_state: string }>
       primary_public_handle: { linked_handle_id: string; label: string } | null
     }
     expect(syncedBody.primary_public_handle).toBeNull()
+    expect(syncedBody.avatar_ref).toBe("https://example.com/blackbeard.png")
+    expect(syncedBody.avatar_source).toBe("ens")
+    expect(syncedBody.bio).toBe("Captain of the Queen Anne's Revenge.")
+    expect(syncedBody.bio_source).toBe("ens")
+    expect(syncedBody.cover_ref).toBe("https://ipfs.io/ipfs/bafyblackbeard/header.png")
+    expect(syncedBody.cover_source).toBe("ens")
     expect(syncedBody.linked_handles[0]?.label ?? "").toMatch(/^[a-z]+-[a-z]+-\d{4}\.pirate$/)
     expect(syncedBody.linked_handles[1]?.label).toBe("blackbeard.eth")
 
     const ensHandle = syncedBody.linked_handles.find((handle) => handle.kind === "ens")
     expect(ensHandle?.verification_state).toBe("verified")
+    expect(ensHandle?.metadata?.avatar).toBe("https://example.com/blackbeard.png")
+    expect((ensHandle?.metadata?.social as Record<string, unknown> | undefined)?.discord).toBe(undefined)
+    expect((ensHandle?.metadata?.social as Record<string, unknown> | undefined)?.github).toBe("blackbeard")
+    expect((ensHandle?.metadata?.social as Record<string, unknown> | undefined)?.twitter).toBe("blackbeard")
+
+    setEnsResolverForTests(async () => ({
+      name: "blackbeard.eth",
+      metadata: {
+        avatar: "https://example.com/blackbeard-v2.png",
+        description: "Captain of the Queen Anne's Revenge, updated.",
+        header: "ipfs://bafyblackbeard/header-v2.png",
+      },
+    }))
+
+    const updatedEnsMedia = await requestJson("http://pirate.test/profiles/me/linked-handles/sync", "POST", {}, ctx.env, session.accessToken)
+    expect(updatedEnsMedia.status).toBe(200)
+    const updatedEnsMediaBody = await json(updatedEnsMedia) as {
+      avatar_ref: string | null
+      avatar_source: string | null
+      bio: string | null
+      bio_source: string | null
+      cover_ref: string | null
+      cover_source: string | null
+    }
+    expect(updatedEnsMediaBody.avatar_ref).toBe("https://example.com/blackbeard-v2.png")
+    expect(updatedEnsMediaBody.avatar_source).toBe("ens")
+    expect(updatedEnsMediaBody.bio).toBe("Captain of the Queen Anne's Revenge, updated.")
+    expect(updatedEnsMediaBody.bio_source).toBe("ens")
+    expect(updatedEnsMediaBody.cover_ref).toBe("https://ipfs.io/ipfs/bafyblackbeard/header-v2.png")
+    expect(updatedEnsMediaBody.cover_source).toBe("ens")
+
+    const removedAvatar = await requestJson("http://pirate.test/profiles/me", "PATCH", {
+      avatar_source: "none",
+    }, ctx.env, session.accessToken)
+    expect(removedAvatar.status).toBe(200)
+    const removedAvatarBody = await json(removedAvatar) as { avatar_ref: string | null; avatar_source: string | null }
+    expect(removedAvatarBody.avatar_ref).toBeNull()
+    expect(removedAvatarBody.avatar_source).toBe("none")
+
+    const resynced = await requestJson("http://pirate.test/profiles/me/linked-handles/sync", "POST", {}, ctx.env, session.accessToken)
+    expect(resynced.status).toBe(200)
+    const resyncedBody = await json(resynced) as { avatar_ref: string | null; avatar_source: string | null; bio: string | null; bio_source: string | null }
+    expect(resyncedBody.avatar_ref).toBeNull()
+    expect(resyncedBody.avatar_source).toBe("none")
+    expect(resyncedBody.bio).toBe("Captain of the Queen Anne's Revenge, updated.")
+    expect(resyncedBody.bio_source).toBe("ens")
 
     const selected = await requestJson("http://pirate.test/profiles/me/primary-public-handle", "POST", {
       linked_handle_id: ensHandle?.linked_handle_id ?? null,

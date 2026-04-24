@@ -3,6 +3,7 @@ const ISO_COUNTRY_CODE_PAIRS =
 
 const COUNTRY_CODE_PAIRS = ISO_COUNTRY_CODE_PAIRS.split(",").map((pair) => pair.split(":") as [string, string])
 const ISO3_BY_ISO2 = new Map(COUNTRY_CODE_PAIRS)
+const ISO2_BY_ISO3 = new Map(COUNTRY_CODE_PAIRS.map(([alpha2, alpha3]) => [alpha3, alpha2]))
 const ISO3_CODES = new Set(COUNTRY_CODE_PAIRS.map(([, alpha3]) => alpha3))
 
 export function normalizeIdentityCountryCode(value: unknown): string | null {
@@ -16,6 +17,21 @@ export function normalizeIdentityCountryCode(value: unknown): string | null {
   }
   if (/^[A-Z]{3}$/.test(normalized) && ISO3_CODES.has(normalized)) {
     return normalized
+  }
+  return null
+}
+
+export function normalizeIdentityCountryAlpha2(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null
+  }
+
+  const normalized = value.trim().toUpperCase()
+  if (/^[A-Z]{2}$/.test(normalized)) {
+    return ISO3_BY_ISO2.has(normalized) ? normalized : null
+  }
+  if (/^[A-Z]{3}$/.test(normalized)) {
+    return ISO2_BY_ISO3.get(normalized) ?? null
   }
   return null
 }

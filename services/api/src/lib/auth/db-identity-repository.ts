@@ -4,6 +4,7 @@ import { generateHandleCandidate } from "./handle-generator"
 import { buildDefaultVerificationCapabilities } from "../verification/verification-capabilities"
 import {
   deriveOnboardingStatus,
+  dismissOnboardingForUser,
   findActiveAuthProviderLink,
   getGlobalHandleRow,
   getGlobalHandleRowByLabelNormalized,
@@ -234,6 +235,11 @@ export class DatabaseIdentityRepository {
     return deriveOnboardingStatus(this.client, userRow, globalHandleRow)
   }
 
+  async dismissOnboarding(userId: string): Promise<OnboardingStatus | null> {
+    await dismissOnboardingForUser(this.client, userId, nowIso())
+    return this.getOnboardingStatusByUserId(userId)
+  }
+
   async getProfileByUserId(userId: string): Promise<Profile | null> {
     const userRow = await getUserRow(this.client, userId)
     if (!userRow) {
@@ -253,7 +259,7 @@ export class DatabaseIdentityRepository {
       userRow.primary_wallet_attachment_id,
       walletRows,
     )
-    return assembleProfile(profileRow, globalHandleRow, linkedHandleRows, primaryWalletAddress)
+    return assembleProfile(profileRow, globalHandleRow, linkedHandleRows, primaryWalletAddress, serializeUser(userRow))
   }
 
   async resolvePublicProfileByHandle(handleLabel: string): Promise<PublicProfileResolution | null> {
@@ -281,12 +287,14 @@ export class DatabaseIdentityRepository {
     const linkedHandleRows = await listLinkedHandleRows(this.client, canonicalHandleRow.user_id)
     const walletRows = await listActiveWalletAttachmentRows(this.client, canonicalHandleRow.user_id)
     const createdCommunityRows = await listCreatedCommunityRowsByCreatorUserId(this.client, canonicalHandleRow.user_id)
+    const userRow = await getUserRow(this.client, canonicalHandleRow.user_id)
 
     const profile = assembleProfile(
       profileRow,
       canonicalHandleRow,
       linkedHandleRows,
       getPrimaryWalletAddressFromRows(null, walletRows),
+      userRow ? serializeUser(userRow) : null,
     )
     const resolvedPublicHandle = getProfilePublicHandleLabel(profile)
     const canonicalPirateRequest = requestedHandleRow.global_handle_id === canonicalHandleRow.global_handle_id
@@ -328,6 +336,7 @@ export class DatabaseIdentityRepository {
     const linkedHandleRows = await listLinkedHandleRows(this.client, linkedHandleRow.user_id)
     const walletRows = await listActiveWalletAttachmentRows(this.client, linkedHandleRow.user_id)
     const createdCommunityRows = await listCreatedCommunityRowsByCreatorUserId(this.client, linkedHandleRow.user_id)
+    const userRow = await getUserRow(this.client, linkedHandleRow.user_id)
 
     return {
       profile: assembleProfile(
@@ -335,6 +344,7 @@ export class DatabaseIdentityRepository {
         globalHandleRow,
         linkedHandleRows,
         getPrimaryWalletAddressFromRows(null, walletRows),
+        userRow ? serializeUser(userRow) : null,
       ),
       requested_handle_label: linkedHandleRow.label_display,
       resolved_handle_label: linkedHandleRow.label_display,

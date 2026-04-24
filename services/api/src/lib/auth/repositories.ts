@@ -52,6 +52,7 @@ export interface UserRepository {
 
 export interface OnboardingStatusRepository {
   getOnboardingStatusByUserId(userId: string): Promise<OnboardingStatus | null>
+  dismissOnboarding(userId: string): Promise<OnboardingStatus | null>
 }
 
 export interface ProfileRepository {

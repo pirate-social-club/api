@@ -139,12 +139,36 @@ async function applySqlFile(client: Client, path: string): Promise<void> {
   const statements = splitSqlStatements(rawSql)
 
   for (const statement of statements) {
+    if (await shouldSkipExistingAddColumn(client, statement)) {
+      continue
+    }
     const sqliteStatement = toSqliteCompatibleStatement(statement)
     if (!sqliteStatement) {
       continue
     }
     await client.execute(sqliteStatement)
   }
+}
+
+function parseAddColumnIfNotExists(statement: string): { tableName: string; columnName: string } | null {
+  const match = statement.match(/^\s*ALTER\s+TABLE\s+"?([A-Za-z_][A-Za-z0-9_]*)"?\s+ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+"?([A-Za-z_][A-Za-z0-9_]*)"?\b/iu)
+  if (!match) {
+    return null
+  }
+  return {
+    tableName: match[1]!,
+    columnName: match[2]!,
+  }
+}
+
+async function shouldSkipExistingAddColumn(client: Client, statement: string): Promise<boolean> {
+  const target = parseAddColumnIfNotExists(statement)
+  if (!target) {
+    return false
+  }
+
+  const result = await client.execute(`PRAGMA table_info(${target.tableName})`)
+  return result.rows.some((row) => String(row.name) === target.columnName)
 }
 
 async function ensureSchemaMigrationsTable(client: Client): Promise<void> {

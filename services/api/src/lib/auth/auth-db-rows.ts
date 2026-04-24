@@ -25,6 +25,7 @@ export type UserRow = {
   verification_capabilities_json: string
   verified_at: string | null
   current_verification_session_id: string | null
+  onboarding_dismissed_at: string | null
   created_at: string
   updated_at: string
 }
@@ -33,9 +34,13 @@ export type ProfileRow = {
   user_id: string
   display_name: string | null
   bio: string | null
+  bio_source: "ens" | "manual" | "none" | null
   avatar_ref: string | null
+  avatar_source: "ens" | "upload" | "none" | null
   cover_ref: string | null
+  cover_source: "ens" | "upload" | "none" | null
   preferred_locale: string | null
+  display_verified_nationality_badge: number
   global_handle_id: string
   primary_linked_handle_id: string | null
   created_at: string
@@ -148,6 +153,7 @@ export function toUserRow(row: unknown): UserRow {
     verification_capabilities_json: requiredString(row, "verification_capabilities_json"),
     verified_at: stringOrNull(rowValue(row, "verified_at")),
     current_verification_session_id: stringOrNull(rowValue(row, "current_verification_session_id")),
+    onboarding_dismissed_at: stringOrNull(rowValue(row, "onboarding_dismissed_at")),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
   }
@@ -158,9 +164,13 @@ export function toProfileRow(row: unknown): ProfileRow {
     user_id: requiredString(row, "user_id"),
     display_name: stringOrNull(rowValue(row, "display_name")),
     bio: stringOrNull(rowValue(row, "bio")),
+    bio_source: stringOrNull(rowValue(row, "bio_source")) as ProfileRow["bio_source"],
     avatar_ref: stringOrNull(rowValue(row, "avatar_ref")),
+    avatar_source: stringOrNull(rowValue(row, "avatar_source")) as ProfileRow["avatar_source"],
     cover_ref: stringOrNull(rowValue(row, "cover_ref")),
+    cover_source: stringOrNull(rowValue(row, "cover_source")) as ProfileRow["cover_source"],
     preferred_locale: stringOrNull(rowValue(row, "preferred_locale")),
+    display_verified_nationality_badge: numberOrNull(rowValue(row, "display_verified_nationality_badge")) ?? 0,
     global_handle_id: requiredString(row, "global_handle_id"),
     primary_linked_handle_id: stringOrNull(rowValue(row, "primary_linked_handle_id")),
     created_at: requiredString(row, "created_at"),

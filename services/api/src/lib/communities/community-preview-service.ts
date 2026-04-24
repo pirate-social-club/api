@@ -16,6 +16,7 @@ import {
   resolveCommunityAvatarRef,
   resolveCommunityBannerRef,
 } from "./community-identity-media"
+import { parseStoredReferenceLinks } from "./community-serialization"
 import type { CommunityRepository } from "./db-community-repository"
 import { notFoundError } from "../errors"
 import type {
@@ -24,6 +25,21 @@ import type {
 } from "../../types"
 
 type CommunityPreviewRule = NonNullable<CommunityPreview["rules"]>[number]
+
+function parsePreviewSettingsJson(raw: unknown): Record<string, unknown> {
+  if (typeof raw !== "string" || !raw.trim()) {
+    return {}
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+  } catch {}
+
+  return {}
+}
 
 export async function getCommunityPreview(input: {
   env: Env
@@ -140,6 +156,9 @@ async function buildCommunityPreview(input: {
     args: [input.communityId],
   })
   const localRow = localResult.rows[0]
+  const settings = parsePreviewSettingsJson(localRow?.settings_json)
+  const referenceLinks = parseStoredReferenceLinks(settings)
+    .filter((link) => link.link_status === "active")
 
   let donationPartner: CommunityPreview["donation_partner"] = null
   if (localRow?.donation_partner_id) {
@@ -211,6 +230,7 @@ async function buildCommunityPreview(input: {
     donation_policy_mode: donationPolicyMode,
     donation_partner_id: localRow?.donation_partner_id == null ? null : String(localRow.donation_partner_id),
     donation_partner: donationPolicyMode !== "none" ? donationPartner : null,
+    reference_links: referenceLinks,
     membership_gate_summaries: input.gateRules.map(buildMembershipGateSummary),
     viewer_membership_status: input.viewerMembershipStatus,
     viewer_following: input.viewerFollowing,

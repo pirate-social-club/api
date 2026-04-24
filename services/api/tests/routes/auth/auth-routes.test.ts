@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test"
 import app from "../../../src/index"
 import { setPrivyAccessProofVerifierForTests } from "../../../src/lib/auth/privy-auth"
+import { setEnsResolverForTests } from "../../../src/lib/auth/ens-linked-handle-service"
 import type { Env } from "../../../src/types"
 import { buildTestEnv, createRouteTestContext, json, mintUpstreamJwt, resetMemoryStore } from "../../helpers"
 
@@ -29,6 +30,7 @@ async function expectAuthError(response: Response): Promise<void> {
 beforeEach(() => {
   resetMemoryStore()
   setPrivyAccessProofVerifierForTests(null)
+  setEnsResolverForTests(null)
 })
 
 describe("auth routes", () => {
@@ -234,5 +236,56 @@ describe("auth routes", () => {
       "0x2222222222222222222222222222222222222222",
     )
     expect(typeof body.user.primary_wallet_attachment_id).toBe("string")
+  })
+
+  test("session exchange syncs ENS handles for database-backed Privy wallets", async () => {
+    const ctx = await createRouteTestContext()
+
+    try {
+      setPrivyAccessProofVerifierForTests(async () => ({
+        provider: "privy",
+        providerSubject: "did:privy:ens-user",
+        providerUserRef: "did:privy:ens-user",
+        walletAddresses: ["0x3333333333333333333333333333333333333333"],
+        selectedWalletAddress: "0x3333333333333333333333333333333333333333",
+      }))
+      setEnsResolverForTests(async () => ({
+        name: "sessionpirate.eth",
+        metadata: {
+          avatar: "https://example.com/sessionpirate.png",
+          description: "ENS imported during auth.",
+        },
+      }))
+
+      const response = await makeJsonRequest("http://pirate.test/auth/session/exchange", {
+        proof: {
+          type: "privy_access_token",
+          privy_access_token: "test-privy-token",
+          wallet_address: "0x3333333333333333333333333333333333333333",
+        },
+      }, ctx.env)
+
+      expect(response.status).toBe(200)
+      const body = await json(response) as {
+        profile: {
+          avatar_ref: string | null
+          avatar_source: string | null
+          bio: string | null
+          bio_source: string | null
+          linked_handles: Array<{ kind: string; label: string; metadata?: Record<string, unknown> | null; verification_state: string }>
+        }
+      }
+      const ensHandle = body.profile.linked_handles.find((handle) => handle.kind === "ens")
+
+      expect(ensHandle?.label).toBe("sessionpirate.eth")
+      expect(ensHandle?.verification_state).toBe("verified")
+      expect(ensHandle?.metadata?.avatar).toBe("https://example.com/sessionpirate.png")
+      expect(body.profile.avatar_ref).toBe("https://example.com/sessionpirate.png")
+      expect(body.profile.avatar_source).toBe("ens")
+      expect(body.profile.bio).toBe("ENS imported during auth.")
+      expect(body.profile.bio_source).toBe("ens")
+    } finally {
+      await ctx.cleanup()
+    }
   })
 })

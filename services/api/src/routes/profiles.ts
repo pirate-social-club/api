@@ -18,6 +18,16 @@ function requireStringOrNull(value: unknown, field: string): string | null {
   return value.trim()
 }
 
+function requireSourceValue<T extends string>(value: unknown, field: string, allowed: readonly T[]): T | null {
+  if (value === null) {
+    return null
+  }
+  if (typeof value !== "string" || !allowed.includes(value as T)) {
+    throw badRequestError(`Invalid ${field}`)
+  }
+  return value as T
+}
+
 profiles.get("/me", async (c) => {
   const actor = c.get("actor")
   const repository = getProfileRepository(c.env)
@@ -34,9 +44,13 @@ profiles.patch("/me", async (c) => {
     .json<{
       display_name?: unknown
       avatar_ref?: unknown
+      avatar_source?: unknown
       cover_ref?: unknown
+      cover_source?: unknown
       bio?: unknown
+      bio_source?: unknown
       preferred_locale?: unknown
+      display_verified_nationality_badge?: unknown
     }>()
     .catch(() => null)
   if (!body || typeof body !== "object") {
@@ -46,9 +60,13 @@ profiles.patch("/me", async (c) => {
   const input: {
     display_name?: string | null
     avatar_ref?: string | null
+    avatar_source?: "ens" | "upload" | "none" | null
     cover_ref?: string | null
+    cover_source?: "ens" | "upload" | "none" | null
     bio?: string | null
+    bio_source?: "ens" | "manual" | "none" | null
     preferred_locale?: string | null
+    display_verified_nationality_badge?: boolean | null
   } = {}
 
   if ("display_name" in body) {
@@ -61,14 +79,29 @@ profiles.patch("/me", async (c) => {
   if ("avatar_ref" in body) {
     input.avatar_ref = requireStringOrNull(body.avatar_ref, "avatar_ref")
   }
+  if ("avatar_source" in body) {
+    input.avatar_source = requireSourceValue(body.avatar_source, "avatar_source", ["ens", "upload", "none"] as const)
+  }
   if ("cover_ref" in body) {
     input.cover_ref = requireStringOrNull(body.cover_ref, "cover_ref")
+  }
+  if ("cover_source" in body) {
+    input.cover_source = requireSourceValue(body.cover_source, "cover_source", ["ens", "upload", "none"] as const)
   }
   if ("bio" in body) {
     input.bio = requireStringOrNull(body.bio, "bio")
   }
+  if ("bio_source" in body) {
+    input.bio_source = requireSourceValue(body.bio_source, "bio_source", ["ens", "manual", "none"] as const)
+  }
   if ("preferred_locale" in body) {
     input.preferred_locale = requireStringOrNull(body.preferred_locale, "preferred_locale")
+  }
+  if ("display_verified_nationality_badge" in body) {
+    if (body.display_verified_nationality_badge !== null && typeof body.display_verified_nationality_badge !== "boolean") {
+      throw badRequestError("Invalid display_verified_nationality_badge")
+    }
+    input.display_verified_nationality_badge = body.display_verified_nationality_badge
   }
 
   const repository = getProfileRepository(c.env)

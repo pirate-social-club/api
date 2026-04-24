@@ -111,6 +111,24 @@ function collectPreviewFields(preview: CommunityPreview): CommunityTextField[] {
     }
   }
 
+  for (const link of preview.reference_links ?? []) {
+    const label = String(link.label ?? "").trim()
+    if (label) {
+      fields.push({
+        field_key: `community.reference_link.${link.community_reference_link_id}.label`,
+        source_text: label,
+      })
+    }
+
+    const displayName = String(link.metadata?.display_name ?? "").trim()
+    if (displayName) {
+      fields.push({
+        field_key: `community.reference_link.${link.community_reference_link_id}.metadata.display_name`,
+        source_text: displayName,
+      })
+    }
+  }
+
   return fields
 }
 

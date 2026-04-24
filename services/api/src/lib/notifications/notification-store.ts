@@ -150,6 +150,19 @@ export async function upsertUserTask(input: {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     if (message.includes("UNIQUE") || message.includes("unique") || message.includes("duplicate")) {
+      await input.executor.execute({
+        sql: `
+          UPDATE user_tasks
+          SET priority = ?4,
+              payload_json = ?5,
+              updated_at = ?6
+          WHERE user_id = ?1
+            AND type = ?2
+            AND subject_id = ?3
+            AND status = 'open'
+        `,
+        args: [input.userId, input.type, input.subjectId, priority, payloadJson, input.createdAt],
+      })
       const existing = await executeFirst(input.executor, {
         sql: `SELECT * FROM user_tasks WHERE user_id = ?1 AND type = ?2 AND subject_id = ?3 AND status = 'open' LIMIT 1`,
         args: [input.userId, input.type, input.subjectId],

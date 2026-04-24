@@ -25,6 +25,202 @@ afterEach(async () => {
 })
 
 describe("community membership routes", () => {
+  test("request membership lifecycle supports list, approval, rejection, and pending eligibility", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "community-request-lifecycle-creator")
+    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Request Lifecycle Club",
+      namespace: {
+        namespace_verification_id: namespaceVerificationId,
+      },
+      membership_mode: "request",
+    }, ctx.env, creator.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: { community_id: string }
+    }
+    const communityId = communityCreateBody.community.community_id
+
+    const joiner = await exchangeJwt(ctx.env, "community-request-lifecycle-joiner")
+    await completeUniqueHumanVerification(ctx.env, joiner.accessToken)
+
+    const initialEligibility = await app.request(
+      `http://pirate.test/communities/${communityId}/join-eligibility`,
+      { headers: { authorization: `Bearer ${joiner.accessToken}` } },
+      ctx.env,
+    )
+    expect(initialEligibility.status).toBe(200)
+    expect((await json(initialEligibility) as { status: string }).status).toBe("requestable")
+
+    const request = await requestJson(
+      `http://pirate.test/communities/${communityId}/join`,
+      { note: "I can help moderate release threads." },
+      ctx.env,
+      joiner.accessToken,
+    )
+    expect(request.status).toBe(200)
+    expect((await json(request) as { status: string }).status).toBe("requested")
+
+    const duplicateRequest = await requestJson(
+      `http://pirate.test/communities/${communityId}/join`,
+      { note: "Updating my note should not create a second request." },
+      ctx.env,
+      joiner.accessToken,
+    )
+    expect(duplicateRequest.status).toBe(200)
+    expect((await json(duplicateRequest) as { status: string }).status).toBe("requested")
+
+    const pendingEligibility = await app.request(
+      `http://pirate.test/communities/${communityId}/join-eligibility`,
+      { headers: { authorization: `Bearer ${joiner.accessToken}` } },
+      ctx.env,
+    )
+    expect(pendingEligibility.status).toBe(200)
+    expect((await json(pendingEligibility) as { status: string }).status).toBe("pending_request")
+
+    const unauthorizedList = await app.request(
+      `http://pirate.test/communities/${communityId}/membership-requests`,
+      { headers: { authorization: `Bearer ${joiner.accessToken}` } },
+      ctx.env,
+    )
+    expect(unauthorizedList.status).toBe(404)
+
+    const creatorTasks = await app.request(
+      "http://pirate.test/notifications/tasks",
+      { headers: { authorization: `Bearer ${creator.accessToken}` } },
+      ctx.env,
+    )
+    expect(creatorTasks.status).toBe(200)
+    const creatorTasksBody = await json(creatorTasks) as {
+      items: Array<{ type: string; subject_id: string; payload: Record<string, unknown> | null }>
+    }
+    expect(creatorTasksBody.items.some((task) => (
+      task.type === "membership_review"
+      && task.subject_id === communityId
+      && task.payload?.request_count === 1
+    ))).toBe(true)
+
+    const list = await app.request(
+      `http://pirate.test/communities/${communityId}/membership-requests`,
+      { headers: { authorization: `Bearer ${creator.accessToken}` } },
+      ctx.env,
+    )
+    expect(list.status).toBe(200)
+    const listBody = await json(list) as {
+      items: Array<{
+        membership_request_id: string
+        applicant_user_id: string
+        applicant_handle?: string | null
+        note?: string | null
+        status: string
+      }>
+      next_cursor: string | null
+    }
+    expect(listBody.items).toHaveLength(1)
+    expect(listBody.items[0]?.applicant_user_id).toBe(joiner.userId)
+    expect(listBody.items[0]?.applicant_handle).toBeTruthy()
+    expect(listBody.items[0]?.note).toBe("I can help moderate release threads.")
+    expect(listBody.items[0]?.status).toBe("pending")
+
+    const requestId = listBody.items[0]?.membership_request_id ?? ""
+    const unauthorizedApprove = await app.request(
+      `http://pirate.test/communities/${communityId}/membership-requests/${requestId}/approve`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${joiner.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(unauthorizedApprove.status).toBe(404)
+
+    const approve = await app.request(
+      `http://pirate.test/communities/${communityId}/membership-requests/${requestId}/approve`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${creator.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(approve.status).toBe(200)
+    expect((await json(approve) as { status: string }).status).toBe("approved")
+
+    const doubleApprove = await app.request(
+      `http://pirate.test/communities/${communityId}/membership-requests/${requestId}/approve`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${creator.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(doubleApprove.status).toBe(409)
+
+    const joinedEligibility = await app.request(
+      `http://pirate.test/communities/${communityId}/join-eligibility`,
+      { headers: { authorization: `Bearer ${joiner.accessToken}` } },
+      ctx.env,
+    )
+    expect(joinedEligibility.status).toBe(200)
+    expect((await json(joinedEligibility) as { status: string }).status).toBe("already_joined")
+
+    const creatorTasksAfterApproval = await app.request(
+      "http://pirate.test/notifications/tasks",
+      { headers: { authorization: `Bearer ${creator.accessToken}` } },
+      ctx.env,
+    )
+    expect(creatorTasksAfterApproval.status).toBe(200)
+    const creatorTasksAfterApprovalBody = await json(creatorTasksAfterApproval) as {
+      items: Array<{ type: string; subject_id: string }>
+    }
+    expect(creatorTasksAfterApprovalBody.items.some((task) => (
+      task.type === "membership_review"
+      && task.subject_id === communityId
+    ))).toBe(false)
+
+    const rejectedJoiner = await exchangeJwt(ctx.env, "community-request-lifecycle-rejected-joiner")
+    await completeUniqueHumanVerification(ctx.env, rejectedJoiner.accessToken)
+    const rejectedRequest = await requestJson(
+      `http://pirate.test/communities/${communityId}/join`,
+      { note: "Please let me in." },
+      ctx.env,
+      rejectedJoiner.accessToken,
+    )
+    expect(rejectedRequest.status).toBe(200)
+
+    const rejectionList = await app.request(
+      `http://pirate.test/communities/${communityId}/membership-requests`,
+      { headers: { authorization: `Bearer ${creator.accessToken}` } },
+      ctx.env,
+    )
+    const rejectionListBody = await json(rejectionList) as {
+      items: Array<{ membership_request_id: string; applicant_user_id: string }>
+    }
+    const rejectedRequestId = rejectionListBody.items.find((item) => item.applicant_user_id === rejectedJoiner.userId)?.membership_request_id ?? ""
+    expect(rejectedRequestId).toBeTruthy()
+
+    const reject = await app.request(
+      `http://pirate.test/communities/${communityId}/membership-requests/${rejectedRequestId}/reject`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${creator.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(reject.status).toBe(200)
+    expect((await json(reject) as { status: string }).status).toBe("rejected")
+
+    const rejectedEligibility = await app.request(
+      `http://pirate.test/communities/${communityId}/join-eligibility`,
+      { headers: { authorization: `Bearer ${rejectedJoiner.accessToken}` } },
+      ctx.env,
+    )
+    expect(rejectedEligibility.status).toBe(200)
+    expect((await json(rejectedEligibility) as { status: string }).status).toBe("requestable")
+  })
+
   test("community join requires a platform trust credential even for open communities", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup

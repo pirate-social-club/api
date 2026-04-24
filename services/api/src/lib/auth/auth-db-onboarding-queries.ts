@@ -261,6 +261,7 @@ export async function deriveOnboardingStatus(
   return {
     generated_handle_assigned: activeGlobalHandleRow.issuance_source === "generated_signup",
     cleanup_rename_available: !Boolean(activeGlobalHandleRow.free_rename_consumed),
+    onboarding_dismissed_at: userRow.onboarding_dismissed_at,
     unique_human_verification_status: uniqueHumanState,
     namespace_verification_status: namespaceStatus,
     community_creation_ready: missingRequirements.length === 0,

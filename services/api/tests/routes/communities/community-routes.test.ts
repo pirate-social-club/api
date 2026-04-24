@@ -433,6 +433,26 @@ describe("community routes", () => {
     )
     expect(donationPolicyResponse.status).toBe(200)
 
+    const referenceLinksResponse = await app.request(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}/reference-links`,
+      {
+        method: "PUT",
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          reference_links: [{
+            platform: "official_website",
+            url: "https://pirate.test/public-community-club",
+            label: "Official site",
+          }],
+        }),
+      },
+      ctx.env,
+    )
+    expect(referenceLinksResponse.status).toBe(200)
+
     const createdPost = await requestJson(
       `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
       {
@@ -487,6 +507,18 @@ describe("community routes", () => {
         provider_partner_ref?: string | null
         image_url?: string | null
       } | null
+      reference_links?: Array<{
+        community_reference_link_id: string
+        platform: string
+        url: string
+        label: string | null
+        link_status: string
+        verified: boolean
+        metadata: {
+          display_name: string | null
+          image_url: string | null
+        }
+      }> | null
       rules?: Array<{
         rule_id: string
         title: string
@@ -517,12 +549,18 @@ describe("community routes", () => {
     expect(previewBody.donation_partner?.display_name).toBe("charity: water")
     expect(previewBody.donation_partner?.provider_partner_ref).toBe("charity-water")
     expect(previewBody.donation_partner?.image_url).toBe("https://images.example/charity-water.png")
+    expect(previewBody.reference_links?.[0]?.label).toBe("Official site")
+    expect(previewBody.reference_links?.[0]?.url).toBe("https://pirate.test/public-community-club")
+    expect(previewBody.reference_links?.[0]?.verified).toBe(false)
+    expect(previewBody.reference_links?.[0]?.metadata.display_name).toBe("Official site")
     expect(previewBody.rules?.map((rule) => rule.title)).toEqual([
       "Respect others and be civil",
       "No spam",
     ])
     expect(previewBody.localized_text?.resolved_locale).toBe("ar")
     expect(previewBody.localized_text?.items.some((item) => item.field_key === "community.description")).toBe(true)
+    expect(previewBody.localized_text?.items.some((item) => /^community\.reference_link\..+\.label$/.test(item.field_key))).toBe(true)
+    expect(previewBody.localized_text?.items.some((item) => /^community\.reference_link\..+\.metadata\.display_name$/.test(item.field_key))).toBe(true)
     expect(previewBody.localized_text?.items.some((item) => /^community\.rule\..+\.title$/.test(item.field_key))).toBe(true)
     expect(previewBody.localized_text?.items.some((item) => /^community\.rule\..+\.body$/.test(item.field_key))).toBe(true)
     expect(previewBody.viewer_membership_status).toBe("not_member")

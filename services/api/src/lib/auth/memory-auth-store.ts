@@ -1,6 +1,7 @@
 import { internalError } from "../errors"
 import { buildDefaultVerificationCapabilities } from "../verification/verification-capabilities"
 import { makeId, nowIso } from "../helpers"
+import { normalizeIdentityCountryAlpha2 } from "../identity/country-codes"
 import { generateHandleCandidate } from "./handle-generator"
 import type {
   Job,
@@ -31,6 +32,20 @@ export type MemoryAuthRecord = {
 type MemoryStore = {
   byUserId: Map<string, MemoryAuthRecord>
   userIdByProviderSubject: Map<string, string>
+}
+
+export function exposeMemoryProfile(record: MemoryAuthRecord): Profile {
+  const nationality = record.user.verification_capabilities.nationality
+  const nationalityBadgeCountry = record.profile.display_verified_nationality_badge
+    && nationality.state === "verified"
+    && nationality.provider === "self"
+    ? normalizeIdentityCountryAlpha2(nationality.value)
+    : null
+
+  return {
+    ...record.profile,
+    nationality_badge_country: nationalityBadgeCountry,
+  }
 }
 
 const globalScope = globalThis as typeof globalThis & {
@@ -104,8 +119,11 @@ function buildNewRecord(identity: UpstreamIdentity): MemoryAuthRecord {
       user_id: userId,
       display_name: null,
       avatar_ref: null,
+      avatar_source: null,
       cover_ref: null,
+      cover_source: null,
       bio: null,
+      bio_source: null,
       preferred_locale: null,
       linked_handles: [
         {
@@ -118,6 +136,8 @@ function buildNewRecord(identity: UpstreamIdentity): MemoryAuthRecord {
       primary_public_handle: null,
       primary_wallet_address: primaryWalletAddress,
       global_handle: globalHandle,
+      display_verified_nationality_badge: false,
+      nationality_badge_country: null,
       created_at: timestamp,
       updated_at: timestamp,
     },
@@ -131,6 +151,7 @@ function buildNewRecord(identity: UpstreamIdentity): MemoryAuthRecord {
       reddit_verification_status: "not_started",
       reddit_import_status: "not_started",
       suggested_community_ids: [],
+      onboarding_dismissed_at: null,
     },
     walletAttachments,
     providerLinks: [
@@ -190,7 +211,7 @@ export async function exchangeMemoryIdentity(
     store.userIdByProviderSubject.set(providerKey, record.user.user_id)
     return {
       user: record.user,
-      profile: record.profile,
+      profile: exposeMemoryProfile(record),
       onboarding: record.onboarding,
       wallet_attachments: record.walletAttachments,
     }
@@ -218,7 +239,7 @@ export async function exchangeMemoryIdentity(
 
   return {
     user: record.user,
-    profile: record.profile,
+    profile: exposeMemoryProfile(record),
     onboarding: record.onboarding,
     wallet_attachments: record.walletAttachments,
   }

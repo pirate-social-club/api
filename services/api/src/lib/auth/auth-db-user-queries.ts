@@ -22,7 +22,9 @@ import {
 } from "./auth-db-rows"
 import { deriveOnboardingStatus } from "./auth-db-onboarding-queries"
 import {
+  ensureProfilesNationalityBadgeColumn,
   ensureProfilesPrimaryLinkedHandleColumn,
+  ensureProfilesSourceColumns,
   firstRow,
   isMissingColumnError,
   isMissingTableError,
@@ -63,10 +65,11 @@ export async function findActiveAuthProviderLink(executor: DbExecutor, provider:
 }
 
 export async function getUserRow(executor: DbExecutor, userId: string): Promise<UserRow | null> {
-  const row = await firstRow(executor, {
+  const selectUserRow = (onboardingDismissedAtExpr: string) => firstRow(executor, {
     sql: `
       SELECT user_id, primary_wallet_attachment_id, verification_state, capability_provider,
              verification_capabilities_json, verified_at, current_verification_session_id,
+             ${onboardingDismissedAtExpr} AS onboarding_dismissed_at,
              created_at, updated_at
       FROM users
       WHERE user_id = ?1
@@ -75,13 +78,34 @@ export async function getUserRow(executor: DbExecutor, userId: string): Promise<
     args: [userId],
   })
 
+  const row = await selectUserRow("onboarding_dismissed_at").catch((error) => {
+    if (isMissingColumnError(error, "onboarding_dismissed_at")) {
+      return selectUserRow("NULL")
+    }
+    throw error
+  })
+
   return row ? toUserRow(row) : null
+}
+
+export async function dismissOnboardingForUser(executor: DbExecutor, userId: string, dismissedAt: string): Promise<void> {
+  await executor.execute({
+    sql: `
+      UPDATE users
+      SET onboarding_dismissed_at = ?2,
+          updated_at = ?2
+      WHERE user_id = ?1
+    `,
+    args: [userId, dismissedAt],
+  })
 }
 
 export async function getProfileRow(executor: DbExecutor, userId: string): Promise<ProfileRow | null> {
   const stmt = {
     sql: `
       SELECT user_id, display_name, bio, avatar_ref, cover_ref, preferred_locale,
+             bio_source, avatar_source, cover_source,
+             display_verified_nationality_badge,
              global_handle_id, primary_linked_handle_id, created_at, updated_at
       FROM profiles
       WHERE user_id = ?1
@@ -92,12 +116,42 @@ export async function getProfileRow(executor: DbExecutor, userId: string): Promi
   const legacyStmt = {
     sql: `
       SELECT user_id, display_name, bio, avatar_ref, cover_ref, preferred_locale,
-             global_handle_id, created_at, updated_at
+             NULL AS bio_source, NULL AS avatar_source, NULL AS cover_source,
+             0 AS display_verified_nationality_badge,
+             global_handle_id, NULL AS primary_linked_handle_id, created_at, updated_at
       FROM profiles
       WHERE user_id = ?1
       LIMIT 1
     `,
     args: [userId],
+  }
+  const sourceLegacyStmt = {
+    sql: `
+      SELECT user_id, display_name, bio, avatar_ref, cover_ref, preferred_locale,
+             NULL AS bio_source, NULL AS avatar_source, NULL AS cover_source,
+             display_verified_nationality_badge,
+             global_handle_id, primary_linked_handle_id, created_at, updated_at
+      FROM profiles
+      WHERE user_id = ?1
+      LIMIT 1
+    `,
+    args: [userId],
+  }
+
+  const isMissingSourceColumn = (error: unknown) => (
+    isMissingColumnError(error, "avatar_source")
+    || isMissingColumnError(error, "cover_source")
+    || isMissingColumnError(error, "bio_source")
+  )
+
+  const retryWithSourceColumns = async () => {
+    await ensureProfilesSourceColumns(executor)
+    return await firstRow(executor, stmt).catch(async (retryError) => {
+      if (isMissingSourceColumn(retryError)) {
+        return await firstRow(executor, sourceLegacyStmt)
+      }
+      throw retryError
+    })
   }
 
   const row = await firstRow(executor, stmt).catch(async (error) => {
@@ -107,8 +161,32 @@ export async function getProfileRow(executor: DbExecutor, userId: string): Promi
         if (isMissingColumnError(retryError, "primary_linked_handle_id")) {
           return await firstRow(executor, legacyStmt)
         }
+        if (isMissingColumnError(retryError, "display_verified_nationality_badge")) {
+          await ensureProfilesNationalityBadgeColumn(executor)
+          return await firstRow(executor, stmt).catch(async (nationalityRetryError) => {
+            if (isMissingSourceColumn(nationalityRetryError)) {
+              return await retryWithSourceColumns()
+            }
+            throw nationalityRetryError
+          })
+        }
+        if (isMissingSourceColumn(retryError)) {
+          return await retryWithSourceColumns()
+        }
         throw retryError
       })
+    }
+    if (isMissingColumnError(error, "display_verified_nationality_badge")) {
+      await ensureProfilesNationalityBadgeColumn(executor)
+      return await firstRow(executor, stmt).catch(async (retryError) => {
+        if (isMissingSourceColumn(retryError)) {
+          return await retryWithSourceColumns()
+        }
+        throw retryError
+      })
+    }
+    if (isMissingSourceColumn(error)) {
+      return await retryWithSourceColumns()
     }
     throw error
   })
@@ -428,9 +506,11 @@ export async function loadSnapshot(executor: DbExecutor, userId: string): Promis
     walletRows,
   )
 
+  const user = serializeUser(userRow)
+
   return {
-    user: serializeUser(userRow),
-    profile: assembleProfile(profileRow, globalHandleRow, linkedHandleRows, primaryWalletAddress),
+    user,
+    profile: assembleProfile(profileRow, globalHandleRow, linkedHandleRows, primaryWalletAddress, user),
     onboarding: await deriveOnboardingStatus(executor, userRow, globalHandleRow),
     wallet_attachments: serializeWalletAttachments(walletRows),
   }

@@ -5,7 +5,7 @@ import type { CommunityRepository } from "../communities/db-community-repository
 import { isMissingColumnError } from "../auth/auth-db-query-helpers"
 import { getLatestThreadSnapshotForRead } from "../comments/community-comment-store"
 import { buildLocalizedPostResponse } from "../localization/post-localization-service"
-import { enqueueEmbedHydrateOnReadIfNeeded } from "../posts/post-jobs"
+import { enqueueEmbedHydrateOnReadIfNeeded, enqueuePostTranslationOnReadIfNeeded } from "../posts/post-jobs"
 import { getPostById } from "../posts/community-post-store"
 import { getControlPlaneClient } from "../runtime-deps"
 import { numberOrNull, requiredNumber, requiredString, rowValue } from "../sql-row"
@@ -158,19 +158,7 @@ export function resolveHomeFeedCommunityIds(input: {
   membershipRows: CommunityMembershipProjectionRow[]
   userId: string | null
 }): string[] {
-  if (!input.userId) {
-    return input.activeCommunities.map((community) => community.community_id)
-  }
-
-  const activeCommunityIds = new Set(input.activeCommunities.map((community) => community.community_id))
-  const followedCommunityIds = new Set<string>()
-  for (const row of input.followRows) {
-    if (row.follow_state === "active" && activeCommunityIds.has(row.community_id)) {
-      followedCommunityIds.add(row.community_id)
-    }
-  }
-
-  return [...followedCommunityIds]
+  return input.activeCommunities.map((community) => community.community_id)
 }
 
 export function filterVisibleHomeFeedProjections(
@@ -425,6 +413,11 @@ export async function listHomeFeed(input: {
             like_count: row.like_count,
             viewer_vote: viewerVote,
           },
+        })
+        await enqueuePostTranslationOnReadIfNeeded({
+          client: db.client,
+          communityId,
+          response: localized,
         })
         await enqueueEmbedHydrateOnReadIfNeeded({
           client: db.client,

@@ -7,13 +7,14 @@ import {
   isCleanupRenameAvailable,
   normalizeDesiredGlobalHandleLabel,
 } from "./global-handle-policy"
-import { getMemoryRecordByUserId, getMemoryStore } from "./memory-auth-store"
+import { exposeMemoryProfile, getMemoryRecordByUserId, getMemoryStore } from "./memory-auth-store"
 import type { GlobalHandle, HandleUpgradeQuote, Profile } from "../../types"
 import type { PublicProfileResolution, UpdateProfileInput } from "./repositories"
 
 export class MemoryProfileRepository {
   async getProfileByUserId(userId: string): Promise<Profile | null> {
-    return getMemoryRecordByUserId(userId)?.profile ?? null
+    const record = getMemoryRecordByUserId(userId)
+    return record ? exposeMemoryProfile(record) : null
   }
 
   async resolvePublicProfileByHandle(handleLabel: string): Promise<PublicProfileResolution | null> {
@@ -35,7 +36,7 @@ export class MemoryProfileRepository {
     const requestedHandle = pirateRecord ? normalizedHandleLabel : publicHandle
 
     return {
-      profile: record.profile,
+      profile: exposeMemoryProfile(record),
       requested_handle_label: requestedHandle,
       resolved_handle_label: publicHandle,
       is_canonical: publicHandle.toLowerCase() === requestedHandle.toLowerCase(),
@@ -53,16 +54,35 @@ export class MemoryProfileRepository {
       ...record.profile,
       display_name: input.display_name !== undefined ? input.display_name : record.profile.display_name,
       avatar_ref: input.avatar_ref !== undefined ? input.avatar_ref : record.profile.avatar_ref,
+      avatar_source: input.avatar_source !== undefined
+        ? input.avatar_source
+        : input.avatar_ref !== undefined
+          ? (input.avatar_ref == null ? "none" : "upload")
+          : record.profile.avatar_source,
       cover_ref: input.cover_ref !== undefined ? input.cover_ref : record.profile.cover_ref,
+      cover_source: input.cover_source !== undefined
+        ? input.cover_source
+        : input.cover_ref !== undefined
+          ? (input.cover_ref == null ? "none" : "upload")
+          : record.profile.cover_source,
       bio: input.bio !== undefined ? input.bio : record.profile.bio,
+      bio_source: input.bio_source !== undefined
+        ? input.bio_source
+        : input.bio !== undefined
+          ? (input.bio == null ? "none" : "manual")
+          : record.profile.bio_source,
       preferred_locale: input.preferred_locale !== undefined ? input.preferred_locale : record.profile.preferred_locale,
+      display_verified_nationality_badge: input.display_verified_nationality_badge !== undefined
+        ? Boolean(input.display_verified_nationality_badge)
+        : record.profile.display_verified_nationality_badge,
       updated_at: nowIso(),
     }
-    return record.profile
+    return exposeMemoryProfile(record)
   }
 
   async syncLinkedHandles(userId: string): Promise<Profile | null> {
-    return getMemoryRecordByUserId(userId)?.profile ?? null
+    const record = getMemoryRecordByUserId(userId)
+    return record ? exposeMemoryProfile(record) : null
   }
 
   async setPrimaryPublicHandle(userId: string, linkedHandleId: string | null): Promise<Profile | null> {
@@ -79,7 +99,7 @@ export class MemoryProfileRepository {
       updated_at: nowIso(),
     }
 
-    return record.profile
+    return exposeMemoryProfile(record)
   }
 
   async renameGlobalHandle(userId: string, desiredLabel: string): Promise<GlobalHandle | null> {

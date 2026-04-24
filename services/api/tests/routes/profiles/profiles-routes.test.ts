@@ -120,6 +120,7 @@ describe("profile routes", () => {
       avatar_ref: "ipfs://avatar-ref",
       cover_ref: "ipfs://cover-ref",
       preferred_locale: "en-US",
+      display_verified_nationality_badge: true,
     }, ctx.env, session.accessToken)
     expect(patched.status).toBe(200)
     const patchedBody = await json(patched) as {
@@ -128,12 +129,16 @@ describe("profile routes", () => {
       avatar_ref: string | null
       cover_ref: string | null
       preferred_locale: string | null
+      display_verified_nationality_badge: boolean | null
+      nationality_badge_country: string | null
     }
     expect(patchedBody.display_name).toBe("Techno Hippie")
     expect(patchedBody.bio).toBe("Imported from elsewhere")
     expect(patchedBody.avatar_ref).toBe("ipfs://avatar-ref")
     expect(patchedBody.cover_ref).toBe("ipfs://cover-ref")
     expect(patchedBody.preferred_locale).toBe("en-US")
+    expect(patchedBody.display_verified_nationality_badge).toBe(true)
+    expect(patchedBody.nationality_badge_country).toBeNull()
 
     const publicProfile = await app.request(`http://pirate.test/profiles/${session.userId}`, {
       headers: {
@@ -146,11 +151,60 @@ describe("profile routes", () => {
       display_name: string | null
       cover_ref: string | null
       preferred_locale: string | null
+      display_verified_nationality_badge: boolean | null
+      nationality_badge_country: string | null
     }
     expect(publicBody.user_id).toBe(session.userId)
     expect(publicBody.display_name).toBe("Techno Hippie")
     expect(publicBody.cover_ref).toBe("ipfs://cover-ref")
     expect(publicBody.preferred_locale).toBe("en-US")
+    expect(publicBody.display_verified_nationality_badge).toBe(true)
+    expect(publicBody.nationality_badge_country).toBeNull()
+  })
+
+  test("nationality badge country is exposed only after opt-in and verified Self nationality", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "profile-nationality-badge-user")
+
+    await ctx.client.execute({
+      sql: `
+        UPDATE users
+        SET verification_capabilities_json = ?2
+        WHERE user_id = ?1
+      `,
+      args: [session.userId, JSON.stringify({
+        unique_human: { state: "unverified", provider: null, mechanism: null, verified_at: null },
+        age_over_18: { state: "unverified", provider: null, proof_type: null, mechanism: null, verified_at: null },
+        minimum_age: { state: "unverified", provider: null, proof_type: null, value: null, mechanism: null, verified_at: null },
+        nationality: { state: "verified", provider: "self", proof_type: "nationality", value: "USA", mechanism: null, verified_at: "2026-04-24T00:00:00.000Z" },
+        gender: { state: "unverified", provider: null, proof_type: null, value: null, mechanism: null, verified_at: null },
+        sanctions_clear: { state: "unverified", provider: null, mechanism: null, verified_at: null },
+        wallet_score: { state: "unverified", provider: null, mechanism: null, verified_at: null },
+      })],
+    })
+
+    const off = await app.request(`http://pirate.test/profiles/${session.userId}`, {}, ctx.env)
+    expect(off.status).toBe(200)
+    const offBody = await json(off) as { nationality_badge_country: string | null }
+    expect(offBody.nationality_badge_country).toBeNull()
+
+    const patched = await requestJson("http://pirate.test/profiles/me", "PATCH", {
+      display_verified_nationality_badge: true,
+    }, ctx.env, session.accessToken)
+    expect(patched.status).toBe(200)
+    const patchedBody = await json(patched) as {
+      display_verified_nationality_badge: boolean | null
+      nationality_badge_country: string | null
+    }
+    expect(patchedBody.display_verified_nationality_badge).toBe(true)
+    expect(patchedBody.nationality_badge_country).toBe("US")
+
+    const publicProfile = await app.request(`http://pirate.test/profiles/${session.userId}`, {}, ctx.env)
+    expect(publicProfile.status).toBe(200)
+    const publicBody = await json(publicProfile) as { nationality_badge_country: string | null }
+    expect(publicBody.nationality_badge_country).toBe("US")
   })
 
   test("public profile by user id works without auth", async () => {

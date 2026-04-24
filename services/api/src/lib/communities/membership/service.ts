@@ -2,9 +2,13 @@ import {
   canAccessCommunity,
   buildMembershipGateSummary,
   evaluateMembershipGateRules,
+  countPendingMembershipRequests,
   getCommunityJoinMode,
   getCommunityMembershipState,
+  getPendingMembershipRequestByApplicant,
+  listPendingMembershipRequests,
   listActiveMembershipGateRules,
+  resolveMembershipRequest,
   setCommunityFollowActive,
   setCommunityFollowInactive,
   upsertCommunityMembership,
@@ -16,11 +20,15 @@ import {
   buildLocalizedCommunity,
   enqueueCommunityTextTranslationOnReadIfNeeded,
 } from "../../localization/community-localization-service"
-import type { UserRepository } from "../../auth/repositories"
+import type { ProfileRepository, UserRepository } from "../../auth/repositories"
 import type { CommunityRepository } from "../db-community-repository"
 import { conflictError, gateFailedWithDetails, internalError, notFoundError } from "../../errors"
 import { nowIso } from "../../helpers"
 import { loadCommunityProjection, requireOwnedCommunity } from "../create/service"
+import {
+  emitMembershipRequestReceived,
+  resolveMembershipReviewTask,
+} from "../../notifications/notification-service"
 
 import { serializeJob } from "../community-serialization"
 import type {
@@ -28,6 +36,8 @@ import type {
   Env,
   JoinEligibility,
   Job,
+  MembershipRequestListResponse,
+  MembershipRequestSummary,
   User,
 } from "../../../types"
 
@@ -43,6 +53,25 @@ type CommunityFollowResult = {
 }
 
 export { getCommunityPreview, getPublicCommunityPreview } from "../community-preview-service"
+
+function sanitizeMembershipRequestNote(note: string | null | undefined): string | null {
+  const trimmed = typeof note === "string" ? note.trim() : ""
+  return trimmed ? trimmed.slice(0, 500) : null
+}
+
+async function enrichMembershipRequestProfiles(
+  profileRepository: ProfileRepository,
+  requests: MembershipRequestSummary[],
+): Promise<MembershipRequestSummary[]> {
+  return Promise.all(requests.map(async (request) => {
+    const profile = await profileRepository.getProfileByUserId(request.applicant_user_id).catch(() => null)
+    return {
+      ...request,
+      applicant_handle: profile?.primary_public_handle?.label ?? profile?.global_handle.label ?? null,
+      applicant_avatar_ref: profile?.avatar_ref ?? null,
+    }
+  }))
+}
 
 export function satisfiesBaselineJoinGate(user: User): boolean {
   if (user.verification_capabilities.unique_human.state === "verified") {
@@ -131,6 +160,29 @@ async function followCommunityForHomeFeed(input: {
     following: true,
     follower_count: result.followerCount,
   }
+}
+
+async function projectMembershipAndFollow(input: {
+  db: Awaited<ReturnType<typeof openCommunityDb>>
+  communityRepository: CommunityRepository
+  communityId: string
+  userId: string
+  now: string
+}): Promise<void> {
+  await input.communityRepository.upsertCommunityMembershipProjection({
+    communityId: input.communityId,
+    userId: input.userId,
+    membershipState: "member",
+    sourceUpdatedAt: input.now,
+    createdAt: input.now,
+  })
+  await followCommunityForHomeFeed({
+    db: input.db,
+    communityRepository: input.communityRepository,
+    communityId: input.communityId,
+    userId: input.userId,
+    now: input.now,
+  })
 }
 
 export async function setPendingNamespaceVerificationSession(input: {
@@ -265,6 +317,22 @@ export async function getJoinEligibility(input: {
     }
 
     if (membershipMode === "request") {
+      const pendingRequest = await getPendingMembershipRequestByApplicant({
+        client: db.client,
+        communityId: input.communityId,
+        userId: input.userId,
+      })
+      if (pendingRequest) {
+        return {
+          community_id: input.communityId,
+          membership_mode: "request",
+          human_verification_lane: "self",
+          joinable_now: false,
+          status: "pending_request",
+          membership_gate_summaries: [],
+          missing_capabilities: [],
+        }
+      }
       return {
         community_id: input.communityId,
         membership_mode: "request",
@@ -417,7 +485,9 @@ export async function joinCommunity(input: {
   env: Env
   userId: string
   communityId: string
+  note?: string | null
   userRepository: UserRepository
+  profileRepository?: ProfileRepository
   communityRepository: CommunityRepository
 }): Promise<MembershipResult> {
   const user = await input.userRepository.getUserById(input.userId)
@@ -466,14 +536,7 @@ export async function joinCommunity(input: {
         userId: input.userId,
         now,
       })
-      await input.communityRepository.upsertCommunityMembershipProjection({
-        communityId: input.communityId,
-        userId: input.userId,
-        membershipState: "member",
-        sourceUpdatedAt: now,
-        createdAt: now,
-      })
-      await followCommunityForHomeFeed({
+      await projectMembershipAndFollow({
         db,
         communityRepository: input.communityRepository,
         communityId: input.communityId,
@@ -487,10 +550,16 @@ export async function joinCommunity(input: {
     }
 
     if (membershipMode === "request") {
-      await upsertMembershipRequest({
+      const existingRequest = await getPendingMembershipRequestByApplicant({
         client: db.client,
         communityId: input.communityId,
         userId: input.userId,
+      })
+      const request = existingRequest ?? await upsertMembershipRequest({
+        client: db.client,
+        communityId: input.communityId,
+        userId: input.userId,
+        note: sanitizeMembershipRequestNote(input.note),
         now,
       })
       await input.communityRepository.upsertCommunityMembershipProjection({
@@ -500,6 +569,24 @@ export async function joinCommunity(input: {
         sourceUpdatedAt: now,
         createdAt: now,
       })
+      if (!existingRequest) {
+        const applicantProfile = input.profileRepository
+          ? await input.profileRepository.getProfileByUserId(input.userId).catch(() => null)
+          : null
+        await emitMembershipRequestReceived({
+          env: input.env,
+          reviewerUserId: community.creator_user_id,
+          communityId: input.communityId,
+          communityDisplayName: community.display_name,
+          applicantUserId: input.userId,
+          applicantHandle: applicantProfile?.primary_public_handle?.label ?? applicantProfile?.global_handle.label ?? null,
+          requestCount: await countPendingMembershipRequests({
+            client: db.client,
+            communityId: input.communityId,
+          }),
+          requestId: request.membership_request_id,
+        })
+      }
       return {
         community_id: input.communityId,
         status: "requested",
@@ -589,14 +676,7 @@ export async function joinCommunity(input: {
       userId: input.userId,
       now,
     })
-    await input.communityRepository.upsertCommunityMembershipProjection({
-      communityId: input.communityId,
-      userId: input.userId,
-      membershipState: "member",
-      sourceUpdatedAt: now,
-      createdAt: now,
-    })
-    await followCommunityForHomeFeed({
+    await projectMembershipAndFollow({
       db,
       communityRepository: input.communityRepository,
       communityId: input.communityId,
@@ -607,6 +687,97 @@ export async function joinCommunity(input: {
       community_id: input.communityId,
       status: "joined",
     }
+  } finally {
+    db.close()
+  }
+}
+
+export async function listMembershipRequests(input: {
+  env: Env
+  userId: string
+  communityId: string
+  cursor?: string | null
+  limit?: number
+  communityRepository: CommunityRepository
+  profileRepository: ProfileRepository
+}): Promise<MembershipRequestListResponse> {
+  await requireOwnedCommunity(input.communityRepository, input.communityId, input.userId)
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  try {
+    const result = await listPendingMembershipRequests({
+      client: db.client,
+      communityId: input.communityId,
+      cursor: input.cursor,
+      limit: input.limit,
+    })
+    return {
+      items: await enrichMembershipRequestProfiles(input.profileRepository, result.items),
+      next_cursor: result.next_cursor,
+    }
+  } finally {
+    db.close()
+  }
+}
+
+export async function reviewMembershipRequest(input: {
+  env: Env
+  userId: string
+  communityId: string
+  requestId: string
+  decision: "approved" | "rejected"
+  communityRepository: CommunityRepository
+  profileRepository: ProfileRepository
+}): Promise<MembershipRequestSummary> {
+  const community = await requireOwnedCommunity(input.communityRepository, input.communityId, input.userId)
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  try {
+    const now = nowIso()
+    const request = await resolveMembershipRequest({
+      client: db.client,
+      communityId: input.communityId,
+      requestId: input.requestId,
+      reviewerUserId: input.userId,
+      decision: input.decision,
+      now,
+    })
+    if (!request) {
+      throw conflictError("Membership request is no longer pending")
+    }
+
+    if (input.decision === "approved") {
+      await projectMembershipAndFollow({
+        db,
+        communityRepository: input.communityRepository,
+        communityId: input.communityId,
+        userId: request.applicant_user_id,
+        now,
+      })
+    }
+
+    const remainingCount = await countPendingMembershipRequests({
+      client: db.client,
+      communityId: input.communityId,
+    })
+    if (remainingCount === 0) {
+      await resolveMembershipReviewTask({
+        env: input.env,
+        reviewerUserId: community.creator_user_id,
+        communityId: input.communityId,
+      })
+    } else {
+      await emitMembershipRequestReceived({
+        env: input.env,
+        reviewerUserId: community.creator_user_id,
+        communityId: input.communityId,
+        communityDisplayName: community.display_name,
+        applicantUserId: request.applicant_user_id,
+        requestCount: remainingCount,
+        requestId: request.membership_request_id,
+      })
+    }
+
+    const [enriched] = await enrichMembershipRequestProfiles(input.profileRepository, [request])
+    return enriched
   } finally {
     db.close()
   }

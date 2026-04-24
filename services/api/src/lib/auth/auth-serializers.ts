@@ -4,6 +4,7 @@ import {
   buildDefaultVerificationCapabilities,
   deriveVerificationState,
 } from "../verification/verification-capabilities"
+import { normalizeIdentityCountryAlpha2 } from "../identity/country-codes"
 import type {
   ExternalReputationSnapshotRow,
   GlobalHandleRow,
@@ -87,11 +88,27 @@ export function serializeGlobalHandle(row: GlobalHandleRow): GlobalHandle {
   }
 }
 
+function parseLinkedHandleMetadata(raw: string | null): Record<string, unknown> | null {
+  if (!raw) {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null
+  } catch {
+    return null
+  }
+}
+
 export function serializeLinkedHandleRow(row: LinkedHandleRow): LinkedHandle {
   return {
     linked_handle_id: row.linked_handle_id,
     label: row.label_display,
     kind: row.kind,
+    metadata: parseLinkedHandleMetadata(row.metadata_json),
     verification_state: row.verification_state,
   }
 }
@@ -110,19 +127,31 @@ export function assembleProfile(
   globalHandleRow: GlobalHandleRow,
   linkedHandleRows: LinkedHandleRow[] = [],
   primaryWalletAddress: string | null = null,
+  user?: Pick<User, "verification_capabilities"> | null,
 ): Profile {
   const externalLinkedHandles = linkedHandleRows.map(serializeLinkedHandleRow)
   const primaryPublicHandle = profileRow.primary_linked_handle_id
     ? externalLinkedHandles.find((handle) => handle.linked_handle_id === profileRow.primary_linked_handle_id) ?? null
+    : null
+  const nationality = user?.verification_capabilities.nationality
+  const nationalityBadgeCountry = profileRow.display_verified_nationality_badge === 1
+    && nationality?.state === "verified"
+    && nationality.provider === "self"
+    ? normalizeIdentityCountryAlpha2(nationality.value)
     : null
 
   return {
     user_id: profileRow.user_id,
     display_name: profileRow.display_name,
     avatar_ref: profileRow.avatar_ref,
+    avatar_source: profileRow.avatar_source,
     cover_ref: profileRow.cover_ref,
+    cover_source: profileRow.cover_source,
     bio: profileRow.bio,
+    bio_source: profileRow.bio_source,
     preferred_locale: profileRow.preferred_locale,
+    display_verified_nationality_badge: profileRow.display_verified_nationality_badge === 1,
+    nationality_badge_country: nationalityBadgeCountry,
     linked_handles: [serializePirateLinkedHandle(globalHandleRow), ...externalLinkedHandles],
     primary_public_handle: primaryPublicHandle,
     primary_wallet_address: primaryWalletAddress,

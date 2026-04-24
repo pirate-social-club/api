@@ -151,6 +151,58 @@ export async function ensureProfilesPrimaryLinkedHandleColumn(executor: DbExecut
   }
 }
 
+async function ensureProfilesTextColumn(executor: DbExecutor, columnName: string): Promise<void> {
+  try {
+    await executor.execute({
+      sql: `SELECT ${columnName} FROM profiles LIMIT 0`,
+      args: [],
+    })
+    return
+  } catch (error) {
+    if (!isMissingColumnError(error, columnName)) {
+      throw error
+    }
+  }
+
+  try {
+    await executor.execute(`ALTER TABLE profiles ADD COLUMN ${columnName} TEXT`)
+  } catch (error) {
+    if (isDuplicateColumnError(error, columnName)) {
+      return
+    }
+    throw error
+  }
+}
+
+export async function ensureProfilesSourceColumns(executor: DbExecutor): Promise<void> {
+  await ensureProfilesTextColumn(executor, "avatar_source")
+  await ensureProfilesTextColumn(executor, "cover_source")
+  await ensureProfilesTextColumn(executor, "bio_source")
+}
+
+export async function ensureProfilesNationalityBadgeColumn(executor: DbExecutor): Promise<void> {
+  try {
+    await executor.execute({
+      sql: "SELECT display_verified_nationality_badge FROM profiles LIMIT 0",
+      args: [],
+    })
+    return
+  } catch (error) {
+    if (!isMissingColumnError(error, "display_verified_nationality_badge")) {
+      throw error
+    }
+  }
+
+  try {
+    await executor.execute("ALTER TABLE profiles ADD COLUMN display_verified_nationality_badge INTEGER NOT NULL DEFAULT 0")
+  } catch (error) {
+    if (isDuplicateColumnError(error, "display_verified_nationality_badge")) {
+      return
+    }
+    throw error
+  }
+}
+
 export async function firstRow(executor: DbExecutor, stmt: InStatement): Promise<unknown | null> {
   return executeFirst(executor, stmt)
 }

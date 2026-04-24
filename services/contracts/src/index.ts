@@ -83,9 +83,14 @@ export type Profile = {
   user_id: string;
   display_name?: string | null;
   avatar_ref?: string | null;
+  avatar_source?: "ens" | "upload" | "none" | null;
   cover_ref?: string | null;
+  cover_source?: "ens" | "upload" | "none" | null;
   bio?: string | null;
+  bio_source?: "ens" | "manual" | "none" | null;
   preferred_locale?: string | null;
+  display_verified_nationality_badge?: boolean | null;
+  nationality_badge_country?: string | null;
   linked_handles?: Array<LinkedHandle> | null;
   primary_public_handle?: LinkedHandle | null;
   primary_wallet_address?: string | null;
@@ -128,6 +133,7 @@ export type RedditImportSummary = {
 export type OnboardingStatus = {
   generated_handle_assigned: boolean;
   cleanup_rename_available: boolean;
+  onboarding_dismissed_at?: string | null;
   unique_human_verification_status: "not_started" | "pending" | "verified" | "expired" | "failed";
   namespace_verification_status: "not_started" | "pending" | "verified" | "stale" | "expired" | "disputed" | "failed";
   community_creation_ready: boolean;
@@ -1310,6 +1316,7 @@ export type CommunityPreview = {
   donation_policy_mode?: "none" | "optional_creator_sidecar" | null;
   donation_partner_id?: string | null;
   donation_partner?: DonationPartnerSummary | null;
+  reference_links?: Array<CommunityReferenceLinkPublic> | null;
   membership_gate_summaries: Array<MembershipGateSummary>;
   rules: Array<CommunityRule>;
   viewer_membership_status?: "member" | "not_member" | "banned" | null;
@@ -1322,7 +1329,7 @@ export type JoinEligibility = {
   membership_mode: "open" | "request" | "gated";
   human_verification_lane: HumanVerificationLane;
   joinable_now: boolean;
-  status: "joinable" | "requestable" | "verification_required" | "gate_failed" | "already_joined" | "banned";
+  status: "joinable" | "requestable" | "pending_request" | "verification_required" | "gate_failed" | "already_joined" | "banned";
   membership_gate_summaries: Array<MembershipGateSummary>;
   missing_capabilities: Array<"unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "sanctions_clear">;
   suggested_verification_provider?: "self" | "very" | "passport" | null;
@@ -1334,6 +1341,24 @@ export type JoinEligibility = {
     passing_score?: boolean | null;
     last_score_timestamp?: string | null;
   }) | null;
+};
+
+export type MembershipRequestStatus = "pending" | "approved" | "rejected" | "expired";
+
+export type MembershipRequestSummary = {
+  membership_request_id: string;
+  community_id: string;
+  applicant_user_id: string;
+  applicant_handle?: string | null;
+  applicant_avatar_ref?: string | null;
+  status: MembershipRequestStatus;
+  note?: string | null;
+  created_at: string;
+};
+
+export type MembershipRequestListResponse = {
+  items: Array<MembershipRequestSummary>;
+  next_cursor: string | null;
 };
 
 export type GateFailureDetails = {
@@ -1379,6 +1404,7 @@ export type LinkedHandle = {
   label: string;
   kind: "pirate" | "ens";
   verification_state: "verified" | "unverified" | "stale";
+  metadata?: (Record<string, unknown>) | null;
 };
 
 export type SelfVerificationDisclosures = {
@@ -1412,7 +1438,7 @@ export type SelfVerificationLaunch = {
   dev_mode?: boolean | null;
 };
 
-export type UserTaskType = "namespace_verification_required" | "namespace_verification_pending" | "payout_setup_required";
+export type UserTaskType = "namespace_verification_required" | "namespace_verification_pending" | "payout_setup_required" | "membership_review";
 
 export type UserTaskStatus = "open" | "completed" | "dismissed";
 
@@ -2431,6 +2457,7 @@ export const apiRoutes = {
   authSessionExchange: "/auth/session/exchange",
   usersMe: "/users/me",
   onboardingStatus: "/onboarding/status",
+  onboardingDismiss: "/onboarding/dismiss",
   onboardingRedditVerification: "/onboarding/reddit-verification",
   onboardingRedditImports: "/onboarding/reddit-imports",
   onboardingRedditImportsLatest: "/onboarding/reddit-imports/latest",
@@ -2474,6 +2501,10 @@ export const apiRoutes = {
   communityModerationCaseActions: (communityId: string, moderationCaseId: string) => `/communities/${communityId}/moderation/cases/${moderationCaseId}/actions`,
   communityPreview: (communityId: string) => `/communities/${communityId}/preview`,
   communityJoinEligibility: (communityId: string) => `/communities/${communityId}/join-eligibility`,
+  communityJoin: (communityId: string) => `/communities/${communityId}/join`,
+  communityMembershipRequests: (communityId: string) => `/communities/${communityId}/membership-requests`,
+  communityMembershipRequestApprove: (communityId: string, membershipRequestId: string) => `/communities/${communityId}/membership-requests/${membershipRequestId}/approve`,
+  communityMembershipRequestReject: (communityId: string, membershipRequestId: string) => `/communities/${communityId}/membership-requests/${membershipRequestId}/reject`,
   communitySongArtifactUploads: (communityId: string) => `/communities/${communityId}/song-artifact-uploads`,
   communitySongArtifactUploadContent: (communityId: string, songArtifactUploadId: string) => `/communities/${communityId}/song-artifact-uploads/${songArtifactUploadId}/content`,
   communitySongArtifacts: (communityId: string) => `/communities/${communityId}/song-artifacts`,

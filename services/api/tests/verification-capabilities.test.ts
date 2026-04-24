@@ -64,6 +64,7 @@ describe("verification capability lifecycle", () => {
       }),
       verified_at: oldVerifiedAt,
       current_verification_session_id: null,
+      onboarding_dismissed_at: null,
       created_at: oldVerifiedAt,
       updated_at: oldVerifiedAt,
     }
