@@ -409,23 +409,22 @@ function runSpacesPublisher(
 }
 
 function buildSpacesPublishCommand(
-  publisherDir: string,
+  _publisherDir: string,
   namespaceKey: string,
   challenge: SpacesChallenge,
 ): string {
   return [
-    `cd ${shellQuote(publisherDir)}`,
-    [
-      "go run . publish",
-      shellQuote(namespaceKey),
-      "--web",
-      shellQuote(challenge.webUrl),
-      "--freedom",
-      shellQuote(challenge.freedomUrl),
-      "--txt",
-      shellQuote(`${challenge.txtKey}=${challenge.txtValue}`),
-    ].join(" "),
-  ].join("\n")
+    "go run github.com/pirate-social-club/pirate-spaces-publisher@v0.1.0 publish",
+    shellQuote(namespaceKey),
+    "--wallet-export",
+    shellQuote("/full/path/to/your-wallet-export.json"),
+    "--web",
+    shellQuote(challenge.webUrl),
+    "--freedom",
+    shellQuote(challenge.freedomUrl),
+    "--txt",
+    shellQuote(`${challenge.txtKey}=${challenge.txtValue}`),
+  ].join(" ")
 }
 
 function getPublisherDir(args: ParsedArgs): string {
