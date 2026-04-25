@@ -68,8 +68,12 @@ export async function runCommunity(
       await launchSpacesCommunity(rest, args)
       return
     }
+    case "finalize-spaces": {
+      await finalizeSpacesCommunity(rest, args)
+      return
+    }
     default:
-      exitWithUsage("Usage: pirate community <create|get|launch-spaces>")
+      exitWithUsage("Usage: pirate community <create|get|launch-spaces|finalize-spaces>")
   }
 }
 
@@ -119,6 +123,33 @@ async function launchSpacesCommunity(rest: string[], args: ParsedArgs): Promise<
 
   printJson({
     namespace: namespaceKey,
+    namespace_verification_id: namespaceVerificationId,
+    community: created.community,
+    job,
+  })
+}
+
+async function finalizeSpacesCommunity(rest: string[], args: ParsedArgs): Promise<void> {
+  const session = requireStoredSession()
+  const namespaceVerificationSessionId = rest[0]
+  if (!namespaceVerificationSessionId) {
+    exitWithUsage("Usage: pirate community finalize-spaces <session_id> --display-name <name> [--very-gate] [--no-wait]")
+  }
+
+  const displayName = requireFlag(args, "display-name")
+  const description = getFlag(args, "description")
+  const veryGate = args.flags["very-gate"] === true
+  const waitForJob = args.flags["no-wait"] !== true
+  const namespaceVerificationId = await completeSpacesNamespaceSession(session, namespaceVerificationSessionId)
+  const created = await createCommunityForNamespace(session, {
+    displayName,
+    description,
+    namespaceVerificationId,
+    veryGate,
+  })
+  const job = waitForJob ? await waitForCommunityJob(session, created.job.job_id) : created.job
+
+  printJson({
     namespace_verification_id: namespaceVerificationId,
     community: created.community,
     job,

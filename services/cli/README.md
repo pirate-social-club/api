@@ -18,6 +18,7 @@ Implemented commands:
 - `pirate verify namespace status <session_id|verification_id> [--kind session|verification|auto]`
 - `pirate community create --display-name <name> --namespace-verification-id <id> [--description <text>]`
 - `pirate community launch-spaces <@root> --display-name <name> [--description <text>] [--very-gate] [--publish] [--publisher-dir <path>] [--no-wait]`
+- `pirate community finalize-spaces <session_id> --display-name <name> [--description <text>] [--very-gate] [--no-wait]`
 - `pirate community get <community_id>`
 - `pirate job get <job_id>`
 - `pirate post create <community_id> --title <title> --body <body> [--idempotency-key <key>]`
@@ -81,6 +82,7 @@ rtk bun run src/index.ts post create cmt_xxx --title "Hello" --body "From the CL
 5. wait for the provisioning job unless `--no-wait` is passed
 
 Without `--publish`, the command only prints the Fabric command to run. With `--publish`, it runs `go run . publish` in the Spaces publisher directory and relies on local `SPACES_WALLET_EXPORT` or `SPACES_SECRET_KEY_HEX`.
+If the Fabric publish is done outside the CLI, use `community finalize-spaces` with the printed session id to complete verification and create the community.
 
 ```bash
 rtk bun run src/index.ts community launch-spaces @human --display-name Human --very-gate
