@@ -22,6 +22,8 @@ import profiles from "./routes/profiles"
 import users from "./routes/users"
 import verification from "./routes/verification"
 import { flushAnalyticsOutbox, isAnalyticsEnabled } from "./lib/analytics"
+import { getCommunityRepository } from "./lib/communities/db-community-repository"
+import { processAvailableCommunityJobs } from "./lib/communities/jobs/runner"
 import { HttpError, errorResponse } from "./lib/errors"
 import { getControlPlaneClient } from "./lib/runtime-deps"
 import type { Env } from "./types"
@@ -85,21 +87,49 @@ type ScheduledApp = typeof app & {
   scheduled: NonNullable<ExportedHandler<Env>["scheduled"]>
 }
 
-;(app as ScheduledApp).scheduled = async (_controller, env, ctx) => {
-  ctx.waitUntil((async () => {
-    if (!isAnalyticsEnabled(env)) {
-      return
-    }
+async function flushScheduledAnalytics(env: Env): Promise<void> {
+  if (!isAnalyticsEnabled(env)) {
+    return
+  }
 
-    const db = getControlPlaneClient(env)
-    try {
-      await flushAnalyticsOutbox(env, db)
-    } catch (error) {
-      console.error("[analytics] scheduled flush failed", error)
-    } finally {
-      db.close?.()
+  const db = getControlPlaneClient(env)
+  try {
+    await flushAnalyticsOutbox(env, db)
+  } catch (error) {
+    console.error("[analytics] scheduled flush failed", error)
+  } finally {
+    db.close?.()
+  }
+}
+
+async function processScheduledCommunityJobs(env: Env): Promise<void> {
+  const communityRepository = getCommunityRepository(env)
+  try {
+    const summary = await processAvailableCommunityJobs({
+      env,
+      communityRepository,
+      maxCommunities: 100,
+      maxJobsPerCommunity: 25,
+    })
+    if (summary.processed_jobs > 0) {
+      console.log("[community-jobs] scheduled processed", JSON.stringify({
+        processed_jobs: summary.processed_jobs,
+        communities: summary.communities.map((community) => ({
+          community_id: community.community_id,
+          processed_jobs: community.processed_jobs,
+        })),
+      }))
     }
-  })())
+  } catch (error) {
+    console.error("[community-jobs] scheduled processing failed", error)
+  } finally {
+    communityRepository.close?.()
+  }
+}
+
+;(app as ScheduledApp).scheduled = async (_controller, env, ctx) => {
+  ctx.waitUntil(flushScheduledAnalytics(env))
+  ctx.waitUntil(processScheduledCommunityJobs(env))
 }
 
 export default app

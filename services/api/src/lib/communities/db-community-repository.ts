@@ -116,6 +116,7 @@ export async function listCommunityFollowProjectionsByUserId(
 }
 
 export interface CommunityRepository {
+  close?(): void
   getCommunityById(communityId: string): Promise<CommunityRow | null>
   getCommunityByRouteSlug(routeSlug: string): Promise<CommunityRow | null>
   getCommunityByNamespaceVerificationId(namespaceVerificationId: string): Promise<CommunityRow | null>
@@ -266,6 +267,10 @@ export interface CommunityRepository {
 
 export class DatabaseCommunityRepository implements CommunityRepository {
   constructor(private readonly client: Client) {}
+
+  close(): void {
+    this.client.close?.()
+  }
 
   async getCommunityById(communityId: string): Promise<CommunityRow | null> {
     return getCommunityById(this.client, communityId)
