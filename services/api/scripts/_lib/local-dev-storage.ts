@@ -8,6 +8,10 @@ import { resolveCoreRepoRoot } from "../../shared/core-repo-paths"
 import { splitSqlStatements, toSqliteCompatibleStatement } from "../../shared/sql-migration"
 
 export const FIRST_LOCAL_POST_BASELINE_MIGRATION = "0047_control_plane_notifications.sql"
+const LOCAL_FOLLOWER_COUNT_RENAME_MIGRATIONS = new Set([
+  "0059_control_plane_communities_follower_count_column.sql",
+  "0060_control_plane_communities_follower_count_column.sql",
+])
 
 export type LocalDevStorage = {
   repoRoot: string
@@ -283,7 +287,6 @@ async function ensureRenamedColumn(
 
 async function ensureLocalBaselineSnapshotCompatibility(client: Client): Promise<void> {
   await ensureColumn(client, "verification_sessions", "verification_requirements_json", "TEXT NOT NULL DEFAULT '[]'")
-  await ensureRenamedColumn(client, "communities", "projected_follower_count", "follower_count", "INTEGER NOT NULL DEFAULT 0")
 }
 
 function isSupersededByLocalBaseline(migrationName: string, baselineMigrationName: string): boolean {
@@ -340,7 +343,11 @@ export async function applyLocalControlPlaneMigrations(storage: LocalDevStorage)
         continue
       }
 
-      await applySqlFile(client, migrationPath)
+      if (LOCAL_FOLLOWER_COUNT_RENAME_MIGRATIONS.has(migrationName)) {
+        await ensureRenamedColumn(client, "communities", "projected_follower_count", "follower_count", "INTEGER NOT NULL DEFAULT 0")
+      } else {
+        await applySqlFile(client, migrationPath)
+      }
       await recordAppliedMigration(client, migrationName, migrationChecksum)
       appliedMigrations.set(migrationName, migrationChecksum)
     }
