@@ -193,7 +193,7 @@ export async function completeNamespaceVerificationSession(
       },
       {
         sql: `
-          INSERT OR REPLACE INTO namespace_verifications (
+          INSERT INTO namespace_verifications (
             namespace_verification_id, source_namespace_verification_session_id, user_id, family, normalized_root_label,
             status, root_exists, root_control_verified, expiry_horizon_sufficient, routing_enabled,
             pirate_dns_authority_verified, club_attach_allowed, pirate_web_routing_allowed, pirate_subdomain_issuance_allowed,
@@ -204,6 +204,31 @@ export async function completeNamespaceVerificationSession(
             COALESCE(?13, 'single_holder_root'), COALESCE(?14, 'owner_managed_namespace'), ?15, ?16, ?17, ?18, ?17, ?17,
             ?19, ?20, ?21, ?22
           )
+          ON CONFLICT(namespace_verification_id) DO UPDATE SET
+            source_namespace_verification_session_id = excluded.source_namespace_verification_session_id,
+            user_id = excluded.user_id,
+            family = excluded.family,
+            normalized_root_label = excluded.normalized_root_label,
+            status = excluded.status,
+            root_exists = excluded.root_exists,
+            root_control_verified = excluded.root_control_verified,
+            expiry_horizon_sufficient = excluded.expiry_horizon_sufficient,
+            routing_enabled = excluded.routing_enabled,
+            pirate_dns_authority_verified = excluded.pirate_dns_authority_verified,
+            club_attach_allowed = excluded.club_attach_allowed,
+            pirate_web_routing_allowed = excluded.pirate_web_routing_allowed,
+            pirate_subdomain_issuance_allowed = excluded.pirate_subdomain_issuance_allowed,
+            control_class = excluded.control_class,
+            operation_class = excluded.operation_class,
+            observation_provider = excluded.observation_provider,
+            evidence_bundle_ref = excluded.evidence_bundle_ref,
+            accepted_at = excluded.accepted_at,
+            expires_at = excluded.expires_at,
+            updated_at = excluded.updated_at,
+            anchor_height = excluded.anchor_height,
+            anchor_block_hash = excluded.anchor_block_hash,
+            anchor_root_hash = excluded.anchor_root_hash,
+            proof_root_hash = excluded.proof_root_hash
         `,
         args: [
           verificationId,
@@ -378,7 +403,7 @@ export async function completeNamespaceVerificationSession(
       },
       {
         sql: `
-          INSERT OR REPLACE INTO namespace_verifications (
+          INSERT INTO namespace_verifications (
             namespace_verification_id, source_namespace_verification_session_id, user_id, family, normalized_root_label,
             status, root_exists, root_control_verified, expiry_horizon_sufficient, routing_enabled,
             pirate_dns_authority_verified, club_attach_allowed, pirate_web_routing_allowed, pirate_subdomain_issuance_allowed,
@@ -387,6 +412,27 @@ export async function completeNamespaceVerificationSession(
             ?1, ?2, ?3, 'hns', ?4, 'verified', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
             ?13, ?14, ?15, ?16, ?17, ?18, ?17, ?17
           )
+          ON CONFLICT(namespace_verification_id) DO UPDATE SET
+            source_namespace_verification_session_id = excluded.source_namespace_verification_session_id,
+            user_id = excluded.user_id,
+            family = excluded.family,
+            normalized_root_label = excluded.normalized_root_label,
+            status = excluded.status,
+            root_exists = excluded.root_exists,
+            root_control_verified = excluded.root_control_verified,
+            expiry_horizon_sufficient = excluded.expiry_horizon_sufficient,
+            routing_enabled = excluded.routing_enabled,
+            pirate_dns_authority_verified = excluded.pirate_dns_authority_verified,
+            club_attach_allowed = excluded.club_attach_allowed,
+            pirate_web_routing_allowed = excluded.pirate_web_routing_allowed,
+            pirate_subdomain_issuance_allowed = excluded.pirate_subdomain_issuance_allowed,
+            control_class = excluded.control_class,
+            operation_class = excluded.operation_class,
+            observation_provider = excluded.observation_provider,
+            evidence_bundle_ref = excluded.evidence_bundle_ref,
+            accepted_at = excluded.accepted_at,
+            expires_at = excluded.expires_at,
+            updated_at = excluded.updated_at
         `,
         args: [
           verificationId,

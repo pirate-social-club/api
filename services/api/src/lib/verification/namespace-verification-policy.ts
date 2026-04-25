@@ -348,10 +348,21 @@ export function makeNamespaceCapabilityStatements(input: {
   for (const capability of input.capabilities) {
     statements.push({
       sql: `
-        INSERT OR REPLACE INTO namespace_verification_capabilities (
+        INSERT INTO namespace_verification_capabilities (
           capability_record_id, namespace_verification_session_id, namespace_verification_id, family, capability_name,
           capability_value, source_evidence_bundle_id, status, first_accepted_at, last_revalidated_at, created_at, updated_at
         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'accepted', ?8, ?8, ?8, ?8)
+        ON CONFLICT(capability_record_id) DO UPDATE SET
+          namespace_verification_session_id = excluded.namespace_verification_session_id,
+          namespace_verification_id = excluded.namespace_verification_id,
+          family = excluded.family,
+          capability_name = excluded.capability_name,
+          capability_value = excluded.capability_value,
+          source_evidence_bundle_id = excluded.source_evidence_bundle_id,
+          status = excluded.status,
+          first_accepted_at = excluded.first_accepted_at,
+          last_revalidated_at = excluded.last_revalidated_at,
+          updated_at = excluded.updated_at
       `,
       args: [
         `nvc_${input.verificationId}_${capability.name}_accepted`,
