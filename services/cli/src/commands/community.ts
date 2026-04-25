@@ -1,6 +1,7 @@
 import {
   apiRoutes,
   type Community,
+  type CommunityPreview,
   type CommunityCreateAcceptedResponse,
   type CreateCommunityRequest,
   type Job,
@@ -8,13 +9,25 @@ import {
   type StartNamespaceVerificationSessionRequest,
 } from "@pirate/api-contracts"
 import { spawnSync } from "node:child_process"
+import { readFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { getFlag, requireFlag } from "../args.js"
+import { getFlag, hasFlag, requireFlag } from "../args.js"
 import { apiRequest } from "../http.js"
 import { exitWithUsage, printJson } from "../output.js"
 import { requireStoredSession } from "../session.js"
 import type { ParsedArgs } from "../types.js"
+
+type UpdateCommunityRulesRequestBody = {
+  rules: Array<{
+    rule_id?: string | null
+    title: string
+    body: string
+    report_reason?: string | null
+    position?: number | null
+    status?: "active" | "archived" | null
+  }>
+}
 
 export async function runCommunity(
   action: string | undefined,
@@ -64,6 +77,18 @@ export async function runCommunity(
       printJson(result)
       return
     }
+    case "update": {
+      await updateCommunity(rest, args)
+      return
+    }
+    case "preview": {
+      await previewCommunity(rest, args)
+      return
+    }
+    case "rules": {
+      await runCommunityRules(rest, args)
+      return
+    }
     case "launch-spaces": {
       await launchSpacesCommunity(rest, args)
       return
@@ -73,8 +98,80 @@ export async function runCommunity(
       return
     }
     default:
-      exitWithUsage("Usage: pirate community <create|get|launch-spaces|finalize-spaces>")
+      exitWithUsage("Usage: pirate community <create|get|update|preview|rules|launch-spaces|finalize-spaces>")
   }
+}
+
+async function updateCommunity(rest: string[], args: ParsedArgs): Promise<void> {
+  const session = requireStoredSession()
+  const communityId = rest[0]
+  if (!communityId) {
+    exitWithUsage("Usage: pirate community update <community_id> [--display-name <name>] [--description <text>] [--clear-description]")
+  }
+
+  const displayName = getFlag(args, "display-name")
+  const description = getFlag(args, "description")
+  const body: Record<string, unknown> = {}
+  if (displayName != null) {
+    body.display_name = displayName
+  }
+  if (description != null) {
+    body.description = description
+  } else if (hasFlag(args, "clear-description")) {
+    body.description = null
+  }
+  if (Object.keys(body).length === 0) {
+    exitWithUsage("Usage: pirate community update <community_id> [--display-name <name>] [--description <text>] [--clear-description]")
+  }
+
+  const result = await apiRequest<Community>({
+    baseUrl: session.baseUrl,
+    path: apiRoutes.community(communityId),
+    method: "PATCH",
+    accessToken: session.accessToken,
+    body,
+  })
+  printJson(result)
+}
+
+async function previewCommunity(rest: string[], args: ParsedArgs): Promise<void> {
+  const session = requireStoredSession()
+  const communityId = rest[0]
+  if (!communityId) {
+    exitWithUsage("Usage: pirate community preview <community_id> [--locale <locale>]")
+  }
+
+  const locale = getFlag(args, "locale")
+  const suffix = locale ? `?locale=${encodeURIComponent(locale)}` : ""
+  const result = await apiRequest<CommunityPreview>({
+    baseUrl: session.baseUrl,
+    path: `${apiRoutes.communityPreview(communityId)}${suffix}`,
+    accessToken: session.accessToken,
+  })
+  printJson(result)
+}
+
+async function runCommunityRules(rest: string[], args: ParsedArgs): Promise<void> {
+  const subcommand = rest[0]
+  if (subcommand !== "set") {
+    exitWithUsage("Usage: pirate community rules set <community_id> --file <rules.txt|rules.json>")
+  }
+
+  const session = requireStoredSession()
+  const communityId = rest[1]
+  if (!communityId) {
+    exitWithUsage("Usage: pirate community rules set <community_id> --file <rules.txt|rules.json>")
+  }
+
+  const body = parseRulesFile(requireFlag(args, "file"))
+  const result = await apiRequest<Community>({
+    baseUrl: session.baseUrl,
+    path: `${apiRoutes.community(communityId)}/rules`,
+    method: "PUT",
+    accessToken: session.accessToken,
+    body,
+  })
+  printJson(result)
 }
 
 async function launchSpacesCommunity(rest: string[], args: ParsedArgs): Promise<void> {
@@ -393,4 +490,62 @@ function shellQuote(value: string): string {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, ms))
+}
+
+function parseRulesFile(filePath: string): UpdateCommunityRulesRequestBody {
+  const text = readFileSync(resolve(filePath), "utf8").trim()
+  if (!text) {
+    throw new Error("Rules file is empty")
+  }
+
+  if (text.startsWith("{") || text.startsWith("[")) {
+    const parsed = JSON.parse(text) as unknown
+    const rules = Array.isArray(parsed)
+      ? parsed
+      : parsed && typeof parsed === "object" && Array.isArray((parsed as { rules?: unknown }).rules)
+        ? (parsed as { rules: unknown[] }).rules
+        : null
+    if (!rules) {
+      throw new Error("Rules JSON must be an array or an object with a rules array")
+    }
+    return { rules: rules.map(normalizeRuleInput) }
+  }
+
+  const blocks = text
+    .split(/\n\s*\n/u)
+    .map((block) => block.trim())
+    .filter(Boolean)
+  const rules = blocks.map((block) => {
+    const lines = block.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean)
+    const title = lines[0] ?? ""
+    const body = lines.slice(1).join("\n\n")
+    if (!title) {
+      throw new Error("Each text rule block must start with a title")
+    }
+    return { title, body, report_reason: title, status: "active" as const }
+  })
+
+  return { rules }
+}
+
+function normalizeRuleInput(value: unknown): UpdateCommunityRulesRequestBody["rules"][number] {
+  if (!value || typeof value !== "object") {
+    throw new Error("Each rule must be an object")
+  }
+
+  const record = value as Record<string, unknown>
+  const title = typeof record.title === "string" ? record.title : ""
+  const body = typeof record.body === "string" ? record.body : ""
+  if (!title.trim() && !body.trim()) {
+    throw new Error("Each rule must include a title or body")
+  }
+
+  return {
+    rule_id: typeof record.rule_id === "string" ? record.rule_id : null,
+    title,
+    body,
+    report_reason: typeof record.report_reason === "string" ? record.report_reason : null,
+    position: typeof record.position === "number" ? record.position : null,
+    status: record.status === "archived" ? "archived" : "active",
+  }
 }

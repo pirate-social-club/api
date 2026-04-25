@@ -17,7 +17,7 @@ export class PirateHttpError extends Error {
 export async function apiRequest<T>(input: {
   baseUrl: string
   path: string
-  method?: "GET" | "POST"
+  method?: "GET" | "POST" | "PUT" | "PATCH"
   accessToken?: string | null
   body?: unknown
 }): Promise<T> {
