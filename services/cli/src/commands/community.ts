@@ -185,26 +185,25 @@ async function launchSpacesCommunity(rest: string[], args: ParsedArgs): Promise<
   const namespaceKey = `@${rootLabel}`
   const displayName = requireFlag(args, "display-name")
   const description = getFlag(args, "description")
-  const publisherDir = getPublisherDir(args)
   const publish = args.flags.publish === true
   const veryGate = args.flags["very-gate"] === true
   const waitForJob = args.flags["no-wait"] !== true
 
   const namespaceSession = await startSpacesNamespaceSession(session, rootLabel)
   const challenge = getSpacesChallengePayload(namespaceSession)
-  const publishCommand = buildSpacesPublishCommand(publisherDir, namespaceKey, challenge)
 
   if (!publish) {
     printJson({
       next_step: "publish_fabric_records_then_complete",
       namespace_verification_session_id: namespaceSession.namespace_verification_session_id,
       namespace: namespaceKey,
-      publish_command: publishCommand,
+      publish_command: buildSpacesPublishCommand(namespaceKey, challenge),
       complete_command: `pirate verify namespace complete ${namespaceSession.namespace_verification_session_id}`,
     })
     return
   }
 
+  const publisherDir = getPublisherDir(args)
   runSpacesPublisher(publisherDir, namespaceKey, challenge)
   const namespaceVerificationId = await completeSpacesNamespaceSession(
     session,
@@ -409,7 +408,6 @@ function runSpacesPublisher(
 }
 
 function buildSpacesPublishCommand(
-  _publisherDir: string,
   namespaceKey: string,
   challenge: SpacesChallenge,
 ): string {
