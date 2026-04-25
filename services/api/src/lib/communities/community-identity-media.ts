@@ -8,11 +8,42 @@ function hashSeed(value: string): number {
 }
 
 function encodeSvg(svg: string): string {
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(toWellFormedText(svg))}`;
+}
+
+function toWellFormedText(value: string): string {
+  let result = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xD800 && code <= 0xDBFF) {
+      const next = value.charCodeAt(index + 1);
+      if (next >= 0xDC00 && next <= 0xDFFF) {
+        result += value[index] + value[index + 1];
+        index += 1;
+      } else {
+        result += "\uFFFD";
+      }
+      continue;
+    }
+    if (code >= 0xDC00 && code <= 0xDFFF) {
+      result += "\uFFFD";
+      continue;
+    }
+    result += value[index];
+  }
+  return result;
+}
+
+function escapeSvgText(value: string): string {
+  return toWellFormedText(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 function sanitizeLabel(value: string): string {
-  return value.trim().replace(/\s+/g, " ");
+  return toWellFormedText(value).trim().replace(/\s+/g, " ");
 }
 
 function buildInitials(displayName: string): string {
@@ -25,7 +56,7 @@ function buildInitials(displayName: string): string {
     return "C";
   }
 
-  return parts.map((part) => part[0]?.toUpperCase() ?? "").join("") || "C";
+  return parts.map((part) => Array.from(part)[0]?.toUpperCase() ?? "").join("") || "C";
 }
 
 export function normalizeCommunityMediaRef(value: string | null | undefined): string | null {
@@ -44,7 +75,7 @@ export function buildDefaultCommunityAvatarRef(input: {
   const hash = hashSeed(input.communityId.trim());
   const hue = hash % 360;
   const secondaryHue = (hue + 38) % 360;
-  const initials = buildInitials(input.displayName);
+  const initials = escapeSvgText(buildInitials(input.displayName));
 
   return encodeSvg(
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="${initials}">
@@ -72,9 +103,10 @@ export function buildDefaultCommunityBannerRef(input: {
   const hue = hash % 360;
   const accentHue = (hue + 52) % 360;
   const tertiaryHue = (hue + 128) % 360;
+  const label = escapeSvgText(sanitizeLabel(input.displayName));
 
   return encodeSvg(
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 320" role="img" aria-label="${sanitizeLabel(input.displayName)} banner">
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 320" role="img" aria-label="${label} banner">
       <defs>
         <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
           <stop offset="0%" stop-color="hsl(${hue} 60% 17%)" />
