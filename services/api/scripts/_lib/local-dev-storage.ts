@@ -262,8 +262,28 @@ async function ensureColumn(
   await client.execute(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`)
 }
 
+async function ensureRenamedColumn(
+  client: Client,
+  tableName: string,
+  legacyColumnName: string,
+  columnName: string,
+  columnDefinition: string,
+): Promise<void> {
+  const columns = await listTableColumns(client, tableName)
+  if (columns.has(columnName)) {
+    return
+  }
+  if (columns.has(legacyColumnName)) {
+    await client.execute(`ALTER TABLE ${tableName} RENAME COLUMN ${legacyColumnName} TO ${columnName}`)
+    return
+  }
+
+  await client.execute(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`)
+}
+
 async function ensureLocalBaselineSnapshotCompatibility(client: Client): Promise<void> {
   await ensureColumn(client, "verification_sessions", "verification_requirements_json", "TEXT NOT NULL DEFAULT '[]'")
+  await ensureRenamedColumn(client, "communities", "projected_follower_count", "follower_count", "INTEGER NOT NULL DEFAULT 0")
 }
 
 function isSupersededByLocalBaseline(migrationName: string, baselineMigrationName: string): boolean {

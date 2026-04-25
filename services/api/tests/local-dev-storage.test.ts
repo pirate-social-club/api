@@ -130,7 +130,7 @@ describe("applyLocalControlPlaneMigrations", () => {
     await applyLocalControlPlaneMigrations(storage)
 
     expect(await listMigrationNames(databasePath)).toEqual(await listExpectedLocalMigrationNames(storage))
-    expect(await listTableColumns(databasePath, "communities")).toContain("projected_follower_count")
+    expect(await listTableColumns(databasePath, "communities")).toContain("follower_count")
     expect(await listTableColumns(databasePath, "community_follow_projections")).toContain("follow_state")
     expect(await listTableColumns(databasePath, "community_post_projections")).toContain("visibility")
     expect(await listTableColumns(databasePath, "community_post_projections")).toContain("upvote_count")

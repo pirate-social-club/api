@@ -121,7 +121,7 @@ function buildCommunitySummary(community: Awaited<ReturnType<CommunityRepository
     route_slug: community.route_slug,
     avatar_ref: null,
     member_count: null,
-    follower_count: community.projected_follower_count,
+    follower_count: community.follower_count,
     updated_at: community.updated_at,
   }
 }

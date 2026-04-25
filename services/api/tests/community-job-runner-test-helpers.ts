@@ -70,7 +70,7 @@ function buildCommunityRow(communityId: string, now: string): CommunityRow {
     namespace_verification_id: null,
     pending_namespace_verification_session_id: null,
     primary_database_binding_id: "cdb_jobs",
-    projected_follower_count: 0,
+    follower_count: 0,
     created_at: now,
     updated_at: now,
   }

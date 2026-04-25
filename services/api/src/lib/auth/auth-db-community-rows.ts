@@ -17,7 +17,7 @@ export type CommunityRow = {
   namespace_verification_id: string | null
   pending_namespace_verification_session_id: string | null
   primary_database_binding_id: string | null
-  projected_follower_count: number | null
+  follower_count: number | null
   created_at: string
   updated_at: string
 }
@@ -139,8 +139,10 @@ export function toCommunityRow(row: unknown): CommunityRow {
     namespace_verification_id: stringOrNull(rowValue(row, "namespace_verification_id")),
     pending_namespace_verification_session_id: stringOrNull(rowValue(row, "pending_namespace_verification_session_id")),
     primary_database_binding_id: stringOrNull(rowValue(row, "primary_database_binding_id")),
-    projected_follower_count: typeof rowValue(row, "projected_follower_count") === "number"
-      ? rowValue(row, "projected_follower_count") as number
+    follower_count: typeof rowValue(row, "follower_count") === "number"
+      ? rowValue(row, "follower_count") as number
+      : typeof rowValue(row, "projected_follower_count") === "number"
+        ? rowValue(row, "projected_follower_count") as number
       : null,
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
