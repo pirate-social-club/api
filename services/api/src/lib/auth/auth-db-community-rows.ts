@@ -141,8 +141,6 @@ export function toCommunityRow(row: unknown): CommunityRow {
     primary_database_binding_id: stringOrNull(rowValue(row, "primary_database_binding_id")),
     follower_count: typeof rowValue(row, "follower_count") === "number"
       ? rowValue(row, "follower_count") as number
-      : typeof rowValue(row, "projected_follower_count") === "number"
-        ? rowValue(row, "projected_follower_count") as number
       : null,
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),

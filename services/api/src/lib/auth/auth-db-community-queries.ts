@@ -26,47 +26,15 @@ const COMMUNITY_ROW_COLUMNS = `
   primary_database_binding_id, follower_count, created_at, updated_at
 `
 
-const PROJECTED_FOLLOWER_COUNT_COMMUNITY_ROW_COLUMNS = `
-  community_id, creator_user_id, display_name, status, provisioning_state,
-  transfer_state, route_slug, namespace_verification_id, pending_namespace_verification_session_id,
-  primary_database_binding_id, projected_follower_count, created_at, updated_at
-`
-
-const LEGACY_COMMUNITY_ROW_COLUMNS = `
-  community_id, creator_user_id, display_name, status, provisioning_state,
-  transfer_state, route_slug, namespace_verification_id, pending_namespace_verification_session_id,
-  primary_database_binding_id, NULL AS follower_count, created_at, updated_at
-`
-
 async function firstCommunityRow(
   executor: DbExecutor,
   buildSql: (columns: string) => string,
   args: unknown[],
 ): Promise<unknown | null> {
-  try {
-    return await firstRow(executor, {
-      sql: buildSql(COMMUNITY_ROW_COLUMNS),
-      args,
-    })
-  } catch (error) {
-    if (!isMissingColumnError(error, "follower_count")) {
-      throw error
-    }
-    try {
-      return await firstRow(executor, {
-        sql: buildSql(PROJECTED_FOLLOWER_COUNT_COMMUNITY_ROW_COLUMNS),
-        args,
-      })
-    } catch (fallbackError) {
-      if (!isMissingColumnError(fallbackError, "projected_follower_count")) {
-        throw fallbackError
-      }
-      return await firstRow(executor, {
-        sql: buildSql(LEGACY_COMMUNITY_ROW_COLUMNS),
-        args,
-      })
-    }
-  }
+  return firstRow(executor, {
+    sql: buildSql(COMMUNITY_ROW_COLUMNS),
+    args,
+  })
 }
 
 async function listCommunityRows(
@@ -74,33 +42,11 @@ async function listCommunityRows(
   buildSql: (columns: string) => string,
   args: unknown[] = [],
 ): Promise<CommunityRow[]> {
-  try {
-    const result = await executor.execute({
-      sql: buildSql(COMMUNITY_ROW_COLUMNS),
-      args,
-    })
-    return result.rows.map((row) => toCommunityRow(row))
-  } catch (error) {
-    if (!isMissingColumnError(error, "follower_count")) {
-      throw error
-    }
-    try {
-      const result = await executor.execute({
-        sql: buildSql(PROJECTED_FOLLOWER_COUNT_COMMUNITY_ROW_COLUMNS),
-        args,
-      })
-      return result.rows.map((row) => toCommunityRow(row))
-    } catch (fallbackError) {
-      if (!isMissingColumnError(fallbackError, "projected_follower_count")) {
-        throw fallbackError
-      }
-      const result = await executor.execute({
-        sql: buildSql(LEGACY_COMMUNITY_ROW_COLUMNS),
-        args,
-      })
-      return result.rows.map((row) => toCommunityRow(row))
-    }
-  }
+  const result = await executor.execute({
+    sql: buildSql(COMMUNITY_ROW_COLUMNS),
+    args,
+  })
+  return result.rows.map((row) => toCommunityRow(row))
 }
 
 export async function getCommunityRowById(executor: DbExecutor, communityId: string): Promise<CommunityRow | null> {
@@ -441,37 +387,18 @@ export async function incrementCommunityFollowerCountRow(input: {
   delta: 1 | -1
   updatedAt: string
 }): Promise<void> {
-  const args = [input.communityId, input.delta, input.updatedAt]
-  try {
-    await input.executor.execute({
-      sql: `
-        UPDATE communities
-        SET follower_count = CASE
-              WHEN COALESCE(follower_count, 0) + ?2 < 0 THEN 0
-              ELSE COALESCE(follower_count, 0) + ?2
-            END,
-            updated_at = ?3
-        WHERE community_id = ?1
-      `,
-      args,
-    })
-  } catch (error) {
-    if (!isMissingColumnError(error, "follower_count")) {
-      throw error
-    }
-    await input.executor.execute({
-      sql: `
-        UPDATE communities
-        SET projected_follower_count = CASE
-              WHEN COALESCE(projected_follower_count, 0) + ?2 < 0 THEN 0
-              ELSE COALESCE(projected_follower_count, 0) + ?2
-            END,
-            updated_at = ?3
-        WHERE community_id = ?1
-      `,
-      args,
-    })
-  }
+  await input.executor.execute({
+    sql: `
+      UPDATE communities
+      SET follower_count = CASE
+            WHEN COALESCE(follower_count, 0) + ?2 < 0 THEN 0
+            ELSE COALESCE(follower_count, 0) + ?2
+          END,
+          updated_at = ?3
+      WHERE community_id = ?1
+    `,
+    args: [input.communityId, input.delta, input.updatedAt],
+  })
 }
 
 export async function updateCommunityPostProjectionStatusRow(input: {
