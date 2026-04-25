@@ -1,7 +1,7 @@
 export function normalizeRootLabel(value: string): string {
   const trimmed = value.trim().normalize("NFKC").toLowerCase();
   const unprefixed = trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
-  return toAsciiRootLabel(unprefixed);
+  return toAsciiRootLabel(unprefixed) ?? unprefixed;
 }
 
 export function ensureAtPrefix(value: string): string {
@@ -9,19 +9,24 @@ export function ensureAtPrefix(value: string): string {
   return trimmed.startsWith("@") ? trimmed : `@${trimmed}`;
 }
 
-function toAsciiRootLabel(value: string): string {
+function toAsciiRootLabel(value: string): string | null {
   if (!value || value.includes(".")) {
     return value;
   }
 
-  if (/^[\x00-\x7F]+$/u.test(value)) {
+  if (/^[\x00-\x7F]+$/u.test(value) && !value.startsWith("xn--")) {
     return value;
   }
 
   try {
     const hostname = new URL(`http://${value}.invalid`).hostname;
-    return hostname.endsWith(".invalid") ? hostname.slice(0, -".invalid".length) : value;
+    if (!hostname.endsWith(".invalid")) {
+      return null;
+    }
+
+    const asciiLabel = hostname.slice(0, -".invalid".length);
+    return value.startsWith("xn--") && asciiLabel !== value ? null : asciiLabel;
   } catch {
-    return value;
+    return null;
   }
 }

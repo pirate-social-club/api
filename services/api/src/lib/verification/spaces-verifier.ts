@@ -115,6 +115,17 @@ function assertSpacesRootLabel(value: string): void {
     throw badRequestError("Spaces root label must be a protocol root label")
   }
 
+  if (value.startsWith("xn--")) {
+    try {
+      const hostname = new URL(`http://${value}.invalid`).hostname
+      if (hostname !== `${value}.invalid`) {
+        throw new Error("non-canonical IDNA root label")
+      }
+    } catch {
+      throw badRequestError("Spaces root label must be canonical IDNA ASCII")
+    }
+  }
+
   const verifyRange = value.startsWith("xn--") && value.length > "xn--".length
     ? value.slice("xn--".length)
     : value

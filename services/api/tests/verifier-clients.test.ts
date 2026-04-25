@@ -30,8 +30,23 @@ describe("normalizeRootLabel", () => {
   })
 
   test("canonicalizes IDNA emoji labels", () => {
+    expect(normalizeRootLabel("@☠")).toBe("xn--h4h")
     expect(normalizeRootLabel("@☠️")).toBe("xn--h4h")
     expect(normalizeRootLabel("@\u{1F1F5}\u{1F1F8}")).toBe("xn--t77hga")
+  })
+
+  test("keeps canonical literal ASCII xn labels", () => {
+    expect(normalizeRootLabel("@xn--t77hga")).toBe("xn--t77hga")
+  })
+
+  test("does not canonicalize fake literal ASCII xn labels", () => {
+    expect(normalizeRootLabel("@xn--238746723487")).toBe("xn--238746723487")
+  })
+
+  test("canonicalizes NFKC-equivalent labels before IDNA", () => {
+    expect(normalizeRootLabel("@ＡＢＣ")).toBe("abc")
+    expect(normalizeRootLabel("@e\u0301")).toBe("xn--9ca")
+    expect(normalizeRootLabel("@é")).toBe("xn--9ca")
   })
 })
 
@@ -136,6 +151,30 @@ describe("inspectSpacesNamespace", () => {
     try {
       try {
         await inspectSpacesNamespace(env, "@🏴‍☠️")
+        throw new Error("expected inspectSpacesNamespace to reject")
+      } catch (error) {
+        expect(error).toMatchObject({
+          status: 400,
+          code: "bad_request",
+        })
+      }
+      expect(called).toBe(false)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("rejects fake literal ASCII xn labels before calling the verifier", async () => {
+    const originalFetch = globalThis.fetch
+    let called = false
+    globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
+      called = true
+      return originalFetch(...args)
+    }) as typeof fetch
+
+    try {
+      try {
+        await inspectSpacesNamespace(env, "@xn--238746723487")
         throw new Error("expected inspectSpacesNamespace to reject")
       } catch (error) {
         expect(error).toMatchObject({
