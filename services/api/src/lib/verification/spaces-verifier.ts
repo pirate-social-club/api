@@ -40,6 +40,8 @@ type SpacesVerifyPublishResponse = {
   failure_reason?: string | null
 }
 
+export const SPACES_FABRIC_PUBLISH_CHALLENGE_TTL_MS = 24 * 60 * 60 * 1000
+
 export type SpacesInspection = {
   rootExists: boolean
   rootKeyProofVerified: boolean
@@ -295,7 +297,7 @@ export async function mintSpacesChallenge(
   }
 
   const issuedAt = new Date()
-  const challengeExpiresAt = new Date(issuedAt.getTime() + 10 * 60 * 1000).toISOString()
+  const challengeExpiresAt = new Date(issuedAt.getTime() + SPACES_FABRIC_PUBLISH_CHALLENGE_TTL_MS).toISOString()
   const domain = getSpacesChallengeDomain(env)
   const nonce = `${sessionId}:${randomNonceHex()}`
   const txtValue = `pirate-space-verify=${nonce}`

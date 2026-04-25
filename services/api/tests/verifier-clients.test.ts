@@ -3,6 +3,7 @@ import {
   inspectSpacesNamespace,
   normalizeRootLabel,
   mintSpacesChallenge,
+  SPACES_FABRIC_PUBLISH_CHALLENGE_TTL_MS,
   verifySpacesFabricPublish,
 } from "../src/lib/verification/spaces-verifier"
 import { getHnsVerifierBaseUrl, inspectHnsRoot, isHnsVerifierConfigured } from "../src/lib/verification/hns-verifier"
@@ -55,11 +56,11 @@ describe("mintSpacesChallenge", () => {
     expect(payload.freedom_url).toBe("https://pirate.sc/c/@myspace")
   })
 
-  test("challenge expiry is 10 minutes after issue", async () => {
+  test("challenge expiry uses the Spaces Fabric publish TTL", async () => {
     const result = await mintSpacesChallenge(env, "myspace", "test-pubkey", "nvs_123")
     const issuedAt = new Date(result.challengePayload.issued_at).getTime()
     const expiresAt = new Date(result.challengeExpiresAt).getTime()
-    expect(expiresAt - issuedAt).toBe(10 * 60 * 1000)
+    expect(expiresAt - issuedAt).toBe(SPACES_FABRIC_PUBLISH_CHALLENGE_TTL_MS)
   })
 
   test("normalizes root label in the payload", async () => {
