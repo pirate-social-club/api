@@ -67,6 +67,13 @@ export type AnalyticsEventName =
   | "notification_inbox_viewed"
   | "notification_opened"
   | "notification_marked_read"
+  | "notification_task_dismissed"
+  | "pwa_install_promo_viewed"
+  | "pwa_install_prompt_opened"
+  | "pwa_install_prompt_accepted"
+  | "pwa_install_prompt_dismissed"
+  | "pwa_install_promo_dismissed"
+  | "pwa_installed"
 
 export type AnalyticsEvent = {
   event_id: string

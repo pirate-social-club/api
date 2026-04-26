@@ -58,6 +58,12 @@ const clientEventNames = new Set<AnalyticsEventName>([
   "notification_inbox_viewed",
   "notification_opened",
   "notification_marked_read",
+  "pwa_install_promo_viewed",
+  "pwa_install_prompt_opened",
+  "pwa_install_prompt_accepted",
+  "pwa_install_prompt_dismissed",
+  "pwa_install_promo_dismissed",
+  "pwa_installed",
 ])
 
 const propertyAllowlist: Partial<Record<AnalyticsEventName, readonly string[]>> = {
@@ -78,8 +84,27 @@ const propertyAllowlist: Partial<Record<AnalyticsEventName, readonly string[]>> 
   funding_route_selected: ["funding_destination", "source_chain"],
   asset_accessed: ["asset_kind"],
   donation_selected: ["donation_mode"],
-  notification_opened: ["notification_type"],
-  notification_marked_read: ["notification_type"],
+  notification_opened: [
+    "notification_kind",
+    "notification_type",
+    "task_type",
+    "task_persistence",
+    "open_surface",
+    "task_auto_cleared_on_open",
+  ],
+  notification_marked_read: [
+    "notification_kind",
+    "notification_type",
+    "read_mode",
+    "open_surface",
+    "count",
+  ],
+  pwa_install_promo_viewed: ["surface", "trigger", "unread_count_bucket"],
+  pwa_install_prompt_opened: ["surface", "platform"],
+  pwa_install_prompt_accepted: ["surface"],
+  pwa_install_prompt_dismissed: ["surface"],
+  pwa_install_promo_dismissed: ["surface", "dismiss_reason"],
+  pwa_installed: ["surface"],
 }
 
 function optionalString(value: unknown): string | null {

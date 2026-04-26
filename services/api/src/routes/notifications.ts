@@ -1,5 +1,6 @@
 import { Hono } from "hono"
 import { badRequestError } from "../lib/errors"
+import { trackApiEvent } from "../lib/analytics/track"
 import { authenticate, type AuthenticatedEnv } from "../lib/auth-middleware"
 import {
   getNotificationsSummary,
@@ -71,6 +72,17 @@ notifications.post("/dismiss-task", async (c) => {
   if (!task) {
     throw badRequestError("Task not found or already dismissed")
   }
+
+  await trackApiEvent(c.env, c.req, {
+    eventName: "notification_task_dismissed",
+    userId: actor.userId,
+    properties: {
+      notification_kind: "task",
+      task_type: task.type,
+      task_persistence: "persisted",
+      dismiss_surface: "inbox",
+    },
+  })
 
   return c.json(task)
 })
