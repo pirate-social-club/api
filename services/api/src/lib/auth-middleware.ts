@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from "node:crypto"
 import { createMiddleware } from "hono/factory"
 import { authError } from "./errors"
 import { getControlPlaneAgentOwnershipRepository } from "./agents/agent-ownership-repository"
@@ -68,7 +69,7 @@ export function authenticateAdminToken(input: {
   }
 
   const configured = String(input.env.PIRATE_ADMIN_TOKEN || "").trim()
-  if (!configured || token !== configured) {
+  if (!configured || !timingSafeTokenEqual(token, configured)) {
     throw authError("Authentication failed")
   }
 
@@ -85,6 +86,12 @@ export function authenticateAdminToken(input: {
       scope: "full",
     },
   }
+}
+
+function timingSafeTokenEqual(left: string, right: string): boolean {
+  const leftDigest = createHash("sha256").update(left).digest()
+  const rightDigest = createHash("sha256").update(right).digest()
+  return timingSafeEqual(leftDigest, rightDigest)
 }
 
 export const authenticate = createMiddleware<{ Bindings: Env; Variables: AuthenticatedVariables }>(
