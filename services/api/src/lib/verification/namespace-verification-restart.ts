@@ -3,8 +3,10 @@ import type { NamespaceVerificationSessionRow } from "../auth/auth-db-rows"
 import { providerUnavailable, verificationRequired } from "../errors"
 import { makeId } from "../helpers"
 import {
+  ensureHnsZone,
   inspectHnsRoot,
   publishHnsTxtRecord,
+  shouldAutoProvisionHnsRoot,
 } from "./hns-verifier"
 import {
   inspectSpacesNamespace,
@@ -149,10 +151,23 @@ async function restartHnsChallenge(input: {
   }
 
   if (isHnsVerifierConfigured(input.env)) {
-    const inspection = await inspectHnsRoot(input.env, {
+    let inspection = await inspectHnsRoot(input.env, {
       rootLabel,
       challengeHost,
     })
+    if (
+      shouldRequireHnsDnsSetup(input.env, inspection)
+      && inspection.failure_reason === "zone_not_provisioned"
+      && shouldAutoProvisionHnsRoot(input.env, rootLabel)
+    ) {
+      await ensureHnsZone(input.env, {
+        rootLabel,
+      })
+      inspection = await inspectHnsRoot(input.env, {
+        rootLabel,
+        challengeHost,
+      })
+    }
     inspectionSnapshot = deriveHnsInspectionSnapshot(inspection)
     persistedSetupNameservers = serializeSetupNameservers(inspection.nameservers?.map((entry) => entry.trim()).filter(Boolean) ?? null)
     if (shouldRequireHnsDnsSetup(input.env, inspection)) {

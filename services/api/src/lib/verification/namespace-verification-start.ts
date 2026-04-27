@@ -8,8 +8,10 @@ import {
 } from "../auth/auth-serializers"
 import {
   assertHnsRootLabel,
+  ensureHnsZone,
   inspectHnsRoot,
   publishHnsTxtRecord,
+  shouldAutoProvisionHnsRoot,
 } from "./hns-verifier"
 import {
   inspectSpacesNamespace,
@@ -142,10 +144,23 @@ export async function startNamespaceVerificationSession(
     }
 
     if (isHnsVerifierConfigured(env)) {
-      const inspection = await inspectHnsRoot(env, {
+      let inspection = await inspectHnsRoot(env, {
         rootLabel: normalizedRootLabel,
         challengeHost,
       })
+      if (
+        shouldRequireHnsDnsSetup(env, inspection)
+        && inspection.failure_reason === "zone_not_provisioned"
+        && shouldAutoProvisionHnsRoot(env, normalizedRootLabel)
+      ) {
+        await ensureHnsZone(env, {
+          rootLabel: normalizedRootLabel,
+        })
+        inspection = await inspectHnsRoot(env, {
+          rootLabel: normalizedRootLabel,
+          challengeHost,
+        })
+      }
       inspectionSnapshot = deriveHnsInspectionSnapshot(inspection)
       persistedSetupNameservers = serializeSetupNameservers(inspection.nameservers?.map((entry) => entry.trim()).filter(Boolean) ?? null)
       if (shouldRequireHnsDnsSetup(env, inspection)) {

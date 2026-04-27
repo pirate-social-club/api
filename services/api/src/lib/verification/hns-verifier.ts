@@ -29,6 +29,14 @@ export type HnsPublishTxtResult = {
   observation_provider?: string | null
 }
 
+export type HnsEnsureZoneResult = {
+  root_label?: string
+  zone_name?: string
+  zone_created?: boolean
+  nameservers?: string[]
+  observation_provider?: string | null
+}
+
 export type HnsVerifyTxtResult = {
   verified?: boolean
   observation_provider?: string | null
@@ -47,6 +55,7 @@ export type HnsVerifyTxtResult = {
 }
 
 const MAX_HNS_ROOT_LABEL_LENGTH = 63
+const PLATFORM_MANAGED_HNS_ROOTS = new Set(["pirate", "clawitzer"])
 
 function isProductionEnvironment(env: Env): boolean {
   return String(env.ENVIRONMENT || "").trim().toLowerCase() === "production"
@@ -91,6 +100,17 @@ function getHnsVerifierAuthToken(env: Env): string | null {
 
 export function isHnsVerifierConfigured(env: Env): boolean {
   return getHnsVerifierBaseUrl(env) != null
+}
+
+export function shouldAutoProvisionHnsRoot(env: Env, rootLabel: string): boolean {
+  const normalized = rootLabel.trim().toLowerCase()
+  if (PLATFORM_MANAGED_HNS_ROOTS.has(normalized)) {
+    return true
+  }
+  const configured = env.HNS_AUTO_PROVISION_ROOTS?.split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean) ?? []
+  return configured.includes(normalized)
 }
 
 async function request<T>(env: Env, path: string, init?: RequestInit): Promise<T> {
@@ -164,6 +184,21 @@ export async function publishHnsTxtRecord(
       root_label: input.rootLabel,
       challenge_host: input.challengeHost ?? null,
       challenge_txt_value: input.challengeTxtValue,
+    }),
+  })
+}
+
+export async function ensureHnsZone(
+  env: Env,
+  input: {
+    rootLabel: string
+  },
+): Promise<HnsEnsureZoneResult> {
+  assertHnsRootLabel(input.rootLabel)
+  return request<HnsEnsureZoneResult>(env, "/ensure-zone", {
+    method: "POST",
+    body: JSON.stringify({
+      root_label: input.rootLabel,
     }),
   })
 }
