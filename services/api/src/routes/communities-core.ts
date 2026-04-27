@@ -30,7 +30,7 @@ import {
   getCommunityDonationPolicy,
   resolveCommunityDonationPartner,
 } from "../lib/communities/community-service"
-import { badRequestError } from "../lib/errors"
+import { authError, badRequestError } from "../lib/errors"
 import {
   getCommunityMachineAccessPolicy,
   updateCommunityMachineAccessPolicy,
@@ -57,6 +57,20 @@ import type { CreatePostRequest } from "../types"
 import type { CreateCommentRequest } from "../lib/comments/comment-types"
 
 export function registerCommunityCoreRoutes(communities: Hono<AuthenticatedEnv>): void {
+  communities.get("/admin/health", async (c) => {
+    const actor = c.get("actor")
+    if (actor.authType !== "admin") {
+      throw authError("Admin authentication required")
+    }
+    return c.json({
+      ok: true,
+      mode: "admin",
+      admin_actor_id: actor.adminOverride.adminActorId,
+      acting_user_id: actor.userId,
+      scope: actor.adminOverride.scope,
+    }, 200)
+  })
+
   communities.post("/", async (c) => {
     const { actor, communityRepository, userRepository, verificationRepository } = getCommunityCreationRouteContext(c)
     const body = await requireJsonBody<CreateCommunityRequestBody>(c, "Invalid community create payload")
