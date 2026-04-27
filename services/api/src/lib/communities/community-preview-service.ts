@@ -207,6 +207,10 @@ async function buildCommunityPreview(input: {
   })
   const followerCount = await getCommunityFollowerCount(input.client, input.communityId)
   const memberCount = await getCommunityMemberCount(input.client, input.communityId)
+  const membershipGateSummaries = input.gateRules.map(buildMembershipGateSummary)
+  const humanVerificationLane = membershipGateSummaries.some((summary) => summary.accepted_providers?.includes("very"))
+    ? "very"
+    : "self"
 
   const preview: CommunityPreview = {
     community_id: input.communityId,
@@ -224,14 +228,14 @@ async function buildCommunityPreview(input: {
       bannerRef: localRow?.banner_ref == null ? null : String(localRow.banner_ref),
     }),
     membership_mode: membershipMode,
-    human_verification_lane: "self",
+    human_verification_lane: humanVerificationLane,
     member_count: memberCount,
     follower_count: followerCount,
     donation_policy_mode: donationPolicyMode,
     donation_partner_id: localRow?.donation_partner_id == null ? null : String(localRow.donation_partner_id),
     donation_partner: donationPolicyMode !== "none" ? donationPartner : null,
     reference_links: referenceLinks,
-    membership_gate_summaries: input.gateRules.map(buildMembershipGateSummary),
+    membership_gate_summaries: membershipGateSummaries,
     viewer_membership_status: input.viewerMembershipStatus,
     viewer_following: input.viewerFollowing,
     created_at: input.communityCreatedAt,
