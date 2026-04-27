@@ -1,6 +1,8 @@
 import { Hono } from "hono"
 import {
   authenticate,
+  authenticateAdminOrUser,
+  authenticateAdminToken,
   authenticateAgentDelegatedToken,
   authenticateUserToken,
   requireBearerToken,
@@ -27,6 +29,17 @@ communities.use("*", async (c, next) => {
     || /^\/communities\/[^/]+\/posts\/[^/]+\/comments$/.test(pathname)
   )
   if (allowsAgentDelegation) {
+    const adminActor = authenticateAdminToken({
+      env: c.env,
+      token: c.req.header("x-admin-token"),
+      asUserId: c.req.header("x-admin-as-user-id"),
+    })
+    if (adminActor) {
+      c.set("actor", adminActor)
+      await next()
+      return
+    }
+
     const token = requireBearerToken(c.req.header("authorization"))
     try {
       c.set("actor", await authenticateUserToken({ env: c.env, token }))
@@ -37,7 +50,7 @@ communities.use("*", async (c, next) => {
     return
   }
 
-  return authenticate(c, next)
+  return authenticateAdminOrUser(c, next)
 })
 
 registerCommunityCoreRoutes(communities)

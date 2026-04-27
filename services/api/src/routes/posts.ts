@@ -2,13 +2,13 @@ import { Hono } from "hono"
 import { badRequestError } from "../lib/errors"
 import { getUserRepository } from "../lib/auth/repositories"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
-import { authenticate, type AuthenticatedEnv } from "../lib/auth-middleware"
+import { authenticateAdminOrUser, type AuthenticatedEnv } from "../lib/auth-middleware"
 import { trackApiEvent } from "../lib/analytics/track"
 import { castPostVote, getPost } from "../lib/posts/post-service"
 
 const posts = new Hono<AuthenticatedEnv>()
 
-posts.use("*", authenticate)
+posts.use("*", authenticateAdminOrUser)
 
 posts.get("/:postId", async (c) => {
   const actor = c.get("actor")

@@ -2,7 +2,7 @@ import { Hono } from "hono"
 import { badRequestError, notFoundError } from "../lib/errors"
 import { getControlPlaneVerificationRepository } from "../lib/verification/verification-repository"
 import { proxyVeryBridgeRequest } from "../lib/verification/very-provider"
-import { authenticate, type AuthenticatedEnv } from "../lib/auth-middleware"
+import { authenticateAdminOrUser, type AuthenticatedEnv } from "../lib/auth-middleware"
 import { trackApiEvent } from "../lib/analytics/track"
 import type { Env, RequestedVerificationCapability, VerificationIntent, VerificationRequirement } from "../types"
 
@@ -45,7 +45,7 @@ verification.post("/verification-sessions/very-widget-verify", async (c) => {
   return c.json({ status: "valid" }, 200)
 })
 
-authenticatedVerification.use("*", authenticate)
+authenticatedVerification.use("*", authenticateAdminOrUser)
 
 authenticatedVerification.post("/verification-sessions/:verificationSessionId/very-bridge/sessions", async (c) => {
   const actor = c.get("actor")

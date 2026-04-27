@@ -203,6 +203,7 @@ export type Env = {
   PIRATE_APP_JWT_ISSUER?: string
   PIRATE_APP_JWT_AUDIENCE?: string
   PIRATE_APP_JWT_TTL_SECONDS?: string
+  PIRATE_ADMIN_TOKEN?: string
   PRIVY_APP_ID?: string
   PRIVY_APP_SECRET?: string
   PRIVY_API_URL?: string
