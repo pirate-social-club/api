@@ -5,6 +5,7 @@
     "": {
       "name": "@pirate/api-service",
       "dependencies": {
+        "@ethereumjs/rlp": "^10.1.1",
         "@ethersphere/bee-js": "^11.1.1",
         "@libsql/client": "^0.17.2",
         "@neondatabase/serverless": "^1.1.0",
@@ -107,6 +108,8 @@
     "@esbuild/win32-ia32": ["@esbuild/win32-ia32@0.27.3", "", { "os": "win32", "cpu": "ia32" }, "sha512-QLKSFeXNS8+tHW7tZpMtjlNb7HKau0QDpwm49u0vUp9y1WOF+PEzkU84y9GqYaAVW8aH8f3GcBck26jh54cX4Q=="],
 
     "@esbuild/win32-x64": ["@esbuild/win32-x64@0.27.3", "", { "os": "win32", "cpu": "x64" }, "sha512-4uJGhsxuptu3OcpVAzli+/gWusVGwZZHTlS63hh++ehExkVT8SgiEf7/uC/PclrPPkLhZqGgCTjd0VWLo6xMqA=="],
+
+    "@ethereumjs/rlp": ["@ethereumjs/rlp@10.1.1", "", { "bin": { "rlp": "bin/rlp.cjs" } }, "sha512-jbnWTEwcpoY+gE0r+wxfDG9zgiu54DcTcwnc9sX3DsqKR4l5K7x2V8mQL3Et6hURa4DuT9g7z6ukwpBLFchszg=="],
 
     "@ethersphere/bee-js": ["@ethersphere/bee-js@11.1.1", "", { "dependencies": { "axios": "^0.30.2", "cafe-utility": "^33.6.1", "debug": "^4.4.1", "isomorphic-ws": "^4.0.1", "semver": "^7.3.5", "ws": "^8.7.0" } }, "sha512-s2IpuVpy74cJyhj5yugO3+c9eR/r9TZsVJABk2iHWtTVkoA1qZdvgUjzV0w962o1gXrmYdxX4NOmlyIEpY11iQ=="],
 
