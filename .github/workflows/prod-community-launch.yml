@@ -1,0 +1,165 @@
+name: prod-community-launch
+
+on:
+  workflow_dispatch:
+    inputs:
+      root_label:
+        description: "HNS root label to verify, for example beermoney"
+        required: true
+        type: string
+      community_id:
+        description: "Existing production community id to attach"
+        required: true
+        type: string
+      admin_as_user_id:
+        description: "Production owner/staff user id used as the API actor"
+        required: true
+        type: string
+      api_url:
+        description: "Production API base URL"
+        required: true
+        default: "https://api.pirate.sc"
+        type: string
+      manifest_folder:
+        description: "Optional committed manifest folder to patch in the workflow workspace"
+        required: false
+        default: ""
+        type: string
+      apply_manifest:
+        description: "Patch namespace_verification_id in manifest_folder/community.yaml after attach"
+        required: false
+        default: false
+        type: boolean
+      verify_slug:
+        description: "Verify /public-communities/<root_label> after attach"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  launch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      API_URL: ${{ inputs.api_url }}
+      ROOT_LABEL: ${{ inputs.root_label }}
+      COMMUNITY_ID: ${{ inputs.community_id }}
+      ADMIN_AS_USER_ID: ${{ inputs.admin_as_user_id }}
+      MANIFEST_FOLDER: ${{ inputs.manifest_folder }}
+      APPLY_MANIFEST: ${{ inputs.apply_manifest }}
+      VERIFY_SLUG: ${{ inputs.verify_slug }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate launch inputs
+        env:
+          PIRATE_ADMIN_TOKEN: ${{ secrets.PIRATE_ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PIRATE_ADMIN_TOKEN"
+          test -n "$ROOT_LABEL"
+          test -n "$COMMUNITY_ID"
+          test -n "$ADMIN_AS_USER_ID"
+          if [[ "$APPLY_MANIFEST" == "true" && -z "$MANIFEST_FOLDER" ]]; then
+            echo "apply_manifest=true requires manifest_folder" >&2
+            exit 1
+          fi
+          if [[ -n "$MANIFEST_FOLDER" && ! -d "$MANIFEST_FOLDER" ]]; then
+            echo "manifest_folder does not exist: $MANIFEST_FOLDER" >&2
+            exit 1
+          fi
+
+      - name: Verify namespace
+        id: namespace
+        env:
+          PIRATE_ADMIN_TOKEN: ${{ secrets.PIRATE_ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl -sS -f \
+            -H "Content-Type: application/json" \
+            -H "X-Admin-Token: $PIRATE_ADMIN_TOKEN" \
+            -H "X-Admin-As-User-Id: $ADMIN_AS_USER_ID" \
+            -X POST \
+            --data "$(jq -nc --arg root "$ROOT_LABEL" '{family:"hns", root_label:$root}')" \
+            "$API_URL/namespace-verification-sessions" > namespace-start.json
+          namespace_session_id="$(jq -r '.namespace_verification_session_id // empty' namespace-start.json)"
+          if [[ -z "$namespace_session_id" ]]; then
+            echo "namespace start did not return namespace_verification_session_id" >&2
+            cat namespace-start.json >&2
+            exit 1
+          fi
+
+          curl -sS -f \
+            -H "Content-Type: application/json" \
+            -H "X-Admin-Token: $PIRATE_ADMIN_TOKEN" \
+            -H "X-Admin-As-User-Id: $ADMIN_AS_USER_ID" \
+            -X POST \
+            --data '{}' \
+            "$API_URL/namespace-verification-sessions/$namespace_session_id/complete" > namespace-complete.json
+          namespace_status="$(jq -r '.status // empty' namespace-complete.json)"
+          namespace_verification_id="$(jq -r '.namespace_verification_id // empty' namespace-complete.json)"
+          if [[ "$namespace_status" != "verified" || -z "$namespace_verification_id" ]]; then
+            echo "namespace did not verify; status=$namespace_status" >&2
+            cat namespace-complete.json >&2
+            exit 1
+          fi
+
+          echo "namespace_session_id=$namespace_session_id" >> "$GITHUB_OUTPUT"
+          echo "namespace_verification_id=$namespace_verification_id" >> "$GITHUB_OUTPUT"
+          echo "Verified namespace $ROOT_LABEL -> $namespace_verification_id"
+
+      - name: Attach namespace to community
+        env:
+          PIRATE_ADMIN_TOKEN: ${{ secrets.PIRATE_ADMIN_TOKEN }}
+          NAMESPACE_VERIFICATION_ID: ${{ steps.namespace.outputs.namespace_verification_id }}
+        run: |
+          set -euo pipefail
+          curl -sS -f \
+            -H "Content-Type: application/json" \
+            -H "X-Admin-Token: $PIRATE_ADMIN_TOKEN" \
+            -H "X-Admin-As-User-Id: $ADMIN_AS_USER_ID" \
+            -X POST \
+            --data "$(jq -nc --arg id "$NAMESPACE_VERIFICATION_ID" '{namespace_verification_id:$id}')" \
+            "$API_URL/communities/$COMMUNITY_ID/namespace" > community-attach.json
+          attached="$(jq -r '.namespace_verification_id // empty' community-attach.json)"
+          route_slug="$(jq -r '.route_slug // empty' community-attach.json)"
+          if [[ "$attached" != "$NAMESPACE_VERIFICATION_ID" ]]; then
+            echo "community attach returned unexpected namespace_verification_id=$attached" >&2
+            cat community-attach.json >&2
+            exit 1
+          fi
+          echo "Attached namespace $attached route_slug=$route_slug"
+
+      - name: Apply manifest
+        if: ${{ inputs.apply_manifest }}
+        env:
+          NAMESPACE_VERIFICATION_ID: ${{ steps.namespace.outputs.namespace_verification_id }}
+        run: |
+          set -euo pipefail
+          perl -0pi -e 's/^namespace_verification_id:\s*\S+/namespace_verification_id: '"$NAMESPACE_VERIFICATION_ID"'/m' "$MANIFEST_FOLDER/community.yaml"
+          grep -n '^namespace_verification_id:' "$MANIFEST_FOLDER/community.yaml"
+
+      - name: Verify public slug
+        if: ${{ inputs.verify_slug }}
+        run: |
+          set -euo pipefail
+          slug="${ROOT_LABEL#@}"
+          for attempt in 1 2 3 4 5; do
+            status="$(curl -sS -o public-community.json -w '%{http_code}' "$API_URL/public-communities/$slug")"
+            if [[ "$status" == "200" ]]; then
+              community_id="$(jq -r '.community_id // empty' public-community.json)"
+              route_slug="$(jq -r '.route_slug // empty' public-community.json)"
+              echo "Public slug verified: $slug community_id=$community_id route_slug=$route_slug"
+              exit 0
+            fi
+            echo "Public slug $slug not ready yet, status=$status attempt=$attempt" >&2
+            sleep 3
+          done
+          cat public-community.json >&2 || true
+          exit 1
