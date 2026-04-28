@@ -20,6 +20,7 @@ type SeedUser = {
   subject?: string
   access_token_env?: string
   synthetic?: boolean
+  wallet_address?: string
   verify_unique_human?: boolean
   verification_provider?: "self" | "very"
   profile?: ProfileSeed
@@ -116,6 +117,15 @@ function modeFromArg(value: string | null): SeedMode {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined
+}
+
+function optionalWalletAddress(value: unknown, label: string): string | undefined {
+  const walletAddress = optionalString(value)
+  if (!walletAddress) return undefined
+  if (!/^0x[a-fA-F0-9]{40}$/.test(walletAddress)) {
+    throw new Error(`${label} must be a valid EVM address`)
+  }
+  return walletAddress
 }
 
 function stringArray(value: unknown, label: string): string[] {
@@ -235,6 +245,7 @@ function parseManifest(raw: unknown): SeedManifest {
         subject: optionalString(user.subject),
         access_token_env: optionalString(user.access_token_env),
         synthetic: user.synthetic === true,
+        wallet_address: optionalWalletAddress(user.wallet_address, `users[${index}].wallet_address`),
         verify_unique_human: user.verify_unique_human !== false,
         verification_provider: user.verification_provider === "self" || user.verification_provider === "very"
           ? user.verification_provider
@@ -421,12 +432,12 @@ function validateComments(input: {
   }
 }
 
-async function mintJwt(subject: string): Promise<string> {
+async function mintJwt(subject: string, walletAddress?: string): Promise<string> {
   const issuer = (envValue("AUTH_UPSTREAM_JWT_ISSUER") || envValue("JWT_BASED_AUTH_ISSUERS") || "pirate-dev").split(",")[0]!.trim()
   const audience = envValue("AUTH_UPSTREAM_JWT_AUDIENCE") || envValue("JWT_BASED_AUTH_AUDIENCE") || "pirate-api"
   const secret = envValue("AUTH_UPSTREAM_JWT_SHARED_SECRET") || envValue("JWT_BASED_AUTH_SHARED_SECRET")
   if (!secret) throw new Error("AUTH_UPSTREAM_JWT_SHARED_SECRET or JWT_BASED_AUTH_SHARED_SECRET is required")
-  return await new SignJWT()
+  return await new SignJWT(walletAddress ? { wallet_address: walletAddress } : {})
     .setProtectedHeader({ alg: "HS256", typ: "JWT" })
     .setIssuer(issuer)
     .setAudience(audience)
@@ -556,7 +567,7 @@ async function resolveUsers(ctx: SeedContext, manifest: SeedManifest): Promise<v
       continue
     }
     if (!seedUser.subject) throw new Error(`User ${seedUser.key} needs subject or access_token_env`)
-    const jwt = await mintJwt(seedUser.subject)
+    const jwt = await mintJwt(seedUser.subject, seedUser.wallet_address)
     const exchanged = await requestJson<{ access_token: string; user: { user_id: string } }>({
       apiUrl: ctx.apiUrl,
       method: "POST",

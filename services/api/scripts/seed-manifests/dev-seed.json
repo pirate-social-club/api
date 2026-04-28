@@ -6,6 +6,7 @@
       "key": "maya",
       "subject": "seed-dev-maya-chen",
       "synthetic": true,
+      "wallet_address": "0x1000000000000000000000000000000000000A11",
       "verification_provider": "very",
       "profile": {
         "display_name": "Maya Chen",
@@ -20,6 +21,7 @@
       "key": "eli",
       "subject": "seed-dev-eli-ramos",
       "synthetic": true,
+      "wallet_address": "0x1000000000000000000000000000000000000A12",
       "verification_provider": "very",
       "profile": {
         "display_name": "Eli Ramos",
@@ -34,6 +36,7 @@
       "key": "nadia",
       "subject": "seed-dev-nadia-park",
       "synthetic": true,
+      "wallet_address": "0x1000000000000000000000000000000000000A13",
       "verification_provider": "very",
       "profile": {
         "display_name": "Nadia Park",
@@ -48,6 +51,7 @@
       "key": "omar",
       "subject": "seed-dev-omar-singh",
       "synthetic": true,
+      "wallet_address": "0x1000000000000000000000000000000000000A14",
       "verification_provider": "very",
       "profile": {
         "display_name": "Omar Singh",
@@ -62,6 +66,7 @@
       "key": "jules",
       "subject": "seed-dev-jules-morgan",
       "synthetic": true,
+      "wallet_address": "0x1000000000000000000000000000000000000A15",
       "verification_provider": "very",
       "profile": {
         "display_name": "Jules Morgan",
@@ -76,6 +81,7 @@
       "key": "samira",
       "subject": "seed-dev-samira-haddad",
       "synthetic": true,
+      "wallet_address": "0x1000000000000000000000000000000000000A16",
       "verification_provider": "very",
       "profile": {
         "display_name": "Samira Haddad",
@@ -90,6 +96,7 @@
       "key": "lin",
       "subject": "seed-dev-lin-wei",
       "synthetic": true,
+      "wallet_address": "0x1000000000000000000000000000000000000A17",
       "verification_provider": "very",
       "profile": {
         "display_name": "Lin Wei",
@@ -104,6 +111,7 @@
       "key": "diego",
       "subject": "seed-dev-diego-alvarez",
       "synthetic": true,
+      "wallet_address": "0x1000000000000000000000000000000000000A18",
       "verification_provider": "very",
       "profile": {
         "display_name": "Diego Alvarez",

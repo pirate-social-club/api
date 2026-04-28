@@ -1,9 +1,32 @@
 import { jwtVerify } from "jose"
 import { authError } from "../errors"
-import { envFlag, splitCsv } from "../helpers"
+import { dedupeStrings, envFlag, normalizeAddress, splitCsv } from "../helpers"
 import type { Env, UpstreamIdentity } from "../../types"
 
 const encoder = new TextEncoder()
+
+function walletAddressesFromJwtClaim(value: unknown): string[] {
+  if (value == null) {
+    return []
+  }
+
+  if (Array.isArray(value)) {
+    const wallets = value.map((item) => {
+      const normalized = normalizeAddress(item)
+      if (!normalized) {
+        throw authError("JWT wallet claim must contain valid EVM addresses")
+      }
+      return normalized
+    })
+    return dedupeStrings(wallets)
+  }
+
+  const normalized = normalizeAddress(value)
+  if (!normalized) {
+    throw authError("JWT wallet claim must be a valid EVM address")
+  }
+  return [normalized]
+}
 
 export async function verifyJwtBasedAuth(params: {
   env: Env
@@ -41,12 +64,19 @@ export async function verifyJwtBasedAuth(params: {
     throw authError("JWT is missing required subject or issuer")
   }
 
+  const walletAddresses = walletAddressesFromJwtClaim(
+    verification.payload.wallet_addresses ?? verification.payload.wallet_address,
+  )
+  const selectedWalletAddress =
+    normalizeAddress(verification.payload.selected_wallet_address)
+    ?? walletAddresses[0]
+    ?? null
+
   return {
     provider: "jwt",
     providerSubject: `${issuer}|${subject}`,
     providerUserRef: subject,
-    // The first executable slice does not persist wallet attachments from jwt_based_auth.
-    walletAddresses: [],
-    selectedWalletAddress: null,
+    walletAddresses,
+    selectedWalletAddress,
   }
 }

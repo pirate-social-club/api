@@ -248,6 +248,12 @@ Production currently expects:
 
 Rotate the upstream shared secret through the secret manager, and do not reuse development or staging issuers/secrets in production.
 
+### JWT Wallet Attestation
+
+When `jwt_based_auth` is enabled, the trusted upstream JWT issuer may attest EVM wallets with either a `wallet_address` claim or a `wallet_addresses` claim. The API verifies the JWT, normalizes and deduplicates valid EVM addresses, and reconciles them through the normal session exchange wallet path. Persisted rows keep provider provenance with `wallet_attachments.source_provider = 'jwt'` and `wallet_attachments.source_subject` set to the verified JWT issuer and subject.
+
+This is an identity-provider attestation, not a wallet-control signature. Only configure JWT issuers and shared secrets for upstreams whose wallet claims you accept as identity assertions. Invalid wallet claims fail authentication. JWTs without wallet claims keep the previous behavior and create no wallet attachments.
+
 ## Pirate Session JWT
 
 Pirate bearer tokens are signed with `RS256`.

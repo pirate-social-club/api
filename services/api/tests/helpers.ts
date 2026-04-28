@@ -138,10 +138,18 @@ export async function mintUpstreamJwt(
     iss?: string
     aud?: string
     exp?: number
+    wallet_address?: string
+    wallet_addresses?: string[]
+    selected_wallet_address?: string
   } = {},
 ): Promise<string> {
   const nowSeconds = Math.floor(Date.now() / 1000)
-  return await new SignJWT()
+  const claims: Record<string, unknown> = {}
+  if (input.wallet_address !== undefined) claims.wallet_address = input.wallet_address
+  if (input.wallet_addresses !== undefined) claims.wallet_addresses = input.wallet_addresses
+  if (input.selected_wallet_address !== undefined) claims.selected_wallet_address = input.selected_wallet_address
+
+  return await new SignJWT(claims)
     .setProtectedHeader({ alg: "HS256", typ: "JWT" })
     .setIssuer(input.iss ?? String(env.AUTH_UPSTREAM_JWT_ISSUER))
     .setAudience(input.aud ?? String(env.AUTH_UPSTREAM_JWT_AUDIENCE))

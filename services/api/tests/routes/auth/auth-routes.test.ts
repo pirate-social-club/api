@@ -65,6 +65,119 @@ describe("auth routes", () => {
     expect(body.onboarding.cleanup_rename_available).toBe(true)
   })
 
+  test("JWT session exchange without wallet claims keeps wallet attachments empty", async () => {
+    const env = buildTestEnv()
+    const jwt = await mintUpstreamJwt(env, { sub: "jwt-no-wallet" })
+
+    const response = await makeJsonRequest("http://pirate.test/auth/session/exchange", {
+      proof: {
+        type: "jwt_based_auth",
+        jwt,
+      },
+    }, env)
+
+    expect(response.status).toBe(200)
+    const body = await json(response) as {
+      profile: { primary_wallet_address: string | null }
+      user: { primary_wallet_attachment_id: string | null }
+      wallet_attachments: unknown[]
+    }
+
+    expect(body.user.primary_wallet_attachment_id).toBeNull()
+    expect(body.profile.primary_wallet_address).toBeNull()
+    expect(body.wallet_attachments).toEqual([])
+  })
+
+  test("JWT wallet claims persist wallet attachments through session exchange", async () => {
+    const env = buildTestEnv()
+    const primaryWallet = "0x1111111111111111111111111111111111111111"
+    const secondaryWallet = "0x2222222222222222222222222222222222222222"
+    const jwt = await mintUpstreamJwt(env, {
+      sub: "jwt-wallet-user",
+      wallet_addresses: [primaryWallet, secondaryWallet, primaryWallet],
+      selected_wallet_address: secondaryWallet,
+    })
+
+    const first = await makeJsonRequest("http://pirate.test/auth/session/exchange", {
+      proof: {
+        type: "jwt_based_auth",
+        jwt,
+      },
+    }, env)
+    const second = await makeJsonRequest("http://pirate.test/auth/session/exchange", {
+      proof: {
+        type: "jwt_based_auth",
+        jwt,
+      },
+    }, env)
+
+    expect(first.status).toBe(200)
+    expect(second.status).toBe(200)
+    const firstBody = await json(first) as {
+      profile: { primary_wallet_address: string | null }
+      user: { primary_wallet_attachment_id: string | null }
+      wallet_attachments: Array<{ wallet_address: string; is_primary: boolean }>
+    }
+    const secondBody = await json(second) as {
+      user: { primary_wallet_attachment_id: string | null }
+      wallet_attachments: Array<{ wallet_address: string; is_primary: boolean }>
+    }
+
+    expect(firstBody.wallet_attachments).toHaveLength(2)
+    expect(firstBody.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_address).toBe(secondaryWallet)
+    expect(firstBody.profile.primary_wallet_address).toBe(secondaryWallet)
+    expect(typeof firstBody.user.primary_wallet_attachment_id).toBe("string")
+    expect(secondBody.wallet_attachments).toHaveLength(2)
+    expect(secondBody.user.primary_wallet_attachment_id).toBe(firstBody.user.primary_wallet_attachment_id)
+  })
+
+  test("JWT wallet claims persist source provenance against the database-backed schema", async () => {
+    const ctx = await createRouteTestContext()
+
+    try {
+      const walletAddress = "0x3333333333333333333333333333333333333333"
+      const jwt = await mintUpstreamJwt(ctx.env, {
+        sub: "jwt-db-wallet-user",
+        wallet_address: walletAddress,
+      })
+      const response = await makeJsonRequest("http://pirate.test/auth/session/exchange", {
+        proof: {
+          type: "jwt_based_auth",
+          jwt,
+        },
+      }, ctx.env)
+
+      expect(response.status).toBe(200)
+      const body = await json(response) as {
+        user: { user_id: string; primary_wallet_attachment_id: string | null }
+        profile: { primary_wallet_address: string | null }
+        wallet_attachments: Array<{ wallet_address: string; is_primary: boolean; chain_namespace?: string }>
+      }
+
+      expect(body.profile.primary_wallet_address).toBe(walletAddress.toLowerCase())
+      expect(body.wallet_attachments).toHaveLength(1)
+      expect(body.wallet_attachments[0]?.wallet_address).toBe(walletAddress.toLowerCase())
+      expect(body.wallet_attachments[0]?.is_primary).toBe(true)
+      expect(body.wallet_attachments[0]?.chain_namespace).toBe("eip155:1")
+      const rows = await ctx.client.execute({
+        sql: `
+          SELECT source_provider, source_subject, wallet_address_normalized
+          FROM wallet_attachments
+          WHERE user_id = ?1
+        `,
+        args: [body.user.user_id],
+      })
+      expect(rows.rows).toEqual([{
+        source_provider: "jwt",
+        source_subject: `${ctx.env.AUTH_UPSTREAM_JWT_ISSUER}|jwt-db-wallet-user`,
+        wallet_address_normalized: walletAddress.toLowerCase(),
+      }])
+      expect(typeof body.user.primary_wallet_attachment_id).toBe("string")
+    } finally {
+      await ctx.cleanup()
+    }
+  })
+
   test("session exchange works against the local migration-backed control-plane schema", async () => {
     const ctx = await createRouteTestContext()
 
@@ -156,6 +269,22 @@ describe("auth routes", () => {
         jwt: "not-a-jwt",
       },
     }, env)
+    await expectAuthError(response)
+  })
+
+  test("invalid JWT wallet claims return auth_error", async () => {
+    const env = buildTestEnv()
+    const jwt = await mintUpstreamJwt(env, {
+      sub: "invalid-wallet-claim-user",
+      wallet_address: "not-a-wallet",
+    })
+    const response = await makeJsonRequest("http://pirate.test/auth/session/exchange", {
+      proof: {
+        type: "jwt_based_auth",
+        jwt,
+      },
+    }, env)
+
     await expectAuthError(response)
   })
 

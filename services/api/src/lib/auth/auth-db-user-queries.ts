@@ -331,7 +331,10 @@ export async function reconcileWalletAttachments(
     updatedAt: string
   },
 ): Promise<void> {
-  if (input.identity.provider !== "privy" || input.identity.walletAddresses.length === 0) {
+  if (
+    (input.identity.provider !== "privy" && input.identity.provider !== "jwt")
+    || input.identity.walletAddresses.length === 0
+  ) {
     return
   }
 
