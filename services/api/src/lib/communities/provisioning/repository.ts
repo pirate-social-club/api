@@ -13,6 +13,7 @@ import type {
   CommunityRow,
   JobRow,
 } from "../../auth/auth-db-rows"
+import type { InitialCommunityDatabaseBinding } from "../community-repository-types"
 
 export async function createCommunityProvisioningRequest(
   client: Client,
@@ -25,7 +26,7 @@ export async function createCommunityProvisioningRequest(
     membershipMode: "open" | "request" | "gated"
     namespaceVerificationId: string | null
     routeSlug?: string | null
-    databaseUrl: string
+    binding: InitialCommunityDatabaseBinding
     createdAt: string
   },
 ): Promise<{
@@ -61,12 +62,25 @@ export async function createCommunityProvisioningRequest(
       sql: `
         INSERT INTO community_database_bindings (
           community_database_binding_id, community_id, binding_role, organization_slug, group_name, group_id,
-          database_name, database_id, database_url, location, status, transferred_at, created_at, updated_at
+          database_name, database_id, database_url, location, requires_credentials, status,
+          transferred_at, created_at, updated_at
         ) VALUES (
-          ?1, ?2, 'primary', 'local-dev', ?3, NULL, 'main', NULL, ?4, 'local', 'active', NULL, ?5, ?5
+          ?1, ?2, 'primary', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'active', NULL, ?11, ?11
         )
       `,
-      args: [input.communityDatabaseBindingId, input.communityId, `club-${input.communityId}`, input.databaseUrl, input.createdAt],
+      args: [
+        input.communityDatabaseBindingId,
+        input.communityId,
+        input.binding.organizationSlug,
+        input.binding.groupName,
+        input.binding.groupId,
+        input.binding.databaseName,
+        input.binding.databaseId,
+        input.binding.databaseUrl,
+        input.binding.location,
+        input.binding.requiresCredentials ? 1 : 0,
+        input.createdAt,
+      ],
     })
 
     await tx.execute({
@@ -94,8 +108,8 @@ export async function createCommunityProvisioningRequest(
         input.communityId,
         JSON.stringify({
           namespace_verification_id: input.namespaceVerificationId,
-          mode: "local_stub",
-          database_url: input.databaseUrl,
+          mode: input.binding.provisioningMode,
+          database_url: input.binding.databaseUrl,
         }),
         input.createdAt,
       ],
@@ -128,7 +142,7 @@ export async function retryCommunityProvisioningRequest(
     jobId: string
     namespaceVerificationId: string
     routeSlug: string
-    databaseUrl: string
+    binding: InitialCommunityDatabaseBinding
     createdAt: string
   },
 ): Promise<{
@@ -153,12 +167,25 @@ export async function retryCommunityProvisioningRequest(
         sql: `
           INSERT INTO community_database_bindings (
             community_database_binding_id, community_id, binding_role, organization_slug, group_name, group_id,
-            database_name, database_id, database_url, location, status, transferred_at, created_at, updated_at
+            database_name, database_id, database_url, location, requires_credentials, status,
+            transferred_at, created_at, updated_at
           ) VALUES (
-            ?1, ?2, 'primary', 'local-dev', ?3, NULL, 'main', NULL, ?4, 'local', 'active', NULL, ?5, ?5
+            ?1, ?2, 'primary', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'active', NULL, ?11, ?11
           )
         `,
-        args: [input.fallbackBindingId, input.communityId, `club-${input.communityId}`, input.databaseUrl, input.createdAt],
+        args: [
+          input.fallbackBindingId,
+          input.communityId,
+          input.binding.organizationSlug,
+          input.binding.groupName,
+          input.binding.groupId,
+          input.binding.databaseName,
+          input.binding.databaseId,
+          input.binding.databaseUrl,
+          input.binding.location,
+          input.binding.requiresCredentials ? 1 : 0,
+          input.createdAt,
+        ],
       })
 
       await tx.execute({
@@ -202,8 +229,8 @@ export async function retryCommunityProvisioningRequest(
         input.communityId,
         JSON.stringify({
           namespace_verification_id: input.namespaceVerificationId,
-          mode: "local_stub",
-          database_url: bindingRow?.database_url ?? input.databaseUrl,
+          mode: input.binding.provisioningMode,
+          database_url: bindingRow?.database_url ?? input.binding.databaseUrl,
           retry: true,
         }),
         attemptCount,
@@ -335,6 +362,7 @@ export async function persistProvisionedCommunityDatabaseAccess(
               database_id = ?6,
               database_url = ?7,
               location = ?8,
+              requires_credentials = 1,
               status = 'active',
               transferred_at = NULL,
               updated_at = ?9

@@ -33,6 +33,7 @@ export type CommunityDatabaseBindingRow = {
   database_id: string | null
   database_url: string
   location: string | null
+  requires_credentials: boolean
   status: "active" | "inactive" | "pending_transfer" | "superseded" | "error"
   transferred_at: string | null
   created_at: string
@@ -159,6 +160,7 @@ export function toCommunityDatabaseBindingRow(row: unknown): CommunityDatabaseBi
     database_id: stringOrNull(rowValue(row, "database_id")),
     database_url: requiredString(row, "database_url"),
     location: stringOrNull(rowValue(row, "location")),
+    requires_credentials: requiredNumber(row, "requires_credentials") === 1,
     status: requiredString(row, "status") as CommunityDatabaseBindingRow["status"],
     transferred_at: stringOrNull(rowValue(row, "transferred_at")),
     created_at: requiredString(row, "created_at"),

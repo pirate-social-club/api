@@ -105,11 +105,6 @@ export function isPendingCommunityDatabaseUrl(value: string | null | undefined):
   return normalized.startsWith("libsql://pending-") || normalized.endsWith(".invalid")
 }
 
-function isLocalCommunityDatabaseUrl(value: string | null | undefined): boolean {
-  const normalized = String(value ?? "").trim().toLowerCase()
-  return normalized.startsWith("file:")
-}
-
 const RUNNING_JOB_HEARTBEAT_TIMEOUT_MS = 30_000
 
 export type ProvisioningRetryAction =
@@ -143,7 +138,7 @@ export async function resolveProvisioningRetryAction(
     return { action: "retry" }
   }
 
-  if (!isLocalCommunityDatabaseUrl(binding.database_url)) {
+  if (binding.requires_credentials) {
     const credential = await repo.getActiveCommunityDbCredential(binding.community_database_binding_id)
     if (!credential) {
       return { action: "retry" }

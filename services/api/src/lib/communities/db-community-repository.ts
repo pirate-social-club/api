@@ -16,7 +16,10 @@ import type {
   CommunityRow,
   JobRow,
 } from "../auth/auth-db-rows"
-import type { CommunityRepository } from "./community-repository-types"
+import type {
+  CommunityRepository,
+  InitialCommunityDatabaseBinding,
+} from "./community-repository-types"
 import type { Env } from "../../types"
 
 export type {
@@ -281,7 +284,7 @@ export class DatabaseCommunityRepository implements CommunityRepository {
     membershipMode: "open" | "request" | "gated"
     namespaceVerificationId: string | null
     routeSlug?: string | null
-    databaseUrl: string
+    binding: InitialCommunityDatabaseBinding
     createdAt: string
   }): Promise<{
     community: CommunityRow
@@ -297,7 +300,7 @@ export class DatabaseCommunityRepository implements CommunityRepository {
     jobId: string
     namespaceVerificationId: string
     routeSlug: string
-    databaseUrl: string
+    binding: InitialCommunityDatabaseBinding
     createdAt: string
   }): Promise<{
     community: CommunityRow

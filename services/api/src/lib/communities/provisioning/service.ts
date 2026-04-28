@@ -1,9 +1,8 @@
 import { encryptCommunityDbCredential } from "../community-db-credential-crypto"
-import { buildLocalCommunityDbUrl } from "../community-local-db"
 import {
-  isCommunityProvisionOperatorConfigured,
-  provisionCommunityViaOperator,
-} from "./operator-client"
+  type ProvisionedCommunityCredential,
+  resolveCommunityProvisioningBackend,
+} from "./backend"
 import type { UserRepository } from "../../auth/repositories"
 import type { CommunityDatabaseBindingRow, CommunityRow, JobRow } from "../../auth/auth-db-rows"
 import type {
@@ -27,17 +26,12 @@ import type {
 import { serializeCommunity, serializeJob } from "../community-serialization"
 import { openCommunityDb } from "../community-db-factory"
 import {
-  bootstrapCommunityLocalSnapshot,
-  buildPendingCommunityDatabaseUrl,
-  buildProvisionOperatorBootstrapPayload,
   isExpired,
   loadCommunityLocalSnapshot,
   loadCommunityProjection,
   requireOwnedCommunity,
-  resolveCommunityDbRoot,
   resolveCommunityDbWrapKey,
   resolveCommunityDbWrapKeyVersion,
-  resolveCommunityProvisionGroupLocation,
   resolveProvisioningRetryAction,
 } from "../create/repository"
 import {
@@ -83,7 +77,7 @@ function isSameNamespaceRoot(
 
 function communityProvisioningFailureDetails(
   error: unknown,
-  mode: "local_stub" | "turso_operator",
+  mode: "local_dev" | "turso_operator",
 ): Record<string, unknown> {
   const details: Record<string, unknown> = {
     mode,
@@ -96,6 +90,45 @@ function communityProvisioningFailureDetails(
   }
 
   return details
+}
+
+async function persistProvisionedCommunityCredential(input: {
+  env: Env
+  repo: CommunityProvisioningRepository
+  communityId: string
+  bindingId: string
+  credential: ProvisionedCommunityCredential | null
+  updatedAt: string
+}): Promise<void> {
+  if (!input.credential) {
+    return
+  }
+
+  const encryptedToken = encryptCommunityDbCredential({
+    plaintextToken: input.credential.plaintextToken,
+    wrapKey: resolveCommunityDbWrapKey(input.env),
+  })
+  const communityDbCredentialId = resolveProvisionedCredentialId(
+    input.communityId,
+    input.credential.credentialId,
+  )
+  await input.repo.persistProvisionedCommunityDatabaseAccess({
+    communityDatabaseBindingId: input.bindingId,
+    communityDbCredentialId,
+    organizationSlug: input.credential.organizationSlug,
+    groupName: input.credential.groupName,
+    groupId: input.credential.groupId,
+    databaseName: input.credential.databaseName,
+    databaseId: input.credential.databaseId,
+    databaseUrl: input.credential.databaseUrl,
+    location: input.credential.location,
+    tokenName: input.credential.tokenName,
+    encryptedToken,
+    encryptionKeyVersion: resolveCommunityDbWrapKeyVersion(input.env),
+    issuedAt: input.credential.issuedAt,
+    expiresAt: input.credential.expiresAt,
+    updatedAt: input.updatedAt,
+  })
 }
 
 async function upsertLocalNamespaceAttachment(input: {
@@ -182,13 +215,12 @@ async function createNamespacelessCommunity(input: {
   const communityId = makeId("cmt")
   const bindingId = makeId("cdb")
   const jobId = makeId("job")
-  const useProvisionOperator = isCommunityProvisionOperatorConfigured(input.env)
-  const groupLocation = useProvisionOperator
-    ? resolveCommunityProvisionGroupLocation(input.env, input.body.database_region)
-    : "local"
-  const databaseUrl = useProvisionOperator
-    ? buildPendingCommunityDatabaseUrl(communityId)
-    : buildLocalCommunityDbUrl(resolveCommunityDbRoot(input.env), communityId)
+  const backend = resolveCommunityProvisioningBackend(input.env)
+  const initialBinding = backend.initialBinding({
+    env: input.env,
+    communityId,
+    databaseRegion: input.body.database_region,
+  })
   const prepared = await input.communityRepository.createCommunityProvisioningRequest({
     communityId,
     communityDatabaseBindingId: bindingId,
@@ -198,77 +230,43 @@ async function createNamespacelessCommunity(input: {
     membershipMode: input.body.membership_mode ?? "open",
     namespaceVerificationId: null,
     routeSlug: null,
-    databaseUrl,
+    binding: initialBinding,
     createdAt: input.auth.createdAt,
   })
 
   try {
-    let localSnapshot: Awaited<ReturnType<typeof loadCommunityLocalSnapshot>> = null
-    let resolvedBinding: CommunityDatabaseBindingRow | null | undefined
-
-    if (useProvisionOperator) {
-      const provisioned = await provisionCommunityViaOperator({
-        env: input.env,
-        communityId,
-        creatorUserId: input.auth.userId,
-        displayName: input.auth.communityDisplayName,
-        namespaceVerificationId: null,
-        groupLocation,
-        bootstrapPayload: buildProvisionOperatorBootstrapPayload(
-          input.body,
-          null,
-        ),
-      })
-      const encryptedToken = encryptCommunityDbCredential({
-        plaintextToken: provisioned.plaintextToken,
-        wrapKey: resolveCommunityDbWrapKey(input.env),
-      })
-      const communityDbCredentialId = resolveProvisionedCredentialId(communityId, provisioned.credentialId)
-      await input.communityRepository.persistProvisionedCommunityDatabaseAccess({
-        communityDatabaseBindingId: prepared.binding.community_database_binding_id,
-        communityDbCredentialId,
-        organizationSlug: provisioned.organizationSlug,
-        groupName: provisioned.groupName,
-        groupId: provisioned.groupId,
-        databaseName: provisioned.databaseName,
-        databaseId: provisioned.databaseId,
-        databaseUrl: provisioned.databaseUrl,
-        location: provisioned.location,
-        tokenName: provisioned.tokenName,
-        encryptedToken,
-        encryptionKeyVersion: resolveCommunityDbWrapKeyVersion(input.env),
-        issuedAt: provisioned.issuedAt,
-        expiresAt: provisioned.expiresAt,
-        updatedAt: input.auth.createdAt,
-      })
-      localSnapshot = await loadCommunityLocalSnapshot(input.env, input.communityRepository, communityId)
-      resolvedBinding = await input.communityRepository.getPrimaryCommunityDatabaseBinding(communityId)
-    } else {
-      localSnapshot = await bootstrapCommunityLocalSnapshot({
-        env: input.env,
-        body: input.body,
-        auth: input.auth,
-        communityId,
-        namespaceVerificationId: null,
-        namespaceLabel: null,
-      })
-    }
+    const provisioned = await backend.provision({
+      env: input.env,
+      body: input.body,
+      auth: input.auth,
+      communityId,
+      namespaceVerificationId: null,
+      routeSlug: null,
+    })
+    await persistProvisionedCommunityCredential({
+      env: input.env,
+      repo: input.communityRepository,
+      communityId,
+      bindingId: prepared.binding.community_database_binding_id,
+      credential: provisioned.credential,
+      updatedAt: input.auth.createdAt,
+    })
+    const localSnapshot = provisioned.localSnapshot
+      ?? await loadCommunityLocalSnapshot(input.env, input.communityRepository, communityId)
+    const resolvedBinding = await input.communityRepository.getPrimaryCommunityDatabaseBinding(communityId)
+    const databaseUrl = resolvedBinding?.database_url ?? provisioned.binding.databaseUrl
 
     const finalized = await input.communityRepository.markCommunityProvisioningSucceeded({
       communityId,
       communityDatabaseBindingId: prepared.binding.community_database_binding_id,
       jobId: prepared.job.job_id,
       actorUserId: input.auth.userId,
-      resultRef: useProvisionOperator
-        ? resolvedBinding?.database_url ?? prepared.binding.database_url
-        : prepared.binding.database_url,
+      resultRef: databaseUrl,
       createdAt: input.auth.createdAt,
       metadata: {
         binding_id: prepared.binding.community_database_binding_id,
-        database_url: useProvisionOperator
-          ? resolvedBinding?.database_url ?? prepared.binding.database_url
-          : prepared.binding.database_url,
-        mode: useProvisionOperator ? "turso_operator" : "local_stub",
+        database_url: databaseUrl,
+        mode: provisioned.mode,
       },
     })
 
@@ -298,7 +296,7 @@ async function createNamespacelessCommunity(input: {
       communityId,
       jobId: prepared.job.job_id,
       actorUserId: input.auth.userId,
-      errorCode: useProvisionOperator ? "turso_operator_provision_failed" : "local_stub_bootstrap_failed",
+      errorCode: backend.mode === "turso_operator" ? "turso_operator_provision_failed" : "local_dev_bootstrap_failed",
       createdAt: nowIso(),
       metadata: {
         binding_id: prepared.binding.community_database_binding_id,
@@ -309,7 +307,7 @@ async function createNamespacelessCommunity(input: {
 
     throw internalError(
       "Community provisioning failed",
-      communityProvisioningFailureDetails(error, useProvisionOperator ? "turso_operator" : "local_stub"),
+      communityProvisioningFailureDetails(error, backend.mode),
     )
   }
 }
@@ -359,13 +357,12 @@ async function provisionNamespacedCommunity(input: {
   const communityId = existingCommunity?.community_id ?? makeId("cmt")
   const bindingId = existingCommunity?.primary_database_binding_id ?? makeId("cdb")
   const jobId = makeId("job")
-  const useProvisionOperator = isCommunityProvisionOperatorConfigured(env)
-  const groupLocation = useProvisionOperator
-    ? resolveCommunityProvisionGroupLocation(env, body.database_region)
-    : "local"
-  const databaseUrl = useProvisionOperator
-    ? buildPendingCommunityDatabaseUrl(communityId)
-    : buildLocalCommunityDbUrl(resolveCommunityDbRoot(env), communityId)
+  const backend = resolveCommunityProvisioningBackend(env)
+  const initialBinding = backend.initialBinding({
+    env,
+    communityId,
+    databaseRegion: body.database_region,
+  })
 
   const prepared = await (async () => {
     return existingCommunity
@@ -375,7 +372,7 @@ async function provisionNamespacedCommunity(input: {
           jobId,
           namespaceVerificationId,
           routeSlug,
-          databaseUrl,
+          binding: initialBinding,
           createdAt: auth.createdAt,
         })
       : repo.createCommunityProvisioningRequest({
@@ -387,7 +384,7 @@ async function provisionNamespacedCommunity(input: {
           membershipMode: body.membership_mode ?? "open",
           namespaceVerificationId,
           routeSlug,
-          databaseUrl,
+          binding: initialBinding,
           createdAt: auth.createdAt,
         })
   })()
@@ -395,71 +392,39 @@ async function provisionNamespacedCommunity(input: {
   let provisioningCompleted = false
   let provisioningFinalized: { community: CommunityRow; job: JobRow } | null = null
   let localSnapshot: Awaited<ReturnType<typeof loadCommunityLocalSnapshot>> = null
-  let resolvedBinding: CommunityDatabaseBindingRow | null | undefined
 
   try {
-    if (useProvisionOperator) {
-      const provisioned = await provisionCommunityViaOperator({
-        env,
-        communityId,
-        creatorUserId: auth.userId,
-        displayName: auth.communityDisplayName,
-        namespaceVerificationId,
-        groupLocation,
-        bootstrapPayload: buildProvisionOperatorBootstrapPayload(
-          body,
-          routeSlug,
-        ),
-      })
-      const encryptedToken = encryptCommunityDbCredential({
-        plaintextToken: provisioned.plaintextToken,
-        wrapKey: resolveCommunityDbWrapKey(env),
-      })
-      const communityDbCredentialId = resolveProvisionedCredentialId(communityId, provisioned.credentialId)
-      await repo.persistProvisionedCommunityDatabaseAccess({
-        communityDatabaseBindingId: prepared.binding.community_database_binding_id,
-        communityDbCredentialId,
-        organizationSlug: provisioned.organizationSlug,
-        groupName: provisioned.groupName,
-        groupId: provisioned.groupId,
-        databaseName: provisioned.databaseName,
-        databaseId: provisioned.databaseId,
-        databaseUrl: provisioned.databaseUrl,
-        location: provisioned.location,
-        tokenName: provisioned.tokenName,
-        encryptedToken,
-        encryptionKeyVersion: resolveCommunityDbWrapKeyVersion(env),
-        issuedAt: provisioned.issuedAt,
-        expiresAt: provisioned.expiresAt,
-        updatedAt: auth.createdAt,
-      })
-      localSnapshot = await loadCommunityLocalSnapshot(env, repo, communityId)
-    } else {
-      localSnapshot = await bootstrapCommunityLocalSnapshot({
-        env,
-        body,
-        auth,
-        communityId,
-        namespaceVerificationId,
-        namespaceLabel: routeSlug,
-      })
-    }
+    const provisioned = await backend.provision({
+      env,
+      body,
+      auth,
+      communityId,
+      namespaceVerificationId,
+      routeSlug,
+    })
+    await persistProvisionedCommunityCredential({
+      env,
+      repo,
+      communityId,
+      bindingId: prepared.binding.community_database_binding_id,
+      credential: provisioned.credential,
+      updatedAt: auth.createdAt,
+    })
+    localSnapshot = provisioned.localSnapshot ?? await loadCommunityLocalSnapshot(env, repo, communityId)
+    const resolvedBinding = await repo.getPrimaryCommunityDatabaseBinding(communityId)
+    const databaseUrl = resolvedBinding?.database_url ?? provisioned.binding.databaseUrl
 
     provisioningFinalized = await repo.markCommunityProvisioningSucceeded({
       communityId,
       communityDatabaseBindingId: prepared.binding.community_database_binding_id,
       jobId: prepared.job.job_id,
       actorUserId: auth.userId,
-      resultRef: useProvisionOperator
-        ? (resolvedBinding ??= await repo.getPrimaryCommunityDatabaseBinding(communityId))?.database_url ?? prepared.binding.database_url
-        : prepared.binding.database_url,
+      resultRef: databaseUrl,
       createdAt: auth.createdAt,
       metadata: {
         binding_id: prepared.binding.community_database_binding_id,
-        database_url: useProvisionOperator
-          ? resolvedBinding?.database_url ?? prepared.binding.database_url
-          : prepared.binding.database_url,
-        mode: useProvisionOperator ? "turso_operator" : "local_stub",
+        database_url: databaseUrl,
+        mode: provisioned.mode,
       },
     })
     provisioningCompleted = true
@@ -476,7 +441,7 @@ async function provisionNamespacedCommunity(input: {
         communityId,
         jobId: prepared.job.job_id,
         actorUserId: auth.userId,
-        errorCode: useProvisionOperator ? "turso_operator_provision_failed" : "local_stub_bootstrap_failed",
+        errorCode: backend.mode === "turso_operator" ? "turso_operator_provision_failed" : "local_dev_bootstrap_failed",
         createdAt: failedAt,
         metadata: {
           binding_id: prepared.binding.community_database_binding_id,
@@ -487,7 +452,7 @@ async function provisionNamespacedCommunity(input: {
 
       throw internalError(
         "Community provisioning failed",
-        communityProvisioningFailureDetails(error, useProvisionOperator ? "turso_operator" : "local_stub"),
+        communityProvisioningFailureDetails(error, backend.mode),
       )
     }
 

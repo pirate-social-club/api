@@ -30,6 +30,20 @@ export interface CommunityJobReadRepository {
   getLatestCommunityProvisioningJob(communityId: string): Promise<JobRow | null>
 }
 
+export type CommunityProvisioningMode = "local_dev" | "turso_operator"
+
+export type InitialCommunityDatabaseBinding = {
+  organizationSlug: string
+  groupName: string
+  groupId: string | null
+  databaseName: string
+  databaseId: string | null
+  databaseUrl: string
+  location: string | null
+  requiresCredentials: boolean
+  provisioningMode: CommunityProvisioningMode
+}
+
 export interface CommunityPostProjectionRepository {
   getCommunityPostProjectionByPostId(postId: string): Promise<CommunityPostProjectionRow | null>
   recordCommunityPostProjection(input: {
@@ -115,7 +129,7 @@ export interface CommunityProvisioningRepository {
     membershipMode: "open" | "request" | "gated"
     namespaceVerificationId: string | null
     routeSlug?: string | null
-    databaseUrl: string
+    binding: InitialCommunityDatabaseBinding
     createdAt: string
   }): Promise<{
     community: CommunityRow
@@ -128,7 +142,7 @@ export interface CommunityProvisioningRepository {
     jobId: string
     namespaceVerificationId: string
     routeSlug: string
-    databaseUrl: string
+    binding: InitialCommunityDatabaseBinding
     createdAt: string
   }): Promise<{
     community: CommunityRow
