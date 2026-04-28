@@ -7,10 +7,10 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 import { resolveCoreRepoRoot } from "../../shared/core-repo-paths"
 import { splitSqlStatements, toSqliteCompatibleStatements } from "../../shared/sql-migration"
 
-export const FIRST_LOCAL_POST_BASELINE_MIGRATION = "0047_control_plane_notifications.sql"
+export const FIRST_LOCAL_POST_BASELINE_MIGRATION = "0051_control_plane_notifications.sql"
 const LOCAL_CONTROL_PLANE_BUSY_TIMEOUT_MS = 5000
 const LOCAL_FOLLOWER_COUNT_RENAME_MIGRATIONS = new Set([
-  "0060_control_plane_communities_follower_count_column.sql",
+  "0064_control_plane_communities_follower_count_column.sql",
 ])
 
 export type LocalDevStorage = {

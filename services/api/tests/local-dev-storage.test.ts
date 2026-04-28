@@ -292,7 +292,7 @@ describe("applyLocalControlPlaneMigrations", () => {
           WHERE migration_name = ?1
         `,
         args: [
-          "0047_control_plane_notifications.sql",
+          "0051_control_plane_notifications.sql",
           "stale-checksum",
         ],
       })
@@ -302,7 +302,7 @@ describe("applyLocalControlPlaneMigrations", () => {
 
     await expect(applyLocalControlPlaneMigrations(
       buildStorage(rootDir, databasePath),
-    )).rejects.toThrow("migration checksum mismatch for 0047_control_plane_notifications.sql")
+    )).rejects.toThrow("migration checksum mismatch for 0051_control_plane_notifications.sql")
   })
 
   test("does not rehome configured local control-plane database paths outside the current service .local", async () => {

@@ -209,7 +209,7 @@ export async function createControlPlaneTestClient(options?: {
     await applySqlFile(client, resolveCoreRepoPath("db/control-plane/migrations/0001_control_plane_identity.sql", {
       serviceRoot,
     }))
-    await applySqlFile(client, resolveCoreRepoPath("db/control-plane/migrations/0054_control_plane_identity_nullifiers.sql", {
+    await applySqlFile(client, resolveCoreRepoPath("db/control-plane/migrations/0059_control_plane_identity_nullifiers.sql", {
       serviceRoot,
     }))
   }
