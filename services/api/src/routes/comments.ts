@@ -14,10 +14,23 @@ import { trackApiEvent } from "../lib/analytics/track"
 import { castCommentVote, createComment, deleteComment, getCommentContext, listCommentReplies } from "../lib/comments/comment-service"
 import { assertAgentDelegatedWriteMatchesActor } from "../lib/agents/agent-write-authorization"
 import type { CreateCommentRequest } from "../lib/comments/comment-types"
+import { makeId, nowIso } from "../lib/helpers"
+import { getControlPlaneClient } from "../lib/runtime-deps"
 
 const comments = new Hono<AuthenticatedEnv>()
 
 comments.use("*", async (c, next) => {
+  const adminActor = authenticateAdminToken({
+    env: c.env,
+    token: c.req.header("x-admin-token"),
+    asUserId: c.req.header("x-admin-as-user-id"),
+  })
+  if (adminActor) {
+    c.set("actor", adminActor)
+    await next()
+    return
+  }
+
   const pathname = new URL(c.req.url).pathname
   const allowsAgentDelegation = c.req.method === "POST" && /^\/comments\/[^/]+\/replies$/.test(pathname)
   if (allowsAgentDelegation) {
@@ -69,6 +82,7 @@ comments.post("/:commentId/replies", async (c) => {
     threadRootPostId: projection.thread_root_post_id,
     parentCommentId: c.req.param("commentId"),
     body,
+    bypassAuthorAccessChecks: actor.authType === "admin",
     userRepository: getUserRepository(c.env),
     profileRepository: getProfileRepository(c.env),
     communityRepository,
@@ -117,6 +131,7 @@ comments.get("/:commentId/context", async (c) => {
 
 comments.post("/:commentId/vote", async (c) => {
   const actor = c.get("actor")
+  const communityRepository = getCommunityRepository(c.env)
   const body = await c.req.json<{ value?: number }>().catch(() => null)
   if (!body || (body.value !== -1 && body.value !== 1)) {
     throw badRequestError("Vote value must be -1 or 1")
@@ -127,8 +142,9 @@ comments.post("/:commentId/vote", async (c) => {
     userId: actor.userId,
     commentId: c.req.param("commentId"),
     value: body.value,
+    bypassVoterAccessChecks: actor.authType === "admin",
     userRepository: getUserRepository(c.env),
-    communityRepository: getCommunityRepository(c.env),
+    communityRepository,
   })
   await trackApiEvent(c.env, c.req, {
     eventName: "comment_voted",
@@ -136,6 +152,29 @@ comments.post("/:commentId/vote", async (c) => {
     commentId: result.comment_id,
     properties: { value: result.value },
   })
+  if (actor.authType === "admin") {
+    const projection = await communityRepository.getCommunityCommentProjectionByCommentId(result.comment_id)
+    await getControlPlaneClient(c.env).execute({
+      sql: `
+        INSERT INTO audit_log (
+          audit_event_id, actor_type, actor_id, action, target_type, target_id, community_id, metadata_json, created_at
+        ) VALUES (
+          ?1, 'operator', ?2, 'community.admin_comment_vote_cast', 'comment', ?3, ?4, ?5, ?6
+        )
+      `,
+      args: [
+        makeId("aud"),
+        actor.adminOverride.adminActorId,
+        result.comment_id,
+        projection?.community_id ?? null,
+        JSON.stringify({
+          acting_user_id: actor.userId,
+          value: result.value,
+        }),
+        nowIso(),
+      ],
+    })
+  }
   return c.json(result, 200)
 })
 

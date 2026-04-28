@@ -34,6 +34,8 @@ export function buildRedditHandleClaimQuote(input: {
   labelNormalized: string
   currentActiveLabelNormalized: string
   labelAvailable: boolean
+  profileAlreadyUsedRedditClaim: boolean
+  redditClaimedByAnotherUser: boolean
   verifiedRedditUsername: string | null
   latestImportSummary: RedditImportSummary | null
 }): HandleUpgradeQuote {
@@ -53,6 +55,24 @@ export function buildRedditHandleClaimQuote(input: {
       ...base,
       eligible: false,
       reason: "Desired label is already active",
+      claim_reason: null,
+    }
+  }
+
+  if (input.profileAlreadyUsedRedditClaim) {
+    return {
+      ...base,
+      eligible: false,
+      reason: "A Reddit account has already been used for this profile",
+      claim_reason: null,
+    }
+  }
+
+  if (input.redditClaimedByAnotherUser) {
+    return {
+      ...base,
+      eligible: false,
+      reason: "This Reddit account has already been used for a Pirate handle",
       claim_reason: null,
     }
   }

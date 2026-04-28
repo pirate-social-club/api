@@ -11,8 +11,6 @@
     "cancel:story-runtime-pending-tx": "bun run scripts/cancel-story-runtime-pending-tx.ts",
     "fund:story-runtime-signers": "bun run scripts/fund-story-runtime-signers.ts",
     "worker:community-jobs:local": "bun run scripts/run-community-job-worker.ts",
-    "bruno:prepare:local": "bun run scripts/prepare-bruno-local.ts",
-    "bruno:test:local": "cd ../../../specs/api/bruno && bru run . -r --env local --tests-only",
     "deploy": "wrangler deploy",
     "check": "tsc --noEmit",
     "test": "bun test",

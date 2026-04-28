@@ -7,11 +7,6 @@ import type {
   UserTaskType,
 } from "../../types"
 
-const USER_TASK_COLUMNS = `
-  task_id, user_id, type, subject_type, subject_id, status, priority, payload_json,
-  resolved_at, dismissed_at, created_at, updated_at
-`
-
 function rowToUserTask(row: Record<string, unknown>): UserTask {
   return {
     task_id: String(row.task_id),
@@ -28,6 +23,11 @@ function rowToUserTask(row: Record<string, unknown>): UserTask {
     updated_at: String(row.updated_at),
   }
 }
+
+const USER_TASK_COLUMNS = `
+  task_id, user_id, type, subject_type, subject_id, status, priority, payload_json,
+  resolved_at, dismissed_at, created_at, updated_at
+`
 
 export async function upsertUserTask(input: {
   executor: DbExecutor

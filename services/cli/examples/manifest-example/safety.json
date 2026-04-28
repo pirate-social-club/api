@@ -1,0 +1,29 @@
+{
+  "adult_content_policy": {
+    "suggestive": "allow",
+    "artistic_nudity": "allow",
+    "explicit_nudity": "disallow",
+    "explicit_sexual_content": "disallow",
+    "fetish_content": "disallow"
+  },
+  "graphic_content_policy": {
+    "injury_medical": "allow",
+    "gore": "disallow",
+    "extreme_gore": "disallow",
+    "body_horror_disturbing": "disallow",
+    "animal_harm": "disallow"
+  },
+  "civility_policy": {
+    "group_directed_demeaning_language": "disallow",
+    "targeted_insults": "disallow",
+    "targeted_harassment": "disallow",
+    "threatening_language": "disallow"
+  },
+  "openai_moderation_settings": {
+    "scan_titles": true,
+    "scan_post_bodies": true,
+    "scan_captions": false,
+    "scan_link_preview_text": false,
+    "scan_images": false
+  }
+}

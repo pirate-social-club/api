@@ -1,5 +1,11 @@
 import type { Client } from "../sql-client"
 import { getControlPlaneClient } from "../runtime-deps"
+import {
+  getCommunityCommentProjectionRowByCommentId,
+  listCommunityFollowProjectionRowsByUserId,
+  getCommunityPostProjectionRowByPostId,
+  listCommunityMembershipProjectionRowsByUserId,
+} from "../auth/auth-db-community-queries"
 import type {
   CommunityCommentProjectionRow,
   CommunityDbCredentialRow,
@@ -10,8 +16,21 @@ import type {
   CommunityRow,
   JobRow,
 } from "../auth/auth-db-rows"
+import type { CommunityRepository } from "./community-repository-types"
 import type { Env } from "../../types"
-import type { CommunityRepository } from "./community-repository-ports"
+
+export type {
+  CommunityCommentProjectionRepository,
+  CommunityDatabaseBindingRepository,
+  CommunityJobReadRepository,
+  CommunityMembershipProjectionRepository,
+  CommunityMutationRepository,
+  CommunityPostProjectionRepository,
+  CommunityProvisioningRepository,
+  CommunityReadRepository,
+  CommunityRepository,
+  CommunityRepositoryLifecycle,
+} from "./community-repository-types"
 
 export {
   getCommunityById,
@@ -40,6 +59,7 @@ export {
 export { recordCommunityCommentProjection } from "./community-comment-projection-repository"
 export {
   incrementCommunityFollowerCount,
+  setCommunityFollowerCount,
   upsertCommunityFollowProjection,
   upsertCommunityMembershipProjection,
 } from "./membership/projection-repository"
@@ -48,24 +68,6 @@ export {
   attachNamespaceToCommunity,
   setPendingNamespaceVerificationSession,
 } from "./community-mutation-repository"
-export {
-  getCommunityCommentProjectionByCommentId,
-  getCommunityPostProjectionByPostId,
-  listCommunityFollowProjectionsByUserId,
-  listCommunityMembershipProjectionsByUserId,
-} from "./community-projection-read-repository"
-export type {
-  CloseableCommunityRepository,
-  CommunityDatabaseBindingRepository,
-  CommunityJobReadRepository,
-  CommunityMembershipProjectionRepository,
-  CommunityMutationRepository,
-  CommunityPostProjectionRepository,
-  CommunityProjectionReadRepository,
-  CommunityProvisioningRepository,
-  CommunityReadRepository,
-  CommunityRepository,
-} from "./community-repository-ports"
 
 import {
   getCommunityById,
@@ -92,6 +94,7 @@ import {
 import { recordCommunityCommentProjection } from "./community-comment-projection-repository"
 import {
   incrementCommunityFollowerCount,
+  setCommunityFollowerCount,
   upsertCommunityFollowProjection,
   upsertCommunityMembershipProjection,
 } from "./membership/projection-repository"
@@ -99,12 +102,34 @@ import {
   attachNamespaceToCommunity,
   setPendingNamespaceVerificationSession,
 } from "./community-mutation-repository"
-import {
-  getCommunityCommentProjectionByCommentId,
-  getCommunityPostProjectionByPostId,
-  listCommunityFollowProjectionsByUserId,
-  listCommunityMembershipProjectionsByUserId,
-} from "./community-projection-read-repository"
+
+export async function getCommunityPostProjectionByPostId(
+  client: Client,
+  postId: string,
+): Promise<CommunityPostProjectionRow | null> {
+  return getCommunityPostProjectionRowByPostId(client, postId)
+}
+
+export async function getCommunityCommentProjectionByCommentId(
+  client: Client,
+  commentId: string,
+): Promise<CommunityCommentProjectionRow | null> {
+  return getCommunityCommentProjectionRowByCommentId(client, commentId)
+}
+
+export async function listCommunityMembershipProjectionsByUserId(
+  client: Client,
+  userId: string,
+): Promise<CommunityMembershipProjectionRow[]> {
+  return listCommunityMembershipProjectionRowsByUserId(client, userId)
+}
+
+export async function listCommunityFollowProjectionsByUserId(
+  client: Client,
+  userId: string,
+): Promise<CommunityFollowProjectionRow[]> {
+  return listCommunityFollowProjectionRowsByUserId(client, userId)
+}
 
 export class DatabaseCommunityRepository implements CommunityRepository {
   constructor(private readonly client: Client) {}
@@ -154,11 +179,11 @@ export class DatabaseCommunityRepository implements CommunityRepository {
   }
 
   async listCommunityMembershipProjectionsByUserId(userId: string): Promise<CommunityMembershipProjectionRow[]> {
-    return listCommunityMembershipProjectionsByUserId(this.client, userId)
+    return listCommunityMembershipProjectionRowsByUserId(this.client, userId)
   }
 
   async listCommunityFollowProjectionsByUserId(userId: string): Promise<CommunityFollowProjectionRow[]> {
-    return listCommunityFollowProjectionsByUserId(this.client, userId)
+    return listCommunityFollowProjectionRowsByUserId(this.client, userId)
   }
 
   async recordCommunityPostProjection(input: {
@@ -218,6 +243,14 @@ export class DatabaseCommunityRepository implements CommunityRepository {
     updatedAt: string
   }): Promise<void> {
     return incrementCommunityFollowerCount(this.client, input)
+  }
+
+  async setCommunityFollowerCount(input: {
+    communityId: string
+    followerCount: number
+    updatedAt: string
+  }): Promise<void> {
+    return setCommunityFollowerCount(this.client, input)
   }
 
   async updateCommunityPostProjectionStatus(input: {

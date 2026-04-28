@@ -33,7 +33,7 @@ Current route surface:
 Current auth support:
 
 - `jwt_based_auth`
-  Fully implemented for local and Bruno-driven development.
+  Fully implemented for local development.
 - `privy_access_token`
   Implemented. When Privy env is configured, the exchange path can verify the access token and reconcile linked wallets.
 
@@ -157,20 +157,19 @@ The reset command refuses to touch paths outside `services/api/.local`.
 
 ## Full Local Setup
 
-This is the shortest path to a real local worker that matches the Bruno collection.
+This is the shortest path to a real local worker.
 
-1. Prepare fresh local Bruno state:
+1. Reset local dev storage:
 
 ```bash
 cd api/services/api
-rtk bun run bruno:prepare:local
+rtk bun run dev:local:reset -- --yes
 ```
 
 This resets:
 
 - the local control-plane SQLite file resolved from `CONTROL_PLANE_DATABASE_URL`, or `services/api/.local/control-plane.db` when unset
 - the local community DB root resolved from `LOCAL_COMMUNITY_DB_ROOT`, or `services/api/.local/community-dbs` when unset
-- `specs/api/bruno/environments/local.bru` with fresh JWT fixtures and a new subject
 
 2. Ensure `.dev.vars` in `api/services/api` is populated for local file-backed Bun runs.
 
@@ -188,15 +187,6 @@ rtk bun run dev:local:full
 ```
 
 `dev:local:full` keeps the SQLite files in `services/api/.local/` by default, reapplies pending control-plane migrations on startup, and runs the translation worker with the same environment as the API process. If you only need the HTTP server, `rtk bun run dev:local` still starts the API without the worker.
-
-4. Run the Bruno collection from the service repo wrapper:
-
-```bash
-cd api/services/api
-rtk bun run bruno:test:local
-```
-
-This local Bruno path intentionally uses Bun, not Wrangler, because the local control-plane/community databases are `file:`-backed.
 
 ## Mint A Dev JWT
 
@@ -281,39 +271,3 @@ curl -X POST http://127.0.0.1:8787/auth/session/exchange \
     }
   }'
 ```
-
-## Bruno
-
-The live API acceptance collection is under [specs/api/bruno](/home/t42/Documents/pirate-workspace/core/specs/api/bruno).
-
-Recommended local run:
-
-```bash
-cd api/services/api
-rtk bun run bruno:prepare:local
-rtk bun run dev:local
-```
-
-Then in a second terminal:
-
-```bash
-cd api/services/api
-rtk bun run bruno:test:local
-```
-
-Run order:
-
-1. `00-auth`
-2. `01-verification`
-3. `02-namespace-verification`
-4. `03-communities`
-5. `04-posts`
-6. `90-failures`
-
-After `04-posts/create-post`, validate both storage layers:
-
-- one `posts` row exists in the community DB
-- one `community_post_projections` row exists in the control-plane DB
-- `projection_version = 1`
-- `source_post_id` matches the returned `post_id`
-- `visibility` matches the post payload and projection row

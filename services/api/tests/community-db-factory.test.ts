@@ -8,9 +8,9 @@ import { createClient } from "@libsql/client"
 import { openCommunityDb } from "../src/lib/communities/community-db-factory"
 import { encryptCommunityDbCredential } from "../src/lib/communities/community-db-credential-crypto"
 import { enqueueCommunityJob } from "../src/lib/communities/jobs/store"
-import type { CommunityRepository } from "../src/lib/communities/db-community-repository"
+import type { CommunityDatabaseBindingRepository } from "../src/lib/communities/db-community-repository"
 import { resolveCoreRepoPath } from "../shared/core-repo-paths"
-import { splitSqlStatements, toSqliteCompatibleStatement } from "../shared/sql-migration"
+import { splitSqlStatements, toSqliteCompatibleStatements } from "../shared/sql-migration"
 
 const cleanupPaths: string[] = []
 
@@ -44,11 +44,9 @@ async function applyLegacyCommunitySchema(databasePath: string): Promise<void> {
     for (const entry of entries) {
       const sql = await readFile(join(migrationsDir, entry), "utf8")
       for (const statement of splitSqlStatements(sql)) {
-        const sqliteStatement = toSqliteCompatibleStatement(statement)
-        if (!sqliteStatement) {
-          continue
+        for (const sqliteStatement of toSqliteCompatibleStatements(statement)) {
+          await client.execute(sqliteStatement)
         }
-        await client.execute(sqliteStatement)
       }
 
       await client.execute({
@@ -95,7 +93,7 @@ async function listTableNames(databasePath: string): Promise<string[]> {
   }
 }
 
-function buildRepository(databasePath: string): CommunityRepository {
+function buildRepository(databasePath: string): CommunityDatabaseBindingRepository {
   return {
     async getPrimaryCommunityDatabaseBinding() {
       return {
@@ -118,7 +116,7 @@ function buildRepository(databasePath: string): CommunityRepository {
     async getActiveCommunityDbCredential() {
       return null
     },
-  } as unknown as CommunityRepository
+  }
 }
 
 describe("openCommunityDb", () => {
@@ -165,7 +163,7 @@ describe("openCommunityDb", () => {
           updated_at: now,
         }
       },
-    } as unknown as CommunityRepository
+    } satisfies CommunityDatabaseBindingRepository
 
     const db = await openCommunityDb(
       {
@@ -214,6 +212,7 @@ describe("openCommunityDb", () => {
     expect(tableNames).toContain("thread_snapshots")
     expect(tableNames).toContain("donation_partners")
     expect(tableNames).toContain("purchase_settlement_effects")
+    expect(tableNames).toContain("purchase_settlement_attempts")
 
     const postColumns = await getTableColumns(databasePath, "posts")
     expect(postColumns).toContain("comment_count")
@@ -224,6 +223,7 @@ describe("openCommunityDb", () => {
     expect(assetColumns).toContain("story_royalty_policy_id")
     expect(assetColumns).toContain("story_derivative_parent_ip_ids_json")
     expect(assetColumns).toContain("story_royalty_registration_status")
+    expect(assetColumns).toContain("display_title")
 
     const donationPartnerColumns = await getTableColumns(databasePath, "donation_partners")
     expect(donationPartnerColumns).toContain("payout_destination_ref")
@@ -239,6 +239,10 @@ describe("openCommunityDb", () => {
 
     const settlementEffectColumns = await getTableColumns(databasePath, "purchase_settlement_effects")
     expect(settlementEffectColumns).toContain("metadata_json")
+
+    const settlementAttemptColumns = await getTableColumns(databasePath, "purchase_settlement_attempts")
+    expect(settlementAttemptColumns).toContain("attempt_count")
+    expect(settlementAttemptColumns).toContain("settlement_wallet_attachment_id")
 
     const purchaseColumns = await getTableColumns(databasePath, "purchases")
     expect(purchaseColumns).toContain("settlement_mode")

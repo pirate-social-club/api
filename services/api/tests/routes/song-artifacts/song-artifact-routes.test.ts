@@ -208,6 +208,7 @@ describe("song artifact routes", () => {
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Preview Crop Club",
       membership_mode: "open",
+      gate_rules: [],
       handle_policy: {
         policy_template: "standard",
       },
@@ -340,6 +341,7 @@ describe("song artifact routes", () => {
         access_mode: "locked",
         song_mode: "original",
         rights_basis: "original",
+        license_preset: "non-commercial",
         song_artifact_bundle_id: pendingBundle.song_artifact_bundle_id,
       },
       ctx.env,
@@ -589,6 +591,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
         title: "My first song",
         song_mode: "original",
         rights_basis: "original",
+        license_preset: "non-commercial",
         song_artifact_bundle_id: bundleBody.song_artifact_bundle_id,
       },
       ctx.env,
@@ -731,6 +734,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "No ACR Song Club",
       membership_mode: "open",
+      gate_rules: [],
       handle_policy: {
         policy_template: "standard",
       },
@@ -814,6 +818,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
         title: "Song without ACR",
         song_mode: "original",
         rights_basis: "original",
+        license_preset: "non-commercial",
         song_artifact_bundle_id: bundleBody.song_artifact_bundle_id,
       },
       ctx.env,

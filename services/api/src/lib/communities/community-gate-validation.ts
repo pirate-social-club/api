@@ -25,11 +25,19 @@ const VALID_PUBLIC_V0_PROVIDERS_BY_PROOF_TYPE = {
   nationality: new Set(["self"]),
   gender: new Set(["self"]),
   wallet_score: new Set(["passport"]),
-  sanctions_clear: new Set(["passport"]),
 } as const
 
-const PASSPORT_CLEAN_HANDS_MECHANISM = "passport_clean_hands"
-const PASSPORT_CLEAN_HANDS_LEGACY_MECHANISM = "CleanHands"
+function defaultUniqueHumanVeryGateRule(): GateRuleInput {
+  return {
+    scope: "membership",
+    gate_family: "identity_proof",
+    gate_type: "unique_human",
+    proof_requirements: [{
+      proof_type: "unique_human",
+      accepted_providers: ["very"],
+    }],
+  }
+}
 
 export function assertPublicV0GateConfiguration(
   body: PublicV0GateValidationBody,
@@ -37,7 +45,12 @@ export function assertPublicV0GateConfiguration(
     ageOver18Verified: boolean
   },
 ): void {
-  body.gate_rules = normalizePublicV0GateRules(body.gate_rules ?? [])
+  if (body.gate_rules == null) {
+    body.gate_rules = [defaultUniqueHumanVeryGateRule()]
+    body.membership_mode = "gated"
+  } else {
+    body.gate_rules = normalizePublicV0GateRules(body.gate_rules)
+  }
   assertPublicV0MembershipBasics(body, input)
 
   const gateRules = body.gate_rules ?? []
@@ -163,15 +176,8 @@ function assertPublicV0IdentityGateConfiguration(gateRules: GateRuleInput[]): vo
   let genderGateCount = 0
   let minimumAgeGateCount = 0
   let walletScoreGateCount = 0
-  let sanctionsClearGateCount = 0
 
   for (const rule of gateRules) {
-    if (rule.gate_type === "sanctions_clear") {
-      sanctionsClearGateCount += 1
-      assertSingleIdentityGateCount(sanctionsClearGateCount, "sanctions_clear")
-      assertSanctionsClearGate(rule)
-      continue
-    }
     if (rule.gate_type === "wallet_score") {
       walletScoreGateCount += 1
       assertSingleIdentityGateCount(walletScoreGateCount, "wallet_score")
@@ -200,7 +206,7 @@ function assertPublicV0IdentityGateConfiguration(gateRules: GateRuleInput[]): vo
 
 function assertSingleIdentityGateCount(
   count: number,
-  gateType: "minimum_age" | "gender" | "nationality" | "wallet_score" | "sanctions_clear",
+  gateType: "minimum_age" | "gender" | "nationality" | "wallet_score",
 ): void {
   if (count <= 1) {
     return
@@ -208,39 +214,6 @@ function assertSingleIdentityGateCount(
 
   const gateName = gateType === "minimum_age" ? "minimum_age" : gateType
   throw eligibilityFailed(`Public v0 communities support at most one ${gateName} gate`)
-}
-
-function assertSanctionsClearGate(rule: GateRuleInput): void {
-  const requirements = rule.proof_requirements ?? []
-  if (requirements.length !== 1 || requirements[0].proof_type !== "sanctions_clear") {
-    throw eligibilityFailed("Sanctions clear gate must have exactly one sanctions_clear proof requirement")
-  }
-
-  const acceptedProviders = requirements[0].accepted_providers ?? []
-  const uniqueProviders = Array.from(new Set(acceptedProviders))
-  if (uniqueProviders.length !== 1 || uniqueProviders[0] !== "passport") {
-    throw eligibilityFailed("Sanctions clear gate accepted_providers must be exactly [\"passport\"]")
-  }
-
-  const acceptedMechanisms = requirements[0].accepted_mechanisms ?? []
-  const uniqueMechanisms = Array.from(new Set(acceptedMechanisms))
-  const providerSupportsMechanism = (mechanism: string): boolean => {
-    if (mechanism === PASSPORT_CLEAN_HANDS_MECHANISM || mechanism === PASSPORT_CLEAN_HANDS_LEGACY_MECHANISM) {
-      return uniqueProviders.includes("passport")
-    }
-    return false
-  }
-  const invalidMechanisms = uniqueMechanisms.filter((mechanism) => !providerSupportsMechanism(mechanism))
-  if (invalidMechanisms.length > 0) {
-    throw eligibilityFailed(`Invalid accepted_mechanisms for sanctions_clear: ${invalidMechanisms.join(", ")}`)
-  }
-  if (
-    uniqueProviders.includes("passport")
-    && uniqueMechanisms.length > 0
-    && !uniqueMechanisms.some((mechanism) => mechanism === PASSPORT_CLEAN_HANDS_MECHANISM || mechanism === PASSPORT_CLEAN_HANDS_LEGACY_MECHANISM)
-  ) {
-    throw eligibilityFailed("Passport sanctions clear gate must accept passport_clean_hands")
-  }
 }
 
 function assertWalletScoreGate(rule: GateRuleInput): void {

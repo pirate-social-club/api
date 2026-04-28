@@ -2,63 +2,49 @@ import type { Env, WalletAttachmentSummary } from "../../../types"
 import {
   evaluateAttachedEthereumWalletErc721CollectionOwnership,
   hasEthereumRpcConfig,
-  normalizeEthereumAddress,
 } from "../community-token-gates"
 import {
   evaluateErc721InventoryMatch,
   readInventoryMatchConfig,
 } from "../community-token-inventory-gates"
-import { parseGateConfig } from "./gate-config"
+import { parseGateConfig, resolveTokenGateContractAddress } from "./gate-config"
 import type { CommunityGateRuleRow } from "./gate-types"
-
-function resolveTokenGateContractAddress(gateConfig: Record<string, unknown> | null): string | null {
-  return normalizeEthereumAddress(gateConfig?.contract_address)
-}
 
 export async function evaluateTokenGateRule(input: {
   env: Env
   rule: CommunityGateRuleRow
   walletAttachments: WalletAttachmentSummary[]
-  mismatchReasons: string[]
-}): Promise<void> {
-  const { env, rule, walletAttachments, mismatchReasons } = input
+}): Promise<string[]> {
+  const { env, rule, walletAttachments } = input
+  const mismatchReasons: string[] = []
   const gateConfig = parseGateConfig(rule.gate_config_json)
+
   if (rule.gate_type !== "erc721_holding" && rule.gate_type !== "erc721_inventory_match") {
-    mismatchReasons.push(`unsupported_gate_type:${rule.gate_type}`)
-    return
+    return [`unsupported_gate_type:${rule.gate_type}`]
   }
   if (rule.gate_type === "erc721_inventory_match") {
     const config = readInventoryMatchConfig(gateConfig, rule.chain_namespace)
     if (!config) {
-      mismatchReasons.push("unsupported_gate_config")
-      return
+      return ["unsupported_gate_config"]
     }
-    const result = await evaluateErc721InventoryMatch({
-      env,
-      walletAttachments,
-      config,
-    })
+    const result = await evaluateErc721InventoryMatch({ env, walletAttachments, config })
     if (result.unavailable) {
       mismatchReasons.push("token_inventory_unavailable")
     } else if (result.matchedQuantity < config.minQuantity) {
       mismatchReasons.push("erc721_inventory_match_required")
     }
-    return
+    return mismatchReasons
   }
   if ((rule.chain_namespace ?? null) !== "eip155:1") {
-    mismatchReasons.push("unsupported_chain_namespace")
-    return
+    return ["unsupported_chain_namespace"]
   }
 
   const contractAddress = resolveTokenGateContractAddress(gateConfig)
   if (!contractAddress) {
-    mismatchReasons.push("unsupported_gate_config")
-    return
+    return ["unsupported_gate_config"]
   }
-
   if (!hasEthereumRpcConfig(env)) {
-    mismatchReasons.push("token_inventory_unavailable")
-    return
+    return ["token_inventory_unavailable"]
   }
 
   const ownership = await evaluateAttachedEthereumWalletErc721CollectionOwnership({
@@ -71,4 +57,5 @@ export async function evaluateTokenGateRule(input: {
   } else if (!ownership.owns) {
     mismatchReasons.push("erc721_holding_required")
   }
+  return mismatchReasons
 }

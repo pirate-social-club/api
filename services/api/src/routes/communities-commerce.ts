@@ -1,32 +1,24 @@
 import { Hono } from "hono"
 import {
-  fetchCommunityAssetContent,
-  getCommunityAsset,
-  resolveCommunityAssetAccess,
-} from "../lib/communities/commerce/service"
-import {
-  getCommunityMoneyPolicy,
-  getCommunityPricingPolicy,
-  updateCommunityMoneyPolicy,
-  updateCommunityPricingPolicy,
-} from "../lib/communities/commerce/policy-service"
-import {
   createCommunityListing,
-  getCommunityListing,
-  listCommunityListings,
-  updateCommunityListing,
-} from "../lib/communities/commerce/listing-service"
-import {
   createCommunityPurchaseQuote,
   failCommunityPurchase,
-  preflightCommunityPurchaseQuote,
-} from "../lib/communities/commerce/quote-service"
-import {
+  fetchCommunityAssetContent,
+  getCommunityAsset,
+  getCommunityMoneyPolicy,
+  getCommunityPricingPolicy,
+  getCommunityListing,
   getCommunityPurchase,
+  listCommunityListings,
   listCommunityPurchases,
+  preflightCommunityPurchaseQuote,
+  resolveCommunityAssetAccess,
   settleCommunityPurchase,
-} from "../lib/communities/commerce/settlement-service"
-import { getCommunity } from "../lib/communities/membership/read-service"
+  updateCommunityMoneyPolicy,
+  updateCommunityPricingPolicy,
+  updateCommunityListing,
+} from "../lib/communities/commerce/service"
+import { getCommunity } from "../lib/communities/membership/community-read-service"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import {
   getResolvedCommunityRouteContext,
@@ -42,6 +34,7 @@ import type {
   UpdateCommunityMoneyPolicyRequest,
   UpdateCommunityPricingPolicyRequest,
 } from "../types"
+import { emitRoyaltyEarnedBatch } from "../lib/notifications/notification-emitters"
 
 export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.get("/:communityId/money-policy", async (c) => {
@@ -250,7 +243,21 @@ export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedE
       communityRepository,
       userRepository,
     })
-    return c.json(result, 201)
+    if (result.royaltyEarningEvents.length > 0) {
+      const emission = emitRoyaltyEarnedBatch({
+        env: c.env,
+        buyerUserId: actor.userId,
+        events: result.royaltyEarningEvents,
+      }).catch((error) => {
+        console.warn("[settlement] royalty notification emission failed", error)
+      })
+      try {
+        c.executionCtx.waitUntil(emission)
+      } catch {
+        void emission
+      }
+    }
+    return c.json(result.settlement, 201)
   })
 
   communities.post("/:communityId/purchase-settlements/fail", async (c) => {

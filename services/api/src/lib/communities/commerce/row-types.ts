@@ -11,11 +11,14 @@ export type AssetRow = {
   asset_id: string
   community_id: string
   source_post_id: string
+  display_title: string | null
   song_artifact_bundle_id: string | null
   creator_user_id: string
   asset_kind: Asset["asset_kind"]
   rights_basis: Asset["rights_basis"]
   access_mode: Asset["access_mode"]
+  license_preset: Asset["license_preset"] | null
+  commercial_rev_share_pct: number | null
   primary_content_ref: string
   primary_content_hash: string | null
   publication_status: Asset["publication_status"]

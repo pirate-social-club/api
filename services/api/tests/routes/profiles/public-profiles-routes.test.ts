@@ -18,6 +18,58 @@ afterEach(async () => {
 })
 
 describe("public profile routes", () => {
+  test("public profiles resolve by active wallet address", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "profile-public-wallet-user")
+    const attachedAt = new Date().toISOString()
+    const walletAddress = "0x1234567890abcdef1234567890abcdef12345678"
+
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO wallet_attachments (
+          wallet_attachment_id,
+          user_id,
+          chain_namespace,
+          wallet_address_normalized,
+          wallet_address_display,
+          source_provider,
+          source_subject,
+          attachment_kind,
+          is_primary,
+          status,
+          attached_at,
+          detached_at,
+          created_at,
+          updated_at
+        ) VALUES (
+          ?1, ?2, 'eip155:1', ?3, ?3, 'test', 'profile-public-wallet-user', 'external', 1, 'active', ?4, NULL, ?4, ?4
+        )
+      `,
+      args: ["wal_public_wallet", session.userId, walletAddress.toLowerCase(), attachedAt],
+    })
+    await ctx.client.execute({
+      sql: `
+        UPDATE users
+        SET primary_wallet_attachment_id = ?2,
+            updated_at = ?3
+        WHERE user_id = ?1
+      `,
+      args: [session.userId, "wal_public_wallet", attachedAt],
+    })
+
+    const response = await app.request(`http://pirate.test/public-profiles/by-wallet/${walletAddress}`, {}, ctx.env)
+    expect(response.status).toBe(200)
+    const body = await json(response) as {
+      profile: { user_id: string; primary_wallet_address: string | null }
+      resolved_handle_label: string
+    }
+    expect(body.profile.user_id).toBe(session.userId)
+    expect(body.profile.primary_wallet_address).toBe(walletAddress.toLowerCase())
+    expect(body.resolved_handle_label.endsWith(".pirate")).toBe(true)
+  })
+
   test("public profiles resolve canonical and redirected pirate handles without auth", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup

@@ -1,16 +1,14 @@
 import { createClient } from "@libsql/client"
 import type { Client } from "@libsql/client"
-import type { CommunityRepository } from "./db-community-repository"
+import type { CommunityDatabaseBindingRepository } from "./db-community-repository"
 import { internalError, notFoundError } from "../errors"
 import { decryptCommunityDbCredential } from "./community-db-credential-crypto"
 import { buildLocalCommunityDbUrl, configureLocalCommunityDbClient, ensureCommunityDbSchema } from "./community-local-db"
 import type { Env } from "../../types"
 
-type CommunityDbRepository = Pick<CommunityRepository, "getPrimaryCommunityDatabaseBinding" | "getActiveCommunityDbCredential">
-
 export async function openCommunityDb(
   env: Env,
-  repo: CommunityDbRepository,
+  repo: CommunityDatabaseBindingRepository,
   communityId: string,
 ): Promise<{ client: Client; close: () => void; databaseUrl: string }> {
   const binding = await repo.getPrimaryCommunityDatabaseBinding(communityId)

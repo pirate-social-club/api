@@ -1,5 +1,10 @@
 import { openCommunityDb } from "../communities/community-db-factory"
-import type { CommunityRepository } from "../communities/db-community-repository"
+import type {
+  CommunityCommentProjectionRepository,
+  CommunityDatabaseBindingRepository,
+  CommunityPostProjectionRepository,
+  CommunityReadRepository,
+} from "../communities/db-community-repository"
 import { buildLocalizedCommentListItem } from "../localization/comment-localization-service"
 import {
   canAccessCommunity,
@@ -20,6 +25,12 @@ import {
   enqueueCommentTranslationOnReadIfNeeded,
   localizeCommentItems,
 } from "./comment-translation-jobs"
+
+type CommentReadCommunityRepository =
+  & CommunityReadRepository
+  & CommunityDatabaseBindingRepository
+  & Pick<CommunityPostProjectionRepository, "getCommunityPostProjectionByPostId">
+  & Pick<CommunityCommentProjectionRepository, "getCommunityCommentProjectionByCommentId">
 
 function isPubliclyReadableThreadRoot(input: {
   status: "draft" | "published" | "hidden" | "removed" | "deleted"
@@ -64,7 +75,7 @@ export async function listPostComments(input: {
   sort?: string | null
   cursor?: string | null
   limit?: string | null
-  communityRepository: CommunityRepository
+  communityRepository: CommentReadCommunityRepository
 }): Promise<CommentListResponse> {
   const community = await input.communityRepository.getCommunityById(input.communityId)
   if (!community || community.provisioning_state !== "active" || community.status !== "active") {
@@ -111,7 +122,7 @@ export async function listPublicPostComments(input: {
   sort?: string | null
   cursor?: string | null
   limit?: string | null
-  communityRepository: CommunityRepository
+  communityRepository: CommentReadCommunityRepository
 }): Promise<CommentListResponse> {
   const projection = await input.communityRepository.getCommunityPostProjectionByPostId(input.threadRootPostId)
   if (!projection) {
@@ -163,7 +174,7 @@ export async function listCommentReplies(input: {
   sort?: string | null
   cursor?: string | null
   limit?: string | null
-  communityRepository: CommunityRepository
+  communityRepository: CommentReadCommunityRepository
 }): Promise<CommentListResponse> {
   const projection = await input.communityRepository.getCommunityCommentProjectionByCommentId(input.commentId)
   if (!projection) {
@@ -210,7 +221,7 @@ export async function listPublicCommentReplies(input: {
   sort?: string | null
   cursor?: string | null
   limit?: string | null
-  communityRepository: CommunityRepository
+  communityRepository: CommentReadCommunityRepository
 }): Promise<CommentListResponse> {
   const projection = await input.communityRepository.getCommunityCommentProjectionByCommentId(input.commentId)
   if (!projection) {
@@ -265,7 +276,7 @@ export async function getCommentContext(input: {
   locale?: string | null
   cursor?: string | null
   limit?: string | null
-  communityRepository: CommunityRepository
+  communityRepository: CommentReadCommunityRepository
 }): Promise<CommentContext> {
   const projection = await input.communityRepository.getCommunityCommentProjectionByCommentId(input.commentId)
   if (!projection) {

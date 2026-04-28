@@ -45,6 +45,41 @@ export class MemoryProfileRepository {
     }
   }
 
+  async resolvePublicProfileByWalletAddress(walletAddress: string): Promise<PublicProfileResolution | null> {
+    const normalizedWalletAddress = walletAddress.trim().toLowerCase()
+    const record = [...getMemoryStore().byUserId.values()].find((candidate) => (
+      candidate.walletAttachments.some((attachment) => (
+        attachment.wallet_address.toLowerCase() === normalizedWalletAddress
+      ))
+    ))
+    if (!record) {
+      return null
+    }
+
+    const publicHandle = getProfilePublicHandleLabel(record.profile)
+    return {
+      profile: exposeMemoryProfile(record),
+      requested_handle_label: walletAddress.trim(),
+      resolved_handle_label: publicHandle,
+      is_canonical: true,
+      created_communities: [],
+    }
+  }
+
+  async updateXmtpInboxId(userId: string, xmtpInboxId: string | null): Promise<Profile | null> {
+    const record = getMemoryRecordByUserId(userId)
+    if (!record) {
+      return null
+    }
+
+    record.profile = {
+      ...record.profile,
+      xmtp_inbox_id: xmtpInboxId,
+      updated_at: nowIso(),
+    }
+    return exposeMemoryProfile(record)
+  }
+
   async updateProfile(userId: string, input: UpdateProfileInput): Promise<Profile | null> {
     const record = getMemoryRecordByUserId(userId)
     if (!record) {
@@ -180,11 +215,14 @@ export class MemoryProfileRepository {
     }
 
     const labelAvailable = this.isGlobalHandleAvailable(userId, desired.labelDisplay)
+    const redditClaimOwnerUserId = this.getRedditClaimOwnerUserId(desired.labelDisplay)
     const quote = buildRedditHandleClaimQuote({
       desiredLabel: desired.labelDisplay,
       labelNormalized: desired.labelNormalized,
       currentActiveLabelNormalized: record.profile.global_handle.label.replace(/\.pirate$/i, "").toLowerCase(),
       labelAvailable,
+      profileAlreadyUsedRedditClaim: record.profile.global_handle.issuance_source === "reddit_verified_claim",
+      redditClaimedByAnotherUser: redditClaimOwnerUserId != null && redditClaimOwnerUserId !== userId,
       verifiedRedditUsername: record.redditVerification?.status === "verified" ? record.redditVerification.reddit_username : null,
       latestImportSummary: record.redditImportSummary,
     })
@@ -234,11 +272,14 @@ export class MemoryProfileRepository {
 
     const desired = normalizeDesiredGlobalHandleLabel(desiredLabel)
     const labelAvailable = this.isGlobalHandleAvailable(userId, desired.labelDisplay)
+    const redditClaimOwnerUserId = this.getRedditClaimOwnerUserId(desired.labelDisplay)
     const redditQuote = buildRedditHandleClaimQuote({
       desiredLabel: desired.labelDisplay,
       labelNormalized: desired.labelNormalized,
       currentActiveLabelNormalized: record.profile.global_handle.label.replace(/\.pirate$/i, "").toLowerCase(),
       labelAvailable,
+      profileAlreadyUsedRedditClaim: record.profile.global_handle.issuance_source === "reddit_verified_claim",
+      redditClaimedByAnotherUser: redditClaimOwnerUserId != null && redditClaimOwnerUserId !== userId,
       verifiedRedditUsername: record.redditVerification?.status === "verified" ? record.redditVerification.reddit_username : null,
       latestImportSummary: record.redditImportSummary,
     })
@@ -265,5 +306,14 @@ export class MemoryProfileRepository {
       && candidateRecord.profile.global_handle.status === "active"
       && candidateRecord.profile.global_handle.label.toLowerCase() === labelDisplay.toLowerCase()
     ))
+  }
+
+  private getRedditClaimOwnerUserId(labelDisplay: string): string | null {
+    const store = getMemoryStore()
+    const owner = [...store.byUserId.values()].find((candidateRecord) => (
+      candidateRecord.profile.global_handle.issuance_source === "reddit_verified_claim"
+      && candidateRecord.profile.global_handle.label.toLowerCase() === labelDisplay.toLowerCase()
+    ))
+    return owner?.user.user_id ?? null
   }
 }

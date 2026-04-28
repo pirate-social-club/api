@@ -1,0 +1,9 @@
+[
+  {
+    "as": "curator",
+    "alias": "welcome-reply",
+    "idempotency_key": "example-welcome-reply-001",
+    "post_alias": "welcome",
+    "body": "Glad this is open."
+  }
+]

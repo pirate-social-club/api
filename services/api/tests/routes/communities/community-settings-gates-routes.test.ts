@@ -33,6 +33,8 @@ describe("community settings gates routes", () => {
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Gates Club",
       default_age_gate_policy: "18_plus",
+      membership_mode: "open",
+      gate_rules: [],
       handle_policy: {
         policy_template: "standard",
       },

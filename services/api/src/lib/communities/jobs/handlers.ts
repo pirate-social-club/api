@@ -25,8 +25,7 @@ import {
   publishJsonToSwarm,
 } from "../../swarm/swarm-publisher"
 import type { Env } from "../../../types"
-import type { CommunityRepository } from "../db-community-repository"
-import { loadCommunityProjection } from "../create/repository"
+import { loadCommunityProjection } from "../create/service"
 import { openCommunityDb } from "../community-db-factory"
 import type { CommunityJobRow } from "./store"
 import {
@@ -352,7 +351,7 @@ async function runPostLabelMaterialize(input: {
 
     const community = await loadCommunityProjection(
       input.env,
-      input.communityRepository as CommunityRepository,
+      input.communityRepository,
       communityRow,
     )
 
@@ -435,7 +434,7 @@ async function runCommunityTextTranslationMaterialize(input: {
 
     const community = await loadCommunityProjection(
       input.env,
-      input.communityRepository as CommunityRepository,
+      input.communityRepository,
       communityRow,
     )
     return await materializeCommunityTextTranslations({

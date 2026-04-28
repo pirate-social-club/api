@@ -1,9 +1,10 @@
 import type { Client } from "../../sql-client"
 import {
   incrementCommunityFollowerCountRow,
+  setCommunityFollowerCountRow,
   upsertCommunityFollowProjectionRow,
   upsertCommunityMembershipProjectionRow,
-} from "../../auth/auth-db-queries"
+} from "../../auth/auth-db-community-queries"
 import type {
   CommunityFollowProjectionRow,
   CommunityMembershipProjectionRow,
@@ -63,6 +64,22 @@ export async function incrementCommunityFollowerCount(
     executor: client,
     communityId: input.communityId,
     delta: input.delta,
+    updatedAt: input.updatedAt,
+  })
+}
+
+export async function setCommunityFollowerCount(
+  client: Client,
+  input: {
+    communityId: string
+    followerCount: number
+    updatedAt: string
+  },
+): Promise<void> {
+  await setCommunityFollowerCountRow({
+    executor: client,
+    communityId: input.communityId,
+    followerCount: input.followerCount,
     updatedAt: input.updatedAt,
   })
 }

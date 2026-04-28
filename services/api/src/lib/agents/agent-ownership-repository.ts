@@ -27,6 +27,7 @@ import {
   refreshAgentDelegatedCredential,
   refreshAgentDelegatedCredentialWithConnectionToken,
   resolvePublicAgentByHandle,
+  seedUserAgentForAdmin,
   startAgentOwnershipSession,
   updateUserAgentDisplayName,
   verifyAgentDelegatedAccessToken,
@@ -85,6 +86,11 @@ export interface AgentOwnershipRepository {
     userId: string
     desiredLabel: string
   }): Promise<AgentHandle | null>
+  seedUserAgentForAdmin(input: {
+    userId: string
+    displayName: string
+    desiredLabel?: string | null
+  }): Promise<UserAgent>
   resolvePublicAgentByHandle(handleLabel: string): Promise<PublicAgentResolution | null>
   issueAgentDelegatedCredential(input: {
     agentId: string
@@ -206,6 +212,14 @@ export class ControlPlaneAgentOwnershipRepository implements AgentOwnershipRepos
     desiredLabel: string
   }): Promise<AgentHandle | null> {
     return claimUserAgentHandle(this.client, input)
+  }
+
+  async seedUserAgentForAdmin(input: {
+    userId: string
+    displayName: string
+    desiredLabel?: string | null
+  }): Promise<UserAgent> {
+    return seedUserAgentForAdmin(this.client, input)
   }
 
   async resolvePublicAgentByHandle(handleLabel: string): Promise<PublicAgentResolution | null> {

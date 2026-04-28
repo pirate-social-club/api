@@ -1,4 +1,6 @@
+import type { User } from "../../../types"
 import { normalizeIdentityCountryCode, normalizeIdentityCountryCodes } from "../../identity/country-codes"
+import { normalizeEthereumAddress } from "../community-token-gates"
 import type { ProofRequirement } from "./gate-types"
 
 export function parseProofRequirements(raw: string | null, fallbackGateType: string): ProofRequirement[] {
@@ -25,33 +27,11 @@ export function parseGateConfig(raw: string | null): Record<string, unknown> | n
   }
 }
 
-export function includesAcceptedProvider(
-  acceptedProviders: string[] | null | undefined,
-  provider: string | null | undefined,
-): boolean {
+export function includesAcceptedProvider(acceptedProviders: string[] | null | undefined, provider: string | null | undefined): boolean {
   if (!acceptedProviders?.length) {
     return true
   }
   return provider != null && acceptedProviders.includes(provider)
-}
-
-function normalizeSanctionsMechanism(mechanism: string | null | undefined): string | null {
-  if (mechanism === "CleanHands") {
-    return "passport_clean_hands"
-  }
-  return typeof mechanism === "string" && mechanism.length > 0 ? mechanism : null
-}
-
-export function includesAcceptedMechanism(
-  acceptedMechanisms: string[] | null | undefined,
-  mechanism: string | null | undefined,
-): boolean {
-  if (!acceptedMechanisms?.length) {
-    return true
-  }
-  const normalizedMechanism = normalizeSanctionsMechanism(mechanism)
-  const normalizedAccepted = acceptedMechanisms.map((value) => normalizeSanctionsMechanism(value))
-  return normalizedMechanism != null && normalizedAccepted.includes(normalizedMechanism)
 }
 
 export function readRequiredCountryValues(config: Record<string, unknown>): string[] {
@@ -84,4 +64,28 @@ export function readMinimumScore(config: Record<string, unknown>, fallback: numb
     return value
   }
   return fallback
+}
+
+export function resolveTokenGateContractAddress(gateConfig: Record<string, unknown> | null): string | null {
+  return normalizeEthereumAddress(gateConfig?.contract_address)
+}
+
+export function satisfiesMinimumAgeRequirement(
+  user: User,
+  acceptedProviders: string[] | null | undefined,
+  minimumAge: number,
+): boolean {
+  const minimumAgeCapability = user.verification_capabilities.minimum_age
+  if (
+    minimumAgeCapability.state === "verified"
+    && typeof minimumAgeCapability.value === "number"
+    && minimumAgeCapability.value >= minimumAge
+    && includesAcceptedProvider(acceptedProviders, minimumAgeCapability.provider)
+  ) {
+    return true
+  }
+
+  return minimumAge <= 18
+    && user.verification_capabilities.age_over_18.state === "verified"
+    && includesAcceptedProvider(acceptedProviders, user.verification_capabilities.age_over_18.provider)
 }

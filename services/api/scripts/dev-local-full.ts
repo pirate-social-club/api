@@ -5,13 +5,13 @@ type ManagedChild = {
   process: ChildProcess
 }
 
-function spawnManagedChild(name: string, scriptPath: string): ManagedChild {
+function spawnManagedChild(name: string, scriptPath: string, env: NodeJS.ProcessEnv = process.env): ManagedChild {
   const child = spawn(
     process.execPath,
     ["run", scriptPath],
     {
       cwd: process.cwd(),
-      env: process.env,
+      env,
       stdio: "inherit",
     },
   )
@@ -52,9 +52,17 @@ async function stopChildren(children: ManagedChild[], signal: NodeJS.Signals = "
 }
 
 async function main(): Promise<void> {
+  const spacesVerifierBaseUrl = process.env.SPACES_VERIFIER_BASE_URL || "http://127.0.0.1:8799"
+  const localEnv = {
+    ...process.env,
+    SPACES_VERIFIER_BASE_URL: spacesVerifierBaseUrl,
+  }
   const children = [
-    spawnManagedChild("api", "scripts/serve-local.ts"),
-    spawnManagedChild("community-job-worker", "scripts/run-community-job-worker.ts"),
+    ...(process.env.SPACES_VERIFIER_BASE_URL
+      ? []
+      : [spawnManagedChild("spaces-verifier", "scripts/serve-local-spaces-verifier.ts", localEnv)]),
+    spawnManagedChild("api", "scripts/serve-local.ts", localEnv),
+    spawnManagedChild("community-job-worker", "scripts/run-community-job-worker.ts", localEnv),
   ]
 
   let shuttingDown = false

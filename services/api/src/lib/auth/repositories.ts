@@ -16,7 +16,7 @@ import type {
   WalletAttachmentSummary,
 } from "../../types"
 import type { SessionSnapshot } from "./auth-db-rows"
-import { requireControlPlaneDbUrl } from "./auth-db-queries"
+import { requireControlPlaneDbUrl } from "./auth-db-query-helpers"
 import { DatabaseIdentityRepository } from "./db-identity-repository"
 import { DatabaseProfileRepository, type UpdateProfileInput } from "./db-profile-repository"
 import { MemoryOnboardingStatusRepository } from "./memory-onboarding-status-repository"
@@ -58,6 +58,8 @@ export interface OnboardingStatusRepository {
 export interface ProfileRepository {
   getProfileByUserId(userId: string): Promise<Profile | null>
   resolvePublicProfileByHandle(handleLabel: string): Promise<PublicProfileResolution | null>
+  resolvePublicProfileByWalletAddress(walletAddress: string): Promise<PublicProfileResolution | null>
+  updateXmtpInboxId(userId: string, xmtpInboxId: string | null): Promise<Profile | null>
   updateProfile(userId: string, input: UpdateProfileInput): Promise<Profile | null>
   renameGlobalHandle(userId: string, desiredLabel: string): Promise<GlobalHandle | null>
   claimRedditGlobalHandle(userId: string, desiredLabel: string): Promise<GlobalHandle | null>

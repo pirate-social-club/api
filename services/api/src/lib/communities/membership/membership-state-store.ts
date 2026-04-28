@@ -1,14 +1,10 @@
 import type { Client } from "../../sql-client"
 import { executeFirst } from "../../db-helpers"
-import { requiredString, rowValue, stringOrNull } from "../../sql-row"
+import { rowValue, stringOrNull } from "../../sql-row"
 
 export type CommunityMembershipRow = {
   membership_status: "member" | "left" | "banned" | null
   role_status: "active" | "revoked" | null
-}
-
-type CommunityJoinModeRow = {
-  membership_mode: "open" | "request" | "gated"
 }
 
 export async function getCommunityMembershipState(
@@ -71,27 +67,24 @@ export async function getCommunityMemberCount(
   )
 
   const value = rowValue(row, "cached_member_count")
-  return typeof value === "number" ? value : null
-}
+  if (typeof value === "number") {
+    return value
+  }
 
-export async function getCommunityJoinMode(
-  client: Client,
-  communityId: string,
-): Promise<CommunityJoinModeRow["membership_mode"] | null> {
-  const row = await executeFirst(
+  const countRow = await executeFirst(
     client,
     {
       sql: `
-        SELECT membership_mode
-        FROM communities
+        SELECT COUNT(*) AS member_count
+        FROM community_memberships
         WHERE community_id = ?1
-        LIMIT 1
+          AND status = 'member'
       `,
       args: [communityId],
     },
   )
-
-  return row ? requiredString(row, "membership_mode") as CommunityJoinModeRow["membership_mode"] : null
+  const countValue = rowValue(countRow, "member_count")
+  return typeof countValue === "number" ? countValue : null
 }
 
 export async function upsertCommunityMembership(input: {

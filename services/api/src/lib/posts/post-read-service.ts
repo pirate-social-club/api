@@ -1,5 +1,9 @@
 import { openCommunityDb } from "../communities/community-db-factory"
-import type { CommunityRepository } from "../communities/db-community-repository"
+import type {
+  CommunityDatabaseBindingRepository,
+  CommunityPostProjectionRepository,
+  CommunityReadRepository,
+} from "../communities/db-community-repository"
 import {
   getPostById,
   listPublishedLocalizedPosts,
@@ -21,6 +25,11 @@ type CommunityFeedResponse = {
 }
 
 type PostFeedSort = "best" | "new" | "top"
+
+type PostReadCommunityRepository =
+  & CommunityReadRepository
+  & CommunityDatabaseBindingRepository
+  & Pick<CommunityPostProjectionRepository, "getCommunityPostProjectionByPostId">
 
 function parseFeedLimit(limit: string | null | undefined): number {
   if (typeof limit !== "string" || limit.trim() === "") {
@@ -51,7 +60,7 @@ export async function getPost(input: {
   userId: string
   postId: string
   locale?: string | null
-  communityRepository: CommunityRepository
+  communityRepository: PostReadCommunityRepository
 }): Promise<LocalizedPostResponse> {
   const projection = await input.communityRepository.getCommunityPostProjectionByPostId(input.postId)
   if (!projection) {
@@ -95,7 +104,7 @@ export async function getPublicPost(input: {
   env: Env
   postId: string
   locale?: string | null
-  communityRepository: CommunityRepository
+  communityRepository: PostReadCommunityRepository
 }): Promise<LocalizedPostResponse> {
   const projection = await input.communityRepository.getCommunityPostProjectionByPostId(input.postId)
   if (!projection) {
@@ -145,7 +154,7 @@ export async function listCommunityPosts(input: {
   cursor?: string | null
   flairId?: string | null
   sort?: string | null
-  communityRepository: CommunityRepository
+  communityRepository: PostReadCommunityRepository
 }): Promise<CommunityFeedResponse> {
   const community = await input.communityRepository.getCommunityById(input.communityId)
   if (!community || community.provisioning_state !== "active" || community.status !== "active") {
@@ -211,7 +220,7 @@ export async function listPublicCommunityPosts(input: {
   cursor?: string | null
   flairId?: string | null
   sort?: string | null
-  communityRepository: CommunityRepository
+  communityRepository: PostReadCommunityRepository
 }): Promise<CommunityFeedResponse> {
   const community = await input.communityRepository.getCommunityById(input.communityId)
   if (!community || community.provisioning_state !== "active" || community.status !== "active") {

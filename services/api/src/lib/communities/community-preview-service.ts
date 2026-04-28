@@ -2,15 +2,17 @@ import {
   buildMembershipGateSummary,
 } from "./membership/gates"
 import {
-  getCommunityFollowStatus,
-  getCommunityFollowerCount,
-} from "./membership/follow-store"
-import {
   canAccessCommunity,
   getCommunityMemberCount,
   getCommunityMembershipState,
 } from "./membership/membership-state-store"
-import { listActiveMembershipGateRules } from "./membership/gate-rule-store"
+import {
+  listActiveMembershipGateRules,
+} from "./membership/gate-rule-store"
+import {
+  getCommunityFollowStatus,
+  getCommunityFollowerCount,
+} from "./membership/follow-store"
 import { openCommunityDb } from "./community-db-factory"
 import {
   buildLocalizedCommunityPreview,
@@ -20,8 +22,12 @@ import {
   resolveCommunityAvatarRef,
   resolveCommunityBannerRef,
 } from "./community-identity-media"
+import { serializeDonationPartnerRow } from "./community-donation-partner-serialization"
 import { parseStoredReferenceLinks } from "./community-serialization"
-import type { CommunityRepository } from "./db-community-repository"
+import type {
+  CommunityDatabaseBindingRepository,
+  CommunityReadRepository,
+} from "./db-community-repository"
 import { notFoundError } from "../errors"
 import type {
   CommunityPreview,
@@ -29,6 +35,8 @@ import type {
 } from "../../types"
 
 type CommunityPreviewRule = NonNullable<CommunityPreview["rules"]>[number]
+
+type CommunityPreviewRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
 
 function parsePreviewSettingsJson(raw: unknown): Record<string, unknown> {
   if (typeof raw !== "string" || !raw.trim()) {
@@ -45,23 +53,93 @@ function parsePreviewSettingsJson(raw: unknown): Record<string, unknown> {
   return {}
 }
 
-export async function getCommunityPreview(input: {
-  env: Env
-  userId: string
-  communityId: string
-  locale?: string | null
-  communityRepository: CommunityRepository
-}): Promise<CommunityPreview> {
-  const community = await input.communityRepository.getCommunityById(input.communityId)
+function parsePreviewAllowedDisclosedQualifiers(
+  settings: Record<string, unknown>,
+): CommunityPreview["allowed_disclosed_qualifiers"] {
+  const rawQualifiers = settings.allowed_disclosed_qualifiers
+  if (!Array.isArray(rawQualifiers)) {
+    return null
+  }
+
+  const qualifierIds = rawQualifiers
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter(Boolean)
+
+  return qualifierIds.length ? [...new Set(qualifierIds)] : null
+}
+
+function parsePreviewAllowQualifiersOnAnonymousPosts(
+  settings: Record<string, unknown>,
+): CommunityPreview["allow_qualifiers_on_anonymous_posts"] {
+  return typeof settings.allow_qualifiers_on_anonymous_posts === "boolean"
+    ? settings.allow_qualifiers_on_anonymous_posts
+    : null
+}
+
+function parsePreviewHumanVerificationLane(
+  settings: Record<string, unknown>,
+  summaries: NonNullable<CommunityPreview["membership_gate_summaries"]>,
+): CommunityPreview["human_verification_lane"] {
+  if (settings.human_verification_lane === "self" || settings.human_verification_lane === "very") {
+    return settings.human_verification_lane
+  }
+
+  if (summaries.some((summary) =>
+    summary.gate_type === "nationality"
+    || summary.gate_type === "gender"
+    || summary.gate_type === "minimum_age"
+    || (summary.gate_type !== "unique_human" && summary.accepted_providers?.includes("self"))
+  )) {
+    return "self"
+  }
+
+  if (summaries.some((summary) =>
+    summary.gate_type === "unique_human"
+    && (!summary.accepted_providers?.length || summary.accepted_providers.includes("very"))
+  )) {
+    return "very"
+  }
+
+  if (summaries.some((summary) =>
+    summary.gate_type === "unique_human"
+    && summary.accepted_providers?.includes("self")
+  )) {
+    return "self"
+  }
+
+  return "very"
+}
+
+async function getActiveCommunityForPreview(
+  repository: Pick<CommunityReadRepository, "getCommunityById">,
+  communityId: string,
+): Promise<{ display_name: string; created_at: string }> {
+  const community = await repository.getCommunityById(communityId)
   if (!community || community.provisioning_state !== "active" || community.status !== "active") {
     throw notFoundError("Community not found")
   }
+  return community
+}
+
+async function buildPreviewForViewer(input: {
+  env: Env
+  communityId: string
+  locale?: string | null
+  communityRepository: CommunityPreviewRepository
+  viewer?: { userId: string } | null
+}): Promise<CommunityPreview> {
+  const community = await getActiveCommunityForPreview(input.communityRepository, input.communityId)
 
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
     const rules = await listActiveMembershipGateRules(db.client, input.communityId)
-    const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
-    const followStatus = await getCommunityFollowStatus(db.client, input.communityId, input.userId)
+    const membership = input.viewer
+      ? await getCommunityMembershipState(db.client, input.communityId, input.viewer.userId)
+      : null
+    const followStatus = input.viewer
+      ? await getCommunityFollowStatus(db.client, input.communityId, input.viewer.userId)
+      : null
     return await buildCommunityPreview({
       client: db.client,
       communityId: input.communityId,
@@ -70,9 +148,9 @@ export async function getCommunityPreview(input: {
       locale: input.locale ?? null,
       gateRules: rules,
       viewerMembershipStatus:
-        membership.membership_status === "banned"
+        membership?.membership_status === "banned"
           ? "banned"
-          : canAccessCommunity(membership)
+          : membership && canAccessCommunity(membership)
             ? "member"
             : "not_member",
       viewerFollowing: followStatus === "active",
@@ -82,33 +160,26 @@ export async function getCommunityPreview(input: {
   }
 }
 
+export async function getCommunityPreview(input: {
+  env: Env
+  userId: string
+  communityId: string
+  locale?: string | null
+  communityRepository: CommunityPreviewRepository
+}): Promise<CommunityPreview> {
+  return await buildPreviewForViewer({
+    ...input,
+    viewer: { userId: input.userId },
+  })
+}
+
 export async function getPublicCommunityPreview(input: {
   env: Env
   communityId: string
   locale?: string | null
-  communityRepository: CommunityRepository
+  communityRepository: CommunityPreviewRepository
 }): Promise<CommunityPreview> {
-  const community = await input.communityRepository.getCommunityById(input.communityId)
-  if (!community || community.provisioning_state !== "active" || community.status !== "active") {
-    throw notFoundError("Community not found")
-  }
-
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
-  try {
-    const rules = await listActiveMembershipGateRules(db.client, input.communityId)
-    return await buildCommunityPreview({
-      client: db.client,
-      communityId: input.communityId,
-      communityDisplayName: community.display_name,
-      communityCreatedAt: community.created_at,
-      locale: input.locale ?? null,
-      gateRules: rules,
-      viewerMembershipStatus: "not_member",
-      viewerFollowing: false,
-    })
-  } finally {
-    db.close()
-  }
+  return await buildPreviewForViewer(input)
 }
 
 async function listPublicCommunityRules(input: {
@@ -152,6 +223,7 @@ async function buildCommunityPreview(input: {
   const localResult = await input.client.execute({
     sql: `
       SELECT display_name, description, avatar_ref, banner_ref, membership_mode,
+             allow_anonymous_identity, anonymous_identity_scope,
              donation_policy_mode, donation_partner_id, settings_json
       FROM communities
       WHERE community_id = ?1
@@ -178,21 +250,7 @@ async function buildCommunityPreview(input: {
     })
     const partnerRow = partnerResult.rows[0]
     if (partnerRow) {
-      donationPartner = {
-        donation_partner_id: String(partnerRow.donation_partner_id),
-        display_name: String(partnerRow.display_name),
-        provider: partnerRow.provider === "endaoment" ? "endaoment" : "endaoment",
-        provider_partner_ref: partnerRow.provider_partner_ref == null ? null : String(partnerRow.provider_partner_ref),
-        image_url: partnerRow.image_url == null ? null : String(partnerRow.image_url),
-        review_status:
-          partnerRow.review_status === "pending" || partnerRow.review_status === "rejected"
-            ? partnerRow.review_status
-            : "approved",
-        status:
-          partnerRow.status === "paused" || partnerRow.status === "retired"
-            ? partnerRow.status
-            : "active",
-      }
+      donationPartner = serializeDonationPartnerRow(partnerRow)
     }
   }
 
@@ -205,27 +263,19 @@ async function buildCommunityPreview(input: {
       ? (localRow.membership_mode as CommunityPreview["membership_mode"])
       : "open"
   const displayName = localRow?.display_name ? String(localRow.display_name) : input.communityDisplayName
+  const anonymousIdentityScope: CommunityPreview["anonymous_identity_scope"] =
+    localRow?.anonymous_identity_scope === "community_stable"
+      || localRow?.anonymous_identity_scope === "thread_stable"
+      || localRow?.anonymous_identity_scope === "post_ephemeral"
+      ? localRow.anonymous_identity_scope
+      : null
+  const membershipGateSummaries = input.gateRules.map(buildMembershipGateSummary)
   const publicRules = await listPublicCommunityRules({
     client: input.client,
     communityId: input.communityId,
   })
   const followerCount = await getCommunityFollowerCount(input.client, input.communityId)
   const memberCount = await getCommunityMemberCount(input.client, input.communityId)
-  const membershipGateSummaries = input.gateRules.map(buildMembershipGateSummary)
-  const hasSelfOnlyIdentityGate = membershipGateSummaries.some((summary) =>
-    summary.gate_type === "age_over_18"
-    || summary.gate_type === "minimum_age"
-    || summary.gate_type === "nationality"
-    || summary.gate_type === "gender"
-  )
-  const humanVerificationLane = !hasSelfOnlyIdentityGate
-    && membershipGateSummaries.some((summary) =>
-      summary.gate_type === "unique_human"
-      && summary.accepted_providers?.includes("very")
-      && !(summary.accepted_providers?.includes("self") ?? false)
-    )
-    ? "very"
-    : "self"
 
   const preview: CommunityPreview = {
     community_id: input.communityId,
@@ -243,7 +293,11 @@ async function buildCommunityPreview(input: {
       bannerRef: localRow?.banner_ref == null ? null : String(localRow.banner_ref),
     }),
     membership_mode: membershipMode,
-    human_verification_lane: humanVerificationLane,
+    allow_anonymous_identity: Number(localRow?.allow_anonymous_identity ?? 0) === 1,
+    anonymous_identity_scope: anonymousIdentityScope,
+    allowed_disclosed_qualifiers: parsePreviewAllowedDisclosedQualifiers(settings),
+    allow_qualifiers_on_anonymous_posts: parsePreviewAllowQualifiersOnAnonymousPosts(settings),
+    human_verification_lane: parsePreviewHumanVerificationLane(settings, membershipGateSummaries),
     member_count: memberCount,
     follower_count: followerCount,
     donation_policy_mode: donationPolicyMode,

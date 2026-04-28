@@ -778,7 +778,7 @@ describe("comments routes", () => {
     expect(contextPageTwoBody.thread_snapshot?.swarm_manifest_ref).toBe("swarm-manifest:test-thread")
   })
 
-  test("POST /comments/:commentId/vote enforces verification and records a verified member vote", async () => {
+  test("POST /comments/:commentId/vote records a member vote without hidden verification", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
 
@@ -813,25 +813,11 @@ describe("comments routes", () => {
     const unverifiedMember = await exchangeJwt(ctx.env, "comments-routes-vote-unverified")
     await addCommunityMember(ctx.communityDbRoot, community.communityId, unverifiedMember.userId)
 
-    const deniedVote = await requestJson(
-      `http://pirate.test/comments/${commentBody.comment_id}/vote`,
-      { value: 1 },
-      ctx.env,
-      unverifiedMember.accessToken,
-    )
-    expect(deniedVote.status).toBe(403)
-    const deniedVoteBody = await json(deniedVote) as { code: string }
-    expect(deniedVoteBody.code).toBe("verification_required")
-
-    const verifiedMember = await exchangeJwt(ctx.env, "comments-routes-vote-verified")
-    await completeUniqueHumanVerification(ctx.env, verifiedMember.accessToken)
-    await addCommunityMember(ctx.communityDbRoot, community.communityId, verifiedMember.userId)
-
     const acceptedVote = await requestJson(
       `http://pirate.test/comments/${commentBody.comment_id}/vote`,
       { value: 1 },
       ctx.env,
-      verifiedMember.accessToken,
+      unverifiedMember.accessToken,
     )
     expect(acceptedVote.status).toBe(200)
     const acceptedVoteBody = await json(acceptedVote) as { comment_id: string; value: number }

@@ -1,14 +1,14 @@
-import type { UserRepository } from "../auth/repositories"
-import type { CommunityRepository } from "../communities/db-community-repository"
-import { canAccessCommunity, getCommunityMembershipState } from "../communities/membership/membership-state-store"
-import { badRequestError, eligibilityFailed, notFoundError, verificationRequired } from "../errors"
 import type { Client } from "../sql-client"
-import { requireSongArtifactUpload } from "./song-artifact-upload-repository"
+import type { UserRepository } from "../auth/repositories"
+import type { CommunityReadRepository } from "../communities/db-community-repository"
+import { canAccessCommunity, getCommunityMembershipState } from "../communities/membership/membership-state-store"
+import { eligibilityFailed, badRequestError, notFoundError, verificationRequired } from "../errors"
+import { requireSongArtifactUpload } from "./song-artifact-repository"
 import type { SongArtifactUpload } from "../../types"
 
 type CommunityMembershipRow = Awaited<ReturnType<typeof getCommunityMembershipState>>
 
-export async function requireSongArtifactMemberAccess(
+export async function requireMemberAccess(
   client: Client,
   communityId: string,
   userId: string,
@@ -31,7 +31,7 @@ export async function requireVerifiedHuman(userRepository: UserRepository, userI
 }
 
 export async function requireActiveCommunity(
-  communityRepository: CommunityRepository,
+  communityRepository: Pick<CommunityReadRepository, "getCommunityById">,
   communityId: string,
 ): Promise<void> {
   const community = await communityRepository.getCommunityById(communityId)

@@ -246,6 +246,81 @@ describe("spaces verification lifecycle routes", () => {
     })
   })
 
+  test("spaces completion rejects sessions missing a canonical root label", async () => {
+    const ctx = await createRouteTestContext({
+      SPACES_VERIFIER_BASE_URL: "http://spaces-verifier.test",
+    })
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-spaces-corrupt-normalized-label-user")
+    await createSelfVerifiedSession(ctx.env, session.accessToken)
+
+    const originalFetch = globalThis.fetch
+    await withFetchMock(async (input, init) => {
+      const url = typeof input === "string" ? input : input.toString()
+      if (url.startsWith("http://spaces-verifier.test/inspect?")) {
+        return new Response(JSON.stringify({
+          root_exists: true,
+          root_key_proof_verified: true,
+          root_pubkey: "spaces-root-pubkey",
+          observation_provider: "spaces_verifier",
+          anchor_fresh_enough: true,
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
+      if (url === "http://spaces-verifier.test/verify-publish") {
+        const body = JSON.parse(String(init?.body)) as { txt_value: string; web_url: string; freedom_url: string }
+        return new Response(JSON.stringify({
+          fabric_publish_verified: true,
+          root_key_proof_verified: true,
+          web_target_verified: true,
+          freedom_target_verified: true,
+          observed_web_url: body.web_url,
+          observed_freedom_url: body.freedom_url,
+          observed_txt_values: [body.txt_value],
+          records: { "pirate-verify": [body.txt_value] },
+          observation_provider: "spaces_verifier+fabric_zone",
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
+      return originalFetch(input, init)
+    }, async () => {
+      const createdNamespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
+        family: "spaces",
+        root_label: "\u{1F1F5}\u{1F1F8}",
+      }, ctx.env, session.accessToken)
+      const createdBody = await json(createdNamespaceSession) as {
+        namespace_verification_session_id: string
+      }
+      await ctx.client.execute({
+        sql: `
+          UPDATE namespace_verification_sessions
+          SET normalized_root_label = NULL
+          WHERE namespace_verification_session_id = ?1
+        `,
+        args: [createdBody.namespace_verification_session_id],
+      })
+
+      const completedNamespaceSession = await requestJson(
+        `http://pirate.test/namespace-verification-sessions/${createdBody.namespace_verification_session_id}/complete`,
+        {},
+        ctx.env,
+        session.accessToken,
+      )
+      expect(completedNamespaceSession.status).toBe(500)
+      const completedBody = await json(completedNamespaceSession) as {
+        code: string
+        message: string
+      }
+      expect(completedBody.code).toBe("internal_error")
+      expect(completedBody.message).toContain("missing normalized_root_label")
+    })
+  })
+
   test("spaces session start rejects missing root facts and derives capabilities from inspection", async () => {
     const ctx = await createRouteTestContext({
       SPACES_VERIFIER_BASE_URL: "http://spaces-verifier.test",

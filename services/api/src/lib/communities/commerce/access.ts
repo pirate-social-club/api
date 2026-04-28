@@ -1,7 +1,7 @@
 import type { Client } from "../../sql-client"
 import { badRequestError, notFoundError, verificationRequired } from "../../errors"
 import { getCommunityMembershipState } from "../membership/membership-state-store"
-import type { CommunityRepository } from "../db-community-repository"
+import type { CommunityReadRepository } from "../db-community-repository"
 import type { UserRepository } from "../../auth/repositories"
 import { getPrimaryWalletSnapshot } from "../community-serialization"
 import {
@@ -24,7 +24,7 @@ export async function requireCommunityMember(
 export async function requireCommunityOwner(input: {
   communityId: string
   userId: string
-  communityRepository: CommunityRepository
+  communityRepository: Pick<CommunityReadRepository, "getCommunityById">
 }): Promise<void> {
   const community = await input.communityRepository.getCommunityById(input.communityId)
   if (!community || community.creator_user_id !== input.userId) {

@@ -21,6 +21,7 @@ import {
   normalizeDesiredAgentHandleLabel,
 } from "./agent-handle-policy"
 import {
+  allocateInitialAgentHandle,
   getActiveAgentHandleRow,
   getAgentHandleRowById,
   getAgentHandleRowByLabel,
@@ -136,6 +137,88 @@ export async function updateUserAgentDisplayName(
     currentOwnershipRow ? serializeAgentOwnershipRecord(currentOwnershipRow) : null,
     handleRow ? serializeAgentHandle(handleRow) : null,
   )
+}
+
+export async function seedUserAgentForAdmin(
+  client: Client,
+  input: {
+    userId: string
+    displayName: string
+    desiredLabel?: string | null
+  },
+): Promise<UserAgent> {
+  const profileRow = await getProfileRow(client, input.userId).catch((error) => {
+    if (isMissingTableError(error, "profiles")) {
+      return null
+    }
+    throw error
+  })
+  if (!profileRow) {
+    throw eligibilityFailed("Owner profile is not available")
+  }
+  const globalHandleRow = await getGlobalHandleRow(client, profileRow.global_handle_id)
+  if (!globalHandleRow || globalHandleRow.status !== "active") {
+    throw eligibilityFailed("Owner global handle is not active")
+  }
+
+  const trimmedDisplayName = input.displayName.trim()
+  const desired = input.desiredLabel ? normalizeDesiredAgentHandleLabel(input.desiredLabel) : null
+  if (desired) {
+    const existingLabelRow = await getAgentHandleRowByLabel(client, desired.labelNormalized).catch((error) => {
+      if (isMissingTableError(error, "agent_handles")) {
+        throw internalError("Agent handle storage is not available")
+      }
+      throw error
+    })
+    if (existingLabelRow) {
+      throw conflictError("Desired agent handle is unavailable")
+    }
+  }
+
+  const agentId = makeId("agt")
+  const createdAt = nowIso()
+  await client.execute({
+    sql: `
+      INSERT INTO user_agents (
+        agent_id, owner_user_id, display_name, status, created_at, updated_at
+      ) VALUES (?1, ?2, ?3, 'active', ?4, ?4)
+    `,
+    args: [agentId, input.userId, trimmedDisplayName, createdAt],
+  })
+
+  await allocateInitialAgentHandle(client, {
+    agentId,
+    displayName: trimmedDisplayName,
+    createdAt,
+  }).catch((error) => {
+    if (isMissingTableError(error, "agent_handles")) {
+      throw internalError("Agent handle storage is not available")
+    }
+    throw error
+  })
+
+  if (desired) {
+    await claimUserAgentHandle(client, {
+      agentId,
+      userId: input.userId,
+      desiredLabel: desired.labelDisplay,
+    })
+  }
+
+  const row = await getUserAgentRowForOwner(client, agentId, input.userId)
+  if (!row) {
+    throw internalError("Seeded agent row is missing")
+  }
+  const handleRow = await getActiveAgentHandleRow(client, agentId).catch((error) => {
+    if (isMissingTableError(error, "agent_handles")) {
+      return null
+    }
+    throw error
+  })
+  if (!handleRow) {
+    throw internalError("Seeded agent handle row is missing")
+  }
+  return serializeUserAgent(row, null, serializeAgentHandle(handleRow))
 }
 
 export async function getUserAgentHandle(

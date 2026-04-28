@@ -1,4 +1,7 @@
-import type { CommunityRepository } from "./db-community-repository"
+import type {
+  CommunityDatabaseBindingRepository,
+  CommunityReadRepository,
+} from "./db-community-repository"
 import { isMissingTableError } from "../auth/auth-db-query-helpers"
 import { badRequestError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
@@ -65,6 +68,8 @@ type CommunityMachineAccessPlatformOverride = {
   expires_at: string | null
 }
 
+type CommunityMachineAccessRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
+
 const configurableSurfaces = [
   "community_stats",
   "thread_cards",
@@ -129,7 +134,7 @@ async function readStoredMachineAccessPolicy(input: {
   env: Env
   communityId: string
   updatedAt: string
-  communityRepository: CommunityRepository
+  communityRepository: CommunityDatabaseBindingRepository
 }): Promise<CommunityMachineAccessPolicy> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
@@ -347,7 +352,7 @@ export function defaultCommunityMachineAccessPolicy(input: {
 
 export async function getCommunityMachineAccessPolicy(input: {
   env: Env
-  communityRepository: CommunityRepository
+  communityRepository: CommunityMachineAccessRepository
   communityId: string
   userId: string
 }): Promise<CommunityMachineAccessPolicy> {
@@ -362,7 +367,7 @@ export async function getCommunityMachineAccessPolicy(input: {
 
 export async function getResolvedCommunityMachineAccessPolicy(input: {
   env: Env
-  communityRepository: CommunityRepository
+  communityRepository: CommunityMachineAccessRepository
   communityId: string
 }): Promise<CommunityMachineAccessPolicy> {
   const community = await input.communityRepository.getCommunityById(input.communityId)
@@ -380,7 +385,7 @@ export async function getResolvedCommunityMachineAccessPolicy(input: {
 
 export async function resolveEffectiveCommunityMachineAccessPolicy(input: {
   env: Env
-  communityRepository: CommunityRepository
+  communityRepository: CommunityMachineAccessRepository
   communityId: string
 }): Promise<CommunityMachineAccessEffectivePolicy> {
   const policy = await getResolvedCommunityMachineAccessPolicy(input)
@@ -397,7 +402,7 @@ export async function resolveEffectiveCommunityMachineAccessPolicy(input: {
 
 export async function updateCommunityMachineAccessPolicy(input: {
   env: Env
-  communityRepository: CommunityRepository
+  communityRepository: CommunityMachineAccessRepository
   communityId: string
   userId: string
   body: CommunityMachineAccessPolicyPatch | null

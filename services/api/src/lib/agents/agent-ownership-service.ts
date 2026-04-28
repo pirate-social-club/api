@@ -15,6 +15,7 @@ export {
   getUserAgentHandle,
   listUserAgents,
   resolvePublicAgentByHandle,
+  seedUserAgentForAdmin,
   updateUserAgentDisplayName,
 } from "./agent-user-service"
 export {

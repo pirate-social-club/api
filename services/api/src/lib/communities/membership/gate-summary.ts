@@ -1,9 +1,4 @@
 import type { MembershipGateSummary } from "../../../types"
-import { normalizeEthereumAddress } from "../community-token-gates"
-import {
-  formatAssetFilterLabel,
-  readInventoryMatchConfig,
-} from "../community-token-inventory-gates"
 import {
   parseGateConfig,
   parseProofRequirements,
@@ -11,12 +6,10 @@ import {
   readMinimumAge,
   readMinimumScore,
   readRequiredCountryValues,
+  resolveTokenGateContractAddress,
 } from "./gate-config"
+import { formatAssetFilterLabel, readInventoryMatchConfig } from "../community-token-inventory-gates"
 import type { CommunityGateRuleRow } from "./gate-types"
-
-function resolveTokenGateContractAddress(gateConfig: Record<string, unknown> | null): string | null {
-  return normalizeEthereumAddress(gateConfig?.contract_address)
-}
 
 export function buildMembershipGateSummary(rule: CommunityGateRuleRow): MembershipGateSummary {
   const requirements = parseProofRequirements(rule.proof_requirements_json, rule.gate_type)

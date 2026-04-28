@@ -1,13 +1,15 @@
 import { Hono } from "hono"
 import { authError, badRequestError, notFoundError } from "../lib/errors"
 import { getProfileRepository } from "../lib/auth/repositories"
-import { authenticate, type AuthenticatedEnv } from "../lib/auth-middleware"
+import { authenticateAdminOrUser, type AuthenticatedEnv } from "../lib/auth-middleware"
 import { trackApiEvent } from "../lib/analytics/track"
+import { makeId, nowIso } from "../lib/helpers"
+import { getControlPlaneClient } from "../lib/runtime-deps"
 
 const profiles = new Hono<AuthenticatedEnv>()
 
-profiles.use("/me", authenticate)
-profiles.use("/me/*", authenticate)
+profiles.use("/me", authenticateAdminOrUser)
+profiles.use("/me/*", authenticateAdminOrUser)
 
 function requireStringOrNull(value: unknown, field: string): string | null {
   if (value === null) {
@@ -27,6 +29,25 @@ function requireSourceValue<T extends string>(value: unknown, field: string, all
     throw badRequestError(`Invalid ${field}`)
   }
   return value as T
+}
+
+function requireXmtpInboxId(value: unknown): string | null {
+  if (value === null) {
+    return null
+  }
+  if (typeof value !== "string") {
+    throw badRequestError("Invalid xmtp_inbox_id")
+  }
+  const trimmed = value.trim()
+  if (
+    trimmed.length < 8
+    || trimmed.length > 256
+    || /\s/u.test(trimmed)
+    || /[\u0000-\u001f\u007f]/u.test(trimmed)
+  ) {
+    throw badRequestError("Invalid xmtp_inbox_id")
+  }
+  return trimmed
 }
 
 profiles.get("/me", async (c) => {
@@ -107,6 +128,42 @@ profiles.patch("/me", async (c) => {
 
   const repository = getProfileRepository(c.env)
   const profile = await repository.updateProfile(actor.userId, input)
+  if (!profile) {
+    throw authError("Authentication failed")
+  }
+  if (actor.authType === "admin") {
+    await getControlPlaneClient(c.env).execute({
+      sql: `
+        INSERT INTO audit_log (
+          audit_event_id, actor_type, actor_id, action, target_type, target_id, community_id, metadata_json, created_at
+        ) VALUES (
+          ?1, 'operator', ?2, 'community.admin_profile_updated', 'user', ?3, NULL, ?4, ?5
+        )
+      `,
+      args: [
+        makeId("aud"),
+        actor.adminOverride.adminActorId,
+        actor.userId,
+        JSON.stringify({
+          acting_user_id: actor.userId,
+          updated_fields: Object.keys(input),
+        }),
+        nowIso(),
+      ],
+    })
+  }
+  return c.json(profile, 200)
+})
+
+profiles.post("/me/xmtp-inbox", async (c) => {
+  const actor = c.get("actor")
+  const body = await c.req.json<{ xmtp_inbox_id?: unknown }>().catch(() => null)
+  if (!body || typeof body !== "object" || !("xmtp_inbox_id" in body)) {
+    throw badRequestError("Invalid XMTP inbox payload")
+  }
+
+  const repository = getProfileRepository(c.env)
+  const profile = await repository.updateXmtpInboxId(actor.userId, requireXmtpInboxId(body.xmtp_inbox_id))
   if (!profile) {
     throw authError("Authentication failed")
   }

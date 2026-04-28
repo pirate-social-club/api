@@ -5,7 +5,7 @@ import {
   getCommunityPostProjectionRowByPostId,
   updateCommunityPostProjectionMetricsRow,
   updateCommunityPostProjectionStatusRow,
-} from "../auth/auth-db-queries"
+} from "../auth/auth-db-community-queries"
 import type { CommunityPostProjectionRow } from "../auth/auth-db-rows"
 
 export async function recordCommunityPostProjection(

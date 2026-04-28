@@ -102,15 +102,8 @@ export function isHnsVerifierConfigured(env: Env): boolean {
   return getHnsVerifierBaseUrl(env) != null
 }
 
-export function shouldAutoProvisionHnsRoot(env: Env, rootLabel: string): boolean {
-  const normalized = rootLabel.trim().toLowerCase()
-  if (PLATFORM_MANAGED_HNS_ROOTS.has(normalized)) {
-    return true
-  }
-  const configured = env.HNS_AUTO_PROVISION_ROOTS?.split(",")
-    .map((entry) => entry.trim().toLowerCase())
-    .filter(Boolean) ?? []
-  return configured.includes(normalized)
+export function isPlatformManagedHnsRoot(rootLabel: string): boolean {
+  return PLATFORM_MANAGED_HNS_ROOTS.has(rootLabel.trim().toLowerCase())
 }
 
 async function request<T>(env: Env, path: string, init?: RequestInit): Promise<T> {

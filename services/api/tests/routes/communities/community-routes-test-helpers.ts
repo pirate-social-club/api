@@ -304,48 +304,6 @@ export async function setPassportWalletScore(
   }
 }
 
-export async function setPassportSanctionsClear(
-  env: Env,
-  userId: string,
-): Promise<void> {
-  const client = createClient({
-    url: String(env.CONTROL_PLANE_DATABASE_URL),
-  })
-
-  try {
-    const userResult = await client.execute({
-      sql: `SELECT verification_capabilities_json FROM users WHERE user_id = ?1 LIMIT 1`,
-      args: [userId],
-    })
-    const currentCapabilities = typeof userResult.rows[0]?.verification_capabilities_json === "string"
-      ? JSON.parse(String(userResult.rows[0]?.verification_capabilities_json)) as ReturnType<typeof buildDefaultVerificationCapabilities>
-      : buildDefaultVerificationCapabilities()
-    const capabilities = {
-      ...buildDefaultVerificationCapabilities(),
-      ...currentCapabilities,
-    }
-    capabilities.sanctions_clear = {
-      state: "verified",
-      provider: "passport",
-      proof_type: "sanctions_clear",
-      mechanism: "CleanHands",
-      verified_at: new Date().toISOString(),
-    }
-
-    await client.execute({
-      sql: `
-        UPDATE users
-        SET verification_capabilities_json = ?2,
-            updated_at = ?3
-        WHERE user_id = ?1
-      `,
-      args: [userId, JSON.stringify(capabilities), new Date().toISOString()],
-    })
-  } finally {
-    client.close()
-  }
-}
-
 export async function getCommunityControlPlaneState(
   env: Env,
   communityId: string,

@@ -1,21 +1,20 @@
-import type { CommunityRepository } from "../db-community-repository"
+import {
+  canAccessCommunity,
+  getCommunityMembershipState,
+} from "./membership-state-store"
+import { setCommunityFollowInactive } from "./follow-store"
 import { openCommunityDb } from "../community-db-factory"
 import { conflictError, notFoundError } from "../../errors"
 import { nowIso } from "../../helpers"
-import { canAccessCommunity, getCommunityMembershipState } from "./membership-state-store"
-import { setCommunityFollowInactive } from "./follow-store"
-import {
-  followCommunityForHomeFeed,
-  syncCommunityFollowProjection,
-} from "./projection-service"
-import type { CommunityFollowResult } from "./types"
 import type { Env } from "../../../types"
+import { activateCommunityFollow, syncCommunityFollowProjection } from "./projection-service"
+import type { CommunityFollowResult, CommunityMembershipRepository } from "./types"
 
 export async function followCommunity(input: {
   env: Env
   userId: string
   communityId: string
-  communityRepository: CommunityRepository
+  communityRepository: CommunityMembershipRepository
 }): Promise<CommunityFollowResult> {
   const community = await input.communityRepository.getCommunityById(input.communityId)
   if (!community || community.provisioning_state !== "active" || community.status !== "active") {
@@ -24,7 +23,7 @@ export async function followCommunity(input: {
 
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
-    return await followCommunityForHomeFeed({
+    return await activateCommunityFollow({
       db,
       communityRepository: input.communityRepository,
       communityId: input.communityId,
@@ -40,7 +39,7 @@ export async function unfollowCommunity(input: {
   env: Env
   userId: string
   communityId: string
-  communityRepository: CommunityRepository
+  communityRepository: CommunityMembershipRepository
 }): Promise<CommunityFollowResult> {
   const community = await input.communityRepository.getCommunityById(input.communityId)
   if (!community || community.provisioning_state !== "active" || community.status !== "active") {

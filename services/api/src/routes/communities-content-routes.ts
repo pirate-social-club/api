@@ -1,27 +1,32 @@
-import type { Hono } from "hono"
+import { Hono } from "hono"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
-import { createPost, listCommunityPosts } from "../lib/posts/post-service"
-import { createComment, listPostComments } from "../lib/comments/comment-service"
 import { assertAgentDelegatedWriteMatchesActor } from "../lib/agents/agent-write-authorization"
 import { trackApiEvent } from "../lib/analytics/track"
+import { createComment, listPostComments } from "../lib/comments/comment-service"
+import type { CreateCommentRequest } from "../lib/comments/comment-types"
+import { getControlPlaneClient } from "../lib/runtime-deps"
+import { makeId, nowIso } from "../lib/helpers"
+import { createPost, listCommunityPosts } from "../lib/posts/post-service"
+import type { CreatePostRequest } from "../types"
 import {
   getResolvedCommunityRouteContext,
   requireJsonBody,
 } from "./communities-route-helpers"
-import type { CreatePostRequest } from "../types"
-import type { CreateCommentRequest } from "../lib/comments/comment-types"
 
 export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.post("/:communityId/posts", async (c) => {
     const { actor, communityId, communityRepository, userRepository, profileRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<CreatePostRequest>(c, "Invalid post create payload")
-    assertAgentDelegatedWriteMatchesActor({ actor, body })
+    if (actor.authType !== "admin") {
+      assertAgentDelegatedWriteMatchesActor({ actor, body })
+    }
     const result = await createPost({
       env: c.env,
       requestUrl: c.req.url,
       userId: actor.userId,
       communityId,
       body,
+      bypassAuthorAccessChecks: actor.authType === "admin",
       userRepository,
       profileRepository,
       communityRepository,
@@ -37,6 +42,33 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
         status: result.status,
       },
     })
+    if (actor.authType === "admin") {
+      const operationClass = c.req.header("x-admin-operation-class")?.trim() || "admin_post"
+      await getControlPlaneClient(c.env).execute({
+        sql: `
+          INSERT INTO audit_log (
+            audit_event_id, actor_type, actor_id, action, target_type, target_id, community_id, metadata_json, created_at
+          ) VALUES (
+            ?1, 'operator', ?2, ?3, 'post', ?4, ?5, ?6, ?7
+          )
+        `,
+        args: [
+          makeId("aud"),
+          actor.adminOverride.adminActorId,
+          operationClass === "launch_seed" ? "community.seed_post_created" : "community.admin_post_created",
+          result.post_id,
+          communityId,
+          JSON.stringify({
+            operation_class: operationClass,
+            acting_user_id: actor.userId,
+            idempotency_key: body.idempotency_key ?? null,
+            post_type: result.post_type,
+            status: result.status,
+          }),
+          nowIso(),
+        ],
+      })
+    }
     return c.json(result, result.status === "published" ? 201 : 202)
   })
 
@@ -59,7 +91,9 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
   communities.post("/:communityId/posts/:postId/comments", async (c) => {
     const { actor, communityId, communityRepository, userRepository, profileRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<CreateCommentRequest>(c, "Invalid comment create payload")
-    assertAgentDelegatedWriteMatchesActor({ actor, body })
+    if (actor.authType !== "admin") {
+      assertAgentDelegatedWriteMatchesActor({ actor, body })
+    }
     const result = await createComment({
       env: c.env,
       requestUrl: c.req.url,
@@ -67,6 +101,7 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
       communityId,
       threadRootPostId: c.req.param("postId"),
       body,
+      bypassAuthorAccessChecks: actor.authType === "admin",
       userRepository,
       profileRepository,
       communityRepository,
@@ -81,6 +116,33 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
         depth: result.depth,
       },
     })
+    if (actor.authType === "admin") {
+      const operationClass = c.req.header("x-admin-operation-class")?.trim() || "admin_comment"
+      await getControlPlaneClient(c.env).execute({
+        sql: `
+          INSERT INTO audit_log (
+            audit_event_id, actor_type, actor_id, action, target_type, target_id, community_id, metadata_json, created_at
+          ) VALUES (
+            ?1, 'operator', ?2, ?3, 'comment', ?4, ?5, ?6, ?7
+          )
+        `,
+        args: [
+          makeId("aud"),
+          actor.adminOverride.adminActorId,
+          operationClass === "launch_seed" ? "community.seed_comment_created" : "community.admin_comment_created",
+          result.comment_id,
+          communityId,
+          JSON.stringify({
+            operation_class: operationClass,
+            acting_user_id: actor.userId,
+            idempotency_key: body.idempotency_key ?? null,
+            post_id: c.req.param("postId"),
+            depth: result.depth,
+          }),
+          nowIso(),
+        ],
+      })
+    }
     return c.json(result, 201)
   })
 

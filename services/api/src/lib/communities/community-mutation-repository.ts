@@ -3,7 +3,7 @@ import { internalError } from "../errors"
 import {
   getCommunityRowById,
   getCommunityRowByNamespaceVerificationId,
-} from "../auth/auth-db-queries"
+} from "../auth/auth-db-community-queries"
 import type { CommunityRow } from "../auth/auth-db-rows"
 
 export async function attachNamespaceToCommunity(

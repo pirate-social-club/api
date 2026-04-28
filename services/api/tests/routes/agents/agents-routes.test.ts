@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import app from "../../../src/index"
 import { setClawkeyProviderForTests } from "../../../src/lib/agents/clawkey-provider"
 import { setSelfProviderForTests } from "../../../src/lib/verification/self-provider"
-import appWorker from "../../../src/index"
 import {
   buildTestEnv,
   buildVerifiedSelfProvider,
@@ -13,6 +12,8 @@ import {
 } from "../../helpers"
 import { createSignedAgentChallenge } from "../../agent-test-helpers"
 import { createSelfVerifiedSession, exchangeJwt, requestJson } from "../verification/verification-test-helpers"
+
+const ADMIN_TOKEN = "test-admin-token-abc123"
 
 let cleanup: (() => Promise<void>) | null = null
 
@@ -465,6 +466,167 @@ describe("agent routes", () => {
     }
     expect(updatedBody.agent_id).toBe(completedBody.agent_id)
     expect(updatedBody.display_name).toBe("Night Signal")
+  })
+
+  test("admin token can list a user's agents and claim a clawitzer handle", async () => {
+    const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
+    cleanup = ctx.cleanup
+
+    const ownerSession = await exchangeJwt(ctx.env, "agent-admin-route-owner")
+    await createSelfVerifiedSession(ctx.env, ownerSession.accessToken)
+
+    setClawkeyProviderForTests({
+      startRegistration: async () => ({
+        sessionId: "cks_agent_admin_route_123",
+        registrationUrl: "https://clawkey.test/register/cks_agent_admin_route_123",
+        expiresAt: "2036-04-20T12:00:00.000Z",
+      }),
+      getRegistrationStatus: async () => ({
+        status: "completed",
+        deviceId: "claw-device-admin-route",
+        publicKey: null,
+        registeredAt: "2026-04-19T12:34:56.000Z",
+      }),
+    })
+
+    const registerChallenge = createSignedAgentChallenge({
+      message: "clawkey-register-1738500000500",
+      deviceId: "claw-device-admin-route",
+    })
+
+    const createdResponse = await requestJson("http://pirate.test/agent-ownership-sessions", {
+      session_kind: "register",
+      ownership_provider: "clawkey",
+      display_name: "Palm Agent",
+      agent_challenge: registerChallenge.challenge,
+    }, ctx.env, ownerSession.accessToken)
+    expect(createdResponse.status).toBe(201)
+    const createdBody = await json(createdResponse) as {
+      agent_ownership_session_id: string
+    }
+
+    const completedResponse = await requestJson(
+      `http://pirate.test/agent-ownership-sessions/${createdBody.agent_ownership_session_id}/complete`,
+      {},
+      ctx.env,
+      ownerSession.accessToken,
+    )
+    expect(completedResponse.status).toBe(200)
+    const completedBody = await json(completedResponse) as {
+      agent_id: string
+    }
+
+    const agentsResponse = await app.request(
+      "http://pirate.test/agents",
+      {
+        headers: {
+          "x-admin-token": ADMIN_TOKEN,
+          "x-admin-as-user-id": ownerSession.userId,
+        },
+      },
+      ctx.env,
+    )
+    expect(agentsResponse.status).toBe(200)
+    const agentsBody = await json(agentsResponse) as {
+      items: Array<{
+        agent_id: string
+        display_name: string
+        handle: { label_display: string } | null
+      }>
+    }
+    expect(agentsBody.items).toHaveLength(1)
+    expect(agentsBody.items[0]?.agent_id).toBe(completedBody.agent_id)
+    expect(agentsBody.items[0]?.display_name).toBe("Palm Agent")
+    expect(agentsBody.items[0]?.handle?.label_display).toBe("palm-agent.clawitzer")
+
+    const claimResponse = await app.request(
+      `http://pirate.test/agents/${completedBody.agent_id}/handle`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-admin-token": ADMIN_TOKEN,
+          "x-admin-as-user-id": ownerSession.userId,
+        },
+        body: JSON.stringify({ desired_label: "night-signal" }),
+      },
+      ctx.env,
+    )
+    expect(claimResponse.status).toBe(200)
+    const claimBody = await json(claimResponse) as {
+      label_display: string
+      status: string
+    }
+    expect(claimBody.label_display).toBe("night-signal.clawitzer")
+    expect(claimBody.status).toBe("active")
+
+    const handleResponse = await app.request(
+      `http://pirate.test/agents/${completedBody.agent_id}/handle`,
+      {
+        headers: {
+          "x-admin-token": ADMIN_TOKEN,
+          "x-admin-as-user-id": ownerSession.userId,
+        },
+      },
+      ctx.env,
+    )
+    expect(handleResponse.status).toBe(200)
+    const handleBody = await json(handleResponse) as {
+      label_display: string
+    }
+    expect(handleBody.label_display).toBe("night-signal.clawitzer")
+  })
+
+  test("admin token can seed a prod-style clawitzer agent without bearer auth", async () => {
+    const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
+    cleanup = ctx.cleanup
+
+    const ownerSession = await exchangeJwt(ctx.env, "agent-admin-seed-owner")
+
+    const seedResponse = await app.request(
+      "http://pirate.test/agents/admin/seed",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-admin-token": ADMIN_TOKEN,
+          "x-admin-as-user-id": ownerSession.userId,
+        },
+        body: JSON.stringify({
+          display_name: "Night Signal",
+          desired_label: "night-signal",
+        }),
+      },
+      ctx.env,
+    )
+    expect(seedResponse.status).toBe(201)
+    const seedBody = await json(seedResponse) as {
+      agent_id: string
+      owner_user_id: string
+      display_name: string
+      handle: { label_display: string } | null
+      current_ownership_record_id: string | null
+    }
+    expect(seedBody.owner_user_id).toBe(ownerSession.userId)
+    expect(seedBody.display_name).toBe("Night Signal")
+    expect(seedBody.handle?.label_display).toBe("night-signal.clawitzer")
+    expect(seedBody.current_ownership_record_id).toBeNull()
+
+    const publicAgentResponse = await app.request("http://pirate.test/public-agents/night-signal", {}, ctx.env)
+    expect(publicAgentResponse.status).toBe(200)
+    const publicAgentBody = await json(publicAgentResponse) as {
+      is_canonical: boolean
+      resolved_handle_label: string
+      agent: { agent_id: string; display_name: string | null; ownership_provider: string | null }
+      owner: { user_id: string; global_handle: { label: string } }
+    }
+    expect(publicAgentBody.is_canonical).toBe(true)
+    expect(publicAgentBody.resolved_handle_label).toBe("night-signal.clawitzer")
+    expect(publicAgentBody.agent.agent_id).toBe(seedBody.agent_id)
+    expect(publicAgentBody.agent.display_name).toBe("Night Signal")
+    expect(publicAgentBody.agent.ownership_provider).toBeNull()
+    expect(publicAgentBody.owner.user_id).toBe(ownerSession.userId)
+    expect(publicAgentBody.owner.global_handle.label).toMatch(/\.pirate$/)
   })
 
   test("generic agent names fall back to the owner's primary public handle", async () => {
@@ -984,12 +1146,13 @@ describe("agent routes", () => {
       agent_ownership_session_id: string
     }
 
-    const callbackResponse = await appWorker.request(
+    const callbackResponse = await app.request(
       `http://pirate.test/agent-ownership-sessions/${startBody.agent_ownership_session_id}/callback`,
       {
         method: "POST",
         headers: {
           "content-type": "application/json",
+          "x-very-callback-secret": "callback-secret",
         },
         body: JSON.stringify({
           provider: "clawkey",
@@ -1005,5 +1168,27 @@ describe("agent routes", () => {
     const callbackBody = await json(callbackResponse) as { code: string; message: string }
     expect(callbackBody.code).toBe("not_implemented")
     expect(callbackBody.message).toContain("polling completion")
+  })
+
+  test("agent ownership callback rejects missing callback secret", async () => {
+    const response = await app.request(
+      "http://pirate.test/agent-ownership-sessions/aos_missing_secret/callback",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          provider: "clawkey",
+          payload: {
+            session_id: "cks_missing_secret",
+          },
+        }),
+      },
+      buildTestEnv(),
+    )
+
+    expect(response.status).toBe(401)
+    const body = await json(response) as { code: string; message: string }
+    expect(body.code).toBe("auth_error")
+    expect(body.message).toBe("Callback secret is required")
   })
 })

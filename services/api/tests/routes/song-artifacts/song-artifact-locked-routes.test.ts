@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { createClient } from "@libsql/client"
 import app from "../../../src/index"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
+import { getCommunityRepository } from "../../../src/lib/communities/db-community-repository"
+import { buildLocalCommunityDbPath } from "../../../src/lib/communities/community-local-db"
+import { reconcileStaleCommunityPurchaseSettlements } from "../../../src/lib/communities/commerce/settlement-service"
 import { setStoryAccessProofSignerForTests } from "../../../src/lib/story/story-access-proof-service"
 import { setStoryAssetPublisherForTests } from "../../../src/lib/story/story-publish-service"
 import { setStoryRoyaltyRegistrarForTests } from "../../../src/lib/story/story-royalty-registration-service"
@@ -27,6 +31,11 @@ import { setCommunityCommerceCharityPayoutExecutorForTests } from "../../../src/
 
 let cleanup: (() => Promise<void>) | null = null
 let originalFetch: typeof fetch
+const testWithTimeout = test as unknown as (name: string, fn: () => Promise<void>, timeout: number) => void
+
+async function verifyForLockedCommerce(env: Env, _userId: string, accessToken: string): Promise<void> {
+  await completeUniqueHumanVerification(env, accessToken)
+}
 
 const routedCheckoutQuoteFields = {
   funding_asset: {
@@ -247,8 +256,8 @@ describe("song artifact locked routes", () => {
       walletAttachmentId: "wal_song_buyer_locked",
       walletAddress: "0xbbb0000000000000000000000000000000000000",
     })
-    await completeUniqueHumanVerification(ctx.env, author.accessToken)
-    await completeUniqueHumanVerification(ctx.env, buyer.accessToken)
+    await verifyForLockedCommerce(ctx.env, author.userId, author.accessToken)
+    await verifyForLockedCommerce(ctx.env, buyer.userId, buyer.accessToken)
 
     const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "Paid Song Club")
     const donationPolicyUpdate = await app.request(
@@ -335,6 +344,7 @@ describe("song artifact locked routes", () => {
         access_mode: "locked",
         song_mode: "original",
         rights_basis: "original",
+        license_preset: "non-commercial",
         song_artifact_bundle_id: bundleBody.song_artifact_bundle_id,
       },
       ctx.env,
@@ -366,6 +376,7 @@ describe("song artifact locked routes", () => {
     const authorAssetBody = await json(authorAssetRead) as {
       asset_id: string
       access_mode: string
+      display_title: string | null
       locked_delivery_status: string
       primary_content_ref: string
       story_ip_id: string | null
@@ -373,6 +384,7 @@ describe("song artifact locked routes", () => {
     }
     expect(authorAssetBody.asset_id).toBe(assetId)
     expect(authorAssetBody.access_mode).toBe("locked")
+    expect(authorAssetBody.display_title).toBe("Paid anthem")
     expect(authorAssetBody.locked_delivery_status).toBe("ready")
     expect(authorAssetBody.primary_content_ref).toBe(primaryUploadIntentBody.storage_ref)
     expect(authorAssetBody.story_ip_id).toBe("0x1010101010101010101010101010101010101010")
@@ -569,6 +581,112 @@ describe("song artifact locked routes", () => {
     expect(royaltySettlementCalls[0]?.purchaseRef).toMatch(/^0x[0-9a-f]{64}$/)
     expect(BigInt(royaltySettlementCalls[0]?.entitlementTokenId ?? "0") > 0n).toBe(true)
 
+    const purchaseRetry = await requestJson(
+      `http://pirate.test/communities/${communityId}/purchase-settlements`,
+      {
+        quote_id: quoteBody.quote_id,
+        settlement_wallet_attachment_id: settlementWalletAttachmentId,
+        funding_tx_ref: "0xfunding-paid-song-1",
+        settlement_tx_ref: "tx-paid-song-1",
+      },
+      ctx.env,
+      buyer.accessToken,
+    )
+    expect(purchaseRetry.status).toBe(201)
+    const purchaseRetryBody = await json(purchaseRetry) as { purchase_id: string }
+    expect(purchaseRetryBody.purchase_id).toBe(purchaseBody.purchase_id)
+    expect(charityPayoutCalls).toHaveLength(1)
+    expect(royaltySettlementCalls).toHaveLength(1)
+
+    const communityDb = createClient({
+      url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
+    })
+    try {
+      await communityDb.execute({
+        sql: `DELETE FROM purchase_allocation_legs WHERE purchase_id = ?1`,
+        args: [purchaseBody.purchase_id],
+      })
+      await communityDb.execute({
+        sql: `DELETE FROM purchase_entitlements WHERE purchase_id = ?1`,
+        args: [purchaseBody.purchase_id],
+      })
+      await communityDb.execute({
+        sql: `DELETE FROM purchases WHERE purchase_id = ?1`,
+        args: [purchaseBody.purchase_id],
+      })
+      await communityDb.execute({
+        sql: `
+          UPDATE purchase_quotes
+          SET status = 'active',
+              consumed_at = NULL,
+              updated_at = '2026-04-21T00:00:00.000Z'
+          WHERE quote_id = ?1
+        `,
+        args: [quoteBody.quote_id],
+      })
+      await communityDb.execute({
+        sql: `
+          UPDATE purchase_settlement_attempts
+          SET status = 'attempting',
+              updated_at = '2026-04-21T00:00:00.000Z'
+          WHERE quote_id = ?1
+        `,
+        args: [quoteBody.quote_id],
+      })
+    } finally {
+      communityDb.close()
+    }
+
+    const communityRepository = getCommunityRepository(ctx.env)
+    try {
+      const reconcileSummary = await reconcileStaleCommunityPurchaseSettlements({
+        env: ctx.env,
+        communityRepository,
+        staleMs: 1,
+      })
+      expect(reconcileSummary).toMatchObject({
+        checked: 1,
+        finalized: 1,
+        failed: 0,
+        errors: 0,
+      })
+    } finally {
+      communityRepository.close?.()
+    }
+    expect(charityPayoutCalls).toHaveLength(1)
+    expect(royaltySettlementCalls).toHaveLength(1)
+
+    await new Promise((resolve) => setTimeout(resolve, 2))
+    const authorRoyaltyActivity = await app.request(
+      "http://pirate.test/royalties/activity?limit=10",
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(authorRoyaltyActivity.status).toBe(200)
+    const authorRoyaltyActivityBody = await json(authorRoyaltyActivity) as {
+      items: Array<{
+        amount_wip_wei: string
+        asset_id: string
+        purchase_id: string | null
+        story_ip_id: string
+        title: string | null
+        tx_hash: string | null
+      }>
+    }
+    const earningActivity = authorRoyaltyActivityBody.items.find((item) => item.purchase_id === purchaseBody.purchase_id)
+    expect(earningActivity).toMatchObject({
+      amount_wip_wei: "4490000000000000000",
+      asset_id: assetId,
+      purchase_id: purchaseBody.purchase_id,
+      story_ip_id: "0x1010101010101010101010101010101010101010",
+      title: "Paid anthem",
+      tx_hash: "0xroyalty-paid-song",
+    })
+
     const purchaseRecord = await app.request(
       `http://pirate.test/communities/${communityId}/purchases/${purchaseBody.purchase_id}`,
       {
@@ -699,7 +817,7 @@ describe("song artifact locked routes", () => {
       walletAttachmentId: "wal_song_author_derivative",
       walletAddress: "0xaaa0000000000000000000000000000000000000",
     })
-    await completeUniqueHumanVerification(ctx.env, author.accessToken)
+    await verifyForLockedCommerce(ctx.env, author.userId, author.accessToken)
 
     const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "Derivative Commerce Club")
 
@@ -802,7 +920,7 @@ describe("song artifact locked routes", () => {
     expect(listingBody.message).toBe("Asset is not ready for Story royalty commerce")
   })
 
-  test("allows commerce for a locked derivative asset once Story royalty registration metadata is present", async () => {
+  testWithTimeout("allows commerce for a locked derivative asset once Story royalty registration metadata is present", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
     const royaltySettlementCalls: Array<{
       purchaseRef: string
@@ -901,8 +1019,8 @@ describe("song artifact locked routes", () => {
       walletAttachmentId: "wal_song_buyer_derivative_registered",
       walletAddress: "0xbbb0000000000000000000000000000000000000",
     })
-    await completeUniqueHumanVerification(ctx.env, author.accessToken)
-    await completeUniqueHumanVerification(ctx.env, buyer.accessToken)
+    await verifyForLockedCommerce(ctx.env, author.userId, author.accessToken)
+    await verifyForLockedCommerce(ctx.env, buyer.userId, buyer.accessToken)
 
     const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "Derivative Registered Club")
 
@@ -1145,6 +1263,332 @@ describe("song artifact locked routes", () => {
     expect(royaltySettlementCalls[0]?.buyerAddress).toBe("0xbbb0000000000000000000000000000000000000")
     expect(royaltySettlementCalls[0]?.receiverIpId).toBe("0x1111111111111111111111111111111111111111")
     expect(royaltySettlementCalls[0]?.amount).toBe("3590000000000000000")
+  }, 10000)
+
+  test("creates a public video commerce asset backed by raw Filebase content", async () => {
+    const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
+    installLockedSongFetchMocks({
+      originalFetch,
+      storedObjects,
+    })
+
+    const ctx = await createRouteTestContext({
+      FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
+      FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
+      FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
+      FILEBASE_S3_BUCKET_MUSIC: "pirate-song-media",
+    })
+    cleanup = ctx.cleanup
+
+    const author = await exchangeJwt(ctx.env, "video-author-public")
+    await completeUniqueHumanVerification(ctx.env, author.accessToken)
+    const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "Public Video Club")
+    const videoBytes = new TextEncoder().encode("public-video-bytes")
+    const videoUpload = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "primary_video",
+      mimeType: "video/mp4",
+      filename: "public-video.mp4",
+      bytes: videoBytes,
+    })
+
+    const createdPost = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        idempotency_key: "public-video-commerce-1",
+        post_type: "video",
+        title: "Public video",
+        access_mode: "public",
+        media_refs: [{
+          storage_ref: videoUpload.storage_ref,
+          mime_type: "video/mp4",
+          size_bytes: videoBytes.byteLength,
+          poster_ref: "http://pirate.test/community-media/post_image/public-video-cover.jpg",
+          poster_mime_type: "image/jpeg",
+          poster_size_bytes: 1234,
+          poster_width: 1280,
+          poster_height: 720,
+          poster_frame_ms: 1000,
+        }],
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(createdPost.status).toBe(201)
+    const postBody = await json(createdPost) as {
+      asset_id: string
+      access_mode: string
+      media_refs: Array<{ storage_ref: string }>
+    }
+    expect(postBody.access_mode).toBe("public")
+    expect(postBody.media_refs[0]?.storage_ref).toBe(videoUpload.storage_ref)
+    expect((postBody.media_refs[0] as { poster_ref?: string }).poster_ref).toBe("http://pirate.test/community-media/post_image/public-video-cover.jpg")
+
+    const assetResponse = await app.request(
+      `http://pirate.test/communities/${communityId}/assets/${postBody.asset_id}`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(assetResponse.status).toBe(200)
+    const assetBody = await json(assetResponse) as {
+      asset_kind: string
+      access_mode: string
+      primary_content_ref: string
+      locked_delivery_status: string
+    }
+    expect(assetBody.asset_kind).toBe("video_file")
+    expect(assetBody.access_mode).toBe("public")
+    expect(assetBody.primary_content_ref).toBe(videoUpload.storage_ref)
+    expect(assetBody.locked_delivery_status).toBe("none")
+
+    const contentResponse = await app.request(
+      `http://pirate.test/communities/${communityId}/assets/${postBody.asset_id}/content`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(contentResponse.status).toBe(200)
+    expect(new Uint8Array(await contentResponse.arrayBuffer())).toEqual(videoBytes)
+  })
+
+  test("creates a members-only locked video commerce asset with Story CDR access", async () => {
+    const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
+    setStoryRuntimeFundingAssertionForTests(async () => {})
+    setStoryCdrUploaderForTests(async () => ({
+      cdrVaultUuid: 9090,
+      writerAddress: "0x0000000000000000000000000000000000000cd1",
+      txHashes: {
+        allocate: "0xalloc-video",
+        write: "0xwrite-video",
+      },
+    }))
+    setStoryAssetPublisherForTests(async () => ({
+      entitlementConfiguredTxHash: "0xconfigure-video",
+      publishTxHash: "0xpublish-video",
+    }))
+    setStoryRoyaltyRegistrarForTests(async (input) => {
+      expect(input.assetKind).toBe("video_file")
+      expect(input.bundle).toBeNull()
+      expect(input.rightsBasis).toBe("original")
+      expect(input.licensePreset).toBe("non-commercial")
+      return {
+        storyIpId: "0x3030303030303030303030303030303030303030",
+        storyIpNftContract: "0x4040404040404040404040404040404040404040",
+        storyIpNftTokenId: "909",
+        storyLicenseTermsId: "19",
+        storyLicenseTemplate: null,
+        storyRoyaltyPolicy: "0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E",
+        storyDerivativeParentIpIds: null,
+        storyRevenueToken: "0x1514000000000000000000000000000000000000",
+        storyRoyaltyRegistrationStatus: "registered",
+        storyDerivativeRegisteredAt: null,
+      }
+    })
+    setStoryAccessProofSignerForTests(async (input) => ({
+      digest: "0xd1e57090",
+      signature: `0x${"22".repeat(65)}` as `0x${string}`,
+      signerAddress: "0x0000000000000000000000000000000000000acc",
+      proof: {
+        vaultUuid: input.vaultUuid,
+        caller: input.callerAddress,
+        accessRef: input.accessRef,
+        scope: "0xb8c1a2b531e7c9d996686b1cc6dcd49d2d7037be365b6d380ebaf489440d4f18",
+        expiry: input.expiry,
+        namespace: input.namespace,
+      },
+    }))
+    installLockedSongFetchMocks({
+      originalFetch,
+      storedObjects,
+    })
+
+    const ctx = await createRouteTestContext({
+      FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
+      FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
+      FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
+      FILEBASE_S3_BUCKET_MUSIC: "pirate-song-media",
+      STORY_CONTRACT_OWNER_PRIVATE_KEY: "0x1000000000000000000000000000000000000000000000000000000000000001",
+      STORY_OPERATOR_PRIVATE_KEY: "0x2000000000000000000000000000000000000000000000000000000000000002",
+      STORY_CDR_WRITER_PRIVATE_KEY: "0x3000000000000000000000000000000000000000000000000000000000000003",
+      STORY_ACCESS_CONTROLLER_PRIVATE_KEY: "0x4000000000000000000000000000000000000000000000000000000000000004",
+    })
+    cleanup = ctx.cleanup
+
+    const author = await exchangeJwt(ctx.env, "video-author-locked")
+    const buyer = await exchangeJwt(ctx.env, "video-buyer-locked")
+    await attachPrimaryWallet({
+      client: ctx.client,
+      userId: author.userId,
+      walletAttachmentId: "wal_video_author_locked",
+      walletAddress: "0xaaa0000000000000000000000000000000000000",
+    })
+    await verifyForLockedCommerce(ctx.env, author.userId, author.accessToken)
+    await verifyForLockedCommerce(ctx.env, buyer.userId, buyer.accessToken)
+    const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "Locked Video Club")
+    const joinBuyer = await requestJson(
+      `http://pirate.test/communities/${communityId}/join`,
+      {},
+      ctx.env,
+      buyer.accessToken,
+    )
+    expect(joinBuyer.status).toBe(200)
+    const videoBytes = new TextEncoder().encode("locked-video-bytes")
+    const videoUpload = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "primary_video",
+      mimeType: "video/mp4",
+      filename: "locked-video.mp4",
+      bytes: videoBytes,
+    })
+
+    const createdPost = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        idempotency_key: "locked-video-commerce-1",
+        post_type: "video",
+        title: "Members-only locked video",
+        visibility: "members_only",
+        access_mode: "locked",
+        license_preset: "non-commercial",
+        media_refs: [{
+          storage_ref: videoUpload.storage_ref,
+          mime_type: "video/mp4",
+          size_bytes: videoBytes.byteLength,
+          poster_ref: "http://pirate.test/community-media/post_image/locked-video-cover.jpg",
+          poster_mime_type: "image/jpeg",
+          poster_size_bytes: 2345,
+          poster_width: 1280,
+          poster_height: 720,
+          poster_frame_ms: 2000,
+        }],
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(createdPost.status).toBe(201)
+    const postBody = await json(createdPost) as {
+      asset_id: string
+      access_mode: string
+      visibility: string
+      media_refs?: Array<{ storage_ref?: string; poster_ref?: string; poster_frame_ms?: number }>
+    }
+    expect(postBody.access_mode).toBe("locked")
+    expect(postBody.visibility).toBe("members_only")
+    expect(postBody.media_refs?.[0]?.storage_ref).toBe("")
+    expect(postBody.media_refs?.[0]?.poster_ref).toBe("http://pirate.test/community-media/post_image/locked-video-cover.jpg")
+    expect(postBody.media_refs?.[0]?.poster_frame_ms).toBe(2000)
+
+    const assetResponse = await app.request(
+      `http://pirate.test/communities/${communityId}/assets/${postBody.asset_id}`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(assetResponse.status).toBe(200)
+    const assetBody = await json(assetResponse) as {
+      asset_kind: string
+      access_mode: string
+      story_status: string
+      locked_delivery_status: string
+      story_cdr_vault_uuid: number
+      story_ip_id: string | null
+      story_license_terms_id: string | null
+      story_royalty_registration_status: string
+    }
+    expect(assetBody.asset_kind).toBe("video_file")
+    expect(assetBody.access_mode).toBe("locked")
+    expect(assetBody.story_status).toBe("published")
+    expect(assetBody.locked_delivery_status).toBe("ready")
+    expect(assetBody.story_cdr_vault_uuid).toBe(9090)
+    expect(assetBody.story_ip_id).toBe("0x3030303030303030303030303030303030303030")
+    expect(assetBody.story_license_terms_id).toBe("19")
+    expect(assetBody.story_royalty_registration_status).toBe("registered")
+
+    const listingCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/listings`,
+      {
+        asset_id: postBody.asset_id,
+        price_usd: 3.99,
+        regional_pricing_enabled: false,
+        status: "active",
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(listingCreate.status).toBe(201)
+    const listingBody = await json(listingCreate) as {
+      listing_id: string
+    }
+
+    const quoteCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/purchase-quotes`,
+      {
+        listing_id: listingBody.listing_id,
+        ...routedCheckoutQuoteFields,
+      },
+      ctx.env,
+      buyer.accessToken,
+    )
+    expect(quoteCreate.status).toBe(201)
+    const quoteBody = await json(quoteCreate) as {
+      final_price_usd: number
+      settlement_mode: string
+    }
+    expect(quoteBody.final_price_usd).toBe(3.99)
+    expect(quoteBody.settlement_mode).toBe("royalty_native_story_payment")
+
+    const accessResponse = await app.request(
+      `http://pirate.test/communities/${communityId}/assets/${postBody.asset_id}/access`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(accessResponse.status).toBe(200)
+    const accessBody = await json(accessResponse) as {
+      access_granted: boolean
+      delivery_kind: string
+      story_cdr_access: {
+        vault_uuid: number
+        mime_type: string
+        ciphertext_ref: string
+      } | null
+    }
+    expect(accessBody.access_granted).toBe(true)
+    expect(accessBody.delivery_kind).toBe("story_cdr_ref")
+    expect(accessBody.story_cdr_access?.vault_uuid).toBe(9090)
+    expect(accessBody.story_cdr_access?.mime_type).toBe("video/mp4")
+    expect(accessBody.story_cdr_access?.ciphertext_ref).toContain(`/assets/${postBody.asset_id}/content`)
+
+    const contentResponse = await app.request(
+      `http://pirate.test/communities/${communityId}/assets/${postBody.asset_id}/content`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(contentResponse.status).toBe(200)
+    const encryptedBytes = new Uint8Array(await contentResponse.arrayBuffer())
+    expect(encryptedBytes.byteLength).toBeGreaterThan(videoBytes.byteLength)
+    expect(encryptedBytes).not.toEqual(videoBytes)
   })
 
 

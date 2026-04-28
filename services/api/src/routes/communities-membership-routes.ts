@@ -1,22 +1,23 @@
-import type { Hono } from "hono"
+import { Hono } from "hono"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import {
   getCommunityPreview,
 } from "../lib/communities/community-preview-service"
 import {
-  getJoinEligibility,
-} from "../lib/communities/membership/eligibility-service"
+  followCommunity,
+  unfollowCommunity,
+} from "../lib/communities/membership/follow-service"
+import { getJoinEligibility } from "../lib/communities/membership/eligibility-service"
 import {
   joinCommunity,
   listMembershipRequests,
   reviewMembershipRequest,
 } from "../lib/communities/membership/request-service"
-import {
-  followCommunity,
-  unfollowCommunity,
-} from "../lib/communities/membership/follow-service"
 import { trackApiEvent } from "../lib/analytics/track"
-import { getResolvedCommunityRouteContext } from "./communities-route-helpers"
+import {
+  getResolvedCommunityRouteContext,
+  optionalJsonBody,
+} from "./communities-route-helpers"
 
 export function registerCommunityMembershipRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.get("/:communityId/preview", async (c) => {
@@ -45,12 +46,13 @@ export function registerCommunityMembershipRoutes(communities: Hono<Authenticate
 
   communities.post("/:communityId/join", async (c) => {
     const { actor, communityId, communityRepository, userRepository, profileRepository } = await getResolvedCommunityRouteContext(c)
-    const body = await c.req.json<{ note?: string | null }>().catch(() => null)
+    const body = await optionalJsonBody<{ note?: string | null }>(c, "Invalid community join payload")
     const result = await joinCommunity({
       env: c.env,
       userId: actor.userId,
       communityId,
       note: body?.note ?? null,
+      bypassMembershipGateChecks: actor.authType === "admin",
       userRepository,
       profileRepository,
       communityRepository,

@@ -116,6 +116,7 @@ export async function createOpenSongCommunity(env: Env, accessToken: string, dis
   const communityCreate = await requestJson("http://pirate.test/communities", {
     display_name: displayName,
     membership_mode: "open",
+    gate_rules: [],
     handle_policy: {
       policy_template: "standard",
     },
@@ -132,7 +133,7 @@ export async function uploadSongArtifact(input: {
   env: Env
   communityId: string
   accessToken: string
-  artifactKind: "primary_audio"
+  artifactKind: "primary_audio" | "primary_video"
   mimeType: string
   filename: string
   bytes: Uint8Array

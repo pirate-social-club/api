@@ -8,7 +8,7 @@ import {
   createSongArtifactUploadIntent,
   markSongArtifactUploadUploaded,
   requireSongArtifactUpload,
-} from "./song-artifact-upload-repository"
+} from "./song-artifact-repository"
 import {
   assertSongArtifactMimeType,
   assertSongArtifactSize,
@@ -19,7 +19,7 @@ import {
 } from "./song-artifact-storage"
 import {
   requireActiveCommunity,
-  requireSongArtifactMemberAccess,
+  requireMemberAccess,
   requireVerifiedHuman,
 } from "./song-artifact-access"
 import type { CreateSongArtifactUploadRequest, Env, SongArtifactUpload } from "../../types"
@@ -66,7 +66,7 @@ export async function createSongArtifactUpload(input: {
 
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
-    await requireSongArtifactMemberAccess(db.client, input.communityId, input.userId)
+    await requireMemberAccess(db.client, input.communityId, input.userId)
     await requireVerifiedHuman(input.userRepository, input.userId)
 
     const client = getControlPlaneClient(input.env)
@@ -99,7 +99,7 @@ export async function uploadSongArtifactContent(input: {
 
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
-    await requireSongArtifactMemberAccess(db.client, input.communityId, input.userId)
+    await requireMemberAccess(db.client, input.communityId, input.userId)
     await requireVerifiedHuman(input.userRepository, input.userId)
 
     const client = getControlPlaneClient(input.env)

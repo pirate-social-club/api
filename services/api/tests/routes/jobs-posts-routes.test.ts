@@ -400,7 +400,7 @@ describe("posts routes", () => {
     expect(translationJobs.some((job) => job.subject_id === `${createdPostBody.post_id}:nl`)).toBe(true)
   })
 
-  test("POST /posts/:postId/vote enforces verification and records a verified member vote", async () => {
+  test("POST /posts/:postId/vote records a member vote without hidden verification", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
 
@@ -424,26 +424,11 @@ describe("posts routes", () => {
     const unverifiedMember = await exchangeJwt(ctx.env, "posts-routes-unverified-member")
     await addCommunityMember(ctx.communityDbRoot, community.communityId, unverifiedMember.userId)
 
-    const deniedVote = await requestJson(
-      `http://pirate.test/posts/${postBody.post_id}/vote`,
-      { value: 1 },
-      ctx.env,
-      unverifiedMember.accessToken,
-    )
-    expect(deniedVote.status).toBe(403)
-    const deniedVoteBody = await json(deniedVote) as { code: string; message: string }
-    expect(deniedVoteBody.code).toBe("verification_required")
-    expect(deniedVoteBody.message).toBe("unique_human verification is required")
-
-    const verifiedMember = await exchangeJwt(ctx.env, "posts-routes-verified-member")
-    await completeUniqueHumanVerification(ctx.env, verifiedMember.accessToken)
-    await addCommunityMember(ctx.communityDbRoot, community.communityId, verifiedMember.userId)
-
     const acceptedVote = await requestJson(
       `http://pirate.test/posts/${postBody.post_id}/vote`,
       { value: 1 },
       ctx.env,
-      verifiedMember.accessToken,
+      unverifiedMember.accessToken,
     )
     expect(acceptedVote.status).toBe(200)
     const acceptedVoteBody = await json(acceptedVote) as { post_id: string; value: number }

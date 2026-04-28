@@ -3,28 +3,28 @@ import { badRequestError, notFoundError } from "../../errors"
 import { nowIso } from "../../helpers"
 import { getCommunityMembershipState } from "../membership/membership-state-store"
 import { openCommunityDb } from "../community-db-factory"
-import type { CommunityRepository } from "../db-community-repository"
+import type { CommunityDatabaseBindingRepository } from "../db-community-repository"
 import { getPostById } from "../../posts/community-post-store"
 import { fetchSongArtifactBytes } from "../../song-artifacts/song-artifact-storage"
 import { sha256Hex } from "../../crypto"
 import type { UserRepository } from "../../auth/repositories"
-import { maybeRegisterStoryRoyaltyForAsset } from "../../story/story-royalty-registration-service"
+import {
+  maybeRegisterStoryRoyaltyForAsset,
+  type StoryLicensePreset,
+} from "../../story/story-royalty-registration-service"
+import type { AssetRow } from "./row-types"
 import {
   buildAssetContentPath,
-  requireCommunityMember,
-  resolvePrimaryWalletAddress,
-} from "./access"
-import {
   getActiveEntitlementForBuyer,
   getAssetRow,
-} from "./queries"
-import {
+  requireCommunityMember,
+  resolvePrimaryWalletAddress,
   serializeAsset,
-} from "./serialization"
+} from "./shared"
 import {
   buildStoryCdrAccessPackage,
-  fetchPrimarySongAssetContent,
-  prepareLockedSongAssetDelivery,
+  fetchPrimaryAssetContent,
+  prepareLockedAssetDelivery,
 } from "./asset-delivery"
 import type {
   Asset,
@@ -32,18 +32,87 @@ import type {
   Env,
   Post,
   SongArtifactBundle,
+  SongArtifactUpload,
 } from "../../../types"
 
-export async function createSongAssetForPost(input: {
+function isStoryRoyaltyAssetKind(assetKind: Asset["asset_kind"]): assetKind is "song_audio" | "video_file" {
+  return assetKind === "song_audio" || assetKind === "video_file"
+}
+
+function shouldAttemptStoryRoyaltyRegistration(input: {
+  assetKind: Asset["asset_kind"]
+  rightsBasis: Post["rights_basis"] | null
+  hasSongBundle: boolean
+}): boolean {
+  const isRoyaltyRightsBasis = input.rightsBasis === "original" || input.rightsBasis === "derivative"
+  if (!isStoryRoyaltyAssetKind(input.assetKind) || !isRoyaltyRightsBasis) {
+    return false
+  }
+  return input.assetKind !== "song_audio" || input.hasSongBundle
+}
+
+type AuthorizedAssetAccess = {
+  asset: AssetRow
+  post: Post
+  isPrivilegedViewer: boolean
+  privilegedReason: "creator" | "moderator" | null
+}
+
+async function authorizeAssetAccess(input: {
+  client: Client
+  communityId: string
+  userId: string
+  assetId: string
+  notFoundMessage: string
+  unpublishedMessage?: string
+}): Promise<AuthorizedAssetAccess> {
+  const asset = await getAssetRow(input.client, input.communityId, input.assetId)
+  if (!asset) {
+    throw notFoundError(input.notFoundMessage)
+  }
+
+  const post = await getPostById(input.client, asset.source_post_id)
+  const membership = await getCommunityMembershipState(input.client, input.communityId, input.userId)
+  const privilegedReason = asset.creator_user_id === input.userId
+    ? "creator"
+    : membership.role_status === "active"
+      ? "moderator"
+      : null
+  const isPrivilegedViewer = privilegedReason != null
+
+  if (!post) {
+    throw notFoundError(input.notFoundMessage)
+  }
+  if (post.status !== "published" && !isPrivilegedViewer) {
+    throw notFoundError(input.unpublishedMessage ?? input.notFoundMessage)
+  }
+
+  return {
+    asset,
+    post,
+    isPrivilegedViewer,
+    privilegedReason,
+  }
+}
+
+export async function createAssetForPost(input: {
   env: Env
   client: Client
   communityId: string
   post: Post
-  bundle: SongArtifactBundle
+  assetKind: Asset["asset_kind"]
+  storageRef: string
+  mimeType: string
+  contentHash: string | null
+  artifactKind: SongArtifactUpload["artifact_kind"]
+  bundleId: string | null
+  bundle?: SongArtifactBundle | null
+  licensePreset?: StoryLicensePreset | null
+  commercialRevSharePct?: number | null
   userRepository: UserRepository
 }): Promise<Asset> {
   if (!input.post.asset_id?.trim()) {
-    throw badRequestError("Song post is missing asset_id")
+    throw badRequestError("Post is missing asset_id")
   }
   const existing = await getAssetRow(input.client, input.communityId, input.post.asset_id)
   if (existing) {
@@ -68,8 +137,15 @@ export async function createSongAssetForPost(input: {
   let storyDerivativeParentIpIdsJson: string | null = null
   let storyDerivativeRegisteredAt: string | null = null
   let storyRevenueToken: string | null = null
+  const shouldRegisterRoyalty = shouldAttemptStoryRoyaltyRegistration({
+    assetKind: input.assetKind,
+    rightsBasis: input.post.rights_basis ?? "none",
+    hasSongBundle: Boolean(input.bundle),
+  })
   let storyRoyaltyRegistrationStatus: "none" | "pending" | "registered" | "failed" =
-    input.post.rights_basis === "original" || input.post.rights_basis === "derivative" ? "pending" : "none"
+    shouldRegisterRoyalty
+      ? "pending"
+      : "none"
   let storyPublishTxRef: string | null = null
   let storyAssetVersionId: string | null = null
   let storyCdrVaultUuid: number | null = null
@@ -86,12 +162,16 @@ export async function createSongAssetForPost(input: {
         userRepository: input.userRepository,
         userId: input.post.author_user_id ?? "",
       })
-      const lockedDelivery = await prepareLockedSongAssetDelivery({
+      const lockedDelivery = await prepareLockedAssetDelivery({
         env: input.env,
         communityId: input.communityId,
         assetId: input.post.asset_id,
         creatorWalletAddress,
-        bundle: input.bundle,
+        storageRef: input.storageRef,
+        mimeType: input.mimeType,
+        contentHash: input.contentHash,
+        artifactKind: input.artifactKind,
+        bundleId: input.bundleId,
         rightsBasis: input.post.rights_basis ?? "none",
         upstreamAssetRefs: input.post.upstream_asset_refs ?? null,
       })
@@ -126,26 +206,31 @@ export async function createSongAssetForPost(input: {
   }
 
   try {
-    if (!creatorWalletAddress) {
+    if (shouldRegisterRoyalty && !creatorWalletAddress) {
       creatorWalletAddress = await resolvePrimaryWalletAddress({
         env: input.env,
         userRepository: input.userRepository,
         userId: input.post.author_user_id ?? "",
       })
     }
-    const royaltyRegistration = await maybeRegisterStoryRoyaltyForAsset({
-      env: input.env,
-      client: input.client,
-      communityId: input.communityId,
-      assetId: input.post.asset_id,
-      creatorWalletAddress,
-      title: input.post.title ?? null,
-      rightsBasis: input.post.rights_basis ?? "none",
-      upstreamAssetRefs: input.post.upstream_asset_refs ?? null,
-      bundle: input.bundle,
-      primaryContentHash:
-        (input.bundle.primary_audio.content_hash?.trim() || `0x${await sha256Hex(input.bundle.primary_audio.storage_ref)}`) as `0x${string}`,
-    })
+    const royaltyRegistration = shouldRegisterRoyalty
+      ? await maybeRegisterStoryRoyaltyForAsset({
+          env: input.env,
+          client: input.client,
+          communityId: input.communityId,
+          assetId: input.post.asset_id,
+          creatorWalletAddress: creatorWalletAddress ?? "",
+          title: input.post.title ?? null,
+          rightsBasis: input.post.rights_basis ?? "none",
+          licensePreset: input.licensePreset ?? null,
+          commercialRevSharePct: input.commercialRevSharePct ?? null,
+          upstreamAssetRefs: input.post.upstream_asset_refs ?? null,
+          assetKind: input.assetKind,
+          bundle: input.bundle ?? null,
+          primaryContentHash:
+            (input.contentHash?.trim() || `0x${await sha256Hex(input.storageRef)}`) as `0x${string}`,
+        })
+      : null
     if (royaltyRegistration) {
       storyIpId = royaltyRegistration.storyIpId
       storyIpNftContract = royaltyRegistration.storyIpNftContract
@@ -171,8 +256,9 @@ export async function createSongAssetForPost(input: {
   await input.client.execute({
     sql: `
       INSERT INTO assets (
-        asset_id, community_id, source_post_id, song_artifact_bundle_id, creator_user_id, asset_kind,
-        rights_basis, access_mode, primary_content_ref, primary_content_hash, publication_status,
+        asset_id, community_id, source_post_id, display_title, song_artifact_bundle_id, creator_user_id, asset_kind,
+        rights_basis, access_mode, license_preset, commercial_rev_share_pct,
+        primary_content_ref, primary_content_hash, publication_status,
         story_status, story_error, story_ip_id, story_ip_nft_contract, story_ip_nft_token_id,
         story_publish_model, story_license_terms_id, story_license_template, story_royalty_policy,
         story_royalty_policy_id, story_derivative_parent_ip_ids_json, story_derivative_registered_at,
@@ -181,26 +267,31 @@ export async function createSongAssetForPost(input: {
         story_cdr_vault_uuid, story_namespace, story_entitlement_token_id, story_read_condition,
         story_write_condition, locked_delivery_storage_ref, locked_delivery_secret_json
       ) VALUES (
-        ?1, ?2, ?3, ?4, ?5, 'song_audio',
-        ?6, ?7, ?8, ?9, 'draft',
-        ?10, ?11, ?12, ?13, ?14,
-        ?15, ?16, ?17, ?18, ?19,
-        ?20, ?21, ?22, ?23, ?24,
-        ?25, ?26, ?27, ?27, ?28,
-        ?29, ?30, ?31, ?32, ?33,
-        ?34, ?35, ?36
+        ?1, ?2, ?3, ?4, ?5, ?6, ?7,
+        ?8, ?9, ?10, ?11,
+        ?12, ?13, 'draft',
+        ?14, ?15, ?16, ?17, ?18,
+        ?19, ?20, ?21, ?22, ?23,
+        ?24, ?25, ?26, ?27, ?28,
+        ?29, ?30, ?31, ?31, ?32,
+        ?33, ?34, ?35, ?36, ?37,
+        ?38, ?39, ?40
       )
     `,
     args: [
       input.post.asset_id,
       input.communityId,
       input.post.post_id,
-      input.post.song_artifact_bundle_id ?? null,
+      input.post.title?.trim() || null,
+      input.bundleId,
       input.post.author_user_id ?? "",
+      input.assetKind,
       input.post.rights_basis ?? "none",
       input.post.access_mode ?? "public",
-      input.bundle.primary_audio.storage_ref,
-      input.bundle.primary_audio.content_hash ?? `0x${await sha256Hex(input.bundle.primary_audio.storage_ref)}`,
+      input.licensePreset ?? null,
+      input.commercialRevSharePct ?? null,
+      input.storageRef,
+      input.contentHash ?? `0x${await sha256Hex(input.storageRef)}`,
       storyStatus,
       storyError,
       storyIpId,
@@ -237,29 +328,51 @@ export async function createSongAssetForPost(input: {
   return serializeAsset(asset)
 }
 
+export async function createSongAssetForPost(input: {
+  env: Env
+  client: Client
+  communityId: string
+  post: Post
+  bundle: SongArtifactBundle
+  licensePreset: StoryLicensePreset | null
+  commercialRevSharePct: number | null
+  userRepository: UserRepository
+}): Promise<Asset> {
+  return await createAssetForPost({
+    env: input.env,
+    client: input.client,
+    communityId: input.communityId,
+    post: input.post,
+    assetKind: "song_audio",
+    storageRef: input.bundle.primary_audio.storage_ref,
+    mimeType: input.bundle.primary_audio.mime_type,
+    contentHash: input.bundle.primary_audio.content_hash ?? null,
+    artifactKind: "primary_audio",
+    bundleId: input.bundle.song_artifact_bundle_id,
+    bundle: input.bundle,
+    licensePreset: input.licensePreset,
+    commercialRevSharePct: input.commercialRevSharePct,
+    userRepository: input.userRepository,
+  })
+}
+
 export async function getCommunityAsset(input: {
   env: Env
   userId: string
   communityId: string
   assetId: string
-  communityRepository: CommunityRepository
+  communityRepository: CommunityDatabaseBindingRepository
 }): Promise<Asset> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityMember(db.client, input.communityId, input.userId)
-    const asset = await getAssetRow(db.client, input.communityId, input.assetId)
-    if (!asset) {
-      throw notFoundError("Asset not found")
-    }
-    const post = await getPostById(db.client, asset.source_post_id)
-    const isPrivilegedViewer = asset.creator_user_id === input.userId
-      || (await getCommunityMembershipState(db.client, input.communityId, input.userId)).role_status === "active"
-    if (!post) {
-      throw notFoundError("Asset not found")
-    }
-    if (post.status !== "published" && !isPrivilegedViewer) {
-      throw notFoundError("Asset not found")
-    }
+    const { asset, isPrivilegedViewer } = await authorizeAssetAccess({
+      client: db.client,
+      communityId: input.communityId,
+      userId: input.userId,
+      assetId: input.assetId,
+      notFoundMessage: "Asset not found",
+    })
     return serializeAsset(asset, { redactPrimaryForLocked: !isPrivilegedViewer })
   } finally {
     db.close()
@@ -271,25 +384,19 @@ export async function resolveCommunityAssetAccess(input: {
   userId: string
   communityId: string
   assetId: string
-  communityRepository: CommunityRepository
+  communityRepository: CommunityDatabaseBindingRepository
   userRepository: UserRepository
 }): Promise<AssetAccessResponse> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityMember(db.client, input.communityId, input.userId)
-    const asset = await getAssetRow(db.client, input.communityId, input.assetId)
-    if (!asset) {
-      throw notFoundError("Asset not found")
-    }
-    const post = await getPostById(db.client, asset.source_post_id)
-    const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
-    const isPrivilegedViewer = asset.creator_user_id === input.userId || membership.role_status === "active"
-    if (!post) {
-      throw notFoundError("Asset not found")
-    }
-    if (post.status !== "published" && !isPrivilegedViewer) {
-      throw notFoundError("Asset not found")
-    }
+    const { asset, post, isPrivilegedViewer, privilegedReason } = await authorizeAssetAccess({
+      client: db.client,
+      communityId: input.communityId,
+      userId: input.userId,
+      assetId: input.assetId,
+      notFoundMessage: "Asset not found",
+    })
 
     if (asset.access_mode === "public") {
       return {
@@ -301,7 +408,7 @@ export async function resolveCommunityAssetAccess(input: {
         story_status: asset.story_status,
         locked_delivery_status: asset.locked_delivery_status,
         access_granted: true,
-        decision_reason: isPrivilegedViewer ? "creator" : "public",
+        decision_reason: privilegedReason ?? "public",
         delivery_kind: "primary_content_ref",
         delivery_ref: buildAssetContentPath(asset.community_id, asset.asset_id),
         story_cdr_access: null,
@@ -314,7 +421,7 @@ export async function resolveCommunityAssetAccess(input: {
         userRepository: input.userRepository,
         userId: input.userId,
       })
-      const decisionReason = membership.role_status === "active" && asset.creator_user_id !== input.userId ? "moderator" : "creator"
+      const decisionReason = privilegedReason ?? "creator"
       return {
         asset_id: asset.asset_id,
         community_id: asset.community_id,
@@ -392,26 +499,21 @@ export async function fetchCommunityAssetContent(input: {
   userId: string
   communityId: string
   assetId: string
-  communityRepository: CommunityRepository
+  communityRepository: CommunityDatabaseBindingRepository
   userRepository: UserRepository
 }): Promise<Response> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
-    const asset = await getAssetRow(db.client, input.communityId, input.assetId)
-    if (!asset) {
-      throw notFoundError("Asset not found")
-    }
-    const post = await getPostById(db.client, asset.source_post_id)
-    const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
-    const isPrivilegedViewer = asset.creator_user_id === input.userId || membership.role_status === "active"
-    if (!post) {
-      throw notFoundError("Asset not found")
-    }
-    if (post.status !== "published" && !isPrivilegedViewer) {
-      throw notFoundError("Asset content not found")
-    }
+    const { asset } = await authorizeAssetAccess({
+      client: db.client,
+      communityId: input.communityId,
+      userId: input.userId,
+      assetId: input.assetId,
+      notFoundMessage: "Asset not found",
+      unpublishedMessage: "Asset content not found",
+    })
     if (asset.access_mode === "public" || !asset.locked_delivery_storage_ref) {
-      return await fetchPrimarySongAssetContent({
+      return await fetchPrimaryAssetContent({
         env: input.env,
         communityId: input.communityId,
         storageRef: asset.primary_content_ref,
@@ -425,3 +527,8 @@ export async function fetchCommunityAssetContent(input: {
     db.close()
   }
 }
+
+export * from "./policy-service"
+export * from "./listing-service"
+export * from "./quote-service"
+export * from "./settlement-service"

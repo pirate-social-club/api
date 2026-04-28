@@ -10,6 +10,7 @@ import discovery from "./routes/discovery"
 import feed from "./routes/feed"
 import jobs from "./routes/jobs"
 import notifications from "./routes/notifications"
+import royalties from "./routes/royalties"
 import onboarding from "./routes/onboarding"
 import posts from "./routes/posts"
 import publicComments from "./routes/public-comments"
@@ -19,22 +20,37 @@ import publicPosts from "./routes/public-posts"
 import publicProfiles from "./routes/public-profiles"
 import profileMedia from "./routes/profile-media"
 import profiles from "./routes/profiles"
-import royalties from "./routes/royalties"
 import users from "./routes/users"
 import verification from "./routes/verification"
 import { flushAnalyticsOutbox, isAnalyticsEnabled } from "./lib/analytics"
 import { getCommunityRepository } from "./lib/communities/db-community-repository"
+import { reconcileStaleCommunityPurchaseSettlements } from "./lib/communities/commerce/settlement-service"
 import { processAvailableCommunityJobs } from "./lib/communities/jobs/runner"
+import { reconcileCommunityMembershipAndFollowProjections } from "./lib/communities/membership/projection-service"
 import { HttpError, errorResponse } from "./lib/errors"
+import { reconcileRoyaltyClaimEvents } from "./lib/royalties/royalty-claim-history"
 import { getControlPlaneClient } from "./lib/runtime-deps"
 import type { Env } from "./types"
 
 const app = new Hono<{ Bindings: Env }>()
 
+function configuredCorsOrigin(origin: string, c: { env: Env }): string | null {
+  const raw = c.env?.CORS_ALLOWED_ORIGINS?.trim()
+  if (!raw) {
+    return null
+  }
+
+  const allowedOrigins = raw.split(",").map((allowedOrigin) => allowedOrigin.trim()).filter(Boolean)
+  if (allowedOrigins.includes("*")) {
+    return "*"
+  }
+  return allowedOrigins.includes(origin) ? origin : null
+}
+
 app.use(
   "/*",
   cors({
-    origin: "*",
+    origin: configuredCorsOrigin,
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowHeaders: [
       "Content-Type",
@@ -57,6 +73,7 @@ app.route("/communities", communities)
 app.route("/feed", feed)
 app.route("/jobs", jobs)
 app.route("/notifications", notifications)
+app.route("/royalties", royalties)
 app.route("/posts", posts)
 app.route("/public-comments", publicComments)
 app.route("/public-agents", publicAgents)
@@ -114,7 +131,7 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
       maxJobsPerCommunity: 25,
     })
     if (summary.processed_jobs > 0) {
-      console.log("[community-jobs] scheduled processed", JSON.stringify({
+      console.info("[community-jobs] scheduled processed", JSON.stringify({
         processed_jobs: summary.processed_jobs,
         communities: summary.communities.map((community) => ({
           community_id: community.community_id,
@@ -129,9 +146,66 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
   }
 }
 
+async function reconcileScheduledRoyaltyClaims(env: Env): Promise<void> {
+  try {
+    const summary = await reconcileRoyaltyClaimEvents({ env, limit: 25 })
+    if (summary.checked > 0) {
+      console.info("[royalties] reconciled claim txs", JSON.stringify(summary))
+    }
+  } catch (error) {
+    console.error("[royalties] claim reconciliation failed", error)
+  }
+}
+
+async function reconcileScheduledPurchaseSettlements(env: Env): Promise<void> {
+  const communityRepository = getCommunityRepository(env)
+  try {
+    const summary = await reconcileStaleCommunityPurchaseSettlements({
+      env,
+      communityRepository,
+      maxCommunities: 100,
+      maxAttemptsPerCommunity: 10,
+    })
+    if (summary.checked > 0) {
+      console.info("[purchase-settlements] reconciled stale attempts", JSON.stringify(summary))
+    }
+  } catch (error) {
+    console.error("[purchase-settlements] reconciliation failed", error)
+  } finally {
+    communityRepository.close?.()
+  }
+}
+
+async function reconcileScheduledCommunityMembershipProjections(env: Env): Promise<void> {
+  const communityRepository = getCommunityRepository(env)
+  try {
+    const summary = await reconcileCommunityMembershipAndFollowProjections({
+      env,
+      communityRepository,
+      maxCommunities: 100,
+      maxRowsPerCommunity: 500,
+    })
+    if (
+      summary.synced_membership_projections > 0
+      || summary.synced_follow_projections > 0
+      || summary.corrected_follower_counts > 0
+      || summary.failed_communities > 0
+    ) {
+      console.info("[community-membership-projections] reconciled", JSON.stringify(summary))
+    }
+  } catch (error) {
+    console.error("[community-membership-projections] reconciliation failed", error)
+  } finally {
+    communityRepository.close?.()
+  }
+}
+
 ;(app as ScheduledApp).scheduled = async (_controller, env, ctx) => {
   ctx.waitUntil(flushScheduledAnalytics(env))
   ctx.waitUntil(processScheduledCommunityJobs(env))
+  ctx.waitUntil(reconcileScheduledCommunityMembershipProjections(env))
+  ctx.waitUntil(reconcileScheduledRoyaltyClaims(env))
+  ctx.waitUntil(reconcileScheduledPurchaseSettlements(env))
 }
 
 export default app

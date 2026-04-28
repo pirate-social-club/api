@@ -7,7 +7,7 @@ import { upsertCommunityMembership } from "./membership-state-store"
 
 type MembershipExecutor = Pick<Client, "execute">
 
-export type MembershipRequestRow = MembershipRequestSummary & {
+type MembershipRequestRow = MembershipRequestSummary & {
   updated_at: string
 }
 
@@ -27,6 +27,24 @@ const MEMBERSHIP_REQUEST_SELECT = `
   SELECT membership_request_id, community_id, applicant_user_id, status, note, created_at, updated_at
   FROM membership_requests
 `
+
+export async function getCommunityJoinMode(client: Client, communityId: string): Promise<"open" | "request" | "gated" | null> {
+  const row = await executeFirst(
+    client,
+    {
+      sql: `
+        SELECT membership_mode
+        FROM communities
+        WHERE community_id = ?1
+        LIMIT 1
+      `,
+      args: [communityId],
+    },
+  )
+
+  const mode = row ? requiredString(row, "membership_mode") : null
+  return mode === "open" || mode === "request" || mode === "gated" ? mode : null
+}
 
 export async function upsertMembershipRequest(input: {
   client: MembershipExecutor

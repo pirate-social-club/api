@@ -10,15 +10,17 @@ import {
   getGlobalHandleRowByLabelNormalized,
   getVerifiedLinkedHandleRowByLabelNormalized,
   listLinkedHandleRows,
-  listCreatedCommunityRowsByCreatorUserId,
   getProfileRow,
   getUserRow,
-  hasUniqueConstraintName,
-  hasUniqueConstraintField,
   listActiveWalletAttachmentRows,
   loadSnapshot,
   reconcileWalletAttachments,
-} from "./auth-db-queries"
+} from "./auth-db-user-queries"
+import { listCreatedCommunityRowsByCreatorUserId } from "./auth-db-community-queries"
+import {
+  hasUniqueConstraintField,
+  hasUniqueConstraintName,
+} from "./auth-db-query-helpers"
 import {
   assembleProfile,
   getPrimaryWalletAddressFromRows,

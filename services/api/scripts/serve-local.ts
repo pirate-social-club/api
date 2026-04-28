@@ -132,6 +132,10 @@ async function main(): Promise<void> {
     console.log(`pirate-api local node server listening on http://127.0.0.1:${port}`)
     console.log(`control-plane db: ${localDevStorage.controlPlaneDbPath ?? localDevStorage.controlPlaneDbUrl}`)
     console.log(`community db root: ${localDevStorage.communityDbRoot}`)
+    const publicOrigin = String(env.PIRATE_API_PUBLIC_ORIGIN || "").trim()
+    if (publicOrigin) {
+      console.log(`public API origin: ${publicOrigin}`)
+    }
   })
 }
 

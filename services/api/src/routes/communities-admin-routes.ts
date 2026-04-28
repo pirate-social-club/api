@@ -1,10 +1,11 @@
-import type { Hono } from "hono"
+import { Hono } from "hono"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import { authError } from "../lib/errors"
+import { getCommunityCreationRouteContext } from "./communities-route-helpers"
 
 export function registerCommunityAdminRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.get("/admin/health", async (c) => {
-    const actor = c.get("actor")
+    const { actor } = getCommunityCreationRouteContext(c)
     if (actor.authType !== "admin") {
       throw authError("Admin authentication required")
     }

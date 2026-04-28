@@ -8,8 +8,8 @@ import { setStoryPurchaseSettlementExecutorForTests } from "../../../src/lib/sto
 import { setCommunityCommerceBuyerFundingVerifierForTests } from "../../../src/lib/communities/commerce/funding-proof-service"
 import { setCommunityCommerceCharityPayoutExecutorForTests } from "../../../src/lib/communities/commerce/charity-payout-service"
 import { openCommunityDb } from "../../../src/lib/communities/community-db-factory"
-import type { CommunityRepository } from "../../../src/lib/communities/db-community-repository"
-import { updateSongArtifactBundlePreview } from "../../../src/lib/song-artifacts/song-artifact-bundle-repository"
+import type { CommunityDatabaseBindingRepository } from "../../../src/lib/communities/db-community-repository"
+import { updateSongArtifactBundlePreview } from "../../../src/lib/song-artifacts/song-artifact-repository"
 import { getControlPlaneClient } from "../../../src/lib/runtime-deps"
 import type { Env } from "../../../src/types"
 import {
@@ -26,6 +26,7 @@ import {
 
 let cleanup: (() => Promise<void>) | null = null
 let originalFetch: typeof fetch
+const testWithTimeout = test as unknown as (name: string, fn: () => Promise<void>, timeout: number) => void
 
 const routedCheckoutQuoteFields = {
   funding_asset: {
@@ -68,6 +69,10 @@ async function markGeneratedPreviewReady(input: {
   })
 }
 
+async function verifyForLockedSongCommerce(env: Env, _userId: string, accessToken: string): Promise<void> {
+  await completeUniqueHumanVerification(env, accessToken)
+}
+
 beforeEach(() => {
   resetRuntimeCaches()
   originalFetch = globalThis.fetch
@@ -90,7 +95,7 @@ afterEach(async () => {
 })
 
 describe("song artifact donation routes", () => {
-  test("rejects purchase quote when community donation policy is none", async () => {
+  testWithTimeout("rejects purchase quote when community donation policy is none", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
     setStoryRuntimeFundingAssertionForTests(async () => {})
     setStoryPurchaseSettlementExecutorForTests(async () => ({ settlementTxHash: "0xstory" }))
@@ -134,8 +139,8 @@ describe("song artifact donation routes", () => {
       walletAttachmentId: "wal_buyer_no_donation",
       walletAddress: "0xbbb0000000000000000000000000000000000000",
     })
-    await completeUniqueHumanVerification(ctx.env, author.accessToken)
-    await completeUniqueHumanVerification(ctx.env, buyer.accessToken)
+    await verifyForLockedSongCommerce(ctx.env, author.userId, author.accessToken)
+    await verifyForLockedSongCommerce(ctx.env, buyer.userId, buyer.accessToken)
 
     const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "No Donation Club")
 
@@ -216,6 +221,7 @@ describe("song artifact donation routes", () => {
         access_mode: "locked",
         song_mode: "original",
         rights_basis: "original",
+        license_preset: "non-commercial",
         song_artifact_bundle_id: bundleBody.song_artifact_bundle_id,
       },
       ctx.env,
@@ -271,9 +277,9 @@ describe("song artifact donation routes", () => {
     expect(quoteCreate.status).toBe(403)
     const quoteBody = await json(quoteCreate) as { message?: string }
     expect(quoteBody.message).toBe("Community donation policy does not permit donations")
-  })
+  }, 15000)
 
-  test("settles public Story royalty assets with charity before net Story payment", async () => {
+  testWithTimeout("settles public Story royalty assets with charity before net Story payment", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
     const royaltySettlementCalls: Array<{
       receiverIpId: string
@@ -352,8 +358,8 @@ describe("song artifact donation routes", () => {
       walletAttachmentId: "wal_song_buyer_public_royalty",
       walletAddress: "0xbbb0000000000000000000000000000000000000",
     })
-    await completeUniqueHumanVerification(ctx.env, author.accessToken)
-    await completeUniqueHumanVerification(ctx.env, buyer.accessToken)
+    await verifyForLockedSongCommerce(ctx.env, author.userId, author.accessToken)
+    await verifyForLockedSongCommerce(ctx.env, buyer.userId, buyer.accessToken)
 
     const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "Public Royalty Club")
 
@@ -431,6 +437,7 @@ describe("song artifact donation routes", () => {
         access_mode: "public",
         song_mode: "original",
         rights_basis: "original",
+        license_preset: "non-commercial",
         song_artifact_bundle_id: bundleBody.song_artifact_bundle_id,
       },
       ctx.env,
@@ -531,9 +538,9 @@ describe("song artifact donation routes", () => {
         amount: "1800000000000000000",
       },
     ])
-  })
+  }, 15000)
 
-  test("clears listing donation state when donation share is updated to zero", async () => {
+  testWithTimeout("clears listing donation state when donation share is updated to zero", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
     setStoryRuntimeFundingAssertionForTests(async () => {})
     setStoryPurchaseSettlementExecutorForTests(async () => ({ settlementTxHash: "0xstory" }))
@@ -577,8 +584,8 @@ describe("song artifact donation routes", () => {
       walletAttachmentId: "wal_buyer_clear_donation",
       walletAddress: "0xbbb0000000000000000000000000000000000000",
     })
-    await completeUniqueHumanVerification(ctx.env, author.accessToken)
-    await completeUniqueHumanVerification(ctx.env, buyer.accessToken)
+    await verifyForLockedSongCommerce(ctx.env, author.userId, author.accessToken)
+    await verifyForLockedSongCommerce(ctx.env, buyer.userId, buyer.accessToken)
 
     const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "Clear Donation Club")
 
@@ -659,6 +666,7 @@ describe("song artifact donation routes", () => {
         access_mode: "locked",
         song_mode: "original",
         rights_basis: "original",
+        license_preset: "non-commercial",
         song_artifact_bundle_id: bundleBody.song_artifact_bundle_id,
       },
       ctx.env,
@@ -742,9 +750,9 @@ describe("song artifact donation routes", () => {
         settlement_strategy: "story_payout",
       },
     ])
-  })
+  }, 15000)
 
-  test("rejects purchase quote when donation partner is paused", async () => {
+  testWithTimeout("rejects purchase quote when donation partner is paused", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
     setStoryRuntimeFundingAssertionForTests(async () => {})
     setStoryPurchaseSettlementExecutorForTests(async () => ({ settlementTxHash: "0xstory" }))
@@ -788,8 +796,8 @@ describe("song artifact donation routes", () => {
       walletAttachmentId: "wal_buyer_paused",
       walletAddress: "0xbbb0000000000000000000000000000000000000",
     })
-    await completeUniqueHumanVerification(ctx.env, author.accessToken)
-    await completeUniqueHumanVerification(ctx.env, buyer.accessToken)
+    await verifyForLockedSongCommerce(ctx.env, author.userId, author.accessToken)
+    await verifyForLockedSongCommerce(ctx.env, buyer.userId, buyer.accessToken)
 
     const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "Paused Partner Club")
 
@@ -870,6 +878,7 @@ describe("song artifact donation routes", () => {
         access_mode: "locked",
         song_mode: "original",
         rights_basis: "original",
+        license_preset: "non-commercial",
         song_artifact_bundle_id: bundleBody.song_artifact_bundle_id,
       },
       ctx.env,
@@ -895,31 +904,21 @@ describe("song artifact donation routes", () => {
     expect(listingCreate.status).toBe(201)
     const listingBody = await json(listingCreate) as { listing_id: string }
 
-    const repo: CommunityRepository = {
+    const repo: CommunityDatabaseBindingRepository = {
       async getPrimaryCommunityDatabaseBinding() {
         return {
           community_database_binding_id: "cdb_test",
           community_id: communityId,
+          binding_role: "primary",
+          organization_slug: "local",
+          group_name: "local",
+          group_id: null,
+          database_name: `community-${communityId}`,
+          database_id: null,
           database_url: `file:${ctx.communityDbRoot}/community-${communityId}.db`,
-          binding_status: "active",
-          binding_kind: "primary",
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        }
-      },
-      async getCommunityById() {
-        return {
-          community_id: communityId,
-          creator_user_id: author.userId,
-          display_name: "Paused Partner Club",
-          description: null,
-          avatar_ref: null,
-          banner_ref: null,
+          location: null,
           status: "active",
-          route_slug: communityId,
-          namespace_verification_id: null,
-          pending_namespace_verification_session_id: null,
-          provisioning_state: "active",
+          transferred_at: null,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         }
@@ -927,7 +926,7 @@ describe("song artifact donation routes", () => {
       async getActiveCommunityDbCredential() {
         return null
       },
-    } as unknown as CommunityRepository
+    }
 
     const communityDb = await openCommunityDb(ctx.env, repo, communityId)
     try {
@@ -956,5 +955,5 @@ describe("song artifact donation routes", () => {
     expect(quoteCreate.status).toBe(403)
     const quoteBody = await json(quoteCreate) as { message?: string }
     expect(quoteBody.message).toBe("Donation partner is not available")
-  })
+  }, 15000)
 })

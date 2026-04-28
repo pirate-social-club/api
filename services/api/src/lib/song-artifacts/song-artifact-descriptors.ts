@@ -44,6 +44,12 @@ export function videoDescriptorFromUpload(upload: SongArtifactUpload): {
   clip_duration_ms?: number | null
   width?: number | null
   height?: number | null
+  poster_ref?: string | null
+  poster_mime_type?: string | null
+  poster_size_bytes?: number | null
+  poster_width?: number | null
+  poster_height?: number | null
+  poster_frame_ms?: number | null
 } {
   return {
     storage_ref: upload.gateway_url || upload.storage_ref,

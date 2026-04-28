@@ -401,6 +401,23 @@ export async function incrementCommunityFollowerCountRow(input: {
   })
 }
 
+export async function setCommunityFollowerCountRow(input: {
+  executor: DbExecutor
+  communityId: string
+  followerCount: number
+  updatedAt: string
+}): Promise<void> {
+  await input.executor.execute({
+    sql: `
+      UPDATE communities
+      SET follower_count = ?2,
+          updated_at = ?3
+      WHERE community_id = ?1
+    `,
+    args: [input.communityId, Math.max(0, input.followerCount), input.updatedAt],
+  })
+}
+
 export async function updateCommunityPostProjectionStatusRow(input: {
   executor: DbExecutor
   postId: string

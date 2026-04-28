@@ -135,6 +135,7 @@ function buildNewRecord(identity: UpstreamIdentity): MemoryAuthRecord {
       ],
       primary_public_handle: null,
       primary_wallet_address: primaryWalletAddress,
+      xmtp_inbox_id: null,
       global_handle: globalHandle,
       display_verified_nationality_badge: false,
       nationality_badge_country: null,

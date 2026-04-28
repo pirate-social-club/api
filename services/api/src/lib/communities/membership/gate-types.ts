@@ -16,15 +16,7 @@ export type ProofRequirement = {
   config?: Record<string, unknown> | null
 }
 
-export type MissingMembershipCapability =
-  | "unique_human"
-  | "age_over_18"
-  | "minimum_age"
-  | "nationality"
-  | "gender"
-  | "wallet_score"
-  | "sanctions_clear"
-
+export type MissingMembershipCapability = "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score"
 export type SuggestedVerificationProvider = "self" | "very" | "passport"
 
 export type MembershipGateEvaluation = {

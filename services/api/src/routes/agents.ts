@@ -1,8 +1,8 @@
 import { Hono } from "hono"
 import { authError, badRequestError, notFoundError } from "../lib/errors"
-import { authenticate, authenticateOptional } from "../lib/auth-middleware"
+import { authenticate, authenticateAdminOrUser, authenticateOptional } from "../lib/auth-middleware"
 import { getControlPlaneAgentOwnershipRepository } from "../lib/agents/agent-ownership-repository"
-import type { ActorContext } from "../lib/auth-middleware"
+import type { ActorContext, AdminActorContext } from "../lib/auth-middleware"
 import type {
   AgentChallenge,
   AgentOwnershipProvider,
@@ -32,6 +32,17 @@ async function resolveActorOrConnectionToken<T>(input: {
     return await input.withConnectionToken(input.connectionToken)
   }
   throw authError("Authentication failed")
+}
+
+function getActorUserId(actor: ActorContext | AdminActorContext): string {
+  return actor.userId
+}
+
+function requireAdminActor(actor: ActorContext | AdminActorContext): AdminActorContext {
+  if (actor.authType !== "admin") {
+    throw authError("Authentication failed")
+  }
+  return actor
 }
 
 agents.post("/agent-ownership-pairing", authenticate, async (c) => {
@@ -136,6 +147,11 @@ agents.post("/agent-ownership-sessions/:agentOwnershipSessionId/callback", async
     payload?: Record<string, unknown> | null
   }>().catch(() => null)) ?? null
 
+  const callbackSecret = c.req.header("x-very-callback-secret")?.trim()
+  if (!callbackSecret) {
+    throw authError("Callback secret is required")
+  }
+
   const repo = getControlPlaneAgentOwnershipRepository(c.env)
   const session = await repo.completeAgentOwnershipSessionFromCallback({
     agentOwnershipSessionId: c.req.param("agentOwnershipSessionId"),
@@ -143,7 +159,7 @@ agents.post("/agent-ownership-sessions/:agentOwnershipSessionId/callback", async
     attestationId: body?.attestation_id ?? null,
     proofHash: body?.proof_hash ?? null,
     payload: body?.payload ?? null,
-    callbackSecret: c.req.header("x-very-callback-secret")?.trim() ?? null,
+    callbackSecret,
   })
   if (!session) {
     throw notFoundError("Agent ownership session not found")
@@ -151,24 +167,42 @@ agents.post("/agent-ownership-sessions/:agentOwnershipSessionId/callback", async
   return c.json(session, 200)
 })
 
-agents.get("/agents", authenticate, async (c) => {
+agents.get("/agents", authenticateAdminOrUser, async (c) => {
   const actor = c.get("actor")
   const repo = getControlPlaneAgentOwnershipRepository(c.env)
-  const items = await repo.listUserAgents(actor.userId)
+  const items = await repo.listUserAgents(getActorUserId(actor))
   return c.json({ items }, 200)
 })
 
-agents.get("/agents/:agentId", authenticate, async (c) => {
+agents.post("/agents/admin/seed", authenticateAdminOrUser, async (c) => {
+  const actor = requireAdminActor(c.get("actor"))
+  const body = await c.req.json<{ display_name?: unknown; desired_label?: unknown }>().catch(() => null)
+  if (!body || typeof body !== "object") {
+    throw badRequestError("Invalid agent seed payload")
+  }
+
+  const repo = getControlPlaneAgentOwnershipRepository(c.env)
+  const agent = await repo.seedUserAgentForAdmin({
+    userId: getActorUserId(actor),
+    displayName: requireString(body.display_name, "display_name"),
+    desiredLabel: typeof body.desired_label === "string" && body.desired_label.trim().length > 0
+      ? body.desired_label.trim()
+      : null,
+  })
+  return c.json(agent, 201)
+})
+
+agents.get("/agents/:agentId", authenticateAdminOrUser, async (c) => {
   const actor = c.get("actor")
   const repo = getControlPlaneAgentOwnershipRepository(c.env)
-  const agent = await repo.getUserAgent(c.req.param("agentId"), actor.userId)
+  const agent = await repo.getUserAgent(c.req.param("agentId"), getActorUserId(actor))
   if (!agent) {
     throw notFoundError("Agent not found")
   }
   return c.json(agent, 200)
 })
 
-agents.patch("/agents/:agentId", authenticate, async (c) => {
+agents.patch("/agents/:agentId", authenticateAdminOrUser, async (c) => {
   const actor = c.get("actor")
   const body = await c.req.json<{ display_name?: unknown }>().catch(() => null)
   if (!body || typeof body !== "object") {
@@ -178,7 +212,7 @@ agents.patch("/agents/:agentId", authenticate, async (c) => {
   const repo = getControlPlaneAgentOwnershipRepository(c.env)
   const agent = await repo.updateUserAgentDisplayName({
     agentId: c.req.param("agentId"),
-    userId: actor.userId,
+    userId: getActorUserId(actor),
     displayName: requireString(body.display_name, "display_name"),
   })
   if (!agent) {
@@ -187,15 +221,15 @@ agents.patch("/agents/:agentId", authenticate, async (c) => {
   return c.json(agent, 200)
 })
 
-agents.get("/agents/:agentId/handle", authenticate, async (c) => {
+agents.get("/agents/:agentId/handle", authenticateAdminOrUser, async (c) => {
   const actor = c.get("actor")
   const repo = getControlPlaneAgentOwnershipRepository(c.env)
   const handle = await repo.getUserAgentHandle({
     agentId: c.req.param("agentId"),
-    userId: actor.userId,
+    userId: getActorUserId(actor),
   })
   if (!handle) {
-    const agent = await repo.getUserAgent(c.req.param("agentId"), actor.userId)
+    const agent = await repo.getUserAgent(c.req.param("agentId"), getActorUserId(actor))
     if (!agent) {
       throw notFoundError("Agent not found")
     }
@@ -204,7 +238,7 @@ agents.get("/agents/:agentId/handle", authenticate, async (c) => {
   return c.json(handle, 200)
 })
 
-agents.post("/agents/:agentId/handle", authenticate, async (c) => {
+agents.post("/agents/:agentId/handle", authenticateAdminOrUser, async (c) => {
   const actor = c.get("actor")
   const body = await c.req.json<{ desired_label?: unknown }>().catch(() => null)
   if (!body || typeof body !== "object") {
@@ -214,7 +248,7 @@ agents.post("/agents/:agentId/handle", authenticate, async (c) => {
   const repo = getControlPlaneAgentOwnershipRepository(c.env)
   const handle = await repo.claimUserAgentHandle({
     agentId: c.req.param("agentId"),
-    userId: actor.userId,
+    userId: getActorUserId(actor),
     desiredLabel: requireString(body.desired_label, "desired_label"),
   })
   if (!handle) {

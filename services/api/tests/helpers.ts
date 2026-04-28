@@ -26,7 +26,7 @@ import {
 } from "../scripts/_lib/local-dev-storage"
 
 import { resolveCoreRepoPath } from "../shared/core-repo-paths"
-import { splitSqlStatements, toSqliteCompatibleStatement } from "../shared/sql-migration"
+import { splitSqlStatements, toSqliteCompatibleStatements } from "../shared/sql-migration"
 
 const encoder = new TextEncoder()
 const ROUTE_TEST_LOCK_PATH = join(tmpdir(), "pirate-api-route-test-lock")
@@ -104,7 +104,7 @@ export function buildVerifiedSelfProvider(upstreamSessionRef: string): SelfProvi
     },
     getSessionOutcome: async (input) => ({
       status: "verified",
-      claims: { age_over_18: true, nationality: null, gender: null, ofac_clear: null, nullifier: input.upstreamSessionRef },
+      claims: { age_over_18: true, nationality: null, gender: null, nullifier: input.upstreamSessionRef },
     }),
   }
 }
@@ -155,15 +155,26 @@ export async function json(response: Response): Promise<unknown> {
   return await response.json()
 }
 
+export async function withMockedFetch<T>(
+  buildHandler: (originalFetch: typeof fetch) => typeof fetch,
+  run: () => Promise<T>,
+): Promise<T> {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = buildHandler(originalFetch)
+  try {
+    return await run()
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+}
+
 async function applySqlFile(client: Client, path: string | URL): Promise<void> {
   const rawSql = await readFile(path, "utf8")
   const statements = splitSqlStatements(rawSql)
   for (const statement of statements) {
-    const sqliteStatement = toSqliteCompatibleStatement(statement)
-    if (!sqliteStatement) {
-      continue
+    for (const sqliteStatement of toSqliteCompatibleStatements(statement)) {
+      await client.execute(sqliteStatement)
     }
-    await client.execute(sqliteStatement)
   }
 }
 

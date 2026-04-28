@@ -1,7 +1,11 @@
 import { executeFirst } from "../db-helpers"
 import { openCommunityDb } from "../communities/community-db-factory"
 import type { Client } from "../sql-client"
-import type { CommunityRepository } from "../communities/db-community-repository"
+import type {
+  CommunityDatabaseBindingRepository,
+  CommunityMembershipProjectionRepository,
+  CommunityReadRepository,
+} from "../communities/db-community-repository"
 import { isMissingColumnError } from "../auth/auth-db-query-helpers"
 import { getLatestThreadSnapshotForRead } from "../comments/community-comment-store"
 import { buildLocalizedPostResponse } from "../localization/post-localization-service"
@@ -30,6 +34,14 @@ type HomeFeedProjectionRow = {
 }
 
 export type HomeFeedTimeRange = "hour" | "day" | "week" | "month" | "year" | "all"
+
+type HomeFeedCommunityRepository =
+  & CommunityReadRepository
+  & CommunityDatabaseBindingRepository
+  & Pick<
+    CommunityMembershipProjectionRepository,
+    "listCommunityMembershipProjectionsByUserId" | "listCommunityFollowProjectionsByUserId"
+  >
 
 function parseHomeFeedSort(sort: string | null | undefined): HomeFeedSort {
   return sort === "new" || sort === "top" ? sort : "best"
@@ -111,7 +123,7 @@ async function getViewerVote(input: {
   return numberOrNull(rowValue(row, "vote_value")) as -1 | 1 | null
 }
 
-function buildCommunitySummary(community: Awaited<ReturnType<CommunityRepository["getCommunityById"]>>): HomeFeedCommunitySummary | null {
+function buildCommunitySummary(community: Awaited<ReturnType<CommunityReadRepository["getCommunityById"]>>): HomeFeedCommunitySummary | null {
   if (!community) {
     return null
   }
@@ -270,7 +282,7 @@ export async function listHomeFeed(input: {
   sort?: string | null
   timeRange?: string | null
   cursor?: string | null
-  communityRepository: CommunityRepository
+  communityRepository: HomeFeedCommunityRepository
 }): Promise<HomeFeedResponse> {
   const activeCommunities = await input.communityRepository.listActiveCommunities()
   const membershipRows = input.userId

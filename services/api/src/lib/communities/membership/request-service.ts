@@ -1,42 +1,35 @@
 import type { ProfileRepository, UserRepository } from "../../auth/repositories"
-import type { CommunityRepository } from "../db-community-repository"
 import { conflictError, gateFailedWithDetails, internalError, notFoundError } from "../../errors"
 import { nowIso } from "../../helpers"
-import { openCommunityDb } from "../community-db-factory"
-import { requireOwnedCommunity } from "../create/repository"
 import {
   emitMembershipRequestReceived,
   resolveMembershipReviewTask,
 } from "../../notifications/notification-task-service"
+import type {
+  Env,
+  MembershipRequestListResponse,
+  MembershipRequestSummary,
+} from "../../../types"
+import { openCommunityDb } from "../community-db-factory"
 import {
   canAccessCommunity,
-  getCommunityJoinMode,
   getCommunityMembershipState,
   upsertCommunityMembership,
 } from "./membership-state-store"
 import {
   countPendingMembershipRequests,
+  getCommunityJoinMode,
   getPendingMembershipRequestByApplicant,
   listPendingMembershipRequests,
   resolveMembershipRequest,
   upsertMembershipRequest,
 } from "./membership-request-store"
 import { listActiveMembershipGateRules } from "./gate-rule-store"
-import {
-  buildMembershipGateSummary,
-  evaluateMembershipGateRules,
-} from "./gates"
-import {
-  assertBaselineJoinGate,
-  buildWalletScoreStatus,
-} from "./eligibility-service"
+import { evaluateGatedMembership } from "./eligibility-service"
+import { throwUnsatisfiedMembershipGate } from "./gate-failure-service"
 import { projectMembershipAndFollow } from "./projection-service"
-import type { MembershipResult } from "./types"
-import type {
-  Env,
-  MembershipRequestListResponse,
-  MembershipRequestSummary,
-} from "../../../types"
+import type { CommunityMembershipRepository, MembershipResult } from "./types"
+import { requireOwnedCommunity } from "../create/service"
 
 function sanitizeMembershipRequestNote(note: string | null | undefined): string | null {
   const trimmed = typeof note === "string" ? note.trim() : ""
@@ -62,16 +55,15 @@ export async function joinCommunity(input: {
   userId: string
   communityId: string
   note?: string | null
+  bypassMembershipGateChecks?: boolean
   userRepository: UserRepository
   profileRepository?: ProfileRepository
-  communityRepository: CommunityRepository
+  communityRepository: CommunityMembershipRepository
 }): Promise<MembershipResult> {
   const user = await input.userRepository.getUserById(input.userId)
   if (!user) {
     throw internalError("Resolved user row is missing for community join")
   }
-  assertBaselineJoinGate(user)
-
   const community = await input.communityRepository.getCommunityById(input.communityId)
   if (!community || community.provisioning_state !== "active" || community.status !== "active") {
     throw notFoundError("Community not found")
@@ -92,12 +84,32 @@ export async function joinCommunity(input: {
       })
     }
 
+    const now = nowIso()
+    if (input.bypassMembershipGateChecks) {
+      await upsertCommunityMembership({
+        client: db.client,
+        communityId: input.communityId,
+        userId: input.userId,
+        now,
+      })
+      await projectMembershipAndFollow({
+        db,
+        communityRepository: input.communityRepository,
+        communityId: input.communityId,
+        userId: input.userId,
+        now,
+      })
+      return {
+        community_id: input.communityId,
+        status: "joined",
+      }
+    }
+
     const membershipMode = await getCommunityJoinMode(db.client, input.communityId)
     if (!membershipMode) {
       throw notFoundError("Community not found")
     }
 
-    const now = nowIso()
     if (membershipMode === "open") {
       await upsertCommunityMembership({
         client: db.client,
@@ -163,81 +175,15 @@ export async function joinCommunity(input: {
     }
 
     const rules = await listActiveMembershipGateRules(db.client, input.communityId)
-    const gateSummaries = rules.map(buildMembershipGateSummary)
-    const walletScoreStatus = buildWalletScoreStatus(user, rules)
-    const walletAttachments = await input.userRepository.getWalletAttachmentsByUserId(input.userId)
-    const evaluation = await evaluateMembershipGateRules({
+    const { gateSummaries, walletScoreStatus, evaluation } = await evaluateGatedMembership({
       env: input.env,
-      rules,
       user,
-      walletAttachments,
+      userRepository: input.userRepository,
+      communityId: input.communityId,
+      rules,
     })
     if (!evaluation.satisfied) {
-      if (evaluation.missingCapabilities.length > 0) {
-        throw gateFailedWithDetails("Verification is required to join this community", {
-          membership_gate_summaries: gateSummaries,
-          missing_capabilities: evaluation.missingCapabilities,
-          suggested_verification_provider: evaluation.suggestedVerificationProvider,
-          suggested_verification_intent: evaluation.suggestedVerificationProvider === "self"
-            ? "community_join"
-            : null,
-          failure_reason: "missing_verification",
-          ...(walletScoreStatus ? { wallet_score_status: walletScoreStatus } : {}),
-        })
-      }
-      if (evaluation.mismatchReasons.includes("nationality_mismatch")) {
-        throw gateFailedWithDetails("Your verified nationality does not satisfy this community requirement", {
-          membership_gate_summaries: gateSummaries,
-          failure_reason: "nationality_mismatch",
-        })
-      }
-      if (evaluation.mismatchReasons.includes("gender_mismatch")) {
-        throw gateFailedWithDetails("Your verified gender does not satisfy this community requirement", {
-          membership_gate_summaries: gateSummaries,
-          failure_reason: "gender_mismatch",
-        })
-      }
-      if (evaluation.mismatchReasons.includes("mechanism_not_accepted")) {
-        throw gateFailedWithDetails("Your verification method does not satisfy this community requirement", {
-          membership_gate_summaries: gateSummaries,
-          failure_reason: "provider_not_accepted",
-        })
-      }
-      if (evaluation.mismatchReasons.includes("wallet_score_too_low")) {
-        throw gateFailedWithDetails("Your Passport score does not satisfy this community requirement", {
-          membership_gate_summaries: gateSummaries,
-          failure_reason: "wallet_score_too_low",
-          ...(walletScoreStatus ? { wallet_score_status: walletScoreStatus } : {}),
-        })
-      }
-      if (evaluation.mismatchReasons.includes("minimum_age_mismatch")) {
-        throw gateFailedWithDetails("Your verified age does not satisfy this community requirement", {
-          membership_gate_summaries: gateSummaries,
-          failure_reason: "minimum_age_mismatch",
-        })
-      }
-      if (evaluation.mismatchReasons.includes("erc721_holding_required")) {
-        throw gateFailedWithDetails("A linked Ethereum wallet holding this NFT collection is required to join", {
-          membership_gate_summaries: gateSummaries,
-          failure_reason: "erc721_holding_required",
-        })
-      }
-      if (evaluation.mismatchReasons.includes("token_inventory_unavailable")) {
-        throw gateFailedWithDetails("Collectible inventory could not be checked right now", {
-          membership_gate_summaries: gateSummaries,
-          failure_reason: "token_inventory_unavailable",
-        })
-      }
-      if (evaluation.mismatchReasons.includes("erc721_inventory_match_required")) {
-        throw gateFailedWithDetails("A linked wallet holding the required collectible inventory is required to join", {
-          membership_gate_summaries: gateSummaries,
-          failure_reason: "erc721_inventory_match_required",
-        })
-      }
-      throw gateFailedWithDetails("Community membership requirements are not satisfied", {
-        membership_gate_summaries: gateSummaries,
-        failure_reason: "unsupported",
-      })
+      throwUnsatisfiedMembershipGate({ evaluation, gateSummaries, walletScoreStatus })
     }
     await upsertCommunityMembership({
       client: db.client,
@@ -267,7 +213,7 @@ export async function listMembershipRequests(input: {
   communityId: string
   cursor?: string | null
   limit?: number
-  communityRepository: CommunityRepository
+  communityRepository: CommunityMembershipRepository
   profileRepository: ProfileRepository
 }): Promise<MembershipRequestListResponse> {
   await requireOwnedCommunity(input.communityRepository, input.communityId, input.userId)
@@ -294,7 +240,7 @@ export async function reviewMembershipRequest(input: {
   communityId: string
   requestId: string
   decision: "approved" | "rejected"
-  communityRepository: CommunityRepository
+  communityRepository: CommunityMembershipRepository
   profileRepository: ProfileRepository
 }): Promise<MembershipRequestSummary> {
   const community = await requireOwnedCommunity(input.communityRepository, input.communityId, input.userId)

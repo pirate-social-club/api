@@ -2,12 +2,19 @@ import { Hono } from "hono"
 import { badRequestError, notFoundError } from "../lib/errors"
 import { getControlPlaneVerificationRepository } from "../lib/verification/verification-repository"
 import { proxyVeryBridgeRequest } from "../lib/verification/very-provider"
-import { authenticateAdminOrUser, type AuthenticatedEnv } from "../lib/auth-middleware"
+import { authenticate, authenticateAdminOrUser, type AuthenticatedEnv } from "../lib/auth-middleware"
 import { trackApiEvent } from "../lib/analytics/track"
 import type { Env, RequestedVerificationCapability, VerificationIntent, VerificationRequirement } from "../types"
 
 const verification = new Hono<{ Bindings: Env }>()
 const authenticatedVerification = new Hono<AuthenticatedEnv>()
+const authenticatedNamespaceVerification = new Hono<AuthenticatedEnv>()
+type VeryBridgePollStatus = "initialized" | "received" | "completed"
+const veryBridgeLastStatusBySession = new Map<string, VeryBridgePollStatus>()
+
+function isVeryBridgePollStatus(value: unknown): value is VeryBridgePollStatus {
+  return value === "initialized" || value === "received" || value === "completed"
+}
 
 verification.post("/verification-sessions/:verificationSessionId/self-callback", async (c) => {
   const payload = (await c.req.json<Record<string, unknown>>().catch(() => null)) ?? null
@@ -42,10 +49,17 @@ verification.post("/verification-sessions/very-widget-verify", async (c) => {
     return c.json({ status: "invalid", error: "missing_proof" }, 200)
   }
 
+  console.info("[very-provider] widget verify callback received", {
+    proofLength: proof.length,
+  })
   return c.json({ status: "valid" }, 200)
 })
 
-authenticatedVerification.use("*", authenticateAdminOrUser)
+authenticatedVerification.use("/verification-sessions", authenticate)
+authenticatedVerification.use("/verification-sessions/*", authenticate)
+authenticatedNamespaceVerification.use("/namespace-verification-sessions", authenticateAdminOrUser)
+authenticatedNamespaceVerification.use("/namespace-verification-sessions/*", authenticateAdminOrUser)
+authenticatedNamespaceVerification.use("/namespace-verifications/*", authenticateAdminOrUser)
 
 authenticatedVerification.post("/verification-sessions/:verificationSessionId/very-bridge/sessions", async (c) => {
   const actor = c.get("actor")
@@ -58,6 +72,10 @@ authenticatedVerification.post("/verification-sessions/:verificationSessionId/ve
   })
   const providerSessionId = typeof result.body.sessionId === "string" ? result.body.sessionId.trim() : ""
   if (providerSessionId) {
+    console.info("[very-provider] bridge session created", {
+      verificationSessionId: c.req.param("verificationSessionId"),
+      providerSessionId,
+    })
     const repo = getControlPlaneVerificationRepository(c.env)
     const recorded = await repo.recordVeryBridgeSession({
       verificationSessionId: c.req.param("verificationSessionId"),
@@ -67,6 +85,15 @@ authenticatedVerification.post("/verification-sessions/:verificationSessionId/ve
     if (!recorded) {
       throw notFoundError("Verification session not found")
     }
+  } else {
+    console.warn("[very-provider] bridge session creation did not return a session id", {
+      verificationSessionId: c.req.param("verificationSessionId"),
+      responseStatus: result.status,
+      bodyStatus: typeof result.body.status === "string" ? result.body.status : null,
+      userMessage: typeof result.body.userMessage === "string" ? result.body.userMessage : null,
+      message: typeof result.body.message === "string" ? result.body.message : null,
+      bodyKeys: Object.keys(result.body).sort(),
+    })
   }
   return c.json(result.body, result.status as 200)
 })
@@ -87,6 +114,45 @@ authenticatedVerification.get("/verification-sessions/:verificationSessionId/ver
     method: "GET",
     path: `session/${encodeURIComponent(providerSessionId)}`,
   })
+  const status = typeof result.body.status === "string" ? result.body.status : null
+  if (isVeryBridgePollStatus(status)) {
+    veryBridgeLastStatusBySession.set(providerSessionId, status)
+  }
+  if (result.status === 504 && result.body.userMessage === "Very bridge request timed out") {
+    const fallbackStatus = veryBridgeLastStatusBySession.get(providerSessionId) ?? "initialized"
+    console.warn("[very-provider] bridge session status timed out; returning last known status", {
+      verificationSessionId: c.req.param("verificationSessionId"),
+      providerSessionId,
+      fallbackStatus,
+    })
+    return c.json({ status: fallbackStatus }, 200)
+  }
+  console.info("[very-provider] bridge session status", {
+    verificationSessionId: c.req.param("verificationSessionId"),
+    providerSessionId,
+    status,
+    responseStatus: result.status,
+    hasResponse: Boolean(result.body.response),
+    userMessage: typeof result.body.userMessage === "string" ? result.body.userMessage : null,
+    message: typeof result.body.message === "string" ? result.body.message : null,
+    error: typeof result.body.error === "string" ? result.body.error : null,
+    code: typeof result.body.code === "string" || typeof result.body.code === "number" ? result.body.code : null,
+    bodyKeys: Object.keys(result.body).sort(),
+  })
+  if (status === "error" || result.status >= 400) {
+    console.warn("[very-provider] bridge session status error", {
+      verificationSessionId: c.req.param("verificationSessionId"),
+      providerSessionId,
+      status,
+      responseStatus: result.status,
+      userMessage: typeof result.body.userMessage === "string" ? result.body.userMessage : null,
+    })
+  } else if (status === "completed") {
+    console.info("[very-provider] bridge session completed", {
+      verificationSessionId: c.req.param("verificationSessionId"),
+      providerSessionId,
+    })
+  }
   return c.json(result.body, result.status as 200)
 })
 
@@ -107,6 +173,15 @@ authenticatedVerification.post("/verification-sessions", async (c) => {
 
   const repo = getControlPlaneVerificationRepository(c.env)
   const publicOrigin = new URL(c.req.url).origin
+  console.info("[verification-sessions] start request", {
+    userId: actor.userId,
+    provider: body.provider,
+    requestedCapabilities: body.requested_capabilities ?? null,
+    verificationRequirements: body.verification_requirements ?? null,
+    verificationIntent: body.verification_intent ?? null,
+    policyId: body.policy_id ?? null,
+    publicOrigin,
+  })
   const created = await repo.startVerificationSession({
     userId: actor.userId,
     provider: body.provider,
@@ -116,6 +191,22 @@ authenticatedVerification.post("/verification-sessions", async (c) => {
     verificationIntent: (body.verification_intent as VerificationIntent | undefined) ?? null,
     policyId: body.policy_id ?? null,
     publicOrigin,
+  })
+  console.info("[verification-sessions] start response", {
+    userId: actor.userId,
+    verificationSessionId: created.verification_session_id,
+    provider: created.provider,
+    requestedCapabilities: created.requested_capabilities,
+    verificationRequirements: created.verification_requirements,
+    status: created.status,
+    launchMode: created.launch?.mode ?? null,
+    selfDisclosures: created.launch?.self_app?.disclosures ?? null,
+    selfEndpointType: created.launch?.self_app?.endpoint_type ?? null,
+    selfScope: created.launch?.self_app?.scope ?? null,
+    veryContext: created.launch?.very_widget?.context ?? null,
+    veryTypeId: created.launch?.very_widget?.type_id ?? null,
+    veryQuery: created.launch?.very_widget?.query ?? null,
+    veryVerifyUrl: created.launch?.very_widget?.verify_url ?? null,
   })
   await trackApiEvent(c.env, c.req, {
     eventName: "unique_human_verification_started",
@@ -172,7 +263,7 @@ authenticatedVerification.post("/verification-sessions/:verificationSessionId/co
   return c.json(result, 200)
 })
 
-authenticatedVerification.post("/namespace-verification-sessions", async (c) => {
+authenticatedNamespaceVerification.post("/namespace-verification-sessions", async (c) => {
   const actor = c.get("actor")
   const body = await c.req.json<{ family?: "hns" | "spaces"; root_label?: string }>().catch(() => null)
   if (!body?.family || (body.family !== "hns" && body.family !== "spaces") || !body.root_label?.trim()) {
@@ -193,7 +284,7 @@ authenticatedVerification.post("/namespace-verification-sessions", async (c) => 
   return c.json(created, 201)
 })
 
-authenticatedVerification.get("/namespace-verification-sessions/:namespaceVerificationSessionId", async (c) => {
+authenticatedNamespaceVerification.get("/namespace-verification-sessions/:namespaceVerificationSessionId", async (c) => {
   const actor = c.get("actor")
   const repo = getControlPlaneVerificationRepository(c.env)
   const result = await repo.getNamespaceVerificationSession(c.req.param("namespaceVerificationSessionId"), actor.userId)
@@ -213,7 +304,7 @@ authenticatedVerification.get("/namespace-verification-sessions/:namespaceVerifi
   return c.json(result, 200)
 })
 
-authenticatedVerification.post("/namespace-verification-sessions/:namespaceVerificationSessionId/complete", async (c) => {
+authenticatedNamespaceVerification.post("/namespace-verification-sessions/:namespaceVerificationSessionId/complete", async (c) => {
   const actor = c.get("actor")
   const body = (await c.req.json<{
     restart_challenge?: boolean | null
@@ -230,7 +321,7 @@ authenticatedVerification.post("/namespace-verification-sessions/:namespaceVerif
   return c.json(result, 200)
 })
 
-authenticatedVerification.get("/namespace-verifications/:namespaceVerificationId", async (c) => {
+authenticatedNamespaceVerification.get("/namespace-verifications/:namespaceVerificationId", async (c) => {
   const actor = c.get("actor")
   const repo = getControlPlaneVerificationRepository(c.env)
   const result = await repo.getNamespaceVerification(c.req.param("namespaceVerificationId"), actor.userId)
@@ -241,5 +332,6 @@ authenticatedVerification.get("/namespace-verifications/:namespaceVerificationId
 })
 
 verification.route("/", authenticatedVerification)
+verification.route("/", authenticatedNamespaceVerification)
 
 export default verification

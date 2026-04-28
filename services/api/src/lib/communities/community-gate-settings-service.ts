@@ -1,18 +1,21 @@
 import type { UserRepository } from "../auth/repositories"
-import type { CommunityRepository } from "./db-community-repository"
+import type {
+  CommunityDatabaseBindingRepository,
+  CommunityReadRepository,
+} from "./db-community-repository"
 import { eligibilityFailed, internalError, notFoundError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
 import { openCommunityDb } from "./community-db-factory"
-import { assertPublicV0GateConfiguration } from "./community-gate-validation"
 import {
-  loadCommunityProjection,
-  requireOwnedCommunity,
-} from "./create/repository"
-import {
+  assertPublicV0GateConfiguration,
   assertUpdateCommunityGatesRequest,
+  communityMutationActorFromUserId,
+  loadCommunityProjection,
+  requireAdminOverrideOrOwnedCommunity,
+  type CommunityMutationActor,
   type UpdateCommunityGatesRequestBody,
-} from "./create/update-validation"
+} from "./create/shared"
 import type {
   Community,
   Env,
@@ -102,18 +105,28 @@ async function recordCommunityGateUpdateAudit(input: {
   })
 }
 
+type CommunityGateSettingsRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
+
 export async function updateCommunityGates(input: {
   env: Env
-  userId: string
+  userId?: string
+  actor?: CommunityMutationActor
   communityId: string
   body: UpdateCommunityGatesRequestBody | null
-  communityRepository: CommunityRepository
+  communityRepository: CommunityGateSettingsRepository
   userRepository: UserRepository
 }): Promise<Community> {
   assertUpdateCommunityGatesRequest(input.body)
-  await requireOwnedCommunity(input.communityRepository, input.communityId, input.userId)
+  const actor = input.actor ?? communityMutationActorFromUserId(input.userId ?? "")
+  await requireAdminOverrideOrOwnedCommunity({
+    env: input.env,
+    repo: input.communityRepository,
+    communityId: input.communityId,
+    actor,
+    action: "community.gates_updated",
+  })
 
-  const user = await input.userRepository.getUserById(input.userId)
+  const user = await input.userRepository.getUserById(actor.userId)
   if (!user) {
     throw internalError("Resolved user row is missing for community gates update")
   }
@@ -248,7 +261,7 @@ export async function updateCommunityGates(input: {
     }
     await recordCommunityGateUpdateAudit({
       env: input.env,
-      actorUserId: input.userId,
+      actorUserId: actor.userId,
       communityId: input.communityId,
       previousAccess,
       nextAccess,

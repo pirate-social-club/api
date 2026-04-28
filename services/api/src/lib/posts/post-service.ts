@@ -1,10 +1,15 @@
 import type { Client } from "../sql-client"
 import { openCommunityDb } from "../communities/community-db-factory"
 import type { ProfileRepository, UserRepository } from "../auth/repositories"
-import type { CommunityRepository } from "../communities/db-community-repository"
+import type {
+  CommunityDatabaseBindingRepository,
+  CommunityPostProjectionRepository,
+  CommunityReadRepository,
+} from "../communities/db-community-repository"
 import { loadCommunityProjection } from "../communities/create/repository"
 import { authorizeAgentWrite } from "../agents/agent-write-authorization"
 import { resolveStubAnalysisOutcome } from "./post-analysis"
+import { resolveOpenAIModerationOutcome } from "./openai-moderation"
 import {
   assertPostCreateRequest,
   findPostByIdempotencyKey,
@@ -17,11 +22,14 @@ import {
 import {
   consumeSongPostBundle,
   resolveSongPostBundle,
+  resolveVideoPostAsset,
 } from "../song-artifacts/song-artifact-post-resolution-service"
-import { createSongAssetForPost } from "../communities/commerce/service"
+import {
+  createAssetForPost,
+  createSongAssetForPost,
+} from "../communities/commerce/service"
 import {
   requireMemberAccess,
-  requireVerifiedHuman,
 } from "./post-access"
 import {
   enqueueEmbedHydrateIfNeeded,
@@ -29,7 +37,7 @@ import {
   enqueuePostTranslationPrewarmJobs,
 } from "./post-jobs"
 import { analysisBlocked, badRequestError, eligibilityFailed, notFoundError } from "../errors"
-import { makeId, nowIso } from "../helpers"
+import { isLocalEnvironment, makeId, nowIso } from "../helpers"
 import type { CreatePostRequest, Env, Post } from "../../types"
 
 export {
@@ -39,9 +47,14 @@ export {
   listPublicCommunityPosts,
 } from "./post-read-service"
 
+type PostServiceCommunityRepository =
+  & CommunityReadRepository
+  & CommunityDatabaseBindingRepository
+  & CommunityPostProjectionRepository
+
 async function syncPostProjectionMetrics(input: {
   client: Client
-  communityRepository: CommunityRepository
+  communityRepository: Pick<CommunityPostProjectionRepository, "updateCommunityPostProjectionMetrics">
   postId: string
   updatedAt: string
 }): Promise<void> {
@@ -90,9 +103,10 @@ export async function createPost(input: {
   userId: string
   communityId: string
   body: CreatePostRequest
+  bypassAuthorAccessChecks?: boolean
   userRepository: UserRepository
   profileRepository: ProfileRepository
-  communityRepository: CommunityRepository
+  communityRepository: PostServiceCommunityRepository
 }): Promise<Post> {
   const communityRow = await input.communityRepository.getCommunityById(input.communityId)
   if (!communityRow || communityRow.provisioning_state !== "active" || communityRow.status !== "active") {
@@ -104,8 +118,10 @@ export async function createPost(input: {
 
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
-    await requireMemberAccess(db.client, input.communityId, input.userId)
-    await requireVerifiedHuman(input.userRepository, input.userId)
+    const enableDevAnalysisMarkers = isLocalEnvironment(input.env.ENVIRONMENT)
+    if (!input.bypassAuthorAccessChecks) {
+      await requireMemberAccess(db.client, input.communityId, input.userId)
+    }
 
     const idempotencyKey = input.body.idempotency_key?.trim() ?? ""
     const existing = idempotencyKey
@@ -133,6 +149,7 @@ export async function createPost(input: {
     })
     let analysisOverride: Pick<Post, "analysis_state" | "content_safety_state" | "age_gate_policy" | "status"> | undefined
     let resolvedSongBundleForAsset: Awaited<ReturnType<typeof resolveSongPostBundle>> | null = null
+    let resolvedVideoAsset: Awaited<ReturnType<typeof resolveVideoPostAsset>> | null = null
 
     if ((input.body.identity_mode ?? "public") === "anonymous") {
       const policy = await getCommunityPostPolicy(db.client, input.communityId)
@@ -187,62 +204,146 @@ export async function createPost(input: {
         song_artifact_bundle_id: resolvedBundle.bundle.song_artifact_bundle_id,
       }
 
-      const stubAnalysis = resolveStubAnalysisOutcome(writeBody)
+      const stubAnalysis = resolveStubAnalysisOutcome(writeBody, { enableDevMarkers: enableDevAnalysisMarkers })
       if (stubAnalysis.analysis_state === "blocked") {
         throw analysisBlocked("Content analysis blocked publication")
       }
+      const openAIModeration = await resolveOpenAIModerationOutcome({
+        env: input.env,
+        community,
+        body: writeBody,
+      })
 
       const mergedAnalysisState = mergeAnalysisState(
-        resolvedBundle.analysisState,
-        stubAnalysis.analysis_state,
+        mergeAnalysisState(resolvedBundle.analysisState, stubAnalysis.analysis_state),
+        openAIModeration.analysis_state,
       )
+      if (mergedAnalysisState === "blocked") {
+        throw analysisBlocked("Content analysis blocked publication")
+      }
       analysisOverride = {
         analysis_state: mergedAnalysisState,
         content_safety_state:
           mergedAnalysisState === "review_required"
             ? "pending"
-            : resolvedBundle.contentSafetyState,
-        age_gate_policy: resolvedBundle.ageGatePolicy,
+            : openAIModeration.content_safety_state === "safe"
+              ? resolvedBundle.contentSafetyState
+              : openAIModeration.content_safety_state,
+        age_gate_policy: resolvedBundle.ageGatePolicy === "18_plus" || openAIModeration.age_gate_policy === "18_plus" ? "18_plus" : "none",
         status: mergedAnalysisState === "review_required" ? "draft" : "published",
       }
-    } else {
-      const stubAnalysis = resolveStubAnalysisOutcome(writeBody)
+    } else if (input.body.post_type === "video" && input.body.access_mode) {
+      const accessMode = input.body.access_mode
+      const resolvedVideo = await resolveVideoPostAsset({
+        env: input.env,
+        userId: input.userId,
+        communityId: input.communityId,
+        mediaRefs: input.body.media_refs,
+      })
+      resolvedVideoAsset = resolvedVideo
+      const lockedPosterMediaRefs = resolvedVideo.mediaRefs[0]?.poster_ref
+        ? [{
+          ...resolvedVideo.mediaRefs[0],
+          storage_ref: "",
+          content_hash: null,
+        }]
+        : []
+
+      writeBody = {
+        ...input.body,
+        identity_mode: "public",
+        media_refs: accessMode === "locked" ? lockedPosterMediaRefs : resolvedVideo.mediaRefs,
+        access_mode: accessMode,
+        asset_id: input.body.asset_id ?? makeId("ast"),
+        rights_basis: input.body.rights_basis ?? (input.body.license_preset || accessMode === "locked" ? "original" : "none"),
+      }
+
+      const stubAnalysis = resolveStubAnalysisOutcome(writeBody, { enableDevMarkers: enableDevAnalysisMarkers })
       if (stubAnalysis.analysis_state === "blocked") {
         throw analysisBlocked("Content analysis blocked publication")
       }
+      const openAIModeration = await resolveOpenAIModerationOutcome({
+        env: input.env,
+        community,
+        body: writeBody,
+      })
+      const mergedAnalysisState = mergeAnalysisState(stubAnalysis.analysis_state, openAIModeration.analysis_state)
+      if (mergedAnalysisState === "blocked") {
+        throw analysisBlocked("Content analysis blocked publication")
+      }
+      analysisOverride = {
+        analysis_state: mergedAnalysisState,
+        content_safety_state: mergedAnalysisState === "review_required" ? "pending" : openAIModeration.content_safety_state,
+        age_gate_policy: openAIModeration.age_gate_policy,
+        status: mergedAnalysisState === "review_required" ? "draft" : "published",
+      }
+    } else {
+      const stubAnalysis = resolveStubAnalysisOutcome(writeBody, { enableDevMarkers: enableDevAnalysisMarkers })
+      if (stubAnalysis.analysis_state === "blocked") {
+        throw analysisBlocked("Content analysis blocked publication")
+      }
+      const openAIModeration = await resolveOpenAIModerationOutcome({
+        env: input.env,
+        community,
+        body: writeBody,
+      })
+      const mergedAnalysisState = mergeAnalysisState(stubAnalysis.analysis_state, openAIModeration.analysis_state)
+      if (mergedAnalysisState === "blocked") {
+        throw analysisBlocked("Content analysis blocked publication")
+      }
+      analysisOverride = {
+        analysis_state: mergedAnalysisState,
+        content_safety_state: mergedAnalysisState === "review_required" ? "pending" : openAIModeration.content_safety_state,
+        age_gate_policy: openAIModeration.age_gate_policy,
+        status: mergedAnalysisState === "review_required" ? "draft" : "published",
+      }
     }
     const createdAt = nowIso()
-    const post = await insertPost({
-      client: db.client,
-      communityId: input.communityId,
-      authorUserId: input.userId,
-      body: writeBody,
-      createdAt,
-      analysisOverride,
-      agentWriteAuthorization: agentWriteAuthorization ?? undefined,
-    })
+    const tx = await db.client.transaction("write")
+    let post: Post
+    try {
+      post = await insertPost({
+        client: tx,
+        communityId: input.communityId,
+        authorUserId: input.userId,
+        body: writeBody,
+        createdAt,
+        enableDevAnalysisMarkers,
+        analysisOverride,
+        agentWriteAuthorization: agentWriteAuthorization ?? undefined,
+      })
 
-    await enqueuePostTranslationPrewarmJobs({
-      client: db.client,
-      communityId: input.communityId,
-      post,
-      createdAt,
-    })
+      await enqueuePostTranslationPrewarmJobs({
+        client: tx,
+        communityId: input.communityId,
+        post,
+        createdAt,
+      })
 
-    await enqueuePostLabelIfNeeded({
-      client: db.client,
-      community,
-      communityId: input.communityId,
-      post,
-      createdAt,
-    })
+      await enqueuePostLabelIfNeeded({
+        client: tx,
+        community,
+        communityId: input.communityId,
+        post,
+        createdAt,
+      })
 
-    await enqueueEmbedHydrateIfNeeded({
-      client: db.client,
-      communityId: input.communityId,
-      post,
-      createdAt,
-    })
+      await enqueueEmbedHydrateIfNeeded({
+        client: tx,
+        communityId: input.communityId,
+        post,
+        createdAt,
+      })
+
+      await tx.commit()
+    } catch (error) {
+      try {
+        await tx.rollback()
+      } catch {}
+      throw error
+    } finally {
+      tx.close()
+    }
 
     await input.communityRepository.recordCommunityPostProjection({
       communityId: input.communityId,
@@ -266,6 +367,8 @@ export async function createPost(input: {
           communityId: input.communityId,
           post,
           bundle: resolvedSongBundleForAsset.bundle,
+          licensePreset: input.body.license_preset ?? null,
+          commercialRevSharePct: input.body.commercial_rev_share_pct ?? null,
           userRepository: input.userRepository,
         })
       }
@@ -273,6 +376,23 @@ export async function createPost(input: {
         env: input.env,
         communityId: input.communityId,
         songArtifactBundleId: post.song_artifact_bundle_id,
+      })
+    }
+    if (post.post_type === "video" && post.access_mode && resolvedVideoAsset) {
+      await createAssetForPost({
+        env: input.env,
+        client: db.client,
+        communityId: input.communityId,
+        post,
+        assetKind: "video_file",
+        storageRef: resolvedVideoAsset.upload.gateway_url || resolvedVideoAsset.upload.storage_ref,
+        mimeType: resolvedVideoAsset.upload.mime_type,
+        contentHash: resolvedVideoAsset.upload.content_hash ?? null,
+        artifactKind: "primary_video",
+        bundleId: null,
+        licensePreset: input.body.license_preset ?? null,
+        commercialRevSharePct: input.body.commercial_rev_share_pct ?? null,
+        userRepository: input.userRepository,
       })
     }
 
@@ -287,8 +407,9 @@ export async function castPostVote(input: {
   userId: string
   postId: string
   value: -1 | 1
+  bypassVoterAccessChecks?: boolean
   userRepository: UserRepository
-  communityRepository: CommunityRepository
+  communityRepository: PostServiceCommunityRepository
 }): Promise<{ post_id: string; value: -1 | 1 }> {
   const projection = await input.communityRepository.getCommunityPostProjectionByPostId(input.postId)
   if (!projection) {
@@ -297,8 +418,9 @@ export async function castPostVote(input: {
 
   const db = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
   try {
-    await requireMemberAccess(db.client, projection.community_id, input.userId)
-    await requireVerifiedHuman(input.userRepository, input.userId)
+    if (!input.bypassVoterAccessChecks) {
+      await requireMemberAccess(db.client, projection.community_id, input.userId)
+    }
     const post = await getPostById(db.client, input.postId)
     if (!post) {
       throw notFoundError("Post not found")

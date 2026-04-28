@@ -131,6 +131,34 @@ describe("sortPublishedLocalizedPostFeedItems", () => {
 })
 
 describe("assertPostCreateRequest", () => {
+  function originalSongRequest(overrides: Partial<CreatePostRequest> = {}): CreatePostRequest {
+    return {
+      idempotency_key: "song-license",
+      post_type: "song",
+      identity_mode: "public",
+      song_artifact_bundle_id: "sab_test",
+      song_mode: "original",
+      rights_basis: "original",
+      license_preset: "non-commercial",
+      ...overrides,
+    } as CreatePostRequest
+  }
+
+  function videoAssetRequest(overrides: Partial<CreatePostRequest> = {}): CreatePostRequest {
+    return {
+      idempotency_key: "video-license",
+      post_type: "video",
+      identity_mode: "public",
+      access_mode: "locked",
+      license_preset: "non-commercial",
+      media_refs: [{
+        storage_ref: "video_upload",
+        mime_type: "video/mp4",
+      }],
+      ...overrides,
+    } as CreatePostRequest
+  }
+
   test("allows titles and body text on link posts", () => {
     const body = {
       idempotency_key: "link-title",
@@ -141,5 +169,127 @@ describe("assertPostCreateRequest", () => {
     } satisfies CreatePostRequest
 
     expect(() => assertPostCreateRequest(body, "cmt_test")).not.toThrow()
+  })
+
+  test("requires a license preset for original song posts", () => {
+    expect(() => assertPostCreateRequest(originalSongRequest({ license_preset: null }), "cmt_test"))
+      .toThrow("license_preset is required for original song posts")
+  })
+
+  test("allows original non-commercial and commercial-use song licenses without revenue share", () => {
+    expect(() => assertPostCreateRequest(originalSongRequest({ license_preset: "non-commercial" }), "cmt_test"))
+      .not.toThrow()
+    expect(() => assertPostCreateRequest(originalSongRequest({ license_preset: "commercial-use" }), "cmt_test"))
+      .not.toThrow()
+  })
+
+  test("rejects revenue share outside commercial-remix licenses", () => {
+    expect(() =>
+      assertPostCreateRequest(
+        originalSongRequest({
+          license_preset: "commercial-use",
+          commercial_rev_share_pct: 10,
+        }),
+        "cmt_test",
+      )
+    ).toThrow("commercial_rev_share_pct is only supported for commercial-remix")
+  })
+
+  test("requires integer revenue share for original commercial-remix licenses", () => {
+    expect(() =>
+      assertPostCreateRequest(
+        originalSongRequest({
+          license_preset: "commercial-remix",
+          commercial_rev_share_pct: null,
+        }),
+        "cmt_test",
+      )
+    ).toThrow("commercial_rev_share_pct must be an integer from 0 to 100 for commercial-remix")
+
+    expect(() =>
+      assertPostCreateRequest(
+        originalSongRequest({
+          license_preset: "commercial-remix",
+          commercial_rev_share_pct: 12.5,
+        }),
+        "cmt_test",
+      )
+    ).toThrow("commercial_rev_share_pct must be an integer from 0 to 100 for commercial-remix")
+
+    expect(() =>
+      assertPostCreateRequest(
+        originalSongRequest({
+          license_preset: "commercial-remix",
+          commercial_rev_share_pct: 10,
+        }),
+        "cmt_test",
+      )
+    ).not.toThrow()
+  })
+
+  test("rejects outbound license fields on remix song posts", () => {
+    expect(() =>
+      assertPostCreateRequest(
+        originalSongRequest({
+          song_mode: "remix",
+          rights_basis: "derivative",
+          license_preset: "commercial-remix",
+          commercial_rev_share_pct: 10,
+        }),
+        "cmt_test",
+      )
+    ).toThrow("license_preset is not supported for remix song posts")
+  })
+
+  test("requires a license preset for locked video asset posts", () => {
+    expect(() => assertPostCreateRequest(videoAssetRequest({ license_preset: null }), "cmt_test"))
+      .toThrow("license_preset is required for original video posts")
+  })
+
+  test("allows original video commercial-remix licenses with revenue share", () => {
+    expect(() =>
+      assertPostCreateRequest(
+        videoAssetRequest({
+          license_preset: "commercial-remix",
+          commercial_rev_share_pct: 10,
+        }),
+        "cmt_test",
+      )
+    ).not.toThrow()
+  })
+
+  test("rejects video license fields when no locked video asset is created", () => {
+    expect(() =>
+      assertPostCreateRequest(
+        videoAssetRequest({
+          access_mode: undefined,
+          license_preset: "non-commercial",
+        }),
+        "cmt_test",
+      )
+    ).toThrow("license_preset is only supported for locked video asset posts")
+    expect(() =>
+      assertPostCreateRequest(
+        videoAssetRequest({
+          access_mode: "public",
+          license_preset: "non-commercial",
+        }),
+        "cmt_test",
+      )
+    ).toThrow("license_preset is only supported for locked video asset posts")
+  })
+
+  test("rejects outbound license fields on non-asset posts", () => {
+    expect(() =>
+      assertPostCreateRequest(
+        {
+          idempotency_key: "link-license",
+          post_type: "link",
+          link_url: "https://example.com",
+          license_preset: "non-commercial",
+        } as CreatePostRequest,
+        "cmt_test",
+      )
+    ).toThrow("license_preset is only supported for original asset posts")
   })
 })

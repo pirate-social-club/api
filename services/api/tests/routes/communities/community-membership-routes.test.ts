@@ -38,6 +38,7 @@ describe("community membership routes", () => {
         namespace_verification_id: namespaceVerificationId,
       },
       membership_mode: "request",
+      gate_rules: [],
     }, ctx.env, creator.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
@@ -221,7 +222,7 @@ describe("community membership routes", () => {
     expect((await json(rejectedEligibility) as { status: string }).status).toBe("requestable")
   })
 
-  test("community join requires a platform trust credential even for open communities", async () => {
+  test("community create defaults to a Very membership gate", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
 
@@ -241,6 +242,29 @@ describe("community membership routes", () => {
     }
 
     const unverifiedUser = await exchangeJwt(ctx.env, "community-unverified-joiner")
+    const eligibility = await app.request(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}/join-eligibility`,
+      {
+        headers: {
+          authorization: `Bearer ${unverifiedUser.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+
+    expect(eligibility.status).toBe(200)
+    const eligibilityBody = await json(eligibility) as {
+      membership_gate_summaries: Array<{ gate_type: string; accepted_providers?: string[] }>
+      missing_capabilities: string[]
+      suggested_verification_provider: string | null
+    }
+    expect(eligibilityBody.membership_gate_summaries).toEqual([{
+      gate_type: "unique_human",
+      accepted_providers: ["very"],
+    }])
+    expect(eligibilityBody.missing_capabilities).toEqual(["unique_human"])
+    expect(eligibilityBody.suggested_verification_provider).toBe("very")
+
     const deniedJoin = await app.request(
       `http://pirate.test/communities/${communityCreateBody.community.community_id}/join`,
       {
@@ -255,10 +279,44 @@ describe("community membership routes", () => {
     expect(deniedJoin.status).toBe(403)
     const deniedBody = await json(deniedJoin) as { code: string; message: string }
     expect(deniedBody.code).toBe("gate_failed")
-    expect(deniedBody.message).toBe("A platform trust credential is required to join this community")
+    expect(deniedBody.message).toBe("Verification is required to join this community")
 
     const verifiedJoiner = await exchangeJwt(ctx.env, "community-verified-joiner")
-    await completeUniqueHumanVerification(ctx.env, verifiedJoiner.accessToken)
+    setVeryProviderForTests({
+      startSession: async () => ({
+        upstreamSessionRef: "very-default-membership-session",
+        launch: {
+          app_id: "very-test",
+          context: "test",
+          type_id: "type",
+          verify_url: "https://verify.very.org/test",
+          query: {
+            app_user_id: verifiedJoiner.userId,
+            action: "unique_human",
+            uniqueness_domain: "pirate-unique-human-v0",
+            binding_value: "0",
+            binding_field: "pseudonym",
+            challenge_expires_at: "2099-01-01T00:00:00.000Z",
+          },
+          session_binding: {
+            uniqueness_domain: "pirate-unique-human-v0",
+            binding_value: "0",
+            binding_field: "pseudonym",
+            challenge_expires_at: "2099-01-01T00:00:00.000Z",
+          },
+        },
+      }),
+      getSessionOutcome: async () => ({
+        status: "verified",
+        attestationData: {
+          externalNullifier: "pirate-unique-human-v0",
+          pseudonym: "0",
+          nullifier: "very-default-membership-nullifier",
+        },
+      }),
+    } satisfies VeryProvider)
+    await completeUniqueHumanVerification(ctx.env, verifiedJoiner.accessToken, "very")
+    setVeryProviderForTests(null)
 
     const allowedJoin = await app.request(
       `http://pirate.test/communities/${communityCreateBody.community.community_id}/join`,
@@ -266,6 +324,44 @@ describe("community membership routes", () => {
         method: "POST",
         headers: {
           authorization: `Bearer ${verifiedJoiner.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+
+    expect(allowedJoin.status).toBe(200)
+    const allowedBody = await json(allowedJoin) as { community_id: string; status: string }
+    expect(allowedBody.community_id).toBe(communityCreateBody.community.community_id)
+    expect(allowedBody.status).toBe("joined")
+  })
+
+  test("explicit empty gates allow unverified users to join open communities", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "community-open-no-gates-creator")
+    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Pirate No Gate Club",
+      namespace: {
+        namespace_verification_id: namespaceVerificationId,
+      },
+      membership_mode: "open",
+      gate_rules: [],
+    }, ctx.env, creator.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: { community_id: string }
+    }
+
+    const joiner = await exchangeJwt(ctx.env, "community-open-no-gates-joiner")
+    const allowedJoin = await app.request(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}/join`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${joiner.accessToken}`,
         },
       },
       ctx.env,
@@ -290,6 +386,7 @@ describe("community membership routes", () => {
         namespace_verification_id: namespaceVerificationId,
       },
       membership_mode: "open",
+      gate_rules: [],
     }, ctx.env, verifiedCreator.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
@@ -367,7 +464,7 @@ describe("community membership routes", () => {
           verify_url: "https://verify.very.org/test",
           session_binding: {
             uniqueness_domain: "pirate-unique-human-v0",
-            binding_value: "ver_test",
+            binding_value: "0",
             binding_field: "pseudonym",
             challenge_expires_at: "2099-01-01T00:00:00.000Z",
           },
@@ -377,7 +474,7 @@ describe("community membership routes", () => {
         status: "verified",
         attestationData: {
           externalNullifier: "pirate-unique-human-v0",
-          pseudonym: "ver_test",
+          pseudonym: "0",
           nullifier: "very-membership-route-nullifier",
         },
       }),

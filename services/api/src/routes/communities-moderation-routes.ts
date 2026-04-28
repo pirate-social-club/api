@@ -1,14 +1,12 @@
-import type { Hono } from "hono"
+import { Hono } from "hono"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
-import {
-  reportComment,
-  reportPost,
-} from "../lib/moderation/report-service"
 import {
   getModerationCaseDetail,
   listCommunityModerationCases,
-} from "../lib/moderation/case-read-service"
-import { resolveModerationCaseWithAction } from "../lib/moderation/case-action-service"
+  reportComment,
+  reportPost,
+  resolveModerationCaseWithAction,
+} from "../lib/moderation/moderation-service"
 import type { CreateModerationActionRequest, CreateUserReportRequest } from "../lib/moderation/moderation-types"
 import {
   getResolvedCommunityRouteContext,

@@ -1,5 +1,5 @@
-import { getProfileRow } from "../auth/auth-db-user-queries"
 import { executeFirst, type DbExecutor } from "../db-helpers"
+import { getProfileRow } from "../auth/auth-db-user-queries"
 
 export async function hasNotificationEventDedupeKey(executor: DbExecutor, dedupeKey: string): Promise<boolean> {
   const row = await executeFirst(executor, {

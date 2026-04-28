@@ -1,8 +1,6 @@
 import type { Client } from "../../sql-client"
-import {
-  type CommunityGateRuleRow,
-  toCommunityGateRuleRow,
-} from "./gates"
+import { toCommunityGateRuleRow } from "./gate-row"
+import type { CommunityGateRuleRow } from "./gate-types"
 
 export async function listActiveMembershipGateRules(client: Client, communityId: string): Promise<CommunityGateRuleRow[]> {
   const result = await client.execute({

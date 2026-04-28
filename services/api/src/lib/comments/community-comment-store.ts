@@ -71,13 +71,13 @@ export async function insertComment(input: {
         authorship_mode, agent_id, agent_ownership_record_id, identity_mode, anonymous_scope,
         anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot,
         body, source_language, status, depth, direct_reply_count, descendant_count, upvote_count, downvote_count, score,
-        last_reply_at, content_hash, swarm_body_ref, created_at, updated_at, agent_handle_snapshot
+        last_reply_at, content_hash, swarm_body_ref, idempotency_key, created_at, updated_at, agent_handle_snapshot
       ) VALUES (
         ?1, ?2, ?3, ?4, ?5,
         ?6, ?7, ?8, ?9, ?10,
         ?11, ?12, ?13, ?14,
         ?15, ?16, 'published', ?17, 0, 0, 0, 0, 0,
-        NULL, ?18, NULL, ?19, ?19, ?20
+        NULL, ?18, NULL, ?19, ?20, ?20, ?21
       )
     `,
     args: [
@@ -99,6 +99,7 @@ export async function insertComment(input: {
       input.sourceLanguage,
       input.depth,
       input.contentHash,
+      input.body.idempotency_key?.trim() ?? "",
       input.createdAt,
       input.agentWriteAuthorization?.agentHandleSnapshot ?? null,
     ],
@@ -119,12 +120,38 @@ export async function getCommentById(executor: DbExecutor, commentId: string): P
              anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot,
              body, source_language, status, depth,
              direct_reply_count, descendant_count, upvote_count, downvote_count, score,
-             last_reply_at, content_hash, swarm_body_ref, created_at, updated_at
+             last_reply_at, content_hash, swarm_body_ref, idempotency_key, created_at, updated_at
       FROM comments
       WHERE comment_id = ?1
       LIMIT 1
     `,
     args: [commentId],
+  })
+
+  return row ? serializeComment(toCommentRow(row)) : null
+}
+
+export async function findCommentByIdempotencyKey(input: {
+  executor: DbExecutor
+  communityId: string
+  authorUserId: string
+  idempotencyKey: string
+}): Promise<Comment | null> {
+  const row = await executeFirst(input.executor, {
+    sql: `
+      SELECT comment_id, community_id, thread_root_post_id, parent_comment_id, author_user_id,
+             authorship_mode, agent_id, agent_ownership_record_id, identity_mode, anonymous_scope,
+             anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot,
+             body, source_language, status, depth,
+             direct_reply_count, descendant_count, upvote_count, downvote_count, score,
+             last_reply_at, content_hash, swarm_body_ref, idempotency_key, created_at, updated_at
+      FROM comments
+      WHERE community_id = ?1
+        AND author_user_id = ?2
+        AND idempotency_key = ?3
+      LIMIT 1
+    `,
+    args: [input.communityId, input.authorUserId, input.idempotencyKey],
   })
 
   return row ? serializeComment(toCommentRow(row)) : null
@@ -141,7 +168,7 @@ export async function listThreadCommentsForSnapshot(
              anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot,
              body, source_language, status, depth,
              direct_reply_count, descendant_count, upvote_count, downvote_count, score,
-             last_reply_at, content_hash, swarm_body_ref, created_at, updated_at
+             last_reply_at, content_hash, swarm_body_ref, idempotency_key, created_at, updated_at
       FROM comments
       WHERE thread_root_post_id = ?1
         AND status != 'hidden'
@@ -227,7 +254,7 @@ export async function listTopLevelComments(input: {
              anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot,
              body, source_language, status, depth,
              direct_reply_count, descendant_count, upvote_count, downvote_count, score,
-             last_reply_at, content_hash, swarm_body_ref, created_at, updated_at,
+             last_reply_at, content_hash, swarm_body_ref, idempotency_key, created_at, updated_at,
              (
                SELECT vote_value
                FROM comment_votes
@@ -268,7 +295,7 @@ export async function listReplies(input: {
              anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot,
              body, source_language, status, depth,
              direct_reply_count, descendant_count, upvote_count, downvote_count, score,
-             last_reply_at, content_hash, swarm_body_ref, created_at, updated_at,
+             last_reply_at, content_hash, swarm_body_ref, idempotency_key, created_at, updated_at,
              (
                SELECT vote_value
                FROM comment_votes
@@ -335,7 +362,7 @@ export async function getCommentContext(input: {
              anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot,
              body, source_language, status, depth,
              direct_reply_count, descendant_count, upvote_count, downvote_count, score,
-             last_reply_at, content_hash, swarm_body_ref, created_at, updated_at,
+             last_reply_at, content_hash, swarm_body_ref, idempotency_key, created_at, updated_at,
              (
                SELECT vote_value
                FROM comment_votes

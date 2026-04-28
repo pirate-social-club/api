@@ -1,0 +1,8 @@
+{
+  "label_enabled": true,
+  "require_label_on_top_level_posts": false,
+  "definitions": [
+    { "label": "Discussion", "status": "active" },
+    { "label": "News", "status": "active" }
+  ]
+}

@@ -156,9 +156,6 @@ export function normalizeVerificationRequirements(
   if (provider === "very") return []
   const normalized: VerificationRequirement[] = []
   for (const requirement of requirements ?? []) {
-    if (requirement?.proof_type === "sanctions_clear") {
-      throw badRequestError("Self sanctions_clear verification is not supported")
-    }
     if (requirement?.proof_type !== "minimum_age") {
       throw badRequestError(`Unsupported Self verification requirement: ${String(requirement?.proof_type ?? "unknown")}`)
     }
@@ -201,7 +198,6 @@ export type SelfVerifiedClaims = {
   minimum_age?: number | null
   nationality: string | null
   gender: "M" | "F" | null
-  ofac_clear: boolean | null
   nullifier: string | null
 }
 
@@ -346,7 +342,6 @@ function buildClaimsFromVerificationResult(result: VerificationResult): SelfVeri
     minimum_age: minimumAge,
     nationality: normalizeIdentityCountryCode(result.discloseOutput.nationality),
     gender: normalizeGenderClaim(result.discloseOutput.gender),
-    ofac_clear: null,
     nullifier,
   }
 }
@@ -372,6 +367,15 @@ export function getSelfProvider(env: Env): SelfProvider {
         }
         const upstreamSessionRef = encodeDevStubSessionRef(input.requestedCapabilities, input.verificationRequirements ?? [])
         const disclosures = mapCapabilitiesToDisclosures(input.requestedCapabilities, input.verificationRequirements ?? [])
+
+        console.info("[self-provider] dev stub launch", {
+          verificationSessionId: input.verificationSessionId,
+          userId: input.userId,
+          requestedCapabilities: input.requestedCapabilities,
+          verificationRequirements: input.verificationRequirements ?? [],
+          disclosures,
+          scope: input.verificationIntent ?? "profile_verification",
+        })
 
         return {
           upstreamSessionRef,
@@ -406,6 +410,19 @@ export function getSelfProvider(env: Env): SelfProvider {
         verificationConfig,
       })
 
+      console.info("[self-provider] sdk launch", {
+        verificationSessionId: input.verificationSessionId,
+        userId: input.userId,
+        requestedCapabilities: input.requestedCapabilities,
+        verificationRequirements: input.verificationRequirements ?? [],
+        disclosures,
+        verificationConfig,
+        endpointType,
+        endpoint,
+        scope,
+        mockPassport: !isProductionEnv(env),
+      })
+
       return {
         upstreamSessionRef,
         launch: {
@@ -434,7 +451,6 @@ export function getSelfProvider(env: Env): SelfProvider {
             minimum_age: minimumAge ?? (capabilities.has("age_over_18") ? 18 : null),
             nationality: capabilities.has("nationality") ? "USA" : null,
             gender: capabilities.has("gender") ? "F" : null,
-            ofac_clear: null,
             nullifier: input.upstreamSessionRef,
           },
         }

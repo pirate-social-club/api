@@ -1,7 +1,7 @@
-import { internalError, verificationRequired } from "../errors"
+import { conflictError, internalError, verificationRequired } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { checkRedditVerificationCode, importRedditSnapshot, makeRedditVerificationCode } from "./reddit-bootstrap"
-import { getMemoryRecordByUserId } from "../auth/memory-auth-store"
+import { getMemoryRecordByUserId, getMemoryStore } from "../auth/memory-auth-store"
 import type { Env, Job, RedditImportSummary, RedditVerification } from "../../types"
 
 export class MemoryRedditOnboardingRepository {
@@ -14,6 +14,7 @@ export class MemoryRedditOnboardingRepository {
     if (!record) {
       throw internalError(`Missing user record for ${input.userId}`)
     }
+    this.assertRedditClaimAvailable(input.userId, input.redditUsername)
 
     const existing = record.redditVerification
     const now = new Date()
@@ -100,6 +101,7 @@ export class MemoryRedditOnboardingRepository {
     if (!record) {
       throw internalError(`Missing user record for ${input.userId}`)
     }
+    this.assertRedditClaimAvailable(input.userId, input.redditUsername)
     if (record.redditVerification?.status !== "verified" || record.redditVerification.reddit_username !== input.redditUsername) {
       throw verificationRequired("Reddit verification is required")
     }
@@ -149,5 +151,15 @@ export class MemoryRedditOnboardingRepository {
 
   async getLatestRedditImportSummary(userId: string): Promise<RedditImportSummary | null> {
     return getMemoryRecordByUserId(userId)?.redditImportSummary ?? null
+  }
+
+  private assertRedditClaimAvailable(userId: string, redditUsername: string): void {
+    const owner = [...getMemoryStore().byUserId.values()].find((candidateRecord) => (
+      candidateRecord.profile.global_handle.issuance_source === "reddit_verified_claim"
+      && candidateRecord.profile.global_handle.label.replace(/\.pirate$/i, "").toLowerCase() === redditUsername
+    ))
+    if (owner && owner.user.user_id !== userId) {
+      throw conflictError("This Reddit account has already been used for a Pirate handle")
+    }
   }
 }

@@ -1,15 +1,21 @@
-import type { Hono } from "hono"
+import { Hono } from "hono"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
+import { badRequestError } from "../lib/errors"
 import {
   attachNamespaceToCommunity,
   createCommunity,
-} from "../lib/communities/provisioning/service"
-import type { CreateCommunityRequestBody } from "../lib/communities/create/validation"
+  getCommunityDonationPolicy,
+  resolveCommunityDonationPartner,
+  updateCommunity,
+  updateCommunityDonationPolicy,
+  type CreateCommunityRequestBody,
+  type UpdateCommunityDonationPolicyRequestBody,
+  type UpdateCommunityRequestBody,
+} from "../lib/communities/create/service"
 import {
   getCommunity,
   setPendingNamespaceVerificationSession,
-} from "../lib/communities/membership/read-service"
-import { badRequestError } from "../lib/errors"
+} from "../lib/communities/membership/community-read-service"
 import { trackApiEvent } from "../lib/analytics/track"
 import {
   getCommunityCreationRouteContext,
@@ -72,10 +78,24 @@ export function registerCommunityCreateRoutes(communities: Hono<AuthenticatedEnv
     return c.json(result, 200)
   })
 
+  communities.patch("/:communityId", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const body = await requireJsonBody<UpdateCommunityRequestBody>(c, "Invalid community update payload")
+
+    const result = await updateCommunity({
+      env: c.env,
+      actor,
+      communityId,
+      body,
+      communityRepository,
+    })
+    return c.json(result, 200)
+  })
+
   communities.post("/:communityId/namespace", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const { verificationRepository } = getCommunityCreationRouteContext(c)
-    const body = await c.req.json<{ namespace_verification_id?: string | null }>().catch(() => null)
+    const body = await requireJsonBody<{ namespace_verification_id?: string | null }>(c, "Invalid namespace attach payload")
     const namespaceVerificationId = body?.namespace_verification_id?.trim()
     if (!namespaceVerificationId) {
       throw badRequestError("namespace_verification_id is required")
@@ -94,7 +114,7 @@ export function registerCommunityCreateRoutes(communities: Hono<AuthenticatedEnv
 
   communities.put("/:communityId/pending-namespace-session", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
-    const body = await c.req.json<{ namespace_verification_session_id?: string | null }>().catch(() => null)
+    const body = await requireJsonBody<{ namespace_verification_session_id?: string | null }>(c, "Invalid pending namespace session payload")
     const sessionId = typeof body?.namespace_verification_session_id === "string"
       ? body.namespace_verification_session_id.trim() || null
       : null
@@ -104,6 +124,51 @@ export function registerCommunityCreateRoutes(communities: Hono<AuthenticatedEnv
       userId: actor.userId,
       communityId,
       sessionId,
+      communityRepository,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.get("/:communityId/donation-policy", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await getCommunityDonationPolicy({
+      env: c.env,
+      actor,
+      communityId,
+      communityRepository,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.post("/:communityId/donation-policy/resolve", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const body = await requireJsonBody<{ endaoment_url?: string | null }>(c, "Invalid donation partner resolve payload")
+    if (!body?.endaoment_url?.trim()) {
+      throw badRequestError("Invalid donation partner resolve payload")
+    }
+
+    const result = await resolveCommunityDonationPartner({
+      communityId,
+      communityRepository,
+      endaomentUrl: body.endaoment_url,
+      env: c.env,
+      actor,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.patch("/:communityId/donation-policy", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const body = await requireJsonBody<UpdateCommunityDonationPolicyRequestBody>(c, "Invalid donation policy payload")
+    if (!body || !body.donation_policy_mode) {
+      throw badRequestError("Invalid donation policy payload")
+    }
+
+    const result = await updateCommunityDonationPolicy({
+      env: c.env,
+      actor,
+      communityId,
+      body,
       communityRepository,
     })
     return c.json(result, 200)

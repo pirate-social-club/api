@@ -11,14 +11,20 @@ import {
   getCommunityMembershipState,
   type CommunityMembershipRow,
 } from "../communities/membership/membership-state-store"
-import type { CommunityRepository } from "../communities/db-community-repository"
-import { badRequestError, eligibilityFailed, notFoundError, verificationRequired } from "../errors"
+import type {
+  CommunityCommentProjectionRepository,
+  CommunityDatabaseBindingRepository,
+  CommunityPostProjectionRepository,
+  CommunityReadRepository,
+} from "../communities/db-community-repository"
+import { badRequestError, eligibilityFailed, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import type { ProfileRepository, UserRepository } from "../auth/repositories"
 import { authorizeAgentWrite } from "../agents/agent-write-authorization"
 import { getPostById, getPostProjectionMetrics } from "../posts/community-post-store"
 import {
   assertCreateCommentRequest,
+  findCommentByIdempotencyKey,
   getCommentById,
   getCommunityCommentPolicy,
   insertComment,
@@ -38,6 +44,12 @@ export {
   listPublicPostComments,
 } from "./comment-read-service"
 
+type CommentServiceCommunityRepository =
+  & CommunityReadRepository
+  & CommunityDatabaseBindingRepository
+  & Pick<CommunityPostProjectionRepository, "updateCommunityPostProjectionMetrics">
+  & CommunityCommentProjectionRepository
+
 async function requireMemberAccess(client: Client, communityId: string, userId: string): Promise<CommunityMembershipRow> {
   const membership = await getCommunityMembershipState(client, communityId, userId)
   if (!canAccessCommunity(membership)) {
@@ -46,19 +58,9 @@ async function requireMemberAccess(client: Client, communityId: string, userId: 
   return membership
 }
 
-async function requireVerifiedHuman(userRepository: UserRepository, userId: string): Promise<void> {
-  const user = await userRepository.getUserById(userId)
-  if (!user) {
-    throw notFoundError("User not found")
-  }
-  if (user.verification_capabilities.unique_human.state !== "verified") {
-    throw verificationRequired("unique_human verification is required")
-  }
-}
-
 async function syncThreadRootPostProjectionMetrics(input: {
   client: Client
-  communityRepository: CommunityRepository
+  communityRepository: Pick<CommunityPostProjectionRepository, "updateCommunityPostProjectionMetrics">
   threadRootPostId: string
   updatedAt: string
 }): Promise<void> {
@@ -122,9 +124,10 @@ export async function createComment(input: {
   threadRootPostId: string
   parentCommentId?: string | null
   body: CreateCommentRequest
+  bypassAuthorAccessChecks?: boolean
   userRepository: UserRepository
   profileRepository?: ProfileRepository
-  communityRepository: CommunityRepository
+  communityRepository: CommentServiceCommunityRepository
 }): Promise<Comment> {
   const communityRow = await input.communityRepository.getCommunityById(input.communityId)
   if (!communityRow || communityRow.provisioning_state !== "active" || communityRow.status !== "active") {
@@ -136,8 +139,22 @@ export async function createComment(input: {
 
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
-    await requireMemberAccess(db.client, input.communityId, input.userId)
-    await requireVerifiedHuman(input.userRepository, input.userId)
+    if (!input.bypassAuthorAccessChecks) {
+      await requireMemberAccess(db.client, input.communityId, input.userId)
+    }
+
+    const idempotencyKey = input.body.idempotency_key?.trim() ?? ""
+    const existing = idempotencyKey
+      ? await findCommentByIdempotencyKey({
+          executor: db.client,
+          communityId: input.communityId,
+          authorUserId: input.userId,
+          idempotencyKey,
+        })
+      : null
+    if (existing) {
+      return existing
+    }
 
     const threadRootPost = await getPostById(db.client, input.threadRootPostId)
     if (!threadRootPost || threadRootPost.community_id !== input.communityId || threadRootPost.status !== "published") {
@@ -184,6 +201,8 @@ export async function createComment(input: {
       profileRepository: input.profileRepository ?? {
         async getProfileByUserId() { return null },
         async resolvePublicProfileByHandle() { return null },
+        async resolvePublicProfileByWalletAddress() { return null },
+        async updateXmtpInboxId() { return null },
         async updateProfile() { return null },
         async renameGlobalHandle() { return null },
         async claimRedditGlobalHandle() { return null },
@@ -347,8 +366,9 @@ export async function castCommentVote(input: {
   userId: string
   commentId: string
   value: -1 | 1
+  bypassVoterAccessChecks?: boolean
   userRepository: UserRepository
-  communityRepository: CommunityRepository
+  communityRepository: CommentServiceCommunityRepository
 }): Promise<{ comment_id: string; value: -1 | 1 }> {
   const projection = await input.communityRepository.getCommunityCommentProjectionByCommentId(input.commentId)
   if (!projection) {
@@ -357,8 +377,9 @@ export async function castCommentVote(input: {
 
   const db = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
   try {
-    await requireMemberAccess(db.client, projection.community_id, input.userId)
-    await requireVerifiedHuman(input.userRepository, input.userId)
+    if (!input.bypassVoterAccessChecks) {
+      await requireMemberAccess(db.client, projection.community_id, input.userId)
+    }
     const comment = await getCommentById(db.client, input.commentId)
     if (!comment || comment.status !== "published") {
       throw notFoundError("Comment not found")
@@ -393,7 +414,7 @@ export async function deleteComment(input: {
   userId: string
   commentId: string
   userRepository: UserRepository
-  communityRepository: CommunityRepository
+  communityRepository: CommentServiceCommunityRepository
 }): Promise<Comment> {
   const projection = await input.communityRepository.getCommunityCommentProjectionByCommentId(input.commentId)
   if (!projection) {
@@ -403,7 +424,6 @@ export async function deleteComment(input: {
   const db = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
   try {
     const membership = await requireMemberAccess(db.client, projection.community_id, input.userId)
-    await requireVerifiedHuman(input.userRepository, input.userId)
 
     const comment = await getCommentById(db.client, input.commentId)
     if (!comment) {

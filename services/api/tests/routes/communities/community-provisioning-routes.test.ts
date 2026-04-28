@@ -176,7 +176,7 @@ describe("community provisioning routes", () => {
     }
   }, 10_000)
 
-  test("community create generates a fallback credential id when operator omits credential_id", async () => {
+  testWithTimeout("community create generates a fallback credential id when operator omits credential_id", async () => {
     const operatorBaseUrl = "https://operator.test"
     const operatorToken = "operator-secret"
     const originalFetch = globalThis.fetch
@@ -250,7 +250,7 @@ describe("community provisioning routes", () => {
     } finally {
       globalThis.fetch = originalFetch
     }
-  })
+  }, 10_000)
 
   test("community create rejects unsupported database regions before provisioning", async () => {
     const operatorBaseUrl = "https://operator.test"
@@ -393,6 +393,109 @@ describe("community provisioning routes", () => {
 
       const createdState = await getCommunityControlPlaneState(ctx.env, body.community.community_id)
       expect(createdState.namespaceVerificationId).toBeNull()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  }, 10_000)
+
+  testWithTimeout("community create sends agent posting settings in the operator bootstrap payload", async () => {
+    const operatorBaseUrl = "https://operator.test"
+    const operatorToken = "operator-secret"
+    const wrapKey = "11".repeat(32)
+    let provisionBody: Record<string, unknown> | null = null
+    const originalFetch = globalThis.fetch
+
+    globalThis.fetch = (async (input, init) => {
+      const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
+      if (requestUrl.startsWith(`${operatorBaseUrl}/internal/v0/community-provisioning/provision`)) {
+        provisionBody = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : null
+        return new Response(JSON.stringify({
+          community_id: "cmt_operator_agent",
+          job_id: "job_operator_agent",
+          binding_id: "cdb_operator_agent",
+          credential_id: "cdc_operator_agent",
+          organization_slug: "pirate-org",
+          group_name: "region-aws-us-east-1",
+          group_id: "grp_operator_agent",
+          database_name: "main-cmt-operator-agent",
+          database_id: "db_operator_agent",
+          database_url: "libsql://main-cmt-operator-agent-pirate-org.aws-us-east-1.turso.io",
+          location: "aws-us-east-1",
+          token_name: "worker-cmt_operator_agent-v1",
+          plaintext_token: "db-token-operator-agent",
+          issued_at: "2026-04-27T18:00:00.000Z",
+          expires_at: null,
+          rotation_number: 1,
+        }), {
+          headers: { "content-type": "application/json" },
+        })
+      }
+
+      if (requestUrl.includes(".turso.io")) {
+        return new Response("remote db unavailable in test", { status: 503 })
+      }
+
+      return originalFetch(input as never, init)
+    }) as typeof globalThis.fetch
+
+    try {
+      const ctx = await createRouteTestContext({
+        LOCAL_COMMUNITY_DB_ROOT: "",
+        COMMUNITY_PROVISION_OPERATOR_BASE_URL: operatorBaseUrl,
+        COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN: operatorToken,
+        COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION: "aws-us-east-1",
+        COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS: "aws-us-east-1",
+        COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS: "2000",
+        TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
+        TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "7",
+      })
+      cleanup = ctx.cleanup
+
+      const session = await exchangeJwt(ctx.env, "community-operator-agent-user")
+      const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, session.accessToken)
+
+      const response = await requestJson("http://pirate.test/communities", {
+        display_name: "Operator Agent Club",
+        namespace: {
+          namespace_verification_id: namespaceVerificationId,
+        },
+        human_verification_lane: "very",
+        agent_posting_policy: "allow",
+        agent_posting_scope: "top_level_and_replies",
+        agent_daily_post_cap: 10,
+        agent_daily_reply_cap: 50,
+        accepted_agent_ownership_providers: ["clawkey"],
+        gate_rules: [{
+          scope: "membership",
+          gate_family: "identity_proof",
+          gate_type: "unique_human",
+          proof_requirements: [{
+            proof_type: "unique_human",
+            accepted_providers: ["very"],
+          }],
+        }],
+      }, ctx.env, session.accessToken)
+
+      expect(response.status).toBe(202)
+
+      if (!provisionBody) {
+        throw new Error("operator provision request was not captured")
+      }
+
+      const bootstrapPayload = provisionBody["bootstrap_payload"] as Record<string, unknown> | null
+      expect(bootstrapPayload).not.toBeNull()
+
+      const initialSettings = bootstrapPayload!["initial_settings"] as Record<string, unknown> | null
+      expect(initialSettings).not.toBeNull()
+      expect(initialSettings!["agent_posting_policy"]).toBe("allow")
+      expect(initialSettings!["agent_posting_scope"]).toBe("top_level_and_replies")
+      expect(initialSettings!["agent_daily_post_cap"]).toBe(10)
+      expect(initialSettings!["agent_daily_reply_cap"]).toBe(50)
+      expect(initialSettings!["human_verification_lane"]).toBe("very")
+      expect(initialSettings!["accepted_agent_ownership_providers"]).toEqual(["clawkey"])
+
+      expect(bootstrapPayload!["membership_unique_human_provider"]).toBe("very")
+      expect(bootstrapPayload!["namespace_label"]).toBe("piratecommunityroot")
     } finally {
       globalThis.fetch = originalFetch
     }

@@ -1,4 +1,5 @@
-import { executeFirst, type DbExecutor } from "../db-helpers"
+import type { DbExecutor } from "../db-helpers"
+import { executeFirst } from "../db-helpers"
 import type {
   NotificationEventType,
   NotificationFeedItem,

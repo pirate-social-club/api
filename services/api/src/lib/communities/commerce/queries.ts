@@ -21,6 +21,59 @@ import {
   stringOrNull,
 } from "./row-types"
 
+function buildInClause(values: string[], startIndex = 1): { placeholders: string; args: string[] } | null {
+  const uniqueValues = Array.from(new Set(values.filter((value) => value.trim())))
+  if (uniqueValues.length === 0) {
+    return null
+  }
+  return {
+    placeholders: uniqueValues.map((_, index) => `?${startIndex + index}`).join(", "),
+    args: uniqueValues,
+  }
+}
+
+function toPurchaseAllocationLegRow(row: unknown): PurchaseAllocationLegRow {
+  return {
+    purchase_allocation_leg_id: requiredString(row, "purchase_allocation_leg_id"),
+    purchase_id: requiredString(row, "purchase_id"),
+    quote_id: requiredString(row, "quote_id"),
+    community_id: requiredString(row, "community_id"),
+    recipient_type: requiredString(row, "recipient_type") as PurchaseAllocationLegRow["recipient_type"],
+    recipient_ref: stringOrNull(row, "recipient_ref"),
+    waterfall_position: Number(numberOrNull(row, "waterfall_position") ?? 0),
+    share_bps: Number(numberOrNull(row, "share_bps") ?? 0),
+    amount_usd: Number(numberOrNull(row, "amount_usd") ?? 0),
+    settlement_strategy: requiredString(row, "settlement_strategy") as PurchaseAllocationLegRow["settlement_strategy"],
+    status: requiredString(row, "status") as PurchaseAllocationLegRow["status"],
+    settlement_ref: stringOrNull(row, "settlement_ref"),
+    provider_receipt_ref: stringOrNull(row, "provider_receipt_ref"),
+    tax_receipt_ref: stringOrNull(row, "tax_receipt_ref"),
+    submitted_at: stringOrNull(row, "submitted_at"),
+    confirmed_at: stringOrNull(row, "confirmed_at"),
+    failed_at: stringOrNull(row, "failed_at"),
+    attempt_count: Number(numberOrNull(row, "attempt_count") ?? 0),
+    failure_reason: stringOrNull(row, "failure_reason"),
+    created_at: requiredString(row, "created_at"),
+    updated_at: requiredString(row, "updated_at"),
+  }
+}
+
+function toPurchaseEntitlementRow(row: unknown): PurchaseEntitlementRow {
+  return {
+    purchase_entitlement_id: requiredString(row, "purchase_entitlement_id"),
+    purchase_id: requiredString(row, "purchase_id"),
+    community_id: requiredString(row, "community_id"),
+    buyer_user_id: requiredString(row, "buyer_user_id"),
+    entitlement_kind: requiredString(row, "entitlement_kind") as CommunityPurchase["entitlement_kind"],
+    target_ref: requiredString(row, "target_ref"),
+    status: requiredString(row, "status") as PurchaseEntitlementRow["status"],
+    granted_at: requiredString(row, "granted_at"),
+    revoked_at: stringOrNull(row, "revoked_at"),
+    created_at: requiredString(row, "created_at"),
+    updated_at: requiredString(row, "updated_at"),
+  }
+}
+
 export async function getAssetRow(
   client: Client,
   communityId: string,
@@ -28,8 +81,9 @@ export async function getAssetRow(
 ): Promise<AssetRow | null> {
   const row = await executeFirst(client, {
     sql: `
-      SELECT asset_id, community_id, source_post_id, song_artifact_bundle_id, creator_user_id, asset_kind,
-             rights_basis, access_mode, primary_content_ref, primary_content_hash, publication_status,
+      SELECT asset_id, community_id, source_post_id, display_title, song_artifact_bundle_id, creator_user_id, asset_kind,
+             rights_basis, access_mode, license_preset, commercial_rev_share_pct,
+             primary_content_ref, primary_content_hash, publication_status,
              story_status, story_error, story_ip_id, story_ip_nft_contract, story_ip_nft_token_id,
              story_publish_model, story_license_terms_id, story_license_template, story_royalty_policy,
              story_royalty_policy_id, story_derivative_parent_ip_ids_json, story_derivative_registered_at,
@@ -52,11 +106,14 @@ export async function getAssetRow(
     asset_id: requiredString(row, "asset_id"),
     community_id: requiredString(row, "community_id"),
     source_post_id: requiredString(row, "source_post_id"),
+    display_title: stringOrNull(row, "display_title"),
     song_artifact_bundle_id: stringOrNull(row, "song_artifact_bundle_id"),
     creator_user_id: requiredString(row, "creator_user_id"),
     asset_kind: requiredString(row, "asset_kind") as Asset["asset_kind"],
     rights_basis: requiredString(row, "rights_basis") as Asset["rights_basis"],
     access_mode: requiredString(row, "access_mode") as Asset["access_mode"],
+    license_preset: stringOrNull(row, "license_preset") as Asset["license_preset"] | null,
+    commercial_rev_share_pct: numberOrNull(row, "commercial_rev_share_pct"),
     primary_content_ref: requiredString(row, "primary_content_ref"),
     primary_content_hash: stringOrNull(row, "primary_content_hash"),
     publication_status: requiredString(row, "publication_status") as Asset["publication_status"],
@@ -204,19 +261,7 @@ export async function getActiveEntitlementForBuyer(
     `,
     args: [communityId, userId, targetRef],
   })
-  return row ? {
-    purchase_entitlement_id: requiredString(row, "purchase_entitlement_id"),
-    purchase_id: requiredString(row, "purchase_id"),
-    community_id: requiredString(row, "community_id"),
-    buyer_user_id: requiredString(row, "buyer_user_id"),
-    entitlement_kind: requiredString(row, "entitlement_kind") as CommunityPurchase["entitlement_kind"],
-    target_ref: requiredString(row, "target_ref"),
-    status: requiredString(row, "status") as PurchaseEntitlementRow["status"],
-    granted_at: requiredString(row, "granted_at"),
-    revoked_at: stringOrNull(row, "revoked_at"),
-    created_at: requiredString(row, "created_at"),
-    updated_at: requiredString(row, "updated_at"),
-  } : null
+  return row ? toPurchaseEntitlementRow(row) : null
 }
 
 export async function getPurchaseQuoteRow(
@@ -300,29 +345,39 @@ export async function listPurchaseAllocationLegRows(
     `,
     args: [purchaseId],
   })
-  return result.rows.map((row) => ({
-    purchase_allocation_leg_id: requiredString(row, "purchase_allocation_leg_id"),
-    purchase_id: requiredString(row, "purchase_id"),
-    quote_id: requiredString(row, "quote_id"),
-    community_id: requiredString(row, "community_id"),
-    recipient_type: requiredString(row, "recipient_type") as PurchaseAllocationLegRow["recipient_type"],
-    recipient_ref: stringOrNull(row, "recipient_ref"),
-    waterfall_position: Number(numberOrNull(row, "waterfall_position") ?? 0),
-    share_bps: Number(numberOrNull(row, "share_bps") ?? 0),
-    amount_usd: Number(numberOrNull(row, "amount_usd") ?? 0),
-    settlement_strategy: requiredString(row, "settlement_strategy") as PurchaseAllocationLegRow["settlement_strategy"],
-    status: requiredString(row, "status") as PurchaseAllocationLegRow["status"],
-    settlement_ref: stringOrNull(row, "settlement_ref"),
-    provider_receipt_ref: stringOrNull(row, "provider_receipt_ref"),
-    tax_receipt_ref: stringOrNull(row, "tax_receipt_ref"),
-    submitted_at: stringOrNull(row, "submitted_at"),
-    confirmed_at: stringOrNull(row, "confirmed_at"),
-    failed_at: stringOrNull(row, "failed_at"),
-    attempt_count: Number(numberOrNull(row, "attempt_count") ?? 0),
-    failure_reason: stringOrNull(row, "failure_reason"),
-    created_at: requiredString(row, "created_at"),
-    updated_at: requiredString(row, "updated_at"),
-  }))
+  return result.rows.map((row) => toPurchaseAllocationLegRow(row))
+}
+
+export async function listPurchaseAllocationLegRowsByPurchaseIds(
+  client: Client,
+  purchaseIds: string[],
+): Promise<Map<string, PurchaseAllocationLegRow[]>> {
+  const inClause = buildInClause(purchaseIds)
+  const rowsByPurchaseId = new Map<string, PurchaseAllocationLegRow[]>()
+  if (!inClause) {
+    return rowsByPurchaseId
+  }
+
+  const result = await client.execute({
+    sql: `
+      SELECT purchase_allocation_leg_id, purchase_id, quote_id, community_id, recipient_type, recipient_ref,
+             waterfall_position, share_bps, amount_usd, settlement_strategy, status, settlement_ref,
+             provider_receipt_ref, tax_receipt_ref, submitted_at, confirmed_at, failed_at, attempt_count,
+             failure_reason, created_at, updated_at
+      FROM purchase_allocation_legs
+      WHERE purchase_id IN (${inClause.placeholders})
+      ORDER BY purchase_id ASC, waterfall_position ASC, created_at ASC
+    `,
+    args: inClause.args,
+  })
+
+  for (const row of result.rows) {
+    const allocation = toPurchaseAllocationLegRow(row)
+    const rows = rowsByPurchaseId.get(allocation.purchase_id) ?? []
+    rows.push(allocation)
+    rowsByPurchaseId.set(allocation.purchase_id, rows)
+  }
+  return rowsByPurchaseId
 }
 
 export async function listPurchaseRows(
@@ -418,17 +473,35 @@ export async function getEntitlementRowByPurchase(
     `,
     args: [purchaseId],
   })
-  return row ? {
-    purchase_entitlement_id: requiredString(row, "purchase_entitlement_id"),
-    purchase_id: requiredString(row, "purchase_id"),
-    community_id: requiredString(row, "community_id"),
-    buyer_user_id: requiredString(row, "buyer_user_id"),
-    entitlement_kind: requiredString(row, "entitlement_kind") as CommunityPurchase["entitlement_kind"],
-    target_ref: requiredString(row, "target_ref"),
-    status: requiredString(row, "status") as PurchaseEntitlementRow["status"],
-    granted_at: requiredString(row, "granted_at"),
-    revoked_at: stringOrNull(row, "revoked_at"),
-    created_at: requiredString(row, "created_at"),
-    updated_at: requiredString(row, "updated_at"),
-  } : null
+  return row ? toPurchaseEntitlementRow(row) : null
+}
+
+export async function listLatestEntitlementRowsByPurchaseIds(
+  client: Client,
+  purchaseIds: string[],
+): Promise<Map<string, PurchaseEntitlementRow>> {
+  const inClause = buildInClause(purchaseIds)
+  const rowsByPurchaseId = new Map<string, PurchaseEntitlementRow>()
+  if (!inClause) {
+    return rowsByPurchaseId
+  }
+
+  const result = await client.execute({
+    sql: `
+      SELECT purchase_entitlement_id, purchase_id, community_id, buyer_user_id, entitlement_kind,
+             target_ref, status, granted_at, revoked_at, created_at, updated_at
+      FROM purchase_entitlements
+      WHERE purchase_id IN (${inClause.placeholders})
+      ORDER BY purchase_id ASC, created_at DESC
+    `,
+    args: inClause.args,
+  })
+
+  for (const row of result.rows) {
+    const entitlement = toPurchaseEntitlementRow(row)
+    if (!rowsByPurchaseId.has(entitlement.purchase_id)) {
+      rowsByPurchaseId.set(entitlement.purchase_id, entitlement)
+    }
+  }
+  return rowsByPurchaseId
 }

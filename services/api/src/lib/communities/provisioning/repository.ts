@@ -7,7 +7,7 @@ import {
   getJobRowById,
   getLatestCommunityProvisioningJobRow,
   getPrimaryCommunityDatabaseBindingRow,
-} from "../../auth/auth-db-queries"
+} from "../../auth/auth-db-community-queries"
 import type {
   CommunityDatabaseBindingRow,
   CommunityRow,

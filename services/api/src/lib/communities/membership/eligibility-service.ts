@@ -1,24 +1,20 @@
 import type { UserRepository } from "../../auth/repositories"
-import type { CommunityRepository } from "../db-community-repository"
-import { gateFailedWithDetails, internalError, notFoundError } from "../../errors"
+import { internalError, notFoundError } from "../../errors"
+import type { Community, Env, JoinEligibility, User } from "../../../types"
 import { openCommunityDb } from "../community-db-factory"
+import {
+  buildMembershipGateSummary,
+  evaluateMembershipGateRules,
+} from "./gates"
 import {
   canAccessCommunity,
   getCommunityMembershipState,
 } from "./membership-state-store"
 import { getPendingMembershipRequestByApplicant } from "./membership-request-store"
 import { listActiveMembershipGateRules } from "./gate-rule-store"
-import {
-  buildMembershipGateSummary,
-  evaluateMembershipGateRules,
-} from "./gates"
-import type { CommunityGateRuleRow } from "./gates"
-import type {
-  Community,
-  Env,
-  JoinEligibility,
-  User,
-} from "../../../types"
+import type { CommunityGateRuleRow, MembershipGateEvaluation } from "./gate-types"
+import type { CommunityMembershipRepository } from "./types"
+import { gateFailureReason } from "./gate-failure-service"
 
 export function satisfiesBaselineJoinGate(user: User): boolean {
   if (user.verification_capabilities.unique_human.state === "verified") {
@@ -41,7 +37,10 @@ function getRequiredWalletScore(rules: CommunityGateRuleRow[]): number | null {
   return requiredScore
 }
 
-export function buildWalletScoreStatus(user: User, rules: CommunityGateRuleRow[]): JoinEligibility["wallet_score_status"] {
+export function buildWalletScoreStatus(
+  user: User,
+  rules: CommunityGateRuleRow[],
+): JoinEligibility["wallet_score_status"] {
   const requiredScore = getRequiredWalletScore(rules)
   if (requiredScore == null) {
     return null
@@ -55,16 +54,27 @@ export function buildWalletScoreStatus(user: User, rules: CommunityGateRuleRow[]
   }
 }
 
-export function assertBaselineJoinGate(user: User): void {
-  if (satisfiesBaselineJoinGate(user)) {
-    return
-  }
-  throw gateFailedWithDetails("A platform trust credential is required to join this community", {
-    missing_capabilities: ["unique_human"],
-    suggested_verification_provider: "self",
-    suggested_verification_intent: "community_join",
-    failure_reason: "missing_verification",
+export async function evaluateGatedMembership(input: {
+  env: Env
+  user: User
+  userRepository: Pick<UserRepository, "getWalletAttachmentsByUserId">
+  communityId: string
+  rules: CommunityGateRuleRow[]
+}): Promise<{
+  gateSummaries: ReturnType<typeof buildMembershipGateSummary>[]
+  walletScoreStatus: JoinEligibility["wallet_score_status"]
+  evaluation: MembershipGateEvaluation
+}> {
+  const gateSummaries = input.rules.map(buildMembershipGateSummary)
+  const walletScoreStatus = buildWalletScoreStatus(input.user, input.rules)
+  const walletAttachments = await input.userRepository.getWalletAttachmentsByUserId(input.user.user_id)
+  const evaluation = await evaluateMembershipGateRules({
+    env: input.env,
+    rules: input.rules,
+    user: input.user,
+    walletAttachments,
   })
+  return { gateSummaries, walletScoreStatus, evaluation }
 }
 
 export async function getJoinEligibility(input: {
@@ -72,7 +82,7 @@ export async function getJoinEligibility(input: {
   userId: string
   communityId: string
   userRepository: UserRepository
-  communityRepository: CommunityRepository
+  communityRepository: CommunityMembershipRepository
 }): Promise<JoinEligibility> {
   const user = await input.userRepository.getUserById(input.userId)
   if (!user) {
@@ -120,20 +130,6 @@ export async function getJoinEligibility(input: {
       }
     }
 
-    if (!satisfiesBaselineJoinGate(user)) {
-      return {
-        community_id: input.communityId,
-        membership_mode: membershipMode,
-        human_verification_lane: "self",
-        joinable_now: false,
-        status: "verification_required",
-        membership_gate_summaries: [],
-        missing_capabilities: ["unique_human"],
-        suggested_verification_provider: "self",
-        suggested_verification_intent: "community_join",
-      }
-    }
-
     if (membershipMode === "open") {
       return {
         community_id: input.communityId,
@@ -175,14 +171,12 @@ export async function getJoinEligibility(input: {
     }
 
     const rules = await listActiveMembershipGateRules(db.client, input.communityId)
-    const gateSummaries = rules.map(buildMembershipGateSummary)
-    const walletScoreStatus = buildWalletScoreStatus(user, rules)
-    const walletAttachments = await input.userRepository.getWalletAttachmentsByUserId(input.userId)
-    const evaluation = await evaluateMembershipGateRules({
+    const { gateSummaries, walletScoreStatus, evaluation } = await evaluateGatedMembership({
       env: input.env,
-      rules,
       user,
-      walletAttachments,
+      userRepository: input.userRepository,
+      communityId: input.communityId,
+      rules,
     })
     if (evaluation.satisfied) {
       return {
@@ -213,19 +207,6 @@ export async function getJoinEligibility(input: {
       }
     }
 
-    const failureReason = evaluation.mismatchReasons.includes("token_inventory_unavailable")
-      ? "token_inventory_unavailable"
-      : evaluation.mismatchReasons.includes("erc721_inventory_match_required")
-        ? "erc721_inventory_match_required"
-        : evaluation.mismatchReasons.includes("erc721_holding_required")
-          ? "erc721_holding_required"
-          : evaluation.mismatchReasons.includes("minimum_age_mismatch")
-            ? "minimum_age_mismatch"
-            : evaluation.mismatchReasons.includes("wallet_score_too_low")
-              ? "wallet_score_too_low"
-              : evaluation.mismatchReasons.includes("mechanism_not_accepted")
-                ? "provider_not_accepted"
-                : null
     return {
       community_id: input.communityId,
       membership_mode: membershipMode,
@@ -234,7 +215,7 @@ export async function getJoinEligibility(input: {
       status: "gate_failed",
       membership_gate_summaries: gateSummaries,
       missing_capabilities: [],
-      failure_reason: failureReason,
+      failure_reason: gateFailureReason(evaluation),
       ...(walletScoreStatus ? { wallet_score_status: walletScoreStatus } : {}),
     }
   } finally {

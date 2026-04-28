@@ -1,21 +1,18 @@
 import type { Env, User, WalletAttachmentSummary } from "../../../types"
-import {
-  parseGateConfig,
-  parseProofRequirements,
-} from "./gate-config"
-import { evaluateIdentityProofRequirement } from "./identity-gate-evaluation"
+import { evaluateIdentityGateRule } from "./identity-gate-evaluation"
 import { evaluateTokenGateRule } from "./token-gate-evaluation"
-export type {
-  CommunityGateRuleRow,
-  MembershipGateEvaluation,
-} from "./gate-types"
 import type {
   CommunityGateRuleRow,
   MembershipGateEvaluation,
   SuggestedVerificationProvider,
 } from "./gate-types"
-export { toCommunityGateRuleRow } from "./gate-row"
+
 export { buildMembershipGateSummary } from "./gate-summary"
+export { toCommunityGateRuleRow } from "./gate-row"
+export type {
+  CommunityGateRuleRow,
+  MembershipGateEvaluation,
+} from "./gate-types"
 
 export async function satisfiesMembershipGateRules(input: {
   env: Env
@@ -48,12 +45,7 @@ export async function evaluateMembershipGateRules(input: {
 
   for (const rule of rules) {
     if (rule.gate_family === "token_holding") {
-      await evaluateTokenGateRule({
-        env,
-        rule,
-        walletAttachments,
-        mismatchReasons,
-      })
+      mismatchReasons.push(...await evaluateTokenGateRule({ env, rule, walletAttachments }))
       continue
     }
     if (rule.gate_family !== "identity_proof") {
@@ -61,19 +53,10 @@ export async function evaluateMembershipGateRules(input: {
       continue
     }
 
-    const gateConfig = parseGateConfig(rule.gate_config_json)
-    const requirements = parseProofRequirements(rule.proof_requirements_json, rule.gate_type)
-
-    for (const requirement of requirements) {
-      suggestedProvider = evaluateIdentityProofRequirement({
-        user,
-        requirement,
-        gateConfig,
-        missingCapabilities,
-        mismatchReasons,
-        suggestedProvider,
-      })
-    }
+    const result = evaluateIdentityGateRule({ rule, user, suggestedProvider })
+    missingCapabilities.push(...result.missingCapabilities)
+    mismatchReasons.push(...result.mismatchReasons)
+    suggestedProvider = result.suggestedVerificationProvider
   }
 
   return {

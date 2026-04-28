@@ -3,11 +3,17 @@ import {
   type LocalCommunityRule,
   type LocalCommunitySnapshot,
 } from "../community-local-db"
+import { serializeDonationPartnerRow } from "../community-donation-partner-serialization"
 import { normalizeCommunityMediaRef } from "../community-identity-media"
 import type { CommunityDatabaseBindingRow, CommunityRow, JobRow } from "../../auth/auth-db-rows"
-import type { CommunityRepository } from "../db-community-repository"
+import type {
+  CommunityDatabaseBindingRepository,
+  CommunityReadRepository,
+} from "../db-community-repository"
 import { badRequestError, eligibilityFailed, internalError, notFoundError } from "../../errors"
-import { makeId } from "../../helpers"
+import { makeId, nowIso } from "../../helpers"
+import { getControlPlaneClient } from "../../runtime-deps"
+import type { ActorContext, AdminActorContext } from "../../auth-middleware"
 import type { Community, Env } from "../../../types"
 import { serializeCommunity } from "../community-serialization"
 import { openCommunityDb } from "../community-db-factory"
@@ -16,6 +22,15 @@ import type {
   CreateCommunityRequestBody,
 } from "./validation"
 import type { UpdateCommunityRulesRequestBody } from "./update-validation"
+
+export type CommunityMutationActor = ActorContext | AdminActorContext
+
+export function communityMutationActorFromUserId(userId: string): ActorContext {
+  return {
+    userId,
+    authType: "user",
+  }
+}
 
 export function resolveCommunityDbRoot(env: Env): string {
   const configured = String(env.LOCAL_COMMUNITY_DB_ROOT || "").trim()
@@ -103,7 +118,7 @@ export type ProvisioningRetryAction =
   | { action: "finalize"; binding: CommunityDatabaseBindingRow }
 
 export async function resolveProvisioningRetryAction(
-  repo: CommunityRepository,
+  repo: CommunityDatabaseBindingRepository,
   community: CommunityRow,
   latestJob: JobRow,
 ): Promise<ProvisioningRetryAction> {
@@ -140,7 +155,7 @@ export async function resolveProvisioningRetryAction(
 
 export async function loadCommunityLocalSnapshot(
   env: Env,
-  repo: CommunityRepository,
+  repo: CommunityDatabaseBindingRepository,
   communityId: string,
 ): Promise<LocalCommunitySnapshot | null> {
   const db = await openCommunityDb(env, repo, communityId).catch(() => null)
@@ -230,23 +245,7 @@ export async function loadCommunityLocalSnapshot(
       })
       const partnerRow = partnerResult.rows[0]
       if (partnerRow) {
-        donation_partner = {
-          donation_partner_id: String(partnerRow.donation_partner_id),
-          display_name: String(partnerRow.display_name),
-          provider: partnerRow.provider === "endaoment" ? "endaoment" : "endaoment",
-          provider_partner_ref: partnerRow.provider_partner_ref == null ? null : String(partnerRow.provider_partner_ref),
-          payout_destination_ref:
-            partnerRow.payout_destination_ref == null ? null : String(partnerRow.payout_destination_ref),
-          image_url: partnerRow.image_url == null ? null : String(partnerRow.image_url),
-          review_status:
-            partnerRow.review_status === "pending" || partnerRow.review_status === "rejected"
-              ? partnerRow.review_status
-              : "approved",
-          status:
-            partnerRow.status === "paused" || partnerRow.status === "retired"
-              ? partnerRow.status
-              : "active",
-        }
+        donation_partner = serializeDonationPartnerRow(partnerRow)
       }
     }
 
@@ -284,7 +283,7 @@ export async function loadCommunityLocalSnapshot(
 
 export async function loadCommunityProjection(
   env: Env,
-  repo: CommunityRepository,
+  repo: CommunityDatabaseBindingRepository,
   communityRow: CommunityRow,
 ): Promise<Community> {
   const local = await loadCommunityLocalSnapshot(env, repo, communityRow.community_id)
@@ -292,7 +291,7 @@ export async function loadCommunityProjection(
 }
 
 export async function requireOwnedCommunity(
-  repo: CommunityRepository,
+  repo: Pick<CommunityReadRepository, "getCommunityById">,
   communityId: string,
   userId: string,
 ): Promise<CommunityRow> {
@@ -300,6 +299,48 @@ export async function requireOwnedCommunity(
   if (!community || community.creator_user_id !== userId) {
     throw notFoundError("Community not found")
   }
+  return community
+}
+
+export async function requireAdminOverrideOrOwnedCommunity(input: {
+  env: Env
+  repo: Pick<CommunityReadRepository, "getCommunityById">
+  communityId: string
+  actor: CommunityMutationActor
+  action: string
+}): Promise<CommunityRow> {
+  if (!("adminOverride" in input.actor)) {
+    return requireOwnedCommunity(input.repo, input.communityId, input.actor.userId)
+  }
+
+  const community = await input.repo.getCommunityById(input.communityId)
+  if (!community) {
+    throw notFoundError("Community not found")
+  }
+
+  const now = nowIso()
+  await getControlPlaneClient(input.env).execute({
+    sql: `
+      INSERT INTO audit_log (
+        audit_event_id, actor_type, actor_id, action, target_type, target_id, community_id, metadata_json, created_at
+      ) VALUES (
+        ?1, 'operator', ?2, ?3, 'community', ?4, ?4, ?5, ?6
+      )
+    `,
+    args: [
+      makeId("aud"),
+      input.actor.adminOverride.adminActorId,
+      input.action,
+      input.communityId,
+      JSON.stringify({
+        scope: input.actor.adminOverride.scope,
+        acting_user_id: input.actor.userId,
+        owner_user_id: community.creator_user_id,
+      }),
+      now,
+    ],
+  })
+
   return community
 }
 
@@ -354,6 +395,29 @@ export function buildBootstrapRules(body: CreateCommunityRequestBody) {
   }))
 }
 
+export function buildBootstrapInitialSettings(body: CreateCommunityRequestBody): Record<string, unknown> | null {
+  const settings: Record<string, unknown> = {}
+  if (body.agent_posting_policy) {
+    settings.agent_posting_policy = body.agent_posting_policy
+  }
+  if (body.agent_posting_scope) {
+    settings.agent_posting_scope = body.agent_posting_scope
+  }
+  if (body.agent_daily_post_cap != null) {
+    settings.agent_daily_post_cap = body.agent_daily_post_cap
+  }
+  if (body.agent_daily_reply_cap != null) {
+    settings.agent_daily_reply_cap = body.agent_daily_reply_cap
+  }
+  if (body.human_verification_lane) {
+    settings.human_verification_lane = body.human_verification_lane
+  }
+  if (body.accepted_agent_ownership_providers) {
+    settings.accepted_agent_ownership_providers = body.accepted_agent_ownership_providers
+  }
+  return Object.keys(settings).length > 0 ? settings : null
+}
+
 function normalizeHumanVerificationProvider(value: unknown): "self" | "very" | null {
   return value === "self" || value === "very" ? value : null
 }
@@ -403,6 +467,7 @@ export function buildProvisionOperatorBootstrapPayload(
     handle_policy_template: body.handle_policy?.policy_template ?? "standard",
     handle_pricing_model: body.handle_policy?.pricing_model ?? null,
     namespace_label: namespaceLabel,
+    initial_settings: buildBootstrapInitialSettings(body),
   }
 }
 
@@ -434,6 +499,7 @@ export async function bootstrapCommunityLocalSnapshot(input: {
     pricingModel: null,
     gateRules: buildBootstrapGateRules(input.body),
     rules: buildBootstrapRules(input.body),
+    initialSettings: buildBootstrapInitialSettings(input.body),
     now: input.auth.createdAt,
   })
 }

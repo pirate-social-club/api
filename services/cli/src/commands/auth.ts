@@ -35,6 +35,7 @@ export async function runAuth(action: string | undefined, args: ParsedArgs): Pro
 
       const times = decodeJwtTimes(response.access_token)
       writeAuthState({
+        mode: "user",
         base_url: baseUrl,
         access_token: response.access_token,
         user_id: response.user.user_id,
@@ -61,8 +62,64 @@ export async function runAuth(action: string | undefined, args: ParsedArgs): Pro
       )
       return
     }
+    case "admin-login": {
+      const baseUrl = resolveBaseUrl(getFlag(args, "base-url"))
+      const adminToken = getFlag(args, "admin-token") || process.env.PIRATE_ADMIN_TOKEN
+      const asUserId = getFlag(args, "as-user") || getFlag(args, "as-user-id") || process.env.PIRATE_ADMIN_AS_USER_ID
+      if (!adminToken) {
+        exitWithUsage("Missing admin token. Use --admin-token <token> or PIRATE_ADMIN_TOKEN.")
+      }
+      if (!asUserId) {
+        exitWithUsage("Missing acting user. Use --as-user <usr_...> or PIRATE_ADMIN_AS_USER_ID.")
+      }
+
+      try {
+        await apiRequest<unknown>({
+          baseUrl,
+          path: apiRoutes.communitiesAdminHealth,
+          adminToken,
+          adminAsUserId: asUserId,
+        })
+      } catch (error) {
+        throw new Error(`Admin token validation failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+
+      writeAuthState({
+        mode: "admin",
+        base_url: baseUrl,
+        access_token: "",
+        admin_token: adminToken,
+        admin_as_user_id: asUserId,
+        user_id: asUserId,
+        issued_at: null,
+        expires_at: null,
+        token_type: "Bearer",
+      })
+
+      process.stdout.write(
+        `${JSON.stringify(
+          {
+            stored_auth_path: getAuthPath(),
+            mode: "admin",
+            base_url: baseUrl,
+            admin_as_user_id: asUserId,
+          },
+          null,
+          2,
+        )}\n`,
+      )
+      return
+    }
     case "me": {
       const session = requireStoredSession()
+      if (session.mode === "admin") {
+        process.stdout.write(`${JSON.stringify({
+          mode: "admin",
+          base_url: session.baseUrl,
+          admin_as_user_id: session.adminAsUserId,
+        }, null, 2)}\n`)
+        return
+      }
       const user = await apiRequest<User>({
         baseUrl: session.baseUrl,
         path: apiRoutes.usersMe,
@@ -86,6 +143,6 @@ export async function runAuth(action: string | undefined, args: ParsedArgs): Pro
       return
     }
     default:
-      exitWithUsage("Usage: pirate auth <login|me|logout>")
+      exitWithUsage("Usage: pirate auth <login|admin-login|me|logout>")
   }
 }

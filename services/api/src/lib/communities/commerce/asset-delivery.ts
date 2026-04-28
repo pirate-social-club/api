@@ -47,6 +47,7 @@ import type {
   Env,
   Post,
   SongArtifactBundle,
+  SongArtifactUpload,
 } from "../../../types"
 
 type LockedDeliverySecret = {
@@ -86,7 +87,7 @@ async function encryptLockedPayload(bytes: Uint8Array): Promise<{
     metadata: {
       algorithm: "AES-GCM",
       iv_b64: toBase64(iv),
-      mime_type: "audio/mpeg",
+      mime_type: "application/octet-stream",
     },
   }
 }
@@ -233,12 +234,16 @@ export async function buildStoryCdrAccessPackage(input: {
   }
 }
 
-export async function prepareLockedSongAssetDelivery(input: {
+export async function prepareLockedAssetDelivery(input: {
   env: Env
   communityId: string
   assetId: string
   creatorWalletAddress: string
-  bundle: SongArtifactBundle
+  storageRef: string
+  mimeType: string
+  contentHash: string | null
+  artifactKind: SongArtifactUpload["artifact_kind"]
+  bundleId: string | null
   rightsBasis: Post["rights_basis"]
   upstreamAssetRefs: string[] | null
 }): Promise<{
@@ -263,19 +268,22 @@ export async function prepareLockedSongAssetDelivery(input: {
   const upload = await findUploadedSongArtifactByStorageRef({
     client: controlPlaneClient,
     communityId: input.communityId,
-    storageRef: input.bundle.primary_audio.storage_ref,
-    artifactKind: "primary_audio",
+    storageRef: input.storageRef,
+    artifactKind: input.artifactKind,
   })
   if (!upload?.storage_object_key) {
-    throw badRequestError("Primary audio upload is missing locked-delivery storage metadata")
+    throw badRequestError("Primary asset upload is missing locked-delivery storage metadata")
   }
   const upstream = await fetchSongArtifactBytes({
     env: input.env,
     objectKey: upload.storage_object_key,
   })
   const plaintext = new Uint8Array(await upstream.arrayBuffer())
+  if (plaintext.byteLength > 50 * 1024 * 1024) {
+    console.warn(`[story] locked asset ${input.assetId} is ${plaintext.byteLength} bytes; chunked encryption should replace whole-payload encryption before raising size caps`)
+  }
   const { ciphertext, dataKey, metadata } = await encryptLockedPayload(plaintext)
-  metadata.mime_type = input.bundle.primary_audio.mime_type
+  metadata.mime_type = input.mimeType
 
   const objectKey = `locked-assets/${input.communityId}/${input.assetId}/payload.bin`
   await uploadFilebaseObject({
@@ -284,11 +292,11 @@ export async function prepareLockedSongAssetDelivery(input: {
     mimeType: "application/octet-stream",
     bytes: ciphertext,
   })
-  const primaryContentHash = (input.bundle.primary_audio.content_hash?.trim() || `0x${await sha256Hex(plaintext)}`) as `0x${string}`
+  const primaryContentHash = (input.contentHash?.trim() || `0x${await sha256Hex(plaintext)}`) as `0x${string}`
   const assetVersionId = deriveStoryAssetVersionId({
     communityId: input.communityId,
     assetId: input.assetId,
-    bundleId: input.bundle.song_artifact_bundle_id,
+    bundleId: input.bundleId ?? input.storageRef,
     primaryContentHash,
   })
   const namespace = deriveStoryNamespace(assetVersionId)
@@ -405,7 +413,31 @@ export async function prepareLockedSongAssetDelivery(input: {
   }
 }
 
-export async function fetchPrimarySongAssetContent(input: {
+export async function prepareLockedSongAssetDelivery(input: {
+  env: Env
+  communityId: string
+  assetId: string
+  creatorWalletAddress: string
+  bundle: SongArtifactBundle
+  rightsBasis: Post["rights_basis"]
+  upstreamAssetRefs: string[] | null
+}): Promise<Awaited<ReturnType<typeof prepareLockedAssetDelivery>>> {
+  return await prepareLockedAssetDelivery({
+    env: input.env,
+    communityId: input.communityId,
+    assetId: input.assetId,
+    creatorWalletAddress: input.creatorWalletAddress,
+    storageRef: input.bundle.primary_audio.storage_ref,
+    mimeType: input.bundle.primary_audio.mime_type,
+    contentHash: input.bundle.primary_audio.content_hash ?? null,
+    artifactKind: "primary_audio",
+    bundleId: input.bundle.song_artifact_bundle_id,
+    rightsBasis: input.rightsBasis,
+    upstreamAssetRefs: input.upstreamAssetRefs,
+  })
+}
+
+export async function fetchPrimaryAssetContent(input: {
   env: Env
   communityId: string
   storageRef: string
@@ -415,7 +447,6 @@ export async function fetchPrimarySongAssetContent(input: {
     client: controlPlaneClient,
     communityId: input.communityId,
     storageRef: input.storageRef,
-    artifactKind: "primary_audio",
   })
   if (!upload?.storage_object_key) {
     throw notFoundError("Primary asset content not found")

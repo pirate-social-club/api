@@ -1,11 +1,15 @@
-import type { CommunityRepository } from "../communities/db-community-repository"
+import type {
+  CommunityDatabaseBindingRepository,
+  CommunityReadRepository,
+} from "../communities/db-community-repository"
 import type {
   CreatePostRequest,
   Post,
   SongArtifactBundle,
+  SongArtifactUpload,
 } from "../../types"
 
-export type SongArtifactCommunityRepository = CommunityRepository
+export type SongArtifactCommunityRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
 
 export type ResolvedSongPostBundle = {
   bundle: SongArtifactBundle
@@ -14,4 +18,9 @@ export type ResolvedSongPostBundle = {
   analysisState: Post["analysis_state"]
   contentSafetyState: Post["content_safety_state"]
   ageGatePolicy: Post["age_gate_policy"]
+}
+
+export type ResolvedVideoPostAsset = {
+  upload: SongArtifactUpload
+  mediaRefs: NonNullable<Extract<CreatePostRequest, { post_type: "video" }>["media_refs"]>
 }

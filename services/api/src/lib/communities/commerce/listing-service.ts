@@ -1,24 +1,23 @@
 import { badRequestError, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
-import { loadCommunityProjection } from "../create/repository"
+import { loadCommunityProjection } from "../create/service"
 import { getCommunityMembershipState } from "../membership/membership-state-store"
 import { openCommunityDb } from "../community-db-factory"
-import type { CommunityRepository } from "../db-community-repository"
+import type {
+  CommunityDatabaseBindingRepository,
+  CommunityReadRepository,
+} from "../db-community-repository"
 import type { UserRepository } from "../../auth/repositories"
 import {
   getAssetRow,
   getListingRowByAssetId,
   getListingRowById,
   listListingRows,
-} from "./queries"
-import {
+  parseListingPolicy,
   requireCommunityMember,
   requireVerifiedHuman,
-} from "./access"
-import {
-  parseListingPolicy,
   serializeListing,
-} from "./serialization"
+} from "./shared"
 import { getCommunityPricingPolicy } from "./policy-service"
 import { assertValidDonationSharePct } from "./quote-helpers"
 import { assertAssetReadyForStoryRoyaltyCommerce } from "./story-royalty"
@@ -36,10 +35,12 @@ type ListingDonationConfig = {
   donation_share_pct: number | null
 }
 
+type CommunityListingRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
+
 async function resolveListingDonationConfig(input: {
   env: Env
   communityId: string
-  communityRepository: CommunityRepository
+  communityRepository: CommunityListingRepository
   current: ListingDonationConfig
   requestedPartnerId: string | null | undefined
   requestedSharePct: number | null | undefined
@@ -105,7 +106,7 @@ export async function listCommunityListings(input: {
   env: Env
   userId: string
   communityId: string
-  communityRepository: CommunityRepository
+  communityRepository: CommunityListingRepository
 }): Promise<CommunityListingListResponse> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
@@ -123,7 +124,7 @@ export async function createCommunityListing(input: {
   userId: string
   communityId: string
   body: CreateCommunityListingRequest
-  communityRepository: CommunityRepository
+  communityRepository: CommunityListingRepository
   userRepository: UserRepository
 }): Promise<CommunityListing> {
   if (!input.body.asset_id?.trim() && !input.body.live_room_id?.trim()) {
@@ -208,7 +209,7 @@ export async function updateCommunityListing(input: {
   communityId: string
   listingId: string
   body: UpdateCommunityListingRequest
-  communityRepository: CommunityRepository
+  communityRepository: CommunityListingRepository
 }): Promise<CommunityListing> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
@@ -288,7 +289,7 @@ export async function getCommunityListing(input: {
   userId: string
   communityId: string
   listingId: string
-  communityRepository: CommunityRepository
+  communityRepository: CommunityListingRepository
 }): Promise<CommunityListing> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {

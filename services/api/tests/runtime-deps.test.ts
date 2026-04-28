@@ -47,4 +47,11 @@ describe("postgresifySql", () => {
     expect(sql).toContain("$3")
     expect(sql).not.toContain("INSERT OR IGNORE")
   })
+
+  test("rejects unlisted insert or replace tables", () => {
+    expect(() => postgresifySql(`
+      INSERT OR REPLACE INTO unknown_table (id, updated_at)
+      VALUES (?1, ?2)
+    `)).toThrow("Unsupported INSERT OR REPLACE table for PostgreSQL translation: unknown_table")
+  })
 })

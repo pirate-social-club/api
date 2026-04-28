@@ -97,6 +97,20 @@ export function hasUniqueConstraintName(error: unknown, constraintName: string):
     || message.includes(`constraint '${constraintName}'`)
 }
 
+export function hasCheckConstraintName(error: unknown, constraintName: string): boolean {
+  const exposedConstraint = typeof error === "object" && error && "constraint" in error
+    ? String((error as { constraint?: unknown }).constraint || "")
+    : ""
+  if (exposedConstraint === constraintName) {
+    return true
+  }
+
+  const message = error instanceof Error ? error.message : String(error)
+  return message.includes(`violates check constraint "${constraintName}"`)
+    || message.includes(`violates check constraint '${constraintName}'`)
+    || message.includes(`CHECK constraint failed: ${constraintName}`)
+}
+
 export function isMissingTableError(error: unknown, tableName: string): boolean {
   const code = typeof error === "object" && error && "code" in error ? String((error as { code?: unknown }).code) : ""
   if (code === "42P01") {

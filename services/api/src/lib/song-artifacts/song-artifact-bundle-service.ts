@@ -10,7 +10,7 @@ import {
   createSongArtifactBundleDraft,
   finalizeSongArtifactBundle,
   getSongArtifactBundle,
-} from "./song-artifact-bundle-repository"
+} from "./song-artifact-repository"
 import { parseSongPreviewWindow } from "./song-artifact-preview"
 import {
   descriptorFromUpload,
@@ -19,8 +19,8 @@ import {
 } from "./song-artifact-descriptors"
 import {
   requireActiveCommunity,
+  requireMemberAccess,
   requireResolvedUpload,
-  requireSongArtifactMemberAccess,
   requireVerifiedHuman,
 } from "./song-artifact-access"
 import type { CreateSongArtifactBundleRequest, Env, SongArtifactBundle } from "../../types"
@@ -47,7 +47,7 @@ export async function createSongArtifactBundle(input: {
 
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
-    await requireSongArtifactMemberAccess(db.client, input.communityId, input.userId)
+    await requireMemberAccess(db.client, input.communityId, input.userId)
     await requireVerifiedHuman(input.userRepository, input.userId)
     const client = getControlPlaneClient(input.env)
     const primaryAudioUpload = await requireResolvedUpload({

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { splitSqlStatements, toSqliteCompatibleStatement } from "../shared/sql-migration"
+import { splitSqlStatements, toSqliteCompatibleStatement, toSqliteCompatibleStatements } from "../shared/sql-migration"
 
 describe("sql migration helpers", () => {
   test("keeps dollar-quoted DO blocks intact so they can be skipped later", () => {
@@ -57,5 +57,20 @@ describe("sql migration helpers", () => {
 
     expect(splitSqlStatements(sql)).toEqual([])
     expect(toSqliteCompatibleStatement(sql)).toBeNull()
+  })
+
+  test("expands namespace Spaces root label checks into sqlite triggers", () => {
+    const statements = toSqliteCompatibleStatements(`
+      ALTER TABLE namespace_verifications
+        ADD CONSTRAINT namespace_verifications_spaces_root_label_ascii_check
+        CHECK (
+          family <> 'spaces'
+          OR normalized_root_label ~ '^[a-z0-9-]+$'
+        );
+    `)
+
+    expect(statements).toHaveLength(2)
+    expect(statements[0]).toContain("BEFORE INSERT ON namespace_verifications")
+    expect(statements[1]).toContain("BEFORE UPDATE OF family, normalized_root_label ON namespace_verifications")
   })
 })

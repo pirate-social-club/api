@@ -1,4 +1,4 @@
-import type { Client } from "../sql-client"
+import type { DbExecutor } from "../db-helpers"
 import { enqueueCommunityJob } from "../communities/jobs/store"
 import { CONTENT_TRANSLATION_PREWARM_LOCALES, sameLanguageLocale } from "../localization/content-locale"
 import { nowIso } from "../helpers"
@@ -7,7 +7,7 @@ import type { Community, LocalizedPostResponse, Post } from "../../types"
 const EMBED_RECHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
 
 async function enqueuePostTranslationJob(input: {
-  client: Client
+  client: DbExecutor
   communityId: string
   postId: string
   locale: string
@@ -28,7 +28,7 @@ async function enqueuePostTranslationJob(input: {
 }
 
 export async function enqueuePostTranslationPrewarmJobs(input: {
-  client: Client
+  client: DbExecutor
   communityId: string
   post: Post
   createdAt: string
@@ -53,7 +53,7 @@ export async function enqueuePostTranslationPrewarmJobs(input: {
 }
 
 export async function enqueuePostTranslationOnReadIfNeeded(input: {
-  client: Client
+  client: DbExecutor
   communityId: string
   response: LocalizedPostResponse
 }): Promise<void> {
@@ -80,7 +80,7 @@ export async function enqueuePostTranslationOnReadIfNeeded(input: {
 }
 
 async function enqueuePostLabelJob(input: {
-  client: Client
+  client: DbExecutor
   communityId: string
   postId: string
   createdAt: string
@@ -101,7 +101,7 @@ async function enqueuePostLabelJob(input: {
 }
 
 export async function enqueueEmbedHydrateIfNeeded(input: {
-  client: Client
+  client: DbExecutor
   communityId: string
   post: Post
   createdAt: string
@@ -125,7 +125,7 @@ export async function enqueueEmbedHydrateIfNeeded(input: {
 }
 
 export async function enqueueEmbedHydrateOnReadIfNeeded(input: {
-  client: Client
+  client: DbExecutor
   communityId: string
   post: Post
   now?: string
@@ -160,7 +160,7 @@ export async function enqueueEmbedHydrateOnReadIfNeeded(input: {
 }
 
 export async function enqueuePostLabelIfNeeded(input: {
-  client: Client
+  client: DbExecutor
   community: Pick<Community, "label_policy">
   communityId: string
   post: Post

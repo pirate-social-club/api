@@ -1,0 +1,52 @@
+{
+  "name": "local-emoji",
+  "description": "Synthetic local emoji route seed using the normal Spaces namespace verification flow.",
+  "users": [
+    {
+      "key": "owner",
+      "subject": "seed-local-emoji-owner",
+      "synthetic": true,
+      "verification_provider": "very",
+      "profile": {
+        "display_name": "Emoji Route Tester",
+        "desired_handle": "emoji-route-tester"
+      }
+    }
+  ],
+  "communities": [
+    {
+      "key": "emoji",
+      "owner": "owner",
+      "namespace": {
+        "family": "spaces",
+        "root_label": "🇵🇸"
+      },
+      "create": {
+        "display_name": "🇵🇸",
+        "description": "Local-only emoji route community for verifying canonical punycode URLs and emoji display labels.",
+        "governance_mode": "centralized",
+        "membership_mode": "open",
+        "default_age_gate_policy": "none",
+        "allow_anonymous_identity": false,
+        "handle_policy": {
+          "policy_template": "standard"
+        }
+      },
+      "members": ["owner"],
+      "followers": ["owner"],
+      "posts": [
+        {
+          "key": "route-check",
+          "author": "owner",
+          "body": {
+            "post_type": "text",
+            "title": "Emoji route check",
+            "body": "The canonical route is /c/@xn--t77hga and the frontend should display c/@🇵🇸.",
+            "idempotency_key": "seed-local-emoji-route-check",
+            "visibility": "public"
+          }
+        }
+      ]
+    }
+  ]
+}

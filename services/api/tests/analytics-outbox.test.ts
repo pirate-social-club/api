@@ -7,7 +7,7 @@ import {
   isAnalyticsEnabled,
 } from "../src/lib/analytics"
 import app from "../src/index"
-import { buildTestEnv, createControlPlaneTestClient } from "./helpers"
+import { buildTestEnv, createControlPlaneTestClient, withMockedFetch } from "./helpers"
 
 let cleanup: (() => Promise<void>) | null = null
 
@@ -90,16 +90,12 @@ describe("analytics outbox", () => {
     })
     await enqueueAnalyticsEvent(setup.client, event)
 
-    const originalFetch = globalThis.fetch
-    globalThis.fetch = (() => {
+    await withMockedFetch(() => (() => {
       throw new Error("network_down")
-    }) as typeof fetch
-    try {
+    }) as typeof fetch, async () => {
       const result = await flushAnalyticsOutbox(env, setup.client)
       expect(result).toEqual({ attempted: 1, sent: 0, failed: 1 })
-    } finally {
-      globalThis.fetch = originalFetch
-    }
+    })
 
     const row = await setup.client.execute({
       sql: "SELECT status, attempt_count, last_error FROM analytics_outbox WHERE analytics_event_id = ?1",

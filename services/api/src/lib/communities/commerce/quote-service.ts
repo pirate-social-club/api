@@ -1,7 +1,7 @@
 import { eligibilityFailed, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
 import { openCommunityDb } from "../community-db-factory"
-import type { CommunityRepository } from "../db-community-repository"
+import type { CommunityDatabaseBindingRepository } from "../db-community-repository"
 import type { UserRepository } from "../../auth/repositories"
 import {
   boolToSqlite,
@@ -56,7 +56,7 @@ export async function preflightCommunityPurchaseQuote(input: {
   userId: string
   communityId: string
   body: CommunityPurchaseQuotePreflightRequest
-  communityRepository: CommunityRepository
+  communityRepository: CommunityDatabaseBindingRepository
   userRepository: UserRepository
 }): Promise<CommunityPurchaseQuotePreflight> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
@@ -123,7 +123,7 @@ export async function createCommunityPurchaseQuote(input: {
   userId: string
   communityId: string
   body: CommunityPurchaseQuoteRequest
-  communityRepository: CommunityRepository
+  communityRepository: CommunityDatabaseBindingRepository
   userRepository: UserRepository
 }): Promise<CommunityPurchaseQuote> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
@@ -339,7 +339,7 @@ export async function failCommunityPurchase(input: {
   userId: string
   communityId: string
   body: CommunityPurchaseSettlementFailureRequest
-  communityRepository: CommunityRepository
+  communityRepository: CommunityDatabaseBindingRepository
 }): Promise<CommunityPurchaseSettlementFailure> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {

@@ -2,12 +2,13 @@ import { createClient, type Client } from "@libsql/client"
 import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
 import { mkdir, readFile, readdir } from "node:fs/promises"
-import { basename, dirname, isAbsolute, join, resolve } from "node:path"
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { resolveCoreRepoRoot } from "../../shared/core-repo-paths"
-import { splitSqlStatements, toSqliteCompatibleStatement } from "../../shared/sql-migration"
+import { splitSqlStatements, toSqliteCompatibleStatements } from "../../shared/sql-migration"
 
 export const FIRST_LOCAL_POST_BASELINE_MIGRATION = "0047_control_plane_notifications.sql"
+const LOCAL_CONTROL_PLANE_BUSY_TIMEOUT_MS = 5000
 const LOCAL_FOLLOWER_COUNT_RENAME_MIGRATIONS = new Set([
   "0059_control_plane_communities_follower_count_column.sql",
   "0060_control_plane_communities_follower_count_column.sql",
@@ -48,6 +49,11 @@ function toLocalFilePath(value: string, baseDir: string): string | null {
   return resolveLocalPath(value, baseDir)
 }
 
+function isPathInside(rootPath: string, candidatePath: string): boolean {
+  const relativePath = relative(rootPath, candidatePath)
+  return relativePath !== "" && !relativePath.startsWith("..") && !isAbsolute(relativePath)
+}
+
 function rehomeMissingConfiguredLocalDb(input: {
   configuredDbUrl: string
   defaultDataRoot: string
@@ -60,6 +66,15 @@ function rehomeMissingConfiguredLocalDb(input: {
 } {
   const configuredPath = input.resolvedDbPath
   if (!input.configuredDbUrl || !configuredPath || existsSync(configuredPath)) {
+    return {
+      configuredPath,
+      dbPath: configuredPath,
+      dbUrl: input.configuredDbUrl,
+      rehomedFromPath: null,
+    }
+  }
+
+  if (!isPathInside(input.defaultDataRoot, configuredPath)) {
     return {
       configuredPath,
       dbPath: configuredPath,
@@ -146,11 +161,9 @@ async function applySqlFile(client: Client, path: string): Promise<void> {
     if (await shouldSkipExistingAddColumn(client, statement)) {
       continue
     }
-    const sqliteStatement = toSqliteCompatibleStatement(statement)
-    if (!sqliteStatement) {
-      continue
+    for (const sqliteStatement of toSqliteCompatibleStatements(statement)) {
+      await client.execute(sqliteStatement)
     }
-    await client.execute(sqliteStatement)
   }
 }
 
@@ -184,6 +197,12 @@ async function ensureSchemaMigrationsTable(client: Client): Promise<void> {
       applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   `)
+}
+
+async function configureLocalControlPlaneClient(client: Client): Promise<void> {
+  await client.execute("PRAGMA journal_mode = WAL")
+  await client.execute("PRAGMA synchronous = NORMAL")
+  await client.execute(`PRAGMA busy_timeout = ${LOCAL_CONTROL_PLANE_BUSY_TIMEOUT_MS}`)
 }
 
 async function getAppliedChecksum(client: Client, migrationName: string): Promise<string | null> {
@@ -298,6 +317,8 @@ export async function applyLocalControlPlaneMigrations(storage: LocalDevStorage)
   const client = createClient({ url: storage.controlPlaneDbUrl })
 
   try {
+    await configureLocalControlPlaneClient(client)
+
     const migrationsDir = resolve(storage.coreRepoRoot, "db/control-plane/migrations")
     const entries = (await readdir(migrationsDir))
       .filter((entry) => entry.endsWith(".sql"))

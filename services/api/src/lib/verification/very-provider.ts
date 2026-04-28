@@ -1,14 +1,15 @@
 import { internalError, providerUnavailable } from "../errors"
 import { envFlag, makeId } from "../helpers"
 import { sha256Hex } from "../crypto"
-import type { Env, VeryWidgetLaunch } from "../../types"
+import type { Env, VerificationIntent, VerySessionBinding, VeryWidgetLaunch } from "../../types"
 
 const VERY_TIMEOUT_MS = 15_000
 const VERY_BRIDGE_API_URL = "https://bridge.very.org/api/v1/"
 const VERY_VERIFY_API_URL = "https://verify.very.org/api/v1/verify"
 export const VERY_UNIQUE_HUMAN_DOMAIN = "pirate-unique-human-v0"
-
-type VerySessionBinding = VeryWidgetLaunch["session_binding"]
+const VERY_WIDGET_PSEUDONYM = "0"
+const VERY_WIDGET_TIMESTAMP_LOWER_BOUND_SECONDS = 1_743_436_800
+const VERY_WIDGET_TIMESTAMP_UPPER_BOUND_SECONDS = 2_043_436_800
 
 export type VeryStartResult = {
   upstreamSessionRef: string
@@ -206,9 +207,6 @@ function buildWidgetVerifyUrl(input: {
   providerVerifyUrl: string
 }): string {
   const requestOrigin = normalizeOrigin(input.publicOrigin)
-  if (isDevelopmentEnv(input.env) && requestOrigin) {
-    return `${requestOrigin}/verification-sessions/very-widget-verify`
-  }
   const origin = normalizeOrigin(input.env.PIRATE_API_PUBLIC_ORIGIN)
     ?? requestOrigin
   if (!origin) {
@@ -223,9 +221,39 @@ export function buildVerySessionBinding(input: {
 }): VerySessionBinding {
   return {
     uniqueness_domain: VERY_UNIQUE_HUMAN_DOMAIN,
-    binding_value: input.verificationSessionId,
+    binding_value: VERY_WIDGET_PSEUDONYM,
     binding_field: "pseudonym",
     challenge_expires_at: input.challengeExpiresAt,
+  }
+}
+
+function buildExternalNullifier(input: {
+  verificationIntent: string | null
+  policyId: string | null
+  upstreamSessionRef: string
+}): string {
+  const intent = normalizeVerificationIntent(input.verificationIntent)
+  if (input.policyId) {
+    return `Pirate - ${intent} - ${input.policyId}`
+  }
+  return `Pirate - ${intent}`
+}
+
+function normalizeVerificationIntent(intent: string | null): string {
+  switch (intent as VerificationIntent | null) {
+    case "community_creation":
+      return "Community Creation"
+    case "community_join":
+      return "Community Join"
+    case "post_access_18_plus":
+      return "18+ Post Access"
+    case "commerce_pricing":
+      return "Commerce Pricing"
+    case "qualifier_disclosure":
+      return "Qualifier Disclosure"
+    case "profile_verification":
+    default:
+      return "Profile Verification"
   }
 }
 
@@ -279,7 +307,7 @@ function validateVeryBinding(input: {
   if (actualBindingValue !== binding.binding_value) {
     return "very_session_binding_mismatch"
   }
-  const actualDomain = getStringValue(record, ["externalNullifier", "external_nullifier", "uniqueness_domain"])
+  const actualDomain = getStringValue(record, ["uniqueness_domain"])
   if (actualDomain != null && actualDomain !== binding.uniqueness_domain) {
     return "very_uniqueness_domain_mismatch"
   }
@@ -363,28 +391,23 @@ function buildVeryQuery(input: {
   upstreamSessionRef: string
   sessionBinding: VerySessionBinding
 }): Record<string, unknown> {
-  const nowSeconds = Math.floor(Date.now() / 1000)
-  const conditionRangeStartSeconds = 0
-  const conditionRangeEndSeconds = 2_043_436_800
   const options: Record<string, unknown> = {
-    // Keep the proof fresh for the verifier. Using 0 here regressed local
-    // widget proof generation back into the "generated proof is null" state.
-    expiredAtLowerBound: String(nowSeconds),
-    externalNullifier: input.sessionBinding.uniqueness_domain,
+    expiredAtLowerBound: String(VERY_WIDGET_TIMESTAMP_LOWER_BOUND_SECONDS),
+    externalNullifier: buildExternalNullifier(input),
     equalCheckId: "0",
     pseudonym: input.sessionBinding.binding_value,
   }
   return {
     conditions: [
       {
-        identifier: "val",
-        operation: "IN",
-        value: {
-          from: String(conditionRangeStartSeconds),
-          to: String(conditionRangeEndSeconds),
-        },
-      },
-    ],
+            identifier: "val",
+            operation: "IN",
+            value: {
+              from: String(VERY_WIDGET_TIMESTAMP_LOWER_BOUND_SECONDS),
+              to: String(VERY_WIDGET_TIMESTAMP_UPPER_BOUND_SECONDS),
+            },
+          },
+        ],
     options,
   }
 }
@@ -535,7 +558,6 @@ export function getVeryProvider(env: Env): VeryProvider {
             publicOrigin: input.publicOrigin ?? null,
             providerVerifyUrl: verifyUrl,
           }),
-          session_binding: sessionBinding,
         },
       }
     },

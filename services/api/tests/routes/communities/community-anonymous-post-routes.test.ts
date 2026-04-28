@@ -23,7 +23,7 @@ afterEach(async () => {
 })
 
 describe("community anonymous post routes", () => {
-  test("anonymous post create also requires unique_human verification", async () => {
+  test("anonymous post create still requires anonymous posting to be enabled", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
 
@@ -63,8 +63,8 @@ describe("community anonymous post routes", () => {
 
     expect(deniedPost.status).toBe(403)
     const deniedBody = await json(deniedPost) as { code: string; message: string }
-    expect(deniedBody.code).toBe("verification_required")
-    expect(deniedBody.message).toBe("unique_human verification is required")
+    expect(deniedBody.code).toBe("eligibility_failed")
+    expect(deniedBody.message).toBe("Anonymous posts are not enabled in this community")
   })
 
   test("anonymous post create returns 400 when anonymous_scope is missing", async () => {

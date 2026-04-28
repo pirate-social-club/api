@@ -7,6 +7,7 @@ import {
   verifySpacesFabricPublish,
 } from "../src/lib/verification/spaces-verifier"
 import { getHnsVerifierBaseUrl, inspectHnsRoot, isHnsVerifierConfigured } from "../src/lib/verification/hns-verifier"
+import { withMockedFetch } from "./helpers"
 
 describe("normalizeRootLabel", () => {
   test("strips leading @ and lowercases", () => {
@@ -117,9 +118,8 @@ describe("inspectSpacesNamespace", () => {
   } as any
 
   test("canonicalizes emoji labels before calling the verifier", async () => {
-    const originalFetch = globalThis.fetch
     let capturedUrl: string | null = null
-    globalThis.fetch = (async (input) => {
+    await withMockedFetch(() => (async (input) => {
       capturedUrl = typeof input === "string" ? input : input.toString()
       return new Response(JSON.stringify({
         root_exists: true,
@@ -129,26 +129,19 @@ describe("inspectSpacesNamespace", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof fetch
-
-    try {
+    }) as typeof fetch, async () => {
       const result = await inspectSpacesNamespace(env, "@☠️")
       expect(result.rootExists).toBe(true)
       expect(capturedUrl).toBe("http://spaces-verifier.test/inspect?root_label=xn--h4h")
-    } finally {
-      globalThis.fetch = originalFetch
-    }
+    })
   })
 
   test("rejects unsupported raw Unicode labels before calling the verifier", async () => {
-    const originalFetch = globalThis.fetch
     let called = false
-    globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
+    await withMockedFetch((originalFetch) => ((...args: Parameters<typeof fetch>) => {
       called = true
       return originalFetch(...args)
-    }) as typeof fetch
-
-    try {
+    }) as typeof fetch, async () => {
       try {
         await inspectSpacesNamespace(env, "@🏴‍☠️")
         throw new Error("expected inspectSpacesNamespace to reject")
@@ -159,20 +152,15 @@ describe("inspectSpacesNamespace", () => {
         })
       }
       expect(called).toBe(false)
-    } finally {
-      globalThis.fetch = originalFetch
-    }
+    })
   })
 
   test("rejects fake literal ASCII xn labels before calling the verifier", async () => {
-    const originalFetch = globalThis.fetch
     let called = false
-    globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
+    await withMockedFetch((originalFetch) => ((...args: Parameters<typeof fetch>) => {
       called = true
       return originalFetch(...args)
-    }) as typeof fetch
-
-    try {
+    }) as typeof fetch, async () => {
       try {
         await inspectSpacesNamespace(env, "@xn--238746723487")
         throw new Error("expected inspectSpacesNamespace to reject")
@@ -183,21 +171,16 @@ describe("inspectSpacesNamespace", () => {
         })
       }
       expect(called).toBe(false)
-    } finally {
-      globalThis.fetch = originalFetch
-    }
+    })
   })
 
   test("maps verifier 5xx responses to provider unavailable", async () => {
-    const originalFetch = globalThis.fetch
-    globalThis.fetch = (async () => new Response(JSON.stringify({
+    await withMockedFetch(() => (async () => new Response(JSON.stringify({
       error: "spaced rpc request failed",
     }), {
       status: 500,
       headers: { "content-type": "application/json" },
-    })) as typeof fetch
-
-    try {
+    })) as typeof fetch, async () => {
       try {
         await inspectSpacesNamespace(env, "@pirate")
         throw new Error("expected inspectSpacesNamespace to reject")
@@ -208,20 +191,15 @@ describe("inspectSpacesNamespace", () => {
           retryable: true,
         })
       }
-    } finally {
-      globalThis.fetch = originalFetch
-    }
+    })
   })
 
-  test("requires a verifier auth token in production", async () => {
-    const originalFetch = globalThis.fetch
+  test("spaces verifier requires an auth token in production", async () => {
     let called = false
-    globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
+    await withMockedFetch((originalFetch) => ((...args: Parameters<typeof fetch>) => {
       called = true
       return originalFetch(...args)
-    }) as typeof fetch
-
-    try {
+    }) as typeof fetch, async () => {
       try {
         await inspectSpacesNamespace({
           ENVIRONMENT: "production",
@@ -235,9 +213,7 @@ describe("inspectSpacesNamespace", () => {
         })
       }
       expect(called).toBe(false)
-    } finally {
-      globalThis.fetch = originalFetch
-    }
+    })
   })
 })
 
@@ -247,14 +223,11 @@ describe("verifySpacesFabricPublish", () => {
   } as any
 
   test("rejects malformed root labels before calling the verifier", async () => {
-    const originalFetch = globalThis.fetch
     let called = false
-    globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
+    await withMockedFetch((originalFetch) => ((...args: Parameters<typeof fetch>) => {
       called = true
       return originalFetch(...args)
-    }) as typeof fetch
-
-    try {
+    }) as typeof fetch, async () => {
       try {
         await verifySpacesFabricPublish(env, {
           rootLabel: "bad.root",
@@ -271,14 +244,11 @@ describe("verifySpacesFabricPublish", () => {
         })
       }
       expect(called).toBe(false)
-    } finally {
-      globalThis.fetch = originalFetch
-    }
+    })
   })
 
   test("fails closed when aggregate publish success conflicts with component checks", async () => {
-    const originalFetch = globalThis.fetch
-    globalThis.fetch = (async () => new Response(JSON.stringify({
+    await withMockedFetch(() => (async () => new Response(JSON.stringify({
       fabric_publish_verified: true,
       root_key_proof_verified: true,
       web_target_verified: false,
@@ -287,9 +257,7 @@ describe("verifySpacesFabricPublish", () => {
     }), {
       status: 200,
       headers: { "content-type": "application/json" },
-    })) as typeof fetch
-
-    try {
+    })) as typeof fetch, async () => {
       try {
         await verifySpacesFabricPublish(env, {
           rootLabel: "pirate",
@@ -306,9 +274,7 @@ describe("verifySpacesFabricPublish", () => {
           retryable: true,
         })
       }
-    } finally {
-      globalThis.fetch = originalFetch
-    }
+    })
   })
 })
 
@@ -354,14 +320,11 @@ describe("isHnsVerifierConfigured", () => {
 
 describe("inspectHnsRoot", () => {
   test("rejects malformed root labels before calling the verifier", async () => {
-    const originalFetch = globalThis.fetch
     let called = false
-    globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
+    await withMockedFetch((originalFetch) => ((...args: Parameters<typeof fetch>) => {
       called = true
       return originalFetch(...args)
-    }) as typeof fetch
-
-    try {
+    }) as typeof fetch, async () => {
       try {
         await inspectHnsRoot({
           HNS_VERIFIER_BASE_URL: "http://hns.test",
@@ -376,20 +339,15 @@ describe("inspectHnsRoot", () => {
         })
       }
       expect(called).toBe(false)
-    } finally {
-      globalThis.fetch = originalFetch
-    }
+    })
   })
 
-  test("requires a verifier auth token in production", async () => {
-    const originalFetch = globalThis.fetch
+  test("hns verifier requires an auth token in production", async () => {
     let called = false
-    globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
+    await withMockedFetch((originalFetch) => ((...args: Parameters<typeof fetch>) => {
       called = true
       return originalFetch(...args)
-    }) as typeof fetch
-
-    try {
+    }) as typeof fetch, async () => {
       try {
         await inspectHnsRoot({
           ENVIRONMENT: "production",
@@ -405,8 +363,6 @@ describe("inspectHnsRoot", () => {
         })
       }
       expect(called).toBe(false)
-    } finally {
-      globalThis.fetch = originalFetch
-    }
+    })
   })
 })

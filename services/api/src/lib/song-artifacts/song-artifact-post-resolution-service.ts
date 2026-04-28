@@ -3,23 +3,27 @@ import { nowIso } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
 import { syncSongBundleToAcrCloudCatalog } from "./song-artifact-catalog"
 import {
+  findUploadedSongArtifactByStorageRef,
   getSongArtifactBundle,
   markSongArtifactBundleConsumed,
   updateSongArtifactBundleModerationResult,
-} from "./song-artifact-bundle-repository"
-import { findUploadedSongArtifactByStorageRef } from "./song-artifact-upload-repository"
+} from "./song-artifact-repository"
 import {
   resolveBundlePostAnalysis,
+  videoDescriptorFromUpload,
 } from "./song-artifact-descriptors"
-import type { CreatePostRequest, Env, Post } from "../../types"
-import type { ResolvedSongPostBundle } from "./song-artifact-types"
+import type { CreatePostRequest, Env } from "../../types"
+import type {
+  ResolvedSongPostBundle,
+  ResolvedVideoPostAsset,
+} from "./song-artifact-types"
 
 export async function resolveSongPostBundle(input: {
   env: Env
   userId: string
   communityId: string
   songArtifactBundleId: string
-  rightsBasis: Post["rights_basis"] | null | undefined
+  rightsBasis: CreatePostRequest["rights_basis"] | null | undefined
   upstreamAssetRefs: string[] | null | undefined
   accessMode?: Extract<CreatePostRequest, { post_type: "song" }>["access_mode"] | null
 }): Promise<ResolvedSongPostBundle> {
@@ -62,6 +66,41 @@ export async function resolveSongPostBundle(input: {
     analysisState: bundleAnalysis.analysisState,
     contentSafetyState: bundleAnalysis.contentSafetyState,
     ageGatePolicy: bundleAnalysis.ageGatePolicy,
+  }
+}
+
+export async function resolveVideoPostAsset(input: {
+  env: Env
+  userId: string
+  communityId: string
+  mediaRefs: Extract<CreatePostRequest, { post_type: "video" }>["media_refs"] | undefined
+}): Promise<ResolvedVideoPostAsset> {
+  const primaryVideo = input.mediaRefs?.[0]
+  if (!primaryVideo?.storage_ref?.trim()) {
+    throw badRequestError("media_refs is required for video commerce posts")
+  }
+  const client = getControlPlaneClient(input.env)
+  const upload = await findUploadedSongArtifactByStorageRef({
+    client,
+    communityId: input.communityId,
+    storageRef: primaryVideo.storage_ref,
+    artifactKind: "primary_video",
+  })
+  if (!upload || upload.uploader_user_id !== input.userId) {
+    throw notFoundError("Video artifact upload not found")
+  }
+  const descriptor = videoDescriptorFromUpload(upload)
+  return {
+    upload,
+    mediaRefs: [{
+      ...descriptor,
+      poster_ref: primaryVideo.poster_ref ?? null,
+      poster_mime_type: primaryVideo.poster_mime_type ?? null,
+      poster_size_bytes: primaryVideo.poster_size_bytes ?? null,
+      poster_width: primaryVideo.poster_width ?? null,
+      poster_height: primaryVideo.poster_height ?? null,
+      poster_frame_ms: primaryVideo.poster_frame_ms ?? null,
+    }] as NonNullable<Extract<CreatePostRequest, { post_type: "video" }>["media_refs"]>,
   }
 }
 

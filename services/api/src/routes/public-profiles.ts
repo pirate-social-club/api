@@ -5,6 +5,15 @@ import type { Env } from "../types"
 
 const publicProfiles = new Hono<{ Bindings: Env }>()
 
+publicProfiles.get("/by-wallet/:walletAddress", async (c) => {
+  const repository = getProfileRepository(c.env)
+  const resolved = await repository.resolvePublicProfileByWalletAddress(c.req.param("walletAddress"))
+  if (!resolved) {
+    throw notFoundError("Profile not found")
+  }
+  return c.json(resolved, 200)
+})
+
 publicProfiles.get("/:handleLabel", async (c) => {
   const repository = getProfileRepository(c.env)
   const resolved = await repository.resolvePublicProfileByHandle(c.req.param("handleLabel"))

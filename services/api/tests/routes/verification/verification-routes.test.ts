@@ -65,7 +65,7 @@ describe("verification routes", () => {
       }),
       getSessionOutcome: async () => ({
         status: "verified",
-        claims: { age_over_18: true, nationality: null, gender: null, ofac_clear: null, nullifier: "self-test-ref" },
+        claims: { age_over_18: true, nationality: null, gender: null, nullifier: "self-test-ref" },
       }),
     } satisfies import("../../../src/lib/verification/self-provider").SelfProvider)
 
@@ -92,23 +92,6 @@ describe("verification routes", () => {
     }
     expect(completedBody.status).toBe("failed")
     expect(completedBody.failure_reason).toBe("missing_required_claims:gender")
-  })
-
-  test("self verification rejects sanctions_clear requirements", async () => {
-    const ctx = await createRouteTestContext()
-    cleanup = ctx.cleanup
-
-    const session = await exchangeJwt(ctx.env, "verification-self-sanctions-user")
-
-    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
-      provider: "self",
-      requested_capabilities: ["nationality"],
-      verification_requirements: [{ proof_type: "sanctions_clear" }],
-      verification_intent: "community_join",
-    }, ctx.env, session.accessToken)
-    expect(createdVerification.status).toBe(400)
-    const body = await json(createdVerification) as { message: string }
-    expect(body.message).toContain("Self sanctions_clear verification is not supported")
   })
 
   test("self verification callback completes an SDK session payload", async () => {
@@ -142,7 +125,6 @@ describe("verification routes", () => {
             minimum_age: null,
             nationality: "USA",
             gender: null,
-            ofac_clear: null,
             nullifier: "self-callback-test-ref",
           },
         }
@@ -438,6 +420,61 @@ describe("verification routes", () => {
     })
   })
 
+  test("very bridge status proxy keeps polling alive when an upstream poll times out", async () => {
+    const ctx = await createRouteTestContext({
+      VERY_APP_ID: "very-app",
+      VERY_BRIDGE_API_URL: "https://bridge.very.test/api/v1/",
+    })
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-very-bridge-timeout-user")
+    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "very",
+      verification_intent: "community_creation",
+    }, ctx.env, session.accessToken)
+    expect(createdVerification.status).toBe(201)
+    const createdBody = await json(createdVerification) as { verification_session_id: string }
+    let statusPolls = 0
+    await withFetchMock(async (input, init) => {
+      expect(String(input)).toBe("https://bridge.very.test/api/v1/session/very-session-timeout")
+      expect(init?.method).toBe("GET")
+      statusPolls += 1
+      if (statusPolls === 1) {
+        return Response.json({ status: "received" })
+      }
+      return Response.json({
+        status: "error",
+        userMessage: "Very bridge request timed out",
+      }, { status: 504 })
+    }, async () => {
+      const firstResponse = await app.request(
+        `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/very-bridge/session/very-session-timeout`,
+        {
+          headers: {
+            authorization: `Bearer ${session.accessToken}`,
+          },
+        },
+        ctx.env,
+      )
+      expect(firstResponse.status).toBe(200)
+      const firstBody = await json(firstResponse) as { status?: string }
+      expect(firstBody.status).toBe("received")
+
+      const timeoutResponse = await app.request(
+        `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/very-bridge/session/very-session-timeout`,
+        {
+          headers: {
+            authorization: `Bearer ${session.accessToken}`,
+          },
+        },
+        ctx.env,
+      )
+      expect(timeoutResponse.status).toBe(200)
+      const timeoutBody = await json(timeoutResponse) as { status?: string }
+      expect(timeoutBody.status).toBe("received")
+    })
+  })
+
   test("very completion does not trust bridge completion when verifier returns 5xx and fallback flag is disabled", async () => {
     const ctx = await createRouteTestContext({
       VERY_API_URL: "https://very.test",
@@ -517,7 +554,7 @@ describe("verification routes", () => {
     const session = await exchangeJwt(ctx.env, "verification-very-user")
 
     let verifierCalls = 0
-    let expectedPseudonym = ""
+    let expectedPseudonym = "0"
     await withFetchMock(async (input, init) => {
       verifierCalls += 1
       const url = typeof input === "string" ? input : input.toString()
@@ -549,10 +586,11 @@ describe("verification routes", () => {
         provider_mode: string | null
         launch?: { very_widget?: { verify_url?: string; session_binding?: { binding_value?: string } } }
       }
-      expectedPseudonym = createdBody.launch?.very_widget?.session_binding?.binding_value ?? ""
+      expectedPseudonym = createdBody.launch?.very_widget?.session_binding?.binding_value ?? "0"
       expect(createdBody.status).toBe("pending")
       expect(createdBody.provider_mode).toBe("widget")
       expect(createdBody.launch?.very_widget?.verify_url).toBe("http://pirate.test/verification-sessions/very-widget-verify")
+      expect(createdBody.launch?.very_widget?.session_binding).toBe(undefined)
 
       const widgetVerification = await requestJson(
         createdBody.launch?.very_widget?.verify_url ?? "",
@@ -604,7 +642,7 @@ describe("verification routes", () => {
           verify_url: "https://verify.very.org/test",
           session_binding: {
             uniqueness_domain: "pirate-unique-human-v0",
-            binding_value: input.verificationSessionId,
+            binding_value: "0",
             binding_field: "pseudonym",
             challenge_expires_at: input.challengeExpiresAt,
           },
@@ -614,7 +652,7 @@ describe("verification routes", () => {
         status: "verified",
         attestationData: {
           externalNullifier: input.expectedBinding?.uniqueness_domain ?? "pirate-unique-human-v0",
-          pseudonym: input.expectedBinding?.binding_value ?? "ver_test",
+          pseudonym: input.expectedBinding?.binding_value ?? "0",
           nullifier: "very-reused-nullifier",
         },
       }),

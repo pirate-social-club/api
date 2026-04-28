@@ -10,6 +10,7 @@ type OperatorBootstrapPayload = {
   handle_policy_template?: "standard" | "premium" | "membership_gated" | "custom"
   handle_pricing_model?: string | null
   namespace_label?: string | null
+  initial_settings?: Record<string, unknown> | null
 }
 
 export type ProvisionCommunityOperatorResult = {

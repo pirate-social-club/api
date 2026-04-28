@@ -48,6 +48,27 @@ export async function getCommunityFollowerCount(
   return typeof value === "number" ? value : null
 }
 
+export async function countActiveCommunityFollows(
+  client: Client,
+  communityId: string,
+): Promise<number> {
+  const row = await executeFirst(
+    client,
+    {
+      sql: `
+        SELECT COUNT(*) AS active_follow_count
+        FROM community_follows
+        WHERE community_id = ?1
+          AND status = 'active'
+      `,
+      args: [communityId],
+    },
+  )
+
+  const value = rowValue(row, "active_follow_count")
+  return typeof value === "number" ? value : 0
+}
+
 export async function setCommunityFollowActive(input: {
   client: Client
   communityId: string

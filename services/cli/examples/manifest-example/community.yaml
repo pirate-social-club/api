@@ -1,0 +1,19 @@
+community_id: cmt_REPLACE_WITH_REAL_ID
+# Or omit community_id and use route_slug for idempotent lookup/create:
+# route_slug: @example
+# display_name: Example Community
+# namespace_verification_id: nv_REPLACE_WITH_REAL_ID
+description_file: description.txt
+rules_file: rules.txt
+reference_links_file: links.json
+labels_file: labels.json
+safety_file: safety.json
+donation_policy_file: donation.json
+seed_accounts_file: seed-accounts.json
+profile_updates_file: profile-updates.json
+joins_file: joins.json
+follows_file: follows.json
+seed_posts_file: seed-posts.json
+seed_comments_file: seed-comments.json
+post_votes_file: post-votes.json
+comment_votes_file: comment-votes.json

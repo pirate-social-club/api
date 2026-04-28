@@ -103,7 +103,7 @@ export async function getProfileRow(executor: DbExecutor, userId: string): Promi
       SELECT user_id, display_name, bio, avatar_ref, cover_ref, preferred_locale,
              bio_source, avatar_source, cover_source,
              display_verified_nationality_badge,
-             global_handle_id, primary_linked_handle_id, created_at, updated_at
+             global_handle_id, primary_linked_handle_id, xmtp_inbox_id, created_at, updated_at
       FROM profiles
       WHERE user_id = ?1
       LIMIT 1
@@ -112,6 +112,25 @@ export async function getProfileRow(executor: DbExecutor, userId: string): Promi
   })
 
   return row ? toProfileRow(row) : null
+}
+
+export async function getActiveWalletAttachmentRowByAddress(
+  executor: DbExecutor,
+  walletAddressNormalized: string,
+): Promise<(WalletAttachmentRow & { user_id: string }) | null> {
+  const row = await firstRow(executor, {
+    sql: `
+      SELECT wallet_attachment_id, user_id, chain_namespace, wallet_address_normalized, wallet_address_display, is_primary
+      FROM wallet_attachments
+      WHERE wallet_address_normalized = ?1
+        AND status = 'active'
+      ORDER BY is_primary DESC, attached_at ASC
+      LIMIT 1
+    `,
+    args: [walletAddressNormalized],
+  })
+
+  return row ? { ...toWalletAttachmentRow(row), user_id: String((row as Record<string, unknown>).user_id) } : null
 }
 
 export async function listLinkedHandleRows(executor: DbExecutor, userId: string): Promise<LinkedHandleRow[]> {

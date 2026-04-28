@@ -82,27 +82,62 @@ function isSqlCommentOnly(statement: string): boolean {
     })
 }
 
-export function toSqliteCompatibleStatement(statement: string): string | null {
+const SQLITE_NAMESPACE_VERIFICATIONS_SPACES_ROOT_LABEL_ASCII_TRIGGERS = [
+  `
+    CREATE TRIGGER IF NOT EXISTS namespace_verifications_spaces_root_label_ascii_insert
+    BEFORE INSERT ON namespace_verifications
+    FOR EACH ROW
+    WHEN NEW.family = 'spaces'
+      AND (
+        NEW.normalized_root_label = ''
+        OR NEW.normalized_root_label GLOB '*[^a-z0-9-]*'
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'spaces normalized_root_label must be canonical IDNA ASCII');
+    END;
+  `,
+  `
+    CREATE TRIGGER IF NOT EXISTS namespace_verifications_spaces_root_label_ascii_update
+    BEFORE UPDATE OF family, normalized_root_label ON namespace_verifications
+    FOR EACH ROW
+    WHEN NEW.family = 'spaces'
+      AND (
+        NEW.normalized_root_label = ''
+        OR NEW.normalized_root_label GLOB '*[^a-z0-9-]*'
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'spaces normalized_root_label must be canonical IDNA ASCII');
+    END;
+  `,
+]
+
+export function toSqliteCompatibleStatements(statement: string): string[] {
   const normalized = statement.trim().replace(/\s+/g, " ").toUpperCase()
 
   if (isSqlCommentOnly(statement)) {
-    return null
+    return []
   }
 
   if (normalized.startsWith("DO ")) {
-    return null
+    return []
   }
 
   if (normalized.startsWith("GRANT ")) {
-    return null
+    return []
   }
 
   if (normalized.startsWith("ALTER TABLE") && normalized.includes(" DROP CONSTRAINT ")) {
-    return null
+    return []
   }
 
   if (normalized.startsWith("ALTER TABLE") && normalized.includes(" ADD CONSTRAINT ")) {
-    return null
+    if (
+      normalized.includes("NAMESPACE_VERIFICATIONS_SPACES_ROOT_LABEL_ASCII_CHECK")
+      && normalized.includes("ALTER TABLE NAMESPACE_VERIFICATIONS")
+    ) {
+      return SQLITE_NAMESPACE_VERIFICATIONS_SPACES_ROOT_LABEL_ASCII_TRIGGERS
+    }
+    return []
   }
 
   let sqliteCompat = statement
@@ -113,5 +148,9 @@ export function toSqliteCompatibleStatement(statement: string): string | null {
   sqliteCompat = sqliteCompat.replace(/\bADD COLUMN IF NOT EXISTS\b/gi, "ADD COLUMN")
   sqliteCompat = sqliteCompat.replace(/::(?:jsonb|text)\b/gi, "")
 
-  return sqliteCompat
+  return [sqliteCompat]
+}
+
+export function toSqliteCompatibleStatement(statement: string): string | null {
+  return toSqliteCompatibleStatements(statement)[0] ?? null
 }

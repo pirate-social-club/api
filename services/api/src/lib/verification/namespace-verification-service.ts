@@ -1,5 +1,5 @@
 import type { Client } from "../sql-client"
-import { providerUnavailable } from "../errors"
+import { internalError, providerUnavailable } from "../errors"
 import { makeId } from "../helpers"
 import {
   serializeNamespaceVerification,
@@ -29,9 +29,18 @@ import {
   makeNamespaceCapabilityStatements,
   parseStoredSpacesChallenge,
 } from "./verification-shared"
+import { isDnsSetupRequiredNamespaceSessionRow } from "./namespace-verification-policy"
 import { restartNamespaceVerificationChallenge } from "./namespace-verification-restart"
 
 export { startNamespaceVerificationSession } from "./namespace-verification-start"
+
+function requireNormalizedRootLabel(row: Pick<NamespaceVerificationSession, "family" | "normalized_root_label">): string {
+  const normalizedRootLabel = row.normalized_root_label?.trim()
+  if (!normalizedRootLabel) {
+    throw internalError(`${row.family} namespace verification session is missing normalized_root_label`)
+  }
+  return normalizedRootLabel
+}
 
 export async function getNamespaceVerificationSession(
   client: Client,
@@ -72,6 +81,10 @@ export async function completeNamespaceVerificationSession(
       now,
       updatedAt,
     })
+    return getNamespaceVerificationSession(client, env, input.namespaceVerificationSessionId, input.userId)
+  }
+
+  if (isDnsSetupRequiredNamespaceSessionRow(row)) {
     return getNamespaceVerificationSession(client, env, input.namespaceVerificationSessionId, input.userId)
   }
 
@@ -147,7 +160,7 @@ export async function completeNamespaceVerificationSession(
     }
 
     const observationProvider = verification.observationProvider ?? row.observation_provider ?? "spaces_verifier"
-    const acceptedRootLabel = row.normalized_root_label ?? row.submitted_root_label.toLowerCase()
+    const acceptedRootLabel = requireNormalizedRootLabel(row)
     const snapshot = deriveSpacesAcceptedSnapshot(row)
 
     await client.batch([
@@ -322,7 +335,7 @@ export async function completeNamespaceVerificationSession(
 
     if (isHnsVerifierConfigured(env)) {
       const verification = await verifyHnsTxtRecord(env, {
-        rootLabel: row.normalized_root_label ?? row.submitted_root_label.toLowerCase(),
+        rootLabel: requireNormalizedRootLabel(row),
         challengeHost: row.challenge_host,
         challengeTxtValue: row.challenge_txt_value ?? "",
       })
@@ -438,7 +451,7 @@ export async function completeNamespaceVerificationSession(
           verificationId,
           input.namespaceVerificationSessionId,
           input.userId,
-          row.normalized_root_label ?? row.submitted_root_label.toLowerCase(),
+          requireNormalizedRootLabel(row),
           acceptedSnapshot.rootExists ?? null,
           acceptedSnapshot.rootControlVerified ?? null,
           acceptedSnapshot.expiryHorizonSufficient ?? null,
@@ -466,7 +479,7 @@ export async function completeNamespaceVerificationSession(
           evidenceBundleId,
           input.namespaceVerificationSessionId,
           verificationId,
-          row.normalized_root_label ?? row.submitted_root_label.toLowerCase(),
+          requireNormalizedRootLabel(row),
           observationProvider,
           JSON.stringify([observationProvider]),
           JSON.stringify(verificationEvidence),
