@@ -412,7 +412,7 @@ function buildSpacesPublishCommand(
   challenge: SpacesChallenge,
 ): string {
   return [
-    "go run github.com/pirate-social-club/pirate-spaces-publisher@v0.1.0 publish",
+    "go run github.com/pirate/pirate-spaces-publisher@v0.1.0 publish",
     shellQuote(namespaceKey),
     "--wallet-export",
     shellQuote("/full/path/to/your-wallet-export.json"),

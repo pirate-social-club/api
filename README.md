@@ -1,6 +1,6 @@
-# Pirate Social Club API
+# Pirate API
 
-Backend services for Pirate Social Club.
+Backend services for Pirate.
 
 ## Services
 
