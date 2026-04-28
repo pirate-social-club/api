@@ -365,4 +365,31 @@ describe("inspectHnsRoot", () => {
       expect(called).toBe(false)
     })
   })
+
+  test("hns verifier reports non-json upstream responses as provider unavailable", async () => {
+    await withMockedFetch(() => (async () => new Response("<!doctype html><title>wrong server</title>", {
+      status: 404,
+      headers: { "content-type": "text/html; charset=utf-8" },
+    })) as typeof fetch, async () => {
+      try {
+        await inspectHnsRoot({
+          HNS_VERIFIER_BASE_URL: "http://hns.test",
+        } as any, {
+          rootLabel: "pirate",
+        })
+        throw new Error("expected inspectHnsRoot to reject")
+      } catch (error) {
+        expect(error).toMatchObject({
+          status: 502,
+          code: "provider_unavailable",
+          retryable: true,
+          message: "HNS verifier returned non-JSON response with status 404 (text/html; charset=utf-8)",
+          details: {
+            verifier_origin: "http://hns.test",
+            verifier_path: "/inspect?root_label=pirate",
+          },
+        })
+      }
+    })
+  })
 })

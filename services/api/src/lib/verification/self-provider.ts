@@ -230,6 +230,22 @@ function trimEnv(value: string | undefined): string {
   return String(value || "").trim()
 }
 
+function normalizeOrigin(value: string | null | undefined): string | null {
+  const trimmed = String(value || "").trim()
+  if (!trimmed) {
+    return null
+  }
+  try {
+    return new URL(trimmed).origin
+  } catch {
+    return null
+  }
+}
+
+function isHttpsOrigin(origin: string | null): origin is string {
+  return origin != null && origin.startsWith("https://")
+}
+
 function isAutomatedTestEnv(env: Env): boolean {
   return String(env.ENVIRONMENT || "").trim().toLowerCase() === "test"
 }
@@ -261,11 +277,26 @@ function buildSelfEndpoint(env: Env, verificationSessionId: string, publicOrigin
   if (rawEndpoint) {
     return rawEndpoint.replace(/\{verification_session_id\}/g, encodeURIComponent(verificationSessionId))
   }
-  const origin = trimEnv(env.PIRATE_API_PUBLIC_ORIGIN) || trimEnv(publicOrigin ?? undefined)
+  const origin = resolveSelfCallbackOrigin(env, publicOrigin)
   if (!origin) {
     throw providerUnavailable("Self provider not configured: PIRATE_API_PUBLIC_ORIGIN or SELF_ENDPOINT must be set")
   }
-  return `${origin.replace(/\/+$/u, "")}/verification-sessions/${encodeURIComponent(verificationSessionId)}/self-callback`
+  return `${origin}/verification-sessions/${encodeURIComponent(verificationSessionId)}/self-callback`
+}
+
+function resolveSelfCallbackOrigin(env: Env, publicOrigin?: string | null): string | null {
+  const configuredOrigin = normalizeOrigin(env.PIRATE_API_PUBLIC_ORIGIN)
+  const requestOrigin = normalizeOrigin(publicOrigin)
+
+  if (isProductionEnv(env)) {
+    return configuredOrigin ?? requestOrigin
+  }
+
+  if (isHttpsOrigin(requestOrigin) && requestOrigin !== configuredOrigin) {
+    return requestOrigin
+  }
+
+  return configuredOrigin ?? requestOrigin
 }
 
 function endpointTypeForEnvironment(env: Env): SelfVerificationLaunch["endpoint_type"] {
@@ -356,7 +387,7 @@ export function getSelfProvider(env: Env): SelfProvider {
     async startSession(input) {
       if (
         isAutomatedTestEnv(env)
-        || (!trimEnv(env.PIRATE_API_PUBLIC_ORIGIN) && !trimEnv(env.SELF_ENDPOINT) && !trimEnv(input.publicOrigin ?? undefined))
+        || (!trimEnv(env.SELF_ENDPOINT) && !resolveSelfCallbackOrigin(env, input.publicOrigin))
       ) {
         if (isProductionEnv(env)) {
           buildSelfEndpoint(env, input.verificationSessionId, input.publicOrigin)

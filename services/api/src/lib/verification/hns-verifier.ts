@@ -139,7 +139,21 @@ async function request<T>(env: Env, path: string, init?: RequestInit): Promise<T
   })
 
   const text = await response.text()
-  const body = text.length > 0 ? JSON.parse(text) as T & { error?: string } : null
+  let body: (T & { error?: string }) | null = null
+  if (text.length > 0) {
+    try {
+      body = JSON.parse(text) as T & { error?: string }
+    } catch {
+      const contentType = response.headers.get("content-type") ?? "unknown"
+      throw providerUnavailable(
+        `HNS verifier returned non-JSON response with status ${response.status} (${contentType})`,
+        {
+          verifier_origin: baseUrl,
+          verifier_path: path,
+        },
+      )
+    }
+  }
 
   if (!response.ok) {
     const message = body?.error || `HNS verifier request failed with status ${response.status}`

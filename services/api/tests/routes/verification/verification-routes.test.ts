@@ -44,6 +44,29 @@ describe("verification routes", () => {
     expect(body.launch?.self_app?.disclosures?.gender).toBe(true)
   })
 
+  test("self launch callback uses the live dev tunnel origin instead of a stale configured origin", async () => {
+    const ctx = await createRouteTestContext({
+      ENVIRONMENT: "staging",
+      PIRATE_API_PUBLIC_ORIGIN: "https://stale-maritime-complete-lesser.trycloudflare.com",
+    })
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-self-fresh-tunnel-user")
+
+    const createdVerification = await requestJson("https://fresh-maritime-complete-lesser.trycloudflare.com/verification-sessions", {
+      provider: "self",
+      requested_capabilities: ["nationality"],
+      verification_intent: "community_join",
+    }, ctx.env, session.accessToken)
+    expect(createdVerification.status).toBe(201)
+    const body = await json(createdVerification) as {
+      launch?: { self_app?: { endpoint?: string } }
+    }
+    expect(body.launch?.self_app?.endpoint).toMatch(
+      /^https:\/\/fresh-maritime-complete-lesser\.trycloudflare\.com\/verification-sessions\/ver_[^/]+\/self-callback$/u,
+    )
+  })
+
   test("verification completion fails when self does not return the requested gender claim", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup

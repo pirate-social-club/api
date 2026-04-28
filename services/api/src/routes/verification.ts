@@ -1,5 +1,5 @@
 import { Hono } from "hono"
-import { badRequestError, notFoundError } from "../lib/errors"
+import { badRequestError, HttpError, notFoundError } from "../lib/errors"
 import { getControlPlaneVerificationRepository } from "../lib/verification/verification-repository"
 import { proxyVeryBridgeRequest } from "../lib/verification/very-provider"
 import { authenticate, authenticateAdminOrUser, type AuthenticatedEnv } from "../lib/auth-middleware"
@@ -14,6 +14,21 @@ const veryBridgeLastStatusBySession = new Map<string, VeryBridgePollStatus>()
 
 function isVeryBridgePollStatus(value: unknown): value is VeryBridgePollStatus {
   return value === "initialized" || value === "received" || value === "completed"
+}
+
+function namespaceVerificationErrorProperties(input: {
+  endpoint: string
+  error: unknown
+  tld?: string | null
+}): Record<string, unknown> {
+  return {
+    endpoint: input.endpoint,
+    tld: input.tld ?? null,
+    error_code: input.error instanceof HttpError ? input.error.code : "internal_error",
+    error_status: input.error instanceof HttpError ? input.error.status : 500,
+    retryable: input.error instanceof HttpError ? input.error.retryable : false,
+    message: input.error instanceof Error ? input.error.message : String(input.error),
+  }
 }
 
 verification.post("/verification-sessions/:verificationSessionId/self-callback", async (c) => {
@@ -271,17 +286,31 @@ authenticatedNamespaceVerification.post("/namespace-verification-sessions", asyn
   }
 
   const repo = getControlPlaneVerificationRepository(c.env)
-  const created = await repo.startNamespaceVerificationSession({
-    userId: actor.userId,
-    family: body.family,
-    rootLabel: body.root_label,
-  })
-  await trackApiEvent(c.env, c.req, {
-    eventName: "namespace_verification_started",
-    userId: actor.userId,
-    properties: { tld: body.family },
-  })
-  return c.json(created, 201)
+  try {
+    const created = await repo.startNamespaceVerificationSession({
+      userId: actor.userId,
+      family: body.family,
+      rootLabel: body.root_label,
+    })
+    await trackApiEvent(c.env, c.req, {
+      eventName: "namespace_verification_started",
+      userId: actor.userId,
+      verificationSessionId: created.namespace_verification_session_id,
+      properties: { tld: body.family },
+    })
+    return c.json(created, 201)
+  } catch (error) {
+    await trackApiEvent(c.env, c.req, {
+      eventName: "namespace_verification_failed",
+      userId: actor.userId,
+      properties: namespaceVerificationErrorProperties({
+        endpoint: "start",
+        error,
+        tld: body.family,
+      }),
+    })
+    throw error
+  }
 })
 
 authenticatedNamespaceVerification.get("/namespace-verification-sessions/:namespaceVerificationSessionId", async (c) => {
@@ -310,15 +339,29 @@ authenticatedNamespaceVerification.post("/namespace-verification-sessions/:names
     restart_challenge?: boolean | null
   }>().catch(() => null)) ?? null
   const repo = getControlPlaneVerificationRepository(c.env)
-  const result = await repo.completeNamespaceVerificationSession({
-    namespaceVerificationSessionId: c.req.param("namespaceVerificationSessionId"),
-    userId: actor.userId,
-    restartChallenge: body?.restart_challenge ?? null,
-  })
-  if (!result) {
-    throw notFoundError("Namespace verification session not found")
+  const namespaceVerificationSessionId = c.req.param("namespaceVerificationSessionId")
+  try {
+    const result = await repo.completeNamespaceVerificationSession({
+      namespaceVerificationSessionId,
+      userId: actor.userId,
+      restartChallenge: body?.restart_challenge ?? null,
+    })
+    if (!result) {
+      throw notFoundError("Namespace verification session not found")
+    }
+    return c.json(result, 200)
+  } catch (error) {
+    await trackApiEvent(c.env, c.req, {
+      eventName: "namespace_verification_failed",
+      userId: actor.userId,
+      verificationSessionId: namespaceVerificationSessionId,
+      properties: namespaceVerificationErrorProperties({
+        endpoint: "complete",
+        error,
+      }),
+    })
+    throw error
   }
-  return c.json(result, 200)
 })
 
 authenticatedNamespaceVerification.get("/namespace-verifications/:namespaceVerificationId", async (c) => {

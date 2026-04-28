@@ -78,6 +78,24 @@ describe("self-provider capability canonicalization", () => {
     expect(started.upstreamSessionRef).toContain("\"mockPassport\":true")
   })
 
+  test("non-production Self sessions prefer the live HTTPS request origin over a stale configured origin", async () => {
+    const provider = getSelfProvider(buildTestEnv({
+      ENVIRONMENT: "staging",
+      PIRATE_API_PUBLIC_ORIGIN: "https://stale-cloudflare.example.com",
+    }))
+    const started = await provider.startSession({
+      verificationSessionId: "ver_self_fresh_tunnel",
+      userId: "usr_test",
+      publicOrigin: "https://fresh-cloudflare.example.com",
+      requestedCapabilities: ["unique_human", "nationality"],
+      verificationIntent: "community_join",
+      policyId: null,
+    })
+
+    expect(started.launch.endpoint).toBe("https://fresh-cloudflare.example.com/verification-sessions/ver_self_fresh_tunnel/self-callback")
+    expect(started.upstreamSessionRef).toContain("https://fresh-cloudflare.example.com/verification-sessions/ver_self_fresh_tunnel/self-callback")
+  })
+
   test("production Self sessions use real passport verification without an API key", async () => {
     const provider = getSelfProvider(buildTestEnv({
       ENVIRONMENT: "production",
