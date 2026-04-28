@@ -1446,11 +1446,11 @@ export type SelfVerificationLaunch = {
   dev_mode?: boolean | null;
 };
 
-export type UserTaskType = "namespace_verification_required" | "namespace_verification_pending" | "payout_setup_required" | "membership_review";
+export type UserTaskType = "namespace_verification_required" | "namespace_verification_pending" | "unique_human_verification_required" | "profile_completion_suggested" | "global_handle_cleanup_suggested" | "payout_setup_required" | "royalty_claim_available" | "membership_review";
 
 export type UserTaskStatus = "open" | "completed" | "dismissed";
 
-export type NotificationEventType = "comment_reply" | "post_commented" | "mention" | "mod_event" | "community_update";
+export type NotificationEventType = "comment_reply" | "post_commented" | "mention" | "mod_event" | "community_update" | "xmtp_message" | "royalty_earned";
 
 export type UserTask = {
   task_id: string;

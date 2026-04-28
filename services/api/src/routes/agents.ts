@@ -101,6 +101,7 @@ agents.get("/agent-ownership-sessions/:agentOwnershipSessionId", authenticate, a
 
 agents.post("/agent-ownership-sessions/:agentOwnershipSessionId/complete", authenticateOptional, async (c) => {
   const actor = c.get("actor")
+  const userActor = actor?.authType === "admin" ? undefined : actor
   const body = (await c.req.json<{
     provider_payload_ref?: string | null
   }>().catch(() => null)) ?? null
@@ -108,7 +109,7 @@ agents.post("/agent-ownership-sessions/:agentOwnershipSessionId/complete", authe
   const connectionToken = c.req.header("x-agent-connection-token")?.trim() ?? null
   const agentOwnershipSessionId = c.req.param("agentOwnershipSessionId")
   const session = await resolveActorOrConnectionToken({
-    actor,
+    actor: userActor,
     connectionToken,
     withActor: (userId) => repo.completeAgentOwnershipSession({
       agentOwnershipSessionId,
@@ -224,6 +225,7 @@ agents.post("/agents/:agentId/handle", authenticate, async (c) => {
 
 agents.post("/agents/:agentId/credential", authenticateOptional, async (c) => {
   const actor = c.get("actor")
+  const userActor = actor?.authType === "admin" ? undefined : actor
   const body = (await c.req.json<{
     current_ownership_record_id?: string | null
   }>().catch(() => null)) ?? null
@@ -231,7 +233,7 @@ agents.post("/agents/:agentId/credential", authenticateOptional, async (c) => {
   const connectionToken = c.req.header("x-agent-connection-token")?.trim() ?? null
   const agentId = c.req.param("agentId")
   const credential = await resolveActorOrConnectionToken({
-    actor,
+    actor: userActor,
     connectionToken,
     withActor: (userId) => repo.issueAgentDelegatedCredential({
       agentId,
@@ -249,6 +251,7 @@ agents.post("/agents/:agentId/credential", authenticateOptional, async (c) => {
 
 agents.post("/agents/:agentId/credential/refresh", authenticateOptional, async (c) => {
   const actor = c.get("actor")
+  const userActor = actor?.authType === "admin" ? undefined : actor
   const body = await c.req.json<{
     refresh_token?: string
   }>().catch(() => null)
@@ -260,7 +263,7 @@ agents.post("/agents/:agentId/credential/refresh", authenticateOptional, async (
   const connectionToken = c.req.header("x-agent-connection-token")?.trim() ?? null
   const agentId = c.req.param("agentId")
   const credential = await resolveActorOrConnectionToken({
-    actor,
+    actor: userActor,
     connectionToken,
     withActor: (userId) => repo.refreshAgentDelegatedCredential({
       agentId,

@@ -3,7 +3,6 @@ import { badRequestError, notFoundError } from "../lib/errors"
 import { getProfileRepository, getUserRepository } from "../lib/auth/repositories"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import {
-  authenticate,
   authenticateAdminOrUser,
   authenticateAdminToken,
   authenticateAgentDelegatedToken,
@@ -58,7 +57,9 @@ comments.post("/:commentId/replies", async (c) => {
   if (!body) {
     throw badRequestError("Invalid comment create payload")
   }
-  assertAgentDelegatedWriteMatchesActor({ actor, body })
+  if (actor.authType !== "admin") {
+    assertAgentDelegatedWriteMatchesActor({ actor, body })
+  }
 
   const result = await createComment({
     env: c.env,

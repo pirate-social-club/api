@@ -1,6 +1,5 @@
 import { Hono } from "hono"
 import {
-  authenticate,
   authenticateAdminOrUser,
   authenticateAdminToken,
   authenticateAgentDelegatedToken,
