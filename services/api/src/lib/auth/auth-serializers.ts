@@ -49,7 +49,6 @@ export function parseVerificationCapabilities(raw: string | null | undefined): V
       minimum_age: parsed.minimum_age ?? defaults.minimum_age,
       nationality: parsed.nationality ?? defaults.nationality,
       gender: parsed.gender ?? defaults.gender,
-      sanctions_clear: parsed.sanctions_clear ?? defaults.sanctions_clear,
       wallet_score: parsed.wallet_score ?? defaults.wallet_score,
     })
   } catch {

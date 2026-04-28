@@ -9,7 +9,6 @@ import {
   exchangeJwt,
   prepareVerifiedNamespace,
   requestJson,
-  setPassportSanctionsClear,
   setPassportWalletScore,
 } from "./community-routes-test-helpers"
 import { createMembershipGatedCommunity } from "./community-membership-gate-test-helpers"
@@ -225,92 +224,6 @@ describe("community membership gate routes", () => {
       scoreThreshold: 20,
       passingScore: true,
     })
-
-    const joined = await app.request(
-      `http://pirate.test/communities/${created.communityId}/join`,
-      {
-        method: "POST",
-        headers: { authorization: `Bearer ${joiner.accessToken}` },
-      },
-      ctx.env,
-    )
-    expect(joined.status).toBe(200)
-    const joinedBody = await json(joined) as { status: string }
-    expect(joinedBody.status).toBe("joined")
-  })
-
-  test("join-eligibility returns verification_required when sanctions clearance is missing", async () => {
-    const ctx = await createRouteTestContext()
-    cleanup = ctx.cleanup
-
-    const creator = await exchangeJwt(ctx.env, "sanctions-clear-elig-creator")
-    const created = await createMembershipGatedCommunity({
-      env: ctx.env,
-      creatorAccessToken: creator.accessToken,
-      displayName: "Sanctions Clear Club",
-      gateRule: {
-        scope: "membership",
-        gate_family: "identity_proof",
-        gate_type: "sanctions_clear",
-        proof_requirements: [
-          {
-            proof_type: "sanctions_clear",
-            accepted_providers: ["passport"],
-          },
-        ],
-      },
-    })
-
-    const joiner = await exchangeJwt(ctx.env, "sanctions-clear-elig-joiner")
-    await completeUniqueHumanVerification(ctx.env, joiner.accessToken)
-
-    const eligibility = await app.request(
-      `http://pirate.test/communities/${created.communityId}/join-eligibility`,
-      {
-        headers: { authorization: `Bearer ${joiner.accessToken}` },
-      },
-      ctx.env,
-    )
-    expect(eligibility.status).toBe(200)
-    const eligibilityBody = await json(eligibility) as {
-      status: string
-      missing_capabilities: string[]
-      suggested_verification_provider: string | null
-      suggested_verification_intent: string | null
-      membership_gate_summaries: Array<{ gate_type: string }>
-    }
-    expect(eligibilityBody.status).toBe("verification_required")
-    expect(eligibilityBody.missing_capabilities).toContain("sanctions_clear")
-    expect(eligibilityBody.suggested_verification_provider).toBe("passport")
-    expect(eligibilityBody.suggested_verification_intent).toBeNull()
-    expect(eligibilityBody.membership_gate_summaries[0].gate_type).toBe("sanctions_clear")
-  })
-
-  test("join mutation succeeds when Passport sanctions clearance is verified", async () => {
-    const ctx = await createRouteTestContext()
-    cleanup = ctx.cleanup
-
-    const creator = await exchangeJwt(ctx.env, "sanctions-clear-join-creator")
-    const created = await createMembershipGatedCommunity({
-      env: ctx.env,
-      creatorAccessToken: creator.accessToken,
-      displayName: "Passing Sanctions Clear Club",
-      gateRule: {
-        scope: "membership",
-        gate_family: "identity_proof",
-        gate_type: "sanctions_clear",
-        proof_requirements: [
-          {
-            proof_type: "sanctions_clear",
-            accepted_providers: ["passport"],
-          },
-        ],
-      },
-    })
-
-    const joiner = await exchangeJwt(ctx.env, "sanctions-clear-joiner")
-    await completeUniqueHumanVerification(ctx.env, joiner.accessToken)
-    await setPassportSanctionsClear(ctx.env, joiner.userId)
 
     const joined = await app.request(
       `http://pirate.test/communities/${created.communityId}/join`,
@@ -550,7 +463,7 @@ describe("community membership gate routes", () => {
       }),
       getSessionOutcome: async () => ({
         status: "verified",
-        claims: { age_over_18: true, nationality: "AR", gender: null, ofac_clear: null, nullifier: "self-test-ref:ar-elig" },
+        claims: { age_over_18: true, nationality: "AR", gender: null, nullifier: "self-test-ref:ar-elig" },
       }),
     } satisfies SelfProvider)
     await completeNationalityVerification(ctx.env, joiner.accessToken)
@@ -610,7 +523,7 @@ describe("community membership gate routes", () => {
       }),
       getSessionOutcome: async () => ({
         status: "verified",
-        claims: { age_over_18: true, nationality: "US", gender: null, ofac_clear: null, nullifier: "self-test-ref:us-elig" },
+        claims: { age_over_18: true, nationality: "US", gender: null, nullifier: "self-test-ref:us-elig" },
       }),
     } satisfies SelfProvider)
     await completeNationalityVerification(ctx.env, joiner.accessToken)
@@ -716,7 +629,7 @@ describe("community membership gate routes", () => {
       }),
       getSessionOutcome: async () => ({
         status: "verified",
-        claims: { age_over_18: true, nationality: "AR", gender: null, ofac_clear: null, nullifier: "self-test-ref:ar-join" },
+        claims: { age_over_18: true, nationality: "AR", gender: null, nullifier: "self-test-ref:ar-join" },
       }),
     } satisfies SelfProvider)
     await completeNationalityVerification(ctx.env, joiner.accessToken)
@@ -779,7 +692,7 @@ describe("community membership gate routes", () => {
       }),
       getSessionOutcome: async () => ({
         status: "verified",
-        claims: { age_over_18: true, nationality: "US", gender: null, ofac_clear: null, nullifier: "self-test-ref:us-join" },
+        claims: { age_over_18: true, nationality: "US", gender: null, nullifier: "self-test-ref:us-join" },
       }),
     } satisfies SelfProvider)
     await completeNationalityVerification(ctx.env, joiner.accessToken)

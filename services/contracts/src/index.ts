@@ -46,7 +46,6 @@ export type VerificationCapabilities = {
     value?: "M" | "F" | null;
     proof_type?: "gender" | null;
   });
-  sanctions_clear: SanctionsClearCapabilityState;
   wallet_score: WalletScoreCapabilityState;
 };
 
@@ -201,7 +200,7 @@ export type VerySessionBinding = {
 export type RequestedVerificationCapability = "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender";
 
 export type VerificationRequirement = {
-  proof_type: "minimum_age" | "sanctions_clear";
+  proof_type: "minimum_age";
   minimum_age?: number;
 };
 
@@ -1295,7 +1294,7 @@ export type LocalizedPostResponse = {
 };
 
 export type MembershipGateSummary = {
-  gate_type: "nationality" | "gender" | "unique_human" | "age_over_18" | "minimum_age" | "wallet_score" | "sanctions_clear" | "erc721_holding" | "erc721_inventory_match";
+  gate_type: "nationality" | "gender" | "unique_human" | "age_over_18" | "minimum_age" | "wallet_score" | "erc721_holding" | "erc721_inventory_match";
   accepted_providers?: Array<"self" | "very" | "passport"> | null;
   required_value?: string | null;
   required_values?: Array<string> | null;
@@ -1339,7 +1338,7 @@ export type JoinEligibility = {
   joinable_now: boolean;
   status: "joinable" | "requestable" | "pending_request" | "verification_required" | "gate_failed" | "already_joined" | "banned";
   membership_gate_summaries: Array<MembershipGateSummary>;
-  missing_capabilities: Array<"unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "sanctions_clear">;
+  missing_capabilities: Array<"unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score">;
   suggested_verification_provider?: "self" | "very" | "passport" | null;
   suggested_verification_intent?: "community_join" | null;
   failure_reason?: "missing_verification" | "provider_not_accepted" | "nationality_mismatch" | "gender_mismatch" | "minimum_age_mismatch" | "erc721_holding_required" | "erc721_inventory_match_required" | "token_inventory_unavailable" | "wallet_score_too_low" | "unsupported" | "banned" | null;
@@ -1423,7 +1422,6 @@ export type SelfVerificationDisclosures = {
   date_of_birth?: boolean | null;
   gender?: boolean | null;
   expiry_date?: boolean | null;
-  ofac?: boolean | null;
   excluded_countries?: Array<string> | null;
   minimum_age?: number | null;
 };
@@ -2083,7 +2081,7 @@ type GateRule = {
   community_id: string;
   scope: "membership" | "viewer" | "posting";
   gate_family: "token_holding" | "identity_proof";
-  gate_type: "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "sanctions_clear" | "wallet_score" | "erc721_holding" | "erc721_inventory_match";
+  gate_type: "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "erc721_holding" | "erc721_inventory_match";
   proof_requirements?: Array<ProofRequirement> | null;
   chain_namespace?: string | null;
   gate_config?: (Record<string, unknown>) | null;
@@ -2095,7 +2093,7 @@ type GateRule = {
 type GateRuleInput = {
   scope: "membership" | "viewer" | "posting";
   gate_family: "token_holding" | "identity_proof";
-  gate_type: "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "sanctions_clear" | "wallet_score" | "erc721_holding" | "erc721_inventory_match";
+  gate_type: "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "erc721_holding" | "erc721_inventory_match";
   proof_requirements?: Array<ProofRequirement> | null;
   chain_namespace?: string | null;
   gate_config?: (Record<string, unknown>) | null;
@@ -2288,7 +2286,7 @@ type PromotionDisclosureInput = {
 };
 
 type ProofRequirement = {
-  proof_type: "unique_human" | "biometric_liveness" | "wallet_score" | "gov_id" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "sanctions_clear" | "phone";
+  proof_type: "unique_human" | "biometric_liveness" | "wallet_score" | "gov_id" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "phone";
   accepted_providers?: Array<"self" | "very" | "passport"> | null;
   accepted_mechanisms?: Array<string> | null;
   config?: (Record<string, unknown>) | null;
@@ -2320,14 +2318,6 @@ type RootPostQuotaRule = {
   max_root_posts: number;
   max_song_posts: number;
   max_video_posts: number;
-};
-
-type SanctionsClearCapabilityState = {
-  state: "unverified" | "verified" | "expired";
-  provider?: "passport" | null;
-  proof_type?: "sanctions_clear" | null;
-  mechanism?: "passport_clean_hands" | "CleanHands" | null;
-  verified_at?: string | null;
 };
 
 type SongArtifactUploadRef = {

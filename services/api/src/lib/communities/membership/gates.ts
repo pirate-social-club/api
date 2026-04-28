@@ -30,7 +30,7 @@ type ProofRequirement = {
   config?: Record<string, unknown> | null
 }
 
-type MissingMembershipCapability = "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "sanctions_clear"
+type MissingMembershipCapability = "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score"
 type SuggestedVerificationProvider = "self" | "very" | "passport"
 
 export type MembershipGateEvaluation = {
@@ -82,22 +82,6 @@ function includesAcceptedProvider(acceptedProviders: string[] | null | undefined
     return true
   }
   return provider != null && acceptedProviders.includes(provider)
-}
-
-function normalizeSanctionsMechanism(mechanism: string | null | undefined): string | null {
-  if (mechanism === "CleanHands") {
-    return "passport_clean_hands"
-  }
-  return typeof mechanism === "string" && mechanism.length > 0 ? mechanism : null
-}
-
-function includesAcceptedMechanism(acceptedMechanisms: string[] | null | undefined, mechanism: string | null | undefined): boolean {
-  if (!acceptedMechanisms?.length) {
-    return true
-  }
-  const normalizedMechanism = normalizeSanctionsMechanism(mechanism)
-  const normalizedAccepted = acceptedMechanisms.map((value) => normalizeSanctionsMechanism(value))
-  return normalizedMechanism != null && normalizedAccepted.includes(normalizedMechanism)
 }
 
 function readRequiredCountryValues(config: Record<string, unknown>): string[] {
@@ -190,10 +174,6 @@ function satisfiesProofRequirement(user: User, requirement: ProofRequirement, ga
       const requiredValue = typeof config.required_value === "string" ? config.required_value : null
       return requiredValue ? capability.value === requiredValue : true
     }
-    case "sanctions_clear":
-      return user.verification_capabilities.sanctions_clear.state === "verified"
-        && includesAcceptedProvider(requirement.accepted_providers, user.verification_capabilities.sanctions_clear.provider)
-        && includesAcceptedMechanism(requirement.accepted_mechanisms, user.verification_capabilities.sanctions_clear.mechanism)
     case "wallet_score": {
       const capability = user.verification_capabilities.wallet_score
       if (
@@ -476,22 +456,6 @@ export async function evaluateMembershipGateRules(input: {
             if (capability.passing_score !== true || !scoreMeetsMinimum) {
               mismatchReasons.push("wallet_score_too_low")
             }
-          }
-          break
-        }
-        case "sanctions_clear": {
-          const capability = user.verification_capabilities.sanctions_clear
-          if (capability.state !== "verified") {
-            missingCapabilities.push("sanctions_clear")
-            if (includesAcceptedProvider(requirement.accepted_providers, "self")) {
-              suggestedProvider = suggestedProvider ?? "self"
-            } else if (includesAcceptedProvider(requirement.accepted_providers, "passport")) {
-              suggestedProvider = suggestedProvider ?? "passport"
-            }
-          } else if (!includesAcceptedProvider(requirement.accepted_providers, capability.provider)) {
-            mismatchReasons.push("provider_not_accepted")
-          } else if (!includesAcceptedMechanism(requirement.accepted_mechanisms, capability.mechanism)) {
-            mismatchReasons.push("mechanism_not_accepted")
           }
           break
         }

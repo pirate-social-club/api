@@ -21,7 +21,6 @@ export function buildDefaultVerificationCapabilities(): VerificationCapabilities
     minimum_age: { state: "unverified", value: null, provider: null, proof_type: null, mechanism: null, verified_at: null },
     nationality: { state: "unverified", value: null, provider: null, proof_type: null, mechanism: null, verified_at: null },
     gender: { state: "unverified", value: null, provider: null, proof_type: null, mechanism: null, verified_at: null },
-    sanctions_clear: { state: "unverified", provider: null, proof_type: null, mechanism: null, verified_at: null },
     wallet_score: {
       state: "unverified",
       provider: null,
@@ -48,7 +47,6 @@ export function applyLazyCapabilityExpiry(
     minimum_age: { ...capabilities.minimum_age },
     nationality: { ...capabilities.nationality },
     gender: { ...capabilities.gender },
-    sanctions_clear: { ...capabilities.sanctions_clear },
     wallet_score: { ...capabilities.wallet_score },
   }
 

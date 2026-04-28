@@ -104,7 +104,7 @@ export function buildVerifiedSelfProvider(upstreamSessionRef: string): SelfProvi
     },
     getSessionOutcome: async (input) => ({
       status: "verified",
-      claims: { age_over_18: true, nationality: null, gender: null, ofac_clear: null, nullifier: input.upstreamSessionRef },
+      claims: { age_over_18: true, nationality: null, gender: null, nullifier: input.upstreamSessionRef },
     }),
   }
 }

@@ -19,7 +19,6 @@ function makeTestUser(overrides: Partial<User["verification_capabilities"]> = {}
       minimum_age: { state: "unverified", provider: null, value: null },
       nationality: { state: "unverified", provider: null, value: null },
       gender: { state: "unverified", provider: null, value: null },
-      sanctions_clear: { state: "unverified", provider: null },
       wallet_score: { state: "unverified", provider: null, passing_score: null, score: null },
       ...overrides,
     },
@@ -358,49 +357,6 @@ describe("community-service helpers", () => {
           }],
         }), { ageOver18Verified: false }),
       ).toThrow("Gender gate required_value must be either \"M\" or \"F\"")
-    })
-
-    test("allows sanctions_clear gate in public v0 with Passport provider", () => {
-      expect(() =>
-        assertCreateRequest(makeCreateBody({
-          gate_rules: [{
-            scope: "membership",
-            gate_family: "identity_proof",
-            gate_type: "sanctions_clear",
-            proof_requirements: [{ proof_type: "sanctions_clear", accepted_providers: ["passport"] }],
-          }],
-        }), { ageOver18Verified: false }),
-      ).not.toThrow()
-    })
-
-    test("rejects sanctions_clear gate in public v0 with Self provider", () => {
-      expect(() =>
-        assertCreateRequest(makeCreateBody({
-          gate_rules: [{
-            scope: "membership",
-            gate_family: "identity_proof",
-            gate_type: "sanctions_clear",
-            proof_requirements: [{
-              proof_type: "sanctions_clear",
-              accepted_providers: ["self"],
-              accepted_mechanisms: ["self_ofac"],
-            }],
-          }],
-        }), { ageOver18Verified: false }),
-      ).toThrow("Invalid accepted_providers for sanctions_clear: self")
-    })
-
-    test("rejects sanctions_clear gate with Self provider", () => {
-      expect(() =>
-        assertCreateRequest(makeCreateBody({
-          gate_rules: [{
-            scope: "membership",
-            gate_family: "identity_proof",
-            gate_type: "sanctions_clear",
-            proof_requirements: [{ proof_type: "sanctions_clear", accepted_providers: ["self"] }],
-          }],
-        }), { ageOver18Verified: false }),
-      ).toThrow("Invalid accepted_providers for sanctions_clear: self")
     })
 
     test("rejects post_ephemeral anonymous scope in v0", () => {

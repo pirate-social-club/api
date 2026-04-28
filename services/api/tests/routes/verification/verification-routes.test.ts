@@ -65,7 +65,7 @@ describe("verification routes", () => {
       }),
       getSessionOutcome: async () => ({
         status: "verified",
-        claims: { age_over_18: true, nationality: null, gender: null, ofac_clear: null, nullifier: "self-test-ref" },
+        claims: { age_over_18: true, nationality: null, gender: null, nullifier: "self-test-ref" },
       }),
     } satisfies import("../../../src/lib/verification/self-provider").SelfProvider)
 
@@ -92,23 +92,6 @@ describe("verification routes", () => {
     }
     expect(completedBody.status).toBe("failed")
     expect(completedBody.failure_reason).toBe("missing_required_claims:gender")
-  })
-
-  test("self verification rejects sanctions_clear requirements", async () => {
-    const ctx = await createRouteTestContext()
-    cleanup = ctx.cleanup
-
-    const session = await exchangeJwt(ctx.env, "verification-self-sanctions-user")
-
-    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
-      provider: "self",
-      requested_capabilities: ["nationality"],
-      verification_requirements: [{ proof_type: "sanctions_clear" }],
-      verification_intent: "community_join",
-    }, ctx.env, session.accessToken)
-    expect(createdVerification.status).toBe(400)
-    const body = await json(createdVerification) as { message: string }
-    expect(body.message).toContain("Self sanctions_clear verification is not supported")
   })
 
   test("self verification callback completes an SDK session payload", async () => {
@@ -142,7 +125,6 @@ describe("verification routes", () => {
             minimum_age: null,
             nationality: "USA",
             gender: null,
-            ofac_clear: null,
             nullifier: "self-callback-test-ref",
           },
         }

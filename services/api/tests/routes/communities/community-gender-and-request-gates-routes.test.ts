@@ -113,7 +113,7 @@ describe("community gender and request gate routes", () => {
       }),
       getSessionOutcome: async () => ({
         status: "verified",
-        claims: { age_over_18: true, nationality: null, gender: "F", ofac_clear: null, nullifier: "self-test-ref" },
+        claims: { age_over_18: true, nationality: null, gender: "F", nullifier: "self-test-ref" },
       }),
     } satisfies SelfProvider)
     await completeGenderVerification(ctx.env, joiner.accessToken)
@@ -176,7 +176,7 @@ describe("community gender and request gate routes", () => {
       }),
       getSessionOutcome: async () => ({
         status: "verified",
-        claims: { age_over_18: true, nationality: null, gender: "F", ofac_clear: null, nullifier: "self-test-ref" },
+        claims: { age_over_18: true, nationality: null, gender: "F", nullifier: "self-test-ref" },
       }),
     } satisfies SelfProvider)
     await completeGenderVerification(ctx.env, joiner.accessToken)

@@ -41,9 +41,6 @@ function parseVerificationRequirements(raw: string | null | undefined): Verifica
         return []
       }
       const typed = requirement as VerificationRequirement
-      if (typed.proof_type === "sanctions_clear") {
-        return [{ proof_type: "sanctions_clear" }]
-      }
       if (typed.proof_type === "minimum_age" && Number.isInteger(typed.minimum_age)) {
         return [typed]
       }
@@ -568,7 +565,7 @@ async function finalizeVerification(
   },
   requestedCapabilities?: RequestedVerificationCapability[] | null,
   verificationRequirements?: VerificationRequirement[] | null,
-  selfClaims?: { age_over_18: boolean; minimum_age?: number | null; nationality: string | null; gender: "M" | "F" | null; ofac_clear?: boolean | null; nullifier?: string | null } | null,
+  selfClaims?: { age_over_18: boolean; minimum_age?: number | null; nationality: string | null; gender: "M" | "F" | null; nullifier?: string | null } | null,
   attestationData?: Record<string, unknown>,
 ): Promise<VerificationSession> {
   const existingAttestations = await getAttestationsBySourceSessionId(client, input.verificationSessionId, input.userId)

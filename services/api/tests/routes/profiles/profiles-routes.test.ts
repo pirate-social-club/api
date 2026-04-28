@@ -185,7 +185,6 @@ describe("profile routes", () => {
         minimum_age: { state: "unverified", provider: null, proof_type: null, value: null, mechanism: null, verified_at: null },
         nationality: { state: "verified", provider: "self", proof_type: "nationality", value: "USA", mechanism: null, verified_at: "2026-04-24T00:00:00.000Z" },
         gender: { state: "unverified", provider: null, proof_type: null, value: null, mechanism: null, verified_at: null },
-        sanctions_clear: { state: "unverified", provider: null, mechanism: null, verified_at: null },
         wallet_score: { state: "unverified", provider: null, mechanism: null, verified_at: null },
       })],
     })

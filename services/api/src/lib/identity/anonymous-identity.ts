@@ -87,9 +87,6 @@ export function formatDisclosedQualifierLabel(qualifierTemplateId: string): stri
   if (normalized === "unique_human") {
     return "Unique Human"
   }
-  if (normalized === "sanctions_clear") {
-    return "Sanctions Clear"
-  }
 
   return toTitleCase(normalized)
 }
