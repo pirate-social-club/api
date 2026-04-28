@@ -41,4 +41,3 @@ CREATE INDEX idx_analytics_outbox_status_next_attempt
 
 CREATE INDEX idx_analytics_outbox_event_created
     ON analytics_outbox(event_name, created_at DESC);
-

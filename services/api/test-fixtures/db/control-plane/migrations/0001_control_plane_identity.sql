@@ -199,7 +199,6 @@ CREATE TABLE profiles (
     cover_source TEXT CHECK (cover_source IS NULL OR cover_source IN ('ens', 'upload', 'none')),
     global_handle_id TEXT,
     primary_linked_handle_id TEXT,
-    display_verified_nationality_badge INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(user_id),
