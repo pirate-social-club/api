@@ -35,6 +35,10 @@ export function gateFailed(message: string): HttpError {
   return new HttpError(403, "gate_failed", message)
 }
 
+export function rateLimited(message: string, details: Record<string, unknown> | null = null): HttpError {
+  return new HttpError(429, "rate_limited", message, true, details)
+}
+
 export function gateFailedWithDetails(message: string, details: GateFailureDetails): HttpError {
   return new HttpError(403, "gate_failed", message, false, details as Record<string, unknown>)
 }

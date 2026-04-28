@@ -21,8 +21,10 @@ export type {
   CommunityPurchaseSettlementRequest,
   CommunityPricingPolicy,
   CompleteNamespaceVerificationSessionRequest,
-  CompleteVerificationSessionRequest,
-  Comment,
+	  CompleteVerificationSessionRequest,
+	  RefreshPassportWalletScoreRequest,
+	  RefreshPassportWalletScoreResponse,
+	  Comment,
   CommentContext,
   CommentListItem,
   CommentListResponse,
@@ -229,6 +231,9 @@ export type Env = {
   SELF_ENDPOINT?: string
   SELF_ENDPOINT_TYPE?: string
   VERY_BRIDGE_API_URL?: string
+  PASSPORT_API_URL?: string
+  PASSPORT_API_KEY?: string
+  PASSPORT_SCORER_ID?: string
 
   // Media storage
   FILEBASE_S3_ACCESS_KEY?: string

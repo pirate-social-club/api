@@ -2,8 +2,13 @@ import { Hono } from "hono"
 import { badRequestError, HttpError, notFoundError } from "../lib/errors"
 import { getControlPlaneVerificationRepository } from "../lib/verification/verification-repository"
 import { proxyVeryBridgeRequest } from "../lib/verification/very-provider"
+import { refreshPassportWalletScore } from "../lib/verification/passport-wallet-score-service"
 import { authenticate, authenticateAdminOrUser, type AuthenticatedEnv } from "../lib/auth-middleware"
 import { trackApiEvent } from "../lib/analytics/track"
+import { getUserRepository } from "../lib/auth/repositories"
+import { getCommunityRepository } from "../lib/communities/db-community-repository"
+import { resolveCommunityIdentifier } from "../lib/communities/community-identifier"
+import { getJoinEligibility } from "../lib/communities/membership/eligibility-service"
 import type { Env, RequestedVerificationCapability, VerificationIntent, VerificationRequirement } from "../types"
 
 const verification = new Hono<{ Bindings: Env }>()
@@ -72,6 +77,7 @@ verification.post("/verification-sessions/very-widget-verify", async (c) => {
 
 authenticatedVerification.use("/verification-sessions", authenticate)
 authenticatedVerification.use("/verification-sessions/*", authenticate)
+authenticatedVerification.use("/verification/passport-wallet-score", authenticate)
 authenticatedNamespaceVerification.use("/namespace-verification-sessions", authenticateAdminOrUser)
 authenticatedNamespaceVerification.use("/namespace-verification-sessions/*", authenticateAdminOrUser)
 authenticatedNamespaceVerification.use("/namespace-verifications/*", authenticateAdminOrUser)
@@ -169,6 +175,42 @@ authenticatedVerification.get("/verification-sessions/:verificationSessionId/ver
     })
   }
   return c.json(result.body, result.status as 200)
+})
+
+authenticatedVerification.post("/verification/passport-wallet-score", async (c) => {
+  const actor = c.get("actor")
+  const body = (await c.req.json<{
+    wallet_attachment_id?: string | null
+    community_id?: string | null
+  }>().catch(() => null)) ?? {}
+  const refreshed = await refreshPassportWalletScore({
+    env: c.env,
+    userId: actor.userId,
+    walletAttachmentId: body.wallet_attachment_id ?? null,
+  })
+
+  const communityRef = typeof body.community_id === "string" ? body.community_id.trim() : ""
+  if (!communityRef) {
+    return c.json({
+      wallet_score: refreshed.walletScore,
+      wallet_score_status: refreshed.walletScoreStatus,
+    }, 200)
+  }
+
+  const communityRepository = getCommunityRepository(c.env)
+  const communityId = await resolveCommunityIdentifier(communityRepository, communityRef) ?? communityRef
+  const joinEligibility = await getJoinEligibility({
+    env: c.env,
+    userId: actor.userId,
+    communityId,
+    userRepository: getUserRepository(c.env),
+    communityRepository,
+  })
+  return c.json({
+    wallet_score: refreshed.walletScore,
+    wallet_score_status: joinEligibility.wallet_score_status ?? refreshed.walletScoreStatus,
+    join_eligibility: joinEligibility,
+  }, 200)
 })
 
 authenticatedVerification.post("/verification-sessions", async (c) => {

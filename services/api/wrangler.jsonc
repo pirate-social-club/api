@@ -10,8 +10,9 @@
   "observability": {
     "enabled": true
   },
-  "vars": {
-    "ENVIRONMENT": "development",
+	  "vars": {
+	    // Set PASSPORT_API_KEY with `wrangler secret put PASSPORT_API_KEY`.
+	    "ENVIRONMENT": "development",
     "JWT_BASED_AUTH_ENABLED": "true",
     "JWT_BASED_AUTH_ISSUERS": "pirate-dev",
     "JWT_BASED_AUTH_AUDIENCE": "pirate-api",
@@ -33,10 +34,12 @@
     "ACRCLOUD_HOST": "identify-ap-southeast-1.acrcloud.com",
     "ACRCLOUD_IDENTIFY_PATH": "/v1/identify",
     "ELEVENLABS_FORCE_ALIGNMENT_URL": "https://api.elevenlabs.io/v1/forced-alignment",
-    "COMMUNITY_PROVISION_OPERATOR_BASE_URL": "https://spaces.pirate.sc",
-    "COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION": "aws-us-east-1",
-    "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
-    "COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS": "60000"
+	    "COMMUNITY_PROVISION_OPERATOR_BASE_URL": "https://spaces.pirate.sc",
+	    "COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION": "aws-us-east-1",
+	    "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
+	    "COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS": "60000",
+	    "PASSPORT_API_URL": "https://api.passport.xyz",
+	    "PASSPORT_SCORER_ID": ""
   },
   "env": {
     "staging": {
@@ -68,10 +71,12 @@
         "ACRCLOUD_IDENTIFY_PATH": "/v1/identify",
         "ELEVENLABS_FORCE_ALIGNMENT_URL": "https://api.elevenlabs.io/v1/forced-alignment",
         "TURSO_COMMUNITY_DB_WRAP_KEY_VERSION": "2",
-        "COMMUNITY_PROVISION_OPERATOR_BASE_URL": "https://spaces.pirate.sc",
-        "COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION": "aws-us-east-1",
-        "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
-        "COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS": "60000"
+	        "COMMUNITY_PROVISION_OPERATOR_BASE_URL": "https://spaces.pirate.sc",
+	        "COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION": "aws-us-east-1",
+	        "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
+	        "COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS": "60000",
+	        "PASSPORT_API_URL": "https://api.passport.xyz",
+	        "PASSPORT_SCORER_ID": ""
       }
     },
     "production": {
@@ -109,10 +114,12 @@
         "HNS_VERIFIER_BASE_URL": "https://spaces.pirate.sc/hns",
         "HNS_AUTO_PROVISION_ROOTS": "beermoney,dankmeme",
         "TURSO_COMMUNITY_DB_WRAP_KEY_VERSION": "2",
-        "COMMUNITY_PROVISION_OPERATOR_BASE_URL": "https://spaces.pirate.sc/prod",
-        "COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION": "aws-us-east-1",
-        "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
-        "COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS": "60000"
+	        "COMMUNITY_PROVISION_OPERATOR_BASE_URL": "https://spaces.pirate.sc/prod",
+	        "COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION": "aws-us-east-1",
+	        "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
+	        "COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS": "60000",
+	        "PASSPORT_API_URL": "https://api.passport.xyz",
+	        "PASSPORT_SCORER_ID": ""
       }
     }
   }

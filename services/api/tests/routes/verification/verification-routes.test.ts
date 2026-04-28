@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import app from "../../../src/index"
 import { json, createRouteTestContext, resetRuntimeCaches } from "../../helpers"
+import { mintUpstreamJwt } from "../../helpers"
 import { setSelfProviderForTests } from "../../../src/lib/verification/self-provider"
 import { setVeryProviderForTests } from "../../../src/lib/verification/very-provider"
+import { setPassportProviderForTests } from "../../../src/lib/verification/passport-provider"
+import { prepareVerifiedNamespace } from "../communities/community-routes-test-helpers"
 import {
   exchangeJwt,
   requestJson,
@@ -279,6 +282,265 @@ describe("verification routes", () => {
     }
     expect(fetchedNamespaceBody.status).toBe("verified")
     expect(fetchedNamespaceBody.capabilities.club_attach_allowed).toBe(true)
+  })
+
+  test("passport wallet score refresh updates only wallet_score capability", async () => {
+    const ctx = await createRouteTestContext({
+      PASSPORT_API_KEY: "passport-key",
+      PASSPORT_SCORER_ID: "123",
+    })
+    cleanup = ctx.cleanup
+
+    const walletAddress = "0x1111111111111111111111111111111111111111"
+    const jwt = await mintUpstreamJwt(ctx.env, {
+      sub: "verification-passport-refresh-user",
+      wallet_addresses: [walletAddress],
+      selected_wallet_address: walletAddress,
+    })
+    const sessionResponse = await requestJson("http://pirate.test/auth/session/exchange", {
+      proof: {
+        type: "jwt_based_auth",
+        jwt,
+      },
+    }, ctx.env)
+    const session = await json(sessionResponse) as {
+      access_token: string
+      user: { user_id: string }
+      wallet_attachments: Array<{ wallet_attachment_id: string }>
+    }
+    const otherWalletAddress = "0x3333333333333333333333333333333333333333"
+    const otherJwt = await mintUpstreamJwt(ctx.env, {
+      sub: "verification-passport-refresh-other-user",
+      wallet_addresses: [otherWalletAddress],
+      selected_wallet_address: otherWalletAddress,
+    })
+    const otherSessionResponse = await requestJson("http://pirate.test/auth/session/exchange", {
+      proof: {
+        type: "jwt_based_auth",
+        jwt: otherJwt,
+      },
+    }, ctx.env)
+    const otherSession = await json(otherSessionResponse) as {
+      wallet_attachments: Array<{ wallet_attachment_id: string }>
+    }
+
+    setPassportProviderForTests({
+      refreshWalletScore: async ({ address, now }) => {
+        expect(address).toBe(walletAddress)
+        return {
+          state: "verified",
+          provider: "passport",
+          proof_type: "wallet_score",
+          mechanism: "stamps-api-v2",
+          verified_at: now?.toISOString() ?? null,
+          score: 33.5,
+          score_threshold: 20,
+          passing_score: true,
+          last_score_timestamp: now?.toISOString() ?? null,
+          expiration_timestamp: new Date((now ?? new Date()).getTime() + 86_400_000).toISOString(),
+          stamps: [{ stamp_name: "Ens", stamp_score: 1.2 }],
+        }
+      },
+    })
+
+    const refreshed = await requestJson("http://pirate.test/verification/passport-wallet-score", {}, ctx.env, session.access_token)
+    expect(refreshed.status).toBe(200)
+    const body = await json(refreshed) as {
+      wallet_score: { state: string; score: number; passing_score: boolean }
+      wallet_score_status: { current_score: number; required_score: number; passing_score: boolean }
+    }
+    expect(body.wallet_score.state).toBe("verified")
+    expect(body.wallet_score.score).toBe(33.5)
+    expect(body.wallet_score_status).toMatchObject({
+      current_score: 33.5,
+      required_score: 20,
+      passing_score: true,
+    })
+
+    const row = await ctx.client.execute({
+      sql: `
+        SELECT verification_state, capability_provider, verified_at, current_verification_session_id, verification_capabilities_json
+        FROM users
+        WHERE user_id = ?1
+        LIMIT 1
+      `,
+      args: [session.user.user_id],
+    })
+    expect(row.rows[0]?.verification_state).toBe("unverified")
+    expect(row.rows[0]?.capability_provider).toBeNull()
+    expect(row.rows[0]?.verified_at).toBeNull()
+    expect(row.rows[0]?.current_verification_session_id).toBeNull()
+    const capabilities = JSON.parse(String(row.rows[0]?.verification_capabilities_json)) as {
+      wallet_score?: { score?: number; passing_score?: boolean }
+    }
+    expect(capabilities.wallet_score?.score).toBe(33.5)
+    expect(capabilities.wallet_score?.passing_score).toBe(true)
+
+    const rejectedWallet = await requestJson("http://pirate.test/verification/passport-wallet-score", {
+      wallet_attachment_id: otherSession.wallet_attachments[0]?.wallet_attachment_id,
+    }, ctx.env, session.access_token)
+    expect(rejectedWallet.status).toBe(400)
+    const rejectedWalletBody = await json(rejectedWallet) as { message: string }
+    expect(rejectedWalletBody.message).toBe("Wallet attachment does not belong to the authenticated user")
+
+    const limited = await requestJson("http://pirate.test/verification/passport-wallet-score", {}, ctx.env, session.access_token)
+    expect(limited.status).toBe(429)
+  })
+
+  test("passport wallet score refresh can return updated join eligibility", async () => {
+    const ctx = await createRouteTestContext({
+      PASSPORT_API_KEY: "passport-key",
+      PASSPORT_SCORER_ID: "123",
+    })
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "verification-passport-community-creator")
+    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Passport Score Club",
+      namespace: {
+        namespace_verification_id: namespaceVerificationId,
+      },
+      membership_mode: "gated",
+      gate_rules: [
+        {
+          scope: "membership",
+          gate_family: "identity_proof",
+          gate_type: "wallet_score",
+          proof_requirements: [
+            {
+              proof_type: "wallet_score",
+              accepted_providers: ["passport"],
+              config: { minimum_score: 20 },
+            },
+          ],
+        },
+      ],
+    }, ctx.env, creator.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityBody = await json(communityCreate) as { community: { community_id: string } }
+
+    const walletAddress = "0x2222222222222222222222222222222222222222"
+    const jwt = await mintUpstreamJwt(ctx.env, {
+      sub: "verification-passport-community-joiner",
+      wallet_addresses: [walletAddress],
+      selected_wallet_address: walletAddress,
+    })
+    const sessionResponse = await requestJson("http://pirate.test/auth/session/exchange", {
+      proof: {
+        type: "jwt_based_auth",
+        jwt,
+      },
+    }, ctx.env)
+    const session = await json(sessionResponse) as { access_token: string }
+    setPassportProviderForTests({
+      refreshWalletScore: async ({ now }) => ({
+        state: "verified",
+        provider: "passport",
+        proof_type: "wallet_score",
+        mechanism: "stamps-api-v2",
+        verified_at: now?.toISOString() ?? null,
+        score: 25,
+        score_threshold: 20,
+        passing_score: true,
+        last_score_timestamp: now?.toISOString() ?? null,
+        expiration_timestamp: new Date((now ?? new Date()).getTime() + 86_400_000).toISOString(),
+        stamps: null,
+      }),
+    })
+
+    const refreshed = await requestJson("http://pirate.test/verification/passport-wallet-score", {
+      community_id: communityBody.community.community_id,
+    }, ctx.env, session.access_token)
+    expect(refreshed.status).toBe(200)
+    const body = await json(refreshed) as {
+      join_eligibility?: { status: string; wallet_score_status?: { current_score?: number | null; required_score?: number | null } }
+      wallet_score_status?: { current_score?: number | null; required_score?: number | null }
+    }
+    expect(body.join_eligibility?.status).toBe("joinable")
+    expect(body.wallet_score_status).toMatchObject({
+      current_score: 25,
+      required_score: 20,
+    })
+  })
+
+  test("passport wallet score refresh returns failing eligibility when score is below gate threshold", async () => {
+    const ctx = await createRouteTestContext({
+      PASSPORT_API_KEY: "passport-key",
+      PASSPORT_SCORER_ID: "123",
+    })
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "verification-passport-low-score-creator")
+    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Passport High Score Club",
+      namespace: {
+        namespace_verification_id: namespaceVerificationId,
+      },
+      membership_mode: "gated",
+      gate_rules: [
+        {
+          scope: "membership",
+          gate_family: "identity_proof",
+          gate_type: "wallet_score",
+          proof_requirements: [
+            {
+              proof_type: "wallet_score",
+              accepted_providers: ["passport"],
+              config: { minimum_score: 20 },
+            },
+          ],
+        },
+      ],
+    }, ctx.env, creator.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityBody = await json(communityCreate) as { community: { community_id: string } }
+
+    const walletAddress = "0x4444444444444444444444444444444444444444"
+    const jwt = await mintUpstreamJwt(ctx.env, {
+      sub: "verification-passport-low-score-joiner",
+      wallet_addresses: [walletAddress],
+      selected_wallet_address: walletAddress,
+    })
+    const sessionResponse = await requestJson("http://pirate.test/auth/session/exchange", {
+      proof: {
+        type: "jwt_based_auth",
+        jwt,
+      },
+    }, ctx.env)
+    const session = await json(sessionResponse) as { access_token: string }
+    setPassportProviderForTests({
+      refreshWalletScore: async ({ now }) => ({
+        state: "verified",
+        provider: "passport",
+        proof_type: "wallet_score",
+        mechanism: "stamps-api-v2",
+        verified_at: now?.toISOString() ?? null,
+        score: 10,
+        score_threshold: 20,
+        passing_score: false,
+        last_score_timestamp: now?.toISOString() ?? null,
+        expiration_timestamp: new Date((now ?? new Date()).getTime() + 86_400_000).toISOString(),
+        stamps: null,
+      }),
+    })
+
+    const refreshed = await requestJson("http://pirate.test/verification/passport-wallet-score", {
+      community_id: communityBody.community.community_id,
+    }, ctx.env, session.access_token)
+    expect(refreshed.status).toBe(200)
+    const body = await json(refreshed) as {
+      join_eligibility?: { status: string; failure_reason?: string | null }
+      wallet_score_status?: { current_score?: number | null; required_score?: number | null; passing_score?: boolean | null }
+    }
+    expect(body.join_eligibility?.status).toBe("gate_failed")
+    expect(body.join_eligibility?.failure_reason).toBe("wallet_score_too_low")
+    expect(body.wallet_score_status).toMatchObject({
+      current_score: 10,
+      required_score: 20,
+      passing_score: false,
+    })
   })
 
   test("very bridge session proxy forwards authenticated widget session creation", async () => {

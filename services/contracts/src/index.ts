@@ -848,6 +848,22 @@ export type StartVerificationSessionRequest = {
   policy_id?: string | null;
 };
 
+export type RefreshPassportWalletScoreRequest = {
+  wallet_attachment_id?: string | null;
+  community_id?: string | null;
+};
+
+export type RefreshPassportWalletScoreResponse = {
+  wallet_score: VerificationCapabilities["wallet_score"];
+  wallet_score_status?: ({
+    current_score?: number | null;
+    required_score?: number | null;
+    passing_score?: boolean | null;
+    last_score_timestamp?: string | null;
+  }) | null;
+  join_eligibility?: JoinEligibility | null;
+};
+
 export type CompleteVerificationSessionRequest = {
   attestation_id?: string | null;
   proof?: (string | Record<string, unknown> | Array<unknown>) | null;
@@ -2563,6 +2579,7 @@ export const apiRoutes = {
   verificationSessions: "/verification-sessions",
   verificationSession: (verificationSessionId: string) => `/verification-sessions/${verificationSessionId}`,
   verificationSessionComplete: (verificationSessionId: string) => `/verification-sessions/${verificationSessionId}/complete`,
+  passportWalletScore: "/verification/passport-wallet-score",
   agentOwnershipSessions: "/agent-ownership-sessions",
   agentOwnershipPairing: "/agent-ownership-pairing",
   agentOwnershipPairingClaim: "/agent-ownership-pairing/claim",
