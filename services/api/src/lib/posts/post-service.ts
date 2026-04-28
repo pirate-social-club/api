@@ -8,8 +8,10 @@ import type {
 } from "../communities/db-community-repository"
 import { loadCommunityProjection } from "../communities/create/repository"
 import { authorizeAgentWrite } from "../agents/agent-write-authorization"
-import { resolveStubAnalysisOutcome } from "./post-analysis"
-import { resolveOpenAIModerationOutcome } from "./openai-moderation"
+import {
+  mergeAnalysisState,
+  resolvePostAnalysisProvider,
+} from "./post-analysis"
 import {
   assertPostCreateRequest,
   findPostByIdempotencyKey,
@@ -37,7 +39,7 @@ import {
   enqueuePostTranslationPrewarmJobs,
 } from "./post-jobs"
 import { analysisBlocked, badRequestError, eligibilityFailed, notFoundError } from "../errors"
-import { isLocalEnvironment, makeId, nowIso } from "../helpers"
+import { makeId, nowIso } from "../helpers"
 import type { CreatePostRequest, Env, Post } from "../../types"
 
 export {
@@ -67,20 +69,6 @@ async function syncPostProjectionMetrics(input: {
     likeCount: metrics.likeCount,
     updatedAt: input.updatedAt,
   })
-}
-
-function mergeAnalysisState(
-  left: Post["analysis_state"],
-  right: Post["analysis_state"],
-): Post["analysis_state"] {
-  const precedence: Record<Post["analysis_state"], number> = {
-    blocked: 4,
-    review_required: 3,
-    allow_with_required_reference: 2,
-    allow: 1,
-    pending: 0,
-  }
-  return precedence[left] >= precedence[right] ? left : right
 }
 
 function resolveAnonymousScope(input: {
@@ -118,7 +106,7 @@ export async function createPost(input: {
 
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
-    const enableDevAnalysisMarkers = isLocalEnvironment(input.env.ENVIRONMENT)
+    const postAnalysisProvider = resolvePostAnalysisProvider(input.env)
     if (!input.bypassAuthorAccessChecks) {
       await requireMemberAccess(db.client, input.communityId, input.userId)
     }
@@ -204,19 +192,15 @@ export async function createPost(input: {
         song_artifact_bundle_id: resolvedBundle.bundle.song_artifact_bundle_id,
       }
 
-      const stubAnalysis = resolveStubAnalysisOutcome(writeBody, { enableDevMarkers: enableDevAnalysisMarkers })
-      if (stubAnalysis.analysis_state === "blocked") {
-        throw analysisBlocked("Content analysis blocked publication")
-      }
-      const openAIModeration = await resolveOpenAIModerationOutcome({
+      const postAnalysis = await postAnalysisProvider.analyze({
         env: input.env,
         community,
         body: writeBody,
       })
 
       const mergedAnalysisState = mergeAnalysisState(
-        mergeAnalysisState(resolvedBundle.analysisState, stubAnalysis.analysis_state),
-        openAIModeration.analysis_state,
+        resolvedBundle.analysisState,
+        postAnalysis.analysis_state,
       )
       if (mergedAnalysisState === "blocked") {
         throw analysisBlocked("Content analysis blocked publication")
@@ -226,10 +210,10 @@ export async function createPost(input: {
         content_safety_state:
           mergedAnalysisState === "review_required"
             ? "pending"
-            : openAIModeration.content_safety_state === "safe"
+            : postAnalysis.content_safety_state === "safe"
               ? resolvedBundle.contentSafetyState
-              : openAIModeration.content_safety_state,
-        age_gate_policy: resolvedBundle.ageGatePolicy === "18_plus" || openAIModeration.age_gate_policy === "18_plus" ? "18_plus" : "none",
+              : postAnalysis.content_safety_state,
+        age_gate_policy: resolvedBundle.ageGatePolicy === "18_plus" || postAnalysis.age_gate_policy === "18_plus" ? "18_plus" : "none",
         status: mergedAnalysisState === "review_required" ? "draft" : "published",
       }
     } else if (input.body.post_type === "video" && input.body.access_mode) {
@@ -258,43 +242,35 @@ export async function createPost(input: {
         rights_basis: input.body.rights_basis ?? (input.body.license_preset || accessMode === "locked" ? "original" : "none"),
       }
 
-      const stubAnalysis = resolveStubAnalysisOutcome(writeBody, { enableDevMarkers: enableDevAnalysisMarkers })
-      if (stubAnalysis.analysis_state === "blocked") {
-        throw analysisBlocked("Content analysis blocked publication")
-      }
-      const openAIModeration = await resolveOpenAIModerationOutcome({
+      const postAnalysis = await postAnalysisProvider.analyze({
         env: input.env,
         community,
         body: writeBody,
       })
-      const mergedAnalysisState = mergeAnalysisState(stubAnalysis.analysis_state, openAIModeration.analysis_state)
+      const mergedAnalysisState = postAnalysis.analysis_state
       if (mergedAnalysisState === "blocked") {
         throw analysisBlocked("Content analysis blocked publication")
       }
       analysisOverride = {
         analysis_state: mergedAnalysisState,
-        content_safety_state: mergedAnalysisState === "review_required" ? "pending" : openAIModeration.content_safety_state,
-        age_gate_policy: openAIModeration.age_gate_policy,
+        content_safety_state: mergedAnalysisState === "review_required" ? "pending" : postAnalysis.content_safety_state,
+        age_gate_policy: postAnalysis.age_gate_policy,
         status: mergedAnalysisState === "review_required" ? "draft" : "published",
       }
     } else {
-      const stubAnalysis = resolveStubAnalysisOutcome(writeBody, { enableDevMarkers: enableDevAnalysisMarkers })
-      if (stubAnalysis.analysis_state === "blocked") {
-        throw analysisBlocked("Content analysis blocked publication")
-      }
-      const openAIModeration = await resolveOpenAIModerationOutcome({
+      const postAnalysis = await postAnalysisProvider.analyze({
         env: input.env,
         community,
         body: writeBody,
       })
-      const mergedAnalysisState = mergeAnalysisState(stubAnalysis.analysis_state, openAIModeration.analysis_state)
+      const mergedAnalysisState = postAnalysis.analysis_state
       if (mergedAnalysisState === "blocked") {
         throw analysisBlocked("Content analysis blocked publication")
       }
       analysisOverride = {
         analysis_state: mergedAnalysisState,
-        content_safety_state: mergedAnalysisState === "review_required" ? "pending" : openAIModeration.content_safety_state,
-        age_gate_policy: openAIModeration.age_gate_policy,
+        content_safety_state: mergedAnalysisState === "review_required" ? "pending" : postAnalysis.content_safety_state,
+        age_gate_policy: postAnalysis.age_gate_policy,
         status: mergedAnalysisState === "review_required" ? "draft" : "published",
       }
     }
@@ -308,7 +284,6 @@ export async function createPost(input: {
         authorUserId: input.userId,
         body: writeBody,
         createdAt,
-        enableDevAnalysisMarkers,
         analysisOverride,
         agentWriteAuthorization: agentWriteAuthorization ?? undefined,
       })

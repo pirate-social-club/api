@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test"
+import { fileURLToPath } from "node:url"
 
 import { readWranglerVars } from "../scripts/_lib/dev-vars"
 
+const wranglerConfigPath = fileURLToPath(new URL("../wrangler.jsonc", import.meta.url))
+
 describe("verification endpoint environment config", () => {
   test("pins staging API verification callbacks and browser CORS to staging origins", () => {
-    const vars = readWranglerVars("wrangler.jsonc", "staging")
+    const vars = readWranglerVars(wranglerConfigPath, "staging")
 
     expect(vars.ENVIRONMENT).toBe("staging")
     expect(vars.PIRATE_API_PUBLIC_ORIGIN).toBe("https://api-staging.pirate.sc")
@@ -12,7 +15,7 @@ describe("verification endpoint environment config", () => {
   })
 
   test("pins production API verification callbacks and browser CORS to production origins", () => {
-    const vars = readWranglerVars("wrangler.jsonc", "production")
+    const vars = readWranglerVars(wranglerConfigPath, "production")
 
     expect(vars.ENVIRONMENT).toBe("production")
     expect(vars.PIRATE_API_PUBLIC_ORIGIN).toBe("https://api.pirate.sc")

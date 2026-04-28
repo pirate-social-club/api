@@ -17,6 +17,7 @@ import { buildVerySessionBinding, getVeryProvider, VERY_UNIQUE_HUMAN_DOMAIN } fr
 import type { SelfSessionOutcome } from "./self-provider"
 import { canonicalizeRequestedCapabilities, getSelfProvider, normalizeVerificationRequirements } from "./self-provider"
 import { normalizeIdentityCountryCode } from "../identity/country-codes"
+import { logVerificationDebug } from "./verification-logging"
 import type {
   Env,
   RequestedVerificationCapability,
@@ -96,7 +97,7 @@ export async function startVerificationSession(
   const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString()
   const verificationSessionId = makeId("ver")
 
-  console.info("[verification-session-service] normalized start", {
+  logVerificationDebug(env, "[verification-session-service] normalized start", {
     verificationSessionId,
     userId: input.userId,
     provider: input.provider,
@@ -174,7 +175,7 @@ export async function startVerificationSession(
   if (!row) {
     throw internalError("Verification session row is missing after creation")
   }
-  console.info("[verification-session-service] created row", {
+  logVerificationDebug(env, "[verification-session-service] created row", {
     verificationSessionId,
     userId: input.userId,
     provider: input.provider,
@@ -374,7 +375,7 @@ async function completeVerySession(
   }
 
   if (outcome.status === "verified") {
-    console.info("[very-provider] completion outcome", {
+    logVerificationDebug(env, "[very-provider] completion outcome", {
       verificationSessionId: input.verificationSessionId,
       outcome: outcome.status,
     })
@@ -382,7 +383,7 @@ async function completeVerySession(
   }
 
   if (outcome.status === "pending") {
-    console.info("[very-provider] completion outcome", {
+    logVerificationDebug(env, "[very-provider] completion outcome", {
       verificationSessionId: input.verificationSessionId,
       outcome: outcome.status,
     })

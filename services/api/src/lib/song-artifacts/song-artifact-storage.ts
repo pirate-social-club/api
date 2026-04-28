@@ -3,6 +3,7 @@ import { sha256Hex, toArrayBuffer } from "../crypto"
 import { resolveFilebaseConfig } from "../storage/filebase-config"
 import { buildS3SignedRequest, EMPTY_SHA256_HEX } from "../storage/s3-signing"
 import type { Env } from "../../types"
+import { FILEBASE_SONG_ARTIFACT_STORAGE_PROVIDER } from "./song-artifact-storage-provider"
 
 export type SongArtifactKind =
   | "primary_audio"
@@ -232,7 +233,7 @@ export async function uploadSongArtifactBytes(input: {
   origin: string
 }): Promise<{
   storageRef: string
-  storageProvider: "filebase"
+  storageProvider: typeof FILEBASE_SONG_ARTIFACT_STORAGE_PROVIDER
   storageBucket: string
   storageObjectKey: string
   storageEndpoint: string
@@ -272,7 +273,7 @@ export async function uploadSongArtifactBytes(input: {
   const storageRef = buildSongArtifactContentUrl(input.origin, input.communityId, input.songArtifactUploadId)
   return {
     storageRef,
-    storageProvider: "filebase",
+    storageProvider: FILEBASE_SONG_ARTIFACT_STORAGE_PROVIDER,
     storageBucket: config.bucket,
     storageObjectKey: objectKey,
     storageEndpoint: config.endpoint.toString(),

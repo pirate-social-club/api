@@ -15,6 +15,7 @@ import {
   toSongArtifactBundleRow,
   toSongArtifactUploadRow,
 } from "./song-artifact-serialization"
+import type { SongArtifactStorageProvider } from "./song-artifact-storage-provider"
 
 async function getSongArtifactUploadRow(
   client: Client,
@@ -160,7 +161,7 @@ export async function markSongArtifactUploadUploaded(input: {
   mimeType: string
   sizeBytes: number
   contentHash: string
-  storageProvider: "filebase" | "local_stub"
+  storageProvider: SongArtifactStorageProvider
   storageBucket: string
   storageObjectKey: string
   storageEndpoint: string

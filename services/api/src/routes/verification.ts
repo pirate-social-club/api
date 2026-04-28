@@ -5,6 +5,7 @@ import { proxyVeryBridgeRequest } from "../lib/verification/very-provider"
 import { refreshPassportWalletScore } from "../lib/verification/passport-wallet-score-service"
 import { authenticate, authenticateAdminOrUser, type AuthenticatedEnv } from "../lib/auth-middleware"
 import { trackApiEvent } from "../lib/analytics/track"
+import { logVerificationDebug } from "../lib/verification/verification-logging"
 import { getUserRepository } from "../lib/auth/repositories"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { resolveCommunityIdentifier } from "../lib/communities/community-identifier"
@@ -69,7 +70,7 @@ verification.post("/verification-sessions/very-widget-verify", async (c) => {
     return c.json({ status: "invalid", error: "missing_proof" }, 200)
   }
 
-  console.info("[very-provider] widget verify callback received", {
+  logVerificationDebug(c.env, "[very-provider] widget verify callback received", {
     proofLength: proof.length,
   })
   return c.json({ status: "valid" }, 200)
@@ -93,7 +94,7 @@ authenticatedVerification.post("/verification-sessions/:verificationSessionId/ve
   })
   const providerSessionId = typeof result.body.sessionId === "string" ? result.body.sessionId.trim() : ""
   if (providerSessionId) {
-    console.info("[very-provider] bridge session created", {
+    logVerificationDebug(c.env, "[very-provider] bridge session created", {
       verificationSessionId: c.req.param("verificationSessionId"),
       providerSessionId,
     })
@@ -148,7 +149,7 @@ authenticatedVerification.get("/verification-sessions/:verificationSessionId/ver
     })
     return c.json({ status: fallbackStatus }, 200)
   }
-  console.info("[very-provider] bridge session status", {
+  logVerificationDebug(c.env, "[very-provider] bridge session status", {
     verificationSessionId: c.req.param("verificationSessionId"),
     providerSessionId,
     status,
@@ -169,7 +170,7 @@ authenticatedVerification.get("/verification-sessions/:verificationSessionId/ver
       userMessage: typeof result.body.userMessage === "string" ? result.body.userMessage : null,
     })
   } else if (status === "completed") {
-    console.info("[very-provider] bridge session completed", {
+    logVerificationDebug(c.env, "[very-provider] bridge session completed", {
       verificationSessionId: c.req.param("verificationSessionId"),
       providerSessionId,
     })
@@ -230,7 +231,7 @@ authenticatedVerification.post("/verification-sessions", async (c) => {
 
   const repo = getControlPlaneVerificationRepository(c.env)
   const publicOrigin = new URL(c.req.url).origin
-  console.info("[verification-sessions] start request", {
+  logVerificationDebug(c.env, "[verification-sessions] start request", {
     userId: actor.userId,
     provider: body.provider,
     requestedCapabilities: body.requested_capabilities ?? null,
@@ -249,7 +250,7 @@ authenticatedVerification.post("/verification-sessions", async (c) => {
     policyId: body.policy_id ?? null,
     publicOrigin,
   })
-  console.info("[verification-sessions] start response", {
+  logVerificationDebug(c.env, "[verification-sessions] start response", {
     userId: actor.userId,
     verificationSessionId: created.verification_session_id,
     provider: created.provider,

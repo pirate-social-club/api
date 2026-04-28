@@ -16,7 +16,7 @@ function makeNamespaceSessionRow(
     family: "hns",
     submitted_root_label: "clawitzer",
     normalized_root_label: "clawitzer",
-    status: "challenge_required",
+    status: "dns_setup_required",
     challenge_kind: null,
     challenge_payload_json: null,
     challenge_host: null,
@@ -54,8 +54,8 @@ function makeNamespaceSessionRow(
   }
 }
 
-describe("namespace verification session status compatibility", () => {
-  test("treats legacy stored HNS setup sessions as dns_setup_required", () => {
+describe("namespace verification session status", () => {
+  test("detects HNS DNS setup sessions", () => {
     const row = makeNamespaceSessionRow()
 
     expect(isDnsSetupRequiredNamespaceSessionRow(row)).toBe(true)
@@ -64,6 +64,7 @@ describe("namespace verification session status compatibility", () => {
 
   test("does not alias active TXT challenge sessions", () => {
     const row = makeNamespaceSessionRow({
+      status: "challenge_required",
       challenge_kind: "dns_txt",
       challenge_host: "_pirate.clawitzer",
       challenge_txt_value: "pirate-verification=nvs_test",
@@ -74,7 +75,7 @@ describe("namespace verification session status compatibility", () => {
     expect(serializeNamespaceSessionStatus(row)).toBe("challenge_required")
   })
 
-  test("serializes legacy stored HNS setup sessions with the public dns_setup_required status", () => {
+  test("serializes HNS DNS setup sessions with setup nameservers", () => {
     const row = makeNamespaceSessionRow()
 
     expect(serializeNamespaceVerificationSession(row)).toMatchObject({

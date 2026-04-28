@@ -1,6 +1,7 @@
 import { internalError, providerUnavailable } from "../errors"
 import { envFlag, makeId } from "../helpers"
 import { sha256Hex } from "../crypto"
+import { logVerificationDebug } from "./verification-logging"
 import type { Env, VerificationIntent, VerySessionBinding, VeryWidgetLaunch } from "../../types"
 
 const VERY_TIMEOUT_MS = 15_000
@@ -65,7 +66,7 @@ function isDevelopmentEnv(env: Env): boolean {
   return String(env.ENVIRONMENT || "").trim().toLowerCase() === "development"
 }
 
-function shouldTrustLocalWidgetCompletion(env: Env): boolean {
+function shouldUseLocalWidgetCompletionTrust(env: Env): boolean {
   return envFlag(env.VERY_TRUST_LOCAL_WIDGET_COMPLETION, isDevelopmentEnv(env))
 }
 
@@ -413,6 +414,7 @@ function buildVeryQuery(input: {
 }
 
 async function verifyVeryPayload(input: {
+  env: Env
   verifyUrl: string
   providerPayloadRef: string
   upstreamSessionRef: string
@@ -499,7 +501,7 @@ async function verifyVeryPayload(input: {
         responseStatus: response.status,
         upstreamSessionRef: input.upstreamSessionRef,
       })
-      console.info("[very-provider] verifier returned pending", diag)
+      logVerificationDebug(input.env, "[very-provider] verifier returned pending", diag)
       return { status: "pending", _diag: diag }
     }
 
@@ -525,13 +527,8 @@ async function verifyVeryPayload(input: {
   }
 }
 
-export function getVeryProvider(env: Env): VeryProvider {
-  if (testOverride) {
-    return testOverride
-  }
-
+function createConfiguredVeryProvider(env: Env): VeryProvider {
   const { appId, verifyUrl } = requireConfiguredVery(env)
-
   return {
     async startSession(input) {
       const upstreamSessionRef = makeId("vs")
@@ -567,22 +564,9 @@ export function getVeryProvider(env: Env): VeryProvider {
       if (!input.providerPayloadRef?.trim()) {
         return { status: "pending" }
       }
-      if (shouldTrustLocalWidgetCompletion(env)) {
-        console.warn("[very-provider] trusting local widget completion")
-        return {
-          status: "verified",
-          attestationData: {
-            proof_hash: await sha256Hex(input.providerPayloadRef.trim()),
-            provider_session_ref: input.upstreamSessionRef,
-            provider_status: "local_widget_verified",
-            uniqueness_domain: input.expectedBinding?.uniqueness_domain ?? VERY_UNIQUE_HUMAN_DOMAIN,
-            pseudonym: input.expectedBinding?.binding_value ?? input.upstreamSessionRef,
-            nullifier_hash: await sha256Hex(`${VERY_UNIQUE_HUMAN_DOMAIN}:${input.providerPayloadRef.trim()}`),
-          },
-        }
-      }
       try {
         return await verifyVeryPayload({
+          env,
           verifyUrl,
           providerPayloadRef: input.providerPayloadRef.trim(),
           upstreamSessionRef: input.upstreamSessionRef,
@@ -618,6 +602,45 @@ export function getVeryProvider(env: Env): VeryProvider {
       }
     },
   }
+}
+
+function withLocalWidgetCompletionTrust(provider: VeryProvider): VeryProvider {
+  return {
+    startSession(input) {
+      return provider.startSession(input)
+    },
+
+    async getSessionOutcome(input) {
+      const providerPayloadRef = input.providerPayloadRef?.trim()
+      if (!providerPayloadRef) {
+        return provider.getSessionOutcome(input)
+      }
+
+      console.warn("[very-provider] trusting local widget completion")
+      return {
+        status: "verified",
+        attestationData: {
+          proof_hash: await sha256Hex(providerPayloadRef),
+          provider_session_ref: input.upstreamSessionRef,
+          provider_status: "local_widget_verified",
+          uniqueness_domain: input.expectedBinding?.uniqueness_domain ?? VERY_UNIQUE_HUMAN_DOMAIN,
+          pseudonym: input.expectedBinding?.binding_value ?? input.upstreamSessionRef,
+          nullifier_hash: await sha256Hex(`${VERY_UNIQUE_HUMAN_DOMAIN}:${providerPayloadRef}`),
+        },
+      }
+    },
+  }
+}
+
+export function getVeryProvider(env: Env): VeryProvider {
+  if (testOverride) {
+    return testOverride
+  }
+
+  const provider = createConfiguredVeryProvider(env)
+  return shouldUseLocalWidgetCompletionTrust(env)
+    ? withLocalWidgetCompletionTrust(provider)
+    : provider
 }
 
 export function setVeryProviderForTests(override: VeryProvider | null): void {

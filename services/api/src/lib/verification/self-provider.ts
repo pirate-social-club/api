@@ -7,6 +7,7 @@ import type {
 import { badRequestError, providerUnavailable } from "../errors"
 import { isProductionEnv, makeId } from "../helpers"
 import { normalizeIdentityCountryCode } from "../identity/country-codes"
+import { logVerificationDebug } from "./verification-logging"
 import type { Env, RequestedVerificationCapability, SelfVerificationDisclosures, SelfVerificationLaunch, VerificationIntent, VerificationRequirement } from "../../types"
 
 const SELF_CAPABILITY_ORDER: readonly RequestedVerificationCapability[] = ["unique_human", "age_over_18", "nationality", "gender"]
@@ -250,6 +251,18 @@ function isAutomatedTestEnv(env: Env): boolean {
   return String(env.ENVIRONMENT || "").trim().toLowerCase() === "test"
 }
 
+function shouldUseSelfDevStub(input: {
+  env: Env
+  publicOrigin?: string | null
+}): boolean {
+  return isAutomatedTestEnv(input.env)
+    || (!trimEnv(input.env.SELF_ENDPOINT) && !resolveSelfCallbackOrigin(input.env, input.publicOrigin))
+}
+
+function shouldUseSelfMockPassport(env: Env): boolean {
+  return !isProductionEnv(env)
+}
+
 function parseMinimumAgeDisclosure(disclosures: Record<string, unknown>): number | null {
   const value = disclosures.minimumAge ?? disclosures.minimum_age ?? disclosures.olderThan
   if (typeof value === "number" && Number.isInteger(value) && value > 0) {
@@ -375,50 +388,67 @@ function buildClaimsFromVerificationResult(result: VerificationResult): SelfVeri
 
 let testOverride: SelfProvider | null = null
 
-export function getSelfProvider(env: Env): SelfProvider {
-  if (testOverride) {
-    return testOverride
-  }
+function createSelfDevStubProvider(env: Env): SelfProvider {
+  const appName = trimEnv(env.SELF_APP_NAME) || "Pirate"
 
+  return {
+    async startSession(input) {
+      if (isProductionEnv(env)) {
+        buildSelfEndpoint(env, input.verificationSessionId, input.publicOrigin)
+      }
+      const upstreamSessionRef = encodeDevStubSessionRef(input.requestedCapabilities, input.verificationRequirements ?? [])
+      const disclosures = mapCapabilitiesToDisclosures(input.requestedCapabilities, input.verificationRequirements ?? [])
+
+      logVerificationDebug(env, "[self-provider] dev stub launch", {
+        verificationSessionId: input.verificationSessionId,
+        userId: input.userId,
+        requestedCapabilities: input.requestedCapabilities,
+        verificationRequirements: input.verificationRequirements ?? [],
+        disclosures,
+        scope: input.verificationIntent ?? "profile_verification",
+      })
+
+      return {
+        upstreamSessionRef,
+        launch: {
+          app_name: appName,
+          endpoint: "https://redirect.self.xyz",
+          endpoint_type: "staging_https",
+          scope: input.verificationIntent ?? "profile_verification",
+          session_id: upstreamSessionRef,
+          user_id: input.userId,
+          user_id_type: "uuid",
+          disclosures,
+        },
+      }
+    },
+
+    async getSessionOutcome(input) {
+      if (!input.upstreamSessionRef.startsWith(`${SELF_DEV_STUB_REF_PREFIX}:`)) {
+        return { status: "pending" }
+      }
+      const capabilities = decodeDevStubCapabilities(input.upstreamSessionRef)
+      const minimumAge = decodeDevStubMinimumAge(input.upstreamSessionRef)
+      return {
+        status: "verified",
+        claims: {
+          age_over_18: capabilities.has("age_over_18") || (minimumAge != null && minimumAge >= 18),
+          minimum_age: minimumAge ?? (capabilities.has("age_over_18") ? 18 : null),
+          nationality: capabilities.has("nationality") ? "USA" : null,
+          gender: capabilities.has("gender") ? "F" : null,
+          nullifier: input.upstreamSessionRef,
+        },
+      }
+    },
+  }
+}
+
+function createSelfSdkProvider(env: Env, options: { mockPassport: boolean }): SelfProvider {
   const endpointType = endpointTypeForEnvironment(env)
   const appName = trimEnv(env.SELF_APP_NAME) || "Pirate"
 
   return {
     async startSession(input) {
-      if (
-        isAutomatedTestEnv(env)
-        || (!trimEnv(env.SELF_ENDPOINT) && !resolveSelfCallbackOrigin(env, input.publicOrigin))
-      ) {
-        if (isProductionEnv(env)) {
-          buildSelfEndpoint(env, input.verificationSessionId, input.publicOrigin)
-        }
-        const upstreamSessionRef = encodeDevStubSessionRef(input.requestedCapabilities, input.verificationRequirements ?? [])
-        const disclosures = mapCapabilitiesToDisclosures(input.requestedCapabilities, input.verificationRequirements ?? [])
-
-        console.info("[self-provider] dev stub launch", {
-          verificationSessionId: input.verificationSessionId,
-          userId: input.userId,
-          requestedCapabilities: input.requestedCapabilities,
-          verificationRequirements: input.verificationRequirements ?? [],
-          disclosures,
-          scope: input.verificationIntent ?? "profile_verification",
-        })
-
-        return {
-          upstreamSessionRef,
-          launch: {
-            app_name: appName,
-            endpoint: "https://redirect.self.xyz",
-            endpoint_type: "staging_https",
-            scope: input.verificationIntent ?? "profile_verification",
-            session_id: upstreamSessionRef,
-            user_id: input.userId,
-            user_id_type: "uuid",
-            disclosures,
-          },
-        }
-      }
-
       const disclosures = mapCapabilitiesToDisclosures(input.requestedCapabilities, input.verificationRequirements ?? [])
       const verificationConfig = buildVerificationConfig(input.requestedCapabilities, input.verificationRequirements ?? [])
       const endpoint = buildSelfEndpoint(env, input.verificationSessionId, input.publicOrigin)
@@ -430,14 +460,14 @@ export function getSelfProvider(env: Env): SelfProvider {
       })
       const upstreamSessionRef = encodeSelfSdkSessionRef({
         endpoint,
-        mockPassport: !isProductionEnv(env),
+        mockPassport: options.mockPassport,
         scope,
         selfUserId,
         userDefinedData,
         verificationConfig,
       })
 
-      console.info("[self-provider] sdk launch", {
+      logVerificationDebug(env, "[self-provider] sdk launch", {
         verificationSessionId: input.verificationSessionId,
         userId: input.userId,
         requestedCapabilities: input.requestedCapabilities,
@@ -447,7 +477,7 @@ export function getSelfProvider(env: Env): SelfProvider {
         endpointType,
         endpoint,
         scope,
-        mockPassport: !isProductionEnv(env),
+        mockPassport: options.mockPassport,
       })
 
       return {
@@ -468,21 +498,6 @@ export function getSelfProvider(env: Env): SelfProvider {
     },
 
     async getSessionOutcome(input) {
-      if (input.upstreamSessionRef.startsWith(`${SELF_DEV_STUB_REF_PREFIX}:`)) {
-        const capabilities = decodeDevStubCapabilities(input.upstreamSessionRef)
-        const minimumAge = decodeDevStubMinimumAge(input.upstreamSessionRef)
-        return {
-          status: "verified",
-          claims: {
-            age_over_18: capabilities.has("age_over_18") || (minimumAge != null && minimumAge >= 18),
-            minimum_age: minimumAge ?? (capabilities.has("age_over_18") ? 18 : null),
-            nationality: capabilities.has("nationality") ? "USA" : null,
-            gender: capabilities.has("gender") ? "F" : null,
-            nullifier: input.upstreamSessionRef,
-          },
-        }
-      }
-
       const sessionRef = decodeSelfSdkSessionRef(input.upstreamSessionRef)
       const payload = parseSelfProofPayload(input)
       if (!sessionRef || !payload) {
@@ -524,6 +539,33 @@ export function getSelfProvider(env: Env): SelfProvider {
       }
     },
   }
+}
+
+function createConfiguredSelfProvider(env: Env): SelfProvider {
+  const devStubProvider = createSelfDevStubProvider(env)
+  const sdkProvider = createSelfSdkProvider(env, { mockPassport: shouldUseSelfMockPassport(env) })
+
+  return {
+    startSession(input) {
+      return shouldUseSelfDevStub({ env, publicOrigin: input.publicOrigin })
+        ? devStubProvider.startSession(input)
+        : sdkProvider.startSession(input)
+    },
+
+    getSessionOutcome(input) {
+      return input.upstreamSessionRef.startsWith(`${SELF_DEV_STUB_REF_PREFIX}:`)
+        ? devStubProvider.getSessionOutcome(input)
+        : sdkProvider.getSessionOutcome(input)
+    },
+  }
+}
+
+export function getSelfProvider(env: Env): SelfProvider {
+  if (testOverride) {
+    return testOverride
+  }
+
+  return createConfiguredSelfProvider(env)
 }
 
 export function setSelfProviderForTests(override: SelfProvider | null): void {

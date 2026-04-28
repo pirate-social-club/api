@@ -31,6 +31,10 @@ import {
 } from "./verification-shared"
 import { isDnsSetupRequiredNamespaceSessionRow } from "./namespace-verification-policy"
 import { restartNamespaceVerificationChallenge } from "./namespace-verification-restart"
+import {
+  HNS_VERIFIER_OBSERVATION_PROVIDER,
+  resolveHnsObservationProviderFallback,
+} from "./namespace-observation-provider"
 
 export { startNamespaceVerificationSession } from "./namespace-verification-start"
 
@@ -323,7 +327,7 @@ export async function completeNamespaceVerificationSession(
       }),
     ], "write")
   } else {
-    let observationProvider = row.observation_provider ?? "local_stub"
+    let observationProvider = row.observation_provider ?? resolveHnsObservationProviderFallback(env)
     let verificationEvidence: Record<string, unknown> = {
       root_exists: row.root_exists === 1,
       root_control_verified: row.root_control_verified === 1,
@@ -340,7 +344,7 @@ export async function completeNamespaceVerificationSession(
         challengeTxtValue: row.challenge_txt_value ?? "",
       })
       verificationResult = verification
-      observationProvider = verification.observation_provider ?? "hns_verifier"
+      observationProvider = verification.observation_provider ?? HNS_VERIFIER_OBSERVATION_PROVIDER
       verificationEvidence = verification as Record<string, unknown>
 
       if (verification.verified !== true) {

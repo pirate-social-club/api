@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { resolveStubAnalysisOutcome } from "./post-analysis"
-import type { CreatePostRequest } from "../../types"
+import { resolvePostAnalysisProvider } from "./post-analysis"
+import type { Community, CreatePostRequest, Env } from "../../types"
 
 function textPost(title: string): CreatePostRequest {
   return {
@@ -11,14 +11,26 @@ function textPost(title: string): CreatePostRequest {
   }
 }
 
-describe("resolveStubAnalysisOutcome", () => {
-  test("ignores marker text unless dev markers are enabled", () => {
-    expect(resolveStubAnalysisOutcome(textPost("[blocked] literal title")).analysis_state).toBe("allow")
-    expect(resolveStubAnalysisOutcome(textPost("[review-required] literal title")).analysis_state).toBe("allow")
+const community = {
+  openai_moderation_settings: null,
+} as Community
+
+async function analyze(env: Partial<Env>, body: CreatePostRequest) {
+  return resolvePostAnalysisProvider(env).analyze({
+    env,
+    community,
+    body,
+  })
+}
+
+describe("post analysis provider", () => {
+  test("ignores dev marker text outside local environments", async () => {
+    expect((await analyze({ ENVIRONMENT: "production" }, textPost("[blocked] literal title"))).analysis_state).toBe("allow")
+    expect((await analyze({ ENVIRONMENT: "production" }, textPost("[review-required] literal title"))).analysis_state).toBe("allow")
   })
 
-  test("honors marker text when dev markers are enabled", () => {
-    expect(resolveStubAnalysisOutcome(textPost("[blocked] test title"), { enableDevMarkers: true }).analysis_state).toBe("blocked")
-    expect(resolveStubAnalysisOutcome(textPost("[review-required] test title"), { enableDevMarkers: true }).analysis_state).toBe("review_required")
+  test("honors marker text in local environments", async () => {
+    expect((await analyze({ ENVIRONMENT: "development" }, textPost("[blocked] test title"))).analysis_state).toBe("blocked")
+    expect((await analyze({ ENVIRONMENT: "development" }, textPost("[review-required] test title"))).analysis_state).toBe("review_required")
   })
 })

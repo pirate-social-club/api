@@ -9,6 +9,7 @@ import {
 import type { HnsInspectResult, HnsVerifyTxtResult } from "./hns-verifier"
 import type { SpacesChallengePayload } from "./spaces-verifier"
 import type { Env, NamespaceVerificationSession } from "../../types"
+import { isLocalDevHnsObservationProvider } from "./namespace-observation-provider"
 
 export { isHnsVerifierConfigured } from "./hns-verifier"
 export { isProductionEnv }
@@ -140,18 +141,7 @@ export function isDnsSetupRequiredNamespaceSessionRow(
     "family" | "status" | "failure_reason" | "challenge_kind" | "challenge_host" | "challenge_txt_value"
   >,
 ): boolean {
-  if (row.family !== "hns") {
-    return false
-  }
-
-  if (row.status === "dns_setup_required") {
-    return true
-  }
-
-  return row.status === "challenge_required"
-    && row.challenge_kind == null
-    && row.challenge_host == null
-    && row.challenge_txt_value == null
+  return row.family === "hns" && row.status === "dns_setup_required"
 }
 
 export function serializeNamespaceSessionStatus(
@@ -198,20 +188,20 @@ export function deriveAcceptedHnsSnapshot(
   verification: HnsVerifyTxtResult | null,
 ): HnsSessionAssertionSnapshot {
   const hasAcceptedTxtProof = verification?.verified === true
-  const isLocalStubAcceptance = verification == null && row.observation_provider === "local_stub"
+  const isLocalDevAcceptance = verification == null && isLocalDevHnsObservationProvider(row.observation_provider)
   const rootExists =
-    boolToDb(verification?.root_exists) ?? row.root_exists ?? (hasAcceptedTxtProof || isLocalStubAcceptance ? 1 : null)
+    boolToDb(verification?.root_exists) ?? row.root_exists ?? (hasAcceptedTxtProof || isLocalDevAcceptance ? 1 : null)
   const rootControlVerified =
     boolToDb(verification?.root_control_verified)
       ?? row.root_control_verified
-      ?? (hasAcceptedTxtProof || isLocalStubAcceptance ? 1 : null)
+      ?? (hasAcceptedTxtProof || isLocalDevAcceptance ? 1 : null)
   const expiryHorizonSufficient =
-    boolToDb(verification?.expiry_horizon_sufficient) ?? row.expiry_horizon_sufficient ?? (isLocalStubAcceptance ? 1 : null)
+    boolToDb(verification?.expiry_horizon_sufficient) ?? row.expiry_horizon_sufficient ?? (isLocalDevAcceptance ? 1 : null)
   const routingEnabled =
-    boolToDb(verification?.routing_enabled) ?? row.routing_enabled ?? (isLocalStubAcceptance ? 1 : null)
+    boolToDb(verification?.routing_enabled) ?? row.routing_enabled ?? (isLocalDevAcceptance ? 1 : null)
   const pirateDnsAuthorityVerified = boolToDb(verification?.pirate_dns_authority_verified)
     ?? row.pirate_dns_authority_verified
-    ?? (isLocalStubAcceptance ? 1 : null)
+    ?? (isLocalDevAcceptance ? 1 : null)
 
   const clubAttachAllowed = rootControlVerified === 1 && expiryHorizonSufficient === 1 ? 1 : 0
   const pirateWebRoutingAllowed = rootControlVerified === 1 && routingEnabled === 1 ? 1 : 0

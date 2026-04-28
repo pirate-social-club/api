@@ -9,6 +9,7 @@ import {
 import type { HnsInspectResult, HnsVerifyTxtResult } from "../src/lib/verification/hns-verifier"
 import type { SpacesChallengePayload } from "../src/lib/verification/spaces-verifier"
 import type { NamespaceVerificationSessionRow } from "../src/lib/auth/auth-db-rows"
+import { LOCAL_DEV_HNS_OBSERVATION_PROVIDER } from "../src/lib/verification/namespace-observation-provider"
 
 function stubRow(overrides: Partial<NamespaceVerificationSessionRow> = {}): NamespaceVerificationSessionRow {
   return {
@@ -41,7 +42,7 @@ function stubRow(overrides: Partial<NamespaceVerificationSessionRow> = {}): Name
     pirate_subspace_issuance_allowed: null,
     control_class: null,
     operation_class: null,
-    observation_provider: "local_stub",
+    observation_provider: LOCAL_DEV_HNS_OBSERVATION_PROVIDER,
     evidence_bundle_ref: null,
     failure_reason: null,
     accepted_at: null,
@@ -237,14 +238,14 @@ describe("deriveAcceptedHnsSnapshot", () => {
     expect(snapshot.rootControlVerified).toBe(1)
   })
 
-  test("local_stub acceptance fills defaults for root_exists and root_control_verified", () => {
+  test("local dev acceptance fills defaults for root_exists and root_control_verified", () => {
     const row = stubRow({
       root_exists: null,
       root_control_verified: null,
       expiry_horizon_sufficient: null,
       routing_enabled: null,
       pirate_dns_authority_verified: null,
-      observation_provider: "local_stub",
+      observation_provider: LOCAL_DEV_HNS_OBSERVATION_PROVIDER,
     })
     const snapshot = deriveAcceptedHnsSnapshot(row, null)
     expect(snapshot.rootExists).toBe(1)

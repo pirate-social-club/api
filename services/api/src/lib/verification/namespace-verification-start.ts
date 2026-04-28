@@ -1,5 +1,4 @@
 import type { Client } from "../sql-client"
-import { hasCheckConstraintName } from "../auth/auth-db-query-helpers"
 import { internalError, providerUnavailable, verificationRequired } from "../errors"
 import { makeId } from "../helpers"
 import { getUserRow } from "../auth/auth-db-user-queries"
@@ -21,6 +20,10 @@ import {
 } from "./spaces-verifier"
 import type { Env, NamespaceVerificationSession } from "../../types"
 import {
+  HNS_VERIFIER_OBSERVATION_PROVIDER,
+  resolveHnsObservationProviderFallback,
+} from "./namespace-observation-provider"
+import {
   buildNamespaceSessionResponseContext,
   deriveHnsInspectionSnapshot,
   getHnsChallengeTtlHours,
@@ -32,37 +35,6 @@ import {
   shouldRequireHnsDnsSetup,
   type HnsSessionAssertionSnapshot,
 } from "./verification-shared"
-
-async function insertNamespaceVerificationSessionWithLegacyStatusFallback(
-  client: Client,
-  statement: {
-    sql: string
-    args: unknown[]
-    status: NamespaceVerificationSession["status"]
-    failureReason: string | null
-  },
-): Promise<void> {
-  try {
-    await client.execute({
-      sql: statement.sql,
-      args: statement.args,
-    })
-    return
-  } catch (error) {
-    const shouldFallback = statement.status === "dns_setup_required"
-      && hasCheckConstraintName(error, "namespace_verification_sessions_status_check")
-    if (!shouldFallback) {
-      throw error
-    }
-  }
-
-  const fallbackArgs = [...statement.args]
-  fallbackArgs[5] = "challenge_required"
-  await client.execute({
-    sql: statement.sql,
-    args: fallbackArgs,
-  })
-}
 
 export async function startNamespaceVerificationSession(
   client: Client,
@@ -161,7 +133,7 @@ export async function startNamespaceVerificationSession(
     let persistedSetupNameservers: string | null = null
     let persistedChallengeExpiresAt: string | null = challengeExpiresAt
     let failureReason: string | null = null
-    let observationProvider = "local_stub"
+    let observationProvider = resolveHnsObservationProviderFallback(env)
     let inspectionSnapshot: HnsSessionAssertionSnapshot = {
       rootExists: null,
       rootControlVerified: null,
@@ -202,7 +174,7 @@ export async function startNamespaceVerificationSession(
         persistedChallengeTxtValue = null
         persistedChallengeExpiresAt = null
         failureReason = inspection.failure_reason ?? "dns_setup_required"
-        observationProvider = inspection.observation_provider ?? "hns_verifier"
+        observationProvider = inspection.observation_provider ?? HNS_VERIFIER_OBSERVATION_PROVIDER
       } else {
         const published = await publishHnsTxtRecord(env, {
           rootLabel: normalizedRootLabel,
@@ -216,13 +188,13 @@ export async function startNamespaceVerificationSession(
         inspectionSnapshot.routingEnabled = inspectionSnapshot.routingEnabled ?? 1
         inspectionSnapshot.pirateDnsAuthorityVerified = 1
         inspectionSnapshot.operationClass = inspectionSnapshot.operationClass ?? "pirate_delegated_namespace"
-        observationProvider = published.observation_provider ?? inspection.observation_provider ?? "hns_verifier"
+        observationProvider = published.observation_provider ?? inspection.observation_provider ?? HNS_VERIFIER_OBSERVATION_PROVIDER
       }
     } else if (isProductionEnv(env)) {
       throw providerUnavailable("HNS verifier is not configured")
     }
 
-    const insertStatement = {
+    await client.execute({
       sql: `
         INSERT INTO namespace_verification_sessions (
           namespace_verification_session_id, namespace_verification_id, user_id, family, submitted_root_label,
@@ -264,10 +236,7 @@ export async function startNamespaceVerificationSession(
         expiresAt,
         createdAt,
       ],
-      status,
-      failureReason,
-    }
-    await insertNamespaceVerificationSessionWithLegacyStatusFallback(client, insertStatement)
+    })
   }
 
   const row = await getNamespaceVerificationSessionRowForUser(client, sessionId, input.userId)
