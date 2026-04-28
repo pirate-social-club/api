@@ -6,6 +6,7 @@
       "key": "owner",
       "subject": "seed-local-gated-owner",
       "synthetic": true,
+      "wallet_address": "0x1000000000000000000000000000000000000001",
       "verification_provider": "very",
       "profile": {
         "desired_handle": "local-gated-owner",
@@ -19,6 +20,7 @@
       "key": "member",
       "subject": "seed-local-gated-member",
       "synthetic": true,
+      "wallet_address": "0x1000000000000000000000000000000000000002",
       "verification_provider": "very",
       "profile": {
         "desired_handle": "local-gated-member",
@@ -31,6 +33,7 @@
       "key": "visitor",
       "subject": "seed-local-gated-visitor",
       "synthetic": true,
+      "wallet_address": "0x1000000000000000000000000000000000000003",
       "verification_provider": "very",
       "profile": {
         "desired_handle": "local-gated-visitor",
