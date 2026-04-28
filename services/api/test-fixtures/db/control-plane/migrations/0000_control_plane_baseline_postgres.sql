@@ -1,5 +1,4 @@
 -- Fresh Postgres baseline for the control plane.
--- This supersedes the historical 0001-0046 migration chain on new Neon targets.
 
 CREATE TABLE users (
     user_id TEXT PRIMARY KEY,
@@ -255,6 +254,7 @@ CREATE TABLE community_database_bindings (
     database_id TEXT,
     database_url TEXT NOT NULL,
     location TEXT,
+    requires_credentials INTEGER NOT NULL DEFAULT 1 CHECK (requires_credentials IN (0, 1)),
     status TEXT NOT NULL CHECK (
         status IN ('active', 'inactive', 'pending_transfer', 'superseded', 'error')
     ),

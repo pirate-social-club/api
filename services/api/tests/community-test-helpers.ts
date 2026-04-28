@@ -134,6 +134,7 @@ export function buildTestCommunityRepository(input: {
         database_id: null,
         database_url: `file:${input.databasePath}`,
         location: null,
+        requires_credentials: false,
         status: "active",
         transferred_at: null,
         created_at: now,

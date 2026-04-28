@@ -6,7 +6,6 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 import { createClient } from "@libsql/client"
 import {
   applyLocalControlPlaneMigrations,
-  FIRST_LOCAL_POST_BASELINE_MIGRATION,
   resolveLocalDevStorage,
   type LocalDevStorage,
 } from "../scripts/_lib/local-dev-storage"
@@ -120,28 +119,6 @@ async function insertNamespaceVerification(databasePath: string, input: {
   }
 }
 
-async function getMigrationChecksum(databasePath: string, migrationName: string): Promise<string | null> {
-  const client = createClient({
-    url: `file:${databasePath}`,
-  })
-
-  try {
-    const result = await client.execute({
-      sql: `
-        SELECT checksum
-        FROM schema_migrations
-        WHERE migration_name = ?1
-        LIMIT 1
-      `,
-      args: [migrationName],
-    })
-    const checksum = result.rows[0]?.checksum
-    return checksum === undefined ? null : String(checksum)
-  } finally {
-    client.close()
-  }
-}
-
 async function setMigrationChecksum(databasePath: string, migrationName: string, checksum: string): Promise<void> {
   const client = createClient({
     url: `file:${databasePath}`,
@@ -161,18 +138,6 @@ async function setMigrationChecksum(databasePath: string, migrationName: string,
   }
 }
 
-async function dropColumn(databasePath: string, tableName: string, columnName: string): Promise<void> {
-  const client = createClient({
-    url: `file:${databasePath}`,
-  })
-
-  try {
-    await client.execute(`ALTER TABLE ${tableName} DROP COLUMN ${columnName}`)
-  } finally {
-    client.close()
-  }
-}
-
 function buildStorage(rootDir: string, databasePath: string) {
   const serviceRoot = fileURLToPath(new URL("..", import.meta.url))
   return resolveLocalDevStorage({
@@ -185,12 +150,7 @@ async function listExpectedLocalMigrationNames(storage: LocalDevStorage): Promis
   const entries = (await readdir(join(storage.coreRepoRoot, "db/control-plane/migrations")))
     .filter((entry) => entry.endsWith(".sql"))
     .sort()
-  const baselineEntry = entries.find((entry) => entry.startsWith("0000_") && entry.includes("baseline"))
-  const baselineMigrationName = baselineEntry ?? entries[0]
-
-  return entries.filter((entry) =>
-    entry === baselineMigrationName || entry >= FIRST_LOCAL_POST_BASELINE_MIGRATION
-  )
+  return entries
 }
 
 describe("applyLocalControlPlaneMigrations", () => {
@@ -243,35 +203,17 @@ describe("applyLocalControlPlaneMigrations", () => {
     })).rejects.toThrow("canonical IDNA ASCII")
   })
 
-  test("repairs stale local baseline checksums", async () => {
-    const rootDir = await mkdtemp(join(tmpdir(), "pirate-local-dev-storage-stale-"))
+  test("rejects local control-plane databases with stale baseline checksums", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-local-dev-storage-stale-baseline-"))
     cleanupPaths.push(rootDir)
 
     const databasePath = join(rootDir, "control-plane.db")
     const storage = buildStorage(rootDir, databasePath)
     await applyLocalControlPlaneMigrations(storage)
-    const currentChecksum = await getMigrationChecksum(databasePath, "0000_control_plane_baseline_postgres.sql")
-    expect(currentChecksum).not.toBeNull()
     await setMigrationChecksum(databasePath, "0000_control_plane_baseline_postgres.sql", "stale-checksum")
 
-    await applyLocalControlPlaneMigrations(storage)
-
-    expect(await getMigrationChecksum(databasePath, "0000_control_plane_baseline_postgres.sql")).toBe(currentChecksum)
-  })
-
-  test("backfills columns added to the local baseline after an existing database was created", async () => {
-    const rootDir = await mkdtemp(join(tmpdir(), "pirate-local-dev-storage-stale-column-"))
-    cleanupPaths.push(rootDir)
-
-    const databasePath = join(rootDir, "control-plane.db")
-    const storage = buildStorage(rootDir, databasePath)
-    await applyLocalControlPlaneMigrations(storage)
-    await dropColumn(databasePath, "verification_sessions", "verification_requirements_json")
-    expect(await listTableColumns(databasePath, "verification_sessions")).not.toContain("verification_requirements_json")
-
-    await applyLocalControlPlaneMigrations(storage)
-
-    expect(await listTableColumns(databasePath, "verification_sessions")).toContain("verification_requirements_json")
+    await expect(applyLocalControlPlaneMigrations(storage))
+      .rejects.toThrow("migration checksum mismatch for 0000_control_plane_baseline_postgres.sql")
   })
 
   test("rejects local control-plane databases with stale post-baseline checksums", async () => {

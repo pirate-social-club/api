@@ -18,7 +18,7 @@ afterEach(async () => {
   await Promise.all(cleanupPaths.splice(0).map((path) => rm(path, { recursive: true, force: true })))
 })
 
-async function applyLegacyCommunitySchema(databasePath: string): Promise<void> {
+async function applyPartialCommunitySchema(databasePath: string): Promise<void> {
   const client = createClient({
     url: `file:${databasePath}`,
   })
@@ -97,16 +97,17 @@ function buildRepository(databasePath: string): CommunityDatabaseBindingReposito
   return {
     async getPrimaryCommunityDatabaseBinding() {
       return {
-        community_database_binding_id: "cdb_legacy",
-        community_id: "cmt_legacy",
+        community_database_binding_id: "cdb_partial",
+        community_id: "cmt_partial",
         binding_role: "primary",
         organization_slug: "local",
         group_name: "local",
         group_id: null,
-        database_name: "community-cmt_legacy",
+        database_name: "community-cmt_partial",
         database_id: null,
         database_url: `file:${databasePath}`,
         location: null,
+        requires_credentials: false,
         status: "active",
         transferred_at: null,
         created_at: new Date().toISOString(),
@@ -137,6 +138,7 @@ describe("openCommunityDb", () => {
           database_id: "db_remote",
           database_url: databaseUrl,
           location: "aws-us-east-1",
+          requires_credentials: true,
           status: "active",
           transferred_at: null,
           created_at: now,
@@ -177,12 +179,12 @@ describe("openCommunityDb", () => {
     db.close()
   })
 
-  test("applies pending template migrations for legacy community databases", async () => {
+  test("applies pending template migrations for existing local community databases", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-db-factory-"))
     cleanupPaths.push(rootDir)
 
     const databasePath = join(rootDir, `${randomUUID()}.db`)
-    await applyLegacyCommunitySchema(databasePath)
+    await applyPartialCommunitySchema(databasePath)
 
     const beforeTableNames = await listTableNames(databasePath)
     expect(beforeTableNames).not.toContain("comments")
@@ -200,7 +202,7 @@ describe("openCommunityDb", () => {
         LOCAL_COMMUNITY_DB_ROOT: rootDir,
       },
       buildRepository(databasePath),
-      "cmt_legacy",
+      "cmt_partial",
     )
 
     db.close()
@@ -256,19 +258,19 @@ describe("openCommunityDb", () => {
     expect(moderationActionColumns).toContain("next_post_status")
   })
 
-  test("enqueues community jobs after legacy databases are migrated", async () => {
+  test("enqueues community jobs after existing local databases are migrated", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-job-store-"))
     cleanupPaths.push(rootDir)
 
     const databasePath = join(rootDir, `${randomUUID()}.db`)
-    await applyLegacyCommunitySchema(databasePath)
+    await applyPartialCommunitySchema(databasePath)
 
     const db = await openCommunityDb(
       {
         LOCAL_COMMUNITY_DB_ROOT: rootDir,
       },
       buildRepository(databasePath),
-      "cmt_legacy",
+      "cmt_partial",
     )
 
     try {
@@ -287,12 +289,12 @@ describe("openCommunityDb", () => {
             NULL, ?3, ?4, ?4
           )
         `,
-        args: ["cmt_legacy", "Legacy Community", "usr_legacy_owner", now],
+        args: ["cmt_partial", "Partial Community", "usr_partial_owner", now],
       })
 
       const first = await enqueueCommunityJob({
         client: db.client,
-        communityId: "cmt_legacy",
+        communityId: "cmt_partial",
         jobType: "comment_projection_sync",
         subjectType: "comment",
         subjectId: "cmt_01",
@@ -302,7 +304,7 @@ describe("openCommunityDb", () => {
 
       const second = await enqueueCommunityJob({
         client: db.client,
-        communityId: "cmt_legacy",
+        communityId: "cmt_partial",
         jobType: "comment_projection_sync",
         subjectType: "comment",
         subjectId: "cmt_01",

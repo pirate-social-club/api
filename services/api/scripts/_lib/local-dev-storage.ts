@@ -7,7 +7,6 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 import { resolveCoreRepoRoot } from "../../shared/core-repo-paths"
 import { splitSqlStatements, toSqliteCompatibleStatements } from "../../shared/sql-migration"
 
-export const FIRST_LOCAL_POST_BASELINE_MIGRATION = "0051_control_plane_notifications.sql"
 const LOCAL_CONTROL_PLANE_BUSY_TIMEOUT_MS = 5000
 const LOCAL_FOLLOWER_COUNT_RENAME_MIGRATIONS = new Set([
   "0064_control_plane_communities_follower_count_column.sql",
@@ -250,44 +249,15 @@ async function recordAppliedMigration(
   })
 }
 
-async function updateAppliedMigrationChecksum(
-  client: Client,
-  migrationName: string,
-  checksum: string,
-): Promise<void> {
-  await client.execute({
-    sql: `
-      UPDATE schema_migrations
-      SET checksum = ?2
-      WHERE migration_name = ?1
-    `,
-    args: [migrationName, checksum],
-  })
-}
-
 async function listTableColumns(client: Client, tableName: string): Promise<Set<string>> {
   const result = await client.execute(`PRAGMA table_info(${tableName})`)
   return new Set(result.rows.map((row) => String(row.name)))
 }
 
-async function ensureColumn(
-  client: Client,
-  tableName: string,
-  columnName: string,
-  columnDefinition: string,
-): Promise<void> {
-  const columns = await listTableColumns(client, tableName)
-  if (columns.has(columnName)) {
-    return
-  }
-
-  await client.execute(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`)
-}
-
 async function ensureRenamedColumn(
   client: Client,
   tableName: string,
-  legacyColumnName: string,
+  sourceColumnName: string,
   columnName: string,
   columnDefinition: string,
 ): Promise<void> {
@@ -295,20 +265,12 @@ async function ensureRenamedColumn(
   if (columns.has(columnName)) {
     return
   }
-  if (columns.has(legacyColumnName)) {
-    await client.execute(`ALTER TABLE ${tableName} RENAME COLUMN ${legacyColumnName} TO ${columnName}`)
+  if (columns.has(sourceColumnName)) {
+    await client.execute(`ALTER TABLE ${tableName} RENAME COLUMN ${sourceColumnName} TO ${columnName}`)
     return
   }
 
   await client.execute(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`)
-}
-
-async function ensureLocalBaselineSnapshotCompatibility(client: Client): Promise<void> {
-  await ensureColumn(client, "verification_sessions", "verification_requirements_json", "TEXT NOT NULL DEFAULT '[]'")
-}
-
-function isSupersededByLocalBaseline(migrationName: string, baselineMigrationName: string): boolean {
-  return migrationName !== baselineMigrationName && migrationName < FIRST_LOCAL_POST_BASELINE_MIGRATION
 }
 
 export async function applyLocalControlPlaneMigrations(storage: LocalDevStorage): Promise<void> {
@@ -336,18 +298,16 @@ export async function applyLocalControlPlaneMigrations(storage: LocalDevStorage)
     const appliedChecksum = await getAppliedChecksum(client, baselineMigrationName)
     if (appliedChecksum) {
       if (appliedChecksum !== baselineChecksum) {
-        await updateAppliedMigrationChecksum(client, baselineMigrationName, baselineChecksum)
+        throw new Error(`migration checksum mismatch for ${baselineMigrationName}`)
       }
     } else {
       await applySqlFile(client, baselineMigrationPath)
       await recordAppliedMigration(client, baselineMigrationName, baselineChecksum)
     }
 
-    await ensureLocalBaselineSnapshotCompatibility(client)
-
     const appliedMigrations = await getAppliedMigrations(client)
     for (const migrationName of entries) {
-      if (migrationName === baselineMigrationName || isSupersededByLocalBaseline(migrationName, baselineMigrationName)) {
+      if (migrationName === baselineMigrationName) {
         continue
       }
 

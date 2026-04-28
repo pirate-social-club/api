@@ -9,6 +9,8 @@ import type { Env } from "../src/types"
 import { setClawkeyProviderForTests } from "../src/lib/agents/clawkey-provider"
 import { setSelfProviderForTests, type SelfProvider } from "../src/lib/verification/self-provider"
 import { setVeryProviderForTests } from "../src/lib/verification/very-provider"
+import { setPassportProviderForTests } from "../src/lib/verification/passport-provider"
+import { resetPassportWalletScoreRefreshLimitsForTests } from "../src/lib/verification/passport-wallet-score-service"
 import { setEnsResolverForTests } from "../src/lib/auth/ens-linked-handle-service"
 import { setStoryAccessProofSignerForTests } from "../src/lib/story/story-access-proof-service"
 import { setStoryCdrUploaderForTests } from "../src/lib/story/story-cdr"
@@ -65,6 +67,8 @@ export function resetRuntimeCaches(): void {
   setClawkeyProviderForTests(null)
   setSelfProviderForTests(null)
   setVeryProviderForTests(null)
+  setPassportProviderForTests(null)
+  resetPassportWalletScoreRefreshLimitsForTests()
   setEnsResolverForTests(null)
   setStoryAccessProofSignerForTests(null)
   setStoryCdrUploaderForTests(null)
@@ -206,7 +210,7 @@ export async function createControlPlaneTestClient(options?: {
     }, serviceRoot)
     await applyLocalControlPlaneMigrations(storage)
   } else {
-    await applySqlFile(client, resolveCoreRepoPath("db/control-plane/migrations/0001_control_plane_identity.sql", {
+    await applySqlFile(client, resolveCoreRepoPath("db/control-plane/migrations/0000_control_plane_baseline_postgres.sql", {
       serviceRoot,
     }))
     await applySqlFile(client, resolveCoreRepoPath("db/control-plane/migrations/0059_control_plane_identity_nullifiers.sql", {

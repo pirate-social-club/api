@@ -50,7 +50,7 @@ describe("community-job-runner", () => {
       expect(String(journalMode.rows[0]?.journal_mode ?? "")).toBe("wal")
 
       const busyTimeout = await db.client.execute("PRAGMA busy_timeout")
-      expect(Number(busyTimeout.rows[0]?.timeout ?? 0)).toBe(5000)
+      expect(Number(busyTimeout.rows[0]?.timeout ?? 0)).toBe(30000)
     } finally {
       db.close()
     }

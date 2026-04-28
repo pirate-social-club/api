@@ -7,7 +7,7 @@ import type { Client } from "@libsql/client"
 import { resolveCoreRepoPath } from "../../../shared/core-repo-paths"
 import { internalError } from "../errors"
 
-const LOCAL_SQLITE_BUSY_TIMEOUT_MS = 5000
+const LOCAL_SQLITE_BUSY_TIMEOUT_MS = 30000
 
 export type LocalCommunityBootstrapInput = {
   rootDir: string
