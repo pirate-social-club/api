@@ -1,0 +1,184 @@
+{
+  "name": "local-gated",
+  "description": "Synthetic local community seed with open, request, and gated membership modes.",
+  "users": [
+    {
+      "key": "owner",
+      "subject": "seed-local-gated-owner",
+      "synthetic": true,
+      "verification_provider": "very",
+      "profile": {
+        "desired_handle": "local-gated-owner",
+        "display_name": "Local Gated Owner",
+        "bio": "Owns the local gated seed communities.",
+        "avatar_ref": "ipfs://seed-local-gated-owner-avatar",
+        "cover_ref": "ipfs://seed-local-gated-owner-cover"
+      }
+    },
+    {
+      "key": "member",
+      "subject": "seed-local-gated-member",
+      "synthetic": true,
+      "verification_provider": "very",
+      "profile": {
+        "desired_handle": "local-gated-member",
+        "display_name": "Local Gated Member",
+        "bio": "Exercises gated membership and posting flows.",
+        "avatar_ref": "ipfs://seed-local-gated-member-avatar"
+      }
+    },
+    {
+      "key": "visitor",
+      "subject": "seed-local-gated-visitor",
+      "synthetic": true,
+      "verification_provider": "very",
+      "profile": {
+        "desired_handle": "local-gated-visitor",
+        "display_name": "Local Gated Visitor",
+        "bio": "Follows boards and leaves comments."
+      }
+    }
+  ],
+  "communities": [
+    {
+      "key": "open-workshop",
+      "owner": "owner",
+      "namespace": {
+        "family": "hns",
+        "root_label": "local-open-workshop"
+      },
+      "create": {
+        "display_name": "Local Open Workshop",
+        "description": "Open community for baseline browsing, following, posting, comments, and votes.",
+        "governance_mode": "centralized",
+        "membership_mode": "open",
+        "default_age_gate_policy": "none",
+        "allow_anonymous_identity": false,
+        "handle_policy": {
+          "policy_template": "standard"
+        }
+      },
+      "members": ["owner", "member", "visitor"],
+      "followers": ["owner", "member", "visitor"],
+      "posts": [
+        {
+          "key": "baseline",
+          "author": "owner",
+          "body": {
+            "post_type": "text",
+            "title": "Open board baseline",
+            "body": "Use this board to verify normal public reads, member posts, comments, and vote counts after a local reset.",
+            "idempotency_key": "seed-local-gated-open-baseline",
+            "visibility": "public",
+            "translation_policy": "machine_allowed"
+          },
+          "votes": [
+            { "voter": "member", "value": 1 },
+            { "voter": "visitor", "value": 1 }
+          ],
+          "comments": [
+            {
+              "key": "member-note",
+              "author": "member",
+              "body": "Open membership and comments are working."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "request-lounge",
+      "owner": "owner",
+      "namespace": {
+        "family": "spaces",
+        "root_label": "local-request-lounge"
+      },
+      "create": {
+        "display_name": "Local Request Lounge",
+        "description": "Request-mode community for checking non-open membership labels and public preview defaults.",
+        "governance_mode": "centralized",
+        "membership_mode": "request",
+        "default_age_gate_policy": "none",
+        "allow_anonymous_identity": false,
+        "handle_policy": {
+          "policy_template": "standard"
+        }
+      },
+      "members": ["owner"],
+      "followers": ["owner", "member", "visitor"],
+      "posts": [
+        {
+          "key": "request-mode",
+          "author": "owner",
+          "body": {
+            "post_type": "text",
+            "title": "Request-mode preview",
+            "body": "This community keeps membership controlled while still giving public preview surfaces something realistic to render.",
+            "idempotency_key": "seed-local-gated-request-mode",
+            "visibility": "public"
+          },
+          "votes": [
+            { "voter": "owner", "value": 1 }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "verified-humans",
+      "owner": "owner",
+      "namespace": {
+        "family": "hns",
+        "root_label": "local-verified-humans"
+      },
+      "create": {
+        "display_name": "Local Verified Humans",
+        "description": "Gated community requiring unique-human verification through the local Very stub.",
+        "governance_mode": "centralized",
+        "membership_mode": "gated",
+        "default_age_gate_policy": "none",
+        "allow_anonymous_identity": false,
+        "handle_policy": {
+          "policy_template": "standard"
+        },
+        "gate_rules": [
+          {
+            "scope": "membership",
+            "gate_family": "identity_proof",
+            "gate_type": "unique_human",
+            "proof_requirements": [
+              {
+                "proof_type": "unique_human",
+                "accepted_providers": ["very"]
+              }
+            ],
+            "gate_config": {
+              "label": "Verified human"
+            }
+          }
+        ]
+      },
+      "members": ["owner", "member", "visitor"],
+      "followers": ["owner", "member", "visitor"],
+      "posts": [
+        {
+          "key": "gate-check",
+          "author": "member",
+          "body": {
+            "post_type": "text",
+            "title": "Verified human gate check",
+            "body": "Everyone in this seed joined after completing the local Very unique-human verification flow.",
+            "idempotency_key": "seed-local-gated-verified-human-check",
+            "visibility": "members_only"
+          },
+          "comments": [
+            {
+              "key": "visitor-confirm",
+              "author": "visitor",
+              "body": "Membership-gated comments are available to verified members."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

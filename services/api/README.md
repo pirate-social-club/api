@@ -143,8 +143,8 @@ Control-plane DB mode:
 6. For the real song pipeline and machine translations, set `OPENROUTER_API_KEY`, `ACRCLOUD_ACCESS_KEY`, `ACRCLOUD_ACCESS_SECRET`, `ACRCLOUD_HOST`, and `ELEVENLABS_API_KEY`. Optional overrides: `OPENROUTER_BASE_URL`, `OPENROUTER_MODEL`, `ACRCLOUD_IDENTIFY_PATH`, and `ELEVENLABS_FORCE_ALIGNMENT_URL`.
 7. Fill in `AUTH_UPSTREAM_JWT_SHARED_SECRET`, `AUTH_UPSTREAM_JWT_ISSUER`, and `AUTH_UPSTREAM_JWT_AUDIENCE`.
 8. Fill in `PIRATE_APP_JWT_PRIVATE_KEY` and `PIRATE_APP_JWT_PUBLIC_KEY`.
-9. Start `rtk bun run dev:local` for the API only, or `rtk bun run dev:local:full` to run the API and the community job worker together. The local server bootstraps the control-plane migrations automatically for local file-backed DBs.
-10. Post and comment translations require the worker to be running with `OPENROUTER_API_KEY` in the environment. If you use Infisical locally, prefer `rtk infisical run --env=dev --path=/services/api -- rtk bun run dev:local:full`.
+9. Start `rtk bun run dev:local` for the API only, or `rtk bun run dev:local:full` to run the API, web dev server, public API tunnel, assistant worker, and community job worker together. The local server bootstraps the control-plane migrations automatically for local file-backed DBs.
+10. Post and comment translations, plus Bedsheet replies, require `OPENROUTER_API_KEY` in the environment. If you use Infisical locally, prefer `rtk infisical run --env=dev --path=/services/api -- rtk bun run dev:local:full`.
 
 If local startup fails with a migration checksum mismatch, reset only the local file-backed dev DBs:
 
@@ -179,14 +179,16 @@ For local Very widget testing:
 - optionally set `VERY_API_URL` or `VERY_VERIFY_URL` when testing against a non-default Very endpoint
 - the API returns `launch.verify_url` for the Very widget; there is no local verifier proxy
 
-3. Start the Bun local API plus the community job worker:
+3. Start the Bun local API, web dev server, local verifiers, assistant worker, plus the community job worker:
 
 ```bash
 cd api/services/api
 rtk bun run dev:local:full
 ```
 
-`dev:local:full` keeps the SQLite files in `services/api/.local/` by default, reapplies pending control-plane migrations on startup, and runs the translation worker with the same environment as the API process. If you only need the HTTP server, `rtk bun run dev:local` still starts the API without the worker.
+`dev:local:full` keeps the SQLite files in `services/api/.local/` by default, reapplies pending control-plane migrations on startup, starts local HNS and Spaces verifiers, uses `http://127.0.0.1:8787` as `PIRATE_API_PUBLIC_ORIGIN` and `VITE_PIRATE_API_BASE_URL`, runs the assistant worker on port `8791`, routes local Bedsheet model calls through a Bun-side OpenRouter proxy on port `8792`, and runs the translation worker with the same environment as the API process. If web port `5173`, assistant worker port `8791`, or OpenRouter proxy port `8792` is already in use, the script leaves that existing server alone. Set `PIRATE_DEV_TUNNEL=required` to require a `cloudflared` quick tunnel, `PIRATE_DEV_TUNNEL=auto` to use a tunnel when available, `PIRATE_DEV_USE_REMOTE_VERIFIERS=true` to use verifier URLs from `.dev.vars`, `PIRATE_DEV_START_WEB=false` to leave web startup to a separate terminal, `PIRATE_DEV_START_ASSISTANT=false` to leave Bedsheet startup to a separate terminal, `PIRATE_DEV_OPENROUTER_PROXY_PORT=8793` to move the local OpenRouter proxy, or `PIRATE_DEV_ASSISTANT_INSPECTOR_PORT=9249` to move the assistant worker inspector port search.
+
+Live Self callback testing requires an HTTPS public API origin. For normal local app work, `rtk bun run dev:local:full` stays fully local and uses the local Self stub.
 
 ## Mint A Dev JWT
 
