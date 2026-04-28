@@ -1296,6 +1296,7 @@ export type CreateModerationActionRequest = {
 
 export type LocalizedPostResponse = {
   post: Post;
+  author_community_role?: "owner" | "moderator" | null;
   thread_snapshot: CommentThreadSnapshot | null;
   market_context?: MarketContextSummary | null;
   label?: PostLabel | null;
@@ -1347,8 +1348,8 @@ export type CommunityPreview = {
   donation_policy_mode?: "none" | "optional_creator_sidecar" | null;
   donation_partner_id?: string | null;
   donation_partner?: DonationPartnerSummary | null;
-  reference_links?: Array<CommunityReferenceLinkPublic> | null;
   moderator?: CommunityModeratorSummary | null;
+  reference_links?: Array<CommunityReferenceLinkPublic> | null;
   membership_gate_summaries: Array<MembershipGateSummary>;
   rules: Array<CommunityRule>;
   viewer_membership_status?: "member" | "not_member" | "banned" | null;

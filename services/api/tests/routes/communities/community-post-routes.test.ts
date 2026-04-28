@@ -23,7 +23,7 @@ afterEach(async () => {
 })
 
 describe("community post routes", () => {
-  test("OpenAI moderation can hold text, link, and video posts for review and block image posts", async () => {
+  test("OpenAI moderation leaves text and link posts alone and only blocks high-confidence visual sexual-minors", async () => {
     const ctx = await createRouteTestContext({
       OPENAI_API_KEY: "test-openai-key",
       OPENAI_MODERATION_BASE_URL: "https://openai.test/v1",
@@ -42,7 +42,7 @@ describe("community post routes", () => {
       const normalizedInput = serializedInput.toLowerCase()
       const categories: Record<string, boolean> = {
         sexual: normalizedInput.includes("post_image_test.gif"),
-        "sexual/minors": false,
+        "sexual/minors": normalizedInput.includes("post_image_minors_high.jpg") || normalizedInput.includes("video-cover-minors-high.jpg"),
         harassment: false,
         "harassment/threatening": false,
         hate: false,
@@ -55,13 +55,18 @@ describe("community post routes", () => {
         violence: normalizedInput.includes("medical injury"),
         "violence/graphic": false,
       }
+      const categoryScores = Object.fromEntries(Object.keys(categories).map((category) => [category, categories[category] ? 0.99 : 0.01]))
+      if (normalizedInput.includes("post_image_minors_low.jpg")) {
+        categories["sexual/minors"] = true
+        categoryScores["sexual/minors"] = 0.8
+      }
       return new Response(JSON.stringify({
         id: "modr_test",
         model: "omni-moderation-latest",
         results: [{
           flagged: Object.values(categories).some(Boolean),
           categories,
-          category_scores: Object.fromEntries(Object.keys(categories).map((category) => [category, categories[category] ? 0.99 : 0.01])),
+          category_scores: categoryScores,
         }],
       }), {
         headers: { "content-type": "application/json" },
@@ -83,7 +88,7 @@ describe("community post routes", () => {
         community: { community_id: string }
       }
 
-      const reviewHeldPost = await requestJson(
+      const textPost = await requestJson(
         `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
         {
           post_type: "text",
@@ -94,17 +99,17 @@ describe("community post routes", () => {
         ctx.env,
         session.accessToken,
       )
-      expect(reviewHeldPost.status).toBe(202)
-      const reviewHeldBody = await json(reviewHeldPost) as {
+      expect(textPost.status).toBe(201)
+      const textPostBody = await json(textPost) as {
         status: string
         analysis_state: string
         content_safety_state: string
       }
-      expect(reviewHeldBody.status).toBe("draft")
-      expect(reviewHeldBody.analysis_state).toBe("review_required")
-      expect(reviewHeldBody.content_safety_state).toBe("pending")
+      expect(textPostBody.status).toBe("published")
+      expect(textPostBody.analysis_state).toBe("allow")
+      expect(textPostBody.content_safety_state).toBe("safe")
 
-      const reviewHeldLinkPost = await requestJson(
+      const linkPost = await requestJson(
         `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
         {
           post_type: "link",
@@ -116,15 +121,15 @@ describe("community post routes", () => {
         ctx.env,
         session.accessToken,
       )
-      expect(reviewHeldLinkPost.status).toBe(202)
-      const reviewHeldLinkBody = await json(reviewHeldLinkPost) as {
+      expect(linkPost.status).toBe(201)
+      const linkPostBody = await json(linkPost) as {
         status: string
         analysis_state: string
       }
-      expect(reviewHeldLinkBody.status).toBe("draft")
-      expect(reviewHeldLinkBody.analysis_state).toBe("review_required")
+      expect(linkPostBody.status).toBe("published")
+      expect(linkPostBody.analysis_state).toBe("allow")
 
-      const reviewHeldVideoPost = await requestJson(
+      const videoPostWithoutPoster = await requestJson(
         `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
         {
           post_type: "video",
@@ -139,15 +144,15 @@ describe("community post routes", () => {
         ctx.env,
         session.accessToken,
       )
-      expect(reviewHeldVideoPost.status).toBe(202)
-      const reviewHeldVideoBody = await json(reviewHeldVideoPost) as {
+      expect(videoPostWithoutPoster.status).toBe(201)
+      const videoPostWithoutPosterBody = await json(videoPostWithoutPoster) as {
         status: string
         analysis_state: string
       }
-      expect(reviewHeldVideoBody.status).toBe("draft")
-      expect(reviewHeldVideoBody.analysis_state).toBe("review_required")
+      expect(videoPostWithoutPosterBody.status).toBe("published")
+      expect(videoPostWithoutPosterBody.analysis_state).toBe("allow")
 
-      const blockedImagePost = await requestJson(
+      const ordinarySexualImagePost = await requestJson(
         `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
         {
           post_type: "image",
@@ -157,7 +162,47 @@ describe("community post routes", () => {
             mime_type: "image/gif",
             size_bytes: 12,
           }],
-          idempotency_key: "post-key-openai-image-blocked",
+          idempotency_key: "post-key-openai-image-ordinary-sexual",
+        },
+        ctx.env,
+        session.accessToken,
+      )
+      expect(ordinarySexualImagePost.status).toBe(201)
+      const ordinarySexualImageBody = await json(ordinarySexualImagePost) as {
+        status: string
+        analysis_state: string
+      }
+      expect(ordinarySexualImageBody.status).toBe("published")
+      expect(ordinarySexualImageBody.analysis_state).toBe("allow")
+
+      const lowConfidenceSexualMinorsImagePost = await requestJson(
+        `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+        {
+          post_type: "image",
+          title: "Backstage",
+          media_refs: [{
+            storage_ref: "http://pirate.test/community-media/post_image/post_image_minors_low.jpg",
+            mime_type: "image/jpeg",
+            size_bytes: 12,
+          }],
+          idempotency_key: "post-key-openai-image-minors-low",
+        },
+        ctx.env,
+        session.accessToken,
+      )
+      expect(lowConfidenceSexualMinorsImagePost.status).toBe(201)
+
+      const blockedImagePost = await requestJson(
+        `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+        {
+          post_type: "image",
+          title: "Backstage",
+          media_refs: [{
+            storage_ref: "http://pirate.test/community-media/post_image/post_image_minors_high.jpg",
+            mime_type: "image/jpeg",
+            size_bytes: 12,
+          }],
+          idempotency_key: "post-key-openai-image-minors-high",
         },
         ctx.env,
         session.accessToken,
@@ -165,12 +210,31 @@ describe("community post routes", () => {
       expect(blockedImagePost.status).toBe(422)
       const blockedBody = await json(blockedImagePost) as { code: string }
       expect(blockedBody.code).toBe("analysis_blocked")
+
+      const blockedVideoPost = await requestJson(
+        `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+        {
+          post_type: "video",
+          title: "Video",
+          media_refs: [{
+            storage_ref: "http://pirate.test/community-media/post_video/post_video_test_2.mp4",
+            mime_type: "video/mp4",
+            size_bytes: 123,
+            poster_ref: "http://pirate.test/community-media/post_image/video-cover-minors-high.jpg",
+            poster_mime_type: "image/jpeg",
+          }],
+          idempotency_key: "post-key-openai-video-poster-minors-high",
+        },
+        ctx.env,
+        session.accessToken,
+      )
+      expect(blockedVideoPost.status).toBe(422)
     } finally {
       globalThis.fetch = originalFetch
     }
   })
 
-  test("OpenAI moderation respects disabled post body scanning", async () => {
+  test("OpenAI moderation respects disabled image scanning", async () => {
     const ctx = await createRouteTestContext({
       OPENAI_API_KEY: "test-openai-key",
       OPENAI_MODERATION_BASE_URL: "https://openai.test/v1",
@@ -187,11 +251,9 @@ describe("community post routes", () => {
 
       const requestBody = await request.json() as { input?: unknown }
       moderationInputs.push(requestBody.input)
-      const serializedInput = JSON.stringify(requestBody.input)
-      const normalizedInput = serializedInput.toLowerCase()
       const categories: Record<string, boolean> = {
         sexual: false,
-        "sexual/minors": false,
+        "sexual/minors": true,
         harassment: false,
         "harassment/threatening": false,
         hate: false,
@@ -201,7 +263,7 @@ describe("community post routes", () => {
         "self-harm": false,
         "self-harm/intent": false,
         "self-harm/instructions": false,
-        violence: normalizedInput.includes("medical injury"),
+        violence: false,
         "violence/graphic": false,
       }
       return new Response(JSON.stringify({
@@ -263,10 +325,10 @@ describe("community post routes", () => {
             },
             openai_moderation_settings: {
               scan_titles: true,
-              scan_post_bodies: false,
+              scan_post_bodies: true,
               scan_captions: true,
               scan_link_preview_text: true,
-              scan_images: true,
+              scan_images: false,
             },
           }),
         },
@@ -277,9 +339,13 @@ describe("community post routes", () => {
       const createdPost = await requestJson(
         `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
         {
-          post_type: "text",
+          post_type: "image",
           title: "Clean title",
-          body: "medical injury should not be sent because body scanning is disabled",
+          media_refs: [{
+            storage_ref: "http://pirate.test/community-media/post_image/post_image_minors_high.jpg",
+            mime_type: "image/jpeg",
+            size_bytes: 12,
+          }],
           idempotency_key: "post-key-openai-disabled-body",
         },
         ctx.env,
@@ -289,9 +355,7 @@ describe("community post routes", () => {
       const createdBody = await json(createdPost) as { status: string; analysis_state: string }
       expect(createdBody.status).toBe("published")
       expect(createdBody.analysis_state).toBe("allow")
-      expect(moderationInputs).toHaveLength(1)
-      expect(JSON.stringify(moderationInputs[0])).not.toContain("medical injury")
-      expect(JSON.stringify(moderationInputs[0])).toContain("Clean title")
+      expect(moderationInputs).toHaveLength(0)
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -336,6 +400,49 @@ describe("community post routes", () => {
     expect(deniedPost.status).toBe(201)
     const postBody = await json(deniedPost) as { title: string | null }
     expect(postBody.title).toBe("Member post")
+  })
+
+  test("community post feed marks creator posts with owner role", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "community-owner-role-creator")
+    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Pirate Owner Badge Club",
+      namespace: {
+        namespace_verification_id: namespaceVerificationId,
+      },
+    }, ctx.env, creator.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: { community_id: string }
+    }
+
+    const createdPost = await requestJson(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      {
+        post_type: "text",
+        title: "Owner post",
+        body: "The creator should render with the owner badge.",
+        idempotency_key: "post-key-owner-role",
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(createdPost.status).toBe(201)
+
+    const feed = await app.request(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      { headers: { authorization: `Bearer ${creator.accessToken}` } },
+      ctx.env,
+    )
+    expect(feed.status).toBe(200)
+    const feedBody = await json(feed) as {
+      items: Array<{ author_community_role?: "owner" | "moderator" | null; post: { title: string | null } }>
+    }
+    expect(feedBody.items.find((item) => item.post.title === "Owner post")?.author_community_role).toBe("owner")
   })
 
   test("post create returns 404 for a verified non-member", async () => {

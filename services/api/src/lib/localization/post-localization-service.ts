@@ -12,6 +12,37 @@ export type PostReadMetrics = {
   viewer_vote: -1 | 1 | null
 }
 
+async function getAuthorCommunityRole(input: {
+  executor: DbExecutor
+  post: Pick<Post, "author_user_id" | "community_id" | "identity_mode">
+}): Promise<LocalizedPostResponse["author_community_role"]> {
+  if (input.post.identity_mode !== "public" || !input.post.author_user_id) {
+    return null
+  }
+
+  const result = await input.executor.execute({
+    sql: `
+      SELECT role
+      FROM community_roles
+      WHERE community_id = ?1
+        AND user_id = ?2
+        AND status = 'active'
+        AND role IN ('owner', 'admin', 'moderator')
+      ORDER BY CASE role
+        WHEN 'owner' THEN 0
+        WHEN 'admin' THEN 1
+        ELSE 2
+      END
+      LIMIT 1
+    `,
+    args: [input.post.community_id, input.post.author_user_id],
+  })
+  const role = result.rows[0]?.role
+  if (role === "owner") return "owner"
+  if (role === "admin" || role === "moderator") return "moderator"
+  return null
+}
+
 function hasTranslatablePostContent(post: Post): boolean {
   return Boolean(
     String(post.title ?? "").trim()
@@ -39,6 +70,10 @@ export async function buildLocalizedPostResponse(input: {
 
   const response: LocalizedPostResponse = {
     post: input.post,
+    author_community_role: await getAuthorCommunityRole({
+      executor: input.executor,
+      post: input.post,
+    }),
     thread_snapshot: input.threadSnapshot ?? null,
     label: label ? serializeCommunityPostLabel(label) : null,
     upvote_count: input.metrics?.upvote_count ?? 0,
