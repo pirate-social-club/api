@@ -586,13 +586,21 @@ async function resolveNamespace(ctx: SeedContext, owner: SessionUser, namespace:
     body: { family: namespace.family, root_label: namespace.root_label },
     ok: [201],
   })
-  const completed = await requestJson<{ namespace_verification_id: string }>({
+  const completed = await requestJson<{
+    namespace_verification_id?: string | null
+    status?: string | null
+  }>({
     apiUrl: ctx.apiUrl,
     method: "POST",
     path: `/namespace-verification-sessions/${encodeURIComponent(started.body.namespace_verification_session_id)}/complete`,
     token: owner.accessToken,
     body: {},
   })
+  if (completed.body.status !== "verified" || !completed.body.namespace_verification_id?.trim()) {
+    throw new Error(
+      `${namespace.family} namespace ${namespace.root_label} did not verify; status=${completed.body.status ?? "unknown"}`,
+    )
+  }
   ctx.report.push(`completed ${namespace.family} namespace ${namespace.root_label}`)
   return completed.body.namespace_verification_id
 }
