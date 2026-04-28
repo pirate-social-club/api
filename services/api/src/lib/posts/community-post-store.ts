@@ -3,18 +3,14 @@ import type { Client } from "../sql-client"
 import { badRequestError, internalError } from "../errors"
 import { executeFirst } from "../db-helpers"
 import { makeId } from "../helpers"
-import { isMissingColumnError } from "../auth/auth-db-query-helpers"
 import {
   buildAnonymousLabel,
   buildDisclosedQualifierSnapshots,
 } from "../identity/anonymous-identity"
 import { detectSourceLanguageFromText } from "../localization/content-locale"
-import { resolveStubAnalysisOutcome } from "./post-analysis"
 import { numberOrNull, requiredNumber, rowValue, stringOrNull } from "../sql-row"
 import {
   POST_SELECT_COLUMNS,
-  POST_SELECT_COLUMNS_LEGACY,
-  POST_SELECT_COLUMNS_VISIBILITY_LEGACY,
   serializePost,
   toPostRow,
 } from "./community-post-serialization"
@@ -71,35 +67,16 @@ export async function findPostByIdempotencyKey(input: {
   authorUserId: string
   idempotencyKey: string
 }): Promise<Post | null> {
-  const row = await executeFirst(
-    input.client,
-    {
-      sql: `
-        SELECT ${POST_SELECT_COLUMNS}
-        FROM posts
-        WHERE community_id = ?1
-          AND author_user_id = ?2
-          AND idempotency_key = ?3
-        LIMIT 1
-      `,
-      args: [input.communityId, input.authorUserId, input.idempotencyKey],
-    },
-  ).catch(async (error) => {
-    if (!isMissingColumnError(error, "embeds_json")) {
-      throw error
-    }
-
-    return executeFirst(input.client, {
-      sql: `
-        SELECT ${POST_SELECT_COLUMNS_LEGACY}
-        FROM posts
-        WHERE community_id = ?1
-          AND author_user_id = ?2
-          AND idempotency_key = ?3
-        LIMIT 1
-      `,
-      args: [input.communityId, input.authorUserId, input.idempotencyKey],
-    })
+  const row = await executeFirst(input.client, {
+    sql: `
+      SELECT ${POST_SELECT_COLUMNS}
+      FROM posts
+      WHERE community_id = ?1
+        AND author_user_id = ?2
+        AND idempotency_key = ?3
+      LIMIT 1
+    `,
+    args: [input.communityId, input.authorUserId, input.idempotencyKey],
   })
 
   return row ? serializePost(toPostRow(row)) : null
@@ -111,7 +88,6 @@ export async function insertPost(input: {
   authorUserId: string
   body: CreatePostRequest
   createdAt: string
-  enableDevAnalysisMarkers?: boolean
   analysisOverride?: Pick<Post, "analysis_state" | "content_safety_state" | "age_gate_policy" | "status">
   agentWriteAuthorization?: {
     agentId: string
@@ -148,10 +124,9 @@ export async function insertPost(input: {
   const title = input.body.title ?? null
   const labelAssignmentStatus: NonNullable<Post["label_assignment_status"]> = input.body.label_id ? "assigned" : "pending"
   const labelAssignedAt = input.body.label_id ? input.createdAt : null
-  const stubAnalysis = resolveStubAnalysisOutcome(input.body, { enableDevMarkers: input.enableDevAnalysisMarkers === true })
-  const analysisState = input.analysisOverride?.analysis_state ?? stubAnalysis.analysis_state
-  const contentSafetyState = input.analysisOverride?.content_safety_state ?? stubAnalysis.content_safety_state
-  const status = input.analysisOverride?.status ?? stubAnalysis.status
+  const analysisState = input.analysisOverride?.analysis_state ?? "allow"
+  const contentSafetyState = input.analysisOverride?.content_safety_state ?? "safe"
+  const status = input.analysisOverride?.status ?? "published"
   const ageGatePolicy = input.analysisOverride?.age_gate_policy ?? "none"
   const sourceLanguage = detectSourceLanguageFromText([
     title,
@@ -237,7 +212,7 @@ export async function insertPost(input: {
 }
 
 export async function getPostById(client: DbExecutor, postId: string): Promise<Post | null> {
-  const stmtWithVisibility = {
+  const row = await executeFirst(client, {
     sql: `
       SELECT ${POST_SELECT_COLUMNS}
       FROM posts
@@ -245,22 +220,6 @@ export async function getPostById(client: DbExecutor, postId: string): Promise<P
       LIMIT 1
     `,
     args: [postId],
-  }
-
-  const row = await executeFirst(client, stmtWithVisibility).catch(async (error) => {
-    if (!isMissingColumnError(error, "visibility") && !isMissingColumnError(error, "embeds_json")) {
-      throw error
-    }
-
-    return executeFirst(client, {
-      sql: `
-        SELECT ${isMissingColumnError(error, "visibility") ? POST_SELECT_COLUMNS_VISIBILITY_LEGACY : POST_SELECT_COLUMNS_LEGACY}
-        FROM posts
-        WHERE post_id = ?1
-        LIMIT 1
-      `,
-      args: [postId],
-    })
   })
 
   return row ? serializePost(toPostRow(row)) : null

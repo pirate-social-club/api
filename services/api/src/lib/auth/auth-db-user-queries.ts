@@ -21,11 +21,7 @@ import {
   toWalletAttachmentRow,
 } from "./auth-db-rows"
 import { deriveOnboardingStatus } from "./auth-db-onboarding-queries"
-import {
-  firstRow,
-  isMissingColumnError,
-  isMissingTableError,
-} from "./auth-db-query-helpers"
+import { firstRow } from "./auth-db-query-helpers"
 import type { UpstreamIdentity } from "../../types"
 
 export {
@@ -62,24 +58,17 @@ export async function findActiveAuthProviderLink(executor: DbExecutor, provider:
 }
 
 export async function getUserRow(executor: DbExecutor, userId: string): Promise<UserRow | null> {
-  const selectUserRow = (onboardingDismissedAtExpr: string) => firstRow(executor, {
+  const row = await firstRow(executor, {
     sql: `
       SELECT user_id, primary_wallet_attachment_id, verification_state, capability_provider,
              verification_capabilities_json, verified_at, current_verification_session_id,
-             ${onboardingDismissedAtExpr} AS onboarding_dismissed_at,
+             onboarding_dismissed_at,
              created_at, updated_at
       FROM users
       WHERE user_id = ?1
       LIMIT 1
     `,
     args: [userId],
-  })
-
-  const row = await selectUserRow("onboarding_dismissed_at").catch((error) => {
-    if (isMissingColumnError(error, "onboarding_dismissed_at")) {
-      return selectUserRow("NULL")
-    }
-    throw error
   })
 
   return row ? toUserRow(row) : null
@@ -134,30 +123,23 @@ export async function getActiveWalletAttachmentRowByAddress(
 }
 
 export async function listLinkedHandleRows(executor: DbExecutor, userId: string): Promise<LinkedHandleRow[]> {
-  try {
-    const result = await executor.execute({
-      sql: `
-        SELECT linked_handle_id, user_id, wallet_attachment_id, kind, label_normalized, label_display,
-               verification_state, metadata_json, created_at, updated_at
-        FROM linked_handles
-        WHERE user_id = ?1
-        ORDER BY
-          CASE kind
-            WHEN 'ens' THEN 0
-            ELSE 1
-          END,
-          label_display ASC
-      `,
-      args: [userId],
-    })
+  const result = await executor.execute({
+    sql: `
+      SELECT linked_handle_id, user_id, wallet_attachment_id, kind, label_normalized, label_display,
+             verification_state, metadata_json, created_at, updated_at
+      FROM linked_handles
+      WHERE user_id = ?1
+      ORDER BY
+        CASE kind
+          WHEN 'ens' THEN 0
+          ELSE 1
+        END,
+        label_display ASC
+    `,
+    args: [userId],
+  })
 
-    return result.rows.map(toLinkedHandleRow)
-  } catch (error) {
-    if (isMissingTableError(error, "linked_handles")) {
-      return []
-    }
-    throw error
-  }
+  return result.rows.map(toLinkedHandleRow)
 }
 
 export async function getLinkedHandleRow(
@@ -175,11 +157,6 @@ export async function getLinkedHandleRow(
       LIMIT 1
     `,
     args: [userId, linkedHandleId],
-  }).catch((error) => {
-    if (isMissingTableError(error, "linked_handles")) {
-      return null
-    }
-    throw error
   })
 
   return row ? toLinkedHandleRow(row) : null
@@ -199,18 +176,13 @@ export async function getVerifiedLinkedHandleRowByLabelNormalized(
       LIMIT 1
     `,
     args: [labelNormalized],
-  }).catch((error) => {
-    if (isMissingTableError(error, "linked_handles")) {
-      return null
-    }
-    throw error
   })
 
   return row ? toLinkedHandleRow(row) : null
 }
 
 export async function getGlobalHandleRow(executor: DbExecutor, globalHandleId: string): Promise<GlobalHandleRow | null> {
-  const stmt = {
+  const row = await firstRow(executor, {
     sql: `
       SELECT global_handle_id, user_id, label_normalized, label_display, status, tier, issuance_source,
              redirect_target_global_handle_id, price_paid_usd, free_rename_consumed, issued_at,
@@ -220,38 +192,6 @@ export async function getGlobalHandleRow(executor: DbExecutor, globalHandleId: s
       LIMIT 1
     `,
     args: [globalHandleId],
-  }
-
-  const row = await firstRow(executor, stmt).catch(async (error) => {
-    if (
-      isMissingColumnError(error, "price_paid_usd")
-      || isMissingColumnError(error, "free_rename_consumed")
-      || isMissingColumnError(error, "replaced_at")
-    ) {
-      return await firstRow(executor, {
-        sql: `
-          SELECT global_handle_id, user_id, label_normalized, label_display, status, tier, issuance_source,
-                 redirect_target_global_handle_id, issued_at, created_at, updated_at
-          FROM global_handles
-          WHERE global_handle_id = ?1
-          LIMIT 1
-        `,
-        args: [globalHandleId],
-      }).then((legacyRow) => {
-        if (!legacyRow) {
-          return null
-        }
-
-        return {
-          ...legacyRow,
-          price_paid_usd: null,
-          free_rename_consumed: 0,
-          replaced_at: null,
-        }
-      })
-    }
-
-    throw error
   })
 
   return row ? toGlobalHandleRow(row) : null
@@ -261,7 +201,7 @@ export async function getGlobalHandleRowByLabelNormalized(
   executor: DbExecutor,
   labelNormalized: string,
 ): Promise<GlobalHandleRow | null> {
-  const stmt = {
+  const row = await firstRow(executor, {
     sql: `
       SELECT global_handle_id, user_id, label_normalized, label_display, status, tier, issuance_source,
              redirect_target_global_handle_id, price_paid_usd, free_rename_consumed, issued_at,
@@ -271,38 +211,6 @@ export async function getGlobalHandleRowByLabelNormalized(
       LIMIT 1
     `,
     args: [labelNormalized],
-  }
-
-  const row = await firstRow(executor, stmt).catch(async (error) => {
-    if (
-      isMissingColumnError(error, "price_paid_usd")
-      || isMissingColumnError(error, "free_rename_consumed")
-      || isMissingColumnError(error, "replaced_at")
-    ) {
-      return await firstRow(executor, {
-        sql: `
-          SELECT global_handle_id, user_id, label_normalized, label_display, status, tier, issuance_source,
-                 redirect_target_global_handle_id, issued_at, created_at, updated_at
-          FROM global_handles
-          WHERE label_normalized = ?1
-          LIMIT 1
-        `,
-        args: [labelNormalized],
-      }).then((legacyRow) => {
-        if (!legacyRow) {
-          return null
-        }
-
-        return {
-          ...legacyRow,
-          price_paid_usd: null,
-          free_rename_consumed: 0,
-          replaced_at: null,
-        }
-      })
-    }
-
-    throw error
   })
 
   return row ? toGlobalHandleRow(row) : null

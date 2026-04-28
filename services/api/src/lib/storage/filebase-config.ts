@@ -15,13 +15,13 @@ function requireTrimmedEnv(value: string | undefined, message: string): string {
 function resolveBucket(env: Env, bucketPreference: FilebaseBucketPreference): string {
   if (bucketPreference === "media") {
     return requireTrimmedEnv(
-      env.FILEBASE_MEDIA_BUCKET || env.FILEBASE_S3_BUCKET_MUSIC,
+      env.FILEBASE_MEDIA_BUCKET,
       "FILEBASE_MEDIA_BUCKET is not configured",
     )
   }
 
   return requireTrimmedEnv(
-    env.FILEBASE_S3_BUCKET_MUSIC || env.FILEBASE_MEDIA_BUCKET,
+    env.FILEBASE_S3_BUCKET_MUSIC,
     "FILEBASE_S3_BUCKET_MUSIC is not configured",
   )
 }

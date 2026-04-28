@@ -917,6 +917,7 @@ describe("song artifact donation routes", () => {
           database_id: null,
           database_url: `file:${ctx.communityDbRoot}/community-${communityId}.db`,
           location: null,
+          requires_credentials: false,
           status: "active",
           transferred_at: null,
           created_at: new Date().toISOString(),

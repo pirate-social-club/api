@@ -5,7 +5,6 @@ import { setSelfProviderForTests } from "../../../src/lib/verification/self-prov
 import {
   buildTestEnv,
   buildVerifiedSelfProvider,
-  createControlPlaneTestClient,
   createRouteTestContext,
   json,
   resetRuntimeCaches,
@@ -731,38 +730,6 @@ describe("agent routes", () => {
       items: Array<{ display_name: string }>
     }
     expect(agentsBody.items[0]?.display_name).toBe(expectedDisplayName)
-  })
-
-  test("agents list returns an empty result on legacy databases without agent tables", async () => {
-    const controlPlane = await createControlPlaneTestClient({ includeAllMigrations: true })
-    cleanup = controlPlane.cleanup
-
-    await controlPlane.client.execute("DROP TABLE IF EXISTS agent_action_nonce_replays")
-    await controlPlane.client.execute("DROP TABLE IF EXISTS agent_pairing_codes")
-    await controlPlane.client.execute("DROP TABLE IF EXISTS agent_delegated_credentials")
-    await controlPlane.client.execute("DROP TABLE IF EXISTS agent_ownership_sessions")
-    await controlPlane.client.execute("DROP TABLE IF EXISTS agent_ownership_records")
-    await controlPlane.client.execute("DROP TABLE IF EXISTS user_agents")
-
-    const env = buildTestEnv({
-      DEV_MEMORY_STORE_ENABLED: "false",
-      ENVIRONMENT: "test",
-      CONTROL_PLANE_DATABASE_URL: `file:${controlPlane.databasePath}`,
-    })
-
-    const session = await exchangeJwt(env, "legacy-agent-list-user")
-    const response = await app.request(
-      "http://pirate.test/agents",
-      {
-        headers: {
-          authorization: `Bearer ${session.accessToken}`,
-        },
-      },
-      env,
-    )
-
-    expect(response.status).toBe(200)
-    expect(await json(response)).toEqual({ items: [] })
   })
 
   test("verified owner can issue and refresh a delegated credential for an active agent", async () => {

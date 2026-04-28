@@ -15,30 +15,6 @@ export const POST_SELECT_COLUMNS = `
   content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
 `
 
-export const POST_SELECT_COLUMNS_LEGACY = `
-  post_id, community_id, author_user_id, authorship_mode, agent_id, agent_ownership_record_id,
-  identity_mode, anonymous_scope, anonymous_label, agent_display_name_snapshot,
-  agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot, disclosed_qualifiers_json,
-  label_id, label_assignment_status, label_assigned_by, label_assigned_at, label_ai_confidence,
-  label_assignment_error, label_assignment_model, label_assignment_result_json,
-  post_type, status, visibility, title, body, caption, lyrics,
-  link_url, link_og_image_url, link_og_title, NULL AS embeds_json, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
-  access_mode, asset_id, parent_post_id, upstream_asset_refs_json, song_mode, rights_basis, analysis_state, analysis_result_ref,
-  content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
-`
-
-export const POST_SELECT_COLUMNS_VISIBILITY_LEGACY = `
-  post_id, community_id, author_user_id, authorship_mode, agent_id, agent_ownership_record_id,
-  identity_mode, anonymous_scope, anonymous_label, agent_display_name_snapshot,
-  agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot, disclosed_qualifiers_json,
-  label_id, label_assignment_status, label_assigned_by, label_assigned_at, label_ai_confidence,
-  label_assignment_error, label_assignment_model, label_assignment_result_json,
-  post_type, status, 'public' AS visibility, title, body, caption, lyrics,
-  link_url, NULL AS link_og_image_url, NULL AS link_og_title, NULL AS embeds_json, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
-  access_mode, asset_id, parent_post_id, upstream_asset_refs_json, song_mode, rights_basis, analysis_state, analysis_result_ref,
-  content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
-`
-
 export type PostRow = {
   post_id: string
   community_id: string

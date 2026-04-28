@@ -36,9 +36,9 @@ export function includesAcceptedProvider(acceptedProviders: string[] | null | un
 
 export function readRequiredCountryValues(config: Record<string, unknown>): string[] {
   const values = new Set<string>()
-  const legacyRequiredValue = normalizeIdentityCountryCode(config.required_value)
-  if (legacyRequiredValue) {
-    values.add(legacyRequiredValue)
+  const singleRequiredValue = normalizeIdentityCountryCode(config.required_value)
+  if (singleRequiredValue) {
+    values.add(singleRequiredValue)
   }
   for (const value of normalizeIdentityCountryCodes(config.required_values)) {
     values.add(value)

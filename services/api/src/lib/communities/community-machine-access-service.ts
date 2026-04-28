@@ -2,7 +2,6 @@ import type {
   CommunityDatabaseBindingRepository,
   CommunityReadRepository,
 } from "./db-community-repository"
-import { isMissingTableError } from "../auth/auth-db-query-helpers"
 import { badRequestError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
@@ -209,45 +208,38 @@ async function listActiveMachineAccessPlatformOverrides(_input: {
   communityId: string
 }): Promise<CommunityMachineAccessPlatformOverride[]> {
   const client = getControlPlaneClient(_input.env)
-  try {
-    const result = await client.execute({
-      sql: `
-        SELECT surface, expires_at
-        FROM machine_access_overrides
-        WHERE community_id = ?1
-          AND effect = 'disable'
-          AND revoked_at IS NULL
-        ORDER BY created_at DESC
-      `,
-      args: [_input.communityId],
-    })
-    const now = Date.now()
+  const result = await client.execute({
+    sql: `
+      SELECT surface, expires_at
+      FROM machine_access_overrides
+      WHERE community_id = ?1
+        AND effect = 'disable'
+        AND revoked_at IS NULL
+      ORDER BY created_at DESC
+    `,
+    args: [_input.communityId],
+  })
+  const now = Date.now()
 
-    return result.rows.flatMap((row) => {
-      const surface = row.surface === "all" || configurableSurfaces.includes(row.surface as ConfigurableMachineAccessSurface)
-        ? row.surface as CommunityMachineAccessPlatformOverride["surface"]
-        : null
-      if (!surface) {
-        return []
-      }
-
-      const expiresAt = row.expires_at == null ? null : String(row.expires_at)
-      if (expiresAt && Date.parse(expiresAt) <= now) {
-        return []
-      }
-
-      return [{
-        surface,
-        reason: "platform_disabled" as const,
-        expires_at: expiresAt,
-      }]
-    })
-  } catch (error) {
-    if (isMissingTableError(error, "machine_access_overrides")) {
+  return result.rows.flatMap((row) => {
+    const surface = row.surface === "all" || configurableSurfaces.includes(row.surface as ConfigurableMachineAccessSurface)
+      ? row.surface as CommunityMachineAccessPlatformOverride["surface"]
+      : null
+    if (!surface) {
       return []
     }
-    throw error
-  }
+
+    const expiresAt = row.expires_at == null ? null : String(row.expires_at)
+    if (expiresAt && Date.parse(expiresAt) <= now) {
+      return []
+    }
+
+    return [{
+      surface,
+      reason: "platform_disabled" as const,
+      expires_at: expiresAt,
+    }]
+  })
 }
 
 function applyMachineAccessPlatformOverrides(input: {

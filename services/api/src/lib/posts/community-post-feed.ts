@@ -3,11 +3,9 @@ import { numberOrNull, requiredNumber, rowValue } from "../sql-row"
 import type { Post } from "../../types"
 import {
   POST_SELECT_COLUMNS,
-  POST_SELECT_COLUMNS_LEGACY,
   serializePost,
   toPostRow,
 } from "./community-post-serialization"
-import { isMissingColumnError } from "../auth/auth-db-query-helpers"
 
 export type PublishedLocalizedPostFeedItem = {
   post: Post
@@ -131,12 +129,7 @@ export async function listPublishedLocalizedPosts(input: {
       input.sort === "new" ? input.limit + 1 : 10_000,
     ],
   })
-  const result = await input.client.execute(buildFeedQuery(POST_SELECT_COLUMNS)).catch(async (error) => {
-    if (!isMissingColumnError(error, "embeds_json")) {
-      throw error
-    }
-    return input.client.execute(buildFeedQuery(POST_SELECT_COLUMNS_LEGACY))
-  })
+  const result = await input.client.execute(buildFeedQuery(POST_SELECT_COLUMNS))
 
   const items = result.rows.map((row) => {
     return {

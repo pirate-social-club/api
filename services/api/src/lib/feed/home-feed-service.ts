@@ -6,7 +6,6 @@ import type {
   CommunityMembershipProjectionRepository,
   CommunityReadRepository,
 } from "../communities/db-community-repository"
-import { isMissingColumnError } from "../auth/auth-db-query-helpers"
 import { getLatestThreadSnapshotForRead } from "../comments/community-comment-store"
 import { buildLocalizedPostResponse } from "../localization/post-localization-service"
 import { enqueueEmbedHydrateOnReadIfNeeded, enqueuePostTranslationOnReadIfNeeded } from "../posts/post-jobs"
@@ -229,50 +228,17 @@ async function listHomeFeedProjectionRows(input: {
   const controlPlaneClient = getControlPlaneClient(input.env)
   const placeholders = input.communityIds.map((_, index) => `?${index + 1}`).join(", ")
 
-  try {
-    const result = await controlPlaneClient.execute({
-      sql: `
-        SELECT community_id, source_post_id, source_created_at, visibility, upvote_count, downvote_count, comment_count, like_count
-        FROM community_post_projections
-        WHERE projection_version = 1
-          AND status = 'published'
-          AND community_id IN (${placeholders})
-      `,
-      args: input.communityIds,
-    })
-    return result.rows.map((row) => toHomeFeedProjectionRow(row))
-  } catch (error) {
-    const isLegacyProjectionSchema = [
-      "visibility",
-      "upvote_count",
-      "downvote_count",
-      "comment_count",
-      "like_count",
-    ].some((columnName) => isMissingColumnError(error, columnName))
-
-    if (!isLegacyProjectionSchema) {
-      throw error
-    }
-
-    const result = await controlPlaneClient.execute({
-      sql: `
-        SELECT community_id,
-               source_post_id,
-               source_created_at,
-               'public' AS visibility,
-               0 AS upvote_count,
-               0 AS downvote_count,
-               0 AS comment_count,
-               0 AS like_count
-        FROM community_post_projections
-        WHERE projection_version = 1
-          AND status = 'published'
-          AND community_id IN (${placeholders})
-      `,
-      args: input.communityIds,
-    })
-    return result.rows.map((row) => toHomeFeedProjectionRow(row))
-  }
+  const result = await controlPlaneClient.execute({
+    sql: `
+      SELECT community_id, source_post_id, source_created_at, visibility, upvote_count, downvote_count, comment_count, like_count
+      FROM community_post_projections
+      WHERE projection_version = 1
+        AND status = 'published'
+        AND community_id IN (${placeholders})
+    `,
+    args: input.communityIds,
+  })
+  return result.rows.map((row) => toHomeFeedProjectionRow(row))
 }
 
 export async function listHomeFeed(input: {

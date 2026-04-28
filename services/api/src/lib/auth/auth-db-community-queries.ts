@@ -18,7 +18,7 @@ import {
   toCommunityRow,
   toJobRow,
 } from "./auth-db-rows"
-import { firstRow, isMissingColumnError, isMissingTableError } from "./auth-db-query-helpers"
+import { firstRow } from "./auth-db-query-helpers"
 
 const COMMUNITY_ROW_COLUMNS = `
   community_id, creator_user_id, display_name, status, provisioning_state,
@@ -138,7 +138,8 @@ export async function getCommunityDatabaseBindingRowById(
   const row = await firstRow(executor, {
     sql: `
       SELECT community_database_binding_id, community_id, binding_role, organization_slug, group_name, group_id,
-             database_name, database_id, database_url, location, status, transferred_at, created_at, updated_at
+             database_name, database_id, database_url, location, requires_credentials, status,
+             transferred_at, created_at, updated_at
       FROM community_database_bindings
       WHERE community_database_binding_id = ?1
       LIMIT 1
@@ -156,7 +157,8 @@ export async function getPrimaryCommunityDatabaseBindingRow(
   const row = await firstRow(executor, {
     sql: `
       SELECT community_database_binding_id, community_id, binding_role, organization_slug, group_name, group_id,
-             database_name, database_id, database_url, location, status, transferred_at, created_at, updated_at
+             database_name, database_id, database_url, location, requires_credentials, status,
+             transferred_at, created_at, updated_at
       FROM community_database_bindings
       WHERE community_id = ?1
         AND binding_role = 'primary'
@@ -242,11 +244,6 @@ export async function getLatestJobRowBySubjectAndType(
       LIMIT 1
     `,
     args: [input.subjectType, input.subjectId, input.jobType],
-  }).catch((error) => {
-    if (isMissingTableError(error, "jobs")) {
-      return null
-    }
-    throw error
   })
 
   return row ? toJobRow(row) : null
@@ -284,11 +281,6 @@ export async function listCommunityMembershipProjectionRowsByUserId(
       ORDER BY updated_at DESC, projection_id DESC
     `,
     args: [userId],
-  }).catch((error) => {
-    if (isMissingTableError(error, "community_membership_projections")) {
-      return { rows: [] }
-    }
-    throw error
   })
 
   return result.rows.map((row) => toCommunityMembershipProjectionRow(row))
@@ -306,11 +298,6 @@ export async function listCommunityFollowProjectionRowsByUserId(
       ORDER BY updated_at DESC, projection_id DESC
     `,
     args: [userId],
-  }).catch((error) => {
-    if (isMissingTableError(error, "community_follow_projections")) {
-      return { rows: [] }
-    }
-    throw error
   })
 
   return result.rows.map((row) => toCommunityFollowProjectionRow(row))
@@ -464,11 +451,6 @@ export async function updateCommunityPostProjectionMetricsRow(input: {
       input.likeCount,
       input.updatedAt,
     ],
-  }).catch((error) => {
-    if (isMissingColumnError(error, "upvote_count")) {
-      return
-    }
-    throw error
   })
 }
 
@@ -485,11 +467,6 @@ export async function getCommunityCommentProjectionRowByCommentId(
       LIMIT 1
     `,
     args: [commentId],
-  }).catch((error) => {
-    if (isMissingTableError(error, "comment_projections")) {
-      return null
-    }
-    throw error
   })
 
   return row ? toCommunityCommentProjectionRow(row) : null

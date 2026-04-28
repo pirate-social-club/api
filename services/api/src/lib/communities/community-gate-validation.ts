@@ -276,10 +276,10 @@ function assertNationalityGate(rule: GateRuleInput): void {
   }
 
   const config = (requirement.config ?? rule.gate_config ?? {}) as Record<string, unknown>
-  const legacyRequiredValue = normalizeIdentityCountryCode(config.required_value)
+  const singleRequiredValue = normalizeIdentityCountryCode(config.required_value)
   const requiredValues = new Set<string>()
-  if (legacyRequiredValue) {
-    requiredValues.add(legacyRequiredValue)
+  if (singleRequiredValue) {
+    requiredValues.add(singleRequiredValue)
   }
   for (const value of normalizeIdentityCountryCodes(config.required_values)) {
     requiredValues.add(value)
@@ -290,7 +290,7 @@ function assertNationalityGate(rule: GateRuleInput): void {
 
   const rawRequiredValues = Array.isArray(config.required_values) ? config.required_values : []
   if (
-    (config.required_value != null && !legacyRequiredValue)
+    (config.required_value != null && !singleRequiredValue)
     || rawRequiredValues.some((value) => normalizeIdentityCountryCode(value) == null)
   ) {
     throw eligibilityFailed("Nationality gate country codes must be valid ISO-2 or ISO-3 codes")

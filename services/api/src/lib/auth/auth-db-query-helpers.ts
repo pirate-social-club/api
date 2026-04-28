@@ -111,28 +111,6 @@ export function hasCheckConstraintName(error: unknown, constraintName: string): 
     || message.includes(`CHECK constraint failed: ${constraintName}`)
 }
 
-export function isMissingTableError(error: unknown, tableName: string): boolean {
-  const code = typeof error === "object" && error && "code" in error ? String((error as { code?: unknown }).code) : ""
-  if (code === "42P01") {
-    return true
-  }
-  const message = error instanceof Error ? error.message : String(error)
-  return message.includes("no such table") && message.includes(tableName)
-}
-
-export function isMissingColumnError(error: unknown, columnName: string): boolean {
-  const code = typeof error === "object" && error && "code" in error ? String((error as { code?: unknown }).code) : ""
-  if (code === "42703") {
-    return true
-  }
-  const message = error instanceof Error ? error.message : String(error)
-  return (
-    (message.includes("no such column") && message.includes(columnName))
-    || message.includes(`column "${columnName}" does not exist`)
-    || message.includes(`column '${columnName}' does not exist`)
-  )
-}
-
 export async function firstRow(executor: DbExecutor, stmt: InStatement): Promise<unknown | null> {
   return executeFirst(executor, stmt)
 }

@@ -17,11 +17,7 @@ import {
   toRedditVerificationSessionRow,
   toVerificationSessionRow,
 } from "./auth-db-rows"
-import {
-  firstRow,
-  isMissingColumnError,
-  isMissingTableError,
-} from "./auth-db-query-helpers"
+import { firstRow } from "./auth-db-query-helpers"
 import { getLatestJobRowBySubjectAndType } from "./auth-db-community-queries"
 import type { OnboardingStatus } from "../../types"
 
@@ -56,11 +52,6 @@ export async function getLatestRedditVerificationSessionRow(
       LIMIT 1
     `,
     args: [userId],
-  }).catch((error) => {
-    if (isMissingTableError(error, "reddit_verification_sessions")) {
-      return null
-    }
-    throw error
   })
 
   return row ? toRedditVerificationSessionRow(row) : null
@@ -83,11 +74,6 @@ export async function getLatestRedditVerificationSessionRowForUsername(
       LIMIT 1
     `,
     args: [userId, redditUsername],
-  }).catch((error) => {
-    if (isMissingTableError(error, "reddit_verification_sessions")) {
-      return null
-    }
-    throw error
   })
 
   return row ? toRedditVerificationSessionRow(row) : null
@@ -109,18 +95,13 @@ export async function getLatestExternalReputationSnapshotRow(
       LIMIT 1
     `,
     args: [userId],
-  }).catch((error) => {
-    if (isMissingTableError(error, "external_reputation_snapshots")) {
-      return null
-    }
-    throw error
   })
 
   return row ? toExternalReputationSnapshotRow(row) : null
 }
 
 async function getLatestNamespaceVerificationSessionRow(executor: DbExecutor, userId: string): Promise<NamespaceVerificationSessionRow | null> {
-  const stmt = {
+  const row = await firstRow(executor, {
     sql: `
       SELECT namespace_verification_session_id, namespace_verification_id, user_id, family, submitted_root_label,
              normalized_root_label, status, challenge_host, challenge_txt_value, setup_nameservers_json, challenge_expires_at,
@@ -134,30 +115,6 @@ async function getLatestNamespaceVerificationSessionRow(executor: DbExecutor, us
       LIMIT 1
     `,
     args: [userId],
-  }
-  const legacyStmt = {
-    sql: `
-      SELECT namespace_verification_session_id, namespace_verification_id, user_id, family, submitted_root_label,
-             normalized_root_label, status, challenge_host, challenge_txt_value, challenge_expires_at,
-             root_exists, root_control_verified, expiry_horizon_sufficient, routing_enabled,
-             pirate_dns_authority_verified, club_attach_allowed, pirate_web_routing_allowed,
-             pirate_subdomain_issuance_allowed, control_class, operation_class, observation_provider,
-             evidence_bundle_ref, failure_reason, accepted_at, expires_at, created_at, updated_at
-      FROM namespace_verification_sessions
-      WHERE user_id = ?1
-      ORDER BY created_at DESC
-      LIMIT 1
-    `,
-    args: [userId],
-  }
-  const row = await firstRow(executor, stmt).catch(async (error) => {
-    if (isMissingTableError(error, "namespace_verification_sessions")) {
-      return null
-    }
-    if (isMissingColumnError(error, "setup_nameservers_json")) {
-      return await firstRow(executor, legacyStmt)
-    }
-    throw error
   })
 
   return row ? toNamespaceVerificationSessionRow(row) : null
@@ -177,11 +134,6 @@ async function getLatestNamespaceVerificationRow(executor: DbExecutor, userId: s
       LIMIT 1
     `,
     args: [userId],
-  }).catch((error) => {
-    if (isMissingTableError(error, "namespace_verifications")) {
-      return null
-    }
-    throw error
   })
 
   return row ? toNamespaceVerificationRow(row) : null

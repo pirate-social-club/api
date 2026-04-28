@@ -3,7 +3,6 @@ import { getGlobalHandleRow, getProfileRow, listLinkedHandleRows } from "../auth
 import { assembleProfile } from "../auth/auth-serializers"
 import { conflictError, eligibilityFailed, internalError } from "../errors"
 import { makeId, nowIso } from "../helpers"
-import { isMissingTableError } from "../auth/auth-db-query-helpers"
 import type {
   AgentHandle,
   PublicAgentResolution,
@@ -38,22 +37,12 @@ export async function getUserAgent(
   agentId: string,
   userId: string,
 ): Promise<UserAgent | null> {
-  const row = await getUserAgentRowForOwner(client, agentId, userId).catch((error) => {
-    if (isMissingTableError(error, "user_agents")) {
-      return null
-    }
-    throw error
-  })
+  const row = await getUserAgentRowForOwner(client, agentId, userId)
   if (!row) {
     return null
   }
   const currentOwnershipRow = await getCurrentOwnershipRecordRowForAgent(client, agentId, userId)
-  const handleRow = await getActiveAgentHandleRow(client, agentId).catch((error) => {
-    if (isMissingTableError(error, "agent_handles")) {
-      return null
-    }
-    throw error
-  })
+  const handleRow = await getActiveAgentHandleRow(client, agentId)
   return serializeUserAgent(
     row,
     currentOwnershipRow ? serializeAgentOwnershipRecord(currentOwnershipRow) : null,
@@ -65,21 +54,11 @@ export async function listUserAgents(
   client: Client,
   userId: string,
 ): Promise<UserAgent[]> {
-  const rows = await listUserAgentRowsForOwner(client, userId).catch((error) => {
-    if (isMissingTableError(error, "user_agents")) {
-      return []
-    }
-    throw error
-  })
+  const rows = await listUserAgentRowsForOwner(client, userId)
   const items: UserAgent[] = []
   for (const row of rows) {
     const currentOwnershipRow = await getCurrentOwnershipRecordRowForAgent(client, row.agent_id, userId)
-    const handleRow = await getActiveAgentHandleRow(client, row.agent_id).catch((error) => {
-      if (isMissingTableError(error, "agent_handles")) {
-        return null
-      }
-      throw error
-    })
+    const handleRow = await getActiveAgentHandleRow(client, row.agent_id)
     items.push(
       serializeUserAgent(
         row,
@@ -99,12 +78,7 @@ export async function updateUserAgentDisplayName(
     displayName: string
   },
 ): Promise<UserAgent | null> {
-  const existingRow = await getUserAgentRowForOwner(client, input.agentId, input.userId).catch((error) => {
-    if (isMissingTableError(error, "user_agents")) {
-      return null
-    }
-    throw error
-  })
+  const existingRow = await getUserAgentRowForOwner(client, input.agentId, input.userId)
   if (!existingRow) {
     return null
   }
@@ -126,12 +100,7 @@ export async function updateUserAgentDisplayName(
     throw internalError("Updated agent row is missing")
   }
   const currentOwnershipRow = await getCurrentOwnershipRecordRowForAgent(client, input.agentId, input.userId)
-  const handleRow = await getActiveAgentHandleRow(client, input.agentId).catch((error) => {
-    if (isMissingTableError(error, "agent_handles")) {
-      return null
-    }
-    throw error
-  })
+  const handleRow = await getActiveAgentHandleRow(client, input.agentId)
   return serializeUserAgent(
     row,
     currentOwnershipRow ? serializeAgentOwnershipRecord(currentOwnershipRow) : null,
@@ -147,12 +116,7 @@ export async function seedUserAgentForAdmin(
     desiredLabel?: string | null
   },
 ): Promise<UserAgent> {
-  const profileRow = await getProfileRow(client, input.userId).catch((error) => {
-    if (isMissingTableError(error, "profiles")) {
-      return null
-    }
-    throw error
-  })
+  const profileRow = await getProfileRow(client, input.userId)
   if (!profileRow) {
     throw eligibilityFailed("Owner profile is not available")
   }
@@ -164,12 +128,7 @@ export async function seedUserAgentForAdmin(
   const trimmedDisplayName = input.displayName.trim()
   const desired = input.desiredLabel ? normalizeDesiredAgentHandleLabel(input.desiredLabel) : null
   if (desired) {
-    const existingLabelRow = await getAgentHandleRowByLabel(client, desired.labelNormalized).catch((error) => {
-      if (isMissingTableError(error, "agent_handles")) {
-        throw internalError("Agent handle storage is not available")
-      }
-      throw error
-    })
+    const existingLabelRow = await getAgentHandleRowByLabel(client, desired.labelNormalized)
     if (existingLabelRow) {
       throw conflictError("Desired agent handle is unavailable")
     }
@@ -190,11 +149,6 @@ export async function seedUserAgentForAdmin(
     agentId,
     displayName: trimmedDisplayName,
     createdAt,
-  }).catch((error) => {
-    if (isMissingTableError(error, "agent_handles")) {
-      throw internalError("Agent handle storage is not available")
-    }
-    throw error
   })
 
   if (desired) {
@@ -209,12 +163,7 @@ export async function seedUserAgentForAdmin(
   if (!row) {
     throw internalError("Seeded agent row is missing")
   }
-  const handleRow = await getActiveAgentHandleRow(client, agentId).catch((error) => {
-    if (isMissingTableError(error, "agent_handles")) {
-      return null
-    }
-    throw error
-  })
+  const handleRow = await getActiveAgentHandleRow(client, agentId)
   if (!handleRow) {
     throw internalError("Seeded agent handle row is missing")
   }
@@ -228,22 +177,12 @@ export async function getUserAgentHandle(
     userId: string
   },
 ): Promise<AgentHandle | null> {
-  const agentRow = await getUserAgentRowForOwner(client, input.agentId, input.userId).catch((error) => {
-    if (isMissingTableError(error, "user_agents")) {
-      return null
-    }
-    throw error
-  })
+  const agentRow = await getUserAgentRowForOwner(client, input.agentId, input.userId)
   if (!agentRow) {
     return null
   }
 
-  const handleRow = await getActiveAgentHandleRow(client, input.agentId).catch((error) => {
-    if (isMissingTableError(error, "agent_handles")) {
-      return null
-    }
-    throw error
-  })
+  const handleRow = await getActiveAgentHandleRow(client, input.agentId)
   return handleRow ? serializeAgentHandle(handleRow) : null
 }
 
@@ -255,12 +194,7 @@ export async function claimUserAgentHandle(
     desiredLabel: string
   },
 ): Promise<AgentHandle | null> {
-  const agentRow = await getUserAgentRowForOwner(client, input.agentId, input.userId).catch((error) => {
-    if (isMissingTableError(error, "user_agents")) {
-      return null
-    }
-    throw error
-  })
+  const agentRow = await getUserAgentRowForOwner(client, input.agentId, input.userId)
   if (!agentRow) {
     return null
   }
@@ -269,12 +203,7 @@ export async function claimUserAgentHandle(
   }
 
   const desired = normalizeDesiredAgentHandleLabel(input.desiredLabel)
-  const existingLabelRow = await getAgentHandleRowByLabel(client, desired.labelNormalized).catch((error) => {
-    if (isMissingTableError(error, "agent_handles")) {
-      throw internalError("Agent handle storage is not available")
-    }
-    throw error
-  })
+  const existingLabelRow = await getAgentHandleRowByLabel(client, desired.labelNormalized)
   if (existingLabelRow && existingLabelRow.agent_id !== input.agentId) {
     throw conflictError("Desired agent handle is unavailable")
   }
@@ -379,12 +308,7 @@ export async function resolvePublicAgentByHandle(
   handleLabel: string,
 ): Promise<PublicAgentResolution | null> {
   const requestedLabelNormalized = normalizeAgentHandleLookupLabel(handleLabel)
-  const requestedHandleRow = await getAgentHandleRowByLabel(client, requestedLabelNormalized).catch((error) => {
-    if (isMissingTableError(error, "agent_handles")) {
-      return null
-    }
-    throw error
-  })
+  const requestedHandleRow = await getAgentHandleRowByLabel(client, requestedLabelNormalized)
   if (!requestedHandleRow) {
     return null
   }
