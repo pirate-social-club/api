@@ -31,6 +31,7 @@ Mounted in `services/api/src/index.ts`:
 - `/users`
 - `/onboarding`
 - `/profiles`
+- `/royalties`
 - `/` for verification routes
 - `/health`
 
@@ -54,6 +55,7 @@ Mounted in `services/api/src/index.ts`:
 | `/feed/home` | `src/routes/feed.ts` | `tests/routes/feed-routes.test.ts`, `src/lib/feed/home-feed-service.test.ts`, broader public-post tests | direct | Route coverage includes the empty-feed/community-summary path; service tests cover ranking helpers. |
 | `/jobs/:jobId` | `src/routes/jobs.ts` | `tests/routes/jobs-posts-routes.test.ts`, `tests/routes/communities/community-routes.test.ts` | direct | Dedicated jobs coverage now exists, with broader assertions still present in community flows. |
 | `/notifications/*` | `src/routes/notifications.ts` | `tests/routes/notifications-routes.test.ts` | direct | Covers auth requirement, summary, tasks, feed, mark-read, and dismiss-task. |
+| `/royalties/*` | `src/routes/royalties.ts` | `tests/routes/notifications-routes.test.ts` | direct | Covers royalty activity pagination backed by notification events. |
 | `/posts/:postId` and `/posts/:postId/vote` | `src/routes/posts.ts` | `tests/routes/jobs-posts-routes.test.ts`, `tests/routes/communities/community-routes.test.ts` | direct | Dedicated post read/vote coverage now exists, with broader post lifecycle coverage still present in community flows. |
 | `/public-posts/:postId` | `src/routes/public-posts.ts` | `tests/routes/communities/community-routes.test.ts`, `tests/routes/communities/public-communities-routes.test.ts`, `tests/routes/jobs-posts-routes.test.ts` | direct/indirect | Public visibility behavior is exercised from community/post flows. |
 | `/public-communities/*` | `src/routes/public-communities.ts` | `tests/routes/communities/public-communities-routes.test.ts` | direct | Covers public community reads/listings/posts. |
