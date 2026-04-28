@@ -6,6 +6,7 @@ import type {
 } from "../communities/db-community-repository"
 import {
   getPostById,
+  getPostReadMetrics,
   listPublishedLocalizedPosts,
 } from "./community-post-store"
 import { getLatestThreadSnapshotForRead } from "../comments/community-comment-store"
@@ -78,10 +79,16 @@ export async function getPost(input: {
       throw notFoundError("Post not found")
     }
     const threadSnapshot = await getLatestThreadSnapshotForRead(db.client, post.post_id)
+    const metrics = await getPostReadMetrics({
+      executor: db.client,
+      postId: post.post_id,
+      viewerUserId: input.userId,
+    })
     const response = await buildLocalizedPostResponse({
       executor: db.client,
       post,
       locale: input.locale ?? undefined,
+      metrics,
       threadSnapshot,
     })
     await enqueuePostTranslationOnReadIfNeeded({
@@ -123,10 +130,16 @@ export async function getPublicPost(input: {
       throw notFoundError("Post not found")
     }
     const threadSnapshot = await getLatestThreadSnapshotForRead(db.client, post.post_id)
+    const metrics = await getPostReadMetrics({
+      executor: db.client,
+      postId: post.post_id,
+      viewerUserId: null,
+    })
     const response = await buildLocalizedPostResponse({
       executor: db.client,
       post,
       locale: input.locale ?? undefined,
+      metrics,
       threadSnapshot,
     })
     await enqueuePostTranslationOnReadIfNeeded({

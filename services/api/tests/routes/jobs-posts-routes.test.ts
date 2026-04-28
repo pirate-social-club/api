@@ -435,4 +435,55 @@ describe("posts routes", () => {
     expect(acceptedVoteBody.post_id).toBe(postBody.post_id)
     expect(acceptedVoteBody.value).toBe(1)
   })
+
+  test("GET /posts/:postId includes refreshed vote metrics for the post author", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "posts-routes-self-vote-creator")
+    const community = await createCommunity(ctx.env, creator.accessToken, "Self Vote Route Club")
+
+    const createdPost = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Self vote on me",
+        body: "The author should see this vote after reload.",
+        idempotency_key: "posts-routes-self-vote-1",
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(createdPost.status).toBe(201)
+    const postBody = await json(createdPost) as { post_id: string }
+
+    const acceptedVote = await requestJson(
+      `http://pirate.test/posts/${postBody.post_id}/vote`,
+      { value: 1 },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(acceptedVote.status).toBe(200)
+
+    const fetchedPost = await app.request(
+      `http://pirate.test/posts/${postBody.post_id}`,
+      {
+        headers: {
+          authorization: `Bearer ${creator.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(fetchedPost.status).toBe(200)
+    const fetchedPostBody = await json(fetchedPost) as {
+      upvote_count: number
+      downvote_count: number
+      like_count: number
+      viewer_vote: number | null
+    }
+    expect(fetchedPostBody.upvote_count).toBe(1)
+    expect(fetchedPostBody.downvote_count).toBe(0)
+    expect(fetchedPostBody.like_count).toBe(0)
+    expect(fetchedPostBody.viewer_vote).toBe(1)
+  })
 })
