@@ -10,7 +10,6 @@ import { splitSqlStatements, toSqliteCompatibleStatements } from "../../shared/s
 export const FIRST_LOCAL_POST_BASELINE_MIGRATION = "0047_control_plane_notifications.sql"
 const LOCAL_CONTROL_PLANE_BUSY_TIMEOUT_MS = 5000
 const LOCAL_FOLLOWER_COUNT_RENAME_MIGRATIONS = new Set([
-  "0059_control_plane_communities_follower_count_column.sql",
   "0060_control_plane_communities_follower_count_column.sql",
 ])
 

@@ -1,4 +1,5 @@
 import { badRequestError, providerUnavailable } from "../errors"
+import { isProductionEnv } from "../helpers"
 import type { Env } from "../../types"
 
 export type HnsInspectResult = {
@@ -56,10 +57,6 @@ export type HnsVerifyTxtResult = {
 
 const MAX_HNS_ROOT_LABEL_LENGTH = 63
 const PLATFORM_MANAGED_HNS_ROOTS = new Set(["pirate", "clawitzer"])
-
-function isProductionEnvironment(env: Env): boolean {
-  return String(env.ENVIRONMENT || "").trim().toLowerCase() === "production"
-}
 
 export function assertHnsRootLabel(value: string): void {
   if (!value || value.length > MAX_HNS_ROOT_LABEL_LENGTH) {
@@ -125,7 +122,7 @@ async function request<T>(env: Env, path: string, init?: RequestInit): Promise<T
   }
 
   const authToken = getHnsVerifierAuthToken(env)
-  if (!authToken && isProductionEnvironment(env)) {
+  if (!authToken && isProductionEnv(env)) {
     throw providerUnavailable("HNS verifier auth token is not configured")
   }
   if (authToken) {

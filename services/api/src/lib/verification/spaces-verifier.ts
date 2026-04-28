@@ -1,4 +1,5 @@
 import { badRequestError, internalError, providerUnavailable } from "../errors"
+import { isProductionEnv } from "../helpers"
 import type { Env } from "../../types"
 import { normalizeRootLabel } from "./labels"
 
@@ -102,10 +103,6 @@ function requireSpacesVerifierBaseUrl(env: Env): string {
   return baseUrl
 }
 
-function isProductionEnvironment(env: Env): boolean {
-  return String(env.ENVIRONMENT || "").trim().toLowerCase() === "production"
-}
-
 function getSpacesChallengeDomain(env: Env): string {
   return String(env.SPACES_VERIFIER_CHALLENGE_DOMAIN || "").trim() || "pirate.sc"
 }
@@ -149,7 +146,7 @@ async function spacesVerifierRequest<T>(
 ): Promise<T> {
   const baseUrl = requireSpacesVerifierBaseUrl(env)
   const authToken = String(env.SPACES_VERIFIER_AUTH_TOKEN || "").trim()
-  if (!authToken && isProductionEnvironment(env)) {
+  if (!authToken && isProductionEnv(env)) {
     throw providerUnavailable("Spaces verifier auth token is not configured")
   }
   const controller = new AbortController()

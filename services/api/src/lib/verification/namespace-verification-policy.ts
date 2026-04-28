@@ -1,6 +1,6 @@
 import type { InStatement } from "../sql-client"
 import { internalError } from "../errors"
-import { makeId } from "../helpers"
+import { isProductionEnv, makeId } from "../helpers"
 import type { NamespaceVerificationSessionRow } from "../auth/auth-db-rows"
 import {
   inspectHnsRoot,
@@ -11,10 +11,7 @@ import type { SpacesChallengePayload } from "./spaces-verifier"
 import type { Env, NamespaceVerificationSession } from "../../types"
 
 export { isHnsVerifierConfigured } from "./hns-verifier"
-
-export function isProductionEnv(env: Env): boolean {
-  return String(env.ENVIRONMENT || "").trim().toLowerCase() === "production"
-}
+export { isProductionEnv }
 
 export function isSpacesVerifierConfigured(env: Env): boolean {
   return String(env.SPACES_VERIFIER_BASE_URL || "").trim().length > 0

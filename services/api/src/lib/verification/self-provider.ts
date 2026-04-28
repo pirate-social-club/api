@@ -5,7 +5,7 @@ import type {
   VerificationResult,
 } from "@selfxyz/core"
 import { badRequestError, providerUnavailable } from "../errors"
-import { makeId } from "../helpers"
+import { isProductionEnv, makeId } from "../helpers"
 import { normalizeIdentityCountryCode } from "../identity/country-codes"
 import type { Env, RequestedVerificationCapability, SelfVerificationDisclosures, SelfVerificationLaunch, VerificationIntent, VerificationRequirement } from "../../types"
 
@@ -228,10 +228,6 @@ export interface SelfProvider {
 
 function trimEnv(value: string | undefined): string {
   return String(value || "").trim()
-}
-
-function isProductionEnv(env: Env): boolean {
-  return String(env.ENVIRONMENT || "").trim().toLowerCase() === "production"
 }
 
 function isAutomatedTestEnv(env: Env): boolean {

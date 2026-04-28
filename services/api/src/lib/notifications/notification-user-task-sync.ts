@@ -136,6 +136,10 @@ async function syncGlobalHandleCleanupTask(executor: DbExecutor, userId: string)
 }
 
 export async function syncUserNotificationTasks(executor: DbExecutor, userId: string): Promise<void> {
+  const user = await getUserRow(executor, userId)
+  if (!user) {
+    return
+  }
   await syncProfileCompletionTask(executor, userId)
   await syncGlobalHandleCleanupTask(executor, userId)
 }

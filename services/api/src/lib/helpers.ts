@@ -12,6 +12,10 @@ export function isLocalEnvironment(environment: string | undefined): boolean {
   return normalized === "" || ["dev", "development", "local", "test"].includes(normalized)
 }
 
+export function isProductionEnv(env: { ENVIRONMENT?: string }): boolean {
+  return String(env.ENVIRONMENT || "").trim().toLowerCase() === "production"
+}
+
 export function splitCsv(value: string | undefined): string[] {
   return String(value || "")
     .split(",")
