@@ -100,6 +100,14 @@ export type Profile = {
   updated_at: string;
 };
 
+export type CommunityModeratorSummary = {
+  user_id: string;
+  display_name: string;
+  handle: string;
+  avatar_ref?: string | null;
+  nationality_badge_country?: string | null;
+};
+
 export type RedditVerification = {
   reddit_username: string;
   status: "pending" | "verified" | "failed" | "expired";
@@ -1340,6 +1348,7 @@ export type CommunityPreview = {
   donation_partner_id?: string | null;
   donation_partner?: DonationPartnerSummary | null;
   reference_links?: Array<CommunityReferenceLinkPublic> | null;
+  moderator?: CommunityModeratorSummary | null;
   membership_gate_summaries: Array<MembershipGateSummary>;
   rules: Array<CommunityRule>;
   viewer_membership_status?: "member" | "not_member" | "banned" | null;

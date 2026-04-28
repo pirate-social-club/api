@@ -24,6 +24,7 @@ import {
 } from "./community-identity-media"
 import { serializeDonationPartnerRow } from "./community-donation-partner-serialization"
 import { parseStoredReferenceLinks } from "./community-serialization"
+import { getControlPlaneClient } from "../runtime-deps"
 import type {
   CommunityDatabaseBindingRepository,
   CommunityReadRepository,
@@ -114,12 +115,46 @@ function parsePreviewHumanVerificationLane(
 async function getActiveCommunityForPreview(
   repository: Pick<CommunityReadRepository, "getCommunityById">,
   communityId: string,
-): Promise<{ display_name: string; created_at: string }> {
+): Promise<{ creator_user_id: string; display_name: string; created_at: string }> {
   const community = await repository.getCommunityById(communityId)
   if (!community || community.provisioning_state !== "active" || community.status !== "active") {
     throw notFoundError("Community not found")
   }
   return community
+}
+
+async function getCommunityModeratorSummary(input: {
+  env: Env
+  userId: string
+}): Promise<CommunityPreview["moderator"]> {
+  const result = await getControlPlaneClient(input.env).execute({
+    sql: `
+      SELECT p.user_id, p.display_name, p.avatar_ref, gh.label_display
+      FROM profiles p
+      JOIN global_handles gh ON gh.global_handle_id = p.global_handle_id
+      WHERE p.user_id = ?1
+      LIMIT 1
+    `,
+    args: [input.userId],
+  })
+  const row = result.rows[0]
+  if (!row) {
+    return null
+  }
+
+  const handle = String(row.label_display ?? "").trim()
+  const displayName = String(row.display_name ?? "").trim() || handle
+  if (!handle || !displayName) {
+    return null
+  }
+
+  return {
+    user_id: String(row.user_id),
+    display_name: displayName,
+    handle,
+    avatar_ref: row.avatar_ref == null ? null : String(row.avatar_ref),
+    nationality_badge_country: null,
+  }
 }
 
 async function buildPreviewForViewer(input: {
@@ -141,10 +176,12 @@ async function buildPreviewForViewer(input: {
       ? await getCommunityFollowStatus(db.client, input.communityId, input.viewer.userId)
       : null
     return await buildCommunityPreview({
+      env: input.env,
       client: db.client,
       communityId: input.communityId,
       communityDisplayName: community.display_name,
       communityCreatedAt: community.created_at,
+      moderatorUserId: community.creator_user_id,
       locale: input.locale ?? null,
       gateRules: rules,
       viewerMembershipStatus:
@@ -211,10 +248,12 @@ async function listPublicCommunityRules(input: {
 }
 
 async function buildCommunityPreview(input: {
+  env: Env
   client: Awaited<ReturnType<typeof openCommunityDb>>["client"]
   communityId: string
   communityDisplayName: string
   communityCreatedAt: string
+  moderatorUserId: string
   locale?: string | null
   gateRules: Awaited<ReturnType<typeof listActiveMembershipGateRules>>
   viewerMembershipStatus: CommunityPreview["viewer_membership_status"]
@@ -274,8 +313,14 @@ async function buildCommunityPreview(input: {
     client: input.client,
     communityId: input.communityId,
   })
-  const followerCount = await getCommunityFollowerCount(input.client, input.communityId)
-  const memberCount = await getCommunityMemberCount(input.client, input.communityId)
+  const [followerCount, memberCount, moderator] = await Promise.all([
+    getCommunityFollowerCount(input.client, input.communityId),
+    getCommunityMemberCount(input.client, input.communityId),
+    getCommunityModeratorSummary({
+      env: input.env,
+      userId: input.moderatorUserId,
+    }).catch(() => null),
+  ])
 
   const preview: CommunityPreview = {
     community_id: input.communityId,
@@ -303,6 +348,7 @@ async function buildCommunityPreview(input: {
     donation_policy_mode: donationPolicyMode,
     donation_partner_id: localRow?.donation_partner_id == null ? null : String(localRow.donation_partner_id),
     donation_partner: donationPolicyMode !== "none" ? donationPartner : null,
+    moderator,
     reference_links: referenceLinks,
     membership_gate_summaries: membershipGateSummaries,
     viewer_membership_status: input.viewerMembershipStatus,
