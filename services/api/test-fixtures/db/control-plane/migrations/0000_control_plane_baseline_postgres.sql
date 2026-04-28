@@ -1,5 +1,5 @@
 -- Fresh Postgres baseline for the control plane.
--- This supersedes the historical 0001-0033 migration chain on new Neon targets.
+-- This supersedes the historical 0001-0046 migration chain on new Neon targets.
 
 CREATE TABLE users (
     user_id TEXT PRIMARY KEY,
@@ -203,7 +203,6 @@ CREATE TABLE profiles (
     global_handle_id TEXT,
     primary_linked_handle_id TEXT,
     preferred_locale TEXT,
-    display_verified_nationality_badge INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(user_id),
@@ -494,27 +493,6 @@ CREATE INDEX idx_track_anchor_state_not_registered
     ON track_anchor_state(registration_status)
     WHERE registration_status = 'not_registered';
 
-CREATE TABLE projection_outbox (
-    outbox_id TEXT PRIMARY KEY,
-    target_scope TEXT NOT NULL CHECK (
-        target_scope IN ('club', 'global')
-    ),
-    target_id TEXT NOT NULL,
-    projection_kind TEXT NOT NULL,
-    payload_json JSONB NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending' CHECK (
-        status IN ('pending', 'running', 'done', 'failed')
-    ),
-    created_at TIMESTAMPTZ NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL
-);
-
-CREATE INDEX idx_projection_outbox_status
-    ON projection_outbox(status, created_at);
-
-CREATE INDEX idx_projection_outbox_target
-    ON projection_outbox(target_scope, target_id);
-
 CREATE TABLE jobs (
     job_id TEXT PRIMARY KEY,
     job_type TEXT NOT NULL,
@@ -784,39 +762,6 @@ CREATE INDEX idx_namespace_verification_assertions_session
 CREATE INDEX idx_namespace_verification_assertions_verification
     ON namespace_verification_assertions(namespace_verification_id, assertion_name, status);
 
-CREATE TABLE namespace_verification_revalidation_events (
-    revalidation_event_id TEXT PRIMARY KEY,
-    namespace_verification_id TEXT NOT NULL,
-    trigger TEXT NOT NULL CHECK (
-        trigger IN (
-            'manual_refresh',
-            'scheduled_refresh',
-            'create_time_recheck',
-            'delegation_change',
-            'expiry_change',
-            'suspected_transfer',
-            'contradiction_detected'
-        )
-    ),
-    old_assertions_json JSONB,
-    new_assertions_json JSONB,
-    old_capabilities_json JSONB,
-    new_capabilities_json JSONB,
-    old_status TEXT CHECK (
-        old_status IS NULL OR old_status IN ('verified', 'stale', 'expired', 'disputed')
-    ),
-    new_status TEXT NOT NULL CHECK (
-        new_status IN ('verified', 'stale', 'expired', 'disputed')
-    ),
-    source_evidence_bundle_id TEXT,
-    created_at TIMESTAMPTZ NOT NULL,
-    FOREIGN KEY (namespace_verification_id) REFERENCES namespace_verifications(namespace_verification_id),
-    FOREIGN KEY (source_evidence_bundle_id) REFERENCES namespace_verification_evidence_bundles(evidence_bundle_id)
-);
-
-CREATE INDEX idx_namespace_verification_revalidation_events_verification
-    ON namespace_verification_revalidation_events(namespace_verification_id, created_at DESC);
-
 CREATE INDEX idx_communities_namespace_verification
     ON communities(namespace_verification_id)
     WHERE namespace_verification_id IS NOT NULL;
@@ -906,31 +851,6 @@ CREATE TABLE external_reputation_snapshots (
 
 CREATE INDEX idx_external_reputation_snapshots_user_source_created
     ON external_reputation_snapshots(user_id, source_platform, created_at DESC);
-
-CREATE TABLE claim_market_bindings (
-    claim_market_binding_id TEXT PRIMARY KEY,
-    normalized_claim_hash TEXT NOT NULL,
-    normalized_claim_text TEXT NOT NULL,
-    provider_key TEXT NOT NULL,
-    provider_market_id TEXT NOT NULL,
-    provider_event_id TEXT,
-    question TEXT NOT NULL,
-    market_url TEXT NOT NULL,
-    resolve_date TEXT,
-    snapshot_payload_json JSONB,
-    snapshot_at TIMESTAMPTZ,
-    status TEXT NOT NULL CHECK (
-        status IN ('active', 'archived')
-    ),
-    created_at TIMESTAMPTZ NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL
-);
-
-CREATE UNIQUE INDEX idx_claim_market_bindings_claim_provider_market
-    ON claim_market_bindings(normalized_claim_hash, provider_key, provider_market_id);
-
-CREATE INDEX idx_claim_market_bindings_claim_status
-    ON claim_market_bindings(normalized_claim_hash, status, updated_at DESC);
 
 CREATE TABLE community_money_policies (
     community_id TEXT PRIMARY KEY,
@@ -1093,33 +1013,6 @@ CREATE INDEX idx_community_registry_table_refs_namespace_table
     ON community_registry_table_refs(club_namespace_table_name)
     WHERE club_namespace_table_name IS NOT NULL;
 
-CREATE TABLE device_sessions (
-    device_session_id TEXT PRIMARY KEY,
-    device_code TEXT NOT NULL,
-    user_code TEXT NOT NULL,
-    authorized_user_id TEXT,
-    status TEXT NOT NULL CHECK (
-        status IN ('pending', 'authorized', 'completed', 'expired')
-    ),
-    client_name TEXT,
-    created_at TIMESTAMPTZ NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL,
-    expires_at TIMESTAMPTZ NOT NULL,
-    authorized_at TIMESTAMPTZ,
-    completed_at TIMESTAMPTZ,
-    FOREIGN KEY (authorized_user_id) REFERENCES users(user_id)
-);
-
-CREATE UNIQUE INDEX idx_device_sessions_device_code
-    ON device_sessions(device_code);
-
-CREATE UNIQUE INDEX idx_device_sessions_user_code_active
-    ON device_sessions(user_code)
-    WHERE status IN ('pending', 'authorized');
-
-CREATE INDEX idx_device_sessions_status_expires
-    ON device_sessions(status, expires_at);
-
 CREATE TABLE community_gate_rules (
     gate_rule_id TEXT PRIMARY KEY,
     community_id TEXT NOT NULL,
@@ -1143,44 +1036,6 @@ CREATE TABLE community_gate_rules (
 
 CREATE INDEX idx_community_gate_rules_community_scope_status
     ON community_gate_rules(community_id, scope, status, created_at DESC);
-
-CREATE TABLE community_membership_requests (
-    membership_request_id TEXT PRIMARY KEY,
-    community_id TEXT NOT NULL,
-    applicant_user_id TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (
-        status IN ('pending', 'approved', 'rejected', 'canceled', 'expired')
-    ),
-    note TEXT,
-    reviewed_by_user_id TEXT,
-    review_reason TEXT,
-    resolved_at TIMESTAMPTZ,
-    expires_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL,
-    FOREIGN KEY (community_id) REFERENCES communities(community_id),
-    FOREIGN KEY (applicant_user_id) REFERENCES users(user_id)
-);
-
-CREATE UNIQUE INDEX idx_community_membership_requests_pending
-    ON community_membership_requests(community_id, applicant_user_id)
-    WHERE status = 'pending';
-
-CREATE TABLE wallet_attachment_provider_state (
-    wallet_attachment_id TEXT PRIMARY KEY,
-    provider TEXT NOT NULL,
-    provider_wallet_id TEXT NOT NULL,
-    provider_chain_type TEXT NOT NULL,
-    public_key_hex TEXT NOT NULL,
-    external_wallet_ref TEXT,
-    metadata_json JSONB,
-    created_at TIMESTAMPTZ NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL,
-    FOREIGN KEY (wallet_attachment_id) REFERENCES wallet_attachments(wallet_attachment_id)
-);
-
-CREATE UNIQUE INDEX idx_wallet_attachment_provider_state_wallet
-    ON wallet_attachment_provider_state(provider, provider_wallet_id);
 
 CREATE TABLE dvpn_feature_entitlements (
     dvpn_feature_entitlement_id TEXT PRIMARY KEY,
@@ -1358,110 +1213,6 @@ CREATE UNIQUE INDEX idx_namespace_verification_capabilities_session_name_status_
 CREATE UNIQUE INDEX idx_namespace_verification_capabilities_verification_name_status_unique
     ON namespace_verification_capabilities(namespace_verification_id, capability_name, status)
     WHERE namespace_verification_id IS NOT NULL;
-
-CREATE TABLE user_reddit_subreddit_affinities (
-    affinity_id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    source_snapshot_id TEXT NOT NULL,
-    subreddit TEXT NOT NULL,
-    post_count INTEGER NOT NULL,
-    comment_count INTEGER NOT NULL,
-    post_score INTEGER NOT NULL,
-    comment_score INTEGER NOT NULL,
-    total_score INTEGER NOT NULL,
-    first_seen_at TIMESTAMPTZ,
-    last_seen_at TIMESTAMPTZ,
-    weight DOUBLE PRECISION NOT NULL,
-    feature_version TEXT NOT NULL,
-    derived_at TIMESTAMPTZ NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(user_id),
-    FOREIGN KEY (source_snapshot_id) REFERENCES external_reputation_snapshots(external_reputation_snapshot_id),
-    UNIQUE (user_id, source_snapshot_id, subreddit)
-);
-
-CREATE INDEX idx_user_reddit_subreddit_affinities_user_score
-    ON user_reddit_subreddit_affinities(user_id, total_score DESC, subreddit);
-
-CREATE INDEX idx_user_reddit_subreddit_affinities_snapshot
-    ON user_reddit_subreddit_affinities(source_snapshot_id, total_score DESC);
-
-CREATE TABLE user_interest_tags (
-    interest_tag_id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    source_snapshot_id TEXT NOT NULL,
-    tag TEXT NOT NULL,
-    source TEXT NOT NULL CHECK (
-        source IN ('taxonomy', 'llm')
-    ),
-    confidence DOUBLE PRECISION NOT NULL,
-    weight DOUBLE PRECISION NOT NULL,
-    evidence_json JSONB,
-    feature_version TEXT NOT NULL,
-    derived_at TIMESTAMPTZ NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(user_id),
-    FOREIGN KEY (source_snapshot_id) REFERENCES external_reputation_snapshots(external_reputation_snapshot_id),
-    UNIQUE (user_id, source_snapshot_id, tag, source)
-);
-
-CREATE INDEX idx_user_interest_tags_user_tag
-    ON user_interest_tags(user_id, tag, confidence DESC);
-
-CREATE INDEX idx_user_interest_tags_snapshot
-    ON user_interest_tags(source_snapshot_id, source, confidence DESC);
-
-CREATE TABLE user_audience_segments (
-    audience_segment_id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    source_snapshot_id TEXT NOT NULL,
-    segment_key TEXT NOT NULL,
-    source TEXT NOT NULL CHECK (
-        source IN ('deterministic', 'llm', 'hybrid')
-    ),
-    confidence DOUBLE PRECISION NOT NULL,
-    eligibility_state TEXT NOT NULL CHECK (
-        eligibility_state IN ('eligible', 'ineligible', 'suppressed')
-    ),
-    evidence_json JSONB,
-    derivation_version TEXT NOT NULL,
-    derived_at TIMESTAMPTZ NOT NULL,
-    expires_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(user_id),
-    FOREIGN KEY (source_snapshot_id) REFERENCES external_reputation_snapshots(external_reputation_snapshot_id),
-    UNIQUE (user_id, source_snapshot_id, segment_key, source)
-);
-
-CREATE INDEX idx_user_audience_segments_segment
-    ON user_audience_segments(segment_key, eligibility_state, confidence DESC);
-
-CREATE INDEX idx_user_audience_segments_user
-    ON user_audience_segments(user_id, segment_key, confidence DESC);
-
-CREATE TABLE user_reddit_feature_profiles (
-    feature_profile_id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    source_snapshot_id TEXT NOT NULL,
-    source TEXT NOT NULL CHECK (
-        source IN ('llm')
-    ),
-    profile_json JSONB NOT NULL,
-    confidence DOUBLE PRECISION NOT NULL,
-    feature_version TEXT NOT NULL,
-    derived_at TIMESTAMPTZ NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(user_id),
-    FOREIGN KEY (source_snapshot_id) REFERENCES external_reputation_snapshots(external_reputation_snapshot_id),
-    UNIQUE (user_id, source_snapshot_id, source, feature_version)
-);
-
-CREATE INDEX idx_user_reddit_feature_profiles_user
-    ON user_reddit_feature_profiles(user_id, derived_at DESC);
 
 ALTER TABLE users
     ADD CONSTRAINT fk_users_primary_wallet_attachment
