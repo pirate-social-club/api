@@ -1,4 +1,5 @@
 import { executeFirst, type DbExecutor } from "../../db-helpers"
+import { conflictError } from "../../errors"
 import { makeId } from "../../helpers"
 import { requiredNumber, requiredString, rowValue, stringOrNull } from "../../sql-row"
 
@@ -75,6 +76,29 @@ export async function getPurchaseSettlementEffectByIdempotencyKey(input: {
   return row ? toSettlementEffectRow(row) : null
 }
 
+export async function listPurchaseSettlementEffectsByQuote(input: {
+  client: DbExecutor
+  communityId: string
+  quoteId: string
+  purchaseId: string
+}): Promise<PurchaseSettlementEffectRow[]> {
+  const result = await input.client.execute({
+    sql: `
+      SELECT purchase_settlement_effect_id, community_id, quote_id, purchase_id, effect_kind,
+             effect_key, idempotency_key, status, settlement_ref, provider_receipt_ref,
+             tax_receipt_ref, metadata_json, failure_reason, attempt_count, submitted_at, confirmed_at,
+             failed_at, created_at, updated_at
+      FROM purchase_settlement_effects
+      WHERE community_id = ?1
+        AND quote_id = ?2
+        AND purchase_id = ?3
+      ORDER BY created_at ASC
+    `,
+    args: [input.communityId, input.quoteId, input.purchaseId],
+  })
+  return result.rows.map((row) => toSettlementEffectRow(row))
+}
+
 export async function beginPurchaseSettlementEffectAttempt(input: {
   client: DbExecutor
   communityId: string
@@ -91,6 +115,9 @@ export async function beginPurchaseSettlementEffectAttempt(input: {
   })
   if (existing?.status === "confirmed") {
     return existing
+  }
+  if (existing?.status === "submitted") {
+    throw conflictError("Purchase settlement effect is already in progress")
   }
   if (existing) {
     await input.client.execute({
@@ -117,31 +144,48 @@ export async function beginPurchaseSettlementEffectAttempt(input: {
   }
 
   const effectId = makeId("pse")
-  await input.client.execute({
-    sql: `
-      INSERT INTO purchase_settlement_effects (
-        purchase_settlement_effect_id, community_id, quote_id, purchase_id, effect_kind,
-        effect_key, idempotency_key, status, settlement_ref, provider_receipt_ref,
-        tax_receipt_ref, metadata_json, failure_reason, attempt_count, submitted_at, confirmed_at,
-        failed_at, created_at, updated_at
-      ) VALUES (
-        ?1, ?2, ?3, ?4, ?5,
-        ?6, ?7, 'submitted', NULL, NULL,
-        NULL, NULL, NULL, 1, ?8, NULL,
-        NULL, ?8, ?8
-      )
-    `,
-    args: [
-      effectId,
-      input.communityId,
-      input.quoteId,
-      input.purchaseId,
-      input.effectKind,
-      input.effectKey,
-      input.idempotencyKey,
-      input.now,
-    ],
-  })
+  try {
+    await input.client.execute({
+      sql: `
+        INSERT INTO purchase_settlement_effects (
+          purchase_settlement_effect_id, community_id, quote_id, purchase_id, effect_kind,
+          effect_key, idempotency_key, status, settlement_ref, provider_receipt_ref,
+          tax_receipt_ref, metadata_json, failure_reason, attempt_count, submitted_at, confirmed_at,
+          failed_at, created_at, updated_at
+        ) VALUES (
+          ?1, ?2, ?3, ?4, ?5,
+          ?6, ?7, 'submitted', NULL, NULL,
+          NULL, NULL, NULL, 1, ?8, NULL,
+          NULL, ?8, ?8
+        )
+      `,
+      args: [
+        effectId,
+        input.communityId,
+        input.quoteId,
+        input.purchaseId,
+        input.effectKind,
+        input.effectKey,
+        input.idempotencyKey,
+        input.now,
+      ],
+    })
+  } catch (error) {
+    const existingAfterConflict = await getPurchaseSettlementEffectByIdempotencyKey({
+      client: input.client,
+      idempotencyKey: input.idempotencyKey,
+    })
+    if (existingAfterConflict?.status === "confirmed") {
+      return existingAfterConflict
+    }
+    if (existingAfterConflict?.status === "submitted") {
+      throw conflictError("Purchase settlement effect is already in progress")
+    }
+    if (existingAfterConflict?.status === "failed") {
+      return await beginPurchaseSettlementEffectAttempt(input)
+    }
+    throw error
+  }
   const created = await getPurchaseSettlementEffectByIdempotencyKey({
     client: input.client,
     idempotencyKey: input.idempotencyKey,
