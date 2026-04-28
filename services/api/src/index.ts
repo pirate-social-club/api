@@ -19,6 +19,7 @@ import publicPosts from "./routes/public-posts"
 import publicProfiles from "./routes/public-profiles"
 import profileMedia from "./routes/profile-media"
 import profiles from "./routes/profiles"
+import royalties from "./routes/royalties"
 import users from "./routes/users"
 import verification from "./routes/verification"
 import { flushAnalyticsOutbox, isAnalyticsEnabled } from "./lib/analytics"
@@ -66,6 +67,7 @@ app.route("/profile-media", profileMedia)
 app.route("/users", users)
 app.route("/onboarding", onboarding)
 app.route("/profiles", profiles)
+app.route("/royalties", royalties)
 app.route("/", verification)
 
 app.notFound((c) => c.json({ code: "not_found", message: "Not found" }, 404))
