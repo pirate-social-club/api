@@ -8,7 +8,7 @@ import {
   getNotificationsFeed,
   markRead,
   dismissTask,
-} from "../lib/notifications/notification-service"
+} from "../lib/notifications/notification-read-service"
 
 const notifications = new Hono<AuthenticatedEnv>()
 

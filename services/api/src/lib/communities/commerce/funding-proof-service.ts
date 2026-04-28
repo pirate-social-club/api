@@ -3,7 +3,7 @@ import { badRequestError } from "../../errors"
 import type { Env } from "../../../types"
 import type { Client } from "../../sql-client"
 import { parseJsonValue, type PurchaseQuoteRow } from "./row-types"
-import { toChainRefString } from "./shared"
+import { toChainRefString } from "./row-types"
 import {
   resolvePirateCheckoutOperatorAddress,
   resolvePirateCheckoutRpcUrl,

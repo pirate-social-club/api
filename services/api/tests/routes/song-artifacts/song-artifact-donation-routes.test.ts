@@ -9,7 +9,7 @@ import { setCommunityCommerceBuyerFundingVerifierForTests } from "../../../src/l
 import { setCommunityCommerceCharityPayoutExecutorForTests } from "../../../src/lib/communities/commerce/charity-payout-service"
 import { openCommunityDb } from "../../../src/lib/communities/community-db-factory"
 import type { CommunityRepository } from "../../../src/lib/communities/db-community-repository"
-import { updateSongArtifactBundlePreview } from "../../../src/lib/song-artifacts/song-artifact-repository"
+import { updateSongArtifactBundlePreview } from "../../../src/lib/song-artifacts/song-artifact-bundle-repository"
 import { getControlPlaneClient } from "../../../src/lib/runtime-deps"
 import type { Env } from "../../../src/types"
 import {

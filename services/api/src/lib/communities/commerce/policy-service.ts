@@ -6,11 +6,11 @@ import {
   boolToSqlite,
   numberOrNull,
   parseJsonValue,
-  requireCommunityOwner,
   requiredString,
   sqliteToBool,
   stringOrNull,
-} from "./shared"
+} from "./row-types"
+import { requireCommunityOwner } from "./access"
 import {
   buildDefaultPirateCheckoutMoneyPolicy,
 } from "./checkout-config"

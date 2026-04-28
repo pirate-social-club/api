@@ -5,12 +5,12 @@ import { openCommunityDb } from "../communities/community-db-factory"
 import { enqueueCommunityJob } from "../communities/jobs/store"
 import { loadCommunityProjection } from "../communities/create/repository"
 import { detectSourceLanguageFromText } from "../localization/content-locale"
-import { emitCommentReply, emitPostCommented } from "../notifications/notification-service"
+import { emitCommentReply, emitPostCommented } from "../notifications/notification-emitters"
 import {
   canAccessCommunity,
   getCommunityMembershipState,
   type CommunityMembershipRow,
-} from "../communities/membership/store"
+} from "../communities/membership/membership-state-store"
 import type { CommunityRepository } from "../communities/db-community-repository"
 import { badRequestError, eligibilityFailed, notFoundError, verificationRequired } from "../errors"
 import { nowIso } from "../helpers"

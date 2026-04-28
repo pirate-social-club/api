@@ -14,8 +14,34 @@ import type {
   User,
 } from "../../types"
 
-export * from "./auth-db-community-rows"
-export * from "./auth-db-namespace-verification-rows"
+export type {
+  CommunityCommentProjectionRow,
+  CommunityDatabaseBindingRow,
+  CommunityDbCredentialRow,
+  CommunityFollowProjectionRow,
+  CommunityMembershipProjectionRow,
+  CommunityPostProjectionRow,
+  CommunityRow,
+  JobRow,
+} from "./auth-db-community-rows"
+export {
+  toCommunityCommentProjectionRow,
+  toCommunityDatabaseBindingRow,
+  toCommunityDbCredentialRow,
+  toCommunityFollowProjectionRow,
+  toCommunityMembershipProjectionRow,
+  toCommunityPostProjectionRow,
+  toCommunityRow,
+  toJobRow,
+} from "./auth-db-community-rows"
+export type {
+  NamespaceVerificationRow,
+  NamespaceVerificationSessionRow,
+} from "./auth-db-namespace-verification-rows"
+export {
+  toNamespaceVerificationRow,
+  toNamespaceVerificationSessionRow,
+} from "./auth-db-namespace-verification-rows"
 
 export type UserRow = {
   user_id: string

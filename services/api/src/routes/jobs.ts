@@ -1,5 +1,5 @@
 import { Hono } from "hono"
-import { getJob } from "../lib/communities/community-service"
+import { getJob } from "../lib/communities/membership/read-service"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { authenticate, type AuthenticatedEnv } from "../lib/auth-middleware"
 

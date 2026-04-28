@@ -1,7 +1,7 @@
 import { Hono } from "hono"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { resolveCommunityIdentifier } from "../lib/communities/community-identifier"
-import { getPublicCommunityPreview } from "../lib/communities/community-service"
+import { getPublicCommunityPreview } from "../lib/communities/community-preview-service"
 import {
   omittedSurfacesForPolicy,
   omittedSurfaceForPolicy,

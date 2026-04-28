@@ -4,13 +4,15 @@ import { eligibilityFailed, internalError, notFoundError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
 import { openCommunityDb } from "./community-db-factory"
+import { assertPublicV0GateConfiguration } from "./community-gate-validation"
 import {
-  assertPublicV0GateConfiguration,
-  assertUpdateCommunityGatesRequest,
   loadCommunityProjection,
   requireOwnedCommunity,
+} from "./create/repository"
+import {
+  assertUpdateCommunityGatesRequest,
   type UpdateCommunityGatesRequestBody,
-} from "./create/shared"
+} from "./create/update-validation"
 import type {
   Community,
   Env,

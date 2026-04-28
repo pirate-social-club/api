@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import app from "../../src/index"
 import {
-  createNamespaceVerificationTask,
   emitRoyaltyEarnedBatch,
   emitPostCommented,
-} from "../../src/lib/notifications/notification-service"
+} from "../../src/lib/notifications/notification-emitters"
+import { createNamespaceVerificationTask } from "../../src/lib/notifications/notification-task-service"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../helpers"
 import { exchangeJwt } from "./communities/community-routes-test-helpers"
 

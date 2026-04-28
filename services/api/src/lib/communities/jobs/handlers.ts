@@ -17,7 +17,7 @@ import { getPostById } from "../../posts/community-post-store"
 import { hydrateLinkPostEmbed } from "../../posts/embed-hydrator"
 import { materializePostLabel } from "../../posts/post-label-materializer"
 import { materializePostTranslation } from "../../localization/post-translation-materializer"
-import { generateSongPreviewForBundle } from "../../song-artifacts/song-artifact-service"
+import { generateSongPreviewForBundle } from "../../song-artifacts/song-artifact-preview-service"
 import {
   buildThreadFeedTopic,
   publishCollectionToSwarm,
@@ -26,7 +26,7 @@ import {
 } from "../../swarm/swarm-publisher"
 import type { Env } from "../../../types"
 import type { CommunityRepository } from "../db-community-repository"
-import { loadCommunityProjection } from "../create/service"
+import { loadCommunityProjection } from "../create/repository"
 import { openCommunityDb } from "../community-db-factory"
 import type { CommunityJobRow } from "./store"
 import {

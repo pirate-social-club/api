@@ -3,12 +3,14 @@ import { notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import { openCommunityDb } from "./community-db-factory"
 import {
-  assertUpdateCommunityRequest,
   loadCommunityProjection,
-  parseCommunitySettingsJson,
   requireOwnedCommunity,
+} from "./create/repository"
+import { parseCommunitySettingsJson } from "./create/validation"
+import {
+  assertUpdateCommunityRequest,
   type UpdateCommunityRequestBody,
-} from "./create/shared"
+} from "./create/update-validation"
 import type {
   Community,
   Env,

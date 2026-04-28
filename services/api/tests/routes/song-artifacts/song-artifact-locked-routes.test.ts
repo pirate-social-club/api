@@ -9,7 +9,7 @@ import { setStoryCdrUploaderForTests } from "../../../src/lib/story/story-cdr"
 import { setStoryRuntimeFundingAssertionForTests } from "../../../src/lib/story/story-runtime-funding"
 import { setStoryPurchaseSettlementExecutorForTests } from "../../../src/lib/story/story-settlement-service"
 import { setCommunityCommerceBuyerFundingVerifierForTests } from "../../../src/lib/communities/commerce/funding-proof-service"
-import { updateSongArtifactBundlePreview } from "../../../src/lib/song-artifacts/song-artifact-repository"
+import { updateSongArtifactBundlePreview } from "../../../src/lib/song-artifacts/song-artifact-bundle-repository"
 import { getControlPlaneClient } from "../../../src/lib/runtime-deps"
 import type { Env } from "../../../src/types"
 import {

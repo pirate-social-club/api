@@ -7,7 +7,7 @@ import {
   uploadFilebaseObject,
 } from "../../song-artifacts/song-artifact-storage"
 import { sha256Hex } from "../../crypto"
-import { findUploadedSongArtifactByStorageRef } from "../../song-artifacts/song-artifact-repository"
+import { findUploadedSongArtifactByStorageRef } from "../../song-artifacts/song-artifact-upload-repository"
 import {
   generateStorySignedAccessProof,
   type StoryAccessScope,
@@ -35,10 +35,12 @@ import {
   STORY_DELIVERY_CONTRACTS,
 } from "../../story/story-runtime-config"
 import {
-  type AssetRow,
   buildAssetContentPath,
+} from "./access"
+import {
+  type AssetRow,
   parseJsonValue,
-} from "./shared"
+} from "./row-types"
 import type {
   Asset,
   AssetAccessResponse,

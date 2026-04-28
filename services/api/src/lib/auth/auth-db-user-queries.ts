@@ -22,9 +22,6 @@ import {
 } from "./auth-db-rows"
 import { deriveOnboardingStatus } from "./auth-db-onboarding-queries"
 import {
-  ensureProfilesNationalityBadgeColumn,
-  ensureProfilesPrimaryLinkedHandleColumn,
-  ensureProfilesSourceColumns,
   firstRow,
   isMissingColumnError,
   isMissingTableError,
@@ -101,7 +98,7 @@ export async function dismissOnboardingForUser(executor: DbExecutor, userId: str
 }
 
 export async function getProfileRow(executor: DbExecutor, userId: string): Promise<ProfileRow | null> {
-  const stmt = {
+  const row = await firstRow(executor, {
     sql: `
       SELECT user_id, display_name, bio, avatar_ref, cover_ref, preferred_locale,
              bio_source, avatar_source, cover_source,
@@ -112,83 +109,6 @@ export async function getProfileRow(executor: DbExecutor, userId: string): Promi
       LIMIT 1
     `,
     args: [userId],
-  }
-  const legacyStmt = {
-    sql: `
-      SELECT user_id, display_name, bio, avatar_ref, cover_ref, preferred_locale,
-             NULL AS bio_source, NULL AS avatar_source, NULL AS cover_source,
-             0 AS display_verified_nationality_badge,
-             global_handle_id, NULL AS primary_linked_handle_id, created_at, updated_at
-      FROM profiles
-      WHERE user_id = ?1
-      LIMIT 1
-    `,
-    args: [userId],
-  }
-  const sourceLegacyStmt = {
-    sql: `
-      SELECT user_id, display_name, bio, avatar_ref, cover_ref, preferred_locale,
-             NULL AS bio_source, NULL AS avatar_source, NULL AS cover_source,
-             display_verified_nationality_badge,
-             global_handle_id, primary_linked_handle_id, created_at, updated_at
-      FROM profiles
-      WHERE user_id = ?1
-      LIMIT 1
-    `,
-    args: [userId],
-  }
-
-  const isMissingSourceColumn = (error: unknown) => (
-    isMissingColumnError(error, "avatar_source")
-    || isMissingColumnError(error, "cover_source")
-    || isMissingColumnError(error, "bio_source")
-  )
-
-  const retryWithSourceColumns = async () => {
-    await ensureProfilesSourceColumns(executor)
-    return await firstRow(executor, stmt).catch(async (retryError) => {
-      if (isMissingSourceColumn(retryError)) {
-        return await firstRow(executor, sourceLegacyStmt)
-      }
-      throw retryError
-    })
-  }
-
-  const row = await firstRow(executor, stmt).catch(async (error) => {
-    if (isMissingColumnError(error, "primary_linked_handle_id")) {
-      await ensureProfilesPrimaryLinkedHandleColumn(executor)
-      return await firstRow(executor, stmt).catch(async (retryError) => {
-        if (isMissingColumnError(retryError, "primary_linked_handle_id")) {
-          return await firstRow(executor, legacyStmt)
-        }
-        if (isMissingColumnError(retryError, "display_verified_nationality_badge")) {
-          await ensureProfilesNationalityBadgeColumn(executor)
-          return await firstRow(executor, stmt).catch(async (nationalityRetryError) => {
-            if (isMissingSourceColumn(nationalityRetryError)) {
-              return await retryWithSourceColumns()
-            }
-            throw nationalityRetryError
-          })
-        }
-        if (isMissingSourceColumn(retryError)) {
-          return await retryWithSourceColumns()
-        }
-        throw retryError
-      })
-    }
-    if (isMissingColumnError(error, "display_verified_nationality_badge")) {
-      await ensureProfilesNationalityBadgeColumn(executor)
-      return await firstRow(executor, stmt).catch(async (retryError) => {
-        if (isMissingSourceColumn(retryError)) {
-          return await retryWithSourceColumns()
-        }
-        throw retryError
-      })
-    }
-    if (isMissingSourceColumn(error)) {
-      return await retryWithSourceColumns()
-    }
-    throw error
   })
 
   return row ? toProfileRow(row) : null

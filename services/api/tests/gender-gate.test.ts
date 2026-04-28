@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { buildMembershipGateSummary, evaluateMembershipGateRules, satisfiesMembershipGateRules } from "../src/lib/communities/membership/store"
+import { buildMembershipGateSummary, evaluateMembershipGateRules, satisfiesMembershipGateRules } from "../src/lib/communities/membership/gates"
 import { buildDefaultVerificationCapabilities } from "../src/lib/verification/verification-capabilities"
 import type { User } from "../src/types"
 
@@ -31,7 +31,23 @@ function makeGenderRule(requiredValue: "M" | "F"): CommunityGateRuleRow {
   }
 }
 
+function makeVeryUniqueHumanRule(): CommunityGateRuleRow {
+  return {
+    gate_rule_id: "gr_unique_human_very",
+    scope: "membership",
+    gate_family: "identity_proof",
+    gate_type: "unique_human",
+    proof_requirements_json: JSON.stringify([
+      { proof_type: "unique_human", accepted_providers: ["very"] },
+    ]),
+    chain_namespace: null,
+    gate_config_json: null,
+    status: "active",
+  }
+}
+
 function makeUser(overrides: {
+  uniqueHuman?: { state: CapabilityState; provider?: "self" | "very" }
   gender?: { state: CapabilityState; provider?: "self"; value?: "M" | "F" | null }
 }): User {
   const caps = buildDefaultVerificationCapabilities()
@@ -44,6 +60,7 @@ function makeUser(overrides: {
         ...caps.unique_human,
         state: "verified",
         provider: "self",
+        ...(overrides.uniqueHuman ?? {}),
       },
       gender: {
         ...caps.gender,
@@ -69,6 +86,21 @@ describe("gender gate evaluation", () => {
     }), walletAttachments: [] })
     expect(result.satisfied).toBe(false)
     expect(result.missingCapabilities).toEqual(["gender"])
+    expect(result.suggestedVerificationProvider).toBe("self")
+  })
+
+  test("Self-only gender overrides earlier Very-only unique human suggestion", async () => {
+    const result = await evaluateMembershipGateRules({
+      env: {},
+      rules: [makeVeryUniqueHumanRule(), makeGenderRule("M")],
+      user: makeUser({
+        uniqueHuman: { state: "unverified" },
+        gender: { state: "unverified" },
+      }),
+      walletAttachments: [],
+    })
+    expect(result.satisfied).toBe(false)
+    expect(result.missingCapabilities).toEqual(["unique_human", "gender"])
     expect(result.suggestedVerificationProvider).toBe("self")
   })
 

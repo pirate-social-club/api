@@ -10,7 +10,7 @@ import type { CommunityRepository } from "../db-community-repository"
 import { eligibilityFailed, internalError, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
 import type { VerificationRepository } from "../../verification/verification-repository"
-import { createNamespaceVerificationTask, resolveNamespaceVerificationTask } from "../../notifications/notification-service"
+import { createNamespaceVerificationTask, resolveNamespaceVerificationTask } from "../../notifications/notification-task-service"
 import type {
   Community,
   CommunityCreateAcceptedResponse,
@@ -23,8 +23,6 @@ import {
   bootstrapCommunityLocalSnapshot,
   buildPendingCommunityDatabaseUrl,
   buildProvisionOperatorBootstrapPayload,
-  CreateCommunityAuth,
-  CreateCommunityRequestBody,
   isExpired,
   loadCommunityLocalSnapshot,
   loadCommunityProjection,
@@ -33,9 +31,13 @@ import {
   resolveCommunityDbWrapKey,
   resolveCommunityDbWrapKeyVersion,
   resolveCommunityProvisionGroupLocation,
-  resolveCreateCommunityAuth,
   resolveProvisioningRetryAction,
-} from "../create/shared"
+} from "../create/repository"
+import {
+  type CreateCommunityAuth,
+  type CreateCommunityRequestBody,
+  resolveCreateCommunityAuth,
+} from "../create/validation"
 import { HttpError } from "../../errors"
 
 function resolveProvisionedCredentialId(communityId: string, credentialId: string): string {

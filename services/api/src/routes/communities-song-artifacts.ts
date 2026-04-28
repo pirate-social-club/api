@@ -1,11 +1,13 @@
 import { Hono } from "hono"
 import {
-  createSongArtifactBundle,
   createSongArtifactUpload,
   fetchSongArtifactContent,
-  getSongArtifactBundleForCreator,
   uploadSongArtifactContent,
-} from "../lib/song-artifacts/song-artifact-service"
+} from "../lib/song-artifacts/song-artifact-upload-service"
+import {
+  createSongArtifactBundle,
+  getSongArtifactBundleForCreator,
+} from "../lib/song-artifacts/song-artifact-bundle-service"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import {
   getResolvedCommunityRouteContext,

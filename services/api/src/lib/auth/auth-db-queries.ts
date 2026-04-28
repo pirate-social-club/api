@@ -1,3 +1,51 @@
-export * from "./auth-db-query-helpers"
-export * from "./auth-db-community-queries"
-export * from "./auth-db-user-queries"
+export {
+  firstRow,
+  hasUniqueConstraintField,
+  hasUniqueConstraintName,
+  isMissingColumnError,
+  isMissingTableError,
+  normalizeControlPlaneDbUrl,
+  requireControlPlaneDbUrl,
+} from "./auth-db-query-helpers"
+export {
+  getActiveCommunityDbCredentialRow,
+  getCommunityCommentProjectionRowByCommentId,
+  getCommunityDatabaseBindingRowById,
+  getCommunityPostProjectionRowByPostId,
+  getCommunityRowById,
+  getCommunityRowByNamespaceVerificationId,
+  getCommunityRowByRouteSlug,
+  getJobRowById,
+  getLatestCommunityProvisioningJobRow,
+  getLatestJobRowBySubjectAndType,
+  getPrimaryCommunityDatabaseBindingRow,
+  incrementCommunityFollowerCountRow,
+  listActiveCommunityRows,
+  listCommunityFollowProjectionRowsByUserId,
+  listCommunityMembershipProjectionRowsByUserId,
+  listCreatedCommunityRowsByCreatorUserId,
+  updateCommunityPostProjectionMetricsRow,
+  updateCommunityPostProjectionStatusRow,
+  upsertCommunityFollowProjectionRow,
+  upsertCommunityMembershipProjectionRow,
+} from "./auth-db-community-queries"
+export {
+  deriveOnboardingStatus,
+  getLatestExternalReputationSnapshotRow,
+  getLatestRedditVerificationSessionRow,
+  getLatestRedditVerificationSessionRowForUsername,
+} from "./auth-db-onboarding-queries"
+export {
+  dismissOnboardingForUser,
+  findActiveAuthProviderLink,
+  getGlobalHandleRow,
+  getGlobalHandleRowByLabelNormalized,
+  getLinkedHandleRow,
+  getProfileRow,
+  getUserRow,
+  getVerifiedLinkedHandleRowByLabelNormalized,
+  listActiveWalletAttachmentRows,
+  listLinkedHandleRows,
+  loadSnapshot,
+  reconcileWalletAttachments,
+} from "./auth-db-user-queries"

@@ -4,9 +4,6 @@ import { nowIso } from "../helpers"
 import type { Env, GlobalHandle, HandleUpgradeQuote, Profile } from "../../types"
 import { DatabaseIdentityRepository } from "./db-identity-repository"
 import {
-  ensureProfilesNationalityBadgeColumn,
-  ensureProfilesPrimaryLinkedHandleColumn,
-  ensureProfilesSourceColumns,
   firstRow,
   getGlobalHandleRow,
   getLatestExternalReputationSnapshotRow,
@@ -85,9 +82,6 @@ export class DatabaseProfileRepository {
   }
 
   async updateProfile(userId: string, input: UpdateProfileInput): Promise<Profile | null> {
-    await ensureProfilesPrimaryLinkedHandleColumn(this.client)
-    await ensureProfilesNationalityBadgeColumn(this.client)
-    await ensureProfilesSourceColumns(this.client)
     const existing = await getProfileRow(this.client, userId)
     if (!existing) {
       return null
@@ -459,7 +453,6 @@ export class DatabaseProfileRepository {
   }
 
   async syncLinkedHandles(userId: string): Promise<Profile | null> {
-    await ensureProfilesSourceColumns(this.client)
     const userRow = await getUserRow(this.client, userId)
     const profileRow = await getProfileRow(this.client, userId)
     if (!userRow || !profileRow) {
@@ -614,21 +607,6 @@ export class DatabaseProfileRepository {
             WHERE user_id = ?1
           `,
           args: [userId, updatedAt],
-        }).catch(async (error) => {
-          if (error instanceof Error && error.message.includes("no such column: primary_linked_handle_id")) {
-            await ensureProfilesPrimaryLinkedHandleColumn(tx)
-            await tx.execute({
-              sql: `
-                UPDATE profiles
-                SET primary_linked_handle_id = NULL,
-                    updated_at = ?2
-                WHERE user_id = ?1
-              `,
-              args: [userId, updatedAt],
-            })
-            return
-          }
-          throw error
         })
       }
 
@@ -669,21 +647,6 @@ export class DatabaseProfileRepository {
         WHERE user_id = ?1
       `,
       args: [userId, linkedHandleId, nowIso()],
-    }).catch(async (error) => {
-      if (error instanceof Error && error.message.includes("no such column: primary_linked_handle_id")) {
-        await ensureProfilesPrimaryLinkedHandleColumn(this.client)
-        await this.client.execute({
-          sql: `
-            UPDATE profiles
-            SET primary_linked_handle_id = ?2,
-                updated_at = ?3
-            WHERE user_id = ?1
-          `,
-          args: [userId, linkedHandleId, nowIso()],
-        })
-        return
-      }
-      throw error
     })
 
     return await this.identityRepository.getProfileByUserId(userId)

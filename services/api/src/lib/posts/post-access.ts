@@ -4,7 +4,7 @@ import {
   canAccessCommunity,
   getCommunityMembershipState,
   type CommunityMembershipRow,
-} from "../communities/membership/store"
+} from "../communities/membership/membership-state-store"
 import { notFoundError, verificationRequired } from "../errors"
 import type { Post } from "../../types"
 

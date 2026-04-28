@@ -3,11 +3,11 @@ import { globalSingleton } from "../db-helpers"
 import { getControlPlaneCacheKey, getControlPlaneClient } from "../runtime-deps"
 import {
   startVerificationSession,
-  getVerificationSession,
-  recordVeryBridgeSession,
-  completeVerificationSession,
-  completeSelfVerificationCallback,
-} from "./verification-session-service"
+} from "./verification-session-start-service"
+import { getVerificationSession } from "./verification-session-read-service"
+import { recordVeryBridgeSession } from "./very-bridge-session-service"
+import { completeVerificationSession } from "./verification-session-completion-service"
+import { completeSelfVerificationCallback } from "./self-completion-service"
 import {
   startNamespaceVerificationSession,
   getNamespaceVerificationSession,
@@ -23,10 +23,6 @@ import type {
   VerificationIntent,
   VerificationSession,
 } from "../../types"
-
-export * from "./verification-shared"
-export * from "./verification-session-service"
-export * from "./namespace-verification-service"
 
 export interface VerificationRepository {
   startVerificationSession(input: {

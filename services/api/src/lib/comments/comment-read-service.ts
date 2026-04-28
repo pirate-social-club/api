@@ -4,7 +4,7 @@ import { buildLocalizedCommentListItem } from "../localization/comment-localizat
 import {
   canAccessCommunity,
   getCommunityMembershipState,
-} from "../communities/membership/store"
+} from "../communities/membership/membership-state-store"
 import { notFoundError } from "../errors"
 import { getPostById } from "../posts/community-post-store"
 import type { Env } from "../../types"

@@ -6,8 +6,10 @@ import {
   loadCommunityProjection,
   normalizeInputRules,
   requireOwnedCommunity,
+} from "./create/repository"
+import {
   type UpdateCommunityRulesRequestBody,
-} from "./create/shared"
+} from "./create/update-validation"
 import type {
   Community,
   Env,

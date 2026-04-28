@@ -1,12 +1,16 @@
 import {
   buildMembershipGateSummary,
-  canAccessCommunity,
+} from "./membership/gates"
+import {
   getCommunityFollowStatus,
   getCommunityFollowerCount,
+} from "./membership/follow-store"
+import {
+  canAccessCommunity,
   getCommunityMemberCount,
   getCommunityMembershipState,
-  listActiveMembershipGateRules,
-} from "./membership/store"
+} from "./membership/membership-state-store"
+import { listActiveMembershipGateRules } from "./membership/gate-rule-store"
 import { openCommunityDb } from "./community-db-factory"
 import {
   buildLocalizedCommunityPreview,
@@ -208,7 +212,18 @@ async function buildCommunityPreview(input: {
   const followerCount = await getCommunityFollowerCount(input.client, input.communityId)
   const memberCount = await getCommunityMemberCount(input.client, input.communityId)
   const membershipGateSummaries = input.gateRules.map(buildMembershipGateSummary)
-  const humanVerificationLane = membershipGateSummaries.some((summary) => summary.accepted_providers?.includes("very"))
+  const hasSelfOnlyIdentityGate = membershipGateSummaries.some((summary) =>
+    summary.gate_type === "age_over_18"
+    || summary.gate_type === "minimum_age"
+    || summary.gate_type === "nationality"
+    || summary.gate_type === "gender"
+  )
+  const humanVerificationLane = !hasSelfOnlyIdentityGate
+    && membershipGateSummaries.some((summary) =>
+      summary.gate_type === "unique_human"
+      && summary.accepted_providers?.includes("very")
+      && !(summary.accepted_providers?.includes("self") ?? false)
+    )
     ? "very"
     : "self"
 

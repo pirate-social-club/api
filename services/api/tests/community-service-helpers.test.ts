@@ -2,10 +2,14 @@ import { describe, expect, test } from "bun:test"
 import {
   isExpired,
   isPendingCommunityDatabaseUrl,
-  satisfiesBaselineJoinGate,
-  getPrimaryWalletSnapshot,
+} from "../src/lib/communities/create/repository"
+import {
   assertCreateRequest,
-} from "../src/lib/communities/community-service"
+} from "../src/lib/communities/create/validation"
+import {
+  satisfiesBaselineJoinGate,
+} from "../src/lib/communities/membership/eligibility-service"
+import { getPrimaryWalletSnapshot } from "../src/lib/communities/community-serialization"
 import type { User, CreateCommunityRequest } from "../src/types"
 
 function makeTestUser(overrides: Partial<User["verification_capabilities"]> = {}): User {
@@ -40,7 +44,7 @@ function makeCreateBody(overrides: Record<string, unknown> = {}): CreateCommunit
   } as CreateCommunityRequest
 }
 
-describe("community-service helpers", () => {
+describe("community helpers", () => {
   describe("isExpired", () => {
     test("returns false for future timestamps", () => {
       const future = new Date(Date.now() + 60_000).toISOString()

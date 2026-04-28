@@ -8,7 +8,7 @@ import {
   type PurchaseRow,
   type PurchaseSettlementMode,
   toChainRefString,
-} from "./shared"
+} from "./row-types"
 import { serializePurchaseAllocationLeg } from "./allocation"
 import type {
   CommunityListing,

@@ -4,14 +4,16 @@ import { makeId, nowIso } from "../helpers"
 import { openCommunityDb } from "./community-db-factory"
 import { syncCommunityLabels } from "./community-label-store"
 import {
+  loadCommunityProjection,
+  requireOwnedCommunity,
+} from "./create/repository"
+import { parseCommunitySettingsJson } from "./create/validation"
+import {
   assertUpdateCommunityLabelPolicyRequest,
   assertUpdateCommunityReferenceLinksRequest,
-  loadCommunityProjection,
-  parseCommunitySettingsJson,
-  requireOwnedCommunity,
   type UpdateCommunityLabelPolicyRequestBody,
   type UpdateCommunityReferenceLinksRequestBody,
-} from "./create/shared"
+} from "./create/update-validation"
 import type {
   Community,
   Env,

@@ -1,11 +1,5 @@
 import type { Client } from "../sql-client"
 import { getControlPlaneClient } from "../runtime-deps"
-import {
-  getCommunityCommentProjectionRowByCommentId,
-  listCommunityFollowProjectionRowsByUserId,
-  getCommunityPostProjectionRowByPostId,
-  listCommunityMembershipProjectionRowsByUserId,
-} from "../auth/auth-db-queries"
 import type {
   CommunityCommentProjectionRow,
   CommunityDbCredentialRow,
@@ -17,6 +11,7 @@ import type {
   JobRow,
 } from "../auth/auth-db-rows"
 import type { Env } from "../../types"
+import type { CommunityRepository } from "./community-repository-ports"
 
 export {
   getCommunityById,
@@ -53,6 +48,24 @@ export {
   attachNamespaceToCommunity,
   setPendingNamespaceVerificationSession,
 } from "./community-mutation-repository"
+export {
+  getCommunityCommentProjectionByCommentId,
+  getCommunityPostProjectionByPostId,
+  listCommunityFollowProjectionsByUserId,
+  listCommunityMembershipProjectionsByUserId,
+} from "./community-projection-read-repository"
+export type {
+  CloseableCommunityRepository,
+  CommunityDatabaseBindingRepository,
+  CommunityJobReadRepository,
+  CommunityMembershipProjectionRepository,
+  CommunityMutationRepository,
+  CommunityPostProjectionRepository,
+  CommunityProjectionReadRepository,
+  CommunityProvisioningRepository,
+  CommunityReadRepository,
+  CommunityRepository,
+} from "./community-repository-ports"
 
 import {
   getCommunityById,
@@ -86,184 +99,12 @@ import {
   attachNamespaceToCommunity,
   setPendingNamespaceVerificationSession,
 } from "./community-mutation-repository"
-
-export async function getCommunityPostProjectionByPostId(
-  client: Client,
-  postId: string,
-): Promise<CommunityPostProjectionRow | null> {
-  return getCommunityPostProjectionRowByPostId(client, postId)
-}
-
-export async function getCommunityCommentProjectionByCommentId(
-  client: Client,
-  commentId: string,
-): Promise<CommunityCommentProjectionRow | null> {
-  return getCommunityCommentProjectionRowByCommentId(client, commentId)
-}
-
-export async function listCommunityMembershipProjectionsByUserId(
-  client: Client,
-  userId: string,
-): Promise<CommunityMembershipProjectionRow[]> {
-  return listCommunityMembershipProjectionRowsByUserId(client, userId)
-}
-
-export async function listCommunityFollowProjectionsByUserId(
-  client: Client,
-  userId: string,
-): Promise<CommunityFollowProjectionRow[]> {
-  return listCommunityFollowProjectionRowsByUserId(client, userId)
-}
-
-export interface CommunityRepository {
-  close?(): void
-  getCommunityById(communityId: string): Promise<CommunityRow | null>
-  getCommunityByRouteSlug(routeSlug: string): Promise<CommunityRow | null>
-  getCommunityByNamespaceVerificationId(namespaceVerificationId: string): Promise<CommunityRow | null>
-  listActiveCommunities(): Promise<CommunityRow[]>
-  getPrimaryCommunityDatabaseBinding(communityId: string): Promise<CommunityDatabaseBindingRow | null>
-  getActiveCommunityDbCredential(communityDatabaseBindingId: string): Promise<CommunityDbCredentialRow | null>
-  getJobById(jobId: string): Promise<JobRow | null>
-  getLatestCommunityProvisioningJob(communityId: string): Promise<JobRow | null>
-  getCommunityPostProjectionByPostId(postId: string): Promise<CommunityPostProjectionRow | null>
-  getCommunityCommentProjectionByCommentId(commentId: string): Promise<CommunityCommentProjectionRow | null>
-  listCommunityMembershipProjectionsByUserId(userId: string): Promise<CommunityMembershipProjectionRow[]>
-  listCommunityFollowProjectionsByUserId(userId: string): Promise<CommunityFollowProjectionRow[]>
-  recordCommunityPostProjection(input: {
-    communityId: string
-    sourcePostId: string
-    authorUserId: string | null
-    identityMode: "public" | "anonymous"
-    postType: "text" | "image" | "video" | "link" | "song"
-    status: "draft" | "published" | "hidden" | "removed" | "deleted"
-    visibility: "public" | "members_only"
-    sourceCreatedAt: string
-    projectedPayloadJson: string
-    actorUserId: string
-    createdAt: string
-  }): Promise<CommunityPostProjectionRow>
-  recordCommunityCommentProjection(input: {
-    communityId: string
-    threadRootPostId: string
-    sourceCommentId: string
-    parentCommentId: string | null
-    depth: number
-    status: "published" | "hidden" | "removed" | "deleted"
-    sourceCreatedAt: string
-    actorUserId: string
-    createdAt: string
-  }): Promise<CommunityCommentProjectionRow>
-  upsertCommunityMembershipProjection(input: {
-    communityId: string
-    userId: string
-    membershipState: CommunityMembershipProjectionRow["membership_state"]
-    sourceUpdatedAt: string
-    createdAt: string
-  }): Promise<void>
-  upsertCommunityFollowProjection(input: {
-    communityId: string
-    userId: string
-    followState: CommunityFollowProjectionRow["follow_state"]
-    sourceUpdatedAt: string
-    unfollowedAt: string | null
-    createdAt: string
-  }): Promise<void>
-  incrementCommunityFollowerCount(input: {
-    communityId: string
-    delta: 1 | -1
-    updatedAt: string
-  }): Promise<void>
-  updateCommunityPostProjectionStatus(input: {
-    postId: string
-    status: CommunityPostProjectionRow["status"]
-    updatedAt: string
-  }): Promise<void>
-  updateCommunityPostProjectionMetrics(input: {
-    postId: string
-    upvoteCount: number
-    downvoteCount: number
-    commentCount: number
-    likeCount: number
-    updatedAt: string
-  }): Promise<void>
-  createCommunityProvisioningRequest(input: {
-    communityId: string
-    communityDatabaseBindingId: string
-    jobId: string
-    creatorUserId: string
-    displayName: string
-    membershipMode: "open" | "request" | "gated"
-    namespaceVerificationId: string | null
-    routeSlug?: string | null
-    databaseUrl: string
-    createdAt: string
-  }): Promise<{
-    community: CommunityRow
-    binding: CommunityDatabaseBindingRow
-    job: JobRow
-  }>
-  retryCommunityProvisioningRequest(input: {
-    communityId: string
-    fallbackBindingId: string
-    jobId: string
-    namespaceVerificationId: string
-    routeSlug: string
-    databaseUrl: string
-    createdAt: string
-  }): Promise<{
-    community: CommunityRow
-    binding: CommunityDatabaseBindingRow
-    job: JobRow
-  }>
-  markCommunityProvisioningSucceeded(input: {
-    communityId: string
-    communityDatabaseBindingId: string
-    jobId: string
-    actorUserId: string
-    resultRef: string | null
-    createdAt: string
-    metadata: Record<string, unknown>
-  }): Promise<{
-    community: CommunityRow
-    job: JobRow
-  }>
-  persistProvisionedCommunityDatabaseAccess(input: {
-    communityDatabaseBindingId: string
-    communityDbCredentialId: string
-    organizationSlug: string
-    groupName: string
-    groupId: string | null
-    databaseName: string
-    databaseId: string | null
-    databaseUrl: string
-    location: string | null
-    tokenName: string
-    encryptedToken: string
-    encryptionKeyVersion: number
-    issuedAt: string
-    expiresAt: string | null
-    updatedAt: string
-  }): Promise<void>
-  markCommunityProvisioningFailed(input: {
-    communityId: string
-    jobId: string
-    actorUserId: string
-    errorCode: string
-    createdAt: string
-    metadata: Record<string, unknown>
-  }): Promise<void>
-  attachNamespaceToCommunity(input: {
-    communityId: string
-    namespaceVerificationId: string
-    routeSlug: string
-    updatedAt: string
-  }): Promise<CommunityRow>
-  setPendingNamespaceVerificationSession(input: {
-    communityId: string
-    sessionId: string | null
-    updatedAt: string
-  }): Promise<void>
-}
+import {
+  getCommunityCommentProjectionByCommentId,
+  getCommunityPostProjectionByPostId,
+  listCommunityFollowProjectionsByUserId,
+  listCommunityMembershipProjectionsByUserId,
+} from "./community-projection-read-repository"
 
 export class DatabaseCommunityRepository implements CommunityRepository {
   constructor(private readonly client: Client) {}
@@ -313,11 +154,11 @@ export class DatabaseCommunityRepository implements CommunityRepository {
   }
 
   async listCommunityMembershipProjectionsByUserId(userId: string): Promise<CommunityMembershipProjectionRow[]> {
-    return listCommunityMembershipProjectionRowsByUserId(this.client, userId)
+    return listCommunityMembershipProjectionsByUserId(this.client, userId)
   }
 
   async listCommunityFollowProjectionsByUserId(userId: string): Promise<CommunityFollowProjectionRow[]> {
-    return listCommunityFollowProjectionRowsByUserId(this.client, userId)
+    return listCommunityFollowProjectionsByUserId(this.client, userId)
   }
 
   async recordCommunityPostProjection(input: {

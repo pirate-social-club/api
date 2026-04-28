@@ -5,7 +5,7 @@ import {
   deriveAcceptedHnsSnapshot,
   deriveSpacesAcceptedSnapshot,
   parseStoredSpacesChallenge,
-} from "../src/lib/verification/verification-repository"
+} from "../src/lib/verification/namespace-verification-policy"
 import type { HnsInspectResult, HnsVerifyTxtResult } from "../src/lib/verification/hns-verifier"
 import type { SpacesChallengePayload } from "../src/lib/verification/spaces-verifier"
 import type { NamespaceVerificationSessionRow } from "../src/lib/auth/auth-db-rows"

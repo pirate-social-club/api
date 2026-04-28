@@ -1,7 +1,7 @@
 import { badRequestError, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
-import { loadCommunityProjection } from "../community-service"
-import { getCommunityMembershipState } from "../membership/store"
+import { loadCommunityProjection } from "../create/repository"
+import { getCommunityMembershipState } from "../membership/membership-state-store"
 import { openCommunityDb } from "../community-db-factory"
 import type { CommunityRepository } from "../db-community-repository"
 import type { UserRepository } from "../../auth/repositories"
@@ -10,11 +10,15 @@ import {
   getListingRowByAssetId,
   getListingRowById,
   listListingRows,
-  parseListingPolicy,
+} from "./queries"
+import {
   requireCommunityMember,
   requireVerifiedHuman,
+} from "./access"
+import {
+  parseListingPolicy,
   serializeListing,
-} from "./shared"
+} from "./serialization"
 import { getCommunityPricingPolicy } from "./policy-service"
 import { assertValidDonationSharePct } from "./quote-helpers"
 import { assertAssetReadyForStoryRoyaltyCommerce } from "./story-royalty"

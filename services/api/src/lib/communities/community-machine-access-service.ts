@@ -4,10 +4,8 @@ import { badRequestError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
 import { openCommunityDb } from "./community-db-factory"
-import {
-  parseCommunitySettingsJson,
-  requireOwnedCommunity,
-} from "./create/service"
+import { requireOwnedCommunity } from "./create/repository"
+import { parseCommunitySettingsJson } from "./create/validation"
 import type { Env } from "../../types"
 
 const MACHINE_ACCESS_POLICY_SETTINGS_KEY = "machine_access_policy"

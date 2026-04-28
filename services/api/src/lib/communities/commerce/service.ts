@@ -1,7 +1,7 @@
 import type { Client } from "../../sql-client"
 import { badRequestError, notFoundError } from "../../errors"
 import { nowIso } from "../../helpers"
-import { getCommunityMembershipState } from "../membership/store"
+import { getCommunityMembershipState } from "../membership/membership-state-store"
 import { openCommunityDb } from "../community-db-factory"
 import type { CommunityRepository } from "../db-community-repository"
 import { getPostById } from "../../posts/community-post-store"
@@ -11,12 +11,16 @@ import type { UserRepository } from "../../auth/repositories"
 import { maybeRegisterStoryRoyaltyForAsset } from "../../story/story-royalty-registration-service"
 import {
   buildAssetContentPath,
-  getActiveEntitlementForBuyer,
-  getAssetRow,
   requireCommunityMember,
   resolvePrimaryWalletAddress,
+} from "./access"
+import {
+  getActiveEntitlementForBuyer,
+  getAssetRow,
+} from "./queries"
+import {
   serializeAsset,
-} from "./shared"
+} from "./serialization"
 import {
   buildStoryCdrAccessPackage,
   fetchPrimarySongAssetContent,
@@ -421,6 +425,3 @@ export async function fetchCommunityAssetContent(input: {
     db.close()
   }
 }
-
-export * from "./policy-service"
-export * from "./purchase-service"

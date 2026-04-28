@@ -12,7 +12,27 @@ import {
   toUserAttestationRow,
   toVerificationSessionRow,
 } from "../auth/auth-db-rows"
-export * from "./namespace-verification-policy"
+export {
+  boolToDb,
+  buildNamespaceSessionResponseContext,
+  deriveAcceptedHnsSnapshot,
+  deriveHnsInspectionSnapshot,
+  deriveSpacesAcceptedSnapshot,
+  getHnsChallengeTtlHours,
+  isHnsVerifierConfigured,
+  isProductionEnv,
+  isSpacesVerifierConfigured,
+  makeNamespaceAssertionStatements,
+  makeNamespaceCapabilityStatements,
+  parseStoredSpacesChallenge,
+  serializeSetupNameservers,
+  shouldRequireHnsDnsSetup,
+} from "./namespace-verification-policy"
+export type {
+  HnsSessionAssertionSnapshot,
+  NamespaceSessionResponseContext,
+  SpacesAcceptedSnapshot,
+} from "./namespace-verification-policy"
 
 export async function getVerificationSessionRowForUser(
   client: Client,

@@ -4,15 +4,19 @@ import { nowIso } from "../helpers"
 import { openCommunityDb } from "./community-db-factory"
 import {
   type EndaomentOrganizationSearchResult,
-  loadCommunityLocalSnapshot,
-  loadCommunityProjection,
-  normalizeDonationPolicyMode,
   parseCommunitySettingsJson,
   parseEndaomentLookupTerm,
-  requireOwnedCommunity,
   selectEndaomentOrganizationMatch,
+} from "./create/validation"
+import {
+  loadCommunityLocalSnapshot,
+  loadCommunityProjection,
+  requireOwnedCommunity,
+} from "./create/repository"
+import {
+  normalizeDonationPolicyMode,
   type UpdateCommunityDonationPolicyRequestBody,
-} from "./create/shared"
+} from "./create/update-validation"
 import type {
   Community,
   Env,

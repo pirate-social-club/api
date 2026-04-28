@@ -1,6 +1,6 @@
 import { Hono } from "hono"
 import { authenticate, type AuthenticatedEnv } from "../lib/auth-middleware"
-import { listNotificationFeed } from "../lib/notifications/notification-store"
+import { listNotificationFeed } from "../lib/notifications/notification-read-store"
 import { getControlPlaneClient } from "../lib/runtime-deps"
 import type { NotificationFeedItem } from "../types"
 
