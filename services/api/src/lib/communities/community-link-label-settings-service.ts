@@ -1,4 +1,7 @@
-import type { CommunityRepository } from "./db-community-repository"
+import type {
+  CommunityDatabaseBindingRepository,
+  CommunityReadRepository,
+} from "./db-community-repository"
 import { notFoundError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { openCommunityDb } from "./community-db-factory"
@@ -6,9 +9,11 @@ import { syncCommunityLabels } from "./community-label-store"
 import {
   assertUpdateCommunityLabelPolicyRequest,
   assertUpdateCommunityReferenceLinksRequest,
+  communityMutationActorFromUserId,
   loadCommunityProjection,
   parseCommunitySettingsJson,
-  requireOwnedCommunity,
+  requireAdminOverrideOrOwnedCommunity,
+  type CommunityMutationActor,
   type UpdateCommunityLabelPolicyRequestBody,
   type UpdateCommunityReferenceLinksRequestBody,
 } from "./create/shared"
@@ -17,15 +22,24 @@ import type {
   Env,
 } from "../../types"
 
+type CommunitySettingsRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
+
 export async function updateCommunityReferenceLinks(input: {
   env: Env
-  userId: string
+  userId?: string
+  actor?: CommunityMutationActor
   communityId: string
   body: UpdateCommunityReferenceLinksRequestBody | null
-  communityRepository: CommunityRepository
+  communityRepository: CommunitySettingsRepository
 }): Promise<Community> {
   assertUpdateCommunityReferenceLinksRequest(input.body)
-  await requireOwnedCommunity(input.communityRepository, input.communityId, input.userId)
+  await requireAdminOverrideOrOwnedCommunity({
+    env: input.env,
+    repo: input.communityRepository,
+    communityId: input.communityId,
+    actor: input.actor ?? communityMutationActorFromUserId(input.userId ?? ""),
+    action: "community.reference_links_updated",
+  })
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
 
   try {
@@ -105,13 +119,20 @@ export async function updateCommunityReferenceLinks(input: {
 
 export async function updateCommunityLabelPolicy(input: {
   env: Env
-  userId: string
+  userId?: string
+  actor?: CommunityMutationActor
   communityId: string
   body: UpdateCommunityLabelPolicyRequestBody | null
-  communityRepository: CommunityRepository
+  communityRepository: CommunitySettingsRepository
 }): Promise<Community> {
   assertUpdateCommunityLabelPolicyRequest(input.body)
-  await requireOwnedCommunity(input.communityRepository, input.communityId, input.userId)
+  await requireAdminOverrideOrOwnedCommunity({
+    env: input.env,
+    repo: input.communityRepository,
+    communityId: input.communityId,
+    actor: input.actor ?? communityMutationActorFromUserId(input.userId ?? ""),
+    action: "community.labels_updated",
+  })
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
 
   try {

@@ -208,6 +208,7 @@ describe("community gender and request gate routes", () => {
         namespace_verification_id: namespaceVerificationId,
       },
       membership_mode: "request",
+      gate_rules: [],
     }, ctx.env, creator.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
@@ -241,6 +242,7 @@ describe("community gender and request gate routes", () => {
         namespace_verification_id: namespaceVerificationId,
       },
       membership_mode: "request",
+      gate_rules: [],
     }, ctx.env, creator.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {

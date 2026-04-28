@@ -1,4 +1,6 @@
-import type { CommunityRepository } from "./db-community-repository"
+import type { CommunityReadRepository } from "./db-community-repository"
+
+type CommunityIdentifierRepository = Pick<CommunityReadRepository, "getCommunityById" | "getCommunityByRouteSlug">
 
 function safeDecodeURIComponent(value: string): string {
   try {
@@ -50,7 +52,7 @@ export function communityIdentifierCandidates(communityIdentifier: string): stri
 }
 
 export async function resolveCommunityIdentifier(
-  communityRepository: CommunityRepository,
+  communityRepository: CommunityIdentifierRepository,
   communityIdentifier: string,
 ): Promise<string | null> {
   for (const candidate of communityIdentifierCandidates(communityIdentifier)) {

@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto"
 import { apiRoutes, type CreatePostRequest, type LocalizedPostResponse, type Post } from "@pirate/api-contracts"
 import { getFlag, requireFlag } from "../args.js"
+import { parseVoteValue, requireAdminForActor } from "../command-utils.js"
 import { apiRequest } from "../http.js"
 import { exitWithUsage, printJson } from "../output.js"
-import { requireStoredSession } from "../session.js"
+import { resolveSeedActorUserId } from "../seed-accounts.js"
+import { apiAuthHeadersForSession, requireStoredSession } from "../session.js"
 import type { ParsedArgs } from "../types.js"
 
 export async function runPost(
@@ -32,7 +34,7 @@ export async function runPost(
         baseUrl: session.baseUrl,
         path: apiRoutes.communityPosts(communityId),
         method: "POST",
-        accessToken: session.accessToken,
+        ...apiAuthHeadersForSession(session),
         body,
       })
       printJson(result)
@@ -48,12 +50,30 @@ export async function runPost(
       const result = await apiRequest<LocalizedPostResponse>({
         baseUrl: session.baseUrl,
         path: `${apiRoutes.post(postId)}${suffix}`,
-        accessToken: session.accessToken,
+        ...apiAuthHeadersForSession(session),
+      })
+      printJson(result)
+      return
+    }
+    case "vote": {
+      const postId = rest[0]
+      if (!postId) {
+        exitWithUsage("Usage: pirate post vote <post_id> --value <1|-1> [--as <alias>|--as-user-id <usr_...>]")
+      }
+      const value = parseVoteValue(requireFlag(args, "value"))
+      const asUserId = resolveSeedActorUserId(args)
+      requireAdminForActor(asUserId, session.mode)
+      const result = await apiRequest<unknown>({
+        baseUrl: session.baseUrl,
+        path: apiRoutes.postVote(postId),
+        method: "POST",
+        ...apiAuthHeadersForSession(session, asUserId),
+        body: { value },
       })
       printJson(result)
       return
     }
     default:
-      exitWithUsage("Usage: pirate post <create|get>")
+      exitWithUsage("Usage: pirate post <create|get|vote>")
   }
 }

@@ -4,6 +4,7 @@ import type { ConfigResult } from "./config-result"
 import { toCanonicalIpfsUri } from "./storage"
 import { resolveDirectTxFeeOverrides, type DirectTxGasPolicy } from "./evm-direct-tx"
 
+// "Chipotle" is Lit Protocol's hosted PKP/Lit Action execution service name.
 const DEFAULT_CHIPOTLE_BASE_URL = "https://api.dev.litprotocol.com"
 const DEFAULT_IPFS_GATEWAY_URL = "https://psc.myfilebase.com/ipfs"
 const DEFAULT_IPFS_FALLBACK_GATEWAY_URLS = [

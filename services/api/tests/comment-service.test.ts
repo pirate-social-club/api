@@ -81,30 +81,14 @@ describe("comment-service", () => {
       expect(parentState.direct_reply_count).toBe(1)
       expect(parentState.descendant_count).toBe(1)
 
-      const closureRows = (await fetchClosureRows(db.client)).sort((left, right) =>
-        `${left.ancestor_comment_id}:${left.descendant_comment_id}:${left.distance}`.localeCompare(
-          `${right.ancestor_comment_id}:${right.descendant_comment_id}:${right.distance}`,
-        )
-      )
-      expect(closureRows).toEqual([
-        {
-          ancestor_comment_id: first.comment_id,
-          descendant_comment_id: first.comment_id,
-          distance: 0,
-        },
-        {
-          ancestor_comment_id: first.comment_id,
-          descendant_comment_id: second.comment_id,
-          distance: 1,
-        },
-        {
-          ancestor_comment_id: second.comment_id,
-          descendant_comment_id: second.comment_id,
-          distance: 0,
-        },
-      ].sort((left, right) => `${left.ancestor_comment_id}:${left.descendant_comment_id}:${left.distance}`.localeCompare(
-        `${right.ancestor_comment_id}:${right.descendant_comment_id}:${right.distance}`,
-      )))
+      const closureKey = (row: { ancestor_comment_id: string; descendant_comment_id: string; distance: number }) =>
+        `${row.ancestor_comment_id}:${row.descendant_comment_id}:${row.distance}`
+      const closureRows = await fetchClosureRows(db.client)
+      expect(closureRows.map(closureKey).sort()).toEqual([
+        `${first.comment_id}:${first.comment_id}:0`,
+        `${first.comment_id}:${second.comment_id}:1`,
+        `${second.comment_id}:${second.comment_id}:0`,
+      ].sort())
 
       const jobs = await fetchCommunityJobs(db.client)
       const jobRefs = jobs.map((job) => `${job.job_type}:${job.subject_id}`).sort()

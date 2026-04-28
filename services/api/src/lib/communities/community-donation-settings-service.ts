@@ -1,15 +1,20 @@
-import type { CommunityRepository } from "./db-community-repository"
+import type {
+  CommunityDatabaseBindingRepository,
+  CommunityReadRepository,
+} from "./db-community-repository"
 import { badRequestError, internalError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import { openCommunityDb } from "./community-db-factory"
 import {
   type EndaomentOrganizationSearchResult,
+  communityMutationActorFromUserId,
   loadCommunityLocalSnapshot,
   loadCommunityProjection,
   normalizeDonationPolicyMode,
   parseCommunitySettingsJson,
   parseEndaomentLookupTerm,
-  requireOwnedCommunity,
+  requireAdminOverrideOrOwnedCommunity,
+  type CommunityMutationActor,
   selectEndaomentOrganizationMatch,
   type UpdateCommunityDonationPolicyRequestBody,
 } from "./create/shared"
@@ -18,12 +23,15 @@ import type {
   Env,
 } from "../../types"
 
+type CommunityDonationSettingsRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
+
 export async function resolveCommunityDonationPartner(input: {
   env: Env
-  userId: string
+  userId?: string
+  actor?: CommunityMutationActor
   communityId: string
   endaomentUrl: string
-  communityRepository: CommunityRepository
+  communityRepository: CommunityReadRepository
 }): Promise<{
   donation_partner_id: string
   display_name: string
@@ -31,7 +39,13 @@ export async function resolveCommunityDonationPartner(input: {
   provider_partner_ref: string | null
   image_url: string | null
 }> {
-  await requireOwnedCommunity(input.communityRepository, input.communityId, input.userId)
+  await requireAdminOverrideOrOwnedCommunity({
+    env: input.env,
+    repo: input.communityRepository,
+    communityId: input.communityId,
+    actor: input.actor ?? communityMutationActorFromUserId(input.userId ?? ""),
+    action: "community.donation_partner_resolved",
+  })
   const lookupTerm = parseEndaomentLookupTerm(input.endaomentUrl)
   if (!lookupTerm) {
     throw badRequestError("Enter a valid Endaoment organization URL.")
@@ -97,10 +111,11 @@ export async function resolveCommunityDonationPartner(input: {
 
 export async function updateCommunityDonationPolicy(input: {
   env: Env
-  userId: string
+  userId?: string
+  actor?: CommunityMutationActor
   communityId: string
   body: UpdateCommunityDonationPolicyRequestBody
-  communityRepository: CommunityRepository
+  communityRepository: CommunityDonationSettingsRepository
 }): Promise<Community> {
   const { donation_partner, donation_partner_id } = input.body
   const donation_policy_mode = normalizeDonationPolicyMode(input.body.donation_policy_mode)
@@ -122,7 +137,13 @@ export async function updateCommunityDonationPolicy(input: {
     throw badRequestError("Resolved donation partner details are required when donations are enabled")
   }
 
-  await requireOwnedCommunity(input.communityRepository, input.communityId, input.userId)
+  await requireAdminOverrideOrOwnedCommunity({
+    env: input.env,
+    repo: input.communityRepository,
+    communityId: input.communityId,
+    actor: input.actor ?? communityMutationActorFromUserId(input.userId ?? ""),
+    action: "community.donation_policy_updated",
+  })
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
 
   try {
@@ -211,9 +232,10 @@ export async function updateCommunityDonationPolicy(input: {
 
 export async function getCommunityDonationPolicy(input: {
   env: Env
-  userId: string
+  userId?: string
+  actor?: CommunityMutationActor
   communityId: string
-  communityRepository: CommunityRepository
+  communityRepository: CommunityDonationSettingsRepository
 }): Promise<{
   community_id: string
   donation_policy_mode: string
@@ -222,7 +244,13 @@ export async function getCommunityDonationPolicy(input: {
   donation_partner: (NonNullable<Community["donation_partner"]> & { image_url?: string | null }) | null
   updated_at: string
 }> {
-  await requireOwnedCommunity(input.communityRepository, input.communityId, input.userId)
+  await requireAdminOverrideOrOwnedCommunity({
+    env: input.env,
+    repo: input.communityRepository,
+    communityId: input.communityId,
+    actor: input.actor ?? communityMutationActorFromUserId(input.userId ?? ""),
+    action: "community.donation_policy_read",
+  })
   const local = await loadCommunityLocalSnapshot(input.env, input.communityRepository, input.communityId)
   const partner = local?.donation_partner
 

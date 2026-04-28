@@ -11,6 +11,7 @@ export type SongArtifactKind =
   | "canvas_video"
   | "instrumental_audio"
   | "vocal_audio"
+  | "primary_video"
 
 const allowedMimeTypesByKind: Record<SongArtifactKind, Set<string>> = {
   primary_audio: new Set([
@@ -77,6 +78,11 @@ const allowedMimeTypesByKind: Record<SongArtifactKind, Set<string>> = {
     "video/quicktime",
     "video/webm",
   ]),
+  primary_video: new Set([
+    "video/mp4",
+    "video/quicktime",
+    "video/webm",
+  ]),
 }
 
 const maxBytesByKind: Record<SongArtifactKind, number> = {
@@ -86,6 +92,7 @@ const maxBytesByKind: Record<SongArtifactKind, number> = {
   vocal_audio: 64 * 1024 * 1024,
   cover_art: 12 * 1024 * 1024,
   canvas_video: 64 * 1024 * 1024,
+  primary_video: 64 * 1024 * 1024,
 }
 
 export function assertSongArtifactMimeType(kind: SongArtifactKind, mimeType: string): void {

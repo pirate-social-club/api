@@ -4,7 +4,7 @@ import { makeId } from "../helpers"
 import { sha256Hex } from "../crypto"
 import {
   getUserRow,
-} from "../auth/auth-db-queries"
+} from "../auth/auth-db-user-queries"
 import {
   parseVerificationCapabilities,
   serializeVerificationSession,
@@ -96,6 +96,17 @@ export async function startVerificationSession(
   const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString()
   const verificationSessionId = makeId("ver")
 
+  console.info("[verification-session-service] normalized start", {
+    verificationSessionId,
+    userId: input.userId,
+    provider: input.provider,
+    requestedCapabilities,
+    verificationRequirements,
+    verificationIntent: input.verificationIntent ?? null,
+    policyId: input.policyId ?? null,
+    publicOrigin: input.publicOrigin ?? null,
+  })
+
   let upstreamSessionRef: string | null = null
   let launch: VerificationSessionLaunch | null = null
 
@@ -163,6 +174,18 @@ export async function startVerificationSession(
   if (!row) {
     throw internalError("Verification session row is missing after creation")
   }
+  console.info("[verification-session-service] created row", {
+    verificationSessionId,
+    userId: input.userId,
+    provider: input.provider,
+    requestedCapabilities,
+    verificationRequirements,
+    status: row.status,
+    launchMode: launch?.mode ?? null,
+    selfDisclosures: launch?.self_app?.disclosures ?? null,
+    selfEndpointType: launch?.self_app?.endpoint_type ?? null,
+    selfScope: launch?.self_app?.scope ?? null,
+  })
   return serializeVerificationSession({ row, attestationRows: [], launch })
 }
 

@@ -1,7 +1,7 @@
 import { executeFirst } from "../../db-helpers"
 import { nowIso } from "../../helpers"
 import { getControlPlaneClient } from "../../runtime-deps"
-import type { CommunityRepository } from "../db-community-repository"
+import type { CommunityReadRepository } from "../db-community-repository"
 import {
   boolToSqlite,
   numberOrNull,
@@ -90,7 +90,7 @@ export async function updateCommunityMoneyPolicy(input: {
   userId: string
   communityId: string
   body: UpdateCommunityMoneyPolicyRequest
-  communityRepository: CommunityRepository
+  communityRepository: CommunityReadRepository
 }): Promise<CommunityMoneyPolicy> {
   await requireCommunityOwner({
     communityId: input.communityId,
@@ -186,7 +186,7 @@ export async function updateCommunityPricingPolicy(input: {
   userId: string
   communityId: string
   body: UpdateCommunityPricingPolicyRequest
-  communityRepository: CommunityRepository
+  communityRepository: CommunityReadRepository
 }): Promise<CommunityPricingPolicy> {
   await requireCommunityOwner({
     communityId: input.communityId,

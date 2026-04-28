@@ -1,6 +1,0 @@
-export * from "./community-donation-settings-service"
-export * from "./community-gate-settings-service"
-export * from "./community-link-label-settings-service"
-export * from "./community-profile-settings-service"
-export * from "./community-rule-settings-service"
-export * from "./community-safety-settings-service"

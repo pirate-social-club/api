@@ -35,6 +35,7 @@ export type CommentRow = {
   last_reply_at: string | null
   content_hash: string | null
   swarm_body_ref: string | null
+  idempotency_key: string | null
   created_at: string
   updated_at: string
 }
@@ -80,6 +81,7 @@ export function toCommentRow(row: unknown): CommentRow {
     last_reply_at: stringOrNull(rowValue(row, "last_reply_at")),
     content_hash: stringOrNull(rowValue(row, "content_hash")),
     swarm_body_ref: stringOrNull(rowValue(row, "swarm_body_ref")),
+    idempotency_key: stringOrNull(rowValue(row, "idempotency_key")),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
   }
@@ -114,6 +116,7 @@ export function serializeComment(row: CommentRow): Comment {
     last_reply_at: row.last_reply_at,
     content_hash: row.content_hash,
     swarm_body_ref: row.swarm_body_ref,
+    idempotency_key: row.idempotency_key,
     created_at: row.created_at,
     updated_at: row.updated_at,
   }

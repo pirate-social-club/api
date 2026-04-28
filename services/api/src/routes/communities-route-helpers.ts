@@ -1,9 +1,6 @@
-import type { ActorContext, AuthenticatedEnv } from "../lib/auth-middleware"
+import type { ActorContext, AdminActorContext, AuthenticatedEnv } from "../lib/auth-middleware"
 import { getProfileRepository, getUserRepository, type ProfileRepository, type UserRepository } from "../lib/auth/repositories"
-import {
-  getCommunityRepository,
-  type CommunityRepository,
-} from "../lib/communities/db-community-repository"
+import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { resolveCommunityIdentifier } from "../lib/communities/community-identifier"
 import {
   getControlPlaneVerificationRepository,
@@ -11,17 +8,19 @@ import {
 } from "../lib/verification/verification-repository"
 import { badRequestError } from "../lib/errors"
 
+type CommunityRouteRepository = ReturnType<typeof getCommunityRepository>
+
 type CommunityRouteContext = {
-  actor: ActorContext
+  actor: ActorContext | AdminActorContext
   communityId: string
-  communityRepository: CommunityRepository
+  communityRepository: CommunityRouteRepository
   userRepository: UserRepository
   profileRepository: ProfileRepository
 }
 
 type CommunityCreationRouteContext = {
-  actor: ActorContext
-  communityRepository: CommunityRepository
+  actor: ActorContext | AdminActorContext
+  communityRepository: CommunityRouteRepository
   userRepository: UserRepository
   verificationRepository: VerificationRepository
 }
@@ -35,7 +34,7 @@ type AuthenticatedRouteContext = {
     header(name: string): string | undefined
     arrayBuffer(): Promise<ArrayBuffer>
   }
-  get(key: "actor"): ActorContext
+  get(key: "actor"): ActorContext | AdminActorContext
 }
 
 function getCommunityRouteContext(c: AuthenticatedRouteContext): CommunityRouteContext {
@@ -75,6 +74,23 @@ export async function requireJsonBody<T>(
     throw badRequestError(message)
   }
   return body
+}
+
+export async function optionalJsonBody<T>(
+  c: Pick<AuthenticatedRouteContext, "req">,
+  message: string,
+): Promise<T | null> {
+  const contentLength = c.req.header("content-length")?.trim()
+  const contentType = c.req.header("content-type")?.trim()
+  if (contentLength === "0" || (!contentLength && !contentType)) {
+    return null
+  }
+
+  try {
+    return await c.req.json<T>()
+  } catch {
+    throw badRequestError(message)
+  }
 }
 
 export function getRequestOrigin(c: Pick<AuthenticatedRouteContext, "req">): string {

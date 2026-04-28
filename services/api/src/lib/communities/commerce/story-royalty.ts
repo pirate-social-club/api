@@ -4,7 +4,7 @@ import type { AssetRow } from "./row-types"
 import type { Env } from "../../../types"
 
 export function assertAssetReadyForStoryRoyaltyCommerce(
-  asset: Pick<AssetRow, "story_ip_id" | "story_royalty_registration_status" | "story_status" | "locked_delivery_status">,
+  asset: Pick<AssetRow, "asset_kind" | "story_ip_id" | "story_royalty_registration_status" | "story_status" | "locked_delivery_status">,
   env?: Pick<Env, "ENVIRONMENT">,
 ): void {
   if (

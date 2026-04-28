@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { buildMembershipGateSummary, evaluateMembershipGateRules } from "../src/lib/communities/membership/store"
+import { buildMembershipGateSummary, evaluateMembershipGateRules } from "../src/lib/communities/membership/gates"
 import { setErc721OwnershipCheckerForTests } from "../src/lib/communities/community-token-gates"
 import {
   clearErc721InventoryMatchCacheForTests,
@@ -9,6 +9,7 @@ import {
 } from "../src/lib/communities/community-token-inventory-gates"
 import { buildDefaultVerificationCapabilities } from "../src/lib/verification/verification-capabilities"
 import type { User, WalletAttachmentSummary } from "../src/types"
+import { withMockedFetch } from "./helpers"
 
 type CommunityGateRuleRow = {
   gate_rule_id: string
@@ -89,14 +90,12 @@ const walletAttachments: WalletAttachmentSummary[] = [
   },
 ]
 
-const originalFetch = globalThis.fetch
 const originalConsoleWarn = console.warn
 
 afterEach(() => {
   setErc721OwnershipCheckerForTests(null)
   setErc721InventoryMatcherForTests(null)
   clearErc721InventoryMatchCacheForTests()
-  globalThis.fetch = originalFetch
   console.warn = originalConsoleWarn
 })
 
@@ -307,7 +306,7 @@ describe("erc721 gate evaluation", () => {
   })
 
   test("normalizes TCG metadata without relying on the collection name containing card", async () => {
-    globalThis.fetch = async () => new Response(JSON.stringify({
+    await withMockedFetch(() => async () => new Response(JSON.stringify({
       total: 1,
       assets: [{
         chain: "polygon",
@@ -321,21 +320,21 @@ describe("erc721 gate evaluation", () => {
           { name: "Title/Subject", value: "Charizard V" },
         ],
       }],
-    })) as Response
+    })) as Response, async () => {
+      const result = await evaluateMembershipGateRules({
+        env: { COURTYARD_INVENTORY_CACHE_TTL_MS: "0" },
+        rules: [makeCourtyardInventoryRule({ min_quantity: 1 })],
+        user: makeUser(),
+        walletAttachments,
+      })
 
-    const result = await evaluateMembershipGateRules({
-      env: { COURTYARD_INVENTORY_CACHE_TTL_MS: "0" },
-      rules: [makeCourtyardInventoryRule({ min_quantity: 1 })],
-      user: makeUser(),
-      walletAttachments,
+      expect(result.satisfied).toBe(true)
+      expect(result.mismatchReasons).toEqual([])
     })
-
-    expect(result.satisfied).toBe(true)
-    expect(result.mismatchReasons).toEqual([])
   })
 
   test("evaluates canonical match config against normalized watch metadata", async () => {
-    globalThis.fetch = async () => new Response(JSON.stringify({
+    await withMockedFetch(() => async () => new Response(JSON.stringify({
       total: 1,
       assets: [{
         chain: "polygon",
@@ -351,31 +350,31 @@ describe("erc721 gate evaluation", () => {
           { name: "Condition", value: "Unworn" },
         ],
       }],
-    })) as Response
+    })) as Response, async () => {
+      const result = await evaluateMembershipGateRules({
+        env: { COURTYARD_INVENTORY_CACHE_TTL_MS: "0" },
+        rules: [makeCourtyardInventoryRule({
+          min_quantity: 1,
+          asset_filter: undefined,
+          match: {
+            category: "watch",
+            brand: "Rolex",
+            model: "Submariner",
+            reference: "124060",
+          },
+        })],
+        user: makeUser(),
+        walletAttachments,
+      })
 
-    const result = await evaluateMembershipGateRules({
-      env: { COURTYARD_INVENTORY_CACHE_TTL_MS: "0" },
-      rules: [makeCourtyardInventoryRule({
-        min_quantity: 1,
-        asset_filter: undefined,
-        match: {
-          category: "watch",
-          brand: "Rolex",
-          model: "Submariner",
-          reference: "124060",
-        },
-      })],
-      user: makeUser(),
-      walletAttachments,
+      expect(result.satisfied).toBe(true)
+      expect(result.mismatchReasons).toEqual([])
     })
-
-    expect(result.satisfied).toBe(true)
-    expect(result.mismatchReasons).toEqual([])
   })
 
   test("deduplicates the same Courtyard token across Polygon wallets", async () => {
     let fetchCount = 0
-    globalThis.fetch = async () => {
+    await withMockedFetch(() => async () => {
       fetchCount += 1
       return new Response(JSON.stringify({
         total: 1,
@@ -392,26 +391,26 @@ describe("erc721 gate evaluation", () => {
           ],
         }],
       })) as Response
-    }
+    }, async () => {
+      const result = await evaluateMembershipGateRules({
+        env: { COURTYARD_INVENTORY_CACHE_TTL_MS: "0" },
+        rules: [makeCourtyardInventoryRule({ min_quantity: 2 })],
+        user: makeUser(),
+        walletAttachments: [
+          ...walletAttachments,
+          {
+            wallet_attachment_id: "wal_polygon_2",
+            chain_namespace: "eip155:137",
+            wallet_address: "0x4444444444444444444444444444444444444444",
+            is_primary: false,
+          },
+        ],
+      })
 
-    const result = await evaluateMembershipGateRules({
-      env: { COURTYARD_INVENTORY_CACHE_TTL_MS: "0" },
-      rules: [makeCourtyardInventoryRule({ min_quantity: 2 })],
-      user: makeUser(),
-      walletAttachments: [
-        ...walletAttachments,
-        {
-          wallet_attachment_id: "wal_polygon_2",
-          chain_namespace: "eip155:137",
-          wallet_address: "0x4444444444444444444444444444444444444444",
-          is_primary: false,
-        },
-      ],
+      expect(result.satisfied).toBe(false)
+      expect(result.mismatchReasons).toContain("erc721_inventory_match_required")
     })
-
     expect(fetchCount).toBe(2)
-    expect(result.satisfied).toBe(false)
-    expect(result.mismatchReasons).toContain("erc721_inventory_match_required")
   })
 
   test("caches successful Courtyard inventory matches briefly", async () => {
@@ -423,7 +422,7 @@ describe("erc721 gate evaluation", () => {
       minQuantity: 1,
       assetFilter: { category: "trading_card" as const, franchise: "pokemon", subject: "charizard" },
     }
-    globalThis.fetch = async () => {
+    await withMockedFetch(() => async () => {
       fetchCount += 1
       return new Response(JSON.stringify({
         total: 1,
@@ -440,13 +439,13 @@ describe("erc721 gate evaluation", () => {
           ],
         }],
       })) as Response
-    }
+    }, async () => {
+      const first = await evaluateErc721InventoryMatch({ env: {}, walletAttachments, config })
+      const second = await evaluateErc721InventoryMatch({ env: {}, walletAttachments, config })
 
-    const first = await evaluateErc721InventoryMatch({ env: {}, walletAttachments, config })
-    const second = await evaluateErc721InventoryMatch({ env: {}, walletAttachments, config })
-
-    expect(first).toEqual({ matchedQuantity: 1, unavailable: false })
-    expect(second).toEqual({ matchedQuantity: 1, unavailable: false })
+      expect(first).toEqual({ matchedQuantity: 1, unavailable: false })
+      expect(second).toEqual({ matchedQuantity: 1, unavailable: false })
+    })
     expect(fetchCount).toBe(1)
   })
 

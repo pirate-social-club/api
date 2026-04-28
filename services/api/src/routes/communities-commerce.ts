@@ -18,7 +18,7 @@ import {
   updateCommunityPricingPolicy,
   updateCommunityListing,
 } from "../lib/communities/commerce/service"
-import { getCommunity } from "../lib/communities/community-service"
+import { getCommunity } from "../lib/communities/membership/community-read-service"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import {
   getResolvedCommunityRouteContext,
@@ -34,6 +34,7 @@ import type {
   UpdateCommunityMoneyPolicyRequest,
   UpdateCommunityPricingPolicyRequest,
 } from "../types"
+import { emitRoyaltyEarnedBatch } from "../lib/notifications/notification-emitters"
 
 export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.get("/:communityId/money-policy", async (c) => {
@@ -242,7 +243,21 @@ export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedE
       communityRepository,
       userRepository,
     })
-    return c.json(result, 201)
+    if (result.royaltyEarningEvents.length > 0) {
+      const emission = emitRoyaltyEarnedBatch({
+        env: c.env,
+        buyerUserId: actor.userId,
+        events: result.royaltyEarningEvents,
+      }).catch((error) => {
+        console.warn("[settlement] royalty notification emission failed", error)
+      })
+      try {
+        c.executionCtx.waitUntil(emission)
+      } catch {
+        void emission
+      }
+    }
+    return c.json(result.settlement, 201)
   })
 
   communities.post("/:communityId/purchase-settlements/fail", async (c) => {

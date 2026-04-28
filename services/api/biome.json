@@ -1,0 +1,38 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.4.13/schema.json",
+  "files": {
+    "includes": [
+      "src/**/*.ts",
+      "tests/**/*.ts",
+      "scripts/**/*.ts",
+      "shared/**/*.ts",
+      "package.json"
+    ]
+  },
+  "formatter": {
+    "enabled": false
+  },
+  "javascript": {
+    "globals": [
+      "HTMLRewriter"
+    ]
+  },
+  "assist": {
+    "enabled": false
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": false,
+      "correctness": {
+        "noUnreachable": "error",
+        "noUndeclaredVariables": "error"
+      },
+      "suspicious": {
+        "noDebugger": "error",
+        "noDuplicateObjectKeys": "error",
+        "noExplicitAny": "off"
+      }
+    }
+  }
+}

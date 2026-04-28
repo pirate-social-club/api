@@ -2,10 +2,13 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { CommunityRepository } from "../src/lib/communities/db-community-repository"
+import type { CommunityDatabaseBindingRepository } from "../src/lib/communities/db-community-repository"
 import { openCommunityDb } from "../src/lib/communities/community-db-factory"
 import { insertPost } from "../src/lib/posts/community-post-store"
-import { resolveStoryRoyaltyDerivativeParents } from "../src/lib/story/story-royalty-registration-service"
+import {
+  resolvePilTermsForLicense,
+  resolveStoryRoyaltyDerivativeParents,
+} from "../src/lib/story/story-royalty-registration-service"
 import type { Env } from "../src/types"
 
 const cleanupPaths: string[] = []
@@ -14,7 +17,7 @@ afterEach(async () => {
   await Promise.all(cleanupPaths.splice(0).map((path) => rm(path, { recursive: true, force: true })))
 })
 
-function buildRepository(): CommunityRepository {
+function buildRepository(): CommunityDatabaseBindingRepository {
   const repo = {
     async getPrimaryCommunityDatabaseBinding() {
       return null
@@ -23,10 +26,63 @@ function buildRepository(): CommunityRepository {
       return null
     },
   }
-  return repo as unknown as CommunityRepository
+  return repo
 }
 
 describe("story royalty registration service", () => {
+  test("resolves creator-selected PIL terms by license preset", () => {
+    const base = {
+      defaultMintingFee: 0n,
+      currency: "0x1514000000000000000000000000000000000000" as `0x${string}`,
+      royaltyPolicy: "0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E" as `0x${string}`,
+    }
+
+    expect(() =>
+      resolvePilTermsForLicense({
+        ...base,
+        licensePreset: "non-commercial",
+        commercialRevSharePct: null,
+      })
+    ).not.toThrow()
+    expect(() =>
+      resolvePilTermsForLicense({
+        ...base,
+        licensePreset: "commercial-use",
+        commercialRevSharePct: null,
+      })
+    ).not.toThrow()
+    expect(() =>
+      resolvePilTermsForLicense({
+        ...base,
+        licensePreset: "commercial-remix",
+        commercialRevSharePct: 10,
+      })
+    ).not.toThrow()
+  })
+
+  test("requires valid revenue share only for commercial remix PIL terms", () => {
+    const base = {
+      defaultMintingFee: 0n,
+      currency: "0x1514000000000000000000000000000000000000" as `0x${string}`,
+      royaltyPolicy: "0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E" as `0x${string}`,
+    }
+
+    expect(() =>
+      resolvePilTermsForLicense({
+        ...base,
+        licensePreset: "commercial-remix",
+        commercialRevSharePct: null,
+      })
+    ).toThrow("commercialRevSharePct must be an integer from 0 to 100")
+    expect(() =>
+      resolvePilTermsForLicense({
+        ...base,
+        licensePreset: "commercial-remix",
+        commercialRevSharePct: 10.5,
+      })
+    ).toThrow("commercialRevSharePct must be an integer from 0 to 100")
+  })
+
   test("resolves derivative parents from local story asset references", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-"))
     cleanupPaths.push(rootDir)

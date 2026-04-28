@@ -11,7 +11,7 @@ import {
 import { getFlag, hasFlag, requireFlag } from "../args.js"
 import { apiRequest } from "../http.js"
 import { exitWithUsage, printJson } from "../output.js"
-import { requireStoredSession } from "../session.js"
+import { apiAuthHeadersForSession, requireStoredSession } from "../session.js"
 import type { ParsedArgs } from "../types.js"
 
 export async function runVerify(
@@ -92,7 +92,7 @@ export async function runVerify(
           baseUrl: session.baseUrl,
           path: apiRoutes.namespaceVerificationSessions,
           method: "POST",
-          accessToken: session.accessToken,
+          ...apiAuthHeadersForSession(session),
           body,
         })
         printJson(result)
@@ -110,7 +110,7 @@ export async function runVerify(
           baseUrl: session.baseUrl,
           path: apiRoutes.namespaceVerificationSessionComplete(sessionId),
           method: "POST",
-          accessToken: session.accessToken,
+          ...apiAuthHeadersForSession(session),
           body,
         })
         printJson(result)
@@ -129,7 +129,7 @@ export async function runVerify(
         const result = await apiRequest<NamespaceVerification | NamespaceVerificationSession>({
           baseUrl: session.baseUrl,
           path,
-          accessToken: session.accessToken,
+          ...apiAuthHeadersForSession(session),
         })
         printJson(result)
         return

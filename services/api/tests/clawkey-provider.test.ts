@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { __testOnly, getClawkeyProvider } from "../src/lib/agents/clawkey-provider"
+import { withMockedFetch } from "./helpers"
 
 describe("ClawKey provider URL resolution", () => {
   test("keeps the /v1 prefix when joining register init path", () => {
@@ -23,8 +24,7 @@ describe("ClawKey provider URL resolution", () => {
 
 describe("ClawKey provider requests", () => {
   test("startRegistration posts to the v1 init endpoint", async () => {
-    const originalFetch = globalThis.fetch
-    globalThis.fetch = (async (input, init) => {
+    await withMockedFetch(() => (async (input, init) => {
       expect(String(input)).toBe("https://api.ag9.ai/v1/agent/register/init")
       expect(init?.method).toBe("POST")
       return new Response(JSON.stringify({
@@ -34,9 +34,7 @@ describe("ClawKey provider requests", () => {
         status: 201,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof globalThis.fetch
-
-    try {
+    }) as typeof globalThis.fetch, async () => {
       const provider = getClawkeyProvider({ CLAWKEY_API_URL: "https://api.ag9.ai/v1" } as any)
       const started = await provider.startRegistration({
         deviceId: "dev_123",
@@ -48,8 +46,6 @@ describe("ClawKey provider requests", () => {
 
       expect(started.sessionId).toBe("cks_123")
       expect(started.registrationUrl).toBe("https://clawkey.ai/register/cks_123")
-    } finally {
-      globalThis.fetch = originalFetch
-    }
+    })
   })
 })

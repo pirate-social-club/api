@@ -1,6 +1,9 @@
 import { openCommunityDb } from "../communities/community-db-factory"
-import { canAccessCommunity, getCommunityMembershipState } from "../communities/membership/store"
-import type { CommunityRepository } from "../communities/db-community-repository"
+import { canAccessCommunity, getCommunityMembershipState } from "../communities/membership/membership-state-store"
+import type {
+  CommunityDatabaseBindingRepository,
+  CommunityPostProjectionRepository,
+} from "../communities/db-community-repository"
 import type { UserRepository } from "../auth/repositories"
 import type { DbExecutor } from "../db-helpers"
 import { badRequestError, eligibilityFailed, internalError, notFoundError, verificationRequired } from "../errors"
@@ -34,6 +37,10 @@ import type {
   ModerationSignalSeverity,
   UserReport,
 } from "./moderation-types"
+
+type ModerationCommunityRepository =
+  & CommunityDatabaseBindingRepository
+  & Pick<CommunityPostProjectionRepository, "updateCommunityPostProjectionStatus">
 
 function reportPriority(reasonCode: CreateUserReportRequest["reason_code"]): ModerationSignalSeverity {
   switch (reasonCode) {
@@ -128,7 +135,7 @@ export async function reportPost(input: {
   postId: string
   body: CreateUserReportRequest
   userRepository: UserRepository
-  communityRepository: CommunityRepository
+  communityRepository: ModerationCommunityRepository
 }): Promise<UserReport> {
   assertCreateUserReportRequest(input.body)
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
@@ -208,7 +215,7 @@ export async function reportComment(input: {
   commentId: string
   body: CreateUserReportRequest
   userRepository: UserRepository
-  communityRepository: CommunityRepository
+  communityRepository: ModerationCommunityRepository
 }): Promise<UserReport> {
   assertCreateUserReportRequest(input.body)
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
@@ -285,7 +292,7 @@ export async function listCommunityModerationCases(input: {
   env: Env
   userId: string
   communityId: string
-  communityRepository: CommunityRepository
+  communityRepository: ModerationCommunityRepository
 }): Promise<ModerationCaseListResponse> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
@@ -310,7 +317,7 @@ export async function getModerationCaseDetail(input: {
   userId: string
   communityId: string
   moderationCaseId: string
-  communityRepository: CommunityRepository
+  communityRepository: ModerationCommunityRepository
 }): Promise<ModerationCaseDetail> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
@@ -444,7 +451,7 @@ export async function resolveModerationCaseWithAction(input: {
   moderationCaseId: string
   body: CreateModerationActionRequest
   userRepository: UserRepository
-  communityRepository: CommunityRepository
+  communityRepository: ModerationCommunityRepository
 }): Promise<ModerationCaseDetail> {
   assertCreateModerationActionRequest(input.body)
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)

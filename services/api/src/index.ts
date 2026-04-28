@@ -26,6 +26,7 @@ import { flushAnalyticsOutbox, isAnalyticsEnabled } from "./lib/analytics"
 import { getCommunityRepository } from "./lib/communities/db-community-repository"
 import { reconcileStaleCommunityPurchaseSettlements } from "./lib/communities/commerce/settlement-service"
 import { processAvailableCommunityJobs } from "./lib/communities/jobs/runner"
+import { reconcileCommunityMembershipAndFollowProjections } from "./lib/communities/membership/projection-service"
 import { HttpError, errorResponse } from "./lib/errors"
 import { reconcileRoyaltyClaimEvents } from "./lib/royalties/royalty-claim-history"
 import { getControlPlaneClient } from "./lib/runtime-deps"
@@ -174,9 +175,34 @@ async function reconcileScheduledPurchaseSettlements(env: Env): Promise<void> {
   }
 }
 
+async function reconcileScheduledCommunityMembershipProjections(env: Env): Promise<void> {
+  const communityRepository = getCommunityRepository(env)
+  try {
+    const summary = await reconcileCommunityMembershipAndFollowProjections({
+      env,
+      communityRepository,
+      maxCommunities: 100,
+      maxRowsPerCommunity: 500,
+    })
+    if (
+      summary.synced_membership_projections > 0
+      || summary.synced_follow_projections > 0
+      || summary.corrected_follower_counts > 0
+      || summary.failed_communities > 0
+    ) {
+      console.info("[community-membership-projections] reconciled", JSON.stringify(summary))
+    }
+  } catch (error) {
+    console.error("[community-membership-projections] reconciliation failed", error)
+  } finally {
+    communityRepository.close?.()
+  }
+}
+
 ;(app as ScheduledApp).scheduled = async (_controller, env, ctx) => {
   ctx.waitUntil(flushScheduledAnalytics(env))
   ctx.waitUntil(processScheduledCommunityJobs(env))
+  ctx.waitUntil(reconcileScheduledCommunityMembershipProjections(env))
   ctx.waitUntil(reconcileScheduledRoyaltyClaims(env))
   ctx.waitUntil(reconcileScheduledPurchaseSettlements(env))
 }

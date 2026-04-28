@@ -33,6 +33,10 @@ let cleanup: (() => Promise<void>) | null = null
 let originalFetch: typeof fetch
 const testWithTimeout = test as unknown as (name: string, fn: () => Promise<void>, timeout: number) => void
 
+async function verifyForLockedCommerce(env: Env, _userId: string, accessToken: string): Promise<void> {
+  await completeUniqueHumanVerification(env, accessToken)
+}
+
 const routedCheckoutQuoteFields = {
   funding_asset: {
     asset_symbol: "USDC",
@@ -252,8 +256,8 @@ describe("song artifact locked routes", () => {
       walletAttachmentId: "wal_song_buyer_locked",
       walletAddress: "0xbbb0000000000000000000000000000000000000",
     })
-    await completeUniqueHumanVerification(ctx.env, author.accessToken)
-    await completeUniqueHumanVerification(ctx.env, buyer.accessToken)
+    await verifyForLockedCommerce(ctx.env, author.userId, author.accessToken)
+    await verifyForLockedCommerce(ctx.env, buyer.userId, buyer.accessToken)
 
     const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "Paid Song Club")
     const donationPolicyUpdate = await app.request(
@@ -813,7 +817,7 @@ describe("song artifact locked routes", () => {
       walletAttachmentId: "wal_song_author_derivative",
       walletAddress: "0xaaa0000000000000000000000000000000000000",
     })
-    await completeUniqueHumanVerification(ctx.env, author.accessToken)
+    await verifyForLockedCommerce(ctx.env, author.userId, author.accessToken)
 
     const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "Derivative Commerce Club")
 
@@ -1015,8 +1019,8 @@ describe("song artifact locked routes", () => {
       walletAttachmentId: "wal_song_buyer_derivative_registered",
       walletAddress: "0xbbb0000000000000000000000000000000000000",
     })
-    await completeUniqueHumanVerification(ctx.env, author.accessToken)
-    await completeUniqueHumanVerification(ctx.env, buyer.accessToken)
+    await verifyForLockedCommerce(ctx.env, author.userId, author.accessToken)
+    await verifyForLockedCommerce(ctx.env, buyer.userId, buyer.accessToken)
 
     const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "Derivative Registered Club")
 
@@ -1427,8 +1431,8 @@ describe("song artifact locked routes", () => {
       walletAttachmentId: "wal_video_author_locked",
       walletAddress: "0xaaa0000000000000000000000000000000000000",
     })
-    await completeUniqueHumanVerification(ctx.env, author.accessToken)
-    await completeUniqueHumanVerification(ctx.env, buyer.accessToken)
+    await verifyForLockedCommerce(ctx.env, author.userId, author.accessToken)
+    await verifyForLockedCommerce(ctx.env, buyer.userId, buyer.accessToken)
     const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "Locked Video Club")
     const joinBuyer = await requestJson(
       `http://pirate.test/communities/${communityId}/join`,

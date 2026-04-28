@@ -10,6 +10,8 @@ import { resolveStoryChainId, resolveStoryRpcUrl } from "./story-runtime-config"
 import { getAssetRow } from "../communities/commerce/queries"
 
 type StoryRoyaltyRightsBasis = "none" | "original" | "derivative"
+export type StoryLicensePreset = "non-commercial" | "commercial-use" | "commercial-remix"
+type StoryRoyaltyAssetKind = "song_audio" | "video_file"
 
 export type StoryRoyaltyRegistrationResult = {
   storyIpId: string
@@ -37,8 +39,11 @@ let testRoyaltyRegistrar: ((input: {
   creatorWalletAddress: string
   title: string | null
   rightsBasis: Post["rights_basis"]
+  licensePreset: StoryLicensePreset | null
+  commercialRevSharePct: number | null
   upstreamAssetRefs: string[] | null
-  bundle: SongArtifactBundle
+  assetKind: StoryRoyaltyAssetKind
+  bundle: SongArtifactBundle | null
   primaryContentHash: `0x${string}`
 }) => Promise<StoryRoyaltyRegistrationResult | null>) | null = null
 
@@ -51,8 +56,11 @@ export function setStoryRoyaltyRegistrarForTests(
     creatorWalletAddress: string
     title: string | null
     rightsBasis: Post["rights_basis"]
+    licensePreset: StoryLicensePreset | null
+    commercialRevSharePct: number | null
     upstreamAssetRefs: string[] | null
-    bundle: SongArtifactBundle
+    assetKind: StoryRoyaltyAssetKind
+    bundle: SongArtifactBundle | null
     primaryContentHash: `0x${string}`
   }) => Promise<StoryRoyaltyRegistrationResult | null>) | null,
 ): void {
@@ -79,6 +87,45 @@ function resolveStoryRoyaltyCommercialRevSharePct(
   if (!raw) return null
   const parsed = Number(raw)
   return Number.isInteger(parsed) && parsed >= 0 && parsed <= 100 ? parsed : null
+}
+
+function validateCommercialRevSharePct(value: number | null | undefined): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 100) {
+    throw new Error("commercialRevSharePct must be an integer from 0 to 100")
+  }
+  return value
+}
+
+function requireOriginalLicensePreset(value: StoryLicensePreset | null): StoryLicensePreset {
+  if (!value) {
+    throw new Error("licensePreset is required for original Story registration")
+  }
+  return value
+}
+
+export function resolvePilTermsForLicense(input: {
+  licensePreset: StoryLicensePreset
+  commercialRevSharePct: number | null
+  defaultMintingFee: bigint
+  currency: `0x${string}`
+  royaltyPolicy: `0x${string}`
+}) {
+  if (input.licensePreset === "non-commercial") {
+    return PILFlavor.nonCommercialSocialRemixing()
+  }
+  if (input.licensePreset === "commercial-use") {
+    return PILFlavor.commercialUse({
+      defaultMintingFee: input.defaultMintingFee,
+      currency: input.currency,
+      royaltyPolicy: input.royaltyPolicy,
+    })
+  }
+  return PILFlavor.commercialRemix({
+    commercialRevShare: validateCommercialRevSharePct(input.commercialRevSharePct),
+    defaultMintingFee: input.defaultMintingFee,
+    currency: input.currency,
+    royaltyPolicy: input.royaltyPolicy,
+  })
 }
 
 export function isStoryRoyaltyRegistrationConfigured(
@@ -182,8 +229,9 @@ async function buildStoryRoyaltyMetadata(input: {
   assetId: string
   title: string | null
   rightsBasis: StoryRoyaltyRightsBasis
+  assetKind: StoryRoyaltyAssetKind
   creatorWalletAddress: string
-  bundle: SongArtifactBundle
+  bundle: SongArtifactBundle | null
   primaryContentHash: `0x${string}`
   derivativeParentIpIds: string[] | null
 }): Promise<{
@@ -197,10 +245,11 @@ async function buildStoryRoyaltyMetadata(input: {
     kind: "pirate_story_ip_metadata",
     community_id: input.communityId,
     asset_id: input.assetId,
+    asset_kind: input.assetKind,
     title: input.title,
     rights_basis: input.rightsBasis,
     creator_wallet_address: input.creatorWalletAddress,
-    song_artifact_bundle_id: input.bundle.song_artifact_bundle_id,
+    song_artifact_bundle_id: input.bundle?.song_artifact_bundle_id ?? null,
     primary_content_hash: input.primaryContentHash,
     derivative_parent_ip_ids: input.derivativeParentIpIds,
     created_at: nowIso(),
@@ -246,8 +295,11 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
   creatorWalletAddress: string
   title: string | null
   rightsBasis: Post["rights_basis"]
+  licensePreset: StoryLicensePreset | null
+  commercialRevSharePct: number | null
   upstreamAssetRefs: string[] | null
-  bundle: SongArtifactBundle
+  assetKind: StoryRoyaltyAssetKind
+  bundle: SongArtifactBundle | null
   primaryContentHash: `0x${string}`
 }): Promise<StoryRoyaltyRegistrationResult | null> {
   if (testRoyaltyRegistrar) {
@@ -260,8 +312,7 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
   }
 
   const spgNftContract = resolveStoryRoyaltySpgNftContract(input.env)
-  const commercialRevSharePct = resolveStoryRoyaltyCommercialRevSharePct(input.env)
-  if (!spgNftContract || commercialRevSharePct === null) {
+  if (!spgNftContract) {
     return null
   }
 
@@ -290,6 +341,7 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
     assetId: input.assetId,
     title: input.title,
     rightsBasis,
+    assetKind: input.assetKind,
     creatorWalletAddress: input.creatorWalletAddress,
     bundle: input.bundle,
     primaryContentHash: input.primaryContentHash,
@@ -303,12 +355,21 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
   })
 
   const royaltyPolicy = resolveStoryRoyaltyPolicyAddress(input.env)
-  const licenseTerms = PILFlavor.commercialRemix({
-    commercialRevShare: commercialRevSharePct,
-    defaultMintingFee: resolveStoryRoyaltyDefaultMintingFee(input.env),
-    currency: WIP_TOKEN_ADDRESS,
-    royaltyPolicy,
-  })
+  const defaultMintingFee = resolveStoryRoyaltyDefaultMintingFee(input.env)
+  const licenseTerms = rightsBasis === "original"
+    ? resolvePilTermsForLicense({
+      licensePreset: requireOriginalLicensePreset(input.licensePreset),
+      commercialRevSharePct: input.commercialRevSharePct,
+      defaultMintingFee,
+      currency: WIP_TOKEN_ADDRESS,
+      royaltyPolicy,
+    })
+    : PILFlavor.commercialRemix({
+      commercialRevShare: validateCommercialRevSharePct(resolveStoryRoyaltyCommercialRevSharePct(input.env)),
+      defaultMintingFee,
+      currency: WIP_TOKEN_ADDRESS,
+      royaltyPolicy,
+    })
   const maxLicenseTokens = resolveStoryRoyaltyMaxLicenseTokens(input.env)
 
   if (rightsBasis === "derivative") {

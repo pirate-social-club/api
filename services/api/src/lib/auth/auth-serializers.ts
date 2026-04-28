@@ -4,6 +4,7 @@ import {
   buildDefaultVerificationCapabilities,
   deriveVerificationState,
 } from "../verification/verification-capabilities"
+import { serializeNamespaceSessionStatus } from "../verification/verification-shared"
 import { normalizeIdentityCountryAlpha2 } from "../identity/country-codes"
 import type {
   ExternalReputationSnapshotRow,
@@ -154,6 +155,7 @@ export function assembleProfile(
     linked_handles: [serializePirateLinkedHandle(globalHandleRow), ...externalLinkedHandles],
     primary_public_handle: primaryPublicHandle,
     primary_wallet_address: primaryWalletAddress,
+    xmtp_inbox_id: profileRow.xmtp_inbox_id,
     global_handle: serializeGlobalHandle(globalHandleRow),
     created_at: profileRow.created_at,
     updated_at: profileRow.updated_at,
@@ -292,7 +294,7 @@ export function serializeNamespaceVerificationSession(
     family: row.family,
     submitted_root_label: row.submitted_root_label,
     normalized_root_label: row.normalized_root_label,
-    status: row.status,
+    status: serializeNamespaceSessionStatus(row),
     challenge_kind: (row.challenge_kind as NamespaceVerificationSession["challenge_kind"]) ?? null,
     challenge_host: row.challenge_host,
     challenge_txt_value: row.challenge_txt_value,

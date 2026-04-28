@@ -43,6 +43,7 @@ export type ProfileRow = {
   display_verified_nationality_badge: number
   global_handle_id: string
   primary_linked_handle_id: string | null
+  xmtp_inbox_id: string | null
   created_at: string
   updated_at: string
 }
@@ -173,6 +174,7 @@ export function toProfileRow(row: unknown): ProfileRow {
     display_verified_nationality_badge: numberOrNull(rowValue(row, "display_verified_nationality_badge")) ?? 0,
     global_handle_id: requiredString(row, "global_handle_id"),
     primary_linked_handle_id: stringOrNull(rowValue(row, "primary_linked_handle_id")),
+    xmtp_inbox_id: stringOrNull(rowValue(row, "xmtp_inbox_id")),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
   }

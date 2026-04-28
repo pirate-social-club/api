@@ -64,6 +64,14 @@ function resolveProviderLyricsOutcome(result: Record<string, unknown>): {
     }
   }
 
+  if (rating !== "safe") {
+    return {
+      analysisState: "review_required",
+      contentSafetyState: "pending",
+      ageGatePolicy: "none",
+    }
+  }
+
   return {
     analysisState: "allow",
     contentSafetyState: "safe",

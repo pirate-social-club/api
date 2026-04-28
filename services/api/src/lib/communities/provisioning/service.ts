@@ -6,11 +6,18 @@ import {
 } from "./operator-client"
 import type { UserRepository } from "../../auth/repositories"
 import type { CommunityDatabaseBindingRow, CommunityRow, JobRow } from "../../auth/auth-db-rows"
-import type { CommunityRepository } from "../db-community-repository"
+import type {
+  CommunityDatabaseBindingRepository,
+  CommunityJobReadRepository,
+  CommunityMembershipProjectionRepository,
+  CommunityMutationRepository,
+  CommunityProvisioningRepository,
+  CommunityReadRepository,
+} from "../db-community-repository"
 import { eligibilityFailed, internalError, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
 import type { VerificationRepository } from "../../verification/verification-repository"
-import { createNamespaceVerificationTask, resolveNamespaceVerificationTask } from "../../notifications/notification-service"
+import { createNamespaceVerificationTask, resolveNamespaceVerificationTask } from "../../notifications/notification-task-service"
 import type {
   Community,
   CommunityCreateAcceptedResponse,
@@ -37,6 +44,14 @@ import {
   resolveProvisioningRetryAction,
 } from "../create/shared"
 import { HttpError } from "../../errors"
+
+type CommunityProvisioningServiceRepository =
+  & CommunityReadRepository
+  & CommunityDatabaseBindingRepository
+  & CommunityJobReadRepository
+  & CommunityProvisioningRepository
+  & CommunityMembershipProjectionRepository
+  & CommunityMutationRepository
 
 function resolveProvisionedCredentialId(communityId: string, credentialId: string): string {
   const trimmed = credentialId.trim()
@@ -83,7 +98,7 @@ function communityProvisioningFailureDetails(
 
 async function upsertLocalNamespaceAttachment(input: {
   env: Env
-  repo: CommunityRepository
+  repo: CommunityDatabaseBindingRepository
   communityId: string
   namespaceVerificationId: string
   namespaceLabel: string
@@ -160,7 +175,7 @@ async function createNamespacelessCommunity(input: {
   env: Env
   body: CreateCommunityRequestBody
   auth: CreateCommunityAuth
-  communityRepository: CommunityRepository
+  communityRepository: CommunityProvisioningServiceRepository
 }): Promise<CommunityCreateAcceptedResponse> {
   const communityId = makeId("cmt")
   const bindingId = makeId("cdb")
@@ -304,7 +319,7 @@ async function finalizeExistingCommunity(input: {
   existingCommunity: CommunityRow
   existingJob: JobRow
   binding: CommunityDatabaseBindingRow
-  communityRepository: CommunityRepository
+  communityRepository: CommunityProvisioningServiceRepository
   namespaceVerificationId: string
   namespaceVerification: Pick<NamespaceVerification, "family" | "normalized_root_label">
 }): Promise<CommunityCreateAcceptedResponse> {
@@ -335,7 +350,7 @@ async function provisionNamespacedCommunity(input: {
   existingCommunity: CommunityRow | null
   namespaceVerificationId: string
   namespaceVerification: Pick<NamespaceVerification, "family" | "normalized_root_label">
-  communityRepository: CommunityRepository
+  communityRepository: CommunityProvisioningServiceRepository
 }): Promise<CommunityCreateAcceptedResponse> {
   const { env, body, auth, existingCommunity, namespaceVerificationId, namespaceVerification, communityRepository: repo } = input
   const routeSlug = namespaceRouteSlug(namespaceVerification)
@@ -492,7 +507,7 @@ export async function createCommunity(input: {
   body: CreateCommunityRequestBody
   userRepository: UserRepository
   verificationRepository: VerificationRepository
-  communityRepository: CommunityRepository
+  communityRepository: CommunityProvisioningServiceRepository
 }): Promise<CommunityCreateAcceptedResponse> {
   const auth = await resolveCreateCommunityAuth(input)
 
@@ -566,7 +581,7 @@ export async function attachNamespaceToCommunity(input: {
   communityId: string
   namespaceVerificationId: string
   verificationRepository: VerificationRepository
-  communityRepository: CommunityRepository
+  communityRepository: CommunityProvisioningServiceRepository
 }): Promise<Community> {
   const community = await requireOwnedCommunity(input.communityRepository, input.communityId, input.userId)
   const namespaceVerification = await input.verificationRepository.getNamespaceVerification(

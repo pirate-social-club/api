@@ -1,12 +1,17 @@
-import type { CommunityRepository } from "./db-community-repository"
+import type {
+  CommunityDatabaseBindingRepository,
+  CommunityReadRepository,
+} from "./db-community-repository"
 import { notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import { openCommunityDb } from "./community-db-factory"
 import {
   assertUpdateCommunityRequest,
+  communityMutationActorFromUserId,
   loadCommunityProjection,
   parseCommunitySettingsJson,
-  requireOwnedCommunity,
+  requireAdminOverrideOrOwnedCommunity,
+  type CommunityMutationActor,
   type UpdateCommunityRequestBody,
 } from "./create/shared"
 import type {
@@ -14,21 +19,30 @@ import type {
   Env,
 } from "../../types"
 
+type CommunitySettingsRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
+
 export async function updateCommunity(input: {
   env: Env
-  userId: string
+  userId?: string
+  actor?: CommunityMutationActor
   communityId: string
   body: UpdateCommunityRequestBody | null
-  communityRepository: CommunityRepository
+  communityRepository: CommunitySettingsRepository
 }): Promise<Community> {
   assertUpdateCommunityRequest(input.body)
-  await requireOwnedCommunity(input.communityRepository, input.communityId, input.userId)
+  await requireAdminOverrideOrOwnedCommunity({
+    env: input.env,
+    repo: input.communityRepository,
+    communityId: input.communityId,
+    actor: input.actor ?? communityMutationActorFromUserId(input.userId ?? ""),
+    action: "community.profile_updated",
+  })
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
 
   try {
     const result = await db.client.execute({
       sql: `
-        SELECT settings_json
+        SELECT settings_json, display_name, description, avatar_ref, banner_ref
         FROM communities
         WHERE community_id = ?1
         LIMIT 1

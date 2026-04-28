@@ -35,6 +35,7 @@ export type LocalCommunityBootstrapInput = {
     gateConfigJson: string | null
   }>
   rules: Array<LocalCommunityRule>
+  initialSettings?: Record<string, unknown> | null
   now: string
 }
 
@@ -252,6 +253,9 @@ export async function bootstrapLocalCommunityDb(input: LocalCommunityBootstrapIn
     const membershipId = `mbr_${input.communityId}_${input.createdByUserId}`
     const roleAssignmentId = `role_${input.communityId}_${input.createdByUserId}_owner`
     const now = input.now
+    const initialSettingsJson = input.initialSettings && Object.keys(input.initialSettings).length > 0
+      ? JSON.stringify(input.initialSettings)
+      : null
 
     const tx = await client.transaction("write")
     try {
@@ -264,7 +268,7 @@ export async function bootstrapLocalCommunityDb(input: LocalCommunityBootstrapIn
             settings_json, created_by_user_id, created_at, updated_at
           ) VALUES (
             ?1, ?2, ?3, ?4, ?5, 'active', NULL, 'fan_run', ?6, ?7, ?8, ?9,
-            NULL, 'none', 'unconfigured', ?10, NULL, ?11, ?12, ?12
+            NULL, 'none', 'unconfigured', ?10, ?11, ?12, ?13, ?13
           )
           ON CONFLICT(community_id) DO UPDATE SET
             display_name = excluded.display_name,
@@ -292,6 +296,7 @@ export async function bootstrapLocalCommunityDb(input: LocalCommunityBootstrapIn
           boolToSqlite(input.allowAnonymousIdentity),
           input.anonymousIdentityScope,
           input.governanceMode,
+          initialSettingsJson,
           input.createdByUserId,
           now,
         ],
@@ -457,7 +462,7 @@ export async function bootstrapLocalCommunityDb(input: LocalCommunityBootstrapIn
       donation_partner_status: "unconfigured",
       donation_partner: null,
       governance_mode: input.governanceMode,
-      settings_json: null,
+      settings_json: initialSettingsJson,
       gate_rules: input.gateRules.map((rule, index) => ({
         gate_rule_id: `grl_${input.communityId}_${index}`,
         scope: rule.scope,

@@ -1,0 +1,9 @@
+[
+  {
+    "as": "editorial",
+    "alias": "welcome",
+    "idempotency_key": "example-welcome-001",
+    "title": "Welcome",
+    "body": "Welcome to the community."
+  }
+]

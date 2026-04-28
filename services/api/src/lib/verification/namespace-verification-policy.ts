@@ -137,6 +137,35 @@ export function shouldRequireHnsDnsSetup(
   return inspection.pirate_dns_authority_verified !== true
 }
 
+export function isDnsSetupRequiredNamespaceSessionRow(
+  row: Pick<
+    NamespaceVerificationSessionRow,
+    "family" | "status" | "failure_reason" | "challenge_kind" | "challenge_host" | "challenge_txt_value"
+  >,
+): boolean {
+  if (row.family !== "hns") {
+    return false
+  }
+
+  if (row.status === "dns_setup_required") {
+    return true
+  }
+
+  return row.status === "challenge_required"
+    && row.challenge_kind == null
+    && row.challenge_host == null
+    && row.challenge_txt_value == null
+}
+
+export function serializeNamespaceSessionStatus(
+  row: Pick<
+    NamespaceVerificationSessionRow,
+    "family" | "status" | "failure_reason" | "challenge_kind" | "challenge_host" | "challenge_txt_value"
+  >,
+): NamespaceVerificationSession["status"] {
+  return isDnsSetupRequiredNamespaceSessionRow(row) ? "dns_setup_required" : row.status
+}
+
 export async function buildNamespaceSessionResponseContext(
   env: Env,
   row: NamespaceVerificationSessionRow,
@@ -148,7 +177,7 @@ export async function buildNamespaceSessionResponseContext(
 
   if (
     row.family !== "hns"
-    || row.status !== "dns_setup_required"
+    || !isDnsSetupRequiredNamespaceSessionRow(row)
     || !isHnsVerifierConfigured(env)
   ) {
     return { setupNameservers: null }

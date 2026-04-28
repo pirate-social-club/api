@@ -8,7 +8,7 @@ import { createClient } from "@libsql/client"
 import { openCommunityDb } from "../src/lib/communities/community-db-factory"
 import { encryptCommunityDbCredential } from "../src/lib/communities/community-db-credential-crypto"
 import { enqueueCommunityJob } from "../src/lib/communities/jobs/store"
-import type { CommunityRepository } from "../src/lib/communities/db-community-repository"
+import type { CommunityDatabaseBindingRepository } from "../src/lib/communities/db-community-repository"
 import { resolveCoreRepoPath } from "../shared/core-repo-paths"
 import { splitSqlStatements, toSqliteCompatibleStatements } from "../shared/sql-migration"
 
@@ -93,7 +93,7 @@ async function listTableNames(databasePath: string): Promise<string[]> {
   }
 }
 
-function buildRepository(databasePath: string): CommunityRepository {
+function buildRepository(databasePath: string): CommunityDatabaseBindingRepository {
   return {
     async getPrimaryCommunityDatabaseBinding() {
       return {
@@ -116,7 +116,7 @@ function buildRepository(databasePath: string): CommunityRepository {
     async getActiveCommunityDbCredential() {
       return null
     },
-  } as unknown as CommunityRepository
+  }
 }
 
 describe("openCommunityDb", () => {
@@ -163,7 +163,7 @@ describe("openCommunityDb", () => {
           updated_at: now,
         }
       },
-    } as unknown as CommunityRepository
+    } satisfies CommunityDatabaseBindingRepository
 
     const db = await openCommunityDb(
       {

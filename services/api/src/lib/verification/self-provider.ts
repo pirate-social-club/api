@@ -368,6 +368,15 @@ export function getSelfProvider(env: Env): SelfProvider {
         const upstreamSessionRef = encodeDevStubSessionRef(input.requestedCapabilities, input.verificationRequirements ?? [])
         const disclosures = mapCapabilitiesToDisclosures(input.requestedCapabilities, input.verificationRequirements ?? [])
 
+        console.info("[self-provider] dev stub launch", {
+          verificationSessionId: input.verificationSessionId,
+          userId: input.userId,
+          requestedCapabilities: input.requestedCapabilities,
+          verificationRequirements: input.verificationRequirements ?? [],
+          disclosures,
+          scope: input.verificationIntent ?? "profile_verification",
+        })
+
         return {
           upstreamSessionRef,
           launch: {
@@ -399,6 +408,19 @@ export function getSelfProvider(env: Env): SelfProvider {
         selfUserId,
         userDefinedData,
         verificationConfig,
+      })
+
+      console.info("[self-provider] sdk launch", {
+        verificationSessionId: input.verificationSessionId,
+        userId: input.userId,
+        requestedCapabilities: input.requestedCapabilities,
+        verificationRequirements: input.verificationRequirements ?? [],
+        disclosures,
+        verificationConfig,
+        endpointType,
+        endpoint,
+        scope,
+        mockPassport: !isProductionEnv(env),
       })
 
       return {

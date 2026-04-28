@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from "node:crypto"
 import { createMiddleware } from "hono/factory"
 import { authError } from "./errors"
 import { getControlPlaneAgentOwnershipRepository } from "./agents/agent-ownership-repository"
@@ -11,8 +12,17 @@ export type ActorContext = {
   delegatedCredentialOwnershipRecordId?: string
 }
 
+export type AdminActorContext = {
+  userId: string
+  authType: "admin"
+  adminOverride: {
+    adminActorId: string
+    scope: string
+  }
+}
+
 type AuthenticatedVariables = {
-  actor: ActorContext
+  actor: ActorContext | AdminActorContext
 }
 
 export function requireBearerToken(headerValue: string | undefined): string {
@@ -48,8 +58,63 @@ export async function authenticateAgentDelegatedToken(input: {
   }
 }
 
+export function authenticateAdminToken(input: {
+  env: Env
+  token: string | undefined
+  asUserId: string | undefined
+}): AdminActorContext | null {
+  const token = input.token?.trim()
+  if (!token) {
+    return null
+  }
+
+  const configured = String(input.env.PIRATE_ADMIN_TOKEN || "").trim()
+  if (!configured || !timingSafeTokenEqual(token, configured)) {
+    throw authError("Authentication failed")
+  }
+
+  const asUserId = input.asUserId?.trim()
+  if (!asUserId) {
+    throw authError("Admin actor user is required")
+  }
+
+  return {
+    userId: asUserId,
+    authType: "admin",
+    adminOverride: {
+      adminActorId: "admin-token",
+      scope: "full",
+    },
+  }
+}
+
+function timingSafeTokenEqual(left: string, right: string): boolean {
+  const leftDigest = createHash("sha256").update(left).digest()
+  const rightDigest = createHash("sha256").update(right).digest()
+  return timingSafeEqual(leftDigest, rightDigest)
+}
+
 export const authenticate = createMiddleware<{ Bindings: Env; Variables: AuthenticatedVariables }>(
   async (c, next) => {
+    const token = requireBearerToken(c.req.header("authorization"))
+    c.set("actor", await authenticateUserToken({ env: c.env, token }))
+    await next()
+  },
+)
+
+export const authenticateAdminOrUser = createMiddleware<{ Bindings: Env; Variables: AuthenticatedVariables }>(
+  async (c, next) => {
+    const adminActor = authenticateAdminToken({
+      env: c.env,
+      token: c.req.header("x-admin-token"),
+      asUserId: c.req.header("x-admin-as-user-id"),
+    })
+    if (adminActor) {
+      c.set("actor", adminActor)
+      await next()
+      return
+    }
+
     const token = requireBearerToken(c.req.header("authorization"))
     c.set("actor", await authenticateUserToken({ env: c.env, token }))
     await next()

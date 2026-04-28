@@ -3,7 +3,7 @@ import {
   communityIdentifierCandidates,
   resolveCommunityIdentifier,
 } from "../src/lib/communities/community-identifier"
-import type { CommunityRepository } from "../src/lib/communities/db-community-repository"
+import type { CommunityReadRepository } from "../src/lib/communities/db-community-repository"
 import type { CommunityRow } from "../src/lib/auth/auth-db-rows"
 
 function communityRow(input: {
@@ -48,7 +48,7 @@ describe("community identifier resolution", () => {
       async getCommunityByRouteSlug(routeSlug: string) {
         return routeSlug === community.route_slug ? community : null
       },
-    } as Pick<CommunityRepository, "getCommunityById" | "getCommunityByRouteSlug"> as CommunityRepository
+    } as Pick<CommunityReadRepository, "getCommunityById" | "getCommunityByRouteSlug">
 
     expect(await resolveCommunityIdentifier(repository, "@🇵🇸")).toBe("cmt_palestine")
     expect(await resolveCommunityIdentifier(repository, "@%F0%9F%87%B5%F0%9F%87%B8")).toBe("cmt_palestine")

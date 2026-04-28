@@ -21,79 +21,52 @@ afterEach(async () => {
   }
 })
 
+async function verifyAndImportReddit(input: {
+  env: Parameters<typeof requestJson>[3]
+  accessToken: string
+  redditUsername: string
+}): Promise<void> {
+  const createdVerification = await requestJson("http://pirate.test/onboarding/reddit-verification", "POST", {
+    reddit_username: input.redditUsername,
+  }, input.env, input.accessToken)
+  expect(createdVerification.status).toBe(200)
+
+  const verified = await requestJson("http://pirate.test/onboarding/reddit-verification", "POST", {
+    reddit_username: input.redditUsername,
+  }, input.env, input.accessToken)
+  expect(verified.status).toBe(200)
+
+  const imported = await requestJson("http://pirate.test/onboarding/reddit-imports", "POST", {
+    reddit_username: input.redditUsername,
+  }, input.env, input.accessToken)
+  expect(imported.status).toBe(202)
+}
+
 describe("profile routes", () => {
-  test("profiles patch self-heals legacy sqlite databases missing primary_linked_handle_id", async () => {
+  test("profiles can publish and rotate XMTP inbox ids", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
 
-    const session = await exchangeJwt(ctx.env, "profile-legacy-column-user")
+    const session = await exchangeJwt(ctx.env, "profile-xmtp-user")
 
-    await ctx.client.execute("PRAGMA foreign_keys = OFF")
-    await ctx.client.execute("ALTER TABLE profiles RENAME TO profiles_legacy_backup")
-    await ctx.client.execute(`
-      CREATE TABLE profiles (
-        user_id TEXT PRIMARY KEY,
-        display_name TEXT,
-        bio TEXT,
-        avatar_ref TEXT,
-        cover_ref TEXT,
-        global_handle_id TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        preferred_locale TEXT,
-        FOREIGN KEY (user_id) REFERENCES users(user_id),
-        FOREIGN KEY (global_handle_id) REFERENCES global_handles(global_handle_id)
-      )
-    `)
-    await ctx.client.execute(`
-      INSERT INTO profiles (
-        user_id,
-        display_name,
-        bio,
-        avatar_ref,
-        cover_ref,
-        global_handle_id,
-        created_at,
-        updated_at,
-        preferred_locale
-      )
-      SELECT
-        user_id,
-        display_name,
-        bio,
-        avatar_ref,
-        cover_ref,
-        global_handle_id,
-        created_at,
-        updated_at,
-        preferred_locale
-      FROM profiles_legacy_backup
-    `)
-    await ctx.client.execute("DROP TABLE profiles_legacy_backup")
-    await ctx.client.execute("PRAGMA foreign_keys = ON")
-
-    const patched = await requestJson("http://pirate.test/profiles/me", "PATCH", {
-      avatar_ref: "ipfs://legacy-avatar-ref",
-      cover_ref: "ipfs://legacy-cover-ref",
+    const published = await requestJson("http://pirate.test/profiles/me/xmtp-inbox", "POST", {
+      xmtp_inbox_id: "xmtp-inbox-profile-route-1",
     }, ctx.env, session.accessToken)
-    expect(patched.status).toBe(200)
-    const patchedBody = await json(patched) as {
-      avatar_ref: string | null
-      cover_ref: string | null
-    }
-    expect(patchedBody.avatar_ref).toBe("ipfs://legacy-avatar-ref")
-    expect(patchedBody.cover_ref).toBe("ipfs://legacy-cover-ref")
+    expect(published.status).toBe(200)
+    const publishedBody = await json(published) as { xmtp_inbox_id: string | null }
+    expect(publishedBody.xmtp_inbox_id).toBe("xmtp-inbox-profile-route-1")
 
-    const repairedQuery = await ctx.client.execute({
-      sql: `
-        SELECT primary_linked_handle_id
-        FROM profiles
-        WHERE user_id = ?1
-        LIMIT 1
-      `,
-      args: [session.userId],
-    })
-    expect(repairedQuery.rows).toHaveLength(1)
+    const rotated = await requestJson("http://pirate.test/profiles/me/xmtp-inbox", "POST", {
+      xmtp_inbox_id: "xmtp-inbox-profile-route-2",
+    }, ctx.env, session.accessToken)
+    expect(rotated.status).toBe(200)
+    const rotatedBody = await json(rotated) as { xmtp_inbox_id: string | null }
+    expect(rotatedBody.xmtp_inbox_id).toBe("xmtp-inbox-profile-route-2")
+
+    const invalid = await requestJson("http://pirate.test/profiles/me/xmtp-inbox", "POST", {
+      xmtp_inbox_id: "bad value with spaces",
+    }, ctx.env, session.accessToken)
+    expect(invalid.status).toBe(400)
   })
 
   test("profiles/me, patch, and public profile read work through the full route stack", async () => {
@@ -463,6 +436,126 @@ describe("profile routes", () => {
     expect(analyticsProperties.tier).toBe("premium")
     expect(analyticsProperties.handle_length).toBe(7)
     expect(analyticsProperties.shorter_by).toBe(1)
+  })
+
+  test("reddit claim cannot be reused to upgrade another profile", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    setRedditVerificationCheckerForTests(async () => ({ status: "verified" }))
+    setRedditSnapshotImporterForTests(async ({ redditUsername }) => ({
+      reddit_username: redditUsername,
+      imported_at: "2026-04-24T10:00:00.000Z",
+      account_age_days: 900,
+      imported_reddit_score: 12_000,
+      top_subreddits: [],
+      moderator_of: [],
+      inferred_interests: [],
+      suggested_communities: [],
+      coverage_note: "Historical archival snapshot.",
+    }))
+
+    const firstSession = await exchangeJwt(ctx.env, "profile-reddit-claim-first-user")
+    await verifyAndImportReddit({
+      env: ctx.env,
+      accessToken: firstSession.accessToken,
+      redditUsername: "captain",
+    })
+
+    const secondSession = await exchangeJwt(ctx.env, "profile-reddit-claim-second-user")
+    await verifyAndImportReddit({
+      env: ctx.env,
+      accessToken: secondSession.accessToken,
+      redditUsername: "captain",
+    })
+
+    const firstClaim = await requestJson("http://pirate.test/profiles/me/global-handle/reddit-claim", "POST", {
+      desired_label: "captain",
+    }, ctx.env, firstSession.accessToken)
+    expect(firstClaim.status).toBe(200)
+
+    const secondQuote = await requestJson("http://pirate.test/profiles/me/global-handle/upgrade-quote", "POST", {
+      desired_label: "captain",
+    }, ctx.env, secondSession.accessToken)
+    expect(secondQuote.status).toBe(200)
+    const secondQuoteBody = await json(secondQuote) as {
+      eligible: boolean
+      reason: string | null
+    }
+    expect(secondQuoteBody.eligible).toBe(false)
+    expect(secondQuoteBody.reason).toBe("This Reddit account has already been used for a Pirate handle")
+
+    const secondClaim = await requestJson("http://pirate.test/profiles/me/global-handle/reddit-claim", "POST", {
+      desired_label: "captain",
+    }, ctx.env, secondSession.accessToken)
+    expect(secondClaim.status).toBe(403)
+    const secondClaimBody = await json(secondClaim) as { code: string; message: string }
+    expect(secondClaimBody.code).toBe("eligibility_failed")
+    expect(secondClaimBody.message).toBe("This Reddit account has already been used for a Pirate handle")
+
+    const thirdSession = await exchangeJwt(ctx.env, "profile-reddit-claim-third-user")
+    const blockedVerification = await requestJson("http://pirate.test/onboarding/reddit-verification", "POST", {
+      reddit_username: "captain",
+    }, ctx.env, thirdSession.accessToken)
+    expect(blockedVerification.status).toBe(409)
+    const blockedVerificationBody = await json(blockedVerification) as { code: string; message: string }
+    expect(blockedVerificationBody.code).toBe("conflict")
+    expect(blockedVerificationBody.message).toBe("This Reddit account has already been used for a Pirate handle")
+  })
+
+  test("profile cannot spend multiple reddit handle claims", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    setRedditVerificationCheckerForTests(async () => ({ status: "verified" }))
+    setRedditSnapshotImporterForTests(async ({ redditUsername }) => ({
+      reddit_username: redditUsername,
+      imported_at: "2026-04-24T10:00:00.000Z",
+      account_age_days: 900,
+      imported_reddit_score: 100_000,
+      top_subreddits: [],
+      moderator_of: [],
+      inferred_interests: [],
+      suggested_communities: [],
+      coverage_note: "Historical archival snapshot.",
+    }))
+
+    const session = await exchangeJwt(ctx.env, "profile-reddit-claim-single-use-user")
+    await verifyAndImportReddit({
+      env: ctx.env,
+      accessToken: session.accessToken,
+      redditUsername: "captain",
+    })
+
+    const firstClaim = await requestJson("http://pirate.test/profiles/me/global-handle/reddit-claim", "POST", {
+      desired_label: "captain",
+    }, ctx.env, session.accessToken)
+    expect(firstClaim.status).toBe(200)
+
+    await verifyAndImportReddit({
+      env: ctx.env,
+      accessToken: session.accessToken,
+      redditUsername: "blackbeard",
+    })
+
+    const secondQuote = await requestJson("http://pirate.test/profiles/me/global-handle/upgrade-quote", "POST", {
+      desired_label: "blackbeard",
+    }, ctx.env, session.accessToken)
+    expect(secondQuote.status).toBe(200)
+    const secondQuoteBody = await json(secondQuote) as {
+      eligible: boolean
+      reason: string | null
+    }
+    expect(secondQuoteBody.eligible).toBe(false)
+    expect(secondQuoteBody.reason).toBe("A Reddit account has already been used for this profile")
+
+    const secondClaim = await requestJson("http://pirate.test/profiles/me/global-handle/reddit-claim", "POST", {
+      desired_label: "blackbeard",
+    }, ctx.env, session.accessToken)
+    expect(secondClaim.status).toBe(403)
+    const secondClaimBody = await json(secondClaim) as { code: string; message: string }
+    expect(secondClaimBody.code).toBe("eligibility_failed")
+    expect(secondClaimBody.message).toBe("A Reddit account has already been used for this profile")
   })
 
 })

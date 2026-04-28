@@ -2,8 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { join } from "node:path"
 import { openCommunityDb } from "../src/lib/communities/community-db-factory"
 import { enqueueCommunityJob } from "../src/lib/communities/jobs/store"
-import type { CommunityRepository } from "../src/lib/communities/db-community-repository"
 import { processAvailableCommunityJobs, processNextCommunityJob, runCommunityJobWorkerLoop } from "../src/lib/communities/jobs/runner"
+import type { CommunityJobRepository } from "../src/lib/communities/jobs/runner-types"
 import type { CommunityRow } from "../src/lib/auth/auth-db-rows"
 import { createComment } from "../src/lib/comments/comment-service"
 import { getCommentById } from "../src/lib/comments/community-comment-store"
@@ -21,11 +21,10 @@ import {
   seedCommunityState,
   type TestCommunityRepository,
 } from "./community-job-runner-test-helpers"
-const originalFetch = globalThis.fetch
+import { withMockedFetch } from "./helpers"
 
 afterEach(async () => {
   setSwarmPublisherForTests(null)
-  globalThis.fetch = originalFetch
   await cleanupCommunityJobRunnerArtifacts()
 })
 
@@ -203,15 +202,7 @@ describe("community-job-runner", () => {
         return alphaRepo.getCommunityCommentProjectionByCommentId(commentId)
           ?? betaRepo.getCommunityCommentProjectionByCommentId(commentId)
       },
-    } satisfies Pick<
-      CommunityRepository,
-      | "getCommunityById"
-      | "listActiveCommunities"
-      | "getPrimaryCommunityDatabaseBinding"
-      | "getActiveCommunityDbCredential"
-      | "recordCommunityCommentProjection"
-      | "getCommunityCommentProjectionByCommentId"
-    >
+    } satisfies CommunityJobRepository
 
     alphaRepo.failProjectionWrites = true
     betaRepo.failProjectionWrites = true
@@ -507,7 +498,7 @@ describe("community-job-runner", () => {
       communityRepository: gatedRepo,
     })
 
-    const drainAll = async (repo: CommunityRepository, communityId: string): Promise<void> => {
+    const drainAll = async (repo: CommunityJobRepository, communityId: string): Promise<void> => {
       while (true) {
         const processed = await processNextCommunityJob({
           env,
@@ -665,7 +656,7 @@ describe("community-job-runner", () => {
       db.close()
     }
 
-    globalThis.fetch = (async (input) => {
+    await withMockedFetch(() => (async (input) => {
       expect(input instanceof Request ? input.url : String(input)).toBe("https://example.com/posts/story")
       return new Response(`
         <html>
@@ -679,18 +670,18 @@ describe("community-job-runner", () => {
           "content-type": "text/html",
         },
       })
-    }) as typeof fetch
+    }) as typeof fetch, async () => {
+      const processed = await processNextCommunityJob({
+        env,
+        communityId,
+        communityRepository: repo,
+      })
 
-    const processed = await processNextCommunityJob({
-      env,
-      communityId,
-      communityRepository: repo,
+      expect(processed?.job_type).toBe("embed_hydrate")
+      expect(processed?.error_code).toBeNull()
+      expect(processed?.status).toBe("succeeded")
+      expect(processed?.result_ref).toBe("https://example.com/assets/story-card.jpg")
     })
-
-    expect(processed?.job_type).toBe("embed_hydrate")
-    expect(processed?.error_code).toBeNull()
-    expect(processed?.status).toBe("succeeded")
-    expect(processed?.result_ref).toBe("https://example.com/assets/story-card.jpg")
 
     const verifyDb = await openCommunityDb(env, repo, communityId)
     try {
@@ -752,7 +743,7 @@ describe("community-job-runner", () => {
       db.close()
     }
 
-    globalThis.fetch = (async (input) => {
+    await withMockedFetch(() => (async (input) => {
       const requestUrl = input instanceof Request ? input.url : String(input)
       const parsed = new URL(requestUrl)
       if (parsed.origin + parsed.pathname === "https://publish.x.com/oembed") {
@@ -778,42 +769,42 @@ describe("community-job-runner", () => {
           "content-type": "text/html",
         },
       })
-    }) as typeof fetch
-
-    const processed = await processNextCommunityJob({
-      env,
-      communityId,
-      communityRepository: repo,
-    })
-
-    expect(processed?.job_type).toBe("embed_hydrate")
-    expect(processed?.error_code).toBeNull()
-    expect(processed?.status).toBe("succeeded")
-    expect(processed?.result_ref).toBe("https://x.com/pirate/status/1234567890123456789")
-
-    const rerunDb = await openCommunityDb(env, repo, communityId)
-    try {
-      const job = await enqueueCommunityJob({
-        client: rerunDb.client,
-        communityId,
-        jobType: "embed_hydrate",
-        subjectType: "post_embed",
-        subjectId: `${linkPostId}:rerun`,
-        payloadJson: JSON.stringify({
-          post_id: linkPostId,
-          link_url: "https://twitter.com/pirate/status/1234567890123456789",
-        }),
-        createdAt: new Date().toISOString(),
-      })
-      await processNextCommunityJob({
+    }) as typeof fetch, async () => {
+      const processed = await processNextCommunityJob({
         env,
         communityId,
         communityRepository: repo,
       })
-      expect(job.job_type).toBe("embed_hydrate")
-    } finally {
-      rerunDb.close()
-    }
+
+      expect(processed?.job_type).toBe("embed_hydrate")
+      expect(processed?.error_code).toBeNull()
+      expect(processed?.status).toBe("succeeded")
+      expect(processed?.result_ref).toBe("https://x.com/pirate/status/1234567890123456789")
+
+      const rerunDb = await openCommunityDb(env, repo, communityId)
+      try {
+        const job = await enqueueCommunityJob({
+          client: rerunDb.client,
+          communityId,
+          jobType: "embed_hydrate",
+          subjectType: "post_embed",
+          subjectId: `${linkPostId}:rerun`,
+          payloadJson: JSON.stringify({
+            post_id: linkPostId,
+            link_url: "https://twitter.com/pirate/status/1234567890123456789",
+          }),
+          createdAt: new Date().toISOString(),
+        })
+        await processNextCommunityJob({
+          env,
+          communityId,
+          communityRepository: repo,
+        })
+        expect(job.job_type).toBe("embed_hydrate")
+      } finally {
+        rerunDb.close()
+      }
+    })
 
     const verifyDb = await openCommunityDb(env, repo, communityId)
     try {
@@ -888,7 +879,7 @@ describe("community-job-runner", () => {
       db.close()
     }
 
-    globalThis.fetch = (async (input) => {
+    await withMockedFetch(() => (async (input) => {
       const requestUrl = input instanceof Request ? input.url : String(input)
       const parsed = new URL(requestUrl)
       expect(parsed.origin + parsed.pathname).toBe("https://www.youtube.com/oembed")
@@ -907,18 +898,18 @@ describe("community-job-runner", () => {
           "cache-control": "public, max-age=86400",
         },
       })
-    }) as typeof fetch
+    }) as typeof fetch, async () => {
+      const processed = await processNextCommunityJob({
+        env,
+        communityId,
+        communityRepository: repo,
+      })
 
-    const processed = await processNextCommunityJob({
-      env,
-      communityId,
-      communityRepository: repo,
+      expect(processed?.job_type).toBe("embed_hydrate")
+      expect(processed?.error_code).toBeNull()
+      expect(processed?.status).toBe("succeeded")
+      expect(processed?.result_ref).toBe("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
     })
-
-    expect(processed?.job_type).toBe("embed_hydrate")
-    expect(processed?.error_code).toBeNull()
-    expect(processed?.status).toBe("succeeded")
-    expect(processed?.result_ref).toBe("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
 
     const verifyDb = await openCommunityDb(env, repo, communityId)
     try {

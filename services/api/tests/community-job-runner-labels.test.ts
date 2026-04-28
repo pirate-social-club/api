@@ -14,11 +14,9 @@ import {
   seedCommunityLabels,
   seedCommunityState,
 } from "./community-job-runner-test-helpers"
-
-const originalFetch = globalThis.fetch
+import { withMockedFetch } from "./helpers"
 
 afterEach(async () => {
-  globalThis.fetch = originalFetch
   await cleanupCommunityJobRunnerArtifacts()
 })
 
@@ -58,7 +56,7 @@ describe("community-job-runner labels", () => {
       ],
     })
 
-    globalThis.fetch = (async () => {
+    await withMockedFetch(() => (async () => {
       return new Response(JSON.stringify({
         choices: [
           {
@@ -74,23 +72,23 @@ describe("community-job-runner labels", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof fetch
+    }) as typeof fetch, async () => {
+      await enqueuePostLabelJob({
+        env,
+        repo,
+        communityId,
+        postId,
+      })
 
-    await enqueuePostLabelJob({
-      env,
-      repo,
-      communityId,
-      postId,
+      const processed = await processNextCommunityJob({
+        env,
+        communityId,
+        communityRepository: repo,
+      })
+      expect(processed?.job_type).toBe("post_label_materialize")
+      expect(processed?.status).toBe("succeeded")
+      expect(processed?.result_ref).toBe("lbl_question:assigned")
     })
-
-    const processed = await processNextCommunityJob({
-      env,
-      communityId,
-      communityRepository: repo,
-    })
-    expect(processed?.job_type).toBe("post_label_materialize")
-    expect(processed?.status).toBe("succeeded")
-    expect(processed?.result_ref).toBe("lbl_question:assigned")
 
     const verifyDb = await openCommunityDb(env, repo, communityId)
     try {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { buildMembershipGateSummary, evaluateMembershipGateRules, satisfiesMembershipGateRules } from "../src/lib/communities/membership/store"
+import { buildMembershipGateSummary, evaluateMembershipGateRules, satisfiesMembershipGateRules } from "../src/lib/communities/membership/gates"
 import { buildDefaultVerificationCapabilities } from "../src/lib/verification/verification-capabilities"
 import type { User } from "../src/types"
 
@@ -46,14 +46,14 @@ function makeNationalityValuesRule(requiredValues: string[]): CommunityGateRuleR
   }
 }
 
-function makeUniqueHumanRule(): CommunityGateRuleRow {
+function makeUniqueHumanRule(acceptedProviders: Array<"self" | "very"> = ["self"]): CommunityGateRuleRow {
   return {
     gate_rule_id: "gr_uh",
     scope: "membership",
     gate_family: "identity_proof",
     gate_type: "unique_human",
     proof_requirements_json: JSON.stringify([
-      { proof_type: "unique_human", accepted_providers: ["self"] },
+      { proof_type: "unique_human", accepted_providers: acceptedProviders },
     ]),
     chain_namespace: null,
     gate_config_json: null,
@@ -182,6 +182,14 @@ describe("evaluateMembershipGateRules", () => {
     const result = await evaluateMembershipGateRules({ env: {}, rules: [], user, walletAttachments: [] })
     expect(result.satisfied).toBe(false)
     expect(result.mismatchReasons).toContain("no_active_gate_rules")
+  })
+
+  test("prefers Very for missing unique human when both human providers are accepted", async () => {
+    const user = makeUser({ uniqueHuman: { state: "unverified" } })
+    const result = await evaluateMembershipGateRules({ env: {}, rules: [makeUniqueHumanRule(["self", "very"])], user, walletAttachments: [] })
+    expect(result.satisfied).toBe(false)
+    expect(result.missingCapabilities).toEqual(["unique_human"])
+    expect(result.suggestedVerificationProvider).toBe("very")
   })
 
   test("evaluates multiple rules: one missing, one satisfied", async () => {

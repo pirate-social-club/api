@@ -1,11 +1,11 @@
 import type { Client } from "../sql-client"
-import { verificationRequired, internalError } from "../errors"
+import { conflictError, verificationRequired, internalError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import {
   getLatestExternalReputationSnapshotRow,
-  getLatestJobRowBySubjectAndType,
   getLatestRedditVerificationSessionRowForUsername,
-} from "../auth/auth-db-queries"
+} from "../auth/auth-db-user-queries"
+import { getLatestJobRowBySubjectAndType } from "../auth/auth-db-community-queries"
 import { serializeRedditImportSummary, serializeRedditVerification } from "../auth/auth-serializers"
 import { getJobById } from "../communities/db-community-repository"
 import type { Env, Job, RedditImportSummary, RedditVerification } from "../../types"
@@ -43,6 +43,8 @@ export class DatabaseRedditOnboardingRepository {
     userId: string
     redditUsername: string
   }): Promise<RedditVerification> {
+    await this.assertRedditClaimAvailable(input.userId, input.redditUsername)
+
     const existing = await getLatestRedditVerificationSessionRowForUsername(this.client, input.userId, input.redditUsername)
     const now = new Date()
     const nowText = now.toISOString()
@@ -177,6 +179,8 @@ export class DatabaseRedditOnboardingRepository {
     userId: string
     redditUsername: string
   }): Promise<{ job: Job }> {
+    await this.assertRedditClaimAvailable(input.userId, input.redditUsername)
+
     const verification = await getLatestRedditVerificationSessionRowForUsername(this.client, input.userId, input.redditUsername)
     if (!verification || verification.status !== "verified") {
       throw verificationRequired("Reddit verification is required")
@@ -294,5 +298,23 @@ export class DatabaseRedditOnboardingRepository {
   async getLatestRedditImportSummary(userId: string): Promise<RedditImportSummary | null> {
     const snapshot = await getLatestExternalReputationSnapshotRow(this.client, userId)
     return snapshot ? serializeRedditImportSummary(snapshot) : null
+  }
+
+  private async assertRedditClaimAvailable(userId: string, redditUsername: string): Promise<void> {
+    const row = await this.client.execute({
+      sql: `
+        SELECT user_id
+        FROM global_handles
+        WHERE label_normalized = ?1
+          AND issuance_source = 'reddit_verified_claim'
+        ORDER BY created_at ASC
+        LIMIT 1
+      `,
+      args: [redditUsername],
+    })
+    const ownerUserId = row.rows[0]?.user_id == null ? null : String(row.rows[0]?.user_id)
+    if (ownerUserId != null && ownerUserId !== userId) {
+      throw conflictError("This Reddit account has already been used for a Pirate handle")
+    }
   }
 }

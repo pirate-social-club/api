@@ -93,6 +93,7 @@ export type Profile = {
   linked_handles?: Array<LinkedHandle> | null;
   primary_public_handle?: LinkedHandle | null;
   primary_wallet_address?: string | null;
+  xmtp_inbox_id?: string | null;
   verification_capabilities?: VerificationCapabilities | null;
   global_handle: GlobalHandle;
   created_at: string;
@@ -113,7 +114,6 @@ export type RedditImportSummary = {
   imported_at: string;
   account_age_days?: number | null;
   imported_reddit_score?: number | null;
-  /** @deprecated Use imported_reddit_score. */
   global_karma?: number | null;
   top_subreddits: Array<{
     subreddit: string;
@@ -187,7 +187,7 @@ export type VeryWidgetLaunch = {
   type_id: string;
   query: Record<string, unknown>;
   verify_url: string;
-  session_binding: VerySessionBinding;
+  session_binding?: VerySessionBinding;
 };
 
 export type VerySessionBinding = {
@@ -857,7 +857,7 @@ export type CompleteNamespaceVerificationSessionRequest = {
 };
 
 export type CreateSongArtifactUploadRequest = {
-  artifact_kind: "primary_audio" | "cover_art" | "preview_audio" | "canvas_video" | "instrumental_audio" | "vocal_audio";
+  artifact_kind: "primary_audio" | "cover_art" | "preview_audio" | "canvas_video" | "instrumental_audio" | "vocal_audio" | "primary_video";
   mime_type: string;
   filename?: string | null;
   size_bytes?: number | null;
@@ -886,6 +886,9 @@ export type CreatePostRequest = (((unknown & {
 } | {
   post_type: "video";
   title?: string | null;
+  access_mode?: "public" | "locked";
+  license_preset?: "non-commercial" | "commercial-use" | "commercial-remix" | null;
+  commercial_rev_share_pct?: number | null;
   media_refs: Array<VideoMediaDescriptor>;
 } | {
   post_type: "link";
@@ -896,6 +899,8 @@ export type CreatePostRequest = (((unknown & {
   post_type: "song";
   identity_mode: "public";
   access_mode?: "public" | "locked";
+  license_preset?: "non-commercial" | "commercial-use" | "commercial-remix" | null;
+  commercial_rev_share_pct?: number | null;
   title?: string | null;
   media_refs?: Array<AudioMediaDescriptor>;
 })) & {
@@ -930,10 +935,13 @@ export type CreatePostRequest = (((unknown & {
   song_mode?: "original" | "remix" | null;
   rights_basis?: "none" | "original" | "derivative" | "attribution_only" | null;
   upstream_asset_refs?: Array<string> | null;
+  license_preset?: "non-commercial" | "commercial-use" | "commercial-remix" | null;
+  commercial_rev_share_pct?: number | null;
   lyrics?: string | null;
 });
 
 export type CreateCommentRequest = {
+  idempotency_key?: string | null;
   body: string;
   authorship_mode?: "human_direct" | "user_agent";
   agent_id?: string | null;
@@ -947,10 +955,13 @@ export type Asset = {
   community_id: string;
   source_post_id: string;
   song_artifact_bundle_id?: string | null;
+  display_title?: string | null;
   creator_user_id: string;
-  asset_kind: "song_audio";
+  asset_kind: "song_audio" | "video_file";
   rights_basis: "none" | "original" | "derivative" | "attribution_only";
   access_mode: "public" | "locked";
+  license_preset?: "non-commercial" | "commercial-use" | "commercial-remix" | null;
+  commercial_rev_share_pct?: number | null;
   primary_content_ref: string;
   primary_content_hash?: string | null;
   publication_status: "draft" | "story_requested" | "story_published" | "story_failed" | "withdrawn";
@@ -1016,7 +1027,7 @@ export type SongArtifactUpload = {
   song_artifact_upload_id: string;
   community_id: string;
   uploader_user_id: string;
-  artifact_kind: "primary_audio" | "cover_art" | "preview_audio" | "canvas_video" | "instrumental_audio" | "vocal_audio";
+  artifact_kind: "primary_audio" | "cover_art" | "preview_audio" | "canvas_video" | "instrumental_audio" | "vocal_audio" | "primary_video";
   status: "pending_upload" | "uploaded" | "failed";
   storage_ref: string;
   mime_type: string;
@@ -1145,6 +1156,7 @@ export type Comment = {
   last_reply_at: string | null;
   content_hash: string | null;
   swarm_body_ref: string | null;
+  idempotency_key: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -1317,6 +1329,10 @@ export type CommunityPreview = {
   avatar_ref?: string | null;
   banner_ref?: string | null;
   membership_mode: "open" | "request" | "gated";
+  allow_anonymous_identity?: boolean;
+  anonymous_identity_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null;
+  allowed_disclosed_qualifiers?: Array<string> | null;
+  allow_qualifiers_on_anonymous_posts?: boolean | null;
   human_verification_lane: HumanVerificationLane;
   member_count?: number | null;
   follower_count?: number | null;
@@ -1444,11 +1460,11 @@ export type SelfVerificationLaunch = {
   dev_mode?: boolean | null;
 };
 
-export type UserTaskType = "namespace_verification_required" | "namespace_verification_pending" | "payout_setup_required" | "membership_review";
+export type UserTaskType = "namespace_verification_required" | "namespace_verification_pending" | "unique_human_verification_required" | "profile_completion_suggested" | "global_handle_cleanup_suggested" | "payout_setup_required" | "royalty_claim_available" | "membership_review";
 
 export type UserTaskStatus = "open" | "completed" | "dismissed";
 
-export type NotificationEventType = "comment_reply" | "post_commented" | "mention" | "mod_event" | "community_update";
+export type NotificationEventType = "comment_reply" | "post_commented" | "mention" | "mod_event" | "community_update" | "xmtp_message" | "royalty_earned";
 
 export type UserTask = {
   task_id: string;
@@ -1511,6 +1527,68 @@ export type MarkNotificationsReadRequest = {
 
 export type DismissTaskRequest = {
   task_id: string;
+};
+
+export type ClaimableRoyaltyItem = {
+  ip_id: string;
+  claimable_wip_wei: string;
+  asset_id: string;
+  community_id: string;
+  title: string | null;
+};
+
+export type ClaimableRoyaltiesResponse = {
+  items: Array<ClaimableRoyaltyItem>;
+  total_claimable_wip_wei: string;
+  checked_at: string;
+};
+
+export type RoyaltyActivityItem = {
+  event_id: string;
+  community_id: string;
+  asset_id: string;
+  title: string | null;
+  story_ip_id: string;
+  amount_wip_wei: string;
+  buyer_wallet_address: string | null;
+  tx_hash: string | null;
+  purchase_id: string | null;
+  created_at: string;
+  read_at: string | null;
+};
+
+export type RoyaltyActivityResponse = {
+  items: Array<RoyaltyActivityItem>;
+  next_cursor: string | null;
+};
+
+export type RoyaltyClaimRecordRequest = {
+  tx_hash: string;
+  wallet_address: string;
+  chain_id: number;
+  claimable_wip_wei_at_submission: string;
+  ip_ids: Array<string>;
+  auto_unwrap_ip_tokens: boolean;
+};
+
+export type RoyaltyClaimRecord = {
+  claim_id: string;
+  user_id: string;
+  tx_hash: string;
+  wallet_address: string;
+  chain_id: number;
+  claimable_wip_wei_at_submission: string;
+  ip_ids: Array<string>;
+  auto_unwrap_ip_tokens: boolean;
+  status: "pending" | "confirmed" | "failed";
+  verified_at: string | null;
+  verification_error: string | null;
+  claimed_at: string;
+  created_at: string;
+};
+
+export type RoyaltyClaimHistoryResponse = {
+  items: Array<RoyaltyClaimRecord>;
 };
 
 type AudioMediaDescriptor = {
@@ -2213,6 +2291,12 @@ type MediaDescriptor = {
   size_bytes?: number | null;
   content_hash?: string | null;
   duration_ms?: number | null;
+  poster_ref?: string | null;
+  poster_mime_type?: string | null;
+  poster_size_bytes?: number | null;
+  poster_width?: number | null;
+  poster_height?: number | null;
+  poster_frame_ms?: number | null;
 };
 
 type ModerationCaseOpenedBy = "platform_analysis" | "user_report" | "mixed";
@@ -2384,6 +2468,12 @@ type VideoMediaDescriptor = {
   duration_ms?: number | null;
   width?: number | null;
   height?: number | null;
+  poster_ref?: string | null;
+  poster_mime_type?: string | null;
+  poster_size_bytes?: number | null;
+  poster_width?: number | null;
+  poster_height?: number | null;
+  poster_frame_ms?: number | null;
 };
 
 type WalletScoreCapabilityState = {
@@ -2454,6 +2544,7 @@ type YouTubeVideoEmbed = {
 export const apiRoutes = {
   authSessionExchange: "/auth/session/exchange",
   usersMe: "/users/me",
+  profilesMe: "/profiles/me",
   onboardingStatus: "/onboarding/status",
   onboardingDismiss: "/onboarding/dismiss",
   onboardingRedditVerification: "/onboarding/reddit-verification",
@@ -2478,6 +2569,7 @@ export const apiRoutes = {
   namespaceVerificationSessionComplete: (namespaceVerificationSessionId: string) => `/namespace-verification-sessions/${namespaceVerificationSessionId}/complete`,
   namespaceVerification: (namespaceVerificationId: string) => `/namespace-verifications/${namespaceVerificationId}`,
   communities: "/communities",
+  communitiesAdminHealth: "/communities/admin/health",
   community: (communityId: string) => `/communities/${communityId}`,
   communityMoneyPolicy: (communityId: string) => `/communities/${communityId}/money-policy`,
   communityPricingPolicy: (communityId: string) => `/communities/${communityId}/pricing-policy`,

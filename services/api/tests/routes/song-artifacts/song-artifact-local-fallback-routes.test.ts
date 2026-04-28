@@ -148,6 +148,7 @@ describe("song artifact local fallback routes", () => {
         access_mode: "locked",
         song_mode: "original",
         rights_basis: "original",
+        license_preset: "non-commercial",
         song_artifact_bundle_id: bundleBody.song_artifact_bundle_id,
       },
       ctx.env,

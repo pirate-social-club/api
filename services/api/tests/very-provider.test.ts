@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { setVeryProviderForTests } from "../src/lib/verification/very-provider"
 import type { VeryProvider, VeryStartResult, VerySessionOutcome } from "../src/lib/verification/very-provider"
-import { resetRuntimeCaches } from "./helpers"
+import { resetRuntimeCaches, withMockedFetch } from "./helpers"
 
 beforeEach(() => {
   resetRuntimeCaches()
@@ -63,7 +63,7 @@ function createMockVeryProvider(overrides?: {
       verify_url: "https://verify.very.org/session/very-upstream-ref-123",
       session_binding: {
         uniqueness_domain: "pirate-unique-human-v0",
-        binding_value: "ver_test",
+        binding_value: "0",
         binding_field: "pseudonym",
         challenge_expires_at: "2099-01-01T00:00:00.000Z",
       },
@@ -152,11 +152,11 @@ describe("Very provider adapter", () => {
     expect(startResult.launch.verify_url).toBe("https://api.pirate.sc/verification-sessions/very-widget-verify")
   })
 
-  test("startSession prefers request origin for widget verify URL in development", async () => {
+  test("startSession prefers configured public origin for widget verify URL in development", async () => {
     const { getVeryProvider } = require("../src/lib/verification/very-provider") as typeof import("../src/lib/verification/very-provider")
     const env = {
       ENVIRONMENT: "development",
-      PIRATE_API_PUBLIC_ORIGIN: "https://stale-tunnel.example.com",
+      PIRATE_API_PUBLIC_ORIGIN: "https://public-tunnel.example.com",
       VERY_APP_ID: "test-app",
     } as any
     const provider = getVeryProvider(env)
@@ -165,7 +165,7 @@ describe("Very provider adapter", () => {
       publicOrigin: "http://127.0.0.1:8787",
     }))
 
-    expect(startResult.launch.verify_url).toBe("http://127.0.0.1:8787/verification-sessions/very-widget-verify")
+    expect(startResult.launch.verify_url).toBe("https://public-tunnel.example.com/verification-sessions/very-widget-verify")
   })
 
   test("startSession emits a Very ZK query within the documented timestamp range", async () => {
@@ -188,18 +188,13 @@ describe("Very provider adapter", () => {
 
     expect(Number.isInteger(lowerBound)).toBe(true)
     expect(Number.isInteger(upperBound)).toBe(true)
-    expect(lowerBound).toBe(0)
+    expect(lowerBound).toBe(1_743_436_800)
     expect(upperBound).toBeGreaterThan(lowerBound)
     expect(upperBound).toBe(2_043_436_800)
-    expect(Number(query.options?.expiredAtLowerBound)).toBeGreaterThan(0)
-    expect(query.options?.externalNullifier).toBe("pirate-unique-human-v0")
-    expect(query.options?.pseudonym).toBe("ver_test")
-    expect(startResult.launch.session_binding).toEqual({
-      uniqueness_domain: "pirate-unique-human-v0",
-      binding_value: "ver_test",
-      binding_field: "pseudonym",
-      challenge_expires_at: "2099-01-01T00:00:00.000Z",
-    })
+    expect(query.options?.expiredAtLowerBound).toBe("1743436800")
+    expect(query.options?.externalNullifier).toBe("Pirate - Community Creation")
+    expect(query.options?.pseudonym).toBe("0")
+    expect(startResult.launch.session_binding).toBe(undefined)
     expect(query.options ? "sessionId" in query.options : true).toBe(false)
   })
 
@@ -211,8 +206,7 @@ describe("Very provider adapter", () => {
     } as any
     const provider = getVeryProvider(env)
 
-    const originalFetch = globalThis.fetch
-    globalThis.fetch = (async (input, init) => {
+    await withMockedFetch(() => (async (input, init) => {
       expect(String(input)).toBe("https://very.example.com/api/v1/verify")
       expect(init?.method).toBe("POST")
       const headers = new Headers(init?.headers)
@@ -224,23 +218,21 @@ describe("Very provider adapter", () => {
         status: "valid",
         data: {
           attestation_id: "very-att-1",
-          externalNullifier: "pirate-unique-human-v0",
-          pseudonym: "ver_test",
+          externalNullifier: "Pirate - Profile Verification - very-upstream-ref-123",
+          pseudonym: "0",
           nullifier: "very-nullifier-1",
         },
       }), {
         status: 200,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof globalThis.fetch
-
-    try {
+    }) as typeof globalThis.fetch, async () => {
       const outcome = await provider.getSessionOutcome({
         upstreamSessionRef: "very-upstream-ref-123",
         providerPayloadRef: "proof-payload-123",
         expectedBinding: {
           uniqueness_domain: "pirate-unique-human-v0",
-          binding_value: "ver_test",
+          binding_value: "0",
           binding_field: "pseudonym",
           challenge_expires_at: "2099-01-01T00:00:00.000Z",
         },
@@ -250,9 +242,7 @@ describe("Very provider adapter", () => {
         expect(typeof outcome.attestationData.proof_hash).toBe("string")
         expect(outcome.attestationData.attestation_id).toBe("very-att-1")
       }
-    } finally {
-      globalThis.fetch = originalFetch
-    }
+    })
   })
 
   test("configured provider accepts alternate successful verifier response shapes", async () => {
@@ -264,39 +254,34 @@ describe("Very provider adapter", () => {
     const provider = getVeryProvider(env)
 
     const responses = [
-      { isValid: true, pseudonym: "ver_test" },
-      { is_valid: true, pseudonym: "ver_test" },
-      { result: true, pseudonym: "ver_test" },
-      { result: { valid: true, pseudonym: "ver_test" } },
-      { data: { verified: true, pseudonym: "ver_test" } },
+      { isValid: true, pseudonym: "0" },
+      { is_valid: true, pseudonym: "0" },
+      { result: true, pseudonym: "0" },
+      { result: { valid: true, pseudonym: "0" } },
+      { data: { verified: true, pseudonym: "0" } },
     ]
-    const originalFetch = globalThis.fetch
     let responseIndex = 0
-    globalThis.fetch = (async () => {
+    await withMockedFetch(() => (async () => {
       const body = responses[responseIndex++]
       return new Response(JSON.stringify(body), {
         status: 200,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof globalThis.fetch
-
-    try {
+    }) as typeof globalThis.fetch, async () => {
       for (const response of responses) {
         const outcome = await provider.getSessionOutcome({
           upstreamSessionRef: "very-upstream-ref-123",
           providerPayloadRef: `proof-for-${Object.keys(response)[0]}`,
           expectedBinding: {
             uniqueness_domain: "pirate-unique-human-v0",
-            binding_value: "ver_test",
+            binding_value: "0",
             binding_field: "pseudonym",
             challenge_expires_at: "2099-01-01T00:00:00.000Z",
           },
         })
         expect(outcome.status).toBe("verified")
       }
-    } finally {
-      globalThis.fetch = originalFetch
-    }
+    })
   })
 })
 
@@ -453,25 +438,21 @@ describe("Very provider development fallback", () => {
       ENVIRONMENT: "development",
     } as any
     const provider = getVeryProvider(env)
-    const originalFetch = globalThis.fetch
     let requestedUrl = ""
-    globalThis.fetch = (async (url) => {
+    await withMockedFetch(() => (async (url) => {
       requestedUrl = String(url)
       return new Response(JSON.stringify({ status: "valid" }), {
         status: 200,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof globalThis.fetch
-    try {
+    }) as typeof globalThis.fetch, async () => {
       const outcome = await provider.getSessionOutcome({
         upstreamSessionRef: "local-ref",
         providerPayloadRef: "some-proof",
       })
       expect(outcome.status).toBe("verified")
       expect(requestedUrl).toBe("https://verify.very.org/api/v1/verify")
-    } finally {
-      globalThis.fetch = originalFetch
-    }
+    })
   })
 
   test("getSessionOutcome returns pending when no providerPayloadRef", async () => {
@@ -495,21 +476,17 @@ describe("Very provider development fallback", () => {
       ENVIRONMENT: "production",
     } as any
     const provider = getVeryProvider(env)
-    const originalFetch = globalThis.fetch
-    globalThis.fetch = (async () => {
+    await withMockedFetch(() => (async () => {
       return new Response(JSON.stringify({ status: "valid" }), {
         status: 200,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof globalThis.fetch
-    try {
+    }) as typeof globalThis.fetch, async () => {
       const outcome = await provider.getSessionOutcome({
         upstreamSessionRef: "prod-ref",
         providerPayloadRef: "prod-proof",
       })
       expect(outcome.status).toBe("verified")
-    } finally {
-      globalThis.fetch = originalFetch
-    }
+    })
   })
 })

@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { hasUniqueConstraintName, isMissingColumnError, normalizeControlPlaneDbUrl } from "./auth-db-query-helpers"
+import {
+  hasCheckConstraintName,
+  hasUniqueConstraintName,
+  isMissingColumnError,
+  normalizeControlPlaneDbUrl,
+} from "./auth-db-query-helpers"
 
 describe("isMissingColumnError", () => {
   test("recognizes PostgreSQL undefined-column messages without an exposed code", () => {
@@ -29,6 +34,25 @@ describe("hasUniqueConstraintName", () => {
     const error = new Error('duplicate key value violates unique constraint "idx_wallet_attachments_active_primary"')
 
     expect(hasUniqueConstraintName(error, "idx_wallet_attachments_active_primary")).toBe(true)
+  })
+})
+
+describe("hasCheckConstraintName", () => {
+  test("recognizes exposed PostgreSQL check constraint names", () => {
+    const error = {
+      code: "23514",
+      constraint: "namespace_verification_sessions_status_check",
+    }
+
+    expect(hasCheckConstraintName(error, "namespace_verification_sessions_status_check")).toBe(true)
+  })
+
+  test("recognizes PostgreSQL check constraint names in error messages", () => {
+    const error = new Error(
+      'new row for relation "namespace_verification_sessions" violates check constraint "namespace_verification_sessions_status_check"',
+    )
+
+    expect(hasCheckConstraintName(error, "namespace_verification_sessions_status_check")).toBe(true)
   })
 })
 

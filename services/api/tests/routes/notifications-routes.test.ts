@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import app from "../../src/index"
 import {
-  createNamespaceVerificationTask,
   emitRoyaltyEarnedBatch,
   emitPostCommented,
-} from "../../src/lib/notifications/notification-service"
+} from "../../src/lib/notifications/notification-emitters"
+import { createNamespaceVerificationTask } from "../../src/lib/notifications/notification-task-service"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../helpers"
 import { exchangeJwt } from "./communities/community-routes-test-helpers"
 
@@ -58,6 +58,31 @@ describe("notification routes", () => {
     const body = await json(response) as { code: string; message: string }
     expect(body.code).toBe("bad_request")
     expect(body.message).toBe("This task cannot be dismissed")
+  })
+
+  test("does not suggest global handle cleanup after onboarding is dismissed", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "notification-dismissed-onboarding-user")
+
+    const dismiss = await app.request(
+      "http://pirate.test/onboarding/dismiss",
+      {
+        method: "POST",
+        headers: authHeaders(session.accessToken),
+      },
+      ctx.env,
+    )
+    expect(dismiss.status).toBe(200)
+
+    const tasks = await app.request(
+      "http://pirate.test/notifications/tasks",
+      { headers: authHeaders(session.accessToken) },
+      ctx.env,
+    )
+    expect(tasks.status).toBe(200)
+    const tasksBody = await json(tasks) as { items: Array<{ type: string }> }
+    expect(tasksBody.items.some((item) => item.type === "global_handle_cleanup_suggested")).toBe(false)
   })
 
   test("reads tasks and activity, then marks and dismisses them", async () => {

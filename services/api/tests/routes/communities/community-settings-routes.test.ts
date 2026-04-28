@@ -5,6 +5,7 @@ import {
   completeAgeOver18Verification,
   completeUniqueHumanVerification,
   exchangeJwt,
+  prepareVerifiedNamespace,
   requestJson,
 } from "./community-routes-test-helpers"
 
@@ -822,5 +823,179 @@ describe("community settings routes", () => {
     expect(fetchedBody.description).toBe("New description")
     expect(fetchedBody.avatar_ref).toBe("media://community-avatar")
     expect(fetchedBody.banner_ref).toBe("media://community-banner")
+  })
+
+  test("community owner can update agent settings without clobbering existing profile fields", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "community-agent-settings-preserve-profile-user")
+    await completeUniqueHumanVerification(ctx.env, session.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Preserve Name",
+      description: "Preserve description",
+      avatar_ref: "media://preserve-avatar",
+      banner_ref: "media://preserve-banner",
+      handle_policy: {
+        policy_template: "standard",
+      },
+    }, ctx.env, session.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: {
+        community_id: string
+      }
+    }
+
+    const settingsUpdate = await Promise.resolve(app.request(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}`,
+      {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${session.accessToken}`,
+        },
+        body: JSON.stringify({
+          human_verification_lane: "very",
+          agent_posting_policy: "allow",
+          agent_posting_scope: "top_level_and_replies",
+          accepted_agent_ownership_providers: ["clawkey"],
+        }),
+      },
+      ctx.env,
+    ))
+    expect(settingsUpdate.status).toBe(200)
+    const updatedCommunity = await json(settingsUpdate) as {
+      display_name: string
+      description: string | null
+      avatar_ref: string | null
+      banner_ref: string | null
+      human_verification_lane: string
+      agent_posting_policy: string
+      agent_posting_scope: string
+      accepted_agent_ownership_providers: string[]
+    }
+    expect(updatedCommunity.display_name).toBe("Preserve Name")
+    expect(updatedCommunity.description).toBe("Preserve description")
+    expect(updatedCommunity.avatar_ref).toBe("media://preserve-avatar")
+    expect(updatedCommunity.banner_ref).toBe("media://preserve-banner")
+    expect(updatedCommunity.human_verification_lane).toBe("very")
+    expect(updatedCommunity.agent_posting_policy).toBe("allow")
+    expect(updatedCommunity.agent_posting_scope).toBe("top_level_and_replies")
+    expect(updatedCommunity.accepted_agent_ownership_providers).toEqual(["clawkey"])
+
+    const fetchedCommunity = await app.request(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}`,
+      {
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(fetchedCommunity.status).toBe(200)
+    const fetchedBody = await json(fetchedCommunity) as {
+      display_name: string
+      description: string | null
+      avatar_ref: string | null
+      banner_ref: string | null
+      human_verification_lane: string
+      agent_posting_policy: string
+      agent_posting_scope: string
+      accepted_agent_ownership_providers: string[]
+    }
+    expect(fetchedBody.display_name).toBe("Preserve Name")
+    expect(fetchedBody.description).toBe("Preserve description")
+    expect(fetchedBody.avatar_ref).toBe("media://preserve-avatar")
+    expect(fetchedBody.banner_ref).toBe("media://preserve-banner")
+    expect(fetchedBody.human_verification_lane).toBe("very")
+    expect(fetchedBody.agent_posting_policy).toBe("allow")
+    expect(fetchedBody.agent_posting_scope).toBe("top_level_and_replies")
+    expect(fetchedBody.accepted_agent_ownership_providers).toEqual(["clawkey"])
+  })
+
+  test("community create persists agent posting settings into settings_json", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "community-create-agent-settings-user")
+    await completeUniqueHumanVerification(ctx.env, session.accessToken)
+
+    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, session.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Agent Settings Create Club",
+      namespace: {
+        namespace_verification_id: namespaceVerificationId,
+      },
+      human_verification_lane: "very",
+      agent_posting_policy: "allow",
+      agent_posting_scope: "top_level_and_replies",
+      agent_daily_post_cap: 10,
+      agent_daily_reply_cap: 50,
+      accepted_agent_ownership_providers: ["clawkey"],
+      gate_rules: [{
+        scope: "membership",
+        gate_family: "identity_proof",
+        gate_type: "unique_human",
+        proof_requirements: [{
+          proof_type: "unique_human",
+          accepted_providers: ["very"],
+        }],
+      }],
+    }, ctx.env, session.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: {
+        community_id: string
+        agent_posting_policy: string
+        agent_posting_scope: string
+        agent_daily_post_cap: number | null
+        agent_daily_reply_cap: number | null
+        human_verification_lane: string
+        human_verification_lane_origin: string
+        accepted_agent_ownership_providers: string[]
+        accepted_agent_ownership_providers_origin: string
+      }
+    }
+
+    expect(communityCreateBody.community.agent_posting_policy).toBe("allow")
+    expect(communityCreateBody.community.agent_posting_scope).toBe("top_level_and_replies")
+    expect(communityCreateBody.community.agent_daily_post_cap).toBe(10)
+    expect(communityCreateBody.community.agent_daily_reply_cap).toBe(50)
+    expect(communityCreateBody.community.human_verification_lane).toBe("very")
+    expect(communityCreateBody.community.human_verification_lane_origin).toBe("explicit")
+    expect(communityCreateBody.community.accepted_agent_ownership_providers).toEqual(["clawkey"])
+    expect(communityCreateBody.community.accepted_agent_ownership_providers_origin).toBe("explicit")
+
+    const fetchedCommunity = await app.request(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}`,
+      {
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(fetchedCommunity.status).toBe(200)
+    const fetchedBody = await json(fetchedCommunity) as {
+      agent_posting_policy: string
+      agent_posting_scope: string
+      agent_daily_post_cap: number | null
+      agent_daily_reply_cap: number | null
+      human_verification_lane: string
+      human_verification_lane_origin: string
+      accepted_agent_ownership_providers: string[]
+      accepted_agent_ownership_providers_origin: string
+    }
+    expect(fetchedBody.agent_posting_policy).toBe("allow")
+    expect(fetchedBody.agent_posting_scope).toBe("top_level_and_replies")
+    expect(fetchedBody.agent_daily_post_cap).toBe(10)
+    expect(fetchedBody.agent_daily_reply_cap).toBe(50)
+    expect(fetchedBody.human_verification_lane).toBe("very")
+    expect(fetchedBody.human_verification_lane_origin).toBe("explicit")
+    expect(fetchedBody.accepted_agent_ownership_providers).toEqual(["clawkey"])
+    expect(fetchedBody.accepted_agent_ownership_providers_origin).toBe("explicit")
   })
 })

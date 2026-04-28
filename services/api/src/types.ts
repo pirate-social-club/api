@@ -35,6 +35,7 @@ export type {
   CreateCommentRequest,
   CreateSongArtifactBundleRequest,
   CreateSongArtifactUploadRequest,
+  ClaimableRoyaltiesResponse,
   DismissTaskRequest,
   ErrorResponse,
   GateFailureDetails,
@@ -73,6 +74,11 @@ export type {
   RedditImportSummary,
   RedditVerification,
   RequestedVerificationCapability,
+  RoyaltyActivityItem,
+  RoyaltyActivityResponse,
+  RoyaltyClaimHistoryResponse,
+  RoyaltyClaimRecord,
+  RoyaltyClaimRecordRequest,
   VerificationRequirement,
   SelfVerificationDisclosures,
   SelfVerificationLaunch,
@@ -95,6 +101,7 @@ export type {
   VerificationIntent,
   VerificationSession,
   VerificationSessionLaunch,
+  VerySessionBinding,
   VeryWidgetLaunch,
   WalletAttachmentSummary,
 } from "@pirate/api-contracts"
@@ -172,6 +179,8 @@ export type Env = {
   ENVIRONMENT?: string
   DEV_MEMORY_STORE_ENABLED?: string
   CONTROL_PLANE_DATABASE_URL?: string
+  CORS_ALLOWED_ORIGINS?: string
+  PIRATE_ADMIN_TOKEN?: string
 
   // Analytics
   ANALYTICS_ENABLED?: string
@@ -305,6 +314,10 @@ export type Env = {
   STORY_RUNTIME_FUNDER_PRIVATE_KEY?: string
 
   // AI and external analysis
+  OPENAI_API_KEY?: string
+  OPENAI_MODERATION_BASE_URL?: string
+  OPENAI_MODERATION_MODEL?: string
+  OPENAI_MODERATION_TIMEOUT_MS?: string
   OPENROUTER_API_KEY?: string
   OPENROUTER_BASE_URL?: string
   OPENROUTER_MODEL?: string

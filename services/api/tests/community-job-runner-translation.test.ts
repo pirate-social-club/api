@@ -19,11 +19,9 @@ import {
   seedCommunityState,
   updatePostTranslationPolicy,
 } from "./community-job-runner-test-helpers"
-
-const originalFetch = globalThis.fetch
+import { withMockedFetch } from "./helpers"
 
 afterEach(async () => {
-  globalThis.fetch = originalFetch
   await cleanupCommunityJobRunnerArtifacts()
 })
 
@@ -47,7 +45,7 @@ describe("community-job-runner translation", () => {
 
     await updatePostTranslationPolicy({ env, repo, communityId, postId })
 
-    globalThis.fetch = (async () => {
+    await withMockedFetch(() => (async () => {
       return new Response(JSON.stringify({
         choices: [
           {
@@ -67,18 +65,18 @@ describe("community-job-runner translation", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof fetch
+    }) as typeof fetch, async () => {
+      await enqueuePostTranslationJob({ env, repo, communityId, postId, locale: "es" })
 
-    await enqueuePostTranslationJob({ env, repo, communityId, postId, locale: "es" })
-
-    const processed = await processNextCommunityJob({
-      env,
-      communityId,
-      communityRepository: repo,
+      const processed = await processNextCommunityJob({
+        env,
+        communityId,
+        communityRepository: repo,
+      })
+      expect(processed?.job_type).toBe("post_translation_materialize")
+      expect(processed?.status).toBe("succeeded")
+      expect(processed?.result_ref).toBe("es:translated")
     })
-    expect(processed?.job_type).toBe("post_translation_materialize")
-    expect(processed?.status).toBe("succeeded")
-    expect(processed?.result_ref).toBe("es:translated")
 
     const verifyDb = await openCommunityDb(env, repo, communityId)
     try {
@@ -191,7 +189,7 @@ describe("community-job-runner translation", () => {
     })
 
     let callCount = 0
-    globalThis.fetch = (async () => {
+    await withMockedFetch(() => (async () => {
       callCount += 1
       return new Response(JSON.stringify({
         choices: [
@@ -212,16 +210,16 @@ describe("community-job-runner translation", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof fetch
-
-    const processed = await processNextCommunityJob({
-      env,
-      communityId,
-      communityRepository: repo,
+    }) as typeof fetch, async () => {
+      const processed = await processNextCommunityJob({
+        env,
+        communityId,
+        communityRepository: repo,
+      })
+      expect(processed?.job_type).toBe("post_translation_materialize")
+      expect(processed?.status).toBe("succeeded")
+      expect(processed?.result_ref).toBe("es:translated")
     })
-    expect(processed?.job_type).toBe("post_translation_materialize")
-    expect(processed?.status).toBe("succeeded")
-    expect(processed?.result_ref).toBe("es:translated")
     expect(callCount).toBe(1)
 
     const verifyDb = await openCommunityDb(env, repo, communityId)
@@ -267,7 +265,7 @@ describe("community-job-runner translation", () => {
       userId: "usr_owner",
     })
 
-    globalThis.fetch = (async () => {
+    await withMockedFetch(() => (async () => {
       return new Response(JSON.stringify({
         choices: [
           {
@@ -287,26 +285,26 @@ describe("community-job-runner translation", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof fetch
+    }) as typeof fetch, async () => {
+      const jobId = await enqueueCommentTranslationJob({
+        env,
+        repo,
+        communityId,
+        commentId: comment.comment_id,
+        locale: "es",
+      })
+      expect(jobId).not.toBe("")
 
-    const jobId = await enqueueCommentTranslationJob({
-      env,
-      repo,
-      communityId,
-      commentId: comment.comment_id,
-      locale: "es",
+      const processed = await processCommunityJobById({
+        env,
+        communityId,
+        jobId,
+        communityRepository: repo,
+      })
+      expect(processed?.job_type).toBe("comment_translation_materialize")
+      expect(processed?.status).toBe("succeeded")
+      expect(processed?.result_ref).toBe("es:translated")
     })
-    expect(jobId).not.toBe("")
-
-    const processed = await processCommunityJobById({
-      env,
-      communityId,
-      jobId,
-      communityRepository: repo,
-    })
-    expect(processed?.job_type).toBe("comment_translation_materialize")
-    expect(processed?.status).toBe("succeeded")
-    expect(processed?.result_ref).toBe("es:translated")
 
     const verifyDb = await openCommunityDb(env, repo, communityId)
     try {
@@ -388,7 +386,7 @@ describe("community-job-runner translation", () => {
       setupDb.close()
     }
 
-    globalThis.fetch = (async (_input, init) => {
+    await withMockedFetch(() => (async (_input, init) => {
       const payload = JSON.parse(String(init?.body ?? "{}")) as {
         messages?: Array<{ role?: string; content?: string }>
       }
@@ -416,23 +414,23 @@ describe("community-job-runner translation", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof fetch
+    }) as typeof fetch, async () => {
+      await enqueueCommunityTextTranslationJob({
+        env,
+        repo,
+        communityId,
+        locale: "es",
+      })
 
-    await enqueueCommunityTextTranslationJob({
-      env,
-      repo,
-      communityId,
-      locale: "es",
+      const processed = await processNextCommunityJob({
+        env,
+        communityId,
+        communityRepository: repo,
+      })
+      expect(processed?.job_type).toBe("community_text_translation_materialize")
+      expect(processed?.status).toBe("succeeded")
+      expect(processed?.result_ref).toBe("es:translated:5")
     })
-
-    const processed = await processNextCommunityJob({
-      env,
-      communityId,
-      communityRepository: repo,
-    })
-    expect(processed?.job_type).toBe("community_text_translation_materialize")
-    expect(processed?.status).toBe("succeeded")
-    expect(processed?.result_ref).toBe("es:translated:5")
 
     const verifyDb = await openCommunityDb(env, repo, communityId)
     try {

@@ -1,224 +1,61 @@
-import { mkdtemp, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
 import type { Client } from "@libsql/client"
 import { expect } from "bun:test"
 import { openCommunityDb } from "../src/lib/communities/community-db-factory"
 import { enqueueCommunityJob } from "../src/lib/communities/jobs/store"
-import type { CommunityRepository } from "../src/lib/communities/db-community-repository"
-import type { CommunityCommentProjectionRow, CommunityRow } from "../src/lib/auth/auth-db-rows"
-import type { UserRepository } from "../src/lib/auth/repositories"
+import type { CommunityDatabaseBindingRepository } from "../src/lib/communities/db-community-repository"
 import { createComment } from "../src/lib/comments/comment-service"
 import { getCommentById } from "../src/lib/comments/community-comment-store"
-import { buildDefaultVerificationCapabilities } from "../src/lib/verification/verification-capabilities"
-import { insertPost } from "../src/lib/posts/community-post-store"
-import type { Env, User } from "../src/types"
+import type { Env } from "../src/types"
+import {
+  buildTestCommunityRepository,
+  buildUserRepository,
+  buildVerifiedUser,
+  cleanupCommunityTestArtifacts,
+  createCommunityTestRoot,
+  seedTestCommunityState,
+  type TestCommunityRepository,
+} from "./community-test-helpers"
+
+export { buildUserRepository, buildVerifiedUser }
+export type { TestCommunityRepository }
 
 export const cleanupPaths: string[] = []
 
 export async function cleanupCommunityJobRunnerArtifacts(): Promise<void> {
-  await Promise.all(cleanupPaths.splice(0).map((path) => rm(path, { recursive: true, force: true })))
+  await cleanupCommunityTestArtifacts(cleanupPaths)
 }
 
 export async function createCommunityJobRunnerRoot(prefix: string): Promise<string> {
-  const rootDir = await mkdtemp(join(tmpdir(), prefix))
-  cleanupPaths.push(rootDir)
-  return rootDir
-}
-
-export function buildVerifiedUser(userId: string): User {
-  const capabilities = buildDefaultVerificationCapabilities()
-  const now = new Date().toISOString()
-  capabilities.unique_human = {
-    state: "verified",
-    provider: "self",
-    proof_type: "unique_human",
-    mechanism: "mock",
-    verified_at: now,
-  }
-
-  return {
-    user_id: userId,
-    verification_state: "verified",
-    capability_provider: "self",
-    verification_capabilities: capabilities,
-    created_at: now,
-    updated_at: now,
-  }
-}
-
-export function buildUserRepository(users: Record<string, User>): UserRepository {
-  return {
-    async getUserById(userId: string) {
-      return users[userId] ?? null
-    },
-    async getWalletAttachmentsByUserId() {
-      return []
-    },
-  }
-}
-
-function buildCommunityRow(communityId: string, now: string): CommunityRow {
-  return {
-    community_id: communityId,
-    creator_user_id: "usr_owner",
-    display_name: "Community Job Runner Test",
-    status: "active",
-    provisioning_state: "active",
-    transfer_state: "none",
-    route_slug: null,
-    namespace_verification_id: null,
-    pending_namespace_verification_session_id: null,
-    primary_database_binding_id: "cdb_jobs",
-    follower_count: 0,
-    created_at: now,
-    updated_at: now,
-  }
-}
-
-export type TestCommunityRepository = CommunityRepository & {
-  projections: Map<string, CommunityCommentProjectionRow>
-  failProjectionWrites: boolean
+  return await createCommunityTestRoot(cleanupPaths, prefix)
 }
 
 export function buildCommunityRepository(databasePath: string, communityId: string): TestCommunityRepository {
-  const projections = new Map<string, CommunityCommentProjectionRow>()
-  const now = new Date().toISOString()
-  const community = buildCommunityRow(communityId, now)
-
-  const repo = {
-    projections,
-    failProjectionWrites: false,
-    async getCommunityById(requestedCommunityId: string) {
-      return requestedCommunityId === communityId ? community : null
-    },
-    async listActiveCommunities() {
-      return [community]
-    },
-    async getPrimaryCommunityDatabaseBinding(requestedCommunityId: string) {
-      if (requestedCommunityId !== communityId) {
-        return null
-      }
-      return {
-        community_database_binding_id: "cdb_jobs",
-        community_id: communityId,
-        binding_role: "primary",
-        organization_slug: "local",
-        group_name: "local",
-        group_id: null,
-        database_name: "community-jobs",
-        database_id: null,
-        database_url: `file:${databasePath}`,
-        location: null,
-        status: "active",
-        transferred_at: null,
-        created_at: now,
-        updated_at: now,
-      }
-    },
-    async getActiveCommunityDbCredential() {
-      return null
-    },
-    async recordCommunityCommentProjection(input: {
-      communityId: string
-      threadRootPostId: string
-      sourceCommentId: string
-      parentCommentId: string | null
-      depth: number
-      status: "published" | "hidden" | "removed" | "deleted"
-      sourceCreatedAt: string
-      actorUserId: string
-      createdAt: string
-    }) {
-      if (repo.failProjectionWrites) {
-        throw new Error("projection unavailable")
-      }
-      const existing = repo.projections.get(input.sourceCommentId)
-      const row: CommunityCommentProjectionRow = {
-        projection_id: existing?.projection_id ?? `ccp_${input.sourceCommentId}`,
-        community_id: input.communityId,
-        thread_root_post_id: input.threadRootPostId,
-        source_comment_id: input.sourceCommentId,
-        parent_comment_id: input.parentCommentId,
-        depth: input.depth,
-        status: input.status,
-        source_created_at: input.sourceCreatedAt,
-        created_at: existing?.created_at ?? input.createdAt,
-        updated_at: input.createdAt,
-      }
-      repo.projections.set(input.sourceCommentId, row)
-      return row
-    },
-    async getCommunityCommentProjectionByCommentId(commentId: string) {
-      return repo.projections.get(commentId) ?? null
-    },
-  }
-
-  return repo as unknown as TestCommunityRepository
+  return buildTestCommunityRepository({
+    databasePath,
+    communityId,
+    displayName: "Community Job Runner Test",
+    primaryDatabaseBindingId: "cdb_jobs",
+    databaseName: "community-jobs",
+  })
 }
 
 export async function seedCommunityState(input: {
   env: Env
-  repo: CommunityRepository
+  repo: CommunityDatabaseBindingRepository
   communityId: string
   memberUserIds: string[]
   membershipMode?: "open" | "request" | "gated"
 }): Promise<{ postId: string }> {
-  const db = await openCommunityDb(input.env, input.repo, input.communityId)
-  try {
-    const now = new Date().toISOString()
-    await db.client.execute({
-      sql: `
-        INSERT INTO communities (
-          community_id, display_name, description, status, artist_identity_id, artist_governance_state,
-          membership_mode, default_age_gate_policy, allow_anonymous_identity, anonymous_identity_scope,
-          donation_partner_id, donation_policy_mode, donation_partner_status, governance_mode,
-          settings_json, created_by_user_id, created_at, updated_at
-        ) VALUES (
-          ?1, ?2, NULL, 'active', NULL, 'fan_run',
-          ?3, 'none', 1, 'thread_stable',
-          NULL, 'none', 'unconfigured', 'centralized',
-          NULL, ?4, ?5, ?5
-        )
-      `,
-      args: [input.communityId, "Community Job Runner Test", input.membershipMode ?? "open", "usr_owner", now],
-    })
-
-    for (const userId of input.memberUserIds) {
-      await db.client.execute({
-        sql: `
-          INSERT INTO community_memberships (
-            membership_id, community_id, user_id, status, joined_at, left_at, banned_at, created_at, updated_at
-          ) VALUES (
-            ?1, ?2, ?3, 'member', ?4, NULL, NULL, ?4, ?4
-          )
-        `,
-        args: [`mbr_${userId}`, input.communityId, userId, now],
-      })
-    }
-
-    const post = await insertPost({
-      client: db.client,
-      communityId: input.communityId,
-      authorUserId: "usr_owner",
-      body: {
-        post_type: "text",
-        title: "Runner Root",
-        body: "Top level post body",
-        idempotency_key: `seed-post-${input.communityId}`,
-      },
-      createdAt: now,
-    })
-
-    return { postId: post.post_id }
-  } finally {
-    db.close()
-  }
+  return await seedTestCommunityState({
+    ...input,
+    displayName: "Community Job Runner Test",
+    rootPostTitle: "Runner Root",
+  })
 }
 
 export async function seedCommunityLabels(input: {
   env: Env
-  repo: CommunityRepository
+  repo: CommunityDatabaseBindingRepository
   communityId: string
   labelEnabled?: boolean
   requireOnTopLevelPosts?: boolean
@@ -354,7 +191,7 @@ export async function fetchThreadSnapshots(client: Client): Promise<Array<{
 
 export async function enqueuePostTranslationJob(input: {
   env: Env
-  repo: CommunityRepository
+  repo: CommunityDatabaseBindingRepository
   communityId: string
   postId: string
   locale: string
@@ -381,7 +218,7 @@ export async function enqueuePostTranslationJob(input: {
 
 export async function enqueuePostLabelJob(input: {
   env: Env
-  repo: CommunityRepository
+  repo: CommunityDatabaseBindingRepository
   communityId: string
   postId: string
   reason?: "publish" | "edit"
@@ -408,7 +245,7 @@ export async function enqueuePostLabelJob(input: {
 
 export async function enqueueCommentTranslationJob(input: {
   env: Env
-  repo: CommunityRepository
+  repo: CommunityDatabaseBindingRepository
   communityId: string
   commentId: string
   locale: string
@@ -437,7 +274,7 @@ export async function enqueueCommentTranslationJob(input: {
 
 export async function enqueueCommunityTextTranslationJob(input: {
   env: Env
-  repo: CommunityRepository
+  repo: CommunityDatabaseBindingRepository
   communityId: string
   locale: string
   createdAt?: string
@@ -464,7 +301,7 @@ export async function enqueueCommunityTextTranslationJob(input: {
 
 export async function createOwnedComment(input: {
   env: Env
-  repo: CommunityRepository
+  repo: TestCommunityRepository
   communityId: string
   postId: string
   userId: string
@@ -484,7 +321,7 @@ export async function createOwnedComment(input: {
 
 export async function updatePostTranslationPolicy(input: {
   env: Env
-  repo: CommunityRepository
+  repo: CommunityDatabaseBindingRepository
   communityId: string
   postId: string
 }): Promise<void> {
@@ -505,7 +342,7 @@ export async function updatePostTranslationPolicy(input: {
 
 export async function getStoredCommentOrThrow(input: {
   env: Env
-  repo: CommunityRepository
+  repo: CommunityDatabaseBindingRepository
   communityId: string
   commentId: string
 }) {

@@ -97,6 +97,20 @@ export function hasUniqueConstraintName(error: unknown, constraintName: string):
     || message.includes(`constraint '${constraintName}'`)
 }
 
+export function hasCheckConstraintName(error: unknown, constraintName: string): boolean {
+  const exposedConstraint = typeof error === "object" && error && "constraint" in error
+    ? String((error as { constraint?: unknown }).constraint || "")
+    : ""
+  if (exposedConstraint === constraintName) {
+    return true
+  }
+
+  const message = error instanceof Error ? error.message : String(error)
+  return message.includes(`violates check constraint "${constraintName}"`)
+    || message.includes(`violates check constraint '${constraintName}'`)
+    || message.includes(`CHECK constraint failed: ${constraintName}`)
+}
+
 export function isMissingTableError(error: unknown, tableName: string): boolean {
   const code = typeof error === "object" && error && "code" in error ? String((error as { code?: unknown }).code) : ""
   if (code === "42P01") {
@@ -117,90 +131,6 @@ export function isMissingColumnError(error: unknown, columnName: string): boolea
     || message.includes(`column "${columnName}" does not exist`)
     || message.includes(`column '${columnName}' does not exist`)
   )
-}
-
-function isDuplicateColumnError(error: unknown, columnName: string): boolean {
-  const code = typeof error === "object" && error && "code" in error ? String((error as { code?: unknown }).code) : ""
-  if (code === "42701") {
-    return true
-  }
-  const message = error instanceof Error ? error.message : String(error)
-  return message.includes("duplicate column name") && message.includes(columnName)
-}
-
-export async function ensureProfilesPrimaryLinkedHandleColumn(executor: DbExecutor): Promise<void> {
-  try {
-    await executor.execute({
-      sql: "SELECT primary_linked_handle_id FROM profiles LIMIT 0",
-      args: [],
-    })
-    return
-  } catch (error) {
-    if (!isMissingColumnError(error, "primary_linked_handle_id")) {
-      throw error
-    }
-  }
-
-  try {
-    await executor.execute("ALTER TABLE profiles ADD COLUMN primary_linked_handle_id TEXT")
-  } catch (error) {
-    if (isDuplicateColumnError(error, "primary_linked_handle_id")) {
-      return
-    }
-    throw error
-  }
-}
-
-async function ensureProfilesTextColumn(executor: DbExecutor, columnName: string): Promise<void> {
-  try {
-    await executor.execute({
-      sql: `SELECT ${columnName} FROM profiles LIMIT 0`,
-      args: [],
-    })
-    return
-  } catch (error) {
-    if (!isMissingColumnError(error, columnName)) {
-      throw error
-    }
-  }
-
-  try {
-    await executor.execute(`ALTER TABLE profiles ADD COLUMN ${columnName} TEXT`)
-  } catch (error) {
-    if (isDuplicateColumnError(error, columnName)) {
-      return
-    }
-    throw error
-  }
-}
-
-export async function ensureProfilesSourceColumns(executor: DbExecutor): Promise<void> {
-  await ensureProfilesTextColumn(executor, "avatar_source")
-  await ensureProfilesTextColumn(executor, "cover_source")
-  await ensureProfilesTextColumn(executor, "bio_source")
-}
-
-export async function ensureProfilesNationalityBadgeColumn(executor: DbExecutor): Promise<void> {
-  try {
-    await executor.execute({
-      sql: "SELECT display_verified_nationality_badge FROM profiles LIMIT 0",
-      args: [],
-    })
-    return
-  } catch (error) {
-    if (!isMissingColumnError(error, "display_verified_nationality_badge")) {
-      throw error
-    }
-  }
-
-  try {
-    await executor.execute("ALTER TABLE profiles ADD COLUMN display_verified_nationality_badge INTEGER NOT NULL DEFAULT 0")
-  } catch (error) {
-    if (isDuplicateColumnError(error, "display_verified_nationality_badge")) {
-      return
-    }
-    throw error
-  }
 }
 
 export async function firstRow(executor: DbExecutor, stmt: InStatement): Promise<unknown | null> {

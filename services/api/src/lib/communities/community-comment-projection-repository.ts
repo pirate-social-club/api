@@ -1,7 +1,7 @@
 import type { Client } from "../sql-client"
 import { internalError } from "../errors"
 import { makeId } from "../helpers"
-import { getCommunityCommentProjectionRowByCommentId } from "../auth/auth-db-queries"
+import { getCommunityCommentProjectionRowByCommentId } from "../auth/auth-db-community-queries"
 import type { CommunityCommentProjectionRow } from "../auth/auth-db-rows"
 
 export async function recordCommunityCommentProjection(

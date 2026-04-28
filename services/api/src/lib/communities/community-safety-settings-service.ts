@@ -1,12 +1,17 @@
-import type { CommunityRepository } from "./db-community-repository"
+import type {
+  CommunityDatabaseBindingRepository,
+  CommunityReadRepository,
+} from "./db-community-repository"
 import { notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import { openCommunityDb } from "./community-db-factory"
 import {
   assertUpdateCommunitySafetyRequest,
+  communityMutationActorFromUserId,
   loadCommunityProjection,
   parseCommunitySettingsJson,
-  requireOwnedCommunity,
+  requireAdminOverrideOrOwnedCommunity,
+  type CommunityMutationActor,
   type UpdateCommunitySafetyRequestBody,
 } from "./create/shared"
 import type {
@@ -14,15 +19,24 @@ import type {
   Env,
 } from "../../types"
 
+type CommunitySettingsRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
+
 export async function updateCommunitySafety(input: {
   env: Env
-  userId: string
+  userId?: string
+  actor?: CommunityMutationActor
   communityId: string
   body: UpdateCommunitySafetyRequestBody | null
-  communityRepository: CommunityRepository
+  communityRepository: CommunitySettingsRepository
 }): Promise<Community> {
   assertUpdateCommunitySafetyRequest(input.body)
-  await requireOwnedCommunity(input.communityRepository, input.communityId, input.userId)
+  await requireAdminOverrideOrOwnedCommunity({
+    env: input.env,
+    repo: input.communityRepository,
+    communityId: input.communityId,
+    actor: input.actor ?? communityMutationActorFromUserId(input.userId ?? ""),
+    action: "community.safety_updated",
+  })
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
 
   try {

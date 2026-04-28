@@ -2,7 +2,7 @@ import { createClient as createLibsqlClient } from "@libsql/client"
 import type { Client as LibsqlClient, Transaction as LibsqlTransaction } from "@libsql/client"
 import { Pool, neonConfig } from "@neondatabase/serverless"
 import { globalSingleton } from "./db-helpers"
-import { requireControlPlaneDbUrl } from "./auth/auth-db-queries"
+import { requireControlPlaneDbUrl } from "./auth/auth-db-query-helpers"
 import type { Client, InStatement, QueryResult, QueryResultRow, Transaction } from "./sql-client"
 import type { Env } from "../types"
 
@@ -11,6 +11,9 @@ type PostgresQueryable = {
 }
 
 neonConfig.poolQueryViaFetch = true
+
+const LIBSQL_BUSY_RETRY_TIMEOUT_MS = 5000
+const LIBSQL_BUSY_RETRY_DELAY_MS = 50
 
 export function isPostgresControlPlaneUrl(value: string): boolean {
   return value.startsWith("postgres://") || value.startsWith("postgresql://")
@@ -87,7 +90,7 @@ function translateInsertOrReplace(sql: string): string {
   const [, tableName, columnList] = match
   const conflictTarget = postgresUpsertConflictTargets.get(tableName)
   if (!conflictTarget) {
-    return sql
+    throw new Error(`Unsupported INSERT OR REPLACE table for PostgreSQL translation: ${tableName}`)
   }
 
   const conflictColumns = new Set(conflictTarget)
@@ -120,6 +123,39 @@ async function executePostgresStatement(queryable: PostgresQueryable, statement:
   return {
     rows: normalizeRows(result.rows),
     rowsAffected: result.rowCount ?? undefined,
+  }
+}
+
+function isLibsqlBusyError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false
+  }
+
+  const code = "code" in error ? String((error as { code?: unknown }).code) : ""
+  const extendedCode = "extendedCode" in error ? String((error as { extendedCode?: unknown }).extendedCode) : ""
+  const rawCode = "rawCode" in error ? Number((error as { rawCode?: unknown }).rawCode) : NaN
+  return code === "SQLITE_BUSY" || extendedCode === "SQLITE_BUSY" || rawCode === 5
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function withLibsqlBusyRetry<T>(operation: () => Promise<T>): Promise<T> {
+  const startedAt = Date.now()
+  let delayMs = LIBSQL_BUSY_RETRY_DELAY_MS
+
+  while (true) {
+    try {
+      return await operation()
+    } catch (error) {
+      if (!isLibsqlBusyError(error) || Date.now() - startedAt >= LIBSQL_BUSY_RETRY_TIMEOUT_MS) {
+        throw error
+      }
+
+      await sleep(delayMs)
+      delayMs = Math.min(delayMs * 2, 250)
+    }
   }
 }
 
@@ -164,7 +200,7 @@ class LibsqlClientAdapter implements Client {
   ) {}
 
   async execute(statement: InStatement | string): Promise<QueryResult> {
-    const result = await this.client.execute(statement as never)
+    const result = await withLibsqlBusyRetry(() => this.client.execute(statement as never))
     return {
       rows: result.rows as QueryResultRow[],
       rowsAffected: result.rowsAffected,
@@ -173,7 +209,7 @@ class LibsqlClientAdapter implements Client {
   }
 
   async batch(statements: InStatement[], mode: "read" | "write" = "write"): Promise<QueryResult[]> {
-    const results = await this.client.batch(statements as never, mode)
+    const results = await withLibsqlBusyRetry(() => this.client.batch(statements as never, mode))
     return results.map((result) => ({
       rows: result.rows as QueryResultRow[],
       rowsAffected: result.rowsAffected,
@@ -182,7 +218,7 @@ class LibsqlClientAdapter implements Client {
   }
 
   async transaction(mode: "read" | "write" = "write"): Promise<Transaction> {
-    const tx = await this.client.transaction(mode)
+    const tx = await withLibsqlBusyRetry(() => this.client.transaction(mode))
     return new LibsqlTransactionAdapter(tx)
   }
 

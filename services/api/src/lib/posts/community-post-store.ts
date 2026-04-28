@@ -20,6 +20,40 @@ import {
 } from "./community-post-serialization"
 import type { CreatePostRequest, Post } from "../../types"
 
+type StoryLicensePreset = NonNullable<CreatePostRequest["license_preset"]>
+
+function isStoryLicensePreset(value: unknown): value is StoryLicensePreset {
+  return value === "non-commercial" || value === "commercial-use" || value === "commercial-remix"
+}
+
+function validateOriginalAssetLicense(input: {
+  body: CreatePostRequest
+  contentLabel: string
+  requireLicense: boolean
+}): void {
+  if (input.requireLicense && !isStoryLicensePreset(input.body.license_preset)) {
+    throw badRequestError(`license_preset is required for original ${input.contentLabel} posts`)
+  }
+
+  if (input.body.license_preset != null && !isStoryLicensePreset(input.body.license_preset)) {
+    throw badRequestError(`license_preset is required for original ${input.contentLabel} posts`)
+  }
+
+  if (input.body.license_preset === "commercial-remix") {
+    const revSharePct = input.body.commercial_rev_share_pct
+    if (
+      typeof revSharePct !== "number"
+      || !Number.isInteger(revSharePct)
+      || revSharePct < 0
+      || revSharePct > 100
+    ) {
+      throw badRequestError("commercial_rev_share_pct must be an integer from 0 to 100 for commercial-remix")
+    }
+  } else if (input.body.commercial_rev_share_pct != null) {
+    throw badRequestError("commercial_rev_share_pct is only supported for commercial-remix")
+  }
+}
+
 export {
   listPublishedLocalizedPosts,
   sortPublishedLocalizedPostFeedItems,
@@ -72,11 +106,12 @@ export async function findPostByIdempotencyKey(input: {
 }
 
 export async function insertPost(input: {
-  client: Client
+  client: DbExecutor
   communityId: string
   authorUserId: string
   body: CreatePostRequest
   createdAt: string
+  enableDevAnalysisMarkers?: boolean
   analysisOverride?: Pick<Post, "analysis_state" | "content_safety_state" | "age_gate_policy" | "status">
   agentWriteAuthorization?: {
     agentId: string
@@ -113,7 +148,7 @@ export async function insertPost(input: {
   const title = input.body.title ?? null
   const labelAssignmentStatus: NonNullable<Post["label_assignment_status"]> = input.body.label_id ? "assigned" : "pending"
   const labelAssignedAt = input.body.label_id ? input.createdAt : null
-  const stubAnalysis = resolveStubAnalysisOutcome(input.body)
+  const stubAnalysis = resolveStubAnalysisOutcome(input.body, { enableDevMarkers: input.enableDevAnalysisMarkers === true })
   const analysisState = input.analysisOverride?.analysis_state ?? stubAnalysis.analysis_state
   const contentSafetyState = input.analysisOverride?.content_safety_state ?? stubAnalysis.content_safety_state
   const status = input.analysisOverride?.status ?? stubAnalysis.status
@@ -428,6 +463,46 @@ export function assertPostCreateRequest(body: CreatePostRequest, _communityId: s
       throw badRequestError("image posts require JPEG, PNG, WebP, GIF, or AVIF media")
     }
   }
+  if (body.post_type === "video") {
+    const primaryVideo = body.media_refs?.[0]
+    if (!primaryVideo?.storage_ref?.trim()) {
+      throw badRequestError("media_refs is required for video posts")
+    }
+    if (!primaryVideo.mime_type?.trim()) {
+      throw badRequestError("video media_refs must include mime_type")
+    }
+    const mimeType = primaryVideo.mime_type.trim().toLowerCase()
+    if (mimeType !== "video/mp4" && mimeType !== "video/quicktime" && mimeType !== "video/webm") {
+      throw badRequestError("video posts require MP4, MOV, or WebM media")
+    }
+    if (primaryVideo.poster_ref) {
+      const posterMimeType = primaryVideo.poster_mime_type?.trim().toLowerCase()
+      if (
+        posterMimeType !== "image/jpeg"
+        && posterMimeType !== "image/png"
+        && posterMimeType !== "image/webp"
+      ) {
+        throw badRequestError("video poster frames require JPEG, PNG, or WebP media")
+      }
+    }
+    if (body.access_mode && body.access_mode !== "public" && body.access_mode !== "locked") {
+      throw badRequestError("video access_mode must be public or locked")
+    }
+    if (body.access_mode && (body.identity_mode ?? "public") !== "public") {
+      throw badRequestError("video commerce posts must use public identity")
+    }
+    if (body.access_mode !== "locked" && (body.license_preset || body.commercial_rev_share_pct != null)) {
+      throw badRequestError("license_preset is only supported for locked video asset posts")
+    }
+    if (body.rights_basis === "derivative") {
+      throw badRequestError("derivative video posts are not supported yet")
+    }
+    validateOriginalAssetLicense({
+      body,
+      contentLabel: "video",
+      requireLicense: body.access_mode === "locked",
+    })
+  }
   if (body.visibility && body.visibility !== "public" && body.visibility !== "members_only") {
     throw badRequestError("visibility must be public or members_only")
   }
@@ -458,8 +533,16 @@ export function assertPostCreateRequest(body: CreatePostRequest, _communityId: s
   if ((body.identity_mode ?? "public") !== "anonymous" && body.disclosed_qualifier_ids?.length) {
     throw badRequestError("disclosed_qualifier_ids are only allowed for anonymous posts")
   }
-  if (body.post_type !== "song" && body.access_mode) {
-    throw badRequestError("access_mode is only supported for song posts")
+  if (body.post_type !== "song" && body.post_type !== "video" && body.access_mode) {
+    throw badRequestError("access_mode is only supported for song and video posts")
+  }
+  if (body.post_type !== "song" && body.post_type !== "video") {
+    if (body.license_preset) {
+      throw badRequestError("license_preset is only supported for original asset posts")
+    }
+    if (body.commercial_rev_share_pct != null) {
+      throw badRequestError("commercial_rev_share_pct is only supported for original asset posts")
+    }
   }
   if (body.post_type === "song") {
     if ((body.identity_mode ?? "public") !== "public") {
@@ -470,6 +553,21 @@ export function assertPostCreateRequest(body: CreatePostRequest, _communityId: s
     }
     if (body.access_mode && body.access_mode !== "public" && body.access_mode !== "locked") {
       throw badRequestError("song access_mode must be public or locked")
+    }
+    const isDerivative = body.song_mode === "remix" || body.rights_basis === "derivative"
+    if (isDerivative) {
+      if (body.license_preset) {
+        throw badRequestError("license_preset is not supported for remix song posts")
+      }
+      if (body.commercial_rev_share_pct != null) {
+        throw badRequestError("commercial_rev_share_pct is not supported for remix song posts")
+      }
+    } else {
+      validateOriginalAssetLicense({
+        body,
+        contentLabel: "song",
+        requireLicense: true,
+      })
     }
   }
 }
