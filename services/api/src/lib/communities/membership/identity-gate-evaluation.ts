@@ -119,7 +119,7 @@ export function evaluateIdentityGateRule(input: {
       case "age_over_18": {
         if (!satisfiesMinimumAgeRequirement(input.user, requirement.accepted_providers, 18)) {
           missingCapabilities.push("age_over_18")
-          if (includesAcceptedProvider(requirement.accepted_providers, "self")) suggestedProvider = suggestedProvider ?? "self"
+          if (includesAcceptedProvider(requirement.accepted_providers, "self")) suggestedProvider = "self"
         }
         break
       }
@@ -134,7 +134,7 @@ export function evaluateIdentityGateRule(input: {
             mismatchReasons.push("minimum_age_mismatch")
           } else {
             missingCapabilities.push("minimum_age")
-            if (includesAcceptedProvider(requirement.accepted_providers, "self")) suggestedProvider = suggestedProvider ?? "self"
+            if (includesAcceptedProvider(requirement.accepted_providers, "self")) suggestedProvider = "self"
           }
         }
         break
@@ -143,7 +143,7 @@ export function evaluateIdentityGateRule(input: {
         const capability = input.user.verification_capabilities.gender
         if (capability.state !== "verified") {
           missingCapabilities.push("gender")
-          if (includesAcceptedProvider(requirement.accepted_providers, "self")) suggestedProvider = suggestedProvider ?? "self"
+          if (includesAcceptedProvider(requirement.accepted_providers, "self")) suggestedProvider = "self"
         } else if (!includesAcceptedProvider(requirement.accepted_providers, capability.provider)) {
           mismatchReasons.push("provider_not_accepted")
         } else if (typeof config.required_value === "string" && capability.value !== config.required_value) {

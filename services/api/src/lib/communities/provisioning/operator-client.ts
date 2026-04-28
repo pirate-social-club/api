@@ -54,7 +54,15 @@ function normalizeBaseUrl(env: Env): string {
 }
 
 export function isCommunityProvisionOperatorConfigured(env: Env): boolean {
-  return trim(env.COMMUNITY_PROVISION_OPERATOR_BASE_URL).length > 0
+  if (!trim(env.COMMUNITY_PROVISION_OPERATOR_BASE_URL)) {
+    return false
+  }
+  if (trim(env.COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN)) {
+    return true
+  }
+
+  const environment = trim(env.ENVIRONMENT).toLowerCase()
+  return environment !== "development" && environment !== "test"
 }
 
 export async function provisionCommunityViaOperator(input: {

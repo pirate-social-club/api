@@ -25,6 +25,41 @@ afterEach(async () => {
 })
 
 describe("community provisioning routes", () => {
+  test("development community create falls back to local provisioning when operator token is absent", async () => {
+    const ctx = await createRouteTestContext({
+      ENVIRONMENT: "development",
+      COMMUNITY_PROVISION_OPERATOR_BASE_URL: "https://operator.test",
+      COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN: "",
+      TURSO_COMMUNITY_DB_WRAP_KEY: "11".repeat(32),
+      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "7",
+    })
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "community-dev-local-fallback-user")
+
+    const response = await requestJson("http://pirate.test/communities", {
+      display_name: "Local Fallback Club",
+      handle_policy: {
+        policy_template: "standard",
+      },
+    }, ctx.env, session.accessToken)
+
+    expect(response.status).toBe(202)
+    const body = await json(response) as {
+      community: {
+        community_id: string
+        display_name: string
+        provisioning_state: string
+      }
+      job: {
+        status: string
+      }
+    }
+    expect(body.community.display_name).toBe("Local Fallback Club")
+    expect(body.community.provisioning_state).toBe("active")
+    expect(body.job.status).toBe("succeeded")
+  })
+
   testWithTimeout("community create provisions through the private operator when configured", async () => {
     const operatorBaseUrl = "https://operator.test"
     const operatorToken = "operator-secret"
