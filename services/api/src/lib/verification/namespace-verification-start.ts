@@ -11,8 +11,8 @@ import {
   assertHnsRootLabel,
   ensureHnsZone,
   inspectHnsRoot,
-  isPlatformManagedHnsRoot,
   publishHnsTxtRecord,
+  shouldAutoProvisionHnsRoot,
 } from "./hns-verifier"
 import {
   inspectSpacesNamespace,
@@ -183,7 +183,7 @@ export async function startNamespaceVerificationSession(
       if (
         shouldRequireHnsDnsSetup(env, inspection)
         && inspection.failure_reason === "zone_not_provisioned"
-        && isPlatformManagedHnsRoot(normalizedRootLabel)
+        && shouldAutoProvisionHnsRoot(env, normalizedRootLabel)
       ) {
         await ensureHnsZone(env, {
           rootLabel: normalizedRootLabel,

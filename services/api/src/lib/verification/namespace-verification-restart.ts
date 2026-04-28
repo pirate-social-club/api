@@ -6,8 +6,8 @@ import { makeId } from "../helpers"
 import {
   ensureHnsZone,
   inspectHnsRoot,
-  isPlatformManagedHnsRoot,
   publishHnsTxtRecord,
+  shouldAutoProvisionHnsRoot,
 } from "./hns-verifier"
 import {
   inspectSpacesNamespace,
@@ -188,7 +188,7 @@ async function restartHnsChallenge(input: {
     if (
       shouldRequireHnsDnsSetup(input.env, inspection)
       && inspection.failure_reason === "zone_not_provisioned"
-      && isPlatformManagedHnsRoot(rootLabel)
+      && shouldAutoProvisionHnsRoot(input.env, rootLabel)
     ) {
       await ensureHnsZone(input.env, {
         rootLabel,
