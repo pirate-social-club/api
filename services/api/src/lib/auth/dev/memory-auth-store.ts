@@ -1,8 +1,8 @@
-import { internalError } from "../errors"
-import { buildDefaultVerificationCapabilities } from "../verification/verification-capabilities"
-import { makeId, nowIso } from "../helpers"
-import { normalizeIdentityCountryAlpha2 } from "../identity/country-codes"
-import { generateHandleCandidate } from "./handle-generator"
+import { internalError } from "../../errors"
+import { buildDefaultVerificationCapabilities } from "../../verification/verification-capabilities"
+import { makeId, nowIso } from "../../helpers"
+import { normalizeIdentityCountryAlpha2 } from "../../identity/country-codes"
+import { generateHandleCandidate } from "../handle-generator"
 import type {
   Job,
   OnboardingStatus,
@@ -13,7 +13,7 @@ import type {
   UpstreamIdentity,
   User,
   WalletAttachmentSummary,
-} from "../../types"
+} from "../../../types"
 
 export type MemoryAuthRecord = {
   user: User

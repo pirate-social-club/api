@@ -1,8 +1,8 @@
-import { conflictError, internalError, verificationRequired } from "../errors"
-import { makeId, nowIso } from "../helpers"
-import { checkRedditVerificationCode, importRedditSnapshot, makeRedditVerificationCode } from "./reddit-bootstrap"
-import { getMemoryRecordByUserId, getMemoryStore } from "../auth/memory-auth-store"
-import type { Env, Job, RedditImportSummary, RedditVerification } from "../../types"
+import { conflictError, internalError, verificationRequired } from "../../errors"
+import { makeId, nowIso } from "../../helpers"
+import { checkRedditVerificationCode, importRedditSnapshot, makeRedditVerificationCode } from "../../onboarding/reddit-bootstrap"
+import { getMemoryRecordByUserId, getMemoryStore } from "./memory-auth-store"
+import type { Env, Job, RedditImportSummary, RedditVerification } from "../../../types"
 
 export class MemoryRedditOnboardingRepository {
   async startOrCheckRedditVerification(input: {

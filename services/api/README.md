@@ -139,7 +139,7 @@ Control-plane DB mode:
 2. Set `DEV_MEMORY_STORE_ENABLED=false`.
 3. Set `CONTROL_PLANE_DATABASE_URL` if you want a specific DB. Leave it blank to use `services/api/.local/control-plane.db`.
 4. Set `LOCAL_COMMUNITY_DB_ROOT` if you want a specific community DB directory. Leave it blank to use `services/api/.local/community-dbs`.
-5. For community avatar and banner uploads, set `FILEBASE_S3_ACCESS_KEY`, `FILEBASE_S3_SECRET_KEY`, and `FILEBASE_MEDIA_BUCKET`. If you already use `FILEBASE_S3_BUCKET_MUSIC`, the API will reuse that bucket until you standardize on `FILEBASE_MEDIA_BUCKET`. Optional: `FILEBASE_S3_ENDPOINT` and `FILEBASE_S3_REGION`.
+5. For community avatar and banner uploads, set `FILEBASE_S3_ACCESS_KEY`, `FILEBASE_S3_SECRET_KEY`, and `FILEBASE_MEDIA_BUCKET`. Optional: `FILEBASE_S3_ENDPOINT` and `FILEBASE_S3_REGION`.
 6. For the real song pipeline and machine translations, set `OPENROUTER_API_KEY`, `ACRCLOUD_ACCESS_KEY`, `ACRCLOUD_ACCESS_SECRET`, `ACRCLOUD_HOST`, and `ELEVENLABS_API_KEY`. Optional overrides: `OPENROUTER_BASE_URL`, `OPENROUTER_MODEL`, `ACRCLOUD_IDENTIFY_PATH`, and `ELEVENLABS_FORCE_ALIGNMENT_URL`.
 7. Fill in `AUTH_UPSTREAM_JWT_SHARED_SECRET`, `AUTH_UPSTREAM_JWT_ISSUER`, and `AUTH_UPSTREAM_JWT_AUDIENCE`.
 8. Fill in `PIRATE_APP_JWT_PRIVATE_KEY` and `PIRATE_APP_JWT_PUBLIC_KEY`.

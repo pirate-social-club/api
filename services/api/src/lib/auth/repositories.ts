@@ -19,12 +19,12 @@ import type { SessionSnapshot } from "./auth-db-rows"
 import { requireControlPlaneDbUrl } from "./auth-db-query-helpers"
 import { DatabaseIdentityRepository } from "./db-identity-repository"
 import { DatabaseProfileRepository, type UpdateProfileInput } from "./db-profile-repository"
-import { MemoryOnboardingStatusRepository } from "./memory-onboarding-status-repository"
-import { MemoryProfileRepository } from "./memory-profile-repository"
-import { MemorySessionRepository } from "./memory-session-repository"
-import { MemoryUserRepository } from "./memory-user-repository"
+import { MemoryOnboardingStatusRepository } from "./dev/memory-onboarding-status-repository"
+import { MemoryProfileRepository } from "./dev/memory-profile-repository"
+import { MemorySessionRepository } from "./dev/memory-session-repository"
+import { MemoryUserRepository } from "./dev/memory-user-repository"
 import { DatabaseRedditOnboardingRepository } from "../onboarding/db-reddit-onboarding-repository"
-import { MemoryRedditOnboardingRepository } from "../onboarding/memory-reddit-onboarding-repository"
+import { MemoryRedditOnboardingRepository } from "./dev/memory-reddit-onboarding-repository"
 
 export type { UpdateProfileInput }
 

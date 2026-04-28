@@ -1058,7 +1058,7 @@ export type SongArtifactUpload = {
   filename?: string | null;
   size_bytes?: number | null;
   content_hash?: string | null;
-  storage_provider?: "filebase" | "local_stub" | null;
+  storage_provider?: "filebase" | "local_dev_file_storage" | null;
   storage_bucket?: string | null;
   storage_object_key?: string | null;
   storage_endpoint?: string | null;

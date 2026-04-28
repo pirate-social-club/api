@@ -1,6 +1,6 @@
 import { getMemoryRecordByUserId } from "./memory-auth-store"
-import type { OnboardingStatus } from "../../types"
-import { nowIso } from "../helpers"
+import type { OnboardingStatus } from "../../../types"
+import { nowIso } from "../../helpers"
 
 export class MemoryOnboardingStatusRepository {
   async getOnboardingStatusByUserId(userId: string): Promise<OnboardingStatus | null> {

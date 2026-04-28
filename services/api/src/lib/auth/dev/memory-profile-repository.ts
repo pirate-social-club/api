@@ -1,16 +1,16 @@
-import { conflictError } from "../errors"
-import { makeId, nowIso } from "../helpers"
-import { getProfilePublicHandleLabel } from "./auth-serializers"
+import { conflictError } from "../../errors"
+import { makeId, nowIso } from "../../helpers"
+import { getProfilePublicHandleLabel } from "../auth-serializers"
 import {
   assertFreeCleanupRenameEligible,
   buildHandleUpgradeQuote,
   isCleanupRenameAvailable,
   normalizeDesiredGlobalHandleLabel,
-} from "./global-handle-policy"
-import { assertRedditHandleClaimEligible, buildRedditHandleClaimQuote } from "./reddit-handle-claim-policy"
+} from "../global-handle-policy"
+import { assertRedditHandleClaimEligible, buildRedditHandleClaimQuote } from "../reddit-handle-claim-policy"
 import { exposeMemoryProfile, getMemoryRecordByUserId, getMemoryStore } from "./memory-auth-store"
-import type { GlobalHandle, HandleUpgradeQuote, Profile } from "../../types"
-import type { PublicProfileResolution, UpdateProfileInput } from "./repositories"
+import type { GlobalHandle, HandleUpgradeQuote, Profile } from "../../../types"
+import type { PublicProfileResolution, UpdateProfileInput } from "../repositories"
 
 export class MemoryProfileRepository {
   async getProfileByUserId(userId: string): Promise<Profile | null> {
