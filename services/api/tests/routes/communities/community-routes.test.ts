@@ -43,10 +43,14 @@ describe("community routes", () => {
       community: {
         community_id: string
         display_name: string
+        membership_mode: string
+        gate_rules?: unknown[]
       }
     }
     expect(communityCreateBody.community.display_name).toBe("Open Create Club")
     expect(communityCreateBody.community.community_id.startsWith("cmt_")).toBe(true)
+    expect(communityCreateBody.community.membership_mode).toBe("open")
+    expect(communityCreateBody.community.gate_rules).toEqual([])
 
     const policyResponse = await app.request(
       `http://pirate.test/communities/${communityCreateBody.community.community_id}/machine-access-policy`,

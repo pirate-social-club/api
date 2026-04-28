@@ -27,18 +27,6 @@ const VALID_PUBLIC_V0_PROVIDERS_BY_PROOF_TYPE = {
   wallet_score: new Set(["passport"]),
 } as const
 
-function defaultUniqueHumanVeryGateRule(): GateRuleInput {
-  return {
-    scope: "membership",
-    gate_family: "identity_proof",
-    gate_type: "unique_human",
-    proof_requirements: [{
-      proof_type: "unique_human",
-      accepted_providers: ["very"],
-    }],
-  }
-}
-
 export function assertPublicV0GateConfiguration(
   body: PublicV0GateValidationBody,
   input: {
@@ -46,8 +34,7 @@ export function assertPublicV0GateConfiguration(
   },
 ): void {
   if (body.gate_rules == null) {
-    body.gate_rules = [defaultUniqueHumanVeryGateRule()]
-    body.membership_mode = "gated"
+    body.gate_rules = []
   } else {
     body.gate_rules = normalizePublicV0GateRules(body.gate_rules)
   }
