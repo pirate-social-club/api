@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs"
 import { basename, join } from "node:path"
 import { tmpdir } from "node:os"
 import { parseArgs } from "./args.js"
-import { readSeedAccounts } from "./config.js"
+import { readSeedAccounts, writeSeedAccounts } from "./config.js"
 import { getFlag, requireFlag } from "./args.js"
 import {
   assertExecutableNamespaceVerificationId,
@@ -99,6 +99,18 @@ describe("seed accounts resolution", () => {
 
     rmSync(tmpDir, { recursive: true, force: true })
   })
+
+  test("writes seed accounts with normalized JSON", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "pirate-cli-test-"))
+    const accountsPath = join(tmpDir, "seed-accounts.json")
+
+    writeSeedAccounts({ editorial: "usr_abc123" }, accountsPath)
+
+    expect(readSeedAccounts(accountsPath)).toEqual({ editorial: "usr_abc123" })
+    expect(readFileSync(accountsPath, "utf8").includes("\"editorial\": \"usr_abc123\"")).toBe(true)
+
+    rmSync(tmpDir, { recursive: true, force: true })
+  })
 })
 
 describe("CLI args parsing for admin commands", () => {
@@ -146,6 +158,32 @@ describe("CLI args parsing for admin commands", () => {
     const followArgs = parseArgs(["community", "follow", "@foo", "--as-user-id", "usr_123"])
     expect(followArgs.positionals).toEqual(["community", "follow", "@foo"])
     expect(getFlag(followArgs, "as-user-id")).toBe("usr_123")
+  })
+
+  test("parses community role grant args", () => {
+    const args = parseArgs([
+      "community", "roles", "grant", "@foo",
+      "--role", "moderator",
+      "--account", "editorial",
+    ])
+    expect(args.positionals).toEqual(["community", "roles", "grant", "@foo"])
+    expect(getFlag(args, "role")).toBe("moderator")
+    expect(getFlag(args, "account")).toBe("editorial")
+  })
+
+  test("parses community account ensure args", () => {
+    const args = parseArgs([
+      "community", "accounts", "ensure",
+      "--alias", "editorial",
+      "--subject", "launch-editorial-001",
+      "--display-name", "Editorial",
+      "--handle", "editorial",
+    ])
+    expect(args.positionals).toEqual(["community", "accounts", "ensure"])
+    expect(getFlag(args, "alias")).toBe("editorial")
+    expect(getFlag(args, "subject")).toBe("launch-editorial-001")
+    expect(getFlag(args, "display-name")).toBe("Editorial")
+    expect(getFlag(args, "handle")).toBe("editorial")
   })
 
   test("parses post and comment vote args", () => {

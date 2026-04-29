@@ -61,3 +61,9 @@ export function readSeedAccounts(path = SEED_ACCOUNTS_PATH): Record<string, stri
     }),
   )
 }
+
+export function writeSeedAccounts(accounts: Record<string, string>, path = SEED_ACCOUNTS_PATH): void {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  writeFileSync(path, `${JSON.stringify(accounts, null, 2)}\n`, { mode: 0o600 })
+  chmodSync(path, 0o600)
+}

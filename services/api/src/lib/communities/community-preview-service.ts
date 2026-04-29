@@ -50,7 +50,9 @@ function parsePreviewSettingsJson(raw: unknown): Record<string, unknown> {
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed as Record<string, unknown>
     }
-  } catch {}
+  } catch (error) {
+    console.warn("[community-preview] failed to parse preview settings JSON", error)
+  }
 
   return {}
 }
@@ -181,6 +183,34 @@ async function getCommunityOwnerUserId(
     return null
   }
   return String(row.user_id)
+}
+
+async function listCommunityModeratorRoleAssignments(
+  client: Awaited<ReturnType<typeof openCommunityDb>>["client"],
+  communityId: string,
+): Promise<Array<{ userId: string; role: "admin" | "moderator" }>> {
+  const result = await client.execute({
+    sql: `
+      SELECT user_id, role
+      FROM community_roles
+      WHERE community_id = ?1
+        AND status = 'active'
+        AND role IN ('admin', 'moderator')
+      ORDER BY
+        CASE role WHEN 'admin' THEN 0 ELSE 1 END,
+        granted_at ASC,
+        created_at ASC,
+        role_assignment_id ASC
+    `,
+    args: [communityId],
+  })
+
+  return result.rows
+    .map((row) => ({
+      userId: String(row.user_id ?? ""),
+      role: row.role === "admin" ? "admin" as const : "moderator" as const,
+    }))
+    .filter((assignment) => assignment.userId.length > 0)
 }
 
 async function buildPreviewForViewer(input: {
@@ -338,12 +368,35 @@ async function buildCommunityPreview(input: {
     communityId: input.communityId,
   })
   const ownerUserId = await getCommunityOwnerUserId(input.client, input.communityId)
-  const [followerCount, memberCount, owner] = await Promise.all([
+  const moderatorAssignments = await listCommunityModeratorRoleAssignments(input.client, input.communityId)
+  const [followerCount, memberCount, owner, moderators] = await Promise.all([
     getCommunityFollowerCount(input.client, input.communityId),
     getCommunityMemberCount(input.client, input.communityId),
     ownerUserId
-      ? getCommunityRoleSummary({ env: input.env, userId: ownerUserId, role: "owner" }).catch(() => null)
+      ? getCommunityRoleSummary({ env: input.env, userId: ownerUserId, role: "owner" }).catch((error) => {
+          console.error("[community-preview] owner role summary failed", {
+            communityId: input.communityId,
+            userId: ownerUserId,
+            error,
+          })
+          return null
+        })
       : Promise.resolve(null),
+    Promise.all(moderatorAssignments.map((assignment) =>
+      getCommunityRoleSummary({
+        env: input.env,
+        userId: assignment.userId,
+        role: assignment.role,
+      }).catch((error) => {
+        console.error("[community-preview] moderator role summary failed", {
+          communityId: input.communityId,
+          userId: assignment.userId,
+          role: assignment.role,
+          error,
+        })
+        return null
+      })
+    )),
   ])
 
   const preview: CommunityPreview = {
@@ -373,7 +426,7 @@ async function buildCommunityPreview(input: {
     donation_partner_id: localRow?.donation_partner_id == null ? null : String(localRow.donation_partner_id),
     donation_partner: donationPolicyMode !== "none" ? donationPartner : null,
     owner,
-    moderators: [],
+    moderators: moderators.filter((summary): summary is CommunityRoleSummary => summary !== null),
     reference_links: referenceLinks,
     membership_gate_summaries: membershipGateSummaries,
     viewer_membership_status: input.viewerMembershipStatus,

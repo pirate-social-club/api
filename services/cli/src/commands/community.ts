@@ -4,11 +4,15 @@ import {
   type CommunityPreview,
   type CommunityCreateAcceptedResponse,
   type CreateCommunityRequest,
+  type SessionExchangeResponse,
 } from "@pirate/api-contracts"
+import { createHmac } from "node:crypto"
 import { getFlag, hasFlag, requireFlag } from "../args.js"
+import { readOptionalTextFile } from "../command-utils.js"
+import { readSeedAccounts, writeSeedAccounts } from "../config.js"
 import { apiRequest } from "../http.js"
 import { exitWithUsage, printJson } from "../output.js"
-import { apiAuthHeadersForSession, requireStoredSession } from "../session.js"
+import { apiAuthHeadersForSession, requireStoredSession, resolveBaseUrl } from "../session.js"
 import type { ParsedArgs } from "../types.js"
 import { applyCommunityManifest } from "./community-manifest.js"
 import { followCommunity, joinCommunity, seedComment, seedPost } from "./community-seed.js"
@@ -34,6 +38,11 @@ export async function runCommunity(
   rest: string[],
   args: ParsedArgs,
 ): Promise<void> {
+  if (action === "accounts") {
+    await runCommunityAccounts(rest, args)
+    return
+  }
+
   const session = requireStoredSession()
   switch (action) {
     case "create": {
@@ -91,6 +100,10 @@ export async function runCommunity(
     }
     case "preview": {
       await previewCommunity(rest, args)
+      return
+    }
+    case "roles": {
+      await runCommunityRoles(rest, args)
       return
     }
     case "rules": {
@@ -170,7 +183,7 @@ export async function runCommunity(
       return
     }
     default:
-      exitWithUsage("Usage: pirate community <create|attach-namespace|get|lookup|update|preview|apply|rules|gates|links|labels|safety|settings|donation-policy|seed-post|seed-comment|join|follow|launch-spaces|finalize-spaces>")
+      exitWithUsage("Usage: pirate community <create|attach-namespace|get|lookup|update|preview|roles|accounts|apply|rules|gates|links|labels|safety|settings|donation-policy|seed-post|seed-comment|join|follow|launch-spaces|finalize-spaces>")
   }
 }
 
@@ -262,4 +275,180 @@ async function previewCommunity(rest: string[], args: ParsedArgs): Promise<void>
     ...apiAuthHeadersForSession(session),
   })
   printJson(result)
+}
+
+async function runCommunityRoles(rest: string[], args: ParsedArgs): Promise<void> {
+  const session = requireStoredSession()
+  const action = rest[0]
+  const communityId = rest[1]
+  if ((action !== "grant" && action !== "revoke") || !communityId) {
+    exitWithUsage("Usage: pirate community roles <grant|revoke> <community_id|@slug> --role <admin|moderator> --user-id <usr_...>")
+  }
+
+  const role = requireFlag(args, "role")
+  if (role !== "admin" && role !== "moderator") {
+    exitWithUsage("Usage: pirate community roles <grant|revoke> <community_id|@slug> --role <admin|moderator> --user-id <usr_...>")
+  }
+
+  const userId = resolveCommunityRoleTargetUserId(args)
+  const path = action === "grant"
+    ? apiRoutes.communityRoleGrant(communityId)
+    : apiRoutes.communityRoleRevoke(communityId)
+  const result = await apiRequest<Community>({
+    baseUrl: session.baseUrl,
+    path,
+    method: "POST",
+    ...apiAuthHeadersForSession(session),
+    body: {
+      user_id: userId,
+      role,
+    },
+  })
+  printJson(result)
+}
+
+function resolveCommunityRoleTargetUserId(args: ParsedArgs): string {
+  const explicit = getFlag(args, "user-id")
+  if (explicit) {
+    return explicit
+  }
+
+  const alias = getFlag(args, "account") ?? getFlag(args, "as")
+  if (!alias) {
+    exitWithUsage("Usage: pirate community roles <grant|revoke> <community_id|@slug> --role <admin|moderator> --user-id <usr_...>")
+  }
+
+  const accountsFile = getFlag(args, "accounts-file") ?? undefined
+  const accounts = readSeedAccounts(accountsFile)
+  const resolved = accounts[alias]
+  if (!resolved) {
+    throw new Error(`Unknown seed account alias ${alias}`)
+  }
+  return resolved
+}
+
+async function runCommunityAccounts(rest: string[], args: ParsedArgs): Promise<void> {
+  const action = rest[0]
+  if (action !== "ensure") {
+    exitWithUsage("Usage: pirate community accounts ensure --alias <name> --subject <jwt-subject> [--display-name <name>] [--handle <label>]")
+  }
+
+  const baseUrl = resolveBaseUrl(getFlag(args, "base-url"))
+  const alias = requireFlag(args, "alias")
+  const subject = requireFlag(args, "subject")
+  const jwt = mintBootstrapAccountJwt(args, subject)
+  const session = await apiRequest<SessionExchangeResponse>({
+    baseUrl,
+    path: apiRoutes.authSessionExchange,
+    method: "POST",
+    body: {
+      proof: {
+        type: "jwt_based_auth",
+        jwt,
+      },
+    },
+  })
+
+  const profilePatch = buildAccountProfilePatch(args)
+  let profile: unknown = session.profile
+  if (Object.keys(profilePatch).length > 0) {
+    profile = await apiRequest<unknown>({
+      baseUrl,
+      path: apiRoutes.profilesMe,
+      method: "PATCH",
+      accessToken: session.access_token,
+      body: profilePatch,
+    })
+  }
+
+  const handle = getFlag(args, "handle")
+  let globalHandle: unknown = null
+  if (handle) {
+    globalHandle = await apiRequest<unknown>({
+      baseUrl,
+      path: "/profiles/me/global-handle/rename",
+      method: "POST",
+      accessToken: session.access_token,
+      body: {
+        desired_label: handle,
+      },
+    })
+  }
+
+  const accountsFile = getFlag(args, "accounts-file") ?? undefined
+  const accounts = readSeedAccounts(accountsFile)
+  if (accounts[alias] && accounts[alias] !== session.user.user_id && !hasFlag(args, "force")) {
+    throw new Error(`Seed account alias ${alias} already points to ${accounts[alias]}; pass --force to replace it`)
+  }
+  accounts[alias] = session.user.user_id
+  writeSeedAccounts(accounts, accountsFile)
+
+  printJson({
+    alias,
+    user_id: session.user.user_id,
+    subject,
+    seed_accounts_path: accountsFile ?? null,
+    profile,
+    global_handle: globalHandle,
+  })
+}
+
+function buildAccountProfilePatch(args: ParsedArgs): Record<string, unknown> {
+  const body: Record<string, unknown> = {}
+  const displayName = getFlag(args, "display-name")
+  const bio = getFlag(args, "bio") ?? readOptionalTextFile(getFlag(args, "bio-file"))
+  const preferredLocale = getFlag(args, "preferred-locale")
+  const avatarRef = getFlag(args, "avatar-ref")
+  const avatarSource = getFlag(args, "avatar-source")
+  if (displayName != null) body.display_name = displayName
+  if (bio != null) body.bio = bio
+  if (preferredLocale != null) body.preferred_locale = preferredLocale
+  if (avatarRef != null) body.avatar_ref = avatarRef
+  if (avatarSource != null) body.avatar_source = avatarSource
+  return body
+}
+
+function mintBootstrapAccountJwt(args: ParsedArgs, subject: string): string {
+  const secret =
+    getFlag(args, "jwt-secret")
+    ?? process.env.AUTH_UPSTREAM_JWT_SHARED_SECRET
+    ?? process.env.PIRATE_UPSTREAM_JWT_SHARED_SECRET
+  const issuer =
+    getFlag(args, "issuer")
+    ?? process.env.AUTH_UPSTREAM_JWT_ISSUER
+    ?? process.env.PIRATE_UPSTREAM_JWT_ISSUER
+  const audience =
+    getFlag(args, "audience")
+    ?? process.env.AUTH_UPSTREAM_JWT_AUDIENCE
+    ?? process.env.PIRATE_UPSTREAM_JWT_AUDIENCE
+    ?? "pirate-api"
+  const ttlSeconds = Number(getFlag(args, "ttl-seconds") ?? 3600)
+  if (!secret) {
+    exitWithUsage("Missing JWT secret. Set AUTH_UPSTREAM_JWT_SHARED_SECRET or pass --jwt-secret.")
+  }
+  if (!issuer) {
+    exitWithUsage("Missing JWT issuer. Set AUTH_UPSTREAM_JWT_ISSUER or pass --issuer.")
+  }
+  if (!Number.isInteger(ttlSeconds) || ttlSeconds <= 0) {
+    throw new Error("--ttl-seconds must be a positive integer")
+  }
+
+  const nowSeconds = Math.floor(Date.now() / 1000)
+  const encodedHeader = encodeJwtPart({ alg: "HS256", typ: "JWT" })
+  const encodedPayload = encodeJwtPart({
+    iss: issuer,
+    aud: audience,
+    sub: subject,
+    iat: nowSeconds,
+    exp: nowSeconds + ttlSeconds,
+  })
+  const signingInput = `${encodedHeader}.${encodedPayload}`
+  const signature = createHmac("sha256", secret)
+    .update(signingInput)
+    .digest("base64url")
+  return `${signingInput}.${signature}`
+}
+
+function encodeJwtPart(value: Record<string, unknown>): string {
+  return Buffer.from(JSON.stringify(value)).toString("base64url")
 }

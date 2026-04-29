@@ -13,6 +13,7 @@ import { registerCommunityContentRoutes } from "./communities-content-routes"
 import { registerCommunityCreateRoutes } from "./communities-create-routes"
 import { registerCommunityMembershipRoutes } from "./communities-membership-routes"
 import { registerCommunityModerationRoutes } from "./communities-moderation-routes"
+import { registerCommunityRoleRoutes } from "./communities-role-routes"
 import { registerCommunitySettingsRoutes } from "./communities-settings-routes"
 import { registerCommunitySongArtifactRoutes } from "./communities-song-artifacts"
 
@@ -89,6 +90,7 @@ registerCommunitySettingsRoutes(communities)
 registerCommunityMembershipRoutes(communities)
 registerCommunityContentRoutes(communities)
 registerCommunityModerationRoutes(communities)
+registerCommunityRoleRoutes(communities)
 registerCommunityCommerceRoutes(communities)
 registerCommunitySongArtifactRoutes(communities)
 

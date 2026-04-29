@@ -23,6 +23,8 @@ export const USAGE_TEXT = [
   "  pirate community lookup <community_id|@slug>",
   "  pirate community update <community_id|@slug> [--display-name <name>] [--description <text>] [--clear-description]",
   "  pirate community preview <community_id|@slug> [--locale <locale>]",
+  "  pirate community accounts ensure --alias <name> --subject <jwt-subject> [--display-name <name>] [--handle <label>] [--base-url <url>]",
+  "  pirate community roles <grant|revoke> <community_id|@slug> --role <admin|moderator> (--user-id <usr_...>|--account <alias>)",
   "  pirate community apply <folder> [--community-id <id>] [--dry-run]",
   "  pirate community rules set <community_id|@slug> --file <rules.txt|rules.json>",
   "  pirate community gates set <community_id|@slug> (--file <gates.json>|--self-nationality <ISO2|ISO3>)",
