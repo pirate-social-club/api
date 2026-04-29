@@ -22,6 +22,7 @@ export type AnalyticsEventName =
   | "reddit_import_succeeded"
   | "reddit_import_failed"
   | "handle_claim_started"
+  | "handle_claim_failed"
   | "handle_claim_succeeded"
   | "onboarding_completed"
   | "onboarding_skipped"

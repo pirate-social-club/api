@@ -37,6 +37,13 @@ auth.post("/session/exchange", async (c) => {
     env: c.env,
     userId: session.user.user_id,
   })
+  if (body.proof.type === "jwt_based_auth") {
+    await trackApiEvent(c.env, c.req, {
+      eventName: "auth_started",
+      userId: session.user.user_id,
+      properties: { provider: "jwt_based_auth" },
+    })
+  }
   await trackApiEvent(c.env, c.req, {
     eventName: "auth_session_exchanged",
     userId: session.user.user_id,

@@ -285,18 +285,6 @@ authenticatedVerification.get("/verification-sessions/:verificationSessionId", a
   if (!result) {
     throw notFoundError("Verification session not found")
   }
-  if (result.status === "verified" || result.status === "failed" || result.status === "expired") {
-    await trackApiEvent(c.env, c.req, {
-      eventName: result.status === "verified" ? "unique_human_verification_succeeded" : "unique_human_verification_failed",
-      userId: actor.userId,
-      verificationSessionId: result.verification_session_id,
-      properties: {
-        provider: result.provider,
-        intent: result.verification_intent ?? null,
-        failure_code: result.status === "verified" ? null : result.failure_reason ?? result.status,
-      },
-    })
-  }
   return c.json(result, 200)
 })
 
@@ -317,6 +305,18 @@ authenticatedVerification.post("/verification-sessions/:verificationSessionId/co
   })
   if (!result) {
     throw notFoundError("Verification session not found")
+  }
+  if (result.status === "verified" || result.status === "failed" || result.status === "expired") {
+    await trackApiEvent(c.env, c.req, {
+      eventName: result.status === "verified" ? "unique_human_verification_succeeded" : "unique_human_verification_failed",
+      userId: actor.userId,
+      verificationSessionId: result.verification_session_id,
+      properties: {
+        provider: result.provider,
+        intent: result.verification_intent ?? null,
+        failure_code: result.status === "verified" ? null : result.failure_reason ?? result.status,
+      },
+    })
   }
   return c.json(result, 200)
 })
