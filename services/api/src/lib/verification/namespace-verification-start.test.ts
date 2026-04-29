@@ -15,27 +15,7 @@ class PlatformManagedZoneBootstrapClient implements Client {
     const sql = typeof statement === "string" ? statement : statement.sql
 
     if (sql.includes("FROM users")) {
-      return {
-        rows: [{
-          user_id: "usr_test",
-          primary_wallet_attachment_id: null,
-          verification_state: "verified",
-          capability_provider: "very",
-          verification_capabilities_json: JSON.stringify({
-            unique_human: { state: "verified", provider: "very", proof_type: "unique_human", mechanism: "widget", verified_at: "2026-04-27T00:00:00.000Z" },
-            age_over_18: { state: "unverified", provider: null, proof_type: null, mechanism: null, verified_at: null },
-            minimum_age: { state: "unverified", value: null, provider: null, proof_type: null, mechanism: null, verified_at: null },
-            nationality: { state: "unverified", value: null, provider: null, proof_type: null, mechanism: null, verified_at: null },
-            gender: { state: "unverified", provider: null, proof_type: null, mechanism: null, verified_at: null },
-            wallet_score: { state: "unverified", provider: null, proof_type: null, mechanism: null, verified_at: null, band: null, score: null },
-          }),
-          verified_at: "2026-04-27T00:00:00.000Z",
-          current_verification_session_id: null,
-          onboarding_dismissed_at: null,
-          created_at: "2026-04-27T00:00:00.000Z",
-          updated_at: "2026-04-27T00:00:00.000Z",
-        }],
-      }
+      throw new Error("namespace verification start must not require user verification capabilities")
     }
 
     if (sql.includes("INSERT INTO namespace_verification_sessions")) {

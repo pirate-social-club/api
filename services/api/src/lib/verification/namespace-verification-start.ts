@@ -1,9 +1,7 @@
 import type { Client } from "../sql-client"
 import { internalError, providerUnavailable, verificationRequired } from "../errors"
 import { makeId } from "../helpers"
-import { getUserRow } from "../auth/auth-db-user-queries"
 import {
-  parseVerificationCapabilities,
   serializeNamespaceVerificationSession,
 } from "../auth/auth-serializers"
 import {
@@ -45,15 +43,6 @@ export async function startNamespaceVerificationSession(
     rootLabel: string
   },
 ): Promise<NamespaceVerificationSession> {
-  const userRow = await getUserRow(client, input.userId)
-  if (!userRow) {
-    throw internalError("User row missing while starting namespace verification session")
-  }
-  const capabilities = parseVerificationCapabilities(userRow.verification_capabilities_json)
-  if (capabilities.unique_human.state !== "verified") {
-    throw verificationRequired("unique_human verification is required")
-  }
-
   const now = new Date()
   const createdAt = now.toISOString()
   const expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
