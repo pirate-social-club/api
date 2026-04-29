@@ -63,7 +63,12 @@ function parseStoredCommunitySettings(
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed as Record<string, unknown>
     }
-  } catch {}
+  } catch (error) {
+    console.warn("[community-serialization] failed to parse community settings JSON", {
+      communityId: local.community_id,
+      error,
+    })
+  }
 
   return {}
 }

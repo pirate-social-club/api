@@ -300,7 +300,9 @@ async function finalizeLocalPurchaseSettlement(input: {
   } catch (error) {
     try {
       await tx.rollback()
-    } catch {}
+    } catch (rollbackError) {
+      console.error("[purchase-settlements] rollback failed while recording settlement attempt", rollbackError)
+    }
     throw error
   } finally {
     tx.close()

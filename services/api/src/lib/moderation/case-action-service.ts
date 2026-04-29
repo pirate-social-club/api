@@ -186,7 +186,9 @@ export async function resolveModerationCaseWithAction(input: {
     } catch (error) {
       try {
         await tx.rollback()
-      } catch {}
+      } catch (rollbackError) {
+        console.error("[moderation-case-actions] rollback failed while recording case action", rollbackError)
+      }
       throw error
     } finally {
       tx.close()

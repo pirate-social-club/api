@@ -23,5 +23,5 @@ export interface Client {
   execute(statement: InStatement | string): Promise<QueryResult>
   batch(statements: InStatement[], mode?: "read" | "write"): Promise<QueryResult[]>
   transaction(mode?: "read" | "write"): Promise<Transaction>
-  close?(): void
+  close?(): void | Promise<void>
 }

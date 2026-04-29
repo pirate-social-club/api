@@ -196,7 +196,9 @@ async function upsertLocalNamespaceAttachment(input: {
     } catch (error) {
       try {
         await tx.rollback()
-      } catch {}
+      } catch (rollbackError) {
+        console.error("[community-provisioning] rollback failed while preparing namespace attach", rollbackError)
+      }
       throw error
     } finally {
       tx.close()
@@ -285,7 +287,12 @@ async function createNamespacelessCommunity(input: {
         communityId,
         communityDisplayName: input.auth.communityDisplayName,
       })
-    } catch {}
+    } catch (error) {
+      console.error("[community-provisioning] namespace verification task creation failed", {
+        communityId,
+        error,
+      })
+    }
 
     return {
       community: serializeCommunity(input.env, finalized.community, localSnapshot),
@@ -303,7 +310,13 @@ async function createNamespacelessCommunity(input: {
         database_url: prepared.binding.database_url,
         message: error instanceof Error ? error.message : String(error),
       },
-    }).catch(() => {})
+    }).catch((markFailedError) => {
+      console.error("[community-provisioning] failed to persist provisioning failure", {
+        communityId,
+        jobId: prepared.job.job_id,
+        error: markFailedError,
+      })
+    })
 
     throw internalError(
       "Community provisioning failed",
@@ -448,7 +461,13 @@ async function provisionNamespacedCommunity(input: {
           database_url: prepared.binding.database_url,
           message: error instanceof Error ? error.message : String(error),
         },
-      }).catch(() => {})
+      }).catch((markFailedError) => {
+        console.error("[community-provisioning] failed to persist retry provisioning failure", {
+          communityId,
+          jobId: prepared.job.job_id,
+          error: markFailedError,
+        })
+      })
 
       throw internalError(
         "Community provisioning failed",
@@ -628,7 +647,13 @@ export async function attachNamespaceToCommunity(input: {
       userId: input.userId,
       communityId: input.communityId,
     })
-  } catch {}
+  } catch (error) {
+    console.error("[community-provisioning] namespace verification task resolution failed", {
+      communityId: input.communityId,
+      userId: input.userId,
+      error,
+    })
+  }
 
   return loadCommunityProjection(input.env, input.communityRepository, attachedCommunity)
 }

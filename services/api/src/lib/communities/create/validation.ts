@@ -94,7 +94,9 @@ export function parseCommunitySettingsJson(
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed as Record<string, unknown>
     }
-  } catch {}
+  } catch (error) {
+    console.warn("[community-create] failed to parse stored settings JSON", error)
+  }
 
   return {}
 }

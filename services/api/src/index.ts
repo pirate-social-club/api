@@ -29,7 +29,7 @@ import { processAvailableCommunityJobs } from "./lib/communities/jobs/runner"
 import { reconcileCommunityMembershipAndFollowProjections } from "./lib/communities/membership/projection-service"
 import { HttpError, errorResponse } from "./lib/errors"
 import { reconcileRoyaltyClaimEvents } from "./lib/royalties/royalty-claim-history"
-import { getControlPlaneClient } from "./lib/runtime-deps"
+import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/runtime-deps"
 import type { Env } from "./types"
 
 const app = new Hono<{ Bindings: Env }>()
@@ -61,6 +61,10 @@ app.use(
     ],
   }),
 )
+
+app.use("*", async (_c, next) => {
+  await withRequestControlPlaneClients(next)
+})
 
 app.get("/health", (c) => c.json({ ok: true }))
 app.route("/", discovery)
@@ -142,7 +146,7 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
   } catch (error) {
     console.error("[community-jobs] scheduled processing failed", error)
   } finally {
-    communityRepository.close?.()
+    await communityRepository.close?.()
   }
 }
 
@@ -172,7 +176,7 @@ async function reconcileScheduledPurchaseSettlements(env: Env): Promise<void> {
   } catch (error) {
     console.error("[purchase-settlements] reconciliation failed", error)
   } finally {
-    communityRepository.close?.()
+    await communityRepository.close?.()
   }
 }
 
@@ -196,16 +200,16 @@ async function reconcileScheduledCommunityMembershipProjections(env: Env): Promi
   } catch (error) {
     console.error("[community-membership-projections] reconciliation failed", error)
   } finally {
-    communityRepository.close?.()
+    await communityRepository.close?.()
   }
 }
 
 ;(app as ScheduledApp).scheduled = async (_controller, env, ctx) => {
-  ctx.waitUntil(flushScheduledAnalytics(env))
-  ctx.waitUntil(processScheduledCommunityJobs(env))
-  ctx.waitUntil(reconcileScheduledCommunityMembershipProjections(env))
-  ctx.waitUntil(reconcileScheduledRoyaltyClaims(env))
-  ctx.waitUntil(reconcileScheduledPurchaseSettlements(env))
+  ctx.waitUntil(withRequestControlPlaneClients(() => flushScheduledAnalytics(env)))
+  ctx.waitUntil(withRequestControlPlaneClients(() => processScheduledCommunityJobs(env)))
+  ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledCommunityMembershipProjections(env)))
+  ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledRoyaltyClaims(env)))
+  ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledPurchaseSettlements(env)))
 }
 
 export default app

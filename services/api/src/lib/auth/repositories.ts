@@ -43,16 +43,19 @@ export type PublicProfileResolution = {
 
 export interface SessionRepository {
   exchangeIdentity(identity: UpstreamIdentity): Promise<SessionSnapshot>
+  close?(): void | Promise<void>
 }
 
 export interface UserRepository {
   getUserById(userId: string): Promise<User | null>
   getWalletAttachmentsByUserId(userId: string): Promise<WalletAttachmentSummary[]>
+  close?(): void | Promise<void>
 }
 
 export interface OnboardingStatusRepository {
   getOnboardingStatusByUserId(userId: string): Promise<OnboardingStatus | null>
   dismissOnboarding(userId: string): Promise<OnboardingStatus | null>
+  close?(): void | Promise<void>
 }
 
 export interface ProfileRepository {
@@ -66,6 +69,7 @@ export interface ProfileRepository {
   quoteGlobalHandleUpgrade(userId: string, desiredLabel: string): Promise<HandleUpgradeQuote | null>
   syncLinkedHandles(userId: string): Promise<Profile | null>
   setPrimaryPublicHandle(userId: string, linkedHandleId: string | null): Promise<Profile | null>
+  close?(): void | Promise<void>
 }
 
 export interface RedditOnboardingRepository {
@@ -80,6 +84,7 @@ export interface RedditOnboardingRepository {
     redditUsername: string
   }): Promise<{ job: Job }>
   getLatestRedditImportSummary(userId: string): Promise<RedditImportSummary | null>
+  close?(): void | Promise<void>
 }
 
 type DatabaseRepositoryBundle = {

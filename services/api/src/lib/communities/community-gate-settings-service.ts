@@ -254,7 +254,9 @@ export async function updateCommunityGates(input: {
     } catch (error) {
       try {
         await tx.rollback()
-      } catch {}
+      } catch (rollbackError) {
+        console.error("[community-gate-settings] rollback failed while updating gate settings", rollbackError)
+      }
       throw error
     } finally {
       tx.close()

@@ -192,9 +192,11 @@ async function applyMigrationFile(client: Client, migrationFilePath: string): Pr
     })
     await tx.commit()
   } catch (error) {
-    try {
-      await tx.rollback()
-    } catch {}
+  try {
+    await tx.rollback()
+  } catch (rollbackError) {
+    console.error("[community-local-db] rollback failed while initializing local community database", rollbackError)
+  }
     throw error
   } finally {
     tx.close()
@@ -440,7 +442,9 @@ export async function bootstrapLocalCommunityDb(input: LocalCommunityBootstrapIn
     } catch (error) {
       try {
         await tx.rollback()
-      } catch {}
+      } catch (rollbackError) {
+        console.error("[community-local-db] rollback failed while applying local community database migration", rollbackError)
+      }
       throw error
     } finally {
       tx.close()

@@ -55,6 +55,10 @@ function normalizePublicLinkedHandleLabel(value: string): string {
 export class DatabaseIdentityRepository {
   constructor(private readonly client: Client) {}
 
+  close(): void | Promise<void> {
+    return this.client.close?.()
+  }
+
   async exchangeIdentity(identity: UpstreamIdentity): Promise<SessionSnapshot> {
     const provider = identity.provider
     const providerSubject = identity.providerSubject
@@ -181,7 +185,9 @@ export class DatabaseIdentityRepository {
     } catch (error) {
       try {
         await tx.rollback()
-      } catch {}
+      } catch (rollbackError) {
+        console.error("[auth] rollback failed while exchanging identity", rollbackError)
+      }
 
       if (hasUniqueConstraintField(error, "auth_provider_links.provider_subject")) {
         const existing = await findActiveAuthProviderLink(this.client, provider, providerSubject)

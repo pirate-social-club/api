@@ -281,7 +281,9 @@ export async function refreshAgentDelegatedCredential(
   } catch (error) {
     try {
       await tx.rollback()
-    } catch {}
+    } catch (rollbackError) {
+      console.error("[agent-credentials] rollback failed while creating delegated credential", rollbackError)
+    }
     tx.close()
     throw error
   }

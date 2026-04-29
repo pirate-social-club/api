@@ -38,6 +38,10 @@ function serializeJob(row: {
 export class DatabaseRedditOnboardingRepository {
   constructor(private readonly client: Client) {}
 
+  close(): void | Promise<void> {
+    return this.client.close?.()
+  }
+
   async startOrCheckRedditVerification(input: {
     env: Env
     userId: string
@@ -265,7 +269,9 @@ export class DatabaseRedditOnboardingRepository {
       } catch (error) {
         try {
           await tx.rollback()
-        } catch {}
+        } catch (rollbackError) {
+          console.error("[reddit-onboarding] rollback failed while starting snapshot import", rollbackError)
+        }
         throw error
       } finally {
         tx.close()

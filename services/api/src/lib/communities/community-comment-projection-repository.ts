@@ -91,7 +91,9 @@ export async function recordCommunityCommentProjection(
   } catch (error) {
     try {
       await tx.rollback()
-    } catch {}
+    } catch (rollbackError) {
+      console.error("[community-comment-projection] rollback failed while recording comment projection", rollbackError)
+    }
     throw error
   } finally {
     tx.close()

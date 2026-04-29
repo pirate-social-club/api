@@ -90,7 +90,9 @@ export async function reportPost(input: {
     } catch (error) {
       try {
         await tx.rollback()
-      } catch {}
+      } catch (rollbackError) {
+        console.error("[moderation-reports] rollback failed while creating report", rollbackError)
+      }
       throw error
     } finally {
       tx.close()
@@ -170,7 +172,9 @@ export async function reportComment(input: {
     } catch (error) {
       try {
         await tx.rollback()
-      } catch {}
+      } catch (rollbackError) {
+        console.error("[moderation-reports] rollback failed while resolving report", rollbackError)
+      }
       throw error
     } finally {
       tx.close()

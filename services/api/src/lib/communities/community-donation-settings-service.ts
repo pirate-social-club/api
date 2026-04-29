@@ -213,7 +213,9 @@ export async function updateCommunityDonationPolicy(input: {
     } catch (error) {
       try {
         await tx.rollback()
-      } catch {}
+      } catch (rollbackError) {
+        console.error("[community-donation-settings] rollback failed while updating donation settings", rollbackError)
+      }
       throw error
     } finally {
       tx.close()

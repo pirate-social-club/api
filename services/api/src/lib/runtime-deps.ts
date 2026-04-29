@@ -1,6 +1,7 @@
 import { createClient as createLibsqlClient } from "@libsql/client"
 import type { Client as LibsqlClient, Transaction as LibsqlTransaction } from "@libsql/client"
 import { Pool, neonConfig } from "@neondatabase/serverless"
+import { AsyncLocalStorage } from "node:async_hooks"
 import { globalSingleton } from "./db-helpers"
 import { requireControlPlaneDbUrl } from "./auth/auth-db-query-helpers"
 import type { Client, InStatement, QueryResult, QueryResultRow, Transaction } from "./sql-client"
@@ -14,6 +15,12 @@ neonConfig.poolQueryViaFetch = true
 
 const LIBSQL_BUSY_RETRY_TIMEOUT_MS = 5000
 const LIBSQL_BUSY_RETRY_DELAY_MS = 50
+
+type RequestControlPlaneStore = {
+  clients: Map<string, Client>
+}
+
+const requestControlPlaneStore = new AsyncLocalStorage<RequestControlPlaneStore>()
 
 export function isPostgresControlPlaneUrl(value: string): boolean {
   return value.startsWith("postgres://") || value.startsWith("postgresql://")
@@ -273,7 +280,9 @@ class PostgresClientAdapter implements Client {
     } catch (error) {
       try {
         await tx.rollback()
-      } catch {}
+      } catch (rollbackError) {
+        console.error("[control-plane] transaction rollback failed during batch", rollbackError)
+      }
       throw error
     } finally {
       tx.close()
@@ -291,9 +300,71 @@ class PostgresClientAdapter implements Client {
     return new PostgresTransactionAdapter(client)
   }
 
-  close(): void {
-    void this.pool.end()
+  async close(): Promise<void> {
+    await this.pool.end()
   }
+}
+
+class RequestScopedClientAdapter implements Client {
+  constructor(private readonly client: Client) {}
+
+  async execute(statement: InStatement | string): Promise<QueryResult> {
+    return this.client.execute(statement)
+  }
+
+  async batch(statements: InStatement[], mode: "read" | "write" = "write"): Promise<QueryResult[]> {
+    return this.client.batch(statements, mode)
+  }
+
+  async transaction(mode: "read" | "write" = "write"): Promise<Transaction> {
+    return this.client.transaction(mode)
+  }
+
+  close(): void {
+  }
+}
+
+async function closeRequestControlPlaneClients(store: RequestControlPlaneStore): Promise<void> {
+  const clients = [...store.clients.values()]
+  store.clients.clear()
+  await Promise.all(clients.map(async (client) => {
+    try {
+      await client.close?.()
+    } catch (error) {
+      console.error("[control-plane] request-scoped client close failed", error)
+    }
+  }))
+}
+
+export async function withRequestControlPlaneClients<T>(operation: () => Promise<T>): Promise<T> {
+  const existingStore = requestControlPlaneStore.getStore()
+  if (existingStore) {
+    return operation()
+  }
+
+  const store: RequestControlPlaneStore = { clients: new Map() }
+  return requestControlPlaneStore.run(store, async () => {
+    try {
+      return await operation()
+    } finally {
+      await closeRequestControlPlaneClients(store)
+    }
+  })
+}
+
+function getRequestScopedPostgresClient(url: string): Client | null {
+  const store = requestControlPlaneStore.getStore()
+  if (!store) {
+    return null
+  }
+
+  const cacheKey = `pg:${url}`
+  let client = store.clients.get(cacheKey)
+  if (!client) {
+    client = new PostgresClientAdapter(new Pool({ connectionString: url, max: 4 }))
+    store.clients.set(cacheKey, client)
+  }
+  return new RequestScopedClientAdapter(client)
 }
 
 export function getControlPlaneCacheKey(env: Env): string {
@@ -305,6 +376,10 @@ function getControlPlaneClient(env: Env): Client {
   if (isPostgresControlPlaneUrl(url)) {
     // In Cloudflare Workers, Postgres I/O objects must stay request-scoped.
     // Reusing a cached Neon pool across requests can trigger cross-request I/O failures.
+    const requestScopedClient = getRequestScopedPostgresClient(url)
+    if (requestScopedClient) {
+      return requestScopedClient
+    }
     return new PostgresClientAdapter(new Pool({ connectionString: url, max: 4 }))
   }
 

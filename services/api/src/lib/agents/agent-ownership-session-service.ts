@@ -339,7 +339,9 @@ export async function completeAgentOwnershipSession(
   } catch (error) {
     try {
       await tx.rollback()
-    } catch {}
+    } catch (rollbackError) {
+      console.error("[agent-ownership] rollback failed while completing ownership session", rollbackError)
+    }
     tx.close()
     throw error
   }

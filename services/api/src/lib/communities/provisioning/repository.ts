@@ -127,7 +127,9 @@ export async function createCommunityProvisioningRequest(
   } catch (error) {
     try {
       await tx.rollback()
-    } catch {}
+    } catch (rollbackError) {
+      console.error("[community-provisioning] rollback failed while creating provisioning request", rollbackError)
+    }
     throw error
   } finally {
     tx.close()
@@ -249,7 +251,9 @@ export async function retryCommunityProvisioningRequest(
   } catch (error) {
     try {
       await tx.rollback()
-    } catch {}
+    } catch (rollbackError) {
+      console.error("[community-provisioning] rollback failed while retrying provisioning request", rollbackError)
+    }
     throw error
   } finally {
     tx.close()
@@ -321,7 +325,9 @@ export async function markCommunityProvisioningSucceeded(
   } catch (error) {
     try {
       await tx.rollback()
-    } catch {}
+    } catch (rollbackError) {
+      console.error("[community-provisioning] rollback failed while marking provisioning succeeded", rollbackError)
+    }
     throw error
   } finally {
     tx.close()
@@ -420,7 +426,9 @@ export async function persistProvisionedCommunityDatabaseAccess(
   } catch (error) {
     try {
       await tx.rollback()
-    } catch {}
+    } catch (rollbackError) {
+      console.error("[community-provisioning] rollback failed while persisting provisioned database access", rollbackError)
+    }
     throw error
   } finally {
     tx.close()
@@ -478,7 +486,9 @@ export async function markCommunityProvisioningFailed(
   } catch (error) {
     try {
       await tx.rollback()
-    } catch {}
+    } catch (rollbackError) {
+      console.error("[community-provisioning] rollback failed while marking provisioning failed", rollbackError)
+    }
     throw error
   } finally {
     tx.close()

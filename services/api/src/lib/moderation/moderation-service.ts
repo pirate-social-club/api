@@ -198,7 +198,9 @@ export async function reportPost(input: {
     } catch (error) {
       try {
         await tx.rollback()
-      } catch {}
+      } catch (rollbackError) {
+        console.error("[moderation] rollback failed while creating moderation case", rollbackError)
+      }
       throw error
     } finally {
       tx.close()
@@ -278,7 +280,9 @@ export async function reportComment(input: {
     } catch (error) {
       try {
         await tx.rollback()
-      } catch {}
+      } catch (rollbackError) {
+        console.error("[moderation] rollback failed while updating moderation case", rollbackError)
+      }
       throw error
     } finally {
       tx.close()
@@ -504,7 +508,9 @@ export async function resolveModerationCaseWithAction(input: {
     } catch (error) {
       try {
         await tx.rollback()
-      } catch {}
+      } catch (rollbackError) {
+        console.error("[moderation] rollback failed while applying moderation decision", rollbackError)
+      }
       throw error
     } finally {
       tx.close()

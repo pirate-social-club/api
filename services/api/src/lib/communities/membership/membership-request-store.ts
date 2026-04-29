@@ -215,7 +215,9 @@ export async function resolveMembershipRequest(input: {
     tx.close()
     return request
   } catch (error) {
-    await tx.rollback().catch(() => {})
+    await tx.rollback().catch((rollbackError) => {
+      console.error("[membership-requests] rollback failed while reviewing membership request", rollbackError)
+    })
     tx.close()
     throw error
   }

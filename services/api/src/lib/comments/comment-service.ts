@@ -113,7 +113,13 @@ async function enqueueProjectionRetry(input: {
       }),
       createdAt: input.createdAt,
     })
-  } catch {}
+  } catch (error) {
+    console.error("[comments] failed to enqueue comment projection retry", {
+      communityId: input.communityId,
+      commentId: input.comment.comment_id,
+      error,
+    })
+  }
 }
 
 export async function createComment(input: {
@@ -345,13 +351,22 @@ export async function createComment(input: {
             commentId: createdComment.comment_id,
           })
         }
-      } catch {}
+      } catch (error) {
+        console.error("[comments] failed to emit comment notifications", {
+          communityId: input.communityId,
+          postId: input.threadRootPostId,
+          commentId: createdComment.comment_id,
+          error,
+        })
+      }
 
       return createdComment
     } catch (error) {
       try {
         await tx.rollback()
-      } catch {}
+      } catch (rollbackError) {
+        console.error("[comments] rollback failed while creating comment", rollbackError)
+      }
       throw error
     } finally {
       tx.close()
@@ -399,7 +414,9 @@ export async function castCommentVote(input: {
     } catch (error) {
       try {
         await tx.rollback()
-      } catch {}
+      } catch (rollbackError) {
+        console.error("[comments] rollback failed while casting comment vote", rollbackError)
+      }
       throw error
     } finally {
       tx.close()
@@ -478,7 +495,9 @@ export async function deleteComment(input: {
     } catch (error) {
       try {
         await tx.rollback()
-      } catch {}
+      } catch (rollbackError) {
+        console.error("[comments] rollback failed while deleting comment", rollbackError)
+      }
       throw error
     } finally {
       tx.close()

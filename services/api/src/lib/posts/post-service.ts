@@ -314,7 +314,9 @@ export async function createPost(input: {
     } catch (error) {
       try {
         await tx.rollback()
-      } catch {}
+      } catch (rollbackError) {
+        console.error("[posts] rollback failed while creating post", rollbackError)
+      }
       throw error
     } finally {
       tx.close()

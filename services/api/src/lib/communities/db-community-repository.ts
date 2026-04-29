@@ -137,8 +137,8 @@ export async function listCommunityFollowProjectionsByUserId(
 export class DatabaseCommunityRepository implements CommunityRepository {
   constructor(private readonly client: Client) {}
 
-  close(): void {
-    this.client.close?.()
+  close(): void | Promise<void> {
+    return this.client.close?.()
   }
 
   async getCommunityById(communityId: string): Promise<CommunityRow | null> {

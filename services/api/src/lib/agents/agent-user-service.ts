@@ -261,7 +261,9 @@ export async function claimUserAgentHandle(
   } catch (error) {
     try {
       await tx.rollback()
-    } catch {}
+    } catch (rollbackError) {
+      console.error("[agents] rollback failed while updating agent handle", rollbackError)
+    }
     tx.close()
     if (isAgentHandleLabelUniqueError(error) || isAgentHandleAgentUniqueError(error)) {
       throw conflictError("Desired agent handle is unavailable")

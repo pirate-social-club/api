@@ -10,7 +10,7 @@ import type {
 } from "../auth/auth-db-rows"
 
 export interface CommunityRepositoryLifecycle {
-  close?(): void
+  close?(): void | Promise<void>
 }
 
 export interface CommunityReadRepository {

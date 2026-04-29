@@ -67,7 +67,9 @@ export async function attachNamespaceToCommunity(
   } catch (error) {
     try {
       await tx.rollback()
-    } catch {}
+    } catch (rollbackError) {
+      console.error("[community-mutations] rollback failed while attaching namespace", rollbackError)
+    }
     throw error
   } finally {
     tx.close()

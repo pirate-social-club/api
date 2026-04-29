@@ -89,6 +89,10 @@ export class DatabaseProfileRepository {
     this.identityRepository = new DatabaseIdentityRepository(client)
   }
 
+  close(): void | Promise<void> {
+    return this.client.close?.()
+  }
+
   async getProfileByUserId(userId: string): Promise<Profile | null> {
     return await this.identityRepository.getProfileByUserId(userId)
   }
@@ -346,7 +350,9 @@ export class DatabaseProfileRepository {
     } catch (error) {
       try {
         await tx.rollback()
-      } catch {}
+      } catch (rollbackError) {
+        console.error("[profiles] rollback failed while renaming global handle", rollbackError)
+      }
       throw error
     } finally {
       tx.close()
@@ -717,7 +723,9 @@ export class DatabaseProfileRepository {
     } catch (error) {
       try {
         await tx.rollback()
-      } catch {}
+      } catch (rollbackError) {
+        console.error("[profiles] rollback failed while syncing linked handles", rollbackError)
+      }
       throw error
     } finally {
       tx.close()

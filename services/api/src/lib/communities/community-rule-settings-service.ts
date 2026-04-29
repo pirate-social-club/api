@@ -85,7 +85,9 @@ export async function updateCommunityRules(input: {
     } catch (error) {
       try {
         await tx.rollback()
-      } catch {}
+      } catch (rollbackError) {
+        console.error("[community-rule-settings] rollback failed while updating rule settings", rollbackError)
+      }
       throw error
     } finally {
       tx.close()

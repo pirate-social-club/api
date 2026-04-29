@@ -218,7 +218,9 @@ export async function updateCommunityLabelPolicy(input: {
     } catch (error) {
       try {
         await tx.rollback()
-      } catch {}
+      } catch (rollbackError) {
+        console.error("[community-link-label-settings] rollback failed while updating link label settings", rollbackError)
+      }
       throw error
     } finally {
       tx.close()
