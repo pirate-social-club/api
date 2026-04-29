@@ -118,7 +118,13 @@ function parsePreviewHumanVerificationLane(
 async function getActiveCommunityForPreview(
   repository: Pick<CommunityReadRepository, "getCommunityById">,
   communityId: string,
-): Promise<{ creator_user_id: string; display_name: string; created_at: string }> {
+): Promise<{
+  creator_user_id: string
+  display_name: string
+  created_at: string
+  namespace_verification_id?: string | null
+  route_slug?: string | null
+}> {
   const community = await repository.getCommunityById(communityId)
   if (!community || community.provisioning_state !== "active" || community.status !== "active") {
     throw notFoundError("Community not found")
@@ -237,6 +243,8 @@ async function buildPreviewForViewer(input: {
       communityId: input.communityId,
       communityDisplayName: community.display_name,
       communityCreatedAt: community.created_at,
+      namespaceVerificationId: community.namespace_verification_id ?? null,
+      routeSlug: community.route_slug ?? null,
       locale: input.locale ?? null,
       gateRules: rules,
       viewerMembershipStatus:
@@ -308,6 +316,8 @@ async function buildCommunityPreview(input: {
   communityId: string
   communityDisplayName: string
   communityCreatedAt: string
+  namespaceVerificationId?: string | null
+  routeSlug?: string | null
   locale?: string | null
   gateRules: Awaited<ReturnType<typeof listActiveMembershipGateRules>>
   viewerMembershipStatus: CommunityPreview["viewer_membership_status"]
@@ -403,6 +413,8 @@ async function buildCommunityPreview(input: {
     community_id: input.communityId,
     display_name: displayName,
     description: localRow?.description != null ? String(localRow.description) : null,
+    namespace_verification_id: input.namespaceVerificationId ?? null,
+    route_slug: input.routeSlug ?? null,
     rules: publicRules,
     avatar_ref: resolveCommunityAvatarRef({
       communityId: input.communityId,

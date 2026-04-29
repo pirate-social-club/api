@@ -350,8 +350,10 @@ describe("community routes", () => {
       expect(attachResponse.status).toBe(200)
       const attachedCommunity = await json(attachResponse) as {
         community_id: string
+        namespace_verification_id: string | null
         route_slug: string | null
       }
+      expect(attachedCommunity.namespace_verification_id).toBe(completedBody.namespace_verification_id)
       expect(attachedCommunity.route_slug).toBe("@xn--t77hga")
 
       const communityBySlug = await app.request("http://pirate.test/communities/@xn--t77hga", {
@@ -360,6 +362,21 @@ describe("community routes", () => {
         },
       }, ctx.env)
       expect(communityBySlug.status).toBe(200)
+
+      const previewById = await app.request(
+        `http://pirate.test/public-communities/${communityCreateBody.community.community_id}`,
+        {},
+        ctx.env,
+      )
+      expect(previewById.status).toBe(200)
+      const previewByIdBody = await json(previewById) as {
+        namespace_verification_id: string | null
+        route_slug: string | null
+        links: { canonical: { href: string } }
+      }
+      expect(previewByIdBody.namespace_verification_id).toBe(completedBody.namespace_verification_id)
+      expect(previewByIdBody.route_slug).toBe("@xn--t77hga")
+      expect(previewByIdBody.links.canonical.href).toBe("http://pirate.test/c/@xn--t77hga")
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -540,9 +557,12 @@ describe("community routes", () => {
       omitted_surfaces: unknown[]
       links: {
         self: { href: string; type: string }
+        canonical: { href: string; type: string }
         markdown: { href: string; type: string }
         posts: { href: string; type: string }
       }
+      namespace_verification_id: string | null
+      route_slug: string | null
       viewer_membership_status: string | null
     }
     expect(previewBody.community_id).toBe(communityCreateBody.community.community_id)
@@ -568,8 +588,11 @@ describe("community routes", () => {
     expect(previewBody.localized_text?.items.some((item) => /^community\.rule\..+\.title$/.test(item.field_key))).toBe(true)
     expect(previewBody.localized_text?.items.some((item) => /^community\.rule\..+\.body$/.test(item.field_key))).toBe(true)
     expect(previewBody.viewer_membership_status).toBe("not_member")
+    expect(previewBody.namespace_verification_id).toBe(namespaceVerificationId)
+    expect(previewBody.route_slug).toBe(communityCreateBody.community.route_slug)
     expect(preview.headers.get("link")).toContain("/public-communities/")
     expect(previewBody.omitted_surfaces).toEqual([])
+    expect(previewBody.links.canonical.href).toBe(`http://pirate.test/c/${communityCreateBody.community.route_slug}`)
     expect(previewBody.links.self.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.community_id}`)
     expect(previewBody.links.markdown.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.community_id}?format=markdown`)
     expect(previewBody.links.posts.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.community_id}/posts`)

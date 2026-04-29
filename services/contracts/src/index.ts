@@ -1355,6 +1355,8 @@ export type CommunityPreview = {
   localized_text?: CommunityTextLocalization | null;
   avatar_ref?: string | null;
   banner_ref?: string | null;
+  namespace_verification_id?: string | null;
+  route_slug?: string | null;
   membership_mode: "open" | "request" | "gated";
   allow_anonymous_identity?: boolean;
   anonymous_identity_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null;

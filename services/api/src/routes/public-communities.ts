@@ -71,14 +71,19 @@ async function resolveCommunityId(
   throw notFoundError("Community not found")
 }
 
-function communityLinks(origin: string, communityId: string): StructuredAccessLinks {
+function communityLinks(
+  origin: string,
+  communityId: string,
+  routeSlug?: string | null,
+): StructuredAccessLinks {
+  const canonicalSegment = routeSlug?.trim() || communityId
   return {
     self: {
       href: absoluteUrl(origin, publicCommunityPath(communityId)),
       type: "application/json",
     },
     canonical: {
-      href: absoluteUrl(origin, `/c/${encodeURIComponent(communityId)}`),
+      href: absoluteUrl(origin, `/c/${encodeURIComponent(canonicalSegment).replace(/^%40/u, "@")}`),
       type: "text/html",
     },
     markdown: {
@@ -230,7 +235,7 @@ publicCommunities.get("/:communityId", async (c) => {
     communityRepository,
   })
   const omittedSurfaces = omittedSurfacesForPolicy(policy, ["community_stats"])
-  const links = communityLinks(configuredApiOrigin(c.env, c.req.url), communityId)
+  const links = communityLinks(configuredApiOrigin(c.env, c.req.url), communityId, result.route_slug)
   const responseBody = {
     ...(policy.included_surfaces.community_stats ? result : omitCommunityStats(result)),
     omitted_surfaces: omittedSurfaces,
