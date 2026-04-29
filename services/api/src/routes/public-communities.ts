@@ -20,9 +20,12 @@ import {
   type StructuredAccessLinks,
 } from "../lib/agent-discovery/structured-links"
 import { badRequestError, notFoundError, structuredSurfaceDisabled } from "../lib/errors"
+import { omitThreadBody, type ThreadBodyOmittedPostResponse } from "../lib/posts/thread-body-omission"
 import type { CommunityPreview, Env, LocalizedPostResponse } from "../types"
 
 const publicCommunities = new Hono<{ Bindings: Env }>()
+
+type CommunityRepository = ReturnType<typeof getCommunityRepository>
 
 function rankPublicCommunitySearchMatch(
   candidate: { display_name: string; route_slug: string | null },
@@ -57,10 +60,9 @@ function rankPublicCommunitySearchMatch(
 }
 
 async function resolveCommunityId(
-  env: Env,
+  repository: CommunityRepository,
   communityIdentifier: string,
 ): Promise<string> {
-  const repository = getCommunityRepository(env)
   const communityId = await resolveCommunityIdentifier(repository, communityIdentifier)
   if (communityId) {
     return communityId
@@ -185,7 +187,10 @@ function communityMarkdown(input: {
 
 function postListMarkdown(input: {
   communityId: string
-  items: Array<LocalizedPostResponse & { links: StructuredAccessLinks; omitted_surfaces: OmittedStructuredSurface[] }>
+  items: Array<(LocalizedPostResponse | ThreadBodyOmittedPostResponse) & {
+    links: StructuredAccessLinks
+    omitted_surfaces: OmittedStructuredSurface[]
+  }>
   links: StructuredAccessLinks
   omittedSurfaces: OmittedStructuredSurface[]
 }): string {
@@ -196,7 +201,9 @@ function postListMarkdown(input: {
     "",
     ...input.items.flatMap((item) => [
       `- [${item.post.title ?? item.post.post_id}](${item.links.self.href})`,
-      ...(typeof item.post.body === "string" && item.post.body.trim() ? [`  ${item.post.body.trim()}`] : []),
+      ...("body" in item.post && typeof item.post.body === "string" && item.post.body.trim()
+        ? [`  ${item.post.body.trim()}`]
+        : []),
     ]),
     "",
     ...omittedSurfacesMarkdown(input.omittedSurfaces),
@@ -208,31 +215,9 @@ function omitCommunityStats<T extends Record<string, unknown>>(preview: T): Omit
   return rest
 }
 
-function omitThreadBody<T extends LocalizedPostResponse>(response: T): T {
-  const {
-    body: _body,
-    caption: _caption,
-    lyrics: _lyrics,
-    media_refs: _mediaRefs,
-    embeds: _embeds,
-    link_url: _linkUrl,
-    ...post
-  } = response.post
-  const {
-    translated_body: _translatedBody,
-    translated_caption: _translatedCaption,
-    ...rest
-  } = response
-
-  return {
-    ...rest,
-    post,
-  } as T
-}
-
 publicCommunities.get("/:communityId", async (c) => {
   const communityRepository = getCommunityRepository(c.env)
-  const communityId = await resolveCommunityId(c.env, c.req.param("communityId"))
+  const communityId = await resolveCommunityId(communityRepository, c.req.param("communityId"))
   const policy = await resolveEffectiveCommunityMachineAccessPolicy({
     env: c.env,
     communityRepository,
@@ -299,7 +284,7 @@ publicCommunities.get("/", async (c) => {
 
 publicCommunities.get("/:communityId/posts", async (c) => {
   const communityRepository = getCommunityRepository(c.env)
-  const communityId = await resolveCommunityId(c.env, c.req.param("communityId"))
+  const communityId = await resolveCommunityId(communityRepository, c.req.param("communityId"))
   const policy = await resolveEffectiveCommunityMachineAccessPolicy({
     env: c.env,
     communityRepository,

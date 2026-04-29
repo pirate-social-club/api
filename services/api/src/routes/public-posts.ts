@@ -19,6 +19,7 @@ import {
   type StructuredAccessLinks,
 } from "../lib/agent-discovery/structured-links"
 import { structuredSurfaceDisabled } from "../lib/errors"
+import { omitThreadBody, type ThreadBodyOmittedPostResponse } from "../lib/posts/thread-body-omission"
 import type { CommentListResponse, Env, LocalizedPostResponse } from "../types"
 
 const publicPosts = new Hono<{ Bindings: Env }>()
@@ -87,16 +88,16 @@ function omittedSurfacesMarkdown(omittedSurfaces: OmittedStructuredSurface[]): s
 }
 
 function postMarkdown(input: {
-  response: LocalizedPostResponse
+  response: LocalizedPostResponse | ThreadBodyOmittedPostResponse
   links: StructuredAccessLinks
   omittedSurfaces: OmittedStructuredSurface[]
 }): string {
   return [
     `# ${input.response.post.title ?? input.response.post.post_id}`,
     "",
-    typeof input.response.post.body === "string" ? input.response.post.body : "",
+    "body" in input.response.post && typeof input.response.post.body === "string" ? input.response.post.body : "",
     "",
-    typeof input.response.post.caption === "string" ? input.response.post.caption : "",
+    "caption" in input.response.post && typeof input.response.post.caption === "string" ? input.response.post.caption : "",
     "",
     "## Links",
     "",
@@ -125,28 +126,6 @@ function topCommentsMarkdown(input: {
       "",
     ]),
   ].join("\n")
-}
-
-function omitThreadBody<T extends LocalizedPostResponse>(response: T): T {
-  const {
-    body: _body,
-    caption: _caption,
-    lyrics: _lyrics,
-    media_refs: _mediaRefs,
-    embeds: _embeds,
-    link_url: _linkUrl,
-    ...post
-  } = response.post
-  const {
-    translated_body: _translatedBody,
-    translated_caption: _translatedCaption,
-    ...rest
-  } = response
-
-  return {
-    ...rest,
-    post,
-  } as T
 }
 
 publicPosts.get("/:postId/top-comments", async (c) => {

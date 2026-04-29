@@ -34,17 +34,6 @@ comments.use("*", async (c, next) => {
   const pathname = new URL(c.req.url).pathname
   const allowsAgentDelegation = c.req.method === "POST" && /^\/comments\/[^/]+\/replies$/.test(pathname)
   if (allowsAgentDelegation) {
-    const adminActor = authenticateAdminToken({
-      env: c.env,
-      token: c.req.header("x-admin-token"),
-      asUserId: c.req.header("x-admin-as-user-id"),
-    })
-    if (adminActor) {
-      c.set("actor", adminActor)
-      await next()
-      return
-    }
-
     const token = requireBearerToken(c.req.header("authorization"))
     try {
       c.set("actor", await authenticateUserToken({ env: c.env, token }))
