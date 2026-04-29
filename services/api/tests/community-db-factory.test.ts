@@ -123,7 +123,7 @@ function buildRepository(databasePath: string): CommunityDatabaseBindingReposito
 describe("openCommunityDb", () => {
   test("does not run local migrations for remote provisioned community databases", async () => {
     const wrapKey = "11".repeat(32)
-    const databaseUrl = "libsql://main-cmt-remote-test-pirate-social.aws-us-east-1.turso.io"
+    const databaseUrl = "libsql://main-cmt-remote-test-pirate-prod.aws-us-east-1.turso.io"
     const now = new Date().toISOString()
     const repo = {
       async getPrimaryCommunityDatabaseBinding() {
@@ -131,7 +131,7 @@ describe("openCommunityDb", () => {
           community_database_binding_id: "cdb_remote",
           community_id: "cmt_remote",
           binding_role: "primary",
-          organization_slug: "pirate-social",
+          organization_slug: "pirate-prod",
           group_name: "region-aws-us-east-1",
           group_id: "grp_remote",
           database_name: "main-cmt-remote-test",

@@ -53,6 +53,22 @@ function normalizeBaseUrl(env: Env): string {
   return requireText(env.COMMUNITY_PROVISION_OPERATOR_BASE_URL, "COMMUNITY_PROVISION_OPERATOR_BASE_URL").replace(/\/+$/, "")
 }
 
+function validateExpectedOrganizationSlug(env: Env, result: ProvisionCommunityOperatorResult): void {
+  const expected = trim(env.COMMUNITY_PROVISION_EXPECTED_ORGANIZATION_SLUG)
+  if (!expected) {
+    return
+  }
+
+  if (result.organizationSlug !== expected) {
+    throw internalError("community_provision_operator_organization_mismatch", {
+      expected_organization_slug: expected,
+      actual_organization_slug: result.organizationSlug,
+      database_name: result.databaseName,
+      database_url: result.databaseUrl,
+    })
+  }
+}
+
 export function isCommunityProvisionOperatorConfigured(env: Env): boolean {
   if (!trim(env.COMMUNITY_PROVISION_OPERATOR_BASE_URL)) {
     return false
@@ -128,7 +144,7 @@ export async function provisionCommunityViaOperator(input: {
     const nullableText = (value: unknown): string | null =>
       value == null ? null : String(value)
 
-    return {
+    const result = {
       communityId: String(body.community_id ?? ""),
       jobId: String(body.job_id ?? ""),
       bindingId: String(body.binding_id ?? ""),
@@ -146,6 +162,9 @@ export async function provisionCommunityViaOperator(input: {
       expiresAt: nullableText(body.expires_at),
       rotationNumber: Number(body.rotation_number ?? 0),
     }
+
+    validateExpectedOrganizationSlug(input.env, result)
+    return result
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       throw internalError("community_provision_operator_timeout")
