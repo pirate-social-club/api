@@ -16,6 +16,7 @@ export async function uploadCommunityMedia(input: {
 }): Promise<{
   kind: CommunityMediaKind
   media_ref: string
+  ipfs_cid: string
   mime_type: string
   size_bytes: number
   storage_bucket: string

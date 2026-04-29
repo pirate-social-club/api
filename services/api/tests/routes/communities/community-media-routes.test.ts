@@ -65,7 +65,10 @@ describe("community media routes", () => {
           body,
           contentType: request.headers.get("content-type") || "application/octet-stream",
         })
-        return new Response(null, { status: 200 })
+        return new Response(null, {
+          status: 200,
+          headers: { "x-amz-meta-cid": "bafycommunityavatarcid" },
+        })
       }
 
       if (request.method === "GET") {
@@ -122,13 +125,15 @@ describe("community media routes", () => {
       storage_object_key: string
     }
     expect(uploadBody.kind).toBe("avatar")
-    expect(uploadBody.media_ref).toMatch(/^http:\/\/pirate\.test\/community-media\/avatar\/avatar_[a-z0-9]+\.png$/)
+    expect(uploadBody.media_ref).toBe("https://psc.myfilebase.com/ipfs/bafycommunityavatarcid")
+    expect((uploadBody as { ipfs_cid?: string }).ipfs_cid).toBe("bafycommunityavatarcid")
     expect(uploadBody.mime_type).toBe("image/png")
     expect(uploadBody.size_bytes).toBe(fileBytes.byteLength)
     expect(uploadBody.storage_bucket).toBe("pirate-media")
     expect(uploadBody.storage_object_key).toMatch(/^community-media\/avatar\/avatar_[a-z0-9]+\.png$/)
 
-    const readResponse = await app.request(uploadBody.media_ref, {}, ctx.env)
+    const objectName = uploadBody.storage_object_key.split("/").pop() ?? ""
+    const readResponse = await app.request(`http://pirate.test/community-media/avatar/${objectName}`, {}, ctx.env)
     expect(readResponse.status).toBe(200)
     expect(readResponse.headers.get("content-type")).toBe("image/png")
     expect(readResponse.headers.get("cache-control")).toBe("public, max-age=31536000, immutable")
@@ -142,7 +147,10 @@ describe("community media routes", () => {
       const request = input instanceof Request ? input : new Request(input, init)
       if (request.url.startsWith("https://s3.filebase.test/")) {
         filebaseCalled = true
-        return new Response(null, { status: 200 })
+        return new Response(null, {
+          status: 200,
+          headers: { "x-amz-meta-cid": "bafycommunitypostimagecid" },
+        })
       }
       return await originalFetch(request)
     }
@@ -193,7 +201,10 @@ describe("community media routes", () => {
           body,
           contentType: request.headers.get("content-type") || "application/octet-stream",
         })
-        return new Response(null, { status: 200 })
+        return new Response(null, {
+          status: 200,
+          headers: { "x-amz-meta-cid": "bafycommunitypostimagecid" },
+        })
       }
 
       if (request.method === "GET") {
@@ -249,12 +260,14 @@ describe("community media routes", () => {
       storage_object_key: string
     }
     expect(uploadBody.kind).toBe("post_image")
-    expect(uploadBody.media_ref).toMatch(/^http:\/\/pirate\.test\/community-media\/post_image\/post_image_[a-z0-9]+\.gif$/)
+    expect(uploadBody.media_ref).toBe("https://psc.myfilebase.com/ipfs/bafycommunitypostimagecid")
+    expect((uploadBody as { ipfs_cid?: string }).ipfs_cid).toBe("bafycommunitypostimagecid")
     expect(uploadBody.mime_type).toBe("image/gif")
     expect(uploadBody.size_bytes).toBe(fileBytes.byteLength)
     expect(uploadBody.storage_object_key).toMatch(/^community-media\/post_image\/post_image_[a-z0-9]+\.gif$/)
 
-    const readResponse = await app.request(uploadBody.media_ref, {}, ctx.env)
+    const objectName = uploadBody.storage_object_key.split("/").pop() ?? ""
+    const readResponse = await app.request(`http://pirate.test/community-media/post_image/${objectName}`, {}, ctx.env)
     expect(readResponse.status).toBe(200)
     expect(readResponse.headers.get("content-type")).toBe("image/gif")
     const readBytes = new Uint8Array(await readResponse.arrayBuffer())
@@ -275,7 +288,10 @@ describe("community media routes", () => {
           body,
           contentType: request.headers.get("content-type") || "application/octet-stream",
         })
-        return new Response(null, { status: 200 })
+        return new Response(null, {
+          status: 200,
+          headers: { "x-amz-meta-cid": "bafycommunityavifcid" },
+        })
       }
 
       return new Response("unexpected method", { status: 500 })
@@ -314,7 +330,8 @@ describe("community media routes", () => {
       storage_object_key: string
     }
     expect(uploadBody.kind).toBe("post_image")
-    expect(uploadBody.media_ref).toMatch(/^http:\/\/pirate\.test\/community-media\/post_image\/post_image_[a-z0-9]+\.avif$/)
+    expect(uploadBody.media_ref).toBe("https://psc.myfilebase.com/ipfs/bafycommunityavifcid")
+    expect((uploadBody as { ipfs_cid?: string }).ipfs_cid).toBe("bafycommunityavifcid")
     expect(uploadBody.mime_type).toBe("image/avif")
     expect(uploadBody.storage_object_key).toMatch(/^community-media\/post_image\/post_image_[a-z0-9]+\.avif$/)
   })

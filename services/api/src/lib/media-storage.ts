@@ -115,13 +115,24 @@ function resolveObjectKey<TKind extends string>(
   }
 }
 
-function buildMediaRef(origin: string, routePrefix: string, kind: string, objectName: string): string {
-  return new URL(`/${routePrefix}/${kind}/${objectName}`, origin).toString()
+function buildGatewayMediaRef(env: Env, cid: string): string {
+  const gateway = String(env.IPFS_GATEWAY_URL || "https://psc.myfilebase.com/ipfs").trim()
+  const normalizedGateway = gateway.replace(/\/+$/, "")
+  return `${normalizedGateway}/${encodeURIComponent(cid)}`
+}
+
+function requireFilebaseCid(response: Response): string {
+  const cid = response.headers.get("x-amz-meta-cid")?.trim()
+  if (!cid) {
+    throw providerUnavailable("Filebase upload did not return an IPFS CID")
+  }
+  return cid
 }
 
 export async function uploadMedia<TKind extends string>(input: UploadMediaInput<TKind>): Promise<{
   kind: TKind
   media_ref: string
+  ipfs_cid: string
   mime_type: string
   size_bytes: number
   storage_bucket: string
@@ -133,7 +144,7 @@ export async function uploadMedia<TKind extends string>(input: UploadMediaInput<
 
   const fileBytes = await input.file.arrayBuffer()
   const payloadHash = await sha256Hex(fileBytes)
-  const { objectKey, objectName } = resolveObjectKey(input.objectKeyPrefix, input.kind, mimeType)
+  const { objectKey } = resolveObjectKey(input.objectKeyPrefix, input.kind, mimeType)
   const request = await buildS3SignedRequest({
     method: "PUT",
     config: resolveFilebaseConfig(input.env, "media"),
@@ -151,10 +162,12 @@ export async function uploadMedia<TKind extends string>(input: UploadMediaInput<
       `Filebase upload failed with status ${response.status}${responseText ? `: ${responseText}` : ""}`,
     )
   }
+  const ipfsCid = requireFilebaseCid(response)
 
   return {
     kind: input.kind,
-    media_ref: buildMediaRef(input.origin, input.routePrefix, input.kind, objectName),
+    media_ref: buildGatewayMediaRef(input.env, ipfsCid),
+    ipfs_cid: ipfsCid,
     mime_type: mimeType,
     size_bytes: input.file.size,
     storage_bucket: resolveFilebaseConfig(input.env, "media").bucket,
@@ -213,7 +226,11 @@ export async function fetchMedia(input: FetchMediaInput): Promise<Response> {
   }
   headers.set("cache-control", "public, max-age=31536000, immutable")
 
-  return new Response(upstream.body, {
+  // Filebase response streams can stall when passed through the Worker directly.
+  // Profile/community media is size-limited, so buffer it before responding.
+  const body = await upstream.arrayBuffer()
+
+  return new Response(body, {
     status: 200,
     headers,
   })

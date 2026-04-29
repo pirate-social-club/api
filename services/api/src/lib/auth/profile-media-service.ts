@@ -15,6 +15,7 @@ export async function uploadProfileMedia(input: {
 }): Promise<{
   kind: ProfileMediaKind
   media_ref: string
+  ipfs_cid: string
   mime_type: string
   size_bytes: number
   storage_bucket: string

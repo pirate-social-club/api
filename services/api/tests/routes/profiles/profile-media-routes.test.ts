@@ -62,7 +62,10 @@ describe("profile media routes", () => {
           body,
           contentType: request.headers.get("content-type") || "application/octet-stream",
         })
-        return new Response(null, { status: 200 })
+        return new Response(null, {
+          status: 200,
+          headers: { "x-amz-meta-cid": "bafyprofilecovercid" },
+        })
       }
 
       if (request.method === "GET") {
@@ -119,10 +122,12 @@ describe("profile media routes", () => {
       storage_object_key: string
     }
     expect(uploadBody.kind).toBe("cover")
-    expect(uploadBody.media_ref).toMatch(/^http:\/\/pirate\.test\/profile-media\/cover\/cover_[a-z0-9]+\.png$/)
+    expect(uploadBody.media_ref).toBe("https://psc.myfilebase.com/ipfs/bafyprofilecovercid")
+    expect((uploadBody as { ipfs_cid?: string }).ipfs_cid).toBe("bafyprofilecovercid")
     expect(uploadBody.storage_object_key).toMatch(/^profile-media\/cover\/cover_[a-z0-9]+\.png$/)
 
-    const readResponse = await app.request(uploadBody.media_ref, {}, ctx.env)
+    const objectName = uploadBody.storage_object_key.split("/").pop() ?? ""
+    const readResponse = await app.request(`http://pirate.test/profile-media/cover/${objectName}`, {}, ctx.env)
     expect(readResponse.status).toBe(200)
     expect(readResponse.headers.get("content-type")).toBe("image/png")
     const readBytes = new Uint8Array(await readResponse.arrayBuffer())
