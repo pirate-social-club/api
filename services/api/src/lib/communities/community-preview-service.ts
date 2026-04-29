@@ -32,6 +32,7 @@ import type {
 import { notFoundError } from "../errors"
 import type {
   CommunityPreview,
+  CommunityRoleSummary,
   Env,
 } from "../../types"
 
@@ -123,10 +124,11 @@ async function getActiveCommunityForPreview(
   return community
 }
 
-async function getCommunityModeratorSummary(input: {
+async function getCommunityRoleSummary(input: {
   env: Env
   userId: string
-}): Promise<CommunityPreview["moderator"]> {
+  role: "owner" | "admin" | "moderator"
+}): Promise<CommunityRoleSummary | null> {
   const result = await getControlPlaneClient(input.env).execute({
     sql: `
       SELECT p.user_id, p.display_name, p.avatar_ref, gh.label_display
@@ -154,7 +156,31 @@ async function getCommunityModeratorSummary(input: {
     handle,
     avatar_ref: row.avatar_ref == null ? null : String(row.avatar_ref),
     nationality_badge_country: null,
+    role: input.role,
   }
+}
+
+async function getCommunityOwnerUserId(
+  client: Awaited<ReturnType<typeof openCommunityDb>>["client"],
+  communityId: string,
+): Promise<string | null> {
+  const result = await client.execute({
+    sql: `
+      SELECT user_id
+      FROM community_roles
+      WHERE community_id = ?1
+        AND status = 'active'
+        AND role = 'owner'
+      ORDER BY granted_at ASC, created_at ASC, role_assignment_id ASC
+      LIMIT 1
+    `,
+    args: [communityId],
+  })
+  const row = result.rows[0]
+  if (!row) {
+    return null
+  }
+  return String(row.user_id)
 }
 
 async function buildPreviewForViewer(input: {
@@ -181,7 +207,6 @@ async function buildPreviewForViewer(input: {
       communityId: input.communityId,
       communityDisplayName: community.display_name,
       communityCreatedAt: community.created_at,
-      moderatorUserId: community.creator_user_id,
       locale: input.locale ?? null,
       gateRules: rules,
       viewerMembershipStatus:
@@ -253,7 +278,6 @@ async function buildCommunityPreview(input: {
   communityId: string
   communityDisplayName: string
   communityCreatedAt: string
-  moderatorUserId: string
   locale?: string | null
   gateRules: Awaited<ReturnType<typeof listActiveMembershipGateRules>>
   viewerMembershipStatus: CommunityPreview["viewer_membership_status"]
@@ -313,13 +337,13 @@ async function buildCommunityPreview(input: {
     client: input.client,
     communityId: input.communityId,
   })
-  const [followerCount, memberCount, moderator] = await Promise.all([
+  const ownerUserId = await getCommunityOwnerUserId(input.client, input.communityId)
+  const [followerCount, memberCount, owner] = await Promise.all([
     getCommunityFollowerCount(input.client, input.communityId),
     getCommunityMemberCount(input.client, input.communityId),
-    getCommunityModeratorSummary({
-      env: input.env,
-      userId: input.moderatorUserId,
-    }).catch(() => null),
+    ownerUserId
+      ? getCommunityRoleSummary({ env: input.env, userId: ownerUserId, role: "owner" }).catch(() => null)
+      : Promise.resolve(null),
   ])
 
   const preview: CommunityPreview = {
@@ -348,7 +372,8 @@ async function buildCommunityPreview(input: {
     donation_policy_mode: donationPolicyMode,
     donation_partner_id: localRow?.donation_partner_id == null ? null : String(localRow.donation_partner_id),
     donation_partner: donationPolicyMode !== "none" ? donationPartner : null,
-    moderator,
+    owner,
+    moderators: [],
     reference_links: referenceLinks,
     membership_gate_summaries: membershipGateSummaries,
     viewer_membership_status: input.viewerMembershipStatus,

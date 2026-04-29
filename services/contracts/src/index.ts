@@ -100,12 +100,13 @@ export type Profile = {
   updated_at: string;
 };
 
-export type CommunityModeratorSummary = {
+export type CommunityRoleSummary = {
   user_id: string;
   display_name: string;
   handle: string;
   avatar_ref?: string | null;
   nationality_badge_country?: string | null;
+  role: "owner" | "admin" | "moderator";
 };
 
 export type RedditVerification = {
@@ -848,13 +849,20 @@ export type StartVerificationSessionRequest = {
   policy_id?: string | null;
 };
 
+export type CompleteVerificationSessionRequest = {
+  attestation_id?: string | null;
+  proof?: (string | Record<string, unknown> | Array<unknown>) | null;
+  proof_hash?: string | null;
+  provider_payload_ref?: (string | Record<string, unknown>) | null;
+};
+
 export type RefreshPassportWalletScoreRequest = {
   wallet_attachment_id?: string | null;
   community_id?: string | null;
 };
 
 export type RefreshPassportWalletScoreResponse = {
-  wallet_score: VerificationCapabilities["wallet_score"];
+  wallet_score: WalletScoreCapabilityState;
   wallet_score_status?: ({
     current_score?: number | null;
     required_score?: number | null;
@@ -862,13 +870,6 @@ export type RefreshPassportWalletScoreResponse = {
     last_score_timestamp?: string | null;
   }) | null;
   join_eligibility?: JoinEligibility | null;
-};
-
-export type CompleteVerificationSessionRequest = {
-  attestation_id?: string | null;
-  proof?: (string | Record<string, unknown> | Array<unknown>) | null;
-  proof_hash?: string | null;
-  provider_payload_ref?: (string | Record<string, unknown>) | null;
 };
 
 export type StartNamespaceVerificationSessionRequest = {
@@ -1364,7 +1365,8 @@ export type CommunityPreview = {
   donation_policy_mode?: "none" | "optional_creator_sidecar" | null;
   donation_partner_id?: string | null;
   donation_partner?: DonationPartnerSummary | null;
-  moderator?: CommunityModeratorSummary | null;
+  owner?: CommunityRoleSummary | null;
+  moderators: Array<CommunityRoleSummary>;
   reference_links?: Array<CommunityReferenceLinkPublic> | null;
   membership_gate_summaries: Array<MembershipGateSummary>;
   rules: Array<CommunityRule>;

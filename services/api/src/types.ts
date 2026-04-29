@@ -111,6 +111,7 @@ export type {
 import type {
   Community as ContractCommunity,
   CommunityPreview as ContractCommunityPreview,
+  CommunityRoleSummary as ContractCommunityRoleSummary,
   CreatePostRequest as ContractCreatePostRequest,
   LocalizedPostResponse as ContractLocalizedPostResponse,
   Post as ContractPost,
@@ -164,6 +165,8 @@ export type Community = ContractCommunity & {
 export type CommunityPreview = ContractCommunityPreview & {
   localized_text?: CommunityTextLocalization | null
 }
+
+export type CommunityRoleSummary = ContractCommunityRoleSummary
 
 export type HandleUpgradeQuote = {
   desired_label: string
