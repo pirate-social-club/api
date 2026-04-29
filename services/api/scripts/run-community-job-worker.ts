@@ -106,7 +106,6 @@ async function main(): Promise<void> {
     })
 
     if (summary.processed_jobs === 0) {
-      console.log("community job worker tick: idle")
       if (stopWhenIdle) {
         return
       }
