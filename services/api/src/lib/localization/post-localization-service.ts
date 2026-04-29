@@ -8,6 +8,7 @@ import type { CommentThreadSnapshot, LocalizedPostResponse, Post } from "../../t
 export type PostReadMetrics = {
   upvote_count: number
   downvote_count: number
+  comment_count: number
   like_count: number
   viewer_vote: -1 | 1 | null
 }
@@ -75,6 +76,7 @@ export async function buildLocalizedPostResponse(input: {
       post: input.post,
     }),
     thread_snapshot: input.threadSnapshot ?? null,
+    comment_count: input.metrics?.comment_count ?? input.threadSnapshot?.comment_count ?? 0,
     label: label ? serializeCommunityPostLabel(label) : null,
     upvote_count: input.metrics?.upvote_count ?? 0,
     downvote_count: input.metrics?.downvote_count ?? 0,

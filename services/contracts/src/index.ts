@@ -1315,6 +1315,7 @@ export type LocalizedPostResponse = {
   post: Post;
   author_community_role?: "owner" | "moderator" | null;
   thread_snapshot: CommentThreadSnapshot | null;
+  comment_count: number;
   market_context?: MarketContextSummary | null;
   label?: PostLabel | null;
   upvote_count: number;

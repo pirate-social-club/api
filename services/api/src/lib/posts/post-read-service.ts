@@ -197,6 +197,7 @@ export async function listCommunityPosts(input: {
         metrics: {
           upvote_count: item.upvote_count,
           downvote_count: item.downvote_count,
+          comment_count: item.comment_count,
           like_count: item.like_count,
           viewer_vote: item.viewer_vote,
         },
@@ -262,6 +263,7 @@ export async function listPublicCommunityPosts(input: {
         metrics: {
           upvote_count: item.upvote_count,
           downvote_count: item.downvote_count,
+          comment_count: item.comment_count,
           like_count: item.like_count,
           viewer_vote: item.viewer_vote,
         },

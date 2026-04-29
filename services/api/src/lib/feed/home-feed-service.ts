@@ -388,6 +388,7 @@ export async function listHomeFeed(input: {
           metrics: {
             upvote_count: row.upvote_count,
             downvote_count: row.downvote_count,
+            comment_count: row.comment_count,
             like_count: row.like_count,
             viewer_vote: viewerVote,
           },
