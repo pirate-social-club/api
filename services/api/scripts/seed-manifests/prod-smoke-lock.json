@@ -1,0 +1,29 @@
+{
+  "name": "prod-smoke-lock",
+  "description": "Throwaway production provisioning smoke. Creates one namespaceless community through the public API path.",
+  "users": [
+    {
+      "key": "smoke",
+      "subject": "prod-smoke-lock-2026-04-29",
+      "synthetic": true,
+      "verify_unique_human": false
+    }
+  ],
+  "communities": [
+    {
+      "key": "smoke-community",
+      "owner": "smoke",
+      "create": {
+        "display_name": "Prod Smoke Lock 2026-04-29",
+        "description": "Temporary production provisioning smoke test.",
+        "membership_mode": "open",
+        "default_age_gate_policy": "none",
+        "handle_policy": {
+          "policy_template": "standard"
+        }
+      },
+      "members": ["smoke"],
+      "followers": ["smoke"]
+    }
+  ]
+}
