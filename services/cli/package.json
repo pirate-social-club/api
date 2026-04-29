@@ -7,7 +7,9 @@
     "pirate": "./src/index.ts"
   },
   "dependencies": {
-    "@pirate/api-contracts": "file:../contracts"
+    "@pirate/api-contracts": "file:../contracts",
+    "viem": "^2.48.1",
+    "yaml": "^2.8.1"
   },
   "scripts": {
     "check": "tsc --noEmit",

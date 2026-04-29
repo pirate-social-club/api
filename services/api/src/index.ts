@@ -3,6 +3,7 @@ import { cors } from "hono/cors"
 import agents from "./routes/agents"
 import analytics from "./routes/analytics"
 import auth from "./routes/auth"
+import botUsers from "./routes/bot-users"
 import communityMedia from "./routes/community-media"
 import comments from "./routes/comments"
 import communities from "./routes/communities"
@@ -55,6 +56,8 @@ app.use(
     allowHeaders: [
       "Content-Type",
       "Authorization",
+      "X-Admin-As-User-Id",
+      "X-Admin-Token",
       "X-Agent-Connection-Token",
       "X-Pirate-Anonymous-Id",
       "X-Pirate-Session-Id",
@@ -71,6 +74,7 @@ app.route("/", discovery)
 app.route("/", agents)
 app.route("/analytics", analytics)
 app.route("/auth", auth)
+app.route("/admin/bot-users", botUsers)
 app.route("/community-media", communityMedia)
 app.route("/comments", comments)
 app.route("/communities", communities)

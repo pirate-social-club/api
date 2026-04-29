@@ -63,14 +63,9 @@ export function authenticateAdminToken(input: {
   token: string | undefined
   asUserId: string | undefined
 }): AdminActorContext | null {
-  const token = input.token?.trim()
-  if (!token) {
+  const adminOverride = authenticateAdminTokenOnly({ env: input.env, token: input.token })
+  if (!adminOverride) {
     return null
-  }
-
-  const configured = String(input.env.PIRATE_ADMIN_TOKEN || "").trim()
-  if (!configured || !timingSafeTokenEqual(token, configured)) {
-    throw authError("Authentication failed")
   }
 
   const asUserId = input.asUserId?.trim()
@@ -82,9 +77,29 @@ export function authenticateAdminToken(input: {
     userId: asUserId,
     authType: "admin",
     adminOverride: {
-      adminActorId: "admin-token",
-      scope: "full",
+      adminActorId: adminOverride.adminActorId,
+      scope: adminOverride.scope,
     },
+  }
+}
+
+export function authenticateAdminTokenOnly(input: {
+  env: Env
+  token: string | undefined
+}): AdminActorContext["adminOverride"] | null {
+  const token = input.token?.trim()
+  if (!token) {
+    return null
+  }
+
+  const configured = String(input.env.PIRATE_ADMIN_TOKEN || "").trim()
+  if (!configured || !timingSafeTokenEqual(token, configured)) {
+    throw authError("Authentication failed")
+  }
+
+  return {
+    adminActorId: "admin-token",
+    scope: "full",
   }
 }
 

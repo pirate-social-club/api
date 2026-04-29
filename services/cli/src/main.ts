@@ -1,5 +1,6 @@
 import { hasFlag, parseArgs } from "./args.js"
 import { runAuth } from "./commands/auth.js"
+import { runBotUser } from "./commands/bot-user.js"
 import { runComment } from "./commands/comment.js"
 import { runCommunity } from "./commands/community.js"
 import { runJob } from "./commands/job.js"
@@ -22,6 +23,9 @@ export async function main(argv: string[]): Promise<void> {
   switch (group) {
     case "auth":
       await runAuth(action, args)
+      return
+    case "bot-user":
+      await runBotUser(action, args)
       return
     case "onboarding":
       await runOnboarding(action)
