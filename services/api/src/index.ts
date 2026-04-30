@@ -97,6 +97,13 @@ app.route("/profiles", profiles)
 app.route("/royalties", royalties)
 app.route("/", verification)
 
+app.get("/__debug/sentry-error", (c) => {
+  if (c.env.ENVIRONMENT === "production") {
+    return c.json({ error: "not_found" }, 404)
+  }
+  throw new Error("Sentry smoke test: intentional 500")
+})
+
 app.notFound((c) => c.json({ code: "not_found", message: "Not found" }, 404))
 
 app.onError((error, c) => {
