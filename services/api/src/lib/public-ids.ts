@@ -29,11 +29,22 @@ export function decodePublicPostId(value: string): string {
 }
 
 export function decodePublicCommentId(value: string): string {
-  return decodePublicId(value, "cmt")
+  const trimmed = value.trim()
+  if (!trimmed.startsWith("cmt_")) return trimmed
+  const stripped = trimmed.slice(4)
+  // Raw comment IDs from makeId("cmt") are cmt_<uuid>. Old-format public IDs
+  // were returned unchanged (cmt_<uuid>), so stripping one prefix would leave
+  // just the UUID. New-format IDs are cmt_cmt_<uuid>. If the stripped result
+  // still contains an underscore, we stripped the public prefix; otherwise we
+  // stripped the raw prefix from an old-format ID and should return original.
+  return stripped.includes("_") ? stripped : trimmed
 }
 
 export function decodePublicAgentId(value: string): string {
-  return decodePublicId(value, "agt")
+  const trimmed = value.trim()
+  if (!trimmed.startsWith("agt_")) return trimmed
+  const stripped = trimmed.slice(4)
+  return stripped.includes("_") ? stripped : trimmed
 }
 
 export function decodePublicAgentOwnershipSessionId(value: string): string {
@@ -93,5 +104,8 @@ export function decodePublicVerificationSessionId(value: string): string {
 }
 
 export function decodePublicUserId(value: string): string {
-  return decodePublicId(value, "usr")
+  const trimmed = value.trim()
+  if (!trimmed.startsWith("usr_")) return trimmed
+  const stripped = trimmed.slice(4)
+  return stripped.includes("_") ? stripped : trimmed
 }
