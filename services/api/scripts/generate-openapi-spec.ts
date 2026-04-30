@@ -225,22 +225,32 @@ function collectRefs(value: unknown, refs: Set<string>): void {
   }
 }
 
-function publicServiceSpec(spec: OpenApiRecord): OpenApiRecord {
-  const paths = Object.fromEntries(
-    Object.entries(spec.paths ?? {})
-      .filter(([path]) => path.startsWith("/public-")),
-  )
-  const slimSpec: OpenApiRecord = {
+function stripReviewNoise(value: unknown): void {
+  if (!value || typeof value !== "object") {
+    return
+  }
+  const record = value as OpenApiRecord
+  delete record.description
+  delete record.example
+  delete record.examples
+  delete record.externalDocs
+  delete record["x-codeSamples"]
+  for (const child of Object.values(record)) {
+    stripReviewNoise(child)
+  }
+}
+
+function reviewServiceSpec(spec: OpenApiRecord): OpenApiRecord {
+  const paths = JSON.parse(JSON.stringify(spec.paths ?? {}))
+  stripReviewNoise(paths)
+  const reviewSpec: OpenApiRecord = {
     openapi: spec.openapi,
     info: {
-      title: "Pirate public structured read API",
+      title: "Pirate API",
       version: spec.info?.version ?? "0.1.0",
-      description: "Public structured read API for Pirate communities, posts, comments, profiles, and agents.",
     },
     servers: spec.servers,
-    tags: (spec.tags ?? []).filter((tag: OpenApiRecord) =>
-      ["Agents", "Comments", "Communities", "Posts", "Profiles"].includes(String(tag.name)),
-    ),
+    tags: spec.tags,
     paths,
     components: {
       securitySchemes: spec.components?.securitySchemes,
@@ -263,10 +273,11 @@ function publicServiceSpec(spec: OpenApiRecord): OpenApiRecord {
       continue
     }
     const copy = JSON.parse(JSON.stringify(value))
-    setRef(slimSpec, ref, copy)
+    stripReviewNoise(copy)
+    setRef(reviewSpec, ref, copy)
     collectRefs(copy, pendingRefs)
   }
-  return slimSpec
+  return reviewSpec
 }
 
 const fullYamlText = readFileSync(fullYamlPath, "utf-8")
@@ -296,7 +307,7 @@ const completeSpec = {
   },
 }
 addReviewMetadata(completeSpec)
-const spec = publicServiceSpec(completeSpec)
+const spec = reviewServiceSpec(completeSpec)
 addReviewMetadata(spec)
 
 mkdirSync(outDir, { recursive: true })
