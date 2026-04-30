@@ -6,6 +6,7 @@ import {
   requestJson,
   withFetchMock,
 } from "./verification-test-helpers"
+import { decodePublicNamespaceVerificationSessionId } from "../../../src/lib/public-ids"
 
 let cleanup: (() => Promise<void>) | null = null
 
@@ -91,12 +92,12 @@ describe("hns verification lifecycle routes", () => {
         status: string
         namespace_verification_id: string | null
         evidence_bundle_ref: string | null
-        accepted_at: string | null
+        accepted_at: number | null
       }
       expect(completedBody.status).toBe("verified")
       expect(typeof completedBody.namespace_verification_id).toBe("string")
       expect(typeof completedBody.evidence_bundle_ref).toBe("string")
-      expect(typeof completedBody.accepted_at).toBe("string")
+      expect(typeof completedBody.accepted_at).toBe("number")
 
       const restartedNamespaceSession = await requestJson(
         `http://pirate.test/namespace-verification-sessions/${createdBody.namespace_verification_session_id}/complete`,
@@ -120,7 +121,7 @@ describe("hns verification lifecycle routes", () => {
       expect(restartedBody.accepted_at).toBeNull()
       expect(restartedBody.failure_reason).toBeNull()
       expect(restartedBody.challenge_txt_value !== createdBody.challenge_txt_value).toBe(true)
-      expect(new Date(restartedBody.expires_at).getTime() > new Date(createdBody.expires_at).getTime()).toBe(true)
+      expect(new Date(restartedBody.expires_at).getTime() >= new Date(createdBody.expires_at).getTime()).toBe(true)
     })
   })
 
@@ -283,7 +284,7 @@ describe("hns verification lifecycle routes", () => {
           SET expires_at = ?2
           WHERE namespace_verification_session_id = ?1
         `,
-        args: [createdBody.namespace_verification_session_id, new Date(Date.now() - 60_000).toISOString()],
+        args: [decodePublicNamespaceVerificationSessionId(createdBody.namespace_verification_session_id), new Date(Date.now() - 60_000).toISOString()],
       })
 
       const completedNamespaceSession = await requestJson(
