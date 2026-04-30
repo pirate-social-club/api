@@ -49,7 +49,7 @@ export type UpdateCommunityGatesRequestBody = {
 
 export type UpdateCommunityReferenceLinksRequestBody = {
   reference_links: Array<{
-    community_reference_link_id?: string | null
+    id?: string | null
     platform: NonNullable<Community["reference_links"]>[number]["platform"]
     url: string
     label?: string | null
@@ -230,8 +230,8 @@ export function assertUpdateCommunityReferenceLinksRequest(
     if (typeof link?.url !== "string" || link.url.trim().length === 0) {
       throw badRequestError("Invalid reference link url")
     }
-    if (link.community_reference_link_id != null && typeof link.community_reference_link_id !== "string") {
-      throw badRequestError("Invalid community_reference_link_id payload")
+    if (link.id != null && typeof link.id !== "string") {
+      throw badRequestError("Invalid reference link id payload")
     }
     if (link.label != null && typeof link.label !== "string") {
       throw badRequestError("Invalid reference link label")

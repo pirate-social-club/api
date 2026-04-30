@@ -5,7 +5,7 @@ import {
   assertCreateRequest,
 } from "../src/lib/communities/create/service"
 import { satisfiesBaselineJoinGate } from "../src/lib/communities/membership/eligibility-service"
-import { getPrimaryWalletSnapshot, parseStoredLabelPolicy } from "../src/lib/communities/community-serialization"
+import { getPrimaryWalletSnapshot, parseStoredLabelPolicy, parseStoredReferenceLinks } from "../src/lib/communities/community-serialization"
 import type { User, CreateCommunityRequest } from "../src/types"
 
 function makeTestUser(overrides: Partial<User["verification_capabilities"]> = {}): User {
@@ -159,6 +159,33 @@ describe("community helper functions", () => {
         status: "active",
         position: 0,
         allowed_post_types: null,
+      }])
+    })
+  })
+
+  describe("parseStoredReferenceLinks", () => {
+    test("reads reference links saved with the current id field", () => {
+      expect(parseStoredReferenceLinks({
+        reference_links: [{
+          id: "lnk_site",
+          object: "community_reference_link",
+          platform: "official_website",
+          url: "https://pirate.example",
+          label: "Site",
+          metadata: { display_name: "Site", image_url: null },
+          position: 0,
+          verified: false,
+        }],
+      })).toEqual([{
+        id: "lnk_site",
+        object: "community_reference_link",
+        platform: "official_website",
+        url: "https://pirate.example",
+        label: "Site",
+        link_status: "active",
+        verified: false,
+        metadata: { display_name: "Site", image_url: null },
+        position: 0,
       }])
     })
   })

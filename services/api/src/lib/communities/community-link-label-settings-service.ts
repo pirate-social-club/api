@@ -59,13 +59,13 @@ export async function updateCommunityReferenceLinks(input: {
       ? existingSettings.reference_links as NonNullable<Community["reference_links"]>
       : []
     const existingById = new Map(
-      existingLinks.map((link) => [link.community_reference_link, link] as const),
+      existingLinks.map((link) => [link.id, link] as const),
     )
     const now = nowIso()
 
     const referenceLinks = input.body.reference_links
       .map((link, index) => {
-        const communityReferenceLinkId = link.community_reference_link_id?.trim() || makeId("lnk")
+        const communityReferenceLinkId = link.id?.trim() || makeId("lnk")
         const existingLink = existingById.get(communityReferenceLinkId)
         const trimmedLabel = link.label?.trim() || null
         const trimmedUrl = link.url.trim()
@@ -75,7 +75,8 @@ export async function updateCommunityReferenceLinks(input: {
         }
 
         return {
-          community_reference_link: communityReferenceLinkId,
+          id: communityReferenceLinkId,
+          object: "community_reference_link",
           platform: link.platform,
           url: trimmedUrl,
           label: trimmedLabel,

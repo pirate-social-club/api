@@ -357,7 +357,8 @@ describe("community-job-runner translation", () => {
           JSON.stringify({
             reference_links: [
               {
-                community_reference_link_id: "crl_runner",
+                id: "crl_runner",
+                object: "community_reference_link",
                 platform: "official_website",
                 url: "https://pirate.test/community",
                 label: "Official site",

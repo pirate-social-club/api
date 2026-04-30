@@ -530,7 +530,8 @@ describe("community routes", () => {
         image_url?: string | null
       } | null
       reference_links?: Array<{
-        community_reference_link_id: string
+        id: string
+        object: "community_reference_link"
         platform: string
         url: string
         label: string | null
@@ -926,7 +927,8 @@ describe("community routes", () => {
           JSON.stringify({
             reference_links: [
               {
-                community_reference_link_id: "crl_sidebar",
+                id: "crl_sidebar",
+                object: "community_reference_link",
                 platform: "official_website",
                 url: "https://pirate.test/community",
                 label: "Official site",

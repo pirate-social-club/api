@@ -93,13 +93,17 @@ export function parseStoredReferenceLinks(
     const metadata = link.metadata && typeof link.metadata === "object"
       ? link.metadata as Record<string, unknown>
       : {}
+    const referenceLinkId = typeof link.id === "string"
+      ? link.id
+      : null
 
-    if (typeof link.community_reference_link_id !== "string" || typeof link.platform !== "string" || typeof link.url !== "string") {
+    if (!referenceLinkId || typeof link.platform !== "string" || typeof link.url !== "string") {
       return []
     }
 
     return [{
-      community_reference_link: link.community_reference_link_id,
+      id: referenceLinkId,
+      object: "community_reference_link",
       platform: link.platform as NonNullable<Community["reference_links"]>[number]["platform"],
       url: link.url,
       label: typeof link.label === "string" ? link.label : null,

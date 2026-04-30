@@ -1864,7 +1864,8 @@ type CommunityReferenceLinkMetadata = {
 type CommunityReferenceLinkPlatform = "musicbrainz" | "genius" | "spotify" | "apple_music" | "wikipedia" | "instagram" | "tiktok" | "x" | "official_website" | "youtube" | "bandcamp" | "soundcloud" | "other";
 
 type CommunityReferenceLinkPublic = {
-  community_reference_link: string;
+  id: string;
+  object: "community_reference_link";
   platform: CommunityReferenceLinkPlatform;
   url: string;
   external?: string | null;
