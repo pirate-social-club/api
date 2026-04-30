@@ -17,7 +17,12 @@ export async function getNotificationSummary(input: {
   }) as Record<string, unknown> | null
 
   const receiptRow = await executeFirst(input.executor, {
-    sql: `SELECT COUNT(*) as cnt FROM notification_receipts WHERE recipient_user_id = ?1 AND read_at IS NULL`,
+    sql: `
+      SELECT COUNT(*) as cnt
+      FROM notification_receipts r
+      JOIN notification_events e ON e.event_id = r.event_id
+      WHERE r.recipient_user_id = ?1 AND r.read_at IS NULL AND e.type <> 'xmtp_message'
+    `,
     args: [input.userId],
   }) as Record<string, unknown> | null
 
