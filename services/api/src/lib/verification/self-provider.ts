@@ -296,7 +296,7 @@ function buildSelfEndpoint(env: Env, verificationSessionId: string, publicOrigin
   if (!isHttpsOrigin(origin)) {
     throw providerUnavailable("Self provider requires a public HTTPS callback origin; set PIRATE_API_PUBLIC_ORIGIN or SELF_ENDPOINT to an HTTPS URL")
   }
-  return `${origin}/verification-sessions/${encodeURIComponent(verificationSessionId)}/self-callback`
+  return `${origin}/verification-sessions/${encodeURIComponent(verificationSessionId)}/receive-self-proof`
 }
 
 function resolveSelfCallbackOrigin(env: Env, publicOrigin?: string | null): string | null {

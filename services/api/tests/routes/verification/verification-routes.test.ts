@@ -66,7 +66,7 @@ describe("verification routes", () => {
       launch?: { self_app?: { endpoint?: string } }
     }
     expect(body.launch?.self_app?.endpoint).toMatch(
-      /^https:\/\/fresh-maritime-complete-lesser\.trycloudflare\.com\/verification-sessions\/ver_[^/]+\/self-callback$/u,
+      /^https:\/\/fresh-maritime-complete-lesser\.trycloudflare\.com\/verification-sessions\/ver_[^/]+\/receive-self-proof$/u,
     )
   })
 
@@ -124,16 +124,16 @@ describe("verification routes", () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
 
-    const session = await exchangeJwt(ctx.env, "verification-self-callback-user")
+    const session = await exchangeJwt(ctx.env, "verification-receive-self-proof-user")
     setSelfProviderForTests({
       startSession: async () => ({
-        upstreamSessionRef: "self-callback-test-ref",
+        upstreamSessionRef: "receive-self-proof-test-ref",
         launch: {
           app_name: "Pirate",
-          endpoint: "https://api.pirate.test/verification-sessions/ver_self_callback/self-callback",
+          endpoint: "https://api.pirate.test/verification-sessions/ver_self_callback/receive-self-proof",
           endpoint_type: "staging_https",
           scope: "community_join",
-          session_id: "self-callback-test-ref",
+          session_id: "receive-self-proof-test-ref",
           user_id: "00000000-0000-4000-8000-000000000001",
           user_id_type: "uuid",
           disclosures: { nationality: true },
@@ -151,7 +151,7 @@ describe("verification routes", () => {
             minimum_age: null,
             nationality: "USA",
             gender: null,
-            nullifier: "self-callback-test-ref",
+            nullifier: "receive-self-proof-test-ref",
           },
         }
       },
@@ -166,7 +166,7 @@ describe("verification routes", () => {
     const createdBody = await json(createdVerification) as { verification_session_id: string }
 
     const callback = await app.request(
-      `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/self-callback`,
+      `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/receive-self-proof`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },

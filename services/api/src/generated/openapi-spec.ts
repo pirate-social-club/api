@@ -233,7 +233,7 @@ const spec = {
         "tags": [
           "Verification"
         ],
-        "summary": "Get the current wallet score capability",
+        "summary": "Get the current Passport wallet score capability",
         "responses": {
           "200": {
             "content": {
@@ -282,48 +282,7 @@ const spec = {
         "operationId": "get_verification_sessions_by_verification_session_id"
       }
     },
-    "/verification-sessions/{verification_session_id}/callback": {
-      "post": {
-        "tags": [
-          "Verification"
-        ],
-        "summary": "Provider callback for a verification session",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/VerificationSessionId"
-          }
-        ],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ProviderVerificationCallbackRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/VerificationSession"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          }
-        },
-        "operationId": "post_verification_sessions_by_verification_session_id_callback"
-      }
-    },
-    "/verification-sessions/{verification_session_id}/self-callback": {
+    "/verification-sessions/{verification_session_id}/receive-self-proof": {
       "post": {
         "tags": [
           "Verification"
@@ -374,7 +333,7 @@ const spec = {
             "$ref": "#/components/responses/NotFound"
           }
         },
-        "operationId": "post_verification_sessions_by_verification_session_id_self_callback"
+        "operationId": "post_verification_sessions_by_verification_session_id_receive_self_proof"
       }
     },
     "/verification-sessions/{verification_session_id}/complete": {
@@ -598,7 +557,7 @@ const spec = {
         "operationId": "post_agent_ownership_sessions_by_agent_ownership_session_id_complete"
       }
     },
-    "/agent-ownership-sessions/{agent_ownership_session_id}/callback": {
+    "/agent-ownership-sessions/{agent_ownership_session_id}/receive-callback": {
       "post": {
         "tags": [
           "Agents"
@@ -634,7 +593,7 @@ const spec = {
             "$ref": "#/components/responses/NotFound"
           }
         },
-        "operationId": "post_agent_ownership_sessions_by_agent_ownership_session_id_callback"
+        "operationId": "post_agent_ownership_sessions_by_agent_ownership_session_id_receive_callback"
       }
     },
     "/agents": {
@@ -859,7 +818,7 @@ const spec = {
         "operationId": "post_agents_by_agent_id_credential"
       }
     },
-    "/agents/{agent_id}/refresh_credential": {
+    "/agents/{agent_id}/refresh-credential": {
       "post": {
         "tags": [
           "Agents"
@@ -1387,7 +1346,7 @@ const spec = {
         "operationId": "post_profiles_me_xmtp_inbox"
       }
     },
-    "/profiles/me/rename_global_handle": {
+    "/profiles/me/rename-global-handle": {
       "post": {
         "tags": [
           "Profiles"
@@ -1437,7 +1396,7 @@ const spec = {
         "operationId": "post_profiles_me_rename_global_handle"
       }
     },
-    "/profiles/me/quote_handle_upgrade": {
+    "/profiles/me/quote-handle-upgrade": {
       "post": {
         "tags": [
           "Profiles"
@@ -1484,7 +1443,7 @@ const spec = {
         "operationId": "post_profiles_me_quote_handle_upgrade"
       }
     },
-    "/profiles/me/sync_linked_handles": {
+    "/profiles/me/sync-linked-handles": {
       "post": {
         "tags": [
           "Profiles"
@@ -1507,7 +1466,7 @@ const spec = {
         "operationId": "post_profiles_me_sync_linked_handles"
       }
     },
-    "/profiles/me/set_primary_public_handle": {
+    "/profiles/me/set-primary-public-handle": {
       "post": {
         "tags": [
           "Profiles"
@@ -2262,7 +2221,7 @@ const spec = {
         "operationId": "post_communities_by_community_id_purchase_settlements"
       }
     },
-    "/communities/{community_id}/fail_purchase_settlement": {
+    "/communities/{community_id}/fail-purchase-settlement": {
       "post": {
         "tags": [
           "Communities"
@@ -4907,9 +4866,6 @@ const spec = {
       "UpdateUserAgentRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "display_name"
-        ],
         "properties": {
           "display_name": {
             "type": "string"
@@ -6518,18 +6474,6 @@ const spec = {
       },
       "UpdateCommunityMoneyPolicyRequest": {
         "type": "object",
-        "required": [
-          "funding_preference",
-          "accepted_funding_assets",
-          "accepted_source_chains",
-          "destination_settlement_chain",
-          "destination_settlement_token",
-          "max_slippage_bps",
-          "quote_ttl_seconds",
-          "route_required",
-          "route_status_policy",
-          "route_hop_tolerance"
-        ],
         "additionalProperties": false,
         "properties": {
           "funding_preference": {
@@ -6649,11 +6593,6 @@ const spec = {
       },
       "UpdateCommunityPricingPolicyRequest": {
         "type": "object",
-        "required": [
-          "regional_pricing_enabled",
-          "tiers",
-          "country_assignments"
-        ],
         "additionalProperties": false,
         "properties": {
           "regional_pricing_enabled": {
@@ -8299,48 +8238,6 @@ const spec = {
           },
           "label": {
             "type": "string",
-            "nullable": true
-          },
-          "label_assignment_status": {
-            "type": "string",
-            "enum": [
-              "pending",
-              "assigned",
-              "failed",
-              "skipped"
-            ],
-            "nullable": true
-          },
-          "label_assigned_by": {
-            "type": "string",
-            "enum": [
-              "moderator",
-              "ai"
-            ],
-            "nullable": true
-          },
-          "label_assigned_at": {
-            "type": "integer",
-            "format": "int64",
-            "nullable": true
-          },
-          "label_ai_confidence": {
-            "type": "number",
-            "nullable": true,
-            "minimum": 0,
-            "maximum": 1
-          },
-          "label_assignment_error": {
-            "type": "string",
-            "nullable": true
-          },
-          "label_assignment_model": {
-            "type": "string",
-            "nullable": true
-          },
-          "label_assignment_result_json": {
-            "type": "object",
-            "additionalProperties": true,
             "nullable": true
           },
           "post_type": {

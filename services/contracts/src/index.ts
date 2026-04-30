@@ -391,7 +391,7 @@ export type UpdateAgentHandleRequest = {
 };
 
 export type UpdateUserAgentRequest = {
-  display_name: string;
+  display_name?: string;
 };
 
 export type PublicAgentResolution = {
@@ -824,26 +824,26 @@ export type CommunityCreateAcceptedResponse = {
 export type CreateCommunityRequest = (CreateCentralizedCommunityRequest | CreateMultisigCommunityRequest | CreateMajeurCommunityRequest);
 
 export type UpdateCommunityMoneyPolicyRequest = {
-  funding_preference: string;
-  accepted_funding_assets: Array<CommunityMoneyAssetRef>;
-  accepted_source_chains: Array<CommunityMoneyChainRef>;
+  funding_preference?: string;
+  accepted_funding_assets?: Array<CommunityMoneyAssetRef>;
+  accepted_source_chains?: Array<CommunityMoneyChainRef>;
   approved_route_providers?: Array<string> | null;
-  destination_settlement_chain: CommunityMoneyChainRef;
-  destination_settlement_token: string;
+  destination_settlement_chain?: CommunityMoneyChainRef;
+  destination_settlement_token?: string;
   treasury_denomination?: string | null;
-  max_slippage_bps: number;
-  quote_ttl_seconds: number;
-  route_required: boolean;
-  route_status_policy: CommunityFundingRouteStatusPolicy;
-  route_hop_tolerance: number;
+  max_slippage_bps?: number;
+  quote_ttl_seconds?: number;
+  route_required?: boolean;
+  route_status_policy?: CommunityFundingRouteStatusPolicy;
+  route_hop_tolerance?: number;
 };
 
 export type UpdateCommunityPricingPolicyRequest = {
-  regional_pricing_enabled: boolean;
+  regional_pricing_enabled?: boolean;
   verification_provider_requirement?: CommunityPricingVerificationProvider | null;
   default_tier_key?: string | null;
-  tiers: Array<CommunityPricingTier>;
-  country_assignments: Array<CommunityPricingCountryAssignment>;
+  tiers?: Array<CommunityPricingTier>;
+  country_assignments?: Array<CommunityPricingCountryAssignment>;
   source_template?: string | null;
   source_template_version?: string | null;
 };
@@ -947,13 +947,6 @@ export type CreatePostRequest = (((unknown & {
   disclosed_qualifier_ids?: Array<string> | null;
   parent_post?: string | null;
   label?: string | null;
-  label_assignment_status?: "pending" | "assigned" | "failed" | "skipped" | null;
-  label_assigned_by?: "moderator" | "ai" | null;
-  label_assigned_at?: number | null;
-  label_ai_confidence?: number | null;
-  label_assignment_error?: string | null;
-  label_assignment_model?: string | null;
-  label_assignment_result_json?: (Record<string, unknown>) | null;
   post_type: "text" | "image" | "video" | "link" | "song";
   body?: string | null;
   caption?: string | null;
@@ -2673,7 +2666,7 @@ export const apiRoutes = {
   agent: (agentId: string) => `/agents/${agentId}`,
   agentHandle: (agentId: string) => `/agents/${agentId}/handle`,
   agentCredential: (agentId: string) => `/agents/${agentId}/credential`,
-  agentCredentialRefresh: (agentId: string) => `/agents/${agentId}/refresh_credential`,
+  agentCredentialRefresh: (agentId: string) => `/agents/${agentId}/refresh-credential`,
   publicAgent: (handleLabel: string) => `/public-agents/${handleLabel}`,
   namespaceVerificationSessions: "/namespace-verification-sessions",
   namespaceVerificationSession: (namespaceVerificationSessionId: string) => `/namespace-verification-sessions/${namespaceVerificationSessionId}`,
@@ -2691,7 +2684,7 @@ export const apiRoutes = {
   communityPurchaseQuotePreflight: (communityId: string) => `/communities/${communityId}/purchase-quote-preflight`,
   communityPurchaseQuotes: (communityId: string) => `/communities/${communityId}/purchase-quotes`,
   communityPurchaseSettlements: (communityId: string) => `/communities/${communityId}/purchase-settlements`,
-  communityPurchaseSettlementFailures: (communityId: string) => `/communities/${communityId}/fail_purchase_settlement`,
+  communityPurchaseSettlementFailures: (communityId: string) => `/communities/${communityId}/fail-purchase-settlement`,
   communityFollow: (communityId: string) => `/communities/${communityId}/follow`,
   communityUnfollow: (communityId: string) => `/communities/${communityId}/unfollow`,
   communityPosts: (communityId: string) => `/communities/${communityId}/posts`,

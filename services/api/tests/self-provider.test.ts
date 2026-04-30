@@ -70,7 +70,7 @@ describe("self-provider capability canonicalization", () => {
       policyId: null,
     })
 
-    expect(started.launch.endpoint).toBe("https://api.pirate.test/verification-sessions/ver_self_sdk/self-callback")
+    expect(started.launch.endpoint).toBe("https://api.pirate.test/verification-sessions/ver_self_sdk/receive-self-proof")
     expect(started.launch.endpoint_type).toBe("staging_https")
     expect(started.launch.dev_mode).toBe(true)
     expect(started.launch.user_id).toMatch(/^[0-9a-f-]{36}$/u)
@@ -93,8 +93,8 @@ describe("self-provider capability canonicalization", () => {
       policyId: null,
     })
 
-    expect(started.launch.endpoint).toBe("https://fresh-cloudflare.example.com/verification-sessions/ver_self_fresh_tunnel/self-callback")
-    expect(started.upstreamSessionRef).toContain("https://fresh-cloudflare.example.com/verification-sessions/ver_self_fresh_tunnel/self-callback")
+    expect(started.launch.endpoint).toBe("https://fresh-cloudflare.example.com/verification-sessions/ver_self_fresh_tunnel/receive-self-proof")
+    expect(started.upstreamSessionRef).toContain("https://fresh-cloudflare.example.com/verification-sessions/ver_self_fresh_tunnel/receive-self-proof")
   })
 
   test("non-production Self sessions use configured HTTPS origin when the request origin is localhost", async () => {
@@ -111,7 +111,7 @@ describe("self-provider capability canonicalization", () => {
       policyId: null,
     })
 
-    expect(started.launch.endpoint).toBe("https://configured-cloudflare.example.com/verification-sessions/ver_self_configured_tunnel/self-callback")
+    expect(started.launch.endpoint).toBe("https://configured-cloudflare.example.com/verification-sessions/ver_self_configured_tunnel/receive-self-proof")
     expect(started.upstreamSessionRef).toContain("\"kind\":\"self-sdk\"")
   })
 
@@ -154,7 +154,7 @@ describe("self-provider capability canonicalization", () => {
       policyId: null,
     })
 
-    expect(started.launch.endpoint).toBe("https://api.pirate.test/verification-sessions/ver_self_prod/self-callback")
+    expect(started.launch.endpoint).toBe("https://api.pirate.test/verification-sessions/ver_self_prod/receive-self-proof")
     expect(started.launch.endpoint_type).toBe("https")
     expect(started.launch.dev_mode).toBe(false)
     expect(started.upstreamSessionRef).toContain("\"kind\":\"self-sdk\"")

@@ -42,7 +42,7 @@ function namespaceVerificationErrorProperties(input: {
   }
 }
 
-verification.post("/verification-sessions/:verificationSessionId/self-callback", async (c) => {
+verification.post("/verification-sessions/:verificationSessionId/receive-self-proof", async (c) => {
   const payload = (await c.req.json<Record<string, unknown>>().catch(() => null)) ?? null
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw badRequestError("Invalid Self verification callback payload")

@@ -265,7 +265,7 @@ export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedE
     return c.json(result.settlement, 201)
   })
 
-  communities.post("/:communityId/fail_purchase_settlement", async (c) => {
+  communities.post("/:communityId/fail-purchase-settlement", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<CommunityPurchaseSettlementFailureRequest>(c, "Invalid purchase settlement failure payload")
     const result = await failCommunityPurchase({

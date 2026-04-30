@@ -171,7 +171,7 @@ profiles.post("/me/xmtp-inbox", async (c) => {
   return c.json(profile, 200)
 })
 
-profiles.post("/me/rename_global_handle", async (c) => {
+profiles.post("/me/rename-global-handle", async (c) => {
   const actor = c.get("actor")
   const body = await c.req.json<{ desired_label?: unknown }>().catch(() => null)
   if (!body || typeof body.desired_label !== "string") {
@@ -220,7 +220,7 @@ profiles.post("/me/global-handle/reddit-claim", async (c) => {
   return c.json(globalHandle, 200)
 })
 
-profiles.post("/me/quote_handle_upgrade", async (c) => {
+profiles.post("/me/quote-handle-upgrade", async (c) => {
   const actor = c.get("actor")
   const body = await c.req.json<{ desired_label?: unknown }>().catch(() => null)
   if (!body || typeof body.desired_label !== "string") {
@@ -235,7 +235,7 @@ profiles.post("/me/quote_handle_upgrade", async (c) => {
   return c.json(quote, 200)
 })
 
-profiles.post("/me/sync_linked_handles", async (c) => {
+profiles.post("/me/sync-linked-handles", async (c) => {
   const actor = c.get("actor")
   const repository = getProfileRepository(c.env)
   const profile = await repository.syncLinkedHandles(actor.userId)
@@ -245,7 +245,7 @@ profiles.post("/me/sync_linked_handles", async (c) => {
   return c.json(profile, 200)
 })
 
-profiles.post("/me/set_primary_public_handle", async (c) => {
+profiles.post("/me/set-primary-public-handle", async (c) => {
   const actor = c.get("actor")
   const body = await c.req.json<{ linked_handle_id?: unknown }>().catch(() => null)
   if (!body || typeof body !== "object") {

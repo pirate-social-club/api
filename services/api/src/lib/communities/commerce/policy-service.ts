@@ -99,6 +99,26 @@ export async function updateCommunityMoneyPolicy(input: {
   })
   const client = getControlPlaneClient(input.env)
   const updatedAt = nowIso()
+  const current = await getCommunityMoneyPolicy({ env: input.env, communityId: input.communityId })
+  const body = input.body as Partial<UpdateCommunityMoneyPolicyRequest>
+  const next = {
+    funding_preference: body.funding_preference ?? current.funding_preference,
+    accepted_funding_assets: body.accepted_funding_assets ?? current.accepted_funding_assets,
+    accepted_source_chains: body.accepted_source_chains ?? current.accepted_source_chains,
+    approved_route_providers: "approved_route_providers" in body
+      ? body.approved_route_providers ?? null
+      : current.approved_route_providers,
+    destination_settlement_chain: body.destination_settlement_chain ?? current.destination_settlement_chain,
+    destination_settlement_token: body.destination_settlement_token ?? current.destination_settlement_token,
+    treasury_denomination: "treasury_denomination" in body
+      ? body.treasury_denomination ?? null
+      : current.treasury_denomination,
+    max_slippage_bps: body.max_slippage_bps ?? current.max_slippage_bps,
+    quote_ttl_seconds: body.quote_ttl_seconds ?? current.quote_ttl_seconds,
+    route_required: body.route_required ?? current.route_required,
+    route_status_policy: body.route_status_policy ?? current.route_status_policy,
+    route_hop_tolerance: body.route_hop_tolerance ?? current.route_hop_tolerance,
+  }
   await client.execute({
     sql: `
       INSERT INTO community_money_policies (
@@ -129,18 +149,18 @@ export async function updateCommunityMoneyPolicy(input: {
     `,
     args: [
       input.communityId,
-      input.body.funding_preference,
-      JSON.stringify(input.body.accepted_funding_assets),
-      JSON.stringify(input.body.accepted_source_chains),
-      input.body.approved_route_providers ? JSON.stringify(input.body.approved_route_providers) : null,
-      JSON.stringify(input.body.destination_settlement_chain),
-      input.body.destination_settlement_token,
-      input.body.treasury_denomination ?? null,
-      input.body.max_slippage_bps,
-      input.body.quote_ttl_seconds,
-      boolToSqlite(input.body.route_required),
-      input.body.route_status_policy,
-      input.body.route_hop_tolerance,
+      next.funding_preference,
+      JSON.stringify(next.accepted_funding_assets),
+      JSON.stringify(next.accepted_source_chains),
+      next.approved_route_providers ? JSON.stringify(next.approved_route_providers) : null,
+      JSON.stringify(next.destination_settlement_chain),
+      next.destination_settlement_token,
+      next.treasury_denomination,
+      next.max_slippage_bps,
+      next.quote_ttl_seconds,
+      boolToSqlite(next.route_required),
+      next.route_status_policy,
+      next.route_hop_tolerance,
       updatedAt,
     ],
   })
@@ -196,6 +216,25 @@ export async function updateCommunityPricingPolicy(input: {
   const client = getControlPlaneClient(input.env)
   const updatedAt = nowIso()
   const policyVersion = `cpp_${updatedAt}`
+  const current = await getCommunityPricingPolicy({ env: input.env, communityId: input.communityId })
+  const body = input.body as Partial<UpdateCommunityPricingPolicyRequest>
+  const next = {
+    regional_pricing_enabled: body.regional_pricing_enabled ?? current.regional_pricing_enabled,
+    verification_provider_requirement: "verification_provider_requirement" in body
+      ? body.verification_provider_requirement ?? null
+      : current.verification_provider_requirement,
+    default_tier_key: "default_tier_key" in body
+      ? body.default_tier_key ?? null
+      : current.default_tier_key,
+    tiers: body.tiers ?? current.tiers,
+    country_assignments: body.country_assignments ?? current.country_assignments,
+    source_template: "source_template" in body
+      ? body.source_template ?? null
+      : current.source_template,
+    source_template_version: "source_template_version" in body
+      ? body.source_template_version ?? null
+      : current.source_template_version,
+  }
   await client.execute({
     sql: `
       INSERT INTO community_pricing_policies (
@@ -220,13 +259,13 @@ export async function updateCommunityPricingPolicy(input: {
     `,
     args: [
       input.communityId,
-      boolToSqlite(input.body.regional_pricing_enabled),
-      input.body.verification_provider_requirement ?? null,
-      input.body.default_tier_key ?? null,
-      JSON.stringify(input.body.tiers),
-      JSON.stringify(input.body.country_assignments),
-      input.body.source_template ?? null,
-      input.body.source_template_version ?? null,
+      boolToSqlite(next.regional_pricing_enabled),
+      next.verification_provider_requirement,
+      next.default_tier_key,
+      JSON.stringify(next.tiers),
+      JSON.stringify(next.country_assignments),
+      next.source_template,
+      next.source_template_version,
       policyVersion,
       updatedAt,
     ],

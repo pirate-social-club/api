@@ -142,7 +142,7 @@ agents.post("/agent-ownership-sessions/:agentOwnershipSessionId/complete", authe
   }
   return c.json(session, 200)
 })
-agents.post("/agent-ownership-sessions/:agentOwnershipSessionId/callback", async (c) => {
+agents.post("/agent-ownership-sessions/:agentOwnershipSessionId/receive-callback", async (c) => {
   const body = (await c.req.json<{
     provider?: AgentOwnershipProvider | null
     event_type?: string | null
@@ -216,6 +216,13 @@ agents.post("/agents/:agentId", authenticateAdminOrUser, async (c) => {
 
   const repo = getControlPlaneAgentOwnershipRepository(c.env)
   const agentId = decodePublicAgentId(c.req.param("agentId"))
+  if (!("display_name" in body)) {
+    const existingAgent = await repo.getUserAgent(agentId, getActorUserId(actor))
+    if (!existingAgent) {
+      throw notFoundError("Agent not found")
+    }
+    return c.json(existingAgent, 200)
+  }
   const agent = await repo.updateUserAgentDisplayName({
     agentId,
     userId: getActorUserId(actor),
@@ -290,7 +297,7 @@ agents.post("/agents/:agentId/credential", authenticateOptional, async (c) => {
   return c.json(credential, 200)
 })
 
-agents.post("/agents/:agentId/refresh_credential", authenticateOptional, async (c) => {
+agents.post("/agents/:agentId/refresh-credential", authenticateOptional, async (c) => {
   const actor = c.get("actor")
   const userActor = actor?.authType === "admin" ? undefined : actor
   const body = await c.req.json<{

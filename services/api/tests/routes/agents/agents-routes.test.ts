@@ -1114,7 +1114,7 @@ describe("agent routes", () => {
     }
 
     const callbackResponse = await app.request(
-      `http://pirate.test/agent-ownership-sessions/${startBody.agent_ownership_session_id}/callback`,
+      `http://pirate.test/agent-ownership-sessions/${startBody.agent_ownership_session_id}/receive-callback`,
       {
         method: "POST",
         headers: {
@@ -1139,7 +1139,7 @@ describe("agent routes", () => {
 
   test("agent ownership callback rejects missing callback secret", async () => {
     const response = await app.request(
-      "http://pirate.test/agent-ownership-sessions/aos_missing_secret/callback",
+      "http://pirate.test/agent-ownership-sessions/aos_missing_secret/receive-callback",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
