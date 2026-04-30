@@ -25,6 +25,10 @@ import {
 import {
   serializeCommunity,
 } from "../serializers/community"
+import {
+  decodePublicNamespaceVerificationId,
+  decodePublicNamespaceVerificationSessionId,
+} from "../lib/public-ids"
 
 export function registerCommunityCreateRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.post("/", async (c) => {
@@ -98,8 +102,14 @@ export function registerCommunityCreateRoutes(communities: Hono<AuthenticatedEnv
   communities.post("/:communityId/namespace", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const { verificationRepository } = getCommunityCreationRouteContext(c)
-    const body = await requireJsonBody<{ namespace_verification_id?: string | null }>(c, "Invalid namespace attach payload")
-    const namespaceVerificationId = body?.namespace_verification_id?.trim()
+    const body = await requireJsonBody<{
+      namespace_verification?: string | null
+      namespace_verification_id?: string | null
+    }>(c, "Invalid namespace attach payload")
+    const publicNamespaceVerificationId = (body?.namespace_verification_id ?? body?.namespace_verification)?.trim()
+    const namespaceVerificationId = publicNamespaceVerificationId
+      ? decodePublicNamespaceVerificationId(publicNamespaceVerificationId)
+      : null
     if (!namespaceVerificationId) {
       throw badRequestError("namespace_verification_id is required")
     }
@@ -119,7 +129,7 @@ export function registerCommunityCreateRoutes(communities: Hono<AuthenticatedEnv
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<{ namespace_verification_session_id?: string | null }>(c, "Invalid pending namespace session payload")
     const sessionId = typeof body?.namespace_verification_session_id === "string"
-      ? body.namespace_verification_session_id.trim() || null
+      ? decodePublicNamespaceVerificationSessionId(body.namespace_verification_session_id.trim()) || null
       : null
 
     const result = await setPendingNamespaceVerificationSession({

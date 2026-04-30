@@ -5,7 +5,12 @@ import type {
 } from "@pirate/api-contracts"
 import type { Community, CommunityPreview } from "../types"
 import { nullableUnixSeconds, unixSeconds } from "./time"
-import { publicCommunityId } from "../lib/public-ids"
+import {
+  decodePublicNamespaceVerificationId,
+  decodePublicNamespaceVerificationSessionId,
+  publicCommunityId,
+  publicId,
+} from "../lib/public-ids"
 
 type CurrentCommunityResponse = ContractCommunity & Pick<Community, "localized_text">
 
@@ -17,9 +22,9 @@ export function serializeCommunity(community: Community): CurrentCommunityRespon
     description: community.description,
     avatar_ref: community.avatar_ref,
     banner_ref: community.banner_ref,
-    namespace_verification: community.namespace_verification_id ? `nv_${community.namespace_verification_id}` : community.namespace_verification_id,
+    namespace_verification: community.namespace_verification_id ? publicId(decodePublicNamespaceVerificationId(community.namespace_verification_id), "nv") : community.namespace_verification_id,
     route_slug: community.route_slug,
-    pending_namespace_verification_session: community.pending_namespace_verification_session_id ? `nvs_${community.pending_namespace_verification_session_id}` : community.pending_namespace_verification_session_id,
+    pending_namespace_verification_session: community.pending_namespace_verification_session_id ? publicId(decodePublicNamespaceVerificationSessionId(community.pending_namespace_verification_session_id), "nvs") : community.pending_namespace_verification_session_id,
     status: community.status,
     provisioning_state: community.provisioning_state,
     artist_identity: community.artist_identity_id,
@@ -87,7 +92,7 @@ export function serializeCommunityPreview(preview: CommunityPreview): CurrentCom
   return {
     id: publicCommunityId(preview.community_id),
     object: "community_preview",
-    namespace_verification: preview.namespace_verification_id ? `nv_${preview.namespace_verification_id}` : preview.namespace_verification_id,
+    namespace_verification: preview.namespace_verification_id ? publicId(decodePublicNamespaceVerificationId(preview.namespace_verification_id), "nv") : preview.namespace_verification_id,
     route_slug: preview.route_slug,
     display_name: preview.display_name,
     description: preview.description,

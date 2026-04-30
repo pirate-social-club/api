@@ -7,6 +7,7 @@ import {
 import { serializeNamespaceSessionStatus } from "../verification/namespace-verification-policy"
 import { normalizeIdentityCountryAlpha2 } from "../identity/country-codes"
 import { nullableUnixSeconds, unixSeconds } from "../../serializers/time"
+import { decodePublicNamespaceVerificationId, decodePublicNamespaceVerificationSessionId, publicId } from "../public-ids"
 import type {
   ExternalReputationSnapshotRow,
   GlobalHandleRow,
@@ -293,9 +294,9 @@ export function serializeNamespaceVerificationSession(
   const storedSetupNameservers = parseOptionalStringArray(row.setup_nameservers_json)
 
   return {
-    id: `nvs_${row.namespace_verification_session_id}`,
+    id: publicId(decodePublicNamespaceVerificationSessionId(row.namespace_verification_session_id), "nvs"),
     object: "namespace_verification_session",
-    namespace_verification: row.namespace_verification_id ? `nv_${row.namespace_verification_id}` : row.namespace_verification_id,
+    namespace_verification: row.namespace_verification_id ? publicId(decodePublicNamespaceVerificationId(row.namespace_verification_id), "nv") : row.namespace_verification_id,
     user: `usr_${row.user_id}`,
     family: row.family,
     submitted_root_label: row.submitted_root_label,
