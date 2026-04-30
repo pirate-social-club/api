@@ -31,6 +31,7 @@ export async function listCommunityModerationCases(input: {
         executor: db.client,
         communityId: input.communityId,
       }),
+      next_cursor: null,
     }
   } finally {
     db.close()

@@ -30,23 +30,24 @@ auth.post("/session/exchange", async (c) => {
 
   const repository = getSessionRepository(c.env)
   const session = await repository.exchangeIdentity(upstreamIdentity)
+  const userId = session.user.id.replace(/^usr_/, "")
   const syncedProfile = await getProfileRepository(c.env)
-    .syncLinkedHandles(session.user.user_id)
+    .syncLinkedHandles(userId)
     .catch(() => null)
   const accessToken = await mintPirateAccessToken({
     env: c.env,
-    userId: session.user.user_id,
+    userId,
   })
   if (body.proof.type === "jwt_based_auth") {
     await trackApiEvent(c.env, c.req, {
       eventName: "auth_started",
-      userId: session.user.user_id,
+      userId,
       properties: { provider: "jwt_based_auth" },
     })
   }
   await trackApiEvent(c.env, c.req, {
     eventName: "auth_session_exchanged",
-    userId: session.user.user_id,
+    userId,
     properties: { provider: upstreamIdentity.provider },
   })
 

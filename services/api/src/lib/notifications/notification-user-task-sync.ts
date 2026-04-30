@@ -4,6 +4,7 @@ import { getGlobalHandleRow, getProfileRow, getUserRow } from "../auth/auth-db-u
 import { parseVerificationCapabilities } from "../auth/auth-serializers"
 import { resolveUserTask, upsertUserTask } from "./notification-task-store"
 import type { UserTask } from "../../types"
+import { unixSeconds } from "../../serializers/time"
 
 const SYNTHETIC_UNIQUE_HUMAN_TASK_ID_PREFIX = "synth:unique_human:"
 export const UNIQUE_HUMAN_TASK_TYPE = "unique_human_verification_required"
@@ -17,11 +18,12 @@ export function isSyntheticUniqueHumanTaskId(taskId: string): boolean {
 export function buildUniqueHumanTask(userId: string): UserTask {
   const createdAt = nowIso()
   return {
-    task_id: `${SYNTHETIC_UNIQUE_HUMAN_TASK_ID_PREFIX}${userId}`,
-    user_id: userId,
+    id: `task_${SYNTHETIC_UNIQUE_HUMAN_TASK_ID_PREFIX}${userId}`,
+    object: "user_task",
+    user: `usr_${userId}`,
     type: UNIQUE_HUMAN_TASK_TYPE,
     subject_type: "user",
-    subject_id: userId,
+    subject: userId,
     status: "open",
     priority: 100,
     payload: {
@@ -30,8 +32,7 @@ export function buildUniqueHumanTask(userId: string): UserTask {
     },
     resolved_at: null,
     dismissed_at: null,
-    created_at: createdAt,
-    updated_at: createdAt,
+    created: unixSeconds(createdAt),
   }
 }
 

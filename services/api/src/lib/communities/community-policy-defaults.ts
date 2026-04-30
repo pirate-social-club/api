@@ -3,10 +3,10 @@ import type { Env } from "../../types"
 import { buildDefaultPirateCheckoutMoneyPolicy } from "./commerce/checkout-config"
 
 function defaultPolicyFields(communityId: string, updatedAt: string) {
+  void updatedAt
   return {
-    community_id: communityId,
+    community: `com_${communityId}`,
     policy_origin: "default" as const,
-    updated_at: updatedAt,
   }
 }
 
@@ -63,7 +63,7 @@ export function buildDefaultContentAuthenticityDetectionPolicy(
     ...defaultPolicyFields(communityId, updatedAt),
     selection_mode: "platform_default",
     resolved_profile: {
-      authenticity_detection_profile_id: "authdet_default_v0",
+      authenticity_detection_profile: "authdet_default_v0",
       profile_key: "platform-default-v0",
       provider_key: "platform_default",
       supported_capabilities: ["image_authenticity", "video_authenticity", "audio_authenticity", "deepfake_detection"],
@@ -73,14 +73,17 @@ export function buildDefaultContentAuthenticityDetectionPolicy(
 }
 
 export function buildDefaultMarketContextPolicy(communityId: string, updatedAt: string): Community["market_context_policy"] {
+  void updatedAt
   return {
-    ...defaultPolicyFields(communityId, updatedAt),
+    id: `cmcp_${communityId}`,
+    object: "community_market_context_policy",
+    policy_origin: "default",
     mode: "off",
     enabled_post_types: ["link"],
     max_markets_per_post: 1,
     provider_set: "platform_default",
     resolved_profile: {
-      market_context_profile_id: "marketctx_default_v0",
+      market_context_profile: "marketctx_default_v0",
       profile_key: "platform-default-v0",
       provider_keys: ["platform_default"],
       status: "active",
@@ -172,7 +175,7 @@ export function buildDefaultPromotionPolicy(communityId: string, updatedAt: stri
     self_promotion_mode: "limited_with_disclosure",
     require_affiliation_disclosure: true,
     max_promotional_posts_per_week: 1,
-    promotional_participation_ratio: null,
+    promotional_participation_ratio_decimal: null,
     require_minimum_membership_days: 7,
   }
 }

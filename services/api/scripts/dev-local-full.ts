@@ -1,9 +1,10 @@
 import { spawn, type ChildProcess } from "node:child_process"
+import { resolve as resolveDns } from "node:dns/promises"
 import { existsSync } from "node:fs"
 import { connect } from "node:net"
 import { fileURLToPath } from "node:url"
 import { readDevVarsFromCwd } from "./_lib/dev-vars"
-import { mergeCommaSeparatedValues, startTryCloudflareTunnel, type ManagedTunnel } from "./_lib/dev-public-tunnel"
+import { isTryCloudflareOrigin, mergeCommaSeparatedValues, startTryCloudflareTunnel, type ManagedTunnel } from "./_lib/dev-public-tunnel"
 
 type ManagedChild = {
   name: string
@@ -104,9 +105,21 @@ async function startPublicTunnel(localOrigin: string): Promise<ManagedTunnel | n
   return tunnel
 }
 
-function isPublicTunnelDisabled(): boolean {
-  const mode = String(process.env.PIRATE_DEV_TUNNEL || "off").trim().toLowerCase()
-  return mode === "0" || mode === "false" || mode === "off" || mode === "none"
+async function assertConfiguredPublicOriginReachable(publicOrigin: string): Promise<void> {
+  if (!isTryCloudflareOrigin(publicOrigin)) {
+    return
+  }
+  const hostname = new URL(publicOrigin).hostname
+  try {
+    await resolveDns(hostname)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(
+      `Configured PIRATE_API_PUBLIC_ORIGIN does not resolve: ${publicOrigin}. `
+      + "Quick tunnel hostnames are ephemeral; start a fresh tunnel with PIRATE_DEV_TUNNEL=required "
+      + `or update .dev.vars. DNS error: ${message}`,
+    )
+  }
 }
 
 function localNoProxy(): string {
@@ -160,9 +173,11 @@ async function main(): Promise<void> {
     : "http://127.0.0.1:8798"
   const localApiOrigin = apiLocalOrigin()
   const tunnel = await startPublicTunnel(localApiOrigin)
-  const publicApiOrigin = isPublicTunnelDisabled()
-    ? localApiOrigin
-    : tunnel?.publicOrigin || process.env.PIRATE_API_PUBLIC_ORIGIN || devVars.PIRATE_API_PUBLIC_ORIGIN
+  const configuredPublicApiOrigin = process.env.PIRATE_API_PUBLIC_ORIGIN || devVars.PIRATE_API_PUBLIC_ORIGIN
+  if (!tunnel && configuredPublicApiOrigin) {
+    await assertConfiguredPublicOriginReachable(configuredPublicApiOrigin)
+  }
+  const publicApiOrigin = tunnel?.publicOrigin || configuredPublicApiOrigin || localApiOrigin
   if (!tunnel && publicApiOrigin?.includes(".trycloudflare.com")) {
     console.warn(`warning: using configured trycloudflare origin without a managed tunnel: ${publicApiOrigin}`)
     console.warn("warning: if Self callbacks fail, install cloudflared or set PIRATE_DEV_TUNNEL=required to fail fast")

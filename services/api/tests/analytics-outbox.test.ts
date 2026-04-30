@@ -6,7 +6,7 @@ import {
   hmacUserId,
   isAnalyticsEnabled,
 } from "../src/lib/analytics"
-import app from "../src/index"
+import { app } from "../src/index"
 import { buildTestEnv, createControlPlaneTestClient, withMockedFetch } from "./helpers"
 
 let cleanup: (() => Promise<void>) | null = null

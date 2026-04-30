@@ -3,6 +3,7 @@ import type {
   SongArtifactBundle,
   SongArtifactUpload,
 } from "../../types"
+import { unixSeconds } from "../../serializers/time"
 
 export type SongArtifactUploadRow = {
   song_artifact_upload_id: string
@@ -91,9 +92,10 @@ export function toSongArtifactUploadRow(row: unknown): SongArtifactUploadRow {
 
 export function serializeSongArtifactUpload(row: SongArtifactUploadRow): SongArtifactUpload {
   return {
-    song_artifact_upload_id: row.song_artifact_upload_id,
-    community_id: row.community_id,
-    uploader_user_id: row.uploader_user_id,
+    id: `sau_${row.song_artifact_upload_id}`,
+    object: "song_artifact_upload",
+    community: `com_${row.community_id}`,
+    uploader_user: `usr_${row.uploader_user_id}`,
     artifact_kind: row.artifact_kind,
     status: row.status,
     storage_ref: row.storage_ref,
@@ -107,8 +109,7 @@ export function serializeSongArtifactUpload(row: SongArtifactUploadRow): SongArt
     storage_endpoint: row.storage_endpoint,
     gateway_url: row.gateway_url,
     upload_url: row.storage_ref,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
+    created: unixSeconds(row.created_at),
   }
 }
 
@@ -152,9 +153,10 @@ export function serializeSongArtifactBundle(row: SongArtifactBundleRow): SongArt
     mime_type: "",
   })
   return {
-    song_artifact_bundle_id: row.song_artifact_bundle_id,
-    community_id: row.community_id,
-    creator_user_id: row.creator_user_id,
+    id: `sab_${row.song_artifact_bundle_id}`,
+    object: "song_artifact_bundle",
+    community: `com_${row.community_id}`,
+    creator_user: `usr_${row.creator_user_id}`,
     status: row.status,
     primary_audio: primaryAudio,
     media_refs: primaryAudio.storage_ref && primaryAudio.mime_type
@@ -188,7 +190,6 @@ export function serializeSongArtifactBundle(row: SongArtifactBundleRow): SongArt
     moderation_error: row.moderation_error,
     moderation_result_ref: row.moderation_result_ref,
     moderation_result: parseJsonValue(row.moderation_result_json, null),
-    created_at: row.created_at,
-    updated_at: row.updated_at,
+    created: unixSeconds(row.created_at),
   }
 }

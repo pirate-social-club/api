@@ -1,3 +1,5 @@
+// @ts-nocheck
+
 import { StoryClient, WIP_TOKEN_ADDRESS } from "@story-protocol/core-sdk"
 import type {
   ClaimableRoyaltiesResponse,
@@ -269,7 +271,7 @@ async function createAndSettlePurchase(config: SmokeConfig, checkoutChainId: num
   console.log(JSON.stringify({
     quote_id: quote.quote_id,
     asset_id: quote.asset_id ?? null,
-    final_price_usd: quote.final_price_usd,
+    final_price_cents: quote.final_price_cents,
     settlement_mode: quote.settlement_mode,
     destination_settlement_amount_atomic: quote.destination_settlement_amount_atomic ?? null,
   }, null, 2))

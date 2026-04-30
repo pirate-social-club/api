@@ -3,7 +3,7 @@ import {
   type LocalCommunityRule,
   type LocalCommunitySnapshot,
 } from "../community-local-db"
-import { serializeDonationPartnerRow } from "../community-donation-partner-serialization"
+import { serializeLocalDonationPartnerRow } from "../community-donation-partner-serialization"
 import { normalizeCommunityMediaRef } from "../community-identity-media"
 import type { CommunityDatabaseBindingRow, CommunityRow, JobRow } from "../../auth/auth-db-rows"
 import type {
@@ -17,6 +17,7 @@ import type { ActorContext, AdminActorContext } from "../../auth-middleware"
 import type { Community, Env } from "../../../types"
 import { serializeCommunity } from "../community-serialization"
 import { openCommunityDb } from "../community-db-factory"
+import type { GateAtom, GateExpression, GatePolicy } from "../membership/gate-types"
 import type {
   CreateCommunityAuth,
   CreateCommunityRequestBody,
@@ -92,8 +93,8 @@ export function buildPendingCommunityDatabaseUrl(communityId: string): string {
   return `libsql://pending-${communityId}.invalid`
 }
 
-export function isExpired(isoTimestamp: string): boolean {
-  const expiresAt = Date.parse(isoTimestamp)
+export function isExpired(timestamp: string | number): boolean {
+  const expiresAt = typeof timestamp === "number" ? timestamp * 1000 : Date.parse(timestamp)
   if (!Number.isFinite(expiresAt)) {
     throw eligibilityFailed("Namespace verification expiry is invalid")
   }
@@ -197,34 +198,19 @@ export async function loadCommunityLocalSnapshot(
       status: ruleRow.status === "archived" ? "archived" : "active",
     } satisfies LocalCommunityRule))
 
-    const gateRulesResult = await db.client.execute({
+    const gatePolicyResult = await db.client.execute({
       sql: `
-        SELECT gate_rule_id, scope, gate_family, gate_type, proof_requirements_json,
-               chain_namespace, gate_config_json, status, created_at, updated_at
-        FROM community_gate_rules
+        SELECT expression_json
+        FROM community_gate_policies
         WHERE community_id = ?1
-        ORDER BY created_at ASC
+          AND scope = 'membership'
+        LIMIT 1
       `,
       args: [communityId],
     })
-    const gate_rules = gateRulesResult.rows.map((gateRow) => ({
-      gate_rule_id: String(gateRow.gate_rule_id),
-      scope: String(gateRow.scope) as LocalCommunitySnapshot["gate_rules"][number]["scope"],
-      gate_family: String(gateRow.gate_family) as LocalCommunitySnapshot["gate_rules"][number]["gate_family"],
-      gate_type: String(gateRow.gate_type),
-      proof_requirements:
-        gateRow.proof_requirements_json == null
-          ? null
-          : JSON.parse(String(gateRow.proof_requirements_json)) as Array<Record<string, unknown>>,
-      chain_namespace: gateRow.chain_namespace == null ? null : String(gateRow.chain_namespace),
-      gate_config:
-        gateRow.gate_config_json == null
-          ? null
-          : JSON.parse(String(gateRow.gate_config_json)) as Record<string, unknown>,
-      status: gateRow.status === "disabled" ? "disabled" : "active",
-      created_at: String(gateRow.created_at),
-      updated_at: String(gateRow.updated_at),
-    } satisfies LocalCommunitySnapshot["gate_rules"][number]))
+    const gate_policy = gatePolicyResult.rows[0]?.expression_json == null
+      ? null
+      : JSON.parse(String(gatePolicyResult.rows[0].expression_json)) as LocalCommunitySnapshot["gate_policy"]
 
     let donation_partner: LocalCommunitySnapshot["donation_partner"] = null
     if (row.donation_partner_id) {
@@ -240,7 +226,7 @@ export async function loadCommunityLocalSnapshot(
       })
       const partnerRow = partnerResult.rows[0]
       if (partnerRow) {
-        donation_partner = serializeDonationPartnerRow(partnerRow)
+        donation_partner = serializeLocalDonationPartnerRow(partnerRow)
       }
     }
 
@@ -262,7 +248,7 @@ export async function loadCommunityLocalSnapshot(
       donation_partner_status: String(row.donation_partner_status) as LocalCommunitySnapshot["donation_partner_status"],
       donation_partner,
       settings_json: row.settings_json == null ? null : String(row.settings_json),
-      gate_rules,
+      gate_policy,
       governance_mode: String(row.governance_mode) as LocalCommunitySnapshot["governance_mode"],
       rules,
       created_by_user_id: String(row.created_by_user_id),
@@ -368,15 +354,8 @@ export function normalizeInputRules(
     .filter((rule): rule is LocalCommunityRule => rule !== null)
 }
 
-export function buildBootstrapGateRules(body: CreateCommunityRequestBody) {
-  return (body.gate_rules ?? []).map((rule) => ({
-    scope: rule.scope,
-    gateFamily: rule.gate_family,
-    gateType: rule.gate_type,
-    proofRequirementsJson: rule.proof_requirements ? JSON.stringify(rule.proof_requirements) : null,
-    chainNamespace: rule.chain_namespace ?? null,
-    gateConfigJson: rule.gate_config ? JSON.stringify(rule.gate_config) : null,
-  }))
+export function buildBootstrapGatePolicy(body: CreateCommunityRequestBody): GatePolicy | null {
+  return body.membership_mode === "gated" ? (body.gate_policy as GatePolicy | null | undefined ?? null) : null
 }
 
 export function buildBootstrapRules(body: CreateCommunityRequestBody) {
@@ -421,32 +400,38 @@ function resolveScopeUniqueHumanProvider(
   body: CreateCommunityRequestBody,
   scope: "membership" | "posting",
 ): "self" | "very" | null {
-  for (const rule of body.gate_rules ?? []) {
-    if (rule.scope !== scope || rule.gate_family !== "identity_proof") {
-      continue
-    }
-
-    for (const requirement of rule.proof_requirements ?? []) {
-      if (
-        requirement.proof_type !== "unique_human"
-        && requirement.proof_type !== "age_over_18"
-        && requirement.proof_type !== "minimum_age"
-        && requirement.proof_type !== "nationality"
-        && requirement.proof_type !== "gender"
-      ) {
-        continue
-      }
-
-      for (const provider of requirement.accepted_providers ?? []) {
-        const normalized = normalizeHumanVerificationProvider(provider)
-        if (normalized) {
-          return normalized
-        }
-      }
-    }
+  if (scope === "membership") {
+    const gatePolicy = body.gate_policy as GatePolicy | null | undefined
+    const provider = findFirstHumanVerificationProvider(gatePolicy?.expression ?? null)
+    if (provider) return provider
   }
 
   return normalizeHumanVerificationProvider(body.human_verification_lane)
+}
+
+function findFirstHumanVerificationProvider(expression: GateExpression | null): "self" | "very" | null {
+  if (!expression) return null
+  if (expression.op === "gate") {
+    return humanVerificationProviderForAtom(expression.gate)
+  }
+  for (const child of expression.children) {
+    const provider = findFirstHumanVerificationProvider(child)
+    if (provider) return provider
+  }
+  return null
+}
+
+function humanVerificationProviderForAtom(atom: GateAtom): "self" | "very" | null {
+  switch (atom.type) {
+    case "unique_human":
+      return atom.provider === "very" ? "very" : "self"
+    case "minimum_age":
+    case "nationality":
+    case "gender":
+      return "self"
+    default:
+      return null
+  }
 }
 
 export function buildProvisionOperatorBootstrapPayload(
@@ -455,7 +440,7 @@ export function buildProvisionOperatorBootstrapPayload(
 ) {
   return {
     description: body.description?.trim() || null,
-    membership_mode: body.membership_mode ?? "open",
+    membership_mode: resolvePublicV0MembershipMode(body.membership_mode),
     default_age_gate_policy: body.default_age_gate_policy ?? "none",
     membership_unique_human_provider: resolveScopeUniqueHumanProvider(body, "membership"),
     posting_unique_human_provider: resolveScopeUniqueHumanProvider(body, "posting"),
@@ -464,6 +449,10 @@ export function buildProvisionOperatorBootstrapPayload(
     namespace_label: namespaceLabel,
     initial_settings: buildBootstrapInitialSettings(body),
   }
+}
+
+function resolvePublicV0MembershipMode(mode: CreateCommunityRequestBody["membership_mode"] | null | undefined): "request" | "gated" {
+  return mode === "request" ? "request" : "gated"
 }
 
 export async function bootstrapCommunityLocalSnapshot(input: {
@@ -485,14 +474,14 @@ export async function bootstrapCommunityLocalSnapshot(input: {
     bannerRef: normalizeCommunityMediaRef(input.body.banner_ref),
     namespaceVerificationId: input.namespaceVerificationId,
     namespaceLabel: input.namespaceLabel,
-    membershipMode: input.body.membership_mode ?? "open",
+    membershipMode: resolvePublicV0MembershipMode(input.body.membership_mode),
     defaultAgeGatePolicy: input.body.default_age_gate_policy ?? "none",
     allowAnonymousIdentity: input.body.allow_anonymous_identity ?? false,
     anonymousIdentityScope: input.body.allow_anonymous_identity ? (input.body.anonymous_identity_scope ?? null) : null,
     governanceMode: input.body.governance_mode ?? "centralized",
     handlePolicyTemplate: input.body.handle_policy?.policy_template ?? "standard",
     pricingModel: null,
-    gateRules: buildBootstrapGateRules(input.body),
+    gatePolicy: buildBootstrapGatePolicy(input.body),
     rules: buildBootstrapRules(input.body),
     initialSettings: buildBootstrapInitialSettings(input.body),
     now: input.auth.createdAt,

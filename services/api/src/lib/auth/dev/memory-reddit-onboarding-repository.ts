@@ -3,6 +3,7 @@ import { makeId, nowIso } from "../../helpers"
 import { checkRedditVerificationCode, importRedditSnapshot, makeRedditVerificationCode } from "../../onboarding/reddit-bootstrap"
 import { getMemoryRecordByUserId, getMemoryStore } from "./memory-auth-store"
 import type { Env, Job, RedditImportSummary, RedditVerification } from "../../../types"
+import { unixSeconds } from "../../../serializers/time"
 
 export class MemoryRedditOnboardingRepository {
   async startOrCheckRedditVerification(input: {
@@ -36,7 +37,7 @@ export class MemoryRedditOnboardingRepository {
           ...existing,
           status: "failed",
           failure_code: "rate_limited",
-          last_checked_at: now.toISOString(),
+          last_checked_at: unixSeconds(now.toISOString()),
         }
       } else {
         const result = await checkRedditVerificationCode({
@@ -50,19 +51,19 @@ export class MemoryRedditOnboardingRepository {
               ...existing,
               status: "verified",
               failure_code: null,
-              last_checked_at: now.toISOString(),
+              last_checked_at: unixSeconds(now.toISOString()),
             }
           : result.status === "pending"
             ? {
                 ...existing,
                 failure_code: result.failureCode,
-                last_checked_at: now.toISOString(),
+                last_checked_at: unixSeconds(now.toISOString()),
               }
             : {
                 ...existing,
                 status: "failed",
                 failure_code: result.failureCode,
-                last_checked_at: now.toISOString(),
+                last_checked_at: unixSeconds(now.toISOString()),
               }
         record.redditVerification = next
       }
@@ -107,15 +108,15 @@ export class MemoryRedditOnboardingRepository {
     }
 
     const job: Job = {
-      job_id: makeId("job"),
+      id: `job_${makeId("job")}`,
+      object: "job",
       job_type: "reddit_snapshot_import",
       status: "running",
       subject_type: "user",
-      subject_id: input.userId,
+      subject: input.userId,
       result_ref: null,
       error_code: null,
-      created_at: nowIso(),
-      updated_at: nowIso(),
+      created: unixSeconds(nowIso()),
     }
     record.redditImportJob = job
     record.onboarding.reddit_import_status = "running"
@@ -130,16 +131,14 @@ export class MemoryRedditOnboardingRepository {
         ...job,
         status: "succeeded",
         result_ref: makeId("ers"),
-        updated_at: nowIso(),
       }
       record.onboarding.reddit_import_status = "succeeded"
-      record.onboarding.suggested_community_ids = summary.suggested_communities.map((community) => community.community_id)
+      record.onboarding.suggested_community_ids = summary.suggested_communities.map((community) => community.community.replace(/^com_/, ""))
     } catch {
       record.redditImportJob = {
         ...job,
         status: "failed",
         error_code: "source_error",
-        updated_at: nowIso(),
       }
       record.onboarding.reddit_import_status = "failed"
     }

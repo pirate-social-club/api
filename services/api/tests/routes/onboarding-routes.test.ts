@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import app from "../../src/index"
+import { app } from "../../src/index"
 import { setRedditSnapshotImporterForTests, setRedditVerificationCheckerForTests } from "../../src/lib/onboarding/reddit-bootstrap"
 import { buildTestEnv, createRouteTestContext, json, mintUpstreamJwt, resetRuntimeCaches } from "../helpers"
 import type { Env } from "../../src/types"
@@ -135,7 +135,7 @@ describe("onboarding reddit routes", () => {
 
     setRedditSnapshotImporterForTests(async ({ redditUsername }) => ({
       reddit_username: redditUsername,
-      imported_at: "2026-04-10T12:00:00.000Z",
+      imported_at: 1775822400,
       account_age_days: 1200,
       imported_reddit_score: 42000,
       top_subreddits: [
@@ -150,7 +150,7 @@ describe("onboarding reddit routes", () => {
       inferred_interests: ["hip-hop", "music"],
       suggested_communities: [
         {
-          community_id: "cmt_hiphop",
+          community: "com_cmt_hiphop",
           name: "Hip Hop",
           reason: "Based on your Reddit history",
         },

@@ -10,6 +10,11 @@ import { getUserRepository } from "../lib/auth/repositories"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { resolveCommunityIdentifier } from "../lib/communities/community-identifier"
 import { getJoinEligibility } from "../lib/communities/membership/eligibility-service"
+import {
+  decodePublicNamespaceVerificationId,
+  decodePublicNamespaceVerificationSessionId,
+  decodePublicVerificationSessionId,
+} from "../lib/public-ids"
 import type { Env, RequestedVerificationCapability, VerificationIntent, VerificationRequirement } from "../types"
 
 const verification = new Hono<{ Bindings: Env }>()
@@ -44,7 +49,7 @@ verification.post("/verification-sessions/:verificationSessionId/self-callback",
   }
   const repo = getControlPlaneVerificationRepository(c.env)
   const result = await repo.completeSelfVerificationCallback({
-    verificationSessionId: c.req.param("verificationSessionId"),
+    verificationSessionId: decodePublicVerificationSessionId(c.req.param("verificationSessionId")),
     payload,
   })
   if (!result) {
@@ -52,15 +57,19 @@ verification.post("/verification-sessions/:verificationSessionId/self-callback",
   }
   await trackApiEvent(c.env, c.req, {
     eventName: result.status === "verified" ? "unique_human_verification_succeeded" : "unique_human_verification_failed",
-    userId: result.user_id,
-    verificationSessionId: result.verification_session_id,
+    userId: result.user.replace(/^usr_/, ""),
+    verificationSessionId: result.id.replace(/^vs_/, ""),
     properties: {
       provider: "self",
       intent: result.verification_intent ?? null,
       failure_code: result.status === "verified" ? null : result.failure_reason ?? result.status,
     },
   })
-  return c.json({ status: result.status, verification_session_id: result.verification_session_id }, 200)
+  return c.json({
+    result: result.status === "verified",
+    status: result.status,
+    verification_session_id: result.id,
+  }, 200)
 })
 
 verification.post("/verification-sessions/very-widget-verify", async (c) => {
@@ -85,6 +94,7 @@ authenticatedNamespaceVerification.use("/namespace-verifications/*", authenticat
 
 authenticatedVerification.post("/verification-sessions/:verificationSessionId/very-bridge/sessions", async (c) => {
   const actor = c.get("actor")
+  const verificationSessionId = decodePublicVerificationSessionId(c.req.param("verificationSessionId"))
   const body = await c.req.text()
   const result = await proxyVeryBridgeRequest({
     body,
@@ -95,12 +105,12 @@ authenticatedVerification.post("/verification-sessions/:verificationSessionId/ve
   const providerSessionId = typeof result.body.sessionId === "string" ? result.body.sessionId.trim() : ""
   if (providerSessionId) {
     logVerificationDebug(c.env, "[very-provider] bridge session created", {
-      verificationSessionId: c.req.param("verificationSessionId"),
+      verificationSessionId,
       providerSessionId,
     })
     const repo = getControlPlaneVerificationRepository(c.env)
     const recorded = await repo.recordVeryBridgeSession({
-      verificationSessionId: c.req.param("verificationSessionId"),
+      verificationSessionId,
       userId: actor.userId,
       providerSessionId,
     })
@@ -109,7 +119,7 @@ authenticatedVerification.post("/verification-sessions/:verificationSessionId/ve
     }
   } else {
     console.warn("[very-provider] bridge session creation did not return a session id", {
-      verificationSessionId: c.req.param("verificationSessionId"),
+      verificationSessionId,
       responseStatus: result.status,
       bodyStatus: typeof result.body.status === "string" ? result.body.status : null,
       userMessage: typeof result.body.userMessage === "string" ? result.body.userMessage : null,
@@ -123,7 +133,8 @@ authenticatedVerification.post("/verification-sessions/:verificationSessionId/ve
 authenticatedVerification.get("/verification-sessions/:verificationSessionId/very-bridge/session/:providerSessionId", async (c) => {
   const actor = c.get("actor")
   const repo = getControlPlaneVerificationRepository(c.env)
-  const session = await repo.getVerificationSession(c.req.param("verificationSessionId"), actor.userId)
+  const verificationSessionId = decodePublicVerificationSessionId(c.req.param("verificationSessionId"))
+  const session = await repo.getVerificationSession(verificationSessionId, actor.userId)
   if (!session) {
     throw notFoundError("Verification session not found")
   }
@@ -143,14 +154,14 @@ authenticatedVerification.get("/verification-sessions/:verificationSessionId/ver
   if (result.status === 504 && result.body.userMessage === "Very bridge request timed out") {
     const fallbackStatus = veryBridgeLastStatusBySession.get(providerSessionId) ?? "initialized"
     console.warn("[very-provider] bridge session status timed out; returning last known status", {
-      verificationSessionId: c.req.param("verificationSessionId"),
+      verificationSessionId,
       providerSessionId,
       fallbackStatus,
     })
     return c.json({ status: fallbackStatus }, 200)
   }
   logVerificationDebug(c.env, "[very-provider] bridge session status", {
-    verificationSessionId: c.req.param("verificationSessionId"),
+    verificationSessionId,
     providerSessionId,
     status,
     responseStatus: result.status,
@@ -163,7 +174,7 @@ authenticatedVerification.get("/verification-sessions/:verificationSessionId/ver
   })
   if (status === "error" || result.status >= 400) {
     console.warn("[very-provider] bridge session status error", {
-      verificationSessionId: c.req.param("verificationSessionId"),
+      verificationSessionId,
       providerSessionId,
       status,
       responseStatus: result.status,
@@ -171,7 +182,7 @@ authenticatedVerification.get("/verification-sessions/:verificationSessionId/ver
     })
   } else if (status === "completed") {
     logVerificationDebug(c.env, "[very-provider] bridge session completed", {
-      verificationSessionId: c.req.param("verificationSessionId"),
+      verificationSessionId,
       providerSessionId,
     })
   }
@@ -252,7 +263,7 @@ authenticatedVerification.post("/verification-sessions", async (c) => {
   })
   logVerificationDebug(c.env, "[verification-sessions] start response", {
     userId: actor.userId,
-    verificationSessionId: created.verification_session_id,
+    verificationSessionId: created.id.replace(/^vs_/, ""),
     provider: created.provider,
     requestedCapabilities: created.requested_capabilities,
     verificationRequirements: created.verification_requirements,
@@ -269,7 +280,7 @@ authenticatedVerification.post("/verification-sessions", async (c) => {
   await trackApiEvent(c.env, c.req, {
     eventName: "unique_human_verification_started",
     userId: actor.userId,
-    verificationSessionId: created.verification_session_id,
+    verificationSessionId: created.id.replace(/^vs_/, ""),
     properties: {
       provider: body.provider,
       intent: body.verification_intent ?? null,
@@ -281,7 +292,7 @@ authenticatedVerification.post("/verification-sessions", async (c) => {
 authenticatedVerification.get("/verification-sessions/:verificationSessionId", async (c) => {
   const actor = c.get("actor")
   const repo = getControlPlaneVerificationRepository(c.env)
-  const result = await repo.getVerificationSession(c.req.param("verificationSessionId"), actor.userId)
+  const result = await repo.getVerificationSession(decodePublicVerificationSessionId(c.req.param("verificationSessionId")), actor.userId)
   if (!result) {
     throw notFoundError("Verification session not found")
   }
@@ -296,7 +307,7 @@ authenticatedVerification.post("/verification-sessions/:verificationSessionId/co
       .catch(() => null)) ?? null
   const repo = getControlPlaneVerificationRepository(c.env)
   const result = await repo.completeVerificationSession({
-    verificationSessionId: c.req.param("verificationSessionId"),
+    verificationSessionId: decodePublicVerificationSessionId(c.req.param("verificationSessionId")),
     userId: actor.userId,
     attestationId: body?.attestation_id ?? null,
     proof: body?.proof ?? null,
@@ -310,7 +321,7 @@ authenticatedVerification.post("/verification-sessions/:verificationSessionId/co
     await trackApiEvent(c.env, c.req, {
       eventName: result.status === "verified" ? "unique_human_verification_succeeded" : "unique_human_verification_failed",
       userId: actor.userId,
-      verificationSessionId: result.verification_session_id,
+      verificationSessionId: result.id.replace(/^vs_/, ""),
       properties: {
         provider: result.provider,
         intent: result.verification_intent ?? null,
@@ -338,7 +349,7 @@ authenticatedNamespaceVerification.post("/namespace-verification-sessions", asyn
     await trackApiEvent(c.env, c.req, {
       eventName: "namespace_verification_started",
       userId: actor.userId,
-      verificationSessionId: created.namespace_verification_session_id,
+      verificationSessionId: created.id.replace(/^nvs_/, ""),
       properties: { tld: body.family },
     })
     return c.json(created, 201)
@@ -359,7 +370,7 @@ authenticatedNamespaceVerification.post("/namespace-verification-sessions", asyn
 authenticatedNamespaceVerification.get("/namespace-verification-sessions/:namespaceVerificationSessionId", async (c) => {
   const actor = c.get("actor")
   const repo = getControlPlaneVerificationRepository(c.env)
-  const result = await repo.getNamespaceVerificationSession(c.req.param("namespaceVerificationSessionId"), actor.userId)
+  const result = await repo.getNamespaceVerificationSession(decodePublicNamespaceVerificationSessionId(c.req.param("namespaceVerificationSessionId")), actor.userId)
   if (!result) {
     throw notFoundError("Namespace verification session not found")
   }
@@ -382,7 +393,7 @@ authenticatedNamespaceVerification.post("/namespace-verification-sessions/:names
     restart_challenge?: boolean | null
   }>().catch(() => null)) ?? null
   const repo = getControlPlaneVerificationRepository(c.env)
-  const namespaceVerificationSessionId = c.req.param("namespaceVerificationSessionId")
+  const namespaceVerificationSessionId = decodePublicNamespaceVerificationSessionId(c.req.param("namespaceVerificationSessionId"))
   try {
     const result = await repo.completeNamespaceVerificationSession({
       namespaceVerificationSessionId,
@@ -410,7 +421,7 @@ authenticatedNamespaceVerification.post("/namespace-verification-sessions/:names
 authenticatedNamespaceVerification.get("/namespace-verifications/:namespaceVerificationId", async (c) => {
   const actor = c.get("actor")
   const repo = getControlPlaneVerificationRepository(c.env)
-  const result = await repo.getNamespaceVerification(c.req.param("namespaceVerificationId"), actor.userId)
+  const result = await repo.getNamespaceVerification(decodePublicNamespaceVerificationId(c.req.param("namespaceVerificationId")), actor.userId)
   if (!result) {
     throw notFoundError("Namespace verification not found")
   }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import app from "../../src/index"
+import { app } from "../../src/index"
 import { reconcileRoyaltyClaimEvents } from "../../src/lib/royalties/royalty-claim-history"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../helpers"
 import { exchangeJwt } from "./communities/community-routes-test-helpers"

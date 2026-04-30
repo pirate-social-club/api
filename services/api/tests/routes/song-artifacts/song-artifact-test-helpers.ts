@@ -1,4 +1,4 @@
-import app from "../../../src/index"
+import { app } from "../../../src/index"
 import { json, mintUpstreamJwt } from "../../helpers"
 import type { Env } from "../../../src/types"
 

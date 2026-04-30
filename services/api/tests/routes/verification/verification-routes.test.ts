@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import app from "../../../src/index"
+import { app } from "../../../src/index"
 import { json, createRouteTestContext, resetRuntimeCaches } from "../../helpers"
 import { mintUpstreamJwt } from "../../helpers"
 import { setSelfProviderForTests } from "../../../src/lib/verification/self-provider"
@@ -187,9 +187,11 @@ describe("verification routes", () => {
 
     expect(callback.status).toBe(200)
     const callbackBody = await json(callback) as {
+      result: boolean
       status: string
       verification_session_id: string
     }
+    expect(callbackBody.result).toBe(true)
     expect(callbackBody.status).toBe("verified")
     expect(callbackBody.verification_session_id).toBe(createdBody.verification_session_id)
   })
@@ -332,13 +334,13 @@ describe("verification routes", () => {
           provider: "passport",
           proof_type: "wallet_score",
           mechanism: "stamps-api-v2",
-          verified_at: now?.toISOString() ?? null,
-          score: 33.5,
-          score_threshold: 20,
+          verified_at: now ? Math.floor(now.getTime() / 1000) : null,
+          score_decimal: "33.5",
+          score_threshold_decimal: "20",
           passing_score: true,
-          last_score_timestamp: now?.toISOString() ?? null,
-          expiration_timestamp: new Date((now ?? new Date()).getTime() + 86_400_000).toISOString(),
-          stamps: [{ stamp_name: "Ens", stamp_score: 1.2 }],
+          last_scored_at: now ? Math.floor(now.getTime() / 1000) : null,
+          expires_at: Math.floor(((now ?? new Date()).getTime() + 86_400_000) / 1000),
+          stamps: [{ stamp_name: "Ens", stamp_score_decimal: "1.2" }],
         }
       },
     })
@@ -352,8 +354,8 @@ describe("verification routes", () => {
     expect(body.wallet_score.state).toBe("verified")
     expect(body.wallet_score.score).toBe(33.5)
     expect(body.wallet_score_status).toMatchObject({
-      current_score: 33.5,
-      required_score: 20,
+      current_score_decimal: "33.5",
+      required_score_decimal: "20",
       passing_score: true,
     })
 
@@ -411,7 +413,7 @@ describe("verification routes", () => {
             {
               proof_type: "wallet_score",
               accepted_providers: ["passport"],
-              config: { minimum_score: 20 },
+              config: { minimum_score_decimal: "20" },
             },
           ],
         },
@@ -439,12 +441,12 @@ describe("verification routes", () => {
         provider: "passport",
         proof_type: "wallet_score",
         mechanism: "stamps-api-v2",
-        verified_at: now?.toISOString() ?? null,
-        score: 25,
-        score_threshold: 20,
+        verified_at: now ? Math.floor(now.getTime() / 1000) : null,
+        score_decimal: "25",
+        score_threshold_decimal: "20",
         passing_score: true,
-        last_score_timestamp: now?.toISOString() ?? null,
-        expiration_timestamp: new Date((now ?? new Date()).getTime() + 86_400_000).toISOString(),
+        last_scored_at: now ? Math.floor(now.getTime() / 1000) : null,
+        expires_at: Math.floor(((now ?? new Date()).getTime() + 86_400_000) / 1000),
         stamps: null,
       }),
     })
@@ -459,8 +461,8 @@ describe("verification routes", () => {
     }
     expect(body.join_eligibility?.status).toBe("joinable")
     expect(body.wallet_score_status).toMatchObject({
-      current_score: 25,
-      required_score: 20,
+      current_score_decimal: "25",
+      required_score_decimal: "20",
     })
   })
 
@@ -488,7 +490,7 @@ describe("verification routes", () => {
             {
               proof_type: "wallet_score",
               accepted_providers: ["passport"],
-              config: { minimum_score: 20 },
+              config: { minimum_score_decimal: "20" },
             },
           ],
         },
@@ -516,12 +518,12 @@ describe("verification routes", () => {
         provider: "passport",
         proof_type: "wallet_score",
         mechanism: "stamps-api-v2",
-        verified_at: now?.toISOString() ?? null,
-        score: 10,
-        score_threshold: 20,
+        verified_at: now ? Math.floor(now.getTime() / 1000) : null,
+        score_decimal: "10",
+        score_threshold_decimal: "20",
         passing_score: false,
-        last_score_timestamp: now?.toISOString() ?? null,
-        expiration_timestamp: new Date((now ?? new Date()).getTime() + 86_400_000).toISOString(),
+        last_scored_at: now ? Math.floor(now.getTime() / 1000) : null,
+        expires_at: Math.floor(((now ?? new Date()).getTime() + 86_400_000) / 1000),
         stamps: null,
       }),
     })
@@ -537,8 +539,8 @@ describe("verification routes", () => {
     expect(body.join_eligibility?.status).toBe("gate_failed")
     expect(body.join_eligibility?.failure_reason).toBe("wallet_score_too_low")
     expect(body.wallet_score_status).toMatchObject({
-      current_score: 10,
-      required_score: 20,
+      current_score_decimal: "10",
+      required_score_decimal: "20",
       passing_score: false,
     })
   })
@@ -929,7 +931,7 @@ describe("verification routes", () => {
             uniqueness_domain: "pirate-unique-human-v0",
             binding_value: "0",
             binding_field: "pseudonym",
-            challenge_expires_at: input.challengeExpiresAt,
+            challenge_expires_at: Math.floor(Date.parse(input.challengeExpiresAt) / 1000),
           },
         },
       }),

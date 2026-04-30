@@ -10,6 +10,8 @@ import {
   toChainRefString,
 } from "./row-types"
 import { serializePurchaseAllocationLeg } from "./allocation"
+import { centsToUsd, pctToBps, usdToCents } from "./serialization"
+import { unixSeconds } from "../../../serializers/time"
 import type {
   CommunityListing,
   CommunityMoneyPolicy,
@@ -100,15 +102,16 @@ export function serializeSettlement(
     { chain_namespace: "eip155", chain_id: 1315, display_name: "Story Aeneid" },
   )
   return {
-    purchase_id: purchase.purchase_id,
-    quote_id: quote.quote_id,
-    community_id: purchase.community_id,
-    listing_id: purchase.listing_id,
-    buyer_user_id: purchase.buyer_user_id,
-    asset_id: purchase.asset_id,
-    live_room_id: purchase.live_room_id,
-    settlement_wallet_attachment_id: purchase.settlement_wallet_attachment_id,
-    purchase_price_usd: purchase.purchase_price_usd,
+    id: `pur_${purchase.purchase_id}`,
+    object: "community_purchase_settlement",
+    quote: `pq_${quote.quote_id}`,
+    community: `com_${purchase.community_id}`,
+    listing: `lst_${purchase.listing_id}`,
+    buyer_user: `usr_${purchase.buyer_user_id}`,
+    asset: purchase.asset_id ? `asset_${purchase.asset_id}` : null,
+    live_room: purchase.live_room_id,
+    settlement_wallet_attachment: purchase.settlement_wallet_attachment_id,
+    purchase_price_cents: usdToCents(purchase.purchase_price_usd) ?? 0,
     pricing_tier: purchase.pricing_tier,
     settlement_mode: purchase.settlement_mode,
     settlement_chain: settlementChain,
@@ -116,13 +119,13 @@ export function serializeSettlement(
     settlement_token: purchase.settlement_token,
     settlement_tx_ref: purchase.settlement_tx_ref,
     allocations: allocations.map(serializePurchaseAllocationLeg),
-    donation_partner_id: purchase.donation_partner_id,
-    donation_share_pct: purchase.donation_share_pct,
-    donation_amount_usd: purchase.donation_amount_usd,
+    donation_partner: purchase.donation_partner_id,
+    donation_share_bps: pctToBps(purchase.donation_share_pct),
+    donation_amount_cents: usdToCents(purchase.donation_amount_usd),
     entitlement_kind: toSettlementEntitlementKind(entitlement.entitlement_kind),
     entitlement_target_ref: entitlement.target_ref,
-    purchase_entitlement_id: entitlement.purchase_entitlement_id,
-    settled_at: purchase.created_at,
+    purchase_entitlement: entitlement.purchase_entitlement_id,
+    settled_at: unixSeconds(purchase.created_at),
   }
 }
 
@@ -131,7 +134,7 @@ export function resolveRegionalPrice(input: {
   pricingPolicy: CommunityPricingPolicy
   buyer: Awaited<ReturnType<UserRepository["getUserById"]>>
 }): { finalPriceUsd: number; pricingTier: string | null; verificationSnapshot: Record<string, unknown> | null } {
-  const basePriceUsd = input.listing.price_usd
+  const basePriceUsd = centsToUsd(input.listing.price_cents)
   if (!input.listing.regional_pricing_enabled || !input.pricingPolicy.regional_pricing_enabled || !input.buyer) {
     return { finalPriceUsd: basePriceUsd, pricingTier: null, verificationSnapshot: null }
   }
@@ -171,7 +174,7 @@ export function resolveBestVerifiedRegionalPrice(input: {
   maxSelfDiscountPercent: number | null
   verificationRequiredProvider: "self" | null
 } {
-  const basePriceUsd = input.listing.price_usd
+  const basePriceUsd = centsToUsd(input.listing.price_cents)
   if (
     !input.listing.regional_pricing_enabled
     || !input.pricingPolicy.regional_pricing_enabled

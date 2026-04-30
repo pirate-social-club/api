@@ -12,7 +12,7 @@ type CommunityCommentPolicy = {
 type CommunityVisibilityRow = {
   community_id: string
   status: string
-  membership_mode: "open" | "request" | "gated"
+  membership_mode: "request" | "gated"
 }
 
 export function assertCreateCommentRequest(body: CreateCommentRequest): void {
@@ -94,6 +94,6 @@ export async function getCommunityVisibility(executor: DbExecutor, communityId: 
   return {
     community_id: requiredString(row, "community_id"),
     status: requiredString(row, "status"),
-    membership_mode: requiredString(row, "membership_mode") as "open" | "request" | "gated",
+    membership_mode: requiredString(row, "membership_mode") as "request" | "gated",
   }
 }

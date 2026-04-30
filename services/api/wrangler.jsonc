@@ -13,6 +13,7 @@
 	  "vars": {
 	    // Set PASSPORT_API_KEY with `wrangler secret put PASSPORT_API_KEY`.
 	    "ENVIRONMENT": "development",
+      "SENTRY_DSN": "https://0e27176cffcca727ff2c1a10e334f831@o4511308510265344.ingest.us.sentry.io/4511308511379456",
     "JWT_BASED_AUTH_ENABLED": "true",
     "JWT_BASED_AUTH_ISSUERS": "pirate-dev",
     "JWT_BASED_AUTH_AUDIENCE": "pirate-api",
@@ -47,6 +48,7 @@
       "name": "pirate-api-staging",
       "vars": {
         "ENVIRONMENT": "staging",
+        "SENTRY_DSN": "https://0e27176cffcca727ff2c1a10e334f831@o4511308510265344.ingest.us.sentry.io/4511308511379456",
         "DEV_MEMORY_STORE_ENABLED": "false",
         "JWT_BASED_AUTH_ENABLED": "true",
         "JWT_BASED_AUTH_ISSUERS": "pirate-staging-upstream",
@@ -85,6 +87,7 @@
       "name": "api-core",
       "vars": {
         "ENVIRONMENT": "production",
+        "SENTRY_DSN": "https://0e27176cffcca727ff2c1a10e334f831@o4511308510265344.ingest.us.sentry.io/4511308511379456",
         "DEV_MEMORY_STORE_ENABLED": "false",
         "JWT_BASED_AUTH_ENABLED": "true",
         "JWT_BASED_AUTH_ISSUERS": "pirate-production-upstream",

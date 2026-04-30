@@ -1,5 +1,5 @@
 import { createClient } from "@libsql/client"
-import app from "../../../src/index"
+import { app } from "../../../src/index"
 import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
 import { buildDefaultVerificationCapabilities } from "../../../src/lib/verification/verification-capabilities"
 import type { Env } from "../../../src/types"
@@ -20,6 +20,10 @@ export function requestJson(url: string, body: unknown, env: Env, token?: string
   ))
 }
 
+function responseId(body: Record<string, unknown>, legacyKey: string): string {
+  return String(body[legacyKey] ?? body.id ?? "")
+}
+
 export async function exchangeJwt(env: Env, sub: string): Promise<{ accessToken: string; userId: string }> {
   const jwt = await mintUpstreamJwt(env, { sub })
   const response = await requestJson("http://pirate.test/auth/session/exchange", {
@@ -28,17 +32,18 @@ export async function exchangeJwt(env: Env, sub: string): Promise<{ accessToken:
       jwt,
     },
   }, env)
-  const body = await json(response) as { access_token: string; user: { user_id: string } }
-  return { accessToken: body.access_token, userId: body.user.user_id }
+  const body = await json(response) as { access_token: string; user: { user_id?: string; id?: string } }
+  return { accessToken: body.access_token, userId: body.user.user_id ?? body.user.id ?? "" }
 }
 
 export async function prepareVerifiedNamespace(env: Env, accessToken: string): Promise<string> {
   const verificationSession = await requestJson("http://pirate.test/verification-sessions", {
     provider: "self",
   }, env, accessToken)
-  const verificationBody = await json(verificationSession) as { verification_session_id: string }
+  const verificationBody = await json(verificationSession) as Record<string, unknown>
+  const verificationSessionId = responseId(verificationBody, "verification_session_id")
   await requestJson(
-    `http://pirate.test/verification-sessions/${verificationBody.verification_session_id}/complete`,
+    `http://pirate.test/verification-sessions/${verificationSessionId}/complete`,
     {},
     env,
     accessToken,
@@ -48,15 +53,16 @@ export async function prepareVerifiedNamespace(env: Env, accessToken: string): P
     family: "hns",
     root_label: "PirateCommunityRoot",
   }, env, accessToken)
-  const namespaceBody = await json(namespaceSession) as { namespace_verification_session_id: string }
+  const namespaceBody = await json(namespaceSession) as Record<string, unknown>
+  const namespaceSessionId = responseId(namespaceBody, "namespace_verification_session_id")
   const completed = await requestJson(
-    `http://pirate.test/namespace-verification-sessions/${namespaceBody.namespace_verification_session_id}/complete`,
+    `http://pirate.test/namespace-verification-sessions/${namespaceSessionId}/complete`,
     {},
     env,
     accessToken,
   )
-  const completedBody = await json(completed) as { namespace_verification_id: string }
-  return completedBody.namespace_verification_id
+  const completedBody = await json(completed) as Record<string, unknown>
+  return responseId(completedBody, "namespace_verification_id")
 }
 
 export async function completeUniqueHumanVerification(
@@ -67,9 +73,10 @@ export async function completeUniqueHumanVerification(
   const verificationSession = await requestJson("http://pirate.test/verification-sessions", {
     provider,
   }, env, accessToken)
-  const verificationBody = await json(verificationSession) as { verification_session_id: string }
+  const verificationBody = await json(verificationSession) as Record<string, unknown>
+  const verificationSessionId = responseId(verificationBody, "verification_session_id")
   await requestJson(
-    `http://pirate.test/verification-sessions/${verificationBody.verification_session_id}/complete`,
+    `http://pirate.test/verification-sessions/${verificationSessionId}/complete`,
     {},
     env,
     accessToken,
@@ -84,9 +91,10 @@ export async function completeNationalityVerification(
     provider: "self",
     requested_capabilities: ["nationality"],
   }, env, accessToken)
-  const verificationBody = await json(verificationSession) as { verification_session_id: string }
+  const verificationBody = await json(verificationSession) as Record<string, unknown>
+  const verificationSessionId = responseId(verificationBody, "verification_session_id")
   await requestJson(
-    `http://pirate.test/verification-sessions/${verificationBody.verification_session_id}/complete`,
+    `http://pirate.test/verification-sessions/${verificationSessionId}/complete`,
     {},
     env,
     accessToken,
@@ -101,9 +109,10 @@ export async function completeGenderVerification(
     provider: "self",
     requested_capabilities: ["gender"],
   }, env, accessToken)
-  const verificationBody = await json(verificationSession) as { verification_session_id: string }
+  const verificationBody = await json(verificationSession) as Record<string, unknown>
+  const verificationSessionId = responseId(verificationBody, "verification_session_id")
   await requestJson(
-    `http://pirate.test/verification-sessions/${verificationBody.verification_session_id}/complete`,
+    `http://pirate.test/verification-sessions/${verificationSessionId}/complete`,
     {},
     env,
     accessToken,
@@ -118,9 +127,10 @@ export async function completeAgeOver18Verification(
     provider: "self",
     requested_capabilities: ["age_over_18"],
   }, env, accessToken)
-  const verificationBody = await json(verificationSession) as { verification_session_id: string }
+  const verificationBody = await json(verificationSession) as Record<string, unknown>
+  const verificationSessionId = responseId(verificationBody, "verification_session_id")
   await requestJson(
-    `http://pirate.test/verification-sessions/${verificationBody.verification_session_id}/complete`,
+    `http://pirate.test/verification-sessions/${verificationSessionId}/complete`,
     {},
     env,
     accessToken,
@@ -281,12 +291,12 @@ export async function setPassportWalletScore(
       provider: "passport",
       proof_type: "wallet_score",
       mechanism: "stamps-api-v2",
-      verified_at: new Date().toISOString(),
-      score: input.score,
-      score_threshold: input.scoreThreshold,
+      verified_at: Math.floor(Date.now() / 1000),
+      score_decimal: String(input.score),
+      score_threshold_decimal: String(input.scoreThreshold),
       passing_score: input.passingScore,
-      last_score_timestamp: new Date().toISOString(),
-      expiration_timestamp: null,
+      last_scored_at: Math.floor(Date.now() / 1000),
+      expires_at: null,
       stamps: null,
     }
 

@@ -72,6 +72,7 @@ describe("self-provider capability canonicalization", () => {
 
     expect(started.launch.endpoint).toBe("https://api.pirate.test/verification-sessions/ver_self_sdk/self-callback")
     expect(started.launch.endpoint_type).toBe("staging_https")
+    expect(started.launch.dev_mode).toBe(true)
     expect(started.launch.user_id).toMatch(/^[0-9a-f-]{36}$/u)
     expect(started.launch.user_defined_data).toContain("ver_self_sdk")
     expect(started.upstreamSessionRef).toContain("\"kind\":\"self-sdk\"")
@@ -96,6 +97,50 @@ describe("self-provider capability canonicalization", () => {
     expect(started.upstreamSessionRef).toContain("https://fresh-cloudflare.example.com/verification-sessions/ver_self_fresh_tunnel/self-callback")
   })
 
+  test("non-production Self sessions use configured HTTPS origin when the request origin is localhost", async () => {
+    const provider = getSelfProvider(buildTestEnv({
+      ENVIRONMENT: "staging",
+      PIRATE_API_PUBLIC_ORIGIN: "https://configured-cloudflare.example.com",
+    }))
+    const started = await provider.startSession({
+      verificationSessionId: "ver_self_configured_tunnel",
+      userId: "usr_test",
+      publicOrigin: "http://localhost:8787",
+      requestedCapabilities: ["unique_human", "age_over_18"],
+      verificationIntent: "community_creation",
+      policyId: null,
+    })
+
+    expect(started.launch.endpoint).toBe("https://configured-cloudflare.example.com/verification-sessions/ver_self_configured_tunnel/self-callback")
+    expect(started.upstreamSessionRef).toContain("\"kind\":\"self-sdk\"")
+  })
+
+  test("non-production localhost Self sessions reject missing public HTTPS callback origins", async () => {
+    const provider = getSelfProvider(buildTestEnv({ ENVIRONMENT: "staging" }))
+
+    await expect(provider.startSession({
+      verificationSessionId: "ver_self_localhost",
+      userId: "usr_test",
+      publicOrigin: "http://localhost:8787",
+      requestedCapabilities: ["unique_human", "age_over_18"],
+      verificationIntent: "community_creation",
+      policyId: null,
+    })).rejects.toThrow("Self provider requires a public HTTPS callback origin")
+  })
+
+  test("production Self sessions reject localhost callback origins", async () => {
+    const provider = getSelfProvider(buildTestEnv({ ENVIRONMENT: "production" }))
+
+    await expect(provider.startSession({
+      verificationSessionId: "ver_self_prod_localhost",
+      userId: "usr_test",
+      publicOrigin: "http://localhost:8787",
+      requestedCapabilities: ["unique_human", "age_over_18"],
+      verificationIntent: "community_creation",
+      policyId: null,
+    })).rejects.toThrow("Self provider requires a public HTTPS callback origin")
+  })
+
   test("production Self sessions use real passport verification without an API key", async () => {
     const provider = getSelfProvider(buildTestEnv({
       ENVIRONMENT: "production",
@@ -111,6 +156,7 @@ describe("self-provider capability canonicalization", () => {
 
     expect(started.launch.endpoint).toBe("https://api.pirate.test/verification-sessions/ver_self_prod/self-callback")
     expect(started.launch.endpoint_type).toBe("https")
+    expect(started.launch.dev_mode).toBe(false)
     expect(started.upstreamSessionRef).toContain("\"kind\":\"self-sdk\"")
     expect(started.upstreamSessionRef).toContain("\"mockPassport\":false")
   })

@@ -18,6 +18,7 @@ import {
   getResolvedCommunityRouteContext,
   optionalJsonBody,
 } from "./communities-route-helpers"
+import { decodePublicMembershipRequestId } from "../lib/public-ids"
 
 export function registerCommunityMembershipRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.get("/:communityId/preview", async (c) => {
@@ -88,7 +89,7 @@ export function registerCommunityMembershipRoutes(communities: Hono<Authenticate
       env: c.env,
       userId: actor.userId,
       communityId,
-      requestId: c.req.param("requestId"),
+      requestId: decodePublicMembershipRequestId(c.req.param("requestId")),
       decision: "approved",
       communityRepository,
       profileRepository,
@@ -102,7 +103,7 @@ export function registerCommunityMembershipRoutes(communities: Hono<Authenticate
       env: c.env,
       userId: actor.userId,
       communityId,
-      requestId: c.req.param("requestId"),
+      requestId: decodePublicMembershipRequestId(c.req.param("requestId")),
       decision: "rejected",
       communityRepository,
       profileRepository,
@@ -110,7 +111,7 @@ export function registerCommunityMembershipRoutes(communities: Hono<Authenticate
     return c.json(result, 200)
   })
 
-  communities.put("/:communityId/follow", async (c) => {
+  communities.post("/:communityId/follow", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const result = await followCommunity({
       env: c.env,
@@ -128,7 +129,7 @@ export function registerCommunityMembershipRoutes(communities: Hono<Authenticate
     return c.json(result, 200)
   })
 
-  communities.delete("/:communityId/follow", async (c) => {
+  communities.post("/:communityId/unfollow", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const result = await unfollowCommunity({
       env: c.env,

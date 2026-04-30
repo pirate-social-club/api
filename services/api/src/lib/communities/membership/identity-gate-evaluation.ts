@@ -63,7 +63,8 @@ function satisfiesProofRequirement(user: User, requirement: ProofRequirement, ga
       }
       const config = (requirement.config ?? gateConfig ?? {}) as Record<string, unknown>
       const minimumScore = typeof config.minimum_score === "number" ? config.minimum_score : null
-      return minimumScore == null || (typeof capability.score === "number" && capability.score >= minimumScore)
+      const score = capability.score_decimal == null ? null : Number(capability.score_decimal)
+      return minimumScore == null || (typeof score === "number" && Number.isFinite(score) && score >= minimumScore)
     }
     default:
       return false
@@ -160,8 +161,9 @@ export function evaluateIdentityGateRule(input: {
           mismatchReasons.push("provider_not_accepted")
         } else {
           const minimumScore = readMinimumScore(config, null)
+          const score = capability.score_decimal == null ? null : Number(capability.score_decimal)
           const scoreMeetsMinimum = minimumScore == null
-            || (typeof capability.score === "number" && capability.score >= minimumScore)
+            || (typeof score === "number" && Number.isFinite(score) && score >= minimumScore)
           if (capability.passing_score !== true || !scoreMeetsMinimum) {
             mismatchReasons.push("wallet_score_too_low")
           }

@@ -60,6 +60,22 @@ function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null
 }
 
+function decimalString(value: number | null): string | null {
+  return value == null ? null : String(value)
+}
+
+function unixSeconds(value: Date): number {
+  return Math.floor(value.getTime() / 1000)
+}
+
+function parseUnixSeconds(value: string | null, fallback: Date): number {
+  if (!value) {
+    return unixSeconds(fallback)
+  }
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : unixSeconds(fallback)
+}
+
 function normalizeStampScores(value: unknown): WalletScoreCapability["stamps"] {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null
@@ -71,7 +87,7 @@ function normalizeStampScores(value: unknown): WalletScoreCapability["stamps"] {
         : numericValue(raw)
       return {
         stamp_name: stampName,
-        ...(stampScore == null ? {} : { stamp_score: stampScore }),
+        ...(stampScore == null ? {} : { stamp_score_decimal: String(stampScore) }),
       }
     })
     .filter((stamp) => stamp.stamp_name)
@@ -84,11 +100,11 @@ function unverifiedWalletScore(now: Date): WalletScoreCapability {
     proof_type: "wallet_score",
     mechanism: "stamps-api-v2",
     verified_at: null,
-    score: null,
-    score_threshold: null,
+    score_decimal: null,
+    score_threshold_decimal: null,
     passing_score: null,
-    last_score_timestamp: now.toISOString(),
-    expiration_timestamp: null,
+    last_scored_at: unixSeconds(now),
+    expires_at: null,
     stamps: null,
   }
 }
@@ -126,12 +142,12 @@ function normalizePassportScoreResponse(body: PassportScoreResponse, now: Date):
     provider: "passport",
     proof_type: "wallet_score",
     mechanism: "stamps-api-v2",
-    verified_at: now.toISOString(),
-    score,
-    score_threshold: scoreThreshold,
+    verified_at: unixSeconds(now),
+    score_decimal: decimalString(score),
+    score_threshold_decimal: decimalString(scoreThreshold),
     passing_score: passingScore,
-    last_score_timestamp: lastScoreTimestamp,
-    expiration_timestamp: providerExpiration ?? cacheExpiration,
+    last_scored_at: parseUnixSeconds(lastScoreTimestamp, now),
+    expires_at: parseUnixSeconds(providerExpiration ?? cacheExpiration, now),
     stamps: normalizeStampScores(body.stamp_scores ?? body.stamps),
   }
 }

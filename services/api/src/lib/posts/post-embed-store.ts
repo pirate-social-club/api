@@ -3,6 +3,7 @@ import { executeFirst } from "../db-helpers"
 import { makeId } from "../helpers"
 import { numberOrNull, requiredString, rowValue, stringOrNull } from "../sql-row"
 import type { Post } from "../../types"
+import { nullableUnixSeconds } from "../../serializers/time"
 
 type PostEmbed = NonNullable<Post["embeds"]>[number]
 type XPostEmbed = Extract<PostEmbed, { provider: "x" }>
@@ -42,7 +43,7 @@ function parsePreview(value: string | null, provider: PostEmbed["provider"]): Po
 
 function toPostEmbed(row: PostEmbedRow): PostEmbed {
   return {
-    embed_id: row.embed_id,
+    embed: row.embed_id,
     embed_key: row.embed_key,
     provider: row.provider,
     provider_ref: row.provider_ref,
@@ -53,7 +54,7 @@ function toPostEmbed(row: PostEmbedRow): PostEmbed {
     oembed_html: row.oembed_html,
     oembed_cache_age: row.oembed_cache_age,
     unavailable_reason: row.unavailable_reason,
-    last_checked_at: row.last_checked_at,
+    last_checked_at: nullableUnixSeconds(row.last_checked_at),
   }
 }
 

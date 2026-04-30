@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import app from "../../src/index"
+import { app } from "../../src/index"
 import {
   emitRoyaltyEarnedBatch,
   emitPostCommented,
@@ -49,7 +49,7 @@ describe("notification routes", () => {
           ...authHeaders(session.accessToken),
           "content-type": "application/json",
         },
-        body: JSON.stringify({ task_id: `synth:unique_human:${session.userId}` }),
+        body: JSON.stringify({ id: `synth:unique_human:${session.userId}` }),
       },
       ctx.env,
     )
@@ -98,7 +98,7 @@ describe("notification routes", () => {
         UPDATE profiles
         SET display_name = ?2,
             avatar_ref = ?3
-        WHERE user_id = ?1
+        WHERE user = ?1
       `,
       args: [actorSession.userId, "Route Actor", "/avatars/route-actor.png"],
     })
@@ -145,11 +145,11 @@ describe("notification routes", () => {
     )
     expect(tasks.status).toBe(200)
     const tasksBody = await json(tasks) as {
-      items: Array<{ task_id: string; type: string; status: string; payload?: Record<string, unknown> | null }>
+      items: Array<{ id: string; type: string; status: string; payload?: Record<string, unknown> | null }>
     }
     expect(tasksBody.items).toHaveLength(4)
-    expect(tasksBody.items.some((item) => item.task_id === task.task_id && item.status === "open")).toBe(true)
-    expect(tasksBody.items.find((item) => item.task_id === task.task_id)).toMatchObject({
+    expect(tasksBody.items.some((item) => item.id === task.id && item.status === "open")).toBe(true)
+    expect(tasksBody.items.find((item) => item.id === task.id)).toMatchObject({
       payload: {
         target_path: "/c/cmt_notifications/mod/namespace",
       },
@@ -263,21 +263,21 @@ describe("notification routes", () => {
           ...authHeaders(session.accessToken),
           "content-type": "application/json",
         },
-        body: JSON.stringify({ task_id: task.task_id }),
+        body: JSON.stringify({ id: task.id }),
       },
       ctx.env,
     )
     expect(dismiss.status).toBe(200)
-    const dismissBody = await json(dismiss) as { task_id: string; status: string }
-    expect(dismissBody).toMatchObject({ task_id: task.task_id, status: "dismissed" })
+    const dismissBody = await json(dismiss) as { id: string; status: string }
+    expect(dismissBody).toMatchObject({ id: task.id, status: "dismissed" })
 
     const tasksAfterDismiss = await app.request(
       "http://pirate.test/notifications/tasks",
       { headers: authHeaders(session.accessToken) },
       ctx.env,
     )
-    const tasksAfterDismissBody = await json(tasksAfterDismiss) as { items: Array<{ task_id: string }> }
-    expect(tasksAfterDismissBody.items.some((item) => item.task_id === task.task_id)).toBe(false)
+    const tasksAfterDismissBody = await json(tasksAfterDismiss) as { items: Array<{ id: string }> }
+    expect(tasksAfterDismissBody.items.some((item) => item.id === task.id)).toBe(false)
 
     const analyticsRows = await ctx.client.execute({
       sql: `

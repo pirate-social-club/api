@@ -5,22 +5,23 @@ import { resolveBestVerifiedRegionalPrice } from "../src/lib/communities/commerc
 
 function createListing(overrides: Partial<CommunityListing> = {}): CommunityListing {
   return {
-    listing_id: "lst_test",
-    community_id: "cmt_test",
+    id: "lst_test",
+    object: "community_listing",
+    community: "com_cmt_test",
     listing_mode: "fixed_price",
     status: "active",
-    price_usd: 10,
+    price_cents: 1000,
     regional_pricing_enabled: true,
-    created_by_user_id: "usr_creator",
-    created_at: "2026-01-01T00:00:00.000Z",
-    updated_at: "2026-01-01T00:00:00.000Z",
+    created_by_user: "usr_creator",
+    created: 1767225600,
     ...overrides,
   }
 }
 
 function createPricingPolicy(overrides: Partial<CommunityPricingPolicy> = {}): CommunityPricingPolicy {
   return {
-    community_id: "cmt_test",
+    id: "cpp_cmt_test",
+    object: "community_pricing_policy",
     policy_origin: "explicit",
     pricing_policy_version: "ppv_test",
     regional_pricing_enabled: true,
@@ -33,7 +34,6 @@ function createPricingPolicy(overrides: Partial<CommunityPricingPolicy> = {}): C
     country_assignments: [
       { country_code: "BR", tier_key: "access" },
     ],
-    updated_at: "2026-01-01T00:00:00.000Z",
     ...overrides,
   }
 }
@@ -94,7 +94,7 @@ describe("resolveBestVerifiedRegionalPrice", () => {
 
   test("does not offer a discount for invalid listing price", () => {
     expect(resolveBestVerifiedRegionalPrice({
-      listing: createListing({ price_usd: 0 }),
+      listing: createListing({ price_cents: 0 }),
       pricingPolicy: createPricingPolicy(),
     })).toEqual({
       bestVerifiedPriceUsd: null,

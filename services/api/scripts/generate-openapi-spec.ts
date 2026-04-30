@@ -126,9 +126,9 @@ function runtimeOnlyPaths(fullSpec: OpenApiRecord): OpenApiRecord {
                       type: "array",
                       items: {
                         type: "object",
-                        required: ["community_id", "display_name"],
+                        required: ["community", "display_name"],
                         properties: {
-                          community_id: { type: "string" },
+                          community: { type: "string" },
                           display_name: { type: "string" },
                           route_slug: { type: "string", nullable: true },
                         },
@@ -148,31 +148,6 @@ function runtimeOnlyPaths(fullSpec: OpenApiRecord): OpenApiRecord {
     "/public-communities/{community_id}/posts": implementedPath(fullSpec.paths["/public-communities/{community_id}/posts"]),
     "/public-posts/{post_id}": implementedPath(fullSpec.paths["/public-posts/{post_id}"]),
     "/public-posts/{post_id}/top-comments": implementedPath(fullSpec.paths["/public-posts/{post_id}/top-comments"]),
-    "/public-comments/posts/{post_id}/comments": {
-      get: {
-        tags: ["Comments"],
-        "x-implemented": true,
-        security: [],
-        summary: "List public comments for a post",
-        parameters: [
-          { name: "post_id", in: "path", required: true, schema: { type: "string" } },
-          { $ref: "#/components/parameters/Cursor" },
-          { $ref: "#/components/parameters/Limit" },
-        ],
-        responses: {
-          "200": {
-            description: "Public comments",
-            content: {
-              "application/json": {
-                schema: { $ref: "#/components/schemas/CommentListResponse" },
-              },
-            },
-          },
-          "404": { $ref: "#/components/responses/NotFound" },
-          "429": { $ref: "#/components/responses/RateLimited" },
-        },
-      },
-    },
     "/public-comments/{comment_id}/replies": {
       get: {
         tags: ["Comments"],

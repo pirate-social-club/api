@@ -7,7 +7,10 @@ import type { CreateCommentRequest } from "../lib/comments/comment-types"
 import { getControlPlaneClient } from "../lib/runtime-deps"
 import { makeId, nowIso } from "../lib/helpers"
 import { createPost, listCommunityPosts } from "../lib/posts/post-service"
+import { serializeComment, serializeCommentListResponse } from "../serializers/comment"
+import { serializeLocalizedPostResponse, serializePost } from "../serializers/post"
 import type { CreatePostRequest } from "../types"
+import { decodePublicPostId } from "../lib/public-ids"
 import {
   getResolvedCommunityRouteContext,
   requireJsonBody,
@@ -69,7 +72,7 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
         ],
       })
     }
-    return c.json(result, result.status === "published" ? 201 : 202)
+    return c.json(serializePost(result), result.status === "published" ? 201 : 202)
   })
 
   communities.get("/:communityId/posts", async (c) => {
@@ -85,11 +88,15 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
       sort: c.req.query("sort") ?? null,
       communityRepository,
     })
-    return c.json(result, 200)
+    return c.json({
+      ...result,
+      items: result.items.map(serializeLocalizedPostResponse),
+    }, 200)
   })
 
   communities.post("/:communityId/posts/:postId/comments", async (c) => {
     const { actor, communityId, communityRepository, userRepository, profileRepository } = await getResolvedCommunityRouteContext(c)
+    const postId = decodePublicPostId(c.req.param("postId"))
     const body = await requireJsonBody<CreateCommentRequest>(c, "Invalid comment create payload")
     if (actor.authType !== "admin") {
       assertAgentDelegatedWriteMatchesActor({ actor, body })
@@ -99,7 +106,7 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
       requestUrl: c.req.url,
       userId: actor.userId,
       communityId,
-      threadRootPostId: c.req.param("postId"),
+      threadRootPostId: postId,
       body,
       bypassAuthorAccessChecks: actor.authType === "admin",
       userRepository,
@@ -110,7 +117,7 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
       eventName: "comment_created",
       userId: actor.userId,
       communityId,
-      postId: c.req.param("postId"),
+      postId,
       commentId: result.comment_id,
       properties: {
         depth: result.depth,
@@ -136,14 +143,14 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
             operation_class: operationClass,
             acting_user_id: actor.userId,
             idempotency_key: body.idempotency_key ?? null,
-            post_id: c.req.param("postId"),
+            post_id: postId,
             depth: result.depth,
           }),
           nowIso(),
         ],
       })
     }
-    return c.json(result, 201)
+    return c.json(serializeComment(result), 201)
   })
 
   communities.get("/:communityId/posts/:postId/comments", async (c) => {
@@ -152,13 +159,13 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
       env: c.env,
       userId: actor.userId,
       communityId,
-      threadRootPostId: c.req.param("postId"),
+      threadRootPostId: decodePublicPostId(c.req.param("postId")),
       locale: c.req.query("locale") ?? null,
       sort: c.req.query("sort") ?? null,
       cursor: c.req.query("cursor") ?? null,
       limit: c.req.query("limit") ?? null,
       communityRepository,
     })
-    return c.json(result, 200)
+    return c.json(serializeCommentListResponse(result), 200)
   })
 }

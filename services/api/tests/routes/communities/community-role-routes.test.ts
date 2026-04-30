@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { createClient } from "@libsql/client"
-import app from "../../../src/index"
+import { app } from "../../../src/index"
 import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
 import type { CommunityPreview, Env } from "../../../src/types"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
@@ -70,7 +70,7 @@ async function countActiveRole(input: {
         SELECT COUNT(*) AS count
         FROM community_roles
         WHERE community_id = ?1
-          AND user_id = ?2
+          AND user = ?2
           AND role = ?3
           AND status = 'active'
       `,
@@ -101,7 +101,7 @@ describe("community role routes", () => {
     const grantModerator = await requestJson(
       `http://pirate.test/communities/${communityId}/roles/grant`,
       {
-        user_id: moderator.userId,
+        user: moderator.userId,
         role: "moderator",
       },
       ctx.env,
@@ -112,7 +112,7 @@ describe("community role routes", () => {
     const duplicateGrant = await requestJson(
       `http://pirate.test/communities/${communityId}/roles/grant`,
       {
-        user_id: moderator.userId,
+        user: moderator.userId,
         role: "moderator",
       },
       ctx.env,
@@ -129,7 +129,7 @@ describe("community role routes", () => {
     const grantAdmin = await requestJson(
       `http://pirate.test/communities/${communityId}/roles/grant`,
       {
-        user_id: admin.userId,
+        user: admin.userId,
         role: "admin",
       },
       ctx.env,
@@ -140,7 +140,7 @@ describe("community role routes", () => {
     const adminGrantsModerator = await requestJson(
       `http://pirate.test/communities/${communityId}/roles/grant`,
       {
-        user_id: secondModerator.userId,
+        user: secondModerator.userId,
         role: "moderator",
       },
       ctx.env,
@@ -151,7 +151,7 @@ describe("community role routes", () => {
     const adminCannotGrantAdmin = await requestJson(
       `http://pirate.test/communities/${communityId}/roles/grant`,
       {
-        user_id: secondAdmin.userId,
+        user: secondAdmin.userId,
         role: "admin",
       },
       ctx.env,
@@ -164,20 +164,20 @@ describe("community role routes", () => {
       communityId,
       accessToken: owner.accessToken,
     })
-    expect(preview.owner?.user_id).toBe(owner.userId)
+    expect(preview.owner?.user).toBe(owner.userId)
     expect(preview.moderators.map((role) => ({
-      user_id: role.user_id,
+      user: role.user,
       role: role.role,
     }))).toEqual([
-      { user_id: admin.userId, role: "admin" },
-      { user_id: moderator.userId, role: "moderator" },
-      { user_id: secondModerator.userId, role: "moderator" },
+      { user: admin.userId, role: "admin" },
+      { user: moderator.userId, role: "moderator" },
+      { user: secondModerator.userId, role: "moderator" },
     ])
 
     const revokeModerator = await requestJson(
       `http://pirate.test/communities/${communityId}/roles/revoke`,
       {
-        user_id: moderator.userId,
+        user: moderator.userId,
         role: "moderator",
       },
       ctx.env,
@@ -190,7 +190,7 @@ describe("community role routes", () => {
       communityId,
       accessToken: owner.accessToken,
     })
-    expect(afterRevoke.moderators.map((role) => role.user_id)).toEqual([admin.userId, secondModerator.userId])
+    expect(afterRevoke.moderators.map((role) => role.user)).toEqual([admin.userId, secondModerator.userId])
   })
 
   test("non-owner cannot grant community roles", async () => {
@@ -209,7 +209,7 @@ describe("community role routes", () => {
     const response = await requestJson(
       `http://pirate.test/communities/${communityId}/roles/grant`,
       {
-        user_id: target.userId,
+        user: target.userId,
         role: "moderator",
       },
       ctx.env,

@@ -28,7 +28,8 @@ function defaultMoneyPolicy(env: Env, communityId: string): CommunityMoneyPolicy
 
 function defaultPricingPolicy(communityId: string): CommunityPricingPolicy {
   return {
-    community_id: communityId,
+    id: `cpp_${communityId}`,
+    object: "community_pricing_policy",
     policy_origin: "default",
     pricing_policy_version: "default",
     regional_pricing_enabled: false,
@@ -36,9 +37,8 @@ function defaultPricingPolicy(communityId: string): CommunityPricingPolicy {
     default_tier_key: null,
     tiers: [],
     country_assignments: [],
-    source_template_id: null,
+    source_template: null,
     source_template_version: null,
-    updated_at: new Date(0).toISOString(),
   }
 }
 
@@ -63,7 +63,8 @@ export async function getCommunityMoneyPolicy(input: {
     return defaultMoneyPolicy(input.env, input.communityId)
   }
   return {
-    community_id: requiredString(row, "community_id"),
+    id: `cmp_${requiredString(row, "community_id")}`,
+    object: "community_money_policy",
     policy_origin: "explicit",
     funding_preference: requiredString(row, "funding_preference"),
     accepted_funding_assets: parseJsonValue(requiredString(row, "accepted_funding_assets_json"), []),
@@ -81,7 +82,6 @@ export async function getCommunityMoneyPolicy(input: {
     route_required: sqliteToBool((row as Record<string, unknown>).route_required),
     route_status_policy: requiredString(row, "route_status_policy") as CommunityMoneyPolicy["route_status_policy"],
     route_hop_tolerance: Number(numberOrNull(row, "route_hop_tolerance") ?? 0),
-    updated_at: requiredString(row, "updated_at"),
   }
 }
 
@@ -167,7 +167,8 @@ export async function getCommunityPricingPolicy(input: {
     return defaultPricingPolicy(input.communityId)
   }
   return {
-    community_id: requiredString(row, "community_id"),
+    id: `cpp_${requiredString(row, "community_id")}`,
+    object: "community_pricing_policy",
     policy_origin: "explicit",
     pricing_policy_version: requiredString(row, "pricing_policy_version"),
     regional_pricing_enabled: sqliteToBool((row as Record<string, unknown>).regional_pricing_enabled),
@@ -175,9 +176,8 @@ export async function getCommunityPricingPolicy(input: {
     default_tier_key: stringOrNull(row, "default_tier_key"),
     tiers: parseJsonValue(requiredString(row, "tiers_json"), []),
     country_assignments: parseJsonValue(requiredString(row, "country_assignments_json"), []),
-    source_template_id: stringOrNull(row, "source_template_id"),
+    source_template: stringOrNull(row, "source_template_id"),
     source_template_version: stringOrNull(row, "source_template_version"),
-    updated_at: requiredString(row, "updated_at"),
   }
 }
 
@@ -225,7 +225,7 @@ export async function updateCommunityPricingPolicy(input: {
       input.body.default_tier_key ?? null,
       JSON.stringify(input.body.tiers),
       JSON.stringify(input.body.country_assignments),
-      input.body.source_template_id ?? null,
+      input.body.source_template ?? null,
       input.body.source_template_version ?? null,
       policyVersion,
       updatedAt,

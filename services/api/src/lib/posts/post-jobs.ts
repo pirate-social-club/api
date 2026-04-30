@@ -137,7 +137,9 @@ export async function enqueueEmbedHydrateOnReadIfNeeded(input: {
   const now = input.now ?? nowIso()
   const nowMs = Date.parse(now)
   const hasStaleEmbed = input.post.embeds.some((embed) => {
-    const checkedAtMs = Date.parse(embed.last_checked_at ?? "")
+    const checkedAtMs = typeof embed.last_checked_at === "number"
+      ? embed.last_checked_at * 1000
+      : Date.parse(embed.last_checked_at ?? "")
     return !Number.isFinite(checkedAtMs) || !Number.isFinite(nowMs) || nowMs - checkedAtMs >= EMBED_RECHECK_INTERVAL_MS
   })
   if (!hasStaleEmbed) {

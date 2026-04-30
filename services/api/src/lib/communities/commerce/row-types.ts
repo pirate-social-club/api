@@ -72,7 +72,9 @@ export type ListingPolicySnapshot = {
   donation_share_pct?: number | null
 }
 
-export type QuoteAllocationSnapshot = NonNullable<CommunityPurchaseQuote["allocation_snapshot"]>[number]
+export type QuoteAllocationSnapshot = Omit<NonNullable<CommunityPurchaseQuote["allocation_snapshot"]>[number], "amount_cents"> & {
+  amount_usd: number
+}
 
 export type PurchaseAllocationLeg = NonNullable<CommunityPurchase["allocations"]>[number]
 

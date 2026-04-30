@@ -1,17 +1,30 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import app from "../../../src/index"
+import { app } from "../../../src/index"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { setVeryProviderForTests } from "../../../src/lib/verification/very-provider"
 import type { VeryProvider } from "../../../src/lib/verification/very-provider"
 import {
   completeUniqueHumanVerification,
   exchangeJwt,
-  prepareVerifiedNamespace,
   requestJson,
   setPassportWalletScore,
 } from "./community-routes-test-helpers"
 
 let cleanup: (() => Promise<void>) | null = null
+
+function gatePolicy(gate: Record<string, unknown>): Record<string, unknown> {
+  return {
+    version: 1,
+    expression: {
+      op: "gate",
+      gate,
+    },
+  }
+}
+
+function createdCommunityId(body: { community: { id?: string; community_id?: string } }): string {
+  return body.community.community_id ?? body.community.id ?? ""
+}
 
 beforeEach(() => {
   resetRuntimeCaches()
@@ -30,21 +43,16 @@ describe("community membership routes", () => {
     cleanup = ctx.cleanup
 
     const creator = await exchangeJwt(ctx.env, "community-request-lifecycle-creator")
-    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Request Lifecycle Club",
-      namespace: {
-        namespace_verification_id: namespaceVerificationId,
-      },
       membership_mode: "request",
-      gate_rules: [],
     }, ctx.env, creator.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id?: string; community_id?: string }
     }
-    const communityId = communityCreateBody.community.community_id
+    const communityId = createdCommunityId(communityCreateBody)
 
     const joiner = await exchangeJwt(ctx.env, "community-request-lifecycle-joiner")
     await completeUniqueHumanVerification(ctx.env, joiner.accessToken)
@@ -222,101 +230,60 @@ describe("community membership routes", () => {
     expect((await json(rejectedEligibility) as { status: string }).status).toBe("requestable")
   })
 
-  test("community create without gate_rules keeps open communities ungated", async () => {
+  test("community create rejects open membership", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
 
     const creator = await exchangeJwt(ctx.env, "community-open-default-creator")
-    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Pirate Join Club",
-      namespace: {
-        namespace_verification_id: namespaceVerificationId,
-      },
       membership_mode: "open",
     }, ctx.env, creator.accessToken)
-    expect(communityCreate.status).toBe(202)
-    const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
-    }
 
-    const unverifiedUser = await exchangeJwt(ctx.env, "community-open-default-joiner")
-    const eligibility = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/join-eligibility`,
-      {
-        headers: {
-          authorization: `Bearer ${unverifiedUser.accessToken}`,
-        },
-      },
-      ctx.env,
-    )
-
-    expect(eligibility.status).toBe(200)
-    const eligibilityBody = await json(eligibility) as {
-      status: string
-      membership_gate_summaries: Array<{ gate_type: string; accepted_providers?: string[] }>
-      missing_capabilities: string[]
-      suggested_verification_provider: string | null
-    }
-    expect(eligibilityBody.status).toBe("joinable")
-    expect(eligibilityBody.membership_gate_summaries).toEqual([])
-    expect(eligibilityBody.missing_capabilities).toEqual([])
-    expect(eligibilityBody.suggested_verification_provider ?? null).toBeNull()
-
-    const allowedJoin = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/join`,
-      {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${unverifiedUser.accessToken}`,
-        },
-      },
-      ctx.env,
-    )
-
-    expect(allowedJoin.status).toBe(200)
-    const allowedBody = await json(allowedJoin) as { community_id: string; status: string }
-    expect(allowedBody.community_id).toBe(communityCreateBody.community.community_id)
-    expect(allowedBody.status).toBe("joined")
+    expect(communityCreate.status).toBe(403)
+    const body = await json(communityCreate) as { code: string; message: string }
+    expect(body.code).toBe("eligibility_failed")
+    expect(body.message).toBe("Public v0 community creation only allows request or gated membership")
   })
 
-  test("explicit empty gates allow unverified users to join open communities", async () => {
+  test("gated community create requires at least one membership gate", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
 
-    const creator = await exchangeJwt(ctx.env, "community-open-no-gates-creator")
-    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+    const creator = await exchangeJwt(ctx.env, "community-gated-no-gates-creator")
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Pirate No Gate Club",
-      namespace: {
-        namespace_verification_id: namespaceVerificationId,
-      },
-      membership_mode: "open",
-      gate_rules: [],
+      membership_mode: "gated",
     }, ctx.env, creator.accessToken)
-    expect(communityCreate.status).toBe(202)
-    const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
-    }
 
-    const joiner = await exchangeJwt(ctx.env, "community-open-no-gates-joiner")
-    const allowedJoin = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/join`,
-      {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${joiner.accessToken}`,
-        },
-      },
-      ctx.env,
-    )
+    expect(communityCreate.status).toBe(403)
+    const body = await json(communityCreate) as { code: string; message: string }
+    expect(body.code).toBe("eligibility_failed")
+    expect(body.message).toBe("Gated membership requires a membership gate policy")
+  })
 
-    expect(allowedJoin.status).toBe(200)
-    const allowedBody = await json(allowedJoin) as { community_id: string; status: string }
-    expect(allowedBody.community_id).toBe(communityCreateBody.community.community_id)
-    expect(allowedBody.status).toBe("joined")
+  test("community create rejects gate policy unless membership is gated", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "community-open-stale-gate-creator")
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Confusing Open Passport Club",
+      membership_mode: "request",
+      gate_policy: gatePolicy({
+        type: "wallet_score",
+        provider: "passport",
+        minimum_score: 20,
+      }),
+    }, ctx.env, creator.accessToken)
+
+    expect(communityCreate.status).toBe(403)
+    const body = await json(communityCreate) as { code: string; message: string }
+    expect(body.code).toBe("eligibility_failed")
+    expect(body.message).toBe("Membership gate policy requires gated membership")
   })
 
   test("community join accepts a passport wallet score that passes the platform threshold", async () => {
@@ -324,20 +291,21 @@ describe("community membership routes", () => {
     cleanup = ctx.cleanup
 
     const verifiedCreator = await exchangeJwt(ctx.env, "community-wallet-score-creator")
-    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, verifiedCreator.accessToken)
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Pirate Wallet Score Club",
-      namespace: {
-        namespace_verification_id: namespaceVerificationId,
-      },
-      membership_mode: "open",
-      gate_rules: [],
+      membership_mode: "gated",
+      gate_policy: gatePolicy({
+        type: "wallet_score",
+        provider: "passport",
+        minimum_score: 20,
+      }),
     }, ctx.env, verifiedCreator.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id?: string; community_id?: string }
     }
+    const communityId = createdCommunityId(communityCreateBody)
 
     const walletScoreJoiner = await exchangeJwt(ctx.env, "community-wallet-score-joiner")
     await setPassportWalletScore(ctx.env, walletScoreJoiner.userId, {
@@ -347,7 +315,7 @@ describe("community membership routes", () => {
     })
 
     const allowedJoin = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/join`,
+      `http://pirate.test/communities/${communityId}/join`,
       {
         method: "POST",
         headers: {
@@ -359,7 +327,7 @@ describe("community membership routes", () => {
 
     expect(allowedJoin.status).toBe(200)
     const allowedBody = await json(allowedJoin) as { community_id: string; status: string }
-    expect(allowedBody.community_id).toBe(communityCreateBody.community.community_id)
+    expect(allowedBody.community_id).toBe(communityId)
     expect(allowedBody.status).toBe("joined")
   })
 
@@ -371,32 +339,20 @@ describe("community membership routes", () => {
     cleanup = ctx.cleanup
 
     const verifiedCreator = await exchangeJwt(ctx.env, "community-gated-creator")
-    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, verifiedCreator.accessToken)
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Pirate Gated Club",
-      namespace: {
-        namespace_verification_id: namespaceVerificationId,
-      },
       membership_mode: "gated",
-      gate_rules: [
-        {
-          scope: "membership",
-          gate_family: "identity_proof",
-          gate_type: "unique_human",
-          proof_requirements: [
-            {
-              proof_type: "unique_human",
-              accepted_providers: ["self"],
-            },
-          ],
-        },
-      ],
+      gate_policy: gatePolicy({
+        type: "unique_human",
+        provider: "self",
+      }),
     }, ctx.env, verifiedCreator.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id?: string; community_id?: string }
     }
+    const communityId = createdCommunityId(communityCreateBody)
 
     const veryJoiner = await exchangeJwt(ctx.env, "community-gated-very-joiner")
     setVeryProviderForTests({
@@ -412,7 +368,7 @@ describe("community membership routes", () => {
             uniqueness_domain: "pirate-unique-human-v0",
             binding_value: "0",
             binding_field: "pseudonym",
-            challenge_expires_at: "2099-01-01T00:00:00.000Z",
+            challenge_expires_at: 4070908800,
           },
         },
       }),
@@ -429,7 +385,7 @@ describe("community membership routes", () => {
     setVeryProviderForTests(null)
 
     const deniedJoin = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/join`,
+      `http://pirate.test/communities/${communityId}/join`,
       {
         method: "POST",
         headers: {
@@ -457,7 +413,7 @@ describe("community membership routes", () => {
     )
 
     const allowedJoin = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/join`,
+      `http://pirate.test/communities/${communityId}/join`,
       {
         method: "POST",
         headers: {
@@ -469,7 +425,7 @@ describe("community membership routes", () => {
 
     expect(allowedJoin.status).toBe(200)
     const allowedBody = await json(allowedJoin) as { community_id: string; status: string }
-    expect(allowedBody.community_id).toBe(communityCreateBody.community.community_id)
+    expect(allowedBody.community_id).toBe(communityId)
     expect(allowedBody.status).toBe("joined")
   })
 
@@ -478,60 +434,34 @@ describe("community membership routes", () => {
     cleanup = ctx.cleanup
 
     const session = await exchangeJwt(ctx.env, "community-invalid-provider-creator")
-    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, session.accessToken)
 
     const invalidGenderProvider = await requestJson("http://pirate.test/communities", {
       display_name: "Invalid Gender Provider Club",
-      namespace: {
-        namespace_verification_id: namespaceVerificationId,
-      },
       membership_mode: "gated",
-      gate_rules: [
-        {
-          scope: "membership",
-          gate_family: "identity_proof",
-          gate_type: "gender",
-          proof_requirements: [
-            {
-              proof_type: "gender",
-              accepted_providers: ["passport"],
-              config: {
-                required_value: "M",
-              },
-            },
-          ],
-        },
-      ],
+      gate_policy: gatePolicy({
+        type: "gender",
+        provider: "passport",
+        allowed: ["M"],
+      }),
     }, ctx.env, session.accessToken)
     expect(invalidGenderProvider.status).toBe(403)
     const invalidGenderProviderBody = await json(invalidGenderProvider) as { code: string; message: string }
     expect(invalidGenderProviderBody.code).toBe("eligibility_failed")
-    expect(invalidGenderProviderBody.message).toMatch(/Invalid accepted_providers for gender/)
+    expect(invalidGenderProviderBody.message).toBe("gender gate provider must be self")
 
     const invalidWalletScoreProvider = await requestJson("http://pirate.test/communities", {
       display_name: "Invalid Wallet Provider Club",
-      namespace: {
-        namespace_verification_id: namespaceVerificationId,
-      },
       membership_mode: "gated",
-      gate_rules: [
-        {
-          scope: "membership",
-          gate_family: "identity_proof",
-          gate_type: "wallet_score",
-          proof_requirements: [
-            {
-              proof_type: "wallet_score",
-              accepted_providers: ["self"],
-            },
-          ],
-        },
-      ],
+      gate_policy: gatePolicy({
+        type: "wallet_score",
+        provider: "self",
+        minimum_score: 20,
+      }),
     }, ctx.env, session.accessToken)
     expect(invalidWalletScoreProvider.status).toBe(403)
     const invalidWalletScoreProviderBody = await json(invalidWalletScoreProvider) as { code: string; message: string }
     expect(invalidWalletScoreProviderBody.code).toBe("eligibility_failed")
-    expect(invalidWalletScoreProviderBody.message).toMatch(/Invalid accepted_providers for wallet_score/)
+    expect(invalidWalletScoreProviderBody.message).toBe("wallet_score gate provider must be passport")
   })
 
   test("community create accepts gender gates in public v0", async () => {
@@ -539,38 +469,23 @@ describe("community membership routes", () => {
     cleanup = ctx.cleanup
 
     const session = await exchangeJwt(ctx.env, "community-gender-gate-creator")
-    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, session.accessToken)
 
     const response = await requestJson("http://pirate.test/communities", {
       display_name: "Gender Gated Club",
-      namespace: {
-        namespace_verification_id: namespaceVerificationId,
-      },
       membership_mode: "gated",
-      gate_rules: [
-        {
-          scope: "membership",
-          gate_family: "identity_proof",
-          gate_type: "gender",
-          proof_requirements: [
-            {
-              proof_type: "gender",
-              accepted_providers: ["self"],
-              config: {
-                required_value: "M",
-              },
-            },
-          ],
-        },
-      ],
+      gate_policy: gatePolicy({
+        type: "gender",
+        provider: "self",
+        allowed: ["M"],
+      }),
     }, ctx.env, session.accessToken)
 
     expect(response.status).toBe(202)
     const body = await json(response) as {
-      community: { community_id: string }
+      community: { id?: string; community_id?: string }
       job: { status: string }
     }
-    expect(typeof body.community.community_id).toBe("string")
+    expect(typeof createdCommunityId(body)).toBe("string")
     expect(["queued", "succeeded"]).toContain(body.job.status)
   })
 })

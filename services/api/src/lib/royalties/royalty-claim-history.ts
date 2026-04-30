@@ -10,6 +10,7 @@ import { badRequestError, conflictError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
 import { resolveStoryRpcUrl } from "../story/story-runtime-config"
+import { nullableUnixSeconds, unixSeconds } from "../../serializers/time"
 
 const HEX_32_BYTE_PATTERN = /^0x[a-fA-F0-9]{64}$/
 const EVM_ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/
@@ -50,8 +51,8 @@ function assertRoyaltyClaimRecordRequest(input: RoyaltyClaimRecordRequest): Roya
   if (typeof input.wallet_address !== "string" || !EVM_ADDRESS_PATTERN.test(input.wallet_address)) {
     throw badRequestError("wallet_address must be a valid EVM address")
   }
-  if (!Number.isInteger(input.chain_id) || input.chain_id <= 0) {
-    throw badRequestError("chain_id must be a positive integer")
+  if (!Number.isInteger(input.chain) || input.chain <= 0) {
+    throw badRequestError("chain must be a positive integer")
   }
   if (typeof input.claimable_wip_wei_at_submission !== "string" || !/^\d+$/u.test(input.claimable_wip_wei_at_submission)) {
     throw badRequestError("claimable_wip_wei_at_submission must be a wei string")
@@ -63,7 +64,7 @@ function assertRoyaltyClaimRecordRequest(input: RoyaltyClaimRecordRequest): Roya
   return {
     tx_hash: input.tx_hash.toLowerCase(),
     wallet_address: input.wallet_address.toLowerCase(),
-    chain_id: input.chain_id,
+    chain: input.chain,
     claimable_wip_wei_at_submission: input.claimable_wip_wei_at_submission,
     ip_ids: parseIpIds(input.ip_ids),
     auto_unwrap_ip_tokens: input.auto_unwrap_ip_tokens,
@@ -73,19 +74,20 @@ function assertRoyaltyClaimRecordRequest(input: RoyaltyClaimRecordRequest): Roya
 function rowToRoyaltyClaimRecord(row: Record<string, unknown>): RoyaltyClaimRecord {
   const autoUnwrap = row.auto_unwrap_ip_tokens
   return {
-    claim_id: String(row.claim_id),
-    user_id: String(row.user_id),
+    id: `rcr_${String(row.claim_id)}`,
+    object: "royalty_claim_record",
+    user: `usr_${String(row.user_id)}`,
     tx_hash: String(row.tx_hash),
     wallet_address: String(row.wallet_address),
-    chain_id: Number(row.chain_id),
+    chain: Number(row.chain_id),
     claimable_wip_wei_at_submission: String(row.claimable_wip_wei_at_submission),
     ip_ids: row.ip_ids_json ? JSON.parse(String(row.ip_ids_json)) as string[] : [],
     auto_unwrap_ip_tokens: autoUnwrap === true || autoUnwrap === 1 || autoUnwrap === "1",
     status: String(row.status ?? "pending") as RoyaltyClaimStatus,
-    verified_at: row.verified_at ? String(row.verified_at) : null,
+    verified_at: nullableUnixSeconds(row.verified_at ? String(row.verified_at) : null),
     verification_error: row.verification_error ? String(row.verification_error) : null,
-    claimed_at: String(row.claimed_at),
-    created_at: String(row.created_at),
+    claimed_at: unixSeconds(String(row.claimed_at)),
+    created: unixSeconds(String(row.created_at)),
   }
 }
 
@@ -139,7 +141,7 @@ export async function recordRoyaltyClaim(input: {
         input.userId,
         body.tx_hash,
         body.wallet_address,
-        body.chain_id,
+        body.chain,
         body.claimable_wip_wei_at_submission,
         JSON.stringify(body.ip_ids),
         body.auto_unwrap_ip_tokens ? 1 : 0,
@@ -148,19 +150,20 @@ export async function recordRoyaltyClaim(input: {
     })
 
     return {
-      claim_id: claimId,
-      user_id: input.userId,
+      id: `rcr_${claimId}`,
+      object: "royalty_claim_record",
+      user: `usr_${input.userId}`,
       tx_hash: body.tx_hash,
       wallet_address: body.wallet_address,
-      chain_id: body.chain_id,
+      chain: body.chain,
       claimable_wip_wei_at_submission: body.claimable_wip_wei_at_submission,
       ip_ids: body.ip_ids,
       auto_unwrap_ip_tokens: body.auto_unwrap_ip_tokens,
       status: "pending",
       verified_at: null,
       verification_error: null,
-      claimed_at: now,
-      created_at: now,
+      claimed_at: unixSeconds(now),
+      created: unixSeconds(now),
     }
   } finally {
     client.close?.()

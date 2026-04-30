@@ -1,14 +1,12 @@
 import {
-  buildMembershipGateSummary,
+  buildMembershipGateSummariesFromPolicy,
 } from "./membership/gates"
 import {
   canAccessCommunity,
   getCommunityMemberCount,
   getCommunityMembershipState,
 } from "./membership/membership-state-store"
-import {
-  listActiveMembershipGateRules,
-} from "./membership/gate-rule-store"
+import { getMembershipGatePolicy } from "./membership/gate-policy-store"
 import {
   getCommunityFollowStatus,
   getCommunityFollowerCount,
@@ -35,6 +33,7 @@ import type {
   CommunityRoleSummary,
   Env,
 } from "../../types"
+import type { GatePolicy } from "./membership/gate-types"
 
 type CommunityPreviewRule = NonNullable<CommunityPreview["rules"]>[number]
 
@@ -159,7 +158,7 @@ async function getCommunityRoleSummary(input: {
   }
 
   return {
-    user_id: String(row.user_id),
+    user: `usr_${String(row.user_id)}`,
     display_name: displayName,
     handle,
     avatar_ref: row.avatar_ref == null ? null : String(row.avatar_ref),
@@ -230,7 +229,7 @@ async function buildPreviewForViewer(input: {
 
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
-    const rules = await listActiveMembershipGateRules(db.client, input.communityId)
+    const gatePolicy = await getMembershipGatePolicy(db.client, input.communityId)
     const membership = input.viewer
       ? await getCommunityMembershipState(db.client, input.communityId, input.viewer.userId)
       : null
@@ -246,7 +245,7 @@ async function buildPreviewForViewer(input: {
       namespaceVerificationId: community.namespace_verification_id ?? null,
       routeSlug: community.route_slug ?? null,
       locale: input.locale ?? null,
-      gateRules: rules,
+      gatePolicy,
       viewerMembershipStatus:
         membership?.membership_status === "banned"
           ? "banned"
@@ -298,7 +297,8 @@ async function listPublicCommunityRules(input: {
   })
 
   return result.rows.map((row, index) => ({
-    rule_id: String(row.rule_id),
+    id: `rule_${String(row.rule_id)}`,
+    object: "community_rule",
     title: String(row.title ?? ""),
     body: String(row.body ?? ""),
     report_reason:
@@ -319,7 +319,7 @@ async function buildCommunityPreview(input: {
   namespaceVerificationId?: string | null
   routeSlug?: string | null
   locale?: string | null
-  gateRules: Awaited<ReturnType<typeof listActiveMembershipGateRules>>
+  gatePolicy: GatePolicy | null
   viewerMembershipStatus: CommunityPreview["viewer_membership_status"]
   viewerFollowing: boolean
 }): Promise<CommunityPreview> {
@@ -362,9 +362,9 @@ async function buildCommunityPreview(input: {
       ? "optional_creator_sidecar"
       : "none"
   const membershipMode: CommunityPreview["membership_mode"] =
-    localRow?.membership_mode === "open" || localRow?.membership_mode === "request" || localRow?.membership_mode === "gated"
+    localRow?.membership_mode === "request" || localRow?.membership_mode === "gated"
       ? (localRow.membership_mode as CommunityPreview["membership_mode"])
-      : "open"
+      : "gated"
   const displayName = localRow?.display_name ? String(localRow.display_name) : input.communityDisplayName
   const anonymousIdentityScope: CommunityPreview["anonymous_identity_scope"] =
     localRow?.anonymous_identity_scope === "community_stable"
@@ -372,7 +372,9 @@ async function buildCommunityPreview(input: {
       || localRow?.anonymous_identity_scope === "post_ephemeral"
       ? localRow.anonymous_identity_scope
       : null
-  const membershipGateSummaries = input.gateRules.map(buildMembershipGateSummary)
+  const membershipGateSummaries = membershipMode === "gated"
+    ? buildMembershipGateSummariesFromPolicy(input.gatePolicy)
+    : []
   const publicRules = await listPublicCommunityRules({
     client: input.client,
     communityId: input.communityId,

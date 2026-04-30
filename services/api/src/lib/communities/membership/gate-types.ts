@@ -1,3 +1,82 @@
+export type CommunityGateScope = "membership" | "viewer" | "posting"
+
+export type CommunityGatePolicyRow = {
+  community_id: string
+  scope: CommunityGateScope
+  version: 1
+  expression_json: string
+}
+
+export type GatePolicy = {
+  version: 1
+  expression: GateExpression
+}
+
+export type GateExpression =
+  | { op: "and"; children: GateExpression[] }
+  | { op: "or"; children: GateExpression[] }
+  | { op: "gate"; gate: GateAtom }
+
+export type GateAtom =
+  | { type: "unique_human"; provider: "very" | "self" }
+  | { type: "minimum_age"; provider: "self"; minimum_age: number }
+  | { type: "nationality"; provider: "self"; allowed: string[] }
+  | { type: "gender"; provider: "self"; allowed: Array<"M" | "F"> }
+  | { type: "wallet_score"; provider: "passport"; minimum_score: number }
+  | { type: "erc721_holding"; chain_namespace: "eip155:1"; contract_address: string }
+  | {
+    type: "erc721_inventory_match"
+    provider: "courtyard"
+    chain_namespace: "eip155:1" | "eip155:137"
+    contract_address: string
+    min_quantity: number
+    match: Record<string, unknown>
+  }
+
+export type GateTraceNode =
+  | { kind: "op"; op: "and" | "or"; passed: boolean; children: GateTraceNode[] }
+  | {
+    kind: "gate"
+    gate_type: GateAtom["type"]
+    provider?: string
+    passed: boolean
+    reason?: string
+    required_score?: number | null
+    actual_score?: number | null
+    required_age?: number | null
+  }
+
+export type RequiredActionNode = RequiredAction | RequiredActionSet
+
+export type RequiredActionSet = {
+  kind: "set"
+  mode: "all" | "any"
+  items: RequiredActionNode[]
+}
+
+export type RequiredAction =
+  | { kind: "action"; provider: "self"; capability: "minimum_age"; required_age: number }
+  | { kind: "action"; provider: "self"; capability: "nationality"; allowed_countries: string[] }
+  | { kind: "action"; provider: "self"; capability: "gender"; allowed_markers: Array<"M" | "F"> }
+  | { kind: "action"; provider: "self"; capability: "unique_human" }
+  | { kind: "action"; provider: "very"; capability: "unique_human" }
+  | { kind: "action"; provider: "passport"; capability: "wallet_score"; minimum_score: number; actual_score: number | null }
+  | { kind: "action"; provider: "wallet"; capability: "erc721_holding"; chain_namespace: string; contract_address: string }
+  | {
+    kind: "action"
+    provider: "wallet"
+    capability: "erc721_inventory_match"
+    chain_namespace: string
+    contract_address: string
+    min_quantity: number
+  }
+
+export type GatePolicyEvaluation = {
+  satisfied: boolean
+  trace: GateTraceNode
+  requiredActionSet: RequiredActionSet | null
+}
+
 export type CommunityGateRuleRow = {
   gate_rule_id: string
   scope: "membership" | "viewer" | "posting"

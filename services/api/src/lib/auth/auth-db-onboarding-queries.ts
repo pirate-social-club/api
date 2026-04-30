@@ -20,6 +20,7 @@ import {
 import { firstRow } from "./auth-db-query-helpers"
 import { getLatestJobRowBySubjectAndType } from "./auth-db-community-queries"
 import type { OnboardingStatus } from "../../types"
+import { nullableUnixSeconds } from "../../serializers/time"
 
 async function getLatestVerificationSessionRow(executor: DbExecutor, userId: string): Promise<VerificationSessionRow | null> {
   const row = await firstRow(executor, {
@@ -206,14 +207,14 @@ export async function deriveOnboardingStatus(
 
   const suggestedCommunityIds = latestRedditSnapshot
     ? parseRedditImportSummary(latestRedditSnapshot.snapshot_payload_json).suggested_communities.map(
-        (community) => community.community_id,
+        (community) => community.community.replace(/^com_/, ""),
       )
     : []
 
   return {
     generated_handle_assigned: activeGlobalHandleRow.issuance_source === "generated_signup",
     cleanup_rename_available: !Boolean(activeGlobalHandleRow.free_rename_consumed),
-    onboarding_dismissed_at: userRow.onboarding_dismissed_at,
+    onboarding_dismissed_at: nullableUnixSeconds(userRow.onboarding_dismissed_at),
     unique_human_verification_status: uniqueHumanState,
     namespace_verification_status: namespaceStatus,
     community_creation_ready: missingRequirements.length === 0,

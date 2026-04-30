@@ -10,6 +10,7 @@ import { serializeRedditImportSummary, serializeRedditVerification } from "../au
 import { getJobById } from "../communities/db-community-repository"
 import type { Env, Job, RedditImportSummary, RedditVerification } from "../../types"
 import { checkRedditVerificationCode, importRedditSnapshot, makeRedditVerificationCode } from "./reddit-bootstrap"
+import { unixSeconds } from "../../serializers/time"
 
 function serializeJob(row: {
   job_id: string
@@ -23,15 +24,15 @@ function serializeJob(row: {
   updated_at: string
 }): Job {
   return {
-    job_id: row.job_id,
+    id: `job_${row.job_id}`,
+    object: "job",
     job_type: row.job_type,
     status: row.status,
     subject_type: row.subject_type,
-    subject_id: row.subject_id,
+    subject: row.subject_id,
     result_ref: row.result_ref,
     error_code: row.error_code,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
+    created: unixSeconds(row.created_at),
   }
 }
 

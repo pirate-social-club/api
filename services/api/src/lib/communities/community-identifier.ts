@@ -1,4 +1,5 @@
 import type { CommunityReadRepository } from "./db-community-repository"
+import { decodePublicCommunityId } from "../public-ids"
 
 type CommunityIdentifierRepository = Pick<CommunityReadRepository, "getCommunityById" | "getCommunityByRouteSlug">
 
@@ -36,8 +37,11 @@ export function communityIdentifierCandidates(communityIdentifier: string): stri
   add(safeDecodeURIComponent(communityIdentifier))
 
   for (const candidate of [...candidates]) {
+    add(decodePublicCommunityId(candidate))
+
     const normalized = candidate.normalize("NFKC").toLowerCase()
     add(normalized)
+    add(decodePublicCommunityId(normalized))
 
     if (normalized.startsWith("@")) {
       const rootLabel = normalized.slice(1)

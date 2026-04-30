@@ -8,6 +8,10 @@ import type {
   AgentOwnershipProvider,
   AgentOwnershipSessionKind,
 } from "../lib/agents/types"
+import {
+  decodePublicAgentId,
+  decodePublicAgentOwnershipSessionId,
+} from "../lib/public-ids"
 import type { Env } from "../types"
 
 const agents = new Hono<{ Bindings: Env }>()
@@ -103,7 +107,7 @@ agents.post("/agent-ownership-sessions", authenticate, async (c) => {
 agents.get("/agent-ownership-sessions/:agentOwnershipSessionId", authenticate, async (c) => {
   const actor = c.get("actor")
   const repo = getControlPlaneAgentOwnershipRepository(c.env)
-  const session = await repo.getAgentOwnershipSession(c.req.param("agentOwnershipSessionId"), actor.userId)
+  const session = await repo.getAgentOwnershipSession(decodePublicAgentOwnershipSessionId(c.req.param("agentOwnershipSessionId")), actor.userId)
   if (!session) {
     throw notFoundError("Agent ownership session not found")
   }
@@ -118,7 +122,7 @@ agents.post("/agent-ownership-sessions/:agentOwnershipSessionId/complete", authe
   }>().catch(() => null)) ?? null
   const repo = getControlPlaneAgentOwnershipRepository(c.env)
   const connectionToken = c.req.header("x-agent-connection-token")?.trim() ?? null
-  const agentOwnershipSessionId = c.req.param("agentOwnershipSessionId")
+  const agentOwnershipSessionId = decodePublicAgentOwnershipSessionId(c.req.param("agentOwnershipSessionId"))
   const session = await resolveActorOrConnectionToken({
     actor: userActor,
     connectionToken,
@@ -154,7 +158,7 @@ agents.post("/agent-ownership-sessions/:agentOwnershipSessionId/callback", async
 
   const repo = getControlPlaneAgentOwnershipRepository(c.env)
   const session = await repo.completeAgentOwnershipSessionFromCallback({
-    agentOwnershipSessionId: c.req.param("agentOwnershipSessionId"),
+    agentOwnershipSessionId: decodePublicAgentOwnershipSessionId(c.req.param("agentOwnershipSessionId")),
     provider: body?.provider ?? null,
     attestationId: body?.attestation_id ?? null,
     proofHash: body?.proof_hash ?? null,
@@ -171,7 +175,7 @@ agents.get("/agents", authenticateAdminOrUser, async (c) => {
   const actor = c.get("actor")
   const repo = getControlPlaneAgentOwnershipRepository(c.env)
   const items = await repo.listUserAgents(getActorUserId(actor))
-  return c.json({ items }, 200)
+  return c.json({ items, next_cursor: null }, 200)
 })
 
 agents.post("/agents/admin/seed", authenticateAdminOrUser, async (c) => {
@@ -195,14 +199,15 @@ agents.post("/agents/admin/seed", authenticateAdminOrUser, async (c) => {
 agents.get("/agents/:agentId", authenticateAdminOrUser, async (c) => {
   const actor = c.get("actor")
   const repo = getControlPlaneAgentOwnershipRepository(c.env)
-  const agent = await repo.getUserAgent(c.req.param("agentId"), getActorUserId(actor))
+  const agentId = decodePublicAgentId(c.req.param("agentId"))
+  const agent = await repo.getUserAgent(agentId, getActorUserId(actor))
   if (!agent) {
     throw notFoundError("Agent not found")
   }
   return c.json(agent, 200)
 })
 
-agents.patch("/agents/:agentId", authenticateAdminOrUser, async (c) => {
+agents.post("/agents/:agentId", authenticateAdminOrUser, async (c) => {
   const actor = c.get("actor")
   const body = await c.req.json<{ display_name?: unknown }>().catch(() => null)
   if (!body || typeof body !== "object") {
@@ -210,8 +215,9 @@ agents.patch("/agents/:agentId", authenticateAdminOrUser, async (c) => {
   }
 
   const repo = getControlPlaneAgentOwnershipRepository(c.env)
+  const agentId = decodePublicAgentId(c.req.param("agentId"))
   const agent = await repo.updateUserAgentDisplayName({
-    agentId: c.req.param("agentId"),
+    agentId,
     userId: getActorUserId(actor),
     displayName: requireString(body.display_name, "display_name"),
   })
@@ -224,12 +230,13 @@ agents.patch("/agents/:agentId", authenticateAdminOrUser, async (c) => {
 agents.get("/agents/:agentId/handle", authenticateAdminOrUser, async (c) => {
   const actor = c.get("actor")
   const repo = getControlPlaneAgentOwnershipRepository(c.env)
+  const agentId = decodePublicAgentId(c.req.param("agentId"))
   const handle = await repo.getUserAgentHandle({
-    agentId: c.req.param("agentId"),
+    agentId,
     userId: getActorUserId(actor),
   })
   if (!handle) {
-    const agent = await repo.getUserAgent(c.req.param("agentId"), getActorUserId(actor))
+    const agent = await repo.getUserAgent(agentId, getActorUserId(actor))
     if (!agent) {
       throw notFoundError("Agent not found")
     }
@@ -247,7 +254,7 @@ agents.post("/agents/:agentId/handle", authenticateAdminOrUser, async (c) => {
 
   const repo = getControlPlaneAgentOwnershipRepository(c.env)
   const handle = await repo.claimUserAgentHandle({
-    agentId: c.req.param("agentId"),
+    agentId: decodePublicAgentId(c.req.param("agentId")),
     userId: getActorUserId(actor),
     desiredLabel: requireString(body.desired_label, "desired_label"),
   })
@@ -265,7 +272,7 @@ agents.post("/agents/:agentId/credential", authenticateOptional, async (c) => {
   }>().catch(() => null)) ?? null
   const repo = getControlPlaneAgentOwnershipRepository(c.env)
   const connectionToken = c.req.header("x-agent-connection-token")?.trim() ?? null
-  const agentId = c.req.param("agentId")
+  const agentId = decodePublicAgentId(c.req.param("agentId"))
   const credential = await resolveActorOrConnectionToken({
     actor: userActor,
     connectionToken,
@@ -283,7 +290,7 @@ agents.post("/agents/:agentId/credential", authenticateOptional, async (c) => {
   return c.json(credential, 200)
 })
 
-agents.post("/agents/:agentId/credential/refresh", authenticateOptional, async (c) => {
+agents.post("/agents/:agentId/refresh_credential", authenticateOptional, async (c) => {
   const actor = c.get("actor")
   const userActor = actor?.authType === "admin" ? undefined : actor
   const body = await c.req.json<{
@@ -295,7 +302,7 @@ agents.post("/agents/:agentId/credential/refresh", authenticateOptional, async (
   const refreshToken = body.refresh_token
   const repo = getControlPlaneAgentOwnershipRepository(c.env)
   const connectionToken = c.req.header("x-agent-connection-token")?.trim() ?? null
-  const agentId = c.req.param("agentId")
+  const agentId = decodePublicAgentId(c.req.param("agentId"))
   const credential = await resolveActorOrConnectionToken({
     actor: userActor,
     connectionToken,

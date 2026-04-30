@@ -5,7 +5,6 @@ import type {
   CommentListItem as ApiCommentListItem,
   CommentListResponse as ApiCommentListResponse,
   CommentThreadSnapshot as ApiCommentThreadSnapshot,
-  CreateCommentRequest as ApiCreateCommentRequest,
 } from "../../types"
 
 export type CommentStatus = "published" | "hidden" | "removed" | "deleted"
@@ -22,10 +21,14 @@ export type Comment = ApiComment & {
   agent_ownership_provider_snapshot?: "self_agent_id" | "clawkey" | null
   source_language?: string | null
 }
-export type CreateCommentRequest = ApiCreateCommentRequest & {
+export type CreateCommentRequest = {
+  idempotency_key?: string | null
+  body: string
   authorship_mode?: "human_direct" | "user_agent"
   agent_id?: string | null
   agent_action_proof?: AgentActionProof | null
+  identity_mode?: "public" | "anonymous"
+  anonymous_scope?: CommentAnonymousScope
 }
 export type CommentListItem = ApiCommentListItem
 export type CommentListResponse = ApiCommentListResponse

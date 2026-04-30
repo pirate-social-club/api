@@ -48,7 +48,7 @@ function collectCommunityFields(community: Community): CommunityTextField[] {
     const title = String(rule.title ?? "").trim()
     if (title) {
       fields.push({
-        field_key: `community.rule.${rule.rule_id}.title`,
+        field_key: `community.rule.${rule.id}.title`,
         source_text: title,
       })
     }
@@ -56,7 +56,7 @@ function collectCommunityFields(community: Community): CommunityTextField[] {
     const body = String(rule.body ?? "").trim()
     if (body) {
       fields.push({
-        field_key: `community.rule.${rule.rule_id}.body`,
+        field_key: `community.rule.${rule.id}.body`,
         source_text: body,
       })
     }
@@ -66,7 +66,7 @@ function collectCommunityFields(community: Community): CommunityTextField[] {
     const label = String(link.label ?? "").trim()
     if (label) {
       fields.push({
-        field_key: `community.reference_link.${link.community_reference_link_id}.label`,
+        field_key: `community.reference_link.${link.community_reference_link}.label`,
         source_text: label,
       })
     }
@@ -74,7 +74,7 @@ function collectCommunityFields(community: Community): CommunityTextField[] {
     const displayName = String(link.metadata?.display_name ?? "").trim()
     if (displayName) {
       fields.push({
-        field_key: `community.reference_link.${link.community_reference_link_id}.metadata.display_name`,
+        field_key: `community.reference_link.${link.community_reference_link}.metadata.display_name`,
         source_text: displayName,
       })
     }
@@ -97,7 +97,7 @@ function collectPreviewFields(preview: CommunityPreview): CommunityTextField[] {
     const title = String(rule.title ?? "").trim()
     if (title) {
       fields.push({
-        field_key: `community.rule.${rule.rule_id}.title`,
+        field_key: `community.rule.${rule.id}.title`,
         source_text: title,
       })
     }
@@ -105,7 +105,7 @@ function collectPreviewFields(preview: CommunityPreview): CommunityTextField[] {
     const body = String(rule.body ?? "").trim()
     if (body) {
       fields.push({
-        field_key: `community.rule.${rule.rule_id}.body`,
+        field_key: `community.rule.${rule.id}.body`,
         source_text: body,
       })
     }
@@ -115,7 +115,7 @@ function collectPreviewFields(preview: CommunityPreview): CommunityTextField[] {
     const label = String(link.label ?? "").trim()
     if (label) {
       fields.push({
-        field_key: `community.reference_link.${link.community_reference_link_id}.label`,
+        field_key: `community.reference_link.${link.community_reference_link}.label`,
         source_text: label,
       })
     }
@@ -123,7 +123,7 @@ function collectPreviewFields(preview: CommunityPreview): CommunityTextField[] {
     const displayName = String(link.metadata?.display_name ?? "").trim()
     if (displayName) {
       fields.push({
-        field_key: `community.reference_link.${link.community_reference_link_id}.metadata.display_name`,
+        field_key: `community.reference_link.${link.community_reference_link}.metadata.display_name`,
         source_text: displayName,
       })
     }

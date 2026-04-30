@@ -2,12 +2,17 @@ import type { Client } from "../../sql-client"
 import { executeFirst } from "../../db-helpers"
 import { makeId } from "../../helpers"
 import { requiredString, rowValue, stringOrNull } from "../../sql-row"
-import type { MembershipRequestSummary } from "../../../types"
 import { upsertCommunityMembership } from "./membership-state-store"
 
 type MembershipExecutor = Pick<Client, "execute">
 
-type MembershipRequestRow = MembershipRequestSummary & {
+export type MembershipRequestRow = {
+  membership_request_id: string
+  community_id: string
+  applicant_user_id: string
+  status: "pending" | "approved" | "rejected" | "expired"
+  note: string | null
+  created_at: string
   updated_at: string
 }
 
@@ -28,7 +33,7 @@ const MEMBERSHIP_REQUEST_SELECT = `
   FROM membership_requests
 `
 
-export async function getCommunityJoinMode(client: Client, communityId: string): Promise<"open" | "request" | "gated" | null> {
+export async function getCommunityJoinMode(client: Client, communityId: string): Promise<"request" | "gated" | null> {
   const row = await executeFirst(
     client,
     {
@@ -43,7 +48,7 @@ export async function getCommunityJoinMode(client: Client, communityId: string):
   )
 
   const mode = row ? requiredString(row, "membership_mode") : null
-  return mode === "open" || mode === "request" || mode === "gated" ? mode : null
+  return mode === "request" || mode === "gated" ? mode : null
 }
 
 export async function upsertMembershipRequest(input: {

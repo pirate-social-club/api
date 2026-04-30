@@ -221,7 +221,7 @@ async function hydrateXPostEmbed(input: {
     text: oembed ? extractTweetText(oembed.html) : fallbackMetadata?.title ?? null,
     has_media: Boolean(fallbackMetadata?.imageUrl),
     media_url: fallbackMetadata?.imageUrl ?? null,
-    created_at: null,
+    created: null,
   }
   const state: XPostEmbed["state"] = oembed ? "embed" : "unavailable"
 

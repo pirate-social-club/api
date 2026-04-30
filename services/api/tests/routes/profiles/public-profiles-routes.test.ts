@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import app from "../../../src/index"
+import { app } from "../../../src/index"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { setEnsResolverForTests } from "../../../src/lib/auth/ens-linked-handle-service"
 import { exchangeJwt, requestJson } from "./profiles-test-helpers"

@@ -24,6 +24,7 @@ import type {
   NamespaceVerification,
 } from "../../../types"
 import { serializeCommunity, serializeJob } from "../community-serialization"
+import { serializeCommunityCreateAcceptedResponse } from "../../../serializers/community"
 import { openCommunityDb } from "../community-db-factory"
 import {
   isExpired,
@@ -229,7 +230,7 @@ async function createNamespacelessCommunity(input: {
     jobId,
     creatorUserId: input.auth.userId,
     displayName: input.auth.communityDisplayName,
-    membershipMode: input.body.membership_mode ?? "open",
+    membershipMode: input.body.membership_mode ?? "gated",
     namespaceVerificationId: null,
     routeSlug: null,
     binding: initialBinding,
@@ -294,10 +295,10 @@ async function createNamespacelessCommunity(input: {
       })
     }
 
-    return {
+    return serializeCommunityCreateAcceptedResponse({
       community: serializeCommunity(input.env, finalized.community, localSnapshot),
       job: serializeJob(finalized.job),
-    }
+    })
   } catch (error) {
     await input.communityRepository.markCommunityProvisioningFailed({
       communityId,
@@ -350,10 +351,10 @@ async function finalizeExistingCommunity(input: {
     },
   })
   const local = await loadCommunityLocalSnapshot(input.env, input.communityRepository, input.existingCommunity.community_id)
-  return {
+  return serializeCommunityCreateAcceptedResponse({
     community: serializeCommunity(input.env, finalized.community, local),
     job: serializeJob(finalized.job),
-  }
+  })
 }
 
 async function provisionNamespacedCommunity(input: {
@@ -394,7 +395,7 @@ async function provisionNamespacedCommunity(input: {
           jobId,
           creatorUserId: auth.userId,
           displayName: auth.communityDisplayName,
-          membershipMode: body.membership_mode ?? "open",
+          membershipMode: body.membership_mode ?? "gated",
           namespaceVerificationId,
           routeSlug,
           binding: initialBinding,
@@ -442,10 +443,10 @@ async function provisionNamespacedCommunity(input: {
     })
     provisioningCompleted = true
 
-    return {
+    return serializeCommunityCreateAcceptedResponse({
       community: serializeCommunity(input.env, provisioningFinalized.community, localSnapshot),
       job: serializeJob(provisioningFinalized.job),
-    }
+    })
   } catch (error) {
     const failedAt = nowIso()
 
@@ -480,10 +481,10 @@ async function provisionNamespacedCommunity(input: {
       throw internalError("Community provisioning failed")
     }
 
-    return {
+    return serializeCommunityCreateAcceptedResponse({
       community: serializeCommunity(input.env, communityRow, localSnapshot),
       job: serializeJob(provisioningFinalized.job),
-    }
+    })
   }
 }
 
@@ -530,10 +531,10 @@ export async function createCommunity(input: {
     }
     const retryAction = await resolveProvisioningRetryAction(input.communityRepository, existingCommunity, existingJob)
     if (retryAction.action === "return_existing") {
-      return {
+      return serializeCommunityCreateAcceptedResponse({
         community: await loadCommunityProjection(input.env, input.communityRepository, existingCommunity),
         job: serializeJob(existingJob),
-      }
+      })
     }
     if (retryAction.action === "finalize") {
       return finalizeExistingCommunity({

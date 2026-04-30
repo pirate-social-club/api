@@ -18,6 +18,7 @@ import {
   requireVerifiedHuman,
   serializeListing,
 } from "./shared"
+import { centsToUsd } from "./serialization"
 import { getCommunityPricingPolicy } from "./policy-service"
 import { assertValidDonationSharePct } from "./quote-helpers"
 import { assertAssetReadyForStoryRoyaltyCommerce } from "./story-royalty"
@@ -43,11 +44,12 @@ async function resolveListingDonationConfig(input: {
   communityRepository: CommunityListingRepository
   current: ListingDonationConfig
   requestedPartnerId: string | null | undefined
-  requestedSharePct: number | null | undefined
+  requestedShareBps: number | null | undefined
 }): Promise<ListingDonationConfig> {
-  const nextSharePct = input.requestedSharePct === undefined
+  const requestedSharePct = input.requestedShareBps == null ? input.requestedShareBps : input.requestedShareBps / 100
+  const nextSharePct = requestedSharePct === undefined
     ? input.current.donation_share_pct
-    : input.requestedSharePct
+    : requestedSharePct
   const nextPartnerId = input.requestedPartnerId === undefined
     ? input.current.donation_partner_id
     : input.requestedPartnerId
@@ -113,6 +115,7 @@ export async function listCommunityListings(input: {
     await requireCommunityMember(db.client, input.communityId, input.userId)
     return {
       items: (await listListingRows(db.client, input.communityId)).map((row) => serializeListing(row)),
+      next_cursor: null,
     }
   } finally {
     db.close()
@@ -127,15 +130,15 @@ export async function createCommunityListing(input: {
   communityRepository: CommunityListingRepository
   userRepository: UserRepository
 }): Promise<CommunityListing> {
-  if (!input.body.asset_id?.trim() && !input.body.live_room_id?.trim()) {
-    throw badRequestError("asset_id or live_room_id is required")
+  if (!input.body.asset?.trim() && !input.body.live_room?.trim()) {
+    throw badRequestError("asset or live_room is required")
   }
   await requireVerifiedHuman(input.userRepository, input.userId)
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityMember(db.client, input.communityId, input.userId)
-    if (input.body.asset_id?.trim()) {
-      const asset = await getAssetRow(db.client, input.communityId, input.body.asset_id)
+    if (input.body.asset?.trim()) {
+      const asset = await getAssetRow(db.client, input.communityId, input.body.asset)
       if (!asset) {
         throw notFoundError("Asset not found")
       }
@@ -146,7 +149,7 @@ export async function createCommunityListing(input: {
           throw notFoundError("Asset not found")
         }
       }
-      if (await getListingRowByAssetId(db.client, input.communityId, input.body.asset_id)) {
+      if (await getListingRowByAssetId(db.client, input.communityId, input.body.asset)) {
         throw badRequestError("Asset already has a listing")
       }
       const pricingPolicy = await getCommunityPricingPolicy({ env: input.env, communityId: input.communityId })
@@ -162,8 +165,8 @@ export async function createCommunityListing(input: {
         donation_partner_id: null,
         donation_share_pct: null,
       },
-      requestedPartnerId: input.body.donation_partner_id,
-      requestedSharePct: input.body.donation_share_pct,
+      requestedPartnerId: input.body.donation_partner,
+      requestedShareBps: input.body.donation_share_bps,
     })
     const listingId = makeId("lst")
     const createdAt = nowIso()
@@ -180,10 +183,10 @@ export async function createCommunityListing(input: {
       args: [
         listingId,
         input.communityId,
-        input.body.asset_id ?? null,
-        input.body.live_room_id ?? null,
+        input.body.asset ?? null,
+        input.body.live_room ?? null,
         input.body.status,
-        input.body.price_usd,
+        centsToUsd(input.body.price_cents),
         JSON.stringify({
           regional_pricing_enabled: input.body.regional_pricing_enabled,
           donation_partner_id: donationConfig.donation_partner_id,
@@ -242,8 +245,8 @@ export async function updateCommunityListing(input: {
         donation_partner_id: currentPolicy.donationPartnerId,
         donation_share_pct: currentPolicy.donationSharePct,
       },
-      requestedPartnerId: input.body.donation_partner_id,
-      requestedSharePct: input.body.donation_share_pct,
+      requestedPartnerId: input.body.donation_partner,
+      requestedShareBps: input.body.donation_share_bps,
     })
     if (nextRegional) {
       const pricingPolicy = await getCommunityPricingPolicy({ env: input.env, communityId: input.communityId })
@@ -265,7 +268,7 @@ export async function updateCommunityListing(input: {
         input.communityId,
         input.listingId,
         input.body.status ?? listing.status,
-        input.body.price_usd ?? listing.price_usd,
+        input.body.price_cents == null ? listing.price_usd : centsToUsd(input.body.price_cents),
         JSON.stringify({
           regional_pricing_enabled: nextRegional,
           donation_partner_id: donationConfig.donation_partner_id,

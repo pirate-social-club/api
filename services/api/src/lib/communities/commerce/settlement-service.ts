@@ -563,7 +563,7 @@ export async function settleCommunityPurchase(input: {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityMember(db.client, input.communityId, input.userId)
-    const quote = await getPurchaseQuoteRow(db.client, input.communityId, input.body.quote_id)
+    const quote = await getPurchaseQuoteRow(db.client, input.communityId, input.body.quote)
     if (!quote || quote.buyer_user_id !== input.userId) {
       throw notFoundError("Purchase quote not found")
     }
@@ -593,7 +593,7 @@ export async function settleCommunityPurchase(input: {
           WHERE community_id = ?1
             AND quote_id = ?2
         `,
-        args: [input.communityId, input.body.quote_id, nowIso()],
+        args: [input.communityId, input.body.quote, nowIso()],
       })
       throw badRequestError("Purchase quote has expired")
     }
@@ -603,7 +603,7 @@ export async function settleCommunityPurchase(input: {
       communityId: input.communityId,
       quoteId: quote.quote_id,
       purchaseId,
-      settlementWalletAttachmentId: input.body.settlement_wallet_attachment_id,
+      settlementWalletAttachmentId: input.body.settlement_wallet_attachment,
       settlementTxRef: input.body.settlement_tx_ref ?? null,
       now: createdAt,
     })
@@ -657,7 +657,7 @@ export async function settleCommunityPurchase(input: {
       const buyerWalletAddress = await resolveWalletAttachmentAddress({
         userRepository: input.userRepository,
         userId: input.userId,
-        walletAttachmentId: input.body.settlement_wallet_attachment_id,
+        walletAttachmentId: input.body.settlement_wallet_attachment,
       })
       const purchaseRef = derivePurchaseRef({
         communityId: input.communityId,
@@ -698,7 +698,7 @@ export async function settleCommunityPurchase(input: {
       const storyPaymentMetadata = JSON.stringify({
         amount_wip_wei: storyPayoutAmount.toString(),
         buyer_wallet_address: buyerWalletAddress,
-        asset_id: asset.asset_id,
+        asset: asset.asset_id,
         story_ip_id: asset.story_ip_id,
         creator_user_id: asset.creator_user_id,
         title: asset.display_title,
@@ -827,7 +827,7 @@ export async function settleCommunityPurchase(input: {
         donationPartnerId,
         donationSharePct,
         donationAmountUsd,
-        settlementWalletAttachmentId: input.body.settlement_wallet_attachment_id,
+        settlementWalletAttachmentId: input.body.settlement_wallet_attachment,
         createdAt,
       })
       return {
@@ -869,7 +869,7 @@ export async function listCommunityPurchases(input: {
         items.push(serializePurchase(purchase, entitlement, allocations))
       }
     }
-    return { items }
+    return { items, next_cursor: null }
   } finally {
     db.close()
   }

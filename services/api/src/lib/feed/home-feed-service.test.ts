@@ -7,8 +7,7 @@ import {
   resolveJoinedHomeFeedCommunityIds,
   sortCommunitySummaries,
 } from "./home-feed-service"
-import type { CommunityAggregate } from "./home-feed-service"
-import type { HomeFeedCommunitySummary } from "../../types"
+import type { CommunityAggregate, InternalHomeFeedCommunitySummary } from "./home-feed-service"
 
 function createCommunityRow(input: {
   communityId: string
@@ -223,8 +222,10 @@ function createCommunitySummary(input: {
   communityId: string
   displayName?: string
   updatedAt?: string
-}): HomeFeedCommunitySummary {
+}): InternalHomeFeedCommunitySummary {
   return {
+    id: `com_${input.communityId}`,
+    object: "home_feed_community_summary",
     community_id: input.communityId,
     display_name: input.displayName ?? input.communityId,
     route_slug: input.communityId,

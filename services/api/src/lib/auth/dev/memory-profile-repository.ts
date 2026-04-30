@@ -8,7 +8,7 @@ import {
   normalizeDesiredGlobalHandleLabel,
 } from "../global-handle-policy"
 import { assertRedditHandleClaimEligible, buildRedditHandleClaimQuote } from "../reddit-handle-claim-policy"
-import { exposeMemoryProfile, getMemoryRecordByUserId, getMemoryStore } from "./memory-auth-store"
+import { exposeMemoryGlobalHandle, exposeMemoryProfile, getMemoryRecordByUserId, getMemoryStore, type MemoryGlobalHandle } from "./memory-auth-store"
 import type { GlobalHandle, HandleUpgradeQuote, Profile } from "../../../types"
 import type { PublicProfileResolution, UpdateProfileInput } from "../repositories"
 
@@ -33,11 +33,12 @@ export class MemoryProfileRepository {
     if (!record) {
       return null
     }
-    const publicHandle = getProfilePublicHandleLabel(record.profile)
+    const exposedProfile = exposeMemoryProfile(record)
+    const publicHandle = getProfilePublicHandleLabel(exposedProfile)
     const requestedHandle = pirateRecord ? normalizedHandleLabel : publicHandle
 
     return {
-      profile: exposeMemoryProfile(record),
+      profile: exposedProfile,
       requested_handle_label: requestedHandle,
       resolved_handle_label: publicHandle,
       is_canonical: publicHandle.toLowerCase() === requestedHandle.toLowerCase(),
@@ -56,9 +57,10 @@ export class MemoryProfileRepository {
       return null
     }
 
-    const publicHandle = getProfilePublicHandleLabel(record.profile)
+    const exposedProfile = exposeMemoryProfile(record)
+    const publicHandle = getProfilePublicHandleLabel(exposedProfile)
     return {
-      profile: exposeMemoryProfile(record),
+      profile: exposedProfile,
       requested_handle_label: walletAddress.trim(),
       resolved_handle_label: publicHandle,
       is_canonical: true,
@@ -146,13 +148,13 @@ export class MemoryProfileRepository {
 
     const desired = normalizeDesiredGlobalHandleLabel(desiredLabel)
     if (desired.labelDisplay === record.profile.global_handle.label) {
-      return record.profile.global_handle
+      return exposeMemoryGlobalHandle(record.profile.global_handle)
     }
 
     assertFreeCleanupRenameEligible({
       desiredLabel: desired.labelDisplay,
       labelNormalized: desired.labelNormalized,
-      activeGlobalHandle: record.profile.global_handle,
+      activeGlobalHandle: exposeMemoryGlobalHandle(record.profile.global_handle),
       userCreatedAt: record.user.created_at,
     })
 
@@ -168,14 +170,14 @@ export class MemoryProfileRepository {
     }
 
     const updatedAt = nowIso()
-    const next: GlobalHandle = {
+    const next: MemoryGlobalHandle = {
       global_handle_id: makeId("ghl"),
       label: desired.labelDisplay,
       tier: "standard",
       status: "active",
       issuance_source: "free_cleanup_rename",
       redirect_target_global_handle_id: null,
-      price_paid_usd: null,
+      price_paid_cents: null,
       free_rename_consumed: true,
       issued_at: updatedAt,
       replaced_at: null,
@@ -200,7 +202,7 @@ export class MemoryProfileRepository {
       generated_handle_assigned: false,
       cleanup_rename_available: false,
     }
-    return next
+    return exposeMemoryGlobalHandle(next)
   }
 
   async claimRedditGlobalHandle(userId: string, desiredLabel: string): Promise<GlobalHandle | null> {
@@ -211,7 +213,7 @@ export class MemoryProfileRepository {
 
     const desired = normalizeDesiredGlobalHandleLabel(desiredLabel)
     if (desired.labelDisplay === record.profile.global_handle.label) {
-      return record.profile.global_handle
+      return exposeMemoryGlobalHandle(record.profile.global_handle)
     }
 
     const labelAvailable = this.isGlobalHandleAvailable(userId, desired.labelDisplay)
@@ -229,14 +231,14 @@ export class MemoryProfileRepository {
     assertRedditHandleClaimEligible(quote)
 
     const updatedAt = nowIso()
-    const next: GlobalHandle = {
+    const next: MemoryGlobalHandle = {
       global_handle_id: makeId("ghl"),
       label: desired.labelDisplay,
       tier: quote.tier,
       status: "active",
       issuance_source: "reddit_verified_claim",
       redirect_target_global_handle_id: null,
-      price_paid_usd: null,
+      price_paid_cents: null,
       free_rename_consumed: true,
       issued_at: updatedAt,
       replaced_at: null,
@@ -261,7 +263,7 @@ export class MemoryProfileRepository {
       generated_handle_assigned: false,
       cleanup_rename_available: false,
     }
-    return next
+    return exposeMemoryGlobalHandle(next)
   }
 
   async quoteGlobalHandleUpgrade(userId: string, desiredLabel: string): Promise<HandleUpgradeQuote | null> {
@@ -293,7 +295,7 @@ export class MemoryProfileRepository {
       currentActiveLabelNormalized: record.profile.global_handle.label.replace(/\.pirate$/i, "").toLowerCase(),
       cleanupRenameAvailable: isCleanupRenameAvailable({
         userCreatedAt: record.user.created_at,
-        activeGlobalHandle: record.profile.global_handle,
+        activeGlobalHandle: exposeMemoryGlobalHandle(record.profile.global_handle),
       }),
       labelAvailable,
     })

@@ -348,7 +348,7 @@ export async function createSongAssetForPost(input: {
     mimeType: input.bundle.primary_audio.mime_type,
     contentHash: input.bundle.primary_audio.content_hash ?? null,
     artifactKind: "primary_audio",
-    bundleId: input.bundle.song_artifact_bundle_id,
+    bundleId: input.bundle.id,
     bundle: input.bundle,
     licensePreset: input.licensePreset,
     commercialRevSharePct: input.commercialRevSharePct,
@@ -400,9 +400,9 @@ export async function resolveCommunityAssetAccess(input: {
 
     if (asset.access_mode === "public") {
       return {
-        asset_id: asset.asset_id,
-        community_id: asset.community_id,
-        source_post_id: asset.source_post_id,
+        asset: `asset_${asset.asset_id}`,
+        community: `com_${asset.community_id}`,
+        source_post: `post_${asset.source_post_id}`,
         access_mode: asset.access_mode,
         source_post_status: post.status === "draft" || post.status === "hidden" ? post.status : "published",
         story_status: asset.story_status,
@@ -423,9 +423,9 @@ export async function resolveCommunityAssetAccess(input: {
       })
       const decisionReason = privilegedReason ?? "creator"
       return {
-        asset_id: asset.asset_id,
-        community_id: asset.community_id,
-        source_post_id: asset.source_post_id,
+        asset: `asset_${asset.asset_id}`,
+        community: `com_${asset.community_id}`,
+        source_post: `post_${asset.source_post_id}`,
         access_mode: asset.access_mode,
         source_post_status: post.status === "draft" || post.status === "hidden" ? post.status : "published",
         story_status: asset.story_status,
@@ -454,9 +454,9 @@ export async function resolveCommunityAssetAccess(input: {
         userId: input.userId,
       })
       return {
-        asset_id: asset.asset_id,
-        community_id: asset.community_id,
-        source_post_id: asset.source_post_id,
+        asset: `asset_${asset.asset_id}`,
+        community: `com_${asset.community_id}`,
+        source_post: `post_${asset.source_post_id}`,
         access_mode: asset.access_mode,
         source_post_status: "published",
         story_status: asset.story_status,
@@ -476,9 +476,9 @@ export async function resolveCommunityAssetAccess(input: {
     }
 
     return {
-      asset_id: asset.asset_id,
-      community_id: asset.community_id,
-      source_post_id: asset.source_post_id,
+      asset: `asset_${asset.asset_id}`,
+      community: `com_${asset.community_id}`,
+      source_post: `post_${asset.source_post_id}`,
       access_mode: asset.access_mode,
       source_post_status: "published",
       story_status: asset.story_status,

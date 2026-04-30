@@ -110,6 +110,7 @@ export type UserAgent = {
 
 export type UserAgentListResponse = {
   items: UserAgent[]
+  next_cursor: string | null
 }
 
 export type AgentHandle = {

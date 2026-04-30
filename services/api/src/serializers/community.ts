@@ -1,0 +1,125 @@
+import type {
+  Community as ContractCommunity,
+  CommunityCreateAcceptedResponse as ContractCommunityCreateAcceptedResponse,
+  CommunityPreview as ContractCommunityPreview,
+} from "@pirate/api-contracts"
+import type { Community, CommunityPreview } from "../types"
+import { nullableUnixSeconds, unixSeconds } from "./time"
+import { publicCommunityId } from "../lib/public-ids"
+
+type CurrentCommunityResponse = ContractCommunity & Pick<Community, "localized_text">
+
+export function serializeCommunity(community: Community): CurrentCommunityResponse {
+  return {
+    id: publicCommunityId(community.community_id),
+    object: "community",
+    display_name: community.display_name,
+    description: community.description,
+    avatar_ref: community.avatar_ref,
+    banner_ref: community.banner_ref,
+    namespace_verification: community.namespace_verification_id ? `nv_${community.namespace_verification_id}` : community.namespace_verification_id,
+    route_slug: community.route_slug,
+    pending_namespace_verification_session: community.pending_namespace_verification_session_id ? `nvs_${community.pending_namespace_verification_session_id}` : community.pending_namespace_verification_session_id,
+    status: community.status,
+    provisioning_state: community.provisioning_state,
+    artist_identity: community.artist_identity_id,
+    community_agent_user: community.community_agent_user_id ? `usr_${community.community_agent_user_id}` : community.community_agent_user_id,
+    membership_mode: community.membership_mode,
+    allow_anonymous_identity: community.allow_anonymous_identity,
+    anonymous_identity_scope: community.anonymous_identity_scope,
+    human_verification_lane: community.human_verification_lane,
+    human_verification_lane_origin: community.human_verification_lane_origin,
+    allowed_disclosed_qualifiers: community.allowed_disclosed_qualifiers,
+    allow_qualifiers_on_anonymous_posts: community.allow_qualifiers_on_anonymous_posts,
+    root_post_min_trust_tier: community.root_post_min_trust_tier,
+    reply_min_trust_tier: community.reply_min_trust_tier,
+    anonymous_posting_min_trust_tier: community.anonymous_posting_min_trust_tier,
+    root_post_quota_by_trust_tier: community.root_post_quota_by_trust_tier,
+    reply_quota_by_trust_tier: community.reply_quota_by_trust_tier,
+    probation_window_days: community.probation_window_days,
+    link_post_policy: community.link_post_policy,
+    default_age_gate_policy: community.default_age_gate_policy,
+    agent_posting_policy: community.agent_posting_policy,
+    agent_posting_scope: community.agent_posting_scope,
+    agent_daily_post_cap: community.agent_daily_post_cap,
+    agent_daily_reply_cap: community.agent_daily_reply_cap,
+    agent_min_owner_trust_tier: community.agent_min_owner_trust_tier,
+    agent_owner_active_limit: community.agent_owner_active_limit,
+    accepted_agent_ownership_providers: community.accepted_agent_ownership_providers,
+    accepted_agent_ownership_providers_origin: community.accepted_agent_ownership_providers_origin,
+    civic_scale_tier: community.civic_scale_tier,
+    donation_policy_mode: community.donation_policy_mode,
+    donation_partner_status: community.donation_partner_status,
+    donation_partner: community.donation_partner,
+    money_policy: community.money_policy as CurrentCommunityResponse["money_policy"],
+    content_authenticity_policy: community.content_authenticity_policy as CurrentCommunityResponse["content_authenticity_policy"],
+    content_authenticity_detection_policy: community.content_authenticity_detection_policy as CurrentCommunityResponse["content_authenticity_detection_policy"],
+    market_context_policy: community.market_context_policy as CurrentCommunityResponse["market_context_policy"],
+    source_policy: community.source_policy as CurrentCommunityResponse["source_policy"],
+    capture_edit_policy: community.capture_edit_policy as CurrentCommunityResponse["capture_edit_policy"],
+    adult_content_policy: community.adult_content_policy as CurrentCommunityResponse["adult_content_policy"],
+    graphic_content_policy: community.graphic_content_policy as CurrentCommunityResponse["graphic_content_policy"],
+    motion_media_policy: community.motion_media_policy as CurrentCommunityResponse["motion_media_policy"],
+    language_policy: community.language_policy as CurrentCommunityResponse["language_policy"],
+    civility_policy: community.civility_policy as CurrentCommunityResponse["civility_policy"],
+    openai_moderation_settings: community.openai_moderation_settings,
+    provenance_policy: community.provenance_policy as CurrentCommunityResponse["provenance_policy"],
+    promotion_policy: community.promotion_policy as CurrentCommunityResponse["promotion_policy"],
+    label_policy: community.label_policy as CurrentCommunityResponse["label_policy"],
+    community_profile: community.community_profile as CurrentCommunityResponse["community_profile"],
+    reference_links: community.reference_links as CurrentCommunityResponse["reference_links"],
+    community_stage: community.community_stage,
+    member_count: community.member_count,
+    qualified_member_count: community.qualified_member_count,
+    stage_entered_at: nullableUnixSeconds(community.stage_entered_at),
+    governance_mode: community.governance_mode,
+    governance_backend: community.governance_backend as CurrentCommunityResponse["governance_backend"],
+    gate_policy: community.gate_policy as CurrentCommunityResponse["gate_policy"],
+    created_by_user: `usr_${community.created_by_user_id}`,
+    created: unixSeconds(community.created_at),
+    localized_text: community.localized_text,
+  }
+}
+
+type CurrentCommunityPreviewResponse = ContractCommunityPreview & Pick<CommunityPreview, "localized_text">
+
+export function serializeCommunityPreview(preview: CommunityPreview): CurrentCommunityPreviewResponse {
+  return {
+    id: publicCommunityId(preview.community_id),
+    object: "community_preview",
+    namespace_verification: preview.namespace_verification_id ? `nv_${preview.namespace_verification_id}` : preview.namespace_verification_id,
+    route_slug: preview.route_slug,
+    display_name: preview.display_name,
+    description: preview.description,
+    localized_text: preview.localized_text,
+    avatar_ref: preview.avatar_ref,
+    banner_ref: preview.banner_ref,
+    membership_mode: preview.membership_mode,
+    allow_anonymous_identity: preview.allow_anonymous_identity,
+    anonymous_identity_scope: preview.anonymous_identity_scope,
+    allowed_disclosed_qualifiers: preview.allowed_disclosed_qualifiers,
+    allow_qualifiers_on_anonymous_posts: preview.allow_qualifiers_on_anonymous_posts,
+    human_verification_lane: preview.human_verification_lane,
+    member_count: preview.member_count,
+    follower_count: preview.follower_count,
+    donation_policy_mode: preview.donation_policy_mode,
+    donation_partner: preview.donation_partner,
+    owner: preview.owner,
+    moderators: preview.moderators,
+    reference_links: preview.reference_links,
+    membership_gate_summaries: preview.membership_gate_summaries,
+    rules: preview.rules,
+    viewer_membership_status: preview.viewer_membership_status,
+    viewer_following: preview.viewer_following,
+    created: unixSeconds(preview.created_at),
+  }
+}
+
+export function serializeCommunityCreateAcceptedResponse(
+  response: { community: Community; job: ContractCommunityCreateAcceptedResponse["job"] },
+): ContractCommunityCreateAcceptedResponse {
+  return {
+    community: serializeCommunity(response.community),
+    job: response.job,
+  }
+}

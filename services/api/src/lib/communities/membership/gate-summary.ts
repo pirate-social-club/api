@@ -9,7 +9,7 @@ import {
   resolveTokenGateContractAddress,
 } from "./gate-config"
 import { formatAssetFilterLabel, readInventoryMatchConfig } from "../community-token-inventory-gates"
-import type { CommunityGateRuleRow } from "./gate-types"
+import type { CommunityGateRuleRow, GateAtom, GateExpression, GatePolicy } from "./gate-types"
 
 export function buildMembershipGateSummary(rule: CommunityGateRuleRow): MembershipGateSummary {
   const requirements = parseProofRequirements(rule.proof_requirements_json, rule.gate_type)
@@ -75,6 +75,78 @@ export function buildMembershipGateSummary(rule: CommunityGateRuleRow): Membersh
     } else if (rule.chain_namespace) {
       summary.chain_namespace = rule.chain_namespace
     }
+  }
+
+  return summary
+}
+
+export function flattenGatePolicyAtoms(policy: GatePolicy | null): GateAtom[] {
+  if (!policy) {
+    return []
+  }
+  const atoms: GateAtom[] = []
+  collectAtoms(policy.expression, atoms)
+  return atoms
+}
+
+function collectAtoms(expression: GateExpression, atoms: GateAtom[]): void {
+  if (expression.op === "gate") {
+    atoms.push(expression.gate)
+    return
+  }
+  for (const child of expression.children) {
+    collectAtoms(child, atoms)
+  }
+}
+
+export function buildMembershipGateSummariesFromPolicy(policy: GatePolicy | null): MembershipGateSummary[] {
+  return flattenGatePolicyAtoms(policy).map(buildMembershipGateSummaryFromAtom)
+}
+
+export function buildMembershipGateSummaryFromAtom(atom: GateAtom): MembershipGateSummary {
+  const summary: MembershipGateSummary = {
+    gate_type: atom.type as MembershipGateSummary["gate_type"],
+  }
+
+  if ("provider" in atom && (atom.provider === "self" || atom.provider === "very" || atom.provider === "passport")) {
+    summary.accepted_providers = [atom.provider]
+  }
+
+  switch (atom.type) {
+    case "minimum_age":
+      summary.required_minimum_age = atom.minimum_age
+      break
+    case "nationality":
+      if (atom.allowed.length === 1) {
+        summary.required_value = atom.allowed[0]
+      } else {
+        summary.required_values = atom.allowed
+      }
+      break
+    case "gender":
+      if (atom.allowed.length === 1) {
+        summary.required_value = atom.allowed[0]
+      } else {
+        summary.required_values = atom.allowed
+      }
+      break
+    case "wallet_score":
+      summary.minimum_score = atom.minimum_score
+      break
+    case "erc721_holding":
+      summary.chain_namespace = atom.chain_namespace
+      summary.contract_address = atom.contract_address
+      break
+    case "erc721_inventory_match":
+      summary.chain_namespace = atom.chain_namespace
+      summary.contract_address = atom.contract_address
+      summary.inventory_provider = atom.provider
+      summary.min_quantity = atom.min_quantity
+      summary.asset_category = typeof atom.match.category === "string" ? atom.match.category : null
+      summary.asset_filter_label = formatAssetFilterLabel(atom.match)
+      break
+    case "unique_human":
+      break
   }
 
   return summary

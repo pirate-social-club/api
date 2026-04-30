@@ -8,8 +8,11 @@ import type {
 } from "../../../types"
 import { getPrimaryWalletSnapshot } from "../community-serialization"
 import { assertPublicV0GateConfiguration } from "../community-gate-validation"
+import type { GatePolicy } from "../membership/gate-types"
 
-export type CreateCommunityRequestBody = CreateCommunityRequest
+export type CreateCommunityRequestBody = Omit<CreateCommunityRequest, "gate_policy"> & {
+  gate_policy?: unknown
+}
 
 export function assertCreateRequest(
   body: CreateCommunityRequestBody,
@@ -18,6 +21,7 @@ export function assertCreateRequest(
   },
 ): asserts body is CreateCommunityRequestBody & {
   display_name: string
+  gate_policy?: GatePolicy | null
 } {
   if (!body.display_name?.trim()) {
     throw badRequestError("display_name is required")
@@ -28,8 +32,8 @@ export function assertCreateRequest(
   if (body.banner_ref != null && typeof body.banner_ref !== "string") {
     throw badRequestError("banner_ref must be a string or null")
   }
-  if (body.namespace != null && !body.namespace.namespace_verification_id?.trim()) {
-    throw badRequestError("namespace.namespace_verification_id is required when namespace is provided")
+  if (body.namespace != null && !body.namespace.namespace_verification?.trim()) {
+    throw badRequestError("namespace.namespace_verification is required when namespace is provided")
   }
   if ((body.governance_mode ?? "centralized") !== "centralized") {
     throw eligibilityFailed("Only centralized community creation is allowed in public v0")
@@ -77,7 +81,7 @@ export async function resolveCreateCommunityAuth(input: {
     user,
     communityDisplayName: input.body.display_name.trim(),
     actorPrimaryWalletSnapshot,
-    namespaceVerificationId: input.body.namespace?.namespace_verification_id?.trim() || null,
+    namespaceVerificationId: input.body.namespace?.namespace_verification?.trim().replace(/^nv_/, "") || null,
     createdAt: nowIso(),
   }
 }
@@ -119,7 +123,7 @@ export function parseStoredDonationPartnerSummary(
   }
 
   return {
-    donation_partner_id: partner.donation_partner_id,
+    donation_partner: partner.donation_partner_id,
     display_name: partner.display_name,
     provider: "endaoment",
     provider_partner_ref: typeof partner.provider_partner_ref === "string" ? partner.provider_partner_ref : null,

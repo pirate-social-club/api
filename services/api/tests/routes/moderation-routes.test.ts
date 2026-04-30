@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { createClient } from "@libsql/client"
-import app from "../../src/index"
+import { app } from "../../src/index"
 import { buildLocalCommunityDbUrl } from "../../src/lib/communities/community-local-db"
 import type { Env } from "../../src/types"
 import { createRouteTestContext, json, mintUpstreamJwt, resetRuntimeCaches } from "../helpers"

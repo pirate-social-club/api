@@ -25,13 +25,15 @@ import {
   assembleProfile,
   getPrimaryWalletAddressFromRows,
   getProfilePublicHandleLabel,
+  parseVerificationCapabilities,
   serializeUser,
   serializeWalletAttachments,
 } from "./auth-serializers"
-import type { SessionSnapshot } from "./auth-db-rows"
+import type { SessionSnapshot, UserRow } from "./auth-db-rows"
 import { makeId, nowIso } from "../helpers"
 import type { OnboardingStatus, Profile, UpstreamIdentity, User, WalletAttachmentSummary } from "../../types"
 import type { PublicProfileResolution } from "./repositories"
+import { deriveVerificationState } from "../verification/verification-capabilities"
 
 function normalizePublicHandleLabel(value: string): {
   labelDisplay: string
@@ -45,6 +47,22 @@ function normalizePublicHandleLabel(value: string): {
   return {
     labelDisplay: `${withoutSuffix}.pirate`,
     labelNormalized: withoutSuffix,
+  }
+}
+
+function serializeInternalUser(row: UserRow): User {
+  const verificationCapabilities = parseVerificationCapabilities(row.verification_capabilities_json)
+  return {
+    user_id: row.user_id,
+    primary_wallet_attachment_id: row.primary_wallet_attachment_id,
+    verification_state: deriveVerificationState(verificationCapabilities),
+    capability_provider: row.capability_provider === "self" || row.capability_provider === "very"
+      ? row.capability_provider
+      : null,
+    verification_capabilities: verificationCapabilities,
+    verified_at: row.verified_at,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
   }
 }
 
@@ -219,7 +237,7 @@ export class DatabaseIdentityRepository {
 
   async getUserById(userId: string): Promise<User | null> {
     const userRow = await getUserRow(this.client, userId)
-    return userRow ? serializeUser(userRow) : null
+    return userRow ? serializeInternalUser(userRow) : null
   }
 
   async getWalletAttachmentsByUserId(userId: string): Promise<WalletAttachmentSummary[]> {

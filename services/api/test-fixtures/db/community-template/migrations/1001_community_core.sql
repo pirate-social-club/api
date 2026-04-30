@@ -12,7 +12,7 @@ CREATE TABLE communities (
         artist_governance_state IN ('fan_run', 'claim_pending', 'artist_governed', 'org_governed')
     ),
     membership_mode TEXT NOT NULL CHECK (
-        membership_mode IN ('open', 'request', 'gated')
+        membership_mode IN ('request', 'gated')
     ),
     default_age_gate_policy TEXT NOT NULL CHECK (
         default_age_gate_policy IN ('none', '18_plus')

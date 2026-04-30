@@ -35,13 +35,13 @@ describe("Passport provider", () => {
         provider: "passport",
         proof_type: "wallet_score",
         mechanism: "stamps-api-v2",
-        score: 33.538,
-        score_threshold: 20,
+        score_decimal: "33.538",
+        score_threshold_decimal: "20",
         passing_score: true,
-        last_score_timestamp: "2026-04-28T00:00:00.000Z",
-        stamps: [{ stamp_name: "Ens", stamp_score: 1.2 }],
+        last_scored_at: 1777334400,
+        stamps: [{ stamp_name: "Ens", stamp_score_decimal: "1.2" }],
       })
-      expect(score.expiration_timestamp).toBe("2026-04-29T01:00:00.000Z")
+      expect(score.expires_at).toBe(1777424400)
     })
   })
 

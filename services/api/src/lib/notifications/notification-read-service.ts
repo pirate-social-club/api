@@ -73,6 +73,7 @@ export async function getNotificationsTasks(input: {
         ...filteredSynthetic,
         ...tasks.items.filter((task) => task.type !== UNIQUE_HUMAN_TASK_TYPE),
       ],
+      next_cursor: tasks.next_cursor ?? null,
     }
   } finally {
     client.close?.()

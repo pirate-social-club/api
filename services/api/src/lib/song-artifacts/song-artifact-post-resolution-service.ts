@@ -29,7 +29,7 @@ export async function resolveSongPostBundle(input: {
 }): Promise<ResolvedSongPostBundle> {
   const client = getControlPlaneClient(input.env)
   const bundle = await getSongArtifactBundle(client, input.communityId, input.songArtifactBundleId)
-  if (!bundle || bundle.creator_user_id !== input.userId) {
+  if (!bundle || bundle.creator_user !== `usr_${input.userId}`) {
     throw notFoundError("Song artifact bundle not found")
   }
   if (bundle.status !== "ready" && bundle.status !== "consumed") {
@@ -86,7 +86,7 @@ export async function resolveVideoPostAsset(input: {
     storageRef: primaryVideo.storage_ref,
     artifactKind: "primary_video",
   })
-  if (!upload || upload.uploader_user_id !== input.userId) {
+  if (!upload || upload.uploader_user !== `usr_${input.userId}`) {
     throw notFoundError("Video artifact upload not found")
   }
   const descriptor = videoDescriptorFromUpload(upload)

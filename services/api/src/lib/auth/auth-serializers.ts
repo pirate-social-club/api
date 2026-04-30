@@ -6,6 +6,7 @@ import {
 } from "../verification/verification-capabilities"
 import { serializeNamespaceSessionStatus } from "../verification/namespace-verification-policy"
 import { normalizeIdentityCountryAlpha2 } from "../identity/country-codes"
+import { nullableUnixSeconds, unixSeconds } from "../../serializers/time"
 import type {
   ExternalReputationSnapshotRow,
   GlobalHandleRow,
@@ -19,6 +20,7 @@ import type {
   VerificationSessionRow,
   WalletAttachmentRow,
 } from "./auth-db-rows"
+import type { User as ContractUser } from "@pirate/api-contracts"
 import type {
   GlobalHandle,
   LinkedHandle,
@@ -29,7 +31,6 @@ import type {
   Profile,
   RedditImportSummary,
   RedditVerification,
-  User,
   VerificationCapabilities,
   VerificationSession,
   VerificationSessionLaunch,
@@ -57,34 +58,37 @@ export function parseVerificationCapabilities(raw: string | null | undefined): V
   }
 }
 
-export function serializeUser(row: UserRow): User {
+export function serializeUser(row: UserRow): ContractUser {
   const verificationCapabilities = parseVerificationCapabilities(row.verification_capabilities_json)
   return {
-    user_id: row.user_id,
-    primary_wallet_attachment_id: row.primary_wallet_attachment_id,
+    id: `usr_${row.user_id}`,
+    object: "user",
+    primary_wallet_attachment: row.primary_wallet_attachment_id,
     verification_state: deriveVerificationState(verificationCapabilities),
     capability_provider: row.capability_provider === "self" || row.capability_provider === "very"
       ? row.capability_provider
       : null,
     verification_capabilities: verificationCapabilities,
-    verified_at: row.verified_at,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
+    verified_at: nullableUnixSeconds(row.verified_at),
+    created: unixSeconds(row.created_at),
   }
 }
 
 export function serializeGlobalHandle(row: GlobalHandleRow): GlobalHandle {
   return {
-    global_handle_id: row.global_handle_id,
+    id: `gh_${row.global_handle_id}`,
+    object: "global_handle",
     label: row.label_display,
     tier: row.tier,
     status: row.status,
     issuance_source: row.issuance_source,
-    redirect_target_global_handle_id: row.redirect_target_global_handle_id,
-    price_paid_usd: row.price_paid_usd,
+    redirect_target_global_handle: row.redirect_target_global_handle_id,
+    price_paid_cents: typeof row.price_paid_usd === "number" && Number.isFinite(row.price_paid_usd)
+      ? Math.round(row.price_paid_usd * 100)
+      : null,
     free_rename_consumed: Boolean(row.free_rename_consumed),
-    issued_at: row.issued_at,
-    replaced_at: row.replaced_at,
+    issued_at: unixSeconds(row.issued_at),
+    replaced_at: nullableUnixSeconds(row.replaced_at),
   }
 }
 
@@ -105,7 +109,7 @@ function parseLinkedHandleMetadata(raw: string | null): Record<string, unknown> 
 
 export function serializeLinkedHandleRow(row: LinkedHandleRow): LinkedHandle {
   return {
-    linked_handle_id: row.linked_handle_id,
+    linked_handle: row.linked_handle_id,
     label: row.label_display,
     kind: row.kind,
     metadata: parseLinkedHandleMetadata(row.metadata_json),
@@ -115,7 +119,7 @@ export function serializeLinkedHandleRow(row: LinkedHandleRow): LinkedHandle {
 
 export function serializePirateLinkedHandle(row: GlobalHandleRow): LinkedHandle {
   return {
-    linked_handle_id: `global:${row.global_handle_id}`,
+    linked_handle: `global:${row.global_handle_id}`,
     label: row.label_display,
     kind: "pirate",
     verification_state: "verified",
@@ -127,11 +131,11 @@ export function assembleProfile(
   globalHandleRow: GlobalHandleRow,
   linkedHandleRows: LinkedHandleRow[] = [],
   primaryWalletAddress: string | null = null,
-  user?: Pick<User, "verification_capabilities"> | null,
+  user?: Pick<ContractUser, "verification_capabilities"> | null,
 ): Profile {
   const externalLinkedHandles = linkedHandleRows.map(serializeLinkedHandleRow)
   const primaryPublicHandle = profileRow.primary_linked_handle_id
-    ? externalLinkedHandles.find((handle) => handle.linked_handle_id === profileRow.primary_linked_handle_id) ?? null
+    ? externalLinkedHandles.find((handle) => handle.linked_handle === profileRow.primary_linked_handle_id) ?? null
     : null
   const nationality = user?.verification_capabilities.nationality
   const nationalityBadgeCountry = profileRow.display_verified_nationality_badge === 1
@@ -141,7 +145,8 @@ export function assembleProfile(
     : null
 
   return {
-    user_id: profileRow.user_id,
+    id: `usr_${profileRow.user_id}`,
+    object: "profile",
     display_name: profileRow.display_name,
     avatar_ref: profileRow.avatar_ref,
     avatar_source: profileRow.avatar_source,
@@ -155,10 +160,9 @@ export function assembleProfile(
     linked_handles: [serializePirateLinkedHandle(globalHandleRow), ...externalLinkedHandles],
     primary_public_handle: primaryPublicHandle,
     primary_wallet_address: primaryWalletAddress,
-    xmtp_inbox_id: profileRow.xmtp_inbox_id,
+    xmtp_inbox: profileRow.xmtp_inbox_id,
     global_handle: serializeGlobalHandle(globalHandleRow),
-    created_at: profileRow.created_at,
-    updated_at: profileRow.updated_at,
+    created: unixSeconds(profileRow.created_at),
   }
 }
 
@@ -188,7 +192,7 @@ export function getProfilePublicHandleStem(profile: PublicHandleProfile): string
 
 export function serializeWalletAttachments(rows: WalletAttachmentRow[]): WalletAttachmentSummary[] {
   return rows.map((row) => ({
-    wallet_attachment_id: row.wallet_attachment_id,
+    wallet_attachment: row.wallet_attachment_id,
     chain_namespace: row.chain_namespace,
     wallet_address: row.wallet_address_display,
     is_primary: Boolean(row.is_primary),
@@ -258,26 +262,27 @@ export function serializeVerificationSession(input: {
     ? JSON.parse(input.row.verification_requirements_json) as VerificationSession["verification_requirements"]
     : []
   return {
-    verification_session_id: input.row.verification_session_id,
-    user_id: input.row.user_id,
+    id: `vs_${input.row.verification_session_id}`,
+    object: "verification_session",
+    user: `usr_${input.row.user_id}`,
     provider: input.row.provider === "self" || input.row.provider === "very" ? input.row.provider : "self",
     provider_mode: input.row.provider === "very" && input.row.upstream_session_ref ? "widget" : null,
-    wallet_attachment_id: input.row.wallet_attachment_id,
+    wallet_attachment: input.row.wallet_attachment_id,
     requested_capabilities: requestedCapabilities,
     verification_requirements: verificationRequirements,
     verification_intent: input.row.verification_intent as VerificationSession["verification_intent"],
-    policy_id: input.row.policy_id,
+    policy: input.row.policy_id,
     status: input.row.status === "canceled" ? "failed" : input.row.status,
     launch: input.launch ?? undefined,
     nationality: null,
     age_at_verification: null,
-    attestation_id: input.attestationRows.length > 0 ? input.attestationRows[0].user_attestation_id : null,
+    attestation: input.attestationRows.length > 0 ? input.attestationRows[0].user_attestation_id : null,
     proof_hash: input.row.result_ref,
     evidence_ref: input.row.result_ref,
-    verified_at: input.attestationRows.length > 0 ? input.attestationRows[0].verified_at : input.row.completed_at,
+    verified_at: nullableUnixSeconds(input.attestationRows.length > 0 ? input.attestationRows[0].verified_at : input.row.completed_at),
     failure_reason: input.row.failure_code,
-    created_at: input.row.created_at,
-    expires_at: input.row.expires_at ?? input.row.created_at,
+    created: unixSeconds(input.row.created_at),
+    expires_at: unixSeconds(input.row.expires_at ?? input.row.created_at),
   }
 }
 
@@ -288,9 +293,10 @@ export function serializeNamespaceVerificationSession(
   const storedSetupNameservers = parseOptionalStringArray(row.setup_nameservers_json)
 
   return {
-    namespace_verification_session_id: row.namespace_verification_session_id,
-    namespace_verification_id: row.namespace_verification_id,
-    user_id: row.user_id,
+    id: `nvs_${row.namespace_verification_session_id}`,
+    object: "namespace_verification_session",
+    namespace_verification: row.namespace_verification_id ? `nv_${row.namespace_verification_id}` : row.namespace_verification_id,
+    user: `usr_${row.user_id}`,
     family: row.family,
     submitted_root_label: row.submitted_root_label,
     normalized_root_label: row.normalized_root_label,
@@ -299,7 +305,7 @@ export function serializeNamespaceVerificationSession(
     challenge_host: row.challenge_host,
     challenge_txt_value: row.challenge_txt_value,
     challenge_payload: parseChallengePayload(row.challenge_payload_json),
-    challenge_expires_at: row.challenge_expires_at,
+    challenge_expires_at: nullableUnixSeconds(row.challenge_expires_at),
     setup_nameservers: input?.setupNameservers ?? storedSetupNameservers,
     assertions: buildNamespaceAssertions(row),
     capabilities: buildNamespaceCapabilities(row),
@@ -308,10 +314,9 @@ export function serializeNamespaceVerificationSession(
     observation_provider: row.observation_provider,
     evidence_bundle_ref: row.evidence_bundle_ref,
     failure_reason: row.failure_reason,
-    accepted_at: row.accepted_at,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-    expires_at: row.expires_at,
+    accepted_at: nullableUnixSeconds(row.accepted_at),
+    created: unixSeconds(row.created_at),
+    expires_at: unixSeconds(row.expires_at ?? row.created_at),
   }
 }
 
@@ -339,8 +344,9 @@ function parseOptionalStringArray(raw: string | null): string[] | null {
 
 export function serializeNamespaceVerification(row: NamespaceVerificationRow): NamespaceVerification {
   return {
-    namespace_verification_id: row.namespace_verification_id,
-    user_id: row.user_id,
+    id: `nv_${row.namespace_verification_id}`,
+    object: "namespace_verification",
+    user: `usr_${row.user_id}`,
     family: row.family,
     normalized_root_label: row.normalized_root_label,
     status: row.status,
@@ -350,10 +356,9 @@ export function serializeNamespaceVerification(row: NamespaceVerificationRow): N
     operation_class: row.operation_class,
     observation_provider: row.observation_provider,
     evidence_bundle_ref: row.evidence_bundle_ref,
-    accepted_at: row.accepted_at,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-    expires_at: row.expires_at,
+    accepted_at: unixSeconds(row.accepted_at),
+    created: unixSeconds(row.created_at),
+    expires_at: unixSeconds(row.expires_at),
   }
 }
 
@@ -363,7 +368,7 @@ export function serializeRedditVerification(row: RedditVerificationSessionRow): 
     status: row.status,
     verification_hint: row.verification_hint,
     code_placement_surface: row.code_placement_surface,
-    last_checked_at: row.last_checked_at,
+    last_checked_at: nullableUnixSeconds(row.last_checked_at),
     failure_code: row.failure_code,
   }
 }
@@ -373,13 +378,20 @@ export function parseRedditImportSummary(raw: string): RedditImportSummary {
   const importedRedditScore = parsed.imported_reddit_score ?? parsed.global_karma ?? null
   return {
     reddit_username: parsed.reddit_username,
-    imported_at: parsed.imported_at,
+    imported_at: typeof parsed.imported_at === "number" ? parsed.imported_at : unixSeconds(parsed.imported_at),
     account_age_days: parsed.account_age_days ?? null,
     imported_reddit_score: importedRedditScore,
     top_subreddits: Array.isArray(parsed.top_subreddits) ? parsed.top_subreddits : [],
     moderator_of: Array.isArray(parsed.moderator_of) ? parsed.moderator_of : [],
     inferred_interests: Array.isArray(parsed.inferred_interests) ? parsed.inferred_interests : [],
-    suggested_communities: Array.isArray(parsed.suggested_communities) ? parsed.suggested_communities : [],
+    suggested_communities: Array.isArray(parsed.suggested_communities)
+      ? parsed.suggested_communities.map((community) => ({
+        ...community,
+        community: "community" in community
+          ? community.community
+          : (community as { community_id?: string }).community_id ?? "",
+      }))
+      : [],
     coverage_note: parsed.coverage_note ?? null,
   }
 }

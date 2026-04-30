@@ -6,6 +6,7 @@ import type {
   NotificationFeedResponse,
   NotificationSummary,
 } from "../../types"
+import { nullableUnixSeconds, unixSeconds } from "../../serializers/time"
 
 export async function getNotificationSummary(input: {
   executor: DbExecutor
@@ -87,26 +88,27 @@ export async function listNotificationFeed(input: {
   const hasMore = rows.length > limit
   const items = (hasMore ? rows.slice(0, limit) : rows).map((row) => ({
     event: {
-      event_id: String(row.event_id),
+      id: `ne_${String(row.event_id)}`,
+      object: "notification_event",
       type: String(row.type) as NotificationEventType,
-      actor_user_id: row.actor_user_id ? String(row.actor_user_id) : null,
+      actor_user: row.actor_user_id ? `usr_${String(row.actor_user_id)}` : null,
       subject_type: String(row.subject_type),
-      subject_id: String(row.subject_id),
+      subject: String(row.subject_id),
       object_type: row.object_type ? String(row.object_type) : null,
-      object_id: row.object_id ? String(row.object_id) : null,
       payload: row.event_payload ? JSON.parse(String(row.event_payload)) : null,
-      created_at: String(row.event_created_at),
+      created: unixSeconds(String(row.event_created_at)),
     },
     receipt: {
-      event_id: String(row.event_id),
-      recipient_user_id: String(row.recipient_user_id),
-      seen_at: row.seen_at ? String(row.seen_at) : null,
-      read_at: row.read_at ? String(row.read_at) : null,
-      created_at: String(row.receipt_created_at),
+      id: `nr_${String(row.event_id)}`,
+      object: "notification_receipt",
+      recipient_user: `usr_${String(row.recipient_user_id)}`,
+      seen_at: nullableUnixSeconds(row.seen_at ? String(row.seen_at) : null),
+      read_at: nullableUnixSeconds(row.read_at ? String(row.read_at) : null),
+      created: unixSeconds(String(row.receipt_created_at)),
     },
   } satisfies NotificationFeedItem))
 
-  const nextCursor = hasMore && items.length > 0 ? items[items.length - 1].event.created_at : null
+  const nextCursor = hasMore && rows.length > 0 ? String(rows[Math.min(limit, rows.length) - 1].event_created_at) : null
 
   return { items, next_cursor: nextCursor }
 }

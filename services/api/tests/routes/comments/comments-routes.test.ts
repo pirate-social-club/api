@@ -1,6 +1,6 @@
 import { sign as signWithPrivateKey } from "node:crypto"
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import app from "../../../src/index"
+import { app } from "../../../src/index"
 import {
   canonicalizeAgentActionProofSignaturePayload,
   computeAgentActionProofHash,

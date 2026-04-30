@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test"
-import app from "../../../src/index"
+import { app } from "../../../src/index"
 import { setPrivyAccessProofVerifierForTests } from "../../../src/lib/auth/privy-auth"
 import { setEnsResolverForTests } from "../../../src/lib/auth/ens-linked-handle-service"
 import type { Env } from "../../../src/types"

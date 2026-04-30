@@ -20,10 +20,10 @@ function buildWalletScoreStatus(walletScore: WalletScoreCapability): WalletScore
   // Without community context this field reflects the Passport scorer threshold.
   // Community gate minimums replace it through getJoinEligibility when community_id is supplied.
   return {
-    current_score: typeof walletScore.score === "number" ? walletScore.score : null,
-    required_score: typeof walletScore.score_threshold === "number" ? walletScore.score_threshold : null,
+    current_score_decimal: walletScore.score_decimal ?? null,
+    required_score_decimal: walletScore.score_threshold_decimal ?? null,
     passing_score: typeof walletScore.passing_score === "boolean" ? walletScore.passing_score : null,
-    last_score_timestamp: walletScore.last_score_timestamp ?? null,
+    last_scored_at: walletScore.last_scored_at ?? null,
   }
 }
 

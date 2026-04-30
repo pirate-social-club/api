@@ -5,6 +5,7 @@ const GLOBAL_HANDLE_SUFFIX = ".pirate"
 const FREE_CLEANUP_RENAME_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 const STANDARD_HANDLE_UPGRADE_PRICE_USD = 20
 const PREMIUM_7_HANDLE_UPGRADE_PRICE_USD = 250
+const usdToCents = (value: number) => Math.round(value * 100)
 const RESERVED_GLOBAL_HANDLE_LABELS = new Set([
   "admin",
   "support",
@@ -73,7 +74,7 @@ export function buildHandleUpgradeQuote(input: {
     return {
       desired_label: input.desiredLabel,
       tier,
-      price_usd: 0,
+      price_cents: 0,
       eligible: false,
       reason: "Desired label is already active",
     }
@@ -83,7 +84,7 @@ export function buildHandleUpgradeQuote(input: {
     return {
       desired_label: input.desiredLabel,
       tier,
-      price_usd: 0,
+      price_cents: 0,
       eligible: false,
       reason: "Desired label is reserved",
     }
@@ -93,7 +94,7 @@ export function buildHandleUpgradeQuote(input: {
     return {
       desired_label: input.desiredLabel,
       tier,
-      price_usd: 0,
+      price_cents: 0,
       eligible: false,
       reason: "Desired label is unavailable",
     }
@@ -103,7 +104,7 @@ export function buildHandleUpgradeQuote(input: {
     return {
       desired_label: input.desiredLabel,
       tier: "standard",
-      price_usd: input.cleanupRenameAvailable ? 0 : STANDARD_HANDLE_UPGRADE_PRICE_USD,
+      price_cents: input.cleanupRenameAvailable ? 0 : usdToCents(STANDARD_HANDLE_UPGRADE_PRICE_USD),
       eligible: true,
       reason: input.cleanupRenameAvailable ? "Eligible for free cleanup rename" : null,
     }
@@ -113,7 +114,7 @@ export function buildHandleUpgradeQuote(input: {
     return {
       desired_label: input.desiredLabel,
       tier: "premium",
-      price_usd: PREMIUM_7_HANDLE_UPGRADE_PRICE_USD,
+      price_cents: usdToCents(PREMIUM_7_HANDLE_UPGRADE_PRICE_USD),
       eligible: true,
       reason: null,
     }
@@ -122,7 +123,7 @@ export function buildHandleUpgradeQuote(input: {
   return {
     desired_label: input.desiredLabel,
     tier: "premium",
-    price_usd: 0,
+    price_cents: 0,
     eligible: false,
     reason: "Self-serve handles shorter than 7 characters are not available in v0",
   }

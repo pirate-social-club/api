@@ -19,6 +19,10 @@ import type {
   CreateSongArtifactBundleRequest,
   CreateSongArtifactUploadRequest,
 } from "../types"
+import {
+  decodePublicSongArtifactBundleId,
+  decodePublicSongArtifactUploadId,
+} from "../lib/public-ids"
 
 export function registerCommunitySongArtifactRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.post("/:communityId/song-artifact-uploads", async (c) => {
@@ -45,7 +49,7 @@ export function registerCommunitySongArtifactRoutes(communities: Hono<Authentica
       env: c.env,
       userId: actor.userId,
       communityId,
-      songArtifactUploadId: c.req.param("songArtifactUploadId"),
+      songArtifactUploadId: decodePublicSongArtifactUploadId(c.req.param("songArtifactUploadId")),
       content,
       userRepository,
       communityRepository,
@@ -59,7 +63,7 @@ export function registerCommunitySongArtifactRoutes(communities: Hono<Authentica
     return await fetchSongArtifactContent({
       env: c.env,
       communityId,
-      songArtifactUploadId: c.req.param("songArtifactUploadId"),
+      songArtifactUploadId: decodePublicSongArtifactUploadId(c.req.param("songArtifactUploadId")),
     })
   })
 
@@ -84,7 +88,7 @@ export function registerCommunitySongArtifactRoutes(communities: Hono<Authentica
       env: c.env,
       userId: actor.userId,
       communityId,
-      songArtifactBundleId: c.req.param("songArtifactBundleId"),
+      songArtifactBundleId: decodePublicSongArtifactBundleId(c.req.param("songArtifactBundleId")),
     })
     return c.json(result, 200)
   })

@@ -353,13 +353,13 @@ const spec = {
                   "type": "object",
                   "required": [
                     "status",
-                    "verification_session_id"
+                    "verification_session"
                   ],
                   "properties": {
                     "status": {
                       "type": "string"
                     },
-                    "verification_session_id": {
+                    "verification_session": {
                       "type": "string"
                     }
                   }
@@ -689,6 +689,48 @@ const spec = {
           }
         },
         "operationId": "get_agents_by_agent_id"
+      },
+      "post": {
+        "tags": [
+          "Agents"
+        ],
+        "summary": "Update a user-owned agent",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AgentId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateUserAgentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserAgent"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "post_agents_by_agent_id"
       }
     },
     "/agents/{agent_id}/handle": {
@@ -817,7 +859,7 @@ const spec = {
         "operationId": "post_agents_by_agent_id_credential"
       }
     },
-    "/agents/{agent_id}/credential/refresh": {
+    "/agents/{agent_id}/refresh_credential": {
       "post": {
         "tags": [
           "Agents"
@@ -858,7 +900,7 @@ const spec = {
             "$ref": "#/components/responses/NotFound"
           }
         },
-        "operationId": "post_agents_by_agent_id_credential_refresh"
+        "operationId": "post_agents_by_agent_id_refresh_credential"
       }
     },
     "/public-agents/{handle_label}": {
@@ -1247,7 +1289,7 @@ const spec = {
         },
         "operationId": "get_profiles_me"
       },
-      "patch": {
+      "post": {
         "tags": [
           "Profiles"
         ],
@@ -1297,7 +1339,7 @@ const spec = {
             "$ref": "#/components/responses/AuthError"
           }
         },
-        "operationId": "patch_profiles_me"
+        "operationId": "post_profiles_me"
       }
     },
     "/profiles/me/xmtp-inbox": {
@@ -1313,10 +1355,10 @@ const spec = {
               "schema": {
                 "type": "object",
                 "required": [
-                  "xmtp_inbox_id"
+                  "xmtp_inbox"
                 ],
                 "properties": {
-                  "xmtp_inbox_id": {
+                  "xmtp_inbox": {
                     "type": "string",
                     "nullable": true
                   }
@@ -1345,7 +1387,7 @@ const spec = {
         "operationId": "post_profiles_me_xmtp_inbox"
       }
     },
-    "/profiles/me/global-handle/rename": {
+    "/profiles/me/rename_global_handle": {
       "post": {
         "tags": [
           "Profiles"
@@ -1392,10 +1434,10 @@ const spec = {
             "$ref": "#/components/responses/RateLimited"
           }
         },
-        "operationId": "post_profiles_me_global_handle_rename"
+        "operationId": "post_profiles_me_rename_global_handle"
       }
     },
-    "/profiles/me/global-handle/upgrade-quote": {
+    "/profiles/me/quote_handle_upgrade": {
       "post": {
         "tags": [
           "Profiles"
@@ -1439,10 +1481,10 @@ const spec = {
             "$ref": "#/components/responses/RateLimited"
           }
         },
-        "operationId": "post_profiles_me_global_handle_upgrade_quote"
+        "operationId": "post_profiles_me_quote_handle_upgrade"
       }
     },
-    "/profiles/me/linked-handles/sync": {
+    "/profiles/me/sync_linked_handles": {
       "post": {
         "tags": [
           "Profiles"
@@ -1462,10 +1504,10 @@ const spec = {
             "$ref": "#/components/responses/AuthError"
           }
         },
-        "operationId": "post_profiles_me_linked_handles_sync"
+        "operationId": "post_profiles_me_sync_linked_handles"
       }
     },
-    "/profiles/me/primary-public-handle": {
+    "/profiles/me/set_primary_public_handle": {
       "post": {
         "tags": [
           "Profiles"
@@ -1478,7 +1520,7 @@ const spec = {
               "schema": {
                 "type": "object",
                 "properties": {
-                  "linked_handle_id": {
+                  "linked_handle": {
                     "type": "string",
                     "nullable": true
                   }
@@ -1504,7 +1546,7 @@ const spec = {
             "$ref": "#/components/responses/NotFound"
           }
         },
-        "operationId": "post_profiles_me_primary_public_handle"
+        "operationId": "post_profiles_me_set_primary_public_handle"
       }
     },
     "/profiles/{user_id}": {
@@ -1731,7 +1773,7 @@ const spec = {
         },
         "operationId": "get_communities_by_community_id_money_policy"
       },
-      "patch": {
+      "post": {
         "tags": [
           "Communities"
         ],
@@ -1777,7 +1819,7 @@ const spec = {
             "$ref": "#/components/responses/RateLimited"
           }
         },
-        "operationId": "patch_communities_by_community_id_money_policy"
+        "operationId": "post_communities_by_community_id_money_policy"
       }
     },
     "/communities/{community_id}/pricing-policy": {
@@ -1810,7 +1852,7 @@ const spec = {
         },
         "operationId": "get_communities_by_community_id_pricing_policy"
       },
-      "patch": {
+      "post": {
         "tags": [
           "Communities"
         ],
@@ -1856,7 +1898,7 @@ const spec = {
             "$ref": "#/components/responses/RateLimited"
           }
         },
-        "operationId": "patch_communities_by_community_id_pricing_policy"
+        "operationId": "post_communities_by_community_id_pricing_policy"
       }
     },
     "/communities/{community_id}/listings": {
@@ -1967,7 +2009,7 @@ const spec = {
         },
         "operationId": "get_communities_by_community_id_listings_by_listing_id"
       },
-      "patch": {
+      "post": {
         "tags": [
           "Communities"
         ],
@@ -2012,7 +2054,7 @@ const spec = {
             "$ref": "#/components/responses/NotFound"
           }
         },
-        "operationId": "patch_communities_by_community_id_listings_by_listing_id"
+        "operationId": "post_communities_by_community_id_listings_by_listing_id"
       }
     },
     "/communities/{community_id}/purchases": {
@@ -2220,7 +2262,7 @@ const spec = {
         "operationId": "post_communities_by_community_id_purchase_settlements"
       }
     },
-    "/communities/{community_id}/purchase-settlements/fail": {
+    "/communities/{community_id}/fail_purchase_settlement": {
       "post": {
         "tags": [
           "Communities"
@@ -2261,7 +2303,7 @@ const spec = {
             "$ref": "#/components/responses/Conflict"
           }
         },
-        "operationId": "post_communities_by_community_id_purchase_settlements_fail"
+        "operationId": "post_communities_by_community_id_fail_purchase_settlement"
       }
     },
     "/communities/{community_id}/join": {
@@ -2426,7 +2468,7 @@ const spec = {
       }
     },
     "/communities/{community_id}/follow": {
-      "put": {
+      "post": {
         "tags": [
           "Communities"
         ],
@@ -2453,9 +2495,11 @@ const spec = {
             "$ref": "#/components/responses/NotFound"
           }
         },
-        "operationId": "put_communities_by_community_id_follow"
-      },
-      "delete": {
+        "operationId": "post_communities_by_community_id_follow"
+      }
+    },
+    "/communities/{community_id}/unfollow": {
+      "post": {
         "tags": [
           "Communities"
         ],
@@ -2482,7 +2526,7 @@ const spec = {
             "$ref": "#/components/responses/NotFound"
           }
         },
-        "operationId": "delete_communities_by_community_id_follow"
+        "operationId": "post_communities_by_community_id_unfollow"
       }
     },
     "/communities/{community_id}/preview": {
@@ -3131,12 +3175,6 @@ const spec = {
         ],
         "responses": {
           "200": {
-            "401": {
-              "$ref": "#/components/responses/AuthError"
-            },
-            "404": {
-              "$ref": "#/components/responses/NotFound"
-            },
             "content": {
               "application/json": {
                 "schema": {
@@ -3144,6 +3182,12 @@ const spec = {
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
           }
         },
         "operationId": "get_communities_by_community_id_song_artifacts_by_song_artifact_bundle_id"
@@ -3239,8 +3283,8 @@ const spec = {
         "operationId": "post_posts_by_post_id_vote"
       }
     },
-    "/comments/{comment_id}": {
-      "delete": {
+    "/comments/{comment_id}/remove": {
+      "post": {
         "tags": [
           "Comments"
         ],
@@ -3270,7 +3314,7 @@ const spec = {
             "$ref": "#/components/responses/NotFound"
           }
         },
-        "operationId": "delete_comments_by_comment_id"
+        "operationId": "post_comments_by_comment_id_remove"
       }
     },
     "/comments/{comment_id}/replies": {
@@ -3658,11 +3702,11 @@ const spec = {
                       "items": {
                         "type": "object",
                         "required": [
-                          "community_id",
+                          "community",
                           "display_name"
                         ],
                         "properties": {
-                          "community_id": {
+                          "community": {
                             "type": "string"
                           },
                           "display_name": {
@@ -3873,50 +3917,6 @@ const spec = {
           }
         },
         "operationId": "get_public_posts_by_post_id_top_comments"
-      }
-    },
-    "/public-comments/posts/{post_id}/comments": {
-      "get": {
-        "tags": [
-          "Comments"
-        ],
-        "x-implemented": true,
-        "security": [],
-        "summary": "List public comments for a post",
-        "parameters": [
-          {
-            "name": "post_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "$ref": "#/components/parameters/Cursor"
-          },
-          {
-            "$ref": "#/components/parameters/Limit"
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CommentListResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "429": {
-            "$ref": "#/components/responses/RateLimited"
-          }
-        },
-        "operationId": "get_public_comments_posts_by_post_id_comments"
       }
     },
     "/public-comments/{comment_id}/replies": {
@@ -4350,7 +4350,7 @@ const spec = {
               "$ref": "./verification.yaml#/VerificationRequirement"
             }
           },
-          "wallet_attachment_id": {
+          "wallet_attachment": {
             "type": "string",
             "nullable": true
           },
@@ -4358,7 +4358,7 @@ const spec = {
             "$ref": "./verification.yaml#/VerificationIntent",
             "nullable": true
           },
-          "policy_id": {
+          "policy": {
             "type": "string",
             "nullable": true
           }
@@ -4367,19 +4367,28 @@ const spec = {
       "VerificationSession": {
         "type": "object",
         "required": [
-          "verification_session_id",
-          "user_id",
+          "id",
+          "object",
+          "user",
           "provider",
           "requested_capabilities",
           "status",
-          "created_at",
+          "created",
           "expires_at"
         ],
         "properties": {
-          "verification_session_id": {
-            "type": "string"
+          "id": {
+            "type": "string",
+            "readOnly": true
           },
-          "user_id": {
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "verification_session"
+            ]
+          },
+          "user": {
             "type": "string"
           },
           "provider": {
@@ -4397,7 +4406,7 @@ const spec = {
             ],
             "nullable": true
           },
-          "wallet_attachment_id": {
+          "wallet_attachment": {
             "type": "string",
             "nullable": true
           },
@@ -4417,7 +4426,7 @@ const spec = {
             "$ref": "./verification.yaml#/VerificationIntent",
             "nullable": true
           },
-          "policy_id": {
+          "policy": {
             "type": "string",
             "nullable": true
           },
@@ -4445,7 +4454,7 @@ const spec = {
             "type": "integer",
             "nullable": true
           },
-          "attestation_id": {
+          "attestation": {
             "type": "string",
             "nullable": true
           },
@@ -4458,21 +4467,21 @@ const spec = {
             "nullable": true
           },
           "verified_at": {
-            "type": "string",
-            "format": "date-time",
+            "type": "integer",
+            "format": "int64",
             "nullable": true
           },
           "failure_reason": {
             "type": "string",
             "nullable": true
           },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
+          "created": {
+            "type": "integer",
+            "format": "int64"
           },
           "expires_at": {
-            "type": "string",
-            "format": "date-time"
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -4512,30 +4521,30 @@ const spec = {
             "nullable": true
           },
           "verified_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "score_decimal": {
             "type": "string",
-            "format": "date-time",
+            "pattern": "^\\d+(\\.\\d+)?$",
             "nullable": true
           },
-          "score": {
-            "type": "number",
-            "nullable": true
-          },
-          "score_threshold": {
-            "type": "number",
+          "score_threshold_decimal": {
+            "type": "string",
+            "pattern": "^\\d+(\\.\\d+)?$",
             "nullable": true
           },
           "passing_score": {
             "type": "boolean",
             "nullable": true
           },
-          "last_score_timestamp": {
-            "type": "string",
-            "format": "date-time",
+          "last_scored_at": {
+            "type": "integer",
             "nullable": true
           },
-          "expiration_timestamp": {
-            "type": "string",
-            "format": "date-time",
+          "expires_at": {
+            "type": "integer",
             "nullable": true
           },
           "stamps": {
@@ -4547,8 +4556,9 @@ const spec = {
                 "stamp_name": {
                   "type": "string"
                 },
-                "stamp_score": {
-                  "type": "number"
+                "stamp_score_decimal": {
+                  "type": "string",
+                  "pattern": "^\\d+(\\.\\d+)?$"
                 }
               }
             }
@@ -4569,7 +4579,7 @@ const spec = {
             "type": "string",
             "nullable": true
           },
-          "attestation_id": {
+          "attestation": {
             "type": "string",
             "nullable": true
           },
@@ -4587,7 +4597,7 @@ const spec = {
       "CompleteVerificationSessionRequest": {
         "type": "object",
         "properties": {
-          "attestation_id": {
+          "attestation": {
             "type": "string",
             "nullable": true
           },
@@ -4640,7 +4650,7 @@ const spec = {
           "ownership_provider": {
             "$ref": "./agents.yaml#/AgentOwnershipProvider"
           },
-          "agent_id": {
+          "agent": {
             "type": "string",
             "nullable": true
           },
@@ -4648,7 +4658,7 @@ const spec = {
             "type": "string",
             "nullable": true
           },
-          "policy_id": {
+          "policy": {
             "type": "string",
             "nullable": true
           },
@@ -4661,27 +4671,35 @@ const spec = {
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "agent_ownership_session_id",
+          "id",
+          "object",
           "session_kind",
           "ownership_provider",
           "status",
           "launch",
-          "created_at",
-          "expires_at",
-          "updated_at"
+          "created",
+          "expires_at"
         ],
         "properties": {
-          "agent_ownership_session_id": {
-            "type": "string"
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "agent_ownership_session"
+            ]
           },
           "session_kind": {
             "$ref": "./agents.yaml#/AgentOwnershipSessionKind"
           },
-          "owner_user_id": {
+          "owner_user": {
             "type": "string",
             "nullable": true
           },
-          "agent_id": {
+          "agent": {
             "type": "string",
             "nullable": true
           },
@@ -4705,21 +4723,17 @@ const spec = {
             "type": "string",
             "nullable": true
           },
-          "resolved_agent_ownership_record_id": {
+          "resolved_agent_ownership_record": {
             "type": "string",
             "nullable": true
           },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
+          "created": {
+            "type": "integer",
+            "format": "int64"
           },
           "expires_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -4735,8 +4749,8 @@ const spec = {
             "type": "string"
           },
           "expires_at": {
-            "type": "string",
-            "format": "date-time"
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -4760,12 +4774,12 @@ const spec = {
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "agent_ownership_session_id",
+          "agent_ownership_session",
           "registration_url",
           "connection_token"
         ],
         "properties": {
-          "agent_ownership_session_id": {
+          "agent_ownership_session": {
             "type": "string"
           },
           "registration_url": {
@@ -4780,7 +4794,7 @@ const spec = {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "attestation_id": {
+          "attestation": {
             "type": "string",
             "nullable": true
           },
@@ -4805,7 +4819,7 @@ const spec = {
             "type": "string",
             "nullable": true
           },
-          "attestation_id": {
+          "attestation": {
             "type": "string",
             "nullable": true
           },
@@ -4824,7 +4838,8 @@ const spec = {
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "items"
+          "items",
+          "next_cursor"
         ],
         "properties": {
           "items": {
@@ -4832,6 +4847,10 @@ const spec = {
             "items": {
               "$ref": "./agents.yaml#/UserAgent"
             }
+          },
+          "next_cursor": {
+            "type": "string",
+            "nullable": true
           }
         }
       },
@@ -4839,18 +4858,26 @@ const spec = {
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "agent_id",
-          "owner_user_id",
+          "id",
+          "object",
+          "owner_user",
           "display_name",
           "status",
-          "created_at",
-          "updated_at"
+          "created"
         ],
         "properties": {
-          "agent_id": {
-            "type": "string"
+          "id": {
+            "type": "string",
+            "readOnly": true
           },
-          "owner_user_id": {
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "user_agent"
+            ]
+          },
+          "owner_user": {
             "type": "string"
           },
           "display_name": {
@@ -4863,7 +4890,7 @@ const spec = {
           "status": {
             "$ref": "./agents.yaml#/UserAgentStatus"
           },
-          "current_ownership_record_id": {
+          "current_ownership_record": {
             "type": "string",
             "nullable": true
           },
@@ -4871,13 +4898,21 @@ const spec = {
             "$ref": "./agents.yaml#/AgentOwnershipRecord",
             "nullable": true
           },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
+          "created": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "UpdateUserAgentRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "display_name"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string"
           }
         }
       },
@@ -4885,20 +4920,28 @@ const spec = {
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "agent_handle_id",
-          "agent_id",
+          "id",
+          "object",
+          "agent",
           "label_normalized",
           "label_display",
           "status",
           "issued_at",
-          "created_at",
-          "updated_at"
+          "created"
         ],
         "properties": {
-          "agent_handle_id": {
-            "type": "string"
+          "id": {
+            "type": "string",
+            "readOnly": true
           },
-          "agent_id": {
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "agent_handle"
+            ]
+          },
+          "agent": {
             "type": "string"
           },
           "label_normalized": {
@@ -4910,26 +4953,22 @@ const spec = {
           "status": {
             "$ref": "./agents.yaml#/AgentHandleStatus"
           },
-          "redirect_target_agent_handle_id": {
+          "redirect_target_agent_handle": {
             "type": "string",
             "nullable": true
           },
           "issued_at": {
-            "type": "string",
-            "format": "date-time"
+            "type": "integer",
+            "format": "int64"
           },
           "replaced_at": {
-            "type": "string",
-            "format": "date-time",
+            "type": "integer",
+            "format": "int64",
             "nullable": true
           },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
+          "created": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -4949,7 +4988,7 @@ const spec = {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "current_ownership_record_id": {
+          "current_ownership_record": {
             "type": "string",
             "nullable": true
           }
@@ -4959,9 +4998,9 @@ const spec = {
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "agent_id",
-          "owner_user_id",
-          "current_ownership_record_id",
+          "agent",
+          "owner_user",
+          "current_ownership_record",
           "token_type",
           "access_token",
           "refresh_token",
@@ -4969,13 +5008,13 @@ const spec = {
           "expires_at"
         ],
         "properties": {
-          "agent_id": {
+          "agent": {
             "type": "string"
           },
-          "owner_user_id": {
+          "owner_user": {
             "type": "string"
           },
-          "current_ownership_record_id": {
+          "current_ownership_record": {
             "type": "string"
           },
           "token_type": {
@@ -4991,16 +5030,16 @@ const spec = {
             "type": "string"
           },
           "issued_at": {
-            "type": "string",
-            "format": "date-time"
+            "type": "integer",
+            "format": "int64"
           },
           "expires_at": {
-            "type": "string",
-            "format": "date-time"
+            "type": "integer",
+            "format": "int64"
           },
           "refresh_expires_at": {
-            "type": "string",
-            "format": "date-time",
+            "type": "integer",
+            "format": "int64",
             "nullable": true
           }
         }
@@ -5041,13 +5080,12 @@ const spec = {
             "type": "object",
             "additionalProperties": false,
             "required": [
-              "agent_id",
+              "agent",
               "handle",
-              "created_at",
-              "updated_at"
+              "created"
             ],
             "properties": {
-              "agent_id": {
+              "agent": {
                 "type": "string"
               },
               "display_name": {
@@ -5061,13 +5099,9 @@ const spec = {
                 "$ref": "./agents.yaml#/AgentOwnershipProvider",
                 "nullable": true
               },
-              "created_at": {
-                "type": "string",
-                "format": "date-time"
-              },
-              "updated_at": {
-                "type": "string",
-                "format": "date-time"
+              "created": {
+                "type": "integer",
+                "format": "int64"
               }
             }
           },
@@ -5075,12 +5109,12 @@ const spec = {
             "type": "object",
             "additionalProperties": false,
             "required": [
-              "user_id",
+              "user",
               "global_handle",
               "primary_public_handle"
             ],
             "properties": {
-              "user_id": {
+              "user": {
                 "type": "string"
               },
               "display_name": {
@@ -5120,23 +5154,32 @@ const spec = {
       "NamespaceVerificationSession": {
         "type": "object",
         "required": [
-          "namespace_verification_session_id",
-          "user_id",
+          "id",
+          "object",
+          "user",
           "family",
           "submitted_root_label",
           "status",
-          "created_at",
+          "created",
           "expires_at"
         ],
         "properties": {
-          "namespace_verification_session_id": {
-            "type": "string"
+          "id": {
+            "type": "string",
+            "readOnly": true
           },
-          "namespace_verification_id": {
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "namespace_verification_session"
+            ]
+          },
+          "namespace_verification": {
             "type": "string",
             "nullable": true
           },
-          "user_id": {
+          "user": {
             "type": "string"
           },
           "family": {
@@ -5190,8 +5233,8 @@ const spec = {
             "additionalProperties": true
           },
           "challenge_expires_at": {
-            "type": "string",
-            "format": "date-time",
+            "type": "integer",
+            "format": "int64",
             "nullable": true
           },
           "setup_nameservers": {
@@ -5250,21 +5293,17 @@ const spec = {
             "nullable": true
           },
           "accepted_at": {
-            "type": "string",
-            "format": "date-time",
+            "type": "integer",
+            "format": "int64",
             "nullable": true
           },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
+          "created": {
+            "type": "integer",
+            "format": "int64"
           },
           "expires_at": {
-            "type": "string",
-            "format": "date-time"
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -5280,8 +5319,9 @@ const spec = {
       "NamespaceVerification": {
         "type": "object",
         "required": [
-          "namespace_verification_id",
-          "user_id",
+          "id",
+          "object",
+          "user",
           "family",
           "normalized_root_label",
           "status",
@@ -5289,14 +5329,21 @@ const spec = {
           "capabilities",
           "accepted_at",
           "expires_at",
-          "created_at",
-          "updated_at"
+          "created"
         ],
         "properties": {
-          "namespace_verification_id": {
-            "type": "string"
+          "id": {
+            "type": "string",
+            "readOnly": true
           },
-          "user_id": {
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "namespace_verification"
+            ]
+          },
+          "user": {
             "type": "string"
           },
           "family": {
@@ -5353,20 +5400,16 @@ const spec = {
             "nullable": true
           },
           "accepted_at": {
-            "type": "string",
-            "format": "date-time"
+            "type": "integer",
+            "format": "int64"
           },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
+          "created": {
+            "type": "integer",
+            "format": "int64"
           },
           "expires_at": {
-            "type": "string",
-            "format": "date-time"
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -5390,8 +5433,8 @@ const spec = {
             "type": "boolean"
           },
           "onboarding_dismissed_at": {
-            "type": "string",
-            "format": "date-time",
+            "type": "integer",
+            "format": "int64",
             "nullable": true
           },
           "unique_human_verification_status": {
@@ -5485,8 +5528,8 @@ const spec = {
             ]
           },
           "last_checked_at": {
-            "type": "string",
-            "format": "date-time",
+            "type": "integer",
+            "format": "int64",
             "nullable": true
           },
           "failure_code": {
@@ -5527,8 +5570,8 @@ const spec = {
             "type": "string"
           },
           "imported_at": {
-            "type": "string",
-            "format": "date-time"
+            "type": "integer",
+            "format": "int64"
           },
           "account_age_days": {
             "type": "integer",
@@ -5591,12 +5634,12 @@ const spec = {
             "items": {
               "type": "object",
               "required": [
-                "community_id",
+                "community",
                 "name",
                 "reason"
               ],
               "properties": {
-                "community_id": {
+                "community": {
                   "type": "string"
                 },
                 "name": {
@@ -5617,15 +5660,23 @@ const spec = {
       "User": {
         "type": "object",
         "required": [
-          "user_id",
+          "id",
+          "object",
           "verification_state",
           "verification_capabilities",
-          "created_at",
-          "updated_at"
+          "created"
         ],
         "properties": {
-          "user_id": {
-            "type": "string"
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "user"
+            ]
           },
           "community_posting_state": {
             "type": "object",
@@ -5634,7 +5685,7 @@ const spec = {
               "community_ref": {
                 "type": "string"
               },
-              "community_id": {
+              "community": {
                 "type": "string"
               },
               "has_created_text_post": {
@@ -5642,7 +5693,7 @@ const spec = {
               }
             }
           },
-          "primary_wallet_attachment_id": {
+          "primary_wallet_attachment": {
             "type": "string",
             "nullable": true
           },
@@ -5667,31 +5718,35 @@ const spec = {
             "$ref": "./verification.yaml#/VerificationCapabilities"
           },
           "verified_at": {
-            "type": "string",
-            "format": "date-time",
+            "type": "integer",
+            "format": "int64",
             "nullable": true
           },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
+          "created": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
       "Profile": {
         "type": "object",
         "required": [
-          "user_id",
+          "id",
+          "object",
           "global_handle",
-          "created_at",
-          "updated_at"
+          "created"
         ],
         "properties": {
-          "user_id": {
-            "type": "string"
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "profile"
+            ]
           },
           "display_name": {
             "type": "string",
@@ -5767,7 +5822,7 @@ const spec = {
             "type": "string",
             "nullable": true
           },
-          "xmtp_inbox_id": {
+          "xmtp_inbox": {
             "type": "string",
             "nullable": true
           },
@@ -5782,20 +5837,17 @@ const spec = {
           "global_handle": {
             "$ref": "./profiles.yaml#/GlobalHandle"
           },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
+          "created": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
       "GlobalHandle": {
         "type": "object",
         "required": [
-          "global_handle_id",
+          "id",
+          "object",
           "label",
           "tier",
           "status",
@@ -5803,8 +5855,16 @@ const spec = {
           "issued_at"
         ],
         "properties": {
-          "global_handle_id": {
-            "type": "string"
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "global_handle"
+            ]
           },
           "label": {
             "type": "string"
@@ -5835,24 +5895,25 @@ const spec = {
               "admin_grant"
             ]
           },
-          "redirect_target_global_handle_id": {
+          "redirect_target_global_handle": {
             "type": "string",
             "nullable": true
           },
-          "price_paid_usd": {
-            "type": "number",
+          "price_paid_cents": {
+            "type": "integer",
+            "minimum": 0,
             "nullable": true
           },
           "free_rename_consumed": {
             "type": "boolean"
           },
           "issued_at": {
-            "type": "string",
-            "format": "date-time"
+            "type": "integer",
+            "format": "int64"
           },
           "replaced_at": {
-            "type": "string",
-            "format": "date-time",
+            "type": "integer",
+            "format": "int64",
             "nullable": true
           }
         }
@@ -5862,7 +5923,7 @@ const spec = {
         "required": [
           "desired_label",
           "tier",
-          "price_usd",
+          "price_cents",
           "eligible"
         ],
         "properties": {
@@ -5876,8 +5937,9 @@ const spec = {
               "premium"
             ]
           },
-          "price_usd": {
-            "type": "number"
+          "price_cents": {
+            "type": "integer",
+            "minimum": 0
           },
           "eligible": {
             "type": "boolean"
@@ -5915,12 +5977,12 @@ const spec = {
             "items": {
               "type": "object",
               "required": [
-                "community_id",
+                "community",
                 "display_name",
-                "created_at"
+                "created"
               ],
               "properties": {
-                "community_id": {
+                "community": {
                   "type": "string"
                 },
                 "display_name": {
@@ -5930,9 +5992,9 @@ const spec = {
                   "type": "string",
                   "nullable": true
                 },
-                "created_at": {
-                  "type": "string",
-                  "format": "date-time"
+                "created": {
+                  "type": "integer",
+                  "format": "int64"
                 }
               }
             }
@@ -5978,7 +6040,8 @@ const spec = {
       "Community": {
         "type": "object",
         "required": [
-          "community_id",
+          "id",
+          "object",
           "display_name",
           "status",
           "provisioning_state",
@@ -6006,13 +6069,20 @@ const spec = {
           "civility_policy",
           "provenance_policy",
           "promotion_policy",
-          "created_by_user_id",
-          "created_at",
-          "updated_at"
+          "created_by_user",
+          "created"
         ],
         "properties": {
-          "community_id": {
-            "type": "string"
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "community"
+            ]
           },
           "display_name": {
             "type": "string"
@@ -6025,7 +6095,7 @@ const spec = {
             "type": "string",
             "nullable": true
           },
-          "namespace_verification_id": {
+          "namespace_verification": {
             "type": "string",
             "nullable": true
           },
@@ -6033,7 +6103,7 @@ const spec = {
             "type": "string",
             "nullable": true
           },
-          "pending_namespace_verification_session_id": {
+          "pending_namespace_verification_session": {
             "type": "string",
             "nullable": true
           },
@@ -6057,11 +6127,11 @@ const spec = {
               "error"
             ]
           },
-          "artist_identity_id": {
+          "artist_identity": {
             "type": "string",
             "nullable": true
           },
-          "community_agent_user_id": {
+          "community_agent_user": {
             "type": "string",
             "nullable": true
           },
@@ -6159,6 +6229,10 @@ const spec = {
               "18_plus"
             ]
           },
+          "gate_policy": {
+            "$ref": "./communities-core.yaml#/GatePolicy",
+            "nullable": true
+          },
           "agent_posting_policy": {
             "type": "string",
             "enum": [
@@ -6230,10 +6304,6 @@ const spec = {
               "active",
               "paused"
             ]
-          },
-          "donation_partner_id": {
-            "type": "string",
-            "nullable": true
           },
           "donation_partner": {
             "$ref": "./communities-community.yaml#/DonationPartnerSummary",
@@ -6330,8 +6400,8 @@ const spec = {
             "nullable": true
           },
           "stage_entered_at": {
-            "type": "string",
-            "format": "date-time",
+            "type": "integer",
+            "format": "int64",
             "nullable": true
           },
           "governance_mode": {
@@ -6353,23 +6423,20 @@ const spec = {
             },
             "nullable": true
           },
-          "created_by_user_id": {
+          "created_by_user": {
             "type": "string"
           },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
+          "created": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
       "CommunityMoneyPolicy": {
         "type": "object",
         "required": [
-          "community_id",
+          "id",
+          "object",
           "policy_origin",
           "funding_preference",
           "accepted_funding_assets",
@@ -6380,12 +6447,19 @@ const spec = {
           "quote_ttl_seconds",
           "route_required",
           "route_status_policy",
-          "route_hop_tolerance",
-          "updated_at"
+          "route_hop_tolerance"
         ],
         "properties": {
-          "community_id": {
-            "type": "string"
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "community_money_policy"
+            ]
           },
           "policy_origin": {
             "$ref": "./communities-community.yaml#/CommunityPolicyOrigin"
@@ -6439,10 +6513,6 @@ const spec = {
           "route_hop_tolerance": {
             "type": "integer",
             "minimum": 0
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
           }
         }
       },
@@ -6517,18 +6587,26 @@ const spec = {
       "CommunityPricingPolicy": {
         "type": "object",
         "required": [
-          "community_id",
+          "id",
+          "object",
           "policy_origin",
           "pricing_policy_version",
           "regional_pricing_enabled",
           "tiers",
-          "country_assignments",
-          "updated_at"
+          "country_assignments"
         ],
         "additionalProperties": false,
         "properties": {
-          "community_id": {
-            "type": "string"
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "community_pricing_policy"
+            ]
           },
           "policy_origin": {
             "$ref": "./communities-community.yaml#/CommunityPolicyOrigin"
@@ -6559,17 +6637,13 @@ const spec = {
               "$ref": "./communities-community.yaml#/CommunityPricingCountryAssignment"
             }
           },
-          "source_template_id": {
+          "source_template": {
             "type": "string",
             "nullable": true
           },
           "source_template_version": {
             "type": "string",
             "nullable": true
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
           }
         }
       },
@@ -6605,7 +6679,7 @@ const spec = {
               "$ref": "./communities-community.yaml#/CommunityPricingCountryAssignment"
             }
           },
-          "source_template_id": {
+          "source_template": {
             "type": "string",
             "nullable": true
           },
@@ -6618,7 +6692,8 @@ const spec = {
       "CommunityListingListResponse": {
         "type": "object",
         "required": [
-          "items"
+          "items",
+          "next_cursor"
         ],
         "additionalProperties": false,
         "properties": {
@@ -6627,39 +6702,44 @@ const spec = {
             "items": {
               "$ref": "./communities-community.yaml#/CommunityListing"
             }
+          },
+          "next_cursor": {
+            "type": "string",
+            "nullable": true
           }
         }
       },
       "CreateCommunityListingRequest": {
         "type": "object",
         "required": [
-          "price_usd",
+          "price_cents",
           "regional_pricing_enabled",
           "status"
         ],
         "additionalProperties": false,
         "properties": {
-          "asset_id": {
+          "asset": {
             "type": "string",
             "nullable": true
           },
-          "live_room_id": {
+          "live_room": {
             "type": "string",
             "nullable": true
           },
-          "price_usd": {
-            "type": "number",
+          "price_cents": {
+            "type": "integer",
             "minimum": 0
           },
           "regional_pricing_enabled": {
             "type": "boolean"
           },
-          "donation_partner_id": {
+          "donation_partner": {
             "type": "string",
             "nullable": true
           },
-          "donation_share_pct": {
-            "type": "number",
+          "donation_share_bps": {
+            "type": "integer",
+            "minimum": 0,
             "nullable": true
           },
           "status": {
@@ -6676,29 +6756,37 @@ const spec = {
       "CommunityListing": {
         "type": "object",
         "required": [
-          "listing_id",
-          "community_id",
+          "id",
+          "object",
+          "community",
           "listing_mode",
           "status",
-          "price_usd",
+          "price_cents",
           "regional_pricing_enabled",
-          "created_by_user_id",
-          "created_at",
-          "updated_at"
+          "created_by_user",
+          "created"
         ],
         "additionalProperties": false,
         "properties": {
-          "listing_id": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "community_listing"
+            ]
+          },
+          "community": {
             "type": "string"
           },
-          "community_id": {
-            "type": "string"
-          },
-          "asset_id": {
+          "asset": {
             "type": "string",
             "nullable": true
           },
-          "live_room_id": {
+          "live_room": {
             "type": "string",
             "nullable": true
           },
@@ -6717,31 +6805,28 @@ const spec = {
               "archived"
             ]
           },
-          "price_usd": {
-            "type": "number",
+          "price_cents": {
+            "type": "integer",
             "minimum": 0
           },
           "regional_pricing_enabled": {
             "type": "boolean"
           },
-          "donation_partner_id": {
+          "donation_partner": {
             "type": "string",
             "nullable": true
           },
-          "donation_share_pct": {
-            "type": "number",
+          "donation_share_bps": {
+            "type": "integer",
+            "minimum": 0,
             "nullable": true
           },
-          "created_by_user_id": {
+          "created_by_user": {
             "type": "string"
           },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
+          "created": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -6749,19 +6834,20 @@ const spec = {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "price_usd": {
-            "type": "number",
+          "price_cents": {
+            "type": "integer",
             "minimum": 0
           },
           "regional_pricing_enabled": {
             "type": "boolean"
           },
-          "donation_partner_id": {
+          "donation_partner": {
             "type": "string",
             "nullable": true
           },
-          "donation_share_pct": {
-            "type": "number",
+          "donation_share_bps": {
+            "type": "integer",
+            "minimum": 0,
             "nullable": true
           },
           "status": {
@@ -6778,7 +6864,8 @@ const spec = {
       "CommunityPurchaseListResponse": {
         "type": "object",
         "required": [
-          "items"
+          "items",
+          "next_cursor"
         ],
         "additionalProperties": false,
         "properties": {
@@ -6787,55 +6874,68 @@ const spec = {
             "items": {
               "$ref": "./communities-community.yaml#/CommunityPurchase"
             }
+          },
+          "next_cursor": {
+            "type": "string",
+            "nullable": true
           }
         }
       },
       "CommunityPurchase": {
         "type": "object",
         "required": [
-          "purchase_id",
-          "community_id",
-          "listing_id",
-          "buyer_user_id",
-          "settlement_wallet_attachment_id",
-          "purchase_price_usd",
+          "id",
+          "object",
+          "community",
+          "listing",
+          "buyer_user",
+          "settlement_wallet_attachment",
+          "purchase_price_cents",
           "settlement_mode",
           "settlement_chain",
           "settlement_token",
           "settlement_tx_ref",
           "allocations",
-          "purchase_entitlement_id",
+          "purchase_entitlement",
           "entitlement_kind",
           "entitlement_target_ref",
-          "created_at"
+          "created"
         ],
         "additionalProperties": false,
         "properties": {
-          "purchase_id": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "community_purchase"
+            ]
+          },
+          "community": {
             "type": "string"
           },
-          "community_id": {
+          "listing": {
             "type": "string"
           },
-          "listing_id": {
-            "type": "string"
-          },
-          "asset_id": {
+          "asset": {
             "type": "string",
             "nullable": true
           },
-          "live_room_id": {
+          "live_room": {
             "type": "string",
             "nullable": true
           },
-          "buyer_user_id": {
+          "buyer_user": {
             "type": "string"
           },
-          "settlement_wallet_attachment_id": {
+          "settlement_wallet_attachment": {
             "type": "string"
           },
-          "purchase_price_usd": {
-            "type": "number",
+          "purchase_price_cents": {
+            "type": "integer",
             "minimum": 0
           },
           "pricing_tier": {
@@ -6860,19 +6960,21 @@ const spec = {
               "$ref": "./communities-community.yaml#/CommunitySaleAllocationLeg"
             }
           },
-          "donation_partner_id": {
+          "donation_partner": {
             "type": "string",
             "nullable": true
           },
-          "donation_share_pct": {
-            "type": "number",
+          "donation_share_bps": {
+            "type": "integer",
+            "minimum": 0,
             "nullable": true
           },
-          "donation_amount_usd": {
-            "type": "number",
+          "donation_amount_cents": {
+            "type": "integer",
+            "minimum": 0,
             "nullable": true
           },
-          "purchase_entitlement_id": {
+          "purchase_entitlement": {
             "type": "string"
           },
           "entitlement_kind": {
@@ -6887,9 +6989,9 @@ const spec = {
           "entitlement_target_ref": {
             "type": "string"
           },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
+          "created": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -6901,7 +7003,7 @@ const spec = {
         ],
         "additionalProperties": false,
         "properties": {
-          "listing_id": {
+          "listing": {
             "type": "string",
             "nullable": true
           },
@@ -6935,7 +7037,7 @@ const spec = {
       "CommunityPurchaseQuotePreflight": {
         "type": "object",
         "required": [
-          "community_id",
+          "community",
           "eligible",
           "funding_mode",
           "policy_origin",
@@ -6952,7 +7054,7 @@ const spec = {
         ],
         "additionalProperties": false,
         "properties": {
-          "community_id": {
+          "community": {
             "type": "string"
           },
           "eligible": {
@@ -7007,20 +7109,21 @@ const spec = {
             "type": "integer",
             "minimum": 0
           },
-          "base_price_usd": {
-            "type": "number",
+          "base_price_cents": {
+            "type": "integer",
             "nullable": true
           },
-          "viewer_price_usd": {
-            "type": "number",
+          "viewer_price_cents": {
+            "type": "integer",
             "nullable": true
           },
-          "best_verified_price_usd": {
-            "type": "number",
+          "best_verified_price_cents": {
+            "type": "integer",
             "nullable": true
           },
-          "max_self_discount_percent": {
-            "type": "number",
+          "max_self_discount_bps": {
+            "type": "integer",
+            "minimum": 0,
             "nullable": true
           },
           "verification_required_provider": {
@@ -7028,25 +7131,25 @@ const spec = {
             "nullable": true
           },
           "quoted_at": {
-            "type": "string",
-            "format": "date-time"
+            "type": "integer",
+            "format": "int64"
           },
           "expires_at": {
-            "type": "string",
-            "format": "date-time"
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
       "CommunityPurchaseQuoteRequest": {
         "type": "object",
         "required": [
-          "listing_id",
+          "listing",
           "client_estimated_slippage_bps",
           "client_estimated_hop_count"
         ],
         "additionalProperties": false,
         "properties": {
-          "listing_id": {
+          "listing": {
             "type": "string"
           },
           "funding_asset": {
@@ -7079,12 +7182,13 @@ const spec = {
       "CommunityPurchaseQuote": {
         "type": "object",
         "required": [
-          "quote_id",
-          "community_id",
-          "listing_id",
-          "buyer_user_id",
-          "base_price_usd",
-          "final_price_usd",
+          "id",
+          "object",
+          "community",
+          "listing",
+          "buyer_user",
+          "base_price_cents",
+          "final_price_cents",
           "settlement_mode",
           "allocation_snapshot",
           "funding_mode",
@@ -7101,36 +7205,44 @@ const spec = {
         ],
         "additionalProperties": false,
         "properties": {
-          "quote_id": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "community_purchase_quote"
+            ]
+          },
+          "community": {
             "type": "string"
           },
-          "community_id": {
+          "listing": {
             "type": "string"
           },
-          "listing_id": {
+          "buyer_user": {
             "type": "string"
           },
-          "buyer_user_id": {
-            "type": "string"
-          },
-          "asset_id": {
+          "asset": {
             "type": "string",
             "nullable": true
           },
-          "live_room_id": {
+          "live_room": {
             "type": "string",
             "nullable": true
           },
-          "base_price_usd": {
-            "type": "number",
+          "base_price_cents": {
+            "type": "integer",
             "minimum": 0
           },
           "pricing_tier": {
             "type": "string",
             "nullable": true
           },
-          "final_price_usd": {
-            "type": "number",
+          "final_price_cents": {
+            "type": "integer",
             "minimum": 0
           },
           "settlement_mode": {
@@ -7213,29 +7325,29 @@ const spec = {
             "nullable": true
           },
           "quoted_at": {
-            "type": "string",
-            "format": "date-time"
+            "type": "integer",
+            "format": "int64"
           },
           "expires_at": {
-            "type": "string",
-            "format": "date-time"
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
       "CommunityPurchaseSettlementRequest": {
         "type": "object",
         "required": [
-          "quote_id",
-          "settlement_wallet_attachment_id",
+          "quote",
+          "settlement_wallet_attachment",
           "funding_tx_ref",
           "settlement_tx_ref"
         ],
         "additionalProperties": false,
         "properties": {
-          "quote_id": {
+          "quote": {
             "type": "string"
           },
-          "settlement_wallet_attachment_id": {
+          "settlement_wallet_attachment": {
             "type": "string"
           },
           "funding_tx_ref": {
@@ -7249,13 +7361,14 @@ const spec = {
       "CommunityPurchaseSettlement": {
         "type": "object",
         "required": [
-          "purchase_id",
-          "quote_id",
-          "community_id",
-          "listing_id",
-          "buyer_user_id",
-          "settlement_wallet_attachment_id",
-          "purchase_price_usd",
+          "id",
+          "object",
+          "quote",
+          "community",
+          "listing",
+          "buyer_user",
+          "settlement_wallet_attachment",
+          "purchase_price_cents",
           "settlement_mode",
           "settlement_chain",
           "settlement_chain_ref",
@@ -7264,39 +7377,47 @@ const spec = {
           "allocations",
           "entitlement_kind",
           "entitlement_target_ref",
-          "purchase_entitlement_id",
+          "purchase_entitlement",
           "settled_at"
         ],
         "additionalProperties": false,
         "properties": {
-          "purchase_id": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "community_purchase_settlement"
+            ]
+          },
+          "quote": {
             "type": "string"
           },
-          "quote_id": {
+          "community": {
             "type": "string"
           },
-          "community_id": {
+          "listing": {
             "type": "string"
           },
-          "listing_id": {
+          "buyer_user": {
             "type": "string"
           },
-          "buyer_user_id": {
-            "type": "string"
-          },
-          "asset_id": {
+          "asset": {
             "type": "string",
             "nullable": true
           },
-          "live_room_id": {
+          "live_room": {
             "type": "string",
             "nullable": true
           },
-          "settlement_wallet_attachment_id": {
+          "settlement_wallet_attachment": {
             "type": "string"
           },
-          "purchase_price_usd": {
-            "type": "number",
+          "purchase_price_cents": {
+            "type": "integer",
             "minimum": 0
           },
           "pricing_tier": {
@@ -7324,16 +7445,18 @@ const spec = {
               "$ref": "./communities-community.yaml#/CommunitySaleAllocationLeg"
             }
           },
-          "donation_partner_id": {
+          "donation_partner": {
             "type": "string",
             "nullable": true
           },
-          "donation_share_pct": {
-            "type": "number",
+          "donation_share_bps": {
+            "type": "integer",
+            "minimum": 0,
             "nullable": true
           },
-          "donation_amount_usd": {
-            "type": "number",
+          "donation_amount_cents": {
+            "type": "integer",
+            "minimum": 0,
             "nullable": true
           },
           "entitlement_kind": {
@@ -7346,23 +7469,23 @@ const spec = {
           "entitlement_target_ref": {
             "type": "string"
           },
-          "purchase_entitlement_id": {
+          "purchase_entitlement": {
             "type": "string"
           },
           "settled_at": {
-            "type": "string",
-            "format": "date-time"
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
       "CommunityPurchaseSettlementFailureRequest": {
         "type": "object",
         "required": [
-          "quote_id"
+          "quote"
         ],
         "additionalProperties": false,
         "properties": {
-          "quote_id": {
+          "quote": {
             "type": "string"
           }
         }
@@ -7370,17 +7493,30 @@ const spec = {
       "CommunityPurchaseSettlementFailure": {
         "type": "object",
         "required": [
-          "quote_id",
-          "community_id",
+          "id",
+          "object",
+          "quote",
+          "community",
           "status",
           "expires_at"
         ],
         "additionalProperties": false,
         "properties": {
-          "quote_id": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "community_purchase_settlement_failure"
+            ]
+          },
+          "quote": {
             "type": "string"
           },
-          "community_id": {
+          "community": {
             "type": "string"
           },
           "status": {
@@ -7391,24 +7527,24 @@ const spec = {
             ]
           },
           "failed_at": {
-            "type": "string",
-            "format": "date-time",
+            "type": "integer",
+            "format": "int64",
             "nullable": true
           },
           "expires_at": {
-            "type": "string",
-            "format": "date-time"
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
       "MembershipResult": {
         "type": "object",
         "required": [
-          "community_id",
+          "community",
           "status"
         ],
         "properties": {
-          "community_id": {
+          "community": {
             "type": "string"
           },
           "status": {
@@ -7443,20 +7579,29 @@ const spec = {
       "MembershipRequestSummary": {
         "type": "object",
         "required": [
-          "membership_request_id",
-          "community_id",
-          "applicant_user_id",
+          "id",
+          "object",
+          "community",
+          "applicant_user",
           "status",
-          "created_at"
+          "created"
         ],
         "properties": {
-          "membership_request_id": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "membership_request_summary"
+            ]
+          },
+          "community": {
             "type": "string"
           },
-          "community_id": {
-            "type": "string"
-          },
-          "applicant_user_id": {
+          "applicant_user": {
             "type": "string"
           },
           "applicant_handle": {
@@ -7474,20 +7619,20 @@ const spec = {
             "type": "string",
             "nullable": true
           },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
+          "created": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
       "CommunityFollowResponse": {
         "type": "object",
         "required": [
-          "community_id",
+          "community",
           "following"
         ],
         "properties": {
-          "community_id": {
+          "community": {
             "type": "string"
           },
           "following": {
@@ -7502,18 +7647,35 @@ const spec = {
       "CommunityPreview": {
         "type": "object",
         "required": [
-          "community_id",
+          "id",
+          "object",
           "display_name",
           "membership_mode",
           "human_verification_lane",
           "moderators",
           "membership_gate_summaries",
           "rules",
-          "created_at"
+          "created"
         ],
         "properties": {
-          "community_id": {
-            "type": "string"
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "community_preview"
+            ]
+          },
+          "namespace_verification": {
+            "type": "string",
+            "nullable": true
+          },
+          "route_slug": {
+            "type": "string",
+            "nullable": true
           },
           "display_name": {
             "type": "string"
@@ -7580,10 +7742,6 @@ const spec = {
             ],
             "nullable": true
           },
-          "donation_partner_id": {
-            "type": "string",
-            "nullable": true
-          },
           "donation_partner": {
             "$ref": "./communities-community.yaml#/DonationPartnerSummary",
             "nullable": true
@@ -7630,25 +7788,24 @@ const spec = {
             "type": "boolean",
             "nullable": true
           },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
+          "created": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
       "JoinEligibility": {
         "type": "object",
         "required": [
-          "community_id",
+          "community",
           "membership_mode",
           "human_verification_lane",
           "joinable_now",
           "status",
-          "membership_gate_summaries",
-          "missing_capabilities"
+          "membership_gate_summaries"
         ],
         "properties": {
-          "community_id": {
+          "community": {
             "type": "string"
           },
           "membership_mode": {
@@ -7734,24 +7891,29 @@ const spec = {
             "type": "object",
             "nullable": true,
             "properties": {
-              "current_score": {
-                "type": "number",
+              "current_score_decimal": {
+                "type": "string",
+                "pattern": "^\\d+(\\.\\d+)?$",
                 "nullable": true
               },
-              "required_score": {
-                "type": "number",
+              "required_score_decimal": {
+                "type": "string",
+                "pattern": "^\\d+(\\.\\d+)?$",
                 "nullable": true
               },
               "passing_score": {
                 "type": "boolean",
                 "nullable": true
               },
-              "last_score_timestamp": {
-                "type": "string",
-                "format": "date-time",
+              "last_scored_at": {
+                "type": "integer",
                 "nullable": true
               }
             }
+          },
+          "gate_evaluation": {
+            "$ref": "./communities-core.yaml#/GatePolicyEvaluation",
+            "nullable": true
           }
         }
       },
@@ -7804,7 +7966,7 @@ const spec = {
                 },
                 {
                   "required": [
-                    "song_artifact_bundle_id"
+                    "song_artifact_bundle"
                   ]
                 },
                 {
@@ -7848,7 +8010,7 @@ const spec = {
                 },
                 {
                   "required": [
-                    "song_artifact_bundle_id"
+                    "song_artifact_bundle"
                   ]
                 },
                 {
@@ -7914,7 +8076,7 @@ const spec = {
                 },
                 {
                   "required": [
-                    "song_artifact_bundle_id"
+                    "song_artifact_bundle"
                   ]
                 },
                 {
@@ -7960,7 +8122,7 @@ const spec = {
                 },
                 {
                   "required": [
-                    "song_artifact_bundle_id"
+                    "song_artifact_bundle"
                   ]
                 },
                 {
@@ -7979,7 +8141,7 @@ const spec = {
             "anyOf": [
               {
                 "required": [
-                  "song_artifact_bundle_id"
+                  "song_artifact_bundle"
                 ]
               },
               {
@@ -8055,7 +8217,7 @@ const spec = {
                   "allOf": [
                     {
                       "required": [
-                        "song_artifact_bundle_id"
+                        "song_artifact_bundle"
                       ]
                     },
                     {
@@ -8069,7 +8231,7 @@ const spec = {
                   "allOf": [
                     {
                       "required": [
-                        "song_artifact_bundle_id"
+                        "song_artifact_bundle"
                       ]
                     },
                     {
@@ -8099,7 +8261,7 @@ const spec = {
             ],
             "default": "human_direct"
           },
-          "agent_id": {
+          "agent": {
             "type": "string",
             "nullable": true
           },
@@ -8131,11 +8293,11 @@ const spec = {
             },
             "nullable": true
           },
-          "parent_post_id": {
+          "parent_post": {
             "type": "string",
             "nullable": true
           },
-          "label_id": {
+          "label": {
             "type": "string",
             "nullable": true
           },
@@ -8158,8 +8320,8 @@ const spec = {
             "nullable": true
           },
           "label_assigned_at": {
-            "type": "string",
-            "format": "date-time",
+            "type": "integer",
+            "format": "int64",
             "nullable": true
           },
           "label_ai_confidence": {
@@ -8243,11 +8405,11 @@ const spec = {
             ],
             "nullable": true
           },
-          "asset_id": {
+          "asset": {
             "type": "string",
             "nullable": true
           },
-          "song_artifact_bundle_id": {
+          "song_artifact_bundle": {
             "type": "string",
             "nullable": true
           },
@@ -8300,8 +8462,9 @@ const spec = {
       "Post": {
         "type": "object",
         "required": [
-          "post_id",
-          "community_id",
+          "id",
+          "object",
+          "community",
           "authorship_mode",
           "identity_mode",
           "post_type",
@@ -8310,17 +8473,24 @@ const spec = {
           "analysis_state",
           "content_safety_state",
           "age_gate_policy",
-          "created_at",
-          "updated_at"
+          "created"
         ],
         "properties": {
-          "post_id": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "post"
+            ]
+          },
+          "community": {
             "type": "string"
           },
-          "community_id": {
-            "type": "string"
-          },
-          "author_user_id": {
+          "author_user": {
             "type": "string",
             "nullable": true
           },
@@ -8331,11 +8501,11 @@ const spec = {
               "user_agent"
             ]
           },
-          "agent_id": {
+          "agent": {
             "type": "string",
             "nullable": true
           },
-          "agent_ownership_record_id": {
+          "agent_ownership_record": {
             "type": "string",
             "nullable": true
           },
@@ -8382,7 +8552,7 @@ const spec = {
             },
             "nullable": true
           },
-          "label_id": {
+          "label": {
             "type": "string",
             "nullable": true
           },
@@ -8482,15 +8652,15 @@ const spec = {
             ],
             "nullable": true
           },
-          "asset_id": {
+          "asset": {
             "type": "string",
             "nullable": true
           },
-          "song_artifact_bundle_id": {
+          "song_artifact_bundle": {
             "type": "string",
             "nullable": true
           },
-          "parent_post_id": {
+          "parent_post": {
             "type": "string",
             "nullable": true
           },
@@ -8549,13 +8719,9 @@ const spec = {
               "18_plus"
             ]
           },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
+          "created": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -8631,7 +8797,7 @@ const spec = {
             ],
             "default": "human_direct"
           },
-          "agent_id": {
+          "agent": {
             "type": "string",
             "nullable": true
           },
@@ -8661,11 +8827,12 @@ const spec = {
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "comment_id",
-          "community_id",
-          "thread_root_post_id",
-          "parent_comment_id",
-          "author_user_id",
+          "id",
+          "object",
+          "community",
+          "thread_root_post",
+          "parent_comment",
+          "author_user",
           "authorship_mode",
           "identity_mode",
           "anonymous_scope",
@@ -8682,24 +8849,31 @@ const spec = {
           "content_hash",
           "swarm_body_ref",
           "idempotency_key",
-          "created_at",
-          "updated_at"
+          "created"
         ],
         "properties": {
-          "comment_id": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "comment"
+            ]
+          },
+          "community": {
             "type": "string"
           },
-          "community_id": {
+          "thread_root_post": {
             "type": "string"
           },
-          "thread_root_post_id": {
-            "type": "string"
-          },
-          "parent_comment_id": {
+          "parent_comment": {
             "type": "string",
             "nullable": true
           },
-          "author_user_id": {
+          "author_user": {
             "type": "string",
             "nullable": true
           },
@@ -8710,11 +8884,11 @@ const spec = {
               "user_agent"
             ]
           },
-          "agent_id": {
+          "agent": {
             "type": "string",
             "nullable": true
           },
-          "agent_ownership_record_id": {
+          "agent_ownership_record": {
             "type": "string",
             "nullable": true
           },
@@ -8785,8 +8959,8 @@ const spec = {
             "type": "integer"
           },
           "last_reply_at": {
-            "type": "string",
-            "format": "date-time",
+            "type": "integer",
+            "format": "int64",
             "nullable": true
           },
           "content_hash": {
@@ -8801,13 +8975,9 @@ const spec = {
             "type": "string",
             "nullable": true
           },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
+          "created": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -8830,30 +9000,39 @@ const spec = {
       "UserReport": {
         "type": "object",
         "required": [
-          "user_report_id",
-          "community_id",
-          "post_id",
-          "comment_id",
-          "reporter_user_id",
+          "id",
+          "object",
+          "community",
+          "post",
+          "comment",
+          "reporter_user",
           "reason_code",
-          "created_at"
+          "created"
         ],
         "properties": {
-          "user_report_id": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "user_report"
+            ]
+          },
+          "community": {
             "type": "string"
           },
-          "community_id": {
-            "type": "string"
-          },
-          "post_id": {
+          "post": {
             "type": "string",
             "nullable": true
           },
-          "comment_id": {
+          "comment": {
             "type": "string",
             "nullable": true
           },
-          "reporter_user_id": {
+          "reporter_user": {
             "type": "string"
           },
           "reason_code": {
@@ -8863,16 +9042,17 @@ const spec = {
             "type": "string",
             "nullable": true
           },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
+          "created": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
       "ModerationCaseListResponse": {
         "type": "object",
         "required": [
-          "items"
+          "items",
+          "next_cursor"
         ],
         "properties": {
           "items": {
@@ -8880,6 +9060,10 @@ const spec = {
             "items": {
               "$ref": "./moderation.yaml#/ModerationCase"
             }
+          },
+          "next_cursor": {
+            "type": "string",
+            "nullable": true
           }
         }
       },
@@ -8981,25 +9165,33 @@ const spec = {
       "SongArtifactUpload": {
         "type": "object",
         "required": [
-          "song_artifact_upload_id",
-          "community_id",
-          "uploader_user_id",
+          "id",
+          "object",
+          "community",
+          "uploader_user",
           "artifact_kind",
           "status",
           "storage_ref",
           "mime_type",
           "upload_url",
-          "created_at",
-          "updated_at"
+          "created"
         ],
         "properties": {
-          "song_artifact_upload_id": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "song_artifact_upload"
+            ]
+          },
+          "community": {
             "type": "string"
           },
-          "community_id": {
-            "type": "string"
-          },
-          "uploader_user_id": {
+          "uploader_user": {
             "type": "string"
           },
           "artifact_kind": {
@@ -9067,13 +9259,9 @@ const spec = {
           "upload_url": {
             "type": "string"
           },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
+          "created": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -9132,9 +9320,10 @@ const spec = {
       "SongArtifactBundle": {
         "type": "object",
         "required": [
-          "song_artifact_bundle_id",
-          "community_id",
-          "creator_user_id",
+          "id",
+          "object",
+          "community",
+          "creator_user",
           "status",
           "primary_audio",
           "media_refs",
@@ -9144,17 +9333,24 @@ const spec = {
           "translation_status",
           "alignment_status",
           "moderation_status",
-          "created_at",
-          "updated_at"
+          "created"
         ],
         "properties": {
-          "song_artifact_bundle_id": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "song_artifact_bundle"
+            ]
+          },
+          "community": {
             "type": "string"
           },
-          "community_id": {
-            "type": "string"
-          },
-          "creator_user_id": {
+          "creator_user": {
             "type": "string"
           },
           "status": {
@@ -9286,13 +9482,9 @@ const spec = {
             "nullable": true,
             "additionalProperties": true
           },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
+          "created": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -9344,6 +9536,10 @@ const spec = {
             "minimum": 0
           },
           "like_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "comment_count": {
             "type": "integer",
             "minimum": 0
           },
@@ -9400,11 +9596,11 @@ const spec = {
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "post_id",
+          "post",
           "value"
         ],
         "properties": {
-          "post_id": {
+          "post": {
             "type": "string"
           },
           "value": {
@@ -9456,11 +9652,11 @@ const spec = {
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "comment_id",
+          "comment",
           "value"
         ],
         "properties": {
-          "comment_id": {
+          "comment": {
             "type": "string"
           },
           "value": {
@@ -9494,7 +9690,8 @@ const spec = {
       "NotificationTasksResponse": {
         "type": "object",
         "required": [
-          "items"
+          "items",
+          "next_cursor"
         ],
         "properties": {
           "items": {
@@ -9502,6 +9699,10 @@ const spec = {
             "items": {
               "$ref": "./notifications.yaml#/UserTask"
             }
+          },
+          "next_cursor": {
+            "type": "string",
+            "nullable": true
           }
         }
       },
@@ -9538,10 +9739,10 @@ const spec = {
       "DismissTaskRequest": {
         "type": "object",
         "required": [
-          "task_id"
+          "task"
         ],
         "properties": {
-          "task_id": {
+          "task": {
             "type": "string"
           }
         }
@@ -9549,22 +9750,30 @@ const spec = {
       "UserTask": {
         "type": "object",
         "required": [
-          "task_id",
-          "user_id",
+          "id",
+          "object",
+          "user",
           "type",
           "subject_type",
-          "subject_id",
+          "subject",
           "status",
           "priority",
           "payload",
-          "created_at",
-          "updated_at"
+          "created"
         ],
         "properties": {
-          "task_id": {
-            "type": "string"
+          "id": {
+            "type": "string",
+            "readOnly": true
           },
-          "user_id": {
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "user_task"
+            ]
+          },
+          "user": {
             "type": "string"
           },
           "type": {
@@ -9573,7 +9782,7 @@ const spec = {
           "subject_type": {
             "type": "string"
           },
-          "subject_id": {
+          "subject": {
             "type": "string"
           },
           "status": {
@@ -9588,39 +9797,43 @@ const spec = {
             "additionalProperties": true
           },
           "resolved_at": {
-            "type": "string",
-            "format": "date-time",
+            "type": "integer",
+            "format": "int64",
             "nullable": true
           },
           "dismissed_at": {
-            "type": "string",
-            "format": "date-time",
+            "type": "integer",
+            "format": "int64",
             "nullable": true
           },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
+          "created": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
       "Job": {
         "type": "object",
         "required": [
-          "job_id",
+          "id",
+          "object",
           "job_type",
           "status",
           "subject_type",
-          "subject_id",
-          "created_at",
-          "updated_at"
+          "subject",
+          "created"
         ],
         "properties": {
-          "job_id": {
-            "type": "string"
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "job"
+            ]
           },
           "job_type": {
             "type": "string",
@@ -9652,7 +9865,7 @@ const spec = {
           "subject_type": {
             "type": "string"
           },
-          "subject_id": {
+          "subject": {
             "type": "string"
           },
           "result_ref": {
@@ -9663,13 +9876,9 @@ const spec = {
             "type": "string",
             "nullable": true
           },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
+          "created": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -9704,6 +9913,7 @@ const spec = {
         "additionalProperties": false,
         "required": [
           "items",
+          "next_cursor",
           "omitted_surfaces",
           "links"
         ],
@@ -9713,6 +9923,10 @@ const spec = {
             "items": {
               "$ref": "./communities-community.yaml#/StructuredPostCard"
             }
+          },
+          "next_cursor": {
+            "type": "string",
+            "nullable": true
           },
           "omitted_surfaces": {
             "type": "array",
@@ -9753,6 +9967,7 @@ const spec = {
         "additionalProperties": false,
         "required": [
           "items",
+          "next_cursor",
           "top_comments_limit",
           "links"
         ],
@@ -9762,6 +9977,10 @@ const spec = {
             "items": {
               "$ref": "./comments.yaml#/CommentListItem"
             }
+          },
+          "next_cursor": {
+            "type": "string",
+            "nullable": true
           },
           "top_comments_limit": {
             "type": "integer",

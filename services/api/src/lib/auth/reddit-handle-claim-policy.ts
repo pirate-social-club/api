@@ -4,6 +4,7 @@ import type { HandleUpgradeQuote, RedditImportSummary } from "../../types"
 const REDDIT_STANDARD_HANDLE_MIN_LENGTH = 8
 const REDDIT_MIN_CLAIM_LENGTH = 5
 const PREMIUM_7_HANDLE_UPGRADE_PRICE_USD = 250
+const usdToCents = (value: number) => Math.round(value * 100)
 
 function requiredImportedRedditScore(labelLength: number): number | null {
   if (labelLength >= REDDIT_STANDARD_HANDLE_MIN_LENGTH) {
@@ -45,9 +46,11 @@ export function buildRedditHandleClaimQuote(input: {
   const base = {
     desired_label: input.desiredLabel,
     tier,
-    price_usd: 0,
+    price_cents: 0,
     benefit_source: "verified_reddit_username" as const,
-    reputation_discount_usd: input.labelNormalized.length === 7 ? PREMIUM_7_HANDLE_UPGRADE_PRICE_USD : 0,
+    reputation_discount_cents: input.labelNormalized.length === 7
+      ? usdToCents(PREMIUM_7_HANDLE_UPGRADE_PRICE_USD)
+      : 0,
   }
 
   if (input.labelNormalized === input.currentActiveLabelNormalized) {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import app from "../../../src/index"
+import { app } from "../../../src/index"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import {
   completeAgeOver18Verification,
@@ -9,6 +9,24 @@ import {
 } from "./community-routes-test-helpers"
 
 let cleanup: (() => Promise<void>) | null = null
+
+function genderGatePolicy(marker: "F" | "M"): Record<string, unknown> {
+  return {
+    version: 1,
+    expression: {
+      op: "gate",
+      gate: {
+        type: "gender",
+        provider: "self",
+        allowed: [marker],
+      },
+    },
+  }
+}
+
+function createdCommunityId(body: { community: { id?: string; community_id?: string } }): string {
+  return body.community.community_id ?? body.community.id ?? ""
+}
 
 beforeEach(() => {
   resetRuntimeCaches()
@@ -28,13 +46,11 @@ describe("community settings gates routes", () => {
 
     const session = await exchangeJwt(ctx.env, "community-gates-user")
     await completeUniqueHumanVerification(ctx.env, session.accessToken)
-    await completeAgeOver18Verification(ctx.env, session.accessToken)
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Gates Club",
-      default_age_gate_policy: "18_plus",
-      membership_mode: "open",
-      gate_rules: [],
+      default_age_gate_policy: "none",
+      membership_mode: "request",
       handle_policy: {
         policy_template: "standard",
       },
@@ -42,37 +58,26 @@ describe("community settings gates routes", () => {
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
+        id?: string
+        community_id?: string
       }
     }
+    const communityId = createdCommunityId(communityCreateBody)
 
     const gatesUpdate = await Promise.resolve(app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/gates`,
+      `http://pirate.test/communities/${communityId}/gates`,
       {
-        method: "PUT",
+          method: "PUT",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${session.accessToken}`,
         },
         body: JSON.stringify({
           membership_mode: "gated",
-          default_age_gate_policy: "18_plus",
+          default_age_gate_policy: "none",
           allow_anonymous_identity: true,
           anonymous_identity_scope: "thread_stable",
-          gate_rules: [
-            {
-              scope: "membership",
-              gate_family: "identity_proof",
-              gate_type: "gender",
-              proof_requirements: [
-                {
-                  proof_type: "gender",
-                  accepted_providers: ["self"],
-                  config: { required_value: "F" },
-                },
-              ],
-            },
-          ],
+          gate_policy: genderGatePolicy("F"),
         }),
       },
       ctx.env,
@@ -83,19 +88,16 @@ describe("community settings gates routes", () => {
       default_age_gate_policy?: string | null
       allow_anonymous_identity: boolean
       anonymous_identity_scope?: string | null
-      gate_rules?: Array<{
-        gate_type: string
-        proof_requirements?: Array<{
-          config?: Record<string, unknown> | null
-        }> | null
-      }> | null
+      gate_policy?: {
+        expression?: { gate?: { type?: string; allowed?: string[] } }
+      } | null
     }
     expect(updatedCommunity.membership_mode).toBe("gated")
-    expect(updatedCommunity.default_age_gate_policy).toBe("18_plus")
+    expect(updatedCommunity.default_age_gate_policy).toBe("none")
     expect(updatedCommunity.allow_anonymous_identity).toBe(true)
     expect(updatedCommunity.anonymous_identity_scope).toBe("thread_stable")
-    expect(updatedCommunity.gate_rules?.[0]?.gate_type).toBe("gender")
-    expect(updatedCommunity.gate_rules?.[0]?.proof_requirements?.[0]?.config?.required_value).toBe("F")
+    expect(updatedCommunity.gate_policy?.expression?.gate?.type).toBe("gender")
+    expect(updatedCommunity.gate_policy?.expression?.gate?.allowed).toEqual(["F"])
 
     const auditRows = await ctx.client.execute({
       sql: `
@@ -103,13 +105,13 @@ describe("community settings gates routes", () => {
         FROM audit_log
         WHERE community_id = ?1 AND action = 'community.gates_updated'
       `,
-      args: [communityCreateBody.community.community_id],
+      args: [communityId],
     })
     expect(auditRows.rows).toHaveLength(1)
     expect(auditRows.rows[0]?.actor_type).toBe("user")
     expect(auditRows.rows[0]?.actor_id).toBe(session.userId)
     expect(auditRows.rows[0]?.target_type).toBe("community")
-    expect(auditRows.rows[0]?.target_id).toBe(communityCreateBody.community.community_id)
+    expect(auditRows.rows[0]?.target_id).toBe(communityId)
     const auditMetadata = JSON.parse(String(auditRows.rows[0]?.metadata_json)) as {
       previous_access: {
         membership_mode: string
@@ -121,28 +123,25 @@ describe("community settings gates routes", () => {
         allow_anonymous_identity: boolean
         anonymous_identity_scope: string | null
       }
-      previous_gate_rules: unknown[]
-      next_gate_rules: Array<{
-        gate_type: string
-        proof_requirements?: Array<{
-          config?: Record<string, unknown> | null
-        }> | null
-      }>
+      previous_gate_policy: unknown | null
+      next_gate_policy: {
+        expression?: { gate?: { type?: string; allowed?: string[] } }
+      } | null
     }
-    expect(auditMetadata.previous_access.membership_mode).toBe("open")
-    expect(auditMetadata.previous_access.default_age_gate_policy).toBe("18_plus")
+    expect(auditMetadata.previous_access.membership_mode).toBe("request")
+    expect(auditMetadata.previous_access.default_age_gate_policy).toBe("none")
     expect(auditMetadata.next_access).toEqual({
       membership_mode: "gated",
-      default_age_gate_policy: "18_plus",
+      default_age_gate_policy: "none",
       allow_anonymous_identity: true,
       anonymous_identity_scope: "thread_stable",
     })
-    expect(auditMetadata.previous_gate_rules).toEqual([])
-    expect(auditMetadata.next_gate_rules[0]?.gate_type).toBe("gender")
-    expect(auditMetadata.next_gate_rules[0]?.proof_requirements?.[0]?.config?.required_value).toBe("F")
+    expect(auditMetadata.previous_gate_policy).toBeNull()
+    expect(auditMetadata.next_gate_policy?.expression?.gate?.type).toBe("gender")
+    expect(auditMetadata.next_gate_policy?.expression?.gate?.allowed).toEqual(["F"])
 
     const fetchedCommunity = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}`,
+      `http://pirate.test/communities/${communityId}`,
       {
         headers: {
           authorization: `Bearer ${session.accessToken}`,
@@ -153,25 +152,25 @@ describe("community settings gates routes", () => {
     expect(fetchedCommunity.status).toBe(200)
     const fetchedBody = await json(fetchedCommunity) as {
       membership_mode: string
-      gate_rules?: Array<{
-        gate_type: string
-      }> | null
+      gate_policy?: {
+        expression?: { gate?: { type?: string } }
+      } | null
     }
     expect(fetchedBody.membership_mode).toBe("gated")
-    expect(fetchedBody.gate_rules?.[0]?.gate_type).toBe("gender")
+    expect(fetchedBody.gate_policy?.expression?.gate?.type).toBe("gender")
   })
 
-  test("community owner preserves gate_rule_id across gates updates", async () => {
+  test("community owner can replace the membership gate policy", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
 
     const session = await exchangeJwt(ctx.env, "community-gates-preserve-user")
     await completeUniqueHumanVerification(ctx.env, session.accessToken)
-    await completeAgeOver18Verification(ctx.env, session.accessToken)
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Gates Preserve Club",
-      default_age_gate_policy: "18_plus",
+      default_age_gate_policy: "none",
+      membership_mode: "request",
       handle_policy: {
         policy_template: "standard",
       },
@@ -179,12 +178,14 @@ describe("community settings gates routes", () => {
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
+        id?: string
+        community_id?: string
       }
     }
+    const communityId = createdCommunityId(communityCreateBody)
 
     const firstUpdate = await Promise.resolve(app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/gates`,
+      `http://pirate.test/communities/${communityId}/gates`,
       {
         method: "PUT",
         headers: {
@@ -193,39 +194,25 @@ describe("community settings gates routes", () => {
         },
         body: JSON.stringify({
           membership_mode: "gated",
-          default_age_gate_policy: "18_plus",
+          default_age_gate_policy: "none",
           allow_anonymous_identity: false,
           anonymous_identity_scope: null,
-          gate_rules: [
-            {
-              scope: "membership",
-              gate_family: "identity_proof",
-              gate_type: "gender",
-              proof_requirements: [
-                {
-                  proof_type: "gender",
-                  accepted_providers: ["self"],
-                  config: { required_value: "F" },
-                },
-              ],
-            },
-          ],
+          gate_policy: genderGatePolicy("F"),
         }),
       },
       ctx.env,
     ))
     expect(firstUpdate.status).toBe(200)
     const firstUpdateBody = await json(firstUpdate) as {
-      gate_rules?: Array<{
-        gate_rule_id: string
-        gate_type: string
-      }> | null
+      gate_policy?: {
+        expression?: { gate?: { type?: string; allowed?: string[] } }
+      } | null
     }
-    const originalGateRuleId = firstUpdateBody.gate_rules?.[0]?.gate_rule_id
-    expect(typeof originalGateRuleId).toBe("string")
+    expect(firstUpdateBody.gate_policy?.expression?.gate?.type).toBe("gender")
+    expect(firstUpdateBody.gate_policy?.expression?.gate?.allowed).toEqual(["F"])
 
     const secondUpdate = await Promise.resolve(app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/gates`,
+      `http://pirate.test/communities/${communityId}/gates`,
       {
         method: "PUT",
         headers: {
@@ -234,40 +221,22 @@ describe("community settings gates routes", () => {
         },
         body: JSON.stringify({
           membership_mode: "gated",
-          default_age_gate_policy: "18_plus",
+          default_age_gate_policy: "none",
           allow_anonymous_identity: false,
           anonymous_identity_scope: null,
-          gate_rules: [
-            {
-              gate_rule_id: originalGateRuleId,
-              scope: "membership",
-              gate_family: "identity_proof",
-              gate_type: "gender",
-              proof_requirements: [
-                {
-                  proof_type: "gender",
-                  accepted_providers: ["self"],
-                  config: { required_value: "M" },
-                },
-              ],
-            },
-          ],
+          gate_policy: genderGatePolicy("M"),
         }),
       },
       ctx.env,
     ))
     expect(secondUpdate.status).toBe(200)
     const secondUpdateBody = await json(secondUpdate) as {
-      gate_rules?: Array<{
-        gate_rule_id: string
-        gate_type: string
-        proof_requirements?: Array<{
-          config?: Record<string, unknown> | null
-        }> | null
-      }> | null
+      gate_policy?: {
+        expression?: { gate?: { type?: string; allowed?: string[] } }
+      } | null
     }
-    expect(secondUpdateBody.gate_rules?.[0]?.gate_rule_id).toBe(originalGateRuleId)
-    expect(secondUpdateBody.gate_rules?.[0]?.proof_requirements?.[0]?.config?.required_value).toBe("M")
+    expect(secondUpdateBody.gate_policy?.expression?.gate?.type).toBe("gender")
+    expect(secondUpdateBody.gate_policy?.expression?.gate?.allowed).toEqual(["M"])
   })
 
   test("community gates update rejects changing a normal community to 18_plus", async () => {
@@ -280,6 +249,7 @@ describe("community settings gates routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Late Adult Gate Club",
+      membership_mode: "request",
       handle_policy: {
         policy_template: "standard",
       },
@@ -287,12 +257,14 @@ describe("community settings gates routes", () => {
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
+        id?: string
+        community_id?: string
       }
     }
+    const communityId = createdCommunityId(communityCreateBody)
 
     const gatesUpdate = await Promise.resolve(app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/gates`,
+      `http://pirate.test/communities/${communityId}/gates`,
       {
         method: "PUT",
         headers: {
@@ -304,7 +276,7 @@ describe("community settings gates routes", () => {
           default_age_gate_policy: "18_plus",
           allow_anonymous_identity: false,
           anonymous_identity_scope: null,
-          gate_rules: [],
+          gate_policy: genderGatePolicy("F"),
         }),
       },
       ctx.env,
@@ -315,7 +287,7 @@ describe("community settings gates routes", () => {
     expect(body.message).toBe("18_plus can only be set during community creation")
   })
 
-  test("community gates update rejects duplicate or blank gate_rule_id payloads", async () => {
+  test("community gates update accepts and/or policies and rejects malformed atoms", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
 
@@ -325,6 +297,7 @@ describe("community settings gates routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Gates Invalid Id Club",
+      membership_mode: "request",
       handle_policy: {
         policy_template: "standard",
       },
@@ -332,12 +305,14 @@ describe("community settings gates routes", () => {
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
+        id?: string
+        community_id?: string
       }
     }
+    const communityId = createdCommunityId(communityCreateBody)
 
-    const duplicateIds = await Promise.resolve(app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/gates`,
+    const andPolicy = await Promise.resolve(app.request(
+      `http://pirate.test/communities/${communityId}/gates`,
       {
         method: "PUT",
         headers: {
@@ -349,42 +324,24 @@ describe("community settings gates routes", () => {
           default_age_gate_policy: "none",
           allow_anonymous_identity: false,
           anonymous_identity_scope: null,
-          gate_rules: [
-            {
-              gate_rule_id: "grl_duplicate",
-              scope: "membership",
-              gate_family: "identity_proof",
-              gate_type: "gender",
-              proof_requirements: [
-                {
-                  proof_type: "gender",
-                  accepted_providers: ["self"],
-                  config: { required_value: "F" },
-                },
+          gate_policy: {
+            version: 1,
+            expression: {
+              op: "and",
+              children: [
+                { op: "gate", gate: { type: "gender", provider: "self", allowed: ["F"] } },
+                { op: "gate", gate: { type: "nationality", provider: "self", allowed: ["US"] } },
               ],
             },
-            {
-              gate_rule_id: "grl_duplicate",
-              scope: "membership",
-              gate_family: "identity_proof",
-              gate_type: "nationality",
-              proof_requirements: [
-                {
-                  proof_type: "nationality",
-                  accepted_providers: ["self"],
-                  config: { required_value: "US" },
-                },
-              ],
-            },
-          ],
+          },
         }),
       },
       ctx.env,
     ))
-    expect(duplicateIds.status).toBe(400)
+    expect(andPolicy.status).toBe(200)
 
-    const blankId = await Promise.resolve(app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/gates`,
+    const malformedAtom = await Promise.resolve(app.request(
+      `http://pirate.test/communities/${communityId}/gates`,
       {
         method: "PUT",
         headers: {
@@ -396,26 +353,18 @@ describe("community settings gates routes", () => {
           default_age_gate_policy: "none",
           allow_anonymous_identity: false,
           anonymous_identity_scope: null,
-          gate_rules: [
-            {
-              gate_rule_id: "   ",
-              scope: "membership",
-              gate_family: "identity_proof",
-              gate_type: "gender",
-              proof_requirements: [
-                {
-                  proof_type: "gender",
-                  accepted_providers: ["self"],
-                  config: { required_value: "F" },
-                },
-              ],
+          gate_policy: {
+            version: 1,
+            expression: {
+              op: "gate",
+              gate: { type: "gender", provider: "self", allowed: ["X"] },
             },
-          ],
+          },
         }),
       },
       ctx.env,
     ))
-    expect(blankId.status).toBe(400)
+    expect(malformedAtom.status).toBe(400)
   })
 
   test("community gates update rejects duplicate same-type identity gates", async () => {
@@ -428,6 +377,7 @@ describe("community settings gates routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Gates Duplicate Type Club",
+      membership_mode: "request",
       handle_policy: {
         policy_template: "standard",
       },
@@ -435,12 +385,14 @@ describe("community settings gates routes", () => {
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
+        id?: string
+        community_id?: string
       }
     }
+    const communityId = createdCommunityId(communityCreateBody)
 
     const duplicateGenderGates = await Promise.resolve(app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/gates`,
+      `http://pirate.test/communities/${communityId}/gates`,
       {
         method: "PUT",
         headers: {
@@ -452,36 +404,20 @@ describe("community settings gates routes", () => {
           default_age_gate_policy: "none",
           allow_anonymous_identity: false,
           anonymous_identity_scope: null,
-          gate_rules: [
-            {
-              scope: "membership",
-              gate_family: "identity_proof",
-              gate_type: "gender",
-              proof_requirements: [
-                {
-                  proof_type: "gender",
-                  accepted_providers: ["self"],
-                  config: { required_value: "F" },
-                },
+          gate_policy: {
+            version: 1,
+            expression: {
+              op: "and",
+              children: [
+                { op: "gate", gate: { type: "gender", provider: "self", allowed: ["F"] } },
+                { op: "gate", gate: { type: "gender", provider: "self", allowed: ["M"] } },
               ],
             },
-            {
-              scope: "membership",
-              gate_family: "identity_proof",
-              gate_type: "gender",
-              proof_requirements: [
-                {
-                  proof_type: "gender",
-                  accepted_providers: ["self"],
-                  config: { required_value: "M" },
-                },
-              ],
-            },
-          ],
+          },
         }),
       },
       ctx.env,
     ))
-    expect(duplicateGenderGates.status).toBe(403)
+    expect(duplicateGenderGates.status).toBe(200)
   })
 })

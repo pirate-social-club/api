@@ -165,7 +165,7 @@ async function runCommentBodyMirror(input: {
     if (!community || community.status !== "active") {
       throw internalError("Community is missing for swarm mirror")
     }
-    if (community.membership_mode !== "open") {
+    if (String(community.membership_mode) !== "open") {
       return "skipped:non_public_community"
     }
     if (comment.status !== "published") {
@@ -209,7 +209,7 @@ async function runThreadSnapshotPublish(input: {
     if (!community || community.status !== "active") {
       throw internalError("Community is missing for thread snapshot publish")
     }
-    if (community.membership_mode !== "open") {
+    if (String(community.membership_mode) !== "open") {
       return "skipped:non_public_community"
     }
 

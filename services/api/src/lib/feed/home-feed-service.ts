@@ -12,6 +12,7 @@ import { enqueueEmbedHydrateOnReadIfNeeded, enqueuePostTranslationOnReadIfNeeded
 import { getPostById } from "../posts/community-post-store"
 import { getControlPlaneClient } from "../runtime-deps"
 import { numberOrNull, requiredNumber, requiredString, rowValue } from "../sql-row"
+import { serializeLocalizedPostResponse } from "../../serializers/post"
 import type { CommunityFollowProjectionRow, CommunityMembershipProjectionRow, CommunityRow } from "../auth/auth-db-rows"
 import type {
   Env,
@@ -30,6 +31,11 @@ type HomeFeedProjectionRow = {
   downvote_count: number
   comment_count: number
   like_count: number
+}
+
+export type InternalHomeFeedCommunitySummary = HomeFeedCommunitySummary & {
+  community_id: string
+  updated_at: string
 }
 
 export type HomeFeedTimeRange = "hour" | "day" | "week" | "month" | "year" | "all"
@@ -122,11 +128,13 @@ async function getViewerVote(input: {
   return numberOrNull(rowValue(row, "vote_value")) as -1 | 1 | null
 }
 
-function buildCommunitySummary(community: Awaited<ReturnType<CommunityReadRepository["getCommunityById"]>>): HomeFeedCommunitySummary | null {
+function buildCommunitySummary(community: Awaited<ReturnType<CommunityReadRepository["getCommunityById"]>>): InternalHomeFeedCommunitySummary | null {
   if (!community) {
     return null
   }
   return {
+    id: `com_${community.community_id}`,
+    object: "home_feed_community_summary",
     community_id: community.community_id,
     display_name: community.display_name,
     route_slug: community.route_slug,
@@ -134,6 +142,18 @@ function buildCommunitySummary(community: Awaited<ReturnType<CommunityReadReposi
     member_count: null,
     follower_count: community.follower_count,
     updated_at: community.updated_at,
+  }
+}
+
+function serializeHomeFeedCommunitySummary(summary: InternalHomeFeedCommunitySummary): HomeFeedCommunitySummary {
+  return {
+    id: summary.id,
+    object: summary.object,
+    display_name: summary.display_name,
+    route_slug: summary.route_slug,
+    avatar_ref: summary.avatar_ref,
+    member_count: summary.member_count,
+    follower_count: summary.follower_count,
   }
 }
 
@@ -186,19 +206,19 @@ export type CommunityAggregate = {
 }
 
 export function filterCommunitiesWithPosts(
-  summaries: HomeFeedCommunitySummary[],
+  summaries: InternalHomeFeedCommunitySummary[],
   aggregates: Map<string, CommunityAggregate>,
   hasTimeRange: boolean,
-): HomeFeedCommunitySummary[] {
+): InternalHomeFeedCommunitySummary[] {
   if (!hasTimeRange) return summaries
   return summaries.filter((summary) => aggregates.has(summary.community_id))
 }
 
 export function sortCommunitySummaries(
-  summaries: HomeFeedCommunitySummary[],
+  summaries: InternalHomeFeedCommunitySummary[],
   aggregates: Map<string, CommunityAggregate>,
   sort: HomeFeedSort,
-): HomeFeedCommunitySummary[] {
+): InternalHomeFeedCommunitySummary[] {
   return [...summaries].sort((left, right) => {
     const leftAgg = aggregates.get(left.community_id)
     const rightAgg = aggregates.get(right.community_id)
@@ -282,7 +302,7 @@ export async function listHomeFeed(input: {
       await input.communityRepository.getCommunityById(communityId),
     )))
   )
-    .filter((summary): summary is HomeFeedCommunitySummary => Boolean(summary))
+    .filter((summary): summary is InternalHomeFeedCommunitySummary => Boolean(summary))
 
   const sort = parseHomeFeedSort(input.sort)
   const now = Date.now()
@@ -408,8 +428,8 @@ export async function listHomeFeed(input: {
           continue
         }
         items.push({
-          community,
-          post: localized,
+          community: serializeHomeFeedCommunitySummary(community),
+          post: serializeLocalizedPostResponse(localized),
         })
       }
     } finally {
@@ -417,14 +437,14 @@ export async function listHomeFeed(input: {
     }
   }
 
-  const itemByPostId = Object.fromEntries(items.map((item) => [item.post.post.post_id, item] as const))
+  const itemByPostId = Object.fromEntries(items.map((item) => [item.post.post.id.replace(/^post_/, ""), item] as const))
   const orderedItems = pageRows
     .map((row) => itemByPostId[row.source_post_id])
     .filter((item): item is HomeFeedItem => Boolean(item))
 
   return {
     items: orderedItems,
-    top_communities: sortedCommunities.slice(0, 6),
+    top_communities: sortedCommunities.slice(0, 6).map(serializeHomeFeedCommunitySummary),
     next_cursor: nextCursor,
   }
 }

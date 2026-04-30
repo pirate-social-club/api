@@ -83,7 +83,7 @@ export async function resolveWalletAttachmentAddress(input: {
   walletAttachmentId: string
 }): Promise<string> {
   const attachments = await input.userRepository.getWalletAttachmentsByUserId(input.userId)
-  const attachment = attachments.find((candidate) => candidate.wallet_attachment_id === input.walletAttachmentId)
+  const attachment = attachments.find((candidate) => candidate.wallet_attachment === input.walletAttachmentId)
   if (!attachment?.wallet_address?.trim()) {
     throw badRequestError("Settlement wallet attachment is invalid")
   }

@@ -74,13 +74,13 @@ export async function generateSongPreviewForBundle(input: {
     await createSongArtifactUploadIntent({
       client,
       communityId: input.communityId,
-      userId: bundle.creator_user_id,
+      userId: bundle.creator_user.replace(/^usr_/, ""),
       songArtifactUploadId: previewUploadId,
       storageRef: buildSongArtifactContentUrl(origin, input.communityId, previewUploadId),
       body: {
         artifact_kind: "preview_audio",
         mime_type: "audio/mpeg",
-        filename: `${bundle.song_artifact_bundle_id}-preview.mp3`,
+        filename: `${bundle.id.replace(/^sab_/, "")}-preview.mp3`,
         size_bytes: preview.bytes.byteLength,
         content_hash: `0x${await sha256Hex(preview.bytes)}`,
       },

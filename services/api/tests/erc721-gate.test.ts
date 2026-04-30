@@ -77,13 +77,13 @@ function makeUser(): User {
 
 const walletAttachments: WalletAttachmentSummary[] = [
   {
-    wallet_attachment_id: "wal_eth",
+    wallet_attachment: "wal_eth",
     chain_namespace: "eip155:1",
     wallet_address: "0x2222222222222222222222222222222222222222",
     is_primary: true,
   },
   {
-    wallet_attachment_id: "wal_polygon",
+    wallet_attachment: "wal_polygon",
     chain_namespace: "eip155:137",
     wallet_address: "0x3333333333333333333333333333333333333333",
     is_primary: false,
@@ -399,7 +399,7 @@ describe("erc721 gate evaluation", () => {
         walletAttachments: [
           ...walletAttachments,
           {
-            wallet_attachment_id: "wal_polygon_2",
+            wallet_attachment: "wal_polygon_2",
             chain_namespace: "eip155:137",
             wallet_address: "0x4444444444444444444444444444444444444444",
             is_primary: false,
@@ -468,7 +468,7 @@ describe("erc721 gate evaluation", () => {
       await evaluateErc721InventoryMatch({
         env: {},
         walletAttachments: [{
-          wallet_attachment_id: `wal_${index}`,
+          wallet_attachment: `wal_${index}`,
           chain_namespace: "eip155:137",
           wallet_address: `0x${suffix}`,
           is_primary: false,
@@ -480,7 +480,7 @@ describe("erc721 gate evaluation", () => {
     await evaluateErc721InventoryMatch({
       env: {},
       walletAttachments: [{
-        wallet_attachment_id: "wal_0",
+        wallet_attachment: "wal_0",
         chain_namespace: "eip155:137",
         wallet_address: "0x0000000000000000000000000000000000000000",
         is_primary: false,

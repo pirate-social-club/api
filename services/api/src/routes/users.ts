@@ -2,6 +2,7 @@ import { Hono } from "hono"
 import { authError } from "../lib/errors"
 import { getUserRepository } from "../lib/auth/repositories"
 import { authenticate, type AuthenticatedEnv } from "../lib/auth-middleware"
+import { serializeUser } from "../serializers/user"
 
 const users = new Hono<AuthenticatedEnv>()
 
@@ -14,7 +15,7 @@ users.get("/me", async (c) => {
   if (!user) {
     throw authError("Authentication failed")
   }
-  return c.json(user, 200)
+  return c.json(serializeUser(user), 200)
 })
 
 export default users

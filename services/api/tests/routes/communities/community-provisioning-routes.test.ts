@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import app from "../../../src/index"
+import { app } from "../../../src/index"
 import { decryptCommunityDbCredential } from "../../../src/lib/communities/community-db-credential-crypto"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import {

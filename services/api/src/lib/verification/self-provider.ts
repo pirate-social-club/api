@@ -256,7 +256,6 @@ function shouldUseSelfDevStub(input: {
   publicOrigin?: string | null
 }): boolean {
   return isAutomatedTestEnv(input.env)
-    || (!trimEnv(input.env.SELF_ENDPOINT) && !resolveSelfCallbackOrigin(input.env, input.publicOrigin))
 }
 
 function shouldUseSelfMockPassport(env: Env): boolean {
@@ -293,6 +292,9 @@ function buildSelfEndpoint(env: Env, verificationSessionId: string, publicOrigin
   const origin = resolveSelfCallbackOrigin(env, publicOrigin)
   if (!origin) {
     throw providerUnavailable("Self provider not configured: PIRATE_API_PUBLIC_ORIGIN or SELF_ENDPOINT must be set")
+  }
+  if (!isHttpsOrigin(origin)) {
+    throw providerUnavailable("Self provider requires a public HTTPS callback origin; set PIRATE_API_PUBLIC_ORIGIN or SELF_ENDPOINT to an HTTPS URL")
   }
   return `${origin}/verification-sessions/${encodeURIComponent(verificationSessionId)}/self-callback`
 }
@@ -398,6 +400,7 @@ function createSelfDevStubProvider(env: Env): SelfProvider {
       }
       const upstreamSessionRef = encodeDevStubSessionRef(input.requestedCapabilities, input.verificationRequirements ?? [])
       const disclosures = mapCapabilitiesToDisclosures(input.requestedCapabilities, input.verificationRequirements ?? [])
+      const selfUserId = crypto.randomUUID()
 
       logVerificationDebug(env, "[self-provider] dev stub launch", {
         verificationSessionId: input.verificationSessionId,
@@ -416,9 +419,15 @@ function createSelfDevStubProvider(env: Env): SelfProvider {
           endpoint_type: "staging_https",
           scope: input.verificationIntent ?? "profile_verification",
           session_id: upstreamSessionRef,
-          user_id: input.userId,
+          user_id: selfUserId,
           user_id_type: "uuid",
           disclosures,
+          dev_mode: true,
+          user_defined_data: JSON.stringify({
+            verification_session_id: input.verificationSessionId,
+            user_id: input.userId,
+          }),
+          version: 2,
         },
       }
     },
@@ -491,6 +500,7 @@ function createSelfSdkProvider(env: Env, options: { mockPassport: boolean }): Se
           user_id: selfUserId,
           user_id_type: "uuid",
           disclosures,
+          dev_mode: options.mockPassport,
           user_defined_data: userDefinedData,
           version: 2,
         },

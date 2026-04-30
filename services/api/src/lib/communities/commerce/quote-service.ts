@@ -1,5 +1,6 @@
 import { eligibilityFailed, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
+import { nullableUnixSeconds, unixSeconds } from "../../../serializers/time"
 import { openCommunityDb } from "../community-db-factory"
 import type { CommunityDatabaseBindingRepository } from "../db-community-repository"
 import type { UserRepository } from "../../auth/repositories"
@@ -18,6 +19,7 @@ import {
   parseListingPolicy,
   serializeListing,
   serializeQuote,
+  usdToCents,
 } from "./serialization"
 import {
   getCommunityMoneyPolicy,
@@ -66,10 +68,10 @@ export async function preflightCommunityPurchaseQuote(input: {
     const route = resolveRoutePolicy({ moneyPolicy, body: input.body })
     const pricingPolicy = await getCommunityPricingPolicy({ env: input.env, communityId: input.communityId })
     const buyer = await input.userRepository.getUserById(input.userId)
-    const listing = input.body.listing_id
-      ? await getListingRowById(db.client, input.communityId, input.body.listing_id)
+    const listing = input.body.listing
+      ? await getListingRowById(db.client, input.communityId, input.body.listing)
       : null
-    if (input.body.listing_id && (!listing || listing.status !== "active")) {
+    if (input.body.listing && (!listing || listing.status !== "active")) {
       throw notFoundError("Listing not found")
     }
     const serializedListing = listing ? serializeListing(listing) : null
@@ -89,7 +91,7 @@ export async function preflightCommunityPurchaseQuote(input: {
     const quotedAt = nowIso()
     const expiresAt = new Date(Date.now() + moneyPolicy.quote_ttl_seconds * 1000).toISOString()
     return {
-      community_id: input.communityId,
+      community: `com_${input.communityId}`,
       eligible: route.eligible,
       funding_mode: route.fundingMode,
       policy_origin: moneyPolicy.policy_origin,
@@ -105,13 +107,15 @@ export async function preflightCommunityPurchaseQuote(input: {
       route_required: moneyPolicy.route_required,
       route_status_policy: moneyPolicy.route_status_policy,
       route_hop_tolerance: moneyPolicy.route_hop_tolerance,
-      base_price_usd: serializedListing?.price_usd ?? null,
-      viewer_price_usd: resolvedPrice?.finalPriceUsd ?? null,
-      best_verified_price_usd: bestVerifiedPrice?.bestVerifiedPriceUsd ?? null,
-      max_self_discount_percent: bestVerifiedPrice?.maxSelfDiscountPercent ?? null,
+      base_price_cents: usdToCents(listing?.price_usd ?? null),
+      viewer_price_cents: usdToCents(resolvedPrice?.finalPriceUsd ?? null),
+      best_verified_price_cents: usdToCents(bestVerifiedPrice?.bestVerifiedPriceUsd ?? null),
+      max_self_discount_bps: typeof bestVerifiedPrice?.maxSelfDiscountPercent === "number"
+        ? Math.round(bestVerifiedPrice.maxSelfDiscountPercent * 100)
+        : null,
       verification_required_provider: bestVerifiedPrice?.verificationRequiredProvider ?? null,
-      quoted_at: quotedAt,
-      expires_at: expiresAt,
+      quoted_at: unixSeconds(quotedAt),
+      expires_at: unixSeconds(expiresAt),
     }
   } finally {
     db.close()
@@ -129,7 +133,7 @@ export async function createCommunityPurchaseQuote(input: {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityMember(db.client, input.communityId, input.userId)
-    const listing = await getListingRowById(db.client, input.communityId, input.body.listing_id)
+    const listing = await getListingRowById(db.client, input.communityId, input.body.listing)
     if (!listing || listing.status !== "active") {
       throw notFoundError("Listing not found")
     }
@@ -344,7 +348,7 @@ export async function failCommunityPurchase(input: {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityMember(db.client, input.communityId, input.userId)
-    const quote = await getPurchaseQuoteRow(db.client, input.communityId, input.body.quote_id)
+    const quote = await getPurchaseQuoteRow(db.client, input.communityId, input.body.quote)
     if (!quote || quote.buyer_user_id !== input.userId) {
       throw notFoundError("Purchase quote not found")
     }
@@ -360,14 +364,16 @@ export async function failCommunityPurchase(input: {
         WHERE community_id = ?1
           AND quote_id = ?2
       `,
-      args: [input.communityId, input.body.quote_id, nextStatus, now],
+      args: [input.communityId, input.body.quote, nextStatus, now],
     })
     return {
-      quote_id: quote.quote_id,
-      community_id: quote.community_id,
+      id: `pur_${quote.quote_id}`,
+      object: "community_purchase_settlement_failure",
+      quote: `pq_${quote.quote_id}`,
+      community: `com_${quote.community_id}`,
       status: nextStatus,
-      failed_at: nextStatus === "failed" ? now : null,
-      expires_at: quote.expires_at,
+      failed_at: nextStatus === "failed" ? nullableUnixSeconds(now) : null,
+      expires_at: unixSeconds(quote.expires_at),
     }
   } finally {
     db.close()

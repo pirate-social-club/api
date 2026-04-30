@@ -1,4 +1,4 @@
-import app from "../../../src/index"
+import { app } from "../../../src/index"
 import type { Client } from "@libsql/client"
 import { json } from "../../helpers"
 import { completeUniqueHumanVerification, requestJson } from "./song-artifact-test-helpers"

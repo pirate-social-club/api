@@ -20,8 +20,11 @@ import {
   type StructuredAccessLinks,
 } from "../lib/agent-discovery/structured-links"
 import { badRequestError, notFoundError, structuredSurfaceDisabled } from "../lib/errors"
-import { omitThreadBody, type ThreadBodyOmittedPostResponse } from "../lib/posts/thread-body-omission"
-import type { CommunityPreview, Env, LocalizedPostResponse } from "../types"
+import { omitThreadBody } from "../lib/posts/thread-body-omission"
+import { serializeCommunityPreview } from "../serializers/community"
+import { serializeLocalizedPostResponse } from "../serializers/post"
+import type { CommunityPreview, Env } from "../types"
+import { publicCommunityId, publicPostId } from "../lib/public-ids"
 
 const publicCommunities = new Hono<{ Bindings: Env }>()
 
@@ -192,7 +195,8 @@ function communityMarkdown(input: {
 
 function postListMarkdown(input: {
   communityId: string
-  items: Array<(LocalizedPostResponse | ThreadBodyOmittedPostResponse) & {
+  items: Array<{
+    post: { title?: string | null; post_id?: string; id?: string; body?: string | null }
     links: StructuredAccessLinks
     omitted_surfaces: OmittedStructuredSurface[]
   }>
@@ -205,7 +209,7 @@ function postListMarkdown(input: {
     `JSON: ${input.links.self.href}`,
     "",
     ...input.items.flatMap((item) => [
-      `- [${item.post.title ?? item.post.post_id}](${item.links.self.href})`,
+      `- [${item.post.title ?? item.post.post_id ?? item.post.id}](${item.links.self.href})`,
       ...("body" in item.post && typeof item.post.body === "string" && item.post.body.trim()
         ? [`  ${item.post.body.trim()}`]
         : []),
@@ -236,8 +240,9 @@ publicCommunities.get("/:communityId", async (c) => {
   })
   const omittedSurfaces = omittedSurfacesForPolicy(policy, ["community_stats"])
   const links = communityLinks(configuredApiOrigin(c.env, c.req.url), communityId, result.route_slug)
+  const serializedPreview = serializeCommunityPreview(result)
   const responseBody = {
-    ...(policy.included_surfaces.community_stats ? result : omitCommunityStats(result)),
+    ...(policy.included_surfaces.community_stats ? serializedPreview : omitCommunityStats(serializedPreview)),
     omitted_surfaces: omittedSurfaces,
     links,
   }
@@ -279,7 +284,10 @@ publicCommunities.get("/", async (c) => {
       return left.display_name.localeCompare(right.display_name, "en", { sensitivity: "base" })
     })
     .slice(0, limit)
-    .map(({ match_rank: _matchRank, ...community }) => community)
+    .map(({ match_rank: _matchRank, community_id, ...community }) => ({
+      community: publicCommunityId(community_id),
+      ...community,
+    }))
 
   return c.json({
     query: query || null,
@@ -322,27 +330,29 @@ publicCommunities.get("/:communityId/posts", async (c) => {
   })
   const omittedSurfaces = omittedSurfacesForPolicy(policy, ["thread_bodies", "top_comments"])
   const items = result.items.map((item) => {
+    const routePostId = publicPostId(item.post.post_id)
+    const routeCommunityId = publicCommunityId(item.post.community_id)
     const postLinks: StructuredAccessLinks = {
       self: {
-        href: absoluteUrl(origin, publicPostPath(item.post.post_id)),
+        href: absoluteUrl(origin, publicPostPath(routePostId)),
         type: "application/json",
       },
       canonical: {
-        href: absoluteUrl(origin, `/p/${encodeURIComponent(item.post.post_id)}`),
+        href: absoluteUrl(origin, `/p/${encodeURIComponent(routePostId)}`),
         type: "text/html",
       },
       markdown: {
-        href: absoluteUrl(origin, `${publicPostPath(item.post.post_id)}?format=markdown`),
+        href: absoluteUrl(origin, `${publicPostPath(routePostId)}?format=markdown`),
         type: "text/markdown",
       },
       community: {
-        href: absoluteUrl(origin, publicCommunityPath(item.post.community_id)),
+        href: absoluteUrl(origin, publicCommunityPath(routeCommunityId)),
         type: "application/json",
       },
     }
     if (policy.included_surfaces.top_comments) {
       postLinks.top_comments = {
-        href: absoluteUrl(origin, publicPostTopCommentsPath(item.post.post_id)),
+        href: absoluteUrl(origin, publicPostTopCommentsPath(routePostId)),
         type: "application/json",
       }
     }
@@ -351,7 +361,7 @@ publicCommunities.get("/:communityId/posts", async (c) => {
       "top_comments",
     ])
     return {
-      ...(policy.included_surfaces.thread_bodies ? item : omitThreadBody(item)),
+      ...(policy.included_surfaces.thread_bodies ? serializeLocalizedPostResponse(item) : serializeLocalizedPostResponse(omitThreadBody(item))),
       omitted_surfaces: itemOmittedSurfaces,
       links: postLinks,
     }
@@ -359,6 +369,7 @@ publicCommunities.get("/:communityId/posts", async (c) => {
   const responseBody = {
     ...result,
     items,
+    next_cursor: null,
     omitted_surfaces: omittedSurfaces,
     links,
   }

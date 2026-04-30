@@ -3,7 +3,9 @@ import { buildDefaultVerificationCapabilities } from "../../verification/verific
 import { makeId, nowIso } from "../../helpers"
 import { normalizeIdentityCountryAlpha2 } from "../../identity/country-codes"
 import { generateHandleCandidate } from "../handle-generator"
+import { nullableUnixSeconds, unixSeconds } from "../../../serializers/time"
 import type {
+  GlobalHandle,
   Job,
   OnboardingStatus,
   Profile,
@@ -15,11 +17,59 @@ import type {
   WalletAttachmentSummary,
 } from "../../../types"
 
+export type MemoryWalletAttachment = {
+  wallet_attachment_id: string
+  chain_namespace: string
+  wallet_address: string
+  is_primary: boolean
+}
+
+export type MemoryGlobalHandle = {
+  global_handle_id: string
+  label: string
+  tier: GlobalHandle["tier"]
+  status: GlobalHandle["status"]
+  issuance_source: GlobalHandle["issuance_source"]
+  redirect_target_global_handle_id: string | null
+  price_paid_cents: number | null
+  free_rename_consumed: boolean
+  issued_at: string
+  replaced_at: string | null
+}
+
+export type MemoryLinkedHandle = {
+  linked_handle_id: string
+  label: string
+  kind: "pirate" | "ens"
+  verification_state: "unverified" | "verified" | "stale"
+}
+
+export type MemoryProfile = {
+  user_id: string
+  display_name: string | null
+  avatar_ref: string | null
+  avatar_source: Profile["avatar_source"]
+  cover_ref: string | null
+  cover_source: Profile["cover_source"]
+  bio: string | null
+  bio_source: Profile["bio_source"]
+  preferred_locale: string | null
+  linked_handles: MemoryLinkedHandle[]
+  primary_public_handle: MemoryLinkedHandle | null
+  primary_wallet_address: string | null
+  xmtp_inbox_id: string | null
+  global_handle: MemoryGlobalHandle
+  display_verified_nationality_badge: boolean
+  nationality_badge_country: string | null
+  created_at: string
+  updated_at: string
+}
+
 export type MemoryAuthRecord = {
   user: User
-  profile: Profile
+  profile: MemoryProfile
   onboarding: OnboardingStatus
-  walletAttachments: WalletAttachmentSummary[]
+  walletAttachments: MemoryWalletAttachment[]
   providerLinks: Array<{ provider: string; providerSubject: string; providerUserRef: string | null }>
   redditVerification: RedditVerification | null
   redditVerificationCode: string | null
@@ -34,6 +84,53 @@ type MemoryStore = {
   userIdByProviderSubject: Map<string, string>
 }
 
+export function exposeMemoryGlobalHandle(handle: MemoryGlobalHandle): GlobalHandle {
+  return {
+    id: `gh_${handle.global_handle_id}`,
+    object: "global_handle",
+    label: handle.label,
+    tier: handle.tier,
+    status: handle.status,
+    issuance_source: handle.issuance_source,
+    redirect_target_global_handle: handle.redirect_target_global_handle_id,
+    price_paid_cents: handle.price_paid_cents,
+    free_rename_consumed: handle.free_rename_consumed,
+    issued_at: unixSeconds(handle.issued_at),
+    replaced_at: nullableUnixSeconds(handle.replaced_at),
+  }
+}
+
+function exposeMemoryLinkedHandle(handle: MemoryLinkedHandle): Profile["linked_handles"] extends Array<infer T> | null | undefined ? T : never {
+  return {
+    linked_handle: handle.linked_handle_id,
+    label: handle.label,
+    kind: handle.kind,
+    verification_state: handle.verification_state,
+  }
+}
+
+export function exposeMemoryWalletAttachments(attachments: MemoryWalletAttachment[]): WalletAttachmentSummary[] {
+  return attachments.map((attachment) => ({
+    wallet_attachment: attachment.wallet_attachment_id,
+    chain_namespace: attachment.chain_namespace,
+    wallet_address: attachment.wallet_address,
+    is_primary: attachment.is_primary,
+  }))
+}
+
+export function exposeMemoryUser(user: User): SessionExchangeResponse["user"] {
+  return {
+    id: `usr_${user.user_id}`,
+    object: "user",
+    primary_wallet_attachment: user.primary_wallet_attachment_id,
+    verification_state: user.verification_state,
+    capability_provider: user.capability_provider,
+    verification_capabilities: user.verification_capabilities,
+    verified_at: nullableUnixSeconds(user.verified_at),
+    created: unixSeconds(user.created_at),
+  }
+}
+
 export function exposeMemoryProfile(record: MemoryAuthRecord): Profile {
   const nationality = record.user.verification_capabilities.nationality
   const nationalityBadgeCountry = record.profile.display_verified_nationality_badge
@@ -43,8 +140,26 @@ export function exposeMemoryProfile(record: MemoryAuthRecord): Profile {
     : null
 
   return {
-    ...record.profile,
+    id: `usr_${record.profile.user_id}`,
+    object: "profile",
+    display_name: record.profile.display_name,
+    avatar_ref: record.profile.avatar_ref,
+    avatar_source: record.profile.avatar_source,
+    cover_ref: record.profile.cover_ref,
+    cover_source: record.profile.cover_source,
+    bio: record.profile.bio,
+    bio_source: record.profile.bio_source,
+    preferred_locale: record.profile.preferred_locale,
+    linked_handles: record.profile.linked_handles.map(exposeMemoryLinkedHandle),
+    primary_public_handle: record.profile.primary_public_handle
+      ? exposeMemoryLinkedHandle(record.profile.primary_public_handle)
+      : null,
+    primary_wallet_address: record.profile.primary_wallet_address,
+    xmtp_inbox: record.profile.xmtp_inbox_id,
+    global_handle: exposeMemoryGlobalHandle(record.profile.global_handle),
+    display_verified_nationality_badge: record.profile.display_verified_nationality_badge,
     nationality_badge_country: nationalityBadgeCountry,
+    created: unixSeconds(record.profile.created_at),
   }
 }
 
@@ -98,7 +213,7 @@ function buildNewRecord(identity: UpstreamIdentity): MemoryAuthRecord {
     status: "active" as const,
     issuance_source: "generated_signup" as const,
     redirect_target_global_handle_id: null,
-    price_paid_usd: null,
+    price_paid_cents: null,
     free_rename_consumed: false,
     issued_at: timestamp,
     replaced_at: null,
@@ -171,7 +286,7 @@ function buildNewRecord(identity: UpstreamIdentity): MemoryAuthRecord {
   }
 }
 
-function mergeWallets(existing: WalletAttachmentSummary[], identity: UpstreamIdentity): WalletAttachmentSummary[] {
+function mergeWallets(existing: MemoryWalletAttachment[], identity: UpstreamIdentity): MemoryWalletAttachment[] {
   const byAddress = new Map(existing.map((attachment) => [attachment.wallet_address, attachment]))
   for (const walletAddress of identity.walletAddresses) {
     if (!byAddress.has(walletAddress)) {
@@ -211,10 +326,10 @@ export async function exchangeMemoryIdentity(
     store.byUserId.set(record.user.user_id, record)
     store.userIdByProviderSubject.set(providerKey, record.user.user_id)
     return {
-      user: record.user,
+      user: exposeMemoryUser(record.user),
       profile: exposeMemoryProfile(record),
       onboarding: record.onboarding,
-      wallet_attachments: record.walletAttachments,
+      wallet_attachments: exposeMemoryWalletAttachments(record.walletAttachments),
     }
   }
 
@@ -239,9 +354,9 @@ export async function exchangeMemoryIdentity(
   }
 
   return {
-    user: record.user,
+    user: exposeMemoryUser(record.user),
     profile: exposeMemoryProfile(record),
     onboarding: record.onboarding,
-    wallet_attachments: record.walletAttachments,
+    wallet_attachments: exposeMemoryWalletAttachments(record.walletAttachments),
   }
 }

@@ -6,21 +6,22 @@ import type {
   UserTaskStatus,
   UserTaskType,
 } from "../../types"
+import { nullableUnixSeconds, unixSeconds } from "../../serializers/time"
 
 function rowToUserTask(row: Record<string, unknown>): UserTask {
   return {
-    task_id: String(row.task_id),
-    user_id: String(row.user_id),
+    id: `task_${String(row.task_id)}`,
+    object: "user_task",
+    user: `usr_${String(row.user_id)}`,
     type: String(row.type) as UserTaskType,
     subject_type: String(row.subject_type),
-    subject_id: String(row.subject_id),
+    subject: String(row.subject_id),
     status: String(row.status) as UserTaskStatus,
     priority: Number(row.priority ?? 0),
     payload: row.payload_json ? JSON.parse(String(row.payload_json)) : null,
-    resolved_at: row.resolved_at ? String(row.resolved_at) : null,
-    dismissed_at: row.dismissed_at ? String(row.dismissed_at) : null,
-    created_at: String(row.created_at),
-    updated_at: String(row.updated_at),
+    resolved_at: nullableUnixSeconds(row.resolved_at ? String(row.resolved_at) : null),
+    dismissed_at: nullableUnixSeconds(row.dismissed_at ? String(row.dismissed_at) : null),
+    created: unixSeconds(String(row.created_at)),
   }
 }
 
@@ -87,18 +88,18 @@ export async function upsertUserTask(input: {
 
   return {
     task: {
-      task_id: taskId,
-      user_id: input.userId,
+      id: `task_${taskId}`,
+      object: "user_task",
+      user: `usr_${input.userId}`,
       type: input.type,
       subject_type: input.subjectType,
-      subject_id: input.subjectId,
+      subject: input.subjectId,
       status,
       priority,
       payload: input.payload ?? null,
       resolved_at: null,
       dismissed_at: null,
-      created_at: input.createdAt,
-      updated_at: input.createdAt,
+      created: unixSeconds(input.createdAt),
     },
     wasCreated: true,
   }
@@ -164,5 +165,5 @@ export async function listOpenUserTasks(input: {
     `,
     args: [input.userId],
   })
-  return { items: result.rows.map(rowToUserTask) }
+  return { items: result.rows.map(rowToUserTask), next_cursor: null }
 }

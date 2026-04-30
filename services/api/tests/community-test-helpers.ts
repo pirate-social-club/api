@@ -32,7 +32,7 @@ export function buildVerifiedUser(userId: string): User {
     provider: "self",
     proof_type: "unique_human",
     mechanism: "mock",
-    verified_at: now,
+    verified_at: Math.floor(Date.now() / 1000),
   }
 
   return {

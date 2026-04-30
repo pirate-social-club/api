@@ -1,6 +1,7 @@
 import { getMemoryRecordByUserId } from "./memory-auth-store"
 import type { OnboardingStatus } from "../../../types"
 import { nowIso } from "../../helpers"
+import { unixSeconds } from "../../../serializers/time"
 
 export class MemoryOnboardingStatusRepository {
   async getOnboardingStatusByUserId(userId: string): Promise<OnboardingStatus | null> {
@@ -14,7 +15,7 @@ export class MemoryOnboardingStatusRepository {
     }
     record.onboarding = {
       ...record.onboarding,
-      onboarding_dismissed_at: nowIso(),
+      onboarding_dismissed_at: unixSeconds(nowIso()),
     }
     return record.onboarding
   }

@@ -28,7 +28,7 @@ describe("control-plane identity repository", () => {
       selectedWalletAddress: null,
     })
 
-    expect(session.user.primary_wallet_attachment_id).toBeNull()
+    expect(session.user.primary_wallet_attachment).toBeNull()
     expect(session.wallet_attachments).toEqual([])
   })
 
@@ -47,7 +47,7 @@ describe("control-plane identity repository", () => {
 
     expect(first.wallet_attachments).toHaveLength(2)
     expect(first.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_address).toBe(WALLET_A)
-    expect(first.user.primary_wallet_attachment_id).toBe(first.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_attachment_id)
+    expect(first.user.primary_wallet_attachment).toBe(first.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_attachment)
     expect(first.profile.primary_wallet_address).toBe(WALLET_A)
 
     const second = await repo.exchangeIdentity({
@@ -58,10 +58,10 @@ describe("control-plane identity repository", () => {
       selectedWalletAddress: WALLET_B,
     })
 
-    expect(second.user.user_id).toBe(first.user.user_id)
+    expect(second.user.id).toBe(first.user.id)
     expect(second.wallet_attachments).toHaveLength(2)
     expect(second.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_address).toBe(WALLET_B)
-    expect(second.user.primary_wallet_attachment_id).toBe(second.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_attachment_id)
+    expect(second.user.primary_wallet_attachment).toBe(second.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_attachment)
     expect(second.profile.primary_wallet_address).toBe(WALLET_B)
   })
 })

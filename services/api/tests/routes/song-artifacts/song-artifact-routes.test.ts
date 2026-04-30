@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import app from "../../../src/index"
+import { app } from "../../../src/index"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { getCommunityRepository } from "../../../src/lib/communities/db-community-repository"
 import { processCommunityJobsForCommunity } from "../../../src/lib/communities/jobs/runner"

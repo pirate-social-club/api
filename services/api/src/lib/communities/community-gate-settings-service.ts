@@ -28,15 +28,10 @@ type CommunityAccessAuditSnapshot = {
   anonymous_identity_scope: string | null
 }
 
-type CommunityGateRuleAuditSnapshot = {
-  gate_rule_id: string
+type CommunityGatePolicyAuditSnapshot = {
   scope: string
-  gate_family: string
-  gate_type: string
-  proof_requirements: unknown
-  chain_namespace: string | null
-  gate_config: unknown
-  status: string
+  version: number
+  expression: unknown
 }
 
 function parseJsonSnapshot(value: unknown): unknown {
@@ -59,16 +54,11 @@ function accessSnapshotFromRow(row: Record<string, unknown>): CommunityAccessAud
   }
 }
 
-function gateRuleSnapshotFromRow(row: Record<string, unknown>): CommunityGateRuleAuditSnapshot {
+function gatePolicySnapshotFromRow(row: Record<string, unknown>): CommunityGatePolicyAuditSnapshot {
   return {
-    gate_rule_id: String(row.gate_rule_id),
     scope: String(row.scope),
-    gate_family: String(row.gate_family),
-    gate_type: String(row.gate_type),
-    proof_requirements: parseJsonSnapshot(row.proof_requirements_json),
-    chain_namespace: row.chain_namespace == null ? null : String(row.chain_namespace),
-    gate_config: parseJsonSnapshot(row.gate_config_json),
-    status: String(row.status),
+    version: Number(row.version),
+    expression: parseJsonSnapshot(row.expression_json),
   }
 }
 
@@ -78,8 +68,8 @@ async function recordCommunityGateUpdateAudit(input: {
   communityId: string
   previousAccess: CommunityAccessAuditSnapshot | null
   nextAccess: CommunityAccessAuditSnapshot
-  previousGateRules: CommunityGateRuleAuditSnapshot[]
-  nextGateRules: CommunityGateRuleAuditSnapshot[]
+  previousGatePolicy: CommunityGatePolicyAuditSnapshot | null
+  nextGatePolicy: CommunityGatePolicyAuditSnapshot | null
   createdAt: string
 }): Promise<void> {
   await getControlPlaneClient(input.env).execute({
@@ -97,8 +87,8 @@ async function recordCommunityGateUpdateAudit(input: {
       JSON.stringify({
         previous_access: input.previousAccess,
         next_access: input.nextAccess,
-        previous_gate_rules: input.previousGateRules,
-        next_gate_rules: input.nextGateRules,
+        previous_gate_policy: input.previousGatePolicy,
+        next_gate_policy: input.nextGatePolicy,
       }),
       input.createdAt,
     ],
@@ -140,14 +130,16 @@ export async function updateCommunityGates(input: {
   try {
     const now = nowIso()
     let previousAccess: CommunityAccessAuditSnapshot | null = null
-    let previousGateRules: CommunityGateRuleAuditSnapshot[] = []
+    let previousGatePolicy: CommunityGatePolicyAuditSnapshot | null = null
     const nextAccess: CommunityAccessAuditSnapshot = {
       membership_mode: input.body.membership_mode,
       default_age_gate_policy: input.body.default_age_gate_policy ?? "none",
       allow_anonymous_identity: input.body.allow_anonymous_identity,
       anonymous_identity_scope: input.body.allow_anonymous_identity ? (input.body.anonymous_identity_scope ?? null) : null,
     }
-    const nextGateRules: CommunityGateRuleAuditSnapshot[] = []
+    const nextGatePolicy: CommunityGatePolicyAuditSnapshot | null = input.body.gate_policy
+      ? { scope: "membership", version: input.body.gate_policy.version, expression: input.body.gate_policy.expression }
+      : null
     const tx = await db.client.transaction("write")
     try {
       const currentAccessRows = await tx.execute({
@@ -169,17 +161,18 @@ export async function updateCommunityGates(input: {
         throw eligibilityFailed("18_plus can only be set during community creation")
       }
 
-      const currentGateRuleRows = await tx.execute({
+      const currentGatePolicyRows = await tx.execute({
         sql: `
-          SELECT gate_rule_id, scope, gate_family, gate_type, proof_requirements_json,
-                 chain_namespace, gate_config_json, status
-          FROM community_gate_rules
+          SELECT scope, version, expression_json
+          FROM community_gate_policies
           WHERE community_id = ?1
-          ORDER BY created_at ASC, gate_rule_id ASC
+            AND scope = 'membership'
         `,
         args: [input.communityId],
       })
-      previousGateRules = currentGateRuleRows.rows.map((row) => gateRuleSnapshotFromRow(row as Record<string, unknown>))
+      previousGatePolicy = currentGatePolicyRows.rows[0]
+        ? gatePolicySnapshotFromRow(currentGatePolicyRows.rows[0] as Record<string, unknown>)
+        : null
 
       await tx.execute({
         sql: `
@@ -203,48 +196,25 @@ export async function updateCommunityGates(input: {
 
       await tx.execute({
         sql: `
-          DELETE FROM community_gate_rules
+          DELETE FROM community_gate_policies
           WHERE community_id = ?1
+            AND scope = 'membership'
         `,
         args: [input.communityId],
       })
 
-      for (const [index, rule] of (input.body.gate_rules ?? []).entries()) {
-        const existingId = typeof rule.gate_rule_id === "string" && rule.gate_rule_id.trim().length > 0
-          ? rule.gate_rule_id.trim()
-          : null
-        const gateRuleId = existingId ?? `grl_${input.communityId}_${index}_${nowIso().replace(/[^a-zA-Z0-9]/g, "")}_${index}`
-        const proofRequirementsJson = rule.proof_requirements ? JSON.stringify(rule.proof_requirements) : null
-        const gateConfigJson = rule.gate_config ? JSON.stringify(rule.gate_config) : null
-        nextGateRules.push({
-          gate_rule_id: gateRuleId,
-          scope: rule.scope,
-          gate_family: rule.gate_family,
-          gate_type: rule.gate_type,
-          proof_requirements: rule.proof_requirements ?? null,
-          chain_namespace: rule.chain_namespace ?? null,
-          gate_config: rule.gate_config ?? null,
-          status: "active",
-        })
+      if (input.body.gate_policy) {
         await tx.execute({
           sql: `
-            INSERT INTO community_gate_rules (
-              gate_rule_id, community_id, scope, gate_family, gate_type, proof_requirements_json,
-              chain_namespace, gate_config_json, status, created_at, updated_at
+            INSERT INTO community_gate_policies (
+              community_id, scope, version, expression_json, created_at, updated_at
             ) VALUES (
-              ?1, ?2, ?3, ?4, ?5, ?6,
-              ?7, ?8, 'active', ?9, ?9
+              ?1, 'membership', 1, ?2, ?3, ?3
             )
           `,
           args: [
-            gateRuleId,
             input.communityId,
-            rule.scope,
-            rule.gate_family,
-            rule.gate_type,
-            proofRequirementsJson,
-            rule.chain_namespace ?? null,
-            gateConfigJson,
+            JSON.stringify(input.body.gate_policy),
             now,
           ],
         })
@@ -267,8 +237,8 @@ export async function updateCommunityGates(input: {
       communityId: input.communityId,
       previousAccess,
       nextAccess,
-      previousGateRules,
-      nextGateRules,
+      previousGatePolicy,
+      nextGatePolicy,
       createdAt: now,
     })
   } finally {

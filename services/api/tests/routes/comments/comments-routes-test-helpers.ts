@@ -1,5 +1,5 @@
 import { createClient } from "@libsql/client"
-import app from "../../../src/index"
+import { app } from "../../../src/index"
 import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
 import { getCommentById } from "../../../src/lib/comments/community-comment-store"
 import { computeCommentSourceHash } from "../../../src/lib/localization/content-source-hash"

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { createClient } from "@libsql/client"
-import app from "../../src/index"
+import { app } from "../../src/index"
 import { buildLocalCommunityDbUrl } from "../../src/lib/communities/community-local-db"
 import { computePostSourceHash } from "../../src/lib/localization/content-source-hash"
 import { getPostById } from "../../src/lib/posts/community-post-store"

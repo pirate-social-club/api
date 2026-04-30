@@ -152,9 +152,9 @@ export async function createSongArtifactBundle(input: {
         communityId: input.communityId,
         jobType: "song_preview_generate",
         subjectType: "song_artifact_bundle",
-        subjectId: finalized.song_artifact_bundle_id,
+        subjectId: finalized.id,
         payloadJson: JSON.stringify({
-          song_artifact_bundle_id: finalized.song_artifact_bundle_id,
+          song_artifact_bundle: finalized.id,
           primary_audio_content_hash: finalized.primary_audio.content_hash ?? null,
           preview_window: finalized.preview_window,
         }),
@@ -183,7 +183,7 @@ export async function getSongArtifactBundleForCreator(input: {
 }): Promise<SongArtifactBundle> {
   const client = getControlPlaneClient(input.env)
   const bundle = await getSongArtifactBundle(client, input.communityId, input.songArtifactBundleId)
-  if (!bundle || bundle.creator_user_id !== input.userId) {
+  if (!bundle || bundle.creator_user !== `usr_${input.userId}`) {
     throw notFoundError("Song artifact bundle not found")
   }
   return bundle

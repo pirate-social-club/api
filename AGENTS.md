@@ -1,5 +1,11 @@
 # Pirate API — Agent Notes
 
+## Repository Boundary
+
+`/home/t42/Documents/pirate-workspace` is a workspace directory, not this Git repo. This repo root is `/home/t42/Documents/pirate-workspace/api`.
+
+Run API git commands from this directory. The sibling `web/` and `core/` directories are separate Git repositories and must be committed independently.
+
 ## Default Checks
 
 Run the repo-level cheap gate before committing API service changes:

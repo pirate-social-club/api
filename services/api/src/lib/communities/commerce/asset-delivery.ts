@@ -431,7 +431,7 @@ export async function prepareLockedSongAssetDelivery(input: {
     mimeType: input.bundle.primary_audio.mime_type,
     contentHash: input.bundle.primary_audio.content_hash ?? null,
     artifactKind: "primary_audio",
-    bundleId: input.bundle.song_artifact_bundle_id,
+    bundleId: input.bundle.id.replace(/^sab_/, ""),
     rightsBasis: input.rightsBasis,
     upstreamAssetRefs: input.upstreamAssetRefs,
   })

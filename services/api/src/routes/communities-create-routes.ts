@@ -22,6 +22,9 @@ import {
   getResolvedCommunityRouteContext,
   requireJsonBody,
 } from "./communities-route-helpers"
+import {
+  serializeCommunity,
+} from "../serializers/community"
 
 export function registerCommunityCreateRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.post("/", async (c) => {
@@ -39,16 +42,16 @@ export function registerCommunityCreateRoutes(communities: Hono<AuthenticatedEnv
     await trackApiEvent(c.env, c.req, {
       eventName: "community_create_submitted",
       userId: actor.userId,
-      communityId: result.community.community_id,
+      communityId: result.community.id.replace(/^com_/, ""),
       properties: {
         membership_mode: result.community.membership_mode,
-        namespace_attached: Boolean(result.community.namespace_verification_id),
+        namespace_attached: Boolean(result.community.namespace_verification),
       },
     })
     await trackApiEvent(c.env, c.req, {
       eventName: "community_provisioning_requested",
       userId: actor.userId,
-      communityId: result.community.community_id,
+      communityId: result.community.id.replace(/^com_/, ""),
       properties: {
         job_status: result.job.status,
       },
@@ -57,7 +60,7 @@ export function registerCommunityCreateRoutes(communities: Hono<AuthenticatedEnv
       await trackApiEvent(c.env, c.req, {
         eventName: result.job.status === "succeeded" ? "community_provisioning_succeeded" : "community_provisioning_failed",
         userId: actor.userId,
-        communityId: result.community.community_id,
+        communityId: result.community.id.replace(/^com_/, ""),
         properties: {
           failure_code: result.job.error_code ?? null,
         },
@@ -75,10 +78,10 @@ export function registerCommunityCreateRoutes(communities: Hono<AuthenticatedEnv
       locale: c.req.query("locale") ?? null,
       repository: communityRepository,
     })
-    return c.json(result, 200)
+    return c.json(serializeCommunity(result), 200)
   })
 
-  communities.patch("/:communityId", async (c) => {
+  communities.post("/:communityId", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<UpdateCommunityRequestBody>(c, "Invalid community update payload")
 
@@ -89,7 +92,7 @@ export function registerCommunityCreateRoutes(communities: Hono<AuthenticatedEnv
       body,
       communityRepository,
     })
-    return c.json(result, 200)
+    return c.json(serializeCommunity(result), 200)
   })
 
   communities.post("/:communityId/namespace", async (c) => {
@@ -109,10 +112,10 @@ export function registerCommunityCreateRoutes(communities: Hono<AuthenticatedEnv
       verificationRepository,
       communityRepository,
     })
-    return c.json(result, 200)
+    return c.json(serializeCommunity(result), 200)
   })
 
-  communities.put("/:communityId/pending-namespace-session", async (c) => {
+  communities.post("/:communityId/pending-namespace-session", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<{ namespace_verification_session_id?: string | null }>(c, "Invalid pending namespace session payload")
     const sessionId = typeof body?.namespace_verification_session_id === "string"
@@ -126,7 +129,7 @@ export function registerCommunityCreateRoutes(communities: Hono<AuthenticatedEnv
       sessionId,
       communityRepository,
     })
-    return c.json(result, 200)
+    return c.json(serializeCommunity(result), 200)
   })
 
   communities.get("/:communityId/donation-policy", async (c) => {
@@ -157,7 +160,7 @@ export function registerCommunityCreateRoutes(communities: Hono<AuthenticatedEnv
     return c.json(result, 200)
   })
 
-  communities.patch("/:communityId/donation-policy", async (c) => {
+  communities.post("/:communityId/donation-policy", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<UpdateCommunityDonationPolicyRequestBody>(c, "Invalid donation policy payload")
     if (!body || !body.donation_policy_mode) {

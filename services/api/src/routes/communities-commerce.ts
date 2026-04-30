@@ -35,6 +35,11 @@ import type {
   UpdateCommunityPricingPolicyRequest,
 } from "../types"
 import { emitRoyaltyEarnedBatch } from "../lib/notifications/notification-emitters"
+import {
+  decodePublicAssetId,
+  decodePublicListingId,
+  decodePublicPurchaseId,
+} from "../lib/public-ids"
 
 export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.get("/:communityId/money-policy", async (c) => {
@@ -52,7 +57,7 @@ export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedE
     return c.json(result, 200)
   })
 
-  communities.put("/:communityId/money-policy", async (c) => {
+  communities.post("/:communityId/money-policy", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<UpdateCommunityMoneyPolicyRequest>(c, "Invalid community money policy payload")
     const result = await updateCommunityMoneyPolicy({
@@ -80,7 +85,7 @@ export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedE
     return c.json(result, 200)
   })
 
-  communities.put("/:communityId/pricing-policy", async (c) => {
+  communities.post("/:communityId/pricing-policy", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<UpdateCommunityPricingPolicyRequest>(c, "Invalid community pricing policy payload")
     const result = await updateCommunityPricingPolicy({
@@ -99,7 +104,7 @@ export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedE
       env: c.env,
       userId: actor.userId,
       communityId,
-      assetId: c.req.param("assetId"),
+      assetId: decodePublicAssetId(c.req.param("assetId")),
       communityRepository,
     })
     return c.json(result, 200)
@@ -111,7 +116,7 @@ export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedE
       env: c.env,
       userId: actor.userId,
       communityId,
-      assetId: c.req.param("assetId"),
+      assetId: decodePublicAssetId(c.req.param("assetId")),
       communityRepository,
       userRepository,
     })
@@ -124,7 +129,7 @@ export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedE
       env: c.env,
       userId: actor.userId,
       communityId,
-      assetId: c.req.param("assetId"),
+      assetId: decodePublicAssetId(c.req.param("assetId")),
       communityRepository,
       userRepository,
     })
@@ -161,20 +166,20 @@ export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedE
       env: c.env,
       userId: actor.userId,
       communityId,
-      listingId: c.req.param("listingId"),
+      listingId: decodePublicListingId(c.req.param("listingId")),
       communityRepository,
     })
     return c.json(result, 200)
   })
 
-  communities.patch("/:communityId/listings/:listingId", async (c) => {
+  communities.post("/:communityId/listings/:listingId", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<UpdateCommunityListingRequest>(c, "Invalid community listing update payload")
     const result = await updateCommunityListing({
       env: c.env,
       userId: actor.userId,
       communityId,
-      listingId: c.req.param("listingId"),
+      listingId: decodePublicListingId(c.req.param("listingId")),
       body,
       communityRepository,
     })
@@ -198,7 +203,7 @@ export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedE
       env: c.env,
       userId: actor.userId,
       communityId,
-      purchaseId: c.req.param("purchaseId"),
+      purchaseId: decodePublicPurchaseId(c.req.param("purchaseId")),
       communityRepository,
     })
     return c.json(result, 200)
@@ -260,7 +265,7 @@ export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedE
     return c.json(result.settlement, 201)
   })
 
-  communities.post("/:communityId/purchase-settlements/fail", async (c) => {
+  communities.post("/:communityId/fail_purchase_settlement", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<CommunityPurchaseSettlementFailureRequest>(c, "Invalid purchase settlement failure payload")
     const result = await failCommunityPurchase({

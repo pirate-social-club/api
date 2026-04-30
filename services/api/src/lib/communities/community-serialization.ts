@@ -21,6 +21,8 @@ import {
   resolveCommunityAvatarRef,
   resolveCommunityBannerRef,
 } from "./community-identity-media"
+import { unixSeconds } from "../../serializers/time"
+import type { GateAtom, GateExpression } from "./membership/gate-types"
 
 type HumanVerificationLane = NonNullable<Community["human_verification_lane"]>
 
@@ -96,7 +98,7 @@ export function parseStoredReferenceLinks(
     }
 
     return [{
-      community_reference_link_id: link.community_reference_link_id,
+      community_reference_link: link.community_reference_link_id,
       platform: link.platform as NonNullable<Community["reference_links"]>[number]["platform"],
       url: link.url,
       label: typeof link.label === "string" ? link.label : null,
@@ -144,7 +146,8 @@ function parseStoredLabelPolicy(
       : null
 
     return [{
-      label_id: definition.label_id,
+      id: `cld_${definition.label_id}`,
+      object: "community_label_definition",
       label: definition.label,
       description: typeof definition.description === "string" ? definition.description : null,
       color_token: typeof definition.color_token === "string" ? definition.color_token : null,
@@ -204,51 +207,26 @@ function parseStoredAgentPostingScope(
   return "replies_only"
 }
 
+function gatePolicyHasAtom(
+  expression: GateExpression | null | undefined,
+  predicate: (atom: GateAtom) => boolean,
+): boolean {
+  if (!expression) return false
+  if (expression.op === "gate") return predicate(expression.gate)
+  return expression.children.some((child) => gatePolicyHasAtom(child, predicate))
+}
+
 function communityRequiresSelfLane(local: LocalCommunitySnapshot | null): boolean {
-  return (local?.gate_rules ?? []).some((rule) => {
-    if (rule.status !== "active" || rule.gate_family !== "identity_proof") {
-      return false
-    }
-
-    if (rule.gate_type === "age_over_18" || rule.gate_type === "minimum_age" || rule.gate_type === "nationality" || rule.gate_type === "gender") {
-      return true
-    }
-
-    return (rule.proof_requirements ?? []).some((requirement) => {
-      const proofType = requirement.proof_type
-      if (proofType === "age_over_18" || proofType === "minimum_age" || proofType === "nationality" || proofType === "gender") {
-        return true
-      }
-
-      const acceptedProviders = Array.isArray(requirement.accepted_providers)
-        ? requirement.accepted_providers
-        : []
-      return acceptedProviders.includes("self")
-    })
-  })
+  return gatePolicyHasAtom(local?.gate_policy?.expression, (atom) => (
+    (atom.type === "unique_human" && atom.provider === "self")
+    || atom.type === "minimum_age"
+    || atom.type === "nationality"
+    || atom.type === "gender"
+  ))
 }
 
 function communityAllowsVeryLane(local: LocalCommunitySnapshot | null): boolean {
-  return (local?.gate_rules ?? []).some((rule) => {
-    if (rule.status !== "active" || rule.gate_family !== "identity_proof") {
-      return false
-    }
-
-    if (rule.gate_type !== "unique_human") {
-      return false
-    }
-
-    return (rule.proof_requirements ?? []).some((requirement) => {
-      if (requirement.proof_type !== "unique_human") {
-        return false
-      }
-
-      const acceptedProviders = Array.isArray(requirement.accepted_providers)
-        ? requirement.accepted_providers
-        : []
-      return acceptedProviders.includes("very")
-    })
-  })
+  return gatePolicyHasAtom(local?.gate_policy?.expression, (atom) => atom.type === "unique_human" && atom.provider === "very")
 }
 
 function parseStoredHumanVerificationLane(
@@ -304,7 +282,7 @@ export function serializeCommunity(env: Env, row: CommunityRow, local: LocalComm
   const labelPolicy = parseStoredLabelPolicy(storedSettings)
   const donationPartner = local?.donation_partner
     ? {
-        donation_partner_id: local.donation_partner.donation_partner_id,
+        donation_partner: local.donation_partner.donation_partner_id,
         display_name: local.donation_partner.display_name,
         provider: local.donation_partner.provider,
         provider_partner_ref: local.donation_partner.provider_partner_ref,
@@ -357,7 +335,7 @@ export function serializeCommunity(env: Env, row: CommunityRow, local: LocalComm
     pending_namespace_verification_session_id: row.pending_namespace_verification_session_id,
     status: row.status === "suspended" ? "frozen" : row.status,
     provisioning_state: row.provisioning_state,
-    membership_mode: local?.membership_mode ?? "open",
+    membership_mode: local?.membership_mode ?? "gated",
     allow_anonymous_identity: local?.allow_anonymous_identity ?? false,
     anonymous_identity_scope: local?.anonymous_identity_scope ?? null,
     allowed_disclosed_qualifiers: allowedDisclosedQualifiers,
@@ -399,7 +377,8 @@ export function serializeCommunity(env: Env, row: CommunityRow, local: LocalComm
     community_profile: local
       ? {
         rules: local.rules.map((rule) => ({
-          rule_id: rule.rule_id,
+          id: `rule_${rule.rule_id}`,
+          object: "community_rule",
           title: rule.title,
           body: rule.body,
           report_reason: rule.report_reason,
@@ -410,19 +389,7 @@ export function serializeCommunity(env: Env, row: CommunityRow, local: LocalComm
       }
       : null,
     reference_links: referenceLinks,
-    gate_rules: (local?.gate_rules?.map((rule) => ({
-      community_id: row.community_id,
-      gate_rule_id: rule.gate_rule_id,
-      scope: rule.scope,
-      gate_family: rule.gate_family,
-      gate_type: rule.gate_type,
-      proof_requirements: rule.proof_requirements,
-      chain_namespace: rule.chain_namespace,
-      gate_config: rule.gate_config,
-      status: rule.status,
-      created_at: rule.created_at,
-      updated_at: rule.updated_at,
-    })) as NonNullable<Community["gate_rules"]>) ?? null,
+    gate_policy: local?.gate_policy ?? null,
     created_by_user_id: row.creator_user_id,
     created_at: row.created_at,
     updated_at: local?.updated_at ?? row.updated_at,
@@ -431,22 +398,22 @@ export function serializeCommunity(env: Env, row: CommunityRow, local: LocalComm
 
 export function serializeJob(row: JobRow): Job {
   return {
-    job_id: row.job_id,
+    id: `job_${row.job_id}`,
+    object: "job",
     job_type: row.job_type,
     status: row.status,
     subject_type: row.subject_type,
-    subject_id: row.subject_id,
+    subject: row.subject_id,
     result_ref: row.result_ref,
     error_code: row.error_code,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
+    created: unixSeconds(row.created_at),
   }
 }
 
-export function getPrimaryWalletSnapshot(user: User, walletAttachments: Array<{ wallet_attachment_id: string; wallet_address: string; is_primary: boolean }>): string | null {
+export function getPrimaryWalletSnapshot(user: User, walletAttachments: Array<{ wallet_attachment: string; wallet_address: string; is_primary: boolean }>): string | null {
   const primaryAttachmentId = user.primary_wallet_attachment_id
   if (primaryAttachmentId) {
-    const primaryAttachment = walletAttachments.find((attachment) => attachment.wallet_attachment_id === primaryAttachmentId)
+    const primaryAttachment = walletAttachments.find((attachment) => attachment.wallet_attachment === primaryAttachmentId)
     if (primaryAttachment) {
       return primaryAttachment.wallet_address
     }

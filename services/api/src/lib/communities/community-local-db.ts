@@ -6,6 +6,7 @@ import { createClient } from "@libsql/client"
 import type { Client } from "@libsql/client"
 import { resolveCoreRepoPath } from "../../../shared/core-repo-paths"
 import { internalError } from "../errors"
+import type { GatePolicy } from "./membership/gate-types"
 
 const LOCAL_SQLITE_BUSY_TIMEOUT_MS = 30000
 
@@ -26,14 +27,7 @@ export type LocalCommunityBootstrapInput = {
   governanceMode: "centralized" | "multisig" | "majeur"
   handlePolicyTemplate: "standard" | "premium" | "membership_gated" | "custom"
   pricingModel: "free" | "flat_by_length" | "custom_curve" | "gated_then_flat" | null
-  gateRules: Array<{
-    scope: "membership" | "viewer" | "posting"
-    gateFamily: "identity_proof" | "token_holding"
-    gateType: string
-    proofRequirementsJson: string | null
-    chainNamespace: string | null
-    gateConfigJson: string | null
-  }>
+  gatePolicy: GatePolicy | null
   rules: Array<LocalCommunityRule>
   initialSettings?: Record<string, unknown> | null
   now: string
@@ -74,18 +68,7 @@ export type LocalCommunitySnapshot = {
   } | null
   governance_mode: "centralized" | "multisig" | "majeur"
   settings_json: string | null
-  gate_rules: Array<{
-    gate_rule_id: string
-    scope: "membership" | "viewer" | "posting"
-    gate_family: "token_holding" | "identity_proof"
-    gate_type: string
-    proof_requirements: Array<Record<string, unknown>> | null
-    chain_namespace: string | null
-    gate_config: Record<string, unknown> | null
-    status: "active" | "disabled"
-    created_at: string
-    updated_at: string
-  }>
+  gate_policy: GatePolicy | null
   rules: LocalCommunityRule[]
   created_by_user_id: string
   created_at: string
@@ -391,26 +374,20 @@ export async function bootstrapLocalCommunityDb(input: LocalCommunityBootstrapIn
         })
       }
 
-      for (const [index, rule] of input.gateRules.entries()) {
+      if (input.gatePolicy) {
         await tx.execute({
           sql: `
-            INSERT INTO community_gate_rules (
-              gate_rule_id, community_id, scope, gate_family, gate_type, proof_requirements_json,
-              chain_namespace, gate_config_json, status, created_at, updated_at
-            ) VALUES (
-              ?1, ?2, ?3, ?4, ?5, ?6,
-              ?7, ?8, 'active', ?9, ?9
-            )
+            INSERT INTO community_gate_policies (
+              community_id, scope, version, expression_json, created_at, updated_at
+            ) VALUES (?1, 'membership', 1, ?2, ?3, ?3)
+            ON CONFLICT(community_id, scope) DO UPDATE SET
+              version = excluded.version,
+              expression_json = excluded.expression_json,
+              updated_at = excluded.updated_at
           `,
           args: [
-            `grl_${input.communityId}_${index}`,
             input.communityId,
-            rule.scope,
-            rule.gateFamily,
-            rule.gateType,
-            rule.proofRequirementsJson,
-            rule.chainNamespace,
-            rule.gateConfigJson,
+            JSON.stringify(input.gatePolicy),
             now,
           ],
         })
@@ -467,22 +444,7 @@ export async function bootstrapLocalCommunityDb(input: LocalCommunityBootstrapIn
       donation_partner: null,
       governance_mode: input.governanceMode,
       settings_json: initialSettingsJson,
-      gate_rules: input.gateRules.map((rule, index) => ({
-        gate_rule_id: `grl_${input.communityId}_${index}`,
-        scope: rule.scope,
-        gate_family: rule.gateFamily,
-        gate_type: rule.gateType,
-        proof_requirements: rule.proofRequirementsJson
-          ? JSON.parse(rule.proofRequirementsJson) as Array<Record<string, unknown>>
-          : null,
-        chain_namespace: rule.chainNamespace,
-        gate_config: rule.gateConfigJson
-          ? JSON.parse(rule.gateConfigJson) as Record<string, unknown>
-          : null,
-        status: "active",
-        created_at: now,
-        updated_at: now,
-      })),
+      gate_policy: input.gatePolicy,
       rules: [...input.rules].sort((a, b) => a.position - b.position),
       created_by_user_id: input.createdByUserId,
       created_at: now,

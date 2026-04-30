@@ -14,6 +14,7 @@
         "@pirate/api-contracts": "file:../contracts",
         "@privy-io/node": "^0.11.0",
         "@selfxyz/core": "^1.2.0-beta.1",
+        "@sentry/cloudflare": "^10.51.0",
         "@story-protocol/core-sdk": "^1.4.4",
         "ethers": "^6.16.0",
         "hono": "^4.8.5",
@@ -284,6 +285,8 @@
 
     "@openpassport/zk-kit-utils": ["@openpassport/zk-kit-utils@0.0.1", "", { "dependencies": { "buffer": "^6.0.3" } }, "sha512-T7jZ3vn+iCAPnvMS+NLg3Yj4ixF2xXG/geFkyNi48beEFd1hD/2Yca05QP+g2iaJAsIRvllwtni5SuLXGwv5Xw=="],
 
+    "@opentelemetry/api": ["@opentelemetry/api@1.9.1", "", {}, "sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q=="],
+
     "@pcd/pcd-types": ["@pcd/pcd-types@0.10.0", "", {}, "sha512-QoBlHYVhNA8nbjpl8hmwHLkV78XolFCC7hdpt0U+STY7dfQO+aAegVYbx18yHo4G76nFj9xRUSfjVFV8ZzxIlQ=="],
 
     "@pcd/tsconfig": ["@pcd/tsconfig@0.6.2", "", {}, "sha512-sdva2fJW+fB1a4xQ63oNhDwSJFrNn1Rc5TyJpuSeRH48U7YAQOYkYiKJz1jlRW6Ak0QJaSDgVhBmzsIE2DmNIg=="],
@@ -329,6 +332,10 @@
     "@selfxyz/common": ["@selfxyz/common@0.0.9", "", { "dependencies": { "@anon-aadhaar/core": "npm:@selfxyz/anon-aadhaar-core@^0.0.1", "@openpassport/zk-kit-imt": "^0.0.5", "@openpassport/zk-kit-lean-imt": "^0.0.6", "@openpassport/zk-kit-smt": "^0.0.1", "@peculiar/x509": "^1.12.3", "@stablelib/cbor": "^2.0.1", "asn1.js": "^5.4.1", "asn1js": "^3.0.5", "axios": "^1.7.2", "buffer": "^6.0.3", "country-emoji": "^1.5.6", "country-iso-3-to-2": "^1.1.1", "elliptic": "^6.5.5", "ethers": "^6.14.4", "fs": "^0.0.1-security", "hash.js": "^1.1.7", "i18n-iso-countries": "^7.13.0", "js-sha1": "^0.7.0", "js-sha256": "^0.11.0", "js-sha512": "^0.9.0", "json-to-ts": "^2.1.0", "jsrsasign": "^11.1.0", "node-forge": "github:remicolin/forge#17a11a632dd0e50343b3b8393245a2696f78afbb", "path": "^0.12.7", "pkijs": "^3.2.4", "poseidon-lite": "^0.2.0", "snarkjs": "^0.7.5", "typescript-parser": "^2.6.1", "uuid": "^11.1.0" } }, "sha512-DXoDvRSyK3/MdghR2mietlGZXzdpSLU9tg0NUOauO2Ha3J08fXekGBk/zbmlfgSMJ7rxs+yAt7UFJJ84tLrZwA=="],
 
     "@selfxyz/core": ["@selfxyz/core@1.2.0-beta.1", "", { "dependencies": { "@selfxyz/common": "^0.0.9", "ethers": "^6.13.5", "js-sha1": "^0.7.0", "js-sha256": "^0.11.0", "js-sha512": "^0.9.0", "node-forge": "^1.3.3", "poseidon-lite": "^0.3.0", "snarkjs": "^0.7.4", "uuid": "^11.1.0" } }, "sha512-eWLKXgxsmn1xD2F3re+Zm3tCu53HrwVxmBls35Zvj+2GNn7w4d5QI2+ilDB2TG0601p520qKLulu3XwpeM8HCg=="],
+
+    "@sentry/cloudflare": ["@sentry/cloudflare@10.51.0", "", { "dependencies": { "@opentelemetry/api": "^1.9.1", "@sentry/core": "10.51.0" }, "peerDependencies": { "@cloudflare/workers-types": "^4.x" }, "optionalPeers": ["@cloudflare/workers-types"] }, "sha512-oDv2i70q25QPG9zN2GbdtkAjxBdvwHjZL+2aAuilDsagz+jUMq89EXrdh3RPdqnSlaTOqMJovIRDJVbTvpOCsg=="],
+
+    "@sentry/core": ["@sentry/core@10.51.0", "", {}, "sha512-Y45V/YXvVLEXmOdkbD1oG1gkRWFi9guCEGg3PlIlIpRjAbZUrvLGgjRJIc1E7XpSzmOnWbs5BbUxMv4PDaPj2w=="],
 
     "@sindresorhus/is": ["@sindresorhus/is@7.2.0", "", {}, "sha512-P1Cz1dWaFfR4IR+U13mqqiGsLFf1KbayybWwdd2vfctdV6hDpUkgCY0nKOLLTMSoRd/jJNjtbqzf13K8DCCXQw=="],
 

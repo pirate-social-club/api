@@ -1,5 +1,6 @@
 import { Hono } from "hono"
 import { cors } from "hono/cors"
+import { captureException, withSentry } from "@sentry/cloudflare"
 import agents from "./routes/agents"
 import analytics from "./routes/analytics"
 import auth from "./routes/auth"
@@ -31,6 +32,7 @@ import { reconcileCommunityMembershipAndFollowProjections } from "./lib/communit
 import { HttpError, errorResponse } from "./lib/errors"
 import { reconcileRoyaltyClaimEvents } from "./lib/royalties/royalty-claim-history"
 import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/runtime-deps"
+import { makeSentryOptions, captureScheduledError } from "./lib/sentry"
 import type { Env } from "./types"
 
 const app = new Hono<{ Bindings: Env }>()
@@ -97,9 +99,18 @@ app.route("/", verification)
 
 app.notFound((c) => c.json({ code: "not_found", message: "Not found" }, 404))
 
-app.onError((error) => {
+app.onError((error, c) => {
   if (!(error instanceof HttpError) || error.status >= 500) {
     console.error("[api-worker]", error)
+    if (c.env.SENTRY_DSN) {
+      captureException(error, {
+        tags: {
+          route: c.req.path,
+          method: c.req.method,
+          status: error instanceof HttpError ? String(error.status) : "500",
+        },
+      })
+    }
   }
   const response = errorResponse(error)
   return new Response(JSON.stringify(response.body), {
@@ -109,10 +120,6 @@ app.onError((error) => {
     },
   })
 })
-
-type ScheduledApp = typeof app & {
-  scheduled: NonNullable<ExportedHandler<Env>["scheduled"]>
-}
 
 async function flushScheduledAnalytics(env: Env): Promise<void> {
   if (!isAnalyticsEnabled(env)) {
@@ -124,6 +131,7 @@ async function flushScheduledAnalytics(env: Env): Promise<void> {
     await flushAnalyticsOutbox(env, db)
   } catch (error) {
     console.error("[analytics] scheduled flush failed", error)
+    captureScheduledError(env, error, "analytics_flush")
   } finally {
     db.close?.()
   }
@@ -149,6 +157,7 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
     }
   } catch (error) {
     console.error("[community-jobs] scheduled processing failed", error)
+    captureScheduledError(env, error, "community_jobs")
   } finally {
     await communityRepository.close?.()
   }
@@ -162,6 +171,7 @@ async function reconcileScheduledRoyaltyClaims(env: Env): Promise<void> {
     }
   } catch (error) {
     console.error("[royalties] claim reconciliation failed", error)
+    captureScheduledError(env, error, "royalty_reconciliation")
   }
 }
 
@@ -179,6 +189,7 @@ async function reconcileScheduledPurchaseSettlements(env: Env): Promise<void> {
     }
   } catch (error) {
     console.error("[purchase-settlements] reconciliation failed", error)
+    captureScheduledError(env, error, "purchase_settlement_reconciliation")
   } finally {
     await communityRepository.close?.()
   }
@@ -203,17 +214,23 @@ async function reconcileScheduledCommunityMembershipProjections(env: Env): Promi
     }
   } catch (error) {
     console.error("[community-membership-projections] reconciliation failed", error)
+    captureScheduledError(env, error, "membership_projection_reconciliation")
   } finally {
     await communityRepository.close?.()
   }
 }
 
-;(app as ScheduledApp).scheduled = async (_controller, env, ctx) => {
-  ctx.waitUntil(withRequestControlPlaneClients(() => flushScheduledAnalytics(env)))
-  ctx.waitUntil(withRequestControlPlaneClients(() => processScheduledCommunityJobs(env)))
-  ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledCommunityMembershipProjections(env)))
-  ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledRoyaltyClaims(env)))
-  ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledPurchaseSettlements(env)))
+const handler: ExportedHandler<Env> = {
+  fetch: (req, env, ctx) => app.fetch(req, env, ctx),
+
+  scheduled: async (_controller, env, ctx) => {
+    ctx.waitUntil(withRequestControlPlaneClients(() => flushScheduledAnalytics(env)))
+    ctx.waitUntil(withRequestControlPlaneClients(() => processScheduledCommunityJobs(env)))
+    ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledCommunityMembershipProjections(env)))
+    ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledRoyaltyClaims(env)))
+    ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledPurchaseSettlements(env)))
+  },
 }
 
-export default app
+export { app }
+export default withSentry(makeSentryOptions, handler)

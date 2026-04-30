@@ -35,7 +35,7 @@ export function registerCommunitySettingsRoutes(communities: Hono<AuthenticatedE
     return c.json(result, 200)
   })
 
-  communities.patch("/:communityId/machine-access-policy", async (c) => {
+  communities.post("/:communityId/machine-access-policy", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<CommunityMachineAccessPolicyPatch>(c, "Invalid machine access policy payload")
     const result = await updateCommunityMachineAccessPolicy({
@@ -48,7 +48,7 @@ export function registerCommunitySettingsRoutes(communities: Hono<AuthenticatedE
     return c.json(result, 200)
   })
 
-  communities.put("/:communityId/rules", async (c) => {
+  communities.post("/:communityId/rules", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<UpdateCommunityRulesRequestBody>(c, "Invalid community rules payload")
     if (!body || !Array.isArray(body.rules)) {
@@ -65,7 +65,7 @@ export function registerCommunitySettingsRoutes(communities: Hono<AuthenticatedE
     return c.json(result, 200)
   })
 
-  communities.put("/:communityId/reference-links", async (c) => {
+  communities.post("/:communityId/reference-links", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<UpdateCommunityReferenceLinksRequestBody>(c, "Invalid reference links payload")
 
@@ -79,7 +79,7 @@ export function registerCommunitySettingsRoutes(communities: Hono<AuthenticatedE
     return c.json(result, 200)
   })
 
-  communities.patch("/:communityId/labels", async (c) => {
+  communities.post("/:communityId/labels", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<UpdateCommunityLabelPolicyRequestBody>(c, "Invalid community label policy payload")
 
@@ -93,7 +93,7 @@ export function registerCommunitySettingsRoutes(communities: Hono<AuthenticatedE
     return c.json(result, 200)
   })
 
-  communities.put("/:communityId/gates", async (c) => {
+  communities.post("/:communityId/gates", async (c) => {
     const { actor, communityId, communityRepository, userRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<UpdateCommunityGatesRequestBody>(c, "Invalid community gates payload")
 
@@ -108,7 +108,7 @@ export function registerCommunitySettingsRoutes(communities: Hono<AuthenticatedE
     return c.json(result, 200)
   })
 
-  communities.put("/:communityId/safety", async (c) => {
+  communities.post("/:communityId/safety", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<UpdateCommunitySafetyRequestBody>(c, "Invalid community safety payload")
 

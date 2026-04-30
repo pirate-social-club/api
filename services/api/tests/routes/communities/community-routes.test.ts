@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { createClient } from "@libsql/client"
-import app from "../../../src/index"
+import { app } from "../../../src/index"
 import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import {
@@ -34,6 +34,7 @@ describe("community routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Open Create Club",
+      membership_mode: "request",
       handle_policy: {
         policy_template: "standard",
       },
@@ -49,7 +50,7 @@ describe("community routes", () => {
     }
     expect(communityCreateBody.community.display_name).toBe("Open Create Club")
     expect(communityCreateBody.community.community_id.startsWith("cmt_")).toBe(true)
-    expect(communityCreateBody.community.membership_mode).toBe("open")
+    expect(communityCreateBody.community.membership_mode).toBe("request")
     expect(communityCreateBody.community.gate_rules).toEqual([])
 
     const policyResponse = await app.request(

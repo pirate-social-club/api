@@ -7,6 +7,15 @@ export type ManagedTunnel = {
   publicOrigin: string
 }
 
+export function isTryCloudflareOrigin(value: string | null | undefined): boolean {
+  try {
+    const url = new URL(String(value || "").trim())
+    return url.protocol === "https:" && /(?:^|\.)trycloudflare\.com$/iu.test(url.hostname) && url.hostname !== "api.trycloudflare.com"
+  } catch {
+    return false
+  }
+}
+
 export function parseTryCloudflareUrl(value: string): string | null {
   return value.match(TRYCLOUDFLARE_URL_PATTERN)?.[0] ?? null
 }

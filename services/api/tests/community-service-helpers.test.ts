@@ -19,7 +19,7 @@ function makeTestUser(overrides: Partial<User["verification_capabilities"]> = {}
       minimum_age: { state: "unverified", provider: null, value: null },
       nationality: { state: "unverified", provider: null, value: null },
       gender: { state: "unverified", provider: null, value: null },
-      wallet_score: { state: "unverified", provider: null, passing_score: null, score: null },
+      wallet_score: { state: "unverified", provider: null, passing_score: null, score_decimal: null },
       ...overrides,
     },
     primary_wallet_attachment_id: null,
@@ -34,7 +34,7 @@ function makeCreateBody(overrides: Record<string, unknown> = {}): CreateCommunit
     allow_anonymous_identity: false,
     handle_policy: { policy_template: "standard" },
     governance_mode: "centralized",
-    membership_mode: "open",
+    membership_mode: "request",
     ...overrides,
   } as CreateCommunityRequest
 }
@@ -85,7 +85,7 @@ describe("community helper functions", () => {
     test("returns true when wallet_score is passing via passport", () => {
       const user = makeTestUser({
         unique_human: { state: "unverified", provider: null },
-        wallet_score: { state: "verified", provider: "passport", passing_score: true, score: 85 },
+        wallet_score: { state: "verified", provider: "passport", passing_score: true, score_decimal: "85" },
       })
       expect(satisfiesBaselineJoinGate(user)).toBe(true)
     })
@@ -93,7 +93,7 @@ describe("community helper functions", () => {
     test("returns false when wallet_score is verified but not passing", () => {
       const user = makeTestUser({
         unique_human: { state: "unverified", provider: null },
-        wallet_score: { state: "verified", provider: "passport", passing_score: false, score: 30 },
+        wallet_score: { state: "verified", provider: "passport", passing_score: false, score_decimal: "30" },
       })
       expect(satisfiesBaselineJoinGate(user)).toBe(false)
     })
@@ -108,11 +108,11 @@ describe("community helper functions", () => {
 
   describe("getPrimaryWalletSnapshot", () => {
     const attachments = [
-      { wallet_attachment_id: "wa_1", wallet_address: "0xaaa", is_primary: false },
-      { wallet_attachment_id: "wa_2", wallet_address: "0xbbb", is_primary: true },
+      { wallet_attachment: "wa_1", wallet_address: "0xaaa", is_primary: false },
+      { wallet_attachment: "wa_2", wallet_address: "0xbbb", is_primary: true },
     ]
 
-    test("returns the wallet matching primary_wallet_attachment_id", () => {
+    test("returns the wallet matching primary_wallet_attachment", () => {
       const user = { primary_wallet_attachment_id: "wa_1" } as User
       expect(getPrimaryWalletSnapshot(user, attachments)).toBe("0xaaa")
     })
@@ -125,7 +125,7 @@ describe("community helper functions", () => {
     test("falls back to first attachment", () => {
       const user = { primary_wallet_attachment_id: null } as User
       const noPrimary = [
-        { wallet_attachment_id: "wa_1", wallet_address: "0xaaa", is_primary: false },
+        { wallet_attachment: "wa_1", wallet_address: "0xaaa", is_primary: false },
       ]
       expect(getPrimaryWalletSnapshot(user, noPrimary)).toBe("0xaaa")
     })

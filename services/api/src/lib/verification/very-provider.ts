@@ -3,6 +3,7 @@ import { envFlag, makeId } from "../helpers"
 import { sha256Hex } from "../crypto"
 import { logVerificationDebug } from "./verification-logging"
 import type { Env, VerificationIntent, VerySessionBinding, VeryWidgetLaunch } from "../../types"
+import { unixSeconds } from "../../serializers/time"
 
 const VERY_TIMEOUT_MS = 15_000
 const VERY_BRIDGE_API_URL = "https://bridge.very.org/api/v1/"
@@ -224,7 +225,7 @@ export function buildVerySessionBinding(input: {
     uniqueness_domain: VERY_UNIQUE_HUMAN_DOMAIN,
     binding_value: VERY_WIDGET_PSEUDONYM,
     binding_field: "pseudonym",
-    challenge_expires_at: input.challengeExpiresAt,
+    challenge_expires_at: unixSeconds(input.challengeExpiresAt),
   }
 }
 

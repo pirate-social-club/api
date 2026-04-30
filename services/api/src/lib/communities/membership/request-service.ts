@@ -23,13 +23,15 @@ import {
   listPendingMembershipRequests,
   resolveMembershipRequest,
   upsertMembershipRequest,
+  type MembershipRequestRow,
 } from "./membership-request-store"
-import { listActiveMembershipGateRules } from "./gate-rule-store"
+import { getMembershipGatePolicy } from "./gate-policy-store"
 import { evaluateGatedMembership } from "./eligibility-service"
 import { throwUnsatisfiedMembershipGate } from "./gate-failure-service"
 import { projectMembershipAndFollow } from "./projection-service"
 import type { CommunityMembershipRepository, MembershipResult } from "./types"
 import { requireOwnedCommunity } from "../create/service"
+import { unixSeconds } from "../../../serializers/time"
 
 function sanitizeMembershipRequestNote(note: string | null | undefined): string | null {
   const trimmed = typeof note === "string" ? note.trim() : ""
@@ -38,14 +40,20 @@ function sanitizeMembershipRequestNote(note: string | null | undefined): string 
 
 async function enrichMembershipRequestProfiles(
   profileRepository: ProfileRepository,
-  requests: MembershipRequestSummary[],
+  requests: MembershipRequestRow[],
 ): Promise<MembershipRequestSummary[]> {
   return Promise.all(requests.map(async (request) => {
     const profile = await profileRepository.getProfileByUserId(request.applicant_user_id).catch(() => null)
     return {
-      ...request,
+      id: `mrq_${request.membership_request_id}`,
+      object: "membership_request_summary",
+      community: `com_${request.community_id}`,
+      applicant_user: `usr_${request.applicant_user_id}`,
       applicant_handle: profile?.primary_public_handle?.label ?? profile?.global_handle.label ?? null,
       applicant_avatar_ref: profile?.avatar_ref ?? null,
+      status: request.status,
+      note: request.note,
+      created: unixSeconds(request.created_at),
     }
   }))
 }
@@ -110,26 +118,6 @@ export async function joinCommunity(input: {
       throw notFoundError("Community not found")
     }
 
-    if (membershipMode === "open") {
-      await upsertCommunityMembership({
-        client: db.client,
-        communityId: input.communityId,
-        userId: input.userId,
-        now,
-      })
-      await projectMembershipAndFollow({
-        db,
-        communityRepository: input.communityRepository,
-        communityId: input.communityId,
-        userId: input.userId,
-        now,
-      })
-      return {
-        community_id: input.communityId,
-        status: "joined",
-      }
-    }
-
     if (membershipMode === "request") {
       const existingRequest = await getPendingMembershipRequestByApplicant({
         client: db.client,
@@ -174,13 +162,13 @@ export async function joinCommunity(input: {
       }
     }
 
-    const rules = await listActiveMembershipGateRules(db.client, input.communityId)
+    const policy = await getMembershipGatePolicy(db.client, input.communityId)
     const { gateSummaries, walletScoreStatus, evaluation } = await evaluateGatedMembership({
       env: input.env,
       user,
       userRepository: input.userRepository,
       communityId: input.communityId,
-      rules,
+      policy,
     })
     if (!evaluation.satisfied) {
       throwUnsatisfiedMembershipGate({ evaluation, gateSummaries, walletScoreStatus })

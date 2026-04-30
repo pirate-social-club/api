@@ -5,6 +5,7 @@ import { authenticateAdminOrUser, type AuthenticatedEnv } from "../lib/auth-midd
 import { trackApiEvent } from "../lib/analytics/track"
 import { makeId, nowIso } from "../lib/helpers"
 import { getControlPlaneClient } from "../lib/runtime-deps"
+import { decodePublicUserId } from "../lib/public-ids"
 
 const profiles = new Hono<AuthenticatedEnv>()
 
@@ -60,7 +61,7 @@ profiles.get("/me", async (c) => {
   return c.json(profile, 200)
 })
 
-profiles.patch("/me", async (c) => {
+profiles.post("/me", async (c) => {
   const actor = c.get("actor")
   const body = await c.req
     .json<{
@@ -170,7 +171,7 @@ profiles.post("/me/xmtp-inbox", async (c) => {
   return c.json(profile, 200)
 })
 
-profiles.post("/me/global-handle/rename", async (c) => {
+profiles.post("/me/rename_global_handle", async (c) => {
   const actor = c.get("actor")
   const body = await c.req.json<{ desired_label?: unknown }>().catch(() => null)
   if (!body || typeof body.desired_label !== "string") {
@@ -219,7 +220,7 @@ profiles.post("/me/global-handle/reddit-claim", async (c) => {
   return c.json(globalHandle, 200)
 })
 
-profiles.post("/me/global-handle/upgrade-quote", async (c) => {
+profiles.post("/me/quote_handle_upgrade", async (c) => {
   const actor = c.get("actor")
   const body = await c.req.json<{ desired_label?: unknown }>().catch(() => null)
   if (!body || typeof body.desired_label !== "string") {
@@ -234,7 +235,7 @@ profiles.post("/me/global-handle/upgrade-quote", async (c) => {
   return c.json(quote, 200)
 })
 
-profiles.post("/me/linked-handles/sync", async (c) => {
+profiles.post("/me/sync_linked_handles", async (c) => {
   const actor = c.get("actor")
   const repository = getProfileRepository(c.env)
   const profile = await repository.syncLinkedHandles(actor.userId)
@@ -244,7 +245,7 @@ profiles.post("/me/linked-handles/sync", async (c) => {
   return c.json(profile, 200)
 })
 
-profiles.post("/me/primary-public-handle", async (c) => {
+profiles.post("/me/set_primary_public_handle", async (c) => {
   const actor = c.get("actor")
   const body = await c.req.json<{ linked_handle_id?: unknown }>().catch(() => null)
   if (!body || typeof body !== "object") {
@@ -265,7 +266,7 @@ profiles.post("/me/primary-public-handle", async (c) => {
 
 profiles.get("/:userId", async (c) => {
   const repository = getProfileRepository(c.env)
-  const profile = await repository.getProfileByUserId(c.req.param("userId"))
+  const profile = await repository.getProfileByUserId(decodePublicUserId(c.req.param("userId")))
   if (!profile) {
     throw notFoundError("Profile not found")
   }

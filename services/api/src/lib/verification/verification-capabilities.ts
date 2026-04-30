@@ -2,15 +2,14 @@ import type { User, VerificationCapabilities } from "../../types"
 
 export const INTERACTIVE_VERIFICATION_TTL_MS = 90 * 24 * 60 * 60 * 1000
 
-function isExpiredAt(iso: string | null | undefined, nowMs: number): boolean {
-  if (!iso) return false
-  const expiresMs = Date.parse(iso)
-  return Number.isFinite(expiresMs) && expiresMs <= nowMs
+function isExpiredAt(unixSeconds: number | null | undefined, nowMs: number): boolean {
+  if (typeof unixSeconds !== "number") return false
+  return unixSeconds * 1000 <= nowMs
 }
 
-function isOlderThanTtl(verifiedAt: string | null | undefined, ttlMs: number, nowMs: number): boolean {
-  if (!verifiedAt) return false
-  const verifiedMs = Date.parse(verifiedAt)
+function isOlderThanTtl(verifiedAt: number | null | undefined, ttlMs: number, nowMs: number): boolean {
+  if (typeof verifiedAt !== "number") return false
+  const verifiedMs = verifiedAt * 1000
   return Number.isFinite(verifiedMs) && verifiedMs + ttlMs <= nowMs
 }
 
@@ -27,11 +26,11 @@ export function buildDefaultVerificationCapabilities(): VerificationCapabilities
       proof_type: null,
       mechanism: null,
       verified_at: null,
-      score: null,
-      score_threshold: null,
+      score_decimal: null,
+      score_threshold_decimal: null,
       passing_score: null,
-      last_score_timestamp: null,
-      expiration_timestamp: null,
+      last_scored_at: null,
+      expires_at: null,
       stamps: null,
     },
   }
@@ -70,7 +69,7 @@ export function applyLazyCapabilityExpiry(
 
   if (
     next.wallet_score.state === "verified"
-    && isExpiredAt(next.wallet_score.expiration_timestamp, nowMs)
+    && isExpiredAt(next.wallet_score.expires_at, nowMs)
   ) {
     next.wallet_score.state = "expired"
   }

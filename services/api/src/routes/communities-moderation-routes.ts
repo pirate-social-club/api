@@ -12,6 +12,7 @@ import {
   getResolvedCommunityRouteContext,
   requireJsonBody,
 } from "./communities-route-helpers"
+import { decodePublicCommentId, decodePublicModerationCaseId, decodePublicPostId } from "../lib/public-ids"
 
 export function registerCommunityModerationRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.post("/:communityId/posts/:postId/reports", async (c) => {
@@ -21,7 +22,7 @@ export function registerCommunityModerationRoutes(communities: Hono<Authenticate
       env: c.env,
       userId: actor.userId,
       communityId,
-      postId: c.req.param("postId"),
+      postId: decodePublicPostId(c.req.param("postId")),
       body,
       userRepository,
       communityRepository,
@@ -36,7 +37,7 @@ export function registerCommunityModerationRoutes(communities: Hono<Authenticate
       env: c.env,
       userId: actor.userId,
       communityId,
-      commentId: c.req.param("commentId"),
+      commentId: decodePublicCommentId(c.req.param("commentId")),
       body,
       userRepository,
       communityRepository,
@@ -61,7 +62,7 @@ export function registerCommunityModerationRoutes(communities: Hono<Authenticate
       env: c.env,
       userId: actor.userId,
       communityId,
-      moderationCaseId: c.req.param("moderationCaseId"),
+      moderationCaseId: decodePublicModerationCaseId(c.req.param("moderationCaseId")),
       communityRepository,
     })
     return c.json(result, 200)
@@ -74,7 +75,7 @@ export function registerCommunityModerationRoutes(communities: Hono<Authenticate
       env: c.env,
       userId: actor.userId,
       communityId,
-      moderationCaseId: c.req.param("moderationCaseId"),
+      moderationCaseId: decodePublicModerationCaseId(c.req.param("moderationCaseId")),
       body,
       userRepository,
       communityRepository,

@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
-import app from "../src/index"
+import { app } from "../src/index"
 import type { Env } from "../src/types"
 import { readDevVarsFromCwd, readWranglerVarsFromCwd } from "./_lib/dev-vars"
 import { sanitizeLocalDevEnv } from "./_lib/local-dev-runtime"
@@ -112,7 +112,11 @@ async function main(): Promise<void> {
   const server = createServer(async (req, res) => {
     try {
       const request = await toRequest(req)
-      const response = await app.fetch(request, env as never)
+      const response = await app.fetch(request, env as never, {
+        props: {},
+        passThroughOnException() {},
+        waitUntil() {},
+      })
       await writeResponse(res, response)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)

@@ -15,6 +15,7 @@ import type {
   RoyaltyActivityItem,
   RoyaltyActivityResponse,
 } from "@pirate/api-contracts"
+import { unixSeconds } from "../../serializers/time"
 
 function resolveStoryChainName(env: Pick<Env, "STORY_CHAIN_ID">): "aeneid" | "mainnet" {
   return resolveStoryChainId(env) === 1514 ? "mainnet" : "aeneid"
@@ -46,7 +47,7 @@ export async function getClaimableRoyaltiesForUser(input: {
       return {
         items: [],
         total_claimable_wip_wei: "0",
-        checked_at: new Date().toISOString(),
+        checked_at: unixSeconds(new Date()),
       }
     }
 
@@ -71,10 +72,10 @@ export async function getClaimableRoyaltiesForUser(input: {
 
             if (claimableWei > 0n) {
               items.push({
-                ip_id: asset.story_ip_id,
+                ip: asset.story_ip_id,
                 claimable_wip_wei: claimableWei.toString(),
-                asset_id: asset.asset_id,
-                community_id: asset.community_id,
+                asset: `asset_${asset.asset_id}`,
+                community: `com_${asset.community_id}`,
                 title: asset.display_title,
               })
             }
@@ -104,7 +105,7 @@ export async function getClaimableRoyaltiesForUser(input: {
     return {
       items,
       total_claimable_wip_wei: total.toString(),
-      checked_at: new Date().toISOString(),
+      checked_at: unixSeconds(new Date()),
     }
   } finally {
     controlPlane.close?.()
@@ -121,21 +122,22 @@ function royaltyActivityFromFeedItem(item: NotificationFeedItem): RoyaltyActivit
   const amountWipWei = payloadString(payload, "amount_wip_wei")
   const storyIpId = payloadString(payload, "story_ip_id")
   const communityId = payloadString(payload, "community_id")
-  const assetId = payloadString(payload, "asset_id") ?? item.event.subject_id
+  const assetId = payloadString(payload, "asset_id") ?? item.event.subject
   if (!amountWipWei || !storyIpId || !communityId || !assetId) {
     return null
   }
   return {
-    event_id: item.event.event_id,
-    community_id: communityId,
-    asset_id: assetId,
+    id: `rai_${item.event.id.replace(/^ne_/, "")}`,
+    object: "royalty_activity_item",
+    community: `com_${communityId.replace(/^com_/, "")}`,
+    asset: `asset_${assetId.replace(/^asset_/, "")}`,
     title: payloadString(payload, "title"),
-    story_ip_id: storyIpId,
+    story_ip: storyIpId,
     amount_wip_wei: amountWipWei,
     buyer_wallet_address: payloadString(payload, "buyer_wallet_address"),
     tx_hash: payloadString(payload, "tx_hash"),
-    purchase_id: item.event.object_type === "purchase" ? item.event.object_id ?? null : null,
-    created_at: item.event.created_at,
+    purchase: null,
+    created: item.event.created,
     read_at: item.receipt.read_at ?? null,
   }
 }

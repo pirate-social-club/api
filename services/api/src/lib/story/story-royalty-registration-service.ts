@@ -249,7 +249,7 @@ async function buildStoryRoyaltyMetadata(input: {
     title: input.title,
     rights_basis: input.rightsBasis,
     creator_wallet_address: input.creatorWalletAddress,
-    song_artifact_bundle_id: input.bundle?.song_artifact_bundle_id ?? null,
+    song_artifact_bundle_id: input.bundle?.id.replace(/^sab_/, "") ?? null,
     primary_content_hash: input.primaryContentHash,
     derivative_parent_ip_ids: input.derivativeParentIpIds,
     created_at: nowIso(),

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import app from "../../../src/index"
+import { app } from "../../../src/index"
 import { setClawkeyProviderForTests } from "../../../src/lib/agents/clawkey-provider"
 import { setSelfProviderForTests } from "../../../src/lib/verification/self-provider"
 import {

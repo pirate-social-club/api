@@ -1,5 +1,6 @@
 ENVIRONMENT=development
 DEV_MEMORY_STORE_ENABLED=false
+SENTRY_DSN=https://0e27176cffcca727ff2c1a10e334f831@o4511308510265344.ingest.us.sentry.io/4511308511379456
 AUTH_UPSTREAM_JWT_SHARED_SECRET=replace-me-with-a-long-random-secret
 AUTH_UPSTREAM_JWT_ISSUER=pirate-dev-upstream
 AUTH_UPSTREAM_JWT_AUDIENCE=pirate-api

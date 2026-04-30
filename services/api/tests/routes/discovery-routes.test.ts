@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import app from "../../src/index"
+import { app } from "../../src/index"
 import { buildTestEnv } from "../helpers"
 
 describe("discovery routes", () => {

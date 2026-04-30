@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import app from "../../../src/index"
+import { app } from "../../../src/index"
 import { setRedditSnapshotImporterForTests, setRedditVerificationCheckerForTests } from "../../../src/lib/onboarding/reddit-bootstrap"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { exchangeJwt, requestJson } from "./profiles-test-helpers"
@@ -362,7 +362,7 @@ describe("profile routes", () => {
 
     setRedditSnapshotImporterForTests(async ({ redditUsername }) => ({
       reddit_username: redditUsername,
-      imported_at: "2026-04-24T10:00:00.000Z",
+      imported_at: 1777024800,
       account_age_days: 900,
       imported_reddit_score: 12_000,
       top_subreddits: [
@@ -445,7 +445,7 @@ describe("profile routes", () => {
     setRedditVerificationCheckerForTests(async () => ({ status: "verified" }))
     setRedditSnapshotImporterForTests(async ({ redditUsername }) => ({
       reddit_username: redditUsername,
-      imported_at: "2026-04-24T10:00:00.000Z",
+      imported_at: 1777024800,
       account_age_days: 900,
       imported_reddit_score: 12_000,
       top_subreddits: [],
@@ -510,7 +510,7 @@ describe("profile routes", () => {
     setRedditVerificationCheckerForTests(async () => ({ status: "verified" }))
     setRedditSnapshotImporterForTests(async ({ redditUsername }) => ({
       reddit_username: redditUsername,
-      imported_at: "2026-04-24T10:00:00.000Z",
+      imported_at: 1777024800,
       account_age_days: 900,
       imported_reddit_score: 100_000,
       top_subreddits: [],

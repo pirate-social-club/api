@@ -7,6 +7,8 @@ import { trackApiEvent } from "../lib/analytics/track"
 import { castPostVote, getPost } from "../lib/posts/post-service"
 import { makeId, nowIso } from "../lib/helpers"
 import { getControlPlaneClient } from "../lib/runtime-deps"
+import { serializeLocalizedPostResponse } from "../serializers/post"
+import { decodePublicPostId } from "../lib/public-ids"
 
 const posts = new Hono<AuthenticatedEnv>()
 
@@ -18,11 +20,11 @@ posts.get("/:postId", async (c) => {
   const result = await getPost({
     env: c.env,
     userId: actor.userId,
-    postId: c.req.param("postId"),
+    postId: decodePublicPostId(c.req.param("postId")),
     locale: c.req.query("locale") ?? null,
     communityRepository,
   })
-  return c.json(result, 200)
+  return c.json(serializeLocalizedPostResponse(result), 200)
 })
 
 posts.post("/:postId/vote", async (c) => {
@@ -36,7 +38,7 @@ posts.post("/:postId/vote", async (c) => {
   const result = await castPostVote({
     env: c.env,
     userId: actor.userId,
-    postId: c.req.param("postId"),
+    postId: decodePublicPostId(c.req.param("postId")),
     value: body.value,
     bypassVoterAccessChecks: actor.authType === "admin",
     userRepository: getUserRepository(c.env),

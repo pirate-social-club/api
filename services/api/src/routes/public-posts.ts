@@ -20,7 +20,9 @@ import {
 } from "../lib/agent-discovery/structured-links"
 import { structuredSurfaceDisabled } from "../lib/errors"
 import { omitThreadBody, type ThreadBodyOmittedPostResponse } from "../lib/posts/thread-body-omission"
-import type { CommentListResponse, Env, LocalizedPostResponse } from "../types"
+import { serializeCommentListResponse } from "../serializers/comment"
+import type { Env, LocalizedPostResponse } from "../types"
+import { decodePublicPostId, publicCommunityId, publicPostId } from "../lib/public-ids"
 
 const publicPosts = new Hono<{ Bindings: Env }>()
 
@@ -111,7 +113,7 @@ function postMarkdown(input: {
 
 function topCommentsMarkdown(input: {
   post: LocalizedPostResponse
-  comments: CommentListResponse
+  comments: ReturnType<typeof serializeCommentListResponse>
   links: StructuredAccessLinks
 }): string {
   return [
@@ -120,7 +122,7 @@ function topCommentsMarkdown(input: {
     `JSON: ${input.links.self.href}`,
     "",
     ...input.comments.items.flatMap((item, index) => [
-      `## ${index + 1}. ${item.comment.comment_id}`,
+      `## ${index + 1}. ${item.comment.id}`,
       "",
       item.translated_body ?? item.comment.body ?? "",
       "",
@@ -130,9 +132,10 @@ function topCommentsMarkdown(input: {
 
 publicPosts.get("/:postId/top-comments", async (c) => {
   const communityRepository = getCommunityRepository(c.env)
+  const rawPostId = decodePublicPostId(c.req.param("postId"))
   const post = await getPublicPost({
     env: c.env,
-    postId: c.req.param("postId"),
+    postId: rawPostId,
     locale: c.req.query("locale") ?? null,
     communityRepository,
   })
@@ -152,7 +155,7 @@ publicPosts.get("/:postId/top-comments", async (c) => {
   }
   const result = await listPublicPostComments({
     env: c.env,
-    threadRootPostId: c.req.param("postId"),
+    threadRootPostId: rawPostId,
     locale: c.req.query("locale") ?? null,
     sort: "top",
     cursor: null,
@@ -160,30 +163,33 @@ publicPosts.get("/:postId/top-comments", async (c) => {
     communityRepository,
   })
   const origin = configuredApiOrigin(c.env, c.req.url)
+  const routePostId = publicPostId(rawPostId)
   const links: StructuredAccessLinks = {
     self: {
-      href: absoluteUrl(origin, publicPostTopCommentsPath(c.req.param("postId"))),
+      href: absoluteUrl(origin, publicPostTopCommentsPath(routePostId)),
       type: "application/json",
     },
     post: {
-      href: absoluteUrl(origin, publicPostPath(c.req.param("postId"))),
+      href: absoluteUrl(origin, publicPostPath(routePostId)),
       type: "application/json",
     },
     canonical: {
-      href: absoluteUrl(origin, `/p/${encodeURIComponent(c.req.param("postId"))}`),
+      href: absoluteUrl(origin, `/p/${encodeURIComponent(routePostId)}`),
       type: "text/html",
     },
     markdown: {
-      href: absoluteUrl(origin, `${publicPostTopCommentsPath(c.req.param("postId"))}?format=markdown`),
+      href: absoluteUrl(origin, `${publicPostTopCommentsPath(routePostId)}?format=markdown`),
       type: "text/markdown",
     },
     community: {
-      href: absoluteUrl(origin, publicCommunityPath(post.post.community_id)),
+      href: absoluteUrl(origin, publicCommunityPath(publicCommunityId(post.post.community_id))),
       type: "application/json",
     },
   }
+  const serializedComments = serializeCommentListResponse(result)
   const responseBody = {
-    ...result,
+    ...serializedComments,
+    next_cursor: null,
     top_comments_limit: topCommentsLimit(),
     omitted_surfaces: [],
     links,
@@ -192,7 +198,7 @@ publicPosts.get("/:postId/top-comments", async (c) => {
   if (wantsMarkdown(c.req.raw, c.req.query("format"))) {
     return markdownResponse(topCommentsMarkdown({
       post,
-      comments: result,
+      comments: serializedComments,
       links,
     }), links)
   }
@@ -202,9 +208,10 @@ publicPosts.get("/:postId/top-comments", async (c) => {
 
 publicPosts.get("/:postId", async (c) => {
   const communityRepository = getCommunityRepository(c.env)
+  const rawPostId = decodePublicPostId(c.req.param("postId"))
   const result = await getPublicPost({
     env: c.env,
-    postId: c.req.param("postId"),
+    postId: rawPostId,
     locale: c.req.query("locale") ?? null,
     communityRepository,
   })
@@ -224,8 +231,8 @@ publicPosts.get("/:postId", async (c) => {
   }
   const links = publicPostLinks({
     origin: configuredApiOrigin(c.env, c.req.url),
-    postId: result.post.post_id,
-    communityId: result.post.community_id,
+    postId: publicPostId(result.post.post_id),
+    communityId: publicCommunityId(result.post.community_id),
     includeTopComments: policy.included_surfaces.top_comments,
   })
   const omittedSurfaces = omittedSurfacesForPolicy(policy, ["thread_bodies", "top_comments"])

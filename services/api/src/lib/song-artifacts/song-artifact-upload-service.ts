@@ -48,7 +48,7 @@ function validateUploadMatch(upload: SongArtifactUpload, bytes: Uint8Array): voi
   assertSongArtifactMimeType(upload.artifact_kind as SongArtifactKind, upload.mime_type)
   assertSongArtifactSize(upload.artifact_kind as SongArtifactKind, bytes.byteLength)
   if (upload.size_bytes != null && upload.size_bytes !== bytes.byteLength) {
-    throw badRequestError(`Uploaded byte count does not match the declared size for ${upload.song_artifact_upload_id}`)
+    throw badRequestError(`Uploaded byte count does not match the declared size for ${upload.id}`)
   }
 }
 
@@ -104,14 +104,14 @@ export async function uploadSongArtifactContent(input: {
 
     const client = getControlPlaneClient(input.env)
     const upload = await requireSongArtifactUpload(client, input.communityId, input.songArtifactUploadId)
-    if (upload.uploader_user_id !== input.userId) {
+    if (upload.uploader_user !== `usr_${input.userId}`) {
       throw notFoundError("Song artifact upload not found")
     }
     if (upload.status === "uploaded") {
       return upload
     }
     if (upload.status !== "pending_upload") {
-      throw badRequestError(`Song artifact upload ${upload.song_artifact_upload_id} is not ready for content upload`)
+      throw badRequestError(`Song artifact upload ${upload.id} is not ready for content upload`)
     }
 
     const bytes = normalizeUploadBytes(input.content)
@@ -119,7 +119,7 @@ export async function uploadSongArtifactContent(input: {
     const expectedHash = upload.content_hash?.trim() || null
     const actualHash = `0x${await sha256Hex(bytes)}`
     if (expectedHash && expectedHash !== actualHash) {
-      throw badRequestError(`content_hash does not match uploaded bytes for ${upload.song_artifact_upload_id}`)
+      throw badRequestError(`content_hash does not match uploaded bytes for ${upload.id}`)
     }
 
     const storage = await uploadSongArtifactBytes({

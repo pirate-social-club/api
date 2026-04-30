@@ -268,7 +268,7 @@ export async function getCommunityDonationPolicy(input: {
     donation_partner_id: partnerId,
     donation_partner: partnerId && partner
       ? {
-          donation_partner_id: partner.donation_partner_id,
+          donation_partner: partner.donation_partner_id,
           display_name: partner.display_name,
           provider: partner.provider,
           provider_partner_ref: partner.provider_partner_ref,

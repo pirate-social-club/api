@@ -58,7 +58,7 @@ export async function updateCommunityReferenceLinks(input: {
       ? existingSettings.reference_links as NonNullable<Community["reference_links"]>
       : []
     const existingById = new Map(
-      existingLinks.map((link) => [link.community_reference_link_id, link] as const),
+      existingLinks.map((link) => [link.community_reference_link, link] as const),
     )
     const now = nowIso()
 
@@ -74,7 +74,7 @@ export async function updateCommunityReferenceLinks(input: {
         }
 
         return {
-          community_reference_link_id: communityReferenceLinkId,
+          community_reference_link: communityReferenceLinkId,
           platform: link.platform,
           url: trimmedUrl,
           label: trimmedLabel,
@@ -155,11 +155,16 @@ export async function updateCommunityLabelPolicy(input: {
       : []
     const existingDefinitionsById = new Map(
       existingDefinitions.flatMap((definition) => {
-        if (!definition || typeof definition.label_id !== "string") {
+        const definitionId = typeof definition.id === "string"
+          ? definition.id
+          : typeof definition.label_id === "string"
+            ? definition.label_id
+            : null
+        if (!definitionId) {
           return []
         }
 
-        return [[definition.label_id, definition] as const]
+        return [[definitionId, definition] as const]
       }),
     )
     const now = nowIso()
@@ -169,7 +174,8 @@ export async function updateCommunityLabelPolicy(input: {
       const existingDefinition = existingDefinitionsById.get(labelId)
 
       return {
-        label_id: labelId,
+        id: labelId,
+        object: "community_label_definition" as const,
         label: definition.label.trim(),
         description: typeof existingDefinition?.description === "string" ? existingDefinition.description : null,
         color_token: definition.color_token?.trim() || null,
@@ -205,7 +211,7 @@ export async function updateCommunityLabelPolicy(input: {
         executor: tx,
         communityId: input.communityId,
         definitions: definitions.map((definition) => ({
-          label_id: definition.label_id,
+          label_id: definition.id,
           label: definition.label,
           description: definition.description,
           color_token: definition.color_token,

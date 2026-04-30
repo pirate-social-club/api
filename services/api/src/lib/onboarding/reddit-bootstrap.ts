@@ -1,5 +1,6 @@
 import { nowIso } from "../helpers"
 import type { Env, RedditImportSummary } from "../../types"
+import { unixSeconds } from "../../serializers/time"
 
 const DEFAULT_PROFILE_USER_AGENT =
   "Mozilla/5.0 (compatible; PirateRedditVerifier/0.1; +https://pirate.example)"
@@ -101,7 +102,7 @@ async function defaultRedditImporter(input: {
 
   return {
     reddit_username: input.redditUsername,
-    imported_at: nowIso(),
+    imported_at: unixSeconds(nowIso()),
     account_age_days: accountAgeDays,
     imported_reddit_score: allThings.length > 0 ? importedRedditScore : null,
     top_subreddits: topSubreddits,

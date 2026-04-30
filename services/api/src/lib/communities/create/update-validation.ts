@@ -1,6 +1,8 @@
-import type { Community, CreateCommunityRequest } from "../../../types"
+import type { Community } from "../../../types"
+import type { GatePolicy } from "../membership/gate-types"
 import type { LocalCommunitySnapshot } from "../community-local-db"
 import { badRequestError } from "../../errors"
+import { validateGatePolicy } from "../membership/gate-policy-validation"
 
 export type UpdateCommunityRulesRequestBody = {
   rules: Array<{
@@ -37,17 +39,12 @@ export type UpdateCommunitySafetyRequestBody = {
   openai_moderation_settings: NonNullable<Community["openai_moderation_settings"]>
 }
 
-export type UpdateGateRuleInput = CreateCommunityRequest["gate_rules"] extends
-  Array<infer T> | null | undefined
-  ? Array<T & { gate_rule_id?: string | null }>
-  : never
-
 export type UpdateCommunityGatesRequestBody = {
-  membership_mode: "open" | "request" | "gated"
+  membership_mode: "request" | "gated"
   default_age_gate_policy?: "none" | "18_plus" | null
   allow_anonymous_identity: boolean
   anonymous_identity_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null
-  gate_rules?: UpdateGateRuleInput
+  gate_policy?: GatePolicy | null
 }
 
 export type UpdateCommunityReferenceLinksRequestBody = {
@@ -181,7 +178,7 @@ export function assertUpdateCommunityGatesRequest(
     throw badRequestError("Invalid community gates payload")
   }
 
-  if (!["open", "request", "gated"].includes(body.membership_mode)) {
+  if (!["request", "gated"].includes(body.membership_mode)) {
     throw badRequestError("Invalid membership_mode payload")
   }
 
@@ -206,28 +203,16 @@ export function assertUpdateCommunityGatesRequest(
     throw badRequestError("Invalid default_age_gate_policy payload")
   }
 
-  if (body.gate_rules != null && !Array.isArray(body.gate_rules)) {
-    throw badRequestError("Invalid gate_rules payload")
+  if (body.membership_mode === "request" && body.gate_policy != null) {
+    throw badRequestError("Request membership cannot include gate_policy")
   }
 
-  if (Array.isArray(body.gate_rules)) {
-    const seenGateRuleIds = new Set<string>()
-    for (const rule of body.gate_rules) {
-      if (rule.gate_rule_id != null) {
-        if (typeof rule.gate_rule_id !== "string") {
-          throw badRequestError("Invalid gate_rule_id payload")
-        }
+  if (body.membership_mode === "gated" && body.gate_policy == null) {
+    throw badRequestError("Gated membership requires gate_policy")
+  }
 
-        const normalizedGateRuleId = rule.gate_rule_id.trim()
-        if (normalizedGateRuleId.length === 0) {
-          throw badRequestError("gate_rule_id must not be blank")
-        }
-        if (seenGateRuleIds.has(normalizedGateRuleId)) {
-          throw badRequestError("Duplicate gate_rule_id payload")
-        }
-        seenGateRuleIds.add(normalizedGateRuleId)
-      }
-    }
+  if (body.gate_policy != null) {
+    body.gate_policy = validateGatePolicy(body.gate_policy)
   }
 }
 

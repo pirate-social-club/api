@@ -18,6 +18,7 @@ import type { SelfSessionOutcome } from "./self-provider"
 import { canonicalizeRequestedCapabilities, getSelfProvider, normalizeVerificationRequirements } from "./self-provider"
 import { normalizeIdentityCountryCode } from "../identity/country-codes"
 import { logVerificationDebug } from "./verification-logging"
+import { unixSeconds } from "../../serializers/time"
 import type {
   Env,
   RequestedVerificationCapability,
@@ -636,7 +637,7 @@ async function finalizeVerification(
     provider: row.provider === "self" || row.provider === "very" ? row.provider : null,
     proof_type: "unique_human",
     mechanism: row.provider === "very" ? "very_provider" : "session_complete",
-    verified_at: updatedAt,
+    verified_at: unixSeconds(updatedAt),
   }
   attestationInserts.push({
     sql: `
@@ -654,7 +655,7 @@ async function finalizeVerification(
       provider: "self",
       proof_type: "age_over_18",
       mechanism: "self_disclosure",
-      verified_at: updatedAt,
+      verified_at: unixSeconds(updatedAt),
     }
     attestationInserts.push({
       sql: `
@@ -674,7 +675,7 @@ async function finalizeVerification(
       provider: "self",
       proof_type: "minimum_age",
       mechanism: "self_disclosure",
-      verified_at: updatedAt,
+      verified_at: unixSeconds(updatedAt),
     }
     attestationInserts.push({
       sql: `
@@ -695,7 +696,7 @@ async function finalizeVerification(
       provider: "self",
       proof_type: "nationality",
       mechanism: "self_disclosure",
-      verified_at: updatedAt,
+      verified_at: unixSeconds(updatedAt),
     }
     attestationInserts.push({
       sql: `
@@ -716,7 +717,7 @@ async function finalizeVerification(
       provider: "self",
       proof_type: "gender",
       mechanism: "self_disclosure",
-      verified_at: updatedAt,
+      verified_at: unixSeconds(updatedAt),
     }
     attestationInserts.push({
       sql: `

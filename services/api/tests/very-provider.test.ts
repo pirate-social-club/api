@@ -65,7 +65,7 @@ function createMockVeryProvider(overrides?: {
         uniqueness_domain: "pirate-unique-human-v0",
         binding_value: "0",
         binding_field: "pseudonym",
-        challenge_expires_at: "2099-01-01T00:00:00.000Z",
+        challenge_expires_at: 4070908800,
       },
     },
     ...overrides?.startResult,
@@ -234,7 +234,7 @@ describe("Very provider adapter", () => {
           uniqueness_domain: "pirate-unique-human-v0",
           binding_value: "0",
           binding_field: "pseudonym",
-          challenge_expires_at: "2099-01-01T00:00:00.000Z",
+          challenge_expires_at: 4070908800,
         },
       })
       expect(outcome.status).toBe("verified")
@@ -276,7 +276,7 @@ describe("Very provider adapter", () => {
             uniqueness_domain: "pirate-unique-human-v0",
             binding_value: "0",
             binding_field: "pseudonym",
-            challenge_expires_at: "2099-01-01T00:00:00.000Z",
+            challenge_expires_at: 4070908800,
           },
         })
         expect(outcome.status).toBe("verified")

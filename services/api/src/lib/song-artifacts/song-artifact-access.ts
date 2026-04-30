@@ -44,18 +44,22 @@ export async function requireResolvedUpload(input: {
   client: Client
   communityId: string
   userId: string
-  ref: { song_artifact_upload_id: string }
+  ref: { song_artifact_upload: string }
   expectedKind: SongArtifactUpload["artifact_kind"]
 }): Promise<SongArtifactUpload> {
-  const upload = await requireSongArtifactUpload(input.client, input.communityId, input.ref.song_artifact_upload_id)
-  if (upload.uploader_user_id !== input.userId) {
+  const upload = await requireSongArtifactUpload(
+    input.client,
+    input.communityId,
+    input.ref.song_artifact_upload.replace(/^sau_/, ""),
+  )
+  if (upload.uploader_user !== `usr_${input.userId}`) {
     throw notFoundError("Song artifact upload not found")
   }
   if (upload.status !== "uploaded") {
-    throw badRequestError(`Song artifact upload ${upload.song_artifact_upload_id} is not uploaded yet`)
+    throw badRequestError(`Song artifact upload ${upload.id} is not uploaded yet`)
   }
   if (upload.artifact_kind !== input.expectedKind) {
-    throw badRequestError(`Song artifact upload ${upload.song_artifact_upload_id} is not a ${input.expectedKind} upload`)
+    throw badRequestError(`Song artifact upload ${upload.id} is not a ${input.expectedKind} upload`)
   }
   return upload
 }

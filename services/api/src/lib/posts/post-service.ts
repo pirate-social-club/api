@@ -189,7 +189,7 @@ export async function createPost(input: {
         lyrics: resolvedBundle.lyrics,
         access_mode: accessMode,
         asset_id: input.body.asset_id ?? makeId("ast"),
-        song_artifact_bundle_id: resolvedBundle.bundle.song_artifact_bundle_id,
+        song_artifact_bundle_id: resolvedBundle.bundle.id.replace(/^sab_/, ""),
       }
 
       const postAnalysis = await postAnalysisProvider.analyze({

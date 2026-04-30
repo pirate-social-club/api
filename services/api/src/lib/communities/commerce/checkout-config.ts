@@ -73,7 +73,8 @@ export function buildDefaultPirateCheckoutMoneyPolicy(input: {
   env: Env
   communityId: string
 }): {
-  community_id: string
+  id: string
+  object: "community_money_policy"
   policy_origin: "default"
   funding_preference: "USDC"
   accepted_funding_assets: Array<{
@@ -100,12 +101,12 @@ export function buildDefaultPirateCheckoutMoneyPolicy(input: {
   route_required: true
   route_status_policy: "fail"
   route_hop_tolerance: 3
-  updated_at: string
 } {
   const sourceChainId = resolvePirateCheckoutSourceChainId(input.env)
   const sourceChainName = resolvePirateCheckoutSourceChainName(sourceChainId)
   return {
-    community_id: input.communityId,
+    id: `cmp_${input.communityId}`,
+    object: "community_money_policy",
     policy_origin: "default",
     funding_preference: "USDC",
     accepted_funding_assets: [{
@@ -132,6 +133,5 @@ export function buildDefaultPirateCheckoutMoneyPolicy(input: {
     route_required: true,
     route_status_policy: "fail",
     route_hop_tolerance: 3,
-    updated_at: new Date(0).toISOString(),
   }
 }

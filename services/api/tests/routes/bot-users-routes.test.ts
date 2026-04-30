@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import app from "../../src/index"
+import { app } from "../../src/index"
 import { createRouteTestContext, json, mintUpstreamJwt, resetRuntimeCaches } from "../helpers"
 import type { Env } from "../../src/types"
 

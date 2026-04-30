@@ -12,6 +12,10 @@ function roundUsd(value: number): number {
   return Math.round(value * 100) / 100
 }
 
+function usdToCents(value: number): number {
+  return Math.round(value * 100)
+}
+
 export function resolveQuoteAllocationSnapshot(input: {
   finalPriceUsd: number
   listingPolicy: {
@@ -61,7 +65,7 @@ export function serializePurchaseAllocationLeg(row: PurchaseAllocationLegRow): P
     recipient_ref: row.recipient_ref,
     waterfall_position: row.waterfall_position,
     share_bps: row.share_bps,
-    amount_usd: row.amount_usd,
+    amount_cents: usdToCents(row.amount_usd),
     settlement_strategy: row.settlement_strategy,
     status: row.status,
     settlement_ref: row.settlement_ref,
