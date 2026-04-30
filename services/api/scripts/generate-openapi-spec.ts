@@ -184,11 +184,96 @@ function runtimeOnlyPaths(fullSpec: OpenApiRecord): OpenApiRecord {
   }
 }
 
+function resolveRef(spec: OpenApiRecord, ref: string): unknown {
+  if (!ref.startsWith("#/")) {
+    return undefined
+  }
+  return ref
+    .slice(2)
+    .split("/")
+    .map((part) => part.replace(/~1/g, "/").replace(/~0/g, "~"))
+    .reduce<unknown>((current, part) => {
+      if (!current || typeof current !== "object") {
+        return undefined
+      }
+      return (current as OpenApiRecord)[part]
+    }, spec)
+}
+
+function setRef(spec: OpenApiRecord, ref: string, value: unknown): void {
+  const parts = ref
+    .slice(2)
+    .split("/")
+    .map((part) => part.replace(/~1/g, "/").replace(/~0/g, "~"))
+  let current = spec
+  for (const part of parts.slice(0, -1)) {
+    current[part] ??= {}
+    current = current[part]
+  }
+  current[parts[parts.length - 1]] = value
+}
+
+function collectRefs(value: unknown, refs: Set<string>): void {
+  if (!value || typeof value !== "object") {
+    return
+  }
+  if (typeof (value as OpenApiRecord).$ref === "string") {
+    refs.add((value as OpenApiRecord).$ref)
+  }
+  for (const child of Object.values(value)) {
+    collectRefs(child, refs)
+  }
+}
+
+function publicServiceSpec(spec: OpenApiRecord): OpenApiRecord {
+  const paths = Object.fromEntries(
+    Object.entries(spec.paths ?? {})
+      .filter(([path]) => path.startsWith("/public-")),
+  )
+  const slimSpec: OpenApiRecord = {
+    openapi: spec.openapi,
+    info: {
+      title: "Pirate public structured read API",
+      version: spec.info?.version ?? "0.1.0",
+      description: "Public structured read API for Pirate communities, posts, comments, profiles, and agents.",
+    },
+    servers: spec.servers,
+    tags: (spec.tags ?? []).filter((tag: OpenApiRecord) =>
+      ["Agents", "Comments", "Communities", "Posts", "Profiles"].includes(String(tag.name)),
+    ),
+    paths,
+    components: {
+      securitySchemes: spec.components?.securitySchemes,
+      parameters: {},
+      responses: {},
+      schemas: {},
+    },
+  }
+
+  const pendingRefs = new Set<string>()
+  const copiedRefs = new Set<string>()
+  collectRefs(paths, pendingRefs)
+  for (const ref of pendingRefs) {
+    if (copiedRefs.has(ref)) {
+      continue
+    }
+    copiedRefs.add(ref)
+    const value = resolveRef(spec, ref)
+    if (value === undefined) {
+      continue
+    }
+    const copy = JSON.parse(JSON.stringify(value))
+    setRef(slimSpec, ref, copy)
+    collectRefs(copy, pendingRefs)
+  }
+  return slimSpec
+}
+
 const fullYamlText = readFileSync(fullYamlPath, "utf-8")
 const implementedYamlText = readFileSync(implementedYamlPath, "utf-8")
 const fullSpec = YAML.parse(fullYamlText)
 const implementedSpec = YAML.parse(implementedYamlText)
-const spec = {
+const completeSpec = {
   ...fullSpec,
   components: {
     ...(fullSpec.components ?? {}),
@@ -210,6 +295,8 @@ const spec = {
     ...runtimeOnlyPaths(fullSpec),
   },
 }
+addReviewMetadata(completeSpec)
+const spec = publicServiceSpec(completeSpec)
 addReviewMetadata(spec)
 
 mkdirSync(outDir, { recursive: true })
