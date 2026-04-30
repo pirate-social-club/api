@@ -345,6 +345,8 @@ export type AgentDelegatedCredentialRefreshRequest = {
 };
 
 export type AgentDelegatedCredential = {
+  id: string;
+  object: "agent_delegated_credential";
   agent: string;
   owner_user: string;
   current_ownership_record: string;

@@ -4954,6 +4954,8 @@ const spec = {
         "type": "object",
         "additionalProperties": false,
         "required": [
+          "id",
+          "object",
           "agent",
           "owner_user",
           "current_ownership_record",
@@ -4964,6 +4966,17 @@ const spec = {
           "expires_at"
         ],
         "properties": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "agent_delegated_credential"
+            ]
+          },
           "agent": {
             "type": "string"
           },

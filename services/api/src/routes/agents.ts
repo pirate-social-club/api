@@ -5,13 +5,16 @@ import { getControlPlaneAgentOwnershipRepository } from "../lib/agents/agent-own
 import type { ActorContext, AdminActorContext } from "../lib/auth-middleware"
 import type {
   AgentChallenge,
+  AgentDelegatedCredential,
   AgentOwnershipProvider,
   AgentOwnershipSessionKind,
 } from "../lib/agents/types"
 import {
   decodePublicAgentId,
   decodePublicAgentOwnershipSessionId,
+  publicId,
 } from "../lib/public-ids"
+import { nullableUnixSeconds, unixSeconds } from "../serializers/time"
 import type { Env } from "../types"
 
 const agents = new Hono<{ Bindings: Env }>()
@@ -36,6 +39,22 @@ async function resolveActorOrConnectionToken<T>(input: {
     return await input.withConnectionToken(input.connectionToken)
   }
   throw authError("Authentication failed")
+}
+
+function serializeAgentDelegatedCredential(credential: AgentDelegatedCredential) {
+  return {
+    id: publicId(credential.agent_delegated_credential_id, "adc"),
+    object: "agent_delegated_credential" as const,
+    agent: publicId(credential.agent_id, "agt"),
+    owner_user: publicId(credential.owner_user_id, "usr"),
+    current_ownership_record: publicId(credential.current_ownership_record_id, "aor"),
+    token_type: credential.token_type,
+    access_token: credential.access_token,
+    refresh_token: credential.refresh_token,
+    issued_at: unixSeconds(credential.issued_at),
+    expires_at: unixSeconds(credential.expires_at),
+    refresh_expires_at: nullableUnixSeconds(credential.refresh_expires_at),
+  }
 }
 
 function getActorUserId(actor: ActorContext | AdminActorContext): string {
@@ -294,7 +313,7 @@ agents.post("/agents/:agentId/credential", authenticateOptional, async (c) => {
       currentOwnershipRecordId: body?.current_ownership_record_id ?? null,
     }),
   })
-  return c.json(credential, 200)
+  return c.json(serializeAgentDelegatedCredential(credential), 200)
 })
 
 agents.post("/agents/:agentId/refresh-credential", authenticateOptional, async (c) => {
@@ -324,7 +343,7 @@ agents.post("/agents/:agentId/refresh-credential", authenticateOptional, async (
       refreshToken,
     }),
   })
-  return c.json(credential, 200)
+  return c.json(serializeAgentDelegatedCredential(credential), 200)
 })
 
 export default agents

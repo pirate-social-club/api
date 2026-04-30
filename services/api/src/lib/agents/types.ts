@@ -68,6 +68,7 @@ export type AgentDelegatedCredentialRefreshRequest = {
 }
 
 export type AgentDelegatedCredential = {
+  agent_delegated_credential_id: string
   agent_id: string
   owner_user_id: string
   current_ownership_record_id: string

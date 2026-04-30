@@ -27,6 +27,7 @@ function serializeDelegatedCredential(input: {
   refreshToken: string
 }): AgentDelegatedCredential {
   return {
+    agent_delegated_credential_id: input.row.agent_delegated_credential_id,
     agent_id: input.row.agent_id,
     owner_user_id: input.row.owner_user_id,
     current_ownership_record_id: input.row.agent_ownership_record_id,
