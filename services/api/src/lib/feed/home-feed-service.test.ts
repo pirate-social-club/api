@@ -6,6 +6,7 @@ import {
   resolveHomeFeedCommunityIds,
   resolveJoinedHomeFeedCommunityIds,
   sortCommunitySummaries,
+  withHomeFeedCommunityIdentity,
 } from "./home-feed-service"
 import type { CommunityAggregate, InternalHomeFeedCommunitySummary } from "./home-feed-service"
 
@@ -260,6 +261,36 @@ describe("filterCommunitiesWithPosts", () => {
     const result = filterCommunitiesWithPosts([alpha, beta], aggregates, false)
 
     expect(result.map((summary) => summary.community_id)).toEqual(["cmt_alpha", "cmt_beta"])
+  })
+})
+
+describe("withHomeFeedCommunityIdentity", () => {
+  test("uses the local community avatar in home feed summaries", () => {
+    const summary = createCommunitySummary({
+      communityId: "cmt_palestine",
+      displayName: "Palestine",
+    })
+
+    const result = withHomeFeedCommunityIdentity(summary, {
+      avatarRef: "https://media.pirate.test/palestine.png",
+      displayName: "@🇵🇸",
+    })
+
+    expect(result.display_name).toBe("@🇵🇸")
+    expect(result.avatar_ref).toBe("https://media.pirate.test/palestine.png")
+  })
+
+  test("builds a unicode-safe default avatar when no local avatar exists", () => {
+    const summary = createCommunitySummary({
+      communityId: "cmt_palestine",
+      displayName: "🇵🇸",
+    })
+
+    const result = withHomeFeedCommunityIdentity(summary, null)
+
+    expect(result.avatar_ref?.startsWith("data:image/svg+xml;charset=utf-8,")).toBe(true)
+    expect(decodeURIComponent(result.avatar_ref ?? "")).toContain("🇵")
+    expect(decodeURIComponent(result.avatar_ref ?? "").includes("\uFFFD")).toBe(false)
   })
 })
 

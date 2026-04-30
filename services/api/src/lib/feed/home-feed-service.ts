@@ -14,6 +14,7 @@ import { getControlPlaneClient } from "../runtime-deps"
 import { numberOrNull, requiredNumber, requiredString, rowValue } from "../sql-row"
 import { serializeLocalizedPostResponse } from "../../serializers/post"
 import type { CommunityFollowProjectionRow, CommunityMembershipProjectionRow, CommunityRow } from "../auth/auth-db-rows"
+import { resolveCommunityAvatarRef } from "../communities/community-identity-media"
 import type {
   Env,
   HomeFeedCommunitySummary,
@@ -31,6 +32,11 @@ type HomeFeedProjectionRow = {
   downvote_count: number
   comment_count: number
   like_count: number
+}
+
+export type HomeFeedCommunityIdentity = {
+  displayName: string
+  avatarRef: string | null
 }
 
 export type InternalHomeFeedCommunitySummary = HomeFeedCommunitySummary & {
@@ -154,6 +160,45 @@ function serializeHomeFeedCommunitySummary(summary: InternalHomeFeedCommunitySum
     avatar_ref: summary.avatar_ref,
     member_count: summary.member_count,
     follower_count: summary.follower_count,
+  }
+}
+
+async function getHomeFeedCommunityIdentity(
+  client: Client,
+  communityId: string,
+): Promise<HomeFeedCommunityIdentity | null> {
+  const result = await client.execute({
+    sql: `
+      SELECT display_name, avatar_ref
+      FROM communities
+      WHERE community_id = ?1
+      LIMIT 1
+    `,
+    args: [communityId],
+  })
+  const row = result.rows[0]
+  if (!row) {
+    return null
+  }
+  return {
+    displayName: String(row.display_name),
+    avatarRef: row.avatar_ref == null ? null : String(row.avatar_ref),
+  }
+}
+
+export function withHomeFeedCommunityIdentity(
+  summary: InternalHomeFeedCommunitySummary,
+  identity: HomeFeedCommunityIdentity | null,
+): InternalHomeFeedCommunitySummary {
+  const displayName = identity?.displayName ?? summary.display_name
+  return {
+    ...summary,
+    display_name: displayName,
+    avatar_ref: resolveCommunityAvatarRef({
+      communityId: summary.community_id,
+      displayName,
+      avatarRef: identity?.avatarRef,
+    }),
   }
 }
 
@@ -386,6 +431,13 @@ export async function listHomeFeed(input: {
   for (const [communityId, rows] of rowsByCommunityId) {
     const db = await openCommunityDb(input.env, input.communityRepository, communityId)
     try {
+      const baseCommunity = communitySummaryById[communityId]
+      const community = baseCommunity
+        ? withHomeFeedCommunityIdentity(
+          baseCommunity,
+          await getHomeFeedCommunityIdentity(db.client, communityId),
+        )
+        : null
       for (const row of rows) {
         const post = await getPostById(db.client, row.source_post_id)
         if (!post || post.status !== "published") {
@@ -423,7 +475,6 @@ export async function listHomeFeed(input: {
           communityId,
           post,
         })
-        const community = communitySummaryById[communityId]
         if (!community) {
           continue
         }
