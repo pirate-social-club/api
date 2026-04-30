@@ -108,6 +108,40 @@ describe("onboarding reddit routes", () => {
     expect(createdVerificationBody.code_placement_surface).toBe("profile")
     expect(createdVerificationBody.failure_code).toBeNull()
 
+    setRedditVerificationCheckerForTests(async () => ({
+      status: "pending" as const,
+      failureCode: "code_not_found" as const,
+    }))
+
+    const pendingVerification = await requestJson("http://pirate.test/onboarding/reddit-verification", {
+      reddit_username: "technohippie",
+    }, ctx.env, session.accessToken)
+    expect(pendingVerification.status).toBe(200)
+    const pendingBody = await json(pendingVerification) as {
+      status: string
+      last_checked_at: string | null
+      failure_code: string | null
+    }
+    expect(pendingBody.status).toBe("pending")
+    expect(typeof pendingBody.last_checked_at).toBe("number")
+    expect(pendingBody.failure_code).toBe("code_not_found")
+
+    const pendingAnalytics = await ctx.client.execute({
+      sql: `
+        SELECT properties_json
+        FROM analytics_outbox
+        WHERE event_name = 'reddit_verification_check_pending'
+        ORDER BY created_at DESC
+        LIMIT 1
+      `,
+    })
+    const pendingAnalyticsProperties = JSON.parse(String(pendingAnalytics.rows[0]?.properties_json ?? "{}")) as {
+      failure_code?: string
+      code_placement_surface?: string
+    }
+    expect(pendingAnalyticsProperties.failure_code).toBe("code_not_found")
+    expect(pendingAnalyticsProperties.code_placement_surface).toBe("profile")
+
     setRedditVerificationCheckerForTests(async ({ verificationCode }) => {
       if (typeof createdVerificationBody.verification_hint === "string" && createdVerificationBody.verification_hint.includes(verificationCode)) {
         return {

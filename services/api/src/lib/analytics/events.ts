@@ -15,6 +15,7 @@ export type AnalyticsEventName =
   | "unique_human_verification_failed"
   | "reddit_verification_started"
   | "reddit_verification_code_generated"
+  | "reddit_verification_check_pending"
   | "reddit_verification_succeeded"
   | "reddit_verification_failed"
   | "reddit_import_queued"

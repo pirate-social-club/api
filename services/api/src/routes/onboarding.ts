@@ -68,9 +68,14 @@ onboarding.post("/reddit-verification", async (c) => {
   })
   if (result.status === "pending") {
     await trackApiEvent(c.env, c.req, {
-      eventName: "reddit_verification_code_generated",
+      eventName: result.last_checked_at ? "reddit_verification_check_pending" : "reddit_verification_code_generated",
       userId: actor.userId,
-      properties: { code_placement_surface: result.code_placement_surface ?? "profile" },
+      properties: result.last_checked_at
+        ? {
+            code_placement_surface: result.code_placement_surface ?? "profile",
+            failure_code: result.failure_code ?? "code_not_found",
+          }
+        : { code_placement_surface: result.code_placement_surface ?? "profile" },
     })
   } else if (result.status === "verified") {
     await trackApiEvent(c.env, c.req, {
