@@ -259,14 +259,6 @@ const spec = {
         "summary": "Inspect a verification session",
         "parameters": [
           {
-            "name": "verification_session_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/VerificationSessionId"
           }
         ],
@@ -297,14 +289,6 @@ const spec = {
         ],
         "summary": "Provider callback for a verification session",
         "parameters": [
-          {
-            "name": "verification_session_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/VerificationSessionId"
           }
@@ -347,14 +331,6 @@ const spec = {
         "security": [],
         "summary": "Receive a Self proof callback",
         "parameters": [
-          {
-            "name": "verification_session_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/VerificationSessionId"
           }
@@ -408,14 +384,6 @@ const spec = {
         ],
         "summary": "Complete or refresh a verification session",
         "parameters": [
-          {
-            "name": "verification_session_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/VerificationSessionId"
           }
@@ -566,14 +534,6 @@ const spec = {
         "summary": "Inspect an agent ownership session",
         "parameters": [
           {
-            "name": "agent_ownership_session_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/AgentOwnershipSessionId"
           }
         ],
@@ -604,14 +564,6 @@ const spec = {
         ],
         "summary": "Complete or refresh an agent ownership session",
         "parameters": [
-          {
-            "name": "agent_ownership_session_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/AgentOwnershipSessionId"
           }
@@ -654,14 +606,6 @@ const spec = {
         "security": [],
         "summary": "Receive an asynchronous provider callback for an agent ownership session",
         "parameters": [
-          {
-            "name": "agent_ownership_session_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/AgentOwnershipSessionId"
           }
@@ -724,14 +668,6 @@ const spec = {
         "summary": "Get a user-owned agent",
         "parameters": [
           {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/AgentId"
           }
         ],
@@ -763,14 +699,6 @@ const spec = {
         "summary": "Get a user-owned agent handle",
         "parameters": [
           {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/AgentId"
           }
         ],
@@ -799,14 +727,6 @@ const spec = {
         ],
         "summary": "Claim or rename a user-owned agent handle",
         "parameters": [
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/AgentId"
           }
@@ -858,14 +778,6 @@ const spec = {
         "summary": "Issue a delegated credential for a user-owned agent",
         "parameters": [
           {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/AgentId"
           }
         ],
@@ -913,14 +825,6 @@ const spec = {
         "summary": "Refresh a delegated credential for a user-owned agent",
         "parameters": [
           {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/AgentId"
           }
         ],
@@ -965,14 +869,6 @@ const spec = {
         "security": [],
         "summary": "Resolve a public `.clawitzer` agent handle",
         "parameters": [
-          {
-            "name": "handle_label",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/HandleLabel"
           }
@@ -1041,14 +937,6 @@ const spec = {
         "summary": "Inspect a namespace verification session",
         "parameters": [
           {
-            "name": "namespace_verification_session_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/NamespaceVerificationSessionId"
           }
         ],
@@ -1079,14 +967,6 @@ const spec = {
         ],
         "summary": "Complete or refresh a namespace verification session",
         "parameters": [
-          {
-            "name": "namespace_verification_session_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/NamespaceVerificationSessionId"
           }
@@ -1128,14 +1008,6 @@ const spec = {
         ],
         "summary": "Inspect an accepted namespace verification",
         "parameters": [
-          {
-            "name": "namespace_verification_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/NamespaceVerificationId"
           }
@@ -1643,14 +1515,6 @@ const spec = {
         "summary": "Get a public profile",
         "parameters": [
           {
-            "name": "user_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/UserId"
           }
         ],
@@ -1814,14 +1678,6 @@ const spec = {
         "summary": "Get a community",
         "parameters": [
           {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/CommunityId"
           }
         ],
@@ -1853,14 +1709,6 @@ const spec = {
         "summary": "Get the active money policy for a community",
         "parameters": [
           {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/CommunityId"
           }
         ],
@@ -1889,14 +1737,6 @@ const spec = {
         ],
         "summary": "Configure or update the money policy for a community",
         "parameters": [
-          {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/CommunityId"
           }
@@ -1948,14 +1788,6 @@ const spec = {
         "summary": "Get the active pricing policy for a community",
         "parameters": [
           {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/CommunityId"
           }
         ],
@@ -1984,14 +1816,6 @@ const spec = {
         ],
         "summary": "Configure or update the pricing policy for a community",
         "parameters": [
-          {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/CommunityId"
           }
@@ -2043,14 +1867,6 @@ const spec = {
         "summary": "List community listings",
         "parameters": [
           {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/CommunityId"
           }
         ],
@@ -2079,14 +1895,6 @@ const spec = {
         ],
         "summary": "Create a community listing",
         "parameters": [
-          {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/CommunityId"
           }
@@ -2129,14 +1937,6 @@ const spec = {
         "summary": "Get a community listing",
         "parameters": [
           {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/CommunityId"
           },
           {
@@ -2173,14 +1973,6 @@ const spec = {
         ],
         "summary": "Update a community listing",
         "parameters": [
-          {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/CommunityId"
           },
@@ -2231,14 +2023,6 @@ const spec = {
         "summary": "List the authenticated buyer's purchases in a community",
         "parameters": [
           {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/CommunityId"
           }
         ],
@@ -2269,14 +2053,6 @@ const spec = {
         ],
         "summary": "Get an authenticated buyer's purchase in a community",
         "parameters": [
-          {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/CommunityId"
           },
@@ -2316,14 +2092,6 @@ const spec = {
         ],
         "summary": "Preflight a community purchase funding lane",
         "parameters": [
-          {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/CommunityId"
           }
@@ -2368,14 +2136,6 @@ const spec = {
         ],
         "summary": "Issue a short-lived community purchase quote",
         "parameters": [
-          {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/CommunityId"
           }
@@ -2424,14 +2184,6 @@ const spec = {
         "summary": "Confirm settlement for an issued community purchase quote",
         "parameters": [
           {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/CommunityId"
           }
         ],
@@ -2475,14 +2227,6 @@ const spec = {
         ],
         "summary": "Mark a community purchase quote as failed",
         "parameters": [
-          {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/CommunityId"
           }
@@ -2528,14 +2272,6 @@ const spec = {
         "summary": "Join a community",
         "parameters": [
           {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/CommunityId"
           }
         ],
@@ -2566,14 +2302,6 @@ const spec = {
         ],
         "summary": "List pending membership requests",
         "parameters": [
-          {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/CommunityId"
           },
@@ -2614,14 +2342,6 @@ const spec = {
         ],
         "summary": "Approve a membership request",
         "parameters": [
-          {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/CommunityId"
           },
@@ -2668,14 +2388,6 @@ const spec = {
         "summary": "Reject a membership request",
         "parameters": [
           {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/CommunityId"
           },
           {
@@ -2721,14 +2433,6 @@ const spec = {
         "summary": "Follow a community",
         "parameters": [
           {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/CommunityId"
           }
         ],
@@ -2757,14 +2461,6 @@ const spec = {
         ],
         "summary": "Unfollow a community",
         "parameters": [
-          {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/CommunityId"
           }
@@ -2797,14 +2493,6 @@ const spec = {
         "summary": "Preview a community as a viewer",
         "parameters": [
           {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/CommunityId"
           }
         ],
@@ -2836,14 +2524,6 @@ const spec = {
         "summary": "Check join eligibility for a community",
         "parameters": [
           {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/CommunityId"
           }
         ],
@@ -2874,14 +2554,6 @@ const spec = {
         ],
         "summary": "Create a post in a community",
         "parameters": [
-          {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/CommunityId"
           }
@@ -2940,14 +2612,6 @@ const spec = {
         "summary": "List posts in a community",
         "parameters": [
           {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/CommunityId"
           },
           {
@@ -2997,22 +2661,6 @@ const spec = {
         "summary": "List top-level comments for a post thread",
         "parameters": [
           {
-            "name": "post_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/CommunityId"
           },
           {
@@ -3053,22 +2701,6 @@ const spec = {
         ],
         "summary": "Create a top-level comment under a post thread",
         "parameters": [
-          {
-            "name": "post_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/CommunityId"
           },
@@ -3116,22 +2748,6 @@ const spec = {
         ],
         "summary": "Report a post in a community",
         "parameters": [
-          {
-            "name": "post_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/CommunityId"
           },
@@ -3183,22 +2799,6 @@ const spec = {
         "summary": "Report a comment in a community",
         "parameters": [
           {
-            "name": "comment_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/CommunityId"
           },
           {
@@ -3249,14 +2849,6 @@ const spec = {
         "summary": "List moderation cases for a community",
         "parameters": [
           {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/CommunityId"
           }
         ],
@@ -3290,22 +2882,6 @@ const spec = {
         ],
         "summary": "Read a moderation case",
         "parameters": [
-          {
-            "name": "moderation_case_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/CommunityId"
           },
@@ -3343,22 +2919,6 @@ const spec = {
         ],
         "summary": "Resolve a moderation case with an action",
         "parameters": [
-          {
-            "name": "moderation_case_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/CommunityId"
           },
@@ -3406,14 +2966,6 @@ const spec = {
         ],
         "summary": "Create a song artifact upload intent",
         "parameters": [
-          {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/CommunityId"
           }
@@ -3464,22 +3016,6 @@ const spec = {
         ],
         "summary": "Upload song artifact content",
         "parameters": [
-          {
-            "name": "song_artifact_upload_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/CommunityId"
           },
@@ -3537,14 +3073,6 @@ const spec = {
         "summary": "Register a mainline song artifact bundle for a community",
         "parameters": [
           {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/CommunityId"
           }
         ],
@@ -3595,22 +3123,6 @@ const spec = {
         "summary": "Read a registered song artifact bundle",
         "parameters": [
           {
-            "name": "song_artifact_bundle_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/CommunityId"
           },
           {
@@ -3635,160 +3147,6 @@ const spec = {
           }
         },
         "operationId": "get_communities_by_community_id_song_artifacts_by_song_artifact_bundle_id"
-      },
-      "communities_by_community_id_provenance_policy": {
-        "get": {
-          "tags": [
-            "Communities"
-          ],
-          "summary": "Get the active provenance policy for a community",
-          "parameters": [
-            {
-              "$ref": "#/components/parameters/CommunityId"
-            }
-          ],
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/CommunityProvenancePolicy"
-                  }
-                }
-              }
-            },
-            "401": {
-              "$ref": "#/components/responses/AuthError"
-            },
-            "404": {
-              "$ref": "#/components/responses/NotFound"
-            }
-          }
-        },
-        "patch": {
-          "tags": [
-            "Communities"
-          ],
-          "summary": "Configure or update the provenance policy for a community",
-          "parameters": [
-            {
-              "$ref": "#/components/parameters/CommunityId"
-            }
-          ],
-          "requestBody": {
-            "required": true,
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UpdateCommunityProvenancePolicyRequest"
-                }
-              }
-            }
-          },
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/CommunityProvenancePolicy"
-                  }
-                }
-              }
-            },
-            "401": {
-              "$ref": "#/components/responses/AuthError"
-            },
-            "403": {
-              "$ref": "#/components/responses/EligibilityFailed"
-            },
-            "404": {
-              "$ref": "#/components/responses/NotFound"
-            },
-            "409": {
-              "$ref": "#/components/responses/Conflict"
-            },
-            "429": {
-              "$ref": "#/components/responses/RateLimited"
-            }
-          }
-        }
-      },
-      "communities_by_community_id_promotion_policy": {
-        "get": {
-          "tags": [
-            "Communities"
-          ],
-          "summary": "Get the active promotion policy for a community",
-          "parameters": [
-            {
-              "$ref": "#/components/parameters/CommunityId"
-            }
-          ],
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/CommunityPromotionPolicy"
-                  }
-                }
-              }
-            },
-            "401": {
-              "$ref": "#/components/responses/AuthError"
-            },
-            "404": {
-              "$ref": "#/components/responses/NotFound"
-            }
-          }
-        },
-        "patch": {
-          "tags": [
-            "Communities"
-          ],
-          "summary": "Configure or update the promotion policy for a community",
-          "parameters": [
-            {
-              "$ref": "#/components/parameters/CommunityId"
-            }
-          ],
-          "requestBody": {
-            "required": true,
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UpdateCommunityPromotionPolicyRequest"
-                }
-              }
-            }
-          },
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/CommunityPromotionPolicy"
-                  }
-                }
-              }
-            },
-            "401": {
-              "$ref": "#/components/responses/AuthError"
-            },
-            "403": {
-              "$ref": "#/components/responses/EligibilityFailed"
-            },
-            "404": {
-              "$ref": "#/components/responses/NotFound"
-            },
-            "409": {
-              "$ref": "#/components/responses/Conflict"
-            },
-            "429": {
-              "$ref": "#/components/responses/RateLimited"
-            }
-          }
-        }
       }
     },
     "/posts/{post_id}": {
@@ -3798,14 +3156,6 @@ const spec = {
         ],
         "summary": "Get a post",
         "parameters": [
-          {
-            "name": "post_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/PostId"
           },
@@ -3840,14 +3190,6 @@ const spec = {
         ],
         "summary": "Cast or update a vote on a post",
         "parameters": [
-          {
-            "name": "post_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/PostId"
           }
@@ -3905,14 +3247,6 @@ const spec = {
         "summary": "Tombstone a comment",
         "parameters": [
           {
-            "name": "comment_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/CommentId"
           }
         ],
@@ -3946,14 +3280,6 @@ const spec = {
         ],
         "summary": "List direct replies for a comment",
         "parameters": [
-          {
-            "name": "comment_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/CommentId"
           },
@@ -3992,14 +3318,6 @@ const spec = {
         ],
         "summary": "Create a reply beneath a comment",
         "parameters": [
-          {
-            "name": "comment_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/CommentId"
           }
@@ -4045,14 +3363,6 @@ const spec = {
         "summary": "Load permalink context for a comment",
         "parameters": [
           {
-            "name": "comment_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/CommentId"
           },
           {
@@ -4089,14 +3399,6 @@ const spec = {
         ],
         "summary": "Cast or update a vote on a comment",
         "parameters": [
-          {
-            "name": "comment_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/CommentId"
           }
@@ -4283,14 +3585,6 @@ const spec = {
         "summary": "Inspect a pollable async job",
         "parameters": [
           {
-            "name": "job_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/JobId"
           }
         ],
@@ -4406,14 +3700,6 @@ const spec = {
         "summary": "Get structured public community",
         "parameters": [
           {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/CommunityId"
           }
         ],
@@ -4458,14 +3744,6 @@ const spec = {
         "security": [],
         "summary": "List structured public community posts",
         "parameters": [
-          {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/CommunityId"
           },
@@ -4516,14 +3794,6 @@ const spec = {
         "summary": "Get structured public post",
         "parameters": [
           {
-            "name": "post_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/PostId"
           }
         ],
@@ -4571,14 +3841,6 @@ const spec = {
         "security": [],
         "summary": "Get structured public top comments",
         "parameters": [
-          {
-            "name": "post_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/PostId"
           }
@@ -10031,150 +9293,6 @@ const spec = {
           "updated_at": {
             "type": "string",
             "format": "date-time"
-          }
-        }
-      },
-      "CommunityProvenancePolicy": {
-        "type": "object",
-        "required": [
-          "community_id",
-          "policy_origin",
-          "allowed_creator_relations",
-          "require_creator_relation",
-          "false_claim_consequence",
-          "allow_oc_claim",
-          "require_proof_for_original",
-          "updated_at"
-        ],
-        "properties": {
-          "community_id": {
-            "type": "string"
-          },
-          "policy_origin": {
-            "$ref": "./communities-community.yaml#/CommunityPolicyOrigin"
-          },
-          "allowed_creator_relations": {
-            "type": "array",
-            "minItems": 1,
-            "items": {
-              "$ref": "./communities-community.yaml#/CommunityCreatorRelation"
-            }
-          },
-          "require_creator_relation": {
-            "type": "boolean"
-          },
-          "false_claim_consequence": {
-            "$ref": "./communities-community.yaml#/CommunityFalseClaimConsequence"
-          },
-          "allow_oc_claim": {
-            "type": "boolean"
-          },
-          "require_proof_for_original": {
-            "type": "boolean"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "UpdateCommunityProvenancePolicyRequest": {
-        "type": "object",
-        "required": [
-          "allowed_creator_relations",
-          "require_creator_relation",
-          "false_claim_consequence",
-          "allow_oc_claim",
-          "require_proof_for_original"
-        ],
-        "additionalProperties": false,
-        "properties": {
-          "allowed_creator_relations": {
-            "type": "array",
-            "minItems": 1,
-            "items": {
-              "$ref": "./communities-community.yaml#/CommunityCreatorRelation"
-            }
-          },
-          "require_creator_relation": {
-            "type": "boolean"
-          },
-          "false_claim_consequence": {
-            "$ref": "./communities-community.yaml#/CommunityFalseClaimConsequence"
-          },
-          "allow_oc_claim": {
-            "type": "boolean"
-          },
-          "require_proof_for_original": {
-            "type": "boolean"
-          }
-        }
-      },
-      "CommunityPromotionPolicy": {
-        "type": "object",
-        "required": [
-          "community_id",
-          "policy_origin",
-          "self_promotion_mode",
-          "require_affiliation_disclosure",
-          "updated_at"
-        ],
-        "properties": {
-          "community_id": {
-            "type": "string"
-          },
-          "policy_origin": {
-            "$ref": "./communities-community.yaml#/CommunityPolicyOrigin"
-          },
-          "self_promotion_mode": {
-            "$ref": "./communities-community.yaml#/CommunitySelfPromotionMode"
-          },
-          "require_affiliation_disclosure": {
-            "type": "boolean"
-          },
-          "max_promotional_posts_per_week": {
-            "type": "integer",
-            "nullable": true
-          },
-          "promotional_participation_ratio": {
-            "type": "number",
-            "nullable": true
-          },
-          "require_minimum_membership_days": {
-            "type": "integer",
-            "nullable": true
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "UpdateCommunityPromotionPolicyRequest": {
-        "type": "object",
-        "required": [
-          "self_promotion_mode",
-          "require_affiliation_disclosure"
-        ],
-        "additionalProperties": false,
-        "properties": {
-          "self_promotion_mode": {
-            "$ref": "./communities-community.yaml#/CommunitySelfPromotionMode"
-          },
-          "require_affiliation_disclosure": {
-            "type": "boolean"
-          },
-          "max_promotional_posts_per_week": {
-            "type": "integer",
-            "nullable": true
-          },
-          "promotional_participation_ratio": {
-            "type": "number",
-            "nullable": true
-          },
-          "require_minimum_membership_days": {
-            "type": "integer",
-            "nullable": true
           }
         }
       },

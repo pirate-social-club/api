@@ -58,7 +58,7 @@ function addReviewMetadata(spec: OpenApiRecord): void {
       }
       const parameters = Array.isArray(op.parameters) ? op.parameters : []
       for (const pathParam of pathParams) {
-        if (parameters.some((parameter) => parameter?.in === "path" && parameter?.name === pathParam)) {
+        if (parameters.some((parameter) => parameterName(spec, parameter) === pathParam)) {
           continue
         }
         parameters.unshift({
@@ -71,6 +71,23 @@ function addReviewMetadata(spec: OpenApiRecord): void {
       op.parameters = parameters
     }
   }
+}
+
+function parameterName(spec: OpenApiRecord, parameter: OpenApiRecord): string | null {
+  if (parameter.in === "path" && typeof parameter.name === "string") {
+    return parameter.name
+  }
+  if (typeof parameter.$ref !== "string") {
+    return null
+  }
+  const resolved = resolveRef(spec, parameter.$ref)
+  if (!resolved || typeof resolved !== "object") {
+    return null
+  }
+  const resolvedParameter = resolved as OpenApiRecord
+  return resolvedParameter.in === "path" && typeof resolvedParameter.name === "string"
+    ? resolvedParameter.name
+    : null
 }
 
 function implementedPath(pathItem: OpenApiRecord): OpenApiRecord {
@@ -240,8 +257,20 @@ function stripReviewNoise(value: unknown): void {
   }
 }
 
+function operationOnlyPathItem(pathItem: OpenApiRecord): OpenApiRecord {
+  const methods = new Set(["get", "put", "post", "delete", "options", "head", "patch", "trace", "parameters"])
+  return Object.fromEntries(
+    Object.entries(pathItem).filter(([key]) => methods.has(key)),
+  )
+}
+
 function reviewServiceSpec(spec: OpenApiRecord): OpenApiRecord {
-  const paths = JSON.parse(JSON.stringify(spec.paths ?? {}))
+  const paths = Object.fromEntries(
+    Object.entries(spec.paths ?? {}).map(([path, pathItem]) => [
+      path,
+      operationOnlyPathItem(JSON.parse(JSON.stringify(pathItem))),
+    ]),
+  )
   stripReviewNoise(paths)
   const reviewSpec: OpenApiRecord = {
     openapi: spec.openapi,
