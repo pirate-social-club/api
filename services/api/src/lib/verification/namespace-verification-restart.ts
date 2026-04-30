@@ -197,7 +197,7 @@ async function restartHnsChallenge(input: {
       inspectionSnapshot.operationClass = inspectionSnapshot.operationClass ?? "pirate_delegated_namespace"
       observationProvider = published.observation_provider ?? HNS_VERIFIER_OBSERVATION_PROVIDER
     }
-  } else if (isProductionEnv(input.env)) {
+  } else {
     throw providerUnavailable("HNS verifier is not configured")
   }
 

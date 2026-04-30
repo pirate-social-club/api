@@ -24,7 +24,6 @@ import {
   getNamespaceVerificationRowForUser,
   getNamespaceVerificationSessionRowForUser,
   isHnsVerifierConfigured,
-  isProductionEnv,
   makeNamespaceAssertionStatements,
   makeNamespaceCapabilityStatements,
   parseStoredSpacesChallenge,
@@ -372,7 +371,7 @@ export async function completeNamespaceVerificationSession(
         })
         return getNamespaceVerificationSession(client, env, input.namespaceVerificationSessionId, input.userId)
       }
-    } else if (isProductionEnv(env)) {
+    } else {
       throw providerUnavailable("HNS verifier is not configured")
     }
 
