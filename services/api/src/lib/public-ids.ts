@@ -5,19 +5,19 @@ export function decodePublicId(value: string, publicPrefix: string): string {
 }
 
 export function publicCommunityId(rawCommunityId: string): string {
-  return rawCommunityId.startsWith("com_") ? rawCommunityId : `com_${rawCommunityId}`
+  return `com_${rawCommunityId}`
 }
 
 export function publicPostId(rawPostId: string): string {
-  return rawPostId.startsWith("post_") ? rawPostId : `post_${rawPostId}`
+  return `post_${rawPostId}`
 }
 
 export function publicCommentId(rawCommentId: string): string {
-  return rawCommentId.startsWith("cmt_") ? rawCommentId : `cmt_${rawCommentId}`
+  return `cmt_${rawCommentId}`
 }
 
 export function publicId(rawId: string, publicPrefix: string): string {
-  return rawId.startsWith(`${publicPrefix}_`) ? rawId : `${publicPrefix}_${rawId}`
+  return `${publicPrefix}_${rawId}`
 }
 
 export function decodePublicCommunityId(value: string): string {
@@ -61,11 +61,19 @@ export function decodePublicModerationCaseId(value: string): string {
 }
 
 export function decodePublicNamespaceVerificationId(value: string): string {
-  return decodePublicId(value, "nv")
+  let decoded = value.trim()
+  while (decoded.startsWith("nv_nv_")) {
+    decoded = decoded.slice("nv_".length)
+  }
+  return decoded
 }
 
 export function decodePublicNamespaceVerificationSessionId(value: string): string {
-  return decodePublicId(value, "nvs")
+  let decoded = value.trim()
+  while (decoded.startsWith("nvs_nvs_")) {
+    decoded = decoded.slice("nvs_".length)
+  }
+  return decoded
 }
 
 export function decodePublicPurchaseId(value: string): string {
