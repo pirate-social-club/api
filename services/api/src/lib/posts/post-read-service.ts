@@ -1,4 +1,5 @@
 import { openCommunityDb } from "../communities/community-db-factory"
+import { isCommunityLive } from "../communities/community-status"
 import type {
   CommunityDatabaseBindingRepository,
   CommunityPostProjectionRepository,
@@ -120,7 +121,7 @@ export async function getPublicPost(input: {
   }
 
   const community = await input.communityRepository.getCommunityById(projection.community_id)
-  if (!community || community.provisioning_state !== "active" || community.status !== "active") {
+  if (!isCommunityLive(community)) {
     throw notFoundError("Post not found")
   }
 
@@ -171,7 +172,7 @@ export async function listCommunityPosts(input: {
   communityRepository: PostReadCommunityRepository
 }): Promise<CommunityFeedResponse> {
   const community = await input.communityRepository.getCommunityById(input.communityId)
-  if (!community || community.provisioning_state !== "active" || community.status !== "active") {
+  if (!isCommunityLive(community)) {
     throw notFoundError("Community not found")
   }
 
@@ -238,7 +239,7 @@ export async function listPublicCommunityPosts(input: {
   communityRepository: PostReadCommunityRepository
 }): Promise<CommunityFeedResponse> {
   const community = await input.communityRepository.getCommunityById(input.communityId)
-  if (!community || community.provisioning_state !== "active" || community.status !== "active") {
+  if (!isCommunityLive(community)) {
     throw notFoundError("Community not found")
   }
 

@@ -1,4 +1,5 @@
 import type { User } from "../../../types"
+import { parseJsonField, parseOptionalJsonField } from "../../json"
 import { normalizeIdentityCountryCode, normalizeIdentityCountryCodes } from "../../identity/country-codes"
 import { normalizeEthereumAddress } from "../community-token-gates"
 import type { ProofRequirement } from "./gate-types"
@@ -7,24 +8,13 @@ export function parseProofRequirements(raw: string | null, fallbackGateType: str
   if (!raw) {
     return [{ proof_type: fallbackGateType }]
   }
-  try {
-    const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed as ProofRequirement[] : [{ proof_type: fallbackGateType }]
-  } catch {
-    return [{ proof_type: fallbackGateType }]
-  }
+  const parsed = parseJsonField<unknown>(raw, "membership_gate_definitions.proof_requirements_json")
+  return Array.isArray(parsed) ? parsed as ProofRequirement[] : [{ proof_type: fallbackGateType }]
 }
 
 export function parseGateConfig(raw: string | null): Record<string, unknown> | null {
-  if (!raw) {
-    return null
-  }
-  try {
-    const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : null
-  } catch {
-    return null
-  }
+  const parsed = parseOptionalJsonField<unknown>(raw, "membership_gate_definitions.config_json")
+  return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : null
 }
 
 export function includesAcceptedProvider(acceptedProviders: string[] | null | undefined, provider: string | null | undefined): boolean {

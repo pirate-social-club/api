@@ -60,8 +60,14 @@ describe("Passport provider", () => {
         state: "unverified",
         provider: "passport",
         proof_type: "wallet_score",
-        score: null,
+        mechanism: "stamps-api-v2",
+        verified_at: null,
+        score_decimal: null,
+        score_threshold_decimal: null,
         passing_score: null,
+        last_scored_at: 1777338000,
+        expires_at: null,
+        stamps: null,
       })
     })
   })

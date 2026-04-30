@@ -8,6 +8,7 @@ import { serializeNamespaceSessionStatus } from "../verification/namespace-verif
 import { normalizeIdentityCountryAlpha2 } from "../identity/country-codes"
 import { nullableUnixSeconds, unixSeconds } from "../../serializers/time"
 import { decodePublicNamespaceVerificationId, decodePublicNamespaceVerificationSessionId, publicId } from "../public-ids"
+import { parseJsonField, parseOptionalJsonField } from "../json"
 import type {
   ExternalReputationSnapshotRow,
   GlobalHandleRow,
@@ -94,18 +95,10 @@ export function serializeGlobalHandle(row: GlobalHandleRow): GlobalHandle {
 }
 
 function parseLinkedHandleMetadata(raw: string | null): Record<string, unknown> | null {
-  if (!raw) {
-    return null
-  }
-
-  try {
-    const parsed = JSON.parse(raw) as unknown
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : null
-  } catch {
-    return null
-  }
+  const parsed = parseOptionalJsonField<unknown>(raw, "linked_handles.metadata_json")
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : null
 }
 
 export function serializeLinkedHandleRow(row: LinkedHandleRow): LinkedHandle {
@@ -241,16 +234,8 @@ function buildNamespaceCapabilities(input: {
 }
 
 function parseChallengePayload(raw: string | null | undefined): Record<string, unknown> | null {
-  if (!raw) {
-    return null
-  }
-
-  try {
-    const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : null
-  } catch {
-    return null
-  }
+  const parsed = parseOptionalJsonField<unknown>(raw, "namespace_verification_sessions.challenge_payload_json")
+  return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : null
 }
 
 export function serializeVerificationSession(input: {
@@ -258,9 +243,15 @@ export function serializeVerificationSession(input: {
   attestationRows: UserAttestationRow[]
   launch?: VerificationSessionLaunch | null
 }): VerificationSession {
-  const requestedCapabilities = JSON.parse(input.row.requested_capabilities_json) as VerificationSession["requested_capabilities"]
+  const requestedCapabilities = parseJsonField<VerificationSession["requested_capabilities"]>(
+    input.row.requested_capabilities_json,
+    "verification_sessions.requested_capabilities_json",
+  )
   const verificationRequirements = input.row.verification_requirements_json
-    ? JSON.parse(input.row.verification_requirements_json) as VerificationSession["verification_requirements"]
+    ? parseJsonField<VerificationSession["verification_requirements"]>(
+      input.row.verification_requirements_json,
+      "verification_sessions.verification_requirements_json",
+    )
     : []
   return {
     id: `vs_${input.row.verification_session_id}`,
@@ -322,25 +313,17 @@ export function serializeNamespaceVerificationSession(
 }
 
 function parseOptionalStringArray(raw: string | null): string[] | null {
-  if (!raw) {
+  const parsed = parseOptionalJsonField<unknown>(raw, "namespace_verification_sessions.setup_nameservers_json")
+  if (!Array.isArray(parsed)) {
     return null
   }
 
-  try {
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) {
-      return null
-    }
+  const values = parsed
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
 
-    const values = parsed
-      .filter((entry): entry is string => typeof entry === "string")
-      .map((entry) => entry.trim())
-      .filter(Boolean)
-
-    return values.length > 0 ? values : null
-  } catch {
-    return null
-  }
+  return values.length > 0 ? values : null
 }
 
 export function serializeNamespaceVerification(row: NamespaceVerificationRow): NamespaceVerification {
@@ -375,7 +358,10 @@ export function serializeRedditVerification(row: RedditVerificationSessionRow): 
 }
 
 export function parseRedditImportSummary(raw: string): RedditImportSummary {
-  const parsed = JSON.parse(raw) as RedditImportSummary & { global_karma?: number | null }
+  const parsed = parseJsonField<RedditImportSummary & { global_karma?: number | null }>(
+    raw,
+    "external_reputation_snapshots.snapshot_payload_json",
+  )
   const importedRedditScore = parsed.imported_reddit_score ?? parsed.global_karma ?? null
   return {
     reddit_username: parsed.reddit_username,

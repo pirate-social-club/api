@@ -198,7 +198,7 @@ export async function seedTestCommunityState(input: {
   memberUserIds: string[]
   displayName: string
   rootPostTitle: string
-  membershipMode?: "request" | "gated"
+  membershipMode?: "open" | "request" | "gated"
 }): Promise<{ postId: string }> {
   const db = await openCommunityDb(input.env, input.repo, input.communityId)
   try {

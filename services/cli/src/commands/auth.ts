@@ -38,7 +38,7 @@ export async function runAuth(action: string | undefined, args: ParsedArgs): Pro
         mode: "user",
         base_url: baseUrl,
         access_token: response.access_token,
-        user_id: response.user.user_id,
+        user_id: response.user.id,
         issued_at: times.issuedAt,
         expires_at: times.expiresAt,
         token_type: "Bearer",
@@ -48,7 +48,7 @@ export async function runAuth(action: string | undefined, args: ParsedArgs): Pro
         `${JSON.stringify(
           {
             stored_auth_path: getAuthPath(),
-            user_id: response.user.user_id,
+            user_id: response.user.id,
             base_url: baseUrl,
             issued_at: times.issuedAt,
             expires_at: times.expiresAt,

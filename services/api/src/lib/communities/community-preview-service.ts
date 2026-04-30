@@ -22,6 +22,7 @@ import {
 } from "./community-identity-media"
 import { serializeDonationPartnerRow } from "./community-donation-partner-serialization"
 import { parseStoredReferenceLinks } from "./community-serialization"
+import { isCommunityLive } from "./community-status"
 import { getControlPlaneClient } from "../runtime-deps"
 import type {
   CommunityDatabaseBindingRepository,
@@ -125,7 +126,7 @@ async function getActiveCommunityForPreview(
   route_slug?: string | null
 }> {
   const community = await repository.getCommunityById(communityId)
-  if (!community || community.provisioning_state !== "active" || community.status !== "active") {
+  if (!isCommunityLive(community)) {
     throw notFoundError("Community not found")
   }
   return community

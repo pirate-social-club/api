@@ -1,4 +1,4 @@
-import { badRequestError } from "../errors"
+import { badRequestError, providerUnavailable } from "../errors"
 import type { Env } from "../../env"
 import type { CreateSongArtifactBundleRequest } from "../../types"
 
@@ -59,100 +59,6 @@ export async function cropAudioPreviewWithFfmpeg(input: {
     }
   }
 
-  const [
-    childProcess,
-    fs,
-    os,
-    path,
-  ] = await Promise.all([
-    import("node:child_process"),
-    import("node:fs/promises"),
-    import("node:os"),
-    import("node:path"),
-  ])
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pirate-song-preview-"))
-  const inputPath = path.join(tempDir, `input.${input.sourceMimeType.includes("wav") ? "wav" : "audio"}`)
-  const outputPath = path.join(tempDir, "preview.mp3")
-  const ffmpegBin = String(input.env.SONG_PREVIEW_FFMPEG_BIN || "ffmpeg").trim() || "ffmpeg"
-  const ffprobeBin = String(input.env.SONG_PREVIEW_FFPROBE_BIN || "ffprobe").trim() || "ffprobe"
-  const startSeconds = String(input.previewWindow.start_ms / 1000)
-  const durationSeconds = String(input.previewWindow.duration_ms / 1000)
-
-  try {
-    await fs.writeFile(inputPath, input.sourceBytes)
-    await new Promise<void>((resolve, reject) => {
-      const child = childProcess.spawn(ffmpegBin, [
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
-        "-ss",
-        startSeconds,
-        "-t",
-        durationSeconds,
-        "-i",
-        inputPath,
-        "-vn",
-        "-codec:a",
-        "libmp3lame",
-        "-b:a",
-        "192k",
-        "-f",
-        "mp3",
-        outputPath,
-      ], { stdio: ["ignore", "ignore", "pipe"] })
-      let stderr = ""
-      child.stderr?.setEncoding("utf8")
-      child.stderr?.on("data", (chunk) => {
-        stderr += String(chunk)
-      })
-      child.on("error", reject)
-      child.on("close", (code) => {
-        if (code === 0) {
-          resolve()
-          return
-        }
-        reject(new Error(`ffmpeg exited with code ${code}${stderr.trim() ? `: ${stderr.trim()}` : ""}`))
-      })
-    })
-    const probeOutput = await new Promise<string>((resolve, reject) => {
-      const child = childProcess.spawn(ffprobeBin, [
-        "-v",
-        "error",
-        "-show_entries",
-        "format=duration",
-        "-of",
-        "default=noprint_wrappers=1:nokey=1",
-        outputPath,
-      ], { stdio: ["ignore", "pipe", "pipe"] })
-      let stdout = ""
-      let stderr = ""
-      child.stdout?.setEncoding("utf8")
-      child.stderr?.setEncoding("utf8")
-      child.stdout?.on("data", (chunk) => {
-        stdout += String(chunk)
-      })
-      child.stderr?.on("data", (chunk) => {
-        stderr += String(chunk)
-      })
-      child.on("error", reject)
-      child.on("close", (code) => {
-        if (code === 0) {
-          resolve(stdout)
-          return
-        }
-        reject(new Error(`ffprobe exited with code ${code}${stderr.trim() ? `: ${stderr.trim()}` : ""}`))
-      })
-    })
-    const durationSecondsParsed = Number.parseFloat(probeOutput.trim())
-    const durationMs = Number.isFinite(durationSecondsParsed)
-      ? Math.max(1, Math.round(durationSecondsParsed * 1000))
-      : null
-    return {
-      bytes: new Uint8Array(await fs.readFile(outputPath)),
-      durationMs,
-    }
-  } finally {
-    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined)
-  }
+  void input.sourceMimeType
+  throw providerUnavailable("Song preview cropping requires a Node-only ffmpeg worker")
 }

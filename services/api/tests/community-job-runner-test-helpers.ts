@@ -44,10 +44,11 @@ export async function seedCommunityState(input: {
   repo: CommunityDatabaseBindingRepository
   communityId: string
   memberUserIds: string[]
-  membershipMode?: "request" | "gated"
+  membershipMode?: "open" | "request" | "gated"
 }): Promise<{ postId: string }> {
   return await seedTestCommunityState({
     ...input,
+    membershipMode: input.membershipMode ?? "open",
     displayName: "Community Job Runner Test",
     rootPostTitle: "Runner Root",
   })

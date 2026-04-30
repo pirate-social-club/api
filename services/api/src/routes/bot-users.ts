@@ -7,9 +7,15 @@ import { buildDefaultVerificationCapabilities } from "../lib/verification/verifi
 import { badRequestError, conflictError, authError, notFoundError } from "../lib/errors"
 import { makeId, nowIso } from "../lib/helpers"
 import { getControlPlaneClient } from "../lib/runtime-deps"
+import { safeRollback } from "../lib/transactions"
 import type { Env } from "../env"
 import { optionalTrimmedString } from "./route-helpers"
 import { writeAuditEventBestEffortForEnv } from "../lib/audit"
+import {
+  serializeBotUserProvisionResponse,
+  serializeBotUserTokenResponse,
+  type BotUserTokenResponse,
+} from "../serializers/bot-user"
 
 const botUsers = new Hono<{ Bindings: Env }>()
 
@@ -245,11 +251,7 @@ botUsers.post("/provision", async (c) => {
 
     await tx.commit()
   } catch (error) {
-    try {
-      await tx.rollback()
-    } catch (rollbackError) {
-      console.error("[bot-users] rollback failed while provisioning bot user", rollbackError)
-    }
+    await safeRollback(tx, "[bot-users] rollback failed while provisioning bot user")
     throw error
   } finally {
     tx.close()
@@ -272,20 +274,20 @@ botUsers.post("/provision", async (c) => {
   }, "[bot-users]")
 
   const session = await loadSnapshot(client, userId)
-  return c.json({
+  return c.json(serializeBotUserProvisionResponse({
     created,
     user_id: userId,
     handle: requestedHandle.labelDisplay,
     wallet_address: walletAddress,
     ...session,
-  }, created ? 201 : 200)
+  }), created ? 201 : 200)
 })
 
 async function mintBotTokenResponse(input: {
   adminActorId: string
   env: Env
   userId: string
-}) {
+}): Promise<BotUserTokenResponse> {
   const client = getControlPlaneClient(input.env)
   const link = await client.execute({
     sql: `
@@ -342,11 +344,11 @@ botUsers.post("/handle/:handle/token", async (c) => {
     throw notFoundError("Bot user not found")
   }
 
-  return c.json(await mintBotTokenResponse({
+  return c.json(serializeBotUserTokenResponse(await mintBotTokenResponse({
     adminActorId: admin.adminActorId,
     env: c.env,
     userId,
-  }), 200)
+  })), 200)
 })
 
 botUsers.post("/:userId/token", async (c) => {
@@ -356,11 +358,11 @@ botUsers.post("/:userId/token", async (c) => {
     throw badRequestError("Invalid user id")
   }
 
-  return c.json(await mintBotTokenResponse({
+  return c.json(serializeBotUserTokenResponse(await mintBotTokenResponse({
     adminActorId: admin.adminActorId,
     env: c.env,
     userId,
-  }), 200)
+  })), 200)
 })
 
 export default botUsers

@@ -34,7 +34,7 @@ export async function runProfile(
       const result = await apiRequest<unknown>({
         baseUrl: session.baseUrl,
         path: apiRoutes.profilesMe,
-        method: "PATCH",
+        method: "POST",
         ...apiAuthHeadersForSession(session, asUserId),
         body,
       })

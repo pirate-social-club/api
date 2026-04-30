@@ -36,48 +36,13 @@ async function exchangeJwt(env: Env, sub: string): Promise<{ accessToken: string
   return { accessToken: body.access_token, userId: body.user.id.replace(/^usr_/, "") }
 }
 
-async function completeUniqueHumanVerification(env: Env, accessToken: string): Promise<void> {
-  const verificationSession = await requestJson("http://pirate.test/verification-sessions", {
-    provider: "self",
-  }, env, accessToken)
-  const verificationBody = await json(verificationSession) as { id: string }
-  await requestJson(
-    `http://pirate.test/verification-sessions/${verificationBody.id}/complete`,
-    {},
-    env,
-    accessToken,
-  )
-}
-
-async function prepareVerifiedNamespace(env: Env, accessToken: string): Promise<string> {
-  await completeUniqueHumanVerification(env, accessToken)
-
-  const namespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
-    family: "hns",
-    root_label: "FocusedRouteCoverageRoot",
-  }, env, accessToken)
-  const namespaceBody = await json(namespaceSession) as { id: string }
-  const completed = await requestJson(
-    `http://pirate.test/namespace-verification-sessions/${namespaceBody.id}/complete`,
-    {},
-    env,
-    accessToken,
-  )
-  const completedBody = await json(completed) as { namespace_verification: string }
-  return completedBody.namespace_verification
-}
-
 async function createCommunity(env: Env, accessToken: string, displayName: string): Promise<{
   communityId: string
   createJobId: string
 }> {
-  const namespaceVerificationId = await prepareVerifiedNamespace(env, accessToken)
   const response = await requestJson("http://pirate.test/communities", {
     display_name: displayName,
     membership_mode: "request",
-    namespace: {
-      namespace_verification: namespaceVerificationId,
-    },
   }, env, accessToken)
 
   expect(response.status).toBe(202)

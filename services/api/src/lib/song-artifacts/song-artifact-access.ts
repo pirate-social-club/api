@@ -1,6 +1,7 @@
 import type { Client } from "../sql-client"
 import type { UserRepository } from "../auth/repositories"
 import type { CommunityReadRepository } from "../communities/db-community-repository"
+import { isCommunityLive } from "../communities/community-status"
 import { canAccessCommunity, getCommunityMembershipState } from "../communities/membership/membership-state-store"
 import { eligibilityFailed, badRequestError, notFoundError, verificationRequired } from "../errors"
 import { requireSongArtifactUpload } from "./song-artifact-repository"
@@ -35,7 +36,7 @@ export async function requireActiveCommunity(
   communityId: string,
 ): Promise<void> {
   const community = await communityRepository.getCommunityById(communityId)
-  if (!community || community.provisioning_state !== "active" || community.status !== "active") {
+  if (!isCommunityLive(community)) {
     throw eligibilityFailed("Community is not available for posting")
   }
 }

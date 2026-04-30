@@ -47,10 +47,10 @@ export async function launchSpacesCommunity(rest: string[], args: ParsedArgs): P
   if (!publish) {
     printJson({
       next_step: "publish_fabric_records_then_complete",
-      namespace_verification_session_id: namespaceSession.namespace_verification_session_id,
+      namespace_verification_session_id: namespaceSession.id,
       namespace: namespaceKey,
       publish_command: buildSpacesPublishCommand(namespaceKey, challenge),
-      complete_command: `pirate verify namespace complete ${namespaceSession.namespace_verification_session_id}`,
+      complete_command: `pirate verify namespace complete ${namespaceSession.id}`,
     })
     return
   }
@@ -59,7 +59,7 @@ export async function launchSpacesCommunity(rest: string[], args: ParsedArgs): P
   runSpacesPublisher(publisherDir, namespaceKey, challenge)
   const namespaceVerificationId = await completeSpacesNamespaceSession(
     session,
-    namespaceSession.namespace_verification_session_id,
+    namespaceSession.id,
   )
   const created = await createCommunityForNamespace(session, {
     displayName,
@@ -68,7 +68,7 @@ export async function launchSpacesCommunity(rest: string[], args: ParsedArgs): P
     veryGate,
     allowAgents,
   })
-  const job = waitForJob ? await waitForCommunityJob(session, created.job.job_id) : created.job
+  const job = waitForJob ? await waitForCommunityJob(session, created.job.id) : created.job
 
   printJson({
     namespace: namespaceKey,
@@ -98,7 +98,7 @@ export async function finalizeSpacesCommunity(rest: string[], args: ParsedArgs):
     veryGate,
     allowAgents,
   })
-  const job = waitForJob ? await waitForCommunityJob(session, created.job.job_id) : created.job
+  const job = waitForJob ? await waitForCommunityJob(session, created.job.id) : created.job
 
   printJson({
     namespace_verification_id: namespaceVerificationId,
@@ -151,8 +151,8 @@ async function completeSpacesNamespaceSession(
       ...apiAuthHeadersForSession(session),
       body: {},
     })
-    if (completed.status === "verified" && completed.namespace_verification_id) {
-      return completed.namespace_verification_id
+    if (completed.status === "verified" && completed.namespace_verification) {
+      return completed.namespace_verification
     }
     if (completed.status !== "challenge_pending" && completed.status !== "challenge_required" && completed.status !== "verifying") {
       throw new Error(`Spaces namespace verification ended with status ${completed.status}`)
@@ -187,7 +187,7 @@ async function createCommunityForNamespace(
       policy_template: "standard",
     },
     namespace: {
-      namespace_verification_id: input.namespaceVerificationId,
+      namespace_verification: input.namespaceVerificationId,
     },
     gate_rules: input.veryGate
       ? [{

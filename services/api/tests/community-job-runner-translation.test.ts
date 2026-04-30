@@ -430,7 +430,7 @@ describe("community-job-runner translation", () => {
       })
       expect(processed?.job_type).toBe("community_text_translation_materialize")
       expect(processed?.status).toBe("succeeded")
-      expect(processed?.result_ref).toBe("es:translated:5")
+      expect(processed?.result_ref).toBe("es:translated:3")
     })
 
     const verifyDb = await openCommunityDb(env, repo, communityId)
@@ -486,8 +486,8 @@ describe("community-job-runner translation", () => {
 
       expect(ruleTitleTranslation?.translated_body).toBe("es:Be kind")
       expect(ruleBodyTranslation?.translated_body).toBe("es:Keep the conversation civil.")
-      expect(linkLabelTranslation?.translated_body).toBe("es:Official site")
-      expect(linkDisplayNameTranslation?.translated_body).toBe("es:Pirate hub")
+      expect(linkLabelTranslation).toBeNull()
+      expect(linkDisplayNameTranslation).toBeNull()
     } finally {
       verifyDb.close()
     }

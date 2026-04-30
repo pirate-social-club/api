@@ -11,6 +11,7 @@ import type {
   MembershipRequestSummary,
 } from "../../../types"
 import { openCommunityDb } from "../community-db-factory"
+import { isCommunityLive } from "../community-status"
 import {
   canAccessCommunity,
   getCommunityMembershipState,
@@ -74,7 +75,7 @@ export async function joinCommunity(input: {
     throw internalError("Resolved user row is missing for community join")
   }
   const community = await input.communityRepository.getCommunityById(input.communityId)
-  if (!community || community.provisioning_state !== "active" || community.status !== "active") {
+  if (!isCommunityLive(community)) {
     throw notFoundError("Community not found")
   }
 

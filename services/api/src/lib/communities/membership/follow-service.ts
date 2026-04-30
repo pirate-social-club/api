@@ -2,6 +2,7 @@ import {
   canAccessCommunity,
   getCommunityMembershipState,
 } from "./membership-state-store"
+import { isCommunityLive } from "../community-status"
 import { setCommunityFollowInactive } from "./follow-store"
 import { openCommunityDb } from "../community-db-factory"
 import { conflictError, notFoundError } from "../../errors"
@@ -17,7 +18,7 @@ export async function followCommunity(input: {
   communityRepository: CommunityMembershipRepository
 }): Promise<CommunityFollowResult> {
   const community = await input.communityRepository.getCommunityById(input.communityId)
-  if (!community || community.provisioning_state !== "active" || community.status !== "active") {
+  if (!isCommunityLive(community)) {
     throw notFoundError("Community not found")
   }
 
@@ -42,7 +43,7 @@ export async function unfollowCommunity(input: {
   communityRepository: CommunityMembershipRepository
 }): Promise<CommunityFollowResult> {
   const community = await input.communityRepository.getCommunityById(input.communityId)
-  if (!community || community.provisioning_state !== "active" || community.status !== "active") {
+  if (!isCommunityLive(community)) {
     throw notFoundError("Community not found")
   }
 

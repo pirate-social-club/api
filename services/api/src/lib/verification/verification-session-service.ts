@@ -19,6 +19,7 @@ import { canonicalizeRequestedCapabilities, getSelfProvider, normalizeVerificati
 import { normalizeIdentityCountryCode } from "../identity/country-codes"
 import { logVerificationDebug } from "./verification-logging"
 import { unixSeconds } from "../../serializers/time"
+import { parseJsonField } from "../json"
 import type {
   Env,
   RequestedVerificationCapability,
@@ -35,22 +36,18 @@ import {
 
 function parseVerificationRequirements(raw: string | null | undefined): VerificationRequirement[] {
   if (!raw) return []
-  try {
-    const parsed = JSON.parse(raw) as unknown
-    if (!Array.isArray(parsed)) return []
-    return parsed.flatMap((requirement): VerificationRequirement[] => {
-      if (requirement == null || typeof requirement !== "object") {
-        return []
-      }
-      const typed = requirement as VerificationRequirement
-      if (typed.proof_type === "minimum_age" && Number.isInteger(typed.minimum_age)) {
-        return [typed]
-      }
+  const parsed = parseJsonField<unknown>(raw, "verification_sessions.verification_requirements_json")
+  if (!Array.isArray(parsed)) return []
+  return parsed.flatMap((requirement): VerificationRequirement[] => {
+    if (requirement == null || typeof requirement !== "object") {
       return []
-    })
-  } catch {
+    }
+    const typed = requirement as VerificationRequirement
+    if (typed.proof_type === "minimum_age" && Number.isInteger(typed.minimum_age)) {
+      return [typed]
+    }
     return []
-  }
+  })
 }
 
 function resolveMinimumAgeToMint(
@@ -462,7 +459,10 @@ async function completeSelfSession(
   }
 
   if (outcome.status === "verified") {
-    const requestedCapabilities = JSON.parse(row.requested_capabilities_json) as RequestedVerificationCapability[]
+    const requestedCapabilities = parseJsonField<RequestedVerificationCapability[]>(
+      row.requested_capabilities_json,
+      "verification_sessions.requested_capabilities_json",
+    )
     const verificationRequirements = parseVerificationRequirements(row.verification_requirements_json)
     const missingClaims: string[] = []
     if (requestedCapabilities.includes("age_over_18") && outcome.claims.age_over_18 !== true) {

@@ -2,14 +2,26 @@ import type { User, VerificationCapabilities } from "../../types"
 
 export const INTERACTIVE_VERIFICATION_TTL_MS = 90 * 24 * 60 * 60 * 1000
 
-function isExpiredAt(unixSeconds: number | null | undefined, nowMs: number): boolean {
-  if (typeof unixSeconds !== "number") return false
-  return unixSeconds * 1000 <= nowMs
+function timestampToMs(timestamp: number | string | null | undefined): number | null {
+  if (typeof timestamp === "number") {
+    const millis = timestamp * 1000
+    return Number.isFinite(millis) ? millis : null
+  }
+  if (typeof timestamp === "string") {
+    const millis = Date.parse(timestamp)
+    return Number.isFinite(millis) ? millis : null
+  }
+  return null
 }
 
-function isOlderThanTtl(verifiedAt: number | null | undefined, ttlMs: number, nowMs: number): boolean {
-  if (typeof verifiedAt !== "number") return false
-  const verifiedMs = verifiedAt * 1000
+function isExpiredAt(timestamp: number | string | null | undefined, nowMs: number): boolean {
+  const expiresMs = timestampToMs(timestamp)
+  return expiresMs !== null && expiresMs <= nowMs
+}
+
+function isOlderThanTtl(verifiedAt: number | string | null | undefined, ttlMs: number, nowMs: number): boolean {
+  const verifiedMs = timestampToMs(verifiedAt)
+  if (verifiedMs === null) return false
   return Number.isFinite(verifiedMs) && verifiedMs + ttlMs <= nowMs
 }
 

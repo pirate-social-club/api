@@ -1,4 +1,5 @@
 import type { Client } from "../sql-client"
+import { safeRollback } from "../transactions"
 import { conflictError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import { getAddress } from "ethers"
@@ -36,6 +37,7 @@ import { resolveVerifiedEnsProfile } from "./ens-linked-handle-service"
 import type { PublicProfileResolution } from "./repositories"
 import { unixSeconds } from "../../serializers/time"
 import { publicCommunityId } from "../public-ids"
+import { parseOptionalJsonField } from "../json"
 
 export type UpdateProfileInput = {
   display_name?: string | null
@@ -59,18 +61,10 @@ function normalizeWalletAddress(value: string): string | null {
 }
 
 function parseLinkedHandleMetadata(raw: string | null): Record<string, unknown> | null {
-  if (!raw) {
-    return null
-  }
-
-  try {
-    const parsed = JSON.parse(raw) as unknown
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : null
-  } catch {
-    return null
-  }
+  const parsed = parseOptionalJsonField<unknown>(raw, "linked_handles.metadata_json")
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : null
 }
 
 function stringMetadataValue(metadata: Record<string, unknown> | null, key: string): string | null {
@@ -351,11 +345,7 @@ export class DatabaseProfileRepository {
 
       await tx.commit()
     } catch (error) {
-      try {
-        await tx.rollback()
-      } catch (rollbackError) {
-        console.error("[profiles] rollback failed while renaming global handle", rollbackError)
-      }
+      await safeRollback(tx, "[profiles] rollback failed while renaming global handle")
       throw error
     } finally {
       tx.close()
@@ -724,11 +714,7 @@ export class DatabaseProfileRepository {
 
       await tx.commit()
     } catch (error) {
-      try {
-        await tx.rollback()
-      } catch (rollbackError) {
-        console.error("[profiles] rollback failed while syncing linked handles", rollbackError)
-      }
+      await safeRollback(tx, "[profiles] rollback failed while syncing linked handles")
       throw error
     } finally {
       tx.close()

@@ -1,4 +1,5 @@
 import { openCommunityDb } from "../communities/community-db-factory"
+import { isCommunityLive } from "../communities/community-status"
 import type {
   CommunityCommentProjectionRepository,
   CommunityDatabaseBindingRepository,
@@ -78,7 +79,7 @@ export async function listPostComments(input: {
   communityRepository: CommentReadCommunityRepository
 }): Promise<CommentListResponse> {
   const community = await input.communityRepository.getCommunityById(input.communityId)
-  if (!community || community.provisioning_state !== "active" || community.status !== "active") {
+  if (!isCommunityLive(community)) {
     throw notFoundError("Community not found")
   }
 
@@ -130,7 +131,7 @@ export async function listPublicPostComments(input: {
   }
 
   const community = await input.communityRepository.getCommunityById(projection.community_id)
-  if (!community || community.provisioning_state !== "active" || community.status !== "active") {
+  if (!isCommunityLive(community)) {
     throw notFoundError("Community not found")
   }
 
@@ -229,7 +230,7 @@ export async function listPublicCommentReplies(input: {
   }
 
   const community = await input.communityRepository.getCommunityById(projection.community_id)
-  if (!community || community.provisioning_state !== "active" || community.status !== "active") {
+  if (!isCommunityLive(community)) {
     throw notFoundError("Community not found")
   }
 

@@ -1,5 +1,7 @@
 import type { Client } from "../sql-client"
 import { openCommunityDb } from "../communities/community-db-factory"
+import { isCommunityLive } from "../communities/community-status"
+import { safeRollback } from "../transactions"
 import type { ProfileRepository, UserRepository } from "../auth/repositories"
 import type {
   CommunityDatabaseBindingRepository,
@@ -99,7 +101,7 @@ export async function createPost(input: {
   communityRepository: PostServiceCommunityRepository
 }): Promise<Post> {
   const communityRow = await input.communityRepository.getCommunityById(input.communityId)
-  if (!communityRow || communityRow.provisioning_state !== "active" || communityRow.status !== "active") {
+  if (!isCommunityLive(communityRow)) {
     throw eligibilityFailed("Community is not available for posting")
   }
   const community = await loadCommunityProjection(input.env, input.communityRepository, communityRow)
@@ -314,11 +316,7 @@ export async function createPost(input: {
 
       await tx.commit()
     } catch (error) {
-      try {
-        await tx.rollback()
-      } catch (rollbackError) {
-        console.error("[posts] rollback failed while creating post", rollbackError)
-      }
+      await safeRollback(tx, "[posts] rollback failed while creating post")
       throw error
     } finally {
       tx.close()

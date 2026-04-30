@@ -86,7 +86,7 @@ export async function followCommunity(rest: string[], args: ParsedArgs): Promise
   const result = await apiRequest<unknown>({
     baseUrl: session.baseUrl,
     path: apiRoutes.communityFollow(communityId),
-    method: "PUT",
+    method: "POST",
     ...apiAuthHeadersForSession(session, asUserId),
   })
   printJson(result)

@@ -197,7 +197,10 @@ describe("verification routes", () => {
   })
 
   test("verification and namespace endpoints work through the full route stack", async () => {
-    const ctx = await createRouteTestContext()
+    const ctx = await createRouteTestContext({
+      HNS_VERIFIER_BASE_URL: "http://hns-verifier.test",
+      HNS_VERIFIER_AUTH_TOKEN: "test-hns-token",
+    })
     cleanup = ctx.cleanup
 
     const session = await exchangeJwt(ctx.env, "verification-user")
@@ -239,51 +242,82 @@ describe("verification routes", () => {
     expect(completedVerificationBody.status).toBe("verified")
     expect(completedVerificationBody.attestation_id).toBe(undefined)
 
-    const createdNamespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
-      family: "hns",
-      root_label: "PirateTestRoot",
-    }, ctx.env, session.accessToken)
-    expect(createdNamespaceSession.status).toBe(201)
-    const namespaceSessionBody = await json(createdNamespaceSession) as {
-      id: string
-      status: string
-      challenge_host: string | null
-      challenge_txt_value: string | null
-    }
-    expect(namespaceSessionBody.status).toBe("challenge_required")
-    expect(typeof namespaceSessionBody.challenge_host).toBe("string")
-    expect(typeof namespaceSessionBody.challenge_txt_value).toBe("string")
+    const originalFetch = globalThis.fetch
+    await withFetchMock(async (input, init) => {
+      const url = typeof input === "string" ? input : input.toString()
+      if (url.startsWith("http://hns-verifier.test")) {
+        if (url.includes("/inspect?")) {
+          return Response.json({
+            root_exists: true,
+            expiry_horizon_sufficient: true,
+            routing_enabled: true,
+            pirate_dns_authority_verified: true,
+            nameservers: ["ns1.pirate.sc."],
+            operation_class: "pirate_delegated_namespace",
+            observation_provider: "powerdns_api",
+            failure_reason: null,
+          })
+        }
+        if (url.endsWith("/publish-txt")) {
+          expect(init?.headers).toMatchObject({ authorization: "Bearer test-hns-token" })
+          return Response.json({ observation_provider: "powerdns_api" })
+        }
+        if (url.endsWith("/verify-txt")) {
+          return Response.json({
+            verified: true,
+            observation_provider: "powerdns_api",
+            failure_reason: null,
+          })
+        }
+      }
+      return originalFetch(input, init)
+    }, async () => {
+      const createdNamespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
+        family: "hns",
+        root_label: "PirateTestRoot",
+      }, ctx.env, session.accessToken)
+      expect(createdNamespaceSession.status).toBe(201)
+      const namespaceSessionBody = await json(createdNamespaceSession) as {
+        id: string
+        status: string
+        challenge_host: string | null
+        challenge_txt_value: string | null
+      }
+      expect(namespaceSessionBody.status).toBe("challenge_required")
+      expect(typeof namespaceSessionBody.challenge_host).toBe("string")
+      expect(typeof namespaceSessionBody.challenge_txt_value).toBe("string")
 
-    const completedNamespaceSession = await requestJson(
-      `http://pirate.test/namespace-verification-sessions/${namespaceSessionBody.id}/complete`,
-      {},
-      ctx.env,
-      session.accessToken,
-    )
-    expect(completedNamespaceSession.status).toBe(200)
-    const completedNamespaceBody = await json(completedNamespaceSession) as {
-      status: string
-      namespace_verification: string | null
-    }
-    expect(completedNamespaceBody.status).toBe("verified")
-    expect(typeof completedNamespaceBody.namespace_verification).toBe("string")
+      const completedNamespaceSession = await requestJson(
+        `http://pirate.test/namespace-verification-sessions/${namespaceSessionBody.id}/complete`,
+        {},
+        ctx.env,
+        session.accessToken,
+      )
+      expect(completedNamespaceSession.status).toBe(200)
+      const completedNamespaceBody = await json(completedNamespaceSession) as {
+        status: string
+        namespace_verification: string | null
+      }
+      expect(completedNamespaceBody.status).toBe("verified")
+      expect(typeof completedNamespaceBody.namespace_verification).toBe("string")
 
-    const fetchedNamespaceVerification = await app.request(
-      `http://pirate.test/namespace-verifications/${completedNamespaceBody.namespace_verification}`,
-      {
-        headers: {
-          authorization: `Bearer ${session.accessToken}`,
+      const fetchedNamespaceVerification = await app.request(
+        `http://pirate.test/namespace-verifications/${completedNamespaceBody.namespace_verification}`,
+        {
+          headers: {
+            authorization: `Bearer ${session.accessToken}`,
+          },
         },
-      },
-      ctx.env,
-    )
-    expect(fetchedNamespaceVerification.status).toBe(200)
-    const fetchedNamespaceBody = await json(fetchedNamespaceVerification) as {
-      status: string
-      capabilities: { club_attach_allowed: boolean | null }
-    }
-    expect(fetchedNamespaceBody.status).toBe("verified")
-    expect(fetchedNamespaceBody.capabilities.club_attach_allowed).toBe(true)
+        ctx.env,
+      )
+      expect(fetchedNamespaceVerification.status).toBe(200)
+      const fetchedNamespaceBody = await json(fetchedNamespaceVerification) as {
+        status: string
+        capabilities: { club_attach_allowed: boolean | null }
+      }
+      expect(fetchedNamespaceBody.status).toBe("verified")
+      expect(fetchedNamespaceBody.capabilities.club_attach_allowed).toBe(true)
+    })
   })
 
   test("passport wallet score refresh updates only wallet_score capability", async () => {

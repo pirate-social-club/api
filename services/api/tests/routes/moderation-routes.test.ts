@@ -47,32 +47,10 @@ async function completeUniqueHumanVerification(env: Env, accessToken: string): P
   )
 }
 
-async function prepareVerifiedNamespace(env: Env, accessToken: string): Promise<string> {
-  await completeUniqueHumanVerification(env, accessToken)
-
-  const namespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
-    family: "hns",
-    root_label: "ModerationRoutesCoverageRoot",
-  }, env, accessToken)
-  const namespaceBody = await json(namespaceSession) as { id: string }
-  const completed = await requestJson(
-    `http://pirate.test/namespace-verification-sessions/${namespaceBody.id}/complete`,
-    {},
-    env,
-    accessToken,
-  )
-  const completedBody = await json(completed) as { namespace_verification: string }
-  return completedBody.namespace_verification
-}
-
 async function createCommunity(env: Env, accessToken: string, displayName: string): Promise<{ communityId: string }> {
-  const namespaceVerificationId = await prepareVerifiedNamespace(env, accessToken)
   const response = await requestJson("http://pirate.test/communities", {
     display_name: displayName,
     membership_mode: "request",
-    namespace: {
-      namespace_verification: namespaceVerificationId,
-    },
   }, env, accessToken)
   expect(response.status).toBe(202)
   const body = await json(response) as { community: { id: string } }
@@ -190,11 +168,16 @@ describe("moderation routes", () => {
     cleanup = ctx.cleanup
 
     const owner = await exchangeJwt(ctx.env, "moderation-routes-owner-2")
+    await completeUniqueHumanVerification(ctx.env, owner.accessToken)
     const community = await createCommunity(ctx.env, owner.accessToken, "Moderation Comments Club")
 
     const member = await exchangeJwt(ctx.env, "moderation-routes-member-2")
     await completeUniqueHumanVerification(ctx.env, member.accessToken)
     await addCommunityMember(ctx.communityDbRoot, community.communityId, member.userId)
+
+    const commenter = await exchangeJwt(ctx.env, "moderation-routes-commenter-2")
+    await completeUniqueHumanVerification(ctx.env, commenter.accessToken)
+    await addCommunityMember(ctx.communityDbRoot, community.communityId, commenter.userId)
 
     const createdPost = await requestJson(
       `http://pirate.test/communities/${community.communityId}/posts`,
@@ -205,7 +188,7 @@ describe("moderation routes", () => {
         idempotency_key: "moderation-post-2",
       },
       ctx.env,
-      owner.accessToken,
+      commenter.accessToken,
     )
     expect(createdPost.status).toBe(201)
     const postBody = await json(createdPost) as { id: string }
@@ -216,7 +199,7 @@ describe("moderation routes", () => {
         body: "Suspicious comment",
       },
       ctx.env,
-      member.accessToken,
+      owner.accessToken,
     )
     expect(createdComment.status).toBe(201)
     const commentBody = await json(createdComment) as { id: string; status: string }
@@ -228,7 +211,7 @@ describe("moderation routes", () => {
         reason_code: "harassment",
       },
       ctx.env,
-      owner.accessToken,
+      member.accessToken,
     )
     expect(report.status).toBe(201)
     const rawCommentId = commentBody.id.replace(/^cmt_/, "")

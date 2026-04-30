@@ -10,6 +10,13 @@ import type { GatePolicy } from "./membership/gate-types"
 
 const LOCAL_SQLITE_BUSY_TIMEOUT_MS = 30000
 
+function localSqliteBusyTimeoutMs(): number {
+  if (!Number.isInteger(LOCAL_SQLITE_BUSY_TIMEOUT_MS) || LOCAL_SQLITE_BUSY_TIMEOUT_MS < 0) {
+    throw internalError("Invalid local SQLite busy timeout")
+  }
+  return LOCAL_SQLITE_BUSY_TIMEOUT_MS
+}
+
 export type LocalCommunityBootstrapInput = {
   rootDir: string
   communityId: string
@@ -132,7 +139,7 @@ async function ensureSchemaMigrationsTable(client: Client): Promise<void> {
 export async function configureLocalCommunityDbClient(client: Client): Promise<void> {
   await client.execute("PRAGMA journal_mode = WAL")
   await client.execute("PRAGMA synchronous = NORMAL")
-  await client.execute(`PRAGMA busy_timeout = ${LOCAL_SQLITE_BUSY_TIMEOUT_MS}`)
+  await client.execute(`PRAGMA busy_timeout = ${localSqliteBusyTimeoutMs()}`)
 }
 
 async function applyMigrationFile(client: Client, migrationFilePath: string): Promise<void> {

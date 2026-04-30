@@ -25,6 +25,7 @@ import {
 import { decodePublicId } from "../public-ids"
 import { unixSeconds } from "../../serializers/time"
 import type { GateAtom, GateExpression } from "./membership/gate-types"
+import { parseJsonField } from "../json"
 
 type HumanVerificationLane = NonNullable<Community["human_verification_lane"]>
 
@@ -62,16 +63,12 @@ function parseStoredCommunitySettings(
     return {}
   }
 
-  try {
-    const parsed = JSON.parse(local.settings_json) as unknown
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>
-    }
-  } catch (error) {
-    console.warn("[community-serialization] failed to parse community settings JSON", {
-      communityId: local.community_id,
-      error,
-    })
+  const parsed = parseJsonField<unknown>(
+    local.settings_json,
+    "local_communities.settings_json",
+  )
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    return parsed as Record<string, unknown>
   }
 
   return {}

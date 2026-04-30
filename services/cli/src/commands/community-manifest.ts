@@ -88,7 +88,7 @@ export async function applyCommunityManifest(rest: string[], args: ParsedArgs): 
 type SettingManifestStep = {
   kind: "update" | "gates" | "rules" | "links" | "labels" | "safety" | "donation-policy"
   body: unknown
-  method: "PUT" | "PATCH"
+  method: "POST"
   pathSuffix: string
 }
 
@@ -288,43 +288,43 @@ function buildManifestPlanFromObject(
     updateBody.accepted_agent_ownership_providers = parseAcceptedAgentOwnershipProviders(manifest)
   }
   if (Object.keys(updateBody).length > 0) {
-    steps.push({ kind: "update", body: updateBody, method: "PATCH", pathSuffix: "" })
+    steps.push({ kind: "update", body: updateBody, method: "POST", pathSuffix: "" })
   }
 
   const gatesFile = manifest["gates_file"] as string | undefined
   if (gatesFile) {
     const gatesPath = resolveRequiredManifestFile(folder, gatesFile)
-    steps.push({ kind: "gates", body: readJsonFile(gatesPath), method: "PUT", pathSuffix: "gates" })
+    steps.push({ kind: "gates", body: readJsonFile(gatesPath), method: "POST", pathSuffix: "gates" })
   }
 
   const rulesFile = manifest["rules_file"] as string | undefined
   if (rulesFile) {
     const rulesPath = resolveRequiredManifestFile(folder, rulesFile)
-    steps.push({ kind: "rules", body: parseRulesFile(rulesPath), method: "PUT", pathSuffix: "rules" })
+    steps.push({ kind: "rules", body: parseRulesFile(rulesPath), method: "POST", pathSuffix: "rules" })
   }
 
   const linksFile = manifest["reference_links_file"] as string | undefined
   if (linksFile) {
     const linksPath = resolveRequiredManifestFile(folder, linksFile)
-    steps.push({ kind: "links", body: normalizeReferenceLinksPayload(readJsonFile(linksPath)), method: "PUT", pathSuffix: "reference-links" })
+    steps.push({ kind: "links", body: normalizeReferenceLinksPayload(readJsonFile(linksPath)), method: "POST", pathSuffix: "reference-links" })
   }
 
   const labelsFile = manifest["labels_file"] as string | undefined
   if (labelsFile) {
     const labelsPath = resolveRequiredManifestFile(folder, labelsFile)
-    steps.push({ kind: "labels", body: readJsonFile(labelsPath), method: "PATCH", pathSuffix: "labels" })
+    steps.push({ kind: "labels", body: readJsonFile(labelsPath), method: "POST", pathSuffix: "labels" })
   }
 
   const safetyFile = manifest["safety_file"] as string | undefined
   if (safetyFile) {
     const safetyPath = resolveRequiredManifestFile(folder, safetyFile)
-    steps.push({ kind: "safety", body: readJsonFile(safetyPath), method: "PUT", pathSuffix: "safety" })
+    steps.push({ kind: "safety", body: readJsonFile(safetyPath), method: "POST", pathSuffix: "safety" })
   }
 
   const donationPolicyFile = manifest["donation_policy_file"] as string | undefined
   if (donationPolicyFile) {
     const donationPath = resolveRequiredManifestFile(folder, donationPolicyFile)
-    steps.push({ kind: "donation-policy", body: readJsonFile(donationPath), method: "PATCH", pathSuffix: "donation-policy" })
+    steps.push({ kind: "donation-policy", body: readJsonFile(donationPath), method: "POST", pathSuffix: "donation-policy" })
   }
 
   const profileUpdatesFile = manifest["profile_updates_file"] as string | undefined
@@ -504,13 +504,13 @@ async function executeManifestStep(
         path: `${apiRoutes.community(communityId)}/namespace`,
         method: "POST",
         ...apiAuthHeadersForSession(session),
-        body: { namespace_verification_id: step.namespaceVerificationId },
+        body: { namespace_verification: step.namespaceVerificationId },
       })
     case "update":
       return apiRequest<Community>({
         baseUrl: session.baseUrl,
         path: apiRoutes.community(communityId),
-        method: "PATCH",
+        method: "POST",
         ...apiAuthHeadersForSession(session),
         body: step.body,
       })
@@ -518,7 +518,7 @@ async function executeManifestStep(
       return apiRequest<Community>({
         baseUrl: session.baseUrl,
         path: `${apiRoutes.community(communityId)}/rules`,
-        method: "PUT",
+        method: "POST",
         ...apiAuthHeadersForSession(session),
         body: step.body,
       })
@@ -546,14 +546,14 @@ async function executeManifestStep(
       return apiRequest<unknown>({
         baseUrl: session.baseUrl,
         path: apiRoutes.communityFollow(communityId),
-        method: "PUT",
+        method: "POST",
         ...apiAuthHeadersForSession(session, step.asUserId),
       })
     case "profile-update":
       return apiRequest<unknown>({
         baseUrl: session.baseUrl,
         path: apiRoutes.profilesMe,
-        method: "PATCH",
+        method: "POST",
         ...apiAuthHeadersForSession(session, step.asUserId),
         body: step.body,
       })
@@ -644,7 +644,7 @@ async function resolveManifestCommunityTarget(
         path: apiRoutes.community(plan.lookupIdentifier),
         ...apiAuthHeadersForSession(session),
       })
-      return { communityId: community.community_id, created: null, job: null }
+      return { communityId: community.id, created: null, job: null }
     } catch (error) {
       if (!(error instanceof PirateHttpError) || error.status !== 404) {
         throw error
@@ -660,8 +660,8 @@ async function resolveManifestCommunityTarget(
   }
 
   const created = await createCommunityFromManifest(session, plan.create)
-  const job = await waitForCommunityJob(session, created.job.job_id)
-  return { communityId: created.community.community_id, created, job }
+  const job = await waitForCommunityJob(session, created.job.id)
+  return { communityId: created.community.id, created, job }
 }
 
 async function createCommunityFromManifest(
@@ -685,7 +685,7 @@ async function createCommunityFromManifest(
       policy_template: "standard",
     },
     namespace: {
-      namespace_verification_id: input.namespaceVerificationId,
+      namespace_verification: input.namespaceVerificationId,
     },
   }
 

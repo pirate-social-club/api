@@ -60,7 +60,7 @@ export async function runCommunity(
           policy_template: "standard",
         },
         namespace: {
-          namespace_verification_id: namespaceVerificationId,
+          namespace_verification: namespaceVerificationId,
         },
       }
       const result = await apiRequest<CommunityCreateAcceptedResponse>({
@@ -117,7 +117,7 @@ export async function runCommunity(
     case "links": {
       await runCommunityJsonSetting(rest, args, {
         pathSuffix: "reference-links",
-        method: "PUT",
+        method: "POST",
         usage: "Usage: pirate community links set <community_id|@slug> --file <links.json>",
         normalize: normalizeReferenceLinksPayload,
       })
@@ -126,7 +126,7 @@ export async function runCommunity(
     case "labels": {
       await runCommunityJsonSetting(rest, args, {
         pathSuffix: "labels",
-        method: "PATCH",
+        method: "POST",
         usage: "Usage: pirate community labels set <community_id|@slug> --file <labels.json>",
         normalize: (value) => value,
       })
@@ -135,7 +135,7 @@ export async function runCommunity(
     case "safety": {
       await runCommunityJsonSetting(rest, args, {
         pathSuffix: "safety",
-        method: "PUT",
+        method: "POST",
         usage: "Usage: pirate community safety set <community_id|@slug> --file <safety.json>",
         normalize: (value) => value,
       })
@@ -148,7 +148,7 @@ export async function runCommunity(
     case "donation-policy": {
       await runCommunityJsonSetting(rest, args, {
         pathSuffix: "donation-policy",
-        method: "PATCH",
+        method: "POST",
         usage: "Usage: pirate community donation-policy set <community_id|@slug> --file <donation-policy.json>",
         normalize: (value) => value,
       })
@@ -200,7 +200,7 @@ async function attachNamespace(rest: string[], args: ParsedArgs): Promise<void> 
     method: "POST",
     ...apiAuthHeadersForSession(session),
     body: {
-      namespace_verification_id: namespaceVerificationId,
+      namespace_verification: namespaceVerificationId,
     },
   })
   printJson(result)
@@ -231,7 +231,7 @@ async function updateCommunity(rest: string[], args: ParsedArgs): Promise<void> 
   const result = await apiRequest<Community>({
     baseUrl: session.baseUrl,
     path: apiRoutes.community(communityId),
-    method: "PATCH",
+    method: "POST",
     ...apiAuthHeadersForSession(session),
     body,
   })
@@ -250,12 +250,12 @@ async function lookupCommunity(rest: string[]): Promise<void> {
     ...apiAuthHeadersForSession(session),
   })
   printJson({
-    community_id: community.community_id,
+    community_id: community.id,
     route_slug: community.route_slug ?? null,
     display_name: community.display_name,
     status: community.status,
     provisioning_state: community.provisioning_state,
-    created_by_user_id: community.created_by_user_id,
+    created_by_user_id: community.created_by_user,
     membership_mode: community.membership_mode,
   })
 }
@@ -292,8 +292,8 @@ async function runCommunityRoles(rest: string[], args: ParsedArgs): Promise<void
 
   const userId = resolveCommunityRoleTargetUserId(args)
   const path = action === "grant"
-    ? apiRoutes.communityRoleGrant(communityId)
-    : apiRoutes.communityRoleRevoke(communityId)
+    ? `${apiRoutes.community(communityId)}/roles/grant`
+    : `${apiRoutes.community(communityId)}/roles/revoke`
   const result = await apiRequest<Community>({
     baseUrl: session.baseUrl,
     path,
@@ -355,7 +355,7 @@ async function runCommunityAccounts(rest: string[], args: ParsedArgs): Promise<v
     profile = await apiRequest<unknown>({
       baseUrl,
       path: apiRoutes.profilesMe,
-      method: "PATCH",
+      method: "POST",
       accessToken: session.access_token,
       body: profilePatch,
     })
@@ -377,15 +377,15 @@ async function runCommunityAccounts(rest: string[], args: ParsedArgs): Promise<v
 
   const accountsFile = getFlag(args, "accounts-file") ?? undefined
   const accounts = readSeedAccounts(accountsFile)
-  if (accounts[alias] && accounts[alias] !== session.user.user_id && !hasFlag(args, "force")) {
+  if (accounts[alias] && accounts[alias] !== session.user.id && !hasFlag(args, "force")) {
     throw new Error(`Seed account alias ${alias} already points to ${accounts[alias]}; pass --force to replace it`)
   }
-  accounts[alias] = session.user.user_id
+  accounts[alias] = session.user.id
   writeSeedAccounts(accounts, accountsFile)
 
   printJson({
     alias,
-    user_id: session.user.user_id,
+    user_id: session.user.id,
     subject,
     seed_accounts_path: accountsFile ?? null,
     profile,

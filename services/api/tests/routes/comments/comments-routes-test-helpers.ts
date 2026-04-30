@@ -69,13 +69,9 @@ export async function createCommunity(
   accessToken: string,
   displayName: string,
 ): Promise<{ communityId: string }> {
-  const namespaceVerificationId = await prepareVerifiedNamespace(env, accessToken)
   const response = await requestJson("http://pirate.test/communities", {
     display_name: displayName,
     membership_mode: "request",
-    namespace: {
-      namespace_verification: namespaceVerificationId,
-    },
   }, env, accessToken)
   const body = await json(response) as { community: { id: string } }
   return { communityId: body.community.id.replace(/^com_/, "") }

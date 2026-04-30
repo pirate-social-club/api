@@ -2,6 +2,8 @@ import type { Client } from "../sql-client"
 import type { DbExecutor } from "../db-helpers"
 import { sha256Hex } from "../crypto"
 import { openCommunityDb } from "../communities/community-db-factory"
+import { isCommunityLive } from "../communities/community-status"
+import { safeRollback } from "../transactions"
 import { enqueueCommunityJob } from "../communities/jobs/store"
 import { loadCommunityProjection } from "../communities/create/repository"
 import { detectSourceLanguageFromText } from "../localization/content-locale"
@@ -136,7 +138,7 @@ export async function createComment(input: {
   communityRepository: CommentServiceCommunityRepository
 }): Promise<Comment> {
   const communityRow = await input.communityRepository.getCommunityById(input.communityId)
-  if (!communityRow || communityRow.provisioning_state !== "active" || communityRow.status !== "active") {
+  if (!isCommunityLive(communityRow)) {
     throw eligibilityFailed("Community is not available for commenting")
   }
   const community = await loadCommunityProjection(input.env, input.communityRepository, communityRow)
@@ -362,11 +364,7 @@ export async function createComment(input: {
 
       return createdComment
     } catch (error) {
-      try {
-        await tx.rollback()
-      } catch (rollbackError) {
-        console.error("[comments] rollback failed while creating comment", rollbackError)
-      }
+      await safeRollback(tx, "[comments] rollback failed while creating comment")
       throw error
     } finally {
       tx.close()
@@ -412,11 +410,7 @@ export async function castCommentVote(input: {
       await tx.commit()
       return result
     } catch (error) {
-      try {
-        await tx.rollback()
-      } catch (rollbackError) {
-        console.error("[comments] rollback failed while casting comment vote", rollbackError)
-      }
+      await safeRollback(tx, "[comments] rollback failed while casting comment vote")
       throw error
     } finally {
       tx.close()
@@ -493,11 +487,7 @@ export async function deleteComment(input: {
 
       return deleted
     } catch (error) {
-      try {
-        await tx.rollback()
-      } catch (rollbackError) {
-        console.error("[comments] rollback failed while deleting comment", rollbackError)
-      }
+      await safeRollback(tx, "[comments] rollback failed while deleting comment")
       throw error
     } finally {
       tx.close()

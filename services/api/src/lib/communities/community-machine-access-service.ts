@@ -6,6 +6,7 @@ import { badRequestError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
 import { openCommunityDb } from "./community-db-factory"
+import { isCommunityLive } from "./community-status"
 import { requireOwnedCommunity } from "./create/repository"
 import { parseCommunitySettingsJson } from "./create/validation"
 import type { Env } from "../../env"
@@ -363,7 +364,7 @@ export async function getResolvedCommunityMachineAccessPolicy(input: {
   communityId: string
 }): Promise<CommunityMachineAccessPolicy> {
   const community = await input.communityRepository.getCommunityById(input.communityId)
-  if (!community || community.provisioning_state !== "active" || community.status !== "active") {
+  if (!isCommunityLive(community)) {
     throw notFoundError("Community not found")
   }
 

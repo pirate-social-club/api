@@ -3,6 +3,7 @@ import { internalError, notFoundError } from "../../errors"
 import type { Env } from "../../../env"
 import type { Community, JoinEligibility, User } from "../../../types"
 import { openCommunityDb } from "../community-db-factory"
+import { isCommunityLive } from "../community-status"
 import {
   buildMembershipGateSummariesFromPolicy,
   flattenGatePolicyAtoms,
@@ -133,7 +134,7 @@ export async function getJoinEligibility(input: {
   }
 
   const community = await input.communityRepository.getCommunityById(input.communityId)
-  if (!community || community.provisioning_state !== "active" || community.status !== "active") {
+  if (!isCommunityLive(community)) {
     throw notFoundError("Community not found")
   }
 

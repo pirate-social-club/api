@@ -43,7 +43,7 @@ export async function runCommunitySettings(rest: string[], args: ParsedArgs): Pr
     const result = await apiRequest<Community>({
       baseUrl: session.baseUrl,
       path: apiRoutes.community(communityId),
-      method: "PATCH",
+      method: "POST",
       ...apiAuthHeadersForSession(session),
       body,
     })
@@ -59,7 +59,7 @@ export async function runCommunitySettings(rest: string[], args: ParsedArgs): Pr
   const result = await apiRequest<Community>({
     baseUrl: session.baseUrl,
     path: apiRoutes.community(communityId),
-    method: "PATCH",
+    method: "POST",
     ...apiAuthHeadersForSession(session),
     body,
   })
@@ -148,7 +148,7 @@ export async function runCommunityRules(rest: string[], args: ParsedArgs): Promi
   const result = await apiRequest<Community>({
     baseUrl: session.baseUrl,
     path: `${apiRoutes.community(communityId)}/rules`,
-    method: "PUT",
+    method: "POST",
     ...apiAuthHeadersForSession(session),
     body,
   })
@@ -180,7 +180,7 @@ export async function runCommunityGates(rest: string[], args: ParsedArgs): Promi
   const result = await apiRequest<Community>({
     baseUrl: session.baseUrl,
     path: `${apiRoutes.community(communityId)}/gates`,
-    method: "PUT",
+    method: "POST",
     ...apiAuthHeadersForSession(session),
     body,
   })
@@ -192,7 +192,7 @@ export async function runCommunityJsonSetting(
   args: ParsedArgs,
   input: {
     pathSuffix: string
-    method: "PUT" | "PATCH"
+    method: "POST"
     usage: string
     normalize: (value: unknown) => unknown
   },

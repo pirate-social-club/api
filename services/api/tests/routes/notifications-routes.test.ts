@@ -480,13 +480,13 @@ describe("notification routes", () => {
       story_ip: "0x1111111111111111111111111111111111111111",
       amount_wip_wei: "12450000000000000000",
       buyer_wallet_address: "0x2222222222222222222222222222222222222222",
-      purchase: null,
+      purchase: "pur_pur_royalty_activity",
     })
     const secondEarning = activityItems.find((item) => item.asset === "asset_ast_royalty_activity_second")
     expect(secondEarning).toMatchObject({
       asset: "asset_ast_royalty_activity_second",
       amount_wip_wei: "4000000000000000000",
-      purchase: null,
+      purchase: "pur_pur_royalty_activity_second",
     })
 
     const buyerActivity = await app.request(
