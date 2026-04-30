@@ -7,6 +7,7 @@ import {
   requestJson,
   withFetchMock,
 } from "./verification-test-helpers"
+import { decodePublicNamespaceVerificationSessionId } from "../../../src/lib/public-ids"
 
 let cleanup: (() => Promise<void>) | null = null
 
@@ -98,7 +99,7 @@ describe("spaces verification routes", () => {
       }, ctx.env, session.accessToken)
       expect(createdNamespaceSession.status).toBe(201)
       const createdBody = await json(createdNamespaceSession) as {
-        namespace_verification_session_id: string
+        id: string
         family: string
         challenge_kind: string | null
         challenge_payload: {
@@ -118,7 +119,7 @@ describe("spaces verification routes", () => {
       expectedTxtValue = createdBody.challenge_payload?.txt_value ?? null
 
       const completedNamespaceSession = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${createdBody.namespace_verification_session_id}/complete`,
+        `http://pirate.test/namespace-verification-sessions/${createdBody.id}/complete`,
         {},
         ctx.env,
         session.accessToken,
@@ -127,14 +128,14 @@ describe("spaces verification routes", () => {
       const completedBody = await json(completedNamespaceSession) as {
         status: string
         family: string
-        namespace_verification_id: string | null
+        namespace_verification: string | null
       }
       expect(completedBody.status).toBe("verified")
       expect(completedBody.family).toBe("spaces")
-      expect(typeof completedBody.namespace_verification_id).toBe("string")
+      expect(typeof completedBody.namespace_verification).toBe("string")
 
       const fetchedNamespaceVerification = await app.request(
-        `http://pirate.test/namespace-verifications/${completedBody.namespace_verification_id}`,
+        `http://pirate.test/namespace-verifications/${completedBody.namespace_verification}`,
         {
           headers: {
             authorization: `Bearer ${session.accessToken}`,
@@ -200,11 +201,11 @@ describe("spaces verification routes", () => {
         root_label: "@pirate-pending-root",
       }, ctx.env, session.accessToken)
       const createdBody = await json(createdNamespaceSession) as {
-        namespace_verification_session_id: string
+        id: string
       }
 
       const completedNamespaceSession = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${createdBody.namespace_verification_session_id}/complete`,
+        `http://pirate.test/namespace-verification-sessions/${createdBody.id}/complete`,
         {},
         ctx.env,
         session.accessToken,
@@ -260,11 +261,11 @@ describe("spaces verification routes", () => {
         root_label: "@pirate-mismatch-root",
       }, ctx.env, session.accessToken)
       const createdBody = await json(createdNamespaceSession) as {
-        namespace_verification_session_id: string
+        id: string
       }
 
       const completedNamespaceSession = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${createdBody.namespace_verification_session_id}/complete`,
+        `http://pirate.test/namespace-verification-sessions/${createdBody.id}/complete`,
         {},
         ctx.env,
         session.accessToken,
@@ -324,11 +325,11 @@ describe("spaces verification routes", () => {
         root_label: "@pirate-inconsistent-root",
       }, ctx.env, session.accessToken)
       const createdBody = await json(createdNamespaceSession) as {
-        namespace_verification_session_id: string
+        id: string
       }
 
       const completedNamespaceSession = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${createdBody.namespace_verification_session_id}/complete`,
+        `http://pirate.test/namespace-verification-sessions/${createdBody.id}/complete`,
         {},
         ctx.env,
         session.accessToken,
@@ -345,7 +346,7 @@ describe("spaces verification routes", () => {
           FROM namespace_verification_sessions
           WHERE namespace_verification_session_id = ?1
         `,
-        args: [createdBody.namespace_verification_session_id],
+        args: [decodePublicNamespaceVerificationSessionId(createdBody.id)],
       })
       expect(row.rows[0]?.status).toBe("challenge_required")
       expect(row.rows[0]?.accepted_at).toBeNull()

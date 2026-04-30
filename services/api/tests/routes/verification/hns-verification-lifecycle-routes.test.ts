@@ -77,30 +77,30 @@ describe("hns verification lifecycle routes", () => {
         root_label: "PirateRestartRoot",
       }, ctx.env, session.accessToken)
       const createdBody = await json(createdNamespaceSession) as {
-        namespace_verification_session_id: string
+        id: string
         challenge_txt_value: string | null
         expires_at: string
       }
 
       const completedNamespaceSession = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${createdBody.namespace_verification_session_id}/complete`,
+        `http://pirate.test/namespace-verification-sessions/${createdBody.id}/complete`,
         {},
         ctx.env,
         session.accessToken,
       )
       const completedBody = await json(completedNamespaceSession) as {
         status: string
-        namespace_verification_id: string | null
+        namespace_verification: string | null
         evidence_bundle_ref: string | null
         accepted_at: number | null
       }
       expect(completedBody.status).toBe("verified")
-      expect(typeof completedBody.namespace_verification_id).toBe("string")
+      expect(typeof completedBody.namespace_verification).toBe("string")
       expect(typeof completedBody.evidence_bundle_ref).toBe("string")
       expect(typeof completedBody.accepted_at).toBe("number")
 
       const restartedNamespaceSession = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${createdBody.namespace_verification_session_id}/complete`,
+        `http://pirate.test/namespace-verification-sessions/${createdBody.id}/complete`,
         { restart_challenge: true },
         ctx.env,
         session.accessToken,
@@ -108,7 +108,7 @@ describe("hns verification lifecycle routes", () => {
       expect(restartedNamespaceSession.status).toBe(200)
       const restartedBody = await json(restartedNamespaceSession) as {
         status: string
-        namespace_verification_id: string | null
+        namespace_verification: string | null
         evidence_bundle_ref: string | null
         accepted_at: string | null
         failure_reason: string | null
@@ -116,7 +116,7 @@ describe("hns verification lifecycle routes", () => {
         expires_at: string
       }
       expect(restartedBody.status).toBe("challenge_required")
-      expect(restartedBody.namespace_verification_id).toBeNull()
+      expect(restartedBody.namespace_verification).toBeNull()
       expect(restartedBody.evidence_bundle_ref).toBeNull()
       expect(restartedBody.accepted_at).toBeNull()
       expect(restartedBody.failure_reason).toBeNull()
@@ -192,12 +192,12 @@ describe("hns verification lifecycle routes", () => {
       }, ctx.env, session.accessToken)
       expect(createdNamespaceSession.status).toBe(201)
       const createdBody = await json(createdNamespaceSession) as {
-        namespace_verification_session_id: string
+        id: string
         challenge_txt_value: string | null
       }
 
       const pendingCompletion = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${createdBody.namespace_verification_session_id}/complete`,
+        `http://pirate.test/namespace-verification-sessions/${createdBody.id}/complete`,
         {},
         ctx.env,
         session.accessToken,
@@ -205,17 +205,17 @@ describe("hns verification lifecycle routes", () => {
       expect(pendingCompletion.status).toBe(200)
       const pendingBody = await json(pendingCompletion) as {
         status: string
-        namespace_verification_id: string | null
+        namespace_verification: string | null
         challenge_txt_value: string | null
         failure_reason: string | null
       }
       expect(pendingBody.status).toBe("challenge_pending")
-      expect(pendingBody.namespace_verification_id).toBeNull()
+      expect(pendingBody.namespace_verification).toBeNull()
       expect(pendingBody.challenge_txt_value).toBe(createdBody.challenge_txt_value)
       expect(pendingBody.failure_reason).toBeNull()
 
       const verifiedCompletion = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${createdBody.namespace_verification_session_id}/complete`,
+        `http://pirate.test/namespace-verification-sessions/${createdBody.id}/complete`,
         {},
         ctx.env,
         session.accessToken,
@@ -223,11 +223,11 @@ describe("hns verification lifecycle routes", () => {
       expect(verifiedCompletion.status).toBe(200)
       const verifiedBody = await json(verifiedCompletion) as {
         status: string
-        namespace_verification_id: string | null
+        namespace_verification: string | null
         challenge_txt_value: string | null
       }
       expect(verifiedBody.status).toBe("verified")
-      expect(typeof verifiedBody.namespace_verification_id).toBe("string")
+      expect(typeof verifiedBody.namespace_verification).toBe("string")
       expect(verifiedBody.challenge_txt_value).toBe(createdBody.challenge_txt_value)
     })
   })
@@ -275,7 +275,7 @@ describe("hns verification lifecycle routes", () => {
         root_label: "PirateExpiryRoot",
       }, ctx.env, session.accessToken)
       const createdBody = await json(createdNamespaceSession) as {
-        namespace_verification_session_id: string
+        id: string
       }
 
       await ctx.client.execute({
@@ -284,11 +284,11 @@ describe("hns verification lifecycle routes", () => {
           SET expires_at = ?2
           WHERE namespace_verification_session_id = ?1
         `,
-        args: [decodePublicNamespaceVerificationSessionId(createdBody.namespace_verification_session_id), new Date(Date.now() - 60_000).toISOString()],
+        args: [decodePublicNamespaceVerificationSessionId(createdBody.id), new Date(Date.now() - 60_000).toISOString()],
       })
 
       const completedNamespaceSession = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${createdBody.namespace_verification_session_id}/complete`,
+        `http://pirate.test/namespace-verification-sessions/${createdBody.id}/complete`,
         {},
         ctx.env,
         session.accessToken,

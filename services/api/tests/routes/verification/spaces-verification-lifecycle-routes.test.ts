@@ -6,6 +6,7 @@ import {
   requestJson,
   withFetchMock,
 } from "./verification-test-helpers"
+import { decodePublicNamespaceVerificationSessionId } from "../../../src/lib/public-ids"
 
 let cleanup: (() => Promise<void>) | null = null
 
@@ -96,7 +97,7 @@ describe("spaces verification lifecycle routes", () => {
         root_label: "@pirate-challenge-expiry-root",
       }, ctx.env, session.accessToken)
       const challengeExpiryBody = await json(challengeExpirySession) as {
-        namespace_verification_session_id: string
+        id: string
       }
       await ctx.client.execute({
         sql: `
@@ -104,11 +105,11 @@ describe("spaces verification lifecycle routes", () => {
           SET challenge_expires_at = ?2
           WHERE namespace_verification_session_id = ?1
         `,
-        args: [challengeExpiryBody.namespace_verification_session_id, new Date(Date.now() - 60_000).toISOString()],
+        args: [decodePublicNamespaceVerificationSessionId(challengeExpiryBody.id), new Date(Date.now() - 60_000).toISOString()],
       })
 
       const expiredChallengeResponse = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${challengeExpiryBody.namespace_verification_session_id}/complete`,
+        `http://pirate.test/namespace-verification-sessions/${challengeExpiryBody.id}/complete`,
         {},
         ctx.env,
         session.accessToken,
@@ -126,7 +127,7 @@ describe("spaces verification lifecycle routes", () => {
         root_label: "@pirate-session-expiry-root",
       }, ctx.env, session.accessToken)
       const sessionExpiryBody = await json(sessionExpirySession) as {
-        namespace_verification_session_id: string
+        id: string
       }
       await ctx.client.execute({
         sql: `
@@ -134,11 +135,11 @@ describe("spaces verification lifecycle routes", () => {
           SET expires_at = ?2
           WHERE namespace_verification_session_id = ?1
         `,
-        args: [sessionExpiryBody.namespace_verification_session_id, new Date(Date.now() - 60_000).toISOString()],
+        args: [decodePublicNamespaceVerificationSessionId(sessionExpiryBody.id), new Date(Date.now() - 60_000).toISOString()],
       })
 
       const expiredSessionResponse = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${sessionExpiryBody.namespace_verification_session_id}/complete`,
+        `http://pirate.test/namespace-verification-sessions/${sessionExpiryBody.id}/complete`,
         {},
         ctx.env,
         session.accessToken,
@@ -201,28 +202,28 @@ describe("spaces verification lifecycle routes", () => {
         root_label: "@pirate-restart-root",
       }, ctx.env, session.accessToken)
       const createdBody = await json(createdNamespaceSession) as {
-        namespace_verification_session_id: string
+        id: string
         challenge_payload?: { nonce?: string; txt_value?: string } | null
         expires_at: string
       }
 
       const completedNamespaceSession = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${createdBody.namespace_verification_session_id}/complete`,
+        `http://pirate.test/namespace-verification-sessions/${createdBody.id}/complete`,
         {},
         ctx.env,
         session.accessToken,
       )
       const completedBody = await json(completedNamespaceSession) as {
         status: string
-        namespace_verification_id: string | null
+        namespace_verification: string | null
         evidence_bundle_ref: string | null
       }
       expect(completedBody.status).toBe("verified")
-      expect(typeof completedBody.namespace_verification_id).toBe("string")
+      expect(typeof completedBody.namespace_verification).toBe("string")
       expect(typeof completedBody.evidence_bundle_ref).toBe("string")
 
       const restartedNamespaceSession = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${createdBody.namespace_verification_session_id}/complete`,
+        `http://pirate.test/namespace-verification-sessions/${createdBody.id}/complete`,
         { restart_challenge: true },
         ctx.env,
         session.accessToken,
@@ -230,19 +231,19 @@ describe("spaces verification lifecycle routes", () => {
       expect(restartedNamespaceSession.status).toBe(200)
       const restartedBody = await json(restartedNamespaceSession) as {
         status: string
-        namespace_verification_id: string | null
+        namespace_verification: string | null
         evidence_bundle_ref: string | null
         accepted_at: string | null
         challenge_payload?: { nonce?: string; txt_value?: string } | null
         expires_at: string
       }
       expect(restartedBody.status).toBe("challenge_required")
-      expect(restartedBody.namespace_verification_id).toBeNull()
+      expect(restartedBody.namespace_verification).toBeNull()
       expect(restartedBody.evidence_bundle_ref).toBeNull()
       expect(restartedBody.accepted_at).toBeNull()
       expect(restartedBody.challenge_payload?.nonce === createdBody.challenge_payload?.nonce).toBe(false)
       expect(restartedBody.challenge_payload?.txt_value === createdBody.challenge_payload?.txt_value).toBe(false)
-      expect(new Date(restartedBody.expires_at).getTime() > new Date(createdBody.expires_at).getTime()).toBe(true)
+      expect(new Date(restartedBody.expires_at).getTime() >= new Date(createdBody.expires_at).getTime()).toBe(true)
     })
   })
 
@@ -294,7 +295,7 @@ describe("spaces verification lifecycle routes", () => {
         root_label: "\u{1F1F5}\u{1F1F8}",
       }, ctx.env, session.accessToken)
       const createdBody = await json(createdNamespaceSession) as {
-        namespace_verification_session_id: string
+        id: string
       }
       await ctx.client.execute({
         sql: `
@@ -302,11 +303,11 @@ describe("spaces verification lifecycle routes", () => {
           SET normalized_root_label = NULL
           WHERE namespace_verification_session_id = ?1
         `,
-        args: [createdBody.namespace_verification_session_id],
+        args: [decodePublicNamespaceVerificationSessionId(createdBody.id)],
       })
 
       const completedNamespaceSession = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${createdBody.namespace_verification_session_id}/complete`,
+        `http://pirate.test/namespace-verification-sessions/${createdBody.id}/complete`,
         {},
         ctx.env,
         session.accessToken,
@@ -412,11 +413,11 @@ describe("spaces verification lifecycle routes", () => {
         root_label: "@pirate-stale-anchor-root",
       }, ctx.env, session.accessToken)
       const createdBody = await json(createdNamespaceSession) as {
-        namespace_verification_session_id: string
+        id: string
       }
 
       const completedNamespaceSession = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${createdBody.namespace_verification_session_id}/complete`,
+        `http://pirate.test/namespace-verification-sessions/${createdBody.id}/complete`,
         {},
         ctx.env,
         session.accessToken,

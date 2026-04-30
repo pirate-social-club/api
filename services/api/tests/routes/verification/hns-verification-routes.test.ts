@@ -99,7 +99,7 @@ describe("hns verification routes", () => {
       }, ctx.env, session.accessToken)
       expect(createdNamespaceSession.status).toBe(201)
       const namespaceSessionBody = await json(createdNamespaceSession) as {
-        namespace_verification_session_id: string
+        id: string
         status: string
         challenge_host: string | null
         challenge_txt_value: string | null
@@ -115,7 +115,7 @@ describe("hns verification routes", () => {
       expect(calls.some((entry) => entry.url.endsWith("/publish-txt"))).toBe(false)
 
       const fetchedNamespaceSession = await app.request(
-        `http://pirate.test/namespace-verification-sessions/${namespaceSessionBody.namespace_verification_session_id}`,
+        `http://pirate.test/namespace-verification-sessions/${namespaceSessionBody.id}`,
         {
           method: "GET",
           headers: {
@@ -134,7 +134,7 @@ describe("hns verification routes", () => {
       expect(inspectCount).toBe(1)
 
       const setupCheckedNamespaceSession = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${namespaceSessionBody.namespace_verification_session_id}/complete`,
+        `http://pirate.test/namespace-verification-sessions/${namespaceSessionBody.id}/complete`,
         { restart_challenge: true },
         ctx.env,
         session.accessToken,
@@ -155,7 +155,7 @@ describe("hns verification routes", () => {
       expect(calls.some((entry) => entry.url.endsWith("/publish-txt"))).toBe(false)
 
       const promotedNamespaceSession = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${namespaceSessionBody.namespace_verification_session_id}/complete`,
+        `http://pirate.test/namespace-verification-sessions/${namespaceSessionBody.id}/complete`,
         { restart_challenge: true },
         ctx.env,
         session.accessToken,
@@ -174,7 +174,7 @@ describe("hns verification routes", () => {
       expect(calls.some((entry) => entry.url.endsWith("/publish-txt"))).toBe(true)
 
       const completedNamespaceSession = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${namespaceSessionBody.namespace_verification_session_id}/complete`,
+        `http://pirate.test/namespace-verification-sessions/${namespaceSessionBody.id}/complete`,
         {},
         ctx.env,
         session.accessToken,
@@ -182,11 +182,11 @@ describe("hns verification routes", () => {
       expect(completedNamespaceSession.status).toBe(200)
       const completedNamespaceBody = await json(completedNamespaceSession) as {
         status: string
-        namespace_verification_id: string | null
+        namespace_verification: string | null
         observation_provider: string | null
       }
       expect(completedNamespaceBody.status).toBe("verified")
-      expect(typeof completedNamespaceBody.namespace_verification_id).toBe("string")
+      expect(typeof completedNamespaceBody.namespace_verification).toBe("string")
       expect(completedNamespaceBody.observation_provider).toBe("powerdns_api")
 
       expect(calls.some((entry) => entry.url.includes("/inspect?"))).toBe(true)
@@ -253,11 +253,11 @@ describe("hns verification routes", () => {
         root_label: "PirateVerifierFailRoot",
       }, ctx.env, session.accessToken)
       const namespaceSessionBody = await json(createdNamespaceSession) as {
-        namespace_verification_session_id: string
+        id: string
       }
 
       const completedNamespaceSession = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${namespaceSessionBody.namespace_verification_session_id}/complete`,
+        `http://pirate.test/namespace-verification-sessions/${namespaceSessionBody.id}/complete`,
         {},
         ctx.env,
         session.accessToken,
@@ -265,12 +265,12 @@ describe("hns verification routes", () => {
       expect(completedNamespaceSession.status).toBe(200)
       const completedNamespaceBody = await json(completedNamespaceSession) as {
         status: string
-        namespace_verification_id: string | null
+        namespace_verification: string | null
         failure_reason: string | null
         observation_provider: string | null
       }
       expect(completedNamespaceBody.status).toBe("failed")
-      expect(completedNamespaceBody.namespace_verification_id).toBeNull()
+      expect(completedNamespaceBody.namespace_verification).toBeNull()
       expect(completedNamespaceBody.failure_reason).toBe("challenge_mismatch")
       expect(completedNamespaceBody.observation_provider).toBe("powerdns_api")
     })
@@ -331,22 +331,22 @@ describe("hns verification routes", () => {
         root_label: "PirateAssertionsRoot",
       }, ctx.env, session.accessToken)
       const createdBody = await json(createdNamespaceSession) as {
-        namespace_verification_session_id: string
+        id: string
       }
 
       const completedNamespaceSession = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${createdBody.namespace_verification_session_id}/complete`,
+        `http://pirate.test/namespace-verification-sessions/${createdBody.id}/complete`,
         {},
         ctx.env,
         session.accessToken,
       )
       const completedBody = await json(completedNamespaceSession) as {
-        namespace_verification_id: string | null
+        namespace_verification: string | null
       }
-      expect(typeof completedBody.namespace_verification_id).toBe("string")
+      expect(typeof completedBody.namespace_verification).toBe("string")
 
       const fetchedNamespaceVerification = await app.request(
-        `http://pirate.test/namespace-verifications/${completedBody.namespace_verification_id}`,
+        `http://pirate.test/namespace-verifications/${completedBody.namespace_verification}`,
         {
           headers: {
             authorization: `Bearer ${session.accessToken}`,
