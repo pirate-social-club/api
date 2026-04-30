@@ -4,6 +4,7 @@ import type {
 } from "./db-community-repository"
 import { notFoundError } from "../errors"
 import { makeId, nowIso } from "../helpers"
+import { decodePublicId } from "../public-ids"
 import { openCommunityDb } from "./community-db-factory"
 import { syncCommunityLabels } from "./community-label-store"
 import {
@@ -170,7 +171,9 @@ export async function updateCommunityLabelPolicy(input: {
     const now = nowIso()
 
     const definitions = input.body.definitions.map((definition, index) => {
-      const labelId = definition.label_id?.trim() || makeId("lbl")
+      const labelId = definition.label_id?.trim()
+        ? decodePublicId(definition.label_id, "cld")
+        : makeId("lbl")
       const existingDefinition = existingDefinitionsById.get(labelId)
 
       return {
@@ -188,6 +191,16 @@ export async function updateCommunityLabelPolicy(input: {
       } satisfies NonNullable<Community["label_policy"]>["definitions"][number]
     })
 
+    const storedDefinitions = definitions.map((definition) => ({
+      label_id: definition.id,
+      label: definition.label,
+      description: definition.description,
+      color_token: definition.color_token,
+      status: definition.status,
+      position: definition.position,
+      allowed_post_types: definition.allowed_post_types,
+    }))
+
     const tx = await db.client.transaction("write")
     try {
       await tx.execute({
@@ -202,7 +215,7 @@ export async function updateCommunityLabelPolicy(input: {
           label_policy: {
             label_enabled: input.body.label_enabled,
             require_label_on_top_level_posts: input.body.require_label_on_top_level_posts,
-            definitions,
+            definitions: storedDefinitions,
           },
         }), now],
       })

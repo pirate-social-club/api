@@ -5,7 +5,7 @@ import {
   assertCreateRequest,
 } from "../src/lib/communities/create/service"
 import { satisfiesBaselineJoinGate } from "../src/lib/communities/membership/eligibility-service"
-import { getPrimaryWalletSnapshot } from "../src/lib/communities/community-serialization"
+import { getPrimaryWalletSnapshot, parseStoredLabelPolicy } from "../src/lib/communities/community-serialization"
 import type { User, CreateCommunityRequest } from "../src/types"
 
 function makeTestUser(overrides: Partial<User["verification_capabilities"]> = {}): User {
@@ -133,6 +133,33 @@ describe("community helper functions", () => {
     test("returns null when no attachments", () => {
       const user = { primary_wallet_attachment_id: null } as User
       expect(getPrimaryWalletSnapshot(user, [])).toBe(null)
+    })
+  })
+
+  describe("parseStoredLabelPolicy", () => {
+    test("reads label definitions saved with the legacy id field", () => {
+      expect(parseStoredLabelPolicy({
+        label_policy: {
+          label_enabled: true,
+          require_label_on_top_level_posts: false,
+          definitions: [{
+            id: "lbl_news",
+            label: "News",
+            color_token: "#6377f0",
+            status: "active",
+            position: 0,
+          }],
+        },
+      })?.definitions).toEqual([{
+        id: "cld_lbl_news",
+        object: "community_label_definition",
+        label: "News",
+        description: null,
+        color_token: "#6377f0",
+        status: "active",
+        position: 0,
+        allowed_post_types: null,
+      }])
     })
   })
 

@@ -21,6 +21,7 @@ import {
   resolveCommunityAvatarRef,
   resolveCommunityBannerRef,
 } from "./community-identity-media"
+import { decodePublicId } from "../public-ids"
 import { unixSeconds } from "../../serializers/time"
 import type { GateAtom, GateExpression } from "./membership/gate-types"
 
@@ -113,7 +114,7 @@ export function parseStoredReferenceLinks(
   }).sort((left, right) => left.position - right.position)
 }
 
-function parseStoredLabelPolicy(
+export function parseStoredLabelPolicy(
   storedSettings: Record<string, unknown>,
 ): Community["label_policy"] {
   const rawPolicy = storedSettings.label_policy
@@ -136,9 +137,16 @@ function parseStoredLabelPolicy(
     }
 
     const definition = rawDefinition as Record<string, unknown>
-    if (typeof definition.label_id !== "string" || typeof definition.label !== "string") {
+    const storedLabelId = typeof definition.label_id === "string"
+      ? definition.label_id
+      : typeof definition.id === "string"
+        ? definition.id
+        : null
+
+    if (!storedLabelId || typeof definition.label !== "string") {
       return []
     }
+    const labelId = decodePublicId(storedLabelId, "cld")
 
     const allowedPostTypes = Array.isArray(definition.allowed_post_types)
       ? definition.allowed_post_types.filter((postType): postType is "text" | "image" | "video" | "song" =>
@@ -146,7 +154,7 @@ function parseStoredLabelPolicy(
       : null
 
     return [{
-      id: `cld_${definition.label_id}`,
+      id: `cld_${labelId}`,
       object: "community_label_definition",
       label: definition.label,
       description: typeof definition.description === "string" ? definition.description : null,
