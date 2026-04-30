@@ -1,4 +1,5 @@
-import type { Env, SongArtifactBundle, SongArtifactUpload } from "../../types"
+import type { Env } from "../../env"
+import type { SongArtifactBundle, SongArtifactUpload } from "../../types"
 import { fetchSongArtifactBytes } from "./song-artifact-storage"
 
 function trimEnv(value: string | undefined): string {

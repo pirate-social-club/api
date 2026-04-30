@@ -8,7 +8,7 @@ import {
 } from "./projection-source-store"
 import { openCommunityDb } from "../community-db-factory"
 import { nowIso } from "../../helpers"
-import type { Env } from "../../../types"
+import type { Env } from "../../../env"
 import type {
   CommunityFollowResult,
   CommunityMembershipProjectionReconciliationSummary,

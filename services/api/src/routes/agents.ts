@@ -15,15 +15,22 @@ import {
   publicId,
 } from "../lib/public-ids"
 import { nullableUnixSeconds, unixSeconds } from "../serializers/time"
-import type { Env } from "../types"
+import type { Env } from "../env"
+import { requireTrimmedString } from "./route-helpers"
 
 const agents = new Hono<{ Bindings: Env }>()
+const DEFAULT_AGENT_LIST_LIMIT = 25
+const MAX_AGENT_LIST_LIMIT = 100
 
-function requireString(value: unknown, field: string): string {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw badRequestError(`Invalid ${field}`)
+function listLimit(value: string | undefined): number {
+  if (value === undefined) {
+    return DEFAULT_AGENT_LIST_LIMIT
   }
-  return value.trim()
+  const parsed = Number.parseInt(value, 10)
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    throw badRequestError("Invalid limit")
+  }
+  return Math.min(parsed, MAX_AGENT_LIST_LIMIT)
 }
 
 async function resolveActorOrConnectionToken<T>(input: {
@@ -55,10 +62,6 @@ function serializeAgentDelegatedCredential(credential: AgentDelegatedCredential)
     expires_at: unixSeconds(credential.expires_at),
     refresh_expires_at: nullableUnixSeconds(credential.refresh_expires_at),
   }
-}
-
-function getActorUserId(actor: ActorContext | AdminActorContext): string {
-  return actor.userId
 }
 
 function requireAdminActor(actor: ActorContext | AdminActorContext): AdminActorContext {
@@ -193,8 +196,11 @@ agents.post("/agent-ownership-sessions/:agentOwnershipSessionId/receive-callback
 agents.get("/agents", authenticateAdminOrUser, async (c) => {
   const actor = c.get("actor")
   const repo = getControlPlaneAgentOwnershipRepository(c.env)
-  const items = await repo.listUserAgents(getActorUserId(actor))
-  return c.json({ items, next_cursor: null }, 200)
+  const result = await repo.listUserAgents(actor.userId, {
+    cursor: c.req.query("cursor") ?? null,
+    limit: listLimit(c.req.query("limit")),
+  })
+  return c.json(result, 200)
 })
 
 agents.post("/agents/admin/seed", authenticateAdminOrUser, async (c) => {
@@ -206,8 +212,8 @@ agents.post("/agents/admin/seed", authenticateAdminOrUser, async (c) => {
 
   const repo = getControlPlaneAgentOwnershipRepository(c.env)
   const agent = await repo.seedUserAgentForAdmin({
-    userId: getActorUserId(actor),
-    displayName: requireString(body.display_name, "display_name"),
+    userId: actor.userId,
+    displayName: requireTrimmedString(body.display_name, "display_name"),
     desiredLabel: typeof body.desired_label === "string" && body.desired_label.trim().length > 0
       ? body.desired_label.trim()
       : null,
@@ -219,7 +225,7 @@ agents.get("/agents/:agentId", authenticateAdminOrUser, async (c) => {
   const actor = c.get("actor")
   const repo = getControlPlaneAgentOwnershipRepository(c.env)
   const agentId = decodePublicAgentId(c.req.param("agentId"))
-  const agent = await repo.getUserAgent(agentId, getActorUserId(actor))
+  const agent = await repo.getUserAgent(agentId, actor.userId)
   if (!agent) {
     throw notFoundError("Agent not found")
   }
@@ -236,7 +242,7 @@ agents.post("/agents/:agentId", authenticateAdminOrUser, async (c) => {
   const repo = getControlPlaneAgentOwnershipRepository(c.env)
   const agentId = decodePublicAgentId(c.req.param("agentId"))
   if (!("display_name" in body)) {
-    const existingAgent = await repo.getUserAgent(agentId, getActorUserId(actor))
+    const existingAgent = await repo.getUserAgent(agentId, actor.userId)
     if (!existingAgent) {
       throw notFoundError("Agent not found")
     }
@@ -244,8 +250,8 @@ agents.post("/agents/:agentId", authenticateAdminOrUser, async (c) => {
   }
   const agent = await repo.updateUserAgentDisplayName({
     agentId,
-    userId: getActorUserId(actor),
-    displayName: requireString(body.display_name, "display_name"),
+    userId: actor.userId,
+    displayName: requireTrimmedString(body.display_name, "display_name"),
   })
   if (!agent) {
     throw notFoundError("Agent not found")
@@ -259,10 +265,10 @@ agents.get("/agents/:agentId/handle", authenticateAdminOrUser, async (c) => {
   const agentId = decodePublicAgentId(c.req.param("agentId"))
   const handle = await repo.getUserAgentHandle({
     agentId,
-    userId: getActorUserId(actor),
+    userId: actor.userId,
   })
   if (!handle) {
-    const agent = await repo.getUserAgent(agentId, getActorUserId(actor))
+    const agent = await repo.getUserAgent(agentId, actor.userId)
     if (!agent) {
       throw notFoundError("Agent not found")
     }
@@ -281,8 +287,8 @@ agents.post("/agents/:agentId/handle", authenticateAdminOrUser, async (c) => {
   const repo = getControlPlaneAgentOwnershipRepository(c.env)
   const handle = await repo.claimUserAgentHandle({
     agentId: decodePublicAgentId(c.req.param("agentId")),
-    userId: getActorUserId(actor),
-    desiredLabel: requireString(body.desired_label, "desired_label"),
+    userId: actor.userId,
+    desiredLabel: requireTrimmedString(body.desired_label, "desired_label"),
   })
   if (!handle) {
     throw notFoundError("Agent not found")

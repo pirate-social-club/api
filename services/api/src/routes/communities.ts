@@ -1,10 +1,6 @@
 import { Hono } from "hono"
 import {
-  authenticate,
-  authenticateAdminToken,
-  authenticateAgentDelegatedToken,
-  authenticateUserToken,
-  requireBearerToken,
+  authenticateAdminUserOrAgentDelegated,
   type AuthenticatedEnv,
 } from "../lib/auth-middleware"
 import { registerCommunityAdminRoutes } from "./communities-admin-routes"
@@ -59,29 +55,14 @@ communities.use("*", async (c, next) => {
     return
   }
 
-  const adminActor = authenticateAdminToken({
+  c.set("actor", await authenticateAdminUserOrAgentDelegated({
+    allowAgentDelegated: authPolicy === "agent-delegated",
+    authorization: c.req.header("authorization"),
     env: c.env,
-    token: c.req.header("x-admin-token"),
-    asUserId: c.req.header("x-admin-as-user-id"),
-  })
-  if (adminActor) {
-    c.set("actor", adminActor)
-    await next()
-    return
-  }
-
-  if (authPolicy === "agent-delegated") {
-    const token = requireBearerToken(c.req.header("authorization"))
-    try {
-      c.set("actor", await authenticateUserToken({ env: c.env, token }))
-    } catch {
-      c.set("actor", await authenticateAgentDelegatedToken({ env: c.env, token }))
-    }
-    await next()
-    return
-  }
-
-  return authenticate(c, next)
+    xAdminAsUserId: c.req.header("x-admin-as-user-id"),
+    xAdminToken: c.req.header("x-admin-token"),
+  }))
+  await next()
 })
 
 registerCommunityAdminRoutes(communities)

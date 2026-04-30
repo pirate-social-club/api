@@ -119,6 +119,12 @@ export function buildTestCommunityRepository(input: {
     async listActiveCommunities() {
       return [community]
     },
+    async searchActiveCommunities(searchInput: { query: string; limit: number }) {
+      const normalizedQuery = searchInput.query.trim().toLowerCase()
+      const matchesCommunity = community.display_name.toLowerCase().includes(normalizedQuery)
+        || community.route_slug?.toLowerCase().includes(normalizedQuery)
+      return matchesCommunity ? [community].slice(0, searchInput.limit) : []
+    },
     async getPrimaryCommunityDatabaseBinding(requestedCommunityId: string): Promise<CommunityDatabaseBindingRow | null> {
       if (requestedCommunityId !== input.communityId) {
         return null
@@ -192,7 +198,7 @@ export async function seedTestCommunityState(input: {
   memberUserIds: string[]
   displayName: string
   rootPostTitle: string
-  membershipMode?: "open" | "request" | "gated"
+  membershipMode?: "request" | "gated"
 }): Promise<{ postId: string }> {
   const db = await openCommunityDb(input.env, input.repo, input.communityId)
   try {
@@ -211,7 +217,7 @@ export async function seedTestCommunityState(input: {
           NULL, ?4, ?5, ?5
         )
       `,
-      args: [input.communityId, input.displayName, input.membershipMode ?? "open", "usr_owner", now],
+      args: [input.communityId, input.displayName, input.membershipMode ?? "request", "usr_owner", now],
     })
 
     for (const userId of input.memberUserIds) {

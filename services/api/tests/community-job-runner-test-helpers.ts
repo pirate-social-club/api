@@ -44,7 +44,7 @@ export async function seedCommunityState(input: {
   repo: CommunityDatabaseBindingRepository
   communityId: string
   memberUserIds: string[]
-  membershipMode?: "open" | "request" | "gated"
+  membershipMode?: "request" | "gated"
 }): Promise<{ postId: string }> {
   return await seedTestCommunityState({
     ...input,

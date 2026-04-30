@@ -18,7 +18,8 @@ import {
   requireMemberAccess,
 } from "./post-access"
 import { enqueueEmbedHydrateOnReadIfNeeded, enqueuePostTranslationOnReadIfNeeded } from "./post-jobs"
-import type { Env, LocalizedPostResponse } from "../../types"
+import type { Env } from "../../env"
+import type { LocalizedPostResponse } from "../../types"
 
 type CommunityFeedResponse = {
   items: LocalizedPostResponse[]

@@ -1,5 +1,6 @@
 import { internalError, providerUnavailable } from "../errors"
-import type { Env, VerificationCapabilities } from "../../types"
+import type { Env } from "../../env"
+import type { VerificationCapabilities } from "../../types"
 
 const PASSPORT_API_URL = "https://api.passport.xyz"
 const PASSPORT_TIMEOUT_MS = 15_000

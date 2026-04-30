@@ -29,14 +29,62 @@ function makeTestUser(overrides: Partial<User["verification_capabilities"]> = {}
 }
 
 function makeCreateBody(overrides: Record<string, unknown> = {}): CreateCommunityRequest {
+  const gateRules = Array.isArray(overrides.gate_rules) ? overrides.gate_rules : null
+  const gatePolicy = gateRules
+    ? {
+        version: 1,
+        expression: {
+          op: "and",
+          children: gateRules.map((rule) => ({
+            op: "gate",
+            gate: gateRuleToAtom(rule as Record<string, unknown>),
+          })),
+        },
+      }
+    : undefined
+  const { gate_rules: _gateRules, ...rest } = overrides
   return {
     display_name: "Test Community",
     allow_anonymous_identity: false,
     handle_policy: { policy_template: "standard" },
     governance_mode: "centralized",
-    membership_mode: "request",
-    ...overrides,
+    membership_mode: gatePolicy ? "gated" : "request",
+    ...rest,
+    ...(gatePolicy ? { gate_policy: gatePolicy } : {}),
   } as CreateCommunityRequest
+}
+
+function gateRuleToAtom(rule: Record<string, unknown>): Record<string, unknown> {
+  if (rule.gate_type === "gender") {
+    const requirement = Array.isArray(rule.proof_requirements)
+      ? rule.proof_requirements[0] as { accepted_providers?: string[]; config?: { required_value?: unknown } } | undefined
+      : undefined
+    return {
+      type: "gender",
+      provider: requirement?.accepted_providers?.[0] ?? "self",
+      allowed: [requirement?.config?.required_value],
+    }
+  }
+  if (rule.gate_type === "erc721_holding") {
+    const config = rule.gate_config as Record<string, unknown> | undefined
+    return {
+      type: "erc721_holding",
+      chain_namespace: rule.chain_namespace,
+      contract_address: config?.contract_address,
+    }
+  }
+  if (rule.gate_type === "erc721_inventory_match") {
+    const config = rule.gate_config as Record<string, unknown> | undefined
+    return {
+      type: "erc721_inventory_match",
+      provider: config?.inventory_provider,
+      chain_namespace: rule.chain_namespace,
+      contract_address: config?.contract_address,
+      min_quantity: config?.min_quantity,
+      match: config?.match ?? config?.asset_filter,
+    }
+  }
+  return { type: rule.gate_type }
 }
 
 describe("community helper functions", () => {
@@ -137,13 +185,13 @@ describe("community helper functions", () => {
   })
 
   describe("parseStoredLabelPolicy", () => {
-    test("reads label definitions saved with the legacy id field", () => {
+    test("reads label definitions saved with the current label_id field", () => {
       expect(parseStoredLabelPolicy({
         label_policy: {
           label_enabled: true,
           require_label_on_top_level_posts: false,
           definitions: [{
-            id: "lbl_news",
+            label_id: "lbl_news",
             label: "News",
             color_token: "#6377f0",
             status: "active",
@@ -164,10 +212,10 @@ describe("community helper functions", () => {
   })
 
   describe("parseStoredReferenceLinks", () => {
-    test("reads reference links saved with the current id field", () => {
+    test("reads reference links saved with the current community_reference_link field", () => {
       expect(parseStoredReferenceLinks({
         reference_links: [{
-          id: "lnk_site",
+          community_reference_link: "lnk_site",
           object: "community_reference_link",
           platform: "official_website",
           url: "https://pirate.example",
@@ -177,8 +225,7 @@ describe("community helper functions", () => {
           verified: false,
         }],
       })).toEqual([{
-        id: "lnk_site",
-        object: "community_reference_link",
+        community_reference_link: "lnk_site",
         platform: "official_website",
         url: "https://pirate.example",
         label: "Site",
@@ -313,7 +360,7 @@ describe("community helper functions", () => {
             },
           }],
         }), { ageOver18Verified: false }),
-      ).toThrow("Courtyard inventory gates require an allowlisted Courtyard contract")
+      ).toThrow("erc721_inventory_match gate requires an allowlisted Courtyard contract")
     })
 
     test("rejects Courtyard inventory gate with unsupported filter key", () => {
@@ -332,7 +379,7 @@ describe("community helper functions", () => {
             },
           }],
         }), { ageOver18Verified: false }),
-      ).toThrow("ERC-721 inventory match has unsupported keys: regex")
+      ).toThrow("erc721_inventory_match has unsupported keys: regex")
     })
 
     test("rejects Courtyard inventory gate with invalid quantity", () => {
@@ -351,7 +398,7 @@ describe("community helper functions", () => {
             },
           }],
         }), { ageOver18Verified: false }),
-      ).toThrow("ERC-721 inventory gates require min_quantity from 1 to 100")
+      ).toThrow("erc721_inventory_match gate min_quantity must be from 1 to 100")
     })
 
     test("rejects Courtyard inventory gate with empty category-only filter", () => {
@@ -370,7 +417,7 @@ describe("community helper functions", () => {
             },
           }],
         }), { ageOver18Verified: false }),
-      ).toThrow("ERC-721 inventory match must include category plus a supported matching field")
+      ).toThrow("erc721_inventory_match must include category plus a supported matching field")
     })
 
     test("rejects erc721_holding gate with invalid chain namespace", () => {
@@ -384,7 +431,7 @@ describe("community helper functions", () => {
             gate_config: { contract_address: "0x1111111111111111111111111111111111111111" },
           }],
         }), { ageOver18Verified: false }),
-      ).toThrow("ERC-721 community gates must target Ethereum mainnet (eip155:1)")
+      ).toThrow("erc721_holding gate must target Ethereum mainnet (eip155:1)")
     })
 
     test("allows gender gate in public v0 with valid self config", () => {
@@ -410,7 +457,7 @@ describe("community helper functions", () => {
             proof_requirements: [{ proof_type: "gender", accepted_providers: ["self"], config: { required_value: "male" } }],
           }],
         }), { ageOver18Verified: false }),
-      ).toThrow("Gender gate required_value must be either \"M\" or \"F\"")
+      ).toThrow("gender gate allowed values must be M or F")
     })
 
     test("rejects post_ephemeral anonymous scope in v0", () => {
@@ -422,7 +469,7 @@ describe("community helper functions", () => {
       ).toThrow()
     })
 
-    test("rejects namespace without namespace_verification_id", () => {
+    test("rejects namespace without namespace_verification", () => {
       expect(() =>
         assertCreateRequest(makeCreateBody({ namespace: {} as any }), { ageOver18Verified: false }),
       ).toThrow()

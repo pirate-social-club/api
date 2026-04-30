@@ -14,6 +14,14 @@ import {
 
 let cleanup: (() => Promise<void>) | null = null
 
+function stripPublicPrefix(value: unknown, prefix: string): unknown {
+  if (typeof value !== "string") {
+    return value
+  }
+  const publicPrefix = `${prefix}_`
+  return value.startsWith(publicPrefix) ? value.slice(publicPrefix.length) : value
+}
+
 beforeEach(() => {
   resetRuntimeCaches()
 })
@@ -42,19 +50,19 @@ describe("community routes", () => {
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
+        id: string
         display_name: string
         membership_mode: string
-        gate_rules?: unknown[]
+        gate_policy?: unknown
       }
     }
     expect(communityCreateBody.community.display_name).toBe("Open Create Club")
-    expect(communityCreateBody.community.community_id.startsWith("cmt_")).toBe(true)
+    expect(communityCreateBody.community.id.replace(/^com_/, "").startsWith("cmt_")).toBe(true)
     expect(communityCreateBody.community.membership_mode).toBe("request")
-    expect(communityCreateBody.community.gate_rules).toEqual([])
+    expect(communityCreateBody.community.gate_policy ?? null).toBeNull()
 
     const policyResponse = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/machine-access-policy`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/machine-access-policy`,
       {
         headers: {
           authorization: `Bearer ${session.accessToken}`,
@@ -64,6 +72,7 @@ describe("community routes", () => {
     )
     expect(policyResponse.status).toBe(200)
     const policy = await json(policyResponse) as {
+      id: string
       community_id: string
       policy_origin: string
       access_mode: string
@@ -87,7 +96,7 @@ describe("community routes", () => {
         max_lookback_window: string
       }
     }
-    expect(policy.community_id).toBe(communityCreateBody.community.community_id)
+    expect(policy.community_id).toBe(communityCreateBody.community.id.replace(/^com_/, ""))
     expect(policy.policy_origin).toBe("default")
     expect(policy.access_mode).toBe("structured_api")
     expect(policy.included_surfaces).toEqual({
@@ -111,9 +120,9 @@ describe("community routes", () => {
     })
 
     const patchPolicyResponse = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/machine-access-policy`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/machine-access-policy`,
       {
-        method: "PATCH",
+        method: "POST",
         headers: {
           authorization: `Bearer ${session.accessToken}`,
           "content-type": "application/json",
@@ -140,7 +149,7 @@ describe("community routes", () => {
     })
 
     const persistedPolicyResponse = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/machine-access-policy`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/machine-access-policy`,
       {
         headers: {
           authorization: `Bearer ${session.accessToken}`,
@@ -163,6 +172,7 @@ describe("community routes", () => {
 
     const deniedCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Adults Only Club",
+      membership_mode: "request",
       default_age_gate_policy: "18_plus",
       handle_policy: {
         policy_template: "standard",
@@ -177,6 +187,7 @@ describe("community routes", () => {
 
     const allowedCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Adults Only Club",
+      membership_mode: "request",
       default_age_gate_policy: "18_plus",
       handle_policy: {
         policy_template: "standard",
@@ -194,6 +205,7 @@ describe("community routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Namespace Later Club",
+      membership_mode: "request",
       handle_policy: {
         policy_template: "standard",
       },
@@ -201,38 +213,38 @@ describe("community routes", () => {
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
-        namespace_verification_id: string | null
+        id: string
+        namespace_verification: string | null
         route_slug: string | null
       }
     }
-    expect(communityCreateBody.community.namespace_verification_id).toBeNull()
+    expect(communityCreateBody.community.namespace_verification).toBeNull()
     expect(communityCreateBody.community.route_slug).toBeNull()
 
-    const createdState = await getCommunityControlPlaneState(ctx.env, communityCreateBody.community.community_id)
+    const createdState = await getCommunityControlPlaneState(ctx.env, communityCreateBody.community.id.replace(/^com_/, ""))
     expect(createdState.namespaceVerificationId).toBeNull()
     expect(createdState.routeSlug).toBeNull()
 
     const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, session.accessToken)
     const attachResponse = await requestJson(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/namespace`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/namespace`,
       {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
       ctx.env,
       session.accessToken,
     )
     expect(attachResponse.status).toBe(200)
     const attachedCommunity = await json(attachResponse) as {
-      community_id: string
-      namespace_verification_id: string | null
+      id: string
+      namespace_verification: string | null
       route_slug: string | null
     }
-    expect(attachedCommunity.namespace_verification_id).toBe(namespaceVerificationId)
+    expect(attachedCommunity.namespace_verification).toBe(namespaceVerificationId)
     expect(attachedCommunity.route_slug).toBe("piratecommunityroot")
 
-    const attachedState = await getCommunityControlPlaneState(ctx.env, communityCreateBody.community.community_id)
-    expect(attachedState.namespaceVerificationId).toBe(namespaceVerificationId)
+    const attachedState = await getCommunityControlPlaneState(ctx.env, communityCreateBody.community.id.replace(/^com_/, ""))
+    expect(attachedState.namespaceVerificationId).toBe(stripPublicPrefix(namespaceVerificationId, "nv"))
     expect(attachedState.routeSlug).toBe("piratecommunityroot")
 
     const communityBySlug = await app.request(`http://pirate.test/communities/piratecommunityroot`, {
@@ -241,8 +253,8 @@ describe("community routes", () => {
       },
     }, ctx.env)
     expect(communityBySlug.status).toBe(200)
-    const communityBySlugBody = await json(communityBySlug) as { community_id: string; route_slug: string | null }
-    expect(communityBySlugBody.community_id).toBe(communityCreateBody.community.community_id)
+    const communityBySlugBody = await json(communityBySlug) as { id: string; route_slug: string | null }
+    expect(communityBySlugBody.id).toBe(communityCreateBody.community.id)
     expect(communityBySlugBody.route_slug).toBe("piratecommunityroot")
 
     const previewBySlug = await app.request(`http://pirate.test/communities/piratecommunityroot/preview`, {
@@ -278,6 +290,7 @@ describe("community routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Spaces Route Club",
+      membership_mode: "request",
       handle_policy: {
         policy_template: "standard",
       },
@@ -285,7 +298,7 @@ describe("community routes", () => {
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
+        id: string
       }
     }
 
@@ -330,31 +343,31 @@ describe("community routes", () => {
         root_label: "\u{1F1F5}\u{1F1F8}",
       }, ctx.env, session.accessToken)
       expect(namespaceSession.status).toBe(201)
-      const namespaceBody = await json(namespaceSession) as { namespace_verification_session_id: string }
+      const namespaceBody = await json(namespaceSession) as { id: string }
       const completed = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${namespaceBody.namespace_verification_session_id}/complete`,
+        `http://pirate.test/namespace-verification-sessions/${namespaceBody.id}/complete`,
         {},
         ctx.env,
         session.accessToken,
       )
       expect(completed.status).toBe(200)
-      const completedBody = await json(completed) as { namespace_verification_id: string }
+      const completedBody = await json(completed) as { namespace_verification: string }
 
       const attachResponse = await requestJson(
-        `http://pirate.test/communities/${communityCreateBody.community.community_id}/namespace`,
+        `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/namespace`,
         {
-          namespace_verification_id: completedBody.namespace_verification_id,
+          namespace_verification: completedBody.namespace_verification,
         },
         ctx.env,
         session.accessToken,
       )
       expect(attachResponse.status).toBe(200)
       const attachedCommunity = await json(attachResponse) as {
-        community_id: string
-        namespace_verification_id: string | null
+        id: string
+        namespace_verification: string | null
         route_slug: string | null
       }
-      expect(attachedCommunity.namespace_verification_id).toBe(completedBody.namespace_verification_id)
+      expect(attachedCommunity.namespace_verification).toBe(completedBody.namespace_verification)
       expect(attachedCommunity.route_slug).toBe("@xn--t77hga")
 
       const communityBySlug = await app.request("http://pirate.test/communities/@xn--t77hga", {
@@ -365,17 +378,17 @@ describe("community routes", () => {
       expect(communityBySlug.status).toBe(200)
 
       const previewById = await app.request(
-        `http://pirate.test/public-communities/${communityCreateBody.community.community_id}`,
+        `http://pirate.test/public-communities/${communityCreateBody.community.id.replace(/^com_/, "")}`,
         {},
         ctx.env,
       )
       expect(previewById.status).toBe(200)
       const previewByIdBody = await json(previewById) as {
-        namespace_verification_id: string | null
+        namespace_verification: string | null
         route_slug: string | null
         links: { canonical: { href: string } }
       }
-      expect(previewByIdBody.namespace_verification_id).toBe(completedBody.namespace_verification_id)
+      expect(previewByIdBody.namespace_verification).toBe(completedBody.namespace_verification)
       expect(previewByIdBody.route_slug).toBe("@xn--t77hga")
       expect(previewByIdBody.links.canonical.href).toBe("http://pirate.test/c/@xn--t77hga")
     } finally {
@@ -394,22 +407,23 @@ describe("community routes", () => {
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Public Community Club",
       description: "Readable without reconnecting.",
+      membership_mode: "request",
       namespace: {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
     }, ctx.env, session.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
+        id: string
         route_slug: string | null
       }
     }
 
     const rulesResponse = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/rules`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/rules`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           authorization: `Bearer ${session.accessToken}`,
           "content-type": "application/json",
@@ -432,9 +446,9 @@ describe("community routes", () => {
     expect(rulesResponse.status).toBe(200)
 
     const donationPolicyResponse = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/donation-policy`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/donation-policy`,
       {
-        method: "PATCH",
+        method: "POST",
         headers: {
           authorization: `Bearer ${session.accessToken}`,
           "content-type": "application/json",
@@ -456,9 +470,9 @@ describe("community routes", () => {
     expect(donationPolicyResponse.status).toBe(200)
 
     const referenceLinksResponse = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/reference-links`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/reference-links`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           authorization: `Bearer ${session.accessToken}`,
           "content-type": "application/json",
@@ -476,7 +490,7 @@ describe("community routes", () => {
     expect(referenceLinksResponse.status).toBe(200)
 
     const createdPost = await requestJson(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
       {
         post_type: "text",
         title: "Public route post",
@@ -488,13 +502,13 @@ describe("community routes", () => {
     )
     expect(createdPost.status).toBe(201)
     const createdPostBody = await json(createdPost) as {
-      post_id: string
+      id: string
       title: string | null
     }
     expect(createdPostBody.title).toBe("Public route post")
 
     const secondPost = await requestJson(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
       {
         post_type: "text",
         title: "Second public route post",
@@ -506,25 +520,25 @@ describe("community routes", () => {
     )
     expect(secondPost.status).toBe(201)
     const secondPostBody = await json(secondPost) as {
-      post_id: string
+      id: string
       title: string | null
     }
     expect(secondPostBody.title).toBe("Second public route post")
 
     const preview = await app.request(
-      `http://pirate.test/public-communities/${communityCreateBody.community.route_slug ?? communityCreateBody.community.community_id}?locale=ar`,
+      `http://pirate.test/public-communities/${communityCreateBody.community.route_slug ?? communityCreateBody.community.id.replace(/^com_/, "")}?locale=ar`,
       {},
       ctx.env,
     )
     expect(preview.status).toBe(200)
     const previewBody = await json(preview) as {
-      community_id: string
+      id: string
       display_name: string
       description: string | null
       donation_policy_mode?: "none" | "optional_creator_sidecar" | null
       donation_partner_id?: string | null
       donation_partner?: {
-        donation_partner_id: string
+        donation_partner: string
         display_name: string
         provider_partner_ref?: string | null
         image_url?: string | null
@@ -563,15 +577,15 @@ describe("community routes", () => {
         markdown: { href: string; type: string }
         posts: { href: string; type: string }
       }
-      namespace_verification_id: string | null
+      namespace_verification: string | null
       route_slug: string | null
       viewer_membership_status: string | null
     }
-    expect(previewBody.community_id).toBe(communityCreateBody.community.community_id)
+    expect(previewBody.id).toBe(communityCreateBody.community.id)
     expect(previewBody.display_name).toBe("Public Community Club")
     expect(previewBody.description).toBe("Readable without reconnecting.")
     expect(previewBody.donation_policy_mode).toBe("optional_creator_sidecar")
-    expect(previewBody.donation_partner_id).toBe("org_charity_water")
+    expect(previewBody.donation_partner?.donation_partner).toBe("org_charity_water")
     expect(previewBody.donation_partner?.display_name).toBe("charity: water")
     expect(previewBody.donation_partner?.provider_partner_ref).toBe("charity-water")
     expect(previewBody.donation_partner?.image_url).toBe("https://images.example/charity-water.png")
@@ -590,17 +604,17 @@ describe("community routes", () => {
     expect(previewBody.localized_text?.items.some((item) => /^community\.rule\..+\.title$/.test(item.field_key))).toBe(true)
     expect(previewBody.localized_text?.items.some((item) => /^community\.rule\..+\.body$/.test(item.field_key))).toBe(true)
     expect(previewBody.viewer_membership_status).toBe("not_member")
-    expect(previewBody.namespace_verification_id).toBe(namespaceVerificationId)
+    expect(previewBody.namespace_verification).toBe(namespaceVerificationId)
     expect(previewBody.route_slug).toBe(communityCreateBody.community.route_slug)
     expect(preview.headers.get("link")).toContain("/public-communities/")
     expect(previewBody.omitted_surfaces).toEqual([])
     expect(previewBody.links.canonical.href).toBe(`http://pirate.test/c/${communityCreateBody.community.route_slug}`)
-    expect(previewBody.links.self.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.community_id}`)
-    expect(previewBody.links.markdown.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.community_id}?format=markdown`)
-    expect(previewBody.links.posts.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.community_id}/posts`)
+    expect(previewBody.links.self.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.id}`)
+    expect(previewBody.links.markdown.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.id}?format=markdown`)
+    expect(previewBody.links.posts.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.id}/posts`)
 
     const previewMarkdown = await app.request(
-      `http://pirate.test/public-communities/${communityCreateBody.community.community_id}?format=markdown`,
+      `http://pirate.test/public-communities/${communityCreateBody.community.id}?format=markdown`,
       {},
       ctx.env,
     )
@@ -609,14 +623,14 @@ describe("community routes", () => {
     expect(await previewMarkdown.text()).toContain("# Public Community Club")
 
     const posts = await app.request(
-      `http://pirate.test/public-communities/${communityCreateBody.community.route_slug ?? communityCreateBody.community.community_id}/posts`,
+      `http://pirate.test/public-communities/${communityCreateBody.community.route_slug ?? communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
       {},
       ctx.env,
     )
     expect(posts.status).toBe(200)
     const postsBody = await json(posts) as {
       items: Array<{
-        post: { post_id: string; title: string | null }
+        post: { id: string; title: string | null }
         omitted_surfaces: unknown[]
         links: {
           self: { href: string; type: string }
@@ -633,21 +647,21 @@ describe("community routes", () => {
       }
     }
     expect(postsBody.items).toHaveLength(2)
-    expect(postsBody.items[0]?.post.post_id).toBe(secondPostBody.post_id)
+    expect(postsBody.items[0]?.post.id).toBe(secondPostBody.id)
     expect(postsBody.items[0]?.post.title).toBe("Second public route post")
-    expect(postsBody.items[1]?.post.post_id).toBe(createdPostBody.post_id)
+    expect(postsBody.items[1]?.post.id).toBe(createdPostBody.id)
     expect(postsBody.items[1]?.post.title).toBe("Public route post")
     expect(postsBody.next_cursor).toBeNull()
     expect(posts.headers.get("link")).toContain("/public-communities/")
     expect(postsBody.omitted_surfaces).toEqual([])
-    expect(postsBody.links.community.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.community_id}`)
+    expect(postsBody.links.community.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.id}`)
     expect(postsBody.items[0]?.omitted_surfaces).toEqual([])
-    expect(postsBody.items[0]?.links.self.href).toBe(`http://pirate.test/public-posts/${secondPostBody.post_id}`)
-    expect(postsBody.items[0]?.links.markdown.href).toBe(`http://pirate.test/public-posts/${secondPostBody.post_id}?format=markdown`)
-    expect(postsBody.items[0]?.links.top_comments.href).toBe(`http://pirate.test/public-posts/${secondPostBody.post_id}/top-comments`)
+    expect(postsBody.items[0]?.links.self.href).toBe(`http://pirate.test/public-posts/${secondPostBody.id}`)
+    expect(postsBody.items[0]?.links.markdown.href).toBe(`http://pirate.test/public-posts/${secondPostBody.id}?format=markdown`)
+    expect(postsBody.items[0]?.links.top_comments.href).toBe(`http://pirate.test/public-posts/${secondPostBody.id}/top-comments`)
 
     const postsMarkdown = await app.request(
-      `http://pirate.test/public-communities/${communityCreateBody.community.community_id}/posts?format=markdown`,
+      `http://pirate.test/public-communities/${communityCreateBody.community.id}/posts?format=markdown`,
       {},
       ctx.env,
     )
@@ -656,13 +670,13 @@ describe("community routes", () => {
     expect(await postsMarkdown.text()).toContain("Second public route post")
 
     const publicPost = await app.request(
-      `http://pirate.test/public-posts/${createdPostBody.post_id}?locale=zh-Hans`,
+      `http://pirate.test/public-posts/${createdPostBody.id}?locale=zh-Hans`,
       {},
       ctx.env,
     )
     expect(publicPost.status).toBe(200)
     const publicPostBody = await json(publicPost) as {
-      post: { post_id: string; title: string | null }
+      post: { id: string; title: string | null }
       resolved_locale: string
       translation_state: string
       omitted_surfaces: unknown[]
@@ -673,19 +687,19 @@ describe("community routes", () => {
         top_comments: { href: string; type: string }
       }
     }
-    expect(publicPostBody.post.post_id).toBe(createdPostBody.post_id)
+    expect(publicPostBody.post.id).toBe(createdPostBody.id)
     expect(publicPostBody.post.title).toBe("Public route post")
     expect(publicPostBody.resolved_locale).toBe("zh-Hans")
     expect(publicPostBody.translation_state).toBe("policy_blocked")
     expect(publicPost.headers.get("link")).toContain("/public-posts/")
     expect(publicPostBody.omitted_surfaces).toEqual([])
-    expect(publicPostBody.links.self.href).toBe(`http://pirate.test/public-posts/${createdPostBody.post_id}`)
-    expect(publicPostBody.links.community.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.community_id}`)
-    expect(publicPostBody.links.markdown.href).toBe(`http://pirate.test/public-posts/${createdPostBody.post_id}?format=markdown`)
-    expect(publicPostBody.links.top_comments.href).toBe(`http://pirate.test/public-posts/${createdPostBody.post_id}/top-comments`)
+    expect(publicPostBody.links.self.href).toBe(`http://pirate.test/public-posts/${createdPostBody.id}`)
+    expect(publicPostBody.links.community.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.id}`)
+    expect(publicPostBody.links.markdown.href).toBe(`http://pirate.test/public-posts/${createdPostBody.id}?format=markdown`)
+    expect(publicPostBody.links.top_comments.href).toBe(`http://pirate.test/public-posts/${createdPostBody.id}/top-comments`)
 
     const publicPostMarkdown = await app.request(
-      `http://pirate.test/public-posts/${createdPostBody.post_id}?format=markdown`,
+      `http://pirate.test/public-posts/${createdPostBody.id}?format=markdown`,
       {},
       ctx.env,
     )
@@ -694,7 +708,7 @@ describe("community routes", () => {
     expect(await publicPostMarkdown.text()).toContain("This should be visible without a session.")
 
     const topComments = await app.request(
-      `http://pirate.test/public-posts/${createdPostBody.post_id}/top-comments`,
+      `http://pirate.test/public-posts/${createdPostBody.id}/top-comments`,
       {},
       ctx.env,
     )
@@ -711,13 +725,13 @@ describe("community routes", () => {
     }
     expect(topCommentsBody.items).toEqual([])
     expect(topCommentsBody.top_comments_limit).toBe(10)
-    expect(topCommentsBody.links.self.href).toBe(`http://pirate.test/public-posts/${createdPostBody.post_id}/top-comments`)
-    expect(topCommentsBody.links.markdown.href).toBe(`http://pirate.test/public-posts/${createdPostBody.post_id}/top-comments?format=markdown`)
-    expect(topCommentsBody.links.post.href).toBe(`http://pirate.test/public-posts/${createdPostBody.post_id}`)
-    expect(topCommentsBody.links.community.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.community_id}`)
+    expect(topCommentsBody.links.self.href).toBe(`http://pirate.test/public-posts/${createdPostBody.id}/top-comments`)
+    expect(topCommentsBody.links.markdown.href).toBe(`http://pirate.test/public-posts/${createdPostBody.id}/top-comments?format=markdown`)
+    expect(topCommentsBody.links.post.href).toBe(`http://pirate.test/public-posts/${createdPostBody.id}`)
+    expect(topCommentsBody.links.community.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.id}`)
 
     const topCommentsMarkdown = await app.request(
-      `http://pirate.test/public-posts/${createdPostBody.post_id}/top-comments?format=markdown`,
+      `http://pirate.test/public-posts/${createdPostBody.id}/top-comments?format=markdown`,
       {},
       ctx.env,
     )
@@ -734,13 +748,13 @@ describe("community routes", () => {
       `,
       args: [
         "mao_route_top_comments",
-        communityCreateBody.community.community_id,
+        communityCreateBody.community.id.replace(/^com_/, ""),
         "2026-04-24T00:00:00.000Z",
       ],
     })
 
     const platformDisabledPublicPost = await app.request(
-      `http://pirate.test/public-posts/${createdPostBody.post_id}`,
+      `http://pirate.test/public-posts/${createdPostBody.id}`,
       {},
       ctx.env,
     )
@@ -755,7 +769,7 @@ describe("community routes", () => {
     ])
 
     const platformDisabledTopComments = await app.request(
-      `http://pirate.test/public-posts/${createdPostBody.post_id}/top-comments`,
+      `http://pirate.test/public-posts/${createdPostBody.id}/top-comments`,
       {},
       ctx.env,
     )
@@ -779,9 +793,9 @@ describe("community routes", () => {
     })
 
     const patchPolicyResponse = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/machine-access-policy`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/machine-access-policy`,
       {
-        method: "PATCH",
+        method: "POST",
         headers: {
           authorization: `Bearer ${session.accessToken}`,
           "content-type": "application/json",
@@ -799,7 +813,7 @@ describe("community routes", () => {
     expect(patchPolicyResponse.status).toBe(200)
 
     const disabledPreview = await app.request(
-      `http://pirate.test/public-communities/${communityCreateBody.community.community_id}`,
+      `http://pirate.test/public-communities/${communityCreateBody.community.id}`,
       {},
       ctx.env,
     )
@@ -816,7 +830,7 @@ describe("community routes", () => {
     ])
 
     const disabledPosts = await app.request(
-      `http://pirate.test/public-communities/${communityCreateBody.community.community_id}/posts`,
+      `http://pirate.test/public-communities/${communityCreateBody.community.id}/posts`,
       {},
       ctx.env,
     )
@@ -838,7 +852,7 @@ describe("community routes", () => {
     expect(disabledPostsBody.items[0]!.omitted_surfaces).toEqual(disabledPostsBody.omitted_surfaces)
 
     const disabledPublicPost = await app.request(
-      `http://pirate.test/public-posts/${createdPostBody.post_id}`,
+      `http://pirate.test/public-posts/${createdPostBody.id}`,
       {},
       ctx.env,
     )
@@ -856,7 +870,7 @@ describe("community routes", () => {
     ])
 
     const disabledTopComments = await app.request(
-      `http://pirate.test/public-posts/${createdPostBody.post_id}/top-comments`,
+      `http://pirate.test/public-posts/${createdPostBody.id}/top-comments`,
       {},
       ctx.env,
     )
@@ -880,6 +894,7 @@ describe("community routes", () => {
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Localized Community Club",
       description: "Welcome to the community.",
+      membership_mode: "request",
       handle_policy: {
         policy_template: "standard",
       },
@@ -887,14 +902,14 @@ describe("community routes", () => {
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
+        id: string
       }
     }
 
     const rulesResponse = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/rules`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/rules`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           authorization: `Bearer ${session.accessToken}`,
           "content-type": "application/json",
@@ -913,7 +928,7 @@ describe("community routes", () => {
     expect(rulesResponse.status).toBe(200)
 
     const localClient = createClient({
-      url: buildLocalCommunityDbUrl(String(ctx.env.LOCAL_COMMUNITY_DB_ROOT), communityCreateBody.community.community_id),
+      url: buildLocalCommunityDbUrl(String(ctx.env.LOCAL_COMMUNITY_DB_ROOT), communityCreateBody.community.id.replace(/^com_/, "")),
     })
     try {
       await localClient.execute({
@@ -923,11 +938,11 @@ describe("community routes", () => {
           WHERE community_id = ?1
         `,
         args: [
-          communityCreateBody.community.community_id,
+          communityCreateBody.community.id.replace(/^com_/, ""),
           JSON.stringify({
             reference_links: [
               {
-                id: "crl_sidebar",
+                community_reference_link: "crl_sidebar",
                 object: "community_reference_link",
                 platform: "official_website",
                 url: "https://pirate.test/community",
@@ -945,7 +960,7 @@ describe("community routes", () => {
       })
 
       const response = await app.request(
-        `http://pirate.test/communities/${communityCreateBody.community.community_id}?locale=es`,
+        `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}?locale=es`,
         {
           headers: {
             authorization: `Bearer ${session.accessToken}`,
@@ -985,11 +1000,11 @@ describe("community routes", () => {
           FROM community_jobs
           WHERE subject_id = ?1
         `,
-        args: [`${communityCreateBody.community.community_id}:es`],
+        args: [`${communityCreateBody.community.id.replace(/^com_/, "")}:es`],
       })
       expect(jobs.rows).toHaveLength(1)
       expect(String(jobs.rows[0]?.job_type)).toBe("community_text_translation_materialize")
-      expect(String(jobs.rows[0]?.subject_id)).toBe(`${communityCreateBody.community.community_id}:es`)
+      expect(String(jobs.rows[0]?.subject_id)).toBe(`${communityCreateBody.community.id.replace(/^com_/, "")}:es`)
     } finally {
       localClient.close()
     }
@@ -1005,20 +1020,21 @@ describe("community routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Private Post Club",
+      membership_mode: "request",
       namespace: {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
     }, ctx.env, session.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
+        id: string
         route_slug: string | null
       }
     }
 
     const publicPost = await requestJson(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
       {
         post_type: "text",
         title: "Public post",
@@ -1030,13 +1046,13 @@ describe("community routes", () => {
     )
     expect(publicPost.status).toBe(201)
     const publicPostBody = await json(publicPost) as {
-      post_id: string
+      id: string
       visibility: string
     }
     expect(publicPostBody.visibility).toBe("public")
 
     const privatePost = await requestJson(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
       {
         post_type: "text",
         title: "Private post",
@@ -1049,13 +1065,13 @@ describe("community routes", () => {
     )
     expect(privatePost.status).toBe(201)
     const privatePostBody = await json(privatePost) as {
-      post_id: string
+      id: string
       visibility: string
     }
     expect(privatePostBody.visibility).toBe("members_only")
 
     const memberRead = await app.request(
-      `http://pirate.test/posts/${privatePostBody.post_id}`,
+      `http://pirate.test/posts/${privatePostBody.id}`,
       {
         headers: {
           authorization: `Bearer ${session.accessToken}`,
@@ -1065,24 +1081,24 @@ describe("community routes", () => {
     )
     expect(memberRead.status).toBe(200)
     const memberReadBody = await json(memberRead) as {
-      post: { post_id: string; visibility: string }
+      post: { id: string; visibility: string }
     }
-    expect(memberReadBody.post.post_id).toBe(privatePostBody.post_id)
+    expect(memberReadBody.post.id).toBe(privatePostBody.id)
     expect(memberReadBody.post.visibility).toBe("members_only")
 
     const publicPosts = await app.request(
-      `http://pirate.test/public-communities/${communityCreateBody.community.route_slug ?? communityCreateBody.community.community_id}/posts`,
+      `http://pirate.test/public-communities/${communityCreateBody.community.route_slug ?? communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
       {},
       ctx.env,
     )
     expect(publicPosts.status).toBe(200)
     const publicPostsBody = await json(publicPosts) as {
-      items: Array<{ post: { post_id: string } }>
+      items: Array<{ post: { id: string } }>
     }
-    expect(publicPostsBody.items.map((item) => item.post.post_id)).toEqual([publicPostBody.post_id])
+    expect(publicPostsBody.items.map((item) => item.post.id)).toEqual([publicPostBody.id])
 
     const hiddenPublicPost = await app.request(
-      `http://pirate.test/public-posts/${privatePostBody.post_id}`,
+      `http://pirate.test/public-posts/${privatePostBody.id}`,
       {},
       ctx.env,
     )
@@ -1095,11 +1111,11 @@ describe("community routes", () => {
         WHERE community_id = ?1
         ORDER BY source_created_at ASC
       `,
-      args: [communityCreateBody.community.community_id],
+      args: [communityCreateBody.community.id.replace(/^com_/, "")],
     })
     expect(projectionRows.rows).toEqual([
-      { source_post_id: publicPostBody.post_id, visibility: "public" },
-      { source_post_id: privatePostBody.post_id, visibility: "members_only" },
+      { source_post_id: stripPublicPrefix(publicPostBody.id, "post"), visibility: "public" },
+      { source_post_id: stripPublicPrefix(privatePostBody.id, "post"), visibility: "members_only" },
     ])
   })
 
@@ -1112,24 +1128,25 @@ describe("community routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Pirate Test Club",
+      membership_mode: "request",
       namespace: {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
     }, ctx.env, session.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
+        id: string
         display_name: string
-        namespace_verification_id: string | null
+        namespace_verification: string | null
         route_slug: string | null
         provisioning_state: string
         status: string
       }
-      job: { job_id: string; status: string }
+      job: { id: string; status: string }
     }
     expect(communityCreateBody.community.display_name).toBe("Pirate Test Club")
-    expect(communityCreateBody.community.namespace_verification_id).toBe(namespaceVerificationId)
+    expect(communityCreateBody.community.namespace_verification).toBe(namespaceVerificationId)
     expect(communityCreateBody.community.route_slug).toBe("piratecommunityroot")
     expect(communityCreateBody.community.provisioning_state).toBe("active")
     expect(communityCreateBody.community.status).toBe("active")
@@ -1147,7 +1164,7 @@ describe("community routes", () => {
     expect(communityBySlug.status).toBe(200)
 
     const communityGet = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}`,
       {
         headers: {
           authorization: `Bearer ${session.accessToken}`,
@@ -1158,7 +1175,7 @@ describe("community routes", () => {
     expect(communityGet.status).toBe(200)
 
     const jobGet = await app.request(
-      `http://pirate.test/jobs/${communityCreateBody.job.job_id}`,
+      `http://pirate.test/jobs/${communityCreateBody.job.id}`,
       {
         headers: {
           authorization: `Bearer ${session.accessToken}`,
@@ -1167,12 +1184,12 @@ describe("community routes", () => {
       ctx.env,
     )
     expect(jobGet.status).toBe(200)
-    const jobBody = await json(jobGet) as { status: string; subject_id: string }
+    const jobBody = await json(jobGet) as { status: string; subject: string }
     expect(jobBody.status).toBe("succeeded")
-    expect(jobBody.subject_id).toBe(communityCreateBody.community.community_id)
+    expect(jobBody.subject).toBe(communityCreateBody.community.id.replace(/^com_/, ""))
 
     const createdPost = await requestJson(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
       {
         post_type: "text",
         title: "Hello Pirate",
@@ -1184,19 +1201,19 @@ describe("community routes", () => {
     )
     expect(createdPost.status).toBe(201)
     const postBody = await json(createdPost) as {
-      post_id: string
-      community_id: string
+      id: string
+      community: string
       status: string
       title: string | null
-      author_user_id: string | null
+      author_user: string | null
     }
-    expect(postBody.community_id).toBe(communityCreateBody.community.community_id)
+    expect(postBody.community).toBe(communityCreateBody.community.id)
     expect(postBody.status).toBe("published")
     expect(postBody.title).toBe("Hello Pirate")
-    expect(postBody.author_user_id).toBe(session.userId)
+    expect(postBody.author_user).toBe(`usr_${session.userId}`)
 
     const retriedPost = await requestJson(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
       {
         post_type: "text",
         title: "Hello Pirate",
@@ -1208,16 +1225,16 @@ describe("community routes", () => {
     )
     expect(retriedPost.status).toBe(201)
     const retriedPostBody = await json(retriedPost) as {
-      post_id: string
-      community_id: string
+      id: string
+      community: string
       status: string
     }
-    expect(retriedPostBody.post_id).toBe(postBody.post_id)
-    expect(retriedPostBody.community_id).toBe(postBody.community_id)
+    expect(retriedPostBody.id).toBe(postBody.id)
+    expect(retriedPostBody.community).toBe(postBody.community)
     expect(retriedPostBody.status).toBe("published")
 
     const fetchedPost = await app.request(
-      `http://pirate.test/posts/${postBody.post_id}?locale=es`,
+      `http://pirate.test/posts/${postBody.id}?locale=es`,
       {
         headers: {
           authorization: `Bearer ${session.accessToken}`,
@@ -1227,17 +1244,17 @@ describe("community routes", () => {
     )
     expect(fetchedPost.status).toBe(200)
     const fetchedPostBody = await json(fetchedPost) as {
-      post: { post_id: string; title: string | null }
+      post: { id: string; title: string | null }
       resolved_locale: string
       translation_state: string
     }
-    expect(fetchedPostBody.post.post_id).toBe(postBody.post_id)
+    expect(fetchedPostBody.post.id).toBe(postBody.id)
     expect(fetchedPostBody.post.title).toBe("Hello Pirate")
     expect(fetchedPostBody.resolved_locale).toBe("es")
     expect(fetchedPostBody.translation_state).toBe("policy_blocked")
 
     const reviewHeldPost = await requestJson(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
       {
         post_type: "text",
         title: "[review-required] Hello Pirate",
@@ -1249,19 +1266,19 @@ describe("community routes", () => {
     )
     expect(reviewHeldPost.status).toBe(202)
     const reviewHeldPostBody = await json(reviewHeldPost) as {
-      post_id: string
-      community_id: string
+      id: string
+      community: string
       status: string
       analysis_state: string
       content_safety_state: string
     }
-    expect(reviewHeldPostBody.community_id).toBe(communityCreateBody.community.community_id)
+    expect(reviewHeldPostBody.community).toBe(communityCreateBody.community.id)
     expect(reviewHeldPostBody.status).toBe("draft")
     expect(reviewHeldPostBody.analysis_state).toBe("review_required")
     expect(reviewHeldPostBody.content_safety_state).toBe("pending")
 
     const fetchedReviewHeldPost = await app.request(
-      `http://pirate.test/posts/${reviewHeldPostBody.post_id}?locale=es`,
+      `http://pirate.test/posts/${reviewHeldPostBody.id}?locale=es`,
       {
         headers: {
           authorization: `Bearer ${session.accessToken}`,
@@ -1272,7 +1289,7 @@ describe("community routes", () => {
     expect(fetchedReviewHeldPost.status).toBe(200)
     const fetchedReviewHeldPostBody = await json(fetchedReviewHeldPost) as {
       post: {
-        post_id: string
+        id: string
         status: string
         analysis_state: string
         content_safety_state: string
@@ -1280,7 +1297,7 @@ describe("community routes", () => {
       resolved_locale: string
       translation_state: string
     }
-    expect(fetchedReviewHeldPostBody.post.post_id).toBe(reviewHeldPostBody.post_id)
+    expect(fetchedReviewHeldPostBody.post.id).toBe(reviewHeldPostBody.id)
     expect(fetchedReviewHeldPostBody.post.status).toBe("draft")
     expect(fetchedReviewHeldPostBody.post.analysis_state).toBe("review_required")
     expect(fetchedReviewHeldPostBody.post.content_safety_state).toBe("pending")
@@ -1288,7 +1305,7 @@ describe("community routes", () => {
     expect(fetchedReviewHeldPostBody.translation_state).toBe("policy_blocked")
 
     const blockedPost = await requestJson(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
       {
         post_type: "text",
         title: "[blocked] Hello Pirate",
@@ -1308,12 +1325,12 @@ describe("community routes", () => {
         FROM community_post_projections
         WHERE community_id = ?1
       `,
-      args: [communityCreateBody.community.community_id],
+      args: [communityCreateBody.community.id.replace(/^com_/, "")],
     })
     expect(Number(controlPlaneProjectionCount.rows[0]?.count ?? 0)).toBe(2)
 
     const communityDb = createClient({
-      url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityCreateBody.community.community_id),
+      url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityCreateBody.community.id.replace(/^com_/, "")),
     })
     try {
       const communityPostCount = await communityDb.execute({
@@ -1322,7 +1339,7 @@ describe("community routes", () => {
           FROM posts
           WHERE community_id = ?1
         `,
-        args: [communityCreateBody.community.community_id],
+        args: [communityCreateBody.community.id.replace(/^com_/, "")],
       })
       expect(Number(communityPostCount.rows[0]?.count ?? 0)).toBe(2)
     } finally {
@@ -1330,7 +1347,7 @@ describe("community routes", () => {
     }
 
     const listedPosts = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts?locale=es`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts?locale=es`,
       {
         headers: {
           authorization: `Bearer ${session.accessToken}`,
@@ -1341,16 +1358,16 @@ describe("community routes", () => {
     expect(listedPosts.status).toBe(200)
     const listedPostsBody = await json(listedPosts) as {
       items: Array<{
-        post: { post_id: string; status: string }
+        post: { id: string; status: string }
         resolved_locale: string
       }>
       next_cursor: string | null
     }
     expect(listedPostsBody.items).toHaveLength(1)
-    expect(listedPostsBody.items[0]?.post.post_id).toBe(postBody.post_id)
+    expect(listedPostsBody.items[0]?.post.id).toBe(postBody.id)
     expect(listedPostsBody.items[0]?.post.status).toBe("published")
     expect(listedPostsBody.items[0]?.resolved_locale).toBe("es")
-    expect(listedPostsBody.items.some((item) => item.post.post_id === reviewHeldPostBody.post_id)).toBe(false)
+    expect(listedPostsBody.items.some((item) => item.post.id === reviewHeldPostBody.id)).toBe(false)
     expect(listedPostsBody.next_cursor).toBeNull()
   })
 
@@ -1362,6 +1379,7 @@ describe("community routes", () => {
 
     const response = await requestJson("http://pirate.test/communities", {
       display_name: "",
+membership_mode: "request",
       governance_mode: "multisig",
       namespace: {},
     }, ctx.env, session.accessToken)

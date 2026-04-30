@@ -1,6 +1,7 @@
 import type { Client } from "../sql-client"
 import { internalError } from "../errors"
 import { makeId } from "../helpers"
+import { auditEventInsert } from "../audit"
 import { getCommunityCommentProjectionRowByCommentId } from "../auth/auth-db-community-queries"
 import type { CommunityCommentProjectionRow } from "../auth/auth-db-rows"
 
@@ -20,7 +21,6 @@ export async function recordCommunityCommentProjection(
 ): Promise<CommunityCommentProjectionRow> {
   const existing = await getCommunityCommentProjectionRowByCommentId(client, input.sourceCommentId)
   const projectionId = existing?.projection_id ?? makeId("ccp")
-  const auditEventId = makeId("aud")
   const tx = await client.transaction("write")
 
   try {
@@ -54,31 +54,23 @@ export async function recordCommunityCommentProjection(
           input.createdAt,
         ],
       },
-      {
-        sql: `
-          INSERT INTO audit_log (
-            audit_event_id, actor_type, actor_id, action, target_type, target_id, community_id, metadata_json, created_at
-          ) VALUES (
-            ?1, 'user', ?2, ?3, 'comment', ?4, ?5, ?6, ?7
-          )
-        `,
-        args: [
-          auditEventId,
-          input.actorUserId,
-          existing ? "community.comment_projection_synced" : "community.comment_created",
-          input.sourceCommentId,
-          input.communityId,
-          JSON.stringify({
-            projection_id: projectionId,
-            thread_root_post_id: input.threadRootPostId,
-            parent_comment_id: input.parentCommentId,
-            previous_status: existing?.status ?? null,
-            next_status: input.status,
-            source_created_at: input.sourceCreatedAt,
-          }),
-          input.createdAt,
-        ],
-      },
+      auditEventInsert({
+        action: existing ? "community.comment_projection_synced" : "community.comment_created",
+        actorId: input.actorUserId,
+        actorType: "user",
+        communityId: input.communityId,
+        createdAt: input.createdAt,
+        targetId: input.sourceCommentId,
+        targetType: "comment",
+        metadata: {
+          projection_id: projectionId,
+          thread_root_post_id: input.threadRootPostId,
+          parent_comment_id: input.parentCommentId,
+          previous_status: existing?.status ?? null,
+          next_status: input.status,
+          source_created_at: input.sourceCreatedAt,
+        },
+      }),
     ])
 
     const projection = await getCommunityCommentProjectionRowByCommentId(tx, input.sourceCommentId)

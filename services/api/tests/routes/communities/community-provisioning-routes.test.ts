@@ -39,6 +39,7 @@ describe("community provisioning routes", () => {
 
     const response = await requestJson("http://pirate.test/communities", {
       display_name: "Local Fallback Club",
+membership_mode: "request",
       handle_policy: {
         policy_template: "standard",
       },
@@ -47,7 +48,7 @@ describe("community provisioning routes", () => {
     expect(response.status).toBe(202)
     const body = await json(response) as {
       community: {
-        community_id: string
+        id: string
         display_name: string
         provisioning_state: string
       }
@@ -82,7 +83,7 @@ describe("community provisioning routes", () => {
 
         return new Response(JSON.stringify({
           community_id: "cmt_operator_test",
-          job_id: "job_operator_runtime",
+          id: "job_operator_runtime",
           binding_id: "cdb_operator_runtime",
           credential_id: "cdc_operator_runtime",
           organization_slug: "pirate-org",
@@ -127,33 +128,34 @@ describe("community provisioning routes", () => {
 
       const response = await requestJson("http://pirate.test/communities", {
         display_name: "Operator Club",
+membership_mode: "request",
         database_region: "aws-ap-south-1",
         namespace: {
-          namespace_verification_id: namespaceVerificationId,
+          namespace_verification: namespaceVerificationId,
         },
       }, ctx.env, session.accessToken)
 
       expect(response.status).toBe(202)
       const body = await json(response) as {
         community: {
-          community_id: string
-          namespace_verification_id: string | null
+          id: string
+          namespace_verification: string | null
           provisioning_state: string
         }
         job: {
-          job_id: string
+          id: string
           status: string
         }
       }
 
       expect(body.community.provisioning_state).toBe("active")
-      expect(body.community.namespace_verification_id).toBe(namespaceVerificationId)
+      expect(body.community.namespace_verification).toBe(namespaceVerificationId)
       expect(body.job.status).toBe("succeeded")
       if (!provisionBody) {
         throw new Error("operator provision request was not captured")
       }
       const operatorRequest = provisionBody
-      expect(operatorRequest["community_id"]).toBe(body.community.community_id)
+      expect(operatorRequest["community_id"]).toBe(body.community.id.replace(/^com_/, ""))
       expect(operatorRequest["group_location"]).toBe("aws-ap-south-1")
       expect((operatorRequest["bootstrap_payload"] as Record<string, unknown> | null)?.["namespace_label"]).toBe("piratecommunityroot")
 
@@ -165,7 +167,7 @@ describe("community provisioning routes", () => {
             AND binding_role = 'primary'
           LIMIT 1
         `,
-        args: [body.community.community_id],
+        args: [body.community.id.replace(/^com_/, "")],
       })
       expect(bindingRows.rows[0]?.organization_slug).toBe("pirate-org")
       expect(bindingRows.rows[0]?.group_name).toBe("region-aws-ap-south-1")
@@ -195,7 +197,7 @@ describe("community provisioning routes", () => {
       ).toBe("db-token-operator-test")
 
       const communityGet = await app.request(
-        `http://pirate.test/communities/${body.community.community_id}`,
+        `http://pirate.test/communities/${body.community.id.replace(/^com_/, "")}`,
         {
           headers: {
             authorization: `Bearer ${session.accessToken}`,
@@ -204,8 +206,8 @@ describe("community provisioning routes", () => {
         ctx.env,
       )
       expect(communityGet.status).toBe(200)
-      const communityGetBody = await json(communityGet) as { namespace_verification_id: string | null }
-      expect(communityGetBody.namespace_verification_id).toBe(namespaceVerificationId)
+      const communityGetBody = await json(communityGet) as { namespace_verification: string | null }
+      expect(communityGetBody.namespace_verification).toBe(namespaceVerificationId)
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -221,7 +223,7 @@ describe("community provisioning routes", () => {
       if (requestUrl.startsWith(`${operatorBaseUrl}/internal/v0/community-provisioning/provision`)) {
         return new Response(JSON.stringify({
           community_id: "cmt_operator_no_cred",
-          job_id: "job_operator_no_cred",
+          id: "job_operator_no_cred",
           binding_id: "cdb_operator_no_cred",
           credential_id: "",
           organization_slug: "pirate-org",
@@ -265,8 +267,9 @@ describe("community provisioning routes", () => {
 
       const response = await requestJson("http://pirate.test/communities", {
         display_name: "Fallback Cred Club",
+membership_mode: "request",
         namespace: {
-          namespace_verification_id: namespaceVerificationId,
+          namespace_verification: namespaceVerificationId,
         },
       }, ctx.env, session.accessToken)
 
@@ -319,6 +322,7 @@ describe("community provisioning routes", () => {
 
       const response = await requestJson("http://pirate.test/communities", {
         display_name: "Unsupported Region Club",
+membership_mode: "request",
         database_region: "aws-eu-west-1",
       }, ctx.env, session.accessToken)
 
@@ -344,7 +348,7 @@ describe("community provisioning routes", () => {
         provisionBody = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : null
         return new Response(JSON.stringify({
           community_id: "cmt_operator_namespaceless",
-          job_id: "job_operator_namespaceless",
+          id: "job_operator_namespaceless",
           binding_id: "cdb_operator_namespaceless",
           credential_id: "cdc_operator_namespaceless",
           organization_slug: "pirate-org",
@@ -388,13 +392,14 @@ describe("community provisioning routes", () => {
 
       const response = await requestJson("http://pirate.test/communities", {
         display_name: "Operator Namespaceless Club",
+membership_mode: "request",
       }, ctx.env, session.accessToken)
 
       expect(response.status).toBe(202)
       const body = await json(response) as {
         community: {
-          community_id: string
-          namespace_verification_id: string | null
+          id: string
+          namespace_verification: string | null
           provisioning_state: string
         }
         job: {
@@ -402,13 +407,13 @@ describe("community provisioning routes", () => {
         }
       }
 
-      expect(body.community.namespace_verification_id).toBeNull()
+      expect(body.community.namespace_verification).toBeNull()
       expect(body.community.provisioning_state).toBe("active")
       expect(body.job.status).toBe("succeeded")
       if (!provisionBody) {
         throw new Error("operator provision request was not captured")
       }
-      expect(provisionBody["community_id"]).toBe(body.community.community_id)
+      expect(provisionBody["community_id"]).toBe(body.community.id.replace(/^com_/, ""))
       expect(provisionBody["namespace_verification_id"]).toBeNull()
       expect(provisionBody["group_location"]).toBe("iad")
       expect((provisionBody["bootstrap_payload"] as Record<string, unknown> | null)?.["namespace_label"]).toBeNull()
@@ -421,12 +426,12 @@ describe("community provisioning routes", () => {
             AND binding_role = 'primary'
           LIMIT 1
         `,
-        args: [body.community.community_id],
+        args: [body.community.id.replace(/^com_/, "")],
       })
       expect(bindingRows.rows[0]?.database_url).toBe("libsql://main-cmt-operator-namespaceless-pirate-org.iad.turso.io")
       expect(bindingRows.rows[0]?.status).toBe("active")
 
-      const createdState = await getCommunityControlPlaneState(ctx.env, body.community.community_id)
+      const createdState = await getCommunityControlPlaneState(ctx.env, body.community.id.replace(/^com_/, ""))
       expect(createdState.namespaceVerificationId).toBeNull()
     } finally {
       globalThis.fetch = originalFetch
@@ -446,7 +451,7 @@ describe("community provisioning routes", () => {
         provisionBody = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : null
         return new Response(JSON.stringify({
           community_id: "cmt_operator_agent",
-          job_id: "job_operator_agent",
+          id: "job_operator_agent",
           binding_id: "cdb_operator_agent",
           credential_id: "cdc_operator_agent",
           organization_slug: "pirate-org",
@@ -491,8 +496,9 @@ describe("community provisioning routes", () => {
 
       const response = await requestJson("http://pirate.test/communities", {
         display_name: "Operator Agent Club",
+membership_mode: "request",
         namespace: {
-          namespace_verification_id: namespaceVerificationId,
+          namespace_verification: namespaceVerificationId,
         },
         human_verification_lane: "very",
         agent_posting_policy: "allow",

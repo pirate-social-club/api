@@ -1,5 +1,5 @@
 import { Contract, JsonRpcProvider, Wallet, getAddress } from "ethers"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 import { resolveDirectTxGasPolicy, sendContractTxWithPolicy } from "../evm-direct-tx"
 import { normalizeDirectSignerPrivateKey } from "./story-direct-signer"
 import { STORY_DELIVERY_CONTRACTS } from "./story-runtime-config"

@@ -3,7 +3,7 @@ import { makeId } from "./helpers"
 import { sha256Hex } from "./crypto"
 import { resolveFilebaseConfig } from "./storage/filebase-config"
 import { buildS3SignedRequest, EMPTY_SHA256_HEX } from "./storage/s3-signing"
-import type { Env } from "../types"
+import type { Env } from "../env"
 
 type UploadMediaInput<TKind extends string> = {
   env: Env

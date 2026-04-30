@@ -1,4 +1,5 @@
-import type { Env, Post } from "../../types"
+import type { Env } from "../../env"
+import type { Post } from "../../types"
 import { trimEnv, type LyricsModerationOutcome } from "./song-artifact-analysis-types"
 
 function resolveProviderLyricsOutcome(result: Record<string, unknown>): {

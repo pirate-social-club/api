@@ -9,10 +9,12 @@ export function requestJson(
   env: Env,
   token?: string,
 ): Promise<Response> {
+  const normalizedUrl = normalizeProfileTestUrl(url)
+  const normalizedMethod = method === "PATCH" ? "POST" : method
   return Promise.resolve(app.request(
-    url,
+    normalizedUrl,
     {
-      method,
+      method: normalizedMethod,
       headers: {
         "content-type": "application/json",
         ...(token ? { authorization: `Bearer ${token}` } : {}),
@@ -23,7 +25,16 @@ export function requestJson(
   ))
 }
 
-export async function exchangeJwt(env: Env, sub: string): Promise<{ accessToken: string; userId: string }> {
+function normalizeProfileTestUrl(url: string): string {
+  return url
+    .replace("/profiles/me/global-handle/rename", "/profiles/me/rename-global-handle")
+    .replace("/profiles/me/global-handle/upgrade-quote", "/profiles/me/quote-handle-upgrade")
+    .replace("/profiles/me/global-handle/reddit-claim", "/profiles/me/global-handle/reddit-claim")
+    .replace("/profiles/me/linked-handles/sync", "/profiles/me/sync-linked-handles")
+    .replace("/profiles/me/primary-public-handle", "/profiles/me/set-primary-public-handle")
+}
+
+export async function exchangeJwt(env: Env, sub: string): Promise<{ accessToken: string; userId: string; publicUserId: string }> {
   const jwt = await mintUpstreamJwt(env, { sub })
   const response = await requestJson("http://pirate.test/auth/session/exchange", "POST", {
     proof: {
@@ -31,9 +42,11 @@ export async function exchangeJwt(env: Env, sub: string): Promise<{ accessToken:
       jwt,
     },
   }, env)
-  const body = await json(response) as { access_token: string; user: { user_id: string } }
+  const body = await json(response) as { access_token: string; user: { id: string } }
+  const publicUserId = body.user.id
   return {
     accessToken: body.access_token,
-    userId: body.user.user_id,
+    userId: publicUserId.replace(/^usr_/, ""),
+    publicUserId,
   }
 }

@@ -1,4 +1,4 @@
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 import { isHnsVerifierConfigured } from "./hns-verifier"
 
 export const HNS_VERIFIER_OBSERVATION_PROVIDER = "hns_verifier"

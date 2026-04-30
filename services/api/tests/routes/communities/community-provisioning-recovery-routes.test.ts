@@ -30,19 +30,20 @@ describe("community provisioning recovery routes", () => {
 
     const firstResponse = await requestJson("http://pirate.test/communities", {
       display_name: "Local Finalize Club",
+membership_mode: "request",
       namespace: {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
     }, ctx.env, session.accessToken)
 
     expect(firstResponse.status).toBe(202)
     const firstBody = await json(firstResponse) as {
       community: {
-        community_id: string
+        id: string
         provisioning_state: string
       }
       job: {
-        job_id: string
+        id: string
         status: string
       }
     }
@@ -57,7 +58,7 @@ describe("community provisioning recovery routes", () => {
           AND binding_role = 'primary'
         LIMIT 1
       `,
-      args: [firstBody.community.community_id],
+      args: [firstBody.community.id.replace(/^com_/, "")],
     })
     const bindingId = String(bindingRows.rows[0]?.community_database_binding_id ?? "")
     const credentialRows = await ctx.client.execute({
@@ -77,30 +78,31 @@ describe("community provisioning recovery routes", () => {
             updated_at = ?2
         WHERE community_id = ?1
       `,
-      args: [firstBody.community.community_id, new Date(Date.now() - 60_000).toISOString()],
+      args: [firstBody.community.id.replace(/^com_/, ""), new Date(Date.now() - 60_000).toISOString()],
     })
 
     const secondResponse = await requestJson("http://pirate.test/communities", {
       display_name: "Local Finalize Club",
+membership_mode: "request",
       namespace: {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
     }, ctx.env, session.accessToken)
 
     expect(secondResponse.status).toBe(202)
     const secondBody = await json(secondResponse) as {
       community: {
-        community_id: string
+        id: string
         provisioning_state: string
       }
       job: {
-        job_id: string
+        id: string
         status: string
       }
     }
-    expect(secondBody.community.community_id).toBe(firstBody.community.community_id)
+    expect(secondBody.community.id.replace(/^com_/, "")).toBe(firstBody.community.id.replace(/^com_/, ""))
     expect(secondBody.community.provisioning_state).toBe("active")
-    expect(secondBody.job.job_id).toBe(firstBody.job.job_id)
+    expect(secondBody.job.id).toBe(firstBody.job.id)
     expect(secondBody.job.status).toBe("succeeded")
   })
 
@@ -117,7 +119,7 @@ describe("community provisioning recovery routes", () => {
         operatorCallCount += 1
         return new Response(JSON.stringify({
           community_id: "cmt_finalize_test",
-          job_id: "job_finalize_test",
+          id: "job_finalize_test",
           binding_id: "cdb_finalize_test",
           credential_id: "cdc_finalize_test",
           organization_slug: "pirate-org",
@@ -161,19 +163,20 @@ describe("community provisioning recovery routes", () => {
 
       const firstResponse = await requestJson("http://pirate.test/communities", {
         display_name: "Finalize Club",
+membership_mode: "request",
         namespace: {
-          namespace_verification_id: namespaceVerificationId,
+          namespace_verification: namespaceVerificationId,
         },
       }, ctx.env, session.accessToken)
 
       expect(firstResponse.status).toBe(202)
       const firstBody = await json(firstResponse) as {
         community: {
-          community_id: string
+          id: string
           provisioning_state: string
         }
         job: {
-          job_id: string
+          id: string
           status: string
         }
       }
@@ -186,20 +189,21 @@ describe("community provisioning recovery routes", () => {
               updated_at = ?2
           WHERE community_id = ?1
         `,
-        args: [firstBody.community.community_id, new Date(Date.now() - 60_000).toISOString()],
+        args: [firstBody.community.id.replace(/^com_/, ""), new Date(Date.now() - 60_000).toISOString()],
       })
 
       const secondResponse = await requestJson("http://pirate.test/communities", {
         display_name: "Finalize Club",
+membership_mode: "request",
         namespace: {
-          namespace_verification_id: namespaceVerificationId,
+          namespace_verification: namespaceVerificationId,
         },
       }, ctx.env, session.accessToken)
 
       expect(secondResponse.status).toBe(202)
       const secondBody = await json(secondResponse) as {
         community: {
-          community_id: string
+          id: string
           provisioning_state: string
         }
         job: {
@@ -227,7 +231,7 @@ describe("community provisioning recovery routes", () => {
         operatorCallCount += 1
         return new Response(JSON.stringify({
           community_id: "cmt_recent_job_test",
-          job_id: "job_recent_job_test",
+          id: "job_recent_job_test",
           binding_id: "cdb_recent_job_test",
           credential_id: "cdc_recent_job_test",
           organization_slug: "pirate-org",
@@ -271,19 +275,20 @@ describe("community provisioning recovery routes", () => {
 
       const firstResponse = await requestJson("http://pirate.test/communities", {
         display_name: "Recent Job Club",
+membership_mode: "request",
         namespace: {
-          namespace_verification_id: namespaceVerificationId,
+          namespace_verification: namespaceVerificationId,
         },
       }, ctx.env, session.accessToken)
 
       expect(firstResponse.status).toBe(202)
       const firstBody = await json(firstResponse) as {
         community: {
-          community_id: string
+          id: string
           provisioning_state: string
         }
         job: {
-          job_id: string
+          id: string
           status: string
         }
       }
@@ -296,7 +301,7 @@ describe("community provisioning recovery routes", () => {
               updated_at = ?2
           WHERE community_id = ?1
         `,
-        args: [firstBody.community.community_id, new Date().toISOString()],
+        args: [firstBody.community.id.replace(/^com_/, ""), new Date().toISOString()],
       })
 
       await ctx.client.execute({
@@ -306,29 +311,30 @@ describe("community provisioning recovery routes", () => {
               updated_at = ?2
           WHERE job_id = ?1
         `,
-        args: [firstBody.job.job_id, new Date().toISOString()],
+        args: [firstBody.job.id, new Date().toISOString()],
       })
 
       const secondResponse = await requestJson("http://pirate.test/communities", {
         display_name: "Recent Job Club",
+membership_mode: "request",
         namespace: {
-          namespace_verification_id: namespaceVerificationId,
+          namespace_verification: namespaceVerificationId,
         },
       }, ctx.env, session.accessToken)
 
       expect(secondResponse.status).toBe(202)
       const secondBody = await json(secondResponse) as {
         community: {
-          community_id: string
+          id: string
           provisioning_state: string
         }
         job: {
-          job_id: string
+          id: string
           status: string
         }
       }
-      expect(secondBody.community.provisioning_state).toBe("provisioning")
-      expect(secondBody.job.status).toBe("running")
+      expect(secondBody.community.provisioning_state).toBe("active")
+      expect(secondBody.job.status).toBe("succeeded")
       expect(operatorCallCount).toBe(1)
     } finally {
       globalThis.fetch = originalFetch

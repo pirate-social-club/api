@@ -1,4 +1,4 @@
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 
 export const DEFAULT_STORY_CHAIN_ID = 1315
 export const DEFAULT_STORY_RPC_URL = "https://aeneid.storyrpc.io"

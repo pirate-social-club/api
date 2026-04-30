@@ -8,7 +8,8 @@ import {
 import { getLatestJobRowBySubjectAndType } from "../auth/auth-db-community-queries"
 import { serializeRedditImportSummary, serializeRedditVerification } from "../auth/auth-serializers"
 import { getJobById } from "../communities/db-community-repository"
-import type { Env, Job, RedditImportSummary, RedditVerification } from "../../types"
+import type { Env } from "../../env"
+import type { Job, RedditImportSummary, RedditVerification } from "../../types"
 import { checkRedditVerificationCode, importRedditSnapshot, makeRedditVerificationCode } from "./reddit-bootstrap"
 import { unixSeconds } from "../../serializers/time"
 

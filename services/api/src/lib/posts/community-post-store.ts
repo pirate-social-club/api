@@ -15,6 +15,7 @@ import {
   toPostRow,
 } from "./community-post-serialization"
 import type { CreatePostRequest, Post } from "../../types"
+import { decodePublicSongArtifactBundleId } from "../public-ids"
 
 type StoryLicensePreset = NonNullable<CreatePostRequest["license_preset"]>
 
@@ -187,7 +188,7 @@ export async function insertPost(input: {
       input.body.lyrics ?? null,
       input.body.link_url ?? null,
       mediaRefsJson,
-      input.body.song_artifact_bundle_id ?? null,
+      input.body.song_artifact_bundle ? decodePublicSongArtifactBundleId(input.body.song_artifact_bundle) : null,
       sourceLanguage,
       translationPolicy,
       input.body.rights_basis ?? "none",
@@ -557,8 +558,8 @@ export function assertPostCreateRequest(body: CreatePostRequest, _communityId: s
     if ((body.identity_mode ?? "public") !== "public") {
       throw badRequestError("song posts must use public identity")
     }
-    if (!body.song_artifact_bundle_id?.trim()) {
-      throw badRequestError("song_artifact_bundle_id is required for song posts")
+    if (!body.song_artifact_bundle?.trim()) {
+      throw badRequestError("song_artifact_bundle is required for song posts")
     }
     if (body.access_mode && body.access_mode !== "public" && body.access_mode !== "locked") {
       throw badRequestError("song access_mode must be public or locked")

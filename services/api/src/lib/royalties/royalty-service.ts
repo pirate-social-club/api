@@ -1,6 +1,6 @@
 import { StoryClient, WIP_TOKEN_ADDRESS } from "@story-protocol/core-sdk"
 import { http } from "viem"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 import { openCommunityDb } from "../communities/community-db-factory"
 import type { CommunityDatabaseBindingRepository } from "../communities/db-community-repository"
 import { listCommunityMembershipProjectionRowsByUserId } from "../auth/auth-db-community-queries"
@@ -123,6 +123,7 @@ function royaltyActivityFromFeedItem(item: NotificationFeedItem): RoyaltyActivit
   const storyIpId = payloadString(payload, "story_ip_id")
   const communityId = payloadString(payload, "community_id")
   const assetId = payloadString(payload, "asset_id") ?? item.event.subject
+  const purchaseId = payloadString(payload, "purchase")
   if (!amountWipWei || !storyIpId || !communityId || !assetId) {
     return null
   }
@@ -136,7 +137,7 @@ function royaltyActivityFromFeedItem(item: NotificationFeedItem): RoyaltyActivit
     amount_wip_wei: amountWipWei,
     buyer_wallet_address: payloadString(payload, "buyer_wallet_address"),
     tx_hash: payloadString(payload, "tx_hash"),
-    purchase: null,
+    purchase: purchaseId,
     created: item.event.created,
     read_at: item.receipt.read_at ?? null,
   }

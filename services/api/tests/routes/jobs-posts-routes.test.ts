@@ -32,17 +32,17 @@ async function exchangeJwt(env: Env, sub: string): Promise<{ accessToken: string
       jwt,
     },
   }, env)
-  const body = await json(response) as { access_token: string; user: { user_id: string } }
-  return { accessToken: body.access_token, userId: body.user.user_id }
+  const body = await json(response) as { access_token: string; user: { id: string } }
+  return { accessToken: body.access_token, userId: body.user.id.replace(/^usr_/, "") }
 }
 
 async function completeUniqueHumanVerification(env: Env, accessToken: string): Promise<void> {
   const verificationSession = await requestJson("http://pirate.test/verification-sessions", {
     provider: "self",
   }, env, accessToken)
-  const verificationBody = await json(verificationSession) as { verification_session_id: string }
+  const verificationBody = await json(verificationSession) as { id: string }
   await requestJson(
-    `http://pirate.test/verification-sessions/${verificationBody.verification_session_id}/complete`,
+    `http://pirate.test/verification-sessions/${verificationBody.id}/complete`,
     {},
     env,
     accessToken,
@@ -56,15 +56,15 @@ async function prepareVerifiedNamespace(env: Env, accessToken: string): Promise<
     family: "hns",
     root_label: "FocusedRouteCoverageRoot",
   }, env, accessToken)
-  const namespaceBody = await json(namespaceSession) as { namespace_verification_session_id: string }
+  const namespaceBody = await json(namespaceSession) as { id: string }
   const completed = await requestJson(
-    `http://pirate.test/namespace-verification-sessions/${namespaceBody.namespace_verification_session_id}/complete`,
+    `http://pirate.test/namespace-verification-sessions/${namespaceBody.id}/complete`,
     {},
     env,
     accessToken,
   )
-  const completedBody = await json(completed) as { namespace_verification_id: string }
-  return completedBody.namespace_verification_id
+  const completedBody = await json(completed) as { namespace_verification: string }
+  return completedBody.namespace_verification
 }
 
 async function createCommunity(env: Env, accessToken: string, displayName: string): Promise<{
@@ -74,24 +74,25 @@ async function createCommunity(env: Env, accessToken: string, displayName: strin
   const namespaceVerificationId = await prepareVerifiedNamespace(env, accessToken)
   const response = await requestJson("http://pirate.test/communities", {
     display_name: displayName,
+    membership_mode: "request",
     namespace: {
-      namespace_verification_id: namespaceVerificationId,
+      namespace_verification: namespaceVerificationId,
     },
   }, env, accessToken)
 
   expect(response.status).toBe(202)
   const body = await json(response) as {
     community: {
-      community_id: string
+      id: string
     }
     job: {
-      job_id: string
+      id: string
     }
   }
 
   return {
-    communityId: body.community.community_id,
-    createJobId: body.job.job_id,
+    communityId: body.community.id.replace(/^com_/, ""),
+    createJobId: body.job.id,
   }
 }
 
@@ -217,7 +218,7 @@ async function fetchCommunityJobsByType(input: {
   communityDbRoot: string
   communityId: string
   jobType: string
-}): Promise<Array<{ subject_id: string; payload_json: string | null; status: string }>> {
+}): Promise<Array<{ subject: string; payload_json: string | null; status: string }>> {
   const client = createClient({
     url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
   })
@@ -233,7 +234,7 @@ async function fetchCommunityJobsByType(input: {
       args: [input.jobType],
     })
     return result.rows.map((row) => ({
-      subject_id: String(row.subject_id),
+      subject: String(row.subject_id),
       payload_json: row.payload_json == null ? null : String(row.payload_json),
       status: String(row.status),
     }))
@@ -268,10 +269,10 @@ describe("jobs routes", () => {
       ctx.env,
     )
     expect(createJob.status).toBe(200)
-    const createJobBody = await json(createJob) as { job_id: string; status: string; subject_id: string }
-    expect(createJobBody.job_id).toBe(community.createJobId)
+    const createJobBody = await json(createJob) as { id: string; status: string; subject: string }
+    expect(createJobBody.id).toBe(community.createJobId)
     expect(createJobBody.status).toBe("succeeded")
-    expect(createJobBody.subject_id).toBe(community.communityId)
+    expect(createJobBody.subject).toBe(community.communityId)
   })
 })
 
@@ -296,13 +297,14 @@ describe("posts routes", () => {
       session.accessToken,
     )
     expect(createdPost.status).toBe(201)
-    const createdPostBody = await json(createdPost) as { post_id: string; title: string | null }
+    const createdPostBody = await json(createdPost) as { id: string; title: string | null }
+    const rawPostId = createdPostBody.id.replace(/^post_/, "")
     expect(createdPostBody.title).toBe("Focused route coverage")
 
     await insertThreadSnapshot({
       communityDbRoot: ctx.communityDbRoot,
       communityId: community.communityId,
-      postId: createdPostBody.post_id,
+      postId: rawPostId,
       commentCount: 3,
       swarmManifestRef: "swarm-manifest:post-thread",
       swarmFeedRef: "swarm-feed:post-thread",
@@ -310,14 +312,14 @@ describe("posts routes", () => {
     await insertPostTranslation({
       communityDbRoot: ctx.communityDbRoot,
       communityId: community.communityId,
-      postId: createdPostBody.post_id,
+      postId: rawPostId,
       locale: "es",
       translatedTitle: "Cobertura enfocada de rutas",
       translatedBody: "Prueba dedicada de la ruta de publicaciones.",
     })
 
     const fetchedPost = await app.request(
-      `http://pirate.test/posts/${createdPostBody.post_id}?locale=es`,
+      `http://pirate.test/posts/${createdPostBody.id}?locale=es`,
       {
         headers: {
           authorization: `Bearer ${session.accessToken}`,
@@ -327,9 +329,9 @@ describe("posts routes", () => {
     )
     expect(fetchedPost.status).toBe(200)
     const fetchedPostBody = await json(fetchedPost) as {
-      post: { post_id: string; title: string | null }
+      post: { id: string; title: string | null }
       thread_snapshot: {
-        thread_root_post_id: string
+        thread_root_post: string
         comment_count: number
         swarm_manifest_ref: string
         swarm_feed_ref: string | null
@@ -340,9 +342,9 @@ describe("posts routes", () => {
       translated_title: string | null
       translated_body: string | null
     }
-    expect(fetchedPostBody.post.post_id).toBe(createdPostBody.post_id)
+    expect(fetchedPostBody.post.id).toBe(createdPostBody.id)
     expect(fetchedPostBody.post.title).toBe("Focused route coverage")
-    expect(fetchedPostBody.thread_snapshot?.thread_root_post_id).toBe(createdPostBody.post_id)
+    expect(fetchedPostBody.thread_snapshot?.thread_root_post).toBe(createdPostBody.id)
     expect(fetchedPostBody.thread_snapshot?.comment_count).toBe(3)
     expect(fetchedPostBody.thread_snapshot?.swarm_manifest_ref).toBe("swarm-manifest:post-thread")
     expect(fetchedPostBody.thread_snapshot?.swarm_feed_ref).toBe("swarm-feed:post-thread")
@@ -373,10 +375,11 @@ describe("posts routes", () => {
       session.accessToken,
     )
     expect(createdPost.status).toBe(201)
-    const createdPostBody = await json(createdPost) as { post_id: string }
+    const createdPostBody = await json(createdPost) as { id: string }
+    const rawPostId = createdPostBody.id.replace(/^post_/, "")
 
     const fetchedPost = await app.request(
-      `http://pirate.test/posts/${createdPostBody.post_id}?locale=nl`,
+      `http://pirate.test/posts/${createdPostBody.id}?locale=nl`,
       {
         headers: {
           authorization: `Bearer ${session.accessToken}`,
@@ -397,7 +400,7 @@ describe("posts routes", () => {
       communityId: community.communityId,
       jobType: "post_translation_materialize",
     })
-    expect(translationJobs.some((job) => job.subject_id === `${createdPostBody.post_id}:nl`)).toBe(true)
+    expect(translationJobs.some((job) => job.subject === `${rawPostId}:nl`)).toBe(true)
   })
 
   test("POST /posts/:postId/vote records a member vote without hidden verification", async () => {
@@ -419,20 +422,20 @@ describe("posts routes", () => {
       creator.accessToken,
     )
     expect(createdPost.status).toBe(201)
-    const postBody = await json(createdPost) as { post_id: string }
+    const postBody = await json(createdPost) as { id: string }
 
     const unverifiedMember = await exchangeJwt(ctx.env, "posts-routes-unverified-member")
     await addCommunityMember(ctx.communityDbRoot, community.communityId, unverifiedMember.userId)
 
     const acceptedVote = await requestJson(
-      `http://pirate.test/posts/${postBody.post_id}/vote`,
+      `http://pirate.test/posts/${postBody.id}/vote`,
       { value: 1 },
       ctx.env,
       unverifiedMember.accessToken,
     )
     expect(acceptedVote.status).toBe(200)
-    const acceptedVoteBody = await json(acceptedVote) as { post_id: string; value: number }
-    expect(acceptedVoteBody.post_id).toBe(postBody.post_id)
+    const acceptedVoteBody = await json(acceptedVote) as { post: string; value: number }
+    expect(acceptedVoteBody.post).toBe(postBody.id)
     expect(acceptedVoteBody.value).toBe(1)
   })
 
@@ -455,10 +458,10 @@ describe("posts routes", () => {
       creator.accessToken,
     )
     expect(createdPost.status).toBe(201)
-    const postBody = await json(createdPost) as { post_id: string }
+    const postBody = await json(createdPost) as { id: string }
 
     const acceptedVote = await requestJson(
-      `http://pirate.test/posts/${postBody.post_id}/vote`,
+      `http://pirate.test/posts/${postBody.id}/vote`,
       { value: 1 },
       ctx.env,
       creator.accessToken,
@@ -466,7 +469,7 @@ describe("posts routes", () => {
     expect(acceptedVote.status).toBe(200)
 
     const fetchedPost = await app.request(
-      `http://pirate.test/posts/${postBody.post_id}`,
+      `http://pirate.test/posts/${postBody.id}`,
       {
         headers: {
           authorization: `Bearer ${creator.accessToken}`,

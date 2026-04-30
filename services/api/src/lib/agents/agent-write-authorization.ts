@@ -1,6 +1,7 @@
 import type { ProfileRepository } from "../auth/repositories"
 import { badRequestError, eligibilityFailed } from "../errors"
-import type { Community, Env } from "../../types"
+import type { Env } from "../../env"
+import type { Community } from "../../types"
 import type { Client } from "../sql-client"
 import { getProfilePublicHandleLabel } from "../auth/auth-serializers"
 import { getControlPlaneAgentOwnershipRepository } from "./agent-ownership-repository"

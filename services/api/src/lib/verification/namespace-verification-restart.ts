@@ -12,7 +12,8 @@ import {
   inspectSpacesNamespace,
   mintSpacesChallenge,
 } from "./spaces-verifier"
-import type { Env, NamespaceVerificationSession } from "../../types"
+import type { Env } from "../../env"
+import type { NamespaceVerificationSession } from "../../types"
 import {
   HNS_VERIFIER_OBSERVATION_PROVIDER,
   resolveHnsObservationProviderFallback,

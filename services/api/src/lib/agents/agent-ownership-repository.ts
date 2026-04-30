@@ -1,6 +1,6 @@
 import { globalSingleton } from "../db-helpers"
 import { getControlPlaneCacheKey, getControlPlaneClient } from "../runtime-deps"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 import type {
   AgentDelegatedCredential,
   AgentChallenge,
@@ -10,6 +10,7 @@ import type {
   AgentOwnershipSession,
   PublicAgentResolution,
   UserAgent,
+  UserAgentListResponse,
 } from "./types"
 import {
   claimAgentOwnershipPairingCode,
@@ -70,7 +71,7 @@ export interface AgentOwnershipRepository {
     payload?: Record<string, unknown> | null
     callbackSecret: string | null
   }): Promise<AgentOwnershipSession | null>
-  listUserAgents(userId: string): Promise<UserAgent[]>
+  listUserAgents(userId: string, input: { cursor?: string | null; limit: number }): Promise<UserAgentListResponse>
   getUserAgent(agentId: string, userId: string): Promise<UserAgent | null>
   updateUserAgentDisplayName(input: {
     agentId: string
@@ -183,8 +184,8 @@ export class ControlPlaneAgentOwnershipRepository implements AgentOwnershipRepos
     return completeAgentOwnershipSessionFromCallback(this.client, this.env, input)
   }
 
-  async listUserAgents(userId: string): Promise<UserAgent[]> {
-    return listUserAgents(this.client, userId)
+  async listUserAgents(userId: string, input: { cursor?: string | null; limit: number }): Promise<UserAgentListResponse> {
+    return listUserAgents(this.client, userId, input)
   }
 
   async getUserAgent(agentId: string, userId: string): Promise<UserAgent | null> {

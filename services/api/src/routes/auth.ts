@@ -5,7 +5,8 @@ import { mintPirateAccessToken } from "../lib/auth/pirate-session-token"
 import { verifyPrivyAccessProof } from "../lib/auth/privy-auth"
 import { getProfileRepository, getSessionRepository } from "../lib/auth/repositories"
 import { trackApiEvent } from "../lib/analytics/track"
-import type { Env, SessionExchangeRequest } from "../types"
+import type { Env } from "../env"
+import type { SessionExchangeRequest } from "../types"
 
 const auth = new Hono<{ Bindings: Env }>()
 

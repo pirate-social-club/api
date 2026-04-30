@@ -301,15 +301,30 @@ export async function getCurrentOwnershipRecordRowForAgent(
   return row ? toAgentOwnershipRecordRow(row) : null
 }
 
-export async function listUserAgentRowsForOwner(executor: DbExecutor, ownerUserId: string): Promise<UserAgentRow[]> {
+export async function listUserAgentRowsForOwner(
+  executor: DbExecutor,
+  ownerUserId: string,
+  input: {
+    after?: { created_at: string; agent_id: string } | null
+    limit: number
+  },
+): Promise<UserAgentRow[]> {
+  const cursorClause = input.after
+    ? "AND (created_at < ?2 OR (created_at = ?2 AND agent_id < ?3))"
+    : ""
+  const limitArgIndex = input.after ? 4 : 2
   const result = await executor.execute({
     sql: `
       SELECT agent_id, owner_user_id, display_name, status, created_at, updated_at
       FROM user_agents
       WHERE owner_user_id = ?1
-      ORDER BY created_at DESC
+        ${cursorClause}
+      ORDER BY created_at DESC, agent_id DESC
+      LIMIT ?${limitArgIndex}
     `,
-    args: [ownerUserId],
+    args: input.after
+      ? [ownerUserId, input.after.created_at, input.after.agent_id, input.limit]
+      : [ownerUserId, input.limit],
   })
   return result.rows.map(toUserAgentRow)
 }
@@ -376,4 +391,3 @@ export async function getAgentDelegatedCredentialRowByAccessTokenHash(
 
   return row ? toAgentDelegatedCredentialRow(row) : null
 }
-

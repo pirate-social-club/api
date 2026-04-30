@@ -1,7 +1,8 @@
 import { notFoundError } from "../../errors"
 import { serializeJob } from "../community-serialization"
 import { requireOwnedCommunity } from "../create/service"
-import type { Env, Job } from "../../../types"
+import type { Env } from "../../../env"
+import type { Job } from "../../../types"
 import type { CommunityMembershipRepository } from "./types"
 
 export async function getJob(input: {

@@ -11,6 +11,10 @@ import {
 
 let cleanup: (() => Promise<void>) | null = null
 
+function settingsJson(body: Record<string, unknown>): string {
+  return JSON.stringify(body)
+}
+
 beforeEach(() => {
   resetRuntimeCaches()
 })
@@ -79,17 +83,18 @@ describe("community post routes", () => {
 
       const communityCreate = await requestJson("http://pirate.test/communities", {
         display_name: "Pirate OpenAI Moderation Club",
+membership_mode: "request",
         namespace: {
-          namespace_verification_id: namespaceVerificationId,
+          namespace_verification: namespaceVerificationId,
         },
       }, ctx.env, session.accessToken)
       expect(communityCreate.status).toBe(202)
       const communityCreateBody = await json(communityCreate) as {
-        community: { community_id: string }
+        community: { id: string }
       }
 
       const textPost = await requestJson(
-        `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+        `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
         {
           post_type: "text",
           title: "Medical injury update",
@@ -110,7 +115,7 @@ describe("community post routes", () => {
       expect(textPostBody.content_safety_state).toBe("safe")
 
       const linkPost = await requestJson(
-        `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+        `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
         {
           post_type: "link",
           title: "Medical injury resource",
@@ -130,7 +135,7 @@ describe("community post routes", () => {
       expect(linkPostBody.analysis_state).toBe("allow")
 
       const videoPostWithoutPoster = await requestJson(
-        `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+        `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
         {
           post_type: "video",
           title: "Medical injury clip",
@@ -153,7 +158,7 @@ describe("community post routes", () => {
       expect(videoPostWithoutPosterBody.analysis_state).toBe("allow")
 
       const ordinarySexualImagePost = await requestJson(
-        `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+        `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
         {
           post_type: "image",
           title: "Backstage",
@@ -176,7 +181,7 @@ describe("community post routes", () => {
       expect(ordinarySexualImageBody.analysis_state).toBe("allow")
 
       const lowConfidenceSexualMinorsImagePost = await requestJson(
-        `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+        `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
         {
           post_type: "image",
           title: "Backstage",
@@ -193,7 +198,7 @@ describe("community post routes", () => {
       expect(lowConfidenceSexualMinorsImagePost.status).toBe(201)
 
       const blockedImagePost = await requestJson(
-        `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+        `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
         {
           post_type: "image",
           title: "Backstage",
@@ -212,7 +217,7 @@ describe("community post routes", () => {
       expect(blockedBody.code).toBe("analysis_blocked")
 
       const blockedVideoPost = await requestJson(
-        `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+        `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
         {
           post_type: "video",
           title: "Video",
@@ -285,24 +290,25 @@ describe("community post routes", () => {
 
       const communityCreate = await requestJson("http://pirate.test/communities", {
         display_name: "Pirate OpenAI Disabled Body Club",
+membership_mode: "request",
         namespace: {
-          namespace_verification_id: namespaceVerificationId,
+          namespace_verification: namespaceVerificationId,
         },
       }, ctx.env, session.accessToken)
       expect(communityCreate.status).toBe(202)
       const communityCreateBody = await json(communityCreate) as {
-        community: { community_id: string }
+        community: { id: string }
       }
 
       const safetyUpdate = await app.request(
-        `http://pirate.test/communities/${communityCreateBody.community.community_id}/safety`,
+        `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/safety`,
         {
-          method: "PUT",
+          method: "POST",
           headers: {
             "content-type": "application/json",
             authorization: `Bearer ${session.accessToken}`,
           },
-          body: JSON.stringify({
+          body: settingsJson({
             adult_content_policy: {
               suggestive: "review",
               artistic_nudity: "allow",
@@ -337,7 +343,7 @@ describe("community post routes", () => {
       expect(safetyUpdate.status).toBe(200)
 
       const createdPost = await requestJson(
-        `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+        `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
         {
           post_type: "image",
           title: "Clean title",
@@ -370,23 +376,24 @@ describe("community post routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Pirate Verified Posting Club",
+membership_mode: "request",
       namespace: {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
     }, ctx.env, verifiedCreator.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id: string }
     }
 
     const unverifiedMember = await exchangeJwt(ctx.env, "community-unverified-member")
     await addCommunityMember(
       ctx.communityDbRoot,
-      communityCreateBody.community.community_id,
+      communityCreateBody.community.id.replace(/^com_/, ""),
       unverifiedMember.userId,
     )
     const deniedPost = await requestJson(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
       {
         post_type: "text",
         title: "Member post",
@@ -411,17 +418,18 @@ describe("community post routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Pirate Owner Badge Club",
+membership_mode: "request",
       namespace: {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
     }, ctx.env, creator.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id: string }
     }
 
     const createdPost = await requestJson(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
       {
         post_type: "text",
         title: "Owner post",
@@ -434,7 +442,7 @@ describe("community post routes", () => {
     expect(createdPost.status).toBe(201)
 
     const feed = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
       { headers: { authorization: `Bearer ${creator.accessToken}` } },
       ctx.env,
     )
@@ -454,20 +462,21 @@ describe("community post routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Pirate Non Member Club",
+membership_mode: "request",
       namespace: {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
     }, ctx.env, verifiedCreator.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id: string }
     }
 
     const verifiedNonMember = await exchangeJwt(ctx.env, "community-verified-non-member")
     await completeUniqueHumanVerification(ctx.env, verifiedNonMember.accessToken)
 
     const deniedPost = await requestJson(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
       {
         post_type: "text",
         title: "Hello From Outside",
@@ -493,21 +502,22 @@ describe("community post routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Pirate Review Held Visibility Club",
+membership_mode: "request",
       namespace: {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
     }, ctx.env, owner.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id: string }
     }
 
     const author = await exchangeJwt(ctx.env, "community-review-held-author")
     await completeUniqueHumanVerification(ctx.env, author.accessToken)
-    await addCommunityMember(ctx.communityDbRoot, communityCreateBody.community.community_id, author.userId)
+    await addCommunityMember(ctx.communityDbRoot, communityCreateBody.community.id.replace(/^com_/, ""), author.userId)
 
     const reviewHeldPost = await requestJson(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
       {
         post_type: "text",
         title: "[review-required] Member Draft",
@@ -519,15 +529,15 @@ describe("community post routes", () => {
     )
     expect(reviewHeldPost.status).toBe(202)
     const reviewHeldBody = await json(reviewHeldPost) as {
-      post_id: string
+      id: string
       status: string
-      author_user_id: string | null
+      author_user: string | null
     }
     expect(reviewHeldBody.status).toBe("draft")
-    expect(reviewHeldBody.author_user_id).toBe(author.userId)
+    expect(reviewHeldBody.author_user).toBe(`usr_${author.userId}`)
 
     const ownerRead = await app.request(
-      `http://pirate.test/posts/${reviewHeldBody.post_id}`,
+      `http://pirate.test/posts/${reviewHeldBody.id}`,
       {
         headers: {
           authorization: `Bearer ${owner.accessToken}`,
@@ -537,16 +547,16 @@ describe("community post routes", () => {
     )
     expect(ownerRead.status).toBe(200)
     const ownerReadBody = await json(ownerRead) as {
-      post: { post_id: string; status: string }
+      post: { id: string; status: string }
     }
-    expect(ownerReadBody.post.post_id).toBe(reviewHeldBody.post_id)
+    expect(ownerReadBody.post.id).toBe(reviewHeldBody.id)
     expect(ownerReadBody.post.status).toBe("draft")
 
     const otherMember = await exchangeJwt(ctx.env, "community-review-held-other-member")
-    await addCommunityMember(ctx.communityDbRoot, communityCreateBody.community.community_id, otherMember.userId)
+    await addCommunityMember(ctx.communityDbRoot, communityCreateBody.community.id.replace(/^com_/, ""), otherMember.userId)
 
     const deniedRead = await app.request(
-      `http://pirate.test/posts/${reviewHeldBody.post_id}`,
+      `http://pirate.test/posts/${reviewHeldBody.id}`,
       {
         headers: {
           authorization: `Bearer ${otherMember.accessToken}`,
@@ -569,17 +579,18 @@ describe("community post routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Pirate Links Club",
+membership_mode: "request",
       namespace: {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
     }, ctx.env, session.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id: string }
     }
 
     const deniedPost = await requestJson(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
       {
         post_type: "link",
         title: "Broken Link Post",
@@ -605,17 +616,18 @@ describe("community post routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Pirate Images Club",
+membership_mode: "request",
       namespace: {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
     }, ctx.env, session.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id: string }
     }
 
     const createdPost = await requestJson(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
       {
         post_type: "image",
         title: "Backstage",
@@ -657,17 +669,18 @@ describe("community post routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Pirate Broken Images Club",
+membership_mode: "request",
       namespace: {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
     }, ctx.env, session.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id: string }
     }
 
     const deniedPost = await requestJson(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
       {
         post_type: "image",
         title: "Missing image",
@@ -692,19 +705,20 @@ describe("community post routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Pirate Test Club",
+membership_mode: "request",
       namespace: {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
     }, ctx.env, session.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id: string }
     }
 
     const response = await requestJson(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
       {
-        community_id: communityCreateBody.community.community_id,
+        community_id: communityCreateBody.community.id.replace(/^com_/, ""),
         post_type: "text",
         idempotency_key: "post-key-duplicate-community-id",
       },
@@ -727,17 +741,18 @@ describe("community post routes", () => {
     const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Pirate Voting Club",
+membership_mode: "request",
       namespace: {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
     }, ctx.env, creator.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id: string }
     }
 
     const createdPost = await requestJson(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
       {
         post_type: "text",
         title: "Vote me",
@@ -748,35 +763,35 @@ describe("community post routes", () => {
       creator.accessToken,
     )
     expect(createdPost.status).toBe(201)
-    const postBody = await json(createdPost) as { post_id: string }
+    const postBody = await json(createdPost) as { id: string }
 
     const unverifiedMember = await exchangeJwt(ctx.env, "community-unverified-voter")
-    await addCommunityMember(ctx.communityDbRoot, communityCreateBody.community.community_id, unverifiedMember.userId)
+    await addCommunityMember(ctx.communityDbRoot, communityCreateBody.community.id.replace(/^com_/, ""), unverifiedMember.userId)
 
     const allowedVote = await requestJson(
-      `http://pirate.test/posts/${postBody.post_id}/vote`,
+      `http://pirate.test/posts/${postBody.id}/vote`,
       { value: 1 },
       ctx.env,
       unverifiedMember.accessToken,
     )
     expect(allowedVote.status).toBe(200)
-    const allowedBody = await json(allowedVote) as { post_id: string; value: number }
-    expect(allowedBody.post_id).toBe(postBody.post_id)
+    const allowedBody = await json(allowedVote) as { post: string; value: number }
+    expect(allowedBody.post).toBe(postBody.id)
     expect(allowedBody.value).toBe(1)
 
     const updatedVote = await requestJson(
-      `http://pirate.test/posts/${postBody.post_id}/vote`,
+      `http://pirate.test/posts/${postBody.id}/vote`,
       { value: -1 },
       ctx.env,
       unverifiedMember.accessToken,
     )
     expect(updatedVote.status).toBe(200)
-    const updatedBody = await json(updatedVote) as { post_id: string; value: number }
-    expect(updatedBody.post_id).toBe(postBody.post_id)
+    const updatedBody = await json(updatedVote) as { post: string; value: number }
+    expect(updatedBody.post).toBe(postBody.id)
     expect(updatedBody.value).toBe(-1)
 
     const listedPosts = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
       {
         headers: {
           authorization: `Bearer ${unverifiedMember.accessToken}`,
@@ -787,7 +802,7 @@ describe("community post routes", () => {
     expect(listedPosts.status).toBe(200)
     const listedPostsBody = await json(listedPosts) as {
       items: Array<{
-        post: { post_id: string }
+        post: { id: string }
         upvote_count: number
         downvote_count: number
         like_count: number
@@ -795,7 +810,7 @@ describe("community post routes", () => {
       }>
     }
     expect(listedPostsBody.items).toHaveLength(1)
-    expect(listedPostsBody.items[0]?.post.post_id).toBe(postBody.post_id)
+    expect(listedPostsBody.items[0]?.post.id).toBe(postBody.id)
     expect(listedPostsBody.items[0]?.upvote_count).toBe(0)
     expect(listedPostsBody.items[0]?.downvote_count).toBe(1)
     expect(listedPostsBody.items[0]?.like_count).toBe(0)

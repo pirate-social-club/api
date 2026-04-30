@@ -134,6 +134,7 @@ describe("song artifact catalog sync routes", () => {
       "http://pirate.test/communities",
       {
         display_name: "Song Club Missing Bucket",
+        membership_mode: "request",
         handle_policy: {
           policy_template: "standard",
         },
@@ -143,10 +144,10 @@ describe("song artifact catalog sync routes", () => {
     )
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
+        id: string
       }
     }
-    const communityId = communityCreateBody.community.community_id
+    const communityId = communityCreateBody.community.id.replace(/^com_/, "")
 
     const uploadIntent = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
@@ -159,12 +160,12 @@ describe("song artifact catalog sync routes", () => {
       ctx.env,
       author.accessToken,
     )
-    const uploadIntentBody = await json(uploadIntent) as { song_artifact_upload_id: string }
+    const uploadIntentBody = await json(uploadIntent) as { id: string }
 
     await app.request(
-      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${uploadIntentBody.song_artifact_upload_id}/content`,
+      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${uploadIntentBody.id}/content`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           authorization: `Bearer ${author.accessToken}`,
           "content-type": "application/octet-stream",
@@ -178,14 +179,14 @@ describe("song artifact catalog sync routes", () => {
       `http://pirate.test/communities/${communityId}/song-artifacts`,
       {
         primary_audio: {
-          song_artifact_upload_id: uploadIntentBody.song_artifact_upload_id,
+          song_artifact_upload: uploadIntentBody.id,
         },
         lyrics: "Line one",
       },
       ctx.env,
       author.accessToken,
     )
-    const bundleBody = await json(bundleCreate) as { song_artifact_bundle_id: string }
+    const bundleBody = await json(bundleCreate) as { id: string }
 
     const postCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/posts`,
@@ -197,7 +198,7 @@ describe("song artifact catalog sync routes", () => {
         song_mode: "original",
         rights_basis: "original",
         license_preset: "non-commercial",
-        song_artifact_bundle_id: bundleBody.song_artifact_bundle_id,
+        song_artifact_bundle: bundleBody.id,
       },
       ctx.env,
       author.accessToken,
@@ -205,7 +206,7 @@ describe("song artifact catalog sync routes", () => {
     expect(postCreate.status).toBe(201)
 
     const bundleRead = await app.request(
-      `http://pirate.test/communities/${communityId}/song-artifacts/${bundleBody.song_artifact_bundle_id}`,
+      `http://pirate.test/communities/${communityId}/song-artifacts/${bundleBody.id}`,
       {
         headers: {
           authorization: `Bearer ${author.accessToken}`,
@@ -338,6 +339,7 @@ describe("song artifact catalog sync routes", () => {
       "http://pirate.test/communities",
       {
         display_name: "Song Club Republish",
+        membership_mode: "request",
         handle_policy: {
           policy_template: "standard",
         },
@@ -347,10 +349,10 @@ describe("song artifact catalog sync routes", () => {
     )
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
+        id: string
       }
     }
-    const communityId = communityCreateBody.community.community_id
+    const communityId = communityCreateBody.community.id.replace(/^com_/, "")
 
     const uploadIntent = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
@@ -363,12 +365,12 @@ describe("song artifact catalog sync routes", () => {
       ctx.env,
       author.accessToken,
     )
-    const uploadIntentBody = await json(uploadIntent) as { song_artifact_upload_id: string }
+    const uploadIntentBody = await json(uploadIntent) as { id: string }
 
     await app.request(
-      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${uploadIntentBody.song_artifact_upload_id}/content`,
+      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${uploadIntentBody.id}/content`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           authorization: `Bearer ${author.accessToken}`,
           "content-type": "application/octet-stream",
@@ -382,14 +384,14 @@ describe("song artifact catalog sync routes", () => {
       `http://pirate.test/communities/${communityId}/song-artifacts`,
       {
         primary_audio: {
-          song_artifact_upload_id: uploadIntentBody.song_artifact_upload_id,
+          song_artifact_upload: uploadIntentBody.id,
         },
         lyrics: "Line one",
       },
       ctx.env,
       author.accessToken,
     )
-    const bundleBody = await json(bundleCreate) as { song_artifact_bundle_id: string }
+    const bundleBody = await json(bundleCreate) as { id: string }
 
     const firstPostCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/posts`,
@@ -401,7 +403,7 @@ describe("song artifact catalog sync routes", () => {
         song_mode: "original",
         rights_basis: "original",
         license_preset: "non-commercial",
-        song_artifact_bundle_id: bundleBody.song_artifact_bundle_id,
+        song_artifact_bundle: bundleBody.id,
       },
       ctx.env,
       author.accessToken,
@@ -418,7 +420,7 @@ describe("song artifact catalog sync routes", () => {
         song_mode: "original",
         rights_basis: "original",
         license_preset: "non-commercial",
-        song_artifact_bundle_id: bundleBody.song_artifact_bundle_id,
+        song_artifact_bundle: bundleBody.id,
       },
       ctx.env,
       author.accessToken,

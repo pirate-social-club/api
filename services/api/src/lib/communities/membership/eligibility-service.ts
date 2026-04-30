@@ -1,6 +1,7 @@
 import type { UserRepository } from "../../auth/repositories"
 import { internalError, notFoundError } from "../../errors"
-import type { Community, Env, JoinEligibility, User } from "../../../types"
+import type { Env } from "../../../env"
+import type { Community, JoinEligibility, User } from "../../../types"
 import { openCommunityDb } from "../community-db-factory"
 import {
   buildMembershipGateSummariesFromPolicy,
@@ -13,9 +14,10 @@ import {
 } from "./membership-state-store"
 import { getPendingMembershipRequestByApplicant } from "./membership-request-store"
 import { getMembershipGatePolicy } from "./gate-policy-store"
-import type { GatePolicy, GatePolicyEvaluation } from "./gate-types"
+import type { GatePolicy, GatePolicyEvaluation, RequiredActionNode, RequiredActionSet } from "./gate-types"
 import type { CommunityMembershipRepository } from "./types"
 import { gateFailureReasonFromPolicyEvaluation } from "./gate-failure-service"
+import { publicCommunityId } from "../../public-ids"
 
 export function satisfiesBaselineJoinGate(user: User): boolean {
   if (user.verification_capabilities.unique_human.state === "verified") {
@@ -36,6 +38,46 @@ function getRequiredWalletScore(policy: GatePolicy | null): number | null {
     requiredScore = requiredScore == null ? atom.minimum_score : Math.max(requiredScore, atom.minimum_score)
   }
   return requiredScore
+}
+
+function flattenRequiredActions(actionSet: RequiredActionSet | null): RequiredActionNode[] {
+  if (!actionSet) {
+    return []
+  }
+  return actionSet.items.flatMap((item) => item.kind === "set" ? flattenRequiredActions(item) : [item])
+}
+
+function missingCapabilitiesFromRequiredActionSet(
+  actionSet: RequiredActionSet | null,
+): NonNullable<JoinEligibility["missing_capabilities"]> {
+  const capabilities = new Set<NonNullable<JoinEligibility["missing_capabilities"]>[number]>()
+  for (const item of flattenRequiredActions(actionSet)) {
+    if (item.kind !== "action") {
+      continue
+    }
+    if (
+      item.capability === "minimum_age"
+      || item.capability === "nationality"
+      || item.capability === "gender"
+      || item.capability === "unique_human"
+      || item.capability === "wallet_score"
+    ) {
+      capabilities.add(item.capability)
+    }
+  }
+  return [...capabilities]
+}
+
+function suggestedProviderFromRequiredActionSet(
+  actionSet: RequiredActionSet | null,
+): JoinEligibility["suggested_verification_provider"] {
+  const action = flattenRequiredActions(actionSet).find((item) => (
+    item.kind === "action"
+    && (item.provider === "self" || item.provider === "very" || item.provider === "passport")
+  ))
+  return action?.kind === "action" && (action.provider === "self" || action.provider === "very" || action.provider === "passport")
+    ? action.provider
+    : null
 }
 
 export function buildWalletScoreStatus(
@@ -109,7 +151,7 @@ export async function getJoinEligibility(input: {
     const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
     if (canAccessCommunity(membership)) {
       return {
-        community: input.communityId,
+        community: publicCommunityId(input.communityId),
         membership_mode: membershipMode,
         human_verification_lane: "self",
         joinable_now: false,
@@ -121,7 +163,7 @@ export async function getJoinEligibility(input: {
 
     if (membership.membership_status === "banned") {
       return {
-        community: input.communityId,
+        community: publicCommunityId(input.communityId),
         membership_mode: membershipMode,
         human_verification_lane: "self",
         joinable_now: false,
@@ -139,7 +181,7 @@ export async function getJoinEligibility(input: {
       })
       if (pendingRequest) {
         return {
-          community: input.communityId,
+         community: publicCommunityId(input.communityId),
           membership_mode: "request",
           human_verification_lane: "self",
           joinable_now: false,
@@ -149,7 +191,7 @@ export async function getJoinEligibility(input: {
         }
       }
       return {
-        community: input.communityId,
+        community: publicCommunityId(input.communityId),
         membership_mode: "request",
         human_verification_lane: "self",
         joinable_now: false,
@@ -174,7 +216,7 @@ export async function getJoinEligibility(input: {
     }
     if (evaluation.satisfied) {
       return {
-        community: input.communityId,
+        community: publicCommunityId(input.communityId),
         membership_mode: membershipMode,
         human_verification_lane: "self",
         joinable_now: true,
@@ -185,21 +227,24 @@ export async function getJoinEligibility(input: {
     }
 
     if (evaluation.requiredActionSet && evaluation.requiredActionSet.items.length > 0) {
+      const missingCapabilities = missingCapabilitiesFromRequiredActionSet(evaluation.requiredActionSet)
       return {
-        community: input.communityId,
+        community: publicCommunityId(input.communityId),
         membership_mode: membershipMode,
         human_verification_lane: "self",
         joinable_now: false,
         status: "verification_required",
         membership_gate_summaries: gateSummaries,
         gate_evaluation: gateEvaluation,
+        missing_capabilities: missingCapabilities,
+        suggested_verification_provider: suggestedProviderFromRequiredActionSet(evaluation.requiredActionSet),
         ...(walletScoreStatus ? { wallet_score_status: walletScoreStatus } : {}),
         suggested_verification_intent: "community_join",
       }
     }
 
     return {
-      community: input.communityId,
+        community: publicCommunityId(input.communityId),
       membership_mode: membershipMode,
       human_verification_lane: "self",
       joinable_now: false,

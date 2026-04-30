@@ -136,12 +136,12 @@ describe("assertPostCreateRequest", () => {
       idempotency_key: "song-license",
       post_type: "song",
       identity_mode: "public",
-      song_artifact_bundle_id: "sab_test",
+      song_artifact_bundle: "sab_test",
       song_mode: "original",
       rights_basis: "original",
       license_preset: "non-commercial",
       ...overrides,
-    } as CreatePostRequest
+    } as unknown as CreatePostRequest
   }
 
   function videoAssetRequest(overrides: Partial<CreatePostRequest> = {}): CreatePostRequest {

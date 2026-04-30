@@ -29,17 +29,17 @@ export async function exchangeJwt(env: Env, sub: string): Promise<{ accessToken:
       jwt,
     },
   }, env)
-  const body = await json(response) as { access_token: string; user: { user_id: string } }
-  return { accessToken: body.access_token, userId: body.user.user_id }
+  const body = await json(response) as { access_token: string; user: { id: string } }
+  return { accessToken: body.access_token, userId: body.user.id.replace(/^usr_/, "") }
 }
 
 export async function completeUniqueHumanVerification(env: Env, accessToken: string): Promise<void> {
   const verificationSession = await requestJson("http://pirate.test/verification-sessions", {
     provider: "self",
   }, env, accessToken)
-  const verificationBody = await json(verificationSession) as { verification_session_id: string }
+  const verificationBody = await json(verificationSession) as { id: string }
   await requestJson(
-    `http://pirate.test/verification-sessions/${verificationBody.verification_session_id}/complete`,
+    `http://pirate.test/verification-sessions/${verificationBody.id}/complete`,
     {},
     env,
     accessToken,
@@ -53,15 +53,15 @@ export async function prepareVerifiedNamespace(env: Env, accessToken: string): P
     family: "hns",
     root_label: "CommentRoutesCoverageRoot",
   }, env, accessToken)
-  const namespaceBody = await json(namespaceSession) as { namespace_verification_session_id: string }
+  const namespaceBody = await json(namespaceSession) as { id: string }
   const completed = await requestJson(
-    `http://pirate.test/namespace-verification-sessions/${namespaceBody.namespace_verification_session_id}/complete`,
+    `http://pirate.test/namespace-verification-sessions/${namespaceBody.id}/complete`,
     {},
     env,
     accessToken,
   )
-  const completedBody = await json(completed) as { namespace_verification_id: string }
-  return completedBody.namespace_verification_id
+  const completedBody = await json(completed) as { namespace_verification: string }
+  return completedBody.namespace_verification
 }
 
 export async function createCommunity(
@@ -72,12 +72,13 @@ export async function createCommunity(
   const namespaceVerificationId = await prepareVerifiedNamespace(env, accessToken)
   const response = await requestJson("http://pirate.test/communities", {
     display_name: displayName,
+    membership_mode: "request",
     namespace: {
-      namespace_verification_id: namespaceVerificationId,
+      namespace_verification: namespaceVerificationId,
     },
   }, env, accessToken)
-  const body = await json(response) as { community: { community_id: string } }
-  return { communityId: body.community.community_id }
+  const body = await json(response) as { community: { id: string } }
+  return { communityId: body.community.id.replace(/^com_/, "") }
 }
 
 export async function addCommunityMember(communityDbRoot: string, communityId: string, userId: string): Promise<void> {
@@ -106,6 +107,15 @@ export async function addCommunityMember(communityDbRoot: string, communityId: s
   } finally {
     client.close()
   }
+}
+
+function rawPublicId(value: string, prefix: string): string {
+  const publicPrefix = `${prefix}_`
+  if (!value.startsWith(publicPrefix)) {
+    return value
+  }
+  const stripped = value.slice(publicPrefix.length)
+  return stripped.includes("_") ? stripped : value
 }
 
 export async function insertThreadSnapshot(input: {
@@ -137,7 +147,7 @@ export async function insertThreadSnapshot(input: {
       args: [
         `tsn_${input.postId}`,
         input.communityId,
-        input.postId,
+        rawPublicId(input.postId, "post"),
         now,
         input.commentCount,
         input.swarmManifestRef,
@@ -161,7 +171,8 @@ export async function insertCommentTranslation(input: {
   })
 
   try {
-    const comment = await getCommentById(client, input.commentId)
+    const commentId = rawPublicId(input.commentId, "cmt")
+    const comment = await getCommentById(client, commentId)
     const sourceHash = await computeCommentSourceHash(comment!)
     const now = new Date().toISOString()
     await client.execute({
@@ -178,7 +189,7 @@ export async function insertCommentTranslation(input: {
       `,
       args: [
         `ctr_${input.commentId}_${input.locale}`,
-        input.commentId,
+        commentId,
         input.locale,
         sourceHash,
         comment?.source_language ?? "en",

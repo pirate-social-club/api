@@ -123,7 +123,7 @@ export function serializeSettlement(
     donation_share_bps: pctToBps(purchase.donation_share_pct),
     donation_amount_cents: usdToCents(purchase.donation_amount_usd),
     entitlement_kind: toSettlementEntitlementKind(entitlement.entitlement_kind),
-    entitlement_target_ref: entitlement.target_ref,
+    entitlement_target_ref: purchase.asset_id ? `asset_${entitlement.target_ref}` : entitlement.target_ref,
     purchase_entitlement: entitlement.purchase_entitlement_id,
     settled_at: unixSeconds(purchase.created_at),
   }

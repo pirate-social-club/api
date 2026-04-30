@@ -455,7 +455,7 @@ describe("community-job-runner translation", () => {
         executor: verifyDb.client,
         contentType: "community_text",
         contentId: communityId,
-        fieldKey: "community.rule.rul_runner.title",
+        fieldKey: "community.rule.rule_rul_runner.title",
         locale: "es",
         sourceHash: ruleTitleSourceHash,
       })
@@ -463,7 +463,7 @@ describe("community-job-runner translation", () => {
         executor: verifyDb.client,
         contentType: "community_text",
         contentId: communityId,
-        fieldKey: "community.rule.rul_runner.body",
+        fieldKey: "community.rule.rule_rul_runner.body",
         locale: "es",
         sourceHash: ruleBodySourceHash,
       })

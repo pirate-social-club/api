@@ -1,5 +1,5 @@
 import { assertMediaObject, fetchMedia, uploadMedia } from "../media-storage"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 
 export type CommunityMediaKind = "avatar" | "banner" | "post_image"
 const maxBytesByKind: Record<CommunityMediaKind, number> = {

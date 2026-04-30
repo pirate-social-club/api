@@ -8,7 +8,8 @@ import { badRequestError, providerUnavailable } from "../errors"
 import { isProductionEnv, makeId } from "../helpers"
 import { normalizeIdentityCountryCode } from "../identity/country-codes"
 import { logVerificationDebug } from "./verification-logging"
-import type { Env, RequestedVerificationCapability, SelfVerificationDisclosures, SelfVerificationLaunch, VerificationIntent, VerificationRequirement } from "../../types"
+import type { Env } from "../../env"
+import type { RequestedVerificationCapability, SelfVerificationDisclosures, SelfVerificationLaunch, VerificationIntent, VerificationRequirement } from "../../types"
 
 const SELF_CAPABILITY_ORDER: readonly RequestedVerificationCapability[] = ["unique_human", "age_over_18", "nationality", "gender"]
 const SELF_DEV_STUB_REF_PREFIX = "self-dev-stub"

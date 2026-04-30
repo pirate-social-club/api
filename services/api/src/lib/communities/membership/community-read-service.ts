@@ -6,7 +6,8 @@ import { notFoundError } from "../../errors"
 import { nowIso } from "../../helpers"
 import { loadCommunityProjection, requireOwnedCommunity } from "../create/service"
 import { openCommunityDb } from "../community-db-factory"
-import type { Community, Env } from "../../../types"
+import type { Env } from "../../../env"
+import type { Community } from "../../../types"
 import type { CommunityMembershipRepository } from "./types"
 
 export async function setPendingNamespaceVerificationSession(input: {

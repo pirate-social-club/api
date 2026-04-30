@@ -66,7 +66,7 @@ function collectCommunityFields(community: Community): CommunityTextField[] {
     const label = String(link.label ?? "").trim()
     if (label) {
       fields.push({
-        field_key: `community.reference_link.${link.id}.label`,
+        field_key: `community.reference_link.${link.community_reference_link}.label`,
         source_text: label,
       })
     }
@@ -74,7 +74,7 @@ function collectCommunityFields(community: Community): CommunityTextField[] {
     const displayName = String(link.metadata?.display_name ?? "").trim()
     if (displayName) {
       fields.push({
-        field_key: `community.reference_link.${link.id}.metadata.display_name`,
+        field_key: `community.reference_link.${link.community_reference_link}.metadata.display_name`,
         source_text: displayName,
       })
     }
@@ -115,7 +115,7 @@ function collectPreviewFields(preview: CommunityPreview): CommunityTextField[] {
     const label = String(link.label ?? "").trim()
     if (label) {
       fields.push({
-        field_key: `community.reference_link.${link.id}.label`,
+        field_key: `community.reference_link.${link.community_reference_link}.label`,
         source_text: label,
       })
     }
@@ -123,7 +123,7 @@ function collectPreviewFields(preview: CommunityPreview): CommunityTextField[] {
     const displayName = String(link.metadata?.display_name ?? "").trim()
     if (displayName) {
       fields.push({
-        field_key: `community.reference_link.${link.id}.metadata.display_name`,
+        field_key: `community.reference_link.${link.community_reference_link}.metadata.display_name`,
         source_text: displayName,
       })
     }

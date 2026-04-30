@@ -46,10 +46,10 @@ async function exchangeJwt(env: Env, sub: string, walletAddress?: string): Promi
       jwt,
     },
   })
-  const body = await json(response) as { access_token: string; user: { user_id: string } }
+  const body = await json(response) as { access_token: string; user: { id: string } }
   return {
     accessToken: body.access_token,
-    userId: body.user.user_id,
+    userId: body.user.id.replace(/^usr_/, ""),
   }
 }
 
@@ -154,7 +154,7 @@ describe("bot user admin routes", () => {
     expect(invalidWallet.status).toBe(400)
 
     const human = await exchangeJwt(ctx.env, "human-owner")
-    const renamed = await postJson(ctx.env, "/profiles/me/global-handle/rename", {
+    const renamed = await postJson(ctx.env, "/profiles/me/rename-global-handle", {
       desired_label: "humanowned",
     }, human.accessToken)
     expect(renamed.status).toBe(200)

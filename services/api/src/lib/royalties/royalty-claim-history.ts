@@ -4,7 +4,7 @@ import type {
   RoyaltyClaimRecordRequest,
 } from "@pirate/api-contracts"
 import { createPublicClient, http, type Hash } from "viem"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 import { executeFirst, type DbExecutor } from "../db-helpers"
 import { badRequestError, conflictError } from "../errors"
 import { makeId, nowIso } from "../helpers"

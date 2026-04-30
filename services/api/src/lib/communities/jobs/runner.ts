@@ -1,5 +1,5 @@
 import { nowIso } from "../../helpers"
-import type { Env } from "../../../types"
+import type { Env } from "../../../env"
 import { openCommunityDb } from "../community-db-factory"
 import {
   findNextRunnableCommunityJob,

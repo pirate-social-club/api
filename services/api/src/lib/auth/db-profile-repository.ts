@@ -2,7 +2,8 @@ import type { Client } from "../sql-client"
 import { conflictError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import { getAddress } from "ethers"
-import type { Env, GlobalHandle, HandleUpgradeQuote, Profile } from "../../types"
+import type { Env } from "../../env"
+import type { GlobalHandle, HandleUpgradeQuote, Profile } from "../../types"
 import type { GlobalHandleRow } from "./auth-db-rows"
 import { DatabaseIdentityRepository } from "./db-identity-repository"
 import {
@@ -33,6 +34,8 @@ import { assertRedditHandleClaimEligible, buildRedditHandleClaimQuote } from "./
 import { makeId } from "../helpers"
 import { resolveVerifiedEnsProfile } from "./ens-linked-handle-service"
 import type { PublicProfileResolution } from "./repositories"
+import { unixSeconds } from "../../serializers/time"
+import { publicCommunityId } from "../public-ids"
 
 export type UpdateProfileInput = {
   display_name?: string | null
@@ -150,10 +153,10 @@ export class DatabaseProfileRepository {
       resolved_handle_label: publicHandle,
       is_canonical: true,
       created_communities: createdCommunityRows.map((row) => ({
-        community_id: row.community_id,
+        community: publicCommunityId(row.community_id),
         display_name: row.display_name,
         route_slug: row.route_slug,
-        created_at: row.created_at,
+        created: unixSeconds(row.created_at),
       })),
     }
   }

@@ -1,17 +1,20 @@
 import type { Client } from "../sql-client"
 import { getGlobalHandleRow, getProfileRow, listLinkedHandleRows } from "../auth/auth-db-user-queries"
 import { assembleProfile } from "../auth/auth-serializers"
-import { conflictError, eligibilityFailed, internalError } from "../errors"
+import { badRequestError, conflictError, eligibilityFailed, internalError } from "../errors"
 import { makeId, nowIso } from "../helpers"
+import { unixSeconds } from "../../serializers/time"
 import type {
   AgentHandle,
-  PublicAgentResolution,
   UserAgent,
+  UserAgentListResponse,
 } from "./types"
+import type { PublicAgentResolution } from "../../types"
 import type { AgentHandleRow } from "./agent-db-rows"
 import {
   serializeAgentHandle,
   serializeAgentOwnershipRecord,
+  serializeContractAgentHandle,
   serializeUserAgent,
 } from "./agent-serializers"
 import {
@@ -53,10 +56,18 @@ export async function getUserAgent(
 export async function listUserAgents(
   client: Client,
   userId: string,
-): Promise<UserAgent[]> {
-  const rows = await listUserAgentRowsForOwner(client, userId)
+  input: {
+    cursor?: string | null
+    limit: number
+  },
+): Promise<UserAgentListResponse> {
+  const rows = await listUserAgentRowsForOwner(client, userId, {
+    after: decodeAgentListCursor(input.cursor),
+    limit: input.limit + 1,
+  })
+  const pageRows = rows.slice(0, input.limit)
   const items: UserAgent[] = []
-  for (const row of rows) {
+  for (const row of pageRows) {
     const currentOwnershipRow = await getCurrentOwnershipRecordRowForAgent(client, row.agent_id, userId)
     const handleRow = await getActiveAgentHandleRow(client, row.agent_id)
     items.push(
@@ -67,7 +78,43 @@ export async function listUserAgents(
       ),
     )
   }
-  return items
+  const hasMore = rows.length > input.limit
+  const lastRow = pageRows[pageRows.length - 1] ?? null
+  return {
+    items,
+    next_cursor: hasMore && lastRow ? encodeAgentListCursor(lastRow) : null,
+  }
+}
+
+function encodeAgentListCursor(row: Pick<UserAgent, "agent_id" | "created_at">): string {
+  return Buffer.from(JSON.stringify({
+    agent_id: row.agent_id,
+    created_at: row.created_at,
+  }), "utf8").toString("base64url")
+}
+
+function decodeAgentListCursor(cursor: string | null | undefined): { agent_id: string; created_at: string } | null {
+  if (!cursor) {
+    return null
+  }
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as {
+      agent_id?: unknown
+      created_at?: unknown
+    }
+    if (typeof parsed.agent_id !== "string" || !parsed.agent_id.trim()) {
+      throw new Error("invalid cursor")
+    }
+    if (typeof parsed.created_at !== "string" || !parsed.created_at.trim()) {
+      throw new Error("invalid cursor")
+    }
+    return {
+      agent_id: parsed.agent_id,
+      created_at: parsed.created_at,
+    }
+  } catch {
+    throw badRequestError("Invalid agents cursor")
+  }
 }
 
 export async function updateUserAgentDisplayName(
@@ -342,15 +389,14 @@ export async function resolvePublicAgentByHandle(
     requested_handle_label: formatAgentHandleLabel(requestedLabelNormalized),
     resolved_handle_label: resolvedHandleRow.label_display,
     agent: {
-      agent_id: agentRow.agent_id,
+      agent: agentRow.agent_id,
       display_name: agentRow.display_name,
-      handle: serializeAgentHandle(resolvedHandleRow),
+      handle: serializeContractAgentHandle(resolvedHandleRow),
       ownership_provider: currentOwnershipRow?.ownership_provider ?? null,
-      created_at: agentRow.created_at,
-      updated_at: agentRow.updated_at,
+      created: unixSeconds(agentRow.created_at),
     },
     owner: {
-      user_id: agentRow.owner_user_id,
+      user: ownerProfile.id,
       display_name: profileRow.display_name,
       global_handle: ownerProfile.global_handle,
       primary_public_handle: ownerProfile.primary_public_handle ?? null,

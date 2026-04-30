@@ -3,7 +3,7 @@ import { createMiddleware } from "hono/factory"
 import { authError } from "./errors"
 import { getControlPlaneAgentOwnershipRepository } from "./agents/agent-ownership-repository"
 import { verifyPirateAccessToken } from "./auth/pirate-session-token"
-import type { Env } from "../types"
+import type { Env } from "../env"
 
 export type ActorContext = {
   userId: string
@@ -107,6 +107,34 @@ function timingSafeTokenEqual(left: string, right: string): boolean {
   const leftDigest = createHash("sha256").update(left).digest()
   const rightDigest = createHash("sha256").update(right).digest()
   return timingSafeEqual(leftDigest, rightDigest)
+}
+
+export async function authenticateAdminUserOrAgentDelegated(input: {
+  allowAgentDelegated: boolean
+  authorization: string | undefined
+  env: Env
+  xAdminAsUserId: string | undefined
+  xAdminToken: string | undefined
+}): Promise<ActorContext | AdminActorContext> {
+  const adminActor = authenticateAdminToken({
+    env: input.env,
+    token: input.xAdminToken,
+    asUserId: input.xAdminAsUserId,
+  })
+  if (adminActor) {
+    return adminActor
+  }
+
+  const token = requireBearerToken(input.authorization)
+  if (!input.allowAgentDelegated) {
+    return authenticateUserToken({ env: input.env, token })
+  }
+
+  try {
+    return await authenticateUserToken({ env: input.env, token })
+  } catch {
+    return authenticateAgentDelegatedToken({ env: input.env, token })
+  }
 }
 
 export const authenticate = createMiddleware<{ Bindings: Env; Variables: AuthenticatedVariables }>(

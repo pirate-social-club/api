@@ -1,6 +1,6 @@
 import { Bee, PrivateKey, Topic, type Collection } from "@ethersphere/bee-js"
 import { internalError } from "../errors"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 
 export type SwarmPublishInput = {
   env: Env

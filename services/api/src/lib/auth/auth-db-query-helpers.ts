@@ -1,7 +1,7 @@
 import { executeFirst, type DbExecutor } from "../db-helpers"
 import { internalError } from "../errors"
 import type { InStatement } from "../sql-client"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 
 export function requireControlPlaneDbUrl(env: Env): string {
   const url = normalizeControlPlaneDbUrl(

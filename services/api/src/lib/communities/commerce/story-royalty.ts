@@ -1,7 +1,7 @@
 import { badRequestError } from "../../errors"
 import { isLocalEnvironment } from "../../helpers"
 import type { AssetRow } from "./row-types"
-import type { Env } from "../../../types"
+import type { Env } from "../../../env"
 
 export function assertAssetReadyForStoryRoyaltyCommerce(
   asset: Pick<AssetRow, "asset_kind" | "story_ip_id" | "story_royalty_registration_status" | "story_status" | "locked_delivery_status">,

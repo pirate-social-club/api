@@ -1,7 +1,8 @@
 import { jwtVerify } from "jose"
 import { authError } from "../errors"
 import { dedupeStrings, envFlag, normalizeAddress, splitCsv } from "../helpers"
-import type { Env, UpstreamIdentity } from "../../types"
+import type { Env } from "../../env"
+import type { UpstreamIdentity } from "../../types"
 
 const encoder = new TextEncoder()
 

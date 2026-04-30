@@ -1,7 +1,7 @@
 import { Hono } from "hono"
 import { notFoundError } from "../lib/errors"
 import { getControlPlaneAgentOwnershipRepository } from "../lib/agents/agent-ownership-repository"
-import type { Env } from "../types"
+import type { Env } from "../env"
 
 const publicAgents = new Hono<{ Bindings: Env }>()
 

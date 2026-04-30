@@ -19,51 +19,24 @@ import {
   serializeLinkHeader,
   type StructuredAccessLinks,
 } from "../lib/agent-discovery/structured-links"
+import {
+  markdownResponse,
+  omittedSurfacesMarkdown,
+  wantsMarkdown,
+} from "../lib/agent-discovery/markdown-helpers"
+import type { CommunityRouteRepository } from "./communities-route-helpers"
 import { badRequestError, notFoundError, structuredSurfaceDisabled } from "../lib/errors"
 import { omitThreadBody } from "../lib/posts/thread-body-omission"
 import { serializeCommunityPreview } from "../serializers/community"
 import { serializeLocalizedPostResponse } from "../serializers/post"
-import type { CommunityPreview, Env } from "../types"
+import type { Env } from "../env"
+import type { CommunityPreview } from "../types"
 import { publicCommunityId, publicPostId } from "../lib/public-ids"
 
 const publicCommunities = new Hono<{ Bindings: Env }>()
 
-type CommunityRepository = ReturnType<typeof getCommunityRepository>
-
-function rankPublicCommunitySearchMatch(
-  candidate: { display_name: string; route_slug: string | null },
-  query: string,
-): number | null {
-  const normalizedQuery = query.trim().toLowerCase()
-  if (!normalizedQuery) {
-    return 4
-  }
-
-  const routeSlug = candidate.route_slug?.trim().toLowerCase() ?? ""
-  const displayName = candidate.display_name.trim().toLowerCase()
-  if (routeSlug && routeSlug === normalizedQuery) {
-    return 0
-  }
-  if (displayName === normalizedQuery) {
-    return 1
-  }
-  if (routeSlug && routeSlug.startsWith(normalizedQuery)) {
-    return 2
-  }
-  if (displayName.startsWith(normalizedQuery)) {
-    return 3
-  }
-  if (routeSlug && routeSlug.includes(normalizedQuery)) {
-    return 4
-  }
-  if (displayName.includes(normalizedQuery)) {
-    return 5
-  }
-  return null
-}
-
 async function resolveCommunityId(
-  repository: CommunityRepository,
+  repository: CommunityRouteRepository,
   communityIdentifier: string,
 ): Promise<string> {
   const communityId = await resolveCommunityIdentifier(repository, communityIdentifier)
@@ -79,10 +52,11 @@ function communityLinks(
   communityId: string,
   routeSlug?: string | null,
 ): StructuredAccessLinks {
-  const canonicalSegment = routeSlug?.trim() || communityId
+  const routeCommunityId = publicCommunityId(communityId)
+  const canonicalSegment = routeSlug?.trim() || routeCommunityId
   return {
     self: {
-      href: absoluteUrl(origin, publicCommunityPath(communityId)),
+      href: absoluteUrl(origin, publicCommunityPath(routeCommunityId)),
       type: "application/json",
     },
     canonical: {
@@ -90,11 +64,11 @@ function communityLinks(
       type: "text/html",
     },
     markdown: {
-      href: absoluteUrl(origin, `${publicCommunityPath(communityId)}?format=markdown`),
+      href: absoluteUrl(origin, `${publicCommunityPath(routeCommunityId)}?format=markdown`),
       type: "text/markdown",
     },
     posts: {
-      href: absoluteUrl(origin, publicCommunityPostsPath(communityId)),
+      href: absoluteUrl(origin, publicCommunityPostsPath(routeCommunityId)),
       type: "application/json",
     },
   }
@@ -106,13 +80,14 @@ function communityPostListLinks(input: {
   nextCursor: string | null
   requestUrl: string
 }): StructuredAccessLinks {
+  const routeCommunityId = publicCommunityId(input.communityId)
   const links: StructuredAccessLinks = {
     self: {
-      href: absoluteUrl(input.origin, publicCommunityPostsPath(input.communityId)),
+      href: absoluteUrl(input.origin, publicCommunityPostsPath(routeCommunityId)),
       type: "application/json",
     },
     community: {
-      href: absoluteUrl(input.origin, publicCommunityPath(input.communityId)),
+      href: absoluteUrl(input.origin, publicCommunityPath(routeCommunityId)),
       type: "application/json",
     },
   }
@@ -125,36 +100,6 @@ function communityPostListLinks(input: {
     }
   }
   return links
-}
-
-function markdownResponse(markdown: string, links: StructuredAccessLinks): Response {
-  return new Response(markdown, {
-    status: 200,
-    headers: {
-      "content-type": "text/markdown; charset=utf-8",
-      Link: serializeLinkHeader(links),
-    },
-  })
-}
-
-function wantsMarkdown(request: Request, format: string | null | undefined): boolean {
-  if (format === "markdown" || format === "md") {
-    return true
-  }
-  const accept = request.headers.get("accept") ?? ""
-  return accept.includes("text/markdown")
-}
-
-function omittedSurfacesMarkdown(omittedSurfaces: OmittedStructuredSurface[]): string[] {
-  if (!omittedSurfaces.length) {
-    return []
-  }
-  return [
-    "## Omitted surfaces",
-    "",
-    ...omittedSurfaces.map((surface) => `- ${surface.surface}: ${surface.reason}`),
-    "",
-  ]
 }
 
 function communityMarkdown(input: {
@@ -268,30 +213,20 @@ publicCommunities.get("/", async (c) => {
     ? Math.min(Math.max(rawLimit, 1), 25)
     : 10
 
-  const matches = (await repository.listActiveCommunities())
+  const rankedMatches = await repository.searchActiveCommunities({ query, limit: limit + 1 })
+
+  const matches = rankedMatches
+    .slice(0, limit)
     .map((community) => ({
-      community_id: community.community_id,
+      community: publicCommunityId(community.community_id),
       display_name: community.display_name,
       route_slug: community.route_slug,
-      match_rank: rankPublicCommunitySearchMatch(community, query),
-    }))
-    .filter((community) => query.length === 0 || community.match_rank != null)
-    .sort((left, right) => {
-      const rankCompare = (left.match_rank ?? 99) - (right.match_rank ?? 99)
-      if (rankCompare !== 0) {
-        return rankCompare
-      }
-      return left.display_name.localeCompare(right.display_name, "en", { sensitivity: "base" })
-    })
-    .slice(0, limit)
-    .map(({ match_rank: _matchRank, community_id, ...community }) => ({
-      community: publicCommunityId(community_id),
-      ...community,
     }))
 
   return c.json({
     query: query || null,
     communities: matches,
+    has_more: rankedMatches.length > limit,
   }, 200)
 })
 
@@ -306,7 +241,7 @@ publicCommunities.get("/:communityId/posts", async (c) => {
   if (!policy.included_surfaces.thread_cards) {
     const omittedSurface = omittedSurfaceForPolicy(policy, "thread_cards")
     throw structuredSurfaceDisabled("Thread cards are not available for structured access", {
-      community_id: communityId,
+      community: publicCommunityId(communityId),
       surface: "thread_cards",
       reason: omittedSurface?.reason ?? "community_opt_out",
     })

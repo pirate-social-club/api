@@ -1,6 +1,6 @@
 import { trackServerEvent } from "../analytics"
 import type { DbExecutor } from "../db-helpers"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 
 type NotificationGeneratedInput = {
   userId: string

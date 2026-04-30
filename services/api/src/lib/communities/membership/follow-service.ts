@@ -6,7 +6,7 @@ import { setCommunityFollowInactive } from "./follow-store"
 import { openCommunityDb } from "../community-db-factory"
 import { conflictError, notFoundError } from "../../errors"
 import { nowIso } from "../../helpers"
-import type { Env } from "../../../types"
+import type { Env } from "../../../env"
 import { activateCommunityFollow, syncCommunityFollowProjection } from "./projection-service"
 import type { CommunityFollowResult, CommunityMembershipRepository } from "./types"
 

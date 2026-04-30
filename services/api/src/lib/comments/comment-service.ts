@@ -34,7 +34,7 @@ import {
 import { incrementAncestorCommentCounters, incrementThreadPostCommentCounters, insertCommentClosureRows } from "./comment-closure-store"
 import { enqueueCommentTranslationPrewarmJobs } from "./comment-translation-jobs"
 import type { Comment, CommentAnonymousScope, CreateCommentRequest } from "./comment-types"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 
 export {
   getCommentContext,

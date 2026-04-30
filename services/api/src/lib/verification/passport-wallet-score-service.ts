@@ -3,7 +3,8 @@ import { getUserRow, listActiveWalletAttachmentRows } from "../auth/auth-db-user
 import { parseVerificationCapabilities } from "../auth/auth-serializers"
 import { badRequestError, internalError, notFoundError, rateLimited } from "../errors"
 import { getPassportProvider } from "./passport-provider"
-import type { Env, JoinEligibility, VerificationCapabilities } from "../../types"
+import type { Env } from "../../env"
+import type { JoinEligibility, VerificationCapabilities } from "../../types"
 
 const PASSPORT_REFRESH_RATE_LIMIT_MS = 60_000
 

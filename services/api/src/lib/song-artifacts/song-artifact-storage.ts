@@ -2,7 +2,7 @@ import { badRequestError, notFoundError, providerUnavailable } from "../errors"
 import { sha256Hex, toArrayBuffer } from "../crypto"
 import { resolveFilebaseConfig } from "../storage/filebase-config"
 import { buildS3SignedRequest, EMPTY_SHA256_HEX } from "../storage/s3-signing"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 import { FILEBASE_SONG_ARTIFACT_STORAGE_PROVIDER } from "./song-artifact-storage-provider"
 
 export type SongArtifactKind =

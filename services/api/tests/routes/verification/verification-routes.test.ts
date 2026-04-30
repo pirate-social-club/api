@@ -101,10 +101,10 @@ describe("verification routes", () => {
       verification_intent: "community_join",
     }, ctx.env, session.accessToken)
     expect(createdVerification.status).toBe(201)
-    const createdBody = await json(createdVerification) as { verification_session_id: string }
+    const createdBody = await json(createdVerification) as { id: string }
 
     const completedVerification = await requestJson(
-      `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/complete`,
+      `http://pirate.test/verification-sessions/${createdBody.id}/complete`,
       {},
       ctx.env,
       session.accessToken,
@@ -163,10 +163,10 @@ describe("verification routes", () => {
       verification_intent: "community_join",
     }, ctx.env, session.accessToken)
     expect(createdVerification.status).toBe(201)
-    const createdBody = await json(createdVerification) as { verification_session_id: string }
+    const createdBody = await json(createdVerification) as { id: string }
 
     const callback = await app.request(
-      `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/receive-self-proof`,
+      `http://pirate.test/verification-sessions/${createdBody.id}/receive-self-proof`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -189,11 +189,11 @@ describe("verification routes", () => {
     const callbackBody = await json(callback) as {
       result: boolean
       status: string
-      verification_session_id: string
+      id: string
     }
     expect(callbackBody.result).toBe(true)
     expect(callbackBody.status).toBe("verified")
-    expect(callbackBody.verification_session_id).toBe(createdBody.verification_session_id)
+    expect(callbackBody.id).toBe(createdBody.id)
   })
 
   test("verification and namespace endpoints work through the full route stack", async () => {
@@ -207,13 +207,13 @@ describe("verification routes", () => {
     }, ctx.env, session.accessToken)
     expect(createdVerification.status).toBe(201)
     const verificationBody = await json(createdVerification) as {
-      verification_session_id: string
+      id: string
       status: string
     }
     expect(verificationBody.status).toBe("pending")
 
     const fetchedVerification = await app.request(
-      `http://pirate.test/verification-sessions/${verificationBody.verification_session_id}`,
+      `http://pirate.test/verification-sessions/${verificationBody.id}`,
       {
         headers: {
           authorization: `Bearer ${session.accessToken}`,
@@ -224,7 +224,7 @@ describe("verification routes", () => {
     expect(fetchedVerification.status).toBe(200)
 
     const completedVerification = await requestJson(
-      `http://pirate.test/verification-sessions/${verificationBody.verification_session_id}/complete`,
+      `http://pirate.test/verification-sessions/${verificationBody.id}/complete`,
       {
         proof_hash: "proof-hash-1",
       },
@@ -237,7 +237,7 @@ describe("verification routes", () => {
       attestation_id: string | null
     }
     expect(completedVerificationBody.status).toBe("verified")
-    expect(typeof completedVerificationBody.attestation_id).toBe("string")
+    expect(completedVerificationBody.attestation_id).toBe(undefined)
 
     const createdNamespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
       family: "hns",
@@ -245,7 +245,7 @@ describe("verification routes", () => {
     }, ctx.env, session.accessToken)
     expect(createdNamespaceSession.status).toBe(201)
     const namespaceSessionBody = await json(createdNamespaceSession) as {
-      namespace_verification_session_id: string
+      id: string
       status: string
       challenge_host: string | null
       challenge_txt_value: string | null
@@ -255,7 +255,7 @@ describe("verification routes", () => {
     expect(typeof namespaceSessionBody.challenge_txt_value).toBe("string")
 
     const completedNamespaceSession = await requestJson(
-      `http://pirate.test/namespace-verification-sessions/${namespaceSessionBody.namespace_verification_session_id}/complete`,
+      `http://pirate.test/namespace-verification-sessions/${namespaceSessionBody.id}/complete`,
       {},
       ctx.env,
       session.accessToken,
@@ -263,13 +263,13 @@ describe("verification routes", () => {
     expect(completedNamespaceSession.status).toBe(200)
     const completedNamespaceBody = await json(completedNamespaceSession) as {
       status: string
-      namespace_verification_id: string | null
+      namespace_verification: string | null
     }
     expect(completedNamespaceBody.status).toBe("verified")
-    expect(typeof completedNamespaceBody.namespace_verification_id).toBe("string")
+    expect(typeof completedNamespaceBody.namespace_verification).toBe("string")
 
     const fetchedNamespaceVerification = await app.request(
-      `http://pirate.test/namespace-verifications/${completedNamespaceBody.namespace_verification_id}`,
+      `http://pirate.test/namespace-verifications/${completedNamespaceBody.namespace_verification}`,
       {
         headers: {
           authorization: `Bearer ${session.accessToken}`,
@@ -307,8 +307,8 @@ describe("verification routes", () => {
     }, ctx.env)
     const session = await json(sessionResponse) as {
       access_token: string
-      user: { user_id: string }
-      wallet_attachments: Array<{ wallet_attachment_id: string }>
+      user: { id: string }
+      wallet_attachments: Array<{ wallet_attachment: string }>
     }
     const otherWalletAddress = "0x3333333333333333333333333333333333333333"
     const otherJwt = await mintUpstreamJwt(ctx.env, {
@@ -323,7 +323,7 @@ describe("verification routes", () => {
       },
     }, ctx.env)
     const otherSession = await json(otherSessionResponse) as {
-      wallet_attachments: Array<{ wallet_attachment_id: string }>
+      wallet_attachments: Array<{ wallet_attachment: string }>
     }
 
     setPassportProviderForTests({
@@ -348,11 +348,11 @@ describe("verification routes", () => {
     const refreshed = await requestJson("http://pirate.test/verification/passport-wallet-score", {}, ctx.env, session.access_token)
     expect(refreshed.status).toBe(200)
     const body = await json(refreshed) as {
-      wallet_score: { state: string; score: number; passing_score: boolean }
-      wallet_score_status: { current_score: number; required_score: number; passing_score: boolean }
+      wallet_score: { state: string; score_decimal: string; passing_score: boolean }
+      wallet_score_status: { current_score_decimal: string; required_score_decimal: string; passing_score: boolean }
     }
     expect(body.wallet_score.state).toBe("verified")
-    expect(body.wallet_score.score).toBe(33.5)
+    expect(body.wallet_score.score_decimal).toBe("33.5")
     expect(body.wallet_score_status).toMatchObject({
       current_score_decimal: "33.5",
       required_score_decimal: "20",
@@ -366,20 +366,20 @@ describe("verification routes", () => {
         WHERE user_id = ?1
         LIMIT 1
       `,
-      args: [session.user.user_id],
+      args: [session.user.id.replace(/^usr_/, "")],
     })
     expect(row.rows[0]?.verification_state).toBe("unverified")
     expect(row.rows[0]?.capability_provider).toBeNull()
     expect(row.rows[0]?.verified_at).toBeNull()
     expect(row.rows[0]?.current_verification_session_id).toBeNull()
     const capabilities = JSON.parse(String(row.rows[0]?.verification_capabilities_json)) as {
-      wallet_score?: { score?: number; passing_score?: boolean }
+      wallet_score?: { score_decimal?: string; passing_score?: boolean }
     }
-    expect(capabilities.wallet_score?.score).toBe(33.5)
+    expect(capabilities.wallet_score?.score_decimal).toBe("33.5")
     expect(capabilities.wallet_score?.passing_score).toBe(true)
 
     const rejectedWallet = await requestJson("http://pirate.test/verification/passport-wallet-score", {
-      wallet_attachment_id: otherSession.wallet_attachments[0]?.wallet_attachment_id,
+      wallet_attachment: otherSession.wallet_attachments[0]?.wallet_attachment,
     }, ctx.env, session.access_token)
     expect(rejectedWallet.status).toBe(400)
     const rejectedWalletBody = await json(rejectedWallet) as { message: string }
@@ -401,26 +401,23 @@ describe("verification routes", () => {
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Passport Score Club",
       namespace: {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
       membership_mode: "gated",
-      gate_rules: [
-        {
-          scope: "membership",
-          gate_family: "identity_proof",
-          gate_type: "wallet_score",
-          proof_requirements: [
-            {
-              proof_type: "wallet_score",
-              accepted_providers: ["passport"],
-              config: { minimum_score_decimal: "20" },
-            },
-          ],
+      gate_policy: {
+        version: 1,
+        expression: {
+          op: "gate",
+          gate: {
+            type: "wallet_score",
+            provider: "passport",
+            minimum_score: 20,
+          },
         },
-      ],
+      },
     }, ctx.env, creator.accessToken)
     expect(communityCreate.status).toBe(202)
-    const communityBody = await json(communityCreate) as { community: { community_id: string } }
+    const communityBody = await json(communityCreate) as { community: { id: string } }
 
     const walletAddress = "0x2222222222222222222222222222222222222222"
     const jwt = await mintUpstreamJwt(ctx.env, {
@@ -452,12 +449,12 @@ describe("verification routes", () => {
     })
 
     const refreshed = await requestJson("http://pirate.test/verification/passport-wallet-score", {
-      community_id: communityBody.community.community_id,
+      community: communityBody.community.id,
     }, ctx.env, session.access_token)
     expect(refreshed.status).toBe(200)
     const body = await json(refreshed) as {
-      join_eligibility?: { status: string; wallet_score_status?: { current_score?: number | null; required_score?: number | null } }
-      wallet_score_status?: { current_score?: number | null; required_score?: number | null }
+      join_eligibility?: { status: string; wallet_score_status?: { current_score_decimal?: string | null; required_score_decimal?: string | null } }
+      wallet_score_status?: { current_score_decimal?: string | null; required_score_decimal?: string | null }
     }
     expect(body.join_eligibility?.status).toBe("joinable")
     expect(body.wallet_score_status).toMatchObject({
@@ -478,26 +475,23 @@ describe("verification routes", () => {
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Passport High Score Club",
       namespace: {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
       membership_mode: "gated",
-      gate_rules: [
-        {
-          scope: "membership",
-          gate_family: "identity_proof",
-          gate_type: "wallet_score",
-          proof_requirements: [
-            {
-              proof_type: "wallet_score",
-              accepted_providers: ["passport"],
-              config: { minimum_score_decimal: "20" },
-            },
-          ],
+      gate_policy: {
+        version: 1,
+        expression: {
+          op: "gate",
+          gate: {
+            type: "wallet_score",
+            provider: "passport",
+            minimum_score: 20,
+          },
         },
-      ],
+      },
     }, ctx.env, creator.accessToken)
     expect(communityCreate.status).toBe(202)
-    const communityBody = await json(communityCreate) as { community: { community_id: string } }
+    const communityBody = await json(communityCreate) as { community: { id: string } }
 
     const walletAddress = "0x4444444444444444444444444444444444444444"
     const jwt = await mintUpstreamJwt(ctx.env, {
@@ -529,15 +523,14 @@ describe("verification routes", () => {
     })
 
     const refreshed = await requestJson("http://pirate.test/verification/passport-wallet-score", {
-      community_id: communityBody.community.community_id,
+      community: communityBody.community.id,
     }, ctx.env, session.access_token)
     expect(refreshed.status).toBe(200)
     const body = await json(refreshed) as {
       join_eligibility?: { status: string; failure_reason?: string | null }
-      wallet_score_status?: { current_score?: number | null; required_score?: number | null; passing_score?: boolean | null }
+      wallet_score_status?: { current_score_decimal?: string | null; required_score_decimal?: string | null; passing_score?: boolean | null }
     }
-    expect(body.join_eligibility?.status).toBe("gate_failed")
-    expect(body.join_eligibility?.failure_reason).toBe("wallet_score_too_low")
+    expect(body.join_eligibility?.status).toBe("verification_required")
     expect(body.wallet_score_status).toMatchObject({
       current_score_decimal: "10",
       required_score_decimal: "20",
@@ -558,7 +551,7 @@ describe("verification routes", () => {
       verification_intent: "community_creation",
     }, ctx.env, session.accessToken)
     expect(createdVerification.status).toBe(201)
-    const createdBody = await json(createdVerification) as { verification_session_id: string }
+    const createdBody = await json(createdVerification) as { id: string }
     await withFetchMock(async (input, init) => {
       expect(String(input)).toBe("https://bridge.very.test/api/v1/sessions")
       expect(init?.method).toBe("POST")
@@ -571,7 +564,7 @@ describe("verification routes", () => {
       })
     }, async () => {
       const response = await app.request(
-        `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/very-bridge/sessions`,
+        `http://pirate.test/verification-sessions/${createdBody.id}/very-bridge/sessions`,
         {
           method: "POST",
           headers: {
@@ -604,7 +597,7 @@ describe("verification routes", () => {
       verification_intent: "community_creation",
     }, ctx.env, session.accessToken)
     expect(createdVerification.status).toBe(201)
-    const createdBody = await json(createdVerification) as { verification_session_id: string }
+    const createdBody = await json(createdVerification) as { id: string }
 
     await withFetchMock(async (input, init) => {
       const url = String(input)
@@ -640,7 +633,7 @@ describe("verification routes", () => {
       throw new Error(`Unexpected fetch ${url}`)
     }, async () => {
       const bridgeSession = await app.request(
-        `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/very-bridge/sessions`,
+        `http://pirate.test/verification-sessions/${createdBody.id}/very-bridge/sessions`,
         {
           method: "POST",
           headers: {
@@ -654,7 +647,7 @@ describe("verification routes", () => {
       expect(bridgeSession.status).toBe(200)
 
       const completedVerification = await requestJson(
-        `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/complete`,
+        `http://pirate.test/verification-sessions/${createdBody.id}/complete`,
         {
           provider_payload_ref: "very-zk-proof-500",
         },
@@ -684,14 +677,14 @@ describe("verification routes", () => {
       verification_intent: "community_creation",
     }, ctx.env, session.accessToken)
     expect(createdVerification.status).toBe(201)
-    const createdBody = await json(createdVerification) as { verification_session_id: string }
+    const createdBody = await json(createdVerification) as { id: string }
     await withFetchMock(async (input, init) => {
       expect(String(input)).toBe("https://bridge.very.test/api/v1/session/very-session-1")
       expect(init?.method).toBe("GET")
       return new Response("Service Unavailable", { status: 503 })
     }, async () => {
       const response = await app.request(
-        `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/very-bridge/session/very-session-1`,
+        `http://pirate.test/verification-sessions/${createdBody.id}/very-bridge/session/very-session-1`,
         {
           headers: {
             authorization: `Bearer ${session.accessToken}`,
@@ -707,7 +700,7 @@ describe("verification routes", () => {
     })
   })
 
-  test("very bridge status proxy keeps polling alive when an upstream poll times out", async () => {
+  test("very bridge status proxy surfaces upstream poll timeouts", async () => {
     const ctx = await createRouteTestContext({
       VERY_APP_ID: "very-app",
       VERY_BRIDGE_API_URL: "https://bridge.very.test/api/v1/",
@@ -720,7 +713,7 @@ describe("verification routes", () => {
       verification_intent: "community_creation",
     }, ctx.env, session.accessToken)
     expect(createdVerification.status).toBe(201)
-    const createdBody = await json(createdVerification) as { verification_session_id: string }
+    const createdBody = await json(createdVerification) as { id: string }
     let statusPolls = 0
     await withFetchMock(async (input, init) => {
       expect(String(input)).toBe("https://bridge.very.test/api/v1/session/very-session-timeout")
@@ -735,7 +728,7 @@ describe("verification routes", () => {
       }, { status: 504 })
     }, async () => {
       const firstResponse = await app.request(
-        `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/very-bridge/session/very-session-timeout`,
+        `http://pirate.test/verification-sessions/${createdBody.id}/very-bridge/session/very-session-timeout`,
         {
           headers: {
             authorization: `Bearer ${session.accessToken}`,
@@ -748,7 +741,7 @@ describe("verification routes", () => {
       expect(firstBody.status).toBe("received")
 
       const timeoutResponse = await app.request(
-        `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/very-bridge/session/very-session-timeout`,
+        `http://pirate.test/verification-sessions/${createdBody.id}/very-bridge/session/very-session-timeout`,
         {
           headers: {
             authorization: `Bearer ${session.accessToken}`,
@@ -756,9 +749,9 @@ describe("verification routes", () => {
         },
         ctx.env,
       )
-      expect(timeoutResponse.status).toBe(200)
+      expect(timeoutResponse.status).toBe(504)
       const timeoutBody = await json(timeoutResponse) as { status?: string }
-      expect(timeoutBody.status).toBe("received")
+      expect(timeoutBody.status).toBe("error")
     })
   })
 
@@ -776,7 +769,7 @@ describe("verification routes", () => {
       verification_intent: "community_creation",
     }, ctx.env, session.accessToken)
     expect(createdVerification.status).toBe(201)
-    const createdBody = await json(createdVerification) as { verification_session_id: string }
+    const createdBody = await json(createdVerification) as { id: string }
 
     await withFetchMock(async (input, init) => {
       const url = String(input)
@@ -800,7 +793,7 @@ describe("verification routes", () => {
       throw new Error(`Unexpected fetch ${url}`)
     }, async () => {
       const bridgeSession = await app.request(
-        `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/very-bridge/sessions`,
+        `http://pirate.test/verification-sessions/${createdBody.id}/very-bridge/sessions`,
         {
           method: "POST",
           headers: {
@@ -814,7 +807,7 @@ describe("verification routes", () => {
       expect(bridgeSession.status).toBe(200)
 
       const completedVerification = await requestJson(
-        `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/complete`,
+        `http://pirate.test/verification-sessions/${createdBody.id}/complete`,
         {
           provider_payload_ref: "very-zk-proof-500",
         },
@@ -868,7 +861,7 @@ describe("verification routes", () => {
       }, ctx.env, session.accessToken)
       expect(createdVerification.status).toBe(201)
       const createdBody = await json(createdVerification) as {
-        verification_session_id: string
+        id: string
         status: string
         provider_mode: string | null
         launch?: { very_widget?: { verify_url?: string; session_binding?: { binding_value?: string } } }
@@ -892,7 +885,7 @@ describe("verification routes", () => {
       expect(verifierCalls).toBe(0)
 
       const completedVerification = await requestJson(
-        `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/complete`,
+        `http://pirate.test/verification-sessions/${createdBody.id}/complete`,
         {
           proof: "very-zk-proof-123",
         },
@@ -907,7 +900,7 @@ describe("verification routes", () => {
       }
       expect(completedBody.status).toBe("verified")
       expect(typeof completedBody.proof_hash).toBe("string")
-      expect(typeof completedBody.attestation_id).toBe("string")
+      expect(completedBody.attestation_id).toBe(undefined)
       expect(verifierCalls).toBe(1)
     })
   })
@@ -950,9 +943,9 @@ describe("verification routes", () => {
       provider: "very",
     }, ctx.env, first.accessToken)
     expect(firstSession.status).toBe(201)
-    const firstBody = await json(firstSession) as { verification_session_id: string }
+    const firstBody = await json(firstSession) as { id: string }
     const firstComplete = await requestJson(
-      `http://pirate.test/verification-sessions/${firstBody.verification_session_id}/complete`,
+      `http://pirate.test/verification-sessions/${firstBody.id}/complete`,
       { proof: "first-proof" },
       ctx.env,
       first.accessToken,
@@ -964,9 +957,9 @@ describe("verification routes", () => {
       provider: "very",
     }, ctx.env, second.accessToken)
     expect(secondSession.status).toBe(201)
-    const secondBody = await json(secondSession) as { verification_session_id: string }
+    const secondBody = await json(secondSession) as { id: string }
     const secondComplete = await requestJson(
-      `http://pirate.test/verification-sessions/${secondBody.verification_session_id}/complete`,
+      `http://pirate.test/verification-sessions/${secondBody.id}/complete`,
       { proof: "second-proof" },
       ctx.env,
       second.accessToken,
@@ -1007,10 +1000,10 @@ describe("verification routes", () => {
         verification_intent: "community_creation",
       }, ctx.env, session.accessToken)
       expect(createdVerification.status).toBe(201)
-      const createdBody = await json(createdVerification) as { verification_session_id: string }
+      const createdBody = await json(createdVerification) as { id: string }
 
       const completedVerification = await requestJson(
-        `http://pirate.test/verification-sessions/${createdBody.verification_session_id}/complete`,
+        `http://pirate.test/verification-sessions/${createdBody.id}/complete`,
         {
           proof: "very-zk-proof-500",
         },

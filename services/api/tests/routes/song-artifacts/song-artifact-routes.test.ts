@@ -207,8 +207,7 @@ describe("song artifact routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Preview Crop Club",
-      membership_mode: "open",
-      gate_rules: [],
+      membership_mode: "request",
       handle_policy: {
         policy_template: "standard",
       },
@@ -216,10 +215,10 @@ describe("song artifact routes", () => {
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
+        id: string
       }
     }
-    const communityId = communityCreateBody.community.community_id
+    const communityId = communityCreateBody.community.id.replace(/^com_/, "")
     const primaryBytes = makeSilentWavBytes()
 
     const uploadIntent = await requestJson(
@@ -235,16 +234,16 @@ describe("song artifact routes", () => {
     )
     expect(uploadIntent.status).toBe(201)
     const uploadIntentBody = await json(uploadIntent) as {
-      song_artifact_upload_id: string
+      id: string
       upload_url: string
     }
     const primaryBody = new ArrayBuffer(primaryBytes.byteLength)
     new Uint8Array(primaryBody).set(primaryBytes)
 
     const uploadContent = await app.request(
-      uploadIntentBody.upload_url,
+      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${uploadIntentBody.id}/content`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           authorization: `Bearer ${author.accessToken}`,
           "content-type": "audio/wav",
@@ -259,11 +258,11 @@ describe("song artifact routes", () => {
       `http://pirate.test/communities/${communityId}/song-artifacts`,
       {
         primary_audio: {
-          song_artifact_upload_id: uploadIntentBody.song_artifact_upload_id,
+          song_artifact_upload: uploadIntentBody.id,
         },
         preview_window: {
           start_ms: 0,
-          duration_ms: 30_000,
+          duration_ms: 1_000,
         },
         lyrics: "Paid line",
       },
@@ -272,7 +271,7 @@ describe("song artifact routes", () => {
     )
     expect(bundleCreate.status).toBe(201)
     const pendingBundle = await json(bundleCreate) as {
-      song_artifact_bundle_id: string
+      id: string
       preview_audio?: unknown | null
       preview_status: string
       preview_window?: { start_ms: number; duration_ms: number } | null
@@ -281,7 +280,7 @@ describe("song artifact routes", () => {
     expect(pendingBundle.preview_status).toBe("pending")
     expect(pendingBundle.preview_window).toEqual({
       start_ms: 0,
-      duration_ms: 30_000,
+      duration_ms: 1_000,
     })
 
     const jobSummary = await processCommunityJobsForCommunity({
@@ -295,7 +294,7 @@ describe("song artifact routes", () => {
     expect(jobSummary.jobs[0]?.status).toBe("succeeded")
 
     const completedBundleRead = await app.request(
-      `http://pirate.test/communities/${communityId}/song-artifacts/${pendingBundle.song_artifact_bundle_id}`,
+      `http://pirate.test/communities/${communityId}/song-artifacts/${pendingBundle.id}`,
       {
         headers: {
           authorization: `Bearer ${author.accessToken}`,
@@ -324,7 +323,11 @@ describe("song artifact routes", () => {
 
     const previewContent = await app.request(
       completedBundle.preview_audio?.storage_ref ?? "",
-      {},
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
       ctx.env,
     )
     expect(previewContent.status).toBe(200)
@@ -342,7 +345,7 @@ describe("song artifact routes", () => {
         song_mode: "original",
         rights_basis: "original",
         license_preset: "non-commercial",
-        song_artifact_bundle_id: pendingBundle.song_artifact_bundle_id,
+        song_artifact_bundle: pendingBundle.id,
       },
       ctx.env,
       author.accessToken,
@@ -480,6 +483,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Song Club",
+      membership_mode: "request",
       handle_policy: {
         policy_template: "standard",
       },
@@ -487,10 +491,10 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
+        id: string
       }
     }
-    const communityId = communityCreateBody.community.community_id
+    const communityId = communityCreateBody.community.id.replace(/^com_/, "")
 
     const uploadIntent = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
@@ -505,13 +509,13 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     )
     expect(uploadIntent.status).toBe(201)
     const uploadIntentBody = await json(uploadIntent) as {
-      song_artifact_upload_id: string
+      id: string
       upload_url: string
       storage_ref: string
       status: string
     }
     expect(uploadIntentBody.status).toBe("pending_upload")
-    expect(uploadIntentBody.upload_url).toContain(`/communities/${communityId}/song-artifact-uploads/`)
+    expect(`http://pirate.test/communities/${communityId}/song-artifact-uploads/${uploadIntentBody.id}/content`).toContain(`/communities/${communityId}/song-artifact-uploads/`)
 
     const previewUploadIntent = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
@@ -527,9 +531,9 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     expect(previewUploadIntent.status).toBe(400)
 
     const uploadContent = await app.request(
-      uploadIntentBody.upload_url,
+      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${uploadIntentBody.id}/content`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           authorization: `Bearer ${author.accessToken}`,
           "content-type": "application/octet-stream",
@@ -540,15 +544,19 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     )
     expect(uploadContent.status).toBe(200)
     const uploaded = await json(uploadContent) as {
-      song_artifact_upload_id: string
+      id: string
       status: string
       content_hash: string
     }
-    expect(uploaded.song_artifact_upload_id).toBe(uploadIntentBody.song_artifact_upload_id)
+    expect(uploaded.id).toBe(uploadIntentBody.id)
     expect(uploaded.status).toBe("uploaded")
     expect(uploaded.content_hash).toMatch(/^0x[0-9a-f]{64}$/)
 
-    const readContent = await app.request(uploadIntentBody.storage_ref, {}, ctx.env)
+    const readContent = await app.request(
+      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${uploadIntentBody.id}/content`,
+      {},
+      ctx.env,
+    )
     expect(readContent.status).toBe(200)
     expect(new Uint8Array(await readContent.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]))
 
@@ -556,7 +564,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
       `http://pirate.test/communities/${communityId}/song-artifacts`,
       {
         primary_audio: {
-          song_artifact_upload_id: uploadIntentBody.song_artifact_upload_id,
+          song_artifact_upload: uploadIntentBody.id,
         },
         lyrics: "Line one\nLine two",
       },
@@ -565,7 +573,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     )
     expect(bundleCreate.status).toBe(201)
     const bundleBody = await json(bundleCreate) as {
-      song_artifact_bundle_id: string
+      id: string
       status: string
       media_refs: Array<{ storage_ref: string; mime_type: string }>
       moderation_status: string
@@ -592,7 +600,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
         song_mode: "original",
         rights_basis: "original",
         license_preset: "non-commercial",
-        song_artifact_bundle_id: bundleBody.song_artifact_bundle_id,
+        song_artifact_bundle: bundleBody.id,
       },
       ctx.env,
       author.accessToken,
@@ -602,16 +610,16 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
       post_id: string
       post_type: string
       status: string
-      song_artifact_bundle_id: string | null
+      song_artifact_bundle: string | null
       media_refs?: Array<{ storage_ref: string }>
     }
     expect(postBody.post_type).toBe("song")
     expect(postBody.status).toBe("published")
-    expect(postBody.song_artifact_bundle_id).toBe(bundleBody.song_artifact_bundle_id)
+    expect(postBody.song_artifact_bundle).toBe(bundleBody.id)
     expect(postBody.media_refs?.[0]?.storage_ref).toBe(uploadIntentBody.storage_ref)
 
     const bundleRead = await app.request(
-      `http://pirate.test/communities/${communityId}/song-artifacts/${bundleBody.song_artifact_bundle_id}`,
+      `http://pirate.test/communities/${communityId}/song-artifacts/${bundleBody.id}`,
       {
         headers: {
           authorization: `Bearer ${author.accessToken}`,
@@ -640,12 +648,12 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
       `http://pirate.test/communities/${communityId}/song-artifacts`,
       {
         primary_audio: {
-          song_artifact_upload_id: uploadIntentBody.song_artifact_upload_id,
+          song_artifact_upload: uploadIntentBody.id,
         },
         lyrics: "Preview line one\nPreview line two",
         preview_window: {
           start_ms: 42_000,
-          duration_ms: 30_000,
+          duration_ms: 1_000,
         },
       },
       ctx.env,
@@ -661,22 +669,22 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     expect(previewWindowBundleBody.preview_status).toBe("pending")
     expect(previewWindowBundleBody.preview_window).toEqual({
       start_ms: 42_000,
-      duration_ms: 30_000,
+      duration_ms: 1_000,
     })
 
     const conflictingPreviewCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifacts`,
       {
         primary_audio: {
-          song_artifact_upload_id: uploadIntentBody.song_artifact_upload_id,
+          song_artifact_upload: uploadIntentBody.id,
         },
         lyrics: "Conflicting preview source",
         preview_audio: {
-          song_artifact_upload_id: "sau_conflicting_preview",
+          song_artifact_upload: "sau_conflicting_preview",
         },
         preview_window: {
           start_ms: 0,
-          duration_ms: 30_000,
+          duration_ms: 1_000,
         },
       },
       ctx.env,
@@ -733,8 +741,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "No ACR Song Club",
-      membership_mode: "open",
-      gate_rules: [],
+      membership_mode: "request",
       handle_policy: {
         policy_template: "standard",
       },
@@ -742,10 +749,10 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
+        id: string
       }
     }
-    const communityId = communityCreateBody.community.community_id
+    const communityId = communityCreateBody.community.id.replace(/^com_/, "")
 
     const uploadIntent = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
@@ -760,15 +767,15 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     )
     expect(uploadIntent.status).toBe(201)
     const uploadIntentBody = await json(uploadIntent) as {
-      song_artifact_upload_id: string
+      id: string
       upload_url: string
       storage_ref: string
     }
 
     const uploadContent = await app.request(
-      uploadIntentBody.upload_url,
+      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${uploadIntentBody.id}/content`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           authorization: `Bearer ${author.accessToken}`,
           "content-type": "application/octet-stream",
@@ -783,7 +790,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
       `http://pirate.test/communities/${communityId}/song-artifacts`,
       {
         primary_audio: {
-          song_artifact_upload_id: uploadIntentBody.song_artifact_upload_id,
+          song_artifact_upload: uploadIntentBody.id,
         },
         lyrics: "Line one\nLine two",
       },
@@ -792,7 +799,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     )
     expect(bundleCreate.status).toBe(201)
     const bundleBody = await json(bundleCreate) as {
-      song_artifact_bundle_id: string
+      id: string
       status: string
       moderation_status: string
       moderation_result?: {
@@ -819,7 +826,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
         song_mode: "original",
         rights_basis: "original",
         license_preset: "non-commercial",
-        song_artifact_bundle_id: bundleBody.song_artifact_bundle_id,
+        song_artifact_bundle: bundleBody.id,
       },
       ctx.env,
       author.accessToken,
@@ -828,11 +835,11 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     const postBody = await json(postCreate) as {
       post_type: string
       status: string
-      song_artifact_bundle_id: string | null
+      song_artifact_bundle: string | null
     }
     expect(postBody.post_type).toBe("song")
     expect(postBody.status).toBe("published")
-    expect(postBody.song_artifact_bundle_id).toBe(bundleBody.song_artifact_bundle_id)
+    expect(postBody.song_artifact_bundle).toBe(bundleBody.id)
   })
 
 })

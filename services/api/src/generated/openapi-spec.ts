@@ -3013,7 +3013,7 @@ const spec = {
       }
     },
     "/communities/{community_id}/song-artifact-uploads/{song_artifact_upload_id}/content": {
-      "put": {
+      "post": {
         "tags": [
           "Posts"
         ],
@@ -3065,7 +3065,7 @@ const spec = {
             "$ref": "#/components/responses/NotFound"
           }
         },
-        "operationId": "put_communities_by_community_id_song_artifact_uploads_by_song_artifact_upload_id_content"
+        "operationId": "post_communities_by_community_id_song_artifact_uploads_by_song_artifact_upload_id_content"
       }
     },
     "/communities/{community_id}/song-artifacts": {
@@ -3655,7 +3655,8 @@ const spec = {
                   "type": "object",
                   "required": [
                     "query",
-                    "communities"
+                    "communities",
+                    "has_more"
                   ],
                   "properties": {
                     "query": {
@@ -3683,6 +3684,9 @@ const spec = {
                           }
                         }
                       }
+                    },
+                    "has_more": {
+                      "type": "boolean"
                     }
                   }
                 }

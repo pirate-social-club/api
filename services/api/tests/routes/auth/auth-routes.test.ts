@@ -19,6 +19,10 @@ function makeJsonRequest(url: string, body: unknown, env: Env): Promise<Response
   ))
 }
 
+function rawUserId(publicUserId: string): string {
+  return publicUserId.replace(/^usr_/, "")
+}
+
 async function expectAuthError(response: Response): Promise<void> {
   expect(response.status).toBe(401)
   const body = await json(response) as { code?: unknown; message?: unknown; retryable?: unknown }
@@ -48,7 +52,7 @@ describe("auth routes", () => {
     expect(response.status).toBe(200)
     const body = await json(response) as {
       access_token: string
-      user: { user_id: string; primary_wallet_attachment_id: string | null; verification_state: string }
+      user: { id: string; primary_wallet_attachment: string | null; verification_state: string }
       profile: { global_handle: { label: string; issuance_source: string; free_rename_consumed: boolean } }
       onboarding: { generated_handle_assigned: boolean; cleanup_rename_available: boolean }
       wallet_attachments: unknown[]
@@ -56,7 +60,7 @@ describe("auth routes", () => {
 
     expect(typeof body.access_token).toBe("string")
     expect(body.user.verification_state).toBe("unverified")
-    expect(body.user.primary_wallet_attachment_id).toBeNull()
+    expect(body.user.primary_wallet_attachment).toBeNull()
     expect(body.wallet_attachments).toEqual([])
     expect(body.profile.global_handle.label).toMatch(/^[a-z]+-[a-z]+-\d{4}\.pirate$/)
     expect(body.profile.global_handle.issuance_source).toBe("generated_signup")
@@ -79,11 +83,11 @@ describe("auth routes", () => {
     expect(response.status).toBe(200)
     const body = await json(response) as {
       profile: { primary_wallet_address: string | null }
-      user: { primary_wallet_attachment_id: string | null }
+      user: { primary_wallet_attachment: string | null }
       wallet_attachments: unknown[]
     }
 
-    expect(body.user.primary_wallet_attachment_id).toBeNull()
+    expect(body.user.primary_wallet_attachment).toBeNull()
     expect(body.profile.primary_wallet_address).toBeNull()
     expect(body.wallet_attachments).toEqual([])
   })
@@ -115,20 +119,20 @@ describe("auth routes", () => {
     expect(second.status).toBe(200)
     const firstBody = await json(first) as {
       profile: { primary_wallet_address: string | null }
-      user: { primary_wallet_attachment_id: string | null }
+      user: { primary_wallet_attachment: string | null }
       wallet_attachments: Array<{ wallet_address: string; is_primary: boolean }>
     }
     const secondBody = await json(second) as {
-      user: { primary_wallet_attachment_id: string | null }
+      user: { primary_wallet_attachment: string | null }
       wallet_attachments: Array<{ wallet_address: string; is_primary: boolean }>
     }
 
     expect(firstBody.wallet_attachments).toHaveLength(2)
     expect(firstBody.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_address).toBe(secondaryWallet)
     expect(firstBody.profile.primary_wallet_address).toBe(secondaryWallet)
-    expect(typeof firstBody.user.primary_wallet_attachment_id).toBe("string")
+    expect(typeof firstBody.user.primary_wallet_attachment).toBe("string")
     expect(secondBody.wallet_attachments).toHaveLength(2)
-    expect(secondBody.user.primary_wallet_attachment_id).toBe(firstBody.user.primary_wallet_attachment_id)
+    expect(secondBody.user.primary_wallet_attachment).toBe(firstBody.user.primary_wallet_attachment)
   })
 
   test("JWT wallet claims persist source provenance against the database-backed schema", async () => {
@@ -149,7 +153,7 @@ describe("auth routes", () => {
 
       expect(response.status).toBe(200)
       const body = await json(response) as {
-        user: { user_id: string; primary_wallet_attachment_id: string | null }
+        user: { id: string; primary_wallet_attachment: string | null }
         profile: { primary_wallet_address: string | null }
         wallet_attachments: Array<{ wallet_address: string; is_primary: boolean; chain_namespace?: string }>
       }
@@ -165,14 +169,14 @@ describe("auth routes", () => {
           FROM wallet_attachments
           WHERE user_id = ?1
         `,
-        args: [body.user.user_id],
+        args: [rawUserId(body.user.id)],
       })
       expect(rows.rows).toEqual([{
         source_provider: "jwt",
         source_subject: `${ctx.env.AUTH_UPSTREAM_JWT_ISSUER}|jwt-db-wallet-user`,
         wallet_address_normalized: walletAddress.toLowerCase(),
       }])
-      expect(typeof body.user.primary_wallet_attachment_id).toBe("string")
+      expect(typeof body.user.primary_wallet_attachment).toBe("string")
     } finally {
       await ctx.cleanup()
     }
@@ -192,10 +196,10 @@ describe("auth routes", () => {
 
       expect(response.status).toBe(200)
       const body = await json(response) as {
-        user: { user_id: string }
+        user: { id: string }
         onboarding: { missing_requirements: string[] }
       }
-      expect(typeof body.user.user_id).toBe("string")
+      expect(typeof body.user.id).toBe("string")
       expect(body.onboarding.missing_requirements).toEqual(["unique_human_verification", "namespace_verification"])
     } finally {
       await ctx.cleanup()
@@ -219,9 +223,9 @@ describe("auth routes", () => {
       },
     }, env)
 
-    const firstBody = await json(first) as { user: { user_id: string } }
-    const secondBody = await json(second) as { user: { user_id: string } }
-    expect(firstBody.user.user_id).toBe(secondBody.user.user_id)
+    const firstBody = await json(first) as { user: { id: string } }
+    const secondBody = await json(second) as { user: { id: string } }
+    expect(firstBody.user.id).toBe(secondBody.user.id)
   })
 
   test("users/me and onboarding/status accept the returned Pirate access token", async () => {
@@ -234,7 +238,7 @@ describe("auth routes", () => {
         jwt,
       },
     }, env)
-    const exchangeBody = await json(exchange) as { access_token: string; user: { user_id: string } }
+    const exchangeBody = await json(exchange) as { access_token: string; user: { id: string } }
 
     const me = await app.request("http://pirate.test/users/me", {
       headers: {
@@ -242,8 +246,8 @@ describe("auth routes", () => {
       },
     }, env)
     expect(me.status).toBe(200)
-    const meBody = await json(me) as { user_id: string }
-    expect(meBody.user_id).toBe(exchangeBody.user.user_id)
+    const meBody = await json(me) as { id: string }
+    expect(meBody.id).toBe(exchangeBody.user.id)
 
     const onboarding = await app.request("http://pirate.test/onboarding/status", {
       headers: {
@@ -357,14 +361,14 @@ describe("auth routes", () => {
     expect(response.status).toBe(200)
     const body = await json(response) as {
       wallet_attachments: Array<{ wallet_address: string; is_primary: boolean }>
-      user: { primary_wallet_attachment_id: string | null }
+      user: { primary_wallet_attachment: string | null }
     }
 
     expect(body.wallet_attachments).toHaveLength(2)
     expect(body.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_address).toBe(
       "0x2222222222222222222222222222222222222222",
     )
-    expect(typeof body.user.primary_wallet_attachment_id).toBe("string")
+    expect(typeof body.user.primary_wallet_attachment).toBe("string")
   })
 
   test("session exchange syncs ENS handles for database-backed Privy wallets", async () => {

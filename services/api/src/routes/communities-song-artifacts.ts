@@ -41,7 +41,7 @@ export function registerCommunitySongArtifactRoutes(communities: Hono<Authentica
     return c.json(result, 201)
   })
 
-  communities.put("/:communityId/song-artifact-uploads/:songArtifactUploadId/content", async (c) => {
+  communities.post("/:communityId/song-artifact-uploads/:songArtifactUploadId/content", async (c) => {
     const { actor, communityId, communityRepository, userRepository } = await getResolvedCommunityRouteContext(c)
     const content = await readSongArtifactContent(c)
 

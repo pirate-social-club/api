@@ -45,18 +45,19 @@ describe("community agent post routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Pirate Agent Posting Club",
+membership_mode: "request",
       namespace: {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
     }, ctx.env, owner.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id: string }
     }
 
     await updateLocalCommunityAgentPostingPolicy({
       communityDbRoot: ctx.communityDbRoot,
-      communityId: communityCreateBody.community.community_id,
+      communityId: communityCreateBody.community.id.replace(/^com_/, ""),
       agentPostingPolicy: "allow",
       agentPostingScope: "top_level_and_replies",
       acceptedAgentOwnershipProviders: ["clawkey"],
@@ -64,7 +65,7 @@ describe("community agent post routes", () => {
 
     const member = await exchangeJwt(ctx.env, "community-agent-post-member")
     await completeUniqueHumanVerification(ctx.env, member.accessToken)
-    await addCommunityMember(ctx.communityDbRoot, communityCreateBody.community.community_id, member.userId)
+    await addCommunityMember(ctx.communityDbRoot, communityCreateBody.community.id.replace(/^com_/, ""), member.userId)
     await ctx.client.execute({
       sql: `
         INSERT INTO linked_handles (
@@ -124,7 +125,7 @@ describe("community agent post routes", () => {
     }
 
     const ownershipComplete = await requestJson(
-      `http://pirate.test/agent-ownership-sessions/${ownershipStartBody.agent_ownership_session_id}/complete`,
+      `http://pirate.test/agent-ownership-sessions/aos_${ownershipStartBody.agent_ownership_session_id}/complete`,
       {},
       ctx.env,
       member.accessToken,
@@ -135,7 +136,7 @@ describe("community agent post routes", () => {
       resolved_agent_ownership_record_id: string
     }
 
-    const createUrl = `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`
+    const createUrl = `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`
     const createPayload = {
       post_type: "text" as const,
       title: "Captain Bot says hi",
@@ -178,20 +179,20 @@ describe("community agent post routes", () => {
 
     expect(createdPost.status).toBe(201)
     const createdPostBody = await json(createdPost) as {
-      post_id: string
-      author_user_id: string | null
+      id: string
+      author_user: string | null
       authorship_mode: string
-      agent_id: string | null
-      agent_ownership_record_id: string | null
+      agent: string | null
+      agent_ownership_record: string | null
       agent_handle_snapshot: string | null
       agent_display_name_snapshot: string | null
       agent_owner_handle_snapshot: string | null
       agent_ownership_provider_snapshot: string | null
     }
-    expect(createdPostBody.author_user_id).toBe(member.userId)
+    expect(createdPostBody.author_user).toBe(`usr_${member.userId}`)
     expect(createdPostBody.authorship_mode).toBe("user_agent")
-    expect(createdPostBody.agent_id).toBe(ownershipCompleteBody.agent_id)
-    expect(createdPostBody.agent_ownership_record_id).toBe(ownershipCompleteBody.resolved_agent_ownership_record_id)
+    expect(createdPostBody.agent).toBe(`agt_${ownershipCompleteBody.agent_id}`)
+    expect(createdPostBody.agent_ownership_record).toBe(`aor_${ownershipCompleteBody.resolved_agent_ownership_record_id}`)
     expect(createdPostBody.agent_handle_snapshot).toBe("captain-bot.clawitzer")
     expect(createdPostBody.agent_display_name_snapshot).toBe("Captain Bot")
     expect(createdPostBody.agent_owner_handle_snapshot).toBe("communityagent.eth")
@@ -250,18 +251,19 @@ describe("community agent post routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Pirate Delegated Agent Posting Club",
+membership_mode: "request",
       namespace: {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
     }, ctx.env, owner.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id: string }
     }
 
     await updateLocalCommunityAgentPostingPolicy({
       communityDbRoot: ctx.communityDbRoot,
-      communityId: communityCreateBody.community.community_id,
+      communityId: communityCreateBody.community.id.replace(/^com_/, ""),
       agentPostingPolicy: "allow",
       agentPostingScope: "top_level_and_replies",
       acceptedAgentOwnershipProviders: ["clawkey"],
@@ -269,7 +271,7 @@ describe("community agent post routes", () => {
 
     const member = await exchangeJwt(ctx.env, "community-delegated-agent-post-member")
     await completeUniqueHumanVerification(ctx.env, member.accessToken)
-    await addCommunityMember(ctx.communityDbRoot, communityCreateBody.community.community_id, member.userId)
+    await addCommunityMember(ctx.communityDbRoot, communityCreateBody.community.id.replace(/^com_/, ""), member.userId)
 
     const registerChallenge = createSignedAgentChallenge({
       message: "clawkey-register-1738500000400",
@@ -303,7 +305,7 @@ describe("community agent post routes", () => {
     }
 
     const ownershipComplete = await requestJson(
-      `http://pirate.test/agent-ownership-sessions/${ownershipStartBody.agent_ownership_session_id}/complete`,
+      `http://pirate.test/agent-ownership-sessions/aos_${ownershipStartBody.agent_ownership_session_id}/complete`,
       {},
       ctx.env,
       member.accessToken,
@@ -325,7 +327,7 @@ describe("community agent post routes", () => {
     expect(issueResponse.status).toBe(200)
     const issueBody = await json(issueResponse) as { access_token: string }
 
-    const createUrl = `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`
+    const createUrl = `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`
     const createPayload = {
       post_type: "text" as const,
       title: "Delegated Captain Bot says hi",
@@ -368,10 +370,10 @@ describe("community agent post routes", () => {
     expect(createdPost.status).toBe(201)
     const createdPostBody = await json(createdPost) as {
       authorship_mode: string
-      agent_id: string | null
+      agent: string | null
     }
     expect(createdPostBody.authorship_mode).toBe("user_agent")
-    expect(createdPostBody.agent_id).toBe(ownershipCompleteBody.agent_id)
+    expect(createdPostBody.agent).toBe(`agt_${ownershipCompleteBody.agent_id}`)
   })
 
   test("community post create derives clawkey acceptance from the very lane and enforces the daily agent post cap", async () => {
@@ -386,18 +388,19 @@ describe("community agent post routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Pirate Derived Agent Posting Club",
+membership_mode: "request",
       namespace: {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
     }, ctx.env, owner.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id: string }
     }
 
     await updateLocalCommunityAgentPostingPolicy({
       communityDbRoot: ctx.communityDbRoot,
-      communityId: communityCreateBody.community.community_id,
+      communityId: communityCreateBody.community.id.replace(/^com_/, ""),
       agentPostingPolicy: "allow",
       agentPostingScope: "top_level_and_replies",
       humanVerificationLane: "very",
@@ -406,7 +409,7 @@ describe("community agent post routes", () => {
 
     const member = await exchangeJwt(ctx.env, "community-derived-agent-post-member")
     await completeUniqueHumanVerification(ctx.env, member.accessToken)
-    await addCommunityMember(ctx.communityDbRoot, communityCreateBody.community.community_id, member.userId)
+    await addCommunityMember(ctx.communityDbRoot, communityCreateBody.community.id.replace(/^com_/, ""), member.userId)
 
     const registerChallenge = createSignedAgentChallenge({
       message: "clawkey-register-1738500001100",
@@ -440,7 +443,7 @@ describe("community agent post routes", () => {
     }
 
     const ownershipComplete = await requestJson(
-      `http://pirate.test/agent-ownership-sessions/${ownershipStartBody.agent_ownership_session_id}/complete`,
+      `http://pirate.test/agent-ownership-sessions/aos_${ownershipStartBody.agent_ownership_session_id}/complete`,
       {},
       ctx.env,
       member.accessToken,
@@ -450,7 +453,7 @@ describe("community agent post routes", () => {
       agent_id: string
     }
 
-    const createUrl = `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`
+    const createUrl = `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`
     const firstPayload = {
       post_type: "text" as const,
       title: "Derived Bot first post",
@@ -546,18 +549,19 @@ describe("community agent post routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Pirate Empty KYA Allowlist Club",
+membership_mode: "request",
       namespace: {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
     }, ctx.env, owner.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id: string }
     }
 
     await updateLocalCommunityAgentPostingPolicy({
       communityDbRoot: ctx.communityDbRoot,
-      communityId: communityCreateBody.community.community_id,
+      communityId: communityCreateBody.community.id.replace(/^com_/, ""),
       agentPostingPolicy: "allow",
       agentPostingScope: "top_level_and_replies",
       humanVerificationLane: "very",
@@ -565,7 +569,7 @@ describe("community agent post routes", () => {
 
     const member = await exchangeJwt(ctx.env, "community-empty-kya-allowlist-member")
     await completeUniqueHumanVerification(ctx.env, member.accessToken)
-    await addCommunityMember(ctx.communityDbRoot, communityCreateBody.community.community_id, member.userId)
+    await addCommunityMember(ctx.communityDbRoot, communityCreateBody.community.id.replace(/^com_/, ""), member.userId)
 
     const registerChallenge = createSignedAgentChallenge({
       message: "clawkey-register-1738500001200",
@@ -599,7 +603,7 @@ describe("community agent post routes", () => {
     }
 
     const ownershipComplete = await requestJson(
-      `http://pirate.test/agent-ownership-sessions/${ownershipStartBody.agent_ownership_session_id}/complete`,
+      `http://pirate.test/agent-ownership-sessions/aos_${ownershipStartBody.agent_ownership_session_id}/complete`,
       {},
       ctx.env,
       member.accessToken,
@@ -609,7 +613,7 @@ describe("community agent post routes", () => {
       agent_id: string
     }
 
-    const createUrl = `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`
+    const createUrl = `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`
     const createPayload = {
       post_type: "text" as const,
       title: "No Allowlist Bot says hi",
@@ -666,18 +670,19 @@ describe("community agent post routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Pirate Future Proof Club",
+membership_mode: "request",
       namespace: {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
     }, ctx.env, owner.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id: string }
     }
 
     await updateLocalCommunityAgentPostingPolicy({
       communityDbRoot: ctx.communityDbRoot,
-      communityId: communityCreateBody.community.community_id,
+      communityId: communityCreateBody.community.id.replace(/^com_/, ""),
       agentPostingPolicy: "allow",
       agentPostingScope: "top_level_and_replies",
       acceptedAgentOwnershipProviders: ["clawkey"],
@@ -685,7 +690,7 @@ describe("community agent post routes", () => {
 
     const member = await exchangeJwt(ctx.env, "community-agent-future-proof-member")
     await completeUniqueHumanVerification(ctx.env, member.accessToken)
-    await addCommunityMember(ctx.communityDbRoot, communityCreateBody.community.community_id, member.userId)
+    await addCommunityMember(ctx.communityDbRoot, communityCreateBody.community.id.replace(/^com_/, ""), member.userId)
 
     const registerChallenge = createSignedAgentChallenge({
       message: "clawkey-register-1738500001300",
@@ -719,7 +724,7 @@ describe("community agent post routes", () => {
     }
 
     const ownershipComplete = await requestJson(
-      `http://pirate.test/agent-ownership-sessions/${ownershipStartBody.agent_ownership_session_id}/complete`,
+      `http://pirate.test/agent-ownership-sessions/aos_${ownershipStartBody.agent_ownership_session_id}/complete`,
       {},
       ctx.env,
       member.accessToken,
@@ -729,7 +734,7 @@ describe("community agent post routes", () => {
       agent_id: string
     }
 
-    const createUrl = `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`
+    const createUrl = `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`
     const createPayload = {
       post_type: "text" as const,
       title: "Future Bot says hi",

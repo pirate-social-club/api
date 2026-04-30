@@ -12,7 +12,8 @@ import {
   resolveBundlePostAnalysis,
   videoDescriptorFromUpload,
 } from "./song-artifact-descriptors"
-import type { CreatePostRequest, Env } from "../../types"
+import type { Env } from "../../env"
+import type { CreatePostRequest } from "../../types"
 import type {
   ResolvedSongPostBundle,
   ResolvedVideoPostAsset,

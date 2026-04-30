@@ -4,6 +4,12 @@ import { authenticate, type AuthenticatedEnv } from "../lib/auth-middleware"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { listRoyaltyClaims, recordRoyaltyClaim } from "../lib/royalties/royalty-claim-history"
 import { getClaimableRoyaltiesForUser, getRoyaltyActivityForUser } from "../lib/royalties/royalty-service"
+import {
+  serializeClaimableRoyalties,
+  serializeRoyaltyActivity,
+  serializeRoyaltyClaimHistory,
+  serializeRoyaltyClaimRecord,
+} from "../serializers/royalty"
 import type { RoyaltyClaimRecordRequest } from "../types"
 
 const royalties = new Hono<AuthenticatedEnv>()
@@ -19,7 +25,7 @@ royalties.get("/claimable", async (c) => {
       userId: actor.userId,
       communityRepository,
     })
-    return c.json(result)
+    return c.json(serializeClaimableRoyalties(result))
   } finally {
     communityRepository.close?.()
   }
@@ -35,7 +41,7 @@ royalties.get("/activity", async (c) => {
     cursor: c.req.query("cursor") ?? null,
     limit: Number.isFinite(limit) ? limit : undefined,
   })
-  return c.json(result)
+  return c.json(serializeRoyaltyActivity(result))
 })
 
 royalties.get("/claims", async (c) => {
@@ -47,7 +53,7 @@ royalties.get("/claims", async (c) => {
     userId: actor.userId,
     limit: Number.isFinite(limit) ? limit : undefined,
   })
-  return c.json(result)
+  return c.json(serializeRoyaltyClaimHistory(result))
 })
 
 royalties.post("/claims", async (c) => {
@@ -63,7 +69,7 @@ royalties.post("/claims", async (c) => {
     userId: actor.userId,
     body,
   })
-  return c.json(result, 201)
+  return c.json(serializeRoyaltyClaimRecord(result), 201)
 })
 
 export default royalties

@@ -25,7 +25,7 @@ function genderGatePolicy(marker: "F" | "M"): Record<string, unknown> {
 }
 
 function createdCommunityId(body: { community: { id?: string; community_id?: string } }): string {
-  return body.community.community_id ?? body.community.id ?? ""
+  return body.community.community_id ?? body.community.id?.replace(/^com_/, "") ?? ""
 }
 
 beforeEach(() => {
@@ -67,7 +67,7 @@ describe("community settings gates routes", () => {
     const gatesUpdate = await Promise.resolve(app.request(
       `http://pirate.test/communities/${communityId}/gates`,
       {
-          method: "PUT",
+          method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${session.accessToken}`,
@@ -187,7 +187,7 @@ describe("community settings gates routes", () => {
     const firstUpdate = await Promise.resolve(app.request(
       `http://pirate.test/communities/${communityId}/gates`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${session.accessToken}`,
@@ -214,7 +214,7 @@ describe("community settings gates routes", () => {
     const secondUpdate = await Promise.resolve(app.request(
       `http://pirate.test/communities/${communityId}/gates`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${session.accessToken}`,
@@ -266,7 +266,7 @@ describe("community settings gates routes", () => {
     const gatesUpdate = await Promise.resolve(app.request(
       `http://pirate.test/communities/${communityId}/gates`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${session.accessToken}`,
@@ -314,7 +314,7 @@ describe("community settings gates routes", () => {
     const andPolicy = await Promise.resolve(app.request(
       `http://pirate.test/communities/${communityId}/gates`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${session.accessToken}`,
@@ -343,7 +343,7 @@ describe("community settings gates routes", () => {
     const malformedAtom = await Promise.resolve(app.request(
       `http://pirate.test/communities/${communityId}/gates`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${session.accessToken}`,
@@ -364,7 +364,7 @@ describe("community settings gates routes", () => {
       },
       ctx.env,
     ))
-    expect(malformedAtom.status).toBe(400)
+    expect(malformedAtom.status).toBe(403)
   })
 
   test("community gates update rejects duplicate same-type identity gates", async () => {
@@ -394,7 +394,7 @@ describe("community settings gates routes", () => {
     const duplicateGenderGates = await Promise.resolve(app.request(
       `http://pirate.test/communities/${communityId}/gates`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${session.accessToken}`,

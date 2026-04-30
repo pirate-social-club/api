@@ -22,7 +22,8 @@ import {
   requireMemberAccess,
   requireVerifiedHuman,
 } from "./song-artifact-access"
-import type { CreateSongArtifactUploadRequest, Env, SongArtifactUpload } from "../../types"
+import type { Env } from "../../env"
+import type { CreateSongArtifactUploadRequest, SongArtifactUpload } from "../../types"
 import type { SongArtifactCommunityRepository } from "./song-artifact-types"
 
 function assertUploadRequest(input: CreateSongArtifactUploadRequest): void {

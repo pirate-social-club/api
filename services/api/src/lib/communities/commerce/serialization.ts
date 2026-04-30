@@ -204,7 +204,7 @@ export function serializePurchase(
     donation_amount_cents: usdToCents(row.donation_amount_usd),
     purchase_entitlement: entitlement.purchase_entitlement_id,
     entitlement_kind: entitlement.entitlement_kind,
-    entitlement_target_ref: entitlement.target_ref,
+    entitlement_target_ref: row.asset_id ? `asset_${entitlement.target_ref}` : entitlement.target_ref,
     created: unixSeconds(row.created_at),
   }
 }

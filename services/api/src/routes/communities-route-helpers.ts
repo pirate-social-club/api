@@ -8,7 +8,7 @@ import {
 } from "../lib/verification/verification-repository"
 import { badRequestError } from "../lib/errors"
 
-type CommunityRouteRepository = ReturnType<typeof getCommunityRepository>
+export type CommunityRouteRepository = ReturnType<typeof getCommunityRepository>
 
 type CommunityRouteContext = {
   actor: ActorContext | AdminActorContext

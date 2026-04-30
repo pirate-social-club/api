@@ -1,6 +1,6 @@
 import { Interface, JsonRpcProvider, getAddress, zeroPadValue } from "ethers"
 import { badRequestError } from "../../errors"
-import type { Env } from "../../../types"
+import type { Env } from "../../../env"
 import type { Client } from "../../sql-client"
 import { parseJsonValue, type PurchaseQuoteRow } from "./row-types"
 import { toChainRefString } from "./row-types"

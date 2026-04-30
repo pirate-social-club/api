@@ -28,7 +28,7 @@ export function serializeCommunity(community: Community): CurrentCommunityRespon
     status: community.status,
     provisioning_state: community.provisioning_state,
     artist_identity: community.artist_identity_id,
-    community_agent_user: community.community_agent_user_id ? `usr_${community.community_agent_user_id}` : community.community_agent_user_id,
+    community_agent_user: community.community_agent_user_id ? publicId(community.community_agent_user_id, "usr") : community.community_agent_user_id,
     membership_mode: community.membership_mode,
     allow_anonymous_identity: community.allow_anonymous_identity,
     anonymous_identity_scope: community.anonymous_identity_scope,
@@ -80,7 +80,7 @@ export function serializeCommunity(community: Community): CurrentCommunityRespon
     governance_mode: community.governance_mode,
     governance_backend: community.governance_backend as CurrentCommunityResponse["governance_backend"],
     gate_policy: community.gate_policy as CurrentCommunityResponse["gate_policy"],
-    created_by_user: `usr_${community.created_by_user_id}`,
+    created_by_user: publicId(community.created_by_user_id, "usr"),
     created: unixSeconds(community.created_at),
     localized_text: community.localized_text,
   }

@@ -1,5 +1,5 @@
 import { getAddress } from "ethers"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 import type { ConfigResult } from "../config-result"
 import {
   assertPkpPublicKeyMatchesAddress,

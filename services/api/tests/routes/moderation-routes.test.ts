@@ -30,17 +30,17 @@ async function exchangeJwt(env: Env, sub: string): Promise<{ accessToken: string
       jwt,
     },
   }, env)
-  const body = await json(response) as { access_token: string; user: { user_id: string } }
-  return { accessToken: body.access_token, userId: body.user.user_id }
+  const body = await json(response) as { access_token: string; user: { id: string } }
+  return { accessToken: body.access_token, userId: body.user.id.replace(/^usr_/, "") }
 }
 
 async function completeUniqueHumanVerification(env: Env, accessToken: string): Promise<void> {
   const verificationSession = await requestJson("http://pirate.test/verification-sessions", {
     provider: "self",
   }, env, accessToken)
-  const verificationBody = await json(verificationSession) as { verification_session_id: string }
+  const verificationBody = await json(verificationSession) as { id: string }
   await requestJson(
-    `http://pirate.test/verification-sessions/${verificationBody.verification_session_id}/complete`,
+    `http://pirate.test/verification-sessions/${verificationBody.id}/complete`,
     {},
     env,
     accessToken,
@@ -54,28 +54,29 @@ async function prepareVerifiedNamespace(env: Env, accessToken: string): Promise<
     family: "hns",
     root_label: "ModerationRoutesCoverageRoot",
   }, env, accessToken)
-  const namespaceBody = await json(namespaceSession) as { namespace_verification_session_id: string }
+  const namespaceBody = await json(namespaceSession) as { id: string }
   const completed = await requestJson(
-    `http://pirate.test/namespace-verification-sessions/${namespaceBody.namespace_verification_session_id}/complete`,
+    `http://pirate.test/namespace-verification-sessions/${namespaceBody.id}/complete`,
     {},
     env,
     accessToken,
   )
-  const completedBody = await json(completed) as { namespace_verification_id: string }
-  return completedBody.namespace_verification_id
+  const completedBody = await json(completed) as { namespace_verification: string }
+  return completedBody.namespace_verification
 }
 
 async function createCommunity(env: Env, accessToken: string, displayName: string): Promise<{ communityId: string }> {
   const namespaceVerificationId = await prepareVerifiedNamespace(env, accessToken)
   const response = await requestJson("http://pirate.test/communities", {
     display_name: displayName,
+    membership_mode: "request",
     namespace: {
-      namespace_verification_id: namespaceVerificationId,
+      namespace_verification: namespaceVerificationId,
     },
   }, env, accessToken)
   expect(response.status).toBe(202)
-  const body = await json(response) as { community: { community_id: string } }
-  return { communityId: body.community.community_id }
+  const body = await json(response) as { community: { id: string } }
+  return { communityId: body.community.id.replace(/^com_/, "") }
 }
 
 async function addCommunityMember(communityDbRoot: string, communityId: string, userId: string): Promise<void> {
@@ -138,10 +139,10 @@ describe("moderation routes", () => {
       owner.accessToken,
     )
     expect(createdPost.status).toBe(201)
-    const postBody = await json(createdPost) as { post_id: string }
+    const postBody = await json(createdPost) as { id: string }
 
     const report = await requestJson(
-      `http://pirate.test/communities/${community.communityId}/posts/${postBody.post_id}/reports`,
+      `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/reports`,
       {
         reason_code: "spam",
         note: "Looks like spam",
@@ -150,8 +151,9 @@ describe("moderation routes", () => {
       member.accessToken,
     )
     expect(report.status).toBe(201)
+    const rawPostId = postBody.id.replace(/^post_/, "")
     const reportBody = await json(report) as { post_id: string | null; comment_id: string | null; reason_code: string }
-    expect(reportBody.post_id).toBe(postBody.post_id)
+    expect(reportBody.post_id).toBe(rawPostId)
     expect(reportBody.comment_id).toBeNull()
     expect(reportBody.reason_code).toBe("spam")
 
@@ -167,7 +169,7 @@ describe("moderation routes", () => {
     expect(cases.status).toBe(200)
     const casesBody = await json(cases) as { items: Array<{ moderation_case_id: string; post_id: string | null; comment_id: string | null; status: string }> }
     expect(casesBody.items).toHaveLength(1)
-    expect(casesBody.items[0]?.post_id).toBe(postBody.post_id)
+    expect(casesBody.items[0]?.post_id).toBe(rawPostId)
     expect(casesBody.items[0]?.comment_id).toBeNull()
     expect(casesBody.items[0]?.status).toBe("open")
 
@@ -206,10 +208,10 @@ describe("moderation routes", () => {
       owner.accessToken,
     )
     expect(createdPost.status).toBe(201)
-    const postBody = await json(createdPost) as { post_id: string }
+    const postBody = await json(createdPost) as { id: string }
 
     const createdComment = await requestJson(
-      `http://pirate.test/communities/${community.communityId}/posts/${postBody.post_id}/comments`,
+      `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/comments`,
       {
         body: "Suspicious comment",
       },
@@ -217,11 +219,11 @@ describe("moderation routes", () => {
       member.accessToken,
     )
     expect(createdComment.status).toBe(201)
-    const commentBody = await json(createdComment) as { comment_id: string; status: string }
+    const commentBody = await json(createdComment) as { id: string; status: string }
     expect(commentBody.status).toBe("published")
 
     const report = await requestJson(
-      `http://pirate.test/communities/${community.communityId}/comments/${commentBody.comment_id}/reports`,
+      `http://pirate.test/communities/${community.communityId}/comments/${commentBody.id}/reports`,
       {
         reason_code: "harassment",
       },
@@ -229,9 +231,10 @@ describe("moderation routes", () => {
       owner.accessToken,
     )
     expect(report.status).toBe(201)
+    const rawCommentId = commentBody.id.replace(/^cmt_/, "")
     const reportBody = await json(report) as { post_id: string | null; comment_id: string | null }
     expect(reportBody.post_id).toBeNull()
-    expect(reportBody.comment_id).toBe(commentBody.comment_id)
+    expect(reportBody.comment_id).toBe(rawCommentId)
 
     const cases = await app.request(
       `http://pirate.test/communities/${community.communityId}/moderation/cases`,
@@ -246,7 +249,7 @@ describe("moderation routes", () => {
     const casesBody = await json(cases) as { items: Array<{ moderation_case_id: string; comment_id: string | null }> }
     const moderationCaseId = casesBody.items[0]?.moderation_case_id
     expect(typeof moderationCaseId).toBe("string")
-    expect(casesBody.items[0]?.comment_id).toBe(commentBody.comment_id)
+    expect(casesBody.items[0]?.comment_id).toBe(rawCommentId)
 
     const detailBefore = await app.request(
       `http://pirate.test/communities/${community.communityId}/moderation/cases/${moderationCaseId}`,
@@ -264,7 +267,7 @@ describe("moderation routes", () => {
       reports: Array<unknown>
     }
     expect(detailBeforeBody.case.status).toBe("open")
-    expect(detailBeforeBody.comment?.comment_id).toBe(commentBody.comment_id)
+    expect(detailBeforeBody.comment?.comment_id).toBe(rawCommentId)
     expect(detailBeforeBody.comment?.status).toBe("published")
     expect(detailBeforeBody.reports).toHaveLength(1)
 
@@ -285,7 +288,7 @@ describe("moderation routes", () => {
     }
     expect(actionBody.case.status).toBe("resolved")
     expect(typeof actionBody.case.resolved_at).toBe("string")
-    expect(actionBody.comment?.comment_id).toBe(commentBody.comment_id)
+    expect(actionBody.comment?.comment_id).toBe(rawCommentId)
     expect(actionBody.comment?.status).toBe("removed")
     expect(actionBody.actions).toHaveLength(1)
     expect(actionBody.actions[0]?.action_type).toBe("remove")

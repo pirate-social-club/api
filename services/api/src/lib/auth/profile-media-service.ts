@@ -1,5 +1,5 @@
 import { assertMediaObject, fetchMedia, uploadMedia } from "../media-storage"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 
 export type ProfileMediaKind = "avatar" | "cover"
 const maxBytesByKind: Record<ProfileMediaKind, number> = {

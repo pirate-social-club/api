@@ -4,7 +4,7 @@ import type { CommunityDatabaseBindingRepository } from "./db-community-reposito
 import { internalError, notFoundError } from "../errors"
 import { decryptCommunityDbCredential } from "./community-db-credential-crypto"
 import { buildLocalCommunityDbUrl, configureLocalCommunityDbClient, ensureCommunityDbSchema } from "./community-local-db"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 
 export async function openCommunityDb(
   env: Env,

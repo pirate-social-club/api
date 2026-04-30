@@ -1,5 +1,5 @@
 import { bytesToHex } from "../crypto"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 
 const encoder = new TextEncoder()
 

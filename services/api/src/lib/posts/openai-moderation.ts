@@ -1,4 +1,5 @@
-import type { Community, CreatePostRequest, Env, Post } from "../../types"
+import type { Env } from "../../env"
+import type { Community, CreatePostRequest, Post } from "../../types"
 
 type ModerationDecisionLevel = "allow" | "review" | "disallow"
 

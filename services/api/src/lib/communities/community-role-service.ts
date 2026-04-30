@@ -6,13 +6,14 @@ import type {
 } from "./db-community-repository"
 import { badRequestError, notFoundError } from "../errors"
 import { makeId, nowIso } from "../helpers"
-import { getControlPlaneClient } from "../runtime-deps"
+import { writeAuditEventForEnv } from "../audit"
 import { openCommunityDb } from "./community-db-factory"
 import {
   loadCommunityProjection,
   type CommunityMutationActor,
 } from "./create/shared"
-import type { Community, Env } from "../../types"
+import type { Env } from "../../env"
+import type { Community } from "../../types"
 
 export type ManageableCommunityRole = "admin" | "moderator"
 
@@ -65,29 +66,20 @@ async function recordCommunityRoleAudit(input: {
   createdAt: string
 }): Promise<void> {
   const actor = auditActor({ actor: input.actor })
-  await getControlPlaneClient(input.env).execute({
-    sql: `
-      INSERT INTO audit_log (
-        audit_event_id, actor_type, actor_id, action, target_type, target_id, community_id, metadata_json, created_at
-      ) VALUES (
-        ?1, ?2, ?3, ?4, 'user', ?5, ?6, ?7, ?8
-      )
-    `,
-    args: [
-      makeId("aud"),
-      actor.actorType,
-      actor.actorId,
-      input.action,
-      input.targetUserId,
-      input.communityId,
-      JSON.stringify({
-        role: input.role,
-        changed: input.changed,
-        acting_user_id: input.actor.userId,
-        admin_scope: "adminOverride" in input.actor ? input.actor.adminOverride.scope : null,
-      }),
-      input.createdAt,
-    ],
+  await writeAuditEventForEnv(input.env, {
+    action: input.action,
+    actorId: actor.actorId,
+    actorType: actor.actorType,
+    communityId: input.communityId,
+    createdAt: input.createdAt,
+    targetId: input.targetUserId,
+    targetType: "user",
+    metadata: {
+      role: input.role,
+      changed: input.changed,
+      acting_user_id: input.actor.userId,
+      admin_scope: "adminOverride" in input.actor ? input.actor.adminOverride.scope : null,
+    },
   })
 }
 

@@ -1,4 +1,5 @@
-import type { Env, SongArtifactUpload } from "../../types"
+import type { Env } from "../../env"
+import type { SongArtifactUpload } from "../../types"
 import { fetchSongArtifactBytes } from "./song-artifact-storage"
 import { trimEnv, type AudioIdentificationOutcome } from "./song-artifact-analysis-types"
 

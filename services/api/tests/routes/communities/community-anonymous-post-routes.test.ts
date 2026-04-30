@@ -32,23 +32,24 @@ describe("community anonymous post routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Pirate Anonymous Posting Club",
+membership_mode: "request",
       namespace: {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
     }, ctx.env, verifiedCreator.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id: string }
     }
 
     const unverifiedMember = await exchangeJwt(ctx.env, "community-anon-unverified-member")
     await addCommunityMember(
       ctx.communityDbRoot,
-      communityCreateBody.community.community_id,
+      communityCreateBody.community.id.replace(/^com_/, ""),
       unverifiedMember.userId,
     )
     const deniedPost = await requestJson(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
       {
         post_type: "text",
         title: "Blocked anonymous post",
@@ -76,17 +77,18 @@ describe("community anonymous post routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Pirate Anonymous Club",
+membership_mode: "request",
       namespace: {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
     }, ctx.env, session.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id: string }
     }
 
     const deniedPost = await requestJson(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
       {
         post_type: "text",
         identity_mode: "anonymous",
@@ -113,21 +115,22 @@ describe("community anonymous post routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Pirate Anonymous Disabled Club",
+membership_mode: "request",
     }, ctx.env, session.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id: string }
     }
 
     await updateLocalCommunityAnonymousPolicy({
       allowAnonymousIdentity: false,
       anonymousIdentityScope: null,
       communityDbRoot: ctx.communityDbRoot,
-      communityId: communityCreateBody.community.community_id,
+      communityId: communityCreateBody.community.id.replace(/^com_/, ""),
     })
 
     const deniedPost = await requestJson(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
       {
         post_type: "text",
         identity_mode: "anonymous",
@@ -155,21 +158,22 @@ describe("community anonymous post routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Pirate Anonymous Scope Club",
+membership_mode: "request",
     }, ctx.env, session.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id: string }
     }
 
     await updateLocalCommunityAnonymousPolicy({
       allowAnonymousIdentity: true,
       anonymousIdentityScope: "thread_stable",
       communityDbRoot: ctx.communityDbRoot,
-      communityId: communityCreateBody.community.community_id,
+      communityId: communityCreateBody.community.id.replace(/^com_/, ""),
     })
 
     const deniedPost = await requestJson(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
       {
         post_type: "text",
         identity_mode: "anonymous",
@@ -197,21 +201,22 @@ describe("community anonymous post routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Pirate Anonymous Snapshot Club",
+membership_mode: "request",
     }, ctx.env, session.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id: string }
     }
 
     await updateLocalCommunityAnonymousPolicy({
       allowAnonymousIdentity: true,
       anonymousIdentityScope: "community_stable",
       communityDbRoot: ctx.communityDbRoot,
-      communityId: communityCreateBody.community.community_id,
+      communityId: communityCreateBody.community.id.replace(/^com_/, ""),
     })
 
     const createdPost = await requestJson(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/posts`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
       {
         post_type: "text",
         identity_mode: "anonymous",

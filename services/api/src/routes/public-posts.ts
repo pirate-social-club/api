@@ -18,10 +18,17 @@ import {
   serializeLinkHeader,
   type StructuredAccessLinks,
 } from "../lib/agent-discovery/structured-links"
+import {
+  markdownResponse,
+  omittedSurfacesMarkdown,
+  wantsMarkdown,
+} from "../lib/agent-discovery/markdown-helpers"
 import { structuredSurfaceDisabled } from "../lib/errors"
 import { omitThreadBody, type ThreadBodyOmittedPostResponse } from "../lib/posts/thread-body-omission"
 import { serializeCommentListResponse } from "../serializers/comment"
-import type { Env, LocalizedPostResponse } from "../types"
+import { serializeLocalizedPostResponse } from "../serializers/post"
+import type { Env } from "../env"
+import type { LocalizedPostResponse } from "../types"
 import { decodePublicPostId, publicCommunityId, publicPostId } from "../lib/public-ids"
 
 const publicPosts = new Hono<{ Bindings: Env }>()
@@ -57,36 +64,6 @@ function publicPostLinks(input: {
     }
   }
   return links
-}
-
-function markdownResponse(markdown: string, links: StructuredAccessLinks): Response {
-  return new Response(markdown, {
-    status: 200,
-    headers: {
-      "content-type": "text/markdown; charset=utf-8",
-      Link: serializeLinkHeader(links),
-    },
-  })
-}
-
-function wantsMarkdown(request: Request, format: string | null | undefined): boolean {
-  if (format === "markdown" || format === "md") {
-    return true
-  }
-  const accept = request.headers.get("accept") ?? ""
-  return accept.includes("text/markdown")
-}
-
-function omittedSurfacesMarkdown(omittedSurfaces: OmittedStructuredSurface[]): string[] {
-  if (!omittedSurfaces.length) {
-    return []
-  }
-  return [
-    "## Omitted surfaces",
-    "",
-    ...omittedSurfaces.map((surface) => `- ${surface.surface}: ${surface.reason}`),
-    "",
-  ]
 }
 
 function postMarkdown(input: {
@@ -147,8 +124,8 @@ publicPosts.get("/:postId/top-comments", async (c) => {
   if (!policy.included_surfaces.top_comments) {
     const omittedSurface = omittedSurfaceForPolicy(policy, "top_comments")
     throw structuredSurfaceDisabled("Top comments are not available for structured access", {
-      community_id: post.post.community_id,
-      post_id: post.post.post_id,
+      community: publicCommunityId(post.post.community_id),
+      post: publicPostId(post.post.post_id),
       surface: "top_comments",
       reason: omittedSurface?.reason ?? "community_opt_out",
     })
@@ -193,7 +170,7 @@ publicPosts.get("/:postId/top-comments", async (c) => {
     top_comments_limit: topCommentsLimit(),
     omitted_surfaces: [],
     links,
-    community_id: post.post.community_id,
+    community: publicCommunityId(post.post.community_id),
   }
   if (wantsMarkdown(c.req.raw, c.req.query("format"))) {
     return markdownResponse(topCommentsMarkdown({
@@ -223,8 +200,8 @@ publicPosts.get("/:postId", async (c) => {
   if (!policy.included_surfaces.thread_cards) {
     const omittedSurface = omittedSurfaceForPolicy(policy, "thread_cards")
     throw structuredSurfaceDisabled("Thread cards are not available for structured access", {
-      community_id: result.post.community_id,
-      post_id: result.post.post_id,
+      community: publicCommunityId(result.post.community_id),
+      post: publicPostId(result.post.post_id),
       surface: "thread_cards",
       reason: omittedSurface?.reason ?? "community_opt_out",
     })
@@ -236,14 +213,17 @@ publicPosts.get("/:postId", async (c) => {
     includeTopComments: policy.included_surfaces.top_comments,
   })
   const omittedSurfaces = omittedSurfacesForPolicy(policy, ["thread_bodies", "top_comments"])
+  const markdownBody = policy.included_surfaces.thread_bodies ? result : omitThreadBody(result)
   const responseBody = {
-    ...(policy.included_surfaces.thread_bodies ? result : omitThreadBody(result)),
+    ...(policy.included_surfaces.thread_bodies
+      ? serializeLocalizedPostResponse(result)
+      : serializeLocalizedPostResponse(omitThreadBody(result))),
     omitted_surfaces: omittedSurfaces,
     links,
   }
   if (wantsMarkdown(c.req.raw, c.req.query("format"))) {
     return markdownResponse(postMarkdown({
-      response: responseBody,
+      response: markdownBody,
       links,
       omittedSurfaces,
     }), links)

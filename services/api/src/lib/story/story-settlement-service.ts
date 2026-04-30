@@ -1,5 +1,5 @@
 import { JsonRpcProvider, Wallet, getAddress } from "ethers"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 import { resolveDirectTxGasPolicy, sendContractTxWithPolicy } from "../evm-direct-tx"
 import { parseExpectedEvmAddress } from "../evm-signer"
 import { resolveStorySettlementDirectSigner } from "./story-direct-signer"

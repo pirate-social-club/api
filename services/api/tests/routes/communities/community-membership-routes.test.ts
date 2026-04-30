@@ -105,11 +105,11 @@ describe("community membership routes", () => {
     )
     expect(creatorTasks.status).toBe(200)
     const creatorTasksBody = await json(creatorTasks) as {
-      items: Array<{ type: string; subject_id: string; payload: Record<string, unknown> | null }>
+      items: Array<{ type: string; subject: string; payload: Record<string, unknown> | null }>
     }
     expect(creatorTasksBody.items.some((task) => (
       task.type === "membership_review"
-      && task.subject_id === communityId
+      && task.subject === communityId
       && task.payload?.request_count === 1
     ))).toBe(true)
 
@@ -121,8 +121,8 @@ describe("community membership routes", () => {
     expect(list.status).toBe(200)
     const listBody = await json(list) as {
       items: Array<{
-        membership_request_id: string
-        applicant_user_id: string
+        id: string
+        applicant_user: string
         applicant_handle?: string | null
         note?: string | null
         status: string
@@ -130,12 +130,12 @@ describe("community membership routes", () => {
       next_cursor: string | null
     }
     expect(listBody.items).toHaveLength(1)
-    expect(listBody.items[0]?.applicant_user_id).toBe(joiner.userId)
+    expect(listBody.items[0]?.applicant_user).toBe(`usr_${joiner.userId}`)
     expect(listBody.items[0]?.applicant_handle).toBeTruthy()
     expect(listBody.items[0]?.note).toBe("I can help moderate release threads.")
     expect(listBody.items[0]?.status).toBe("pending")
 
-    const requestId = listBody.items[0]?.membership_request_id ?? ""
+    const requestId = listBody.items[0]?.id ?? ""
     const unauthorizedApprove = await app.request(
       `http://pirate.test/communities/${communityId}/membership-requests/${requestId}/approve`,
       {
@@ -182,11 +182,11 @@ describe("community membership routes", () => {
     )
     expect(creatorTasksAfterApproval.status).toBe(200)
     const creatorTasksAfterApprovalBody = await json(creatorTasksAfterApproval) as {
-      items: Array<{ type: string; subject_id: string }>
+      items: Array<{ type: string; subject: string }>
     }
     expect(creatorTasksAfterApprovalBody.items.some((task) => (
       task.type === "membership_review"
-      && task.subject_id === communityId
+      && task.subject === communityId
     ))).toBe(false)
 
     const rejectedJoiner = await exchangeJwt(ctx.env, "community-request-lifecycle-rejected-joiner")
@@ -205,9 +205,9 @@ describe("community membership routes", () => {
       ctx.env,
     )
     const rejectionListBody = await json(rejectionList) as {
-      items: Array<{ membership_request_id: string; applicant_user_id: string }>
+      items: Array<{ id: string; applicant_user: string }>
     }
-    const rejectedRequestId = rejectionListBody.items.find((item) => item.applicant_user_id === rejectedJoiner.userId)?.membership_request_id ?? ""
+    const rejectedRequestId = rejectionListBody.items.find((item) => item.applicant_user === `usr_${rejectedJoiner.userId}`)?.id ?? ""
     expect(rejectedRequestId).toBeTruthy()
 
     const reject = await app.request(
@@ -326,8 +326,8 @@ describe("community membership routes", () => {
     )
 
     expect(allowedJoin.status).toBe(200)
-    const allowedBody = await json(allowedJoin) as { community_id: string; status: string }
-    expect(allowedBody.community_id).toBe(communityId)
+    const allowedBody = await json(allowedJoin) as { community: string; status: string }
+    expect(allowedBody.community).toBe(communityId)
     expect(allowedBody.status).toBe("joined")
   })
 
@@ -398,15 +398,15 @@ describe("community membership routes", () => {
     expect(deniedJoin.status).toBe(403)
     const deniedBody = await json(deniedJoin) as { code: string; message: string }
     expect(deniedBody.code).toBe("gate_failed")
-    expect(deniedBody.message).toBe("Community membership requirements are not satisfied")
+    expect(deniedBody.message).toBe("Verification is required to join this community")
 
     const selfJoiner = await exchangeJwt(ctx.env, "community-gated-self-joiner")
     const selfVerification = await requestJson("http://pirate.test/verification-sessions", {
       provider: "self",
     }, ctx.env, selfJoiner.accessToken)
-    const selfVerificationBody = await json(selfVerification) as { verification_session_id: string }
+    const selfVerificationBody = await json(selfVerification) as { id: string }
     await requestJson(
-      `http://pirate.test/verification-sessions/${selfVerificationBody.verification_session_id}/complete`,
+      `http://pirate.test/verification-sessions/${selfVerificationBody.id}/complete`,
       {},
       ctx.env,
       selfJoiner.accessToken,
@@ -424,8 +424,8 @@ describe("community membership routes", () => {
     )
 
     expect(allowedJoin.status).toBe(200)
-    const allowedBody = await json(allowedJoin) as { community_id: string; status: string }
-    expect(allowedBody.community_id).toBe(communityId)
+    const allowedBody = await json(allowedJoin) as { community: string; status: string }
+    expect(allowedBody.community).toBe(communityId)
     expect(allowedBody.status).toBe("joined")
   })
 

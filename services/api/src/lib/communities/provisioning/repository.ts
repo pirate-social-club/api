@@ -1,6 +1,6 @@
 import type { Client } from "../../sql-client"
 import { internalError } from "../../errors"
-import { makeId } from "../../helpers"
+import { auditEventInsert } from "../../audit"
 import {
   getCommunityRowById,
   getCommunityDatabaseBindingRowById,
@@ -276,7 +276,6 @@ export async function markCommunityProvisioningSucceeded(
   job: JobRow
 }> {
   const tx = await client.transaction("write")
-  const auditEventId = makeId("aud")
 
   try {
     await tx.batch([
@@ -302,16 +301,16 @@ export async function markCommunityProvisioningSucceeded(
         `,
         args: [input.jobId, input.resultRef, input.createdAt],
       },
-      {
-        sql: `
-          INSERT INTO audit_log (
-            audit_event_id, actor_type, actor_id, action, target_type, target_id, community_id, metadata_json, created_at
-          ) VALUES (
-            ?1, 'user', ?2, 'community.provisioning_succeeded', 'community', ?3, ?3, ?4, ?5
-          )
-        `,
-        args: [auditEventId, input.actorUserId, input.communityId, JSON.stringify(input.metadata), input.createdAt],
-      },
+      auditEventInsert({
+        action: "community.provisioning_succeeded",
+        actorId: input.actorUserId,
+        actorType: "user",
+        communityId: input.communityId,
+        createdAt: input.createdAt,
+        targetId: input.communityId,
+        targetType: "community",
+        metadata: input.metadata,
+      }),
     ])
 
     const communityRow = await getCommunityRowById(tx, input.communityId)
@@ -447,7 +446,6 @@ export async function markCommunityProvisioningFailed(
   },
 ): Promise<void> {
   const tx = await client.transaction("write")
-  const auditEventId = makeId("aud")
 
   try {
     await tx.batch([
@@ -470,16 +468,16 @@ export async function markCommunityProvisioningFailed(
         `,
         args: [input.jobId, input.errorCode, input.createdAt],
       },
-      {
-        sql: `
-          INSERT INTO audit_log (
-            audit_event_id, actor_type, actor_id, action, target_type, target_id, community_id, metadata_json, created_at
-          ) VALUES (
-            ?1, 'user', ?2, 'community.provisioning_failed', 'community', ?3, ?3, ?4, ?5
-          )
-        `,
-        args: [auditEventId, input.actorUserId, input.communityId, JSON.stringify(input.metadata), input.createdAt],
-      },
+      auditEventInsert({
+        action: "community.provisioning_failed",
+        actorId: input.actorUserId,
+        actorType: "user",
+        communityId: input.communityId,
+        createdAt: input.createdAt,
+        targetId: input.communityId,
+        targetType: "community",
+        metadata: input.metadata,
+      }),
     ])
 
     await tx.commit()

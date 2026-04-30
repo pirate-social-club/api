@@ -9,6 +9,12 @@ import {
   markRead,
   dismissTask,
 } from "../lib/notifications/notification-read-service"
+import {
+  serializeNotificationFeed,
+  serializeNotificationSummary,
+  serializeNotificationTasks,
+  serializeUserTask,
+} from "../serializers/notification"
 
 const notifications = new Hono<AuthenticatedEnv>()
 
@@ -17,13 +23,13 @@ notifications.use("*", authenticate)
 notifications.get("/summary", async (c) => {
   const actor = c.get("actor")
   const summary = await getNotificationsSummary({ env: c.env, userId: actor.userId })
-  return c.json(summary)
+  return c.json(serializeNotificationSummary(summary))
 })
 
 notifications.get("/tasks", async (c) => {
   const actor = c.get("actor")
   const tasks = await getNotificationsTasks({ env: c.env, userId: actor.userId })
-  return c.json(tasks)
+  return c.json(serializeNotificationTasks(tasks))
 })
 
 notifications.get("/feed", async (c) => {
@@ -38,7 +44,7 @@ notifications.get("/feed", async (c) => {
     cursor,
     limit,
   })
-  return c.json(feed)
+  return c.json(serializeNotificationFeed(feed))
 })
 
 notifications.post("/mark-read", async (c) => {
@@ -86,7 +92,7 @@ notifications.post("/dismiss-task", async (c) => {
     })
   }
 
-  return c.json(result.task)
+  return c.json(serializeUserTask(result.task))
 })
 
 export default notifications

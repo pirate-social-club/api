@@ -64,13 +64,14 @@ describe("admin auth middleware", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Admin Test Club",
+membership_mode: "request",
       handle_policy: { policy_template: "standard" },
     }, ctx.env, ownerSession.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id: string }
     }
-    const communityId = communityCreateBody.community.community_id
+    const communityId = communityCreateBody.community.id.replace(/^com_/, "")
 
     const otherSession = await exchangeJwt(ctx.env, "admin-test-acting-user")
     const actingUserId = otherSession.userId
@@ -78,7 +79,7 @@ describe("admin auth middleware", () => {
     const rulesUpdate = await Promise.resolve(app.request(
       `http://pirate.test/communities/${communityId}/rules`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           "content-type": "application/json",
           "x-admin-token": ADMIN_TOKEN,
@@ -94,9 +95,9 @@ describe("admin auth middleware", () => {
     ))
     expect(rulesUpdate.status).toBe(200)
     const rulesBody = await json(rulesUpdate) as {
-      community_id: string
+      id: string
     }
-    expect(rulesBody.community_id).toBe(communityId)
+    expect(rulesBody.id).toBe(`com_${communityId}`)
 
     const auditRows = await ctx.client.execute({
       sql: `
@@ -129,13 +130,14 @@ describe("admin auth middleware", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Admin Gates Club",
+membership_mode: "request",
       handle_policy: { policy_template: "standard" },
     }, ctx.env, ownerSession.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id: string }
     }
-    const communityId = communityCreateBody.community.community_id
+    const communityId = communityCreateBody.community.id.replace(/^com_/, "")
 
     const otherSession = await exchangeJwt(ctx.env, "admin-gates-actor")
     const actingUserId = otherSession.userId
@@ -143,7 +145,7 @@ describe("admin auth middleware", () => {
     const gatesUpdate = await Promise.resolve(app.request(
       `http://pirate.test/communities/${communityId}/gates`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           "content-type": "application/json",
           "x-admin-token": ADMIN_TOKEN,
@@ -153,15 +155,16 @@ describe("admin auth middleware", () => {
           membership_mode: "gated",
           default_age_gate_policy: "none",
           allow_anonymous_identity: false,
-          gate_rules: [{
-            scope: "membership",
-            gate_family: "identity_proof",
-            gate_type: "unique_human",
-            proof_requirements: [{
-              proof_type: "unique_human",
-              accepted_providers: ["self"],
-            }],
-          }],
+          gate_policy: {
+            version: 1,
+            expression: {
+              op: "gate",
+              gate: {
+                type: "unique_human",
+                provider: "self",
+              },
+            },
+          },
         }),
       },
       ctx.env,
@@ -169,10 +172,10 @@ describe("admin auth middleware", () => {
     expect(gatesUpdate.status).toBe(200)
     const gatesBody = await json(gatesUpdate) as {
       membership_mode: string
-      gate_rules?: Array<{ gate_type: string }> | null
+      gate_policy?: { expression?: { gate?: { type?: string } } } | null
     }
     expect(gatesBody.membership_mode).toBe("gated")
-    expect(gatesBody.gate_rules?.[0]?.gate_type).toBe("unique_human")
+    expect(gatesBody.gate_policy?.expression?.gate?.type).toBe("unique_human")
   })
 
   test("admin token can create seed posts on another users community", async () => {
@@ -184,13 +187,14 @@ describe("admin auth middleware", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Admin Seed Post Club",
+membership_mode: "request",
       handle_policy: { policy_template: "standard" },
     }, ctx.env, ownerSession.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id: string }
     }
-    const communityId = communityCreateBody.community.community_id
+    const communityId = communityCreateBody.community.id.replace(/^com_/, "")
 
     const otherSession = await exchangeJwt(ctx.env, "admin-seed-post-actor")
     const actingUserId = otherSession.userId
@@ -217,10 +221,10 @@ describe("admin auth middleware", () => {
     ))
     expect(seedPost.status === 201 || seedPost.status === 202).toBe(true)
     const postBody = await json(seedPost) as {
-      post_id: string
+      id: string
       status: string
     }
-    expect(postBody.post_id).toBeTruthy()
+    expect(postBody.id).toBeTruthy()
 
     const auditRows = await ctx.client.execute({
       sql: `
@@ -244,7 +248,7 @@ describe("admin auth middleware", () => {
     expect(metadata.idempotency_key).toBe("admin-test-seed-001")
 
     const seedComment = await Promise.resolve(app.request(
-      `http://pirate.test/communities/${communityId}/posts/${postBody.post_id}/comments`,
+      `http://pirate.test/communities/${communityId}/posts/${postBody.id}/comments`,
       {
         method: "POST",
         headers: {
@@ -262,10 +266,10 @@ describe("admin auth middleware", () => {
       ctx.env,
     ))
     expect(seedComment.status).toBe(201)
-    const commentBody = await json(seedComment) as { comment_id: string }
-    expect(commentBody.comment_id).toBeTruthy()
+    const commentBody = await json(seedComment) as { id: string }
+    expect(commentBody.id).toBeTruthy()
     const duplicateSeedComment = await Promise.resolve(app.request(
-      `http://pirate.test/communities/${communityId}/posts/${postBody.post_id}/comments`,
+      `http://pirate.test/communities/${communityId}/posts/${postBody.id}/comments`,
       {
         method: "POST",
         headers: {
@@ -283,8 +287,8 @@ describe("admin auth middleware", () => {
       ctx.env,
     ))
     expect(duplicateSeedComment.status).toBe(201)
-    const duplicateCommentBody = await json(duplicateSeedComment) as { comment_id: string }
-    expect(duplicateCommentBody.comment_id).toBe(commentBody.comment_id)
+    const duplicateCommentBody = await json(duplicateSeedComment) as { id: string }
+    expect(duplicateCommentBody.id).toBe(commentBody.id)
 
     const commentAuditRows = await ctx.client.execute({
       sql: `
@@ -297,7 +301,7 @@ describe("admin auth middleware", () => {
     expect(commentAuditRows.rows).toHaveLength(2)
 
     const postVote = await Promise.resolve(app.request(
-      `http://pirate.test/posts/${postBody.post_id}/vote`,
+      `http://pirate.test/posts/${postBody.id}/vote`,
       {
         method: "POST",
         headers: {
@@ -321,7 +325,7 @@ describe("admin auth middleware", () => {
     expect(postVoteAuditRows.rows).toHaveLength(1)
 
     const commentVote = await Promise.resolve(app.request(
-      `http://pirate.test/comments/${commentBody.comment_id}/vote`,
+      `http://pirate.test/comments/${commentBody.id}/vote`,
       {
         method: "POST",
         headers: {
@@ -347,7 +351,7 @@ describe("admin auth middleware", () => {
     const profileUpdate = await Promise.resolve(app.request(
       "http://pirate.test/profiles/me",
       {
-        method: "PATCH",
+        method: "POST",
         headers: {
           "content-type": "application/json",
           "x-admin-token": ADMIN_TOKEN,
@@ -378,17 +382,18 @@ describe("admin auth middleware", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Wrong Token Club",
+membership_mode: "request",
       handle_policy: { policy_template: "standard" },
     }, ctx.env, ownerSession.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id: string }
     }
 
     const rulesUpdate = await Promise.resolve(app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/rules`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/rules`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           "content-type": "application/json",
           "x-admin-token": "wrong-token",
@@ -450,7 +455,7 @@ describe("admin auth middleware", () => {
       ))
       expect(created.status).toBe(201)
       const createdBody = await json(created) as {
-        namespace_verification_session_id: string
+        id: string
         status: string
         setup_nameservers: string[] | null
       }
@@ -458,7 +463,7 @@ describe("admin auth middleware", () => {
       expect(createdBody.setup_nameservers).toEqual(["ns1.pirate.sc."])
 
       const fetched = await Promise.resolve(app.request(
-        `http://pirate.test/namespace-verification-sessions/${createdBody.namespace_verification_session_id}`,
+        `http://pirate.test/namespace-verification-sessions/${createdBody.id}`,
         {
           method: "GET",
           headers: {
@@ -487,17 +492,18 @@ describe("admin auth middleware", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "No User ID Club",
+membership_mode: "request",
       handle_policy: { policy_template: "standard" },
     }, ctx.env, ownerSession.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id: string }
     }
 
     const rulesUpdate = await Promise.resolve(app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/rules`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/rules`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           "content-type": "application/json",
           "x-admin-token": ADMIN_TOKEN,
@@ -520,19 +526,20 @@ describe("admin auth middleware", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Non Owner Club",
+membership_mode: "request",
       handle_policy: { policy_template: "standard" },
     }, ctx.env, ownerSession.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id: string }
     }
 
     const strangerSession = await exchangeJwt(ctx.env, "admin-non-owner-stranger")
 
     const rulesUpdate = await Promise.resolve(app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/rules`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/rules`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${strangerSession.accessToken}`,
@@ -555,17 +562,18 @@ describe("admin auth middleware", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "No Config Club",
+membership_mode: "request",
       handle_policy: { policy_template: "standard" },
     }, ctx.env, ownerSession.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id: string }
     }
 
     const rulesUpdate = await Promise.resolve(app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/rules`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/rules`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           "content-type": "application/json",
           "x-admin-token": "any-token",

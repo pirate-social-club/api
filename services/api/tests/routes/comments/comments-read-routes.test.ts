@@ -45,10 +45,10 @@ describe("comment read routes", () => {
       creator.accessToken,
     )
     expect(createdPost.status).toBe(201)
-    const postBody = await json(createdPost) as { post_id: string }
+    const postBody = await json(createdPost) as { id: string }
 
     const topLevelComment = await requestJson(
-      `http://pirate.test/communities/${community.communityId}/posts/${postBody.post_id}/comments`,
+      `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/comments`,
       {
         body: "Hello comment from Pirate",
       },
@@ -56,10 +56,10 @@ describe("comment read routes", () => {
       creator.accessToken,
     )
     expect(topLevelComment.status).toBe(201)
-    const topLevelBody = await json(topLevelComment) as { comment_id: string }
+    const topLevelBody = await json(topLevelComment) as { id: string }
 
     const reply = await requestJson(
-      `http://pirate.test/comments/${topLevelBody.comment_id}/replies`,
+      `http://pirate.test/comments/${topLevelBody.id}/replies`,
       {
         body: "Reply from Pirate",
       },
@@ -67,18 +67,18 @@ describe("comment read routes", () => {
       member.accessToken,
     )
     expect(reply.status).toBe(201)
-    const replyBody = await json(reply) as { comment_id: string }
+    const replyBody = await json(reply) as { id: string }
 
     await insertCommentTranslation({
       communityDbRoot: ctx.communityDbRoot,
       communityId: community.communityId,
-      commentId: topLevelBody.comment_id,
+      commentId: topLevelBody.id,
       locale: "nl",
       translatedBody: "Vertaalde reactie van Pirate",
     })
 
     const listedComments = await app.request(
-      `http://pirate.test/communities/${community.communityId}/posts/${postBody.post_id}/comments?locale=nl&limit=10`,
+      `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/comments?locale=nl&limit=10`,
       {
         headers: {
           authorization: `Bearer ${member.accessToken}`,
@@ -89,7 +89,7 @@ describe("comment read routes", () => {
     expect(listedComments.status).toBe(200)
     const listedCommentsBody = await json(listedComments) as {
       items: Array<{
-        comment: { comment_id: string }
+        comment: { id: string }
         resolved_locale: string
         translation_state: string
         machine_translated: boolean
@@ -97,7 +97,7 @@ describe("comment read routes", () => {
         source_hash: string
       }>
     }
-    expect(listedCommentsBody.items[0]?.comment.comment_id).toBe(topLevelBody.comment_id)
+    expect(listedCommentsBody.items[0]?.comment.id).toBe(topLevelBody.id)
     expect(listedCommentsBody.items[0]?.resolved_locale).toBe("nl")
     expect(listedCommentsBody.items[0]?.translation_state).toBe("ready")
     expect(listedCommentsBody.items[0]?.machine_translated).toBe(true)
@@ -105,7 +105,7 @@ describe("comment read routes", () => {
     expect(typeof listedCommentsBody.items[0]?.source_hash).toBe("string")
 
     const replies = await app.request(
-      `http://pirate.test/comments/${topLevelBody.comment_id}/replies?locale=nl&limit=10`,
+      `http://pirate.test/comments/${topLevelBody.id}/replies?locale=nl&limit=10`,
       {
         headers: {
           authorization: `Bearer ${member.accessToken}`,
@@ -116,21 +116,21 @@ describe("comment read routes", () => {
     expect(replies.status).toBe(200)
     const repliesBody = await json(replies) as {
       items: Array<{
-        comment: { comment_id: string }
+        comment: { id: string }
         resolved_locale: string
         translation_state: string
         machine_translated: boolean
         translated_body: string | null
       }>
     }
-    expect(repliesBody.items[0]?.comment.comment_id).toBe(replyBody.comment_id)
+    expect(repliesBody.items[0]?.comment.id).toBe(replyBody.id)
     expect(repliesBody.items[0]?.resolved_locale).toBe("nl")
     expect(repliesBody.items[0]?.translation_state).toBe("pending")
     expect(repliesBody.items[0]?.machine_translated).toBe(false)
     expect(repliesBody.items[0]?.translated_body).toBeNull()
 
     const context = await app.request(
-      `http://pirate.test/comments/${topLevelBody.comment_id}/context?locale=nl&limit=10`,
+      `http://pirate.test/comments/${topLevelBody.id}/context?locale=nl&limit=10`,
       {
         headers: {
           authorization: `Bearer ${member.accessToken}`,
@@ -145,13 +145,13 @@ describe("comment read routes", () => {
         translated_body: string | null
       }
       replies: Array<{
-        comment: { comment_id: string }
+        comment: { id: string }
         translation_state: string
       }>
     }
     expect(contextBody.comment.translation_state).toBe("ready")
     expect(contextBody.comment.translated_body).toBe("Vertaalde reactie van Pirate")
-    expect(contextBody.replies[0]?.comment.comment_id).toBe(replyBody.comment_id)
+    expect(contextBody.replies[0]?.comment.id).toBe(replyBody.id)
     expect(contextBody.replies[0]?.translation_state).toBe("pending")
 
     const translationJobs = await fetchCommunityJobsByType({
@@ -159,7 +159,7 @@ describe("comment read routes", () => {
       communityId: community.communityId,
       jobType: "comment_translation_materialize",
     })
-    expect(translationJobs.some((job) => job.subject_id === `${replyBody.comment_id}:nl`)).toBe(true)
+    expect(translationJobs.some((job) => job.subject_id === `${replyBody.id.replace(/^cmt_/, "")}:nl`)).toBe(true)
   })
 
   test("public comment read endpoints return localized projections without auth", async () => {
@@ -185,10 +185,10 @@ describe("comment read routes", () => {
       creator.accessToken,
     )
     expect(createdPost.status).toBe(201)
-    const postBody = await json(createdPost) as { post_id: string }
+    const postBody = await json(createdPost) as { id: string }
 
     const topLevelComment = await requestJson(
-      `http://pirate.test/communities/${community.communityId}/posts/${postBody.post_id}/comments`,
+      `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/comments`,
       {
         body: "Hello from public comments",
       },
@@ -196,10 +196,10 @@ describe("comment read routes", () => {
       creator.accessToken,
     )
     expect(topLevelComment.status).toBe(201)
-    const topLevelBody = await json(topLevelComment) as { comment_id: string }
+    const topLevelBody = await json(topLevelComment) as { id: string }
 
     const reply = await requestJson(
-      `http://pirate.test/comments/${topLevelBody.comment_id}/replies`,
+      `http://pirate.test/comments/${topLevelBody.id}/replies`,
       {
         body: "Reply from public comments",
       },
@@ -207,49 +207,49 @@ describe("comment read routes", () => {
       member.accessToken,
     )
     expect(reply.status).toBe(201)
-    const replyBody = await json(reply) as { comment_id: string }
+    const replyBody = await json(reply) as { id: string }
 
     await insertCommentTranslation({
       communityDbRoot: ctx.communityDbRoot,
       communityId: community.communityId,
-      commentId: topLevelBody.comment_id,
+      commentId: topLevelBody.id,
       locale: "zh-Hans",
       translatedBody: "来自 Pirate 的公开评论",
     })
 
     const publicTopLevel = await app.request(
-      `http://pirate.test/public-comments/posts/${postBody.post_id}/comments?locale=zh-Hans&limit=10`,
+      `http://pirate.test/public-comments/posts/${postBody.id}/comments?locale=zh-Hans&limit=10`,
       {},
       ctx.env,
     )
     expect(publicTopLevel.status).toBe(200)
     const publicTopLevelBody = await json(publicTopLevel) as {
       items: Array<{
-        comment: { comment_id: string }
+        comment: { id: string }
         resolved_locale: string
         translation_state: string
         translated_body: string | null
       }>
     }
-    expect(publicTopLevelBody.items[0]?.comment.comment_id).toBe(topLevelBody.comment_id)
+    expect(publicTopLevelBody.items[0]?.comment.id).toBe(topLevelBody.id)
     expect(publicTopLevelBody.items[0]?.resolved_locale).toBe("zh-Hans")
     expect(publicTopLevelBody.items[0]?.translation_state).toBe("ready")
     expect(publicTopLevelBody.items[0]?.translated_body).toBe("来自 Pirate 的公开评论")
 
     const publicReplies = await app.request(
-      `http://pirate.test/public-comments/${topLevelBody.comment_id}/replies?locale=zh-Hans&limit=10`,
+      `http://pirate.test/public-comments/${topLevelBody.id}/replies?locale=zh-Hans&limit=10`,
       {},
       ctx.env,
     )
     expect(publicReplies.status).toBe(200)
     const publicRepliesBody = await json(publicReplies) as {
       items: Array<{
-        comment: { comment_id: string }
+        comment: { id: string }
         resolved_locale: string
         translation_state: string
       }>
     }
-    expect(publicRepliesBody.items[0]?.comment.comment_id).toBe(replyBody.comment_id)
+    expect(publicRepliesBody.items[0]?.comment.id).toBe(replyBody.id)
     expect(publicRepliesBody.items[0]?.resolved_locale).toBe("zh-Hans")
     expect(publicRepliesBody.items[0]?.translation_state).toBe("pending")
   })
@@ -279,10 +279,10 @@ describe("comment read routes", () => {
       creator.accessToken,
     )
     expect(createdPost.status).toBe(201)
-    const postBody = await json(createdPost) as { post_id: string }
+    const postBody = await json(createdPost) as { id: string }
 
     const topLevelComment = await requestJson(
-      `http://pirate.test/communities/${community.communityId}/posts/${postBody.post_id}/comments`,
+      `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/comments`,
       {
         body: "Hello from private comments",
       },
@@ -290,10 +290,10 @@ describe("comment read routes", () => {
       creator.accessToken,
     )
     expect(topLevelComment.status).toBe(201)
-    const topLevelBody = await json(topLevelComment) as { comment_id: string }
+    const topLevelBody = await json(topLevelComment) as { id: string }
 
     const reply = await requestJson(
-      `http://pirate.test/comments/${topLevelBody.comment_id}/replies`,
+      `http://pirate.test/comments/${topLevelBody.id}/replies`,
       {
         body: "Reply from private comments",
       },
@@ -303,7 +303,7 @@ describe("comment read routes", () => {
     expect(reply.status).toBe(201)
 
     const memberRead = await app.request(
-      `http://pirate.test/communities/${community.communityId}/posts/${postBody.post_id}/comments?limit=10`,
+      `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/comments?limit=10`,
       {
         headers: {
           authorization: `Bearer ${member.accessToken}`,
@@ -314,14 +314,14 @@ describe("comment read routes", () => {
     expect(memberRead.status).toBe(200)
 
     const publicTopLevel = await app.request(
-      `http://pirate.test/public-comments/posts/${postBody.post_id}/comments?limit=10`,
+      `http://pirate.test/public-comments/posts/${postBody.id}/comments?limit=10`,
       {},
       ctx.env,
     )
     expect(publicTopLevel.status).toBe(404)
 
     const publicReplies = await app.request(
-      `http://pirate.test/public-comments/${topLevelBody.comment_id}/replies?limit=10`,
+      `http://pirate.test/public-comments/${topLevelBody.id}/replies?limit=10`,
       {},
       ctx.env,
     )
@@ -347,10 +347,10 @@ describe("comment read routes", () => {
       creator.accessToken,
     )
     expect(createdPost.status).toBe(201)
-    const postBody = await json(createdPost) as { post_id: string }
+    const postBody = await json(createdPost) as { id: string }
 
     const commentResponse = await requestJson(
-      `http://pirate.test/communities/${community.communityId}/posts/${postBody.post_id}/comments`,
+      `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/comments`,
       {
         body: "Delete me",
       },
@@ -358,12 +358,12 @@ describe("comment read routes", () => {
       creator.accessToken,
     )
     expect(commentResponse.status).toBe(201)
-    const commentBody = await json(commentResponse) as { comment_id: string }
+    const commentBody = await json(commentResponse) as { id: string }
 
     const deleted = await Promise.resolve(app.request(
-      `http://pirate.test/comments/${commentBody.comment_id}`,
+      `http://pirate.test/comments/${commentBody.id}/remove`,
       {
-        method: "DELETE",
+        method: "POST",
         headers: {
           authorization: `Bearer ${creator.accessToken}`,
         },
@@ -371,13 +371,13 @@ describe("comment read routes", () => {
       ctx.env,
     ))
     expect(deleted.status).toBe(200)
-    const deletedBody = await json(deleted) as { comment_id: string; status: string; body: string | null }
-    expect(deletedBody.comment_id).toBe(commentBody.comment_id)
+    const deletedBody = await json(deleted) as { id: string; status: string; body: string | null }
+    expect(deletedBody.id).toBe(commentBody.id)
     expect(deletedBody.status).toBe("deleted")
     expect(deletedBody.body).toBe("[deleted]")
 
     const context = await app.request(
-      `http://pirate.test/comments/${commentBody.comment_id}/context?limit=10`,
+      `http://pirate.test/comments/${commentBody.id}/context?limit=10`,
       {
         headers: {
           authorization: `Bearer ${creator.accessToken}`,

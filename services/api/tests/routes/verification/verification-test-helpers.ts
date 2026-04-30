@@ -38,10 +38,10 @@ export async function exchangeJwt(env: Env, sub: string): Promise<{ accessToken:
       jwt,
     },
   }, env)
-  const body = await json(response) as { access_token: string; user: { user_id: string } }
+  const body = await json(response) as { access_token: string; user: { id: string } }
   return {
     accessToken: body.access_token,
-    userId: body.user.user_id,
+    userId: body.user.id.replace(/^usr_/, ""),
   }
 }
 
@@ -49,9 +49,9 @@ export async function createSelfVerifiedSession(env: Env, accessToken: string): 
   const verificationSession = await requestJson("http://pirate.test/verification-sessions", {
     provider: "self",
   }, env, accessToken)
-  const verificationBody = await json(verificationSession) as { verification_session_id: string }
+  const verificationBody = await json(verificationSession) as { id: string }
   await requestJson(
-    `http://pirate.test/verification-sessions/${verificationBody.verification_session_id}/complete`,
+    `http://pirate.test/verification-sessions/${verificationBody.id}/complete`,
     {},
     env,
     accessToken,

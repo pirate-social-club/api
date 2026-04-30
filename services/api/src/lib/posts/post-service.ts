@@ -40,7 +40,9 @@ import {
 } from "./post-jobs"
 import { analysisBlocked, badRequestError, eligibilityFailed, notFoundError } from "../errors"
 import { makeId, nowIso } from "../helpers"
-import type { CreatePostRequest, Env, Post } from "../../types"
+import type { Env } from "../../env"
+import type { CreatePostRequest, Post } from "../../types"
+import { decodePublicSongArtifactBundleId, publicPostId } from "../public-ids"
 
 export {
   getPost,
@@ -163,7 +165,7 @@ export async function createPost(input: {
         env: input.env,
         userId: input.userId,
         communityId: input.communityId,
-        songArtifactBundleId: input.body.song_artifact_bundle_id || "",
+        songArtifactBundleId: decodePublicSongArtifactBundleId(input.body.song_artifact_bundle || ""),
         rightsBasis: input.body.rights_basis,
         upstreamAssetRefs: input.body.upstream_asset_refs ?? null,
         accessMode,
@@ -189,7 +191,7 @@ export async function createPost(input: {
         lyrics: resolvedBundle.lyrics,
         access_mode: accessMode,
         asset_id: input.body.asset_id ?? makeId("ast"),
-        song_artifact_bundle_id: resolvedBundle.bundle.id.replace(/^sab_/, ""),
+        song_artifact_bundle: resolvedBundle.bundle.id,
       }
 
       const postAnalysis = await postAnalysisProvider.analyze({
@@ -387,7 +389,7 @@ export async function castPostVote(input: {
   bypassVoterAccessChecks?: boolean
   userRepository: UserRepository
   communityRepository: PostServiceCommunityRepository
-}): Promise<{ post_id: string; value: -1 | 1 }> {
+}): Promise<{ post: string; value: -1 | 1 }> {
   const projection = await input.communityRepository.getCommunityPostProjectionByPostId(input.postId)
   if (!projection) {
     throw notFoundError("Post not found")
@@ -418,7 +420,10 @@ export async function castPostVote(input: {
       postId: input.postId,
       updatedAt: now,
     })
-    return vote
+    return {
+      post: publicPostId(vote.post_id),
+      value: vote.value,
+    }
   } finally {
     db.close()
   }

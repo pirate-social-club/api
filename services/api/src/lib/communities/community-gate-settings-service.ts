@@ -4,8 +4,8 @@ import type {
   CommunityReadRepository,
 } from "./db-community-repository"
 import { eligibilityFailed, internalError, notFoundError } from "../errors"
-import { makeId, nowIso } from "../helpers"
-import { getControlPlaneClient } from "../runtime-deps"
+import { nowIso } from "../helpers"
+import { writeAuditEventForEnv } from "../audit"
 import { openCommunityDb } from "./community-db-factory"
 import {
   assertPublicV0GateConfiguration,
@@ -72,26 +72,20 @@ async function recordCommunityGateUpdateAudit(input: {
   nextGatePolicy: CommunityGatePolicyAuditSnapshot | null
   createdAt: string
 }): Promise<void> {
-  await getControlPlaneClient(input.env).execute({
-    sql: `
-      INSERT INTO audit_log (
-        audit_event_id, actor_type, actor_id, action, target_type, target_id, community_id, metadata_json, created_at
-      ) VALUES (
-        ?1, 'user', ?2, 'community.gates_updated', 'community', ?3, ?3, ?4, ?5
-      )
-    `,
-    args: [
-      makeId("aud"),
-      input.actorUserId,
-      input.communityId,
-      JSON.stringify({
-        previous_access: input.previousAccess,
-        next_access: input.nextAccess,
-        previous_gate_policy: input.previousGatePolicy,
-        next_gate_policy: input.nextGatePolicy,
-      }),
-      input.createdAt,
-    ],
+  await writeAuditEventForEnv(input.env, {
+    action: "community.gates_updated",
+    actorId: input.actorUserId,
+    actorType: "user",
+    communityId: input.communityId,
+    createdAt: input.createdAt,
+    targetId: input.communityId,
+    targetType: "community",
+    metadata: {
+      previous_access: input.previousAccess,
+      next_access: input.nextAccess,
+      previous_gate_policy: input.previousGatePolicy,
+      next_gate_policy: input.nextGatePolicy,
+    },
   })
 }
 

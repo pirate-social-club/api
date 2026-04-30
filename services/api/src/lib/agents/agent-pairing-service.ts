@@ -2,7 +2,7 @@ import type { Client } from "../sql-client"
 import { badRequestError, conflictError, internalError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import { sha256Hex } from "../crypto"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 import type { AgentChallenge, AgentOwnershipPairing, AgentOwnershipPairingClaimResult } from "./types"
 import type { AgentPairingCodeRow } from "./agent-db-rows"
 import {

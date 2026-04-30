@@ -1,6 +1,6 @@
 import { gateFailedWithDetails } from "../../errors"
 import type { JoinEligibility } from "../../../types"
-import type { GatePolicyEvaluation, GateTraceNode } from "./gate-types"
+import type { GatePolicyEvaluation, GateTraceNode, RequiredActionNode, RequiredActionSet } from "./gate-types"
 import { buildMembershipGateSummariesFromPolicy } from "./gate-summary"
 
 type GateSummary = ReturnType<typeof buildMembershipGateSummariesFromPolicy>[number]
@@ -31,6 +31,46 @@ function collectTraceReasons(trace: GateTraceNode): string[] {
   return trace.children.flatMap(collectTraceReasons)
 }
 
+function flattenRequiredActions(actionSet: RequiredActionSet | null): RequiredActionNode[] {
+  if (!actionSet) {
+    return []
+  }
+  return actionSet.items.flatMap((item) => item.kind === "set" ? flattenRequiredActions(item) : [item])
+}
+
+function missingCapabilitiesFromRequiredActionSet(
+  actionSet: RequiredActionSet | null,
+): NonNullable<JoinEligibility["missing_capabilities"]> {
+  const capabilities = new Set<NonNullable<JoinEligibility["missing_capabilities"]>[number]>()
+  for (const item of flattenRequiredActions(actionSet)) {
+    if (item.kind !== "action") {
+      continue
+    }
+    if (
+      item.capability === "minimum_age"
+      || item.capability === "nationality"
+      || item.capability === "gender"
+      || item.capability === "unique_human"
+      || item.capability === "wallet_score"
+    ) {
+      capabilities.add(item.capability)
+    }
+  }
+  return [...capabilities]
+}
+
+function suggestedProviderFromRequiredActionSet(
+  actionSet: RequiredActionSet | null,
+): JoinEligibility["suggested_verification_provider"] {
+  const action = flattenRequiredActions(actionSet).find((item) => (
+    item.kind === "action"
+    && (item.provider === "self" || item.provider === "very" || item.provider === "passport")
+  ))
+  return action?.kind === "action" && (action.provider === "self" || action.provider === "very" || action.provider === "passport")
+    ? action.provider
+    : null
+}
+
 export function throwUnsatisfiedMembershipGate(input: {
   evaluation: GatePolicyEvaluation
   gateSummaries: GateSummary[]
@@ -45,6 +85,8 @@ export function throwUnsatisfiedMembershipGate(input: {
     throw gateFailedWithDetails("Verification is required to join this community", {
       membership_gate_summaries: input.gateSummaries,
       gate_evaluation: gateEvaluation,
+      missing_capabilities: missingCapabilitiesFromRequiredActionSet(input.evaluation.requiredActionSet),
+      suggested_verification_provider: suggestedProviderFromRequiredActionSet(input.evaluation.requiredActionSet),
       suggested_verification_intent: "community_join",
       failure_reason: "missing_verification",
       ...(input.walletScoreStatus ? { wallet_score_status: input.walletScoreStatus } : {}),

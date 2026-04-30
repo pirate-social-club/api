@@ -3,7 +3,7 @@ import { getControlPlaneClient } from "../runtime-deps"
 import { insertNotificationEvent, insertNotificationReceipt } from "./notification-event-store"
 import { buildActorIdentityPayload, hasNotificationEventDedupeKey } from "./notification-event-helpers"
 import { trackNotificationGeneratedSafely } from "./notification-tracking"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 
 export async function emitCommentReply(input: {
   env: Env
@@ -149,6 +149,7 @@ export async function emitRoyaltyEarned(input: {
       payload: {
         community_id: input.communityId,
         asset_id: input.assetId,
+        purchase: `pur_${input.purchaseId}`,
         title: input.title ?? null,
         amount_wip_wei: input.amountWipWei,
         story_ip_id: input.storyIpId,

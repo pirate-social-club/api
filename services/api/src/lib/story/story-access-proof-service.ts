@@ -1,5 +1,5 @@
 import { JsonRpcProvider, TypedDataEncoder, Wallet, getAddress, id } from "ethers"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 import { parseExpectedEvmAddress } from "../evm-signer"
 import { resolveStoryAccessControllerDirectSigner } from "./story-direct-signer"
 import { ensureStoryAccessSignerAuthorized } from "./story-runtime-authorization"

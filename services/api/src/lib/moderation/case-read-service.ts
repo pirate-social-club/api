@@ -1,7 +1,7 @@
 import { openCommunityDb } from "../communities/community-db-factory"
 import type { CommunityRepository } from "../communities/db-community-repository"
 import { notFoundError } from "../errors"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 import {
   getModerationCaseById,
   listModerationCases,

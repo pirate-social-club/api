@@ -1,5 +1,6 @@
 import { nowIso } from "../helpers"
-import type { Env, RedditImportSummary } from "../../types"
+import type { Env } from "../../env"
+import type { RedditImportSummary } from "../../types"
 import { unixSeconds } from "../../serializers/time"
 
 const DEFAULT_PROFILE_USER_AGENT =

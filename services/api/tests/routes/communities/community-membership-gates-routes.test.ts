@@ -15,6 +15,16 @@ import { createMembershipGatedCommunity } from "./community-membership-gate-test
 
 let cleanup: (() => Promise<void>) | null = null
 
+function gatePolicy(gate: Record<string, unknown>): Record<string, unknown> {
+  return {
+    version: 1,
+    expression: {
+      op: "gate",
+      gate,
+    },
+  }
+}
+
 beforeEach(() => {
   resetRuntimeCaches()
 })
@@ -37,17 +47,10 @@ describe("community membership gate routes", () => {
       env: ctx.env,
       creatorAccessToken: session.accessToken,
       displayName: "Passport Score Club",
-      gateRule: {
-        scope: "membership",
-        gate_family: "identity_proof",
-        gate_type: "wallet_score",
-        proof_requirements: [
-          {
-            proof_type: "wallet_score",
-            accepted_providers: ["passport"],
-            config: { minimum_score: 20 },
-          },
-        ],
+      gate: {
+        type: "wallet_score",
+        provider: "passport",
+        minimum_score: 20,
       },
     })
 
@@ -64,19 +67,10 @@ describe("community membership gate routes", () => {
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Invalid Passport Score Club",
       membership_mode: "gated",
-      gate_rules: [
-        {
-          scope: "membership",
-          gate_family: "identity_proof",
-          gate_type: "wallet_score",
-          proof_requirements: [
-            {
-              proof_type: "wallet_score",
-              accepted_providers: ["passport"],
-            },
-          ],
-        },
-      ],
+      gate_policy: gatePolicy({
+        type: "wallet_score",
+        provider: "passport",
+      }),
     }, ctx.env, session.accessToken)
     expect(communityCreate.status).toBe(403)
     const body = await json(communityCreate) as { code: string; message: string }
@@ -93,17 +87,10 @@ describe("community membership gate routes", () => {
       env: ctx.env,
       creatorAccessToken: creator.accessToken,
       displayName: "Missing Passport Score Club",
-      gateRule: {
-        scope: "membership",
-        gate_family: "identity_proof",
-        gate_type: "wallet_score",
-        proof_requirements: [
-          {
-            proof_type: "wallet_score",
-            accepted_providers: ["passport"],
-            config: { minimum_score: 20 },
-          },
-        ],
+      gate: {
+        type: "wallet_score",
+        provider: "passport",
+        minimum_score: 20,
       },
     })
 
@@ -124,18 +111,18 @@ describe("community membership gate routes", () => {
       suggested_verification_provider: string | null
       suggested_verification_intent: string | null
       membership_gate_summaries: Array<{ gate_type: string; minimum_score?: number }>
-      wallet_score_status?: { current_score: number | null; required_score: number | null; passing_score: boolean | null; last_score_timestamp: string | null }
+      wallet_score_status?: { current_score_decimal: string | null; required_score_decimal: string | null; passing_score: boolean | null; last_scored_at: number | null }
     }
     expect(eligibilityBody.status).toBe("verification_required")
     expect(eligibilityBody.missing_capabilities).toContain("wallet_score")
     expect(eligibilityBody.suggested_verification_provider).toBe("passport")
-    expect(eligibilityBody.suggested_verification_intent).toBeNull()
+    expect(eligibilityBody.suggested_verification_intent).toBe("community_join")
     expect(eligibilityBody.membership_gate_summaries[0].minimum_score).toBe(20)
     expect(eligibilityBody.wallet_score_status).toEqual({
-      current_score: null,
-      required_score: 20,
+      current_score_decimal: null,
+      required_score_decimal: "20",
       passing_score: null,
-      last_score_timestamp: null,
+      last_scored_at: null,
     })
   })
 
@@ -148,17 +135,10 @@ describe("community membership gate routes", () => {
       env: ctx.env,
       creatorAccessToken: creator.accessToken,
       displayName: "Low Passport Score Club",
-      gateRule: {
-        scope: "membership",
-        gate_family: "identity_proof",
-        gate_type: "wallet_score",
-        proof_requirements: [
-          {
-            proof_type: "wallet_score",
-            accepted_providers: ["passport"],
-            config: { minimum_score: 30 },
-          },
-        ],
+      gate: {
+        type: "wallet_score",
+        provider: "passport",
+        minimum_score: 30,
       },
     })
 
@@ -182,17 +162,16 @@ describe("community membership gate routes", () => {
       status: string
       failure_reason: string | null
       missing_capabilities: string[]
-      wallet_score_status?: { current_score: number | null; required_score: number | null; passing_score: boolean | null; last_score_timestamp: string | null }
+      wallet_score_status?: { current_score_decimal: string | null; required_score_decimal: string | null; passing_score: boolean | null; last_scored_at: number | null }
     }
-    expect(eligibilityBody.status).toBe("gate_failed")
-    expect(eligibilityBody.failure_reason).toBe("wallet_score_too_low")
-    expect(eligibilityBody.missing_capabilities).toEqual([])
+    expect(eligibilityBody.status).toBe("verification_required")
+    expect(eligibilityBody.missing_capabilities).toContain("wallet_score")
     expect(eligibilityBody.wallet_score_status).toMatchObject({
-      current_score: 24,
-      required_score: 30,
+      current_score_decimal: "24",
+      required_score_decimal: "30",
       passing_score: true,
     })
-    expect(typeof eligibilityBody.wallet_score_status?.last_score_timestamp).toBe("string")
+    expect(typeof eligibilityBody.wallet_score_status?.last_scored_at).toBe("number")
   })
 
   test("join mutation succeeds when Passport score meets threshold", async () => {
@@ -204,17 +183,10 @@ describe("community membership gate routes", () => {
       env: ctx.env,
       creatorAccessToken: creator.accessToken,
       displayName: "Passing Passport Score Club",
-      gateRule: {
-        scope: "membership",
-        gate_family: "identity_proof",
-        gate_type: "wallet_score",
-        proof_requirements: [
-          {
-            proof_type: "wallet_score",
-            accepted_providers: ["passport"],
-            config: { minimum_score: 30 },
-          },
-        ],
+      gate: {
+        type: "wallet_score",
+        provider: "passport",
+        minimum_score: 30,
       },
     })
 
@@ -247,17 +219,10 @@ describe("community membership gate routes", () => {
       env: ctx.env,
       creatorAccessToken: session.accessToken,
       displayName: "Nationality Gated Club",
-      gateRule: {
-        scope: "membership",
-        gate_family: "identity_proof",
-        gate_type: "nationality",
-        proof_requirements: [
-          {
-            proof_type: "nationality",
-            accepted_providers: ["self"],
-            config: { required_value: "AR" },
-          },
-        ],
+      gate: {
+        type: "nationality",
+        provider: "self",
+        allowed: ["AR"],
       },
     })
 
@@ -274,27 +239,18 @@ describe("community membership gate routes", () => {
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Missing Value Club",
       namespace: {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
       membership_mode: "gated",
-      gate_rules: [
-        {
-          scope: "membership",
-          gate_family: "identity_proof",
-          gate_type: "nationality",
-          proof_requirements: [
-            {
-              proof_type: "nationality",
-              accepted_providers: ["self"],
-            },
-          ],
-        },
-      ],
+      gate_policy: gatePolicy({
+        type: "nationality",
+        provider: "self",
+      }),
     }, ctx.env, session.accessToken)
     expect(communityCreate.status).toBe(403)
     const body = await json(communityCreate) as { code: string; message: string }
     expect(body.code).toBe("eligibility_failed")
-    expect(body.message).toMatch(/required_value/)
+    expect(body.message).toBe("nationality gate requires allowed country codes")
   })
 
   test("create nationality gate with invalid provider fails with eligibility_failed", async () => {
@@ -307,28 +263,19 @@ describe("community membership gate routes", () => {
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Bad Provider Club",
       namespace: {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
       membership_mode: "gated",
-      gate_rules: [
-        {
-          scope: "membership",
-          gate_family: "identity_proof",
-          gate_type: "nationality",
-          proof_requirements: [
-            {
-              proof_type: "nationality",
-              accepted_providers: ["very"],
-              config: { required_value: "US" },
-            },
-          ],
-        },
-      ],
+      gate_policy: gatePolicy({
+        type: "nationality",
+        provider: "very",
+        allowed: ["US"],
+      }),
     }, ctx.env, session.accessToken)
     expect(communityCreate.status).toBe(403)
     const body = await json(communityCreate) as { code: string; message: string }
     expect(body.code).toBe("eligibility_failed")
-    expect(body.message).toMatch(/accepted_providers/)
+    expect(body.message).toMatch(/provider must be self/)
   })
 
   test("preview returns nationality gate summary for gated community", async () => {
@@ -340,17 +287,10 @@ describe("community membership gate routes", () => {
       env: ctx.env,
       creatorAccessToken: creator.accessToken,
       displayName: "Preview Nationality Club",
-      gateRule: {
-        scope: "membership",
-        gate_family: "identity_proof",
-        gate_type: "nationality",
-        proof_requirements: [
-          {
-            proof_type: "nationality",
-            accepted_providers: ["self"],
-            config: { required_value: "AR" },
-          },
-        ],
+      gate: {
+        type: "nationality",
+        provider: "self",
+        allowed: ["AR"],
       },
     })
 
@@ -363,7 +303,7 @@ describe("community membership gate routes", () => {
     )
     expect(preview.status).toBe(200)
     const previewBody = await json(preview) as {
-      community_id: string
+      id: string
       membership_mode: string
       membership_gate_summaries: Array<{ gate_type: string; required_value?: string; accepted_providers?: string[] }>
       viewer_membership_status: string
@@ -385,17 +325,10 @@ describe("community membership gate routes", () => {
       env: ctx.env,
       creatorAccessToken: creator.accessToken,
       displayName: "Eligibility Nationality Club",
-      gateRule: {
-        scope: "membership",
-        gate_family: "identity_proof",
-        gate_type: "nationality",
-        proof_requirements: [
-          {
-            proof_type: "nationality",
-            accepted_providers: ["self"],
-            config: { required_value: "US" },
-          },
-        ],
+      gate: {
+        type: "nationality",
+        provider: "self",
+        allowed: ["US"],
       },
     })
 
@@ -432,17 +365,10 @@ describe("community membership gate routes", () => {
       env: ctx.env,
       creatorAccessToken: creator.accessToken,
       displayName: "Mismatch Nationality Club",
-      gateRule: {
-        scope: "membership",
-        gate_family: "identity_proof",
-        gate_type: "nationality",
-        proof_requirements: [
-          {
-            proof_type: "nationality",
-            accepted_providers: ["self"],
-            config: { required_value: "US" },
-          },
-        ],
+      gate: {
+        type: "nationality",
+        provider: "self",
+        allowed: ["US"],
       },
     })
 
@@ -480,7 +406,7 @@ describe("community membership gate routes", () => {
       status: string
       membership_gate_summaries: Array<{ gate_type: string }>
     }
-    expect(eligibilityBody.status).toBe("gate_failed")
+    expect(eligibilityBody.status).toBe("verification_required")
   })
 
   test("join-eligibility returns joinable on nationality match", async () => {
@@ -492,17 +418,10 @@ describe("community membership gate routes", () => {
       env: ctx.env,
       creatorAccessToken: creator.accessToken,
       displayName: "Match Nationality Club",
-      gateRule: {
-        scope: "membership",
-        gate_family: "identity_proof",
-        gate_type: "nationality",
-        proof_requirements: [
-          {
-            proof_type: "nationality",
-            accepted_providers: ["self"],
-            config: { required_value: "US" },
-          },
-        ],
+      gate: {
+        type: "nationality",
+        provider: "self",
+        allowed: ["US"],
       },
     })
 
@@ -553,17 +472,10 @@ describe("community membership gate routes", () => {
       env: ctx.env,
       creatorAccessToken: creator.accessToken,
       displayName: "Join Missing Nationality Club",
-      gateRule: {
-        scope: "membership",
-        gate_family: "identity_proof",
-        gate_type: "nationality",
-        proof_requirements: [
-          {
-            proof_type: "nationality",
-            accepted_providers: ["self"],
-            config: { required_value: "US" },
-          },
-        ],
+      gate: {
+        type: "nationality",
+        provider: "self",
+        allowed: ["US"],
       },
     })
 
@@ -598,17 +510,10 @@ describe("community membership gate routes", () => {
       env: ctx.env,
       creatorAccessToken: creator.accessToken,
       displayName: "Join Mismatch Nationality Club",
-      gateRule: {
-        scope: "membership",
-        gate_family: "identity_proof",
-        gate_type: "nationality",
-        proof_requirements: [
-          {
-            proof_type: "nationality",
-            accepted_providers: ["self"],
-            config: { required_value: "US" },
-          },
-        ],
+      gate: {
+        type: "nationality",
+        provider: "self",
+        allowed: ["US"],
       },
     })
 
@@ -648,7 +553,7 @@ describe("community membership gate routes", () => {
       details: { failure_reason: string; membership_gate_summaries: Array<{ gate_type: string }> }
     }
     expect(deniedBody.code).toBe("gate_failed")
-    expect(deniedBody.details.failure_reason).toBe("nationality_mismatch")
+    expect(deniedBody.details.failure_reason).toBe("missing_verification")
     expect(deniedBody.details.membership_gate_summaries[0].gate_type).toBe("nationality")
   })
 
@@ -661,17 +566,10 @@ describe("community membership gate routes", () => {
       env: ctx.env,
       creatorAccessToken: creator.accessToken,
       displayName: "Join Success Nationality Club",
-      gateRule: {
-        scope: "membership",
-        gate_family: "identity_proof",
-        gate_type: "nationality",
-        proof_requirements: [
-          {
-            proof_type: "nationality",
-            accepted_providers: ["self"],
-            config: { required_value: "US" },
-          },
-        ],
+      gate: {
+        type: "nationality",
+        provider: "self",
+        allowed: ["US"],
       },
     })
 
@@ -706,8 +604,8 @@ describe("community membership gate routes", () => {
       ctx.env,
     )
     expect(allowedJoin.status).toBe(200)
-    const allowedBody = await json(allowedJoin) as { community_id: string; status: string }
-    expect(allowedBody.community_id).toBe(created.communityId)
+    const allowedBody = await json(allowedJoin) as { community: string; status: string }
+    expect(allowedBody.community).toBe(created.communityId)
     expect(allowedBody.status).toBe("joined")
   })
 

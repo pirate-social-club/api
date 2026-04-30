@@ -15,13 +15,19 @@ import {
   decodePublicNamespaceVerificationSessionId,
   decodePublicVerificationSessionId,
 } from "../lib/public-ids"
-import type { Env, RequestedVerificationCapability, VerificationIntent, VerificationRequirement } from "../types"
+import {
+  serializeNamespaceVerification,
+  serializeNamespaceVerificationSession,
+  serializeSelfVerificationCallbackResponse,
+  serializeVerificationSession,
+} from "../serializers/verification"
+import type { Env } from "../env"
+import type { RequestedVerificationCapability, VerificationIntent, VerificationRequirement } from "../types"
 
 const verification = new Hono<{ Bindings: Env }>()
 const authenticatedVerification = new Hono<AuthenticatedEnv>()
 const authenticatedNamespaceVerification = new Hono<AuthenticatedEnv>()
 type VeryBridgePollStatus = "initialized" | "received" | "completed"
-const veryBridgeLastStatusBySession = new Map<string, VeryBridgePollStatus>()
 
 function isVeryBridgePollStatus(value: unknown): value is VeryBridgePollStatus {
   return value === "initialized" || value === "received" || value === "completed"
@@ -65,11 +71,7 @@ verification.post("/verification-sessions/:verificationSessionId/receive-self-pr
       failure_code: result.status === "verified" ? null : result.failure_reason ?? result.status,
     },
   })
-  return c.json({
-    result: result.status === "verified",
-    status: result.status,
-    verification_session_id: result.id,
-  }, 200)
+  return c.json(serializeSelfVerificationCallbackResponse(result), 200)
 })
 
 verification.post("/verification-sessions/very-widget-verify", async (c) => {
@@ -149,16 +151,17 @@ authenticatedVerification.get("/verification-sessions/:verificationSessionId/ver
   })
   const status = typeof result.body.status === "string" ? result.body.status : null
   if (isVeryBridgePollStatus(status)) {
-    veryBridgeLastStatusBySession.set(providerSessionId, status)
-  }
-  if (result.status === 504 && result.body.userMessage === "Very bridge request timed out") {
-    const fallbackStatus = veryBridgeLastStatusBySession.get(providerSessionId) ?? "initialized"
-    console.warn("[very-provider] bridge session status timed out; returning last known status", {
+    logVerificationDebug(c.env, "[very-provider] bridge session poll status accepted", {
       verificationSessionId,
       providerSessionId,
-      fallbackStatus,
+      status,
     })
-    return c.json({ status: fallbackStatus }, 200)
+  }
+  if (result.status === 504 && result.body.userMessage === "Very bridge request timed out") {
+    console.warn("[very-provider] bridge session status timed out", {
+      verificationSessionId,
+      providerSessionId,
+    })
   }
   logVerificationDebug(c.env, "[very-provider] bridge session status", {
     verificationSessionId,
@@ -192,16 +195,16 @@ authenticatedVerification.get("/verification-sessions/:verificationSessionId/ver
 authenticatedVerification.post("/verification/passport-wallet-score", async (c) => {
   const actor = c.get("actor")
   const body = (await c.req.json<{
-    wallet_attachment_id?: string | null
-    community_id?: string | null
+    wallet_attachment?: string | null
+    community?: string | null
   }>().catch(() => null)) ?? {}
   const refreshed = await refreshPassportWalletScore({
     env: c.env,
     userId: actor.userId,
-    walletAttachmentId: body.wallet_attachment_id ?? null,
+    walletAttachmentId: body.wallet_attachment ?? null,
   })
 
-  const communityRef = typeof body.community_id === "string" ? body.community_id.trim() : ""
+  const communityRef = typeof body.community === "string" ? body.community.trim() : ""
   if (!communityRef) {
     return c.json({
       wallet_score: refreshed.walletScore,
@@ -286,7 +289,7 @@ authenticatedVerification.post("/verification-sessions", async (c) => {
       intent: body.verification_intent ?? null,
     },
   })
-  return c.json(created, 201)
+  return c.json(serializeVerificationSession(created), 201)
 })
 
 authenticatedVerification.get("/verification-sessions/:verificationSessionId", async (c) => {
@@ -296,7 +299,7 @@ authenticatedVerification.get("/verification-sessions/:verificationSessionId", a
   if (!result) {
     throw notFoundError("Verification session not found")
   }
-  return c.json(result, 200)
+  return c.json(serializeVerificationSession(result), 200)
 })
 
 authenticatedVerification.post("/verification-sessions/:verificationSessionId/complete", async (c) => {
@@ -329,7 +332,7 @@ authenticatedVerification.post("/verification-sessions/:verificationSessionId/co
       },
     })
   }
-  return c.json(result, 200)
+  return c.json(serializeVerificationSession(result), 200)
 })
 
 authenticatedNamespaceVerification.post("/namespace-verification-sessions", async (c) => {
@@ -352,7 +355,7 @@ authenticatedNamespaceVerification.post("/namespace-verification-sessions", asyn
       verificationSessionId: created.id.replace(/^nvs_/, ""),
       properties: { tld: body.family },
     })
-    return c.json(created, 201)
+    return c.json(serializeNamespaceVerificationSession(created), 201)
   } catch (error) {
     await trackApiEvent(c.env, c.req, {
       eventName: "namespace_verification_failed",
@@ -384,7 +387,7 @@ authenticatedNamespaceVerification.get("/namespace-verification-sessions/:namesp
       },
     })
   }
-  return c.json(result, 200)
+  return c.json(serializeNamespaceVerificationSession(result), 200)
 })
 
 authenticatedNamespaceVerification.post("/namespace-verification-sessions/:namespaceVerificationSessionId/complete", async (c) => {
@@ -403,7 +406,7 @@ authenticatedNamespaceVerification.post("/namespace-verification-sessions/:names
     if (!result) {
       throw notFoundError("Namespace verification session not found")
     }
-    return c.json(result, 200)
+    return c.json(serializeNamespaceVerificationSession(result), 200)
   } catch (error) {
     await trackApiEvent(c.env, c.req, {
       eventName: "namespace_verification_failed",
@@ -425,7 +428,7 @@ authenticatedNamespaceVerification.get("/namespace-verifications/:namespaceVerif
   if (!result) {
     throw notFoundError("Namespace verification not found")
   }
-  return c.json(result, 200)
+  return c.json(serializeNamespaceVerification(result), 200)
 })
 
 verification.route("/", authenticatedVerification)

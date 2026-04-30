@@ -1,6 +1,6 @@
 import { Hono } from "hono"
 import { trackClientEvent } from "../lib/analytics/track"
-import type { Env } from "../types"
+import type { Env } from "../env"
 
 const analytics = new Hono<{ Bindings: Env }>()
 

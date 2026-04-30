@@ -7,7 +7,9 @@ import { buildDefaultVerificationCapabilities } from "../lib/verification/verifi
 import { badRequestError, conflictError, authError, notFoundError } from "../lib/errors"
 import { makeId, nowIso } from "../lib/helpers"
 import { getControlPlaneClient } from "../lib/runtime-deps"
-import type { Env } from "../types"
+import type { Env } from "../env"
+import { optionalTrimmedString } from "./route-helpers"
+import { writeAuditEventBestEffortForEnv } from "../lib/audit"
 
 const botUsers = new Hono<{ Bindings: Env }>()
 
@@ -24,52 +26,11 @@ function requireAdmin(c: { env: Env; req: { header: (name: string) => string | u
   return admin
 }
 
-function optionalTrimmedString(value: unknown, field: string): string | null {
-  if (value === undefined || value === null) return null
-  if (typeof value !== "string") {
-    throw badRequestError(`Invalid ${field}`)
-  }
-  const trimmed = value.trim()
-  return trimmed.length > 0 ? trimmed : null
-}
-
 function requireWalletAddress(value: unknown): `0x${string}` {
   if (typeof value !== "string" || !EVM_ADDRESS_PATTERN.test(value.trim())) {
     throw badRequestError("Invalid wallet_address")
   }
   return value.trim().toLowerCase() as `0x${string}`
-}
-
-async function writeAuditEvent(input: {
-  action: string
-  actorId: string
-  env: Env
-  metadata: Record<string, unknown>
-  targetId: string
-}) {
-  await getControlPlaneClient(input.env).execute({
-    sql: `
-      INSERT INTO audit_log (
-        audit_event_id, actor_type, actor_id, action, target_type, target_id, community_id, metadata_json, created_at
-      ) VALUES (
-        ?1, 'operator', ?2, ?3, 'user', ?4, NULL, ?5, ?6
-      )
-    `,
-    args: [
-      makeId("aud"),
-      input.actorId,
-      input.action,
-      input.targetId,
-      JSON.stringify(input.metadata),
-      nowIso(),
-    ],
-  })
-}
-
-async function writeAuditEventBestEffort(input: Parameters<typeof writeAuditEvent>[0]): Promise<void> {
-  await writeAuditEvent(input).catch((error) => {
-    console.error("[bot-users] audit write failed", error)
-  })
 }
 
 botUsers.post("/provision", async (c) => {
@@ -298,16 +259,17 @@ botUsers.post("/provision", async (c) => {
     throw conflictError("Bot user could not be provisioned")
   }
 
-  await writeAuditEventBestEffort({
+  await writeAuditEventBestEffortForEnv(c.env, {
     action: created ? "bot_user.provisioned" : "bot_user.updated",
     actorId: admin.adminActorId,
-    env: c.env,
-    targetId: userId,
+    actorType: "operator",
     metadata: {
       handle: requestedHandle.labelDisplay,
       wallet_address: walletAddress,
     },
-  })
+    targetId: userId,
+    targetType: "user",
+  }, "[bot-users]")
 
   const session = await loadSnapshot(client, userId)
   return c.json({
@@ -341,13 +303,14 @@ async function mintBotTokenResponse(input: {
   }
 
   const accessToken = await mintPirateAccessToken({ env: input.env, userId: input.userId })
-  await writeAuditEventBestEffort({
+  await writeAuditEventBestEffortForEnv(input.env, {
     action: "bot_user.token_minted",
     actorId: input.adminActorId,
-    env: input.env,
+    actorType: "operator",
     targetId: input.userId,
+    targetType: "user",
     metadata: {},
-  })
+  }, "[bot-users]")
 
   return {
     access_token: accessToken,

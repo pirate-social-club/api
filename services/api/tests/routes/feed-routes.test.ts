@@ -39,8 +39,8 @@ describe("feed routes", () => {
           created_at,
           updated_at
         ) VALUES
-          (?1, ?2, ?3, 'open', 'active', 'active', 'none', ?4, NULL, NULL, NULL, ?5, ?5),
-          (?6, ?2, ?7, 'open', 'draft', 'requested', 'none', ?8, NULL, NULL, NULL, ?9, ?9)
+          (?1, ?2, ?3, 'request', 'active', 'active', 'none', ?4, NULL, NULL, NULL, ?5, ?5),
+          (?6, ?2, ?7, 'request', 'draft', 'requested', 'none', ?8, NULL, NULL, NULL, ?9, ?9)
       `,
       args: [
         "cmt_feed_active",
@@ -60,7 +60,8 @@ describe("feed routes", () => {
     const body = await json(response) as {
       items: unknown[]
       top_communities: Array<{
-        community_id: string
+        id: string
+        object: string
         display_name: string
         route_slug: string | null
       }>
@@ -71,7 +72,8 @@ describe("feed routes", () => {
     expect(body.next_cursor).toBeNull()
     expect(body.top_communities).toHaveLength(1)
     expect(body.top_communities[0]).toMatchObject({
-      community_id: "cmt_feed_active",
+      id: "com_cmt_feed_active",
+      object: "home_feed_community_summary",
       display_name: "Feed Active",
       route_slug: "feed-active",
     })

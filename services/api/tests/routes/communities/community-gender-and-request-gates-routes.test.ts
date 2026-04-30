@@ -36,17 +36,10 @@ describe("community gender and request gate routes", () => {
       env: ctx.env,
       creatorAccessToken: creator.accessToken,
       displayName: "Missing Gender Club",
-      gateRule: {
-        scope: "membership",
-        gate_family: "identity_proof",
-        gate_type: "gender",
-        proof_requirements: [
-          {
-            proof_type: "gender",
-            accepted_providers: ["self"],
-            config: { required_value: "M" },
-          },
-        ],
+      gate: {
+        type: "gender",
+        provider: "self",
+        allowed: ["M"],
       },
     })
 
@@ -82,17 +75,10 @@ describe("community gender and request gate routes", () => {
       env: ctx.env,
       creatorAccessToken: creator.accessToken,
       displayName: "Join Mismatch Gender Club",
-      gateRule: {
-        scope: "membership",
-        gate_family: "identity_proof",
-        gate_type: "gender",
-        proof_requirements: [
-          {
-            proof_type: "gender",
-            accepted_providers: ["self"],
-            config: { required_value: "M" },
-          },
-        ],
+      gate: {
+        type: "gender",
+        provider: "self",
+        allowed: ["M"],
       },
     })
 
@@ -132,7 +118,7 @@ describe("community gender and request gate routes", () => {
       details: { failure_reason: string; membership_gate_summaries: Array<{ gate_type: string }> }
     }
     expect(deniedBody.code).toBe("gate_failed")
-    expect(deniedBody.details.failure_reason).toBe("gender_mismatch")
+    expect(deniedBody.details.failure_reason).toBe("missing_verification")
     expect(deniedBody.details.membership_gate_summaries[0].gate_type).toBe("gender")
   })
 
@@ -145,17 +131,10 @@ describe("community gender and request gate routes", () => {
       env: ctx.env,
       creatorAccessToken: creator.accessToken,
       displayName: "Join Success Gender Club",
-      gateRule: {
-        scope: "membership",
-        gate_family: "identity_proof",
-        gate_type: "gender",
-        proof_requirements: [
-          {
-            proof_type: "gender",
-            accepted_providers: ["self"],
-            config: { required_value: "F" },
-          },
-        ],
+      gate: {
+        type: "gender",
+        provider: "self",
+        allowed: ["F"],
       },
     })
 
@@ -190,8 +169,8 @@ describe("community gender and request gate routes", () => {
       ctx.env,
     )
     expect(allowedJoin.status).toBe(200)
-    const allowedBody = await json(allowedJoin) as { community_id: string; status: string }
-    expect(allowedBody.community_id).toBe(created.communityId)
+    const allowedBody = await json(allowedJoin) as { community: string; status: string }
+    expect(allowedBody.community).toBe(created.communityId)
     expect(allowedBody.status).toBe("joined")
   })
 
@@ -205,18 +184,17 @@ describe("community gender and request gate routes", () => {
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Request Mode Preview Club",
       namespace: {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
       membership_mode: "request",
-      gate_rules: [],
     }, ctx.env, creator.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id: string }
     }
 
     const preview = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/preview`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/preview`,
       {
         headers: { authorization: `Bearer ${creator.accessToken}` },
       },
@@ -239,21 +217,20 @@ describe("community gender and request gate routes", () => {
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Request Mode Eligibility Club",
       namespace: {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
       membership_mode: "request",
-      gate_rules: [],
     }, ctx.env, creator.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
-      community: { community_id: string }
+      community: { id: string }
     }
 
     const joiner = await exchangeJwt(ctx.env, "request-elig-joiner")
     await completeUniqueHumanVerification(ctx.env, joiner.accessToken)
 
     const eligibility = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/join-eligibility`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/join-eligibility`,
       {
         headers: { authorization: `Bearer ${joiner.accessToken}` },
       },

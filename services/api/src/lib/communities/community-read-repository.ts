@@ -7,6 +7,7 @@ import {
   getJobRowById,
   getLatestCommunityProvisioningJobRow,
   listActiveCommunityRows,
+  searchActiveCommunityRows,
   getPrimaryCommunityDatabaseBindingRow,
 } from "../auth/auth-db-community-queries"
 import type {
@@ -31,8 +32,23 @@ export async function getCommunityByNamespaceVerificationId(
   return getCommunityRowByNamespaceVerificationId(client, namespaceVerificationId)
 }
 
-export async function listActiveCommunities(client: Client): Promise<CommunityRow[]> {
-  return listActiveCommunityRows(client)
+export async function listActiveCommunities(
+  client: Client,
+  input?: {
+    limit?: number
+  },
+): Promise<CommunityRow[]> {
+  return listActiveCommunityRows(client, input)
+}
+
+export async function searchActiveCommunities(
+  client: Client,
+  input: {
+    query: string
+    limit: number
+  },
+): Promise<CommunityRow[]> {
+  return searchActiveCommunityRows(client, input)
 }
 
 export async function getPrimaryCommunityDatabaseBinding(

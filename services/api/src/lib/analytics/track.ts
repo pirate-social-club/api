@@ -7,7 +7,7 @@ import {
   type AnalyticsEventInput,
   type AnalyticsEventName,
 } from "."
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 
 type AnalyticsRequest = {
   header(name: string): string | undefined

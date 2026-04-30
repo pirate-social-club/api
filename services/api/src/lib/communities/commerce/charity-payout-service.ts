@@ -1,6 +1,6 @@
 import type { Client } from "../../sql-client"
 import { badRequestError } from "../../errors"
-import type { Env } from "../../../types"
+import type { Env } from "../../../env"
 import type { QuoteAllocationSnapshot } from "./row-types"
 import { requiredString, stringOrNull } from "./row-types"
 import { resolveSettlementAmountSnapshot } from "./quote-helpers"

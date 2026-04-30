@@ -1,5 +1,5 @@
 import { internalError, providerUnavailable } from "../errors"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 
 const CLAWKEY_TIMEOUT_MS = 15_000
 

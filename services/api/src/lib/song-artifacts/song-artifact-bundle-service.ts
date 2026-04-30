@@ -23,7 +23,8 @@ import {
   requireResolvedUpload,
   requireVerifiedHuman,
 } from "./song-artifact-access"
-import type { CreateSongArtifactBundleRequest, Env, SongArtifactBundle } from "../../types"
+import type { Env } from "../../env"
+import type { CreateSongArtifactBundleRequest, SongArtifactBundle } from "../../types"
 import type { SongArtifactCommunityRepository } from "./song-artifact-types"
 
 export async function createSongArtifactBundle(input: {
@@ -147,14 +148,15 @@ export async function createSongArtifactBundle(input: {
     })
 
     if (finalized.preview_status === "pending") {
+      const songArtifactBundleId = finalized.id.replace(/^sab_/, "")
       await enqueueCommunityJob({
         client: db.client,
         communityId: input.communityId,
         jobType: "song_preview_generate",
         subjectType: "song_artifact_bundle",
-        subjectId: finalized.id,
+        subjectId: songArtifactBundleId,
         payloadJson: JSON.stringify({
-          song_artifact_bundle: finalized.id,
+          song_artifact_bundle: songArtifactBundleId,
           primary_audio_content_hash: finalized.primary_audio.content_hash ?? null,
           preview_window: finalized.preview_window,
         }),

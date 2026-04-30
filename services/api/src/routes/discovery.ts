@@ -8,7 +8,7 @@ import {
   publicCommunityPostsPath,
 } from "../lib/agent-discovery/structured-links"
 import openapiSpec from "../generated/openapi-spec"
-import type { Env } from "../types"
+import type { Env } from "../env"
 
 const discovery = new Hono<{ Bindings: Env }>()
 const SCOPES_SUPPORTED = ["pirate_app_session"] as const
@@ -98,9 +98,8 @@ async function sitemapXml(env: Env, origin: string): Promise<string> {
   let communityUrls: string[] = []
   try {
     const repository = getCommunityRepository(env)
-    const communities = (await repository.listActiveCommunities())
+    const communities = (await repository.listActiveCommunities({ limit: 1000 }))
       .filter((community) => community.provisioning_state === "active" && community.status === "active")
-      .slice(0, 1000)
     communityUrls = communities.flatMap((community) => [
       absoluteUrl(origin, publicCommunityPath(community.community_id)),
       absoluteUrl(origin, publicCommunityPostsPath(community.community_id)),

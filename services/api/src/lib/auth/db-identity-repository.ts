@@ -31,6 +31,8 @@ import {
 } from "./auth-serializers"
 import type { SessionSnapshot, UserRow } from "./auth-db-rows"
 import { makeId, nowIso } from "../helpers"
+import { unixSeconds } from "../../serializers/time"
+import { publicCommunityId } from "../public-ids"
 import type { OnboardingStatus, Profile, UpstreamIdentity, User, WalletAttachmentSummary } from "../../types"
 import type { PublicProfileResolution } from "./repositories"
 import { deriveVerificationState } from "../verification/verification-capabilities"
@@ -331,10 +333,10 @@ export class DatabaseIdentityRepository {
       resolved_handle_label: resolvedPublicHandle,
       is_canonical: canonicalPirateRequest && resolvedPublicHandle === canonicalHandleRow.label_display,
       created_communities: createdCommunityRows.map((row) => ({
-        community_id: row.community_id,
+        community: publicCommunityId(row.community_id),
         display_name: row.display_name,
         route_slug: row.route_slug,
-        created_at: row.created_at,
+        created: unixSeconds(row.created_at),
       })),
     }
   }
@@ -376,10 +378,10 @@ export class DatabaseIdentityRepository {
       resolved_handle_label: linkedHandleRow.label_display,
       is_canonical: true,
       created_communities: createdCommunityRows.map((row) => ({
-        community_id: row.community_id,
+        community: publicCommunityId(row.community_id),
         display_name: row.display_name,
         route_slug: row.route_slug,
-        created_at: row.created_at,
+        created: unixSeconds(row.created_at),
       })),
     }
   }

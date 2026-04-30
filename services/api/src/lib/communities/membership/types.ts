@@ -7,7 +7,7 @@ import type {
 } from "../db-community-repository"
 
 export type MembershipResult = {
-  community_id: string
+  community: string
   status: "joined" | "requested" | "left"
 }
 

@@ -49,9 +49,9 @@ describe("public community routes", () => {
           created_at,
           updated_at
         ) VALUES
-          (?1, ?2, ?3, 'open', 'active', 'active', 'none', NULL, NULL, NULL, NULL, ?4, ?4),
-          (?5, ?2, ?6, 'open', 'active', 'active', 'none', ?7, NULL, NULL, NULL, ?8, ?8),
-          (?9, ?2, ?10, 'open', 'draft', 'requested', 'none', NULL, NULL, NULL, NULL, ?11, ?11)
+          (?1, ?2, ?3, 'request', 'active', 'active', 'none', NULL, NULL, NULL, NULL, ?4, ?4),
+          (?5, ?2, ?6, 'request', 'active', 'active', 'none', ?7, NULL, NULL, NULL, ?8, ?8),
+          (?9, ?2, ?10, 'request', 'draft', 'requested', 'none', NULL, NULL, NULL, NULL, ?11, ?11)
       `,
       args: [
         "cmt_infinity",
@@ -73,19 +73,18 @@ describe("public community routes", () => {
     const body = await json(response) as {
       query: string | null
       communities: Array<{
-        community_id: string
+        community: string
         display_name: string
         route_slug: string | null
       }>
     }
 
     expect(body.query).toBe("infinity")
-    expect(body.communities).toEqual([
-      {
-        community_id: "cmt_infinity",
-        display_name: "Infinity",
-        route_slug: null,
-      },
-    ])
+    expect(body.communities).toHaveLength(1)
+    expect(body.communities[0]).toMatchObject({
+      community: "com_cmt_infinity",
+      display_name: "Infinity",
+      route_slug: null,
+    })
   })
 })

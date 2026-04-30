@@ -119,7 +119,7 @@ function runtimeOnlyPaths(fullSpec: OpenApiRecord): OpenApiRecord {
               "application/json": {
                 schema: {
                   type: "object",
-                  required: ["query", "communities"],
+                  required: ["query", "communities", "has_more"],
                   properties: {
                     query: { type: "string", nullable: true },
                     communities: {
@@ -134,6 +134,7 @@ function runtimeOnlyPaths(fullSpec: OpenApiRecord): OpenApiRecord {
                         },
                       },
                     },
+                    has_more: { type: "boolean" },
                   },
                 },
               },

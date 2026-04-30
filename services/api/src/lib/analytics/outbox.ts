@@ -1,4 +1,4 @@
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 import type { DbExecutor } from "../db-helpers"
 import { buildAnalyticsEvent, isAnalyticsEnabled, type AnalyticsEvent, type AnalyticsEventInput } from "./events"
 

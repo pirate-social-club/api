@@ -215,16 +215,31 @@ export async function getListingRowByAssetId(
   } : null
 }
 
-export async function listListingRows(client: Client, communityId: string): Promise<ListingRow[]> {
+export async function listListingRows(
+  client: Client,
+  communityId: string,
+  input: {
+    after?: { created_at: string; id: string } | null
+    limit: number
+  },
+): Promise<ListingRow[]> {
+  const cursorClause = input.after
+    ? "AND (created_at < ?2 OR (created_at = ?2 AND listing_id < ?3))"
+    : ""
+  const limitArgIndex = input.after ? 4 : 2
   const result = await client.execute({
     sql: `
       SELECT listing_id, community_id, asset_id, live_room_id, listing_mode, status, price_usd,
              regional_pricing_policy_json, created_by_user_id, created_at, updated_at
       FROM listings
       WHERE community_id = ?1
-      ORDER BY created_at DESC
+        ${cursorClause}
+      ORDER BY created_at DESC, listing_id DESC
+      LIMIT ?${limitArgIndex}
     `,
-    args: [communityId],
+    args: input.after
+      ? [communityId, input.after.created_at, input.after.id, input.limit]
+      : [communityId, input.limit],
   })
   return result.rows.map((row) => ({
     listing_id: requiredString(row, "listing_id"),
@@ -384,7 +399,15 @@ export async function listPurchaseRows(
   client: Client,
   communityId: string,
   userId: string,
+  input: {
+    after?: { created_at: string; id: string } | null
+    limit: number
+  },
 ): Promise<PurchaseRow[]> {
+  const cursorClause = input.after
+    ? "AND (created_at < ?3 OR (created_at = ?3 AND purchase_id < ?4))"
+    : ""
+  const limitArgIndex = input.after ? 5 : 3
   const result = await client.execute({
     sql: `
       SELECT purchase_id, community_id, listing_id, asset_id, live_room_id, buyer_user_id,
@@ -394,9 +417,13 @@ export async function listPurchaseRows(
       FROM purchases
       WHERE community_id = ?1
         AND buyer_user_id = ?2
-      ORDER BY created_at DESC
+        ${cursorClause}
+      ORDER BY created_at DESC, purchase_id DESC
+      LIMIT ?${limitArgIndex}
     `,
-    args: [communityId, userId],
+    args: input.after
+      ? [communityId, userId, input.after.created_at, input.after.id, input.limit]
+      : [communityId, userId, input.limit],
   })
   return result.rows.map((row) => ({
     purchase_id: requiredString(row, "purchase_id"),

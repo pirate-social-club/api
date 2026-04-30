@@ -15,7 +15,7 @@ import {
   fetchSongArtifactBytes,
   uploadSongArtifactBytes,
 } from "./song-artifact-storage"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 
 function resolveWorkerPublicOrigin(env: Env): string {
   return String(env.PIRATE_API_PUBLIC_ORIGIN || "http://pirate.test").trim()

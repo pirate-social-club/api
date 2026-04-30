@@ -1,4 +1,5 @@
-import type { Env, Post, SongArtifactUpload } from "../../types"
+import type { Env } from "../../env"
+import type { Post, SongArtifactUpload } from "../../types"
 import { fetchSongArtifactBytes } from "./song-artifact-storage"
 
 type LyricsModerationOutcome = {

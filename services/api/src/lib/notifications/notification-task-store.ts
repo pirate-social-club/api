@@ -7,6 +7,12 @@ import type {
   UserTaskType,
 } from "../../types"
 import { nullableUnixSeconds, unixSeconds } from "../../serializers/time"
+import { publicCommunityId } from "../public-ids"
+
+function serializeTaskSubject(row: Record<string, unknown>): string {
+  const subject = String(row.subject_id)
+  return row.subject_type === "community" ? publicCommunityId(subject) : subject
+}
 
 function rowToUserTask(row: Record<string, unknown>): UserTask {
   return {
@@ -15,7 +21,7 @@ function rowToUserTask(row: Record<string, unknown>): UserTask {
     user: `usr_${String(row.user_id)}`,
     type: String(row.type) as UserTaskType,
     subject_type: String(row.subject_type),
-    subject: String(row.subject_id),
+    subject: serializeTaskSubject(row),
     status: String(row.status) as UserTaskStatus,
     priority: Number(row.priority ?? 0),
     payload: row.payload_json ? JSON.parse(String(row.payload_json)) : null,

@@ -32,6 +32,7 @@ import { projectMembershipAndFollow } from "./projection-service"
 import type { CommunityMembershipRepository, MembershipResult } from "./types"
 import { requireOwnedCommunity } from "../create/service"
 import { unixSeconds } from "../../../serializers/time"
+import { publicCommunityId } from "../../public-ids"
 
 function sanitizeMembershipRequestNote(note: string | null | undefined): string | null {
   const trimmed = typeof note === "string" ? note.trim() : ""
@@ -82,7 +83,7 @@ export async function joinCommunity(input: {
     const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
     if (canAccessCommunity(membership)) {
       return {
-        community_id: input.communityId,
+        community: publicCommunityId(input.communityId),
         status: "joined",
       }
     }
@@ -108,7 +109,7 @@ export async function joinCommunity(input: {
         now,
       })
       return {
-        community_id: input.communityId,
+        community: publicCommunityId(input.communityId),
         status: "joined",
       }
     }
@@ -157,7 +158,7 @@ export async function joinCommunity(input: {
         })
       }
       return {
-        community_id: input.communityId,
+        community: publicCommunityId(input.communityId),
         status: "requested",
       }
     }
@@ -187,7 +188,7 @@ export async function joinCommunity(input: {
       now,
     })
     return {
-      community_id: input.communityId,
+      community: publicCommunityId(input.communityId),
       status: "joined",
     }
   } finally {

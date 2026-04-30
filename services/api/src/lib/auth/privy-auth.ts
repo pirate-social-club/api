@@ -2,7 +2,8 @@ import { PrivyClient, verifyAccessToken, type LinkedAccount } from "@privy-io/no
 import { createRemoteJWKSet, importSPKI, type JWTVerifyGetKey } from "jose"
 import { authError } from "../errors"
 import { dedupeStrings, normalizeAddress } from "../helpers"
-import type { Env, UpstreamIdentity } from "../../types"
+import type { Env } from "../../env"
+import type { UpstreamIdentity } from "../../types"
 
 const DEFAULT_PRIVY_AUTH_API_URL = "https://auth.privy.io"
 const ETHEREUM_CHAIN_TYPE = "ethereum"

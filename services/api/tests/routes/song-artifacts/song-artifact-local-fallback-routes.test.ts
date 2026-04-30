@@ -113,7 +113,7 @@ describe("song artifact local fallback routes", () => {
       `http://pirate.test/communities/${communityId}/song-artifacts`,
       {
         primary_audio: {
-          song_artifact_upload_id: primaryUpload.song_artifact_upload_id,
+          song_artifact_upload: primaryUpload.id,
         },
         preview_window: {
           start_ms: 0,
@@ -126,7 +126,7 @@ describe("song artifact local fallback routes", () => {
     )
     expect(bundleCreate.status).toBe(201)
     const bundleBody = await json(bundleCreate) as {
-      song_artifact_bundle_id: string
+      id: string
     }
 
     const jobSummary = await processCommunityJobsForCommunity({
@@ -149,20 +149,20 @@ describe("song artifact local fallback routes", () => {
         song_mode: "original",
         rights_basis: "original",
         license_preset: "non-commercial",
-        song_artifact_bundle_id: bundleBody.song_artifact_bundle_id,
+        song_artifact_bundle: bundleBody.id,
       },
       ctx.env,
       author.accessToken,
     )
     expect(lockedPostCreate.status).toBe(201)
     const lockedPostBody = await json(lockedPostCreate) as {
-      asset_id?: string | null
+      asset?: string | null
       access_mode?: string | null
     }
     expect(lockedPostBody.access_mode).toBe("locked")
-    expect(typeof lockedPostBody.asset_id === "string" && lockedPostBody.asset_id.length > 0).toBe(true)
+    expect(typeof lockedPostBody.asset === "string" && lockedPostBody.asset.length > 0).toBe(true)
 
-    const assetId = String(lockedPostBody.asset_id)
+    const assetId = String(lockedPostBody.asset)
     const assetRead = await app.request(
       `http://pirate.test/communities/${communityId}/assets/${assetId}`,
       {
@@ -201,8 +201,8 @@ describe("song artifact local fallback routes", () => {
     const listingCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/listings`,
       {
-        asset_id: assetId,
-        price_usd: 6.5,
+        asset: assetId,
+        price_cents: 650,
         regional_pricing_enabled: false,
         status: "active",
       },

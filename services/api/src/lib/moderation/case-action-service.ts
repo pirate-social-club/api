@@ -6,7 +6,7 @@ import { badRequestError, internalError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import { getPostById } from "../posts/community-post-store"
 import { getCommentById } from "../comments/community-comment-store"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 import {
   createModerationAction,
   getModerationCaseById,

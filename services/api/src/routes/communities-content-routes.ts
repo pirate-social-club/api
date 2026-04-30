@@ -4,13 +4,12 @@ import { assertAgentDelegatedWriteMatchesActor } from "../lib/agents/agent-write
 import { trackApiEvent } from "../lib/analytics/track"
 import { createComment, listPostComments } from "../lib/comments/comment-service"
 import type { CreateCommentRequest } from "../lib/comments/comment-types"
-import { getControlPlaneClient } from "../lib/runtime-deps"
-import { makeId, nowIso } from "../lib/helpers"
 import { createPost, listCommunityPosts } from "../lib/posts/post-service"
 import { serializeComment, serializeCommentListResponse } from "../serializers/comment"
 import { serializeLocalizedPostResponse, serializePost } from "../serializers/post"
 import type { CreatePostRequest } from "../types"
 import { decodePublicPostId } from "../lib/public-ids"
+import { writeAuditEventForEnv } from "../lib/audit"
 import {
   getResolvedCommunityRouteContext,
   requireJsonBody,
@@ -47,29 +46,20 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
     })
     if (actor.authType === "admin") {
       const operationClass = c.req.header("x-admin-operation-class")?.trim() || "admin_post"
-      await getControlPlaneClient(c.env).execute({
-        sql: `
-          INSERT INTO audit_log (
-            audit_event_id, actor_type, actor_id, action, target_type, target_id, community_id, metadata_json, created_at
-          ) VALUES (
-            ?1, 'operator', ?2, ?3, 'post', ?4, ?5, ?6, ?7
-          )
-        `,
-        args: [
-          makeId("aud"),
-          actor.adminOverride.adminActorId,
-          operationClass === "launch_seed" ? "community.seed_post_created" : "community.admin_post_created",
-          result.post_id,
-          communityId,
-          JSON.stringify({
-            operation_class: operationClass,
-            acting_user_id: actor.userId,
-            idempotency_key: body.idempotency_key ?? null,
-            post_type: result.post_type,
-            status: result.status,
-          }),
-          nowIso(),
-        ],
+      await writeAuditEventForEnv(c.env, {
+        action: operationClass === "launch_seed" ? "community.seed_post_created" : "community.admin_post_created",
+        actorId: actor.adminOverride.adminActorId,
+        actorType: "operator",
+        communityId,
+        targetId: result.post_id,
+        targetType: "post",
+        metadata: {
+          operation_class: operationClass,
+          acting_user_id: actor.userId,
+          idempotency_key: body.idempotency_key ?? null,
+          post_type: result.post_type,
+          status: result.status,
+        },
       })
     }
     return c.json(serializePost(result), result.status === "published" ? 201 : 202)
@@ -125,29 +115,20 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
     })
     if (actor.authType === "admin") {
       const operationClass = c.req.header("x-admin-operation-class")?.trim() || "admin_comment"
-      await getControlPlaneClient(c.env).execute({
-        sql: `
-          INSERT INTO audit_log (
-            audit_event_id, actor_type, actor_id, action, target_type, target_id, community_id, metadata_json, created_at
-          ) VALUES (
-            ?1, 'operator', ?2, ?3, 'comment', ?4, ?5, ?6, ?7
-          )
-        `,
-        args: [
-          makeId("aud"),
-          actor.adminOverride.adminActorId,
-          operationClass === "launch_seed" ? "community.seed_comment_created" : "community.admin_comment_created",
-          result.comment_id,
-          communityId,
-          JSON.stringify({
-            operation_class: operationClass,
-            acting_user_id: actor.userId,
-            idempotency_key: body.idempotency_key ?? null,
-            post_id: postId,
-            depth: result.depth,
-          }),
-          nowIso(),
-        ],
+      await writeAuditEventForEnv(c.env, {
+        action: operationClass === "launch_seed" ? "community.seed_comment_created" : "community.admin_comment_created",
+        actorId: actor.adminOverride.adminActorId,
+        actorType: "operator",
+        communityId,
+        targetId: result.comment_id,
+        targetType: "comment",
+        metadata: {
+          operation_class: operationClass,
+          acting_user_id: actor.userId,
+          idempotency_key: body.idempotency_key ?? null,
+          post_id: postId,
+          depth: result.depth,
+        },
       })
     }
     return c.json(serializeComment(result), 201)

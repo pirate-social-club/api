@@ -1,6 +1,7 @@
 import type { DbExecutor } from "../db-helpers"
 import { nowIso } from "../helpers"
-import type { Env, Post } from "../../types"
+import type { Env } from "../../env"
+import type { Post } from "../../types"
 import { computePostSourceHash } from "./content-source-hash"
 import { DEFAULT_CONTENT_LOCALE, normalizeContentLocale, sameLanguageLocale } from "./content-locale"
 import { requestContentTranslation } from "./content-translation-provider"

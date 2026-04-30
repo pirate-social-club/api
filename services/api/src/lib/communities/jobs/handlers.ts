@@ -24,7 +24,7 @@ import {
   publishFeedReference,
   publishJsonToSwarm,
 } from "../../swarm/swarm-publisher"
-import type { Env } from "../../../types"
+import type { Env } from "../../../env"
 import { loadCommunityProjection } from "../create/service"
 import { openCommunityDb } from "../community-db-factory"
 import type { CommunityJobRow } from "./store"
@@ -76,7 +76,7 @@ type CommunityTextTranslationPayload = {
 }
 
 type SongPreviewGeneratePayload = {
-  song_artifact_bundle_id?: string | null
+  song_artifact_bundle?: string | null
   primary_audio_content_hash?: string | null
   preview_window?: {
     start_ms: number
@@ -457,7 +457,7 @@ async function runSongPreviewGenerate(input: {
   return await generateSongPreviewForBundle({
     env: input.env,
     communityId: input.job.community_id,
-    songArtifactBundleId: payload?.song_artifact_bundle_id ?? input.job.subject_id,
+    songArtifactBundleId: payload?.song_artifact_bundle ?? input.job.subject_id,
     expectedPrimaryAudioContentHash: payload?.primary_audio_content_hash ?? null,
   })
 }

@@ -1,4 +1,5 @@
-import type { Env, User } from "../../types"
+import type { Env } from "../../env"
+import type { User } from "../../types"
 import type { CommunityRow, JobRow } from "../auth/auth-db-rows"
 import type { LocalCommunitySnapshot } from "./community-local-db"
 import type { Community, Job } from "../../types"
@@ -93,8 +94,8 @@ export function parseStoredReferenceLinks(
     const metadata = link.metadata && typeof link.metadata === "object"
       ? link.metadata as Record<string, unknown>
       : {}
-    const referenceLinkId = typeof link.id === "string"
-      ? link.id
+    const referenceLinkId = typeof link.community_reference_link === "string"
+      ? link.community_reference_link
       : null
 
     if (!referenceLinkId || typeof link.platform !== "string" || typeof link.url !== "string") {
@@ -102,8 +103,7 @@ export function parseStoredReferenceLinks(
     }
 
     return [{
-      id: referenceLinkId,
-      object: "community_reference_link",
+      community_reference_link: referenceLinkId,
       platform: link.platform as NonNullable<Community["reference_links"]>[number]["platform"],
       url: link.url,
       label: typeof link.label === "string" ? link.label : null,

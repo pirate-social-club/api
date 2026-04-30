@@ -33,7 +33,7 @@ import { HttpError, errorResponse } from "./lib/errors"
 import { reconcileRoyaltyClaimEvents } from "./lib/royalties/royalty-claim-history"
 import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/runtime-deps"
 import { makeSentryOptions, captureScheduledError } from "./lib/sentry"
-import type { Env } from "./types"
+import type { Env } from "./env"
 
 const app = new Hono<{ Bindings: Env }>()
 
@@ -54,7 +54,7 @@ app.use(
   "/*",
   cors({
     origin: configuredCorsOrigin,
-    allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
     allowHeaders: [
       "Content-Type",
       "Authorization",
@@ -94,7 +94,6 @@ app.route("/profile-media", profileMedia)
 app.route("/users", users)
 app.route("/onboarding", onboarding)
 app.route("/profiles", profiles)
-app.route("/royalties", royalties)
 app.route("/", verification)
 
 app.get("/__debug/sentry-error", (c) => {

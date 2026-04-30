@@ -103,7 +103,7 @@ describe("story royalty registration service", () => {
             settings_json, created_by_user_id, created_at, updated_at
           ) VALUES (
             ?1, ?2, NULL, 'active', NULL, 'fan_run',
-            'open', 'none', 1, 'thread_stable',
+            'request', 'none', 1, 'thread_stable',
             NULL, 'none', 'unconfigured', 'centralized',
             NULL, ?3, ?4, ?4
           )

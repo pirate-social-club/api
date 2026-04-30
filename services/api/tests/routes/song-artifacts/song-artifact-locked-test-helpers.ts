@@ -115,18 +115,17 @@ export async function attachPrimaryWallet(input: {
 export async function createOpenSongCommunity(env: Env, accessToken: string, displayName: string): Promise<string> {
   const communityCreate = await requestJson("http://pirate.test/communities", {
     display_name: displayName,
-    membership_mode: "open",
-    gate_rules: [],
+    membership_mode: "request",
     handle_policy: {
       policy_template: "standard",
     },
   }, env, accessToken)
   const communityCreateBody = await json(communityCreate) as {
     community: {
-      community_id: string
+      id: string
     }
   }
-  return communityCreateBody.community.community_id
+  return communityCreateBody.community.id.replace(/^com_/, "")
 }
 
 export async function uploadSongArtifact(input: {
@@ -138,7 +137,7 @@ export async function uploadSongArtifact(input: {
   filename: string
   bytes: Uint8Array
 }): Promise<{
-  song_artifact_upload_id: string
+  id: string
   storage_ref: string
 }> {
   const uploadBody = Uint8Array.from(input.bytes)
@@ -154,14 +153,14 @@ export async function uploadSongArtifact(input: {
     input.accessToken,
   )
   const uploadIntentBody = await json(uploadIntent) as {
-    song_artifact_upload_id: string
+    id: string
     storage_ref: string
   }
 
   await app.request(
-    `http://pirate.test/communities/${input.communityId}/song-artifact-uploads/${uploadIntentBody.song_artifact_upload_id}/content`,
+    `http://pirate.test/communities/${input.communityId}/song-artifact-uploads/${uploadIntentBody.id}/content`,
     {
-      method: "PUT",
+      method: "POST",
       headers: {
         authorization: `Bearer ${input.accessToken}`,
         "content-type": input.mimeType,

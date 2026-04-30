@@ -1,4 +1,5 @@
-import type { Community, Env, Post } from "../../types"
+import type { Env } from "../../env"
+import type { Community, Post } from "../../types"
 
 export type PostLabelProviderResult = {
   provider: "openrouter"

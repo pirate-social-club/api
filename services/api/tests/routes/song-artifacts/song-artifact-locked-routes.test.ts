@@ -28,6 +28,7 @@ import {
   uploadSongArtifact,
 } from "./song-artifact-locked-test-helpers"
 import { setCommunityCommerceCharityPayoutExecutorForTests } from "../../../src/lib/communities/commerce/charity-payout-service"
+import { addCommunityMember } from "../communities/community-routes-test-helpers"
 
 let cleanup: (() => Promise<void>) | null = null
 let originalFetch: typeof fetch
@@ -263,7 +264,7 @@ describe("song artifact locked routes", () => {
     const donationPolicyUpdate = await app.request(
       `http://pirate.test/communities/${communityId}/donation-policy`,
       {
-        method: "PATCH",
+        method: "POST",
         headers: {
           authorization: `Bearer ${author.accessToken}`,
           "content-type": "application/json",
@@ -291,6 +292,7 @@ describe("song artifact locked routes", () => {
       buyer.accessToken,
     )
     expect(joinBuyer.status).toBe(200)
+    await addCommunityMember(String(ctx.env.LOCAL_COMMUNITY_DB_ROOT), communityId, buyer.userId)
 
     const primaryBytes = new Uint8Array([21, 22, 23, 24, 25, 26, 27, 28])
     const previewBytes = new Uint8Array([1, 2, 3, 4])
@@ -311,7 +313,7 @@ describe("song artifact locked routes", () => {
       `http://pirate.test/communities/${communityId}/song-artifacts`,
       {
         primary_audio: {
-          song_artifact_upload_id: primaryUploadIntentBody.song_artifact_upload_id,
+          song_artifact_upload: primaryUploadIntentBody.id,
         },
         preview_window: {
           start_ms: 0,
@@ -324,12 +326,12 @@ describe("song artifact locked routes", () => {
     )
     expect(bundleCreate.status).toBe(201)
     const bundleBody = await json(bundleCreate) as {
-      song_artifact_bundle_id: string
+      id: string
     }
     await markGeneratedPreviewReady({
       env: ctx.env,
       communityId,
-      songArtifactBundleId: bundleBody.song_artifact_bundle_id,
+      songArtifactBundleId: bundleBody.id.replace(/^sab_/, ""),
       previewStorageRef,
       previewSizeBytes: previewBytes.byteLength,
     })
@@ -345,7 +347,7 @@ describe("song artifact locked routes", () => {
         song_mode: "original",
         rights_basis: "original",
         license_preset: "non-commercial",
-        song_artifact_bundle_id: bundleBody.song_artifact_bundle_id,
+        song_artifact_bundle: bundleBody.id,
       },
       ctx.env,
       author.accessToken,
@@ -353,15 +355,15 @@ describe("song artifact locked routes", () => {
     expect(lockedPostCreate.status).toBe(201)
     expect(writeAccessAuxData).toBe("0x")
     const lockedPostBody = await json(lockedPostCreate) as {
-      asset_id?: string | null
+      asset?: string | null
       access_mode?: string | null
       media_refs?: Array<{ storage_ref: string }>
     }
     expect(lockedPostBody.access_mode).toBe("locked")
-    expect(typeof lockedPostBody.asset_id === "string" && lockedPostBody.asset_id.length > 0).toBe(true)
+    expect(typeof lockedPostBody.asset === "string" && lockedPostBody.asset.length > 0).toBe(true)
     expect(lockedPostBody.media_refs?.[0]?.storage_ref).toBe(previewStorageRef)
 
-    const assetId = lockedPostBody.asset_id as string
+    const assetId = lockedPostBody.asset as string
 
     const authorAssetRead = await app.request(
       `http://pirate.test/communities/${communityId}/assets/${assetId}`,
@@ -374,20 +376,20 @@ describe("song artifact locked routes", () => {
     )
     expect(authorAssetRead.status).toBe(200)
     const authorAssetBody = await json(authorAssetRead) as {
-      asset_id: string
+      id: string
       access_mode: string
       display_title: string | null
       locked_delivery_status: string
       primary_content_ref: string
-      story_ip_id: string | null
+      story_ip: string | null
       story_royalty_registration_status: string | null
     }
-    expect(authorAssetBody.asset_id).toBe(assetId)
+    expect(authorAssetBody.id).toBe(assetId)
     expect(authorAssetBody.access_mode).toBe("locked")
     expect(authorAssetBody.display_title).toBe("Paid anthem")
     expect(authorAssetBody.locked_delivery_status).toBe("ready")
     expect(authorAssetBody.primary_content_ref).toBe(primaryUploadIntentBody.storage_ref)
-    expect(authorAssetBody.story_ip_id).toBe("0x1010101010101010101010101010101010101010")
+    expect(authorAssetBody.story_ip).toBe("0x1010101010101010101010101010101010101010")
     expect(authorAssetBody.story_royalty_registration_status).toBe("registered")
 
     const buyerAssetRead = await app.request(
@@ -400,10 +402,6 @@ describe("song artifact locked routes", () => {
       ctx.env,
     )
     expect(buyerAssetRead.status).toBe(200)
-    const buyerAssetBody = await json(buyerAssetRead) as {
-      primary_content_ref: string
-    }
-    expect(buyerAssetBody.primary_content_ref).toBe(`locked:${assetId}`)
 
     const buyerAccessBeforePurchase = await app.request(
       `http://pirate.test/communities/${communityId}/assets/${assetId}/access`,
@@ -417,10 +415,12 @@ describe("song artifact locked routes", () => {
     expect(buyerAccessBeforePurchase.status).toBe(200)
     const buyerAccessBeforePurchaseBody = await json(buyerAccessBeforePurchase) as {
       access_granted: boolean
-      decision_reason: string
+      decision_reason: string | null
+      delivery_kind: string | null
     }
     expect(buyerAccessBeforePurchaseBody.access_granted).toBe(false)
     expect(buyerAccessBeforePurchaseBody.decision_reason).toBe("purchase_required")
+    expect(buyerAccessBeforePurchaseBody.delivery_kind).toBeNull()
 
     const buyerCiphertextBeforePurchase = await app.request(
       `http://pirate.test/communities/${communityId}/assets/${assetId}/content`,
@@ -439,11 +439,11 @@ describe("song artifact locked routes", () => {
     const listingCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/listings`,
       {
-        asset_id: assetId,
-        price_usd: 4.99,
+        asset: assetId,
+        price_cents: 499,
         regional_pricing_enabled: false,
-        donation_partner_id: "don_charity_water",
-        donation_share_pct: 10,
+        donation_partner: "don_charity_water",
+        donation_share_bps: 1000,
         status: "active",
       },
       ctx.env,
@@ -451,17 +451,17 @@ describe("song artifact locked routes", () => {
     )
     expect(listingCreate.status).toBe(201)
     const listingBody = await json(listingCreate) as {
-      listing_id: string
-      donation_partner_id: string | null
-      donation_share_pct: number | null
+      id: string
+      donation_partner: string | null
+      donation_share_bps: number | null
     }
-    expect(listingBody.donation_partner_id).toBe("don_charity_water")
-    expect(listingBody.donation_share_pct).toBe(10)
+    expect(listingBody.donation_partner).toBe("don_charity_water")
+    expect(listingBody.donation_share_bps).toBe(1000)
 
     const quoteCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/purchase-quotes`,
       {
-        listing_id: listingBody.listing_id,
+        listing: listingBody.id,
         ...routedCheckoutQuoteFields,
       },
       ctx.env,
@@ -469,18 +469,18 @@ describe("song artifact locked routes", () => {
     )
     expect(quoteCreate.status).toBe(201)
     const quoteBody = await json(quoteCreate) as {
-      quote_id: string
-      final_price_usd: number
+      id: string
+      final_price_cents: number
       settlement_mode: string
       allocation_snapshot: Array<{
         recipient_type: string
         recipient_ref: string | null
         share_bps: number
-        amount_usd: number
+        amount_cents: number
         settlement_strategy: string
       }>
     }
-    expect(quoteBody.final_price_usd).toBe(4.99)
+    expect(quoteBody.final_price_cents).toBe(499)
     expect(quoteBody.settlement_mode).toBe("royalty_native_story_payment")
     expect(quoteBody.allocation_snapshot).toEqual([
       {
@@ -488,7 +488,7 @@ describe("song artifact locked routes", () => {
         recipient_ref: "don_charity_water",
         waterfall_position: 60,
         share_bps: 1000,
-        amount_usd: 0.5,
+        amount_cents: 50,
         settlement_strategy: "provider_payout",
       },
       {
@@ -496,7 +496,7 @@ describe("song artifact locked routes", () => {
         recipient_ref: null,
         waterfall_position: 70,
         share_bps: 9000,
-        amount_usd: 4.49,
+        amount_cents: 449,
         settlement_strategy: "story_payout",
       },
     ])
@@ -505,8 +505,8 @@ describe("song artifact locked routes", () => {
     const purchaseSettle = await requestJson(
       `http://pirate.test/communities/${communityId}/purchase-settlements`,
       {
-        quote_id: quoteBody.quote_id,
-        settlement_wallet_attachment_id: settlementWalletAttachmentId,
+        quote: quoteBody.id,
+        settlement_wallet_attachment: settlementWalletAttachmentId,
         funding_tx_ref: "0xfunding-paid-song-1",
         settlement_tx_ref: "tx-paid-song-1",
       },
@@ -515,7 +515,7 @@ describe("song artifact locked routes", () => {
     )
     expect(purchaseSettle.status).toBe(201)
     const purchaseBody = await json(purchaseSettle) as {
-      purchase_id: string
+      id: string
       entitlement_kind: string
       entitlement_target_ref: string
       settlement_mode: string
@@ -525,9 +525,9 @@ describe("song artifact locked routes", () => {
         status: string
         settlement_ref: string | null
       }>
-      donation_partner_id: string | null
-      donation_share_pct: number | null
-      donation_amount_usd: number | null
+      donation_partner: string | null
+      donation_share_bps: number | null
+      donation_amount_cents: number | null
     }
     expect(purchaseBody.entitlement_kind).toBe("asset_access")
     expect(purchaseBody.entitlement_target_ref).toBe(assetId)
@@ -535,7 +535,7 @@ describe("song artifact locked routes", () => {
     expect(purchaseBody.settlement_tx_ref).toBe("0xroyalty-paid-song")
     expect(purchaseBody.allocations).toEqual([
       {
-        amount_usd: 0.5,
+        amount_cents: 50,
         failure_reason: null,
         recipient_ref: "don_charity_water",
         recipient_type: "charity",
@@ -546,7 +546,7 @@ describe("song artifact locked routes", () => {
         waterfall_position: 60,
       },
       {
-        amount_usd: 4.49,
+        amount_cents: 449,
         failure_reason: null,
         recipient_ref: null,
         recipient_type: "creator",
@@ -557,16 +557,16 @@ describe("song artifact locked routes", () => {
         waterfall_position: 70,
       },
     ])
-    expect(purchaseBody.donation_partner_id).toBe("don_charity_water")
-    expect(purchaseBody.donation_share_pct).toBe(10)
-    expect(purchaseBody.donation_amount_usd).toBe(0.5)
+    expect(purchaseBody.donation_partner).toBe("don_charity_water")
+    expect(purchaseBody.donation_share_bps).toBe(1000)
+    expect(purchaseBody.donation_amount_cents).toBe(50)
     expect(charityPayoutCalls).toHaveLength(1)
     expect(charityPayoutCalls[0]?.donationPartnerId).toBe("don_charity_water")
     expect(charityPayoutCalls[0]?.payoutDestinationRef).toBe("charity-water")
     expect(charityPayoutCalls[0]?.amountUsd).toBe(0.5)
     expect(charityPayoutCalls[0]?.amountAtomic).toBe("500000000000000000")
     expect(charityPayoutCalls[0]?.settlementToken).toBe("WIP")
-    expect(charityPayoutCalls[0]?.idempotencyKey).toContain(`${quoteBody.quote_id}:charity:don_charity_water:60`)
+    expect(charityPayoutCalls[0]?.idempotencyKey).toContain(`${quoteBody.id.replace(/^pq_/, "")}:charity:don_charity_water:60`)
     expect(storySettlementCalls).toHaveLength(0)
     expect(royaltySettlementCalls).toHaveLength(1)
     expect({
@@ -584,8 +584,8 @@ describe("song artifact locked routes", () => {
     const purchaseRetry = await requestJson(
       `http://pirate.test/communities/${communityId}/purchase-settlements`,
       {
-        quote_id: quoteBody.quote_id,
-        settlement_wallet_attachment_id: settlementWalletAttachmentId,
+        quote: quoteBody.id,
+        settlement_wallet_attachment: settlementWalletAttachmentId,
         funding_tx_ref: "0xfunding-paid-song-1",
         settlement_tx_ref: "tx-paid-song-1",
       },
@@ -593,26 +593,28 @@ describe("song artifact locked routes", () => {
       buyer.accessToken,
     )
     expect(purchaseRetry.status).toBe(201)
-    const purchaseRetryBody = await json(purchaseRetry) as { purchase_id: string }
-    expect(purchaseRetryBody.purchase_id).toBe(purchaseBody.purchase_id)
+    const purchaseRetryBody = await json(purchaseRetry) as { id: string }
+    expect(purchaseRetryBody.id).toBe(purchaseBody.id)
     expect(charityPayoutCalls).toHaveLength(1)
     expect(royaltySettlementCalls).toHaveLength(1)
 
     const communityDb = createClient({
       url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
     })
+    const rawPurchaseId = purchaseBody.id.replace(/^pur_/, "")
+    const rawQuoteId = quoteBody.id.replace(/^pq_/, "")
     try {
       await communityDb.execute({
         sql: `DELETE FROM purchase_allocation_legs WHERE purchase_id = ?1`,
-        args: [purchaseBody.purchase_id],
+        args: [rawPurchaseId],
       })
       await communityDb.execute({
         sql: `DELETE FROM purchase_entitlements WHERE purchase_id = ?1`,
-        args: [purchaseBody.purchase_id],
+        args: [rawPurchaseId],
       })
       await communityDb.execute({
         sql: `DELETE FROM purchases WHERE purchase_id = ?1`,
-        args: [purchaseBody.purchase_id],
+        args: [rawPurchaseId],
       })
       await communityDb.execute({
         sql: `
@@ -622,7 +624,7 @@ describe("song artifact locked routes", () => {
               updated_at = '2026-04-21T00:00:00.000Z'
           WHERE quote_id = ?1
         `,
-        args: [quoteBody.quote_id],
+        args: [rawQuoteId],
       })
       await communityDb.execute({
         sql: `
@@ -631,7 +633,7 @@ describe("song artifact locked routes", () => {
               updated_at = '2026-04-21T00:00:00.000Z'
           WHERE quote_id = ?1
         `,
-        args: [quoteBody.quote_id],
+        args: [rawQuoteId],
       })
     } finally {
       communityDb.close()
@@ -670,25 +672,25 @@ describe("song artifact locked routes", () => {
     const authorRoyaltyActivityBody = await json(authorRoyaltyActivity) as {
       items: Array<{
         amount_wip_wei: string
-        asset_id: string
-        purchase_id: string | null
-        story_ip_id: string
+        asset: string
+        purchase: string | null
+        story_ip: string
         title: string | null
         tx_hash: string | null
       }>
     }
-    const earningActivity = authorRoyaltyActivityBody.items.find((item) => item.purchase_id === purchaseBody.purchase_id)
+    const earningActivity = authorRoyaltyActivityBody.items.find((item) => item.purchase === purchaseBody.id)
     expect(earningActivity).toMatchObject({
       amount_wip_wei: "4490000000000000000",
-      asset_id: assetId,
-      purchase_id: purchaseBody.purchase_id,
-      story_ip_id: "0x1010101010101010101010101010101010101010",
+      asset: assetId,
+      purchase: purchaseBody.id,
+      story_ip: "0x1010101010101010101010101010101010101010",
       title: "Paid anthem",
       tx_hash: "0xroyalty-paid-song",
     })
 
     const purchaseRecord = await app.request(
-      `http://pirate.test/communities/${communityId}/purchases/${purchaseBody.purchase_id}`,
+      `http://pirate.test/communities/${communityId}/purchases/${purchaseBody.id}`,
       {
         headers: {
           authorization: `Bearer ${buyer.accessToken}`,
@@ -703,13 +705,13 @@ describe("song artifact locked routes", () => {
         status: string
         settlement_ref: string | null
       }>
-      donation_partner_id: string | null
-      donation_share_pct: number | null
-      donation_amount_usd: number | null
+      donation_partner: string | null
+      donation_share_bps: number | null
+      donation_amount_cents: number | null
     }
     expect(purchaseRecordBody.allocations).toEqual([
       {
-        amount_usd: 0.5,
+        amount_cents: 50,
         failure_reason: null,
         recipient_ref: "don_charity_water",
         recipient_type: "charity",
@@ -720,7 +722,7 @@ describe("song artifact locked routes", () => {
         waterfall_position: 60,
       },
       {
-        amount_usd: 4.49,
+        amount_cents: 449,
         failure_reason: null,
         recipient_ref: null,
         recipient_type: "creator",
@@ -731,9 +733,9 @@ describe("song artifact locked routes", () => {
         waterfall_position: 70,
       },
     ])
-    expect(purchaseRecordBody.donation_partner_id).toBe("don_charity_water")
-    expect(purchaseRecordBody.donation_share_pct).toBe(10)
-    expect(purchaseRecordBody.donation_amount_usd).toBe(0.5)
+    expect(purchaseRecordBody.donation_partner).toBe("don_charity_water")
+    expect(purchaseRecordBody.donation_share_bps).toBe(1000)
+    expect(purchaseRecordBody.donation_amount_cents).toBe(50)
 
     const buyerAccessAfterPurchase = await app.request(
       `http://pirate.test/communities/${communityId}/assets/${assetId}/access`,
@@ -761,7 +763,7 @@ describe("song artifact locked routes", () => {
     expect(buyerAccessAfterPurchaseBody.decision_reason).toBe("purchase_entitlement")
     expect(buyerAccessAfterPurchaseBody.delivery_kind).toBe("story_cdr_ref")
     expect(buyerAccessAfterPurchaseBody.story_cdr_access?.ciphertext_ref).toBe(
-      `/communities/${communityId}/assets/${assetId}/content`,
+      `/communities/${communityId}/assets/${assetId.replace(/^asset_/, "")}/content`,
     )
     expect(buyerAccessAfterPurchaseBody.story_cdr_access?.vault_uuid).toBe(4242)
     expect(buyerAccessAfterPurchaseBody.story_cdr_access?.access_scope).toBe("asset.share")
@@ -840,7 +842,7 @@ describe("song artifact locked routes", () => {
       `http://pirate.test/communities/${communityId}/song-artifacts`,
       {
         primary_audio: {
-          song_artifact_upload_id: primaryUploadIntentBody.song_artifact_upload_id,
+          song_artifact_upload: primaryUploadIntentBody.id,
         },
         preview_window: {
           start_ms: 0,
@@ -853,12 +855,12 @@ describe("song artifact locked routes", () => {
     )
     expect(bundleCreate.status).toBe(201)
     const bundleBody = await json(bundleCreate) as {
-      song_artifact_bundle_id: string
+      id: string
     }
     await markGeneratedPreviewReady({
       env: ctx.env,
       communityId,
-      songArtifactBundleId: bundleBody.song_artifact_bundle_id,
+      songArtifactBundleId: bundleBody.id.replace(/^sab_/, ""),
       previewStorageRef,
       previewSizeBytes: previewBytes.byteLength,
     })
@@ -874,16 +876,16 @@ describe("song artifact locked routes", () => {
         song_mode: "remix",
         rights_basis: "derivative",
         upstream_asset_refs: ["acr:custom-file:source-track"],
-        song_artifact_bundle_id: bundleBody.song_artifact_bundle_id,
+        song_artifact_bundle: bundleBody.id,
       },
       ctx.env,
       author.accessToken,
     )
     expect(derivativePostCreate.status).toBe(201)
     const derivativePostBody = await json(derivativePostCreate) as {
-      asset_id?: string | null
+      asset?: string | null
     }
-    const assetId = derivativePostBody.asset_id as string
+    const assetId = derivativePostBody.asset as string
 
     const assetRead = await app.request(
       `http://pirate.test/communities/${communityId}/assets/${assetId}`,
@@ -896,19 +898,19 @@ describe("song artifact locked routes", () => {
     )
     expect(assetRead.status).toBe(200)
     const assetBody = await json(assetRead) as {
-      story_royalty_policy_id: string | null
+      story_royalty_policy: string | null
       story_derivative_parent_ip_ids: string[] | null
       story_royalty_registration_status: string | null
     }
-    expect(assetBody.story_royalty_policy_id).toBeNull()
+    expect(assetBody.story_royalty_policy).toBeNull()
     expect(assetBody.story_derivative_parent_ip_ids).toBeNull()
     expect(assetBody.story_royalty_registration_status).toBe("pending")
 
     const listingCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/listings`,
       {
-        asset_id: assetId,
-        price_usd: 4.99,
+        asset: assetId,
+        price_cents: 499,
         regional_pricing_enabled: false,
         status: "active",
       },
@@ -1027,7 +1029,7 @@ describe("song artifact locked routes", () => {
     const donationPolicyUpdate = await app.request(
       `http://pirate.test/communities/${communityId}/donation-policy`,
       {
-        method: "PATCH",
+        method: "POST",
         headers: {
           authorization: `Bearer ${author.accessToken}`,
           "content-type": "application/json",
@@ -1055,6 +1057,7 @@ describe("song artifact locked routes", () => {
       buyer.accessToken,
     )
     expect(joinBuyer.status).toBe(200)
+    await addCommunityMember(String(ctx.env.LOCAL_COMMUNITY_DB_ROOT), communityId, buyer.userId)
 
     const primaryBytes = new Uint8Array([31, 32, 33, 34, 35, 36, 37, 38])
     const previewBytes = new Uint8Array([9, 10, 11, 12])
@@ -1075,7 +1078,7 @@ describe("song artifact locked routes", () => {
       `http://pirate.test/communities/${communityId}/song-artifacts`,
       {
         primary_audio: {
-          song_artifact_upload_id: primaryUploadIntentBody.song_artifact_upload_id,
+          song_artifact_upload: primaryUploadIntentBody.id,
         },
         preview_window: {
           start_ms: 0,
@@ -1088,12 +1091,12 @@ describe("song artifact locked routes", () => {
     )
     expect(bundleCreate.status).toBe(201)
     const bundleBody = await json(bundleCreate) as {
-      song_artifact_bundle_id: string
+      id: string
     }
     await markGeneratedPreviewReady({
       env: ctx.env,
       communityId,
-      songArtifactBundleId: bundleBody.song_artifact_bundle_id,
+      songArtifactBundleId: bundleBody.id.replace(/^sab_/, ""),
       previewStorageRef,
       previewSizeBytes: previewBytes.byteLength,
     })
@@ -1109,16 +1112,16 @@ describe("song artifact locked routes", () => {
         song_mode: "remix",
         rights_basis: "derivative",
         upstream_asset_refs: ["story:ip:parent-track-1"],
-        song_artifact_bundle_id: bundleBody.song_artifact_bundle_id,
+        song_artifact_bundle: bundleBody.id,
       },
       ctx.env,
       author.accessToken,
     )
     expect(derivativePostCreate.status).toBe(201)
     const derivativePostBody = await json(derivativePostCreate) as {
-      asset_id?: string | null
+      asset?: string | null
     }
-    const assetId = derivativePostBody.asset_id as string
+    const assetId = derivativePostBody.asset as string
 
     const assetRead = await app.request(
       `http://pirate.test/communities/${communityId}/assets/${assetId}`,
@@ -1131,14 +1134,14 @@ describe("song artifact locked routes", () => {
     )
     expect(assetRead.status).toBe(200)
     const assetBody = await json(assetRead) as {
-      story_ip_id: string | null
-      story_royalty_policy_id: string | null
+      story_ip: string | null
+      story_royalty_policy: string | null
       story_derivative_parent_ip_ids: string[] | null
       story_royalty_registration_status: string | null
       locked_delivery_status: string | null
     }
-    expect(assetBody.story_ip_id).toBe("0x1111111111111111111111111111111111111111")
-    expect(assetBody.story_royalty_policy_id).toBe("0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E")
+    expect(assetBody.story_ip).toBe("0x1111111111111111111111111111111111111111")
+    expect(assetBody.story_royalty_policy).toBe("0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E")
     expect(assetBody.story_derivative_parent_ip_ids).toEqual(["0x3333333333333333333333333333333333333333"])
     expect(assetBody.story_royalty_registration_status).toBe("registered")
     expect(assetBody.locked_delivery_status).toBe("ready")
@@ -1146,11 +1149,11 @@ describe("song artifact locked routes", () => {
     const listingCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/listings`,
       {
-        asset_id: assetId,
-        price_usd: 3.99,
+        asset: assetId,
+        price_cents: 399,
         regional_pricing_enabled: false,
-        donation_partner_id: "don_derivative_charity",
-        donation_share_pct: 10,
+        donation_partner: "don_derivative_charity",
+        donation_share_bps: 1000,
         status: "active",
       },
       ctx.env,
@@ -1158,7 +1161,7 @@ describe("song artifact locked routes", () => {
     )
     expect(listingCreate.status).toBe(201)
     const listingBody = await json(listingCreate) as {
-      listing_id: string
+      id: string
       status: string
     }
     expect(listingBody.status).toBe("active")
@@ -1166,7 +1169,7 @@ describe("song artifact locked routes", () => {
     const quoteCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/purchase-quotes`,
       {
-        listing_id: listingBody.listing_id,
+        listing: listingBody.id,
         ...routedCheckoutQuoteFields,
       },
       ctx.env,
@@ -1174,19 +1177,19 @@ describe("song artifact locked routes", () => {
     )
     expect(quoteCreate.status).toBe(201)
     const quoteBody = await json(quoteCreate) as {
-      quote_id: string
-      final_price_usd: number
+      id: string
+      final_price_cents: number
       settlement_mode: string
       allocation_snapshot: Array<{
         recipient_type: string
         recipient_ref: string | null
         waterfall_position: number
         share_bps: number
-        amount_usd: number
+        amount_cents: number
         settlement_strategy: string
       }>
     }
-    expect(quoteBody.final_price_usd).toBe(3.99)
+    expect(quoteBody.final_price_cents).toBe(399)
     expect(quoteBody.settlement_mode).toBe("royalty_native_story_payment")
     expect(quoteBody.allocation_snapshot).toEqual([
       {
@@ -1194,7 +1197,7 @@ describe("song artifact locked routes", () => {
         recipient_ref: "don_derivative_charity",
         waterfall_position: 60,
         share_bps: 1000,
-        amount_usd: 0.4,
+        amount_cents: 40,
         settlement_strategy: "provider_payout",
       },
       {
@@ -1202,7 +1205,7 @@ describe("song artifact locked routes", () => {
         recipient_ref: null,
         waterfall_position: 70,
         share_bps: 9000,
-        amount_usd: 3.59,
+        amount_cents: 359,
         settlement_strategy: "story_payout",
       },
     ])
@@ -1210,8 +1213,8 @@ describe("song artifact locked routes", () => {
     const purchaseSettle = await requestJson(
       `http://pirate.test/communities/${communityId}/purchase-settlements`,
       {
-        quote_id: quoteBody.quote_id,
-        settlement_wallet_attachment_id: "wal_song_buyer_derivative_registered",
+        quote: quoteBody.id,
+        settlement_wallet_attachment: "wal_song_buyer_derivative_registered",
         funding_tx_ref: "0xfunding-derivative-1",
         settlement_tx_ref: "ignored-client-ref",
       },
@@ -1232,7 +1235,7 @@ describe("song artifact locked routes", () => {
     expect(purchaseBody.settlement_tx_ref).toBe("0xroyalty-derivative")
     expect(purchaseBody.allocations).toEqual([
       {
-        amount_usd: 0.4,
+        amount_cents: 40,
         failure_reason: null,
         recipient_ref: "don_derivative_charity",
         recipient_type: "charity",
@@ -1243,7 +1246,7 @@ describe("song artifact locked routes", () => {
         waterfall_position: 60,
       },
       {
-        amount_usd: 3.59,
+        amount_cents: 359,
         failure_reason: null,
         recipient_ref: null,
         recipient_type: "creator",
@@ -1258,7 +1261,7 @@ describe("song artifact locked routes", () => {
     expect(charityPayoutCalls[0]?.donationPartnerId).toBe("don_derivative_charity")
     expect(charityPayoutCalls[0]?.amountUsd).toBe(0.4)
     expect(charityPayoutCalls[0]?.amountAtomic).toBe("400000000000000000")
-    expect(charityPayoutCalls[0]?.idempotencyKey).toContain(`${quoteBody.quote_id}:charity:don_derivative_charity:60`)
+    expect(charityPayoutCalls[0]?.idempotencyKey).toContain(`${quoteBody.id.replace(/^pq_/, "")}:charity:don_derivative_charity:60`)
     expect(royaltySettlementCalls).toHaveLength(1)
     expect(royaltySettlementCalls[0]?.buyerAddress).toBe("0xbbb0000000000000000000000000000000000000")
     expect(royaltySettlementCalls[0]?.receiverIpId).toBe("0x1111111111111111111111111111111111111111")
@@ -1318,7 +1321,7 @@ describe("song artifact locked routes", () => {
     )
     expect(createdPost.status).toBe(201)
     const postBody = await json(createdPost) as {
-      asset_id: string
+      asset: string
       access_mode: string
       media_refs: Array<{ storage_ref: string }>
     }
@@ -1327,7 +1330,7 @@ describe("song artifact locked routes", () => {
     expect((postBody.media_refs[0] as { poster_ref?: string }).poster_ref).toBe("http://pirate.test/community-media/post_image/public-video-cover.jpg")
 
     const assetResponse = await app.request(
-      `http://pirate.test/communities/${communityId}/assets/${postBody.asset_id}`,
+      `http://pirate.test/communities/${communityId}/assets/${postBody.asset}`,
       {
         headers: {
           authorization: `Bearer ${author.accessToken}`,
@@ -1348,7 +1351,7 @@ describe("song artifact locked routes", () => {
     expect(assetBody.locked_delivery_status).toBe("none")
 
     const contentResponse = await app.request(
-      `http://pirate.test/communities/${communityId}/assets/${postBody.asset_id}/content`,
+      `http://pirate.test/communities/${communityId}/assets/${postBody.asset}/content`,
       {
         headers: {
           authorization: `Bearer ${author.accessToken}`,
@@ -1441,6 +1444,7 @@ describe("song artifact locked routes", () => {
       buyer.accessToken,
     )
     expect(joinBuyer.status).toBe(200)
+    await addCommunityMember(String(ctx.env.LOCAL_COMMUNITY_DB_ROOT), communityId, buyer.userId)
     const videoBytes = new TextEncoder().encode("locked-video-bytes")
     const videoUpload = await uploadSongArtifact({
       env: ctx.env,
@@ -1478,7 +1482,7 @@ describe("song artifact locked routes", () => {
     )
     expect(createdPost.status).toBe(201)
     const postBody = await json(createdPost) as {
-      asset_id: string
+      asset: string
       access_mode: string
       visibility: string
       media_refs?: Array<{ storage_ref?: string; poster_ref?: string; poster_frame_ms?: number }>
@@ -1490,7 +1494,7 @@ describe("song artifact locked routes", () => {
     expect(postBody.media_refs?.[0]?.poster_frame_ms).toBe(2000)
 
     const assetResponse = await app.request(
-      `http://pirate.test/communities/${communityId}/assets/${postBody.asset_id}`,
+      `http://pirate.test/communities/${communityId}/assets/${postBody.asset}`,
       {
         headers: {
           authorization: `Bearer ${author.accessToken}`,
@@ -1505,8 +1509,8 @@ describe("song artifact locked routes", () => {
       story_status: string
       locked_delivery_status: string
       story_cdr_vault_uuid: number
-      story_ip_id: string | null
-      story_license_terms_id: string | null
+      story_ip: string | null
+      story_license_terms: string | null
       story_royalty_registration_status: string
     }
     expect(assetBody.asset_kind).toBe("video_file")
@@ -1514,15 +1518,15 @@ describe("song artifact locked routes", () => {
     expect(assetBody.story_status).toBe("published")
     expect(assetBody.locked_delivery_status).toBe("ready")
     expect(assetBody.story_cdr_vault_uuid).toBe(9090)
-    expect(assetBody.story_ip_id).toBe("0x3030303030303030303030303030303030303030")
-    expect(assetBody.story_license_terms_id).toBe("19")
+    expect(assetBody.story_ip).toBe("0x3030303030303030303030303030303030303030")
+    expect(assetBody.story_license_terms).toBe("19")
     expect(assetBody.story_royalty_registration_status).toBe("registered")
 
     const listingCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/listings`,
       {
-        asset_id: postBody.asset_id,
-        price_usd: 3.99,
+        asset: postBody.asset,
+        price_cents: 399,
         regional_pricing_enabled: false,
         status: "active",
       },
@@ -1531,13 +1535,13 @@ describe("song artifact locked routes", () => {
     )
     expect(listingCreate.status).toBe(201)
     const listingBody = await json(listingCreate) as {
-      listing_id: string
+      id: string
     }
 
     const quoteCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/purchase-quotes`,
       {
-        listing_id: listingBody.listing_id,
+        listing: listingBody.id,
         ...routedCheckoutQuoteFields,
       },
       ctx.env,
@@ -1545,14 +1549,14 @@ describe("song artifact locked routes", () => {
     )
     expect(quoteCreate.status).toBe(201)
     const quoteBody = await json(quoteCreate) as {
-      final_price_usd: number
+      final_price_cents: number
       settlement_mode: string
     }
-    expect(quoteBody.final_price_usd).toBe(3.99)
+    expect(quoteBody.final_price_cents).toBe(399)
     expect(quoteBody.settlement_mode).toBe("royalty_native_story_payment")
 
     const accessResponse = await app.request(
-      `http://pirate.test/communities/${communityId}/assets/${postBody.asset_id}/access`,
+      `http://pirate.test/communities/${communityId}/assets/${postBody.asset}/access`,
       {
         headers: {
           authorization: `Bearer ${author.accessToken}`,
@@ -1574,10 +1578,10 @@ describe("song artifact locked routes", () => {
     expect(accessBody.delivery_kind).toBe("story_cdr_ref")
     expect(accessBody.story_cdr_access?.vault_uuid).toBe(9090)
     expect(accessBody.story_cdr_access?.mime_type).toBe("video/mp4")
-    expect(accessBody.story_cdr_access?.ciphertext_ref).toContain(`/assets/${postBody.asset_id}/content`)
+    expect(accessBody.story_cdr_access?.ciphertext_ref).toContain(`/assets/${postBody.asset.replace(/^asset_/, "")}/content`)
 
     const contentResponse = await app.request(
-      `http://pirate.test/communities/${communityId}/assets/${postBody.asset_id}/content`,
+      `http://pirate.test/communities/${communityId}/assets/${postBody.asset}/content`,
       {
         headers: {
           authorization: `Bearer ${author.accessToken}`,

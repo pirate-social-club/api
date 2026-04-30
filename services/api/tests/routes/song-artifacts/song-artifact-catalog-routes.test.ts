@@ -127,6 +127,7 @@ describe("song artifact catalog routes", () => {
       "http://pirate.test/communities",
       {
         display_name: "Song Match Club",
+        membership_mode: "request",
         handle_policy: {
           policy_template: "standard",
         },
@@ -136,10 +137,10 @@ describe("song artifact catalog routes", () => {
     )
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
+        id: string
       }
     }
-    const communityId = communityCreateBody.community.community_id
+    const communityId = communityCreateBody.community.id.replace(/^com_/, "")
 
     const uploadIntent = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
@@ -153,13 +154,13 @@ describe("song artifact catalog routes", () => {
       author.accessToken,
     )
     const uploadIntentBody = await json(uploadIntent) as {
-      song_artifact_upload_id: string
+      id: string
     }
 
     await app.request(
-      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${uploadIntentBody.song_artifact_upload_id}/content`,
+      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${uploadIntentBody.id}/content`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           authorization: `Bearer ${author.accessToken}`,
           "content-type": "application/octet-stream",
@@ -173,7 +174,7 @@ describe("song artifact catalog routes", () => {
       `http://pirate.test/communities/${communityId}/song-artifacts`,
       {
         primary_audio: {
-          song_artifact_upload_id: uploadIntentBody.song_artifact_upload_id,
+          song_artifact_upload: uploadIntentBody.id,
         },
         lyrics: "Line one",
       },
@@ -182,7 +183,7 @@ describe("song artifact catalog routes", () => {
     )
     expect(bundleCreate.status).toBe(201)
     const bundleBody = await json(bundleCreate) as {
-      song_artifact_bundle_id: string
+      id: string
       moderation_result?: {
         analysis_state?: string
         audio_identification?: {
@@ -202,7 +203,7 @@ describe("song artifact catalog routes", () => {
         title: "Matched song",
         song_mode: "original",
         rights_basis: "original",
-        song_artifact_bundle_id: bundleBody.song_artifact_bundle_id,
+        song_artifact_bundle: bundleBody.id,
       },
       ctx.env,
       author.accessToken,
@@ -219,7 +220,7 @@ describe("song artifact catalog routes", () => {
         song_mode: "remix",
         rights_basis: "derivative",
         upstream_asset_refs: ["acr:custom-file:acr_match_1"],
-        song_artifact_bundle_id: bundleBody.song_artifact_bundle_id,
+        song_artifact_bundle: bundleBody.id,
       },
       ctx.env,
       author.accessToken,

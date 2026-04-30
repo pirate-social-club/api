@@ -50,18 +50,18 @@ describe("profile routes", () => {
     const session = await exchangeJwt(ctx.env, "profile-xmtp-user")
 
     const published = await requestJson("http://pirate.test/profiles/me/xmtp-inbox", "POST", {
-      xmtp_inbox_id: "xmtp-inbox-profile-route-1",
+      xmtp_inbox: "xmtp-inbox-profile-route-1",
     }, ctx.env, session.accessToken)
     expect(published.status).toBe(200)
-    const publishedBody = await json(published) as { xmtp_inbox_id: string | null }
-    expect(publishedBody.xmtp_inbox_id).toBe("xmtp-inbox-profile-route-1")
+    const publishedBody = await json(published) as { xmtp_inbox: string | null }
+    expect(publishedBody.xmtp_inbox).toBe("xmtp-inbox-profile-route-1")
 
     const rotated = await requestJson("http://pirate.test/profiles/me/xmtp-inbox", "POST", {
       xmtp_inbox_id: "xmtp-inbox-profile-route-2",
     }, ctx.env, session.accessToken)
     expect(rotated.status).toBe(200)
-    const rotatedBody = await json(rotated) as { xmtp_inbox_id: string | null }
-    expect(rotatedBody.xmtp_inbox_id).toBe("xmtp-inbox-profile-route-2")
+    const rotatedBody = await json(rotated) as { xmtp_inbox: string | null }
+    expect(rotatedBody.xmtp_inbox).toBe("xmtp-inbox-profile-route-2")
 
     const invalid = await requestJson("http://pirate.test/profiles/me/xmtp-inbox", "POST", {
       xmtp_inbox_id: "bad value with spaces",
@@ -82,12 +82,12 @@ describe("profile routes", () => {
     }, ctx.env)
     expect(me.status).toBe(200)
     const meBody = await json(me) as {
-      user_id: string
+      id: string
       display_name: string | null
       preferred_locale: string | null
       global_handle: { label: string }
     }
-    expect(meBody.user_id).toBe(session.userId)
+    expect(meBody.id).toBe(session.publicUserId)
     expect(meBody.display_name).toBeNull()
     expect(meBody.preferred_locale).toBeNull()
     expect(meBody.global_handle.label).toMatch(/^[a-z]+-[a-z]+-\d{4}\.pirate$/)
@@ -118,21 +118,21 @@ describe("profile routes", () => {
     expect(patchedBody.display_verified_nationality_badge).toBe(true)
     expect(patchedBody.nationality_badge_country).toBeNull()
 
-    const publicProfile = await app.request(`http://pirate.test/profiles/${session.userId}`, {
+    const publicProfile = await app.request(`http://pirate.test/profiles/${session.publicUserId}`, {
       headers: {
         authorization: `Bearer ${session.accessToken}`,
       },
     }, ctx.env)
     expect(publicProfile.status).toBe(200)
     const publicBody = await json(publicProfile) as {
-      user_id: string
+      id: string
       display_name: string | null
       cover_ref: string | null
       preferred_locale: string | null
       display_verified_nationality_badge: boolean | null
       nationality_badge_country: string | null
     }
-    expect(publicBody.user_id).toBe(session.userId)
+    expect(publicBody.id).toBe(session.publicUserId)
     expect(publicBody.display_name).toBe("Techno Hippie")
     expect(publicBody.cover_ref).toBe("ipfs://cover-ref")
     expect(publicBody.preferred_locale).toBe("en-US")
@@ -162,7 +162,7 @@ describe("profile routes", () => {
       })],
     })
 
-    const off = await app.request(`http://pirate.test/profiles/${session.userId}`, {}, ctx.env)
+    const off = await app.request(`http://pirate.test/profiles/${session.publicUserId}`, {}, ctx.env)
     expect(off.status).toBe(200)
     const offBody = await json(off) as { nationality_badge_country: string | null }
     expect(offBody.nationality_badge_country).toBeNull()
@@ -178,7 +178,7 @@ describe("profile routes", () => {
     expect(patchedBody.display_verified_nationality_badge).toBe(true)
     expect(patchedBody.nationality_badge_country).toBe("US")
 
-    const publicProfile = await app.request(`http://pirate.test/profiles/${session.userId}`, {}, ctx.env)
+    const publicProfile = await app.request(`http://pirate.test/profiles/${session.publicUserId}`, {}, ctx.env)
     expect(publicProfile.status).toBe(200)
     const publicBody = await json(publicProfile) as { nationality_badge_country: string | null }
     expect(publicBody.nationality_badge_country).toBe("US")
@@ -199,16 +199,16 @@ describe("profile routes", () => {
     }, ctx.env, session.accessToken)
     expect(patched.status).toBe(200)
 
-    const publicProfile = await app.request(`http://pirate.test/profiles/${session.userId}`, {}, ctx.env)
+    const publicProfile = await app.request(`http://pirate.test/profiles/${session.publicUserId}`, {}, ctx.env)
     expect(publicProfile.status).toBe(200)
     const publicBody = await json(publicProfile) as {
-      user_id: string
+      id: string
       display_name: string | null
       cover_ref: string | null
       preferred_locale: string | null
       global_handle: { label: string }
     }
-    expect(publicBody.user_id).toBe(session.userId)
+    expect(publicBody.id).toBe(session.publicUserId)
     expect(publicBody.display_name).toBe("Captain Public")
     expect(publicBody.cover_ref).toBe("ipfs://public-cover")
     expect(publicBody.preferred_locale).toBe("en-US")
@@ -224,7 +224,7 @@ describe("profile routes", () => {
 
     const session = await exchangeJwt(ctx.env, "profile-rename-user")
 
-    const renamed = await requestJson("http://pirate.test/profiles/me/global-handle/rename", "POST", {
+    const renamed = await requestJson("http://pirate.test/profiles/me/rename-global-handle", "POST", {
       desired_label: "technohippie",
     }, ctx.env, session.accessToken)
     expect(renamed.status).toBe(200)
@@ -286,12 +286,12 @@ describe("profile routes", () => {
     const first = await exchangeJwt(ctx.env, "profile-rename-first")
     const second = await exchangeJwt(ctx.env, "profile-rename-second")
 
-    const firstRename = await requestJson("http://pirate.test/profiles/me/global-handle/rename", "POST", {
+    const firstRename = await requestJson("http://pirate.test/profiles/me/rename-global-handle", "POST", {
       desired_label: "takenhandle",
     }, ctx.env, first.accessToken)
     expect(firstRename.status).toBe(200)
 
-    const secondRename = await requestJson("http://pirate.test/profiles/me/global-handle/rename", "POST", {
+    const secondRename = await requestJson("http://pirate.test/profiles/me/rename-global-handle", "POST", {
       desired_label: "takenhandle",
     }, ctx.env, second.accessToken)
     expect(secondRename.status).toBe(409)
@@ -313,13 +313,13 @@ describe("profile routes", () => {
     const freeQuoteBody = await json(freeQuote) as {
       desired_label: string
       tier: string
-      price_usd: number
+      price_cents: number
       eligible: boolean
       reason: string | null
     }
     expect(freeQuoteBody.desired_label).toBe("cleanhandle.pirate")
     expect(freeQuoteBody.tier).toBe("standard")
-    expect(freeQuoteBody.price_usd).toBe(0)
+    expect(freeQuoteBody.price_cents).toBe(0)
     expect(freeQuoteBody.eligible).toBe(true)
     expect(freeQuoteBody.reason).toBe("Eligible for free cleanup rename")
 
@@ -330,13 +330,13 @@ describe("profile routes", () => {
     const premiumQuoteBody = await json(premiumQuote) as {
       desired_label: string
       tier: string
-      price_usd: number
+      price_cents: number
       eligible: boolean
       reason?: string | null
     }
     expect(premiumQuoteBody.desired_label).toBe("captain.pirate")
     expect(premiumQuoteBody.tier).toBe("premium")
-    expect(premiumQuoteBody.price_usd).toBe(250)
+    expect(premiumQuoteBody.price_cents).toBe(25_000)
     expect(premiumQuoteBody.eligible).toBe(true)
     expect(premiumQuoteBody.reason ?? null).toBeNull()
   })
@@ -390,17 +390,17 @@ describe("profile routes", () => {
     const quoteBody = await json(quote) as {
       desired_label: string
       tier: string
-      price_usd: number
+      price_cents: number
       eligible: boolean
       benefit_source: string | null
-      reputation_discount_usd: number | null
+      reputation_discount_cents: number | null
     }
     expect(quoteBody.desired_label).toBe("captain.pirate")
     expect(quoteBody.tier).toBe("premium")
-    expect(quoteBody.price_usd).toBe(0)
+    expect(quoteBody.price_cents).toBe(0)
     expect(quoteBody.eligible).toBe(true)
     expect(quoteBody.benefit_source).toBe("verified_reddit_username")
-    expect(quoteBody.reputation_discount_usd).toBe(250)
+    expect(quoteBody.reputation_discount_cents).toBe(25_000)
 
     const claimed = await requestJson("http://pirate.test/profiles/me/global-handle/reddit-claim", "POST", {
       desired_label: "captain",

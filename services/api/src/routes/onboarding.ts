@@ -4,6 +4,12 @@ import { getOnboardingStatusRepository, getRedditOnboardingRepository } from "..
 import { normalizeRedditUsername } from "../lib/onboarding/reddit-bootstrap"
 import { authenticate, type AuthenticatedEnv } from "../lib/auth-middleware"
 import { trackApiEvent } from "../lib/analytics/track"
+import {
+  serializeOnboardingStatus,
+  serializeRedditImportStart,
+  serializeRedditImportSummary,
+  serializeRedditVerification,
+} from "../serializers/onboarding"
 
 const onboarding = new Hono<AuthenticatedEnv>()
 
@@ -27,7 +33,7 @@ onboarding.get("/status", async (c) => {
   if (!onboardingStatus) {
     throw notFoundError("Onboarding status not found")
   }
-  return c.json(onboardingStatus, 200)
+  return c.json(serializeOnboardingStatus(onboardingStatus), 200)
 })
 
 onboarding.post("/dismiss", async (c) => {
@@ -44,7 +50,7 @@ onboarding.post("/dismiss", async (c) => {
       missing_requirements_count: onboardingStatus.missing_requirements.length,
     },
   })
-  return c.json(onboardingStatus, 200)
+  return c.json(serializeOnboardingStatus(onboardingStatus), 200)
 })
 
 onboarding.post("/reddit-verification", async (c) => {
@@ -78,7 +84,7 @@ onboarding.post("/reddit-verification", async (c) => {
       properties: { failure_code: result.failure_code ?? result.status },
     })
   }
-  return c.json(result, 200)
+  return c.json(serializeRedditVerification(result), 200)
 })
 
 onboarding.post("/reddit-imports", async (c) => {
@@ -121,7 +127,7 @@ onboarding.post("/reddit-imports", async (c) => {
         : { failure_code: result.job.error_code ?? null },
     })
   }
-  return c.json(result, 202)
+  return c.json(serializeRedditImportStart(result), 202)
 })
 
 onboarding.get("/reddit-imports/latest", async (c) => {
@@ -131,7 +137,7 @@ onboarding.get("/reddit-imports/latest", async (c) => {
   if (!summary) {
     throw notFoundError("Reddit import summary not found")
   }
-  return c.json(summary, 200)
+  return c.json(serializeRedditImportSummary(summary), 200)
 })
 
 export default onboarding

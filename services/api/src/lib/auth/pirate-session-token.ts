@@ -1,6 +1,6 @@
 import { calculateJwkThumbprint, exportJWK, importPKCS8, importSPKI, jwtVerify, SignJWT } from "jose"
 import { authError } from "../errors"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 
 const SESSION_JWT_ALG = "RS256"
 const DEFAULT_TTL_SECONDS = 60 * 60

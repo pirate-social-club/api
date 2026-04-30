@@ -3,24 +3,19 @@ import { authError, badRequestError, notFoundError } from "../lib/errors"
 import { getProfileRepository } from "../lib/auth/repositories"
 import { authenticateAdminOrUser, type AuthenticatedEnv } from "../lib/auth-middleware"
 import { trackApiEvent } from "../lib/analytics/track"
-import { makeId, nowIso } from "../lib/helpers"
-import { getControlPlaneClient } from "../lib/runtime-deps"
 import { decodePublicUserId } from "../lib/public-ids"
+import { requireTrimmedStringOrNull } from "./route-helpers"
+import { writeAuditEventForEnv } from "../lib/audit"
+import {
+  serializeGlobalHandle,
+  serializeHandleUpgradeQuote,
+  serializeProfile,
+} from "../serializers/profile"
 
 const profiles = new Hono<AuthenticatedEnv>()
 
 profiles.use("/me", authenticateAdminOrUser)
 profiles.use("/me/*", authenticateAdminOrUser)
-
-function requireStringOrNull(value: unknown, field: string): string | null {
-  if (value === null) {
-    return null
-  }
-  if (typeof value !== "string") {
-    throw badRequestError(`Invalid ${field}`)
-  }
-  return value.trim()
-}
 
 function requireSourceValue<T extends string>(value: unknown, field: string, allowed: readonly T[]): T | null {
   if (value === null) {
@@ -58,7 +53,7 @@ profiles.get("/me", async (c) => {
   if (!profile) {
     throw authError("Authentication failed")
   }
-  return c.json(profile, 200)
+  return c.json(serializeProfile(profile), 200)
 })
 
 profiles.post("/me", async (c) => {
@@ -93,32 +88,32 @@ profiles.post("/me", async (c) => {
   } = {}
 
   if ("display_name" in body) {
-    const value = requireStringOrNull(body.display_name, "display_name")
+    const value = requireTrimmedStringOrNull(body.display_name, "display_name")
     if (value === null || value === "") {
       throw badRequestError("Invalid display_name")
     }
     input.display_name = value
   }
   if ("avatar_ref" in body) {
-    input.avatar_ref = requireStringOrNull(body.avatar_ref, "avatar_ref")
+    input.avatar_ref = requireTrimmedStringOrNull(body.avatar_ref, "avatar_ref")
   }
   if ("avatar_source" in body) {
     input.avatar_source = requireSourceValue(body.avatar_source, "avatar_source", ["ens", "upload", "none"] as const)
   }
   if ("cover_ref" in body) {
-    input.cover_ref = requireStringOrNull(body.cover_ref, "cover_ref")
+    input.cover_ref = requireTrimmedStringOrNull(body.cover_ref, "cover_ref")
   }
   if ("cover_source" in body) {
     input.cover_source = requireSourceValue(body.cover_source, "cover_source", ["ens", "upload", "none"] as const)
   }
   if ("bio" in body) {
-    input.bio = requireStringOrNull(body.bio, "bio")
+    input.bio = requireTrimmedStringOrNull(body.bio, "bio")
   }
   if ("bio_source" in body) {
     input.bio_source = requireSourceValue(body.bio_source, "bio_source", ["ens", "manual", "none"] as const)
   }
   if ("preferred_locale" in body) {
-    input.preferred_locale = requireStringOrNull(body.preferred_locale, "preferred_locale")
+    input.preferred_locale = requireTrimmedStringOrNull(body.preferred_locale, "preferred_locale")
   }
   if ("display_verified_nationality_badge" in body) {
     if (body.display_verified_nationality_badge !== null && typeof body.display_verified_nationality_badge !== "boolean") {
@@ -133,42 +128,39 @@ profiles.post("/me", async (c) => {
     throw authError("Authentication failed")
   }
   if (actor.authType === "admin") {
-    await getControlPlaneClient(c.env).execute({
-      sql: `
-        INSERT INTO audit_log (
-          audit_event_id, actor_type, actor_id, action, target_type, target_id, community_id, metadata_json, created_at
-        ) VALUES (
-          ?1, 'operator', ?2, 'community.admin_profile_updated', 'user', ?3, NULL, ?4, ?5
-        )
-      `,
-      args: [
-        makeId("aud"),
-        actor.adminOverride.adminActorId,
-        actor.userId,
-        JSON.stringify({
-          acting_user_id: actor.userId,
-          updated_fields: Object.keys(input),
-        }),
-        nowIso(),
-      ],
+    await writeAuditEventForEnv(c.env, {
+      action: "community.admin_profile_updated",
+      actorId: actor.adminOverride.adminActorId,
+      actorType: "operator",
+      targetId: actor.userId,
+      targetType: "user",
+      metadata: {
+        acting_user_id: actor.userId,
+        updated_fields: Object.keys(input),
+      },
     })
   }
-  return c.json(profile, 200)
+  return c.json(serializeProfile(profile), 200)
 })
 
 profiles.post("/me/xmtp-inbox", async (c) => {
   const actor = c.get("actor")
-  const body = await c.req.json<{ xmtp_inbox_id?: unknown }>().catch(() => null)
-  if (!body || typeof body !== "object" || !("xmtp_inbox_id" in body)) {
+  const body = await c.req.json<{ xmtp_inbox?: unknown; xmtp_inbox_id?: unknown }>().catch(() => null)
+  if (!body || typeof body !== "object") {
+    throw badRequestError("Invalid XMTP inbox payload")
+  }
+
+  const rawValue = "xmtp_inbox" in body ? body.xmtp_inbox : body.xmtp_inbox_id
+  if (!("xmtp_inbox" in body) && !("xmtp_inbox_id" in body)) {
     throw badRequestError("Invalid XMTP inbox payload")
   }
 
   const repository = getProfileRepository(c.env)
-  const profile = await repository.updateXmtpInboxId(actor.userId, requireXmtpInboxId(body.xmtp_inbox_id))
+  const profile = await repository.updateXmtpInboxId(actor.userId, requireXmtpInboxId(rawValue))
   if (!profile) {
     throw authError("Authentication failed")
   }
-  return c.json(profile, 200)
+  return c.json(serializeProfile(profile), 200)
 })
 
 profiles.post("/me/rename-global-handle", async (c) => {
@@ -192,7 +184,7 @@ profiles.post("/me/rename-global-handle", async (c) => {
       handle_length: globalHandle.label.replace(/\.pirate$/i, "").length,
     },
   })
-  return c.json(globalHandle, 200)
+  return c.json(serializeGlobalHandle(globalHandle), 200)
 })
 
 profiles.post("/me/global-handle/reddit-claim", async (c) => {
@@ -217,7 +209,7 @@ profiles.post("/me/global-handle/reddit-claim", async (c) => {
       shorter_by: Math.max(0, 8 - globalHandle.label.replace(/\.pirate$/i, "").length),
     },
   })
-  return c.json(globalHandle, 200)
+  return c.json(serializeGlobalHandle(globalHandle), 200)
 })
 
 profiles.post("/me/quote-handle-upgrade", async (c) => {
@@ -232,7 +224,7 @@ profiles.post("/me/quote-handle-upgrade", async (c) => {
   if (!quote) {
     throw authError("Authentication failed")
   }
-  return c.json(quote, 200)
+  return c.json(serializeHandleUpgradeQuote(quote), 200)
 })
 
 profiles.post("/me/sync-linked-handles", async (c) => {
@@ -242,7 +234,7 @@ profiles.post("/me/sync-linked-handles", async (c) => {
   if (!profile) {
     throw authError("Authentication failed")
   }
-  return c.json(profile, 200)
+  return c.json(serializeProfile(profile), 200)
 })
 
 profiles.post("/me/set-primary-public-handle", async (c) => {
@@ -253,7 +245,7 @@ profiles.post("/me/set-primary-public-handle", async (c) => {
   }
 
   const linkedHandleId = "linked_handle_id" in body
-    ? requireStringOrNull(body.linked_handle_id, "linked_handle_id")
+    ? requireTrimmedStringOrNull(body.linked_handle_id, "linked_handle_id")
     : null
 
   const repository = getProfileRepository(c.env)
@@ -261,7 +253,7 @@ profiles.post("/me/set-primary-public-handle", async (c) => {
   if (!profile) {
     throw authError("Authentication failed")
   }
-  return c.json(profile, 200)
+  return c.json(serializeProfile(profile), 200)
 })
 
 profiles.get("/:userId", async (c) => {
@@ -270,7 +262,7 @@ profiles.get("/:userId", async (c) => {
   if (!profile) {
     throw notFoundError("Profile not found")
   }
-  return c.json(profile, 200)
+  return c.json(serializeProfile(profile), 200)
 })
 
 export default profiles

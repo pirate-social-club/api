@@ -62,10 +62,10 @@ describe("public profile routes", () => {
     const response = await app.request(`http://pirate.test/public-profiles/by-wallet/${walletAddress}`, {}, ctx.env)
     expect(response.status).toBe(200)
     const body = await json(response) as {
-      profile: { user_id: string; primary_wallet_address: string | null }
+      profile: { id: string; primary_wallet_address: string | null }
       resolved_handle_label: string
     }
-    expect(body.profile.user_id).toBe(session.userId)
+    expect(body.profile.id).toBe(session.publicUserId)
     expect(body.profile.primary_wallet_address).toBe(walletAddress.toLowerCase())
     expect(body.resolved_handle_label.endsWith(".pirate")).toBe(true)
   })
@@ -87,7 +87,7 @@ describe("public profile routes", () => {
     }
     const originalHandle = meBody.global_handle.label
 
-    const renamed = await requestJson("http://pirate.test/profiles/me/global-handle/rename", "POST", {
+    const renamed = await requestJson("http://pirate.test/profiles/me/rename-global-handle", "POST", {
       desired_label: "captainpublic",
     }, ctx.env, session.accessToken)
     expect(renamed.status).toBe(200)
@@ -109,9 +109,9 @@ describe("public profile routes", () => {
           created_at,
           updated_at
         ) VALUES
-          (?1, ?2, ?3, 'open', 'active', 'active', 'none', NULL, NULL, NULL, NULL, ?4, ?4),
-          (?5, ?2, ?6, 'open', 'active', 'active', 'none', NULL, NULL, NULL, NULL, ?7, ?7),
-          (?8, ?2, ?9, 'open', 'draft', 'requested', 'none', NULL, NULL, NULL, NULL, ?10, ?10)
+          (?1, ?2, ?3, 'request', 'active', 'active', 'none', NULL, NULL, NULL, NULL, ?4, ?4),
+          (?5, ?2, ?6, 'request', 'active', 'active', 'none', NULL, NULL, NULL, NULL, ?7, ?7),
+          (?8, ?2, ?9, 'request', 'draft', 'requested', 'none', NULL, NULL, NULL, NULL, ?10, ?10)
       `,
       args: [
         "cmt_public_alpha",
@@ -133,20 +133,20 @@ describe("public profile routes", () => {
       requested_handle_label: string
       resolved_handle_label: string
       is_canonical: boolean
-      profile: { user_id: string; global_handle: { label: string } }
-      created_communities: Array<{ community_id: string; display_name: string; route_slug: string | null; created_at: string }>
+      profile: { id: string; global_handle: { label: string } }
+      created_communities: Array<{ community: string; display_name: string; route_slug: string | null; created: number }>
     }
     expect(canonicalBody.requested_handle_label).toBe("captainpublic.pirate")
     expect(canonicalBody.resolved_handle_label).toBe("captainpublic.pirate")
     expect(canonicalBody.is_canonical).toBe(true)
-    expect(canonicalBody.profile.user_id).toBe(session.userId)
+    expect(canonicalBody.profile.id).toBe(session.publicUserId)
     expect(canonicalBody.profile.global_handle.label).toBe("captainpublic.pirate")
     expect(canonicalBody.created_communities.map((community) => ({
-      community_id: community.community_id,
+      community: community.community,
       display_name: community.display_name,
     }))).toEqual([
-      { community_id: "cmt_public_beta", display_name: "Beta Club" },
-      { community_id: "cmt_public_alpha", display_name: "Alpha Club" },
+      { community: "com_cmt_public_beta", display_name: "Beta Club" },
+      { community: "com_cmt_public_alpha", display_name: "Alpha Club" },
     ])
 
     const redirectedProfile = await app.request(
@@ -159,12 +159,12 @@ describe("public profile routes", () => {
       requested_handle_label: string
       resolved_handle_label: string
       is_canonical: boolean
-      profile: { user_id: string; global_handle: { label: string } }
+      profile: { id: string; global_handle: { label: string } }
     }
     expect(redirectedBody.requested_handle_label).toBe(originalHandle)
     expect(redirectedBody.resolved_handle_label).toBe("captainpublic.pirate")
     expect(redirectedBody.is_canonical).toBe(false)
-    expect(redirectedBody.profile.user_id).toBe(session.userId)
+    expect(redirectedBody.profile.id).toBe(session.publicUserId)
     expect(redirectedBody.profile.global_handle.label).toBe("captainpublic.pirate")
   })
 
@@ -183,7 +183,7 @@ describe("public profile routes", () => {
 
     const session = await exchangeJwt(ctx.env, "profile-public-handle-query-param-user")
 
-    const renamed = await requestJson("http://pirate.test/profiles/me/global-handle/rename", "POST", {
+    const renamed = await requestJson("http://pirate.test/profiles/me/rename-global-handle", "POST", {
       desired_label: "queryparamcaptain",
     }, ctx.env, session.accessToken)
     expect(renamed.status).toBe(200)
@@ -193,11 +193,11 @@ describe("public profile routes", () => {
     const body = await json(response) as {
       resolved_handle_label: string
       is_canonical: boolean
-      profile: { user_id: string }
+      profile: { id: string }
     }
     expect(body.resolved_handle_label).toBe("queryparamcaptain.pirate")
     expect(body.is_canonical).toBe(true)
-    expect(body.profile.user_id).toBe(session.userId)
+    expect(body.profile.id).toBe(session.publicUserId)
   })
 
   test("linked handle sync discovers ENS names and primary public handle can switch to ENS", async () => {
@@ -264,8 +264,8 @@ describe("public profile routes", () => {
       bio_source: string | null
       cover_ref: string | null
       cover_source: string | null
-      linked_handles: Array<{ linked_handle_id: string; label: string; kind: string; metadata?: Record<string, unknown> | null; verification_state: string }>
-      primary_public_handle: { linked_handle_id: string; label: string } | null
+      linked_handles: Array<{ linked_handle: string; label: string; kind: string; metadata?: Record<string, unknown> | null; verification_state: string }>
+      primary_public_handle: { linked_handle: string; label: string } | null
     }
     expect(syncedBody.primary_public_handle).toBeNull()
     expect(syncedBody.avatar_ref).toBe("https://example.com/blackbeard.png")
@@ -327,11 +327,11 @@ describe("public profile routes", () => {
     expect(resyncedBody.bio_source).toBe("ens")
 
     const selected = await requestJson("http://pirate.test/profiles/me/primary-public-handle", "POST", {
-      linked_handle_id: ensHandle?.linked_handle_id ?? null,
+      linked_handle_id: ensHandle?.linked_handle ?? null,
     }, ctx.env, session.accessToken)
     expect(selected.status).toBe(200)
     const selectedBody = await json(selected) as {
-      primary_public_handle: { linked_handle_id: string; label: string } | null
+      primary_public_handle: { linked_handle: string; label: string } | null
       global_handle: { label: string }
     }
     expect(selectedBody.primary_public_handle?.label).toBe("blackbeard.eth")
@@ -342,12 +342,12 @@ describe("public profile routes", () => {
       requested_handle_label: string
       resolved_handle_label: string
       is_canonical: boolean
-      profile: { user_id: string; primary_public_handle: { label: string } | null; global_handle: { label: string } }
+      profile: { id: string; primary_public_handle: { label: string } | null; global_handle: { label: string } }
     }
     expect(ensProfileBody.requested_handle_label).toBe("blackbeard.eth")
     expect(ensProfileBody.resolved_handle_label).toBe("blackbeard.eth")
     expect(ensProfileBody.is_canonical).toBe(true)
-    expect(ensProfileBody.profile.user_id).toBe(session.userId)
+    expect(ensProfileBody.profile.id).toBe(session.publicUserId)
     expect(ensProfileBody.profile.primary_public_handle?.label).toBe("blackbeard.eth")
 
     const pirateProfile = await app.request(
@@ -409,13 +409,13 @@ describe("public profile routes", () => {
     setEnsResolverForTests(async () => "stalehandle.eth")
     const firstSync = await requestJson("http://pirate.test/profiles/me/linked-handles/sync", "POST", {}, ctx.env, session.accessToken)
     const firstSyncBody = await json(firstSync) as {
-      linked_handles: Array<{ linked_handle_id: string; kind: string }>
+      linked_handles: Array<{ linked_handle: string; kind: string }>
     }
     const ensHandle = firstSyncBody.linked_handles.find((handle) => handle.kind === "ens")
-    expect(typeof ensHandle?.linked_handle_id).toBe("string")
+    expect(typeof ensHandle?.linked_handle).toBe("string")
 
     const selected = await requestJson("http://pirate.test/profiles/me/primary-public-handle", "POST", {
-      linked_handle_id: ensHandle?.linked_handle_id ?? null,
+      linked_handle_id: ensHandle?.linked_handle ?? null,
     }, ctx.env, session.accessToken)
     expect(selected.status).toBe(200)
 

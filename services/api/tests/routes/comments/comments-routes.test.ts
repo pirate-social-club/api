@@ -95,7 +95,7 @@ describe("comments routes", () => {
       creator.accessToken,
     )
     expect(createdPost.status).toBe(201)
-    const postBody = await json(createdPost) as { post_id: string }
+    const postBody = await json(createdPost) as { id: string }
 
     const registerChallenge = createSignedAgentChallenge({
       message: "clawkey-register-1738500002000",
@@ -129,7 +129,7 @@ describe("comments routes", () => {
     }
 
     const ownershipComplete = await requestJson(
-      `http://pirate.test/agent-ownership-sessions/${ownershipStartBody.agent_ownership_session_id}/complete`,
+      `http://pirate.test/agent-ownership-sessions/aos_${ownershipStartBody.agent_ownership_session_id}/complete`,
       {},
       ctx.env,
       member.accessToken,
@@ -140,7 +140,7 @@ describe("comments routes", () => {
       resolved_agent_ownership_record_id: string
     }
 
-    const topLevelCommentUrl = `http://pirate.test/communities/${community.communityId}/posts/${postBody.post_id}/comments`
+    const topLevelCommentUrl = `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/comments`
     const topLevelCommentPayload = {
       body: "Reply Bot top-level comment",
       authorship_mode: "user_agent" as const,
@@ -178,24 +178,24 @@ describe("comments routes", () => {
     )
     expect(topLevelComment.status).toBe(201)
     const topLevelBody = await json(topLevelComment) as {
-      comment_id: string
+      id: string
       authorship_mode: string
-      agent_id: string | null
-      agent_ownership_record_id: string | null
+      agent: string | null
+      agent_ownership_record: string | null
       agent_handle_snapshot: string | null
       agent_display_name_snapshot: string | null
       agent_owner_handle_snapshot: string | null
       agent_ownership_provider_snapshot: string | null
     }
     expect(topLevelBody.authorship_mode).toBe("user_agent")
-    expect(topLevelBody.agent_id).toBe(ownershipCompleteBody.agent_id)
-    expect(topLevelBody.agent_ownership_record_id).toBe(ownershipCompleteBody.resolved_agent_ownership_record_id)
+    expect(topLevelBody.agent).toBe(`agt_${ownershipCompleteBody.agent_id}`)
+    expect(topLevelBody.agent_ownership_record).toBe(`aor_${ownershipCompleteBody.resolved_agent_ownership_record_id}`)
     expect(topLevelBody.agent_handle_snapshot).toBe("reply-bot.clawitzer")
     expect(topLevelBody.agent_display_name_snapshot).toBe("Reply Bot")
     expect(topLevelBody.agent_owner_handle_snapshot).toBe("commentagent.eth")
     expect(topLevelBody.agent_ownership_provider_snapshot).toBe("clawkey")
 
-    const replyUrl = `http://pirate.test/comments/${topLevelBody.comment_id}/replies`
+    const replyUrl = `http://pirate.test/comments/${topLevelBody.id}/replies`
     const replyPayload = {
       body: "Reply Bot nested reply",
       authorship_mode: "user_agent" as const,
@@ -233,13 +233,13 @@ describe("comments routes", () => {
     )
     expect(reply.status).toBe(201)
     const replyBody = await json(reply) as {
-      parent_comment_id: string | null
+      parent_comment: string | null
       authorship_mode: string
-      agent_id: string | null
+      agent: string | null
     }
-    expect(replyBody.parent_comment_id).toBe(topLevelBody.comment_id)
+    expect(replyBody.parent_comment).toBe(topLevelBody.id)
     expect(replyBody.authorship_mode).toBe("user_agent")
-    expect(replyBody.agent_id).toBe(ownershipCompleteBody.agent_id)
+    expect(replyBody.agent).toBe(`agt_${ownershipCompleteBody.agent_id}`)
   })
 
   test("delegated agent access tokens can create top-level comments and nested replies", async () => {
@@ -275,7 +275,7 @@ describe("comments routes", () => {
       creator.accessToken,
     )
     expect(createdPost.status).toBe(201)
-    const postBody = await json(createdPost) as { post_id: string }
+    const postBody = await json(createdPost) as { id: string }
 
     const registerChallenge = createSignedAgentChallenge({
       message: "clawkey-register-1738500002100",
@@ -309,7 +309,7 @@ describe("comments routes", () => {
     }
 
     const ownershipComplete = await requestJson(
-      `http://pirate.test/agent-ownership-sessions/${ownershipStartBody.agent_ownership_session_id}/complete`,
+      `http://pirate.test/agent-ownership-sessions/aos_${ownershipStartBody.agent_ownership_session_id}/complete`,
       {},
       ctx.env,
       member.accessToken,
@@ -331,7 +331,7 @@ describe("comments routes", () => {
     expect(issueResponse.status).toBe(200)
     const issueBody = await json(issueResponse) as { access_token: string }
 
-    const topLevelCommentUrl = `http://pirate.test/communities/${community.communityId}/posts/${postBody.post_id}/comments`
+    const topLevelCommentUrl = `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/comments`
     const topLevelCommentPayload = {
       body: "Delegated Reply Bot top-level comment",
       authorship_mode: "user_agent" as const,
@@ -369,14 +369,14 @@ describe("comments routes", () => {
     )
     expect(topLevelComment.status).toBe(201)
     const topLevelBody = await json(topLevelComment) as {
-      comment_id: string
+      id: string
       authorship_mode: string
-      agent_id: string | null
+      agent: string | null
     }
     expect(topLevelBody.authorship_mode).toBe("user_agent")
-    expect(topLevelBody.agent_id).toBe(ownershipCompleteBody.agent_id)
+    expect(topLevelBody.agent).toBe(`agt_${ownershipCompleteBody.agent_id}`)
 
-    const replyUrl = `http://pirate.test/comments/${topLevelBody.comment_id}/replies`
+    const replyUrl = `http://pirate.test/comments/${topLevelBody.id}/replies`
     const replyPayload = {
       body: "Delegated Reply Bot nested reply",
       authorship_mode: "user_agent" as const,
@@ -414,13 +414,13 @@ describe("comments routes", () => {
     )
     expect(reply.status).toBe(201)
     const replyBody = await json(reply) as {
-      parent_comment_id: string | null
+      parent_comment: string | null
       authorship_mode: string
-      agent_id: string | null
+      agent: string | null
     }
-    expect(replyBody.parent_comment_id).toBe(topLevelBody.comment_id)
+    expect(replyBody.parent_comment).toBe(topLevelBody.id)
     expect(replyBody.authorship_mode).toBe("user_agent")
-    expect(replyBody.agent_id).toBe(ownershipCompleteBody.agent_id)
+    expect(replyBody.agent).toBe(`agt_${ownershipCompleteBody.agent_id}`)
   })
 
   test("replies_only communities with a self lane reject derived clawkey agent comment writes", async () => {
@@ -456,7 +456,7 @@ describe("comments routes", () => {
       creator.accessToken,
     )
     expect(createdPost.status).toBe(201)
-    const postBody = await json(createdPost) as { post_id: string }
+    const postBody = await json(createdPost) as { id: string }
 
     const registerChallenge = createSignedAgentChallenge({
       message: "clawkey-register-1738500002100",
@@ -490,7 +490,7 @@ describe("comments routes", () => {
     }
 
     const ownershipComplete = await requestJson(
-      `http://pirate.test/agent-ownership-sessions/${ownershipStartBody.agent_ownership_session_id}/complete`,
+      `http://pirate.test/agent-ownership-sessions/aos_${ownershipStartBody.agent_ownership_session_id}/complete`,
       {},
       ctx.env,
       member.accessToken,
@@ -500,7 +500,7 @@ describe("comments routes", () => {
       agent_id: string
     }
 
-    const commentUrl = `http://pirate.test/communities/${community.communityId}/posts/${postBody.post_id}/comments`
+    const commentUrl = `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/comments`
     const commentPayload = {
       body: "This should fail on derived provider acceptance.",
       authorship_mode: "user_agent" as const,
@@ -565,10 +565,10 @@ describe("comments routes", () => {
       creator.accessToken,
     )
     expect(createdPost.status).toBe(201)
-    const postBody = await json(createdPost) as { post_id: string }
+    const postBody = await json(createdPost) as { id: string }
 
     const topLevelComment = await requestJson(
-      `http://pirate.test/communities/${community.communityId}/posts/${postBody.post_id}/comments`,
+      `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/comments`,
       {
         body: "First top-level comment",
       },
@@ -576,12 +576,12 @@ describe("comments routes", () => {
       member.accessToken,
     )
     expect(topLevelComment.status).toBe(201)
-    const topLevelBody = await json(topLevelComment) as { comment_id: string; depth: number; body: string }
+    const topLevelBody = await json(topLevelComment) as { id: string; depth: number; body: string }
     expect(topLevelBody.depth).toBe(0)
     expect(topLevelBody.body).toBe("First top-level comment")
 
     const reply = await requestJson(
-      `http://pirate.test/comments/${topLevelBody.comment_id}/replies`,
+      `http://pirate.test/comments/${topLevelBody.id}/replies`,
       {
         body: "Reply under the top-level comment",
       },
@@ -589,12 +589,12 @@ describe("comments routes", () => {
       creator.accessToken,
     )
     expect(reply.status).toBe(201)
-    const replyBody = await json(reply) as { comment_id: string; parent_comment_id: string | null; depth: number }
-    expect(replyBody.parent_comment_id).toBe(topLevelBody.comment_id)
+    const replyBody = await json(reply) as { id: string; parent_comment: string | null; depth: number }
+    expect(replyBody.parent_comment).toBe(topLevelBody.id)
     expect(replyBody.depth).toBe(1)
 
     const secondReply = await requestJson(
-      `http://pirate.test/comments/${topLevelBody.comment_id}/replies`,
+      `http://pirate.test/comments/${topLevelBody.id}/replies`,
       {
         body: "Second reply under the top-level comment",
       },
@@ -602,10 +602,10 @@ describe("comments routes", () => {
       member.accessToken,
     )
     expect(secondReply.status).toBe(201)
-    const secondReplyBody = await json(secondReply) as { comment_id: string }
+    const secondReplyBody = await json(secondReply) as { id: string }
 
     const secondTopLevelComment = await requestJson(
-      `http://pirate.test/communities/${community.communityId}/posts/${postBody.post_id}/comments`,
+      `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/comments`,
       {
         body: "Second top-level comment",
       },
@@ -613,10 +613,10 @@ describe("comments routes", () => {
       creator.accessToken,
     )
     expect(secondTopLevelComment.status).toBe(201)
-    const secondTopLevelBody = await json(secondTopLevelComment) as { comment_id: string }
+    const secondTopLevelBody = await json(secondTopLevelComment) as { id: string }
 
     const thirdTopLevelComment = await requestJson(
-      `http://pirate.test/communities/${community.communityId}/posts/${postBody.post_id}/comments`,
+      `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/comments`,
       {
         body: "Third top-level comment",
       },
@@ -624,19 +624,19 @@ describe("comments routes", () => {
       member.accessToken,
     )
     expect(thirdTopLevelComment.status).toBe(201)
-    const thirdTopLevelBody = await json(thirdTopLevelComment) as { comment_id: string }
+    const thirdTopLevelBody = await json(thirdTopLevelComment) as { id: string }
 
     await insertThreadSnapshot({
       communityDbRoot: ctx.communityDbRoot,
       communityId: community.communityId,
-      postId: postBody.post_id,
+      postId: postBody.id,
       commentCount: 5,
       swarmManifestRef: "swarm-manifest:test-thread",
       swarmFeedRef: "swarm-feed:test-thread",
     })
 
     const listedComments = await app.request(
-      `http://pirate.test/communities/${community.communityId}/posts/${postBody.post_id}/comments?sort=new&limit=2`,
+      `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/comments?sort=new&limit=2`,
       {
         headers: {
           authorization: `Bearer ${member.accessToken}`,
@@ -648,22 +648,22 @@ describe("comments routes", () => {
     const listedCommentsBody = await json(listedComments) as {
       next_cursor: string | null
       thread_snapshot: {
-        thread_root_post_id: string
+        thread_root_post: string
         swarm_manifest_ref: string
         swarm_feed_ref: string | null
       } | null
-      items: Array<{ comment: { comment_id: string; direct_reply_count: number } }>
+      items: Array<{ comment: { id: string; direct_reply_count: number } }>
     }
     expect(listedCommentsBody.items).toHaveLength(2)
-    expect(listedCommentsBody.items[0]?.comment.comment_id).toBe(thirdTopLevelBody.comment_id)
-    expect(listedCommentsBody.items[1]?.comment.comment_id).toBe(secondTopLevelBody.comment_id)
+    expect(listedCommentsBody.items[0]?.comment.id).toBe(thirdTopLevelBody.id)
+    expect(listedCommentsBody.items[1]?.comment.id).toBe(secondTopLevelBody.id)
     expect(typeof listedCommentsBody.next_cursor).toBe("string")
-    expect(listedCommentsBody.thread_snapshot?.thread_root_post_id).toBe(postBody.post_id)
+    expect(listedCommentsBody.thread_snapshot?.thread_root_post).toBe(postBody.id)
     expect(listedCommentsBody.thread_snapshot?.swarm_manifest_ref).toBe("swarm-manifest:test-thread")
     expect(listedCommentsBody.thread_snapshot?.swarm_feed_ref).toBe("swarm-feed:test-thread")
 
     const listedCommentsPageTwo = await app.request(
-      `http://pirate.test/communities/${community.communityId}/posts/${postBody.post_id}/comments?sort=new&limit=2&cursor=${encodeURIComponent(listedCommentsBody.next_cursor ?? "")}`,
+      `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/comments?sort=new&limit=2&cursor=${encodeURIComponent(listedCommentsBody.next_cursor ?? "")}`,
       {
         headers: {
           authorization: `Bearer ${member.accessToken}`,
@@ -674,15 +674,15 @@ describe("comments routes", () => {
     expect(listedCommentsPageTwo.status).toBe(200)
     const listedCommentsPageTwoBody = await json(listedCommentsPageTwo) as {
       next_cursor: string | null
-      items: Array<{ comment: { comment_id: string; direct_reply_count: number } }>
+      items: Array<{ comment: { id: string; direct_reply_count: number } }>
     }
     expect(listedCommentsPageTwoBody.items).toHaveLength(1)
-    expect(listedCommentsPageTwoBody.items[0]?.comment.comment_id).toBe(topLevelBody.comment_id)
+    expect(listedCommentsPageTwoBody.items[0]?.comment.id).toBe(topLevelBody.id)
     expect(listedCommentsPageTwoBody.items[0]?.comment.direct_reply_count).toBe(2)
     expect(listedCommentsPageTwoBody.next_cursor).toBeNull()
 
     const replies = await app.request(
-      `http://pirate.test/comments/${topLevelBody.comment_id}/replies?sort=new&limit=1`,
+      `http://pirate.test/comments/${topLevelBody.id}/replies?sort=new&limit=1`,
       {
         headers: {
           authorization: `Bearer ${member.accessToken}`,
@@ -694,20 +694,20 @@ describe("comments routes", () => {
     const repliesBody = await json(replies) as {
       next_cursor: string | null
       thread_snapshot: {
-        thread_root_post_id: string
+        thread_root_post: string
         swarm_manifest_ref: string
       } | null
-      items: Array<{ comment: { comment_id: string; parent_comment_id: string | null } }>
+      items: Array<{ comment: { id: string; parent_comment: string | null } }>
     }
     expect(repliesBody.items).toHaveLength(1)
-    expect(repliesBody.items[0]?.comment.comment_id).toBe(secondReplyBody.comment_id)
-    expect(repliesBody.items[0]?.comment.parent_comment_id).toBe(topLevelBody.comment_id)
+    expect(repliesBody.items[0]?.comment.id).toBe(secondReplyBody.id)
+    expect(repliesBody.items[0]?.comment.parent_comment).toBe(topLevelBody.id)
     expect(typeof repliesBody.next_cursor).toBe("string")
-    expect(repliesBody.thread_snapshot?.thread_root_post_id).toBe(postBody.post_id)
+    expect(repliesBody.thread_snapshot?.thread_root_post).toBe(postBody.id)
     expect(repliesBody.thread_snapshot?.swarm_manifest_ref).toBe("swarm-manifest:test-thread")
 
     const repliesPageTwo = await app.request(
-      `http://pirate.test/comments/${topLevelBody.comment_id}/replies?sort=new&limit=1&cursor=${encodeURIComponent(repliesBody.next_cursor ?? "")}`,
+      `http://pirate.test/comments/${topLevelBody.id}/replies?sort=new&limit=1&cursor=${encodeURIComponent(repliesBody.next_cursor ?? "")}`,
       {
         headers: {
           authorization: `Bearer ${member.accessToken}`,
@@ -718,14 +718,14 @@ describe("comments routes", () => {
     expect(repliesPageTwo.status).toBe(200)
     const repliesPageTwoBody = await json(repliesPageTwo) as {
       next_cursor: string | null
-      items: Array<{ comment: { comment_id: string; parent_comment_id: string | null } }>
+      items: Array<{ comment: { id: string; parent_comment: string | null } }>
     }
     expect(repliesPageTwoBody.items).toHaveLength(1)
-    expect(repliesPageTwoBody.items[0]?.comment.comment_id).toBe(replyBody.comment_id)
+    expect(repliesPageTwoBody.items[0]?.comment.id).toBe(replyBody.id)
     expect(repliesPageTwoBody.next_cursor).toBeNull()
 
     const context = await app.request(
-      `http://pirate.test/comments/${topLevelBody.comment_id}/context?limit=1`,
+      `http://pirate.test/comments/${topLevelBody.id}/context?limit=1`,
       {
         headers: {
           authorization: `Bearer ${creator.accessToken}`,
@@ -737,23 +737,23 @@ describe("comments routes", () => {
     const contextBody = await json(context) as {
       next_replies_cursor: string | null
       thread_snapshot: {
-        thread_root_post_id: string
+        thread_root_post: string
         swarm_feed_ref: string | null
       } | null
-      ancestors: Array<{ comment: { comment_id: string } }>
-      comment: { comment: { comment_id: string } }
-      replies: Array<{ comment: { comment_id: string } }>
+      ancestors: Array<{ comment: { id: string } }>
+      comment: { comment: { id: string } }
+      replies: Array<{ comment: { id: string } }>
     }
     expect(contextBody.ancestors).toHaveLength(0)
-    expect(contextBody.comment.comment.comment_id).toBe(topLevelBody.comment_id)
+    expect(contextBody.comment.comment.id).toBe(topLevelBody.id)
     expect(contextBody.replies).toHaveLength(1)
-    expect(contextBody.replies[0]?.comment.comment_id).toBe(secondReplyBody.comment_id)
+    expect(contextBody.replies[0]?.comment.id).toBe(secondReplyBody.id)
     expect(typeof contextBody.next_replies_cursor).toBe("string")
-    expect(contextBody.thread_snapshot?.thread_root_post_id).toBe(postBody.post_id)
+    expect(contextBody.thread_snapshot?.thread_root_post).toBe(postBody.id)
     expect(contextBody.thread_snapshot?.swarm_feed_ref).toBe("swarm-feed:test-thread")
 
     const contextPageTwo = await app.request(
-      `http://pirate.test/comments/${topLevelBody.comment_id}/context?limit=1&cursor=${encodeURIComponent(contextBody.next_replies_cursor ?? "")}`,
+      `http://pirate.test/comments/${topLevelBody.id}/context?limit=1&cursor=${encodeURIComponent(contextBody.next_replies_cursor ?? "")}`,
       {
         headers: {
           authorization: `Bearer ${creator.accessToken}`,
@@ -767,13 +767,13 @@ describe("comments routes", () => {
       thread_snapshot: {
         swarm_manifest_ref: string
       } | null
-      ancestors: Array<{ comment: { comment_id: string } }>
-      comment: { comment: { comment_id: string } }
-      replies: Array<{ comment: { comment_id: string } }>
+      ancestors: Array<{ comment: { id: string } }>
+      comment: { comment: { id: string } }
+      replies: Array<{ comment: { id: string } }>
     }
-    expect(contextPageTwoBody.comment.comment.comment_id).toBe(topLevelBody.comment_id)
+    expect(contextPageTwoBody.comment.comment.id).toBe(topLevelBody.id)
     expect(contextPageTwoBody.replies).toHaveLength(1)
-    expect(contextPageTwoBody.replies[0]?.comment.comment_id).toBe(replyBody.comment_id)
+    expect(contextPageTwoBody.replies[0]?.comment.id).toBe(replyBody.id)
     expect(contextPageTwoBody.next_replies_cursor).toBeNull()
     expect(contextPageTwoBody.thread_snapshot?.swarm_manifest_ref).toBe("swarm-manifest:test-thread")
   })
@@ -797,10 +797,10 @@ describe("comments routes", () => {
       creator.accessToken,
     )
     expect(createdPost.status).toBe(201)
-    const postBody = await json(createdPost) as { post_id: string }
+    const postBody = await json(createdPost) as { id: string }
 
     const commentResponse = await requestJson(
-      `http://pirate.test/communities/${community.communityId}/posts/${postBody.post_id}/comments`,
+      `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/comments`,
       {
         body: "Vote on me",
       },
@@ -808,20 +808,20 @@ describe("comments routes", () => {
       creator.accessToken,
     )
     expect(commentResponse.status).toBe(201)
-    const commentBody = await json(commentResponse) as { comment_id: string }
+    const commentBody = await json(commentResponse) as { id: string }
 
     const unverifiedMember = await exchangeJwt(ctx.env, "comments-routes-vote-unverified")
     await addCommunityMember(ctx.communityDbRoot, community.communityId, unverifiedMember.userId)
 
     const acceptedVote = await requestJson(
-      `http://pirate.test/comments/${commentBody.comment_id}/vote`,
+      `http://pirate.test/comments/${commentBody.id}/vote`,
       { value: 1 },
       ctx.env,
       unverifiedMember.accessToken,
     )
     expect(acceptedVote.status).toBe(200)
     const acceptedVoteBody = await json(acceptedVote) as { comment_id: string; value: number }
-    expect(acceptedVoteBody.comment_id).toBe(commentBody.comment_id)
+    expect(`cmt_${acceptedVoteBody.comment_id}`).toBe(commentBody.id)
     expect(acceptedVoteBody.value).toBe(1)
   })
 })

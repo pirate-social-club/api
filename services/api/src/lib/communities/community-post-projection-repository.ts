@@ -1,6 +1,7 @@
 import type { Client } from "../sql-client"
 import { internalError } from "../errors"
 import { makeId } from "../helpers"
+import { auditEventInsert } from "../audit"
 import {
   getCommunityPostProjectionRowByPostId,
   updateCommunityPostProjectionMetricsRow,
@@ -25,7 +26,6 @@ export async function recordCommunityPostProjection(
   },
 ): Promise<CommunityPostProjectionRow> {
   const projectionId = makeId("cpp")
-  const auditEventId = makeId("aud")
   const tx = await client.transaction("write")
 
   try {
@@ -55,26 +55,19 @@ export async function recordCommunityPostProjection(
           input.createdAt,
         ],
       },
-      {
-        sql: `
-          INSERT INTO audit_log (
-            audit_event_id, actor_type, actor_id, action, target_type, target_id, community_id, metadata_json, created_at
-          ) VALUES (
-            ?1, 'user', ?2, 'community.post_created', 'post', ?3, ?4, ?5, ?6
-          )
-        `,
-        args: [
-          auditEventId,
-          input.actorUserId,
-          input.sourcePostId,
-          input.communityId,
-          JSON.stringify({
-            projection_id: projectionId,
-            source_created_at: input.sourceCreatedAt,
-          }),
-          input.createdAt,
-          ],
+      auditEventInsert({
+        action: "community.post_created",
+        actorId: input.actorUserId,
+        actorType: "user",
+        communityId: input.communityId,
+        createdAt: input.createdAt,
+        targetId: input.sourcePostId,
+        targetType: "post",
+        metadata: {
+          projection_id: projectionId,
+          source_created_at: input.sourceCreatedAt,
         },
+      }),
     ])
 
     const projection = await getCommunityPostProjectionRowByPostId(tx, input.sourcePostId)

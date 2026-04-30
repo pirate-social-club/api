@@ -5,7 +5,7 @@ import { AsyncLocalStorage } from "node:async_hooks"
 import { globalSingleton } from "./db-helpers"
 import { requireControlPlaneDbUrl } from "./auth/auth-db-query-helpers"
 import type { Client, InStatement, QueryResult, QueryResultRow, Transaction } from "./sql-client"
-import type { Env } from "../types"
+import type { Env } from "../env"
 
 type PostgresQueryable = {
   query: (sql: string, values?: unknown[]) => Promise<{ rows: unknown[]; rowCount?: number | null }>

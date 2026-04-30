@@ -32,21 +32,21 @@ export async function exchangeJwt(env: Env, sub: string): Promise<{
   const body = await json(response) as {
     access_token: string
     user: {
-      user_id: string
-      primary_wallet_attachment_id?: string | null
+      id: string
+      primary_wallet_attachment?: string | null
     }
     wallet_attachments?: Array<{
-      wallet_attachment_id: string
+      wallet_attachment: string
       is_primary?: boolean | null
     }>
   }
-  const primaryWalletAttachmentId = body.user.primary_wallet_attachment_id
-    ?? body.wallet_attachments?.find((attachment) => attachment.is_primary)?.wallet_attachment_id
-    ?? body.wallet_attachments?.[0]?.wallet_attachment_id
+  const primaryWalletAttachmentId = body.user.primary_wallet_attachment
+    ?? body.wallet_attachments?.find((attachment) => attachment.is_primary)?.wallet_attachment
+    ?? body.wallet_attachments?.[0]?.wallet_attachment
     ?? null
   return {
     accessToken: body.access_token,
-    userId: body.user.user_id,
+    userId: body.user.id.replace(/^usr_/, ""),
     primaryWalletAttachmentId,
   }
 }
@@ -58,9 +58,9 @@ export async function completeUniqueHumanVerification(
   const verificationSession = await requestJson("http://pirate.test/verification-sessions", {
     provider: "self",
   }, env, accessToken)
-  const verificationBody = await json(verificationSession) as { verification_session_id: string }
+  const verificationBody = await json(verificationSession) as { id: string }
   await requestJson(
-    `http://pirate.test/verification-sessions/${verificationBody.verification_session_id}/complete`,
+    `http://pirate.test/verification-sessions/${verificationBody.id}/complete`,
     {},
     env,
     accessToken,

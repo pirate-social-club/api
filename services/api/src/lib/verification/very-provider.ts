@@ -2,7 +2,8 @@ import { internalError, providerUnavailable } from "../errors"
 import { envFlag, makeId } from "../helpers"
 import { sha256Hex } from "../crypto"
 import { logVerificationDebug } from "./verification-logging"
-import type { Env, VerificationIntent, VerySessionBinding, VeryWidgetLaunch } from "../../types"
+import type { Env } from "../../env"
+import type { VerificationIntent, VerySessionBinding, VeryWidgetLaunch } from "../../types"
 import { unixSeconds } from "../../serializers/time"
 
 const VERY_TIMEOUT_MS = 15_000

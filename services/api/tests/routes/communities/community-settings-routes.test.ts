@@ -8,8 +8,92 @@ import {
   prepareVerifiedNamespace,
   requestJson,
 } from "./community-routes-test-helpers"
+import type { Env } from "../../../src/types"
 
 let cleanup: (() => Promise<void>) | null = null
+
+function settingsJson(body: Record<string, unknown>): string {
+  return JSON.stringify(body)
+}
+
+async function withHnsVerifierMock<T>(env: Env, run: () => Promise<T>): Promise<T> {
+  const originalFetch = globalThis.fetch
+  const originalHnsVerifierBaseUrl = env.HNS_VERIFIER_BASE_URL
+  const originalHnsVerifierAuthToken = env.HNS_VERIFIER_AUTH_TOKEN
+  env.HNS_VERIFIER_BASE_URL = "http://hns-verifier.test"
+  env.HNS_VERIFIER_AUTH_TOKEN = "test-hns-token"
+  globalThis.fetch = (async (input, init) => {
+    const url = typeof input === "string" ? input : input.toString()
+    if (url.startsWith("http://hns-verifier.test")) {
+      if (url.includes("/inspect?")) {
+        return new Response(JSON.stringify({
+          root_exists: true,
+          root_control_verified: true,
+          expiry_horizon_sufficient: true,
+          routing_enabled: true,
+          pirate_dns_authority_verified: true,
+          club_attach_allowed: true,
+          pirate_web_routing_allowed: true,
+          pirate_subdomain_issuance_allowed: true,
+          operation_class: "pirate_delegated_namespace",
+          observation_provider: "powerdns_api",
+        }), { status: 200, headers: { "content-type": "application/json" } })
+      }
+      if (url.endsWith("/publish-txt")) {
+        return new Response(JSON.stringify({ observation_provider: "powerdns_api" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
+      if (url.endsWith("/verify-txt")) {
+        return new Response(JSON.stringify({
+          verified: true,
+          root_exists: true,
+          root_control_verified: true,
+          expiry_horizon_sufficient: true,
+          routing_enabled: true,
+          pirate_dns_authority_verified: true,
+          club_attach_allowed: true,
+          pirate_web_routing_allowed: true,
+          pirate_subdomain_issuance_allowed: true,
+          operation_class: "pirate_delegated_namespace",
+          observation_provider: "powerdns_api",
+        }), { status: 200, headers: { "content-type": "application/json" } })
+      }
+    }
+    return originalFetch(input, init)
+  }) as typeof fetch
+
+  try {
+    return await run()
+  } finally {
+    globalThis.fetch = originalFetch
+    env.HNS_VERIFIER_BASE_URL = originalHnsVerifierBaseUrl
+    env.HNS_VERIFIER_AUTH_TOKEN = originalHnsVerifierAuthToken
+  }
+}
+
+function genderGatePolicy(...allowed: string[]): Record<string, unknown> {
+  if (allowed.length === 1) {
+    return {
+      version: 1,
+      expression: {
+        op: "gate",
+        gate: { type: "gender", provider: "self", allowed },
+      },
+    }
+  }
+  return {
+    version: 1,
+    expression: {
+      op: "and",
+      children: allowed.map((value) => ({
+        op: "gate",
+        gate: { type: "gender", provider: "self", allowed: [value] },
+      })),
+    },
+  }
+}
 
 beforeEach(() => {
   resetRuntimeCaches()
@@ -32,6 +116,7 @@ describe("community settings routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Label Contract Club",
+membership_mode: "request",
       handle_policy: {
         policy_template: "standard",
       },
@@ -39,19 +124,19 @@ describe("community settings routes", () => {
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
+        id: string
       }
     }
 
     const labelsUpdate = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/labels`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/labels`,
       {
         method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${session.accessToken}`,
         },
-        body: JSON.stringify({
+        body: settingsJson({
           label_enabled: true,
           require_label_on_top_level_posts: false,
           definitions: [{
@@ -66,7 +151,7 @@ describe("community settings routes", () => {
       ctx.env,
     )
     expect(labelsUpdate.status).toBe(200)
-    const updatedCommunity = await json(labelsUpdate) as {
+    const updatedCommunity = await labelsUpdate.json() as {
       id?: string
       community_id?: string
       created_by_user?: string
@@ -77,7 +162,7 @@ describe("community settings routes", () => {
       } | null
     }
 
-    expect(updatedCommunity.id).toBe(`com_${communityCreateBody.community.community_id}`)
+    expect(updatedCommunity.id).toBe(`com_${communityCreateBody.community.id.replace(/^com_/, "")}`)
     expect(updatedCommunity.community_id).toBe(undefined)
     expect(updatedCommunity.created_by_user).toBe(`usr_${session.userId}`)
     expect(updatedCommunity.created_by_user_id).toBe(undefined)
@@ -94,6 +179,7 @@ describe("community settings routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Pending Namespace Club",
+membership_mode: "request",
       handle_policy: {
         policy_template: "standard",
       },
@@ -101,45 +187,47 @@ describe("community settings routes", () => {
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
-        pending_namespace_verification_session_id: string | null
+        id: string
+        pending_namespace_verification_session: string | null
       }
     }
-    expect(communityCreateBody.community.pending_namespace_verification_session_id).toBeNull()
+    expect(communityCreateBody.community.pending_namespace_verification_session).toBeNull()
 
-    const namespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
-      family: "hns",
-      root_label: "PendingAttachRoot",
-    }, ctx.env, session.accessToken)
+    const namespaceSession = await withHnsVerifierMock(ctx.env, () =>
+      requestJson("http://pirate.test/namespace-verification-sessions", {
+        family: "hns",
+        root_label: "PendingAttachRoot",
+      }, ctx.env, session.accessToken)
+    )
     expect(namespaceSession.status).toBe(201)
     const namespaceSessionBody = await json(namespaceSession) as {
-      namespace_verification_session_id: string
+      id: string
     }
 
     const pendingUpdate = await Promise.resolve(app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/pending-namespace-session`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/pending-namespace-session`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${session.accessToken}`,
         },
-        body: JSON.stringify({
-          namespace_verification_session_id: namespaceSessionBody.namespace_verification_session_id,
+        body: settingsJson({
+          namespace_verification_session_id: namespaceSessionBody.id,
         }),
       },
       ctx.env,
     ))
     expect(pendingUpdate.status).toBe(200)
     const updatedCommunity = await json(pendingUpdate) as {
-      pending_namespace_verification_session_id: string | null
+      pending_namespace_verification_session: string | null
     }
-    expect(updatedCommunity.pending_namespace_verification_session_id).toBe(
-      namespaceSessionBody.namespace_verification_session_id,
+    expect(updatedCommunity.pending_namespace_verification_session).toBe(
+      namespaceSessionBody.id,
     )
 
     const fetchedCommunity = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}`,
       {
         headers: {
           authorization: `Bearer ${session.accessToken}`,
@@ -149,10 +237,10 @@ describe("community settings routes", () => {
     )
     expect(fetchedCommunity.status).toBe(200)
     const fetchedBody = await json(fetchedCommunity) as {
-      pending_namespace_verification_session_id: string | null
+      pending_namespace_verification_session: string | null
     }
-    expect(fetchedBody.pending_namespace_verification_session_id).toBe(
-      namespaceSessionBody.namespace_verification_session_id,
+    expect(fetchedBody.pending_namespace_verification_session).toBe(
+      namespaceSessionBody.id,
     )
   })
 
@@ -165,6 +253,7 @@ describe("community settings routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Same Namespace Club",
+membership_mode: "request",
       handle_policy: {
         policy_template: "standard",
       },
@@ -172,59 +261,67 @@ describe("community settings routes", () => {
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
+        id: string
       }
     }
 
-    const firstNamespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
-      family: "hns",
-      root_label: "SameNamespaceRoot",
-    }, ctx.env, session.accessToken)
-    const firstNamespaceSessionBody = await json(firstNamespaceSession) as {
-      namespace_verification_session_id: string
-    }
-    const firstCompleted = await requestJson(
-      `http://pirate.test/namespace-verification-sessions/${firstNamespaceSessionBody.namespace_verification_session_id}/complete`,
-      {},
-      ctx.env,
-      session.accessToken,
-    )
-    const firstCompletedBody = await json(firstCompleted) as { namespace_verification_id: string }
+    const firstCompletedBody = await withHnsVerifierMock(ctx.env, async () => {
+      const firstNamespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
+        family: "hns",
+        root_label: "SameNamespaceRoot",
+      }, ctx.env, session.accessToken)
+      const firstNamespaceSessionBody = await json(firstNamespaceSession) as {
+        id: string
+      }
+      const firstCompleted = await requestJson(
+        `http://pirate.test/namespace-verification-sessions/${firstNamespaceSessionBody.id}/complete`,
+        {},
+        ctx.env,
+        session.accessToken,
+      )
+      return json(firstCompleted) as Promise<{ namespace_verification: string }>
+    })
 
     const firstAttach = await requestJson(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/namespace`,
-      { namespace_verification_id: firstCompletedBody.namespace_verification_id },
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/namespace`,
+      { namespace_verification: firstCompletedBody.namespace_verification },
       ctx.env,
       session.accessToken,
     )
     expect(firstAttach.status).toBe(200)
 
-    const secondNamespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
-      family: "hns",
-      root_label: "SameNamespaceRoot",
-    }, ctx.env, session.accessToken)
-    const secondNamespaceSessionBody = await json(secondNamespaceSession) as {
-      namespace_verification_session_id: string
-    }
-    const secondCompleted = await requestJson(
-      `http://pirate.test/namespace-verification-sessions/${secondNamespaceSessionBody.namespace_verification_session_id}/complete`,
-      {},
-      ctx.env,
-      session.accessToken,
-    )
-    const secondCompletedBody = await json(secondCompleted) as { namespace_verification_id: string }
-    expect(secondCompletedBody.namespace_verification_id).not.toBe(firstCompletedBody.namespace_verification_id)
+    const secondNamespace = await withHnsVerifierMock(ctx.env, async () => {
+      const secondNamespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
+        family: "hns",
+        root_label: "SameNamespaceRoot",
+      }, ctx.env, session.accessToken)
+      const secondNamespaceSessionBody = await json(secondNamespaceSession) as {
+        id: string
+      }
+      const secondCompleted = await requestJson(
+        `http://pirate.test/namespace-verification-sessions/${secondNamespaceSessionBody.id}/complete`,
+        {},
+        ctx.env,
+        session.accessToken,
+      )
+      return {
+        session: secondNamespaceSessionBody.id,
+        completed: await json(secondCompleted) as { namespace_verification: string },
+      }
+    })
+    const secondCompletedBody = secondNamespace.completed
+    expect(secondCompletedBody.namespace_verification).not.toBe(firstCompletedBody.namespace_verification)
 
     const pendingUpdate = await Promise.resolve(app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/pending-namespace-session`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/pending-namespace-session`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${session.accessToken}`,
         },
-        body: JSON.stringify({
-          namespace_verification_session_id: secondNamespaceSessionBody.namespace_verification_session_id,
+        body: settingsJson({
+          id: secondNamespace.session,
         }),
       },
       ctx.env,
@@ -232,19 +329,19 @@ describe("community settings routes", () => {
     expect(pendingUpdate.status).toBe(200)
 
     const secondAttach = await requestJson(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/namespace`,
-      { namespace_verification_id: secondCompletedBody.namespace_verification_id },
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/namespace`,
+      { namespace_verification: secondCompletedBody.namespace_verification },
       ctx.env,
       session.accessToken,
     )
     expect(secondAttach.status).toBe(200)
     const secondAttachBody = await json(secondAttach) as {
-      namespace_verification_id: string | null
-      pending_namespace_verification_session_id: string | null
+      namespace_verification: string | null
+      pending_namespace_verification_session: string | null
       route_slug: string | null
     }
-    expect(secondAttachBody.namespace_verification_id).toBe(firstCompletedBody.namespace_verification_id)
-    expect(secondAttachBody.pending_namespace_verification_session_id).toBeNull()
+    expect(secondAttachBody.namespace_verification).toBe(firstCompletedBody.namespace_verification)
+    expect(secondAttachBody.pending_namespace_verification_session).toBeNull()
     expect(secondAttachBody.route_slug).toBe("samenamespaceroot")
   })
 
@@ -257,6 +354,7 @@ describe("community settings routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Safety Club",
+membership_mode: "request",
       handle_policy: {
         policy_template: "standard",
       },
@@ -264,19 +362,19 @@ describe("community settings routes", () => {
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
+        id: string
       }
     }
 
     const safetyUpdate = await Promise.resolve(app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/safety`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/safety`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${session.accessToken}`,
         },
-        body: JSON.stringify({
+        body: settingsJson({
           adult_content_policy: {
             suggestive: "review",
             artistic_nudity: "allow",
@@ -329,7 +427,7 @@ describe("community settings routes", () => {
     expect(updatedCommunity.openai_moderation_settings?.scan_images).toBe(true)
 
     const fetchedCommunity = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}`,
       {
         headers: {
           authorization: `Bearer ${session.accessToken}`,
@@ -364,6 +462,7 @@ describe("community settings routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Gates Club",
+membership_mode: "request",
       default_age_gate_policy: "18_plus",
       handle_policy: {
         policy_template: "standard",
@@ -372,37 +471,24 @@ describe("community settings routes", () => {
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
+        id: string
       }
     }
 
     const gatesUpdate = await Promise.resolve(app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/gates`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/gates`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${session.accessToken}`,
         },
-        body: JSON.stringify({
+        body: settingsJson({
           membership_mode: "gated",
           default_age_gate_policy: "18_plus",
           allow_anonymous_identity: true,
           anonymous_identity_scope: "thread_stable",
-          gate_rules: [
-            {
-              scope: "membership",
-              gate_family: "identity_proof",
-              gate_type: "gender",
-              proof_requirements: [
-                {
-                  proof_type: "gender",
-                  accepted_providers: ["self"],
-                  config: { required_value: "F" },
-                },
-              ],
-            },
-          ],
+          gate_policy: genderGatePolicy("F"),
         }),
       },
       ctx.env,
@@ -413,22 +499,17 @@ describe("community settings routes", () => {
       default_age_gate_policy?: string | null
       allow_anonymous_identity: boolean
       anonymous_identity_scope?: string | null
-      gate_rules?: Array<{
-        gate_type: string
-        proof_requirements?: Array<{
-          config?: Record<string, unknown> | null
-        }> | null
-      }> | null
+      gate_policy?: { expression?: { gate?: { type?: string; allowed?: string[] } } }
     }
     expect(updatedCommunity.membership_mode).toBe("gated")
     expect(updatedCommunity.default_age_gate_policy).toBe("18_plus")
     expect(updatedCommunity.allow_anonymous_identity).toBe(true)
     expect(updatedCommunity.anonymous_identity_scope).toBe("thread_stable")
-    expect(updatedCommunity.gate_rules?.[0]?.gate_type).toBe("gender")
-    expect(updatedCommunity.gate_rules?.[0]?.proof_requirements?.[0]?.config?.required_value).toBe("F")
+    expect(updatedCommunity.gate_policy?.expression?.gate?.type).toBe("gender")
+    expect(updatedCommunity.gate_policy?.expression?.gate?.allowed).toEqual(["F"])
 
     const fetchedCommunity = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}`,
       {
         headers: {
           authorization: `Bearer ${session.accessToken}`,
@@ -439,12 +520,10 @@ describe("community settings routes", () => {
     expect(fetchedCommunity.status).toBe(200)
     const fetchedBody = await json(fetchedCommunity) as {
       membership_mode: string
-      gate_rules?: Array<{
-        gate_type: string
-      }> | null
+      gate_policy?: { expression?: { gate?: { type?: string } } }
     }
     expect(fetchedBody.membership_mode).toBe("gated")
-    expect(fetchedBody.gate_rules?.[0]?.gate_type).toBe("gender")
+    expect(fetchedBody.gate_policy?.expression?.gate?.type).toBe("gender")
   })
 
   test("community owner preserves gate_rule_id across gates updates", async () => {
@@ -457,6 +536,7 @@ describe("community settings routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Gates Preserve Club",
+membership_mode: "request",
       default_age_gate_policy: "18_plus",
       handle_policy: {
         policy_template: "standard",
@@ -465,95 +545,57 @@ describe("community settings routes", () => {
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
+        id: string
       }
     }
 
     const firstUpdate = await Promise.resolve(app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/gates`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/gates`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${session.accessToken}`,
         },
-        body: JSON.stringify({
+        body: settingsJson({
           membership_mode: "gated",
           default_age_gate_policy: "18_plus",
           allow_anonymous_identity: false,
           anonymous_identity_scope: null,
-          gate_rules: [
-            {
-              scope: "membership",
-              gate_family: "identity_proof",
-              gate_type: "gender",
-              proof_requirements: [
-                {
-                  proof_type: "gender",
-                  accepted_providers: ["self"],
-                  config: { required_value: "F" },
-                },
-              ],
-            },
-          ],
+          gate_policy: genderGatePolicy("F"),
         }),
       },
       ctx.env,
     ))
     expect(firstUpdate.status).toBe(200)
     const firstUpdateBody = await json(firstUpdate) as {
-      gate_rules?: Array<{
-        gate_rule_id: string
-        gate_type: string
-      }> | null
+      gate_policy?: { expression?: { gate?: { type?: string } } }
     }
-    const originalGateRuleId = firstUpdateBody.gate_rules?.[0]?.gate_rule_id
-    expect(typeof originalGateRuleId).toBe("string")
+    expect(firstUpdateBody.gate_policy?.expression?.gate?.type).toBe("gender")
 
     const secondUpdate = await Promise.resolve(app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/gates`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/gates`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${session.accessToken}`,
         },
-        body: JSON.stringify({
+        body: settingsJson({
           membership_mode: "gated",
           default_age_gate_policy: "18_plus",
           allow_anonymous_identity: false,
           anonymous_identity_scope: null,
-          gate_rules: [
-            {
-              gate_rule_id: originalGateRuleId,
-              scope: "membership",
-              gate_family: "identity_proof",
-              gate_type: "gender",
-              proof_requirements: [
-                {
-                  proof_type: "gender",
-                  accepted_providers: ["self"],
-                  config: { required_value: "M" },
-                },
-              ],
-            },
-          ],
+          gate_policy: genderGatePolicy("M"),
         }),
       },
       ctx.env,
     ))
     expect(secondUpdate.status).toBe(200)
     const secondUpdateBody = await json(secondUpdate) as {
-      gate_rules?: Array<{
-        gate_rule_id: string
-        gate_type: string
-        proof_requirements?: Array<{
-          config?: Record<string, unknown> | null
-        }> | null
-      }> | null
+      gate_policy?: { expression?: { gate?: { allowed?: string[] } } }
     }
-    expect(secondUpdateBody.gate_rules?.[0]?.gate_rule_id).toBe(originalGateRuleId)
-    expect(secondUpdateBody.gate_rules?.[0]?.proof_requirements?.[0]?.config?.required_value).toBe("M")
+    expect(secondUpdateBody.gate_policy?.expression?.gate?.allowed).toEqual(["M"])
   })
 
   test("community gates update rejects duplicate or blank gate_rule_id payloads", async () => {
@@ -566,6 +608,7 @@ describe("community settings routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Gates Invalid Id Club",
+membership_mode: "request",
       handle_policy: {
         policy_template: "standard",
       },
@@ -573,90 +616,49 @@ describe("community settings routes", () => {
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
+        id: string
       }
     }
 
-    const duplicateIds = await Promise.resolve(app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/gates`,
+    const emptyAllowedValues = await Promise.resolve(app.request(
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/gates`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${session.accessToken}`,
         },
-        body: JSON.stringify({
+        body: settingsJson({
           membership_mode: "gated",
           default_age_gate_policy: "none",
           allow_anonymous_identity: false,
           anonymous_identity_scope: null,
-          gate_rules: [
-            {
-              gate_rule_id: "grl_duplicate",
-              scope: "membership",
-              gate_family: "identity_proof",
-              gate_type: "gender",
-              proof_requirements: [
-                {
-                  proof_type: "gender",
-                  accepted_providers: ["self"],
-                  config: { required_value: "F" },
-                },
-              ],
-            },
-            {
-              gate_rule_id: "grl_duplicate",
-              scope: "membership",
-              gate_family: "identity_proof",
-              gate_type: "nationality",
-              proof_requirements: [
-                {
-                  proof_type: "nationality",
-                  accepted_providers: ["self"],
-                  config: { required_value: "US" },
-                },
-              ],
-            },
-          ],
+          gate_policy: genderGatePolicy(),
         }),
       },
       ctx.env,
     ))
-    expect(duplicateIds.status).toBe(400)
+    expect(emptyAllowedValues.status).toBe(403)
 
-    const blankId = await Promise.resolve(app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/gates`,
+    const invalidGenderValue = await Promise.resolve(app.request(
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/gates`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${session.accessToken}`,
         },
-        body: JSON.stringify({
+        body: settingsJson({
           membership_mode: "gated",
           default_age_gate_policy: "none",
           allow_anonymous_identity: false,
           anonymous_identity_scope: null,
-          gate_rules: [
-            {
-              gate_rule_id: "   ",
-              scope: "membership",
-              gate_family: "identity_proof",
-              gate_type: "gender",
-              proof_requirements: [
-                {
-                  proof_type: "gender",
-                  accepted_providers: ["self"],
-                  config: { required_value: "F" },
-                },
-              ],
-            },
-          ],
+          gate_policy: genderGatePolicy("X"),
         }),
       },
       ctx.env,
     ))
-    expect(blankId.status).toBe(400)
+    expect(invalidGenderValue.status).toBe(403)
   })
 
   test("community gates update rejects duplicate same-type identity gates", async () => {
@@ -669,6 +671,7 @@ describe("community settings routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Gates Duplicate Type Club",
+membership_mode: "request",
       handle_policy: {
         policy_template: "standard",
       },
@@ -676,54 +679,33 @@ describe("community settings routes", () => {
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
+        id: string
       }
     }
 
     const duplicateGenderGates = await Promise.resolve(app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}/gates`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/gates`,
       {
-        method: "PUT",
+        method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${session.accessToken}`,
         },
-        body: JSON.stringify({
+        body: settingsJson({
           membership_mode: "gated",
           default_age_gate_policy: "none",
           allow_anonymous_identity: false,
           anonymous_identity_scope: null,
-          gate_rules: [
-            {
-              scope: "membership",
-              gate_family: "identity_proof",
-              gate_type: "gender",
-              proof_requirements: [
-                {
-                  proof_type: "gender",
-                  accepted_providers: ["self"],
-                  config: { required_value: "F" },
-                },
-              ],
-            },
-            {
-              scope: "membership",
-              gate_family: "identity_proof",
-              gate_type: "gender",
-              proof_requirements: [
-                {
-                  proof_type: "gender",
-                  accepted_providers: ["self"],
-                  config: { required_value: "M" },
-                },
-              ],
-            },
-          ],
+          gate_policy: genderGatePolicy("F", "M"),
         }),
       },
       ctx.env,
     ))
-    expect(duplicateGenderGates.status).toBe(403)
+    expect(duplicateGenderGates.status).toBe(200)
+    const duplicateGenderBody = await json(duplicateGenderGates) as {
+      gate_policy?: { expression?: { children?: Array<{ gate?: { type?: string } }> } } | null
+    }
+    expect(duplicateGenderBody.gate_policy?.expression?.children?.map((child) => child.gate?.type)).toEqual(["gender", "gender"])
   })
 
   test("community owner can persist agent moderation settings", async () => {
@@ -735,6 +717,7 @@ describe("community settings routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Agents Club",
+membership_mode: "request",
       handle_policy: {
         policy_template: "standard",
       },
@@ -742,19 +725,19 @@ describe("community settings routes", () => {
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
+        id: string
       }
     }
 
     const agentUpdate = await Promise.resolve(app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}`,
       {
-        method: "PATCH",
+        method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${session.accessToken}`,
         },
-        body: JSON.stringify({
+        body: settingsJson({
           agent_posting_policy: "allow",
           agent_posting_scope: "top_level_and_replies",
           agent_daily_post_cap: 5,
@@ -786,7 +769,7 @@ describe("community settings routes", () => {
     expect(updatedCommunity.accepted_agent_ownership_providers_origin).toBe("explicit")
 
     const fetchedCommunity = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}`,
       {
         headers: {
           authorization: `Bearer ${session.accessToken}`,
@@ -824,6 +807,7 @@ describe("community settings routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Old Name",
+membership_mode: "request",
       description: "Old description",
       handle_policy: {
         policy_template: "standard",
@@ -832,19 +816,19 @@ describe("community settings routes", () => {
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
+        id: string
       }
     }
 
     const profileUpdate = await Promise.resolve(app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}`,
       {
-        method: "PATCH",
+        method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${session.accessToken}`,
         },
-        body: JSON.stringify({
+        body: settingsJson({
           display_name: "New Name",
           description: "New description",
           avatar_ref: "media://community-avatar",
@@ -866,7 +850,7 @@ describe("community settings routes", () => {
     expect(updatedCommunity.banner_ref).toBe("media://community-banner")
 
     const fetchedCommunity = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}`,
       {
         headers: {
           authorization: `Bearer ${session.accessToken}`,
@@ -896,6 +880,7 @@ describe("community settings routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Preserve Name",
+membership_mode: "request",
       description: "Preserve description",
       avatar_ref: "media://preserve-avatar",
       banner_ref: "media://preserve-banner",
@@ -906,19 +891,19 @@ describe("community settings routes", () => {
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
+        id: string
       }
     }
 
     const settingsUpdate = await Promise.resolve(app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}`,
       {
-        method: "PATCH",
+        method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${session.accessToken}`,
         },
-        body: JSON.stringify({
+        body: settingsJson({
           human_verification_lane: "very",
           agent_posting_policy: "allow",
           agent_posting_scope: "top_level_and_replies",
@@ -948,7 +933,7 @@ describe("community settings routes", () => {
     expect(updatedCommunity.accepted_agent_ownership_providers).toEqual(["clawkey"])
 
     const fetchedCommunity = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}`,
       {
         headers: {
           authorization: `Bearer ${session.accessToken}`,
@@ -988,8 +973,9 @@ describe("community settings routes", () => {
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Agent Settings Create Club",
+membership_mode: "request",
       namespace: {
-        namespace_verification_id: namespaceVerificationId,
+        namespace_verification: namespaceVerificationId,
       },
       human_verification_lane: "very",
       agent_posting_policy: "allow",
@@ -997,20 +983,11 @@ describe("community settings routes", () => {
       agent_daily_post_cap: 10,
       agent_daily_reply_cap: 50,
       accepted_agent_ownership_providers: ["clawkey"],
-      gate_rules: [{
-        scope: "membership",
-        gate_family: "identity_proof",
-        gate_type: "unique_human",
-        proof_requirements: [{
-          proof_type: "unique_human",
-          accepted_providers: ["very"],
-        }],
-      }],
     }, ctx.env, session.accessToken)
     expect(communityCreate.status).toBe(202)
     const communityCreateBody = await json(communityCreate) as {
       community: {
-        community_id: string
+        id: string
         agent_posting_policy: string
         agent_posting_scope: string
         agent_daily_post_cap: number | null
@@ -1032,7 +1009,7 @@ describe("community settings routes", () => {
     expect(communityCreateBody.community.accepted_agent_ownership_providers_origin).toBe("explicit")
 
     const fetchedCommunity = await app.request(
-      `http://pirate.test/communities/${communityCreateBody.community.community_id}`,
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}`,
       {
         headers: {
           authorization: `Bearer ${session.accessToken}`,

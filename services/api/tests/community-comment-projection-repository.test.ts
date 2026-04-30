@@ -37,7 +37,7 @@ describe("community comment projection repository", () => {
           transfer_state, route_slug, namespace_verification_id, pending_namespace_verification_session_id,
           primary_database_binding_id, created_at, updated_at
         ) VALUES (
-          ?1, ?2, ?3, 'open', 'active', 'active',
+          ?1, ?2, ?3, 'request', 'active', 'active',
           'none', NULL, NULL, NULL,
           NULL, ?4, ?4
         )

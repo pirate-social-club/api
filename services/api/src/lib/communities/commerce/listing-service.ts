@@ -23,6 +23,11 @@ import { getCommunityPricingPolicy } from "./policy-service"
 import { assertValidDonationSharePct } from "./quote-helpers"
 import { assertAssetReadyForStoryRoyaltyCommerce } from "./story-royalty"
 import { assertEndaomentPayoutConfigured } from "./endaoment-payout-service"
+import { decodePublicAssetId } from "../../public-ids"
+import {
+  decodeCommerceListCursor,
+  encodeCommerceListCursor,
+} from "./list-cursors"
 import type {
   CommunityListing,
   CommunityListingListResponse,
@@ -109,13 +114,23 @@ export async function listCommunityListings(input: {
   userId: string
   communityId: string
   communityRepository: CommunityListingRepository
+  cursor?: string | null
+  limit: number
 }): Promise<CommunityListingListResponse> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityMember(db.client, input.communityId, input.userId)
+    const rows = await listListingRows(db.client, input.communityId, {
+      after: decodeCommerceListCursor(input.cursor),
+      limit: input.limit + 1,
+    })
+    const pageRows = rows.slice(0, input.limit)
+    const lastRow = pageRows[pageRows.length - 1] ?? null
     return {
-      items: (await listListingRows(db.client, input.communityId)).map((row) => serializeListing(row)),
-      next_cursor: null,
+      items: pageRows.map((row) => serializeListing(row)),
+      next_cursor: rows.length > input.limit && lastRow
+        ? encodeCommerceListCursor({ created_at: lastRow.created_at, id: lastRow.listing_id })
+        : null,
     }
   } finally {
     db.close()
@@ -135,10 +150,11 @@ export async function createCommunityListing(input: {
   }
   await requireVerifiedHuman(input.userRepository, input.userId)
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const assetId = input.body.asset?.trim() ? decodePublicAssetId(input.body.asset) : null
   try {
     await requireCommunityMember(db.client, input.communityId, input.userId)
-    if (input.body.asset?.trim()) {
-      const asset = await getAssetRow(db.client, input.communityId, input.body.asset)
+    if (assetId) {
+      const asset = await getAssetRow(db.client, input.communityId, assetId)
       if (!asset) {
         throw notFoundError("Asset not found")
       }
@@ -149,7 +165,7 @@ export async function createCommunityListing(input: {
           throw notFoundError("Asset not found")
         }
       }
-      if (await getListingRowByAssetId(db.client, input.communityId, input.body.asset)) {
+      if (await getListingRowByAssetId(db.client, input.communityId, assetId)) {
         throw badRequestError("Asset already has a listing")
       }
       const pricingPolicy = await getCommunityPricingPolicy({ env: input.env, communityId: input.communityId })
@@ -183,7 +199,7 @@ export async function createCommunityListing(input: {
       args: [
         listingId,
         input.communityId,
-        input.body.asset ?? null,
+        assetId,
         input.body.live_room ?? null,
         input.body.status,
         centsToUsd(input.body.price_cents),

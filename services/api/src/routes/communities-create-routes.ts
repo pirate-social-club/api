@@ -104,14 +104,13 @@ export function registerCommunityCreateRoutes(communities: Hono<AuthenticatedEnv
     const { verificationRepository } = getCommunityCreationRouteContext(c)
     const body = await requireJsonBody<{
       namespace_verification?: string | null
-      namespace_verification_id?: string | null
     }>(c, "Invalid namespace attach payload")
-    const publicNamespaceVerificationId = (body?.namespace_verification_id ?? body?.namespace_verification)?.trim()
+    const publicNamespaceVerificationId = body?.namespace_verification?.trim()
     const namespaceVerificationId = publicNamespaceVerificationId
       ? decodePublicNamespaceVerificationId(publicNamespaceVerificationId)
       : null
     if (!namespaceVerificationId) {
-      throw badRequestError("namespace_verification_id is required")
+      throw badRequestError("namespace_verification is required")
     }
 
     const result = await attachNamespaceToCommunity({

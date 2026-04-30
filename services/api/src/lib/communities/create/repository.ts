@@ -12,9 +12,10 @@ import type {
 } from "../db-community-repository"
 import { badRequestError, eligibilityFailed, internalError, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
-import { getControlPlaneClient } from "../../runtime-deps"
+import { writeAuditEventForEnv } from "../../audit"
 import type { ActorContext, AdminActorContext } from "../../auth-middleware"
-import type { Community, Env } from "../../../types"
+import type { Env } from "../../../env"
+import type { Community } from "../../../types"
 import { serializeCommunity } from "../community-serialization"
 import { openCommunityDb } from "../community-db-factory"
 import type { GateAtom, GateExpression, GatePolicy } from "../membership/gate-types"
@@ -300,26 +301,19 @@ export async function requireAdminOverrideOrOwnedCommunity(input: {
   }
 
   const now = nowIso()
-  await getControlPlaneClient(input.env).execute({
-    sql: `
-      INSERT INTO audit_log (
-        audit_event_id, actor_type, actor_id, action, target_type, target_id, community_id, metadata_json, created_at
-      ) VALUES (
-        ?1, 'operator', ?2, ?3, 'community', ?4, ?4, ?5, ?6
-      )
-    `,
-    args: [
-      makeId("aud"),
-      input.actor.adminOverride.adminActorId,
-      input.action,
-      input.communityId,
-      JSON.stringify({
-        scope: input.actor.adminOverride.scope,
-        acting_user_id: input.actor.userId,
-        owner_user_id: community.creator_user_id,
-      }),
-      now,
-    ],
+  await writeAuditEventForEnv(input.env, {
+    action: input.action,
+    actorId: input.actor.adminOverride.adminActorId,
+    actorType: "operator",
+    communityId: input.communityId,
+    createdAt: now,
+    targetId: input.communityId,
+    targetType: "community",
+    metadata: {
+      scope: input.actor.adminOverride.scope,
+      acting_user_id: input.actor.userId,
+      owner_user_id: community.creator_user_id,
+    },
   })
 
   return community

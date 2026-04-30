@@ -8,7 +8,8 @@ import {
 } from "./hns-verifier"
 import type { HnsInspectResult, HnsVerifyTxtResult } from "./hns-verifier"
 import type { SpacesChallengePayload } from "./spaces-verifier"
-import type { Env, NamespaceVerificationSession } from "../../types"
+import type { Env } from "../../env"
+import type { NamespaceVerificationSession } from "../../types"
 import { isLocalDevHnsObservationProvider } from "./namespace-observation-provider"
 
 export { isHnsVerifierConfigured } from "./hns-verifier"

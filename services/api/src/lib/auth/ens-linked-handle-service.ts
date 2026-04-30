@@ -1,6 +1,6 @@
 import { JsonRpcProvider, getAddress } from "ethers"
 import { globalSingleton } from "../db-helpers"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 
 export type EnsProfileMetadata = {
   avatar?: string

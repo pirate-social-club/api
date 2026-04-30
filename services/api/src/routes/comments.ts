@@ -3,19 +3,14 @@ import { badRequestError, notFoundError } from "../lib/errors"
 import { getProfileRepository, getUserRepository } from "../lib/auth/repositories"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import {
-  authenticateAdminOrUser,
-  authenticateAdminToken,
-  authenticateAgentDelegatedToken,
-  authenticateUserToken,
-  requireBearerToken,
+  authenticateAdminUserOrAgentDelegated,
   type AuthenticatedEnv,
 } from "../lib/auth-middleware"
 import { trackApiEvent } from "../lib/analytics/track"
 import { castCommentVote, createComment, deleteComment, getCommentContext, listCommentReplies } from "../lib/comments/comment-service"
 import { assertAgentDelegatedWriteMatchesActor } from "../lib/agents/agent-write-authorization"
 import type { CreateCommentRequest } from "../lib/comments/comment-types"
-import { makeId, nowIso } from "../lib/helpers"
-import { getControlPlaneClient } from "../lib/runtime-deps"
+import { writeAuditEventForEnv } from "../lib/audit"
 import {
   serializeComment,
   serializeCommentContext,
@@ -26,31 +21,16 @@ import { decodePublicCommentId } from "../lib/public-ids"
 const comments = new Hono<AuthenticatedEnv>()
 
 comments.use("*", async (c, next) => {
-  const adminActor = authenticateAdminToken({
-    env: c.env,
-    token: c.req.header("x-admin-token"),
-    asUserId: c.req.header("x-admin-as-user-id"),
-  })
-  if (adminActor) {
-    c.set("actor", adminActor)
-    await next()
-    return
-  }
-
   const pathname = new URL(c.req.url).pathname
   const allowsAgentDelegation = c.req.method === "POST" && /^\/comments\/[^/]+\/replies$/.test(pathname)
-  if (allowsAgentDelegation) {
-    const token = requireBearerToken(c.req.header("authorization"))
-    try {
-      c.set("actor", await authenticateUserToken({ env: c.env, token }))
-    } catch {
-      c.set("actor", await authenticateAgentDelegatedToken({ env: c.env, token }))
-    }
-    await next()
-    return
-  }
-
-  return authenticateAdminOrUser(c, next)
+  c.set("actor", await authenticateAdminUserOrAgentDelegated({
+    allowAgentDelegated: allowsAgentDelegation,
+    authorization: c.req.header("authorization"),
+    env: c.env,
+    xAdminAsUserId: c.req.header("x-admin-as-user-id"),
+    xAdminToken: c.req.header("x-admin-token"),
+  }))
+  await next()
 })
 
 comments.post("/:commentId/replies", async (c) => {
@@ -150,25 +130,17 @@ comments.post("/:commentId/vote", async (c) => {
   })
   if (actor.authType === "admin") {
     const projection = await communityRepository.getCommunityCommentProjectionByCommentId(result.comment_id)
-    await getControlPlaneClient(c.env).execute({
-      sql: `
-        INSERT INTO audit_log (
-          audit_event_id, actor_type, actor_id, action, target_type, target_id, community_id, metadata_json, created_at
-        ) VALUES (
-          ?1, 'operator', ?2, 'community.admin_comment_vote_cast', 'comment', ?3, ?4, ?5, ?6
-        )
-      `,
-      args: [
-        makeId("aud"),
-        actor.adminOverride.adminActorId,
-        result.comment_id,
-        projection?.community_id ?? null,
-        JSON.stringify({
-          acting_user_id: actor.userId,
-          value: result.value,
-        }),
-        nowIso(),
-      ],
+    await writeAuditEventForEnv(c.env, {
+      action: "community.admin_comment_vote_cast",
+      actorId: actor.adminOverride.adminActorId,
+      actorType: "operator",
+      communityId: projection?.community_id ?? null,
+      targetId: result.comment_id,
+      targetType: "comment",
+      metadata: {
+        acting_user_id: actor.userId,
+        value: result.value,
+      },
     })
   }
   return c.json(result, 200)

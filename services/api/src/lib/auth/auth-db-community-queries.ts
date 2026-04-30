@@ -118,7 +118,12 @@ export async function listCreatedCommunityRowsByCreatorUserId(
   )
 }
 
-export async function listActiveCommunityRows(executor: DbExecutor): Promise<CommunityRow[]> {
+export async function listActiveCommunityRows(
+  executor: DbExecutor,
+  input?: {
+    limit?: number
+  },
+): Promise<CommunityRow[]> {
   return listCommunityRows(
     executor,
     (columns) => `
@@ -127,7 +132,50 @@ export async function listActiveCommunityRows(executor: DbExecutor): Promise<Com
       WHERE status = 'active'
         AND provisioning_state = 'active'
       ORDER BY created_at ASC, community_id ASC
+      ${input?.limit === undefined ? "" : "LIMIT ?1"}
     `,
+    input?.limit === undefined ? [] : [input.limit],
+  )
+}
+
+export async function searchActiveCommunityRows(
+  executor: DbExecutor,
+  input: {
+    query: string
+    limit: number
+  },
+): Promise<CommunityRow[]> {
+  const normalizedQuery = input.query.trim().toLowerCase()
+  const escapedQuery = normalizedQuery.replace(/[\\%_]/g, (character) => `\\${character}`)
+  const containsQuery = `%${escapedQuery}%`
+  const startsWithQuery = `${escapedQuery}%`
+
+  return listCommunityRows(
+    executor,
+    (columns) => `
+      SELECT ${columns}
+      FROM communities
+      WHERE status = 'active'
+        AND provisioning_state = 'active'
+        AND (
+          lower(display_name) LIKE ?2 ESCAPE '\\'
+          OR lower(COALESCE(route_slug, '')) LIKE ?2 ESCAPE '\\'
+        )
+      ORDER BY
+        CASE
+          WHEN lower(COALESCE(route_slug, '')) = ?1 THEN 0
+          WHEN lower(display_name) = ?1 THEN 1
+          WHEN lower(COALESCE(route_slug, '')) LIKE ?3 ESCAPE '\\' THEN 2
+          WHEN lower(display_name) LIKE ?3 ESCAPE '\\' THEN 3
+          WHEN lower(COALESCE(route_slug, '')) LIKE ?2 ESCAPE '\\' THEN 4
+          WHEN lower(display_name) LIKE ?2 ESCAPE '\\' THEN 5
+          ELSE 99
+        END ASC,
+        lower(display_name) ASC,
+        community_id ASC
+      LIMIT ?4
+    `,
+    [normalizedQuery, containsQuery, startsWithQuery, input.limit],
   )
 }
 

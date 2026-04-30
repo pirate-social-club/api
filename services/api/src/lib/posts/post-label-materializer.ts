@@ -3,7 +3,8 @@ import { listCommunityLabels } from "../communities/community-label-store"
 import { nowIso } from "../helpers"
 import { updatePostLabelAssignment } from "./community-post-store"
 import { requestPostLabel } from "./post-label-provider"
-import type { Community, Env, Post } from "../../types"
+import type { Env } from "../../env"
+import type { Community, Post } from "../../types"
 
 function hasLabelablePostContent(post: Pick<Post, "title" | "body" | "caption" | "link_url">): boolean {
   return Boolean(

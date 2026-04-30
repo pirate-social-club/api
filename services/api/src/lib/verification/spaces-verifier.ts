@@ -1,6 +1,6 @@
 import { badRequestError, internalError, providerUnavailable } from "../errors"
 import { isProductionEnv } from "../helpers"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 import { normalizeRootLabel } from "./labels"
 
 export { normalizeRootLabel }

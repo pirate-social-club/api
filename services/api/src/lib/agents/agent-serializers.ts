@@ -1,4 +1,6 @@
 import { internalError } from "../errors"
+import { nullableUnixSeconds, unixSeconds } from "../../serializers/time"
+import type { AgentHandle as ContractAgentHandle } from "../../types"
 import type {
   AgentChallenge,
   AgentHandle,
@@ -107,5 +109,20 @@ export function serializeUserAgent(
     current_ownership: currentOwnership,
     created_at: row.created_at,
     updated_at: row.updated_at,
+  }
+}
+
+export function serializeContractAgentHandle(row: AgentHandleRow): ContractAgentHandle {
+  return {
+    id: row.agent_handle_id,
+    object: "agent_handle",
+    agent: row.agent_id,
+    label_normalized: row.label_normalized,
+    label_display: row.label_display,
+    status: row.status,
+    redirect_target_agent_handle: row.redirect_target_agent_handle_id ?? null,
+    issued_at: unixSeconds(row.issued_at),
+    replaced_at: nullableUnixSeconds(row.replaced_at),
+    created: unixSeconds(row.created_at),
   }
 }

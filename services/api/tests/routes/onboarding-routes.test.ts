@@ -130,7 +130,7 @@ describe("onboarding reddit routes", () => {
       failure_code: string | null
     }
     expect(verifiedBody.status).toBe("verified")
-    expect(typeof verifiedBody.last_checked_at).toBe("string")
+    expect(typeof verifiedBody.last_checked_at).toBe("number")
     expect(verifiedBody.failure_code).toBeNull()
 
     setRedditSnapshotImporterForTests(async ({ redditUsername }) => ({
@@ -193,15 +193,16 @@ describe("onboarding reddit routes", () => {
     const summaryBody = await json(summary) as {
       reddit_username: string
       imported_reddit_score: number | null
-      suggested_communities: Array<{ community_id: string; name: string; reason: string }>
+      suggested_communities: Array<{ community: string; name: string; reason: string }>
     }
     expect(summaryBody.reddit_username).toBe("technohippie")
     expect(summaryBody.imported_reddit_score).toBe(42000)
-    expect(summaryBody.suggested_communities).toEqual([{
-      community_id: "cmt_hiphop",
+    expect(summaryBody.suggested_communities).toHaveLength(1)
+    expect(summaryBody.suggested_communities[0]).toMatchObject({
+      community: "com_cmt_hiphop",
       name: "Hip Hop",
       reason: "Based on your Reddit history",
-    }])
+    })
 
     const analytics = await ctx.client.execute({
       sql: `
@@ -242,7 +243,7 @@ describe("onboarding reddit routes", () => {
       onboarding_dismissed_at: string | null
     }
     expect(dismissBody.cleanup_rename_available).toBe(true)
-    expect(typeof dismissBody.onboarding_dismissed_at).toBe("string")
+    expect(typeof dismissBody.onboarding_dismissed_at).toBe("number")
 
     const onboarding = await app.request("http://pirate.test/onboarding/status", {
       headers: {

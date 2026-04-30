@@ -5,7 +5,7 @@ import { assembleProfile, getProfilePublicHandleStem } from "../auth/auth-serial
 import { conflictError, internalError, notFoundError, notImplementedError, authError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { sha256Hex } from "../crypto"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 import type {
   AgentChallenge,
   AgentOwnershipSession,

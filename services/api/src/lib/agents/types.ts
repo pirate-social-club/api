@@ -1,4 +1,4 @@
-import type { GlobalHandle, LinkedHandle } from "../../types"
+import type { PublicAgentResolution } from "../../types"
 
 export type AgentOwnershipProvider = "self_agent_id" | "clawkey"
 export type AgentOwnershipSessionKind = "register" | "refresh" | "transfer" | "deregister"
@@ -127,25 +127,7 @@ export type AgentHandle = {
   updated_at: string
 }
 
-export type PublicAgentResolution = {
-  is_canonical: boolean
-  requested_handle_label: string
-  resolved_handle_label: string
-  agent: {
-    agent_id: string
-    display_name: string | null
-    handle: AgentHandle
-    ownership_provider: AgentOwnershipProvider | null
-    created_at: string
-    updated_at: string
-  }
-  owner: {
-    user_id: string
-    display_name: string | null
-    global_handle: GlobalHandle
-    primary_public_handle: LinkedHandle | null
-  }
-}
+export type { PublicAgentResolution }
 
 export type AgentOwnershipPairing = {
   pairing_code: string

@@ -1,5 +1,6 @@
 import { eligibilityFailed, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
+import { decodePublicId } from "../../public-ids"
 import { nullableUnixSeconds, unixSeconds } from "../../../serializers/time"
 import { openCommunityDb } from "../community-db-factory"
 import type { CommunityDatabaseBindingRepository } from "../db-community-repository"
@@ -68,10 +69,11 @@ export async function preflightCommunityPurchaseQuote(input: {
     const route = resolveRoutePolicy({ moneyPolicy, body: input.body })
     const pricingPolicy = await getCommunityPricingPolicy({ env: input.env, communityId: input.communityId })
     const buyer = await input.userRepository.getUserById(input.userId)
-    const listing = input.body.listing
-      ? await getListingRowById(db.client, input.communityId, input.body.listing)
+    const listingId = input.body.listing ? decodePublicId(input.body.listing, "lst") : null
+    const listing = listingId
+      ? await getListingRowById(db.client, input.communityId, listingId)
       : null
-    if (input.body.listing && (!listing || listing.status !== "active")) {
+    if (listingId && (!listing || listing.status !== "active")) {
       throw notFoundError("Listing not found")
     }
     const serializedListing = listing ? serializeListing(listing) : null
@@ -133,7 +135,7 @@ export async function createCommunityPurchaseQuote(input: {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityMember(db.client, input.communityId, input.userId)
-    const listing = await getListingRowById(db.client, input.communityId, input.body.listing)
+    const listing = await getListingRowById(db.client, input.communityId, decodePublicId(input.body.listing, "lst"))
     if (!listing || listing.status !== "active") {
       throw notFoundError("Listing not found")
     }
@@ -348,7 +350,8 @@ export async function failCommunityPurchase(input: {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityMember(db.client, input.communityId, input.userId)
-    const quote = await getPurchaseQuoteRow(db.client, input.communityId, input.body.quote)
+    const quoteId = decodePublicId(input.body.quote, "pq")
+    const quote = await getPurchaseQuoteRow(db.client, input.communityId, quoteId)
     if (!quote || quote.buyer_user_id !== input.userId) {
       throw notFoundError("Purchase quote not found")
     }
@@ -364,7 +367,7 @@ export async function failCommunityPurchase(input: {
         WHERE community_id = ?1
           AND quote_id = ?2
       `,
-      args: [input.communityId, input.body.quote, nextStatus, now],
+      args: [input.communityId, quoteId, nextStatus, now],
     })
     return {
       id: `pur_${quote.quote_id}`,

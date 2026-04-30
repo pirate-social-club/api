@@ -1,6 +1,7 @@
 import type { DbExecutor } from "../db-helpers"
 import { nowIso } from "../helpers"
-import type { Comment as ApiComment, Env } from "../../types"
+import type { Env } from "../../env"
+import type { Comment as ApiComment } from "../../types"
 import { computeCommentSourceHash } from "./content-source-hash"
 import { DEFAULT_CONTENT_LOCALE, normalizeContentLocale, sameLanguageLocale } from "./content-locale"
 import { requestContentTranslation } from "./content-translation-provider"

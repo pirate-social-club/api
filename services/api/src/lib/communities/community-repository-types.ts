@@ -17,7 +17,13 @@ export interface CommunityReadRepository {
   getCommunityById(communityId: string): Promise<CommunityRow | null>
   getCommunityByRouteSlug(routeSlug: string): Promise<CommunityRow | null>
   getCommunityByNamespaceVerificationId(namespaceVerificationId: string): Promise<CommunityRow | null>
-  listActiveCommunities(): Promise<CommunityRow[]>
+  listActiveCommunities(input?: {
+    limit?: number
+  }): Promise<CommunityRow[]>
+  searchActiveCommunities(input: {
+    query: string
+    limit: number
+  }): Promise<CommunityRow[]>
 }
 
 export interface CommunityDatabaseBindingRepository {

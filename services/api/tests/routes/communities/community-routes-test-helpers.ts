@@ -20,10 +20,6 @@ export function requestJson(url: string, body: unknown, env: Env, token?: string
   ))
 }
 
-function responseId(body: Record<string, unknown>, legacyKey: string): string {
-  return String(body[legacyKey] ?? body.id ?? "")
-}
-
 export async function exchangeJwt(env: Env, sub: string): Promise<{ accessToken: string; userId: string }> {
   const jwt = await mintUpstreamJwt(env, { sub })
   const response = await requestJson("http://pirate.test/auth/session/exchange", {
@@ -32,37 +28,102 @@ export async function exchangeJwt(env: Env, sub: string): Promise<{ accessToken:
       jwt,
     },
   }, env)
-  const body = await json(response) as { access_token: string; user: { user_id?: string; id?: string } }
-  return { accessToken: body.access_token, userId: body.user.user_id ?? body.user.id ?? "" }
+  const body = await json(response) as { access_token: string; user: { id: string } }
+  return { accessToken: body.access_token, userId: body.user.id.replace(/^usr_/, "") }
 }
 
 export async function prepareVerifiedNamespace(env: Env, accessToken: string): Promise<string> {
   const verificationSession = await requestJson("http://pirate.test/verification-sessions", {
     provider: "self",
   }, env, accessToken)
-  const verificationBody = await json(verificationSession) as Record<string, unknown>
-  const verificationSessionId = responseId(verificationBody, "verification_session_id")
+  const verificationBody = await json(verificationSession) as { id: string }
   await requestJson(
-    `http://pirate.test/verification-sessions/${verificationSessionId}/complete`,
+    `http://pirate.test/verification-sessions/${verificationBody.id}/complete`,
     {},
     env,
     accessToken,
   )
 
-  const namespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
-    family: "hns",
-    root_label: "PirateCommunityRoot",
-  }, env, accessToken)
-  const namespaceBody = await json(namespaceSession) as Record<string, unknown>
-  const namespaceSessionId = responseId(namespaceBody, "namespace_verification_session_id")
-  const completed = await requestJson(
-    `http://pirate.test/namespace-verification-sessions/${namespaceSessionId}/complete`,
-    {},
-    env,
-    accessToken,
-  )
-  const completedBody = await json(completed) as Record<string, unknown>
-  return responseId(completedBody, "namespace_verification_id")
+  const originalFetch = globalThis.fetch
+  const originalHnsVerifierBaseUrl = env.HNS_VERIFIER_BASE_URL
+  const originalHnsVerifierAuthToken = env.HNS_VERIFIER_AUTH_TOKEN
+  env.HNS_VERIFIER_BASE_URL = "http://hns-verifier.test"
+  env.HNS_VERIFIER_AUTH_TOKEN = "test-hns-token"
+  globalThis.fetch = (async (input, init) => {
+    const url = typeof input === "string" ? input : input.toString()
+    if (url.startsWith("http://hns-verifier.test")) {
+      if (url.includes("/inspect?")) {
+        return new Response(JSON.stringify({
+          root_exists: true,
+          root_control_verified: true,
+          expiry_horizon_sufficient: true,
+          routing_enabled: true,
+          pirate_dns_authority_verified: true,
+          club_attach_allowed: true,
+          pirate_web_routing_allowed: true,
+          pirate_subdomain_issuance_allowed: true,
+          operation_class: "pirate_delegated_namespace",
+          observation_provider: "powerdns_api",
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
+
+      if (url.endsWith("/publish-txt")) {
+        return new Response(JSON.stringify({
+          observation_provider: "powerdns_api",
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
+
+      if (url.endsWith("/verify-txt")) {
+        return new Response(JSON.stringify({
+          verified: true,
+          root_exists: true,
+          root_control_verified: true,
+          expiry_horizon_sufficient: true,
+          routing_enabled: true,
+          pirate_dns_authority_verified: true,
+          club_attach_allowed: true,
+          pirate_web_routing_allowed: true,
+          pirate_subdomain_issuance_allowed: true,
+          operation_class: "pirate_delegated_namespace",
+          observation_provider: "powerdns_api",
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
+    }
+
+    return originalFetch(input, init)
+  }) as typeof fetch
+
+  try {
+    const namespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
+      family: "hns",
+      root_label: "PirateCommunityRoot",
+    }, env, accessToken)
+    const namespaceBody = await json(namespaceSession) as { id: string }
+    const completed = await requestJson(
+      `http://pirate.test/namespace-verification-sessions/${namespaceBody.id}/complete`,
+      {},
+      env,
+      accessToken,
+    )
+    const completedBody = await json(completed) as { namespace_verification: string | null }
+    if (!completedBody.namespace_verification) {
+      throw new Error("namespace verification did not complete")
+    }
+    return completedBody.namespace_verification
+  } finally {
+    globalThis.fetch = originalFetch
+    env.HNS_VERIFIER_BASE_URL = originalHnsVerifierBaseUrl
+    env.HNS_VERIFIER_AUTH_TOKEN = originalHnsVerifierAuthToken
+  }
 }
 
 export async function completeUniqueHumanVerification(
@@ -73,10 +134,9 @@ export async function completeUniqueHumanVerification(
   const verificationSession = await requestJson("http://pirate.test/verification-sessions", {
     provider,
   }, env, accessToken)
-  const verificationBody = await json(verificationSession) as Record<string, unknown>
-  const verificationSessionId = responseId(verificationBody, "verification_session_id")
+  const verificationBody = await json(verificationSession) as { id: string }
   await requestJson(
-    `http://pirate.test/verification-sessions/${verificationSessionId}/complete`,
+    `http://pirate.test/verification-sessions/${verificationBody.id}/complete`,
     {},
     env,
     accessToken,
@@ -91,10 +151,9 @@ export async function completeNationalityVerification(
     provider: "self",
     requested_capabilities: ["nationality"],
   }, env, accessToken)
-  const verificationBody = await json(verificationSession) as Record<string, unknown>
-  const verificationSessionId = responseId(verificationBody, "verification_session_id")
+  const verificationBody = await json(verificationSession) as { id: string }
   await requestJson(
-    `http://pirate.test/verification-sessions/${verificationSessionId}/complete`,
+    `http://pirate.test/verification-sessions/${verificationBody.id}/complete`,
     {},
     env,
     accessToken,
@@ -109,10 +168,9 @@ export async function completeGenderVerification(
     provider: "self",
     requested_capabilities: ["gender"],
   }, env, accessToken)
-  const verificationBody = await json(verificationSession) as Record<string, unknown>
-  const verificationSessionId = responseId(verificationBody, "verification_session_id")
+  const verificationBody = await json(verificationSession) as { id: string }
   await requestJson(
-    `http://pirate.test/verification-sessions/${verificationSessionId}/complete`,
+    `http://pirate.test/verification-sessions/${verificationBody.id}/complete`,
     {},
     env,
     accessToken,
@@ -127,10 +185,9 @@ export async function completeAgeOver18Verification(
     provider: "self",
     requested_capabilities: ["age_over_18"],
   }, env, accessToken)
-  const verificationBody = await json(verificationSession) as Record<string, unknown>
-  const verificationSessionId = responseId(verificationBody, "verification_session_id")
+  const verificationBody = await json(verificationSession) as { id: string }
   await requestJson(
-    `http://pirate.test/verification-sessions/${verificationSessionId}/complete`,
+    `http://pirate.test/verification-sessions/${verificationBody.id}/complete`,
     {},
     env,
     accessToken,

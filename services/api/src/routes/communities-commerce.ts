@@ -19,6 +19,7 @@ import {
   updateCommunityListing,
 } from "../lib/communities/commerce/service"
 import { getCommunity } from "../lib/communities/membership/community-read-service"
+import { badRequestError } from "../lib/errors"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import {
   getResolvedCommunityRouteContext,
@@ -40,6 +41,20 @@ import {
   decodePublicListingId,
   decodePublicPurchaseId,
 } from "../lib/public-ids"
+
+const DEFAULT_COMMERCE_LIST_LIMIT = 25
+const MAX_COMMERCE_LIST_LIMIT = 100
+
+function commerceListLimit(value: string | undefined): number {
+  if (value === undefined) {
+    return DEFAULT_COMMERCE_LIST_LIMIT
+  }
+  const parsed = Number.parseInt(value, 10)
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    throw badRequestError("Invalid limit")
+  }
+  return Math.min(parsed, MAX_COMMERCE_LIST_LIMIT)
+}
 
 export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.get("/:communityId/money-policy", async (c) => {
@@ -142,6 +157,8 @@ export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedE
       userId: actor.userId,
       communityId,
       communityRepository,
+      cursor: c.req.query("cursor") ?? null,
+      limit: commerceListLimit(c.req.query("limit")),
     })
     return c.json(result, 200)
   })
@@ -193,6 +210,8 @@ export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedE
       userId: actor.userId,
       communityId,
       communityRepository,
+      cursor: c.req.query("cursor") ?? null,
+      limit: commerceListLimit(c.req.query("limit")),
     })
     return c.json(result, 200)
   })
@@ -249,17 +268,14 @@ export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedE
       userRepository,
     })
     if (result.royaltyEarningEvents.length > 0) {
-      const emission = emitRoyaltyEarnedBatch({
-        env: c.env,
-        buyerUserId: actor.userId,
-        events: result.royaltyEarningEvents,
-      }).catch((error) => {
-        console.warn("[settlement] royalty notification emission failed", error)
-      })
       try {
-        c.executionCtx.waitUntil(emission)
-      } catch {
-        void emission
+        await emitRoyaltyEarnedBatch({
+          env: c.env,
+          buyerUserId: actor.userId,
+          events: result.royaltyEarningEvents,
+        })
+      } catch (error) {
+        console.warn("[settlement] royalty notification emission failed", error)
       }
     }
     return c.json(result.settlement, 201)

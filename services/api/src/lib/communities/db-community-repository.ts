@@ -20,7 +20,7 @@ import type {
   CommunityRepository,
   InitialCommunityDatabaseBinding,
 } from "./community-repository-types"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 
 export type {
   CommunityCommentProjectionRepository,
@@ -40,6 +40,7 @@ export {
   getCommunityByRouteSlug,
   getCommunityByNamespaceVerificationId,
   listActiveCommunities,
+  searchActiveCommunities,
   getPrimaryCommunityDatabaseBinding,
   getActiveCommunityDbCredential,
   getJobById,
@@ -77,6 +78,7 @@ import {
   getCommunityByRouteSlug,
   getCommunityByNamespaceVerificationId,
   listActiveCommunities,
+  searchActiveCommunities,
   getPrimaryCommunityDatabaseBinding,
   getActiveCommunityDbCredential,
   getJobById,
@@ -153,8 +155,17 @@ export class DatabaseCommunityRepository implements CommunityRepository {
     return getCommunityByNamespaceVerificationId(this.client, namespaceVerificationId)
   }
 
-  async listActiveCommunities(): Promise<CommunityRow[]> {
-    return listActiveCommunities(this.client)
+  async listActiveCommunities(input?: {
+    limit?: number
+  }): Promise<CommunityRow[]> {
+    return listActiveCommunities(this.client, input)
+  }
+
+  async searchActiveCommunities(input: {
+    query: string
+    limit: number
+  }): Promise<CommunityRow[]> {
+    return searchActiveCommunities(this.client, input)
   }
 
   async getPrimaryCommunityDatabaseBinding(communityId: string): Promise<CommunityDatabaseBindingRow | null> {

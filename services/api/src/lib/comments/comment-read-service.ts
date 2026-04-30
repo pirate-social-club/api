@@ -12,7 +12,7 @@ import {
 } from "../communities/membership/membership-state-store"
 import { notFoundError } from "../errors"
 import { getPostById } from "../posts/community-post-store"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 import type { CommentContext, CommentListResponse, CommentSort } from "./comment-types"
 import {
   getCommentById,

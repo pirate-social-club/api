@@ -284,7 +284,7 @@ describe("openCommunityDb", () => {
             settings_json, created_by_user_id, created_at, updated_at
           ) VALUES (
             ?1, ?2, NULL, 'active', NULL, 'fan_run',
-            'open', 'none', 0, NULL,
+            'request', 'none', 0, NULL,
             NULL, 'none', 'unconfigured', 'centralized',
             NULL, ?3, ?4, ?4
           )

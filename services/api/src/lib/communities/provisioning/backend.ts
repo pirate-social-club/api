@@ -15,7 +15,7 @@ import type {
   CreateCommunityAuth,
   CreateCommunityRequestBody,
 } from "../create/validation"
-import type { Env } from "../../../types"
+import type { Env } from "../../../env"
 import {
   isCommunityProvisionOperatorConfigured,
   provisionCommunityViaOperator,

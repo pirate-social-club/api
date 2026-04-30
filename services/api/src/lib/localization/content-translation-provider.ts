@@ -1,4 +1,4 @@
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 import { normalizeContentLocale } from "./content-locale"
 
 export type ContentTranslationProviderResult = {

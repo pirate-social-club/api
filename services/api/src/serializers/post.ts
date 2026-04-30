@@ -5,7 +5,7 @@ import type {
 import type { LocalizedPostResponse, Post } from "../types"
 import { serializeCommentThreadSnapshot } from "./comment"
 import { unixSeconds } from "./time"
-import { publicCommunityId, publicPostId } from "../lib/public-ids"
+import { publicCommunityId, publicId, publicPostId } from "../lib/public-ids"
 
 type CurrentPostResponse = ContractPost & Pick<
   Post,
@@ -67,8 +67,8 @@ export function serializePost(post: Post): CurrentPostResponse {
     source_language: post.source_language,
     translation_policy: post.translation_policy,
     access_mode: post.access_mode,
-    asset: post.asset_id,
-    song_artifact_bundle: post.song_artifact_bundle_id,
+    asset: post.asset_id ? publicId(post.asset_id, "asset") : null,
+    song_artifact_bundle: post.song_artifact_bundle_id ? publicId(post.song_artifact_bundle_id, "sab") : null,
     parent_post: post.parent_post_id,
     song_mode: post.song_mode,
     rights_basis: post.rights_basis,

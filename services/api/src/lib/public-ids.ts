@@ -92,11 +92,17 @@ export function decodePublicPurchaseId(value: string): string {
 }
 
 export function decodePublicSongArtifactBundleId(value: string): string {
-  return decodePublicId(value, "sab")
+  const trimmed = value.trim()
+  if (!trimmed.startsWith("sab_")) return trimmed
+  const stripped = trimmed.slice("sab_".length)
+  return stripped.includes("_") ? stripped : trimmed
 }
 
 export function decodePublicSongArtifactUploadId(value: string): string {
-  return decodePublicId(value, "sau")
+  const trimmed = value.trim()
+  if (!trimmed.startsWith("sau_")) return trimmed
+  const stripped = trimmed.slice("sau_".length)
+  return stripped.includes("_") ? stripped : trimmed
 }
 
 export function decodePublicVerificationSessionId(value: string): string {

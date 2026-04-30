@@ -1,6 +1,7 @@
 import { Contract, JsonRpcProvider, getAddress } from "ethers"
 import { globalSingleton } from "../db-helpers"
-import type { Env, WalletAttachmentSummary } from "../../types"
+import type { Env } from "../../env"
+import type { WalletAttachmentSummary } from "../../types"
 
 const ERC721_COLLECTION_ABI = [
   "function balanceOf(address owner) view returns (uint256)",

@@ -2,7 +2,8 @@ import { conflictError, internalError, verificationRequired } from "../../errors
 import { makeId, nowIso } from "../../helpers"
 import { checkRedditVerificationCode, importRedditSnapshot, makeRedditVerificationCode } from "../../onboarding/reddit-bootstrap"
 import { getMemoryRecordByUserId, getMemoryStore } from "./memory-auth-store"
-import type { Env, Job, RedditImportSummary, RedditVerification } from "../../../types"
+import type { Env } from "../../../env"
+import type { Job, RedditImportSummary, RedditVerification } from "../../../types"
 import { unixSeconds } from "../../../serializers/time"
 
 export class MemoryRedditOnboardingRepository {

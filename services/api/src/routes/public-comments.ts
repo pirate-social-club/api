@@ -3,7 +3,7 @@ import { getCommunityRepository } from "../lib/communities/db-community-reposito
 import { listPublicCommentReplies, listPublicPostComments } from "../lib/comments/comment-service"
 import { serializeCommentListResponse } from "../serializers/comment"
 import { decodePublicCommentId, decodePublicPostId } from "../lib/public-ids"
-import type { Env } from "../types"
+import type { Env } from "../env"
 
 const publicComments = new Hono<{ Bindings: Env }>()
 

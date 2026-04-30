@@ -1,4 +1,5 @@
-import type { Env, User, WalletAttachmentSummary } from "../../../types"
+import type { Env } from "../../../env"
+import type { User, WalletAttachmentSummary } from "../../../types"
 import { evaluateMembershipGatePolicy } from "./gate-policy-evaluation"
 import { evaluateIdentityGateRule } from "./identity-gate-evaluation"
 import { evaluateTokenGateRule } from "./token-gate-evaluation"

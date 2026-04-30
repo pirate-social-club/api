@@ -1,7 +1,8 @@
 import { Hono } from "hono"
 import { notFoundError } from "../lib/errors"
 import { getProfileRepository } from "../lib/auth/repositories"
-import type { Env } from "../types"
+import type { Env } from "../env"
+import { serializePublicProfileResolution } from "../serializers/profile"
 
 const publicProfiles = new Hono<{ Bindings: Env }>()
 
@@ -11,7 +12,7 @@ publicProfiles.get("/by-wallet/:walletAddress", async (c) => {
   if (!resolved) {
     throw notFoundError("Profile not found")
   }
-  return c.json(resolved, 200)
+  return c.json(serializePublicProfileResolution(resolved), 200)
 })
 
 publicProfiles.get("/:handleLabel", async (c) => {
@@ -20,7 +21,7 @@ publicProfiles.get("/:handleLabel", async (c) => {
   if (!resolved) {
     throw notFoundError("Profile not found")
   }
-  return c.json(resolved, 200)
+  return c.json(serializePublicProfileResolution(resolved), 200)
 })
 
 export default publicProfiles

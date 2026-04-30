@@ -1,4 +1,5 @@
-import type { Env, WalletAttachmentSummary } from "../../types"
+import type { Env } from "../../env"
+import type { WalletAttachmentSummary } from "../../types"
 import { DEFAULT_COURTYARD_API_URL, COURTYARD_REGISTRIES } from "./courtyard-registry-config"
 import { normalizeEthereumAddress } from "./community-token-gates"
 

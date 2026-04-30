@@ -1,5 +1,6 @@
 import { badRequestError, conflictError, notFoundError } from "../../errors"
 import { nowIso } from "../../helpers"
+import { decodePublicId } from "../../public-ids"
 import { openCommunityDb } from "../community-db-factory"
 import type {
   CommunityDatabaseBindingRepository,
@@ -36,6 +37,10 @@ import {
   resolveAllocationSettlementAmountAtomic,
   serializeSettlement,
 } from "./quote-helpers"
+import {
+  decodeCommerceListCursor,
+  encodeCommerceListCursor,
+} from "./list-cursors"
 import {
   assertExecutableQuoteAllocationSnapshot,
   extractDonationCompatibilityFields,
@@ -563,7 +568,8 @@ export async function settleCommunityPurchase(input: {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityMember(db.client, input.communityId, input.userId)
-    const quote = await getPurchaseQuoteRow(db.client, input.communityId, input.body.quote)
+    const quoteId = decodePublicId(input.body.quote, "pq")
+    const quote = await getPurchaseQuoteRow(db.client, input.communityId, quoteId)
     if (!quote || quote.buyer_user_id !== input.userId) {
       throw notFoundError("Purchase quote not found")
     }
@@ -593,7 +599,7 @@ export async function settleCommunityPurchase(input: {
           WHERE community_id = ?1
             AND quote_id = ?2
         `,
-        args: [input.communityId, input.body.quote, nowIso()],
+        args: [input.communityId, quoteId, nowIso()],
       })
       throw badRequestError("Purchase quote has expired")
     }
@@ -853,11 +859,17 @@ export async function listCommunityPurchases(input: {
   userId: string
   communityId: string
   communityRepository: CommunityDatabaseBindingRepository
+  cursor?: string | null
+  limit: number
 }): Promise<CommunityPurchaseListResponse> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityMember(db.client, input.communityId, input.userId)
-    const purchases = await listPurchaseRows(db.client, input.communityId, input.userId)
+    const rows = await listPurchaseRows(db.client, input.communityId, input.userId, {
+      after: decodeCommerceListCursor(input.cursor),
+      limit: input.limit + 1,
+    })
+    const purchases = rows.slice(0, input.limit)
     const purchaseIds = purchases.map((purchase) => purchase.purchase_id)
     const entitlementsByPurchaseId = await listLatestEntitlementRowsByPurchaseIds(db.client, purchaseIds)
     const allocationsByPurchaseId = await listPurchaseAllocationLegRowsByPurchaseIds(db.client, purchaseIds)
@@ -869,7 +881,13 @@ export async function listCommunityPurchases(input: {
         items.push(serializePurchase(purchase, entitlement, allocations))
       }
     }
-    return { items, next_cursor: null }
+    const lastRow = purchases[purchases.length - 1] ?? null
+    return {
+      items,
+      next_cursor: rows.length > input.limit && lastRow
+        ? encodeCommerceListCursor({ created_at: lastRow.created_at, id: lastRow.purchase_id })
+        : null,
+    }
   } finally {
     db.close()
   }

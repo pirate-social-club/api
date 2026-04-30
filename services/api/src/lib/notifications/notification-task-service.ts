@@ -2,7 +2,8 @@ import { nowIso } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
 import { resolveUserTask, upsertUserTask } from "./notification-task-store"
 import { trackNotificationGeneratedSafely } from "./notification-tracking"
-import type { Env, UserTask } from "../../types"
+import type { Env } from "../../env"
+import type { UserTask } from "../../types"
 
 export async function createNamespaceVerificationTask(input: {
   env: Env

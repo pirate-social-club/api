@@ -1,4 +1,5 @@
-import type { Env, WalletAttachmentSummary } from "../../../types"
+import type { Env } from "../../../env"
+import type { WalletAttachmentSummary } from "../../../types"
 import {
   evaluateAttachedEthereumWalletErc721CollectionOwnership,
   hasEthereumRpcConfig,

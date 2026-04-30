@@ -1,5 +1,6 @@
 import { badRequestError } from "../errors"
-import type { CreateSongArtifactBundleRequest, Env } from "../../types"
+import type { Env } from "../../env"
+import type { CreateSongArtifactBundleRequest } from "../../types"
 
 export type SongPreviewWindow = NonNullable<CreateSongArtifactBundleRequest["preview_window"]>
 

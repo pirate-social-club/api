@@ -31,7 +31,7 @@ describe("royalties routes", () => {
     const payload = {
       tx_hash: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       wallet_address: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      chain_id: 1514,
+      chain: 1514,
       claimable_wip_wei_at_submission: "12450000000000000000",
       ip_ids: [
         "0x1111111111111111111111111111111111111111",
@@ -147,7 +147,7 @@ describe("royalties routes", () => {
         body: JSON.stringify({
           tx_hash: txHash,
           wallet_address: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          chain_id: 1514,
+          chain: 1514,
           claimable_wip_wei_at_submission: "4000000000000000000",
           ip_ids: ["0x1111111111111111111111111111111111111111"],
           auto_unwrap_ip_tokens: false,
@@ -170,10 +170,10 @@ describe("royalties routes", () => {
     )
     expect(claims.status).toBe(200)
     const claimsBody = await json(claims) as {
-      items: Array<{ status: string; verified_at: string | null; verification_error: string | null }>
+      items: Array<{ status: string; verified_at: number | null; verification_error: string | null }>
     }
     expect(claimsBody.items[0]?.status).toBe("confirmed")
-    expect(typeof claimsBody.items[0]?.verified_at).toBe("string")
+    expect(typeof claimsBody.items[0]?.verified_at).toBe("number")
     expect(claimsBody.items[0]?.verification_error).toBeNull()
   })
 
@@ -193,7 +193,7 @@ describe("royalties routes", () => {
         body: JSON.stringify({
           tx_hash: "0x1234",
           wallet_address: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          chain_id: 1514,
+          chain: 1514,
           claimable_wip_wei_at_submission: "1",
           ip_ids: [],
           auto_unwrap_ip_tokens: true,

@@ -1,5 +1,5 @@
 import { JsonRpcProvider, Wallet, formatEther, getAddress } from "ethers"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 import {
   DEFAULT_STORY_RPC_URL,
   resolveStoryChainId,

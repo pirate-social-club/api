@@ -8,7 +8,7 @@ import {
   resolveStoryCdrWriterDirectSigner,
   resolveStoryOperatorDirectSigner,
 } from "../../story/story-direct-signer"
-import type { Env } from "../../../types"
+import type { Env } from "../../../env"
 
 export async function requireCommunityMember(
   client: Client,

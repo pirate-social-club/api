@@ -8,7 +8,7 @@ import { getControlPlaneClient } from "../runtime-deps"
 import { openCommunityDb } from "./community-db-factory"
 import { requireOwnedCommunity } from "./create/repository"
 import { parseCommunitySettingsJson } from "./create/validation"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 
 const MACHINE_ACCESS_POLICY_SETTINGS_KEY = "machine_access_policy"
 const TOP_COMMENTS_LIMIT = 10

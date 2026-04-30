@@ -1,4 +1,4 @@
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 
 export type StructuredAccessLink = {
   href: string

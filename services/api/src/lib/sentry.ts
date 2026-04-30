@@ -1,6 +1,6 @@
 import type { CloudflareOptions } from "@sentry/cloudflare"
 import { captureException, honoIntegration } from "@sentry/cloudflare"
-import type { Env } from "../types"
+import type { Env } from "../env"
 
 const REDACT_HEADERS = new Set([
   "authorization",

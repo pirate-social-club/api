@@ -26,7 +26,7 @@ import type {
   NotificationTasksResponse,
   UserTask,
 } from "../../types"
-import type { Env } from "../../types"
+import type { Env } from "../../env"
 
 export async function getNotificationsSummary(input: {
   env: Env

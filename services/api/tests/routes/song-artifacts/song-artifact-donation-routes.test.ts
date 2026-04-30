@@ -23,6 +23,7 @@ import {
   installLockedSongFetchMocks,
   uploadSongArtifact,
 } from "./song-artifact-locked-test-helpers"
+import { addCommunityMember } from "../communities/community-routes-test-helpers"
 
 let cleanup: (() => Promise<void>) | null = null
 let originalFetch: typeof fetch
@@ -147,7 +148,7 @@ describe("song artifact donation routes", () => {
     const donationPolicyUpdate = await app.request(
       `http://pirate.test/communities/${communityId}/donation-policy`,
       {
-        method: "PATCH",
+        method: "POST",
         headers: {
           authorization: `Bearer ${author.accessToken}`,
           "content-type": "application/json",
@@ -175,6 +176,7 @@ describe("song artifact donation routes", () => {
       buyer.accessToken,
     )
     expect(joinBuyer.status).toBe(200)
+    await addCommunityMember(String(ctx.env.LOCAL_COMMUNITY_DB_ROOT), communityId, buyer.userId)
 
     const primaryBytes = new Uint8Array([21, 22, 23, 24, 25, 26, 27, 28])
     const previewBytes = new Uint8Array([1, 2, 3, 4])
@@ -194,7 +196,7 @@ describe("song artifact donation routes", () => {
     const bundleCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifacts`,
       {
-        primary_audio: { song_artifact_upload_id: primaryUploadIntentBody.song_artifact_upload_id },
+        primary_audio: { song_artifact_upload: primaryUploadIntentBody.id },
         preview_window: { start_ms: 0, duration_ms: 30_000 },
         lyrics: "No donation line",
       },
@@ -202,11 +204,11 @@ describe("song artifact donation routes", () => {
       author.accessToken,
     )
     expect(bundleCreate.status).toBe(201)
-    const bundleBody = await json(bundleCreate) as { song_artifact_bundle_id: string }
+    const bundleBody = await json(bundleCreate) as { id: string }
     await markGeneratedPreviewReady({
       env: ctx.env,
       communityId,
-      songArtifactBundleId: bundleBody.song_artifact_bundle_id,
+      songArtifactBundleId: bundleBody.id.replace(/^sab_/, ""),
       previewStorageRef,
       previewSizeBytes: previewBytes.byteLength,
     })
@@ -222,35 +224,35 @@ describe("song artifact donation routes", () => {
         song_mode: "original",
         rights_basis: "original",
         license_preset: "non-commercial",
-        song_artifact_bundle_id: bundleBody.song_artifact_bundle_id,
+        song_artifact_bundle: bundleBody.id,
       },
       ctx.env,
       author.accessToken,
     )
     expect(lockedPostCreate.status).toBe(201)
-    const lockedPostBody = await json(lockedPostCreate) as { asset_id?: string | null }
-    const assetId = lockedPostBody.asset_id as string
+    const lockedPostBody = await json(lockedPostCreate) as { asset?: string | null }
+    const assetId = lockedPostBody.asset as string
 
     const listingCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/listings`,
       {
-        asset_id: assetId,
-        price_usd: 4.99,
+        asset: assetId,
+        price_cents: 499,
         regional_pricing_enabled: false,
-        donation_partner_id: "don_charity_water",
-        donation_share_pct: 10,
+        donation_partner: "don_charity_water",
+        donation_share_bps: 1000,
         status: "active",
       },
       ctx.env,
       author.accessToken,
     )
     expect(listingCreate.status).toBe(201)
-    const listingBody = await json(listingCreate) as { listing_id: string }
+    const listingBody = await json(listingCreate) as { id: string }
 
     const disableDonation = await app.request(
       `http://pirate.test/communities/${communityId}/donation-policy`,
       {
-        method: "PATCH",
+        method: "POST",
         headers: {
           authorization: `Bearer ${author.accessToken}`,
           "content-type": "application/json",
@@ -268,7 +270,7 @@ describe("song artifact donation routes", () => {
     const quoteCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/purchase-quotes`,
       {
-        listing_id: listingBody.listing_id,
+        listing: listingBody.id,
         ...routedCheckoutQuoteFields,
       },
       ctx.env,
@@ -366,7 +368,7 @@ describe("song artifact donation routes", () => {
     const donationPolicyUpdate = await app.request(
       `http://pirate.test/communities/${communityId}/donation-policy`,
       {
-        method: "PATCH",
+        method: "POST",
         headers: {
           authorization: `Bearer ${author.accessToken}`,
           "content-type": "application/json",
@@ -394,6 +396,7 @@ describe("song artifact donation routes", () => {
       buyer.accessToken,
     )
     expect(joinBuyer.status).toBe(200)
+    await addCommunityMember(String(ctx.env.LOCAL_COMMUNITY_DB_ROOT), communityId, buyer.userId)
 
     const primaryUploadIntentBody = await uploadSongArtifact({
       env: ctx.env,
@@ -409,7 +412,7 @@ describe("song artifact donation routes", () => {
       `http://pirate.test/communities/${communityId}/song-artifacts`,
       {
         primary_audio: {
-          song_artifact_upload_id: primaryUploadIntentBody.song_artifact_upload_id,
+          song_artifact_upload: primaryUploadIntentBody.id,
         },
         preview_window: { start_ms: 0, duration_ms: 30_000 },
         lyrics: "Public royalty line",
@@ -418,11 +421,11 @@ describe("song artifact donation routes", () => {
       author.accessToken,
     )
     expect(bundleCreate.status).toBe(201)
-    const bundleBody = await json(bundleCreate) as { song_artifact_bundle_id: string }
+    const bundleBody = await json(bundleCreate) as { id: string }
     await markGeneratedPreviewReady({
       env: ctx.env,
       communityId,
-      songArtifactBundleId: bundleBody.song_artifact_bundle_id,
+      songArtifactBundleId: bundleBody.id.replace(/^sab_/, ""),
       previewStorageRef,
       previewSizeBytes: 4,
     })
@@ -438,49 +441,49 @@ describe("song artifact donation routes", () => {
         song_mode: "original",
         rights_basis: "original",
         license_preset: "non-commercial",
-        song_artifact_bundle_id: bundleBody.song_artifact_bundle_id,
+        song_artifact_bundle: bundleBody.id,
       },
       ctx.env,
       author.accessToken,
     )
     expect(postCreate.status).toBe(201)
-    const postBody = await json(postCreate) as { asset_id?: string | null }
-    const assetId = postBody.asset_id as string
+    const postBody = await json(postCreate) as { asset?: string | null }
+    const assetId = postBody.asset as string
 
     const listingCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/listings`,
       {
-        asset_id: assetId,
-        price_usd: 2,
+        asset: assetId,
+        price_cents: 200,
         regional_pricing_enabled: false,
-        donation_partner_id: "don_public_charity",
-        donation_share_pct: 10,
+        donation_partner: "don_public_charity",
+        donation_share_bps: 1000,
         status: "active",
       },
       ctx.env,
       author.accessToken,
     )
     expect(listingCreate.status).toBe(201)
-    const listingBody = await json(listingCreate) as { listing_id: string }
+    const listingBody = await json(listingCreate) as { id: string }
 
     const quoteCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/purchase-quotes`,
       {
-        listing_id: listingBody.listing_id,
+        listing: listingBody.id,
         ...routedCheckoutQuoteFields,
       },
       ctx.env,
       buyer.accessToken,
     )
     expect(quoteCreate.status).toBe(201)
-    const quoteBody = await json(quoteCreate) as { quote_id: string; settlement_mode: string }
+    const quoteBody = await json(quoteCreate) as { id: string; settlement_mode: string }
     expect(quoteBody.settlement_mode).toBe("royalty_native_story_payment")
 
     const purchaseSettle = await requestJson(
       `http://pirate.test/communities/${communityId}/purchase-settlements`,
       {
-        quote_id: quoteBody.quote_id,
-        settlement_wallet_attachment_id: "wal_song_buyer_public_royalty",
+        quote: quoteBody.id,
+        settlement_wallet_attachment: "wal_song_buyer_public_royalty",
         funding_tx_ref: "0xfunding-public-1",
         settlement_tx_ref: "ignored-client-ref",
       },
@@ -493,7 +496,7 @@ describe("song artifact donation routes", () => {
       settlement_tx_ref: string
       allocations: Array<{
         recipient_type: string
-        amount_usd: number
+        amount_cents: number
         status: string
         settlement_ref: string | null
       }>
@@ -502,7 +505,7 @@ describe("song artifact donation routes", () => {
     expect(purchaseBody.settlement_tx_ref).toBe("0xroyalty-public")
     expect(purchaseBody.allocations).toEqual([
       {
-        amount_usd: 0.2,
+        amount_cents: 20,
         failure_reason: null,
         recipient_ref: "don_public_charity",
         recipient_type: "charity",
@@ -513,7 +516,7 @@ describe("song artifact donation routes", () => {
         waterfall_position: 60,
       },
       {
-        amount_usd: 1.8,
+        amount_cents: 180,
         failure_reason: null,
         recipient_ref: null,
         recipient_type: "creator",
@@ -592,7 +595,7 @@ describe("song artifact donation routes", () => {
     const donationPolicyUpdate = await app.request(
       `http://pirate.test/communities/${communityId}/donation-policy`,
       {
-        method: "PATCH",
+        method: "POST",
         headers: {
           authorization: `Bearer ${author.accessToken}`,
           "content-type": "application/json",
@@ -620,6 +623,7 @@ describe("song artifact donation routes", () => {
       buyer.accessToken,
     )
     expect(joinBuyer.status).toBe(200)
+    await addCommunityMember(String(ctx.env.LOCAL_COMMUNITY_DB_ROOT), communityId, buyer.userId)
 
     const primaryBytes = new Uint8Array([21, 22, 23, 24, 25, 26, 27, 28])
     const previewBytes = new Uint8Array([1, 2, 3, 4])
@@ -639,7 +643,7 @@ describe("song artifact donation routes", () => {
     const bundleCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifacts`,
       {
-        primary_audio: { song_artifact_upload_id: primaryUploadIntentBody.song_artifact_upload_id },
+        primary_audio: { song_artifact_upload: primaryUploadIntentBody.id },
         preview_window: { start_ms: 0, duration_ms: 30_000 },
         lyrics: "Clear donation line",
       },
@@ -647,11 +651,11 @@ describe("song artifact donation routes", () => {
       author.accessToken,
     )
     expect(bundleCreate.status).toBe(201)
-    const bundleBody = await json(bundleCreate) as { song_artifact_bundle_id: string }
+    const bundleBody = await json(bundleCreate) as { id: string }
     await markGeneratedPreviewReady({
       env: ctx.env,
       communityId,
-      songArtifactBundleId: bundleBody.song_artifact_bundle_id,
+      songArtifactBundleId: bundleBody.id.replace(/^sab_/, ""),
       previewStorageRef,
       previewSizeBytes: previewBytes.byteLength,
     })
@@ -667,23 +671,23 @@ describe("song artifact donation routes", () => {
         song_mode: "original",
         rights_basis: "original",
         license_preset: "non-commercial",
-        song_artifact_bundle_id: bundleBody.song_artifact_bundle_id,
+        song_artifact_bundle: bundleBody.id,
       },
       ctx.env,
       author.accessToken,
     )
     expect(lockedPostCreate.status).toBe(201)
-    const lockedPostBody = await json(lockedPostCreate) as { asset_id?: string | null }
-    const assetId = lockedPostBody.asset_id as string
+    const lockedPostBody = await json(lockedPostCreate) as { asset?: string | null }
+    const assetId = lockedPostBody.asset as string
 
     const listingCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/listings`,
       {
-        asset_id: assetId,
-        price_usd: 4.99,
+        asset: assetId,
+        price_cents: 499,
         regional_pricing_enabled: false,
-        donation_partner_id: "don_charity_water",
-        donation_share_pct: 10,
+        donation_partner: "don_charity_water",
+        donation_share_bps: 1000,
         status: "active",
       },
       ctx.env,
@@ -691,39 +695,39 @@ describe("song artifact donation routes", () => {
     )
     expect(listingCreate.status).toBe(201)
     const listingBody = await json(listingCreate) as {
-      listing_id: string
-      donation_partner_id: string | null
-      donation_share_pct: number | null
+      id: string
+      donation_partner: string | null
+      donation_share_bps: number | null
     }
-    expect(listingBody.donation_partner_id).toBe("don_charity_water")
-    expect(listingBody.donation_share_pct).toBe(10)
+    expect(listingBody.donation_partner).toBe("don_charity_water")
+    expect(listingBody.donation_share_bps).toBe(1000)
 
     const listingUpdate = await app.request(
-      `http://pirate.test/communities/${communityId}/listings/${listingBody.listing_id}`,
+      `http://pirate.test/communities/${communityId}/listings/${listingBody.id}`,
       {
-        method: "PATCH",
+        method: "POST",
         headers: {
           authorization: `Bearer ${author.accessToken}`,
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          donation_share_pct: 0,
+          donation_share_bps: 0,
         }),
       },
       ctx.env,
     )
     expect(listingUpdate.status).toBe(200)
     const listingUpdateBody = await json(listingUpdate) as {
-      donation_partner_id: string | null
-      donation_share_pct: number | null
+      donation_partner: string | null
+      donation_share_bps: number | null
     }
-    expect(listingUpdateBody.donation_partner_id).toBeNull()
-    expect(listingUpdateBody.donation_share_pct).toBeNull()
+    expect(listingUpdateBody.donation_partner).toBeNull()
+    expect(listingUpdateBody.donation_share_bps).toBeNull()
 
     const quoteCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/purchase-quotes`,
       {
-        listing_id: listingBody.listing_id,
+        listing: listingBody.id,
         ...routedCheckoutQuoteFields,
       },
       ctx.env,
@@ -735,7 +739,7 @@ describe("song artifact donation routes", () => {
         recipient_type: string
         recipient_ref: string | null
         share_bps: number
-        amount_usd: number
+        amount_cents: number
         settlement_strategy: string
         waterfall_position: number
       }>
@@ -746,7 +750,7 @@ describe("song artifact donation routes", () => {
         recipient_ref: null,
         waterfall_position: 70,
         share_bps: 10000,
-        amount_usd: 4.99,
+        amount_cents: 499,
         settlement_strategy: "story_payout",
       },
     ])
@@ -804,7 +808,7 @@ describe("song artifact donation routes", () => {
     const donationPolicyUpdate = await app.request(
       `http://pirate.test/communities/${communityId}/donation-policy`,
       {
-        method: "PATCH",
+        method: "POST",
         headers: {
           authorization: `Bearer ${author.accessToken}`,
           "content-type": "application/json",
@@ -832,6 +836,7 @@ describe("song artifact donation routes", () => {
       buyer.accessToken,
     )
     expect(joinBuyer.status).toBe(200)
+    await addCommunityMember(String(ctx.env.LOCAL_COMMUNITY_DB_ROOT), communityId, buyer.userId)
 
     const primaryBytes = new Uint8Array([21, 22, 23, 24, 25, 26, 27, 28])
     const previewBytes = new Uint8Array([1, 2, 3, 4])
@@ -851,7 +856,7 @@ describe("song artifact donation routes", () => {
     const bundleCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifacts`,
       {
-        primary_audio: { song_artifact_upload_id: primaryUploadIntentBody.song_artifact_upload_id },
+        primary_audio: { song_artifact_upload: primaryUploadIntentBody.id },
         preview_window: { start_ms: 0, duration_ms: 30_000 },
         lyrics: "Paused partner line",
       },
@@ -859,11 +864,11 @@ describe("song artifact donation routes", () => {
       author.accessToken,
     )
     expect(bundleCreate.status).toBe(201)
-    const bundleBody = await json(bundleCreate) as { song_artifact_bundle_id: string }
+    const bundleBody = await json(bundleCreate) as { id: string }
     await markGeneratedPreviewReady({
       env: ctx.env,
       communityId,
-      songArtifactBundleId: bundleBody.song_artifact_bundle_id,
+      songArtifactBundleId: bundleBody.id.replace(/^sab_/, ""),
       previewStorageRef,
       previewSizeBytes: previewBytes.byteLength,
     })
@@ -879,30 +884,30 @@ describe("song artifact donation routes", () => {
         song_mode: "original",
         rights_basis: "original",
         license_preset: "non-commercial",
-        song_artifact_bundle_id: bundleBody.song_artifact_bundle_id,
+        song_artifact_bundle: bundleBody.id,
       },
       ctx.env,
       author.accessToken,
     )
     expect(lockedPostCreate.status).toBe(201)
-    const lockedPostBody = await json(lockedPostCreate) as { asset_id?: string | null }
-    const assetId = lockedPostBody.asset_id as string
+    const lockedPostBody = await json(lockedPostCreate) as { asset?: string | null }
+    const assetId = lockedPostBody.asset as string
 
     const listingCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/listings`,
       {
-        asset_id: assetId,
-        price_usd: 4.99,
+        asset: assetId,
+        price_cents: 499,
         regional_pricing_enabled: false,
-        donation_partner_id: "don_charity_water",
-        donation_share_pct: 10,
+        donation_partner: "don_charity_water",
+        donation_share_bps: 1000,
         status: "active",
       },
       ctx.env,
       author.accessToken,
     )
     expect(listingCreate.status).toBe(201)
-    const listingBody = await json(listingCreate) as { listing_id: string }
+    const listingBody = await json(listingCreate) as { id: string }
 
     const repo: CommunityDatabaseBindingRepository = {
       async getPrimaryCommunityDatabaseBinding() {
@@ -947,7 +952,7 @@ describe("song artifact donation routes", () => {
     const quoteCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/purchase-quotes`,
       {
-        listing_id: listingBody.listing_id,
+        listing: listingBody.id,
         ...routedCheckoutQuoteFields,
       },
       ctx.env,

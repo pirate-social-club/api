@@ -50,7 +50,7 @@ describe("community membership projection reconciliation", () => {
           transfer_state, route_slug, namespace_verification_id, pending_namespace_verification_session_id,
           primary_database_binding_id, created_at, updated_at
         ) VALUES (
-          ?1, ?2, 'Reconcile Test', 'open', 'active', 'active',
+          ?1, ?2, 'Reconcile Test', 'request', 'active', 'active',
           'none', NULL, NULL, NULL,
           NULL, ?3, ?3
         )
@@ -70,7 +70,7 @@ describe("community membership projection reconciliation", () => {
             settings_json, created_by_user_id, cached_follower_count, created_at, updated_at
           ) VALUES (
             ?1, 'Reconcile Test', NULL, 'active', NULL, 'fan_run',
-            'open', 'none', 1, 'thread_stable',
+            'request', 'none', 1, 'thread_stable',
             NULL, 'none', 'unconfigured', 'centralized',
             NULL, ?2, 2, ?3, ?3
           )
