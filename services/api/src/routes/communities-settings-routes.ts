@@ -22,6 +22,7 @@ import {
   getResolvedCommunityRouteContext,
   requireJsonBody,
 } from "./communities-route-helpers"
+import { serializeCommunity } from "../serializers/community"
 
 export function registerCommunitySettingsRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.get("/:communityId/machine-access-policy", async (c) => {
@@ -62,7 +63,7 @@ export function registerCommunitySettingsRoutes(communities: Hono<AuthenticatedE
       body,
       communityRepository,
     })
-    return c.json(result, 200)
+    return c.json(serializeCommunity(result), 200)
   })
 
   communities.post("/:communityId/reference-links", async (c) => {
@@ -76,7 +77,7 @@ export function registerCommunitySettingsRoutes(communities: Hono<AuthenticatedE
       body,
       communityRepository,
     })
-    return c.json(result, 200)
+    return c.json(serializeCommunity(result), 200)
   })
 
   communities.post("/:communityId/labels", async (c) => {
@@ -90,7 +91,7 @@ export function registerCommunitySettingsRoutes(communities: Hono<AuthenticatedE
       body,
       communityRepository,
     })
-    return c.json(result, 200)
+    return c.json(serializeCommunity(result), 200)
   })
 
   communities.post("/:communityId/gates", async (c) => {
@@ -105,7 +106,7 @@ export function registerCommunitySettingsRoutes(communities: Hono<AuthenticatedE
       communityRepository,
       userRepository,
     })
-    return c.json(result, 200)
+    return c.json(serializeCommunity(result), 200)
   })
 
   communities.post("/:communityId/safety", async (c) => {
@@ -119,6 +120,6 @@ export function registerCommunitySettingsRoutes(communities: Hono<AuthenticatedE
       body,
       communityRepository,
     })
-    return c.json(result, 200)
+    return c.json(serializeCommunity(result), 200)
   })
 }

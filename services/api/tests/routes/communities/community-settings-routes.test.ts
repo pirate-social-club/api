@@ -23,6 +23,68 @@ afterEach(async () => {
 })
 
 describe("community settings routes", () => {
+  test("label settings update returns the public community contract shape", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "community-label-contract-user")
+    await completeUniqueHumanVerification(ctx.env, session.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Label Contract Club",
+      handle_policy: {
+        policy_template: "standard",
+      },
+    }, ctx.env, session.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: {
+        community_id: string
+      }
+    }
+
+    const labelsUpdate = await app.request(
+      `http://pirate.test/communities/${communityCreateBody.community.community_id}/labels`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${session.accessToken}`,
+        },
+        body: JSON.stringify({
+          label_enabled: true,
+          require_label_on_top_level_posts: false,
+          definitions: [{
+            label_id: null,
+            label: "Discussion",
+            color_token: "#6377f0",
+            status: "active",
+            position: 0,
+          }],
+        }),
+      },
+      ctx.env,
+    )
+    expect(labelsUpdate.status).toBe(200)
+    const updatedCommunity = await json(labelsUpdate) as {
+      id?: string
+      community_id?: string
+      created_by_user?: string
+      created_by_user_id?: string
+      label_policy?: {
+        label_enabled?: boolean
+        definitions?: Array<{ label: string }>
+      } | null
+    }
+
+    expect(updatedCommunity.id).toBe(`com_${communityCreateBody.community.community_id}`)
+    expect(updatedCommunity.community_id).toBe(undefined)
+    expect(updatedCommunity.created_by_user).toBe(`usr_${session.userId}`)
+    expect(updatedCommunity.created_by_user_id).toBe(undefined)
+    expect(updatedCommunity.label_policy?.label_enabled).toBe(true)
+    expect(updatedCommunity.label_policy?.definitions?.[0]?.label).toBe("Discussion")
+  })
+
   test("community owner can persist and read a pending namespace verification session", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
