@@ -3,6 +3,7 @@ import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import {
   getCommunityPreview,
 } from "../lib/communities/community-preview-service"
+import { serializeCommunityPreview } from "../serializers/community"
 import {
   followCommunity,
   unfollowCommunity,
@@ -30,7 +31,7 @@ export function registerCommunityMembershipRoutes(communities: Hono<Authenticate
       locale: c.req.query("locale") ?? null,
       communityRepository,
     })
-    return c.json(result, 200)
+    return c.json(serializeCommunityPreview(result), 200)
   })
 
   communities.get("/:communityId/join-eligibility", async (c) => {
