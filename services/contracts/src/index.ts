@@ -101,6 +101,19 @@ export type Profile = {
   created: number;
 };
 
+export type PublicProfileResolution = {
+  profile: Profile;
+  requested_handle_label: string;
+  resolved_handle_label: string;
+  is_canonical: boolean;
+  created_communities: Array<{
+    community: string;
+    display_name: string;
+    route_slug?: string | null;
+    created: number;
+  }>;
+};
+
 export type CommunityRoleSummary = {
   user: string;
   display_name: string;
@@ -824,6 +837,29 @@ export type CommunityCreateAcceptedResponse = {
 };
 
 export type CreateCommunityRequest = (CreateCentralizedCommunityRequest | CreateMultisigCommunityRequest | CreateMajeurCommunityRequest);
+
+export type GatePolicy = {
+  version: 1;
+  expression: GateExpression;
+};
+
+export type GateExpression = {
+  op: "and" | "or" | "gate";
+  children?: Array<Record<string, unknown>>;
+  gate?: GateAtom;
+};
+
+export type GateAtom = {
+  type: "unique_human" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "erc721_holding" | "erc721_inventory_match";
+  provider?: "self" | "very" | "passport" | "courtyard" | null;
+  minimum_age?: number;
+  allowed?: Array<string>;
+  minimum_score?: number;
+  chain_namespace?: string;
+  contract_address?: string;
+  min_quantity?: number;
+  match?: Record<string, unknown>;
+};
 
 export type UpdateCommunityMoneyPolicyRequest = {
   funding_preference?: string;
@@ -1864,8 +1900,7 @@ type CommunityReferenceLinkMetadata = {
 type CommunityReferenceLinkPlatform = "musicbrainz" | "genius" | "spotify" | "apple_music" | "wikipedia" | "instagram" | "tiktok" | "x" | "official_website" | "youtube" | "bandcamp" | "soundcloud" | "other";
 
 type CommunityReferenceLinkPublic = {
-  id: string;
-  object: "community_reference_link";
+  community_reference_link: string;
   platform: CommunityReferenceLinkPlatform;
   url: string;
   external?: string | null;
@@ -2193,29 +2228,6 @@ type DonationPartnerSummary = {
 type FeedItem = {
   community: HomeFeedCommunitySummary;
   post: LocalizedPostResponse;
-};
-
-type GateAtom = {
-  type: "unique_human" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "erc721_holding" | "erc721_inventory_match";
-  provider?: "self" | "very" | "passport" | "courtyard" | null;
-  minimum_age?: number;
-  allowed?: Array<string>;
-  minimum_score?: number;
-  chain_namespace?: string;
-  contract_address?: string;
-  min_quantity?: number;
-  match?: Record<string, unknown>;
-};
-
-type GateExpression = {
-  op: "and" | "or" | "gate";
-  children?: Array<Record<string, unknown>>;
-  gate?: GateAtom;
-};
-
-type GatePolicy = {
-  version: 1;
-  expression: GateExpression;
 };
 
 type GatePolicyEvaluation = {
