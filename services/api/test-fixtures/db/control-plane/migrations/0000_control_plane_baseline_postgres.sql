@@ -214,7 +214,7 @@ CREATE TABLE communities (
     creator_user_id TEXT NOT NULL,
     display_name TEXT NOT NULL,
     membership_mode TEXT NOT NULL CHECK (
-        membership_mode IN ('request', 'gated')
+        membership_mode IN ('open', 'request', 'gated')
     ),
     status TEXT NOT NULL CHECK (
         status IN ('draft', 'active', 'frozen', 'archived', 'deleted', 'suspended')
@@ -1013,21 +1013,29 @@ CREATE INDEX idx_community_registry_table_refs_namespace_table
     ON community_registry_table_refs(club_namespace_table_name)
     WHERE club_namespace_table_name IS NOT NULL;
 
-CREATE TABLE community_gate_policies (
+CREATE TABLE community_gate_rules (
+    gate_rule_id TEXT PRIMARY KEY,
     community_id TEXT NOT NULL,
     scope TEXT NOT NULL CHECK (
         scope IN ('membership', 'viewer', 'posting')
     ),
-    version INTEGER NOT NULL DEFAULT 1 CHECK (version = 1),
-    expression_json JSONB NOT NULL,
+    gate_family TEXT NOT NULL CHECK (
+        gate_family IN ('identity_proof', 'token_holding')
+    ),
+    gate_type TEXT NOT NULL,
+    proof_requirements_json JSONB,
+    chain_namespace TEXT,
+    gate_config_json JSONB,
+    status TEXT NOT NULL CHECK (
+        status IN ('active', 'disabled')
+    ),
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL,
-    PRIMARY KEY (community_id, scope),
     FOREIGN KEY (community_id) REFERENCES communities(community_id)
 );
 
-CREATE INDEX idx_community_gate_policies_scope_updated
-    ON community_gate_policies(scope, updated_at DESC);
+CREATE INDEX idx_community_gate_rules_community_scope_status
+    ON community_gate_rules(community_id, scope, status, created_at DESC);
 
 CREATE TABLE dvpn_feature_entitlements (
     dvpn_feature_entitlement_id TEXT PRIMARY KEY,
