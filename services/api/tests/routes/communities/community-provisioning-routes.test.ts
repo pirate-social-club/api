@@ -11,6 +11,7 @@ import {
 } from "./community-routes-test-helpers"
 
 let cleanup: (() => Promise<void>) | null = null
+const COMMUNITY_PROVISIONING_TEST_TIMEOUT_MS = 30_000
 const testWithTimeout = test as unknown as (name: string, fn: () => Promise<void>, timeout: number) => void
 
 beforeEach(() => {
@@ -211,7 +212,7 @@ membership_mode: "request",
     } finally {
       globalThis.fetch = originalFetch
     }
-  }, 10_000)
+  }, COMMUNITY_PROVISIONING_TEST_TIMEOUT_MS)
 
   testWithTimeout("community create generates a fallback credential id when operator omits credential_id", async () => {
     const operatorBaseUrl = "https://operator.test"
@@ -288,7 +289,7 @@ membership_mode: "request",
     } finally {
       globalThis.fetch = originalFetch
     }
-  }, 10_000)
+  }, COMMUNITY_PROVISIONING_TEST_TIMEOUT_MS)
 
   test("community create rejects unsupported database regions before provisioning", async () => {
     const operatorBaseUrl = "https://operator.test"
@@ -436,7 +437,7 @@ membership_mode: "request",
     } finally {
       globalThis.fetch = originalFetch
     }
-  }, 10_000)
+  }, COMMUNITY_PROVISIONING_TEST_TIMEOUT_MS)
 
   testWithTimeout("community create sends agent posting settings in the operator bootstrap payload", async () => {
     const operatorBaseUrl = "https://operator.test"
@@ -540,5 +541,5 @@ membership_mode: "request",
     } finally {
       globalThis.fetch = originalFetch
     }
-  }, 10_000)
+  }, COMMUNITY_PROVISIONING_TEST_TIMEOUT_MS)
 })

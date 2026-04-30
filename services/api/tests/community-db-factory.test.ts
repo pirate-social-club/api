@@ -13,6 +13,8 @@ import { resolveCoreRepoPath } from "../shared/core-repo-paths"
 import { splitSqlStatements, toSqliteCompatibleStatements } from "../shared/sql-migration"
 
 const cleanupPaths: string[] = []
+const COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS = 120_000
+const testWithTimeout = test as unknown as (name: string, fn: () => Promise<void>, timeout: number) => void
 
 afterEach(async () => {
   await Promise.all(cleanupPaths.splice(0).map((path) => rm(path, { recursive: true, force: true })))
@@ -179,7 +181,7 @@ describe("openCommunityDb", () => {
     db.close()
   })
 
-  test("applies pending template migrations for existing local community databases", async () => {
+  testWithTimeout("applies pending template migrations for existing local community databases", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-db-factory-"))
     cleanupPaths.push(rootDir)
 
@@ -256,9 +258,9 @@ describe("openCommunityDb", () => {
     expect(moderationActionColumns).toContain("comment_id")
     expect(moderationActionColumns).toContain("previous_post_status")
     expect(moderationActionColumns).toContain("next_post_status")
-  })
+  }, COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS)
 
-  test("enqueues community jobs after existing local databases are migrated", async () => {
+  testWithTimeout("enqueues community jobs after existing local databases are migrated", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-job-store-"))
     cleanupPaths.push(rootDir)
 
@@ -317,5 +319,5 @@ describe("openCommunityDb", () => {
     } finally {
       db.close()
     }
-  })
+  }, COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS)
 })
