@@ -5,6 +5,7 @@ import {
   emitPostCommented,
 } from "../../src/lib/notifications/notification-emitters"
 import { createNamespaceVerificationTask } from "../../src/lib/notifications/notification-task-service"
+import { decodePublicUserId } from "../../src/lib/public-ids"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../helpers"
 import { exchangeJwt } from "./communities/community-routes-test-helpers"
 
@@ -23,6 +24,10 @@ afterEach(async () => {
 
 function authHeaders(accessToken: string): { authorization: string } {
   return { authorization: `Bearer ${accessToken}` }
+}
+
+function rawUserId(session: { userId: string }): string {
+  return decodePublicUserId(session.userId)
 }
 
 describe("notification routes", () => {
@@ -49,7 +54,7 @@ describe("notification routes", () => {
           ...authHeaders(session.accessToken),
           "content-type": "application/json",
         },
-        body: JSON.stringify({ id: `synth:unique_human:${session.userId}` }),
+        body: JSON.stringify({ task_id: `task_synth:unique_human:${rawUserId(session)}` }),
       },
       ctx.env,
     )
@@ -58,6 +63,30 @@ describe("notification routes", () => {
     const body = await json(response) as { code: string; message: string }
     expect(body.code).toBe("bad_request")
     expect(body.message).toBe("This task cannot be dismissed")
+  })
+
+  test("returns not found for unknown dismissed tasks", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "notification-missing-dismiss-user")
+
+    const response = await app.request(
+      "http://pirate.test/notifications/dismiss-task",
+      {
+        method: "POST",
+        headers: {
+          ...authHeaders(session.accessToken),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ task_id: "task_tsk_missing" }),
+      },
+      ctx.env,
+    )
+
+    expect(response.status).toBe(404)
+    const body = await json(response) as { code: string; message: string }
+    expect(body.code).toBe("not_found")
+    expect(body.message).toBe("Task not found")
   })
 
   test("does not suggest global handle cleanup after onboarding is dismissed", async () => {
@@ -98,22 +127,22 @@ describe("notification routes", () => {
         UPDATE profiles
         SET display_name = ?2,
             avatar_ref = ?3
-        WHERE user = ?1
+        WHERE user_id = ?1
       `,
-      args: [actorSession.userId, "Route Actor", "/avatars/route-actor.png"],
+      args: [rawUserId(actorSession), "Route Actor", "/avatars/route-actor.png"],
     })
 
     const task = await createNamespaceVerificationTask({
       env: ctx.env,
-      userId: session.userId,
+      userId: rawUserId(session),
       communityId: "cmt_notifications",
       communityDisplayName: "Notifications",
     })
 
     await emitPostCommented({
       env: ctx.env,
-      actorUserId: actorSession.userId,
-      postAuthorUserId: session.userId,
+      actorUserId: rawUserId(actorSession),
+      postAuthorUserId: rawUserId(session),
       communityId: "cmt_notifications",
       commentExcerpt: "A direct route notification",
       postTitle: "Notification Route",
@@ -168,7 +197,7 @@ describe("notification routes", () => {
     expect(feed.status).toBe(200)
     const feedBody = await json(feed) as {
       items: Array<{
-        event: { event_id: string; type: string; payload: Record<string, unknown> | null }
+        event: { id: string; type: string; payload: Record<string, unknown> | null }
         receipt: { read_at: string | null }
       }>
       next_cursor: string | null
@@ -181,7 +210,7 @@ describe("notification routes", () => {
     expect(feedBody.items[0]?.event.payload?.actor_avatar_url).toBe("/avatars/route-actor.png")
     expect(feedBody.items[0]?.receipt.read_at).toBeNull()
 
-    const eventId = feedBody.items[0]!.event.event_id
+    const eventId = feedBody.items[0]!.event.id
     const markRead = await app.request(
       "http://pirate.test/notifications/mark-read",
       {
@@ -263,13 +292,29 @@ describe("notification routes", () => {
           ...authHeaders(session.accessToken),
           "content-type": "application/json",
         },
-        body: JSON.stringify({ id: task.id }),
+        body: JSON.stringify({ task_id: task.id }),
       },
       ctx.env,
     )
     expect(dismiss.status).toBe(200)
     const dismissBody = await json(dismiss) as { id: string; status: string }
     expect(dismissBody).toMatchObject({ id: task.id, status: "dismissed" })
+
+    const dismissAgain = await app.request(
+      "http://pirate.test/notifications/dismiss-task",
+      {
+        method: "POST",
+        headers: {
+          ...authHeaders(session.accessToken),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ task_id: task.id }),
+      },
+      ctx.env,
+    )
+    expect(dismissAgain.status).toBe(200)
+    const dismissAgainBody = await json(dismissAgain) as { id: string; status: string }
+    expect(dismissAgainBody).toMatchObject({ id: task.id, status: "dismissed" })
 
     const tasksAfterDismiss = await app.request(
       "http://pirate.test/notifications/tasks",
@@ -325,8 +370,8 @@ describe("notification routes", () => {
 
     await emitPostCommented({
       env: ctx.env,
-      actorUserId: buyerSession.userId,
-      postAuthorUserId: creatorSession.userId,
+      actorUserId: rawUserId(buyerSession),
+      postAuthorUserId: rawUserId(creatorSession),
       communityId: "cmt_royalty_activity",
       commentExcerpt: "Non-royalty notification",
       postTitle: "Plain Activity",
@@ -335,7 +380,7 @@ describe("notification routes", () => {
     })
 
     const earningEvent = {
-      recipientUserId: creatorSession.userId,
+      recipientUserId: rawUserId(creatorSession),
       communityId: "cmt_royalty_activity",
       assetId: "ast_royalty_activity",
       storyIpId: "0x1111111111111111111111111111111111111111",
@@ -348,18 +393,18 @@ describe("notification routes", () => {
 
     await emitRoyaltyEarnedBatch({
       env: ctx.env,
-      buyerUserId: buyerSession.userId,
+      buyerUserId: rawUserId(buyerSession),
       events: [earningEvent],
     })
     await emitRoyaltyEarnedBatch({
       env: ctx.env,
-      buyerUserId: buyerSession.userId,
+      buyerUserId: rawUserId(buyerSession),
       events: [earningEvent],
     })
     await new Promise((resolve) => setTimeout(resolve, 2))
     await emitRoyaltyEarnedBatch({
       env: ctx.env,
-      buyerUserId: buyerSession.userId,
+      buyerUserId: rawUserId(buyerSession),
       events: [{
         ...earningEvent,
         assetId: "ast_royalty_activity_second",
@@ -369,10 +414,10 @@ describe("notification routes", () => {
     })
     await emitRoyaltyEarnedBatch({
       env: ctx.env,
-      buyerUserId: buyerSession.userId,
+      buyerUserId: rawUserId(buyerSession),
       events: [{
         ...earningEvent,
-        recipientUserId: buyerSession.userId,
+        recipientUserId: rawUserId(buyerSession),
         assetId: "ast_self_purchase",
         purchaseId: "pur_self_purchase",
       }],
@@ -408,11 +453,11 @@ describe("notification routes", () => {
     expect(activity.status).toBe(200)
     const activityBody = await json(activity) as {
       items: Array<{
-        asset_id: string
-        story_ip_id: string
+        asset: string
+        story_ip: string
         amount_wip_wei: string
         buyer_wallet_address: string | null
-        purchase_id: string | null
+        purchase: string | null
       }>
       next_cursor: string | null
     }
@@ -429,19 +474,19 @@ describe("notification routes", () => {
     expect(nextActivityBody.items).toHaveLength(1)
     expect(nextActivityBody.next_cursor).toBeNull()
     const activityItems = [...activityBody.items, ...nextActivityBody.items]
-    const firstEarning = activityItems.find((item) => item.asset_id === "ast_royalty_activity")
+    const firstEarning = activityItems.find((item) => item.asset === "asset_ast_royalty_activity")
     expect(firstEarning).toMatchObject({
-      asset_id: "ast_royalty_activity",
-      story_ip_id: "0x1111111111111111111111111111111111111111",
+      asset: "asset_ast_royalty_activity",
+      story_ip: "0x1111111111111111111111111111111111111111",
       amount_wip_wei: "12450000000000000000",
       buyer_wallet_address: "0x2222222222222222222222222222222222222222",
-      purchase_id: "pur_royalty_activity",
+      purchase: null,
     })
-    const secondEarning = activityItems.find((item) => item.asset_id === "ast_royalty_activity_second")
+    const secondEarning = activityItems.find((item) => item.asset === "asset_ast_royalty_activity_second")
     expect(secondEarning).toMatchObject({
-      asset_id: "ast_royalty_activity_second",
+      asset: "asset_ast_royalty_activity_second",
       amount_wip_wei: "4000000000000000000",
-      purchase_id: "pur_royalty_activity_second",
+      purchase: null,
     })
 
     const buyerActivity = await app.request(
@@ -474,8 +519,8 @@ describe("notification routes", () => {
 
     await emitPostCommented({
       env: ctx.env,
-      actorUserId: actorSession.userId,
-      postAuthorUserId: session.userId,
+      actorUserId: rawUserId(actorSession),
+      postAuthorUserId: rawUserId(session),
       communityId: "cmt_mark_all",
       commentExcerpt: "First unread item",
       postTitle: "Unread One",
@@ -484,8 +529,8 @@ describe("notification routes", () => {
     })
     await emitPostCommented({
       env: ctx.env,
-      actorUserId: actorSession.userId,
-      postAuthorUserId: session.userId,
+      actorUserId: rawUserId(actorSession),
+      postAuthorUserId: rawUserId(session),
       communityId: "cmt_mark_all",
       commentExcerpt: "Second unread item",
       postTitle: "Unread Two",
@@ -494,9 +539,9 @@ describe("notification routes", () => {
     })
     await emitRoyaltyEarnedBatch({
       env: ctx.env,
-      buyerUserId: actorSession.userId,
+      buyerUserId: rawUserId(actorSession),
       events: [{
-        recipientUserId: session.userId,
+        recipientUserId: rawUserId(session),
         communityId: "cmt_mark_all",
         assetId: "ast_mark_all",
         storyIpId: "0x1111111111111111111111111111111111111111",

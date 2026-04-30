@@ -127,7 +127,7 @@ export async function dismissUserTask(input: {
   taskId: string
   userId: string
   dismissedAt: string
-}): Promise<UserTask | null> {
+}): Promise<{ task: UserTask; wasDismissed: boolean } | null> {
   const result = await input.executor.execute({
     sql: `
       UPDATE user_tasks
@@ -137,10 +137,6 @@ export async function dismissUserTask(input: {
     args: [input.dismissedAt, input.taskId, input.userId],
   })
 
-  if (!result.rowsAffected || result.rowsAffected === 0) {
-    return null
-  }
-
   const row = await executeFirst(input.executor, {
     sql: `
       SELECT ${USER_TASK_COLUMNS}
@@ -149,7 +145,12 @@ export async function dismissUserTask(input: {
     `,
     args: [input.taskId, input.userId],
   }) as Record<string, unknown> | null
-  return row ? rowToUserTask(row) : null
+  if (!row) {
+    return null
+  }
+
+  const wasDismissed = Boolean(result.rowsAffected && result.rowsAffected > 0)
+  return { task: rowToUserTask(row), wasDismissed }
 }
 
 export async function listOpenUserTasks(input: {

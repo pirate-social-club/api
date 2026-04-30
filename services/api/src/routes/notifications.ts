@@ -1,5 +1,5 @@
 import { Hono } from "hono"
-import { badRequestError } from "../lib/errors"
+import { badRequestError, notFoundError } from "../lib/errors"
 import { trackApiEvent } from "../lib/analytics/track"
 import { authenticate, type AuthenticatedEnv } from "../lib/auth-middleware"
 import {
@@ -63,28 +63,30 @@ notifications.post("/dismiss-task", async (c) => {
     throw badRequestError("task_id is required")
   }
 
-  const task = await dismissTask({
+  const result = await dismissTask({
     env: c.env,
     userId: actor.userId,
     taskId: body.task_id,
   })
 
-  if (!task) {
-    throw badRequestError("Task not found or already dismissed")
+  if (!result) {
+    throw notFoundError("Task not found")
   }
 
-  await trackApiEvent(c.env, c.req, {
-    eventName: "notification_task_dismissed",
-    userId: actor.userId,
-    properties: {
-      notification_kind: "task",
-      task_type: task.type,
-      task_persistence: "persisted",
-      dismiss_surface: "inbox",
-    },
-  })
+  if (result.wasDismissed) {
+    await trackApiEvent(c.env, c.req, {
+      eventName: "notification_task_dismissed",
+      userId: actor.userId,
+      properties: {
+        notification_kind: "task",
+        task_type: result.task.type,
+        task_persistence: "persisted",
+        dismiss_surface: "inbox",
+      },
+    })
+  }
 
-  return c.json(task)
+  return c.json(result.task)
 })
 
 export default notifications

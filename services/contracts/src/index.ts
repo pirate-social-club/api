@@ -1571,7 +1571,7 @@ export type MarkNotificationsReadRequest = {
 };
 
 export type DismissTaskRequest = {
-  task: string;
+  task_id: string;
 };
 
 export type ClaimableRoyaltyItem = {

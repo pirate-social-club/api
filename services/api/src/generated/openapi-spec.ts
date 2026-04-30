@@ -3576,6 +3576,12 @@ const spec = {
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
           }
         }
       }
@@ -9649,10 +9655,10 @@ const spec = {
       "DismissTaskRequest": {
         "type": "object",
         "required": [
-          "task"
+          "task_id"
         ],
         "properties": {
-          "task": {
+          "task_id": {
             "type": "string"
           }
         }

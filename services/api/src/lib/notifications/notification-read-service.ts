@@ -1,5 +1,6 @@
 import { nowIso } from "../helpers"
 import { badRequestError } from "../errors"
+import { decodePublicId } from "../public-ids"
 import { getControlPlaneClient } from "../runtime-deps"
 import {
   dismissUserTask,
@@ -106,9 +107,10 @@ export async function markRead(input: {
 }): Promise<void> {
   const client = getControlPlaneClient(input.env)
   try {
+    const eventIds = input.eventIds.map((eventId) => decodePublicId(eventId, "ne"))
     const countsByType = input.eventIds.length === 0
       ? await markAllNotificationsRead({ executor: client, userId: input.userId, readAt: nowIso() })
-      : await markNotificationsRead({ executor: client, userId: input.userId, eventIds: input.eventIds, readAt: nowIso() })
+      : await markNotificationsRead({ executor: client, userId: input.userId, eventIds, readAt: nowIso() })
     for (const [notificationType, count] of Object.entries(countsByType)) {
       if (count <= 0) continue
       await trackNotificationMarkedReadSafely(input.env, client, {
@@ -127,13 +129,14 @@ export async function dismissTask(input: {
   env: Env
   userId: string
   taskId: string
-}): Promise<UserTask | null> {
-  if (isSyntheticUniqueHumanTaskId(input.taskId)) {
+}): Promise<{ task: UserTask; wasDismissed: boolean } | null> {
+  const taskId = decodePublicId(input.taskId, "task")
+  if (isSyntheticUniqueHumanTaskId(taskId)) {
     throw badRequestError("This task cannot be dismissed")
   }
   const client = getControlPlaneClient(input.env)
   try {
-    return await dismissUserTask({ executor: client, taskId: input.taskId, userId: input.userId, dismissedAt: nowIso() })
+    return await dismissUserTask({ executor: client, taskId, userId: input.userId, dismissedAt: nowIso() })
   } finally {
     client.close?.()
   }
