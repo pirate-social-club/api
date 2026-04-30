@@ -7,6 +7,7 @@ import {
   publicCommunityPath,
   publicCommunityPostsPath,
 } from "../lib/agent-discovery/structured-links"
+import openapiSpec from "../generated/openapi-spec"
 import type { Env } from "../types"
 
 const discovery = new Hono<{ Bindings: Env }>()
@@ -125,44 +126,8 @@ async function sitemapXml(env: Env, origin: string): Promise<string> {
 
 function publicOpenApi(origin: string) {
   return {
-    openapi: "3.0.3",
-    info: {
-      title: "Pirate public structured read API",
-      version: "0.1.0",
-    },
-    servers: [{ url: origin }],
-    paths: {
-      "/public-communities": {
-        get: {
-          summary: "Search public communities",
-        },
-      },
-      "/public-communities/{communityId}": {
-        get: {
-          summary: "Read a public community with traversal links",
-        },
-      },
-      "/public-communities/{communityId}/posts": {
-        get: {
-          summary: "Read public community posts with traversal links",
-        },
-      },
-      "/public-posts/{postId}": {
-        get: {
-          summary: "Read a public post with traversal links",
-        },
-      },
-      "/public-posts/{postId}/top-comments": {
-        get: {
-          summary: "Read bounded top comments for a public post",
-        },
-      },
-      "/public-comments/posts/{postId}/comments": {
-        get: {
-          summary: "Read public top-level comments for a post",
-        },
-      },
-    },
+    ...openapiSpec,
+    servers: [{ url: origin, description: "Current environment" }],
   }
 }
 

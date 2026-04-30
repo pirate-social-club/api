@@ -267,6 +267,16 @@ Required env:
 - `PIRATE_APP_JWT_ISSUER`
 - `PIRATE_APP_JWT_AUDIENCE`
 
+## OpenAPI Service Description
+
+The runtime `/.well-known/service-desc/public.openapi.json` endpoint serves the full implemented OpenAPI spec derived from `core/specs/api/openapi-implemented.yaml`. To regenerate the bundled spec after contract changes:
+
+```bash
+rtk bun run generate:openapi-spec
+```
+
+This writes `src/generated/openapi-spec.ts`, which is imported by the discovery router and included in the worker bundle.
+
 ## Example Exchange
 
 ```bash

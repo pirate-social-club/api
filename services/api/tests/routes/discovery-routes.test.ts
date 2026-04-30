@@ -64,10 +64,10 @@ describe("discovery routes", () => {
       paths: Record<string, unknown>
     }
 
-    expect(body.paths["/public-communities/{communityId}"]).toBeTruthy()
-    expect(body.paths["/public-communities/{communityId}/posts"]).toBeTruthy()
-    expect(body.paths["/public-posts/{postId}"]).toBeTruthy()
-    expect(body.paths["/public-posts/{postId}/top-comments"]).toBeTruthy()
+    expect(body.paths["/public-communities/{community_id}"]).toBeTruthy()
+    expect(body.paths["/public-communities/{community_id}/posts"]).toBeTruthy()
+    expect(body.paths["/public-posts/{post_id}"]).toBeTruthy()
+    expect(body.paths["/public-posts/{post_id}/top-comments"]).toBeTruthy()
   })
 
   test("GET /.well-known/mcp/server-card.json advertises the API catalog resource", async () => {

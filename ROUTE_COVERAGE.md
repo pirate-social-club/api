@@ -15,6 +15,7 @@ Mounted in `services/api/src/index.ts`:
 - `/analytics`
 - `/` for discovery routes
 - `/` for agent routes
+- `/admin/bot-users`
 - `/community-media`
 - `/comments`
 - `/communities`
@@ -40,6 +41,7 @@ Mounted in `services/api/src/index.ts`:
 | Route Group | Main Route File | Primary Test Files | Coverage Status | Notes |
 | --- | --- | --- | --- | --- |
 | `/analytics/*` | `src/routes/analytics.ts` | `tests/routes/analytics-routes.test.ts` | direct | Covers client analytics ingestion, allowlisted properties, and unsupported event rejection. |
+| `/admin/bot-users` | `src/routes/bot-users.ts` | `tests/routes/bot-users-routes.test.ts` | direct | Bot-user management endpoints. |
 | discovery routes under `/` | `src/routes/discovery.ts` | `tests/routes/discovery-routes.test.ts` | direct | Covers well-known discovery responses. |
 | `/auth/session/exchange` | `src/routes/auth.ts` | `tests/routes/auth/auth-routes.test.ts` | direct | Also exercised by many other route suites for setup. |
 | `/users/me` | `src/routes/users.ts` | `tests/routes/auth/auth-routes.test.ts` | direct | Covered via auth flow tests. |
