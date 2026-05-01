@@ -164,11 +164,11 @@ describe("deriveHnsInspectionSnapshot", () => {
 })
 
 describe("isTrustedHnsAuthorityObservation", () => {
-  test("production rejects local PowerDNS TXT verification as root authority evidence", () => {
+  test("production rejects non-allowlisted TXT verification providers", () => {
     expect(isTrustedHnsAuthorityObservation({
       ENVIRONMENT: "production",
     } as never, {
-      observation_provider: "powerdns_sqlite",
+      observation_provider: "local_untrusted_resolver",
     })).toBe(false)
   })
 
@@ -193,11 +193,11 @@ describe("isTrustedHnsAuthorityObservation", () => {
     })).toBe(true)
   })
 
-  test("local environments can use PowerDNS verifier doubles", () => {
+  test("local environments can use verifier doubles", () => {
     expect(isTrustedHnsAuthorityObservation({
       ENVIRONMENT: "development",
     } as never, {
-      observation_provider: "powerdns_sqlite",
+      observation_provider: "local_test_verifier",
     })).toBe(true)
   })
 })

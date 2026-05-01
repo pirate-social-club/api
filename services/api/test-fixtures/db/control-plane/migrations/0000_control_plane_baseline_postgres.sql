@@ -561,7 +561,6 @@ CREATE TABLE namespace_verification_sessions (
         status IN (
             'draft',
             'inspecting',
-            'dns_setup_required',
             'challenge_required',
             'challenge_pending',
             'verifying',

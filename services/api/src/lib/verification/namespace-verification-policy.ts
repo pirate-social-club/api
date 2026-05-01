@@ -2,10 +2,6 @@ import type { InStatement } from "../sql-client"
 import { internalError } from "../errors"
 import { isProductionEnv, makeId } from "../helpers"
 import type { NamespaceVerificationSessionRow } from "../auth/auth-db-rows"
-import {
-  inspectHnsRoot,
-  isHnsVerifierConfigured,
-} from "./hns-verifier"
 import type { HnsInspectResult, HnsVerifyTxtResult } from "./hns-verifier"
 import type { SpacesChallengePayload } from "./spaces-verifier"
 import type { Env } from "../../env"
@@ -45,10 +41,6 @@ export type HnsSessionAssertionSnapshot = {
   pirateSubdomainIssuanceAllowed: number | null
   controlClass: NamespaceVerificationSession["control_class"]
   operationClass: NamespaceVerificationSession["operation_class"]
-}
-
-export type NamespaceSessionResponseContext = {
-  setupNameservers: string[] | null
 }
 
 type NamespaceVerificationClass =
@@ -94,33 +86,6 @@ export function deriveHnsInspectionSnapshot(inspection: HnsInspectResult): HnsSe
   }
 }
 
-function getHnsSetupNameservers(value: { nameservers?: string[] | null }): string[] | null {
-  const nameservers = value.nameservers?.map((entry) => entry.trim()).filter(Boolean) ?? []
-  return nameservers.length > 0 ? nameservers : null
-}
-
-function parseStoredSetupNameservers(raw: string | null): string[] | null {
-  if (!raw) {
-    return null
-  }
-
-  try {
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) {
-      return null
-    }
-
-    const nameservers = parsed
-      .filter((entry): entry is string => typeof entry === "string")
-      .map((entry) => entry.trim())
-      .filter(Boolean)
-
-    return nameservers.length > 0 ? nameservers : null
-  } catch {
-    return null
-  }
-}
-
 export function serializeSetupNameservers(value: string[] | null): string | null {
   return value && value.length > 0 ? JSON.stringify(value) : null
 }
@@ -141,54 +106,6 @@ const TRUSTED_HNS_OBSERVATION_PROVIDERS = new Set([
   "hns_parent_chain",
   "web3dns_json_doh",
 ])
-
-export function isDnsSetupRequiredNamespaceSessionRow(
-  row: Pick<
-    NamespaceVerificationSessionRow,
-    "family" | "status" | "failure_reason" | "challenge_kind" | "challenge_host" | "challenge_txt_value"
-  >,
-): boolean {
-  return row.family === "hns" && row.status === "dns_setup_required"
-}
-
-export function serializeNamespaceSessionStatus(
-  row: Pick<
-    NamespaceVerificationSessionRow,
-    "family" | "status" | "failure_reason" | "challenge_kind" | "challenge_host" | "challenge_txt_value"
-  >,
-): NamespaceVerificationSession["status"] {
-  return isDnsSetupRequiredNamespaceSessionRow(row) ? "dns_setup_required" : row.status
-}
-
-export async function buildNamespaceSessionResponseContext(
-  env: Env,
-  row: NamespaceVerificationSessionRow,
-): Promise<NamespaceSessionResponseContext> {
-  const storedSetupNameservers = parseStoredSetupNameservers(row.setup_nameservers_json)
-  if (storedSetupNameservers) {
-    return { setupNameservers: storedSetupNameservers }
-  }
-
-  if (
-    row.family !== "hns"
-    || !isDnsSetupRequiredNamespaceSessionRow(row)
-    || !isHnsVerifierConfigured(env)
-  ) {
-    return { setupNameservers: null }
-  }
-
-  try {
-    const inspection = await inspectHnsRoot(env, {
-      rootLabel: row.normalized_root_label ?? row.submitted_root_label.toLowerCase(),
-      challengeHost: row.challenge_host,
-    })
-    return {
-      setupNameservers: getHnsSetupNameservers(inspection),
-    }
-  } catch {
-    return { setupNameservers: null }
-  }
-}
 
 export function deriveAcceptedHnsSnapshot(
   row: NamespaceVerificationSessionRow,

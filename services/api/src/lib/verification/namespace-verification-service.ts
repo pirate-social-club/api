@@ -18,7 +18,6 @@ import type {
   NamespaceVerificationSession,
 } from "../../types"
 import {
-  buildNamespaceSessionResponseContext,
   deriveAcceptedHnsSnapshot,
   deriveSpacesAcceptedSnapshot,
   getNamespaceVerificationRowForUser,
@@ -28,7 +27,6 @@ import {
   makeNamespaceCapabilityStatements,
   parseStoredSpacesChallenge,
 } from "./verification-shared"
-import { isDnsSetupRequiredNamespaceSessionRow } from "./namespace-verification-policy"
 import { isTrustedHnsAuthorityObservation } from "./namespace-verification-policy"
 import { restartNamespaceVerificationChallenge } from "./namespace-verification-restart"
 import {
@@ -48,7 +46,6 @@ function requireNormalizedRootLabel(row: Pick<NamespaceVerificationSession, "fam
 
 export async function getNamespaceVerificationSession(
   client: Client,
-  env: Env,
   namespaceVerificationSessionId: string,
   userId: string,
 ): Promise<NamespaceVerificationSession | null> {
@@ -56,8 +53,7 @@ export async function getNamespaceVerificationSession(
   if (!row) {
     return null
   }
-  const responseContext = await buildNamespaceSessionResponseContext(env, row)
-  return serializeNamespaceVerificationSession(row, responseContext)
+  return serializeNamespaceVerificationSession(row)
 }
 
 export async function completeNamespaceVerificationSession(
@@ -85,11 +81,7 @@ export async function completeNamespaceVerificationSession(
       now,
       updatedAt,
     })
-    return getNamespaceVerificationSession(client, env, input.namespaceVerificationSessionId, input.userId)
-  }
-
-  if (isDnsSetupRequiredNamespaceSessionRow(row)) {
-    return getNamespaceVerificationSession(client, env, input.namespaceVerificationSessionId, input.userId)
+    return getNamespaceVerificationSession(client, input.namespaceVerificationSessionId, input.userId)
   }
 
   if (row.expires_at && new Date(row.expires_at).getTime() < now.getTime()) {
@@ -103,7 +95,7 @@ export async function completeNamespaceVerificationSession(
       `,
       args: [input.namespaceVerificationSessionId, updatedAt],
     })
-    return getNamespaceVerificationSession(client, env, input.namespaceVerificationSessionId, input.userId)
+    return getNamespaceVerificationSession(client, input.namespaceVerificationSessionId, input.userId)
   }
 
   if (row.challenge_expires_at && new Date(row.challenge_expires_at).getTime() < now.getTime()) {
@@ -117,7 +109,7 @@ export async function completeNamespaceVerificationSession(
       `,
       args: [input.namespaceVerificationSessionId, updatedAt],
     })
-    return getNamespaceVerificationSession(client, env, input.namespaceVerificationSessionId, input.userId)
+    return getNamespaceVerificationSession(client, input.namespaceVerificationSessionId, input.userId)
   }
 
   const verificationId = row.namespace_verification_id ?? makeId("nv")
@@ -160,7 +152,7 @@ export async function completeNamespaceVerificationSession(
           updatedAt,
         ],
       })
-      return getNamespaceVerificationSession(client, env, input.namespaceVerificationSessionId, input.userId)
+      return getNamespaceVerificationSession(client, input.namespaceVerificationSessionId, input.userId)
     }
 
     const observationProvider = verification.observationProvider ?? row.observation_provider ?? "spaces_verifier"
@@ -357,7 +349,7 @@ export async function completeNamespaceVerificationSession(
             `,
             args: [input.namespaceVerificationSessionId, updatedAt],
           })
-          return getNamespaceVerificationSession(client, env, input.namespaceVerificationSessionId, input.userId)
+          return getNamespaceVerificationSession(client, input.namespaceVerificationSessionId, input.userId)
         }
         throw caught
       }
@@ -391,7 +383,7 @@ export async function completeNamespaceVerificationSession(
             updatedAt,
           ],
         })
-        return getNamespaceVerificationSession(client, env, input.namespaceVerificationSessionId, input.userId)
+        return getNamespaceVerificationSession(client, input.namespaceVerificationSessionId, input.userId)
       }
     } else {
       throw providerUnavailable("HNS verifier is not configured")
@@ -549,7 +541,7 @@ export async function completeNamespaceVerificationSession(
     ], "write")
   }
 
-  return getNamespaceVerificationSession(client, env, input.namespaceVerificationSessionId, input.userId)
+  return getNamespaceVerificationSession(client, input.namespaceVerificationSessionId, input.userId)
 }
 
 export async function getNamespaceVerification(

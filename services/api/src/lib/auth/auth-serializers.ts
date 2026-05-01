@@ -4,7 +4,6 @@ import {
   buildDefaultVerificationCapabilities,
   deriveVerificationState,
 } from "../verification/verification-capabilities"
-import { serializeNamespaceSessionStatus } from "../verification/namespace-verification-policy"
 import { normalizeIdentityCountryAlpha2 } from "../identity/country-codes"
 import { nullableUnixSeconds, unixSeconds } from "../../serializers/time"
 import { decodePublicNamespaceVerificationId, decodePublicNamespaceVerificationSessionId, publicId } from "../public-ids"
@@ -280,7 +279,6 @@ export function serializeVerificationSession(input: {
 
 export function serializeNamespaceVerificationSession(
   row: NamespaceVerificationSessionRow,
-  input?: { setupNameservers?: string[] | null },
 ): NamespaceVerificationSession {
   const storedSetupNameservers = parseOptionalStringArray(row.setup_nameservers_json)
 
@@ -292,13 +290,13 @@ export function serializeNamespaceVerificationSession(
     family: row.family,
     submitted_root_label: row.submitted_root_label,
     normalized_root_label: row.normalized_root_label,
-    status: serializeNamespaceSessionStatus(row),
+    status: row.status,
     challenge_kind: (row.challenge_kind as NamespaceVerificationSession["challenge_kind"]) ?? null,
     challenge_host: row.challenge_host,
     challenge_txt_value: row.challenge_txt_value,
     challenge_payload: parseChallengePayload(row.challenge_payload_json),
     challenge_expires_at: nullableUnixSeconds(row.challenge_expires_at),
-    setup_nameservers: input?.setupNameservers ?? storedSetupNameservers,
+    setup_nameservers: storedSetupNameservers,
     assertions: buildNamespaceAssertions(row),
     capabilities: buildNamespaceCapabilities(row),
     control_class: row.control_class,

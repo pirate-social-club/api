@@ -20,7 +20,6 @@ import {
   resolveHnsObservationProviderFallback,
 } from "./namespace-observation-provider"
 import {
-  buildNamespaceSessionResponseContext,
   deriveHnsInspectionSnapshot,
   getHnsChallengeTtlHours,
   getNamespaceVerificationSessionRowForUser,
@@ -194,6 +193,5 @@ export async function startNamespaceVerificationSession(
   if (!row) {
     throw internalError("Namespace verification session row is missing after creation")
   }
-  const responseContext = await buildNamespaceSessionResponseContext(env, row)
-  return serializeNamespaceVerificationSession(row, responseContext)
+  return serializeNamespaceVerificationSession(row)
 }

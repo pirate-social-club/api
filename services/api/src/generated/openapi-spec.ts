@@ -5180,7 +5180,6 @@ const spec = {
             "enum": [
               "draft",
               "inspecting",
-              "dns_setup_required",
               "challenge_required",
               "challenge_pending",
               "verifying",

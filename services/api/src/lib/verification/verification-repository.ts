@@ -135,7 +135,7 @@ export class ControlPlaneVerificationRepository implements VerificationRepositor
     namespaceVerificationSessionId: string,
     userId: string,
   ): Promise<NamespaceVerificationSession | null> {
-    return getNamespaceVerificationSession(this.client, this.env, namespaceVerificationSessionId, userId)
+    return getNamespaceVerificationSession(this.client, namespaceVerificationSessionId, userId)
   }
 
   async completeNamespaceVerificationSession(input: {
