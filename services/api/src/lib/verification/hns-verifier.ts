@@ -38,6 +38,7 @@ export type HnsVerifyTxtResult = {
 }
 
 const MAX_HNS_ROOT_LABEL_LENGTH = 63
+const HNS_VERIFIER_TIMEOUT_MS = 25_000
 
 export function normalizeHnsRootLabel(value: string): string {
   const normalized = value.trim().normalize("NFKC").toLowerCase()
@@ -138,14 +139,22 @@ async function request<T>(env: Env, path: string, init?: RequestInit): Promise<T
     headers.authorization = `Bearer ${authToken}`
   }
 
-  const response = await fetch(`${baseUrl}${path}`, {
-    ...init,
-    signal: init?.signal ?? AbortSignal.timeout(10_000),
-    headers: {
-      ...headers,
-      ...(init?.headers ?? {}),
-    },
-  })
+  let response: Response
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      ...init,
+      signal: init?.signal ?? AbortSignal.timeout(HNS_VERIFIER_TIMEOUT_MS),
+      headers: {
+        ...headers,
+        ...(init?.headers ?? {}),
+      },
+    })
+  } catch (error) {
+    if (error instanceof DOMException && (error.name === "AbortError" || error.name === "TimeoutError")) {
+      throw providerUnavailable("HNS verifier request timed out")
+    }
+    throw error
+  }
 
   const text = await response.text()
   let body: (T & { error?: string }) | null = null
