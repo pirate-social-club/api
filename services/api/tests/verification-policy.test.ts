@@ -175,14 +175,24 @@ describe("shouldRequireHnsDnsSetup", () => {
     })).toBe(true)
   })
 
-  test("production accepts non-local authority observations from the verifier", () => {
+  test("production accepts explicitly trusted authority observations from the verifier", () => {
     expect(shouldRequireHnsDnsSetup({
       ENVIRONMENT: "production",
       HNS_VERIFIER_BASE_URL: "https://spaces.pirate.sc/hns",
     } as never, {
       pirate_dns_authority_verified: true,
-      observation_provider: "hns_parent_chain",
+      observation_provider: "web3dns_json_doh",
     })).toBe(false)
+  })
+
+  test("production requires DNS setup for unknown authority providers", () => {
+    expect(shouldRequireHnsDnsSetup({
+      ENVIRONMENT: "production",
+      HNS_VERIFIER_BASE_URL: "https://spaces.pirate.sc/hns",
+    } as never, {
+      pirate_dns_authority_verified: true,
+      observation_provider: "future_weak_provider",
+    })).toBe(true)
   })
 })
 
@@ -193,6 +203,27 @@ describe("isTrustedHnsAuthorityObservation", () => {
     } as never, {
       observation_provider: "powerdns_sqlite",
     })).toBe(false)
+  })
+
+  test("production rejects unknown TXT verification providers by default", () => {
+    expect(isTrustedHnsAuthorityObservation({
+      ENVIRONMENT: "production",
+    } as never, {
+      observation_provider: "future_weak_provider",
+    })).toBe(false)
+  })
+
+  test("production accepts Web3DNS and parent-chain observations", () => {
+    expect(isTrustedHnsAuthorityObservation({
+      ENVIRONMENT: "production",
+    } as never, {
+      observation_provider: "web3dns_json_doh",
+    })).toBe(true)
+    expect(isTrustedHnsAuthorityObservation({
+      ENVIRONMENT: "production",
+    } as never, {
+      observation_provider: "hns_parent_chain",
+    })).toBe(true)
   })
 
   test("local environments can use PowerDNS verifier doubles", () => {

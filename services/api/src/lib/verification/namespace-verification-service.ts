@@ -1,5 +1,5 @@
 import type { Client } from "../sql-client"
-import { internalError, providerUnavailable } from "../errors"
+import { HttpError, internalError, providerUnavailable } from "../errors"
 import { makeId } from "../helpers"
 import {
   serializeNamespaceVerification,
@@ -338,11 +338,29 @@ export async function completeNamespaceVerificationSession(
     let verificationResult: HnsVerifyTxtResult | null = null
 
     if (isHnsVerifierConfigured(env)) {
-      const verification = await verifyHnsTxtRecord(env, {
-        rootLabel: requireNormalizedRootLabel(row),
-        challengeHost: row.challenge_host,
-        challengeTxtValue: row.challenge_txt_value ?? "",
-      })
+      let verification: HnsVerifyTxtResult
+      try {
+        verification = await verifyHnsTxtRecord(env, {
+          rootLabel: requireNormalizedRootLabel(row),
+          challengeHost: row.challenge_host,
+          challengeTxtValue: row.challenge_txt_value ?? "",
+        })
+      } catch (caught) {
+        if (caught instanceof HttpError && caught.code === "provider_unavailable") {
+          await client.execute({
+            sql: `
+              UPDATE namespace_verification_sessions
+              SET status = 'challenge_pending',
+                  failure_reason = 'provider_unavailable',
+                  updated_at = ?2
+              WHERE namespace_verification_session_id = ?1
+            `,
+            args: [input.namespaceVerificationSessionId, updatedAt],
+          })
+          return getNamespaceVerificationSession(client, env, input.namespaceVerificationSessionId, input.userId)
+        }
+        throw caught
+      }
       verificationResult = verification
       observationProvider = verification.observation_provider ?? HNS_VERIFIER_OBSERVATION_PROVIDER
       verificationEvidence = verification as Record<string, unknown>

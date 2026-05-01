@@ -133,7 +133,7 @@ export function shouldRequireHnsDnsSetup(
     return false
   }
 
-  if (isProductionEnv(env) && inspection.observation_provider === "powerdns_sqlite") {
+  if (isProductionEnv(env) && !isTrustedHnsAuthorityObservation(env, inspection)) {
     return true
   }
 
@@ -144,8 +144,18 @@ export function isTrustedHnsAuthorityObservation(
   env: Env,
   verification: Pick<HnsVerifyTxtResult, "observation_provider">,
 ): boolean {
-  return !isProductionEnv(env) || verification.observation_provider !== "powerdns_sqlite"
+  if (!isProductionEnv(env)) {
+    return true
+  }
+
+  return typeof verification.observation_provider === "string"
+    && TRUSTED_HNS_OBSERVATION_PROVIDERS.has(verification.observation_provider)
 }
+
+const TRUSTED_HNS_OBSERVATION_PROVIDERS = new Set([
+  "hns_parent_chain",
+  "web3dns_json_doh",
+])
 
 export function isDnsSetupRequiredNamespaceSessionRow(
   row: Pick<

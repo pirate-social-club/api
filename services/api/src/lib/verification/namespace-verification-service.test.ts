@@ -66,6 +66,16 @@ class HnsCompleteClient implements Client {
       return { rows: [this.row] }
     }
 
+    if (sql.includes("UPDATE namespace_verification_sessions")) {
+      const args = typeof statement === "string" ? [] : statement.args
+      if (sql.includes("status = 'challenge_pending'")) {
+        this.row.status = "challenge_pending"
+        this.row.failure_reason = "provider_unavailable"
+        this.row.updated_at = String(args?.[1] ?? "")
+        return { rows: [] }
+      }
+    }
+
     throw new Error(`unexpected SQL: ${sql}`)
   }
 
@@ -98,5 +108,31 @@ describe("completeNamespaceVerificationSession", () => {
       message: "HNS verifier is not configured",
     })
     expect(client.batchCalls).toBe(0)
+  })
+
+  test("keeps HNS challenges pending when the verifier is temporarily unavailable", async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => new Response(JSON.stringify({ error: "resolver unavailable" }), {
+      status: 502,
+      headers: { "content-type": "application/json" },
+    })) as never
+
+    try {
+      const client = new HnsCompleteClient(makeHnsChallengeRow())
+      const result = await completeNamespaceVerificationSession(client, {
+        ENVIRONMENT: "production",
+        HNS_VERIFIER_BASE_URL: "https://spaces.pirate.sc/hns",
+        HNS_VERIFIER_AUTH_TOKEN: "test-token",
+      } as never, {
+        namespaceVerificationSessionId: "nvs_test",
+        userId: "usr_test",
+      })
+
+      expect(result?.status).toBe("challenge_pending")
+      expect(result?.failure_reason).toBe("provider_unavailable")
+      expect(client.batchCalls).toBe(0)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 })
