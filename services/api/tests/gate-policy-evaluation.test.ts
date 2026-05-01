@@ -334,6 +334,30 @@ describe("evaluateMembershipGatePolicy", () => {
         expect(action.allowed_countries).toEqual(["US", "CA"])
       }
     })
+
+    test("empty nationality allowed list requires any Self nationality", async () => {
+      const unverified = await evaluateMembershipGatePolicy({
+        env: {},
+        policy: atomGate({ type: "nationality", provider: "self", allowed: [] }),
+        user: makeUser({ nationality: { state: "unverified" } }),
+        walletAttachments: [],
+      })
+      expect(unverified.satisfied).toBe(false)
+      const action = unverified.requiredActionSet!.items[0]
+      expect(action.kind).toBe("action")
+      if (action.kind === "action" && action.capability === "nationality") {
+        expect(action.allowed_countries).toEqual([])
+      }
+
+      const verified = await evaluateMembershipGatePolicy({
+        env: {},
+        policy: atomGate({ type: "nationality", provider: "self", allowed: [] }),
+        user: makeUser({ nationality: { state: "verified", value: "AR" } }),
+        walletAttachments: [],
+      })
+      expect(verified.satisfied).toBe(true)
+      expect(verified.requiredActionSet).toBeNull()
+    })
   })
 
   describe("collapsed action sets", () => {

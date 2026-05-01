@@ -229,7 +229,7 @@ describe("community membership gate routes", () => {
     expect(created.membershipMode).toBe("gated")
   })
 
-  test("create nationality gate missing required_value fails with eligibility_failed", async () => {
+  test("create nationality gate without allowed countries succeeds as any-nationality gate", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
 
@@ -247,10 +247,16 @@ describe("community membership gate routes", () => {
         provider: "self",
       }),
     }, ctx.env, session.accessToken)
-    expect(communityCreate.status).toBe(403)
-    const body = await json(communityCreate) as { code: string; message: string }
-    expect(body.code).toBe("eligibility_failed")
-    expect(body.message).toBe("nationality gate requires allowed country codes")
+    expect(communityCreate.status).toBe(202)
+    const body = await json(communityCreate) as {
+      community: {
+        membership_mode: string
+        gate_policy?: { expression?: { gate?: { type?: string; allowed?: string[] } } } | null
+      }
+    }
+    expect(body.community.membership_mode).toBe("gated")
+    expect(body.community.gate_policy?.expression?.gate?.type).toBe("nationality")
+    expect(body.community.gate_policy?.expression?.gate?.allowed).toEqual([])
   })
 
   test("create nationality gate with invalid provider fails with eligibility_failed", async () => {

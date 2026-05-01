@@ -83,10 +83,11 @@ function validateGateAtom(input: unknown): GateAtom {
       if (atom.provider !== "self") {
         throw eligibilityFailed("nationality gate provider must be self")
       }
-      if (!Array.isArray(atom.allowed) || atom.allowed.length === 0) {
-        throw eligibilityFailed("nationality gate requires allowed country codes")
+      if (atom.allowed != null && !Array.isArray(atom.allowed)) {
+        throw eligibilityFailed("nationality gate allowed values must be an array")
       }
-      const allowed = atom.allowed.map((value) => normalizeIdentityCountryCode(value))
+      const allowedInput = Array.isArray(atom.allowed) ? atom.allowed : []
+      const allowed = allowedInput.map((value) => normalizeIdentityCountryCode(value))
       if (allowed.some((value) => value == null)) {
         throw eligibilityFailed("nationality gate allowed values must be valid ISO-2 or ISO-3 country codes")
       }
