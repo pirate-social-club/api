@@ -1,6 +1,6 @@
 import type { Client } from "../sql-client"
 import { globalSingleton } from "../db-helpers"
-import { getControlPlaneCacheKey, getControlPlaneClient } from "../runtime-deps"
+import { getControlPlaneCacheKey, getControlPlaneClient, isPostgresControlPlaneUrl } from "../runtime-deps"
 import {
   startVerificationSession,
   getVerificationSession,
@@ -163,6 +163,10 @@ export function getControlPlaneVerificationRepository(env: Env): ControlPlaneVer
     String(env.HNS_VERIFIER_AUTH_TOKEN || ""),
     String(env.ENVIRONMENT || ""),
   ].join("|")
+
+  if (isPostgresControlPlaneUrl(getControlPlaneCacheKey(env))) {
+    return new ControlPlaneVerificationRepository(client, env)
+  }
 
   return globalSingleton("controlPlaneVerificationRepository", cacheKey, () =>
     new ControlPlaneVerificationRepository(client, env),

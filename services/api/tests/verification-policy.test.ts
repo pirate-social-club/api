@@ -4,7 +4,9 @@ import {
   deriveHnsInspectionSnapshot,
   deriveAcceptedHnsSnapshot,
   deriveSpacesAcceptedSnapshot,
+  isTrustedHnsAuthorityObservation,
   parseStoredSpacesChallenge,
+  shouldRequireHnsDnsSetup,
 } from "../src/lib/verification/namespace-verification-policy"
 import type { HnsInspectResult, HnsVerifyTxtResult } from "../src/lib/verification/hns-verifier"
 import type { SpacesChallengePayload } from "../src/lib/verification/spaces-verifier"
@@ -159,6 +161,46 @@ describe("deriveHnsInspectionSnapshot", () => {
     expect(snapshot.pirateDnsAuthorityVerified).toBeNull()
     expect(snapshot.controlClass).toBeNull()
     expect(snapshot.operationClass).toBeNull()
+  })
+})
+
+describe("shouldRequireHnsDnsSetup", () => {
+  test("production does not accept local PowerDNS as parent delegation evidence", () => {
+    expect(shouldRequireHnsDnsSetup({
+      ENVIRONMENT: "production",
+      HNS_VERIFIER_BASE_URL: "https://spaces.pirate.sc/hns",
+    } as never, {
+      pirate_dns_authority_verified: true,
+      observation_provider: "powerdns_sqlite",
+    })).toBe(true)
+  })
+
+  test("production accepts non-local authority observations from the verifier", () => {
+    expect(shouldRequireHnsDnsSetup({
+      ENVIRONMENT: "production",
+      HNS_VERIFIER_BASE_URL: "https://spaces.pirate.sc/hns",
+    } as never, {
+      pirate_dns_authority_verified: true,
+      observation_provider: "hns_parent_chain",
+    })).toBe(false)
+  })
+})
+
+describe("isTrustedHnsAuthorityObservation", () => {
+  test("production rejects local PowerDNS TXT verification as root authority evidence", () => {
+    expect(isTrustedHnsAuthorityObservation({
+      ENVIRONMENT: "production",
+    } as never, {
+      observation_provider: "powerdns_sqlite",
+    })).toBe(false)
+  })
+
+  test("local environments can use PowerDNS verifier doubles", () => {
+    expect(isTrustedHnsAuthorityObservation({
+      ENVIRONMENT: "development",
+    } as never, {
+      observation_provider: "powerdns_sqlite",
+    })).toBe(true)
   })
 })
 

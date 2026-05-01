@@ -133,7 +133,18 @@ export function shouldRequireHnsDnsSetup(
     return false
   }
 
+  if (isProductionEnv(env) && inspection.observation_provider === "powerdns_sqlite") {
+    return true
+  }
+
   return inspection.pirate_dns_authority_verified !== true
+}
+
+export function isTrustedHnsAuthorityObservation(
+  env: Env,
+  verification: Pick<HnsVerifyTxtResult, "observation_provider">,
+): boolean {
+  return !isProductionEnv(env) || verification.observation_provider !== "powerdns_sqlite"
 }
 
 export function isDnsSetupRequiredNamespaceSessionRow(

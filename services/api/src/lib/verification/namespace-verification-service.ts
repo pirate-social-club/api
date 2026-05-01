@@ -29,6 +29,7 @@ import {
   parseStoredSpacesChallenge,
 } from "./verification-shared"
 import { isDnsSetupRequiredNamespaceSessionRow } from "./namespace-verification-policy"
+import { isTrustedHnsAuthorityObservation } from "./namespace-verification-policy"
 import { restartNamespaceVerificationChallenge } from "./namespace-verification-restart"
 import {
   HNS_VERIFIER_OBSERVATION_PROVIDER,
@@ -346,11 +347,12 @@ export async function completeNamespaceVerificationSession(
       observationProvider = verification.observation_provider ?? HNS_VERIFIER_OBSERVATION_PROVIDER
       verificationEvidence = verification as Record<string, unknown>
 
-      if (verification.verified !== true) {
+      const trustedAuthorityObservation = isTrustedHnsAuthorityObservation(env, verification)
+      if (verification.verified !== true || !trustedAuthorityObservation) {
         const challengeExpiresAtMs = row.challenge_expires_at ? Date.parse(row.challenge_expires_at) : Number.NaN
         const challengeStillValid = Number.isFinite(challengeExpiresAtMs) && challengeExpiresAtMs > now.getTime()
         const observedValues = verification.observed_values ?? []
-        const isPending = challengeStillValid && observedValues.length === 0
+        const isPending = challengeStillValid && (observedValues.length === 0 || !trustedAuthorityObservation)
 
         await client.execute({
           sql: `
@@ -365,7 +367,9 @@ export async function completeNamespaceVerificationSession(
             input.namespaceVerificationSessionId,
             isPending ? "challenge_pending" : "failed",
             observationProvider,
-            isPending ? null : (verification.failure_reason ?? "challenge_mismatch"),
+            isPending
+              ? (!trustedAuthorityObservation ? "dns_delegation_not_confirmed" : null)
+              : (!trustedAuthorityObservation ? "dns_delegation_not_confirmed" : (verification.failure_reason ?? "challenge_mismatch")),
             updatedAt,
           ],
         })

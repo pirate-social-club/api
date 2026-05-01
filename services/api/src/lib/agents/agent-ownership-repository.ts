@@ -1,5 +1,5 @@
 import { globalSingleton } from "../db-helpers"
-import { getControlPlaneCacheKey, getControlPlaneClient } from "../runtime-deps"
+import { getControlPlaneCacheKey, getControlPlaneClient, isPostgresControlPlaneUrl } from "../runtime-deps"
 import type { Env } from "../../env"
 import type {
   AgentDelegatedCredential,
@@ -277,6 +277,10 @@ export function getControlPlaneAgentOwnershipRepository(env: Env): ControlPlaneA
     String(env.CLAWKEY_API_URL || ""),
     String(env.ENVIRONMENT || ""),
   ].join("|")
+
+  if (isPostgresControlPlaneUrl(getControlPlaneCacheKey(env))) {
+    return new ControlPlaneAgentOwnershipRepository(client, env)
+  }
 
   return globalSingleton("controlPlaneAgentOwnershipRepository", cacheKey, () =>
     new ControlPlaneAgentOwnershipRepository(client, env),
