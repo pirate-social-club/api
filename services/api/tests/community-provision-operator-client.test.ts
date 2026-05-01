@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { HttpError } from "../src/lib/errors"
 import { provisionCommunityViaOperator } from "../src/lib/communities/provisioning/operator-client"
 import type { Env } from "../src/types"
 
@@ -40,6 +41,50 @@ describe("community provision operator client", () => {
         groupLocation: "aws-us-east-1",
         bootstrapPayload: {},
       })).rejects.toThrow("community_provision_operator_organization_mismatch")
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("sends a request id and preserves operator error details", async () => {
+    const originalFetch = globalThis.fetch
+    let requestId: string | null = null
+    globalThis.fetch = (async (_input, init) => {
+      requestId = new Headers(init?.headers).get("x-request-id")
+      return new Response(JSON.stringify({
+        error_code: "community_provision_operator_failed",
+        message: "SQLite error: no such table: community_gate_rules",
+      }), {
+        status: 500,
+        headers: { "content-type": "application/json" },
+      })
+    }) as typeof globalThis.fetch
+
+    try {
+      await provisionCommunityViaOperator({
+        env: {
+          COMMUNITY_PROVISION_OPERATOR_BASE_URL: "https://operator.test",
+          COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN: "operator-token",
+        } satisfies Env,
+        communityId: "cmt_operator_error",
+        creatorUserId: "usr_01",
+        displayName: "Operator Error Club",
+        namespaceVerificationId: null,
+        groupLocation: "aws-us-east-1",
+        bootstrapPayload: {},
+      })
+      throw new Error("expected provisionCommunityViaOperator to throw")
+    } catch (error) {
+      expect(requestId).toMatch(/^opr_/)
+      expect(error instanceof HttpError).toBe(true)
+      expect((error as HttpError).message).toBe("community_provision_operator_failed")
+      expect((error as HttpError).details).toMatchObject({
+        community_id: "cmt_operator_error",
+        operator_error_code: "community_provision_operator_failed",
+        operator_message: "SQLite error: no such table: community_gate_rules",
+        operator_status: 500,
+        operator_request_id: requestId,
+      })
     } finally {
       globalThis.fetch = originalFetch
     }

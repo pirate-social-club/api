@@ -1,5 +1,6 @@
 import { internalError } from "../../errors"
 import type { Env } from "../../../env"
+import { makeId } from "../../helpers"
 
 type OperatorBootstrapPayload = {
   description?: string | null
@@ -56,6 +57,27 @@ function normalizeBaseUrl(env: Env): string {
   return requireText(env.COMMUNITY_PROVISION_OPERATOR_BASE_URL, "COMMUNITY_PROVISION_OPERATOR_BASE_URL").replace(/\/+$/, "")
 }
 
+function parsedRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null ? value as Record<string, unknown> : {}
+}
+
+function operatorErrorDetails(input: {
+  status: number
+  requestId: string
+  communityId: string
+  parsed: unknown
+}): Record<string, unknown> {
+  const body = parsedRecord(input.parsed)
+  const message = typeof body.message === "string" ? body.message.slice(0, 500) : null
+  return {
+    operator_status: input.status,
+    operator_request_id: input.requestId,
+    community_id: input.communityId,
+    ...(typeof body.error_code === "string" ? { operator_error_code: body.error_code } : {}),
+    ...(message ? { operator_message: message } : {}),
+  }
+}
+
 function validateExpectedOrganizationSlug(env: Env, result: ProvisionCommunityOperatorResult): void {
   const expected = trim(env.COMMUNITY_PROVISION_EXPECTED_ORGANIZATION_SLUG)
   if (!expected) {
@@ -94,6 +116,7 @@ export async function provisionCommunityViaOperator(input: {
   bootstrapPayload: OperatorBootstrapPayload
 }): Promise<ProvisionCommunityOperatorResult> {
   const baseUrl = normalizeBaseUrl(input.env)
+  const requestId = makeId("opr")
   const authToken = requireText(
     input.env.COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN,
     "COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN",
@@ -110,6 +133,7 @@ export async function provisionCommunityViaOperator(input: {
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${authToken}`,
+        "x-request-id": requestId,
       },
       body: JSON.stringify({
         community_id: input.communityId,
@@ -131,12 +155,18 @@ export async function provisionCommunityViaOperator(input: {
     }
 
     if (!response.ok) {
-      const errorCode = typeof parsed === "object" && parsed && "error_code" in parsed
-        ? String((parsed as Record<string, unknown>).error_code)
+      const body = parsedRecord(parsed)
+      const errorCode = "error_code" in body
+        ? String(body.error_code)
         : response.status === 401
           ? "community_provision_operator_unauthorized"
           : "community_provision_operator_http_error"
-      throw internalError(errorCode)
+      throw internalError(errorCode, operatorErrorDetails({
+        status: response.status,
+        requestId,
+        communityId: input.communityId,
+        parsed,
+      }))
     }
 
     if (!parsed || typeof parsed !== "object") {
@@ -170,7 +200,10 @@ export async function provisionCommunityViaOperator(input: {
     return result
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
-      throw internalError("community_provision_operator_timeout")
+      throw internalError("community_provision_operator_timeout", {
+        operator_request_id: requestId,
+        community_id: input.communityId,
+      })
     }
     throw error
   } finally {

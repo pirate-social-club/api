@@ -123,11 +123,22 @@ app.onError((error, c) => {
   if (!(error instanceof HttpError) || error.status >= 500) {
     console.error("[api-worker]", error)
     if (c.env.SENTRY_DSN) {
+      const details = error instanceof HttpError ? error.details : null
+      const causeDetails = details?.cause_details && typeof details.cause_details === "object"
+        ? details.cause_details as Record<string, unknown>
+        : null
       captureException(error, {
         tags: {
           route: c.req.path,
           method: c.req.method,
           status: error instanceof HttpError ? String(error.status) : "500",
+          ...(typeof details?.community_id === "string" ? { community_id: details.community_id } : {}),
+          ...(typeof details?.job_id === "string" ? { job_id: details.job_id } : {}),
+          ...(typeof causeDetails?.operator_error_code === "string" ? { operator_error_code: causeDetails.operator_error_code } : {}),
+          ...(typeof causeDetails?.operator_request_id === "string" ? { operator_request_id: causeDetails.operator_request_id } : {}),
+        },
+        extra: {
+          ...(details ? { details } : {}),
         },
       })
     }

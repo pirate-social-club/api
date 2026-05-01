@@ -88,6 +88,9 @@ function communityProvisioningFailureDetails(
   if (error instanceof HttpError) {
     details["error_code"] = error.code
     details["error_status"] = error.status
+    if (error.details) {
+      details["cause_details"] = error.details
+    }
   }
 
   return details
@@ -321,7 +324,11 @@ async function createNamespacelessCommunity(input: {
 
     throw internalError(
       "Community provisioning failed",
-      communityProvisioningFailureDetails(error, backend.mode),
+      {
+        ...communityProvisioningFailureDetails(error, backend.mode),
+        community_id: communityId,
+        job_id: prepared.job.job_id,
+      },
     )
   }
 }
@@ -472,7 +479,11 @@ async function provisionNamespacedCommunity(input: {
 
       throw internalError(
         "Community provisioning failed",
-        communityProvisioningFailureDetails(error, backend.mode),
+        {
+          ...communityProvisioningFailureDetails(error, backend.mode),
+          community_id: communityId,
+          job_id: prepared.job.job_id,
+        },
       )
     }
 
