@@ -189,6 +189,11 @@ describe("isTrustedHnsAuthorityObservation", () => {
     expect(isTrustedHnsAuthorityObservation({
       ENVIRONMENT: "production",
     } as never, {
+      observation_provider: "web3dns_public_dns",
+    })).toBe(true)
+    expect(isTrustedHnsAuthorityObservation({
+      ENVIRONMENT: "production",
+    } as never, {
       observation_provider: "hns_parent_chain",
     })).toBe(true)
   })

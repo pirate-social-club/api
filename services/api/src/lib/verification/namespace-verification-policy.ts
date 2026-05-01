@@ -105,6 +105,7 @@ export function isTrustedHnsAuthorityObservation(
 const TRUSTED_HNS_OBSERVATION_PROVIDERS = new Set([
   "hns_parent_chain",
   "web3dns_json_doh",
+  "web3dns_public_dns",
 ])
 
 export function deriveAcceptedHnsSnapshot(
