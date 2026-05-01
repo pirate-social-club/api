@@ -38,7 +38,7 @@ export type HnsVerifyTxtResult = {
 }
 
 const MAX_HNS_ROOT_LABEL_LENGTH = 63
-const HNS_VERIFIER_TIMEOUT_MS = 25_000
+const HNS_VERIFIER_TIMEOUT_MS = 12_000
 
 export function normalizeHnsRootLabel(value: string): string {
   const normalized = value.trim().normalize("NFKC").toLowerCase()
