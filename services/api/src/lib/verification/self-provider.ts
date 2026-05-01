@@ -6,7 +6,7 @@ import type {
 } from "@selfxyz/core"
 import { badRequestError, providerUnavailable } from "../errors"
 import { isProductionEnv, makeId } from "../helpers"
-import { getAllIdentityCountryCodes, normalizeIdentityCountryCode, normalizeIdentityCountryCodes } from "../identity/country-codes"
+import { normalizeIdentityCountryCode, normalizeIdentityCountryCodes } from "../identity/country-codes"
 import { logVerificationDebug } from "./verification-logging"
 import type { Env } from "../../env"
 import type { RequestedVerificationCapability, SelfVerificationDisclosures, SelfVerificationLaunch, VerificationIntent, VerificationRequirement } from "../../types"
@@ -139,15 +139,11 @@ export function mapCapabilitiesToDisclosures(
   const set = new Set(capabilities)
   const disclosures: SelfVerificationDisclosures = {}
   const minimumAge = resolveRequestedMinimumAge(capabilities, verificationRequirements)
-  const excludedCountries = resolveExcludedNationalityCountries(verificationRequirements)
   if (minimumAge != null) {
     disclosures.minimum_age = minimumAge
   }
   if (set.has("nationality")) {
     disclosures.nationality = true
-  }
-  if (excludedCountries.length > 0) {
-    disclosures.excluded_countries = excludedCountries
   }
   if (set.has("gender")) {
     disclosures.gender = true
@@ -204,24 +200,6 @@ function resolveRequestedMinimumAge(
     return null
   }
   return Math.max(...minimumAges)
-}
-
-function resolveExcludedNationalityCountries(
-  verificationRequirements: VerificationRequirement[],
-): string[] {
-  const requiredNationalities = new Set<string>()
-  for (const requirement of verificationRequirements) {
-    if (requirement.proof_type !== "nationality") {
-      continue
-    }
-    for (const countryCode of normalizeIdentityCountryCodes(requirement.required_values)) {
-      requiredNationalities.add(countryCode)
-    }
-  }
-  if (requiredNationalities.size === 0) {
-    return []
-  }
-  return getAllIdentityCountryCodes().filter((countryCode) => !requiredNationalities.has(countryCode))
 }
 
 export type SelfStartResult = {
@@ -314,10 +292,8 @@ function buildVerificationConfig(
   verificationRequirements: VerificationRequirement[],
 ): VerificationConfig {
   const minimumAge = resolveRequestedMinimumAge(capabilities, verificationRequirements)
-  const excludedCountries = resolveExcludedNationalityCountries(verificationRequirements)
   return {
     ...(minimumAge != null ? { minimumAge } : {}),
-    ...(excludedCountries.length > 0 ? { excludedCountries: excludedCountries as VerificationConfig["excludedCountries"] } : {}),
   }
 }
 

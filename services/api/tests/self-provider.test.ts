@@ -31,14 +31,12 @@ describe("self-provider capability canonicalization", () => {
     })
   })
 
-  test("maps nationality allowlist requirements to Self excluded countries", () => {
+  test("maps nationality allowlist requirements to nationality disclosure only", () => {
     const disclosures = mapCapabilitiesToDisclosures(["unique_human", "nationality"], [
       { proof_type: "nationality", required_values: ["PS"] },
     ])
 
-    expect(disclosures.nationality).toBe(true)
-    expect(disclosures.excluded_countries).toContain("USA")
-    expect(disclosures.excluded_countries).not.toContain("PSE")
+    expect(disclosures).toEqual({ nationality: true })
   })
 
   test("non-production self stub returns requested nationality and gender claims", async () => {
@@ -172,7 +170,7 @@ describe("self-provider capability canonicalization", () => {
     expect(started.upstreamSessionRef).toContain("\"mockPassport\":false")
   })
 
-  test("production Self nationality requirements are sent to the QR and verifier config", async () => {
+  test("production Self nationality requirements request disclosure without blocking mock defaults", async () => {
     const provider = getSelfProvider(buildTestEnv({
       ENVIRONMENT: "production",
       PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
@@ -186,11 +184,8 @@ describe("self-provider capability canonicalization", () => {
       policyId: null,
     })
 
-    expect(started.launch.disclosures.nationality).toBe(true)
-    expect(started.launch.disclosures.excluded_countries).toContain("USA")
-    expect(started.launch.disclosures.excluded_countries).not.toContain("PSE")
-    expect(started.upstreamSessionRef).toContain("\"excludedCountries\"")
-    expect(started.upstreamSessionRef).toContain("\"USA\"")
-    expect(started.upstreamSessionRef).not.toContain("\"PSE\"")
+    expect(started.launch.disclosures).toEqual({ nationality: true })
+    expect(started.upstreamSessionRef).toContain("\"verificationConfig\":{}")
+    expect(started.upstreamSessionRef).not.toContain("\"excludedCountries\"")
   })
 })
