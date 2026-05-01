@@ -26,7 +26,6 @@ export {
   makeNamespaceCapabilityStatements,
   parseStoredSpacesChallenge,
   serializeSetupNameservers,
-  shouldRequireHnsDnsSetup,
 } from "./namespace-verification-policy"
 export type {
   HnsSessionAssertionSnapshot,

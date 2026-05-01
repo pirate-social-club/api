@@ -125,21 +125,6 @@ export function serializeSetupNameservers(value: string[] | null): string | null
   return value && value.length > 0 ? JSON.stringify(value) : null
 }
 
-export function shouldRequireHnsDnsSetup(
-  env: Env,
-  inspection: HnsInspectResult,
-): boolean {
-  if (!isHnsVerifierConfigured(env)) {
-    return false
-  }
-
-  if (isProductionEnv(env) && !isTrustedHnsAuthorityObservation(env, inspection)) {
-    return true
-  }
-
-  return inspection.pirate_dns_authority_verified !== true
-}
-
 export function isTrustedHnsAuthorityObservation(
   env: Env,
   verification: Pick<HnsVerifyTxtResult, "observation_provider">,

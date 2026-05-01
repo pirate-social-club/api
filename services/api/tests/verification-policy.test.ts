@@ -6,7 +6,6 @@ import {
   deriveSpacesAcceptedSnapshot,
   isTrustedHnsAuthorityObservation,
   parseStoredSpacesChallenge,
-  shouldRequireHnsDnsSetup,
 } from "../src/lib/verification/namespace-verification-policy"
 import type { HnsInspectResult, HnsVerifyTxtResult } from "../src/lib/verification/hns-verifier"
 import type { SpacesChallengePayload } from "../src/lib/verification/spaces-verifier"
@@ -161,38 +160,6 @@ describe("deriveHnsInspectionSnapshot", () => {
     expect(snapshot.pirateDnsAuthorityVerified).toBeNull()
     expect(snapshot.controlClass).toBeNull()
     expect(snapshot.operationClass).toBeNull()
-  })
-})
-
-describe("shouldRequireHnsDnsSetup", () => {
-  test("production does not accept local PowerDNS as parent delegation evidence", () => {
-    expect(shouldRequireHnsDnsSetup({
-      ENVIRONMENT: "production",
-      HNS_VERIFIER_BASE_URL: "https://spaces.pirate.sc/hns",
-    } as never, {
-      pirate_dns_authority_verified: true,
-      observation_provider: "powerdns_sqlite",
-    })).toBe(true)
-  })
-
-  test("production accepts explicitly trusted authority observations from the verifier", () => {
-    expect(shouldRequireHnsDnsSetup({
-      ENVIRONMENT: "production",
-      HNS_VERIFIER_BASE_URL: "https://spaces.pirate.sc/hns",
-    } as never, {
-      pirate_dns_authority_verified: true,
-      observation_provider: "web3dns_json_doh",
-    })).toBe(false)
-  })
-
-  test("production requires DNS setup for unknown authority providers", () => {
-    expect(shouldRequireHnsDnsSetup({
-      ENVIRONMENT: "production",
-      HNS_VERIFIER_BASE_URL: "https://spaces.pirate.sc/hns",
-    } as never, {
-      pirate_dns_authority_verified: true,
-      observation_provider: "future_weak_provider",
-    })).toBe(true)
   })
 })
 

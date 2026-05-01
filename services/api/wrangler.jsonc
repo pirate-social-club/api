@@ -117,7 +117,6 @@
         "SPACES_VERIFIER_BASE_URL": "https://spaces.pirate.sc",
         "SPACES_VERIFIER_CHALLENGE_DOMAIN": "pirate.sc",
         "HNS_VERIFIER_BASE_URL": "https://spaces.pirate.sc/hns",
-        "HNS_AUTO_PROVISION_ROOTS": "beermoney,dankmeme",
         "TURSO_COMMUNITY_DB_WRAP_KEY_VERSION": "2",
 	        "COMMUNITY_PROVISION_OPERATOR_BASE_URL": "https://spaces.pirate.sc/prod",
 	        "COMMUNITY_PROVISION_EXPECTED_ORGANIZATION_SLUG": "pirate-prod",
