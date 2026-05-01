@@ -3,8 +3,11 @@ import type { Env } from "../../../env"
 
 type OperatorBootstrapPayload = {
   description?: string | null
+  avatar_ref?: string | null
+  banner_ref?: string | null
   membership_mode?: "open" | "request" | "gated"
   default_age_gate_policy?: "none" | "18_plus"
+  gate_policy?: Record<string, unknown> | null
   membership_unique_human_provider?: "self" | "very" | null
   posting_unique_human_provider?: "self" | "very" | null
   handle_policy_template?: "standard" | "premium" | "membership_gated" | "custom"

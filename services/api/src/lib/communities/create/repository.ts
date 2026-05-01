@@ -434,8 +434,11 @@ export function buildProvisionOperatorBootstrapPayload(
 ) {
   return {
     description: body.description?.trim() || null,
+    avatar_ref: normalizeCommunityMediaRef(body.avatar_ref),
+    banner_ref: normalizeCommunityMediaRef(body.banner_ref),
     membership_mode: resolvePublicV0MembershipMode(body.membership_mode),
     default_age_gate_policy: body.default_age_gate_policy ?? "none",
+    gate_policy: buildBootstrapGatePolicy(body) as Record<string, unknown> | null,
     membership_unique_human_provider: resolveScopeUniqueHumanProvider(body, "membership"),
     posting_unique_human_provider: resolveScopeUniqueHumanProvider(body, "posting"),
     handle_policy_template: body.handle_policy?.policy_template ?? "standard",
