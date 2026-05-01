@@ -6,7 +6,7 @@ import type {
 } from "@selfxyz/core"
 import { badRequestError, providerUnavailable } from "../errors"
 import { isProductionEnv, makeId } from "../helpers"
-import { normalizeIdentityCountryCode } from "../identity/country-codes"
+import { getAllIdentityCountryCodes, normalizeIdentityCountryCode, normalizeIdentityCountryCodes } from "../identity/country-codes"
 import { logVerificationDebug } from "./verification-logging"
 import type { Env } from "../../env"
 import type { RequestedVerificationCapability, SelfVerificationDisclosures, SelfVerificationLaunch, VerificationIntent, VerificationRequirement } from "../../types"
@@ -139,11 +139,15 @@ export function mapCapabilitiesToDisclosures(
   const set = new Set(capabilities)
   const disclosures: SelfVerificationDisclosures = {}
   const minimumAge = resolveRequestedMinimumAge(capabilities, verificationRequirements)
+  const excludedCountries = resolveExcludedNationalityCountries(verificationRequirements)
   if (minimumAge != null) {
     disclosures.minimum_age = minimumAge
   }
   if (set.has("nationality")) {
     disclosures.nationality = true
+  }
+  if (excludedCountries.length > 0) {
+    disclosures.excluded_countries = excludedCountries
   }
   if (set.has("gender")) {
     disclosures.gender = true
@@ -158,8 +162,17 @@ export function normalizeVerificationRequirements(
   if (provider === "very") return []
   const normalized: VerificationRequirement[] = []
   for (const requirement of requirements ?? []) {
+    if (requirement?.proof_type === "nationality") {
+      const requiredValues = normalizeIdentityCountryCodes(requirement.required_values)
+      if (requiredValues.length === 0) {
+        throw badRequestError("nationality verification requirement required_values must contain valid ISO-2 or ISO-3 country codes")
+      }
+      normalized.push({ proof_type: "nationality", required_values: requiredValues })
+      continue
+    }
     if (requirement?.proof_type !== "minimum_age") {
-      throw badRequestError(`Unsupported Self verification requirement: ${String(requirement?.proof_type ?? "unknown")}`)
+      const proofType = (requirement as { proof_type?: unknown } | null | undefined)?.proof_type
+      throw badRequestError(`Unsupported Self verification requirement: ${String(proofType ?? "unknown")}`)
     }
     const minimumAge = Number(requirement.minimum_age)
     if (!Number.isInteger(minimumAge) || minimumAge < 18 || minimumAge > 125) {
@@ -176,8 +189,11 @@ function resolveRequestedMinimumAge(
 ): number | null {
   const minimumAges: number[] = []
   for (const requirement of verificationRequirements) {
+    if (requirement.proof_type !== "minimum_age") {
+      continue
+    }
     const minimumAge = requirement.minimum_age
-    if (requirement.proof_type === "minimum_age" && typeof minimumAge === "number" && Number.isInteger(minimumAge)) {
+    if (typeof minimumAge === "number" && Number.isInteger(minimumAge)) {
       minimumAges.push(minimumAge)
     }
   }
@@ -188,6 +204,24 @@ function resolveRequestedMinimumAge(
     return null
   }
   return Math.max(...minimumAges)
+}
+
+function resolveExcludedNationalityCountries(
+  verificationRequirements: VerificationRequirement[],
+): string[] {
+  const requiredNationalities = new Set<string>()
+  for (const requirement of verificationRequirements) {
+    if (requirement.proof_type !== "nationality") {
+      continue
+    }
+    for (const countryCode of normalizeIdentityCountryCodes(requirement.required_values)) {
+      requiredNationalities.add(countryCode)
+    }
+  }
+  if (requiredNationalities.size === 0) {
+    return []
+  }
+  return getAllIdentityCountryCodes().filter((countryCode) => !requiredNationalities.has(countryCode))
 }
 
 export type SelfStartResult = {
@@ -280,8 +314,10 @@ function buildVerificationConfig(
   verificationRequirements: VerificationRequirement[],
 ): VerificationConfig {
   const minimumAge = resolveRequestedMinimumAge(capabilities, verificationRequirements)
+  const excludedCountries = resolveExcludedNationalityCountries(verificationRequirements)
   return {
     ...(minimumAge != null ? { minimumAge } : {}),
+    ...(excludedCountries.length > 0 ? { excludedCountries: excludedCountries as VerificationConfig["excludedCountries"] } : {}),
   }
 }
 

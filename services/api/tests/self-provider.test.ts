@@ -31,6 +31,16 @@ describe("self-provider capability canonicalization", () => {
     })
   })
 
+  test("maps nationality allowlist requirements to Self excluded countries", () => {
+    const disclosures = mapCapabilitiesToDisclosures(["unique_human", "nationality"], [
+      { proof_type: "nationality", required_values: ["PS"] },
+    ])
+
+    expect(disclosures.nationality).toBe(true)
+    expect(disclosures.excluded_countries).toContain("USA")
+    expect(disclosures.excluded_countries).not.toContain("PSE")
+  })
+
   test("non-production self stub returns requested nationality and gender claims", async () => {
     const provider = getSelfProvider(buildTestEnv({ ENVIRONMENT: "test" }))
     const started = await provider.startSession({
@@ -73,6 +83,7 @@ describe("self-provider capability canonicalization", () => {
     expect(started.launch.endpoint).toBe("https://api.pirate.test/verification-sessions/ver_self_sdk/receive-self-proof")
     expect(started.launch.endpoint_type).toBe("staging_https")
     expect(started.launch.dev_mode).toBe(true)
+    expect(started.launch.disclosures).toEqual({ nationality: true })
     expect(started.launch.user_id).toMatch(/^[0-9a-f-]{36}$/u)
     expect(started.launch.user_defined_data).toContain("ver_self_sdk")
     expect(started.upstreamSessionRef).toContain("\"kind\":\"self-sdk\"")
@@ -159,5 +170,27 @@ describe("self-provider capability canonicalization", () => {
     expect(started.launch.dev_mode).toBe(false)
     expect(started.upstreamSessionRef).toContain("\"kind\":\"self-sdk\"")
     expect(started.upstreamSessionRef).toContain("\"mockPassport\":false")
+  })
+
+  test("production Self nationality requirements are sent to the QR and verifier config", async () => {
+    const provider = getSelfProvider(buildTestEnv({
+      ENVIRONMENT: "production",
+      PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
+    }))
+    const started = await provider.startSession({
+      verificationSessionId: "ver_self_prod_pse",
+      userId: "usr_test",
+      requestedCapabilities: ["unique_human", "nationality"],
+      verificationRequirements: [{ proof_type: "nationality", required_values: ["PSE"] }],
+      verificationIntent: "community_join",
+      policyId: null,
+    })
+
+    expect(started.launch.disclosures.nationality).toBe(true)
+    expect(started.launch.disclosures.excluded_countries).toContain("USA")
+    expect(started.launch.disclosures.excluded_countries).not.toContain("PSE")
+    expect(started.upstreamSessionRef).toContain("\"excludedCountries\"")
+    expect(started.upstreamSessionRef).toContain("\"USA\"")
+    expect(started.upstreamSessionRef).not.toContain("\"PSE\"")
   })
 })

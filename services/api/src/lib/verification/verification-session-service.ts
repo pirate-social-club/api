@@ -46,6 +46,9 @@ function parseVerificationRequirements(raw: string | null | undefined): Verifica
     if (typed.proof_type === "minimum_age" && Number.isInteger(typed.minimum_age)) {
       return [typed]
     }
+    if (typed.proof_type === "nationality" && Array.isArray(typed.required_values)) {
+      return [typed]
+    }
     return []
   })
 }
@@ -57,8 +60,11 @@ function resolveMinimumAgeToMint(
 ): number | null {
   const candidates: number[] = []
   for (const requirement of verificationRequirements) {
+    if (requirement.proof_type !== "minimum_age") {
+      continue
+    }
     const minimumAge = requirement.minimum_age
-    if (requirement.proof_type === "minimum_age" && typeof minimumAge === "number" && Number.isInteger(minimumAge)) {
+    if (typeof minimumAge === "number" && Number.isInteger(minimumAge)) {
       candidates.push(minimumAge)
     }
   }
@@ -469,10 +475,12 @@ async function completeSelfSession(
       missingClaims.push("age_over_18")
     }
     for (const requirement of verificationRequirements) {
+      if (requirement.proof_type !== "minimum_age") {
+        continue
+      }
       const minimumAge = requirement.minimum_age
       if (
-        requirement.proof_type === "minimum_age"
-        && typeof minimumAge === "number"
+        typeof minimumAge === "number"
         && Number.isInteger(minimumAge)
         && (outcome.claims.minimum_age == null || outcome.claims.minimum_age < minimumAge)
       ) {

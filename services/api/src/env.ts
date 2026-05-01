@@ -1,5 +1,8 @@
 export type Env = {
   // Runtime
+  BUILD_GIT_REF?: string
+  BUILD_GIT_SHA?: string
+  BUILD_TIMESTAMP?: string
   ENVIRONMENT?: string
   DEV_MEMORY_STORE_ENABLED?: string
   CONTROL_PLANE_DATABASE_URL?: string

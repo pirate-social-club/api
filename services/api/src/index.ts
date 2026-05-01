@@ -37,6 +37,17 @@ import type { Env } from "./env"
 
 const app = new Hono<{ Bindings: Env }>()
 
+function buildVersionPayload(env: Env) {
+  return {
+    service: "api",
+    environment: env.ENVIRONMENT ?? null,
+    git_sha: env.BUILD_GIT_SHA ?? null,
+    git_ref: env.BUILD_GIT_REF ?? null,
+    build_timestamp: env.BUILD_TIMESTAMP ?? null,
+    api_origin: env.PIRATE_API_PUBLIC_ORIGIN ?? null,
+  }
+}
+
 function configuredCorsOrigin(origin: string, c: { env: Env }): string | null {
   const raw = c.env?.CORS_ALLOWED_ORIGINS?.trim()
   if (!raw) {
@@ -72,6 +83,9 @@ app.use("*", async (_c, next) => {
 })
 
 app.get("/health", (c) => c.json({ ok: true }))
+app.get("/__version", (c) => c.json(buildVersionPayload(c.env), 200, {
+  "cache-control": "no-store",
+}))
 app.route("/", discovery)
 app.route("/", agents)
 app.route("/analytics", analytics)

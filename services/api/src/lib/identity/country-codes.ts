@@ -50,3 +50,7 @@ export function normalizeIdentityCountryCodes(values: unknown): string[] {
   }
   return Array.from(normalized)
 }
+
+export function getAllIdentityCountryCodes(): string[] {
+  return Array.from(ISO3_CODES)
+}

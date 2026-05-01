@@ -223,10 +223,15 @@ export type VerySessionBinding = {
 
 export type RequestedVerificationCapability = "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender";
 
-export type VerificationRequirement = {
-  proof_type: "minimum_age";
-  minimum_age?: number;
-};
+export type VerificationRequirement =
+  | {
+    proof_type: "minimum_age";
+    minimum_age?: number;
+  }
+  | {
+    proof_type: "nationality";
+    required_values?: string[];
+  };
 
 export type VerificationIntent = "profile_verification" | "community_creation" | "community_join" | "post_access_18_plus" | "commerce_pricing" | "qualifier_disclosure";
 
