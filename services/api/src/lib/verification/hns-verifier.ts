@@ -39,16 +39,54 @@ export type HnsVerifyTxtResult = {
 
 const MAX_HNS_ROOT_LABEL_LENGTH = 63
 
+export function normalizeHnsRootLabel(value: string): string {
+  const normalized = value.trim().normalize("NFKC").toLowerCase()
+  if (!normalized || normalized.includes(".")) {
+    return normalized
+  }
+
+  if (/^[\x00-\x7F]+$/u.test(normalized) && !normalized.startsWith("xn--")) {
+    return normalized
+  }
+
+  try {
+    const hostname = new URL(`http://${normalized}.invalid`).hostname
+    if (!hostname.endsWith(".invalid")) {
+      return normalized
+    }
+
+    const asciiLabel = hostname.slice(0, -".invalid".length)
+    return normalized.startsWith("xn--") && asciiLabel !== normalized ? normalized : asciiLabel
+  } catch {
+    return normalized
+  }
+}
+
 export function assertHnsRootLabel(value: string): void {
   if (!value || value.length > MAX_HNS_ROOT_LABEL_LENGTH) {
     throw badRequestError("HNS root label must be a protocol root label")
   }
 
-  if (value.startsWith("-") || value.endsWith("-") || value.includes(".") || value.includes("--")) {
+  if (value.startsWith("xn--")) {
+    try {
+      const hostname = new URL(`http://${value}.invalid`).hostname
+      if (hostname !== `${value}.invalid`) {
+        throw new Error("non-canonical IDNA root label")
+      }
+    } catch {
+      throw badRequestError("HNS root label must be canonical IDNA ASCII")
+    }
+  }
+
+  const verifyRange = value.startsWith("xn--") && value.length > "xn--".length
+    ? value.slice("xn--".length)
+    : value
+
+  if (!verifyRange || verifyRange.startsWith("-") || verifyRange.endsWith("-") || value.includes(".") || verifyRange.includes("--")) {
     throw badRequestError("HNS root label must be a protocol root label")
   }
 
-  if (!/^[a-z0-9-]+$/u.test(value)) {
+  if (!/^[a-z0-9-]+$/u.test(verifyRange)) {
     throw badRequestError("HNS root label must be a protocol root label")
   }
 }

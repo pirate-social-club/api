@@ -7,6 +7,7 @@ import {
 import {
   assertHnsRootLabel,
   inspectHnsRoot,
+  normalizeHnsRootLabel,
 } from "./hns-verifier"
 import {
   inspectSpacesNamespace,
@@ -44,7 +45,7 @@ export async function startNamespaceVerificationSession(
   const expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
   const normalizedRootLabel = input.family === "spaces"
     ? normalizeRootLabel(input.rootLabel)
-    : input.rootLabel.trim().toLowerCase()
+    : normalizeHnsRootLabel(input.rootLabel)
   const sessionId = makeId("nvs")
   if (input.family === "spaces") {
     if (!isSpacesVerifierConfigured(env)) {

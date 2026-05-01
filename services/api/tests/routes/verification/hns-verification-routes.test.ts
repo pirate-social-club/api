@@ -134,6 +134,53 @@ describe("hns verification routes", () => {
     })
   })
 
+  test("namespace verification accepts canonical IDNA HNS root labels", async () => {
+    const ctx = await createRouteTestContext({
+      HNS_VERIFIER_BASE_URL: "http://hns-verifier.test",
+      HNS_VERIFIER_AUTH_TOKEN: "test-hns-token",
+    })
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-hns-idna-user")
+    await createSelfVerifiedSession(ctx.env, session.accessToken)
+
+    let capturedInspectUrl: string | null = null
+    const originalFetch = globalThis.fetch
+    await withFetchMock(async (input, init) => {
+      const url = typeof input === "string" ? input : input.toString()
+      if (url.startsWith("http://hns-verifier.test")) {
+        capturedInspectUrl = url
+        return new Response(JSON.stringify({
+          zone_exists: false,
+          challenge_present: false,
+          nameservers: ["ns1.pirate.sc."],
+          observation_provider: "web3dns_json_doh",
+          failure_reason: "zone_not_provisioned",
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
+
+      return originalFetch(input, init)
+    }, async () => {
+      const createdNamespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
+        family: "hns",
+        root_label: "xn--pokmon-dva",
+      }, ctx.env, session.accessToken)
+      expect(createdNamespaceSession.status).toBe(201)
+      const namespaceSessionBody = await json(createdNamespaceSession) as {
+        normalized_root_label: string | null
+        challenge_host: string | null
+      }
+      expect(namespaceSessionBody.normalized_root_label).toBe("xn--pokmon-dva")
+      expect(namespaceSessionBody.challenge_host).toBe("_pirate.xn--pokmon-dva")
+      expect(capturedInspectUrl).toBe(
+        "http://hns-verifier.test/inspect-public?root_label=xn--pokmon-dva&challenge_host=_pirate.xn--pokmon-dva",
+      )
+    })
+  })
+
   test("namespace verification fails cleanly when the HNS verifier rejects the TXT proof", async () => {
     const ctx = await createRouteTestContext({
       HNS_VERIFIER_BASE_URL: "http://hns-verifier.test",
