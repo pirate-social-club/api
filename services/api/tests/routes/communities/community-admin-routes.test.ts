@@ -422,12 +422,12 @@ membership_mode: "request",
     const originalFetch = globalThis.fetch
     await withFetchMock(async (input, init) => {
       const url = typeof input === "string" ? input : input.toString()
-      if (url.startsWith("http://hns-verifier.test") && url.includes("/inspect?")) {
+      if (url.startsWith("http://hns-verifier.test") && url.includes("/inspect-public?")) {
         return new Response(JSON.stringify({
           zone_exists: false,
           challenge_present: false,
           nameservers: ["ns1.pirate.sc."],
-          observation_provider: "powerdns_api",
+          observation_provider: "web3dns_json_doh",
           failure_reason: "zone_not_provisioned",
         }), {
           status: 200,

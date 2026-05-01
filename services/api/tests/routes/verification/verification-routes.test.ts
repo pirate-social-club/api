@@ -246,7 +246,7 @@ describe("verification routes", () => {
     await withFetchMock(async (input, init) => {
       const url = typeof input === "string" ? input : input.toString()
       if (url.startsWith("http://hns-verifier.test")) {
-        if (url.includes("/inspect?")) {
+        if (url.includes("/inspect-public?")) {
           return Response.json({
             root_exists: true,
             expiry_horizon_sufficient: true,
@@ -254,18 +254,14 @@ describe("verification routes", () => {
             pirate_dns_authority_verified: true,
             nameservers: ["ns1.pirate.sc."],
             operation_class: "pirate_delegated_namespace",
-            observation_provider: "powerdns_api",
+            observation_provider: "web3dns_json_doh",
             failure_reason: null,
           })
         }
-        if (url.endsWith("/publish-txt")) {
-          expect(init?.headers).toMatchObject({ authorization: "Bearer test-hns-token" })
-          return Response.json({ observation_provider: "powerdns_api" })
-        }
-        if (url.endsWith("/verify-txt")) {
+        if (url.endsWith("/verify-txt-public")) {
           return Response.json({
             verified: true,
-            observation_provider: "powerdns_api",
+            observation_provider: "web3dns_json_doh",
             failure_reason: null,
           })
         }

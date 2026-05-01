@@ -35,7 +35,7 @@ describe("hns verification lifecycle routes", () => {
     await withFetchMock(async (input, init) => {
       const url = typeof input === "string" ? input : input.toString()
       if (url.startsWith("http://hns-verifier.test")) {
-        if (url.includes("/inspect?")) {
+        if (url.includes("/inspect-public?")) {
           return new Response(JSON.stringify({
             root_exists: true,
             expiry_horizon_sufficient: true,
@@ -43,26 +43,16 @@ describe("hns verification lifecycle routes", () => {
             pirate_dns_authority_verified: true,
             control_class: "single_holder_root",
             operation_class: "pirate_delegated_namespace",
-            observation_provider: "powerdns_api",
+            observation_provider: "web3dns_json_doh",
           }), {
             status: 200,
             headers: { "content-type": "application/json" },
           })
         }
-
-        if (url.endsWith("/publish-txt")) {
-          return new Response(JSON.stringify({
-            observation_provider: "powerdns_api",
-          }), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          })
-        }
-
-        if (url.endsWith("/verify-txt")) {
+        if (url.endsWith("/verify-txt-public")) {
           return new Response(JSON.stringify({
             verified: true,
-            observation_provider: "powerdns_api",
+            observation_provider: "web3dns_json_doh",
           }), {
             status: 200,
             headers: { "content-type": "application/json" },
@@ -140,7 +130,7 @@ describe("hns verification lifecycle routes", () => {
     await withFetchMock(async (input, init) => {
       const url = typeof input === "string" ? input : input.toString()
       if (url.startsWith("http://hns-verifier.test")) {
-        if (url.includes("/inspect?")) {
+        if (url.includes("/inspect-public?")) {
           return new Response(JSON.stringify({
             root_exists: true,
             expiry_horizon_sufficient: true,
@@ -148,34 +138,24 @@ describe("hns verification lifecycle routes", () => {
             pirate_dns_authority_verified: true,
             control_class: "single_holder_root",
             operation_class: "pirate_delegated_namespace",
-            observation_provider: "powerdns_api",
+            observation_provider: "web3dns_json_doh",
           }), {
             status: 200,
             headers: { "content-type": "application/json" },
           })
         }
-
-        if (url.endsWith("/publish-txt")) {
-          return new Response(JSON.stringify({
-            observation_provider: "powerdns_api",
-          }), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          })
-        }
-
-        if (url.endsWith("/verify-txt")) {
+        if (url.endsWith("/verify-txt-public")) {
           verifyCount += 1
           return new Response(JSON.stringify(
             verifyCount === 1
               ? {
                   verified: false,
                   observed_values: [],
-                  observation_provider: "powerdns_api",
+                  observation_provider: "web3dns_json_doh",
                 }
               : {
                   verified: true,
-                  observation_provider: "powerdns_api",
+                  observation_provider: "web3dns_json_doh",
                 },
           ), {
             status: 200,
@@ -245,28 +225,18 @@ describe("hns verification lifecycle routes", () => {
     await withFetchMock(async (input, init) => {
       const url = typeof input === "string" ? input : input.toString()
       if (url.startsWith("http://hns-verifier.test")) {
-        if (url.includes("/inspect?")) {
+        if (url.includes("/inspect-public?")) {
           return new Response(JSON.stringify({
             root_exists: true,
             expiry_horizon_sufficient: true,
             pirate_dns_authority_verified: true,
             operation_class: "pirate_delegated_namespace",
-            observation_provider: "powerdns_api",
+            observation_provider: "web3dns_json_doh",
           }), {
             status: 200,
             headers: { "content-type": "application/json" },
           })
-        }
-
-        if (url.endsWith("/publish-txt")) {
-          return new Response(JSON.stringify({
-            observation_provider: "powerdns_api",
-          }), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          })
-        }
-      }
+        }      }
 
       return originalFetch(input, init)
     }, async () => {

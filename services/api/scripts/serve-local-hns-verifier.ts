@@ -44,24 +44,8 @@ function localInspect(rootLabel: string): Record<string, unknown> {
     control_class: "single_holder_root",
     operation_class: "pirate_delegated_namespace",
     nameservers,
-    observation_provider: "local_hns_verifier",
+    observation_provider: "web3dns_json_doh",
     failure_reason: null,
-  }
-}
-
-function localPublishTxt(body: Record<string, unknown>): Record<string, unknown> {
-  const rootLabel = normalizeRootLabel(body.root_label)
-  const challengeHost = typeof body.challenge_host === "string" && body.challenge_host.trim()
-    ? body.challenge_host.trim()
-    : challengeName(rootLabel)
-  return {
-    root_label: rootLabel,
-    zone_name: rootLabel,
-    challenge_name: challengeHost,
-    challenge_txt_value: typeof body.challenge_txt_value === "string" ? body.challenge_txt_value : "",
-    zone_created: false,
-    nameservers,
-    observation_provider: "local_hns_verifier",
   }
 }
 
@@ -69,7 +53,7 @@ function localVerifyTxt(body: Record<string, unknown>): Record<string, unknown> 
   const rootLabel = normalizeRootLabel(body.root_label)
   return {
     verified: true,
-    observation_provider: "local_hns_verifier",
+    observation_provider: "web3dns_json_doh",
     failure_reason: null,
     observed_values: typeof body.challenge_txt_value === "string" ? [body.challenge_txt_value] : [],
     root_exists: true,
@@ -91,29 +75,12 @@ export function createLocalHnsVerifierServer(): Server {
   return createServer(async (req, res) => {
     try {
       const url = new URL(req.url || "/", `http://${req.headers.host || `127.0.0.1:${port}`}`)
-      if (req.method === "GET" && url.pathname === "/inspect") {
+      if (req.method === "GET" && url.pathname === "/inspect-public") {
         writeJson(res, 200, localInspect(normalizeRootLabel(url.searchParams.get("root_label"))))
         return
       }
 
-      if (req.method === "POST" && url.pathname === "/ensure-zone") {
-        const rootLabel = normalizeRootLabel((await readJson(req)).root_label)
-        writeJson(res, 200, {
-          root_label: rootLabel,
-          zone_name: rootLabel,
-          zone_created: false,
-          nameservers,
-          observation_provider: "local_hns_verifier",
-        })
-        return
-      }
-
-      if (req.method === "POST" && url.pathname === "/publish-txt") {
-        writeJson(res, 200, localPublishTxt(await readJson(req)))
-        return
-      }
-
-      if (req.method === "POST" && url.pathname === "/verify-txt") {
+      if (req.method === "POST" && url.pathname === "/verify-txt-public") {
         writeJson(res, 200, localVerifyTxt(await readJson(req)))
         return
       }

@@ -60,7 +60,7 @@ class PlatformManagedZoneBootstrapClient implements Client {
           pirate_subspace_issuance_allowed: null,
           control_class: "single_holder_root",
           operation_class: "pirate_delegated_namespace",
-          observation_provider: "powerdns_api",
+          observation_provider: "web3dns_json_doh",
           evidence_bundle_ref: null,
           failure_reason: null,
           accepted_at: null,
@@ -102,7 +102,7 @@ describe("startNamespaceVerificationSession", () => {
           routing_enabled: null,
           pirate_dns_authority_verified: false,
           nameservers: ["ns1.pirate."],
-          observation_provider: "powerdns_api",
+          observation_provider: "web3dns_json_doh",
           failure_reason: "zone_not_provisioned",
           control_class: null,
           operation_class: null,
@@ -131,7 +131,6 @@ describe("startNamespaceVerificationSession", () => {
     expect(session.challenge_host).toBe("_pirate.clawitzer")
     expect(session.challenge_txt_value).toBe("pirate-verification=nvs_test")
     expect(session.setup_nameservers).toEqual(["ns1.pirate."])
-    expect(calls.some((entry) => entry.endsWith("/ensure-zone"))).toBe(false)
-    expect(calls.some((entry) => entry.endsWith("/publish-txt"))).toBe(false)
+    expect(calls).toEqual(["GET https://spaces.pirate.sc/hns/inspect-public?root_label=clawitzer&challenge_host=_pirate.clawitzer"])
   })
 })

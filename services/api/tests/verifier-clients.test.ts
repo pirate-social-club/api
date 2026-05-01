@@ -307,10 +307,6 @@ describe("getHnsVerifierBaseUrl", () => {
     expect(() => getHnsVerifierBaseUrl({ HNS_VERIFIER_BASE_URL: "http://hns.test/inspect-public" } as any)).toThrow()
   })
 
-  test("rejects URL ending with /publish-txt", () => {
-    expect(() => getHnsVerifierBaseUrl({ HNS_VERIFIER_BASE_URL: "http://hns.test/publish-txt" } as any)).toThrow()
-  })
-
   test("rejects URL ending with /verify-txt", () => {
     expect(() => getHnsVerifierBaseUrl({ HNS_VERIFIER_BASE_URL: "http://hns.test/verify-txt" } as any)).toThrow()
   })
@@ -398,14 +394,14 @@ describe("inspectHnsRoot", () => {
           message: "HNS verifier returned non-JSON response with status 404 (text/html; charset=utf-8)",
           details: {
             verifier_origin: "http://hns.test",
-            verifier_path: "/inspect?root_label=pirate",
+            verifier_path: "/inspect-public?root_label=pirate",
           },
         })
       }
     })
   })
 
-  test("production inspection uses public resolver endpoint", async () => {
+  test("inspection uses public resolver endpoint", async () => {
     let requestedPath = ""
     await withMockedFetch(() => (async (input) => {
       const url = urlFromFetchInput(input)
@@ -416,9 +412,7 @@ describe("inspectHnsRoot", () => {
       })
     }) as typeof fetch, async () => {
       const result = await inspectHnsRoot({
-        ENVIRONMENT: "production",
         HNS_VERIFIER_BASE_URL: "http://hns.test",
-        HNS_VERIFIER_AUTH_TOKEN: "secret",
       } as any, {
         rootLabel: "pirate",
       })
@@ -429,7 +423,7 @@ describe("inspectHnsRoot", () => {
 })
 
 describe("verifyHnsTxtRecord", () => {
-  test("production TXT verification uses public resolver endpoint", async () => {
+  test("TXT verification uses public resolver endpoint", async () => {
     let requestedPath = ""
     await withMockedFetch(() => (async (input) => {
       const url = urlFromFetchInput(input)
@@ -440,9 +434,7 @@ describe("verifyHnsTxtRecord", () => {
       })
     }) as typeof fetch, async () => {
       const result = await verifyHnsTxtRecord({
-        ENVIRONMENT: "production",
         HNS_VERIFIER_BASE_URL: "http://hns.test",
-        HNS_VERIFIER_AUTH_TOKEN: "secret",
       } as any, {
         rootLabel: "pirate",
         challengeTxtValue: "pirate-verification=nvs_test",

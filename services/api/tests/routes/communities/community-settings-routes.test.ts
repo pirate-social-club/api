@@ -25,7 +25,7 @@ async function withHnsVerifierMock<T>(env: Env, run: () => Promise<T>): Promise<
   globalThis.fetch = (async (input, init) => {
     const url = typeof input === "string" ? input : input.toString()
     if (url.startsWith("http://hns-verifier.test")) {
-      if (url.includes("/inspect?")) {
+      if (url.includes("/inspect-public?")) {
         return new Response(JSON.stringify({
           root_exists: true,
           root_control_verified: true,
@@ -36,16 +36,10 @@ async function withHnsVerifierMock<T>(env: Env, run: () => Promise<T>): Promise<
           pirate_web_routing_allowed: true,
           pirate_subdomain_issuance_allowed: true,
           operation_class: "pirate_delegated_namespace",
-          observation_provider: "powerdns_api",
+          observation_provider: "web3dns_json_doh",
         }), { status: 200, headers: { "content-type": "application/json" } })
       }
-      if (url.endsWith("/publish-txt")) {
-        return new Response(JSON.stringify({ observation_provider: "powerdns_api" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        })
-      }
-      if (url.endsWith("/verify-txt")) {
+      if (url.endsWith("/verify-txt-public")) {
         return new Response(JSON.stringify({
           verified: true,
           root_exists: true,
@@ -57,7 +51,7 @@ async function withHnsVerifierMock<T>(env: Env, run: () => Promise<T>): Promise<
           pirate_web_routing_allowed: true,
           pirate_subdomain_issuance_allowed: true,
           operation_class: "pirate_delegated_namespace",
-          observation_provider: "powerdns_api",
+          observation_provider: "web3dns_json_doh",
         }), { status: 200, headers: { "content-type": "application/json" } })
       }
     }

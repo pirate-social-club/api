@@ -63,7 +63,6 @@ export function getHnsVerifierBaseUrl(env: Env): string | null {
   if (
     normalized.endsWith("/inspect")
     || normalized.endsWith("/inspect-public")
-    || normalized.endsWith("/publish-txt")
     || normalized.endsWith("/verify-txt")
     || normalized.endsWith("/verify-txt-public")
   ) {
@@ -149,8 +148,7 @@ export async function inspectHnsRoot(
   if (input.challengeHost?.trim()) {
     params.set("challenge_host", input.challengeHost.trim())
   }
-  const path = isProductionEnv(env) ? "/inspect-public" : "/inspect"
-  return request<HnsInspectResult>(env, `${path}?${params.toString()}`)
+  return request<HnsInspectResult>(env, `/inspect-public?${params.toString()}`)
 }
 
 export async function verifyHnsTxtRecord(
@@ -162,8 +160,7 @@ export async function verifyHnsTxtRecord(
   },
 ): Promise<HnsVerifyTxtResult> {
   assertHnsRootLabel(input.rootLabel)
-  const path = isProductionEnv(env) ? "/verify-txt-public" : "/verify-txt"
-  return request<HnsVerifyTxtResult>(env, path, {
+  return request<HnsVerifyTxtResult>(env, "/verify-txt-public", {
     method: "POST",
     body: JSON.stringify({
       root_label: input.rootLabel,

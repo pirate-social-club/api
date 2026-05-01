@@ -39,7 +39,7 @@ function makeNamespaceSessionRow(
     pirate_subspace_issuance_allowed: null,
     control_class: "single_holder_root",
     operation_class: "pirate_delegated_namespace",
-    observation_provider: "powerdns_api",
+    observation_provider: "web3dns_json_doh",
     evidence_bundle_ref: null,
     failure_reason: "dns_setup_required",
     accepted_at: null,

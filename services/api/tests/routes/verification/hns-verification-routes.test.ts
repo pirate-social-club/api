@@ -42,13 +42,13 @@ describe("hns verification routes", () => {
         const body = init?.body ? JSON.parse(String(init.body)) : null
         calls.push({ url, body })
 
-        if (url.includes("/inspect?")) {
+        if (url.includes("/inspect-public?")) {
           inspectCount += 1
           return new Response(JSON.stringify({
             zone_exists: false,
             challenge_present: false,
             nameservers: ["ns1.pirate.sc."],
-            observation_provider: "powerdns_api",
+            observation_provider: "web3dns_json_doh",
             failure_reason: "zone_not_provisioned",
           }), {
             status: 200,
@@ -56,10 +56,10 @@ describe("hns verification routes", () => {
           })
         }
 
-        if (url.endsWith("/verify-txt")) {
+        if (url.endsWith("/verify-txt-public")) {
           return new Response(JSON.stringify({
             verified: true,
-            observation_provider: "powerdns_api",
+            observation_provider: "web3dns_json_doh",
             failure_reason: null,
           }), {
             status: 200,
@@ -87,9 +87,8 @@ describe("hns verification routes", () => {
       expect(namespaceSessionBody.challenge_host).toBe("_pirate.pirateverifierroot")
       expect(typeof namespaceSessionBody.challenge_txt_value).toBe("string")
       expect(namespaceSessionBody.setup_nameservers).toEqual(["ns1.pirate.sc."])
-      expect(namespaceSessionBody.observation_provider).toBe("powerdns_api")
+      expect(namespaceSessionBody.observation_provider).toBe("web3dns_json_doh")
       expect(inspectCount).toBe(1)
-      expect(calls.some((entry) => entry.url.endsWith("/publish-txt"))).toBe(false)
 
       const fetchedNamespaceSession = await app.request(
         `http://pirate.test/namespace-verification-sessions/${namespaceSessionBody.id}`,
@@ -128,11 +127,10 @@ describe("hns verification routes", () => {
       }
       expect(completedNamespaceBody.status).toBe("verified")
       expect(typeof completedNamespaceBody.namespace_verification).toBe("string")
-      expect(completedNamespaceBody.observation_provider).toBe("powerdns_api")
+      expect(completedNamespaceBody.observation_provider).toBe("web3dns_json_doh")
 
-      expect(calls.some((entry) => entry.url.includes("/inspect?"))).toBe(true)
-      expect(calls.some((entry) => entry.url.endsWith("/publish-txt"))).toBe(false)
-      expect(calls.some((entry) => entry.url.endsWith("/verify-txt"))).toBe(true)
+      expect(calls.some((entry) => entry.url.includes("/inspect-public?"))).toBe(true)
+      expect(calls.some((entry) => entry.url.endsWith("/verify-txt-public"))).toBe(true)
     })
   })
 
@@ -149,33 +147,23 @@ describe("hns verification routes", () => {
     await withFetchMock(async (input, init) => {
       const url = typeof input === "string" ? input : input.toString()
       if (url.startsWith("http://hns-verifier.test")) {
-        if (url.includes("/inspect?")) {
+        if (url.includes("/inspect-public?")) {
           return new Response(JSON.stringify({
             root_exists: true,
             expiry_horizon_sufficient: true,
             routing_enabled: true,
             pirate_dns_authority_verified: true,
             operation_class: "pirate_delegated_namespace",
-            observation_provider: "powerdns_api",
+            observation_provider: "web3dns_json_doh",
           }), {
             status: 200,
             headers: { "content-type": "application/json" },
           })
         }
-
-        if (url.endsWith("/publish-txt")) {
-          return new Response(JSON.stringify({
-            observation_provider: "powerdns_api",
-          }), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          })
-        }
-
-        if (url.endsWith("/verify-txt")) {
+        if (url.endsWith("/verify-txt-public")) {
           return new Response(JSON.stringify({
             verified: false,
-            observation_provider: "powerdns_api",
+            observation_provider: "web3dns_json_doh",
             failure_reason: "challenge_mismatch",
             observed_values: ["unexpected-value"],
           }), {
@@ -211,7 +199,7 @@ describe("hns verification routes", () => {
       expect(completedNamespaceBody.status).toBe("failed")
       expect(completedNamespaceBody.namespace_verification).toBeNull()
       expect(completedNamespaceBody.failure_reason).toBe("challenge_mismatch")
-      expect(completedNamespaceBody.observation_provider).toBe("powerdns_api")
+      expect(completedNamespaceBody.observation_provider).toBe("web3dns_json_doh")
     })
   })
 
@@ -228,7 +216,7 @@ describe("hns verification routes", () => {
     await withFetchMock(async (input, init) => {
       const url = typeof input === "string" ? input : input.toString()
       if (url.startsWith("http://hns-verifier.test")) {
-        if (url.includes("/inspect?")) {
+        if (url.includes("/inspect-public?")) {
           return new Response(JSON.stringify({
             root_exists: true,
             expiry_horizon_sufficient: false,
@@ -236,26 +224,16 @@ describe("hns verification routes", () => {
             pirate_dns_authority_verified: true,
             control_class: "dao_controlled_root",
             operation_class: "routing_only_namespace",
-            observation_provider: "powerdns_api",
+            observation_provider: "web3dns_json_doh",
           }), {
             status: 200,
             headers: { "content-type": "application/json" },
           })
         }
-
-        if (url.endsWith("/publish-txt")) {
-          return new Response(JSON.stringify({
-            observation_provider: "powerdns_api",
-          }), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          })
-        }
-
-        if (url.endsWith("/verify-txt")) {
+        if (url.endsWith("/verify-txt-public")) {
           return new Response(JSON.stringify({
             verified: true,
-            observation_provider: "powerdns_api",
+            observation_provider: "web3dns_json_doh",
           }), {
             status: 200,
             headers: { "content-type": "application/json" },

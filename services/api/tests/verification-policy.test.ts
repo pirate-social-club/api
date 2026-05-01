@@ -103,7 +103,7 @@ describe("deriveHnsInspectionSnapshot", () => {
       pirate_dns_authority_verified: true,
       control_class: "single_holder_root",
       operation_class: "owner_managed_namespace",
-      observation_provider: "powerdns_api",
+      observation_provider: "web3dns_json_doh",
     }
     const snapshot = deriveHnsInspectionSnapshot(inspection)
     expect(snapshot.rootExists).toBe(1)
@@ -121,7 +121,7 @@ describe("deriveHnsInspectionSnapshot", () => {
   test("falls back to zone_exists when root_exists is missing", () => {
     const inspection: HnsInspectResult = {
       zone_exists: true,
-      observation_provider: "powerdns_api",
+      observation_provider: "web3dns_json_doh",
     }
     const snapshot = deriveHnsInspectionSnapshot(inspection)
     expect(snapshot.rootExists).toBe(1)
@@ -136,7 +136,7 @@ describe("deriveHnsInspectionSnapshot", () => {
       pirate_dns_authority_verified: false,
       control_class: "dao_controlled_root",
       operation_class: "routing_only_namespace",
-      observation_provider: "powerdns_api",
+      observation_provider: "web3dns_json_doh",
     }
     const snapshot = deriveHnsInspectionSnapshot(inspection)
     expect(snapshot.rootExists).toBe(0)
@@ -150,7 +150,7 @@ describe("deriveHnsInspectionSnapshot", () => {
 
   test("maps null assertions to null", () => {
     const inspection: HnsInspectResult = {
-      observation_provider: "powerdns_api",
+      observation_provider: "web3dns_json_doh",
     }
     const snapshot = deriveHnsInspectionSnapshot(inspection)
     expect(snapshot.rootExists).toBeNull()
@@ -212,7 +212,7 @@ describe("deriveAcceptedHnsSnapshot", () => {
       pirate_dns_authority_verified: null,
       control_class: null,
       operation_class: null,
-      observation_provider: "powerdns_api",
+      observation_provider: "web3dns_json_doh",
     })
     const verification: HnsVerifyTxtResult = {
       verified: true,
@@ -223,7 +223,7 @@ describe("deriveAcceptedHnsSnapshot", () => {
       pirate_dns_authority_verified: true,
       control_class: "single_holder_root",
       operation_class: "owner_managed_namespace",
-      observation_provider: "powerdns_api",
+      observation_provider: "web3dns_json_doh",
     }
     const snapshot = deriveAcceptedHnsSnapshot(row, verification)
     expect(snapshot.rootExists).toBe(1)
@@ -250,7 +250,7 @@ describe("deriveAcceptedHnsSnapshot", () => {
     })
     const verification: HnsVerifyTxtResult = {
       verified: true,
-      observation_provider: "powerdns_api",
+      observation_provider: "web3dns_json_doh",
     }
     const snapshot = deriveAcceptedHnsSnapshot(row, verification)
     expect(snapshot.rootExists).toBe(1)
@@ -267,11 +267,11 @@ describe("deriveAcceptedHnsSnapshot", () => {
     const row = stubRow({
       root_exists: null,
       root_control_verified: null,
-      observation_provider: "powerdns_api",
+      observation_provider: "web3dns_json_doh",
     })
     const verification: HnsVerifyTxtResult = {
       verified: true,
-      observation_provider: "powerdns_api",
+      observation_provider: "web3dns_json_doh",
     }
     const snapshot = deriveAcceptedHnsSnapshot(row, verification)
     expect(snapshot.rootExists).toBe(1)
@@ -299,7 +299,7 @@ describe("deriveAcceptedHnsSnapshot", () => {
     const row = stubRow({
       root_exists: null,
       root_control_verified: null,
-      observation_provider: "powerdns_api",
+      observation_provider: "web3dns_json_doh",
     })
     const snapshot = deriveAcceptedHnsSnapshot(row, null)
     expect(snapshot.rootExists).toBeNull()
@@ -310,11 +310,11 @@ describe("deriveAcceptedHnsSnapshot", () => {
     const row = stubRow({
       control_class: null,
       operation_class: null,
-      observation_provider: "powerdns_api",
+      observation_provider: "web3dns_json_doh",
     })
     const verification: HnsVerifyTxtResult = {
       verified: true,
-      observation_provider: "powerdns_api",
+      observation_provider: "web3dns_json_doh",
     }
     const snapshot = deriveAcceptedHnsSnapshot(row, verification)
     expect(snapshot.controlClass).toBeNull()

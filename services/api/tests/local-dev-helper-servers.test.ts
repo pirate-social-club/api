@@ -39,29 +39,12 @@ describe("local HNS verifier", () => {
   test("serves the namespace verification endpoints", async () => {
     const origin = await listen(createLocalHnsVerifierServer())
 
-    const inspect = await readJson(await fetch(`${origin}/inspect?root_label=local-open-workshop`))
+    const inspect = await readJson(await fetch(`${origin}/inspect-public?root_label=local-open-workshop`))
     expect(inspect.root_label).toBe("local-open-workshop")
     expect(inspect.root_control_verified).toBe(true)
-    expect(inspect.observation_provider).toBe("local_hns_verifier")
+    expect(inspect.observation_provider).toBe("web3dns_json_doh")
 
-    const ensureZone = await readJson(await fetch(`${origin}/ensure-zone`, {
-      body: JSON.stringify({ root_label: "local-open-workshop" }),
-      headers: { "content-type": "application/json" },
-      method: "POST",
-    }))
-    expect(ensureZone.zone_name).toBe("local-open-workshop")
-
-    const publishTxt = await readJson(await fetch(`${origin}/publish-txt`, {
-      body: JSON.stringify({
-        challenge_txt_value: "pirate-test-token",
-        root_label: "local-open-workshop",
-      }),
-      headers: { "content-type": "application/json" },
-      method: "POST",
-    }))
-    expect(publishTxt.challenge_txt_value).toBe("pirate-test-token")
-
-    const verifyTxt = await readJson(await fetch(`${origin}/verify-txt`, {
+    const verifyTxt = await readJson(await fetch(`${origin}/verify-txt-public`, {
       body: JSON.stringify({
         challenge_txt_value: "pirate-test-token",
         root_label: "local-open-workshop",
