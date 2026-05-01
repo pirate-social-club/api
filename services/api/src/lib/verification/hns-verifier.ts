@@ -81,8 +81,10 @@ export function getHnsVerifierBaseUrl(env: Env): string | null {
   const normalized = raw.replace(/\/+$/, "")
   if (
     normalized.endsWith("/inspect")
+    || normalized.endsWith("/inspect-public")
     || normalized.endsWith("/publish-txt")
     || normalized.endsWith("/verify-txt")
+    || normalized.endsWith("/verify-txt-public")
   ) {
     throw providerUnavailable(`HNS_VERIFIER_BASE_URL must be the base URL without a path suffix. Got: ${raw}`)
   }
@@ -177,7 +179,8 @@ export async function inspectHnsRoot(
   if (input.challengeHost?.trim()) {
     params.set("challenge_host", input.challengeHost.trim())
   }
-  return request<HnsInspectResult>(env, `/inspect?${params.toString()}`)
+  const path = isProductionEnv(env) ? "/inspect-public" : "/inspect"
+  return request<HnsInspectResult>(env, `${path}?${params.toString()}`)
 }
 
 export async function publishHnsTxtRecord(
@@ -223,7 +226,8 @@ export async function verifyHnsTxtRecord(
   },
 ): Promise<HnsVerifyTxtResult> {
   assertHnsRootLabel(input.rootLabel)
-  return request<HnsVerifyTxtResult>(env, "/verify-txt", {
+  const path = isProductionEnv(env) ? "/verify-txt-public" : "/verify-txt"
+  return request<HnsVerifyTxtResult>(env, path, {
     method: "POST",
     body: JSON.stringify({
       root_label: input.rootLabel,

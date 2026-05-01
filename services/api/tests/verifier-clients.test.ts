@@ -6,8 +6,12 @@ import {
   SPACES_FABRIC_PUBLISH_CHALLENGE_TTL_MS,
   verifySpacesFabricPublish,
 } from "../src/lib/verification/spaces-verifier"
-import { getHnsVerifierBaseUrl, inspectHnsRoot, isHnsVerifierConfigured } from "../src/lib/verification/hns-verifier"
+import { getHnsVerifierBaseUrl, inspectHnsRoot, isHnsVerifierConfigured, verifyHnsTxtRecord } from "../src/lib/verification/hns-verifier"
 import { withMockedFetch } from "./helpers"
+
+function urlFromFetchInput(input: Parameters<typeof fetch>[0]): URL {
+  return new URL(typeof input === "string" || input instanceof URL ? input.toString() : input.url)
+}
 
 describe("normalizeRootLabel", () => {
   test("strips leading @ and lowercases", () => {
@@ -299,12 +303,20 @@ describe("getHnsVerifierBaseUrl", () => {
     expect(() => getHnsVerifierBaseUrl({ HNS_VERIFIER_BASE_URL: "http://hns.test/inspect" } as any)).toThrow()
   })
 
+  test("rejects URL ending with /inspect-public", () => {
+    expect(() => getHnsVerifierBaseUrl({ HNS_VERIFIER_BASE_URL: "http://hns.test/inspect-public" } as any)).toThrow()
+  })
+
   test("rejects URL ending with /publish-txt", () => {
     expect(() => getHnsVerifierBaseUrl({ HNS_VERIFIER_BASE_URL: "http://hns.test/publish-txt" } as any)).toThrow()
   })
 
   test("rejects URL ending with /verify-txt", () => {
     expect(() => getHnsVerifierBaseUrl({ HNS_VERIFIER_BASE_URL: "http://hns.test/verify-txt" } as any)).toThrow()
+  })
+
+  test("rejects URL ending with /verify-txt-public", () => {
+    expect(() => getHnsVerifierBaseUrl({ HNS_VERIFIER_BASE_URL: "http://hns.test/verify-txt-public" } as any)).toThrow()
   })
 })
 
@@ -390,6 +402,54 @@ describe("inspectHnsRoot", () => {
           },
         })
       }
+    })
+  })
+
+  test("production inspection uses public resolver endpoint", async () => {
+    let requestedPath = ""
+    await withMockedFetch(() => (async (input) => {
+      const url = urlFromFetchInput(input)
+      requestedPath = `${url.pathname}?${url.searchParams.toString()}`
+      return Response.json({
+        pirate_dns_authority_verified: true,
+        observation_provider: "web3dns_json_doh",
+      })
+    }) as typeof fetch, async () => {
+      const result = await inspectHnsRoot({
+        ENVIRONMENT: "production",
+        HNS_VERIFIER_BASE_URL: "http://hns.test",
+        HNS_VERIFIER_AUTH_TOKEN: "secret",
+      } as any, {
+        rootLabel: "pirate",
+      })
+      expect(result.observation_provider).toBe("web3dns_json_doh")
+      expect(requestedPath).toBe("/inspect-public?root_label=pirate")
+    })
+  })
+})
+
+describe("verifyHnsTxtRecord", () => {
+  test("production TXT verification uses public resolver endpoint", async () => {
+    let requestedPath = ""
+    await withMockedFetch(() => (async (input) => {
+      const url = urlFromFetchInput(input)
+      requestedPath = url.pathname
+      return Response.json({
+        verified: true,
+        observation_provider: "web3dns_json_doh",
+      })
+    }) as typeof fetch, async () => {
+      const result = await verifyHnsTxtRecord({
+        ENVIRONMENT: "production",
+        HNS_VERIFIER_BASE_URL: "http://hns.test",
+        HNS_VERIFIER_AUTH_TOKEN: "secret",
+      } as any, {
+        rootLabel: "pirate",
+        challengeTxtValue: "pirate-verification=nvs_test",
+      })
+      expect(result.verified).toBe(true)
+      expect(result.observation_provider).toBe("web3dns_json_doh")
+      expect(requestedPath).toBe("/verify-txt-public")
     })
   })
 })
