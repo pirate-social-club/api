@@ -88,13 +88,13 @@ class PlatformManagedZoneBootstrapClient implements Client {
 }
 
 describe("startNamespaceVerificationSession", () => {
-  test("auto-provisions platform-managed roots before publishing TXT challenges", async () => {
+  test("starts HNS sessions with nameserver and TXT records before delegation is detected", async () => {
     const calls: string[] = []
     globalThis.fetch = async (input, init) => {
       const url = typeof input === "string" ? input : input.toString()
       calls.push(`${init?.method ?? "GET"} ${url}`)
 
-      if (url.includes("/inspect?") && calls.filter((entry) => entry.includes("/inspect?")).length === 1) {
+      if (url.includes("/inspect-public?") && calls.filter((entry) => entry.includes("/inspect-public?")).length === 1) {
         return new Response(JSON.stringify({
           root_exists: null,
           root_control_verified: null,
@@ -106,52 +106,6 @@ describe("startNamespaceVerificationSession", () => {
           failure_reason: "zone_not_provisioned",
           control_class: null,
           operation_class: null,
-        }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        })
-      }
-
-      if (url.endsWith("/ensure-zone")) {
-        return new Response(JSON.stringify({
-          root_label: "clawitzer",
-          zone_name: "clawitzer.",
-          zone_created: true,
-          nameservers: ["ns1.pirate."],
-          observation_provider: "powerdns_api",
-        }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        })
-      }
-
-      if (url.includes("/inspect?")) {
-        return new Response(JSON.stringify({
-          root_exists: true,
-          root_control_verified: null,
-          expiry_horizon_sufficient: true,
-          routing_enabled: true,
-          pirate_dns_authority_verified: true,
-          nameservers: ["ns1.pirate."],
-          observation_provider: "powerdns_api",
-          failure_reason: "challenge_not_published",
-          control_class: "single_holder_root",
-          operation_class: "pirate_delegated_namespace",
-        }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        })
-      }
-
-      if (url.endsWith("/publish-txt")) {
-        return new Response(JSON.stringify({
-          root_label: "clawitzer",
-          zone_name: "clawitzer.",
-          challenge_name: "_pirate.clawitzer.",
-          challenge_txt_value: "pirate-verification=nvs_test",
-          zone_created: false,
-          nameservers: ["ns1.pirate."],
-          observation_provider: "powerdns_api",
         }), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -176,7 +130,8 @@ describe("startNamespaceVerificationSession", () => {
     expect(session.status).toBe("challenge_required")
     expect(session.challenge_host).toBe("_pirate.clawitzer")
     expect(session.challenge_txt_value).toBe("pirate-verification=nvs_test")
-    expect(calls.some((entry) => entry.endsWith("/ensure-zone"))).toBe(true)
-    expect(calls.some((entry) => entry.endsWith("/publish-txt"))).toBe(true)
+    expect(session.setup_nameservers).toEqual(["ns1.pirate."])
+    expect(calls.some((entry) => entry.endsWith("/ensure-zone"))).toBe(false)
+    expect(calls.some((entry) => entry.endsWith("/publish-txt"))).toBe(false)
   })
 })

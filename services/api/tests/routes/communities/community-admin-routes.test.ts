@@ -457,9 +457,13 @@ membership_mode: "request",
       const createdBody = await json(created) as {
         id: string
         status: string
+        challenge_host: string | null
+        challenge_txt_value: string | null
         setup_nameservers: string[] | null
       }
-      expect(createdBody.status).toBe("dns_setup_required")
+      expect(createdBody.status).toBe("challenge_required")
+      expect(createdBody.challenge_host).toBe("_pirate.adminverifierroot")
+      expect(typeof createdBody.challenge_txt_value).toBe("string")
       expect(createdBody.setup_nameservers).toEqual(["ns1.pirate.sc."])
 
       const fetched = await Promise.resolve(app.request(
@@ -476,9 +480,13 @@ membership_mode: "request",
       expect(fetched.status).toBe(200)
       const fetchedBody = await json(fetched) as {
         status: string
+        challenge_host: string | null
+        challenge_txt_value: string | null
         setup_nameservers: string[] | null
       }
-      expect(fetchedBody.status).toBe("dns_setup_required")
+      expect(fetchedBody.status).toBe("challenge_required")
+      expect(fetchedBody.challenge_host).toBe("_pirate.adminverifierroot")
+      expect(fetchedBody.challenge_txt_value).toBe(createdBody.challenge_txt_value)
       expect(fetchedBody.setup_nameservers).toEqual(["ns1.pirate.sc."])
     })
   })

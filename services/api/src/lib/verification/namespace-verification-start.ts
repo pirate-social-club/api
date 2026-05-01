@@ -6,10 +6,7 @@ import {
 } from "../auth/auth-serializers"
 import {
   assertHnsRootLabel,
-  ensureHnsZone,
   inspectHnsRoot,
-  publishHnsTxtRecord,
-  shouldAutoProvisionHnsRoot,
 } from "./hns-verifier"
 import {
   inspectSpacesNamespace,
@@ -31,7 +28,6 @@ import {
   isProductionEnv,
   isSpacesVerifierConfigured,
   serializeSetupNameservers,
-  shouldRequireHnsDnsSetup,
   type HnsSessionAssertionSnapshot,
 } from "./verification-shared"
 
@@ -138,48 +134,13 @@ export async function startNamespaceVerificationSession(
     }
 
     if (isHnsVerifierConfigured(env)) {
-      let inspection = await inspectHnsRoot(env, {
+      const inspection = await inspectHnsRoot(env, {
         rootLabel: normalizedRootLabel,
         challengeHost,
       })
-      if (
-        shouldRequireHnsDnsSetup(env, inspection)
-        && inspection.failure_reason === "zone_not_provisioned"
-        && shouldAutoProvisionHnsRoot(env, normalizedRootLabel)
-      ) {
-        await ensureHnsZone(env, {
-          rootLabel: normalizedRootLabel,
-        })
-        inspection = await inspectHnsRoot(env, {
-          rootLabel: normalizedRootLabel,
-          challengeHost,
-        })
-      }
       inspectionSnapshot = deriveHnsInspectionSnapshot(inspection)
       persistedSetupNameservers = serializeSetupNameservers(inspection.nameservers?.map((entry) => entry.trim()).filter(Boolean) ?? null)
-      if (shouldRequireHnsDnsSetup(env, inspection)) {
-        status = "dns_setup_required"
-        challengeKind = null
-        persistedChallengeHost = null
-        persistedChallengeTxtValue = null
-        persistedChallengeExpiresAt = null
-        failureReason = inspection.failure_reason ?? "dns_setup_required"
-        observationProvider = inspection.observation_provider ?? HNS_VERIFIER_OBSERVATION_PROVIDER
-      } else {
-        const published = await publishHnsTxtRecord(env, {
-          rootLabel: normalizedRootLabel,
-          challengeHost,
-          challengeTxtValue,
-        })
-        persistedSetupNameservers =
-          persistedSetupNameservers
-          ?? serializeSetupNameservers(published.nameservers?.map((entry) => entry.trim()).filter(Boolean) ?? null)
-        inspectionSnapshot.rootExists = inspectionSnapshot.rootExists ?? 1
-        inspectionSnapshot.routingEnabled = inspectionSnapshot.routingEnabled ?? 1
-        inspectionSnapshot.pirateDnsAuthorityVerified = 1
-        inspectionSnapshot.operationClass = inspectionSnapshot.operationClass ?? "pirate_delegated_namespace"
-        observationProvider = published.observation_provider ?? inspection.observation_provider ?? HNS_VERIFIER_OBSERVATION_PROVIDER
-      }
+      observationProvider = inspection.observation_provider ?? HNS_VERIFIER_OBSERVATION_PROVIDER
     } else {
       throw providerUnavailable("HNS verifier is not configured")
     }
