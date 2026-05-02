@@ -6,7 +6,6 @@ import type { DbExecutor } from "../db-helpers"
 import type { Post } from "../../types"
 import type { Env } from "../../env"
 import type { Client } from "../sql-client"
-import { hydrateGenericLinkEnrichment } from "./link-enrichment/service"
 
 type PostEmbed = NonNullable<Post["embeds"]>[number]
 type XPostEmbed = Extract<PostEmbed, { provider: "x" }>
@@ -743,19 +742,21 @@ export async function hydrateLinkPostEmbed(input: {
   const fetcher = input.fetcher ?? fetch
   const target = detectSupportedEmbedTarget(input.post.link_url)
   if (!target) {
-    const resultRef = await hydrateGenericLinkEnrichment({
-      communityClient: input.client,
-      controlPlaneClient: input.controlPlaneClient,
-      env: input.env,
-      postId: input.post.post_id,
-      url: input.post.link_url,
-      checkedAt: input.checkedAt,
+    const metadata = await fetchLinkPreviewMetadata({
       fetcher,
+      url: input.post.link_url,
     })
-    if (!resultRef) {
+    if (!metadata) {
       return "skipped:no_preview_metadata"
     }
-    return resultRef
+    await updatePostLinkPreviewMetadata({
+      client: input.client,
+      postId: input.post.post_id,
+      linkOgImageUrl: metadata.imageUrl,
+      linkOgTitle: metadata.title,
+      updatedAt: input.checkedAt,
+    })
+    return metadata.imageUrl ?? input.post.link_url
   }
 
   const result = target.provider === "x"
