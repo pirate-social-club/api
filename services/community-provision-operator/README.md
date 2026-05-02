@@ -7,7 +7,7 @@ Private Cloudflare Worker that provisions per-community Turso databases. Called 
 ```
 API Worker  --service binding-->  community-provision-operator
                                        |
-                                       +--> Neon control plane DB (libsql)
+                                       +--> Neon control plane DB (Postgres via Neon serverless)
                                        +--> Turso platform API (fetch)
                                        +--> Community Turso DB (libsql bootstrap)
 ```
