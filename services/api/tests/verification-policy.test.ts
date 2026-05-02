@@ -180,11 +180,24 @@ describe("isTrustedHnsAuthorityObservation", () => {
     })).toBe(false)
   })
 
-  test("production accepts Web3DNS and parent-chain observations", () => {
+  test("production rejects PowerDNS observations as standalone HNS ownership proof", () => {
+    expect(isTrustedHnsAuthorityObservation({
+      ENVIRONMENT: "production",
+    } as never, {
+      observation_provider: "powerdns_sqlite",
+    })).toBe(false)
+  })
+
+  test("production accepts HNS public DNS, Web3DNS, and parent-chain observations", () => {
     expect(isTrustedHnsAuthorityObservation({
       ENVIRONMENT: "production",
     } as never, {
       observation_provider: "web3dns_json_doh",
+    })).toBe(true)
+    expect(isTrustedHnsAuthorityObservation({
+      ENVIRONMENT: "production",
+    } as never, {
+      observation_provider: "hns_public_dns",
     })).toBe(true)
     expect(isTrustedHnsAuthorityObservation({
       ENVIRONMENT: "production",

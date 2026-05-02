@@ -118,7 +118,7 @@ describe("startNamespaceVerificationSession", () => {
     const client = new PlatformManagedZoneBootstrapClient()
     const session = await startNamespaceVerificationSession(client, {
       ENVIRONMENT: "production",
-      HNS_VERIFIER_BASE_URL: "https://spaces.pirate.sc/hns",
+      HNS_VERIFIER_BASE_URL: "https://verifier.pirate.sc/hns",
       HNS_VERIFIER_AUTH_TOKEN: "test-token",
     }, {
       userId: "usr_test",
@@ -131,6 +131,6 @@ describe("startNamespaceVerificationSession", () => {
     expect(session.challenge_host).toBe("_pirate.clawitzer")
     expect(session.challenge_txt_value).toBe("pirate-verification=nvs_test")
     expect(session.setup_nameservers).toEqual(["ns1.pirate."])
-    expect(calls).toEqual(["GET https://spaces.pirate.sc/hns/inspect-public?root_label=clawitzer&challenge_host=_pirate.clawitzer"])
+    expect(calls).toEqual(["GET https://verifier.pirate.sc/hns/inspect-public?root_label=clawitzer&challenge_host=_pirate.clawitzer"])
   })
 })

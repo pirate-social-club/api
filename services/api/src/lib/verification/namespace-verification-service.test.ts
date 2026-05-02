@@ -121,7 +121,7 @@ describe("completeNamespaceVerificationSession", () => {
       const client = new HnsCompleteClient(makeHnsChallengeRow())
       const result = await completeNamespaceVerificationSession(client, {
         ENVIRONMENT: "production",
-        HNS_VERIFIER_BASE_URL: "https://spaces.pirate.sc/hns",
+        HNS_VERIFIER_BASE_URL: "https://verifier.pirate.sc/hns",
         HNS_VERIFIER_AUTH_TOKEN: "test-token",
       } as never, {
         namespaceVerificationSessionId: "nvs_test",
