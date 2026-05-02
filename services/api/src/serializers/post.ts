@@ -60,6 +60,7 @@ export function serializePost(post: Post): CurrentPostResponse {
     link_url: post.link_url,
     link_og_image_url: post.link_og_image_url,
     link_og_title: post.link_og_title,
+    link_enrichment: post.link_enrichment_snapshot_json,
     embeds: post.embeds,
     media_refs: post.media_refs,
     creator_relation: post.creator_relation,
@@ -107,6 +108,7 @@ export function serializeLocalizedPostResponse(response: LocalizedPostResponse):
     translated_body: response.translated_body,
     translated_title: response.translated_title,
     translated_caption: response.translated_caption,
+    translated_embeds: response.translated_embeds,
     source_hash: response.source_hash,
   }
 }

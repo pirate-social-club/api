@@ -1,6 +1,6 @@
 import type { DbExecutor } from "../db-helpers"
 import { getCommunityLabelById, serializeCommunityPostLabel } from "../communities/community-label-store"
-import { computePostSourceHash } from "./content-source-hash"
+import { computePostSourceHash, computeTextSourceHash } from "./content-source-hash"
 import { DEFAULT_CONTENT_LOCALE, normalizeContentLocale, sameLanguageLocale } from "./content-locale"
 import { getContentTranslation } from "./content-translation-store"
 import type { CommentThreadSnapshot, LocalizedPostResponse, Post } from "../../types"
@@ -44,12 +44,116 @@ async function getAuthorCommunityRole(input: {
   return null
 }
 
+type PredictionMarketEmbed = NonNullable<Post["embeds"]>[number] & {
+  preview?: {
+    question?: string | null
+    title?: string | null
+    outcomes?: Array<{
+      label?: string | null
+    }> | null
+  } | null
+}
+
+function getPredictionMarketEmbedQuestion(embed: NonNullable<Post["embeds"]>[number]): string | null {
+  if (embed.provider !== "kalshi" && embed.provider !== "polymarket") {
+    return null
+  }
+  const preview = (embed as PredictionMarketEmbed).preview
+  const question = String(preview?.question ?? preview?.title ?? "").trim()
+  return question || null
+}
+
+function getTranslatableMarketEmbeds(post: Post): Array<{
+  embedKey: string
+  question: string
+  outcomes: Array<{ index: number; label: string }>
+}> {
+  return (post.embeds ?? [])
+    .map((embed) => {
+      const preview = (embed as PredictionMarketEmbed).preview
+      return {
+        embedKey: embed.embed_key,
+        question: getPredictionMarketEmbedQuestion(embed),
+        outcomes: (preview?.outcomes ?? [])
+          .map((outcome, index) => ({ index, label: String(outcome?.label ?? "").trim() }))
+          .filter((outcome) => Boolean(outcome.label)),
+      }
+    })
+    .filter((item): item is { embedKey: string; question: string; outcomes: Array<{ index: number; label: string }> } => Boolean(item.question))
+}
+
 function hasTranslatablePostContent(post: Post): boolean {
   return Boolean(
     String(post.title ?? "").trim()
     || String(post.body ?? "").trim()
     || String(post.caption ?? "").trim(),
   )
+}
+
+async function getLocalizedMarketEmbedTranslations(input: {
+  executor: DbExecutor
+  post: Post
+  locale: string
+}): Promise<{
+  missingCount: number
+  translations: LocalizedPostResponse["translated_embeds"]
+}> {
+  const marketEmbeds = getTranslatableMarketEmbeds(input.post)
+  const translations: NonNullable<LocalizedPostResponse["translated_embeds"]> = []
+  let missingCount = 0
+
+  for (const embed of marketEmbeds) {
+    const sourceHash = await computeTextSourceHash(embed.question)
+    const cached = await getContentTranslation({
+      executor: input.executor,
+      contentType: "post",
+      contentId: input.post.post_id,
+      fieldKey: `embed:${embed.embedKey}:question`,
+      locale: input.locale,
+      sourceHash,
+    })
+    if (!cached) {
+      missingCount += 1
+      continue
+    }
+    if (cached.outcome === "translated") {
+      const translatedOutcomes: NonNullable<NonNullable<LocalizedPostResponse["translated_embeds"]>[number]["translated_outcomes"]> = []
+      for (const outcome of embed.outcomes) {
+        const outcomeSourceHash = await computeTextSourceHash(outcome.label)
+        const outcomeTranslation = await getContentTranslation({
+          executor: input.executor,
+          contentType: "post",
+          contentId: input.post.post_id,
+          fieldKey: `embed:${embed.embedKey}:outcome:${outcome.index}`,
+          locale: input.locale,
+          sourceHash: outcomeSourceHash,
+        })
+        if (!outcomeTranslation) {
+          missingCount += 1
+          continue
+        }
+        if (outcomeTranslation.outcome === "translated") {
+          translatedOutcomes.push({
+            label: outcome.label,
+            translated_label: outcomeTranslation.translated_body,
+            source_hash: outcomeSourceHash,
+          })
+        }
+      }
+      translations.push({
+        embed_key: embed.embedKey,
+        translated_question: cached.translated_body,
+        translated_title: cached.translated_title,
+        ...(translatedOutcomes.length ? { translated_outcomes: translatedOutcomes } : {}),
+        source_hash: sourceHash,
+      })
+    }
+  }
+
+  return {
+    missingCount,
+    translations: translations.length ? translations : null,
+  }
 }
 
 export async function buildLocalizedPostResponse(input: {
@@ -89,10 +193,18 @@ export async function buildLocalizedPostResponse(input: {
     translated_title: null,
     translated_body: null,
     translated_caption: null,
+    translated_embeds: null,
     source_hash: sourceHash,
   }
 
-  if (!hasTranslatablePostContent(input.post)) {
+  const hasPostContent = hasTranslatablePostContent(input.post)
+  const marketEmbedTranslations = await getLocalizedMarketEmbedTranslations({
+    executor: input.executor,
+    post: input.post,
+    locale: resolvedLocale,
+  })
+
+  if (!hasPostContent && !input.post.embeds?.some((embed) => getPredictionMarketEmbedQuestion(embed))) {
     return response
   }
 
@@ -116,23 +228,30 @@ export async function buildLocalizedPostResponse(input: {
     sourceHash,
   })
 
-  if (!cached) {
+  if ((hasPostContent && !cached) || marketEmbedTranslations.missingCount > 0) {
     return {
       ...response,
       translation_state: "pending",
+      translated_embeds: marketEmbedTranslations.translations,
     }
   }
 
-  if (cached.outcome === "same_language") {
-    return response
+  if (!hasPostContent || cached?.outcome === "same_language") {
+    return {
+      ...response,
+      translation_state: marketEmbedTranslations.translations?.length ? "ready" : response.translation_state,
+      machine_translated: Boolean(marketEmbedTranslations.translations?.length),
+      translated_embeds: marketEmbedTranslations.translations,
+    }
   }
 
   return {
     ...response,
     translation_state: "ready",
     machine_translated: true,
-    translated_title: cached.translated_title,
-    translated_body: cached.translated_body,
-    translated_caption: cached.translated_caption,
+    translated_title: cached?.translated_title,
+    translated_body: cached?.translated_body,
+    translated_caption: cached?.translated_caption,
+    translated_embeds: marketEmbedTranslations.translations,
   }
 }

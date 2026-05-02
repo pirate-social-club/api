@@ -8,6 +8,8 @@ import { nullableUnixSeconds } from "../../serializers/time"
 type PostEmbed = NonNullable<Post["embeds"]>[number]
 type XPostEmbed = Extract<PostEmbed, { provider: "x" }>
 type YouTubeVideoEmbed = Extract<PostEmbed, { provider: "youtube" }>
+type KalshiMarketEmbed = Extract<PostEmbed, { provider: "kalshi" }>
+type PolymarketMarketEmbed = Extract<PostEmbed, { provider: "polymarket" }>
 
 type PostEmbedRow = {
   embed_id: string
@@ -24,7 +26,7 @@ type PostEmbedRow = {
   last_checked_at: string | null
 }
 
-function parsePreview(value: string | null, provider: PostEmbed["provider"]): PostEmbed["preview"] {
+function parsePreview(value: string | null, _provider: PostEmbed["provider"]): PostEmbed["preview"] {
   if (!value) {
     return null
   }
@@ -33,19 +35,16 @@ function parsePreview(value: string | null, provider: PostEmbed["provider"]): Po
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return null
     }
-    return provider === "x"
-      ? parsed as XPostEmbed["preview"]
-      : parsed as YouTubeVideoEmbed["preview"]
+    return parsed as PostEmbed["preview"]
   } catch {
     return null
   }
 }
 
 function toPostEmbed(row: PostEmbedRow): PostEmbed {
-  return {
+  const base = {
     embed: row.embed_id,
     embed_key: row.embed_key,
-    provider: row.provider,
     provider_ref: row.provider_ref,
     canonical_url: row.canonical_url,
     original_url: row.original_url,
@@ -55,6 +54,17 @@ function toPostEmbed(row: PostEmbedRow): PostEmbed {
     oembed_cache_age: row.oembed_cache_age,
     unavailable_reason: row.unavailable_reason,
     last_checked_at: nullableUnixSeconds(row.last_checked_at),
+  }
+
+  switch (row.provider) {
+    case "x":
+      return { ...base, provider: row.provider } as XPostEmbed
+    case "youtube":
+      return { ...base, provider: row.provider } as YouTubeVideoEmbed
+    case "kalshi":
+      return { ...base, provider: row.provider } as KalshiMarketEmbed
+    case "polymarket":
+      return { ...base, provider: row.provider } as PolymarketMarketEmbed
   }
 }
 

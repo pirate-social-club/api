@@ -3,6 +3,7 @@ import { join } from "node:path"
 import { openCommunityDb } from "../src/lib/communities/community-db-factory"
 import { processCommunityJobById, processNextCommunityJob } from "../src/lib/communities/jobs/runner"
 import { getCommentById } from "../src/lib/comments/community-comment-store"
+import { buildLocalizedPostResponse } from "../src/lib/localization/post-localization-service"
 import { computeCommentSourceHash, computePostSourceHash, computeTextSourceHash } from "../src/lib/localization/content-source-hash"
 import { getContentTranslation } from "../src/lib/localization/content-translation-store"
 import { getPostById } from "../src/lib/posts/community-post-store"
@@ -235,6 +236,159 @@ describe("community-job-runner translation", () => {
       })
       expect(translation?.translated_title).toBe("Titulo actualizado")
       expect(translation?.translated_body).toBe("Cuerpo traducido actualizado")
+    } finally {
+      verifyDb.close()
+    }
+  })
+
+  test("materializes prediction market embed question translations", async () => {
+    const rootDir = await createCommunityJobRunnerRoot("pirate-community-job-market-embed-translation-")
+    const databasePath = join(rootDir, "community.db")
+    const communityId = "cmt_job_market_embed_translation"
+    const env: Env = {
+      LOCAL_COMMUNITY_DB_ROOT: rootDir,
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_TRANSLATION_MODEL: "google/gemini-2.5-flash-lite-preview-09-2025",
+    }
+    const repo = buildCommunityRepository(databasePath, communityId)
+    const { postId } = await seedCommunityState({
+      env,
+      repo,
+      communityId,
+      memberUserIds: ["usr_owner"],
+    })
+
+    const embed = {
+      embed: "emb_market_translation",
+      embed_key: "kalshi:KXKANYEISRAEL",
+      provider: "kalshi",
+      provider_ref: "KXKANYEISRAEL",
+      canonical_url: "https://kalshi.com/markets/kxkanyeisrael/will-kanye-visit-area/kxkanyeisrael",
+      original_url: "https://kalshi.com/markets/kxkanyeisrael/will-kanye-visit-area/kxkanyeisrael",
+      state: "embed",
+      preview: {
+        question: "Will Kanye visit Israel before June?",
+        yes_price: 0.42,
+        outcomes: [
+          { label: "Yes", probability: 0.42 },
+          { label: "No", probability: 0.58 },
+        ],
+      },
+      oembed_html: null,
+      oembed_cache_age: 300,
+      unavailable_reason: null,
+      last_checked_at: null,
+    }
+
+    const setupDb = await openCommunityDb(env, repo, communityId)
+    try {
+      await setupDb.client.execute({
+        sql: `
+          UPDATE posts
+          SET post_type = 'link',
+              title = NULL,
+              body = NULL,
+              caption = NULL,
+              link_url = ?2,
+              embeds_json = ?3,
+              source_language = 'en',
+              translation_policy = 'machine_allowed'
+          WHERE post_id = ?1
+        `,
+        args: [postId, embed.canonical_url, JSON.stringify([embed])],
+      })
+    } finally {
+      setupDb.close()
+    }
+
+    const translatedBodies = [
+      "هل سيزور كاني إسرائيل قبل يونيو؟",
+      "نعم",
+      "لا",
+    ]
+    await withMockedFetch(() => (async () => {
+      const translatedBody = translatedBodies.shift()
+      return new Response(JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                source_language: "en",
+                target_locale: "ar",
+                outcome: "translated",
+                translated_title: null,
+                translated_body: translatedBody,
+                translated_caption: null,
+              }),
+            },
+          },
+        ],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }) as typeof fetch, async () => {
+      await enqueuePostTranslationJob({ env, repo, communityId, postId, locale: "ar" })
+
+      const processed = await processNextCommunityJob({
+        env,
+        communityId,
+        communityRepository: repo,
+      })
+      expect(processed?.job_type).toBe("post_translation_materialize")
+      expect(processed?.status).toBe("succeeded")
+      expect(processed?.result_ref).toBe("ar:same_language:embeds_3")
+    })
+
+    const verifyDb = await openCommunityDb(env, repo, communityId)
+    try {
+      const post = await getPostById(verifyDb.client, postId)
+      if (!post) throw new Error("expected post")
+      const sourceHash = await computeTextSourceHash("Will Kanye visit Israel before June?")
+      const translation = await getContentTranslation({
+        executor: verifyDb.client,
+        contentType: "post",
+        contentId: postId,
+        fieldKey: "embed:kalshi:KXKANYEISRAEL:question",
+        locale: "ar",
+        sourceHash,
+      })
+      expect(translation?.translated_body).toBe("هل سيزور كاني إسرائيل قبل يونيو؟")
+      const yesSourceHash = await computeTextSourceHash("Yes")
+      const yesTranslation = await getContentTranslation({
+        executor: verifyDb.client,
+        contentType: "post",
+        contentId: postId,
+        fieldKey: "embed:kalshi:KXKANYEISRAEL:outcome:0",
+        locale: "ar",
+        sourceHash: yesSourceHash,
+      })
+      expect(yesTranslation?.translated_body).toBe("نعم")
+
+      const localized = await buildLocalizedPostResponse({
+        executor: verifyDb.client,
+        post,
+        locale: "ar",
+      })
+      expect(localized.translation_state).toBe("ready")
+      expect(localized.translated_embeds?.[0]).toEqual({
+        embed_key: "kalshi:KXKANYEISRAEL",
+        source_hash: sourceHash,
+        translated_question: "هل سيزور كاني إسرائيل قبل يونيو؟",
+        translated_outcomes: [
+          {
+            label: "Yes",
+            source_hash: yesSourceHash,
+            translated_label: "نعم",
+          },
+          {
+            label: "No",
+            source_hash: await computeTextSourceHash("No"),
+            translated_label: "لا",
+          },
+        ],
+        translated_title: null,
+      })
     } finally {
       verifyDb.close()
     }

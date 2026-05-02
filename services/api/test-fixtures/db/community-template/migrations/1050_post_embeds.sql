@@ -7,7 +7,7 @@ CREATE TABLE post_embeds (
     post_id TEXT NOT NULL,
     community_id TEXT NOT NULL,
     provider TEXT NOT NULL CHECK (
-        provider IN ('x', 'youtube')
+        provider IN ('x', 'youtube', 'kalshi', 'polymarket')
     ),
     provider_ref TEXT,
     canonical_url TEXT NOT NULL,

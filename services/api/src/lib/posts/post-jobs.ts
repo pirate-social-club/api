@@ -4,7 +4,8 @@ import { CONTENT_TRANSLATION_PREWARM_LOCALES, sameLanguageLocale } from "../loca
 import { nowIso } from "../helpers"
 import type { Community, LocalizedPostResponse, Post } from "../../types"
 
-const EMBED_RECHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
+const DEFAULT_EMBED_RECHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
+const ACTIVE_MARKET_EMBED_RECHECK_INTERVAL_MS = 5 * 60 * 1000
 
 async function enqueuePostTranslationJob(input: {
   client: DbExecutor
@@ -124,6 +125,27 @@ export async function enqueueEmbedHydrateIfNeeded(input: {
   })
 }
 
+type PostEmbed = NonNullable<Post["embeds"]>[number]
+
+function isClosedMarketStatus(value: string | null | undefined): boolean {
+  const normalized = String(value ?? "").trim().toLowerCase()
+  return normalized === "closed"
+    || normalized === "settled"
+    || normalized === "resolved"
+    || normalized === "determined"
+}
+
+export function embedRecheckIntervalMs(embed: PostEmbed): number {
+  if (embed.provider === "kalshi" || embed.provider === "polymarket") {
+    const status = (embed.preview as { status?: string | null } | null | undefined)?.status
+    return isClosedMarketStatus(status)
+      ? DEFAULT_EMBED_RECHECK_INTERVAL_MS
+      : ACTIVE_MARKET_EMBED_RECHECK_INTERVAL_MS
+  }
+
+  return DEFAULT_EMBED_RECHECK_INTERVAL_MS
+}
+
 export async function enqueueEmbedHydrateOnReadIfNeeded(input: {
   client: DbExecutor
   communityId: string
@@ -140,7 +162,7 @@ export async function enqueueEmbedHydrateOnReadIfNeeded(input: {
     const checkedAtMs = typeof embed.last_checked_at === "number"
       ? embed.last_checked_at * 1000
       : Date.parse(embed.last_checked_at ?? "")
-    return !Number.isFinite(checkedAtMs) || !Number.isFinite(nowMs) || nowMs - checkedAtMs >= EMBED_RECHECK_INTERVAL_MS
+    return !Number.isFinite(checkedAtMs) || !Number.isFinite(nowMs) || nowMs - checkedAtMs >= embedRecheckIntervalMs(embed)
   })
   if (!hasStaleEmbed) {
     return

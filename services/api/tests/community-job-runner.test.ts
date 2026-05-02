@@ -933,4 +933,328 @@ describe("community-job-runner", () => {
     }
   })
 
+  test("hydrates Kalshi market embeds into link posts", async () => {
+    const rootDir = await createCommunityJobRunnerRoot("pirate-community-kalshi-embed-")
+    const communityId = "cmt_job_kalshi_embed"
+    const env: Env = {
+      LOCAL_COMMUNITY_DB_ROOT: rootDir,
+    }
+    const repo = buildCommunityRepository(join(rootDir, "kalshi-embed.db"), communityId)
+
+    await seedCommunityState({
+      env,
+      repo,
+      communityId,
+      memberUserIds: ["usr_owner"],
+    })
+
+    let linkPostId = ""
+    const db = await openCommunityDb(env, repo, communityId)
+    try {
+      const now = new Date("2026-05-02T12:00:00Z").toISOString()
+      const linkPost = await insertPost({
+        client: db.client,
+        communityId,
+        authorUserId: "usr_owner",
+        body: {
+          post_type: "link",
+          link_url: "https://kalshi.com/markets/kxkanyeisrael/will-kanye-visit-area/kxkanyeisrael",
+          idempotency_key: "kalshi-embed-post",
+        },
+        createdAt: now,
+      })
+      linkPostId = linkPost.post_id
+
+      await enqueueCommunityJob({
+        client: db.client,
+        communityId,
+        jobType: "embed_hydrate",
+        subjectType: "post_embed",
+        subjectId: linkPost.post_id,
+        payloadJson: JSON.stringify({
+          post_id: linkPost.post_id,
+          link_url: linkPost.link_url,
+        }),
+        createdAt: now,
+      })
+    } finally {
+      db.close()
+    }
+
+    await withMockedFetch(() => (async (input) => {
+      const requestUrl = input instanceof Request ? input.url : String(input)
+      const parsed = new URL(requestUrl)
+      if (parsed.pathname === "/trade-api/v2/markets/KXKANYEISRAEL") {
+        return Response.json({
+          market: {
+            close_time: "2026-06-01T00:00:00Z",
+            last_price: 42,
+            open_interest: 18000,
+            status: "open",
+            ticker: "KXKANYEISRAEL",
+            title: "Will Kanye visit Israel before June?",
+            volume: 921000,
+            volume_24h: 64000,
+            yes_ask: 43,
+            yes_bid: 41,
+          },
+        })
+      }
+      expect(parsed.pathname).toBe("/trade-api/v2/markets/candlesticks")
+      expect(parsed.searchParams.get("market_tickers")).toBe("KXKANYEISRAEL")
+      return Response.json({
+        markets: [{
+          market_ticker: "KXKANYEISRAEL",
+          candlesticks: [
+            {
+              end_period_ts: 1777680000,
+              open_interest_fp: "18000.00",
+              price: { close_dollars: "0.4200" },
+              volume_fp: "1200.00",
+            },
+          ],
+        }],
+      })
+    }) as typeof fetch, async () => {
+      const processed = await processNextCommunityJob({
+        env,
+        communityId,
+        communityRepository: repo,
+      })
+
+      expect(processed?.job_type).toBe("embed_hydrate")
+      expect(processed?.error_code).toBeNull()
+      expect(processed?.status).toBe("succeeded")
+    })
+
+    const verifyDb = await openCommunityDb(env, repo, communityId)
+    try {
+      const post = await getPostById(verifyDb.client, linkPostId)
+      expect(post?.link_og_title).toBe("Will Kanye visit Israel before June?")
+      const embed = post?.embeds?.[0]
+      if (embed?.provider !== "kalshi") throw new Error("expected Kalshi embed")
+      expect(embed.provider_ref).toBe("KXKANYEISRAEL")
+      expect(embed.preview?.yes_price).toBe(0.43)
+      expect(embed.preview?.yes_bid).toBe(0.41)
+      expect(embed.preview?.chart?.[0]?.price).toBe(0.42)
+    } finally {
+      verifyDb.close()
+    }
+  })
+
+  test("hydrates Polymarket market embeds into link posts", async () => {
+    const rootDir = await createCommunityJobRunnerRoot("pirate-community-polymarket-embed-")
+    const communityId = "cmt_job_polymarket_embed"
+    const env: Env = {
+      LOCAL_COMMUNITY_DB_ROOT: rootDir,
+    }
+    const repo = buildCommunityRepository(join(rootDir, "polymarket-embed.db"), communityId)
+
+    await seedCommunityState({
+      env,
+      repo,
+      communityId,
+      memberUserIds: ["usr_owner"],
+    })
+
+    let linkPostId = ""
+    const db = await openCommunityDb(env, repo, communityId)
+    try {
+      const now = new Date("2026-05-02T12:00:00Z").toISOString()
+      const linkPost = await insertPost({
+        client: db.client,
+        communityId,
+        authorUserId: "usr_owner",
+        body: {
+          post_type: "link",
+          link_url: "https://polymarket.com/event/example-market/will-example-resolve-yes",
+          idempotency_key: "polymarket-embed-post",
+        },
+        createdAt: now,
+      })
+      linkPostId = linkPost.post_id
+
+      await enqueueCommunityJob({
+        client: db.client,
+        communityId,
+        jobType: "embed_hydrate",
+        subjectType: "post_embed",
+        subjectId: linkPost.post_id,
+        payloadJson: JSON.stringify({
+          post_id: linkPost.post_id,
+          link_url: linkPost.link_url,
+        }),
+        createdAt: now,
+      })
+    } finally {
+      db.close()
+    }
+
+    await withMockedFetch(() => (async (input) => {
+      const requestUrl = input instanceof Request ? input.url : String(input)
+      const parsed = new URL(requestUrl)
+      if (parsed.origin + parsed.pathname === "https://gamma-api.polymarket.com/markets/slug/will-example-resolve-yes") {
+        return Response.json({
+          active: true,
+          bestAsk: 0.54,
+          bestBid: 0.52,
+          clobTokenIds: JSON.stringify(["12345", "67890"]),
+          endDateIso: "2026-07-15T00:00:00Z",
+          image: "https://polymarket.test/image.png",
+          lastTradePrice: 0.53,
+          liquidityNum: 382000,
+          outcomePrices: JSON.stringify(["0.53", "0.47"]),
+          outcomes: JSON.stringify(["Yes", "No"]),
+          question: "Will the example market resolve Yes?",
+          volume24hr: 182000,
+          volumeNum: 2420000,
+        })
+      }
+      expect(parsed.origin + parsed.pathname).toBe("https://clob.polymarket.com/prices-history")
+      expect(parsed.searchParams.get("market")).toBe("12345")
+      return Response.json({
+        history: [
+          { p: 0.51, t: 1777680000 },
+          { p: 0.53, t: 1777766400 },
+        ],
+      })
+    }) as typeof fetch, async () => {
+      const processed = await processNextCommunityJob({
+        env,
+        communityId,
+        communityRepository: repo,
+      })
+
+      expect(processed?.job_type).toBe("embed_hydrate")
+      expect(processed?.error_code).toBeNull()
+      expect(processed?.status).toBe("succeeded")
+    })
+
+    const verifyDb = await openCommunityDb(env, repo, communityId)
+    try {
+      const post = await getPostById(verifyDb.client, linkPostId)
+      expect(post?.link_og_title).toBe("Will the example market resolve Yes?")
+      expect(post?.link_og_image_url).toBe("https://polymarket.test/image.png")
+      const embed = post?.embeds?.[0]
+      if (embed?.provider !== "polymarket") throw new Error("expected Polymarket embed")
+      expect(embed.provider_ref).toBe("will-example-resolve-yes")
+      expect(embed.preview?.yes_price).toBe(0.53)
+      expect(embed.preview?.yes_bid).toBe(0.52)
+      expect(embed.preview?.chart?.length).toBe(2)
+    } finally {
+      verifyDb.close()
+    }
+  })
+
+  test("hydrates Polymarket event-only embeds with multi-outcome preview", async () => {
+    const rootDir = await createCommunityJobRunnerRoot("pirate-community-polymarket-event-embed-")
+    const communityId = "cmt_job_polymarket_event_embed"
+    const env: Env = {
+      LOCAL_COMMUNITY_DB_ROOT: rootDir,
+    }
+    const repo = buildCommunityRepository(join(rootDir, "polymarket-event-embed.db"), communityId)
+
+    await seedCommunityState({
+      env,
+      repo,
+      communityId,
+      memberUserIds: ["usr_owner"],
+    })
+
+    let linkPostId = ""
+    const db = await openCommunityDb(env, repo, communityId)
+    try {
+      const now = new Date("2026-05-02T12:00:00Z").toISOString()
+      const linkPost = await insertPost({
+        client: db.client,
+        communityId,
+        authorUserId: "usr_owner",
+        body: {
+          post_type: "link",
+          link_url: "https://polymarket.com/event/fda-bpc157-reclassification",
+          idempotency_key: "polymarket-event-embed-post",
+        },
+        createdAt: now,
+      })
+      linkPostId = linkPost.post_id
+
+      await enqueueCommunityJob({
+        client: db.client,
+        communityId,
+        jobType: "embed_hydrate",
+        subjectType: "post_embed",
+        subjectId: linkPost.post_id,
+        payloadJson: JSON.stringify({
+          post_id: linkPost.post_id,
+          link_url: linkPost.link_url,
+        }),
+        createdAt: now,
+      })
+    } finally {
+      db.close()
+    }
+
+    await withMockedFetch(() => (async (input) => {
+      const requestUrl = input instanceof Request ? input.url : String(input)
+      const parsed = new URL(requestUrl)
+      expect(parsed.origin + parsed.pathname).toBe("https://gamma-api.polymarket.com/events/slug/fda-bpc157-reclassification")
+      return Response.json({
+        active: true,
+        image: "https://polymarket.test/fda-event.png",
+        markets: [
+          {
+            active: true,
+            outcomes: JSON.stringify(["Yes", "No"]),
+            outcomePrices: JSON.stringify(["0.77", "0.23"]),
+            question: "Before 2027",
+          },
+          {
+            active: true,
+            outcomes: JSON.stringify(["Yes", "No"]),
+            outcomePrices: JSON.stringify(["0.75", "0.25"]),
+            question: "Before November 2026",
+          },
+          {
+            active: true,
+            outcomes: JSON.stringify(["Yes", "No"]),
+            outcomePrices: JSON.stringify(["0.18", "0.82"]),
+            question: "Before September 2026",
+          },
+        ],
+        title: "When will the FDA reclassify BPC-157 to Category 1?",
+        volume: 5200000,
+      })
+    }) as typeof fetch, async () => {
+      const processed = await processNextCommunityJob({
+        env,
+        communityId,
+        communityRepository: repo,
+      })
+
+      expect(processed?.job_type).toBe("embed_hydrate")
+      expect(processed?.error_code).toBeNull()
+      expect(processed?.status).toBe("succeeded")
+    })
+
+    const verifyDb = await openCommunityDb(env, repo, communityId)
+    try {
+      const post = await getPostById(verifyDb.client, linkPostId)
+      expect(post?.link_og_title).toBe("When will the FDA reclassify BPC-157 to Category 1?")
+      expect(post?.link_og_image_url).toBe("https://polymarket.test/fda-event.png")
+      const embed = post?.embeds?.[0]
+      if (embed?.provider !== "polymarket") throw new Error("expected Polymarket embed")
+      expect(embed.preview?.question).toBe("When will the FDA reclassify BPC-157 to Category 1?")
+      expect(embed.preview?.yes_price).toBeNull()
+      expect(embed.preview?.chart).toBeNull()
+      expect(embed.preview?.outcomes?.length).toBe(3)
+      expect(embed.preview?.outcomes?.[0]?.label).toBe("Before 2027")
+      expect(embed.preview?.outcomes?.[0]?.probability).toBe(0.77)
+      expect(embed.preview?.outcomes?.[1]?.label).toBe("Before November 2026")
+      expect(embed.preview?.outcomes?.[2]?.label).toBe("Before September 2026")
+      expect(embed.preview?.outcomes?.[2]?.probability).toBe(0.18)
+    } finally {
+      verifyDb.close()
+    }
+  })
+
 })

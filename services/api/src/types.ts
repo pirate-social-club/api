@@ -210,6 +210,18 @@ export type CommentListItem = {
   source_hash: string
 }
 
+export type LocalizedPostEmbedTranslation = {
+  embed_key: string
+  translated_question?: string | null
+  translated_title?: string | null
+  translated_outcomes?: Array<{
+    label: string
+    translated_label: string | null
+    source_hash: string
+  }> | null
+  source_hash: string
+}
+
 export type CommentThreadSnapshot = {
   thread_root_post_id: string
   snapshot_seq: number
@@ -269,6 +281,8 @@ export type Post = {
   link_url?: string | null
   link_og_image_url?: string | null
   link_og_title?: string | null
+  link_enrichment_snapshot_json?: Record<string, unknown> | null
+  link_enrichment_synced_at?: string | null
   embeds?: Array<PostEmbed> | null
   media_refs?: Array<MediaDescriptor>
   creator_relation?: PostCreatorRelation | null
@@ -361,6 +375,7 @@ export type LocalizedPostResponse = {
   translated_body?: string | null
   translated_title?: string | null
   translated_caption?: string | null
+  translated_embeds?: Array<LocalizedPostEmbedTranslation> | null
   source_hash: string
 }
 

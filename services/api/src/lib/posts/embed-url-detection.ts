@@ -10,7 +10,16 @@ export type XEmbedTarget = EmbedTargetBase & {
 export type YouTubeEmbedTarget = EmbedTargetBase & {
   provider: "youtube"
 }
-export type SupportedEmbedTarget = XEmbedTarget | YouTubeEmbedTarget
+export type KalshiEmbedTarget = EmbedTargetBase & {
+  provider: "kalshi"
+  seriesSlug: string | null
+}
+export type PolymarketEmbedTarget = EmbedTargetBase & {
+  provider: "polymarket"
+  eventSlug: string | null
+  isEventOnly: boolean
+}
+export type SupportedEmbedTarget = XEmbedTarget | YouTubeEmbedTarget | KalshiEmbedTarget | PolymarketEmbedTarget
 
 const X_HOSTS = new Set([
   "x.com",
@@ -25,6 +34,14 @@ const YOUTUBE_HOSTS = new Set([
 ])
 const YOUTUBE_SHORT_HOSTS = new Set([
   "youtu.be",
+])
+const KALSHI_HOSTS = new Set([
+  "kalshi.com",
+  "www.kalshi.com",
+])
+const POLYMARKET_HOSTS = new Set([
+  "polymarket.com",
+  "www.polymarket.com",
 ])
 
 function normalizeHost(hostname: string): string {
@@ -114,6 +131,65 @@ function detectYouTubeEmbed(url: URL, originalUrl: string): SupportedEmbedTarget
   }
 }
 
+function normalizeMarketSlug(value: string | null | undefined): string | null {
+  const slug = String(value ?? "").trim().toLowerCase()
+  return /^[a-z0-9][a-z0-9_-]{1,199}$/u.test(slug) ? slug : null
+}
+
+function detectKalshiMarket(url: URL, originalUrl: string): SupportedEmbedTarget | null {
+  if (!KALSHI_HOSTS.has(normalizeHost(url.hostname))) {
+    return null
+  }
+
+  const segments = url.pathname.split("/").filter(Boolean)
+  if (segments[0]?.toLowerCase() !== "markets") {
+    return null
+  }
+
+  const ticker = normalizeMarketSlug(segments[segments.length - 1])
+  if (!ticker) {
+    return null
+  }
+
+  const seriesSlug = normalizeMarketSlug(segments[1])
+  return {
+    provider: "kalshi",
+    providerRef: ticker.toUpperCase(),
+    embedKey: `kalshi:${ticker.toUpperCase()}`,
+    canonicalUrl: `https://kalshi.com${url.pathname}`,
+    originalUrl,
+    seriesSlug,
+  }
+}
+
+function detectPolymarketMarket(url: URL, originalUrl: string): SupportedEmbedTarget | null {
+  if (!POLYMARKET_HOSTS.has(normalizeHost(url.hostname))) {
+    return null
+  }
+
+  const segments = url.pathname.split("/").filter(Boolean)
+  if (segments[0]?.toLowerCase() !== "event") {
+    return null
+  }
+
+  const eventSlug = normalizeMarketSlug(segments[1])
+  const hasMarketSlug = Boolean(segments[2])
+  const marketSlug = normalizeMarketSlug(segments[2]) ?? eventSlug
+  if (!eventSlug || !marketSlug) {
+    return null
+  }
+
+  return {
+    provider: "polymarket",
+    providerRef: marketSlug,
+    embedKey: hasMarketSlug ? `polymarket:market:${marketSlug}` : `polymarket:event:${eventSlug}`,
+    canonicalUrl: `https://polymarket.com/event/${eventSlug}${hasMarketSlug ? `/${marketSlug}` : ""}`,
+    originalUrl,
+    eventSlug,
+    isEventOnly: !hasMarketSlug,
+  }
+}
+
 export function detectSupportedEmbedTarget(linkUrl: string | null | undefined): SupportedEmbedTarget | null {
   const parsed = normalizeHttpUrl(linkUrl)
   if (!parsed) {
@@ -123,4 +199,6 @@ export function detectSupportedEmbedTarget(linkUrl: string | null | undefined): 
   const originalUrl = String(linkUrl ?? "").trim()
   return detectXEmbed(parsed, originalUrl)
     ?? detectYouTubeEmbed(parsed, originalUrl)
+    ?? detectKalshiMarket(parsed, originalUrl)
+    ?? detectPolymarketMarket(parsed, originalUrl)
 }

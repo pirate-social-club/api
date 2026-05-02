@@ -1178,6 +1178,7 @@ export type Post = {
   link_url?: string | null;
   link_og_image_url?: string | null;
   link_og_title?: string | null;
+  link_enrichment?: Record<string, unknown> | null;
   embeds?: Array<PostEmbed> | null;
   media_refs?: Array<MediaDescriptor>;
   creator_relation?: PostCreatorRelation | null;
@@ -1379,6 +1380,19 @@ export type LocalizedPostResponse = {
   translated_body?: string | null;
   translated_title?: string | null;
   translated_caption?: string | null;
+  translated_embeds?: Array<LocalizedPostEmbedTranslation> | null;
+  source_hash: string;
+};
+
+export type LocalizedPostEmbedTranslation = {
+  embed_key: string;
+  translated_question?: string | null;
+  translated_title?: string | null;
+  translated_outcomes?: Array<{
+    label: string;
+    translated_label: string | null;
+    source_hash: string;
+  }> | null;
   source_hash: string;
 };
 
@@ -2448,7 +2462,7 @@ type NamespaceAttachmentInput = {
 
 type PostCreatorRelation = "captured" | "created" | "subject" | "authorized_repost" | "fan_work" | "found";
 
-type PostEmbed = (XPostEmbed | YouTubeVideoEmbed);
+type PostEmbed = (XPostEmbed | YouTubeVideoEmbed | KalshiMarketEmbed | PolymarketMarketEmbed);
 
 type PostLabel = {
   id: string;
@@ -2658,6 +2672,71 @@ type YouTubeVideoEmbed = {
   original_url: string;
   state: "pending" | "preview" | "embed" | "unavailable";
   preview?: YouTubeEmbedPreview | null;
+  oembed_html?: string | null;
+  oembed_cache_age?: number | null;
+  unavailable_reason?: "deleted" | "withheld" | "private" | "unsupported" | "unknown" | null;
+  last_checked_at?: number | null;
+};
+
+type PredictionMarketChartPoint = {
+  ts: number;
+  price?: number | null;
+  volume?: number | null;
+  open_interest?: number | null;
+};
+
+type PredictionMarketOutcome = {
+  label: string;
+  probability: number;
+};
+
+type PredictionMarketEmbedPreview = {
+  question?: string | null;
+  title?: string | null;
+  image_url?: string | null;
+  yes_price?: number | null;
+  yes_bid?: number | null;
+  yes_ask?: number | null;
+  no_bid?: number | null;
+  no_ask?: number | null;
+  last_price?: number | null;
+  volume?: number | null;
+  volume_24h?: number | null;
+  liquidity?: number | null;
+  open_interest?: number | null;
+  status?: string | null;
+  resolution?: "yes" | "no" | null;
+  resolved_outcome?: string | null;
+  close_time?: string | null;
+  updated_at?: string | null;
+  chart?: Array<PredictionMarketChartPoint> | null;
+  outcomes?: Array<PredictionMarketOutcome> | null;
+};
+
+type KalshiMarketEmbed = {
+  embed: string;
+  embed_key: string;
+  provider: "kalshi";
+  provider_ref?: string | null;
+  canonical_url: string;
+  original_url: string;
+  state: "pending" | "preview" | "embed" | "unavailable";
+  preview?: PredictionMarketEmbedPreview | null;
+  oembed_html?: string | null;
+  oembed_cache_age?: number | null;
+  unavailable_reason?: "deleted" | "withheld" | "private" | "unsupported" | "unknown" | null;
+  last_checked_at?: number | null;
+};
+
+type PolymarketMarketEmbed = {
+  embed: string;
+  embed_key: string;
+  provider: "polymarket";
+  provider_ref?: string | null;
+  canonical_url: string;
+  original_url: string;
+  state: "pending" | "preview" | "embed" | "unavailable";
+  preview?: PredictionMarketEmbedPreview | null;
   oembed_html?: string | null;
   oembed_cache_age?: number | null;
   unavailable_reason?: "deleted" | "withheld" | "private" | "unsupported" | "unknown" | null;
