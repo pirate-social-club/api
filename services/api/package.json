@@ -14,6 +14,7 @@
     "deploy": "wrangler deploy",
     "generate:openapi-spec": "bun run scripts/generate-openapi-spec.ts",
     "check": "tsc --noEmit",
+    "lint": "biome check .",
     "test": "bun test",
     "mint:dev-jwt": "bun run scripts/mint-dev-jwt.ts",
     "seed:local-smoke": "bun run scripts/seed-community-lifecycle.ts --mode local-smoke --manifest scripts/seed-manifests/local-smoke.json",
@@ -43,6 +44,7 @@
     "viem": "^2.48.1"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.4.13",
     "@cloudflare/workers-types": "^4.20260405.0",
     "@types/node": "^24.5.2",
     "typescript": "^5.8.3",
