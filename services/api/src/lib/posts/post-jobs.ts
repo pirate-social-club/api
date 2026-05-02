@@ -146,25 +146,35 @@ export function embedRecheckIntervalMs(embed: PostEmbed): number {
   return DEFAULT_EMBED_RECHECK_INTERVAL_MS
 }
 
+export function linkPostNeedsHydrationOnRead(post: Post, now?: string): boolean {
+  if (post.post_type !== "link" || !post.link_url?.trim()) {
+    return false
+  }
+
+  if (!post.embeds?.length) {
+    return !post.link_enrichment_snapshot_json
+  }
+
+  const checkedAt = now ?? nowIso()
+  const checkedAtMs = Date.parse(checkedAt)
+  return post.embeds.some((embed) => {
+    const lastCheckedAtMs = typeof embed.last_checked_at === "number"
+      ? embed.last_checked_at * 1000
+      : Date.parse(embed.last_checked_at ?? "")
+    return !Number.isFinite(lastCheckedAtMs)
+      || !Number.isFinite(checkedAtMs)
+      || checkedAtMs - lastCheckedAtMs >= embedRecheckIntervalMs(embed)
+  })
+}
+
 export async function enqueueEmbedHydrateOnReadIfNeeded(input: {
   client: DbExecutor
   communityId: string
   post: Post
   now?: string
 }): Promise<void> {
-  if (input.post.post_type !== "link" || !input.post.link_url?.trim() || !input.post.embeds?.length) {
-    return
-  }
-
   const now = input.now ?? nowIso()
-  const nowMs = Date.parse(now)
-  const hasStaleEmbed = input.post.embeds.some((embed) => {
-    const checkedAtMs = typeof embed.last_checked_at === "number"
-      ? embed.last_checked_at * 1000
-      : Date.parse(embed.last_checked_at ?? "")
-    return !Number.isFinite(checkedAtMs) || !Number.isFinite(nowMs) || nowMs - checkedAtMs >= embedRecheckIntervalMs(embed)
-  })
-  if (!hasStaleEmbed) {
+  if (!linkPostNeedsHydrationOnRead(input.post, now)) {
     return
   }
 
