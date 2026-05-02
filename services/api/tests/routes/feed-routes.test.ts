@@ -64,6 +64,7 @@ describe("feed routes", () => {
         object: string
         display_name: string
         route_slug: string | null
+        view_count: number | null
       }>
       next_cursor: string | null
     }
@@ -76,6 +77,7 @@ describe("feed routes", () => {
       object: "home_feed_community_summary",
       display_name: "Feed Active",
       route_slug: "feed-active",
+      view_count: 0,
     })
   })
 })

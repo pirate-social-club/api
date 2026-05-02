@@ -1505,6 +1505,7 @@ export type HomeFeedCommunitySummary = {
   avatar_ref?: string | null;
   member_count?: number | null;
   follower_count?: number | null;
+  view_count?: number | null;
 };
 
 export type HomeFeedItem = {
