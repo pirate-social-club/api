@@ -95,7 +95,8 @@ export function assertHnsRootLabel(value: string): void {
     throw badRequestError("HNS root label must be a protocol root label")
   }
 
-  if (!/^[a-z0-9-]+$/u.test(verifyRange)) {
+  const allowedPattern = value.startsWith("xn--") ? /^[a-z0-9-]+$/u : /^[a-z0-9_-]+$/u
+  if (!allowedPattern.test(verifyRange)) {
     throw badRequestError("HNS root label must be a protocol root label")
   }
 }

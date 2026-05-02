@@ -6,7 +6,7 @@ import {
   SPACES_FABRIC_PUBLISH_CHALLENGE_TTL_MS,
   verifySpacesFabricPublish,
 } from "../src/lib/verification/spaces-verifier"
-import { ensureHnsZone, getHnsVerifierBaseUrl, inspectHnsRoot, isHnsVerifierConfigured, verifyHnsTxtRecord } from "../src/lib/verification/hns-verifier"
+import { ensureHnsZone, getHnsVerifierBaseUrl, inspectHnsRoot, isHnsVerifierConfigured, normalizeHnsRootLabel, verifyHnsTxtRecord } from "../src/lib/verification/hns-verifier"
 import { withMockedFetch } from "./helpers"
 
 function urlFromFetchInput(input: Parameters<typeof fetch>[0]): URL {
@@ -52,6 +52,12 @@ describe("normalizeRootLabel", () => {
     expect(normalizeRootLabel("@ＡＢＣ")).toBe("abc")
     expect(normalizeRootLabel("@e\u0301")).toBe("xn--9ca")
     expect(normalizeRootLabel("@é")).toBe("xn--9ca")
+  })
+})
+
+describe("normalizeHnsRootLabel", () => {
+  test("keeps underscores in HNS labels", () => {
+    expect(normalizeHnsRootLabel("Tame_Impala")).toBe("tame_impala")
   })
 })
 
@@ -418,6 +424,27 @@ describe("inspectHnsRoot", () => {
       })
       expect(result.observation_provider).toBe("web3dns_json_doh")
       expect(requestedPath).toBe("/inspect-public?root_label=pirate")
+    })
+  })
+
+  test("allows underscores in HNS root labels", async () => {
+    let requestedPath = ""
+    await withMockedFetch(() => (async (input) => {
+      const url = urlFromFetchInput(input)
+      requestedPath = `${url.pathname}?${url.searchParams.toString()}`
+      return Response.json({
+        root_label: "tame_impala",
+        pirate_dns_authority_verified: true,
+        observation_provider: "web3dns_json_doh",
+      })
+    }) as typeof fetch, async () => {
+      const result = await inspectHnsRoot({
+        HNS_VERIFIER_BASE_URL: "http://hns.test",
+      } as any, {
+        rootLabel: "tame_impala",
+      })
+      expect(result.root_label).toBe("tame_impala")
+      expect(requestedPath).toBe("/inspect-public?root_label=tame_impala")
     })
   })
 })
