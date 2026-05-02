@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { requestLinkSummary } from "../src/lib/posts/link-enrichment/summary-provider"
+import { requestLinkSummaryTranslation } from "../src/lib/posts/link-enrichment/translation-provider"
 
 describe("requestLinkSummary", () => {
   test("returns validated OpenRouter summary output", async () => {
@@ -110,5 +111,57 @@ describe("requestLinkSummary", () => {
         headers: { "content-type": "application/json" },
       })) as typeof fetch,
     })).rejects.toThrow("key_points too long")
+  })
+})
+
+describe("requestLinkSummaryTranslation", () => {
+  test("returns validated localized article card output", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = []
+
+    const result = await requestLinkSummaryTranslation({
+      env: {
+        OPENROUTER_API_KEY: "or-test",
+        OPENROUTER_BASE_URL: "https://openrouter.test/v1",
+        OPENROUTER_LINK_SUMMARY_TRANSLATION_MODEL: "test/translation-model",
+      },
+      targetLocale: "ar",
+      title: "Israel seizes Gaza aid ships",
+      description: "Reuters report.",
+      summaryParagraph: "A neutral paragraph summary.",
+      shortSummary: "A short summary.",
+      keyPoints: ["Ships seized off Greece", "Israel cites blockade", "Turkey condemns move"],
+      fetcher: (async (input, init) => {
+        calls.push({
+          url: String(input),
+          body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+        })
+        return new Response(JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  target_locale: "ar",
+                  title: "إسرائيل تستولي على سفن مساعدات غزة",
+                  description: "تقرير رويترز.",
+                  summary_paragraph: "ملخص محايد للخبر.",
+                  short_summary: "ملخص قصير.",
+                  key_points: ["مصادرة سفن قبالة اليونان", "إسرائيل تستند إلى الحصار", "تركيا تدين التحرك"],
+                }),
+              },
+            },
+          ],
+        }), {
+          headers: { "content-type": "application/json" },
+        })
+      }) as typeof fetch,
+    })
+
+    expect(calls[0]?.url).toBe("https://openrouter.test/v1/chat/completions")
+    expect(calls[0]?.body.model).toBe("test/translation-model")
+    const messages = calls[0]?.body.messages as Array<{ content?: string }> | undefined
+    expect(messages?.[0]?.content).toContain("Translate the supplied article card fields")
+    expect(result.locale).toBe("ar")
+    expect(result.title).toBe("إسرائيل تستولي على سفن مساعدات غزة")
+    expect(result.keyPoints).toHaveLength(3)
   })
 })

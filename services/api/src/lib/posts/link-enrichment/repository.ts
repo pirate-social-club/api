@@ -6,6 +6,7 @@ import type {
   LinkEnrichmentProvider,
   LinkEnrichmentRecord,
   LinkEnrichmentSnapshot,
+  LinkEnrichmentTranslation,
   LinkEnrichmentStatus,
   LinkEnrichmentUsageRecord,
   LinkSummaryStatus,
@@ -25,6 +26,7 @@ function toRecord(row: unknown): LinkEnrichmentRecord {
     image_url: stringOrNull(rowValue(row, "image_url")),
     markdown: stringOrNull(rowValue(row, "markdown")),
     summary_json: stringOrNull(rowValue(row, "summary_json")),
+    translations_json: stringOrNull(rowValue(row, "translations_json")),
     summary_status: stringOrNull(rowValue(row, "summary_status")) as LinkSummaryStatus | null,
     summary_model: stringOrNull(rowValue(row, "summary_model")),
     error: stringOrNull(rowValue(row, "error")),
@@ -76,6 +78,7 @@ export async function upsertLinkEnrichment(input: {
   imageUrl: string | null
   markdown: string | null
   summaryJson?: string | null
+  translationsJson?: string | null
   summaryStatus?: LinkSummaryStatus | null
   summaryModel?: string | null
   error: string | null
@@ -88,13 +91,13 @@ export async function upsertLinkEnrichment(input: {
       INSERT INTO link_enrichments (
         link_enrichment_id, normalized_url, canonical_url, provider, status,
         title, description, publisher, published_at, image_url,
-        markdown, summary_json, summary_status, summary_model, error,
-        fetched_at, summarized_at, created_at, updated_at
+        markdown, summary_json, translations_json, summary_status, summary_model,
+        error, fetched_at, summarized_at, created_at, updated_at
       ) VALUES (
         ?1, ?2, ?3, ?4, ?5,
         ?6, ?7, ?8, ?9, ?10,
         ?11, ?12, ?13, ?14, ?15,
-        ?16, NULL, ?17, ?17
+        ?16, ?17, NULL, ?18, ?18
       )
       ON CONFLICT(normalized_url) DO UPDATE SET
         canonical_url = excluded.canonical_url,
@@ -107,6 +110,7 @@ export async function upsertLinkEnrichment(input: {
         image_url = excluded.image_url,
         markdown = excluded.markdown,
         summary_json = COALESCE(excluded.summary_json, link_enrichments.summary_json),
+        translations_json = COALESCE(excluded.translations_json, link_enrichments.translations_json),
         summary_status = COALESCE(excluded.summary_status, link_enrichments.summary_status),
         summary_model = COALESCE(excluded.summary_model, link_enrichments.summary_model),
         error = excluded.error,
@@ -126,6 +130,7 @@ export async function upsertLinkEnrichment(input: {
       input.imageUrl,
       input.markdown,
       input.summaryJson ?? null,
+      input.translationsJson ?? null,
       input.summaryStatus ?? null,
       input.summaryModel ?? null,
       input.error,
@@ -137,6 +142,33 @@ export async function upsertLinkEnrichment(input: {
   const row = await getLinkEnrichmentByNormalizedUrl(input.client, input.normalizedUrl)
   if (!row) {
     throw new Error("Link enrichment is missing after upsert")
+  }
+  return row
+}
+
+export async function updateLinkEnrichmentTranslations(input: {
+  client: Client
+  normalizedUrl: string
+  translationsJson: string | null
+  updatedAt: string
+}): Promise<LinkEnrichmentRecord> {
+  await input.client.execute({
+    sql: `
+      UPDATE link_enrichments
+      SET translations_json = ?2,
+          updated_at = ?3
+      WHERE normalized_url = ?1
+    `,
+    args: [
+      input.normalizedUrl,
+      input.translationsJson,
+      input.updatedAt,
+    ],
+  })
+
+  const row = await getLinkEnrichmentByNormalizedUrl(input.client, input.normalizedUrl)
+  if (!row) {
+    throw new Error("Link enrichment is missing after translation update")
   }
   return row
 }
@@ -300,7 +332,50 @@ function parseSummary(value: string | null): LinkEnrichmentSnapshot["summary"] {
   }
 }
 
+export function parseLinkEnrichmentTranslations(value: string | null): Record<string, LinkEnrichmentTranslation> {
+  if (!value) {
+    return {}
+  }
+
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {}
+    }
+
+    const translations: Record<string, LinkEnrichmentTranslation> = {}
+    for (const [locale, entry] of Object.entries(parsed)) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        continue
+      }
+      const record = entry as Record<string, unknown>
+      const summary = record.summary && typeof record.summary === "object" && !Array.isArray(record.summary)
+        ? record.summary as Record<string, unknown>
+        : {}
+      translations[locale] = {
+        locale,
+        title: typeof record.title === "string" ? record.title : null,
+        description: typeof record.description === "string" ? record.description : null,
+        summary: {
+          summary_paragraph: typeof summary.summary_paragraph === "string" ? summary.summary_paragraph : null,
+          short_summary: typeof summary.short_summary === "string" ? summary.short_summary : null,
+          key_points: Array.isArray(summary.key_points)
+            ? summary.key_points.filter((item): item is string => typeof item === "string")
+            : [],
+        },
+        generated_at: typeof record.generated_at === "string" ? record.generated_at : null,
+        model: typeof record.model === "string" ? record.model : null,
+        provider: record.provider === "openrouter" ? "openrouter" : null,
+      }
+    }
+    return translations
+  } catch {
+    return {}
+  }
+}
+
 export function buildLinkEnrichmentSnapshot(record: LinkEnrichmentRecord): LinkEnrichmentSnapshot {
+  const translations = parseLinkEnrichmentTranslations(record.translations_json)
   return {
     version: 1,
     provider: record.provider,
@@ -317,6 +392,7 @@ export function buildLinkEnrichmentSnapshot(record: LinkEnrichmentRecord): LinkE
       status: record.summary_status,
       model: record.summary_model,
     },
+    ...(Object.keys(translations).length ? { translations } : {}),
     error: record.error,
     fetched_at: record.fetched_at,
   }

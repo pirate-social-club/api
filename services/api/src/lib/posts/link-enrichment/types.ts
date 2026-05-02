@@ -2,6 +2,20 @@ export type LinkEnrichmentProvider = "firecrawl" | "native" | "manual"
 export type LinkEnrichmentStatus = "pending" | "ready" | "failed" | "unavailable"
 export type LinkSummaryStatus = "pending" | "ready" | "failed" | "unavailable"
 
+export type LinkEnrichmentTranslation = {
+  locale: string
+  title: string | null
+  description: string | null
+  summary: {
+    summary_paragraph: string | null
+    short_summary: string | null
+    key_points: string[]
+  }
+  generated_at: string | null
+  model: string | null
+  provider: "openrouter" | null
+}
+
 export type LinkEnrichmentSnapshot = {
   version: 1
   provider: LinkEnrichmentProvider
@@ -21,6 +35,7 @@ export type LinkEnrichmentSnapshot = {
     generated_at: string | null
     model: string | null
   }
+  translations?: Record<string, LinkEnrichmentTranslation>
   error: string | null
   fetched_at: string | null
 }
@@ -38,6 +53,7 @@ export type LinkEnrichmentRecord = {
   image_url: string | null
   markdown: string | null
   summary_json: string | null
+  translations_json: string | null
   summary_status: LinkSummaryStatus | null
   summary_model: string | null
   error: string | null
@@ -62,6 +78,18 @@ export type LinkSummaryProviderResult = {
   model: string
   summaryParagraph: string
   shortSummary: string
+  keyPoints: string[]
+  providerResult: Record<string, unknown> | null
+}
+
+export type LinkSummaryTranslationProviderResult = {
+  provider: "openrouter"
+  model: string
+  locale: string
+  title: string | null
+  description: string | null
+  summaryParagraph: string | null
+  shortSummary: string | null
   keyPoints: string[]
   providerResult: Record<string, unknown> | null
 }

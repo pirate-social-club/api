@@ -9,6 +9,7 @@ import {
   updateCommentSwarmBodyRef,
 } from "../../comments/community-comment-store"
 import { materializeCommentTranslation } from "../../localization/comment-translation-materializer"
+import { CONTENT_TRANSLATION_PREWARM_LOCALES, sameLanguageLocale } from "../../localization/content-locale"
 import {
   materializeCommunityTextTranslations,
   parseCommunityTextMaterializePayload,
@@ -19,6 +20,7 @@ import {
   generateAndStoreLinkSummary,
   listLinkSummaryFanoutUsages,
   markLinkSummaryFanoutSynced,
+  translateAndStoreLinkSummary,
   writeLinkEnrichmentSnapshotToPost,
 } from "../../posts/link-enrichment/summary-service"
 import { upsertLinkEnrichmentUsage } from "../../posts/link-enrichment/repository"
@@ -36,6 +38,7 @@ import { getControlPlaneClient } from "../../runtime-deps"
 import { loadCommunityProjection } from "../create/service"
 import { openCommunityDb } from "../community-db-factory"
 import type { CommunityJobRow } from "./store"
+import { enqueueCommunityJob } from "./store"
 import {
   type CommunityJobRepository,
   THREAD_SNAPSHOT_MIN_INTERVAL_MS,
@@ -76,6 +79,12 @@ type EmbedHydratePayload = {
 
 type LinkSummaryMaterializePayload = {
   normalized_url?: string | null
+  post_id?: string | null
+}
+
+type LinkSummaryTranslationMaterializePayload = {
+  normalized_url?: string | null
+  locale?: string | null
   post_id?: string | null
 }
 
@@ -487,7 +496,118 @@ async function runLinkSummaryMaterialize(input: {
     }
   }
 
+  if (summary.resultRef.startsWith("ready:") || summary.resultRef === "skipped:summary_ready") {
+    const queueDb = await openCommunityDb(input.env, input.communityRepository, input.job.community_id)
+    try {
+      for (const locale of CONTENT_TRANSLATION_PREWARM_LOCALES) {
+        if (sameLanguageLocale("en", locale)) {
+          continue
+        }
+        await enqueueCommunityJob({
+          client: queueDb.client,
+          communityId: input.job.community_id,
+          jobType: "link_summary_translation_materialize",
+          subjectType: "link_enrichment_translation",
+          subjectId: `${normalizedUrl}:${locale}`,
+          payloadJson: JSON.stringify({
+            normalized_url: normalizedUrl,
+            locale,
+            post_id: payloadPostId,
+          }),
+          createdAt: now,
+        })
+      }
+    } finally {
+      queueDb.close()
+    }
+  }
+
   return `${summary.resultRef}:synced:${synced}:failed:${failed}`
+}
+
+async function runLinkSummaryTranslationMaterialize(input: {
+  job: CommunityJobRow
+  env: Env
+  communityRepository: CommunityJobRepository
+}): Promise<string | null> {
+  const payload = parseJobPayload<LinkSummaryTranslationMaterializePayload>(input.job.payload_json)
+  const normalizedUrl = String(payload?.normalized_url ?? "").trim()
+  const locale = String(payload?.locale ?? "").trim()
+  if (!normalizedUrl || !locale) {
+    throw internalError("Link summary translation job is missing normalized URL or locale")
+  }
+  if (!input.env.CONTROL_PLANE_DATABASE_URL) {
+    throw internalError("Control-plane database is missing for link summary translation materialize")
+  }
+
+  const controlPlaneClient = getControlPlaneClient(input.env)
+  const now = nowIso()
+  const translated = await translateAndStoreLinkSummary({
+    env: input.env,
+    controlPlaneClient,
+    normalizedUrl,
+    locale,
+    now,
+  })
+  if (!translated.snapshotJson) {
+    return translated.resultRef
+  }
+
+  const payloadPostId = typeof payload?.post_id === "string" && payload.post_id.trim()
+    ? payload.post_id.trim()
+    : null
+  if (payloadPostId) {
+    await upsertLinkEnrichmentUsage({
+      client: controlPlaneClient,
+      normalizedUrl,
+      communityId: input.job.community_id,
+      postId: payloadPostId,
+      linkEnrichmentId: null,
+      snapshotSyncedAt: null,
+      now,
+    })
+  }
+
+  const usages = await listLinkSummaryFanoutUsages({
+    controlPlaneClient,
+    normalizedUrl,
+  })
+  let synced = 0
+  let failed = 0
+  for (const usage of usages) {
+    try {
+      const db = await openCommunityDb(input.env, input.communityRepository, usage.community_id)
+      try {
+        await writeLinkEnrichmentSnapshotToPost({
+          client: db.client,
+          postId: usage.post_id,
+          snapshotJson: translated.snapshotJson,
+          syncedAt: now,
+        })
+        await markLinkSummaryFanoutSynced({
+          controlPlaneClient,
+          normalizedUrl,
+          communityId: usage.community_id,
+          postId: usage.post_id,
+          syncedAt: now,
+        })
+        synced += 1
+      } finally {
+        db.close()
+      }
+    } catch (error) {
+      failed += 1
+      console.error("[link-summary-translation] failed to fan out enrichment snapshot", {
+        normalized_url: normalizedUrl,
+        locale,
+        community_id: usage.community_id,
+        post_id: usage.post_id,
+        error,
+      })
+    }
+  }
+
+  return `${translated.resultRef}:synced:${synced}:failed:${failed}`
 }
 
 async function runCommentTranslationMaterialize(input: {
@@ -580,6 +700,8 @@ export async function runCommunityJob(input: {
       return runPostTranslationMaterialize(input)
     case "link_summary_materialize":
       return runLinkSummaryMaterialize(input)
+    case "link_summary_translation_materialize":
+      return runLinkSummaryTranslationMaterialize(input)
     case "comment_translation_materialize":
       return runCommentTranslationMaterialize(input)
     case "community_text_translation_materialize":

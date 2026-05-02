@@ -14,6 +14,7 @@ export type CommunityJobType =
   | "comment_translation_materialize"
   | "community_text_translation_materialize"
   | "link_summary_materialize"
+  | "link_summary_translation_materialize"
   | "song_preview_generate"
 export type CommunityJobStatus = "queued" | "running" | "succeeded" | "failed"
 

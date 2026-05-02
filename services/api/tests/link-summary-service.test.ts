@@ -6,6 +6,7 @@ import { runCommunityJob } from "../src/lib/communities/jobs/handlers"
 import { insertPost } from "../src/lib/posts/community-post-store"
 import {
   generateAndStoreLinkSummary,
+  translateAndStoreLinkSummary,
 } from "../src/lib/posts/link-enrichment/summary-service"
 import type { Env } from "../src/types"
 import {
@@ -42,6 +43,7 @@ async function createControlPlaneClient(url = "file::memory:") {
       image_url TEXT,
       markdown TEXT,
       summary_json TEXT,
+      translations_json TEXT,
       summary_status TEXT,
       summary_model TEXT,
       error TEXT,
@@ -127,6 +129,68 @@ describe("link summary materialization", () => {
     expect(summary.summary_paragraph).toBe("A neutral paragraph summary.")
     expect(summary.short_summary).toBe("A short summary.")
     expect(summary.key_points).toEqual(["First point.", "Second point.", "Third point."])
+  })
+
+  test("stores localized link summary translations in the snapshot", async () => {
+    const controlPlaneClient = await createControlPlaneClient()
+    await controlPlaneClient.execute({
+      sql: `
+        INSERT INTO link_enrichments (
+          link_enrichment_id, normalized_url, canonical_url, provider, status,
+          title, description, publisher, published_at, image_url,
+          markdown, summary_json, translations_json, summary_status, summary_model, error,
+          fetched_at, summarized_at, created_at, updated_at
+        ) VALUES (
+          'len_translation', 'https://example.com/story', 'https://example.com/story',
+          'firecrawl', 'ready', 'Israel seizes Gaza aid ships', 'Story description', 'Reuters',
+          '2026-05-02T09:00:00.000Z', 'https://cdn.example.com/story.jpg',
+          '# Story title\\n\\nArticle body.',
+          '{"summary_paragraph":"A neutral paragraph summary.","short_summary":"A short summary.","key_points":["Ships seized off Greece","Israel cites blockade","Turkey condemns move"],"generated_at":"2026-05-02T10:00:00.000Z","model":"test/summary"}',
+          NULL, 'ready', 'test/summary', NULL,
+          '2026-05-02T09:00:00.000Z', '2026-05-02T10:00:00.000Z',
+          '2026-05-02T09:00:00.000Z', '2026-05-02T10:00:00.000Z'
+        )
+      `,
+    })
+
+    const result = await translateAndStoreLinkSummary({
+      env: {
+        OPENROUTER_API_KEY: "or-test",
+        OPENROUTER_BASE_URL: "https://openrouter.test/v1",
+        OPENROUTER_LINK_SUMMARY_TRANSLATION_MODEL: "test/translation-model",
+      },
+      controlPlaneClient,
+      normalizedUrl: "https://example.com/story",
+      locale: "ar",
+      now: "2026-05-02T11:00:00.000Z",
+      fetcher: (async () => new Response(JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                target_locale: "ar",
+                title: "إسرائيل تستولي على سفن مساعدات غزة",
+                description: "وصف الخبر.",
+                summary_paragraph: "ملخص عربي محايد.",
+                short_summary: "ملخص قصير.",
+                key_points: ["مصادرة سفن قبالة اليونان", "إسرائيل تستند إلى الحصار", "تركيا تدين التحرك"],
+              }),
+            },
+          },
+        ],
+      }), {
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch,
+    })
+
+    expect(result.resultRef).toBe("ready:https://example.com/story:ar")
+    const rows = await controlPlaneClient.execute("SELECT translations_json FROM link_enrichments")
+    const translations = JSON.parse(String(rows.rows[0]?.translations_json)) as Record<string, { title: string }>
+    expect(translations.ar?.title).toBe("إسرائيل تستولي على سفن مساعدات غزة")
+    const snapshot = JSON.parse(String(result.snapshotJson)) as {
+      translations?: Record<string, { summary: { key_points: string[] } }>
+    }
+    expect(snapshot.translations?.ar?.summary.key_points).toEqual(["مصادرة سفن قبالة اليونان", "إسرائيل تستند إلى الحصار", "تركيا تدين التحرك"])
   })
 
   test("marks ready enrichments without markdown as unavailable", async () => {

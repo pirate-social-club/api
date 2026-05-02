@@ -4,6 +4,7 @@ import { fetchLinkPreviewMetadata } from "../link-preview-fetcher"
 import { updatePostLinkPreviewMetadata } from "../community-post-store"
 import { enqueueCommunityJob } from "../../communities/jobs/store"
 import type { DbExecutor } from "../../db-helpers"
+import { CONTENT_TRANSLATION_PREWARM_LOCALES, sameLanguageLocale } from "../../localization/content-locale"
 import { fetchFirecrawlLinkEnrichment } from "./firecrawl-provider"
 import {
   buildLinkEnrichmentSnapshot,
@@ -72,6 +73,36 @@ async function enqueueSummaryIfNeeded(input: {
   })
 }
 
+async function enqueueSummaryTranslationsIfNeeded(input: {
+  communityClient: DbExecutor
+  communityId?: string | null
+  postId: string
+  record: LinkEnrichmentRecord
+  createdAt: string
+}): Promise<void> {
+  if (!input.communityId || input.record.summary_status !== "ready") {
+    return
+  }
+  for (const locale of CONTENT_TRANSLATION_PREWARM_LOCALES) {
+    if (sameLanguageLocale("en", locale)) {
+      continue
+    }
+    await enqueueCommunityJob({
+      client: input.communityClient,
+      communityId: input.communityId,
+      jobType: "link_summary_translation_materialize",
+      subjectType: "link_enrichment_translation",
+      subjectId: `${input.record.normalized_url}:${locale}`,
+      payloadJson: JSON.stringify({
+        normalized_url: input.record.normalized_url,
+        locale,
+        post_id: input.postId,
+      }),
+      createdAt: input.createdAt,
+    })
+  }
+}
+
 export async function hydrateGenericLinkEnrichment(input: {
   env?: Env
   controlPlaneClient?: Client | null
@@ -101,6 +132,13 @@ export async function hydrateGenericLinkEnrichment(input: {
         syncedAt: input.checkedAt,
       })
       await enqueueSummaryIfNeeded({
+        communityClient: input.communityClient,
+        communityId: input.communityId,
+        postId: input.postId,
+        record: cached,
+        createdAt: input.checkedAt,
+      })
+      await enqueueSummaryTranslationsIfNeeded({
         communityClient: input.communityClient,
         communityId: input.communityId,
         postId: input.postId,
@@ -141,6 +179,13 @@ export async function hydrateGenericLinkEnrichment(input: {
         syncedAt: input.checkedAt,
       })
       await enqueueSummaryIfNeeded({
+        communityClient: input.communityClient,
+        communityId: input.communityId,
+        postId: input.postId,
+        record,
+        createdAt: input.checkedAt,
+      })
+      await enqueueSummaryTranslationsIfNeeded({
         communityClient: input.communityClient,
         communityId: input.communityId,
         postId: input.postId,
@@ -202,6 +247,13 @@ export async function hydrateGenericLinkEnrichment(input: {
       postId: input.postId,
       record,
       syncedAt: input.checkedAt,
+    })
+    await enqueueSummaryTranslationsIfNeeded({
+      communityClient: input.communityClient,
+      communityId: input.communityId,
+      postId: input.postId,
+      record,
+      createdAt: input.checkedAt,
     })
   } else {
     await updatePostLinkPreviewMetadata({

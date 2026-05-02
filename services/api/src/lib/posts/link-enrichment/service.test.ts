@@ -27,6 +27,7 @@ async function createControlPlaneClient() {
       image_url TEXT,
       markdown TEXT,
       summary_json TEXT,
+      translations_json TEXT,
       summary_status TEXT,
       summary_model TEXT,
       error TEXT,
