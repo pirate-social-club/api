@@ -35,7 +35,9 @@ function serializePublicNamespaceRow(row: PublicNamespaceRow, fallbackRootLabel:
   return {
     root_label: rootLabel,
     namespace_verification: typeof row.namespace_verification_id === "string"
-      ? publicId(decodePublicNamespaceVerificationId(row.namespace_verification_id), "nv")
+      ? row.namespace_verification_id.startsWith("nv_")
+        ? row.namespace_verification_id
+        : publicId(decodePublicNamespaceVerificationId(row.namespace_verification_id), "nv")
       : null,
     community: {
       id: publicCommunityId(communityId),

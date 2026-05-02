@@ -27,6 +27,7 @@ Mounted in `services/api/src/index.ts`:
 - `/public-agents`
 - `/public-comments`
 - `/public-communities`
+- `/public-namespaces`
 - `/public-posts`
 - `/public-profiles`
 - `/profile-media`
@@ -61,6 +62,7 @@ Mounted in `services/api/src/index.ts`:
 | `/posts/:postId` and `/posts/:postId/vote` | `src/routes/posts.ts` | `tests/routes/jobs-posts-routes.test.ts`, `tests/routes/communities/community-routes.test.ts` | direct | Dedicated post read/vote coverage now exists, with broader post lifecycle coverage still present in community flows. |
 | `/public-posts/:postId` | `src/routes/public-posts.ts` | `tests/routes/communities/community-routes.test.ts`, `tests/routes/communities/public-communities-routes.test.ts`, `tests/routes/jobs-posts-routes.test.ts` | direct/indirect | Public visibility behavior is exercised from community/post flows. |
 | `/public-communities/*` | `src/routes/public-communities.ts` | `tests/routes/communities/public-communities-routes.test.ts` | direct | Covers public community reads/listings/posts. |
+| `/public-namespaces/*` | `src/routes/public-namespaces.ts` | `tests/routes/public-namespaces-routes.test.ts` | direct | Resolves verified, unexpired, Pirate-routed HNS namespaces for gateway and Freedom clients. |
 | `/profiles/*` | `src/routes/profiles.ts` | `tests/routes/profiles/profiles-routes.test.ts` | direct | Includes patch, read, rename, upgrade quote, linked handles, primary handle. |
 | `/public-profiles/:handleLabel` | `src/routes/public-profiles.ts` | `tests/routes/profiles/profiles-routes.test.ts`, `tests/routes/profiles/public-profiles-routes.test.ts` | direct | Covered alongside profile/global-handle tests. |
 | `/profile-media/*` | `src/routes/profile-media.ts` | `tests/routes/profiles/profile-media-routes.test.ts` | direct | Upload and fetch covered. |
