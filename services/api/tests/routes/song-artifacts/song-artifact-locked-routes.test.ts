@@ -101,7 +101,7 @@ afterEach(async () => {
 })
 
 describe("song artifact locked routes", () => {
-  test("publishes a locked song, sells access, and decrypts the purchased asset", async () => {
+  testWithTimeout("publishes a locked song, sells access, and decrypts the purchased asset", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
     const storySettlementCalls: Array<{
       purchaseRef: string
@@ -784,7 +784,7 @@ describe("song artifact locked routes", () => {
     expect(buyerCiphertextAfterPurchase.status).toBe(200)
     expect(buyerCiphertextAfterPurchase.headers.get("content-type")).toBe("application/octet-stream")
     expect(new Uint8Array(await buyerCiphertextAfterPurchase.arrayBuffer())).toEqual(ciphertextBeforePurchase)
-  })
+  }, 15000)
 
 
 

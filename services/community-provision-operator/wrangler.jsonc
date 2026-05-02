@@ -1,0 +1,28 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pirate-community-provision-operator",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-09",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "EXPECTED_TURSO_ORGANIZATION_SLUG": "pirate-dev"
+  },
+  "env": {
+    "staging": {
+      "name": "community-provision-operator-staging",
+      "vars": {
+        "EXPECTED_TURSO_ORGANIZATION_SLUG": "pirate-social"
+      }
+    },
+    "production": {
+      "name": "community-provision-operator",
+      "vars": {
+        "EXPECTED_TURSO_ORGANIZATION_SLUG": "pirate-prod"
+      }
+    }
+  }
+}

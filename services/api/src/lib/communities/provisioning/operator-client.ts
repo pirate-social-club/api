@@ -95,6 +95,9 @@ function validateExpectedOrganizationSlug(env: Env, result: ProvisionCommunityOp
 }
 
 export function isCommunityProvisionOperatorConfigured(env: Env): boolean {
+  if (env.COMMUNITY_PROVISION_OPERATOR) {
+    return true
+  }
   if (!trim(env.COMMUNITY_PROVISION_OPERATOR_BASE_URL)) {
     return false
   }
@@ -115,34 +118,144 @@ export async function provisionCommunityViaOperator(input: {
   groupLocation: string
   bootstrapPayload: OperatorBootstrapPayload
 }): Promise<ProvisionCommunityOperatorResult> {
-  const baseUrl = normalizeBaseUrl(input.env)
   const requestId = makeId("opr")
+
+  const response = await invokeOperator(input.env, {
+    path: "/internal/v0/community-provisioning/provision",
+    requestId,
+    body: {
+      community_id: input.communityId,
+      creator_user_id: input.creatorUserId,
+      display_name: input.displayName,
+      namespace_verification_id: input.namespaceVerificationId,
+      group_location: input.groupLocation,
+      bootstrap_payload: input.bootstrapPayload,
+    },
+  })
+
+  const body = parsedRecord(response.parsed)
+
+  if (!response.ok) {
+    const errorCode = "error_code" in body
+      ? String(body.error_code)
+      : response.status === 401
+        ? "community_provision_operator_unauthorized"
+        : "community_provision_operator_http_error"
+    throw internalError(errorCode, operatorErrorDetails({
+      status: response.status,
+      requestId,
+      communityId: input.communityId,
+      parsed: response.parsed,
+    }))
+  }
+
+  if (!response.parsed || typeof response.parsed !== "object") {
+    throw internalError("community_provision_operator_invalid_response")
+  }
+
+  const nullableText = (value: unknown): string | null =>
+    value == null ? null : String(value)
+
+  const result = {
+    communityId: String(body.community_id ?? ""),
+    jobId: String(body.job_id ?? ""),
+    bindingId: String(body.binding_id ?? ""),
+    credentialId: String(body.credential_id ?? ""),
+    organizationSlug: String(body.organization_slug ?? ""),
+    groupName: String(body.group_name ?? ""),
+    groupId: nullableText(body.group_id),
+    databaseName: String(body.database_name ?? ""),
+    databaseId: nullableText(body.database_id),
+    databaseUrl: String(body.database_url ?? ""),
+    location: nullableText(body.location),
+    tokenName: String(body.token_name ?? ""),
+    plaintextToken: String(body.plaintext_token ?? ""),
+    issuedAt: String(body.issued_at ?? ""),
+    expiresAt: nullableText(body.expires_at),
+    rotationNumber: Number(body.rotation_number ?? 0),
+  }
+
+  validateExpectedOrganizationSlug(input.env, result)
+  return result
+}
+
+async function invokeOperator(
+  env: Env,
+  input: {
+    path: string
+    requestId: string
+    body: unknown
+  },
+): Promise<{ ok: boolean; status: number; parsed: unknown }> {
+  if (env.COMMUNITY_PROVISION_OPERATOR) {
+    return invokeOperatorViaBinding(env, input)
+  }
+  return invokeOperatorViaHttp(env, input)
+}
+
+async function invokeOperatorViaBinding(
+  env: Env,
+  input: {
+    path: string
+    requestId: string
+    body: unknown
+  },
+): Promise<{ ok: boolean; status: number; parsed: unknown }> {
   const authToken = requireText(
-    input.env.COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN,
+    env.COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN,
+    "COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN",
+  )
+  const response = await env.COMMUNITY_PROVISION_OPERATOR!.fetch(
+    new Request(`https://internal${input.path}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authToken}`,
+        "x-request-id": input.requestId,
+      },
+      body: JSON.stringify(input.body),
+    }),
+  )
+
+  const raw = await response.text()
+  let parsed: unknown = null
+  try {
+    parsed = raw ? JSON.parse(raw) : null
+  } catch {
+    parsed = { raw }
+  }
+
+  return { ok: response.ok, status: response.status, parsed }
+}
+
+async function invokeOperatorViaHttp(
+  env: Env,
+  input: {
+    path: string
+    requestId: string
+    body: unknown
+  },
+): Promise<{ ok: boolean; status: number; parsed: unknown }> {
+  const baseUrl = normalizeBaseUrl(env)
+  const authToken = requireText(
+    env.COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN,
     "COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN",
   )
   const controller = new AbortController()
   const timeout = setTimeout(
     () => controller.abort("timeout"),
-    parseTimeoutMs(input.env.COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS, 60000),
+    parseTimeoutMs(env.COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS, 60000),
   )
 
   try {
-    const response = await fetch(`${baseUrl}/internal/v0/community-provisioning/provision`, {
+    const response = await fetch(`${baseUrl}${input.path}`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${authToken}`,
-        "x-request-id": requestId,
+        "x-request-id": input.requestId,
       },
-      body: JSON.stringify({
-        community_id: input.communityId,
-        creator_user_id: input.creatorUserId,
-        display_name: input.displayName,
-        namespace_verification_id: input.namespaceVerificationId,
-        group_location: input.groupLocation,
-        bootstrap_payload: input.bootstrapPayload,
-      }),
+      body: JSON.stringify(input.body),
       signal: controller.signal,
     })
 
@@ -154,55 +267,12 @@ export async function provisionCommunityViaOperator(input: {
       parsed = { raw }
     }
 
-    if (!response.ok) {
-      const body = parsedRecord(parsed)
-      const errorCode = "error_code" in body
-        ? String(body.error_code)
-        : response.status === 401
-          ? "community_provision_operator_unauthorized"
-          : "community_provision_operator_http_error"
-      throw internalError(errorCode, operatorErrorDetails({
-        status: response.status,
-        requestId,
-        communityId: input.communityId,
-        parsed,
-      }))
-    }
-
-    if (!parsed || typeof parsed !== "object") {
-      throw internalError("community_provision_operator_invalid_response")
-    }
-
-    const body = parsed as Record<string, unknown>
-    const nullableText = (value: unknown): string | null =>
-      value == null ? null : String(value)
-
-    const result = {
-      communityId: String(body.community_id ?? ""),
-      jobId: String(body.job_id ?? ""),
-      bindingId: String(body.binding_id ?? ""),
-      credentialId: String(body.credential_id ?? ""),
-      organizationSlug: String(body.organization_slug ?? ""),
-      groupName: String(body.group_name ?? ""),
-      groupId: nullableText(body.group_id),
-      databaseName: String(body.database_name ?? ""),
-      databaseId: nullableText(body.database_id),
-      databaseUrl: String(body.database_url ?? ""),
-      location: nullableText(body.location),
-      tokenName: String(body.token_name ?? ""),
-      plaintextToken: String(body.plaintext_token ?? ""),
-      issuedAt: String(body.issued_at ?? ""),
-      expiresAt: nullableText(body.expires_at),
-      rotationNumber: Number(body.rotation_number ?? 0),
-    }
-
-    validateExpectedOrganizationSlug(input.env, result)
-    return result
+    return { ok: response.ok, status: response.status, parsed }
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       throw internalError("community_provision_operator_timeout", {
-        operator_request_id: requestId,
-        community_id: input.communityId,
+        operator_request_id: input.requestId,
+        community_id: String((input.body as Record<string, unknown>)?.community_id ?? ""),
       })
     }
     throw error

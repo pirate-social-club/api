@@ -46,6 +46,12 @@
   "env": {
     "staging": {
       "name": "pirate-api-staging",
+      "services": [
+        {
+          "binding": "COMMUNITY_PROVISION_OPERATOR",
+          "service": "community-provision-operator-staging"
+        }
+      ],
       "vars": {
         "ENVIRONMENT": "staging",
         "SENTRY_DSN": "https://0e27176cffcca727ff2c1a10e334f831@o4511308510265344.ingest.us.sentry.io/4511308511379456",
@@ -85,6 +91,12 @@
     },
     "production": {
       "name": "api-core",
+      "services": [
+        {
+          "binding": "COMMUNITY_PROVISION_OPERATOR",
+          "service": "community-provision-operator"
+        }
+      ],
       "vars": {
         "ENVIRONMENT": "production",
         "SENTRY_DSN": "https://0e27176cffcca727ff2c1a10e334f831@o4511308510265344.ingest.us.sentry.io/4511308511379456",

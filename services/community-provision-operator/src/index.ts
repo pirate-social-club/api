@@ -1,0 +1,270 @@
+import { provisionCommunityRuntime } from "./lib/provision-runtime";
+import { rotateCommunityToken } from "./lib/rotate-token";
+import { doctorControlPlane } from "./lib/doctor";
+import { reapStaleCommunityProvisioningJobs } from "./lib/reap-stale";
+
+export type Env = {
+  CONTROL_PLANE_DATABASE_URL: string;
+  TURSO_CONTROL_PLANE_AUTH_TOKEN?: string;
+  TURSO_PLATFORM_API_TOKEN: string;
+  TURSO_ORGANIZATION_SLUG: string;
+  EXPECTED_TURSO_ORGANIZATION_SLUG: string;
+  TURSO_COMMUNITY_DB_WRAP_KEY?: string;
+  TURSO_COMMUNITY_DB_WRAP_KEY_VERSION?: string;
+  COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN: string;
+};
+
+export type OperatorDeps = {
+  provisionFn?: typeof provisionCommunityRuntime;
+  rotateFn?: typeof rotateCommunityToken;
+  doctorFn?: typeof doctorControlPlane;
+  reapStaleFn?: typeof reapStaleCommunityProvisioningJobs;
+};
+
+type ProvisionRouteBody = {
+  community_id?: string;
+  creator_user_id?: string;
+  display_name?: string;
+  namespace_verification_id?: string | null;
+  group_location?: string;
+  database_token_expiration?: string | null;
+  bootstrap_payload?: {
+    description?: string | null;
+    avatar_ref?: string | null;
+    banner_ref?: string | null;
+    membership_mode?: "open" | "request" | "gated";
+    default_age_gate_policy?: "none" | "18_plus";
+    gate_policy?: Record<string, unknown> | null;
+    membership_unique_human_provider?: "self" | "very" | null;
+    posting_unique_human_provider?: "self" | "very" | null;
+    handle_policy_template?: "standard" | "premium" | "membership_gated" | "custom";
+    handle_pricing_model?: string | null;
+    namespace_label?: string | null;
+    initial_settings?: Record<string, unknown> | null;
+  } | null;
+};
+
+type RotateRouteBody = {
+  community_id?: string;
+  reason?: string | null;
+  database_token_expiration?: string | null;
+};
+
+type DoctorRouteBody = {
+  community_id?: string | null;
+};
+
+type ReapStaleRouteBody = {
+  stale_after_ms?: number | string | null;
+};
+
+function json(body: unknown, init?: ResponseInit): Response {
+  return new Response(JSON.stringify(body), {
+    ...init,
+    headers: {
+      "content-type": "application/json",
+      ...(init?.headers ?? {}),
+    },
+  });
+}
+
+function trim(value: string | null | undefined): string {
+  return String(value ?? "").trim();
+}
+
+function requireText(value: string | null | undefined, label: string): string {
+  const normalized = trim(value);
+  if (!normalized) {
+    throw new Error(`${label} is required`);
+  }
+  return normalized;
+}
+
+function requireOperatorAuth(request: Request, env: Env): Response | null {
+  const expected = trim(env.COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN);
+  if (!expected) {
+    return json({ error_code: "operator_auth_not_configured" }, { status: 500 });
+  }
+
+  return request.headers.get("authorization") === `Bearer ${expected}`
+    ? null
+    : json({ error_code: "unauthorized" }, { status: 401 });
+}
+
+function optionalPositiveInt(value: number | string | null | undefined, label: string): number | null {
+  if (value == null || trim(String(value)) === "") {
+    return null;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return parsed;
+}
+
+function requireOrgGuard(env: Env): void {
+  const actual = requireText(env.TURSO_ORGANIZATION_SLUG, "TURSO_ORGANIZATION_SLUG");
+  const expected = requireText(env.EXPECTED_TURSO_ORGANIZATION_SLUG, "EXPECTED_TURSO_ORGANIZATION_SLUG");
+  if (actual !== expected) {
+    throw new Error(`TURSO_ORGANIZATION_SLUG mismatch: expected ${expected}, got ${actual}`);
+  }
+}
+
+export function createHandler(deps: OperatorDeps = {}) {
+  const provisionFn = deps.provisionFn ?? provisionCommunityRuntime;
+  const rotateFn = deps.rotateFn ?? rotateCommunityToken;
+  const doctorFn = deps.doctorFn ?? doctorControlPlane;
+  const reapStaleFn = deps.reapStaleFn ?? reapStaleCommunityProvisioningJobs;
+
+  return async function handle(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+
+    if (url.pathname === "/health") {
+      return json({
+        ok: true,
+        runtime: "cloudflare-worker",
+        requires_bearer_auth: Boolean(trim(env.COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN)),
+        turso_organization_slug: trim(env.TURSO_ORGANIZATION_SLUG),
+      });
+    }
+
+    const authResponse = requireOperatorAuth(request, env);
+    if (authResponse) {
+      return authResponse;
+    }
+
+    if (request.method !== "POST") {
+      return new Response("Method Not Allowed", { status: 405 });
+    }
+
+    try {
+      if (url.pathname === "/internal/v0/community-provisioning/provision") {
+        const body = await request.json() as ProvisionRouteBody;
+        const requestId = trim(request.headers.get("x-request-id")) || null;
+        requireOrgGuard(env);
+        const result = await provisionFn({
+          controlPlaneDatabaseUrl: requireText(env.CONTROL_PLANE_DATABASE_URL, "CONTROL_PLANE_DATABASE_URL"),
+          controlPlaneAuthToken: trim(env.TURSO_CONTROL_PLANE_AUTH_TOKEN) || null,
+          tursoPlatformApiToken: requireText(env.TURSO_PLATFORM_API_TOKEN, "TURSO_PLATFORM_API_TOKEN"),
+          tursoOrganizationSlug: requireText(env.TURSO_ORGANIZATION_SLUG, "TURSO_ORGANIZATION_SLUG"),
+          requestId,
+          communityId: requireText(body.community_id, "community_id"),
+          creatorUserId: requireText(body.creator_user_id, "creator_user_id"),
+          displayName: requireText(body.display_name, "display_name"),
+          namespaceVerificationId: trim(body.namespace_verification_id ?? "") || null,
+          groupLocation: requireText(body.group_location, "group_location"),
+          description: body.bootstrap_payload?.description ?? null,
+          avatarRef: body.bootstrap_payload?.avatar_ref ?? null,
+          bannerRef: body.bootstrap_payload?.banner_ref ?? null,
+          membershipMode: body.bootstrap_payload?.membership_mode ?? "open",
+          defaultAgeGatePolicy: body.bootstrap_payload?.default_age_gate_policy ?? "none",
+          gatePolicy: body.bootstrap_payload?.gate_policy ?? null,
+          membershipUniqueHumanProvider: body.bootstrap_payload?.membership_unique_human_provider ?? null,
+          postingUniqueHumanProvider: body.bootstrap_payload?.posting_unique_human_provider ?? null,
+          handlePolicyTemplate: body.bootstrap_payload?.handle_policy_template ?? "standard",
+          handlePricingModel: body.bootstrap_payload?.handle_pricing_model ?? null,
+          namespaceLabel: body.bootstrap_payload?.namespace_label ?? null,
+          initialSettings: body.bootstrap_payload?.initial_settings ?? null,
+          databaseTokenExpiration: trim(body.database_token_expiration ?? "") || null,
+        });
+        return json({
+          community_id: result.communityId,
+          organization_slug: result.organizationSlug,
+          group_name: result.groupName,
+          group_id: result.groupId,
+          database_name: result.databaseName,
+          database_id: result.databaseId,
+          database_url: result.databaseUrl,
+          location: result.location,
+          token_name: result.tokenName,
+          plaintext_token: result.plaintextToken,
+          issued_at: result.issuedAt,
+          expires_at: result.expiresAt,
+          rotation_number: result.rotationNumber,
+        });
+      }
+
+      if (url.pathname === "/internal/v0/community-provisioning/rotate-token") {
+        const body = await request.json() as RotateRouteBody;
+        requireOrgGuard(env);
+        const result = await rotateFn({
+          controlPlaneDatabaseUrl: requireText(env.CONTROL_PLANE_DATABASE_URL, "CONTROL_PLANE_DATABASE_URL"),
+          controlPlaneAuthToken: trim(env.TURSO_CONTROL_PLANE_AUTH_TOKEN) || null,
+          tursoPlatformApiToken: requireText(env.TURSO_PLATFORM_API_TOKEN, "TURSO_PLATFORM_API_TOKEN"),
+          tursoCommunityDbWrapKey: requireText(env.TURSO_COMMUNITY_DB_WRAP_KEY, "TURSO_COMMUNITY_DB_WRAP_KEY"),
+          tursoCommunityDbWrapKeyVersion: Number(requireText(env.TURSO_COMMUNITY_DB_WRAP_KEY_VERSION, "TURSO_COMMUNITY_DB_WRAP_KEY_VERSION")),
+          communityId: requireText(body.community_id, "community_id"),
+          reason: trim(body.reason ?? "") || null,
+          databaseTokenExpiration: trim(body.database_token_expiration ?? "") || null,
+        });
+        return json({
+          community_id: result.communityId,
+          binding_id: result.communityDatabaseBindingId,
+          credential_id: result.communityDbCredentialId,
+          database_name: result.databaseName,
+          database_url: result.databaseUrl,
+          token_name: result.tokenName,
+          rotation_number: result.rotationNumber,
+        });
+      }
+
+      if (url.pathname === "/internal/v0/community-provisioning/doctor") {
+        const body = await request.json() as DoctorRouteBody;
+        const result = await doctorFn({
+          controlPlaneDatabaseUrl: requireText(env.CONTROL_PLANE_DATABASE_URL, "CONTROL_PLANE_DATABASE_URL"),
+          controlPlaneAuthToken: trim(env.TURSO_CONTROL_PLANE_AUTH_TOKEN) || null,
+          communityId: trim(body.community_id ?? "") || null,
+          tursoCommunityDbWrapKey: trim(env.TURSO_COMMUNITY_DB_WRAP_KEY) || null,
+        });
+        return json({
+          checked_communities: result.checkedCommunityCount,
+          checked_bindings: result.checkedBindingCount,
+          checked_credentials: result.checkedCredentialCount,
+          findings: result.findings,
+          finding_count: result.findingCount,
+        });
+      }
+
+      if (url.pathname === "/internal/v0/community-provisioning/reap-stale") {
+        const body = await request.json() as ReapStaleRouteBody;
+        const result = await reapStaleFn({
+          controlPlaneDatabaseUrl: requireText(env.CONTROL_PLANE_DATABASE_URL, "CONTROL_PLANE_DATABASE_URL"),
+          controlPlaneAuthToken: trim(env.TURSO_CONTROL_PLANE_AUTH_TOKEN) || null,
+          staleAfterMs: optionalPositiveInt(body.stale_after_ms, "stale_after_ms") ?? undefined,
+        });
+        return json({
+          cutoff: result.cutoff,
+          stale_after_ms: result.staleAfterMs,
+          reaped_job_count: result.reapedJobCount,
+          reaped_jobs: result.reapedJobs.map((job: { jobId: string; communityId: string; updatedAt: string }) => ({
+            job_id: job.jobId,
+            community_id: job.communityId,
+            updated_at: job.updatedAt,
+          })),
+        });
+      }
+
+      return new Response("Not Found", { status: 404 });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "operator request failed";
+      const isValidationError = message.endsWith(" is required")
+        || message.includes("must be valid JSON")
+        || message.endsWith("must be a positive integer")
+        || message.includes("Failed to parse JSON")
+        || message.includes("Unexpected token")
+        || message.includes("invalid JSON");
+      console.error("[community-provision-operator]", request.method, url.pathname, `request_id=${trim(request.headers.get("x-request-id")) || "none"}`, message);
+      return json(
+        {
+          error_code: isValidationError ? "invalid_request" : "community_provision_operator_failed",
+          message,
+        },
+        { status: isValidationError ? 400 : 500 },
+      );
+    }
+  };
+}
+
+export default {
+  fetch: createHandler(),
+};
