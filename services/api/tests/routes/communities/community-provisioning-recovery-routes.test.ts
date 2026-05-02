@@ -9,6 +9,21 @@ import {
 let cleanup: (() => Promise<void>) | null = null
 const testWithTimeout = test as unknown as (name: string, fn: () => Promise<void>, timeout: number) => void
 
+function mockProvisionOperatorBinding(input: {
+  authToken: string
+  onProvision: (body: Record<string, unknown>, request: Request) => Response | Promise<Response>
+}): Fetcher {
+  return {
+    fetch: async (request: Request | string) => {
+      const normalizedRequest = typeof request === "string" ? new Request(request) : request
+      expect(new URL(normalizedRequest.url).pathname).toBe("/internal/v0/community-provisioning/provision")
+      expect(normalizedRequest.headers.get("authorization")).toBe(`Bearer ${input.authToken}`)
+      const body = await normalizedRequest.json() as Record<string, unknown>
+      return input.onProvision(body, normalizedRequest)
+    },
+  } as Fetcher
+}
+
 beforeEach(() => {
   resetRuntimeCaches()
 })
@@ -107,16 +122,15 @@ membership_mode: "request",
   })
 
   testWithTimeout("community create finalizes a stuck community that has real binding and credential but provisioning not active", async () => {
-    const operatorBaseUrl = "https://operator.test"
     const operatorToken = "operator-secret"
     const wrapKey = "11".repeat(32)
     const originalFetch = globalThis.fetch
     let operatorCallCount = 0
-
-    globalThis.fetch = (async (input, init) => {
-      const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
-      if (requestUrl.startsWith(`${operatorBaseUrl}/internal/v0/community-provisioning/provision`)) {
+    const operator = mockProvisionOperatorBinding({
+      authToken: operatorToken,
+      onProvision: () => {
         operatorCallCount += 1
+
         return new Response(JSON.stringify({
           community_id: "cmt_finalize_test",
           id: "job_finalize_test",
@@ -137,8 +151,11 @@ membership_mode: "request",
         }), {
           headers: { "content-type": "application/json" },
         })
-      }
+      },
+    })
 
+    globalThis.fetch = (async (input, init) => {
+      const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
       if (requestUrl.includes(".turso.io")) {
         return new Response("remote db unavailable in test", { status: 503 })
       }
@@ -149,10 +166,9 @@ membership_mode: "request",
     try {
       const ctx = await createRouteTestContext({
         LOCAL_COMMUNITY_DB_ROOT: "",
-        COMMUNITY_PROVISION_OPERATOR_BASE_URL: operatorBaseUrl,
+        COMMUNITY_PROVISION_OPERATOR: operator,
         COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN: operatorToken,
         COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION: "iad",
-        COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS: "2000",
         TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
         TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "7",
       })
@@ -219,16 +235,15 @@ membership_mode: "request",
   }, 10_000)
 
   testWithTimeout("community create returns in-progress state for a recently running job without re-provisioning", async () => {
-    const operatorBaseUrl = "https://operator.test"
     const operatorToken = "operator-secret"
     const wrapKey = "11".repeat(32)
     const originalFetch = globalThis.fetch
     let operatorCallCount = 0
-
-    globalThis.fetch = (async (input, init) => {
-      const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
-      if (requestUrl.startsWith(`${operatorBaseUrl}/internal/v0/community-provisioning/provision`)) {
+    const operator = mockProvisionOperatorBinding({
+      authToken: operatorToken,
+      onProvision: () => {
         operatorCallCount += 1
+
         return new Response(JSON.stringify({
           community_id: "cmt_recent_job_test",
           id: "job_recent_job_test",
@@ -249,8 +264,11 @@ membership_mode: "request",
         }), {
           headers: { "content-type": "application/json" },
         })
-      }
+      },
+    })
 
+    globalThis.fetch = (async (input, init) => {
+      const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
       if (requestUrl.includes(".turso.io")) {
         return new Response("remote db unavailable in test", { status: 503 })
       }
@@ -261,10 +279,9 @@ membership_mode: "request",
     try {
       const ctx = await createRouteTestContext({
         LOCAL_COMMUNITY_DB_ROOT: "",
-        COMMUNITY_PROVISION_OPERATOR_BASE_URL: operatorBaseUrl,
+        COMMUNITY_PROVISION_OPERATOR: operator,
         COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN: operatorToken,
         COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION: "iad",
-        COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS: "2000",
         TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
         TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "7",
       })

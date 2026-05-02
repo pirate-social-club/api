@@ -3,10 +3,15 @@ import { HttpError } from "../src/lib/errors"
 import { provisionCommunityViaOperator } from "../src/lib/communities/provisioning/operator-client"
 import type { Env } from "../src/types"
 
+function mockOperatorBinding(handler: (request: Request) => Promise<Response> | Response): Fetcher {
+  return {
+    fetch: (request: Request | string) => handler(typeof request === "string" ? new Request(request) : request),
+  } as Fetcher
+}
+
 describe("community provision operator client", () => {
   test("rejects a provision response from an unexpected Turso organization", async () => {
-    const originalFetch = globalThis.fetch
-    globalThis.fetch = (async () => new Response(JSON.stringify({
+    const operator = mockOperatorBinding(() => new Response(JSON.stringify({
       community_id: "cmt_wrong_org",
       job_id: "job_wrong_org",
       binding_id: "cdb_wrong_org",
@@ -25,32 +30,27 @@ describe("community provision operator client", () => {
       rotation_number: 1,
     }), {
       headers: { "content-type": "application/json" },
-    })) as typeof globalThis.fetch
+    }))
 
-    try {
-      await expect(provisionCommunityViaOperator({
-        env: {
-          COMMUNITY_PROVISION_OPERATOR_BASE_URL: "https://operator.test",
-          COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN: "operator-token",
-          COMMUNITY_PROVISION_EXPECTED_ORGANIZATION_SLUG: "pirate-prod",
-        } satisfies Env,
-        communityId: "cmt_wrong_org",
-        creatorUserId: "usr_01",
-        displayName: "Wrong Org Club",
-        namespaceVerificationId: null,
-        groupLocation: "aws-us-east-1",
-        bootstrapPayload: {},
-      })).rejects.toThrow("community_provision_operator_organization_mismatch")
-    } finally {
-      globalThis.fetch = originalFetch
-    }
+    await expect(provisionCommunityViaOperator({
+      env: {
+        COMMUNITY_PROVISION_OPERATOR: operator,
+        COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN: "operator-token",
+        COMMUNITY_PROVISION_EXPECTED_ORGANIZATION_SLUG: "pirate-prod",
+      } satisfies Env,
+      communityId: "cmt_wrong_org",
+      creatorUserId: "usr_01",
+      displayName: "Wrong Org Club",
+      namespaceVerificationId: null,
+      groupLocation: "aws-us-east-1",
+      bootstrapPayload: {},
+    })).rejects.toThrow("community_provision_operator_organization_mismatch")
   })
 
   test("sends a request id and preserves operator error details", async () => {
-    const originalFetch = globalThis.fetch
     let requestId: string | null = null
-    globalThis.fetch = (async (_input, init) => {
-      requestId = new Headers(init?.headers).get("x-request-id")
+    const operator = mockOperatorBinding((request) => {
+      requestId = request.headers.get("x-request-id")
       return new Response(JSON.stringify({
         error_code: "community_provision_operator_failed",
         message: "SQLite error: no such table: community_gate_rules",
@@ -58,12 +58,12 @@ describe("community provision operator client", () => {
         status: 500,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof globalThis.fetch
+    })
 
     try {
       await provisionCommunityViaOperator({
         env: {
-          COMMUNITY_PROVISION_OPERATOR_BASE_URL: "https://operator.test",
+          COMMUNITY_PROVISION_OPERATOR: operator,
           COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN: "operator-token",
         } satisfies Env,
         communityId: "cmt_operator_error",
@@ -85,8 +85,6 @@ describe("community provision operator client", () => {
         operator_status: 500,
         operator_request_id: requestId,
       })
-    } finally {
-      globalThis.fetch = originalFetch
     }
   })
 })

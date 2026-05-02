@@ -14,6 +14,21 @@ let cleanup: (() => Promise<void>) | null = null
 const COMMUNITY_PROVISIONING_TEST_TIMEOUT_MS = 30_000
 const testWithTimeout = test as unknown as (name: string, fn: () => Promise<void>, timeout: number) => void
 
+function mockProvisionOperatorBinding(input: {
+  authToken: string
+  onProvision: (body: Record<string, unknown>, request: Request) => Response | Promise<Response>
+}): Fetcher {
+  return {
+    fetch: async (request: Request | string) => {
+      const normalizedRequest = typeof request === "string" ? new Request(request) : request
+      expect(new URL(normalizedRequest.url).pathname).toBe("/internal/v0/community-provisioning/provision")
+      expect(normalizedRequest.headers.get("authorization")).toBe(`Bearer ${input.authToken}`)
+      const body = await normalizedRequest.json() as Record<string, unknown>
+      return input.onProvision(body, normalizedRequest)
+    },
+  } as Fetcher
+}
+
 beforeEach(() => {
   resetRuntimeCaches()
 })
@@ -26,11 +41,9 @@ afterEach(async () => {
 })
 
 describe("community provisioning routes", () => {
-  test("development community create falls back to local provisioning when operator token is absent", async () => {
+  test("development community create uses local provisioning when service binding is absent", async () => {
     const ctx = await createRouteTestContext({
       ENVIRONMENT: "development",
-      COMMUNITY_PROVISION_OPERATOR_BASE_URL: "https://operator.test",
-      COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN: "",
       TURSO_COMMUNITY_DB_WRAP_KEY: "11".repeat(32),
       TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "7",
     })
@@ -63,24 +76,14 @@ membership_mode: "request",
   })
 
   testWithTimeout("community create provisions through the private operator when configured", async () => {
-    const operatorBaseUrl = "https://operator.test"
     const operatorToken = "operator-secret"
     const wrapKey = "11".repeat(32)
     const originalFetch = globalThis.fetch
     let provisionBody: Record<string, unknown> | null = null
-
-    globalThis.fetch = (async (input, init) => {
-      const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
-      if (requestUrl.startsWith(`${operatorBaseUrl}/internal/v0/community-provisioning/provision`)) {
-        const authHeader = init?.headers instanceof Headers
-          ? init.headers.get("authorization")
-          : Array.isArray(init?.headers)
-            ? init.headers.find(([key]) => key.toLowerCase() === "authorization")?.[1]
-            : init?.headers && "authorization" in init.headers
-              ? String((init.headers as Record<string, unknown>).authorization)
-              : null
-        expect(authHeader).toBe(`Bearer ${operatorToken}`)
-        provisionBody = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : null
+    const operator = mockProvisionOperatorBinding({
+      authToken: operatorToken,
+      onProvision: (body) => {
+        provisionBody = body
 
         return new Response(JSON.stringify({
           community_id: "cmt_operator_test",
@@ -102,8 +105,11 @@ membership_mode: "request",
         }), {
           headers: { "content-type": "application/json" },
         })
-      }
+      },
+    })
 
+    globalThis.fetch = (async (input, init) => {
+      const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
       if (requestUrl.includes(".turso.io")) {
         return new Response("remote db unavailable in test", { status: 503 })
       }
@@ -114,11 +120,10 @@ membership_mode: "request",
     try {
       const ctx = await createRouteTestContext({
         LOCAL_COMMUNITY_DB_ROOT: "",
-        COMMUNITY_PROVISION_OPERATOR_BASE_URL: operatorBaseUrl,
+        COMMUNITY_PROVISION_OPERATOR: operator,
         COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN: operatorToken,
         COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION: "aws-us-east-1",
         COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS: "aws-us-east-1,aws-ap-south-1",
-        COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS: "2000",
         TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
         TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "7",
       })
@@ -215,35 +220,34 @@ membership_mode: "request",
   }, COMMUNITY_PROVISIONING_TEST_TIMEOUT_MS)
 
   testWithTimeout("community create generates a fallback credential id when operator omits credential_id", async () => {
-    const operatorBaseUrl = "https://operator.test"
     const operatorToken = "operator-secret"
     const originalFetch = globalThis.fetch
+    const operator = mockProvisionOperatorBinding({
+      authToken: operatorToken,
+      onProvision: () => new Response(JSON.stringify({
+        community_id: "cmt_operator_no_cred",
+        id: "job_operator_no_cred",
+        binding_id: "cdb_operator_no_cred",
+        credential_id: "",
+        organization_slug: "pirate-org",
+        group_name: "region-iad",
+        group_id: "grp_no_cred",
+        database_name: "main-cmt-no-cred",
+        database_id: "db_no_cred",
+        database_url: "libsql://main-cmt-no-cred-pirate-org.iad.turso.io",
+        location: "iad",
+        token_name: "worker-cmt_no_cred-v1",
+        plaintext_token: "db-token-no-cred",
+        issued_at: "2026-04-15T18:00:00.000Z",
+        expires_at: null,
+        rotation_number: 1,
+      }), {
+        headers: { "content-type": "application/json" },
+      }),
+    })
 
     globalThis.fetch = (async (input, init) => {
       const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
-      if (requestUrl.startsWith(`${operatorBaseUrl}/internal/v0/community-provisioning/provision`)) {
-        return new Response(JSON.stringify({
-          community_id: "cmt_operator_no_cred",
-          id: "job_operator_no_cred",
-          binding_id: "cdb_operator_no_cred",
-          credential_id: "",
-          organization_slug: "pirate-org",
-          group_name: "region-iad",
-          group_id: "grp_no_cred",
-          database_name: "main-cmt-no-cred",
-          database_id: "db_no_cred",
-          database_url: "libsql://main-cmt-no-cred-pirate-org.iad.turso.io",
-          location: "iad",
-          token_name: "worker-cmt_no_cred-v1",
-          plaintext_token: "db-token-no-cred",
-          issued_at: "2026-04-15T18:00:00.000Z",
-          expires_at: null,
-          rotation_number: 1,
-        }), {
-          headers: { "content-type": "application/json" },
-        })
-      }
-
       if (requestUrl.includes(".turso.io")) {
         return new Response("remote db unavailable in test", { status: 503 })
       }
@@ -254,10 +258,9 @@ membership_mode: "request",
     try {
       const ctx = await createRouteTestContext({
         LOCAL_COMMUNITY_DB_ROOT: "",
-        COMMUNITY_PROVISION_OPERATOR_BASE_URL: operatorBaseUrl,
+        COMMUNITY_PROVISION_OPERATOR: operator,
         COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN: operatorToken,
         COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION: "iad",
-        COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS: "2000",
         TURSO_COMMUNITY_DB_WRAP_KEY: "11".repeat(32),
         TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "7",
       })
@@ -292,61 +295,52 @@ membership_mode: "request",
   }, COMMUNITY_PROVISIONING_TEST_TIMEOUT_MS)
 
   test("community create rejects unsupported database regions before provisioning", async () => {
-    const operatorBaseUrl = "https://operator.test"
     const operatorToken = "operator-secret"
-    const originalFetch = globalThis.fetch
     let operatorCalled = false
-
-    globalThis.fetch = (async (input, init) => {
-      const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
-      if (requestUrl.startsWith(`${operatorBaseUrl}/internal/v0/community-provisioning/provision`)) {
+    const operator = mockProvisionOperatorBinding({
+      authToken: operatorToken,
+      onProvision: () => {
         operatorCalled = true
-      }
-      return originalFetch(input as never, init)
-    }) as typeof globalThis.fetch
+        return new Response("unexpected", { status: 500 })
+      },
+    })
 
-    try {
-      const ctx = await createRouteTestContext({
-        LOCAL_COMMUNITY_DB_ROOT: "",
-        COMMUNITY_PROVISION_OPERATOR_BASE_URL: operatorBaseUrl,
-        COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN: operatorToken,
-        COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION: "aws-us-east-1",
-        COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS: "aws-us-east-1,aws-ap-south-1",
-        COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS: "2000",
-        TURSO_COMMUNITY_DB_WRAP_KEY: "11".repeat(32),
-        TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "7",
-      })
-      cleanup = ctx.cleanup
+    const ctx = await createRouteTestContext({
+      LOCAL_COMMUNITY_DB_ROOT: "",
+      COMMUNITY_PROVISION_OPERATOR: operator,
+      COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN: operatorToken,
+      COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION: "aws-us-east-1",
+      COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS: "aws-us-east-1,aws-ap-south-1",
+      TURSO_COMMUNITY_DB_WRAP_KEY: "11".repeat(32),
+      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "7",
+    })
+    cleanup = ctx.cleanup
 
-      const session = await exchangeJwt(ctx.env, "community-unsupported-region-user")
-      await completeUniqueHumanVerification(ctx.env, session.accessToken)
+    const session = await exchangeJwt(ctx.env, "community-unsupported-region-user")
+    await completeUniqueHumanVerification(ctx.env, session.accessToken)
 
-      const response = await requestJson("http://pirate.test/communities", {
-        display_name: "Unsupported Region Club",
+    const response = await requestJson("http://pirate.test/communities", {
+      display_name: "Unsupported Region Club",
 membership_mode: "request",
-        database_region: "aws-eu-west-1",
-      }, ctx.env, session.accessToken)
+      database_region: "aws-eu-west-1",
+    }, ctx.env, session.accessToken)
 
-      expect(response.status).toBe(400)
-      const body = await json(response) as { message?: string }
-      expect(body.message).toBe("database_region is not supported")
-      expect(operatorCalled).toBe(false)
-    } finally {
-      globalThis.fetch = originalFetch
-    }
+    expect(response.status).toBe(400)
+    const body = await json(response) as { message?: string }
+    expect(body.message).toBe("database_region is not supported")
+    expect(operatorCalled).toBe(false)
   })
 
   testWithTimeout("community create without a namespace uses the provision operator when configured", async () => {
-    const operatorBaseUrl = "https://operator.test"
     const operatorToken = "operator-secret"
     const wrapKey = "11".repeat(32)
     let provisionBody: Record<string, unknown> | null = null
     const originalFetch = globalThis.fetch
+    const operator = mockProvisionOperatorBinding({
+      authToken: operatorToken,
+      onProvision: (body) => {
+        provisionBody = body
 
-    globalThis.fetch = (async (input, init) => {
-      const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
-      if (requestUrl.startsWith(`${operatorBaseUrl}/internal/v0/community-provisioning/provision`)) {
-        provisionBody = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : null
         return new Response(JSON.stringify({
           community_id: "cmt_operator_namespaceless",
           id: "job_operator_namespaceless",
@@ -367,8 +361,11 @@ membership_mode: "request",
         }), {
           headers: { "content-type": "application/json" },
         })
-      }
+      },
+    })
 
+    globalThis.fetch = (async (input, init) => {
+      const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
       if (requestUrl.includes(".turso.io")) {
         return new Response("remote db unavailable in test", { status: 503 })
       }
@@ -379,10 +376,9 @@ membership_mode: "request",
     try {
       const ctx = await createRouteTestContext({
         LOCAL_COMMUNITY_DB_ROOT: "",
-        COMMUNITY_PROVISION_OPERATOR_BASE_URL: operatorBaseUrl,
+        COMMUNITY_PROVISION_OPERATOR: operator,
         COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN: operatorToken,
         COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION: "iad",
-        COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS: "2000",
         TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
         TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "7",
       })
@@ -440,16 +436,15 @@ membership_mode: "request",
   }, COMMUNITY_PROVISIONING_TEST_TIMEOUT_MS)
 
   testWithTimeout("community create sends agent posting settings in the operator bootstrap payload", async () => {
-    const operatorBaseUrl = "https://operator.test"
     const operatorToken = "operator-secret"
     const wrapKey = "11".repeat(32)
     let provisionBody: Record<string, unknown> | null = null
     const originalFetch = globalThis.fetch
+    const operator = mockProvisionOperatorBinding({
+      authToken: operatorToken,
+      onProvision: (body) => {
+        provisionBody = body
 
-    globalThis.fetch = (async (input, init) => {
-      const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
-      if (requestUrl.startsWith(`${operatorBaseUrl}/internal/v0/community-provisioning/provision`)) {
-        provisionBody = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : null
         return new Response(JSON.stringify({
           community_id: "cmt_operator_agent",
           id: "job_operator_agent",
@@ -470,8 +465,11 @@ membership_mode: "request",
         }), {
           headers: { "content-type": "application/json" },
         })
-      }
+      },
+    })
 
+    globalThis.fetch = (async (input, init) => {
+      const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
       if (requestUrl.includes(".turso.io")) {
         return new Response("remote db unavailable in test", { status: 503 })
       }
@@ -482,11 +480,10 @@ membership_mode: "request",
     try {
       const ctx = await createRouteTestContext({
         LOCAL_COMMUNITY_DB_ROOT: "",
-        COMMUNITY_PROVISION_OPERATOR_BASE_URL: operatorBaseUrl,
+        COMMUNITY_PROVISION_OPERATOR: operator,
         COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN: operatorToken,
         COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION: "aws-us-east-1",
         COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS: "aws-us-east-1",
-        COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS: "2000",
         TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
         TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "7",
       })

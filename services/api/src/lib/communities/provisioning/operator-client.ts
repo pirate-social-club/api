@@ -48,15 +48,6 @@ function requireText(value: string | null | undefined, label: string): string {
   return normalized
 }
 
-function parseTimeoutMs(value: string | null | undefined, fallbackMs: number): number {
-  const parsed = Number(trim(value))
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallbackMs
-}
-
-function normalizeBaseUrl(env: Env): string {
-  return requireText(env.COMMUNITY_PROVISION_OPERATOR_BASE_URL, "COMMUNITY_PROVISION_OPERATOR_BASE_URL").replace(/\/+$/, "")
-}
-
 function parsedRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? value as Record<string, unknown> : {}
 }
@@ -96,12 +87,6 @@ function validateExpectedOrganizationSlug(env: Env, result: ProvisionCommunityOp
 
 export function isCommunityProvisionOperatorConfigured(env: Env): boolean {
   if (env.COMMUNITY_PROVISION_OPERATOR) {
-    return true
-  }
-  if (!trim(env.COMMUNITY_PROVISION_OPERATOR_BASE_URL)) {
-    return false
-  }
-  if (trim(env.COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN)) {
     return true
   }
 
@@ -187,25 +172,14 @@ async function invokeOperator(
     body: unknown
   },
 ): Promise<{ ok: boolean; status: number; parsed: unknown }> {
-  if (env.COMMUNITY_PROVISION_OPERATOR) {
-    return invokeOperatorViaBinding(env, input)
+  if (!env.COMMUNITY_PROVISION_OPERATOR) {
+    throw internalError("COMMUNITY_PROVISION_OPERATOR service binding is not configured")
   }
-  return invokeOperatorViaHttp(env, input)
-}
-
-async function invokeOperatorViaBinding(
-  env: Env,
-  input: {
-    path: string
-    requestId: string
-    body: unknown
-  },
-): Promise<{ ok: boolean; status: number; parsed: unknown }> {
   const authToken = requireText(
     env.COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN,
     "COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN",
   )
-  const response = await env.COMMUNITY_PROVISION_OPERATOR!.fetch(
+  const response = await env.COMMUNITY_PROVISION_OPERATOR.fetch(
     new Request(`https://internal${input.path}`, {
       method: "POST",
       headers: {
@@ -226,57 +200,4 @@ async function invokeOperatorViaBinding(
   }
 
   return { ok: response.ok, status: response.status, parsed }
-}
-
-async function invokeOperatorViaHttp(
-  env: Env,
-  input: {
-    path: string
-    requestId: string
-    body: unknown
-  },
-): Promise<{ ok: boolean; status: number; parsed: unknown }> {
-  const baseUrl = normalizeBaseUrl(env)
-  const authToken = requireText(
-    env.COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN,
-    "COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN",
-  )
-  const controller = new AbortController()
-  const timeout = setTimeout(
-    () => controller.abort("timeout"),
-    parseTimeoutMs(env.COMMUNITY_PROVISION_OPERATOR_TIMEOUT_MS, 60000),
-  )
-
-  try {
-    const response = await fetch(`${baseUrl}${input.path}`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${authToken}`,
-        "x-request-id": input.requestId,
-      },
-      body: JSON.stringify(input.body),
-      signal: controller.signal,
-    })
-
-    const raw = await response.text()
-    let parsed: unknown = null
-    try {
-      parsed = raw ? JSON.parse(raw) : null
-    } catch {
-      parsed = { raw }
-    }
-
-    return { ok: response.ok, status: response.status, parsed }
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      throw internalError("community_provision_operator_timeout", {
-        operator_request_id: input.requestId,
-        community_id: String((input.body as Record<string, unknown>)?.community_id ?? ""),
-      })
-    }
-    throw error
-  } finally {
-    clearTimeout(timeout)
-  }
 }
