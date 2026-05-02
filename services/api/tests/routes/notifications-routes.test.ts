@@ -572,7 +572,7 @@ describe("notification routes", () => {
         SELECT properties_json
         FROM analytics_outbox
         WHERE event_name = 'notification_marked_read'
-        ORDER BY created_at ASC
+        ORDER BY created_at ASC, properties_json ASC
       `,
       args: [],
     })
