@@ -18,6 +18,30 @@ describe("health route", () => {
     expect(response.headers.get("access-control-allow-origin")).toBeNull()
   })
 
+  test("CORS allows HNS web origins without explicit configuration", async () => {
+    const appHost = await app.request("http://pirate.test/health", {
+      headers: { origin: "https://app.pirate" },
+    })
+    const importedRoot = await app.request("http://pirate.test/health", {
+      headers: { origin: "https://xn--pokmon-dva" },
+    })
+    const profileHost = await app.request("http://pirate.test/health", {
+      headers: { origin: "https://blackbeard.pirate" },
+    })
+
+    expect(appHost.headers.get("access-control-allow-origin")).toBe("https://app.pirate")
+    expect(importedRoot.headers.get("access-control-allow-origin")).toBe("https://xn--pokmon-dva")
+    expect(profileHost.headers.get("access-control-allow-origin")).toBe("https://blackbeard.pirate")
+  })
+
+  test("CORS does not treat ordinary web origins as HNS origins", async () => {
+    const response = await app.request("http://pirate.test/health", {
+      headers: { origin: "https://evil.com" },
+    })
+
+    expect(response.headers.get("access-control-allow-origin")).toBeNull()
+  })
+
   test("CORS allows public API access when explicitly configured", async () => {
     const response = await app.request("http://pirate.test/health", {
       headers: { origin: "https://app.pirate.test" },
