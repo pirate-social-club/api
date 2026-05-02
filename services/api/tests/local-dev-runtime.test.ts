@@ -64,11 +64,11 @@ describe("sanitizeLocalDevEnv", () => {
 
   test("leaves non-loopback community provision operator config untouched", async () => {
     const result = await sanitizeLocalDevEnv({
-      COMMUNITY_PROVISION_OPERATOR_BASE_URL: "https://spaces.pirate.sc",
+      COMMUNITY_PROVISION_OPERATOR_BASE_URL: "https://verifier.pirate.sc/prod",
       COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN: "secret",
     })
 
-    expect(result.values.COMMUNITY_PROVISION_OPERATOR_BASE_URL).toBe("https://spaces.pirate.sc")
+    expect(result.values.COMMUNITY_PROVISION_OPERATOR_BASE_URL).toBe("https://verifier.pirate.sc/prod")
     expect(result.values.COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN).toBe("secret")
     expect(result.warnings).toEqual([])
   })
