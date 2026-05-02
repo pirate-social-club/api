@@ -72,6 +72,12 @@ function normalizePublicLinkedHandleLabel(value: string): string {
   return value.trim().toLowerCase().replace(/^@+/u, "")
 }
 
+function isActiveAuthProviderSubjectConflict(error: unknown): boolean {
+  return hasUniqueConstraintName(error, "idx_auth_provider_links_active_subject")
+    || hasUniqueConstraintField(error, "auth_provider_links.provider_subject")
+    || hasUniqueConstraintField(error, "provider_subject")
+}
+
 export class DatabaseIdentityRepository {
   constructor(private readonly client: Client) {}
 
@@ -209,7 +215,7 @@ export class DatabaseIdentityRepository {
         console.error("[auth] rollback failed while exchanging identity", rollbackError)
       }
 
-      if (hasUniqueConstraintField(error, "auth_provider_links.provider_subject")) {
+      if (isActiveAuthProviderSubjectConflict(error)) {
         const existing = await findActiveAuthProviderLink(this.client, provider, providerSubject)
         if (existing) {
           resolvedUserId = existing.user_id

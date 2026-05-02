@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { DatabaseIdentityRepository } from "../src/lib/auth/db-identity-repository"
+import type { Client, InStatement, QueryResult, Transaction } from "../src/lib/sql-client"
 import { createControlPlaneTestClient } from "./helpers"
 
 const WALLET_A = "0x1111111111111111111111111111111111111111"
@@ -13,6 +14,43 @@ afterEach(async () => {
     cleanup = null
   }
 })
+
+class AuthProviderLinkRaceClient implements Client {
+  constructor(private readonly client: Client) {}
+
+  execute(statement: InStatement | string): Promise<QueryResult> {
+    return this.client.execute(statement)
+  }
+
+  batch(statements: InStatement[], mode?: "read" | "write"): Promise<QueryResult[]> {
+    return this.client.batch(statements, mode)
+  }
+
+  async transaction(mode?: "read" | "write"): Promise<Transaction> {
+    const tx = await this.client.transaction(mode)
+    return {
+      execute: async (statement: InStatement | string): Promise<QueryResult> => {
+        const sql = typeof statement === "string" ? statement : statement.sql
+        if (sql.includes("FROM auth_provider_links")) {
+          return { rows: [] }
+        }
+        if (sql.includes("INSERT INTO auth_provider_links")) {
+          throw new Error('duplicate key value violates unique constraint "idx_auth_provider_links_active_subject"')
+        }
+        return tx.execute(statement)
+      },
+      batch: (statements: InStatement[], transactionMode?: "read" | "write"): Promise<QueryResult[]> =>
+        tx.batch(statements, transactionMode),
+      commit: (): Promise<void> => tx.commit(),
+      rollback: (): Promise<void> => tx.rollback(),
+      close: (): void => tx.close(),
+    }
+  }
+
+  close(): void | Promise<void> {
+    return this.client.close?.()
+  }
+}
 
 describe("control-plane identity repository", () => {
   test("jwt identities create users with empty wallet attachments", async () => {
@@ -63,5 +101,22 @@ describe("control-plane identity repository", () => {
     expect(second.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_address).toBe(WALLET_B)
     expect(second.user.primary_wallet_attachment).toBe(second.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_attachment)
     expect(second.profile.primary_wallet_address).toBe(WALLET_B)
+  })
+
+  test("recovers when a concurrent signup wins the active auth provider link insert", async () => {
+    const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanup = setup.cleanup
+    const identity = {
+      provider: "jwt",
+      providerSubject: "pirate-dev|race-user",
+      providerUserRef: "race-user",
+      walletAddresses: [],
+      selectedWalletAddress: null,
+    }
+    const first = await new DatabaseIdentityRepository(setup.client).exchangeIdentity(identity)
+    const second = await new DatabaseIdentityRepository(new AuthProviderLinkRaceClient(setup.client))
+      .exchangeIdentity(identity)
+
+    expect(second.user.id).toBe(first.user.id)
   })
 })

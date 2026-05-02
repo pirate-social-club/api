@@ -20,6 +20,12 @@ describe("hasUniqueConstraintName", () => {
 
     expect(hasUniqueConstraintName(error, "idx_wallet_attachments_active_primary")).toBe(true)
   })
+
+  test("recognizes production auth provider link unique index messages", () => {
+    const error = new Error('duplicate key value violates unique constraint "idx_auth_provider_links_active_subject"')
+
+    expect(hasUniqueConstraintName(error, "idx_auth_provider_links_active_subject")).toBe(true)
+  })
 })
 
 describe("hasCheckConstraintName", () => {
