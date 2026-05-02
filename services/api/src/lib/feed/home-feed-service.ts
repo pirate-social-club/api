@@ -202,6 +202,28 @@ export function withHomeFeedCommunityIdentity(
   }
 }
 
+async function resolveTopCommunitiesIdentity(
+  env: Env,
+  communityRepository: HomeFeedCommunityRepository,
+  summaries: InternalHomeFeedCommunitySummary[],
+): Promise<InternalHomeFeedCommunitySummary[]> {
+  const resolved = await Promise.all(
+    summaries.map(async (summary) => {
+      const db = await openCommunityDb(env, communityRepository, summary.community_id).catch(() => null)
+      if (!db) {
+        return withHomeFeedCommunityIdentity(summary, null)
+      }
+      try {
+        const identity = await getHomeFeedCommunityIdentity(db.client, summary.community_id)
+        return withHomeFeedCommunityIdentity(summary, identity)
+      } finally {
+        db.close()
+      }
+    }),
+  )
+  return resolved
+}
+
 export function resolveJoinedHomeFeedCommunityIds(input: {
   activeCommunities: CommunityRow[]
   membershipRows: CommunityMembershipProjectionRow[]
@@ -493,9 +515,15 @@ export async function listHomeFeed(input: {
     .map((row) => itemByPostId[row.source_post_id])
     .filter((item): item is HomeFeedItem => Boolean(item))
 
+  const topCommunities = await resolveTopCommunitiesIdentity(
+    input.env,
+    input.communityRepository,
+    sortedCommunities.slice(0, 6),
+  )
+
   return {
     items: orderedItems,
-    top_communities: sortedCommunities.slice(0, 6).map(serializeHomeFeedCommunitySummary),
+    top_communities: topCommunities.map(serializeHomeFeedCommunitySummary),
     next_cursor: nextCursor,
   }
 }
