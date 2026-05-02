@@ -9,18 +9,24 @@
     "enabled": true
   },
   "vars": {
+    "ENVIRONMENT": "development",
+    "SENTRY_DSN": "https://0e27176cffcca727ff2c1a10e334f831@o4511308510265344.ingest.us.sentry.io/4511308511379456",
     "EXPECTED_TURSO_ORGANIZATION_SLUG": "pirate-dev"
   },
   "env": {
     "staging": {
       "name": "community-provision-operator-staging",
       "vars": {
+        "ENVIRONMENT": "staging",
+        "SENTRY_DSN": "https://0e27176cffcca727ff2c1a10e334f831@o4511308510265344.ingest.us.sentry.io/4511308511379456",
         "EXPECTED_TURSO_ORGANIZATION_SLUG": "pirate-social"
       }
     },
     "production": {
       "name": "community-provision-operator",
       "vars": {
+        "ENVIRONMENT": "production",
+        "SENTRY_DSN": "https://0e27176cffcca727ff2c1a10e334f831@o4511308510265344.ingest.us.sentry.io/4511308511379456",
         "EXPECTED_TURSO_ORGANIZATION_SLUG": "pirate-prod"
       }
     }

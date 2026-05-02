@@ -166,9 +166,11 @@ app.onError((error, c) => {
           ...(typeof details?.job_id === "string" ? { job_id: details.job_id } : {}),
           ...(typeof causeDetails?.operator_error_code === "string" ? { operator_error_code: causeDetails.operator_error_code } : {}),
           ...(typeof causeDetails?.operator_request_id === "string" ? { operator_request_id: causeDetails.operator_request_id } : {}),
+          ...(typeof causeDetails?.operator_step === "string" ? { operator_step: causeDetails.operator_step } : {}),
         },
         extra: {
           ...(details ? { details } : {}),
+          ...(typeof causeDetails?.operator_message === "string" ? { operator_message: causeDetails.operator_message } : {}),
         },
       })
     }

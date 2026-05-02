@@ -57,6 +57,9 @@ export async function withProvisionStep<T>(
     logProvisionStep({ ...input, event: "success", startedAt });
     return result;
   } catch (error) {
+    if (error instanceof Error) {
+      (error as Error & { provisionStep?: string }).provisionStep = input.step;
+    }
     logProvisionStep({ ...input, event: "error", startedAt, error });
     throw error;
   }

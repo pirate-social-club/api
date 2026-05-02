@@ -65,6 +65,7 @@ function operatorErrorDetails(input: {
     operator_request_id: input.requestId,
     community_id: input.communityId,
     ...(typeof body.error_code === "string" ? { operator_error_code: body.error_code } : {}),
+    ...(typeof body.provision_step === "string" ? { operator_step: body.provision_step } : {}),
     ...(message ? { operator_message: message } : {}),
   }
 }

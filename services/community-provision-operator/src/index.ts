@@ -1,3 +1,5 @@
+import type { CloudflareOptions } from "@sentry/cloudflare";
+import { captureException, withSentry } from "@sentry/cloudflare";
 import { provisionCommunityRuntime } from "./lib/provision-runtime";
 import { rotateCommunityToken } from "./lib/rotate-token";
 import { doctorControlPlane } from "./lib/doctor";
@@ -12,6 +14,8 @@ export type Env = {
   TURSO_COMMUNITY_DB_WRAP_KEY?: string;
   TURSO_COMMUNITY_DB_WRAP_KEY_VERSION?: string;
   COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN: string;
+  SENTRY_DSN?: string;
+  ENVIRONMENT?: string;
 };
 
 export type OperatorDeps = {
@@ -108,6 +112,45 @@ function requireOrgGuard(env: Env): void {
   if (actual !== expected) {
     throw new Error(`TURSO_ORGANIZATION_SLUG mismatch: expected ${expected}, got ${actual}`);
   }
+}
+
+function errorExtra(error: unknown): Record<string, unknown> {
+  if (!(error instanceof Error)) {
+    return { error: String(error) };
+  }
+  return {
+    name: error.name,
+    message: error.message,
+    stack: error.stack,
+    provision_step: typeof (error as Error & { provisionStep?: unknown }).provisionStep === "string"
+      ? (error as Error & { provisionStep: string }).provisionStep
+      : null,
+  };
+}
+
+function errorProvisionStep(error: unknown): string | null {
+  return error instanceof Error && typeof (error as Error & { provisionStep?: unknown }).provisionStep === "string"
+    ? (error as Error & { provisionStep: string }).provisionStep
+    : null;
+}
+
+function makeSentryOptions(env: Env): CloudflareOptions {
+  return {
+    dsn: env.SENTRY_DSN,
+    environment: trim(env.ENVIRONMENT) || "development",
+    sendDefaultPii: false,
+    tracesSampleRate: trim(env.ENVIRONMENT) === "production" ? 0.2 : 1.0,
+    beforeSend(event) {
+      if (event.request?.headers && typeof event.request.headers === "object") {
+        const safe: Record<string, string> = {};
+        for (const [key, value] of Object.entries(event.request.headers)) {
+          safe[key] = key.toLowerCase() === "authorization" ? "[redacted]" : value;
+        }
+        event.request.headers = safe;
+      }
+      return event;
+    },
+  };
 }
 
 export function createHandler(deps: OperatorDeps = {}) {
@@ -247,6 +290,7 @@ export function createHandler(deps: OperatorDeps = {}) {
       return new Response("Not Found", { status: 404 });
     } catch (error) {
       const message = error instanceof Error ? error.message : "operator request failed";
+      const provisionStep = errorProvisionStep(error);
       const isValidationError = message.endsWith(" is required")
         || message.includes("must be valid JSON")
         || message.endsWith("must be a positive integer")
@@ -254,10 +298,24 @@ export function createHandler(deps: OperatorDeps = {}) {
         || message.includes("Unexpected token")
         || message.includes("invalid JSON");
       console.error("[community-provision-operator]", request.method, url.pathname, `request_id=${trim(request.headers.get("x-request-id")) || "none"}`, message);
+      if (!isValidationError && trim(env.SENTRY_DSN)) {
+        captureException(error, {
+          tags: {
+            route: url.pathname,
+            method: request.method,
+            operator_request_id: trim(request.headers.get("x-request-id")) || "none",
+            ...(provisionStep ? { provision_step: provisionStep } : {}),
+          },
+          extra: {
+            ...errorExtra(error),
+          },
+        });
+      }
       return json(
         {
           error_code: isValidationError ? "invalid_request" : "community_provision_operator_failed",
           message,
+          ...(provisionStep ? { provision_step: provisionStep } : {}),
         },
         { status: isValidationError ? 400 : 500 },
       );
@@ -265,6 +323,8 @@ export function createHandler(deps: OperatorDeps = {}) {
   };
 }
 
-export default {
+const handler = {
   fetch: createHandler(),
 };
+
+export default withSentry(makeSentryOptions, handler);
