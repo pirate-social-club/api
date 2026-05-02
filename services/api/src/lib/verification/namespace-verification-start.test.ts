@@ -40,7 +40,7 @@ class PlatformManagedZoneBootstrapClient implements Client {
           status: "challenge_required",
           challenge_kind: "dns_txt",
           challenge_payload_json: null,
-          challenge_host: "_pirate.clawitzer",
+          challenge_host: "clawitzer",
           challenge_txt_value: "pirate-verification=nvs_test",
           setup_nameservers_json: JSON.stringify(["ns1.pirate."]),
           challenge_expires_at: "2026-04-28T00:00:00.000Z",
@@ -128,9 +128,9 @@ describe("startNamespaceVerificationSession", () => {
 
     expect(client.insertAttempts).toBe(1)
     expect(session.status).toBe("challenge_required")
-    expect(session.challenge_host).toBe("_pirate.clawitzer")
+    expect(session.challenge_host).toBe("clawitzer")
     expect(session.challenge_txt_value).toBe("pirate-verification=nvs_test")
     expect(session.setup_nameservers).toEqual(["ns1.pirate."])
-    expect(calls).toEqual(["GET https://verifier.pirate.sc/hns/inspect-public?root_label=clawitzer&challenge_host=_pirate.clawitzer"])
+    expect(calls).toEqual(["GET https://verifier.pirate.sc/hns/inspect-public?root_label=clawitzer"])
   })
 })

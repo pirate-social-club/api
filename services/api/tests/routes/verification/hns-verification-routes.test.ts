@@ -84,7 +84,7 @@ describe("hns verification routes", () => {
         observation_provider: string | null
       }
       expect(namespaceSessionBody.status).toBe("challenge_required")
-      expect(namespaceSessionBody.challenge_host).toBe("_pirate.pirateverifierroot")
+      expect(namespaceSessionBody.challenge_host).toBe("pirateverifierroot")
       expect(typeof namespaceSessionBody.challenge_txt_value).toBe("string")
       expect(namespaceSessionBody.setup_nameservers).toEqual(["ns1.pirate.sc."])
       expect(namespaceSessionBody.observation_provider).toBe("web3dns_json_doh")
@@ -108,7 +108,7 @@ describe("hns verification routes", () => {
         setup_nameservers: string[] | null
       }
       expect(fetchedNamespaceSessionBody.status).toBe("challenge_required")
-      expect(fetchedNamespaceSessionBody.challenge_host).toBe("_pirate.pirateverifierroot")
+      expect(fetchedNamespaceSessionBody.challenge_host).toBe("pirateverifierroot")
       expect(fetchedNamespaceSessionBody.challenge_txt_value).toBe(namespaceSessionBody.challenge_txt_value)
       expect(fetchedNamespaceSessionBody.setup_nameservers).toEqual(["ns1.pirate.sc."])
       expect(inspectCount).toBe(1)
@@ -175,11 +175,11 @@ describe("hns verification routes", () => {
           challenge_host: string | null
         }
         expect(namespaceSessionBody.normalized_root_label).toBe("xn--pokmon-dva")
-        expect(namespaceSessionBody.challenge_host).toBe("_pirate.xn--pokmon-dva")
+        expect(namespaceSessionBody.challenge_host).toBe("xn--pokmon-dva")
       }
       expect(capturedInspectUrls).toEqual([
-        "http://hns-verifier.test/inspect-public?root_label=xn--pokmon-dva&challenge_host=_pirate.xn--pokmon-dva",
-        "http://hns-verifier.test/inspect-public?root_label=xn--pokmon-dva&challenge_host=_pirate.xn--pokmon-dva",
+        "http://hns-verifier.test/inspect-public?root_label=xn--pokmon-dva",
+        "http://hns-verifier.test/inspect-public?root_label=xn--pokmon-dva",
       ])
     })
   })

@@ -110,7 +110,7 @@ export async function startNamespaceVerificationSession(
   } else {
     assertHnsRootLabel(normalizedRootLabel)
     const challengeExpiresAt = new Date(now.getTime() + getHnsChallengeTtlHours(env) * 60 * 60 * 1000).toISOString()
-    const challengeHost = `_pirate.${normalizedRootLabel}`
+    const challengeHost = normalizedRootLabel
     const challengeTxtValue = `pirate-verification=${sessionId}`
     let status: NamespaceVerificationSession["status"] = "challenge_required"
     let challengeKind: NamespaceVerificationSession["challenge_kind"] = "dns_txt"
@@ -136,7 +136,6 @@ export async function startNamespaceVerificationSession(
     if (isHnsVerifierConfigured(env)) {
       const inspection = await inspectHnsRoot(env, {
         rootLabel: normalizedRootLabel,
-        challengeHost,
       })
       inspectionSnapshot = deriveHnsInspectionSnapshot(inspection)
       persistedSetupNameservers = serializeSetupNameservers(inspection.nameservers?.map((entry) => entry.trim()).filter(Boolean) ?? null)

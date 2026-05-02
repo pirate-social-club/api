@@ -126,7 +126,7 @@ async function restartHnsChallenge(input: {
   updatedAt: string
 }): Promise<void> {
   const rootLabel = input.row.normalized_root_label ?? input.row.submitted_root_label.toLowerCase()
-  const challengeHost = input.row.challenge_host ?? `_pirate.${rootLabel}`
+  const challengeHost = rootLabel
   const challengeTxtValue = `pirate-verification=${makeId("nch")}`
   const challengeExpiresAt = new Date(input.now.getTime() + getHnsChallengeTtlHours(input.env) * 60 * 60 * 1000).toISOString()
   const expiresAt = new Date(input.now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
@@ -154,7 +154,6 @@ async function restartHnsChallenge(input: {
   if (isHnsVerifierConfigured(input.env)) {
     const inspection = await inspectHnsRoot(input.env, {
       rootLabel,
-      challengeHost,
     })
     inspectionSnapshot = deriveHnsInspectionSnapshot(inspection)
     persistedSetupNameservers = serializeSetupNameservers(inspection.nameservers?.map((entry) => entry.trim()).filter(Boolean) ?? null)
