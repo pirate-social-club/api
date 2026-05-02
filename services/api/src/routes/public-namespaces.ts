@@ -7,13 +7,7 @@ import type { Env } from "../env"
 
 const publicNamespaces = new Hono<{ Bindings: Env }>()
 
-type PublicNamespaceRow = {
-  normalized_root_label: unknown
-  namespace_verification_id: unknown
-  community_id: unknown
-  display_name: unknown
-  route_slug: unknown
-}
+type PublicNamespaceRow = Record<string, unknown>
 
 function normalizePublicHnsRoot(value: string): string | null {
   const normalized = normalizeRootLabel(value)
