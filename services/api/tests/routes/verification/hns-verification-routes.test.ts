@@ -262,10 +262,12 @@ describe("hns verification routes", () => {
     const session = await exchangeJwt(ctx.env, "verification-hns-assertions-user")
     await createSelfVerifiedSession(ctx.env, session.accessToken)
 
+    const verifierCalls: string[] = []
     const originalFetch = globalThis.fetch
     await withFetchMock(async (input, init) => {
       const url = typeof input === "string" ? input : input.toString()
       if (url.startsWith("http://hns-verifier.test")) {
+        verifierCalls.push(url)
         if (url.includes("/inspect-public?")) {
           return new Response(JSON.stringify({
             root_exists: true,
@@ -284,6 +286,18 @@ describe("hns verification routes", () => {
           return new Response(JSON.stringify({
             verified: true,
             observation_provider: "web3dns_json_doh",
+          }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          })
+        }
+        if (url.endsWith("/ensure-zone")) {
+          return new Response(JSON.stringify({
+            root_label: "pirateassertionsroot",
+            zone_name: "pirateassertionsroot.",
+            zone_created: true,
+            nameservers: ["ns1.pirate."],
+            observation_provider: "powerdns_sqlite",
           }), {
             status: 200,
             headers: { "content-type": "application/json" },
@@ -348,6 +362,7 @@ describe("hns verification routes", () => {
       expect(fetchedBody.capabilities.pirate_subdomain_issuance_allowed).toBe(false)
       expect(fetchedBody.control_class).toBe("dao_controlled_root")
       expect(fetchedBody.operation_class).toBe("routing_only_namespace")
+      expect(verifierCalls.some((url) => url.endsWith("/ensure-zone"))).toBe(true)
     })
   })
 })

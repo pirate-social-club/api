@@ -58,6 +58,18 @@ describe("hns verification lifecycle routes", () => {
             headers: { "content-type": "application/json" },
           })
         }
+        if (url.endsWith("/ensure-zone")) {
+          return new Response(JSON.stringify({
+            root_label: "piraterestartroot",
+            zone_name: "piraterestartroot.",
+            zone_created: true,
+            nameservers: ["ns1.pirate."],
+            observation_provider: "powerdns_sqlite",
+          }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          })
+        }
       }
 
       return originalFetch(input, init)
@@ -158,6 +170,18 @@ describe("hns verification lifecycle routes", () => {
                   observation_provider: "web3dns_json_doh",
                 },
           ), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          })
+        }
+        if (url.endsWith("/ensure-zone")) {
+          return new Response(JSON.stringify({
+            root_label: "piratependingroot",
+            zone_name: "piratependingroot.",
+            zone_created: true,
+            nameservers: ["ns1.pirate."],
+            observation_provider: "powerdns_sqlite",
+          }), {
             status: 200,
             headers: { "content-type": "application/json" },
           })

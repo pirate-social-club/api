@@ -87,6 +87,18 @@ export async function prepareVerifiedNamespace(env: Env, accessToken: string): P
           headers: { "content-type": "application/json" },
         })
       }
+      if (url.endsWith("/ensure-zone")) {
+        return new Response(JSON.stringify({
+          root_label: "piratecommunityroot",
+          zone_name: "piratecommunityroot.",
+          zone_created: true,
+          nameservers: ["ns1.pirate."],
+          observation_provider: "powerdns_sqlite",
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
     }
 
     return originalFetch(input, init)

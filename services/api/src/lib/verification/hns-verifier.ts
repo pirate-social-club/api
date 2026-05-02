@@ -37,6 +37,14 @@ export type HnsVerifyTxtResult = {
   challenge_name?: string
 }
 
+export type HnsEnsureZoneResult = {
+  root_label?: string
+  zone_name?: string
+  zone_created?: boolean
+  nameservers?: string[]
+  observation_provider?: string | null
+}
+
 const MAX_HNS_ROOT_LABEL_LENGTH = 63
 const HNS_VERIFIER_TIMEOUT_MS = 12_000
 
@@ -213,6 +221,21 @@ export async function verifyHnsTxtRecord(
       root_label: input.rootLabel,
       challenge_host: input.challengeHost ?? null,
       challenge_txt_value: input.challengeTxtValue,
+    }),
+  })
+}
+
+export async function ensureHnsZone(
+  env: Env,
+  input: {
+    rootLabel: string
+  },
+): Promise<HnsEnsureZoneResult> {
+  assertHnsRootLabel(input.rootLabel)
+  return request<HnsEnsureZoneResult>(env, "/ensure-zone", {
+    method: "POST",
+    body: JSON.stringify({
+      root_label: input.rootLabel,
     }),
   })
 }

@@ -6,6 +6,7 @@ import {
   serializeNamespaceVerificationSession,
 } from "../auth/auth-serializers"
 import {
+  ensureHnsZone,
   verifyHnsTxtRecord,
 } from "./hns-verifier"
 import type { HnsVerifyTxtResult } from "./hns-verifier"
@@ -390,6 +391,29 @@ export async function completeNamespaceVerificationSession(
     }
 
     const acceptedSnapshot = deriveAcceptedHnsSnapshot(row, verificationResult)
+    if (acceptedSnapshot.pirateDnsAuthorityVerified === 1) {
+      try {
+        await ensureHnsZone(env, {
+          rootLabel: requireNormalizedRootLabel(row),
+        })
+      } catch (caught) {
+        if (caught instanceof HttpError && caught.code === "provider_unavailable") {
+          await client.execute({
+            sql: `
+              UPDATE namespace_verification_sessions
+              SET status = 'challenge_pending',
+                  failure_reason = 'provider_unavailable',
+                  updated_at = ?2
+              WHERE namespace_verification_session_id = ?1
+            `,
+            args: [input.namespaceVerificationSessionId, updatedAt],
+          })
+          return getNamespaceVerificationSession(client, input.namespaceVerificationSessionId, input.userId)
+        }
+        throw caught
+      }
+    }
+
     await client.batch([
       {
         sql: `

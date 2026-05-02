@@ -6,7 +6,7 @@ import {
   SPACES_FABRIC_PUBLISH_CHALLENGE_TTL_MS,
   verifySpacesFabricPublish,
 } from "../src/lib/verification/spaces-verifier"
-import { getHnsVerifierBaseUrl, inspectHnsRoot, isHnsVerifierConfigured, verifyHnsTxtRecord } from "../src/lib/verification/hns-verifier"
+import { ensureHnsZone, getHnsVerifierBaseUrl, inspectHnsRoot, isHnsVerifierConfigured, verifyHnsTxtRecord } from "../src/lib/verification/hns-verifier"
 import { withMockedFetch } from "./helpers"
 
 function urlFromFetchInput(input: Parameters<typeof fetch>[0]): URL {
@@ -442,6 +442,43 @@ describe("verifyHnsTxtRecord", () => {
       expect(result.verified).toBe(true)
       expect(result.observation_provider).toBe("web3dns_json_doh")
       expect(requestedPath).toBe("/verify-txt-public")
+    })
+  })
+})
+
+describe("ensureHnsZone", () => {
+  test("zone provisioning uses the authenticated verifier endpoint", async () => {
+    const env = {
+      HNS_VERIFIER_BASE_URL: "http://hns-verifier.test",
+      HNS_VERIFIER_AUTH_TOKEN: "test-hns-token",
+    } as any
+    let capturedUrl: string | null = null
+    let capturedBody: unknown = null
+    let capturedAuthorization: string | null = null
+
+    await withMockedFetch(() => (async (input, init) => {
+      capturedUrl = typeof input === "string" ? input : input.toString()
+      capturedBody = init?.body ? JSON.parse(String(init.body)) : null
+      capturedAuthorization = new Headers(init?.headers).get("authorization")
+      return new Response(JSON.stringify({
+        root_label: "xn--pokmon-dva",
+        zone_name: "xn--pokmon-dva.",
+        zone_created: true,
+        nameservers: ["ns1.pirate."],
+        observation_provider: "powerdns_sqlite",
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }) as typeof fetch, async () => {
+      const result = await ensureHnsZone(env, {
+        rootLabel: "xn--pokmon-dva",
+      })
+
+      expect(capturedUrl).toBe("http://hns-verifier.test/ensure-zone")
+      expect(capturedBody).toEqual({ root_label: "xn--pokmon-dva" })
+      expect(capturedAuthorization).toBe("Bearer test-hns-token")
+      expect(result.zone_name).toBe("xn--pokmon-dva.")
     })
   })
 })

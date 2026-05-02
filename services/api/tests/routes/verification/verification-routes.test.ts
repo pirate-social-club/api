@@ -265,6 +265,15 @@ describe("verification routes", () => {
             failure_reason: null,
           })
         }
+        if (url.endsWith("/ensure-zone")) {
+          return Response.json({
+            root_label: "piratetestroot",
+            zone_name: "piratetestroot.",
+            zone_created: true,
+            nameservers: ["ns1.pirate."],
+            observation_provider: "powerdns_sqlite",
+          })
+        }
       }
       return originalFetch(input, init)
     }, async () => {
