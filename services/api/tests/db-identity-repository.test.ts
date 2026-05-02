@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { DatabaseIdentityRepository } from "../src/lib/auth/db-identity-repository"
 import type { Client, InStatement, QueryResult, Transaction } from "../src/lib/sql-client"
+import type { UpstreamIdentity } from "../src/types"
 import { createControlPlaneTestClient } from "./helpers"
 
 const WALLET_A = "0x1111111111111111111111111111111111111111"
@@ -112,7 +113,7 @@ describe("control-plane identity repository", () => {
       providerUserRef: "race-user",
       walletAddresses: [],
       selectedWalletAddress: null,
-    }
+    } satisfies UpstreamIdentity
     const first = await new DatabaseIdentityRepository(setup.client).exchangeIdentity(identity)
     const second = await new DatabaseIdentityRepository(new AuthProviderLinkRaceClient(setup.client))
       .exchangeIdentity(identity)
