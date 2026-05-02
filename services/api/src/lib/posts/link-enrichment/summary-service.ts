@@ -203,8 +203,12 @@ export async function translateAndStoreLinkSummary(input: {
       : ["", "", ""],
     fetcher: input.fetcher,
   })
+  const latestRecord = await getLinkEnrichmentByNormalizedUrl(input.controlPlaneClient, input.normalizedUrl)
+  const latestTranslations = latestRecord
+    ? parseLinkEnrichmentTranslations(latestRecord.translations_json)
+    : existingTranslations
   const updatedTranslations = {
-    ...existingTranslations,
+    ...latestTranslations,
     [locale]: {
       locale,
       title: translation.title,
