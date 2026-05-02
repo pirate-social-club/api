@@ -10,7 +10,8 @@ export const POST_SELECT_COLUMNS = `
   label_id, label_assignment_status, label_assigned_by, label_assigned_at, label_ai_confidence,
   label_assignment_error, label_assignment_model, label_assignment_result_json,
   post_type, status, visibility, title, body, caption, lyrics,
-  link_url, link_og_image_url, link_og_title, embeds_json, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
+  link_url, link_og_image_url, link_og_title, link_enrichment_snapshot_json, link_enrichment_synced_at,
+  embeds_json, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
   access_mode, asset_id, parent_post_id, upstream_asset_refs_json, song_mode, rights_basis, analysis_state, analysis_result_ref,
   content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
 `
@@ -48,6 +49,8 @@ export type PostRow = {
   link_url: string | null
   link_og_image_url: string | null
   link_og_title: string | null
+  link_enrichment_snapshot_json: string | null
+  link_enrichment_synced_at: string | null
   embeds_json: string | null
   media_refs_json: string | null
   song_artifact_bundle_id: string | null
@@ -102,6 +105,21 @@ function parseLabelAssignmentResult(value: string | null): LabelAssignmentResult
   }
 }
 
+function parseObject(value: string | null): Record<string, unknown> | null {
+  if (!value) {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null
+  } catch {
+    return null
+  }
+}
+
 function parseMediaRefs(value: string | null): Post["media_refs"] {
   const parsed = parseJsonArray<Post["media_refs"] extends Array<infer T> | undefined ? T : never>(value)
   return parsed ? (parsed as Post["media_refs"]) : undefined
@@ -146,6 +164,8 @@ export function toPostRow(row: unknown): PostRow {
     link_url: stringOrNull(rowValue(row, "link_url")),
     link_og_image_url: stringOrNull(rowValue(row, "link_og_image_url")),
     link_og_title: stringOrNull(rowValue(row, "link_og_title")),
+    link_enrichment_snapshot_json: stringOrNull(rowValue(row, "link_enrichment_snapshot_json")),
+    link_enrichment_synced_at: stringOrNull(rowValue(row, "link_enrichment_synced_at")),
     embeds_json: stringOrNull(rowValue(row, "embeds_json")),
     media_refs_json: stringOrNull(rowValue(row, "media_refs_json")),
     song_artifact_bundle_id: stringOrNull(rowValue(row, "song_artifact_bundle_id")),
@@ -201,6 +221,8 @@ export function serializePost(row: PostRow): Post {
     link_url: row.link_url,
     link_og_image_url: row.link_og_image_url,
     link_og_title: row.link_og_title,
+    link_enrichment_snapshot_json: parseObject(row.link_enrichment_snapshot_json),
+    link_enrichment_synced_at: row.link_enrichment_synced_at,
     embeds: parseEmbeds(row.embeds_json),
     media_refs: parseMediaRefs(row.media_refs_json),
     song_artifact_bundle_id: row.song_artifact_bundle_id,

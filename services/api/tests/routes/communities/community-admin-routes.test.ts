@@ -55,6 +55,251 @@ describe("admin auth middleware", () => {
     expect(healthBody.acting_user_id).toBe(actingSession.userId)
   })
 
+  async function createAdminLinkPreviewFixture(input: {
+    ctx: Awaited<ReturnType<typeof createRouteTestContext>>
+    postType: "link" | "text"
+    idSuffix: string
+  }): Promise<{
+    actingUserId: string
+    communityId: string
+    ownerAccessToken: string
+    postId: string
+  }> {
+    const ownerSession = await exchangeJwt(input.ctx.env, `admin-link-preview-owner-${input.idSuffix}`)
+    await completeUniqueHumanVerification(input.ctx.env, ownerSession.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: `Admin Link Preview ${input.idSuffix}`,
+      membership_mode: "request",
+      handle_policy: { policy_template: "standard" },
+    }, input.ctx.env, ownerSession.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: { id: string }
+    }
+    const communityId = communityCreateBody.community.id.replace(/^com_/, "")
+
+    const actingSession = await exchangeJwt(input.ctx.env, `admin-link-preview-actor-${input.idSuffix}`)
+    const postCreate = await Promise.resolve(app.request(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-admin-token": ADMIN_TOKEN,
+          "x-admin-as-user-id": actingSession.userId,
+        },
+        body: JSON.stringify({
+          post_type: input.postType,
+          idempotency_key: `admin-link-preview-post-${input.idSuffix}`,
+          title: "Original title",
+          body: "Original body",
+          ...(input.postType === "link" ? { link_url: "https://example.com/story" } : {}),
+        }),
+      },
+      input.ctx.env,
+    ))
+    expect(postCreate.status).toBe(201)
+    const postCreateBody = await json(postCreate) as { id: string }
+
+    return {
+      actingUserId: actingSession.userId,
+      communityId,
+      ownerAccessToken: ownerSession.accessToken,
+      postId: postCreateBody.id,
+    }
+  }
+
+  test("admin token can update link post preview metadata", async () => {
+    const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
+    cleanup = ctx.cleanup
+    const fixture = await createAdminLinkPreviewFixture({ ctx, postType: "link", idSuffix: "happy" })
+
+    const update = await Promise.resolve(app.request(
+      `http://pirate.test/communities/${fixture.communityId}/posts/${fixture.postId}/link-preview`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-admin-token": ADMIN_TOKEN,
+          "x-admin-as-user-id": fixture.actingUserId,
+        },
+        body: JSON.stringify({
+          title: "Manual preview title",
+          image_url: "https://cdn.example.com/preview.jpg",
+        }),
+      },
+      ctx.env,
+    ))
+
+    expect(update.status).toBe(200)
+    const updateBody = await json(update) as {
+      link_enrichment: {
+        provider: string
+        title: string
+        image_url: string
+      } | null
+      link_og_image_url: string | null
+      link_og_title: string | null
+    }
+    expect(updateBody.link_og_title).toBe("Manual preview title")
+    expect(updateBody.link_og_image_url).toBe("https://cdn.example.com/preview.jpg")
+    expect(updateBody.link_enrichment?.provider).toBe("manual")
+    expect(updateBody.link_enrichment?.title).toBe("Manual preview title")
+    expect(updateBody.link_enrichment?.image_url).toBe("https://cdn.example.com/preview.jpg")
+
+    const auditRows = await ctx.client.execute({
+      sql: `
+        SELECT actor_type, actor_id, action, target_type, target_id, community_id, metadata_json
+        FROM audit_log
+        WHERE community_id = ?1 AND action = 'community.admin_link_preview_updated'
+      `,
+      args: [fixture.communityId],
+    })
+    expect(auditRows.rows).toHaveLength(1)
+    const auditRow = auditRows.rows[0]!
+    expect(auditRow.actor_type).toBe("operator")
+    expect(auditRow.actor_id).toBe("admin-token")
+    expect(auditRow.target_type).toBe("post")
+    expect(auditRow.target_id).toBe(fixture.postId.replace(/^post_/, ""))
+    const metadata = JSON.parse(String(auditRow.metadata_json)) as {
+      acting_user_id: string
+      link_og_image_url: string
+      link_og_title: string
+    }
+    expect(metadata.acting_user_id).toBe(fixture.actingUserId)
+    expect(metadata.link_og_title).toBe("Manual preview title")
+    expect(metadata.link_og_image_url).toBe("https://cdn.example.com/preview.jpg")
+
+    const enrichmentRows = await ctx.client.execute({
+      sql: `
+        SELECT provider, status, normalized_url, canonical_url, title, image_url, markdown
+        FROM link_enrichments
+        WHERE normalized_url = ?1
+      `,
+      args: ["https://example.com/story"],
+    })
+    expect(enrichmentRows.rows).toHaveLength(1)
+    expect(enrichmentRows.rows[0]?.provider).toBe("manual")
+    expect(enrichmentRows.rows[0]?.status).toBe("ready")
+    expect(enrichmentRows.rows[0]?.canonical_url).toBe("https://example.com/story")
+    expect(enrichmentRows.rows[0]?.title).toBe("Manual preview title")
+    expect(enrichmentRows.rows[0]?.image_url).toBe("https://cdn.example.com/preview.jpg")
+    expect(enrichmentRows.rows[0]?.markdown).toBeNull()
+  })
+
+  test("link preview metadata update rejects non-link posts", async () => {
+    const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
+    cleanup = ctx.cleanup
+    const fixture = await createAdminLinkPreviewFixture({ ctx, postType: "text", idSuffix: "text" })
+
+    const update = await Promise.resolve(app.request(
+      `http://pirate.test/communities/${fixture.communityId}/posts/${fixture.postId}/link-preview`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-admin-token": ADMIN_TOKEN,
+          "x-admin-as-user-id": fixture.actingUserId,
+        },
+        body: JSON.stringify({
+          title: "Manual preview title",
+          image_url: "https://cdn.example.com/preview.jpg",
+        }),
+      },
+      ctx.env,
+    ))
+
+    expect(update.status).toBe(400)
+    const updateBody = await json(update) as { code: string; message: string }
+    expect(updateBody.code).toBe("bad_request")
+    expect(updateBody.message).toBe("link preview can only be updated for link posts")
+  })
+
+  test("link preview metadata update rejects invalid image URLs", async () => {
+    const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
+    cleanup = ctx.cleanup
+    const fixture = await createAdminLinkPreviewFixture({ ctx, postType: "link", idSuffix: "invalid-url" })
+
+    const update = await Promise.resolve(app.request(
+      `http://pirate.test/communities/${fixture.communityId}/posts/${fixture.postId}/link-preview`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-admin-token": ADMIN_TOKEN,
+          "x-admin-as-user-id": fixture.actingUserId,
+        },
+        body: JSON.stringify({
+          title: "Manual preview title",
+          image_url: "http://cdn.example.com/preview.jpg",
+        }),
+      },
+      ctx.env,
+    ))
+
+    expect(update.status).toBe(400)
+    const updateBody = await json(update) as { code: string; message: string }
+    expect(updateBody.code).toBe("bad_request")
+    expect(updateBody.message).toBe("image_url must be a valid HTTPS URL")
+  })
+
+  test("link preview metadata update rejects posts from a different community", async () => {
+    const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
+    cleanup = ctx.cleanup
+    const fixture = await createAdminLinkPreviewFixture({ ctx, postType: "link", idSuffix: "cross-a" })
+    const otherFixture = await createAdminLinkPreviewFixture({ ctx, postType: "link", idSuffix: "cross-b" })
+
+    const update = await Promise.resolve(app.request(
+      `http://pirate.test/communities/${otherFixture.communityId}/posts/${fixture.postId}/link-preview`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-admin-token": ADMIN_TOKEN,
+          "x-admin-as-user-id": fixture.actingUserId,
+        },
+        body: JSON.stringify({
+          title: "Manual preview title",
+          image_url: "https://cdn.example.com/preview.jpg",
+        }),
+      },
+      ctx.env,
+    ))
+
+    expect(update.status).toBe(404)
+    const updateBody = await json(update) as { code: string; message: string }
+    expect(updateBody.code).toBe("not_found")
+    expect(updateBody.message).toBe("Post not found")
+  })
+
+  test("link preview metadata update requires an admin token", async () => {
+    const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
+    cleanup = ctx.cleanup
+    const fixture = await createAdminLinkPreviewFixture({ ctx, postType: "link", idSuffix: "non-admin" })
+
+    const update = await Promise.resolve(app.request(
+      `http://pirate.test/communities/${fixture.communityId}/posts/${fixture.postId}/link-preview`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${fixture.ownerAccessToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          title: "Manual preview title",
+          image_url: "https://cdn.example.com/preview.jpg",
+        }),
+      },
+      ctx.env,
+    ))
+
+    expect(update.status).toBe(403)
+    const updateBody = await json(update) as { code: string; message: string }
+    expect(updateBody.code).toBe("eligibility_failed")
+    expect(updateBody.message).toBe("Admin token required")
+  })
+
   test("admin token can update community settings without being the owner", async () => {
     const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
     cleanup = ctx.cleanup

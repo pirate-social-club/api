@@ -15,6 +15,13 @@ import {
 } from "../../localization/community-localization-service"
 import { getPostById } from "../../posts/community-post-store"
 import { hydrateLinkPostEmbed } from "../../posts/embed-hydrator"
+import {
+  generateAndStoreLinkSummary,
+  listLinkSummaryFanoutUsages,
+  markLinkSummaryFanoutSynced,
+  writeLinkEnrichmentSnapshotToPost,
+} from "../../posts/link-enrichment/summary-service"
+import { upsertLinkEnrichmentUsage } from "../../posts/link-enrichment/repository"
 import { materializePostLabel } from "../../posts/post-label-materializer"
 import { materializePostTranslation } from "../../localization/post-translation-materializer"
 import { generateSongPreviewForBundle } from "../../song-artifacts/song-artifact-preview-service"
@@ -25,6 +32,7 @@ import {
   publishJsonToSwarm,
 } from "../../swarm/swarm-publisher"
 import type { Env } from "../../../env"
+import { getControlPlaneClient } from "../../runtime-deps"
 import { loadCommunityProjection } from "../create/service"
 import { openCommunityDb } from "../community-db-factory"
 import type { CommunityJobRow } from "./store"
@@ -64,6 +72,11 @@ type PostLabelPayload = {
 type EmbedHydratePayload = {
   post_id?: string
   link_url?: string | null
+}
+
+type LinkSummaryMaterializePayload = {
+  normalized_url?: string | null
+  post_id?: string | null
 }
 
 type CommentTranslationPayload = {
@@ -382,6 +395,8 @@ async function runEmbedHydrate(input: {
 
     return await hydrateLinkPostEmbed({
       client: db.client,
+      controlPlaneClient: input.env.CONTROL_PLANE_DATABASE_URL ? getControlPlaneClient(input.env) : null,
+      env: input.env,
       post: {
         ...post,
         link_url: post.link_url ?? payload?.link_url ?? null,
@@ -391,6 +406,88 @@ async function runEmbedHydrate(input: {
   } finally {
     db.close()
   }
+}
+
+async function runLinkSummaryMaterialize(input: {
+  job: CommunityJobRow
+  env: Env
+  communityRepository: CommunityJobRepository
+}): Promise<string | null> {
+  const payload = parseJobPayload<LinkSummaryMaterializePayload>(input.job.payload_json)
+  const normalizedUrl = String(payload?.normalized_url ?? input.job.subject_id).trim()
+  if (!normalizedUrl) {
+    throw internalError("Link summary job is missing normalized URL")
+  }
+  if (!input.env.CONTROL_PLANE_DATABASE_URL) {
+    throw internalError("Control-plane database is missing for link summary materialize")
+  }
+
+  const controlPlaneClient = getControlPlaneClient(input.env)
+  const now = nowIso()
+  const summary = await generateAndStoreLinkSummary({
+    env: input.env,
+    controlPlaneClient,
+    normalizedUrl,
+    now,
+  })
+  if (!summary.snapshotJson) {
+    return summary.resultRef
+  }
+
+  const payloadPostId = typeof payload?.post_id === "string" && payload.post_id.trim()
+    ? payload.post_id.trim()
+    : null
+  if (payloadPostId) {
+    await upsertLinkEnrichmentUsage({
+      client: controlPlaneClient,
+      normalizedUrl,
+      communityId: input.job.community_id,
+      postId: payloadPostId,
+      linkEnrichmentId: null,
+      snapshotSyncedAt: null,
+      now,
+    })
+  }
+
+  const usages = await listLinkSummaryFanoutUsages({
+    controlPlaneClient,
+    normalizedUrl,
+  })
+  let synced = 0
+  let failed = 0
+  for (const usage of usages) {
+    try {
+      const db = await openCommunityDb(input.env, input.communityRepository, usage.community_id)
+      try {
+        await writeLinkEnrichmentSnapshotToPost({
+          client: db.client,
+          postId: usage.post_id,
+          snapshotJson: summary.snapshotJson,
+          syncedAt: now,
+        })
+        await markLinkSummaryFanoutSynced({
+          controlPlaneClient,
+          normalizedUrl,
+          communityId: usage.community_id,
+          postId: usage.post_id,
+          syncedAt: now,
+        })
+        synced += 1
+      } finally {
+        db.close()
+      }
+    } catch (error) {
+      failed += 1
+      console.error("[link-summary] failed to fan out enrichment snapshot", {
+        normalized_url: normalizedUrl,
+        community_id: usage.community_id,
+        post_id: usage.post_id,
+        error,
+      })
+    }
+  }
+
+  return `${summary.resultRef}:synced:${synced}:failed:${failed}`
 }
 
 async function runCommentTranslationMaterialize(input: {
@@ -481,6 +578,8 @@ export async function runCommunityJob(input: {
       return runPostLabelMaterialize(input)
     case "post_translation_materialize":
       return runPostTranslationMaterialize(input)
+    case "link_summary_materialize":
+      return runLinkSummaryMaterialize(input)
     case "comment_translation_materialize":
       return runCommentTranslationMaterialize(input)
     case "community_text_translation_materialize":

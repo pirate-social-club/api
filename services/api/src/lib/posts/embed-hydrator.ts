@@ -1,5 +1,6 @@
 import { detectSupportedEmbedTarget } from "./embed-url-detection"
 import { fetchLinkPreviewMetadata } from "./link-preview-fetcher"
+import { hydrateGenericLinkEnrichment } from "./link-enrichment/service"
 import { upsertPostEmbed, refreshPostEmbedsProjection } from "./post-embed-store"
 import { updatePostLinkPreviewMetadata } from "./community-post-store"
 import type { DbExecutor } from "../db-helpers"
@@ -742,21 +743,20 @@ export async function hydrateLinkPostEmbed(input: {
   const fetcher = input.fetcher ?? fetch
   const target = detectSupportedEmbedTarget(input.post.link_url)
   if (!target) {
-    const metadata = await fetchLinkPreviewMetadata({
-      fetcher,
+    const resultRef = await hydrateGenericLinkEnrichment({
+      communityClient: input.client,
+      controlPlaneClient: input.controlPlaneClient,
+      communityId: input.post.community_id,
+      env: input.env,
+      postId: input.post.post_id,
       url: input.post.link_url,
+      checkedAt: input.checkedAt,
+      fetcher,
     })
-    if (!metadata) {
+    if (!resultRef) {
       return "skipped:no_preview_metadata"
     }
-    await updatePostLinkPreviewMetadata({
-      client: input.client,
-      postId: input.post.post_id,
-      linkOgImageUrl: metadata.imageUrl,
-      linkOgTitle: metadata.title,
-      updatedAt: input.checkedAt,
-    })
-    return metadata.imageUrl ?? input.post.link_url
+    return resultRef
   }
 
   const result = target.provider === "x"

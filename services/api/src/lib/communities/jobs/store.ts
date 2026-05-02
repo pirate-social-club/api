@@ -13,6 +13,7 @@ export type CommunityJobType =
   | "post_translation_materialize"
   | "comment_translation_materialize"
   | "community_text_translation_materialize"
+  | "link_summary_materialize"
   | "song_preview_generate"
 export type CommunityJobStatus = "queued" | "running" | "succeeded" | "failed"
 

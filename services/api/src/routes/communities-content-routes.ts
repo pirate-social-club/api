@@ -4,16 +4,54 @@ import { assertAgentDelegatedWriteMatchesActor } from "../lib/agents/agent-write
 import { trackApiEvent } from "../lib/analytics/track"
 import { createComment, listPostComments } from "../lib/comments/comment-service"
 import type { CreateCommentRequest } from "../lib/comments/comment-types"
+import { openCommunityDb } from "../lib/communities/community-db-factory"
+import { badRequestError, eligibilityFailed, notFoundError } from "../lib/errors"
+import { getPostById, updatePostLinkPreviewMetadata } from "../lib/posts/community-post-store"
 import { createPost, listCommunityPosts } from "../lib/posts/post-service"
 import { serializeComment, serializeCommentListResponse } from "../serializers/comment"
 import { serializeLocalizedPostResponse, serializePost } from "../serializers/post"
 import type { CreatePostRequest } from "../types"
 import { decodePublicPostId } from "../lib/public-ids"
 import { writeAuditEventForEnv } from "../lib/audit"
+import { nowIso } from "../lib/helpers"
+import { normalizeLinkUrl } from "../lib/posts/link-enrichment/url-normalization"
+import { upsertLinkEnrichment } from "../lib/posts/link-enrichment/repository"
+import { getControlPlaneClient } from "../lib/runtime-deps"
 import {
   getResolvedCommunityRouteContext,
   requireJsonBody,
 } from "./communities-route-helpers"
+
+type LinkPreviewOverrideRequest = {
+  image_url?: string | null
+  title?: string | null
+}
+
+function requirePreviewTitle(value: string | null | undefined): string {
+  const title = String(value ?? "").trim()
+  if (!title) {
+    throw badRequestError("title is required")
+  }
+  return title.slice(0, 300)
+}
+
+function requireHttpsImageUrl(value: string | null | undefined): string {
+  const imageUrl = String(value ?? "").trim()
+  if (!imageUrl) {
+    throw badRequestError("image_url is required")
+  }
+
+  let parsed: URL
+  try {
+    parsed = new URL(imageUrl)
+  } catch {
+    throw badRequestError("image_url must be a valid HTTPS URL")
+  }
+  if (parsed.protocol !== "https:") {
+    throw badRequestError("image_url must be a valid HTTPS URL")
+  }
+  return parsed.href
+}
 
 export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.post("/:communityId/posts", async (c) => {
@@ -63,6 +101,102 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
       })
     }
     return c.json(serializePost(result), result.status === "published" ? 201 : 202)
+  })
+
+  communities.post("/:communityId/posts/:postId/link-preview", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    if (actor.authType !== "admin") {
+      throw eligibilityFailed("Admin token required")
+    }
+
+    const body = await requireJsonBody<LinkPreviewOverrideRequest>(c, "Invalid link preview payload")
+    const title = requirePreviewTitle(body.title)
+    const imageUrl = requireHttpsImageUrl(body.image_url)
+    const postId = decodePublicPostId(c.req.param("postId"))
+
+    const db = await openCommunityDb(c.env, communityRepository, communityId)
+    try {
+      const post = await getPostById(db.client, postId)
+      if (!post || post.community_id !== communityId) {
+        throw notFoundError("Post not found")
+      }
+      if (post.post_type !== "link") {
+        throw badRequestError("link preview can only be updated for link posts")
+      }
+
+      const updatedAt = nowIso()
+      const normalizedUrl = post.link_url ? normalizeLinkUrl(post.link_url) : null
+      const snapshot = normalizedUrl
+        ? JSON.stringify({
+          version: 1,
+          provider: "manual",
+          status: "ready",
+          normalized_url: normalizedUrl,
+          canonical_url: post.link_url,
+          title,
+          description: null,
+          publisher: null,
+          image_url: imageUrl,
+          summary: {
+            status: null,
+            short_summary: null,
+            key_points: [],
+            generated_at: null,
+            model: null,
+          },
+          error: null,
+          fetched_at: updatedAt,
+        })
+        : null
+      await updatePostLinkPreviewMetadata({
+        client: db.client,
+        postId,
+        linkOgImageUrl: imageUrl,
+        linkOgTitle: title,
+        linkEnrichmentSnapshotJson: snapshot,
+        linkEnrichmentSyncedAt: snapshot ? updatedAt : null,
+        updatedAt,
+      })
+      if (normalizedUrl && c.env.CONTROL_PLANE_DATABASE_URL) {
+        await upsertLinkEnrichment({
+          client: getControlPlaneClient(c.env),
+          normalizedUrl,
+          canonicalUrl: post.link_url ?? normalizedUrl,
+          provider: "manual",
+          status: "ready",
+          title,
+          description: null,
+          publisher: null,
+          publishedAt: null,
+          imageUrl,
+          markdown: null,
+          error: null,
+          fetchedAt: updatedAt,
+          now: updatedAt,
+        })
+      }
+      await writeAuditEventForEnv(c.env, {
+        action: "community.admin_link_preview_updated",
+        actorId: actor.adminOverride.adminActorId,
+        actorType: "operator",
+        communityId,
+        targetId: postId,
+        targetType: "post",
+        metadata: {
+          acting_user_id: actor.userId,
+          link_og_image_url: imageUrl,
+          link_og_title: title,
+        },
+      })
+
+      const updated = await getPostById(db.client, postId)
+      if (!updated) {
+        throw notFoundError("Post not found")
+      }
+      return c.json(serializePost(updated))
+    } finally {
+      db.close()
+    }
   })
 
   communities.get("/:communityId/posts", async (c) => {

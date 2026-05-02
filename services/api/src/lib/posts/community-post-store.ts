@@ -231,6 +231,8 @@ export async function updatePostLinkPreviewMetadata(input: {
   postId: string
   linkOgImageUrl: string | null
   linkOgTitle: string | null
+  linkEnrichmentSnapshotJson?: string | null
+  linkEnrichmentSyncedAt?: string | null
   updatedAt: string
 }): Promise<void> {
   await input.client.execute({
@@ -238,7 +240,9 @@ export async function updatePostLinkPreviewMetadata(input: {
       UPDATE posts
       SET link_og_image_url = ?2,
           link_og_title = ?3,
-          updated_at = ?4
+          link_enrichment_snapshot_json = COALESCE(?4, link_enrichment_snapshot_json),
+          link_enrichment_synced_at = COALESCE(?5, link_enrichment_synced_at),
+          updated_at = ?6
       WHERE post_id = ?1
         AND post_type = 'link'
     `,
@@ -246,6 +250,8 @@ export async function updatePostLinkPreviewMetadata(input: {
       input.postId,
       input.linkOgImageUrl,
       input.linkOgTitle,
+      input.linkEnrichmentSnapshotJson ?? null,
+      input.linkEnrichmentSyncedAt ?? null,
       input.updatedAt,
     ],
   })

@@ -3013,7 +3013,7 @@ const spec = {
       }
     },
     "/communities/{community_id}/song-artifact-uploads/{song_artifact_upload_id}/content": {
-      "post": {
+      "put": {
         "tags": [
           "Posts"
         ],
@@ -3065,7 +3065,7 @@ const spec = {
             "$ref": "#/components/responses/NotFound"
           }
         },
-        "operationId": "post_communities_by_community_id_song_artifact_uploads_by_song_artifact_upload_id_content"
+        "operationId": "put_communities_by_community_id_song_artifact_uploads_by_song_artifact_upload_id_content"
       }
     },
     "/communities/{community_id}/song-artifacts": {
@@ -3576,12 +3576,6 @@ const spec = {
                 }
               }
             }
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
           }
         }
       }
@@ -5180,6 +5174,7 @@ const spec = {
             "enum": [
               "draft",
               "inspecting",
+              "dns_setup_required",
               "challenge_required",
               "challenge_pending",
               "verifying",
@@ -9506,6 +9501,36 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "translated_embeds": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "$ref": "#/components/schemas/LocalizedPostEmbedTranslation"
+            }
+          },
+          "source_hash": {
+            "type": "string"
+          }
+        }
+      },
+      "LocalizedPostEmbedTranslation": {
+        "type": "object",
+        "required": [
+          "embed_key",
+          "source_hash"
+        ],
+        "properties": {
+          "embed_key": {
+            "type": "string"
+          },
+          "translated_question": {
+            "type": "string",
+            "nullable": true
+          },
+          "translated_title": {
+            "type": "string",
+            "nullable": true
+          },
           "source_hash": {
             "type": "string"
           }
@@ -9658,10 +9683,10 @@ const spec = {
       "DismissTaskRequest": {
         "type": "object",
         "required": [
-          "task_id"
+          "task"
         ],
         "properties": {
-          "task_id": {
+          "task": {
             "type": "string"
           }
         }
