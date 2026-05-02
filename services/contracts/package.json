@@ -10,10 +10,11 @@
   "scripts": {
     "generate": "bun run scripts/generate-from-core.ts",
     "check:fresh": "bun run scripts/check-generated-fresh.ts",
-    "check": "tsc --noEmit"
+    "check": "tsgo --noEmit"
   },
   "devDependencies": {
     "@types/node": "^24.5.2",
+    "@typescript/native-preview": "^7.0.0-dev.20260421.2",
     "typescript": "^5.8.3"
   }
 }

@@ -12,11 +12,12 @@
     "yaml": "^2.8.1"
   },
   "scripts": {
-    "check": "tsc --noEmit",
+    "check": "tsgo --noEmit",
     "test": "bun test"
   },
   "devDependencies": {
     "@types/node": "^24.5.2",
+    "@typescript/native-preview": "^7.0.0-dev.20260421.2",
     "typescript": "^5.8.3"
   }
 }

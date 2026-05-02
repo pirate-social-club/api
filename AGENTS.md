@@ -14,6 +14,8 @@ Run the repo-level cheap gate before committing API service changes:
 rtk bun run check
 ```
 
+The API service, contracts, and CLI type-check scripts use the TypeScript 7 native preview compiler (`tsgo`). They are faster than the old `tsc` checks, but the repo-level `check` still chains multiple package checks; use service-local `rtk bun run check` when verifying a focused change on a weak machine.
+
 For focused route work, run the smallest touched route suite after typecheck. For CLI changes, run `rtk bun run check:cli` after `services/cli` dependencies are installed. Use full `agent-ci` only after the focused checks are green.
 
 ## Route Tests
