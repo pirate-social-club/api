@@ -76,6 +76,46 @@ describe("analytics routes", () => {
     expect(body.message).toBe("Unsupported analytics event")
   })
 
+  test("client analytics route stores community ids for community views", async () => {
+    const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanup = setup.cleanup
+    const env = buildTestEnv({
+      DEV_MEMORY_STORE_ENABLED: "false",
+      CONTROL_PLANE_DATABASE_URL: `file:${setup.databasePath}`,
+      ANALYTICS_ENABLED: "true",
+      ANALYTICS_HMAC_SECRET: "analytics-secret",
+      ENVIRONMENT: "staging",
+    })
+
+    const response = await app.request("http://pirate.test/analytics/events", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        event_id: "evt_route_community_viewed",
+        event_name: "community_viewed",
+        community_id: "cmt_route_community",
+        properties: {
+          tab: "posts",
+        },
+      }),
+    }, env)
+
+    expect(response.status).toBe(202)
+
+    const result = await setup.client.execute({
+      sql: `
+        SELECT event_name, community_id, properties_json
+        FROM analytics_outbox
+        WHERE analytics_event_id = ?1
+      `,
+      args: ["evt_route_community_viewed"],
+    })
+
+    expect(result.rows[0]?.event_name).toBe("community_viewed")
+    expect(result.rows[0]?.community_id).toBe("cmt_route_community")
+    expect(result.rows[0]?.properties_json).toBe(JSON.stringify({ tab: "posts" }))
+  })
+
   test("client analytics route queues PWA install funnel events", async () => {
     const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
     cleanup = setup.cleanup
