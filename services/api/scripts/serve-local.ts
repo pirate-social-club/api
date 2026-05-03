@@ -10,6 +10,12 @@ import {
 
 const port = Number(process.env.PORT || "8787")
 
+function envFlag(value: string | undefined, defaultValue: boolean): boolean {
+  if (value == null || value.trim() === "") return defaultValue
+  const normalized = value.trim().toLowerCase()
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on"
+}
+
 async function readRequestBody(req: IncomingMessage): Promise<Uint8Array | null> {
   const chunks: Uint8Array[] = []
   for await (const chunk of req) {
@@ -70,6 +76,12 @@ async function main(): Promise<void> {
     ...wranglerEnv,
     ...devVars,
     ...process.env,
+    ...(envFlag(process.env.PIRATE_DEV_USE_REMOTE_CONTROL_PLANE, false)
+      ? {}
+      : {
+          CONTROL_PLANE_DATABASE_URL: devVars.CONTROL_PLANE_DATABASE_URL,
+          LOCAL_COMMUNITY_DB_ROOT: devVars.LOCAL_COMMUNITY_DB_ROOT,
+        }),
   }
   const localDevStorage = resolveLocalDevStorage(baseEnv)
   if (localDevStorage.controlPlaneDbRehomedFromPath) {

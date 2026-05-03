@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process"
 import { resolve as resolveDns } from "node:dns/promises"
 import { existsSync } from "node:fs"
-import { connect } from "node:net"
+import { createServer } from "node:net"
 import { fileURLToPath } from "node:url"
 import { readDevVarsFromCwd } from "./_lib/dev-vars"
 import { isTryCloudflareOrigin, mergeCommaSeparatedValues, startTryCloudflareTunnel, type ManagedTunnel } from "./_lib/dev-public-tunnel"
@@ -54,23 +54,39 @@ function assistantWorkerRootPath(): string {
   return fileURLToPath(new URL("../../../../assistant-worker", import.meta.url))
 }
 
-async function isTcpPortOpen(port: number, host = "127.0.0.1"): Promise<boolean> {
+async function isTcpPortInUse(port: number): Promise<boolean> {
   return await new Promise((resolve) => {
-    const socket = connect({ host, port })
-    socket.once("connect", () => {
-      socket.end()
+    const server = createServer()
+    server.once("error", () => {
       resolve(true)
     })
-    socket.once("error", () => {
-      socket.destroy()
-      resolve(false)
+    server.once("listening", () => {
+      server.close(() => {
+        resolve(false)
+      })
     })
+    server.listen(port)
   })
 }
 
-async function findAvailableTcpPort(startPort: number, host = "127.0.0.1"): Promise<number> {
+async function isTcpPortAvailable(port: number): Promise<boolean> {
+  return await new Promise((resolve) => {
+    const server = createServer()
+    server.once("error", () => {
+      resolve(false)
+    })
+    server.once("listening", () => {
+      server.close(() => {
+        resolve(true)
+      })
+    })
+    server.listen(port)
+  })
+}
+
+async function findAvailableTcpPort(startPort: number): Promise<number> {
   for (let port = startPort; port < startPort + 100; port += 1) {
-    if (!await isTcpPortOpen(port, host)) return port
+    if (await isTcpPortAvailable(port)) return port
   }
   throw new Error(`could not find an available TCP port starting at ${startPort}`)
 }
@@ -191,6 +207,12 @@ async function main(): Promise<void> {
   )
   const localEnv = {
     ...process.env,
+    ...(envFlag(process.env.PIRATE_DEV_USE_REMOTE_CONTROL_PLANE, false)
+      ? {}
+      : {
+          CONTROL_PLANE_DATABASE_URL: devVars.CONTROL_PLANE_DATABASE_URL,
+          LOCAL_COMMUNITY_DB_ROOT: devVars.LOCAL_COMMUNITY_DB_ROOT,
+        }),
     SPACES_VERIFIER_BASE_URL: spacesVerifierBaseUrl,
     SPACES_VERIFIER_AUTH_TOKEN: useRemoteVerifiers ? process.env.SPACES_VERIFIER_AUTH_TOKEN || devVars.SPACES_VERIFIER_AUTH_TOKEN || "" : "",
     HNS_VERIFIER_BASE_URL: hnsVerifierBaseUrl,
@@ -211,9 +233,9 @@ async function main(): Promise<void> {
   const assistantInspectorPort = await findAvailableTcpPort(Number(process.env.PIRATE_DEV_ASSISTANT_INSPECTOR_PORT || "9239"))
   const openRouterProxyPort = Number(process.env.PIRATE_DEV_OPENROUTER_PROXY_PORT || "8792")
   const openRouterProxyOrigin = `http://127.0.0.1:${Number.isInteger(openRouterProxyPort) && openRouterProxyPort > 0 ? openRouterProxyPort : 8792}`
-  const webPortInUse = shouldStartWeb ? await isTcpPortOpen(webPort) : false
-  const assistantPortInUse = shouldStartAssistant ? await isTcpPortOpen(assistantPort) : false
-  const openRouterProxyPortInUse = shouldStartAssistant ? await isTcpPortOpen(openRouterProxyPort) : false
+  const webPortInUse = shouldStartWeb ? await isTcpPortInUse(webPort) : false
+  const assistantPortInUse = shouldStartAssistant ? await isTcpPortInUse(assistantPort) : false
+  const openRouterProxyPortInUse = shouldStartAssistant ? await isTcpPortInUse(openRouterProxyPort) : false
   const resolvedWebRoot = webRootPath()
   const resolvedAssistantWorkerRoot = assistantWorkerRootPath()
   const assistantEnv = {

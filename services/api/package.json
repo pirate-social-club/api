@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev --port 8787",
-    "dev:local": "bun run scripts/serve-local.ts",
-    "dev:local:full": "bun run scripts/dev-local-full.ts",
+    "dev:local": "infisical run --project-config-dir ../../../core --env=dev --path=/services/api -- bun run scripts/serve-local.ts",
+    "dev:local:raw": "bun run scripts/serve-local.ts",
+    "dev:local:full": "infisical run --project-config-dir ../../../core --env=dev --path=/services/api -- bun run scripts/dev-local-full.ts",
+    "dev:local:full:raw": "bun run scripts/dev-local-full.ts",
     "dev:local:reset": "bun run scripts/reset-local-dev-storage.ts",
     "cancel:story-runtime-pending-tx": "bun run scripts/cancel-story-runtime-pending-tx.ts",
     "fund:story-runtime-signers": "bun run scripts/fund-story-runtime-signers.ts",

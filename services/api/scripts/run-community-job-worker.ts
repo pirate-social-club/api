@@ -21,10 +21,23 @@ function hasConfiguredValue(value: string | undefined): boolean {
   return String(value ?? "").trim().length > 0
 }
 
+function envFlag(value: string | undefined, defaultValue: boolean): boolean {
+  if (value == null || value.trim() === "") return defaultValue
+  const normalized = value.trim().toLowerCase()
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on"
+}
+
 async function main(): Promise<void> {
+  const devVars = readDevVarsFromCwd()
   const rawEnv = {
-    ...readDevVarsFromCwd(),
+    ...devVars,
     ...process.env,
+    ...(envFlag(process.env.PIRATE_DEV_USE_REMOTE_CONTROL_PLANE, false)
+      ? {}
+      : {
+          CONTROL_PLANE_DATABASE_URL: devVars.CONTROL_PLANE_DATABASE_URL,
+          LOCAL_COMMUNITY_DB_ROOT: devVars.LOCAL_COMMUNITY_DB_ROOT,
+        }),
   }
   const localDevStorage = resolveLocalDevStorage(rawEnv)
   if (localDevStorage.controlPlaneDbRehomedFromPath) {
