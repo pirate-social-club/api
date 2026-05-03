@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto"
 import { createMiddleware } from "hono/factory"
 import { authError } from "./errors"
 import { getControlPlaneAgentOwnershipRepository } from "./agents/agent-ownership-repository"
+import { getUserRepository } from "./auth/repositories"
 import { verifyPirateAccessToken } from "./auth/pirate-session-token"
 import type { Env } from "../env"
 
@@ -37,6 +38,11 @@ export async function authenticateUserToken(input: {
   token: string
 }): Promise<ActorContext> {
   const session = await verifyPirateAccessToken({ env: input.env, token: input.token })
+  const user = await getUserRepository(input.env).getUserById(session.userId)
+  if (!user) {
+    throw authError("Authentication failed")
+  }
+
   return {
     userId: session.userId,
     authType: "user",

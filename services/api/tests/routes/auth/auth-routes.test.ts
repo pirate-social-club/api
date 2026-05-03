@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test"
 import { app } from "../../../src/index"
 import { setPrivyAccessProofVerifierForTests } from "../../../src/lib/auth/privy-auth"
 import { setEnsResolverForTests } from "../../../src/lib/auth/ens-linked-handle-service"
+import { mintPirateAccessToken } from "../../../src/lib/auth/pirate-session-token"
 import type { Env } from "../../../src/types"
 import { buildTestEnv, createRouteTestContext, json, mintUpstreamJwt, resetMemoryStore } from "../../helpers"
 
@@ -334,6 +335,19 @@ describe("auth routes", () => {
   test("missing bearer token returns auth_error", async () => {
     const env = buildTestEnv()
     const response = await app.request("http://pirate.test/users/me", {}, env)
+    await expectAuthError(response)
+  })
+
+  test("stale Pirate access token for missing local user returns auth_error", async () => {
+    const env = buildTestEnv()
+    const token = await mintPirateAccessToken({ env, userId: "usr_missing_local_user" })
+
+    const response = await app.request("http://pirate.test/users/me", {
+      headers: {
+        authorization: `Bearer ${token}`,
+      },
+    }, env)
+
     await expectAuthError(response)
   })
 
