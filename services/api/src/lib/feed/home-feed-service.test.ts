@@ -232,6 +232,7 @@ function createCommunitySummary(input: {
     route_slug: input.communityId,
     avatar_ref: null,
     member_count: null,
+    follower_count: null,
     view_count: null,
     updated_at: input.updatedAt ?? "2026-04-18T00:00:00.000Z",
   }

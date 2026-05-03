@@ -77,7 +77,7 @@ describe("feed routes", () => {
       object: "home_feed_community_summary",
       display_name: "Feed Active",
       route_slug: "feed-active",
-      view_count: 0,
+      view_count: null,
     })
   })
 })

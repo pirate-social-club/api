@@ -149,7 +149,7 @@ function buildCommunitySummary(community: Awaited<ReturnType<CommunityReadReposi
     avatar_ref: null,
     member_count: null,
     follower_count: community.follower_count,
-    view_count: community.follower_count,
+    view_count: null,
     updated_at: community.updated_at,
   }
 }
