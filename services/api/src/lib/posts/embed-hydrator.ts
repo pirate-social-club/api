@@ -107,6 +107,11 @@ function extractTweetText(html: string): string | null {
   return text ? text.slice(0, 500) : null
 }
 
+function extractTweetMediaUrl(html: string): string | null {
+  const match = html.match(/https?:\/\/pic\.(?:twitter|x)\.com\/[a-zA-Z0-9]+/iu)
+  return match?.[0] ?? null
+}
+
 function numberField(value: unknown): number | null {
   const parsed = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10)
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
@@ -777,14 +782,16 @@ async function hydrateXPostEmbed(input: {
   const fallbackMetadata = await fetchLinkPreviewMetadata({
     fetcher: input.fetcher,
     url: input.target.canonicalUrl,
+    userAgent: "Twitterbot",
   })
 
+  const extractedMediaUrl = oembed ? extractTweetMediaUrl(oembed.html) : null
   const preview: XPostEmbed["preview"] = {
     author_name: oembed?.authorName ?? null,
     author_url: oembed?.authorUrl ?? null,
     text: oembed ? extractTweetText(oembed.html) : fallbackMetadata?.title ?? null,
-    has_media: Boolean(fallbackMetadata?.imageUrl),
-    media_url: fallbackMetadata?.imageUrl ?? null,
+    has_media: Boolean(fallbackMetadata?.imageUrl || extractedMediaUrl),
+    media_url: fallbackMetadata?.imageUrl ?? extractedMediaUrl ?? null,
     created: null,
   }
   const state: XPostEmbed["state"] = oembed ? "embed" : "unavailable"

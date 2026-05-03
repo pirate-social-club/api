@@ -284,6 +284,7 @@ export async function fetchLinkPreviewMetadata(input: {
   url: string
   fetcher?: typeof fetch
   timeoutMs?: number
+  userAgent?: string
 }): Promise<LinkPreviewMetadata> {
   const pageUrl = normalizePreviewUrl(input.url, input.url)
   if (!pageUrl) {
@@ -300,7 +301,7 @@ export async function fetchLinkPreviewMetadata(input: {
     const response = await (input.fetcher ?? fetch)(pageUrl, {
       headers: {
         accept: "text/html,application/xhtml+xml",
-        "user-agent": "Pirate link preview fetcher",
+        "user-agent": input.userAgent ?? "Pirate link preview fetcher",
       },
       redirect: "follow",
       signal: controller.signal,
