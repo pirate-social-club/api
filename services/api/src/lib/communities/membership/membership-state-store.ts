@@ -30,7 +30,7 @@ export async function getCommunityMembershipState(
             FROM community_roles
             WHERE community_id = ?1
               AND user_id = ?2
-              AND role = 'owner'
+              AND role IN ('owner', 'admin', 'moderator')
             ORDER BY created_at DESC
             LIMIT 1
           ) AS role_status

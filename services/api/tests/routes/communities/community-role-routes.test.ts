@@ -225,4 +225,54 @@ describe("community role routes", () => {
     )
     expect(response.status).toBe(404)
   })
+
+  test("moderator role grants community access for posting", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const owner = await exchangeJwt(ctx.env, "community-role-post-owner")
+    await completeUniqueHumanVerification(ctx.env, owner.accessToken)
+    const moderator = await exchangeJwt(ctx.env, "community-role-post-moderator")
+    const communityId = await createTestCommunity({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+    })
+
+    const beforeGrant = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Before moderator grant",
+        body: "This account has not joined the community.",
+        idempotency_key: "moderator-before-role",
+      },
+      ctx.env,
+      moderator.accessToken,
+    )
+    expect(beforeGrant.status).toBe(404)
+
+    const grantModerator = await requestJson(
+      `http://pirate.test/communities/${communityId}/roles/grant`,
+      {
+        user_id: moderator.userId,
+        role: "moderator",
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(grantModerator.status).toBe(200)
+
+    const afterGrant = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Moderator post",
+        body: "Moderator role grants access without satisfying the member gate.",
+        idempotency_key: "moderator-after-role",
+      },
+      ctx.env,
+      moderator.accessToken,
+    )
+    expect(afterGrant.status).toBe(201)
+  })
 })
