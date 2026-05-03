@@ -8,6 +8,7 @@ import type {
   CreateUserReportRequest,
   ModerationAction,
   ModerationCase,
+  ModerationCaseListItem,
   ModerationCaseOpenedBy,
   ModerationSignal,
   ModerationSignalSeverity,
@@ -80,6 +81,62 @@ function serializeModerationAction(row: unknown): ModerationAction {
     note: stringOrNull(rowValue(row, "note")),
     created_at: requiredString(row, "created_at"),
   }
+}
+
+export async function createModerationSignal(input: {
+  executor: DbExecutor
+  communityId: string
+  postId: string
+  moderationCaseId: string
+  signalType: string
+  severity: ModerationSignalSeverity
+  provider: string
+  providerLabel: string
+  analysisResultRef: string | null
+  evidenceRef: string | null
+  now: string
+}): Promise<ModerationSignal> {
+  const moderationSignalId = makeId("msi")
+  await input.executor.execute({
+    sql: `
+      INSERT INTO moderation_signals (
+        moderation_signal_id, community_id, post_id, moderation_case_id,
+        analysis_result_ref, source, signal_type, severity,
+        provider, provider_label, evidence_ref, created_at
+      ) VALUES (
+        ?1, ?2, ?3, ?4,
+        ?5, 'platform_analysis', ?6, ?7,
+        ?8, ?9, ?10, ?11
+      )
+    `,
+    args: [
+      moderationSignalId,
+      input.communityId,
+      input.postId,
+      input.moderationCaseId,
+      input.analysisResultRef,
+      input.signalType,
+      input.severity,
+      input.provider,
+      input.providerLabel,
+      input.evidenceRef,
+      input.now,
+    ],
+  })
+  const row = await executeFirst(input.executor, {
+    sql: `
+      SELECT moderation_signal_id, community_id, post_id, comment_id, analysis_result_ref,
+             source, signal_type, severity, provider, provider_label, evidence_ref, created_at
+      FROM moderation_signals
+      WHERE moderation_signal_id = ?1
+      LIMIT 1
+    `,
+    args: [moderationSignalId],
+  })
+  if (!row) {
+    throw internalError("Moderation signal is missing after insert")
+  }
+  return serializeModerationSignal(row)
 }
 
 export async function getOpenModerationCaseForTarget(input: {
@@ -257,21 +314,45 @@ export async function createUserReport(input: {
   return serializeUserReport(created)
 }
 
+function serializeModerationCaseListItem(row: unknown): ModerationCaseListItem {
+  const caseRow = serializeModerationCase(row)
+  const postId = stringOrNull(rowValue(row, "post_id"))
+  const postType = stringOrNull(rowValue(row, "post_type"))
+  return {
+    ...caseRow,
+    post: postId && postType
+      ? {
+          post_id: postId,
+          post_type: postType,
+          status: requiredString(row, "post_status"),
+          title: stringOrNull(rowValue(row, "post_title")),
+          body: stringOrNull(rowValue(row, "post_body")),
+          caption: stringOrNull(rowValue(row, "post_caption")),
+          media_refs_json: stringOrNull(rowValue(row, "media_refs_json")),
+        }
+      : null,
+  }
+}
+
 export async function listModerationCases(input: {
   executor: DbExecutor
   communityId: string
-}): Promise<ModerationCase[]> {
+}): Promise<ModerationCaseListItem[]> {
   const result = await input.executor.execute({
     sql: `
-      SELECT moderation_case_id, community_id, post_id, comment_id, status, queue_scope,
-             priority, opened_by, created_at, updated_at, resolved_at
-      FROM moderation_cases
-      WHERE community_id = ?1
-      ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END ASC, updated_at DESC, moderation_case_id DESC
+      SELECT
+        mc.moderation_case_id, mc.community_id, mc.post_id, mc.comment_id, mc.status, mc.queue_scope,
+        mc.priority, mc.opened_by, mc.created_at, mc.updated_at, mc.resolved_at,
+        p.post_id as post_post_id, p.post_type, p.status as post_status, p.title as post_title,
+        p.body as post_body, p.caption as post_caption, p.media_refs_json
+      FROM moderation_cases mc
+      LEFT JOIN posts p ON p.post_id = mc.post_id
+      WHERE mc.community_id = ?1
+      ORDER BY CASE mc.status WHEN 'open' THEN 0 ELSE 1 END ASC, mc.updated_at DESC, mc.moderation_case_id DESC
     `,
     args: [input.communityId],
   })
-  return result.rows.map((row) => serializeModerationCase(row))
+  return result.rows.map((row) => serializeModerationCaseListItem(row))
 }
 
 export async function listModerationSignalsForCase(input: {
@@ -394,6 +475,23 @@ export async function setPostModerationStatus(input: {
       WHERE post_id = ?1
     `,
     args: [input.postId, input.status, input.now],
+  })
+}
+
+export async function approveReviewHeldPost(input: {
+  executor: DbExecutor
+  postId: string
+  now: string
+}): Promise<void> {
+  await input.executor.execute({
+    sql: `
+      UPDATE posts
+      SET status = 'published',
+          analysis_state = 'allow',
+          updated_at = ?2
+      WHERE post_id = ?1
+    `,
+    args: [input.postId, input.now],
   })
 }
 

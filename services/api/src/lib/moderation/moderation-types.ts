@@ -82,7 +82,19 @@ export type ModerationCaseDetail = {
   actions: Array<ModerationAction>
 }
 
+export type ModerationCaseListItem = ModerationCase & {
+  post: {
+    post_id: string
+    post_type: string
+    status: string
+    title: string | null
+    body: string | null
+    caption: string | null
+    media_refs_json: string | null
+  } | null
+}
+
 export type ModerationCaseListResponse = {
-  items: Array<ModerationCase>
+  items: Array<ModerationCaseListItem>
   next_cursor: string | null
 }

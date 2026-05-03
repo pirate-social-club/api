@@ -276,4 +276,81 @@ describe("moderation routes", () => {
     expect(actionBody.actions).toHaveLength(1)
     expect(actionBody.actions[0]?.action_type).toBe("remove")
   })
+
+  test("owners approve review-held draft posts with restore, not dismiss", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const owner = await exchangeJwt(ctx.env, "moderation-routes-review-owner")
+    await completeUniqueHumanVerification(ctx.env, owner.accessToken)
+    const community = await createCommunity(ctx.env, owner.accessToken, "Moderation Review Club")
+
+    const heldPost = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/posts`,
+      {
+        post_type: "text",
+        title: "[review-required] Held Draft",
+        body: "Force the local review-held stub path.",
+        idempotency_key: "moderation-review-held-post",
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(heldPost.status).toBe(202)
+    const heldPostBody = await json(heldPost) as {
+      id: string
+      status: string
+      analysis_state: string
+      content_safety_state: string
+    }
+    expect(heldPostBody.status).toBe("draft")
+    expect(heldPostBody.analysis_state).toBe("review_required")
+    expect(heldPostBody.content_safety_state).toBe("pending")
+
+    const cases = await app.request(
+      `http://pirate.test/communities/${community.communityId}/moderation/cases`,
+      {
+        headers: {
+          authorization: `Bearer ${owner.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(cases.status).toBe(200)
+    const casesBody = await json(cases) as { items: Array<{ moderation_case_id: string; post_id: string | null; status: string }> }
+    const moderationCaseId = casesBody.items[0]?.moderation_case_id
+    expect(typeof moderationCaseId).toBe("string")
+    expect(casesBody.items[0]?.status).toBe("open")
+
+    const dismiss = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/moderation/cases/${moderationCaseId}/actions`,
+      {
+        action_type: "dismiss",
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(dismiss.status).toBe(400)
+
+    const approve = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/moderation/cases/${moderationCaseId}/actions`,
+      {
+        action_type: "restore",
+        note: "Approved by owner",
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(approve.status).toBe(200)
+    const approveBody = await json(approve) as {
+      case: { status: string }
+      post: { status: string; analysis_state: string; content_safety_state: string } | null
+      actions: Array<{ action_type: string }>
+    }
+    expect(approveBody.case.status).toBe("resolved")
+    expect(approveBody.post?.status).toBe("published")
+    expect(approveBody.post?.analysis_state).toBe("allow")
+    expect(approveBody.post?.content_safety_state).toBe("safe")
+    expect(approveBody.actions[0]?.action_type).toBe("restore")
+  })
 })

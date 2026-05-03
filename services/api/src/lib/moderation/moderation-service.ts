@@ -26,6 +26,7 @@ import {
   setCommentModerationStatus,
   setPostAgeGatePolicy,
   setPostModerationStatus,
+  approveReviewHeldPost,
   updateModerationCaseOpenedBy,
 } from "./community-moderation-store"
 import type {
@@ -365,6 +366,9 @@ async function applyModerationAction(input: {
     }
     switch (input.body.action_type) {
       case "dismiss":
+        if (post.status === "draft") {
+          throw badRequestError("Held draft posts must be approved, hidden, or removed")
+        }
         return {}
       case "hide":
         await setPostModerationStatus({
@@ -383,12 +387,20 @@ async function applyModerationAction(input: {
         })
         return { previousStatus: post.status, nextStatus: "removed" }
       case "restore":
-        await setPostModerationStatus({
-          executor: input.dbClient,
-          postId: post.post_id,
-          status: "published",
-          now: input.now,
-        })
+        if (post.status === "draft" && post.analysis_state === "review_required") {
+          await approveReviewHeldPost({
+            executor: input.dbClient,
+            postId: post.post_id,
+            now: input.now,
+          })
+        } else {
+          await setPostModerationStatus({
+            executor: input.dbClient,
+            postId: post.post_id,
+            status: "published",
+            now: input.now,
+          })
+        }
         return { previousStatus: post.status, nextStatus: "published" }
       case "age_gate":
         await setPostAgeGatePolicy({
@@ -466,7 +478,6 @@ export async function resolveModerationCaseWithAction(input: {
       communityId: input.communityId,
       userId: input.userId,
     })
-    await requireVerifiedHuman(input.userRepository, input.userId)
 
     const caseRow = await getModerationCaseById({
       executor: db.client,
