@@ -67,4 +67,21 @@ describe("health route", () => {
     expect(allowed.headers.get("access-control-allow-origin")).toBe("https://app.pirate.test")
     expect(denied.headers.get("access-control-allow-origin")).toBeNull()
   })
+
+  test("CORS preflight allows binary artifact PUT uploads", async () => {
+    const response = await app.request("http://pirate.test/communities/com_test/song-artifact-uploads/sau_test/content", {
+      method: "OPTIONS",
+      headers: {
+        origin: "http://localhost:5173",
+        "access-control-request-method": "PUT",
+        "access-control-request-headers": "content-type,authorization",
+      },
+    }, {
+      CORS_ALLOWED_ORIGINS: "http://localhost:5173",
+    })
+
+    expect(response.status).toBe(204)
+    expect(response.headers.get("access-control-allow-origin")).toBe("http://localhost:5173")
+    expect(response.headers.get("access-control-allow-methods")).toContain("PUT")
+  })
 })

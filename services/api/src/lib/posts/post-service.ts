@@ -28,6 +28,7 @@ import {
   resolveSongPostBundle,
   resolveVideoPostAsset,
 } from "../song-artifacts/song-artifact-post-resolution-service"
+import { buildPublicSongArtifactContentUrl } from "../song-artifacts/song-artifact-storage"
 import {
   createAssetForPost,
   createSongAssetForPost,
@@ -217,11 +218,11 @@ export async function createPost(input: {
             : postAnalysis.content_safety_state === "safe"
               ? resolvedBundle.contentSafetyState
               : postAnalysis.content_safety_state,
-        age_gate_policy: resolvedBundle.ageGatePolicy === "18_plus" || postAnalysis.age_gate_policy === "18_plus" ? "18_plus" : "none",
+        age_gate_policy: community.default_age_gate_policy === "18_plus" || resolvedBundle.ageGatePolicy === "18_plus" || postAnalysis.age_gate_policy === "18_plus" ? "18_plus" : "none",
         status: mergedAnalysisState === "review_required" ? "draft" : "published",
       }
-    } else if (input.body.post_type === "video" && input.body.access_mode) {
-      const accessMode = input.body.access_mode
+    } else if (input.body.post_type === "video") {
+      const accessMode = input.body.access_mode ?? "public"
       const resolvedVideo = await resolveVideoPostAsset({
         env: input.env,
         userId: input.userId,
@@ -229,6 +230,14 @@ export async function createPost(input: {
         mediaRefs: input.body.media_refs,
       })
       resolvedVideoAsset = resolvedVideo
+      const publicVideoMediaRefs = resolvedVideo.mediaRefs.map((mediaRef) => ({
+        ...mediaRef,
+        storage_ref: buildPublicSongArtifactContentUrl(
+          new URL(input.requestUrl).origin,
+          input.communityId,
+          resolvedVideo.upload.id,
+        ),
+      }))
       const lockedPosterMediaRefs = resolvedVideo.mediaRefs[0]?.poster_ref
         ? [{
           ...resolvedVideo.mediaRefs[0],
@@ -240,9 +249,9 @@ export async function createPost(input: {
       writeBody = {
         ...input.body,
         identity_mode: "public",
-        media_refs: accessMode === "locked" ? lockedPosterMediaRefs : resolvedVideo.mediaRefs,
-        access_mode: accessMode,
-        asset_id: input.body.asset_id ?? makeId("ast"),
+        media_refs: accessMode === "locked" ? lockedPosterMediaRefs : publicVideoMediaRefs,
+        access_mode: input.body.access_mode,
+        asset_id: input.body.access_mode ? input.body.asset_id ?? makeId("ast") : input.body.asset_id,
         rights_basis: input.body.rights_basis ?? (input.body.license_preset || accessMode === "locked" ? "original" : "none"),
       }
 
@@ -258,7 +267,7 @@ export async function createPost(input: {
       analysisOverride = {
         analysis_state: mergedAnalysisState,
         content_safety_state: mergedAnalysisState === "review_required" ? "pending" : postAnalysis.content_safety_state,
-        age_gate_policy: postAnalysis.age_gate_policy,
+        age_gate_policy: community.default_age_gate_policy === "18_plus" || postAnalysis.age_gate_policy === "18_plus" ? "18_plus" : "none",
         status: mergedAnalysisState === "review_required" ? "draft" : "published",
       }
     } else {
@@ -274,7 +283,7 @@ export async function createPost(input: {
       analysisOverride = {
         analysis_state: mergedAnalysisState,
         content_safety_state: mergedAnalysisState === "review_required" ? "pending" : postAnalysis.content_safety_state,
-        age_gate_policy: postAnalysis.age_gate_policy,
+        age_gate_policy: community.default_age_gate_policy === "18_plus" || postAnalysis.age_gate_policy === "18_plus" ? "18_plus" : "none",
         status: mergedAnalysisState === "review_required" ? "draft" : "published",
       }
     }

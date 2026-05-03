@@ -3,6 +3,7 @@ import { openCommunityDb } from "../communities/community-db-factory"
 import { badRequestError, notFoundError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
+import { rowValue } from "../sql-row"
 import { sha256Hex } from "../crypto"
 import {
   createSongArtifactUploadIntent,
@@ -13,6 +14,7 @@ import {
   assertSongArtifactMimeType,
   assertSongArtifactSize,
   buildSongArtifactContentUrl,
+  buildPublicSongArtifactContentUrl,
   fetchSongArtifactBytes,
   type SongArtifactKind,
   uploadSongArtifactBytes,
@@ -67,8 +69,10 @@ export async function createSongArtifactUpload(input: {
 
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
-    await requireMemberAccess(db.client, input.communityId, input.userId)
-    await requireVerifiedHuman(input.userRepository, input.userId)
+    const membership = await requireMemberAccess(db.client, input.communityId, input.userId)
+    await requireVerifiedHuman(input.userRepository, input.userId, {
+      bypassForCommunityOwner: membership.role_status === "active",
+    })
 
     const client = getControlPlaneClient(input.env)
     const songArtifactUploadId = makeId("sau")
@@ -100,8 +104,10 @@ export async function uploadSongArtifactContent(input: {
 
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
-    await requireMemberAccess(db.client, input.communityId, input.userId)
-    await requireVerifiedHuman(input.userRepository, input.userId)
+    const membership = await requireMemberAccess(db.client, input.communityId, input.userId)
+    await requireVerifiedHuman(input.userRepository, input.userId, {
+      bypassForCommunityOwner: membership.role_status === "active",
+    })
 
     const client = getControlPlaneClient(input.env)
     const upload = await requireSongArtifactUpload(client, input.communityId, input.songArtifactUploadId)
@@ -164,5 +170,61 @@ export async function fetchSongArtifactContent(input: {
   return await fetchSongArtifactBytes({
     env: input.env,
     objectKey: upload.storage_object_key,
+  })
+}
+
+export async function fetchPublishedPublicSongArtifactContent(input: {
+  env: Env
+  communityId: string
+  songArtifactUploadId: string
+  communityRepository: SongArtifactCommunityRepository
+  origin: string
+}): Promise<Response> {
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  try {
+    const publicStorageRef = buildPublicSongArtifactContentUrl(
+      input.origin,
+      input.communityId,
+      input.songArtifactUploadId,
+    )
+    const legacyStorageRef = buildSongArtifactContentUrl(
+      input.origin,
+      input.communityId,
+      input.songArtifactUploadId,
+    )
+    const result = await db.client.execute({
+      sql: `
+        SELECT post_id
+        FROM posts
+        WHERE community_id = ?1
+          AND status = 'published'
+          AND visibility = 'public'
+          AND (access_mode IS NULL OR access_mode = 'public')
+          AND media_refs_json IS NOT NULL
+          AND (
+            instr(media_refs_json, ?2) > 0
+            OR instr(media_refs_json, ?3) > 0
+            OR instr(media_refs_json, ?4) > 0
+          )
+        LIMIT 1
+      `,
+      args: [
+        input.communityId,
+        publicStorageRef,
+        legacyStorageRef,
+        input.songArtifactUploadId,
+      ],
+    })
+    if (!rowValue(result.rows[0], "post_id")) {
+      throw notFoundError("Song artifact content not found")
+    }
+  } finally {
+    db.close()
+  }
+
+  return await fetchSongArtifactContent({
+    env: input.env,
+    communityId: input.communityId,
+    songArtifactUploadId: input.songArtifactUploadId,
   })
 }

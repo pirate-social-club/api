@@ -129,7 +129,7 @@ export type RedditVerification = {
   verification_hint?: string | null;
   code_placement_surface?: "profile" | "bio" | "about" | null;
   last_checked_at?: number | null;
-  failure_code?: "code_not_found" | "username_not_found" | "rate_limited" | "source_error" | null;
+  failure_code?: "code_not_found" | "different_code_found" | "username_not_found" | "rate_limited" | "source_error" | null;
 };
 
 export type RedditImportSummary = {
@@ -1374,6 +1374,7 @@ export type LocalizedPostResponse = {
   comment_count?: number;
   viewer_vote: -1 | 1 | null;
   viewer_reaction_kinds: Array<"like">;
+  age_gate_viewer_state?: "proof_required" | "verified_allowed" | null;
   resolved_locale: string;
   translation_state: "ready" | "pending" | "same_language" | "policy_blocked";
   machine_translated: boolean;

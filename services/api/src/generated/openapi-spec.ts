@@ -5510,6 +5510,7 @@ const spec = {
             "nullable": true,
             "enum": [
               "code_not_found",
+              "different_code_found",
               "username_not_found",
               "rate_limited",
               "source_error"

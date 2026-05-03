@@ -811,7 +811,7 @@ CREATE TABLE reddit_verification_sessions (
     ),
     verification_hint TEXT,
     failure_code TEXT CHECK (
-        failure_code IS NULL OR failure_code IN ('code_not_found', 'username_not_found', 'rate_limited', 'source_error')
+        failure_code IS NULL OR failure_code IN ('code_not_found', 'different_code_found', 'username_not_found', 'rate_limited', 'source_error')
     ),
     checked_count INTEGER NOT NULL DEFAULT 0,
     last_checked_at TIMESTAMPTZ,

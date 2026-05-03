@@ -1,7 +1,10 @@
 import type { Env } from "../../env"
 import type { Community, CreatePostRequest, Post } from "../../types"
+import { buildDefaultAdultContentPolicy } from "../communities/community-policy-defaults"
 
-type ModerationDecisionLevel = "allow" | "review" | "disallow"
+type ModerationDecisionLevel = "allow" | "allow_with_gate" | "review" | "disallow"
+
+type AdultContentPolicy = Community["adult_content_policy"]
 
 type OpenAIModerationSettings = NonNullable<Community["openai_moderation_settings"]>
 
@@ -96,19 +99,53 @@ function highestCategoryScore(results: OpenAIModerationResult[], category: strin
   }, 0)
 }
 
-function resolveVisualPlatformDecision(
+type PolicyDecisionLevel = "allow" | "review" | "disallow"
+
+export function moreRestrictive(left: PolicyDecisionLevel, right: PolicyDecisionLevel): PolicyDecisionLevel {
+  const precedence: Record<PolicyDecisionLevel, number> = { disallow: 3, review: 2, allow: 1 }
+  return precedence[left] >= precedence[right] ? left : right
+}
+
+export function resolveAdultContentPolicy(community: Community): AdultContentPolicy {
+  if (community.adult_content_policy) {
+    return community.adult_content_policy
+  }
+  return buildDefaultAdultContentPolicy(
+    community.community_id,
+    community.updated_at ?? new Date().toISOString(),
+    community.default_age_gate_policy ?? "none",
+  )
+}
+
+export function resolveVisualPlatformDecision(
   categories: Record<string, boolean>,
   results: OpenAIModerationResult[],
   sexualMinorsBlockThreshold: number,
+  adultContentPolicy: AdultContentPolicy,
 ): ModerationDecisionLevel {
   const sexualMinorsScore = highestCategoryScore(results, "sexual/minors")
   if (flagged(categories, "sexual/minors") && sexualMinorsScore >= sexualMinorsBlockThreshold) {
     return "disallow"
   }
+
+  if (flagged(categories, "sexual")) {
+    const nudityPolicy: PolicyDecisionLevel = adultContentPolicy.explicit_nudity
+    const sexualContentPolicy: PolicyDecisionLevel = adultContentPolicy.explicit_sexual_content
+    const combined = moreRestrictive(nudityPolicy, sexualContentPolicy)
+
+    if (combined === "disallow") {
+      return "disallow"
+    }
+    if (combined === "review") {
+      return "review"
+    }
+    return "allow_with_gate"
+  }
+
   return "allow"
 }
 
-function outcomeFromDecision(decision: ModerationDecisionLevel, providerResult: Record<string, unknown> | null): PostModerationOutcome {
+export function outcomeFromDecision(decision: ModerationDecisionLevel, providerResult: Record<string, unknown> | null): PostModerationOutcome {
   if (decision === "disallow") {
     return {
       analysis_state: "blocked",
@@ -124,6 +161,15 @@ function outcomeFromDecision(decision: ModerationDecisionLevel, providerResult: 
       content_safety_state: "pending",
       status: "draft",
       age_gate_policy: "none",
+      providerResult,
+    }
+  }
+  if (decision === "allow_with_gate") {
+    return {
+      analysis_state: "allow",
+      content_safety_state: "adult",
+      status: "published",
+      age_gate_policy: "18_plus",
       providerResult,
     }
   }
@@ -214,13 +260,15 @@ export async function resolveOpenAIModerationOutcome(input: {
       }
       return merged
     }, {})
-    const decision = resolveVisualPlatformDecision(categories, results, sexualMinorsBlockThreshold)
+    const adultContentPolicy = resolveAdultContentPolicy(input.community)
+    const decision = resolveVisualPlatformDecision(categories, results, sexualMinorsBlockThreshold, adultContentPolicy)
     return outcomeFromDecision(decision, {
       provider: "openai",
       model,
       provider_result: parsed as Record<string, unknown>,
       categories,
       sexual_minors_score: highestCategoryScore(results, "sexual/minors"),
+      sexual_score: highestCategoryScore(results, "sexual"),
       sexual_minors_block_threshold: sexualMinorsBlockThreshold,
       decision,
     })

@@ -6,10 +6,11 @@ import { unixSeconds } from "../../serializers/time"
 const DEFAULT_PROFILE_USER_AGENT =
   "Mozilla/5.0 (compatible; PirateRedditVerifier/0.1; +https://pirate.example)"
 const DEFAULT_PULLPUSH_BASE_URL = "https://api.pullpush.io/reddit"
+const REDDIT_VERIFICATION_CODE_PATTERN = /\bpirate-verification=[a-f0-9]{16}\b/iu
 
 type RedditCheckResult =
   | { status: "verified" }
-  | { status: "pending"; failureCode: "code_not_found" }
+  | { status: "pending"; failureCode: "code_not_found" | "different_code_found" }
   | { status: "failed"; failureCode: "username_not_found" | "rate_limited" | "source_error" }
 
 type RedditImporter = (input: { env: Env; redditUsername: string }) => Promise<RedditImportSummary>
@@ -172,6 +173,13 @@ async function defaultRedditChecker(input: {
   if (haystack.includes(input.verificationCode)) {
     return {
       status: "verified",
+    }
+  }
+
+  if (REDDIT_VERIFICATION_CODE_PATTERN.test(haystack)) {
+    return {
+      status: "pending",
+      failureCode: "different_code_found",
     }
   }
 

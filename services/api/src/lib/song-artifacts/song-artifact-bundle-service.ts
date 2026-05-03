@@ -48,8 +48,10 @@ export async function createSongArtifactBundle(input: {
 
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
-    await requireMemberAccess(db.client, input.communityId, input.userId)
-    await requireVerifiedHuman(input.userRepository, input.userId)
+    const membership = await requireMemberAccess(db.client, input.communityId, input.userId)
+    await requireVerifiedHuman(input.userRepository, input.userId, {
+      bypassForCommunityOwner: membership.role_status === "active",
+    })
     const client = getControlPlaneClient(input.env)
     const primaryAudioUpload = await requireResolvedUpload({
       client,

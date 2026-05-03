@@ -41,6 +41,23 @@ export function registerCommunitySongArtifactRoutes(communities: Hono<Authentica
     return c.json(result, 201)
   })
 
+  communities.put("/:communityId/song-artifact-uploads/:songArtifactUploadId/content", async (c) => {
+    const { actor, communityId, communityRepository, userRepository } = await getResolvedCommunityRouteContext(c)
+    const content = await readSongArtifactContent(c)
+
+    const result = await uploadSongArtifactContent({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      songArtifactUploadId: decodePublicSongArtifactUploadId(c.req.param("songArtifactUploadId")),
+      content,
+      userRepository,
+      communityRepository,
+      origin: getRequestOrigin(c),
+    })
+    return c.json(result, 200)
+  })
+
   communities.post("/:communityId/song-artifact-uploads/:songArtifactUploadId/content", async (c) => {
     const { actor, communityId, communityRepository, userRepository } = await getResolvedCommunityRouteContext(c)
     const content = await readSongArtifactContent(c)
@@ -64,6 +81,19 @@ export function registerCommunitySongArtifactRoutes(communities: Hono<Authentica
       env: c.env,
       communityId,
       songArtifactUploadId: decodePublicSongArtifactUploadId(c.req.param("songArtifactUploadId")),
+    })
+  })
+
+  communities.on("HEAD", "/:communityId/song-artifact-uploads/:songArtifactUploadId/content", async (c) => {
+    const { communityId } = await getResolvedCommunityRouteContext(c)
+    const response = await fetchSongArtifactContent({
+      env: c.env,
+      communityId,
+      songArtifactUploadId: decodePublicSongArtifactUploadId(c.req.param("songArtifactUploadId")),
+    })
+    return new Response(null, {
+      status: response.status,
+      headers: response.headers,
     })
   })
 

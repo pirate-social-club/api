@@ -102,6 +102,7 @@ export function serializeLocalizedPostResponse(response: LocalizedPostResponse):
     comment_count: response.comment_count,
     viewer_vote: response.viewer_vote,
     viewer_reaction_kinds: response.viewer_reaction_kinds,
+    age_gate_viewer_state: response.age_gate_viewer_state,
     resolved_locale: response.resolved_locale,
     translation_state: response.translation_state,
     machine_translated: response.machine_translated,

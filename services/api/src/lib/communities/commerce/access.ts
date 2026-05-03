@@ -35,7 +35,11 @@ export async function requireCommunityOwner(input: {
 export async function requireVerifiedHuman(
   userRepository: UserRepository,
   userId: string,
+  options: { bypassForCommunityOwner?: boolean } = {},
 ): Promise<void> {
+  if (options.bypassForCommunityOwner) {
+    return
+  }
   const user = await userRepository.getUserById(userId)
   if (!user) {
     throw notFoundError("User not found")

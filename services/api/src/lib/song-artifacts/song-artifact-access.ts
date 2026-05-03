@@ -21,7 +21,14 @@ export async function requireMemberAccess(
   return membership
 }
 
-export async function requireVerifiedHuman(userRepository: UserRepository, userId: string): Promise<void> {
+export async function requireVerifiedHuman(
+  userRepository: UserRepository,
+  userId: string,
+  options: { bypassForCommunityOwner?: boolean } = {},
+): Promise<void> {
+  if (options.bypassForCommunityOwner) {
+    return
+  }
   const user = await userRepository.getUserById(userId)
   if (!user) {
     throw notFoundError("User not found")

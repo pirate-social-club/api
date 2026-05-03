@@ -165,6 +165,17 @@ export function buildSongArtifactContentUrl(
   ).toString()
 }
 
+export function buildPublicSongArtifactContentUrl(
+  origin: string,
+  communityId: string,
+  songArtifactUploadId: string,
+): string {
+  return new URL(
+    `/public-communities/${encodeURIComponent(communityId)}/song-artifact-uploads/${encodeURIComponent(songArtifactUploadId)}/content`,
+    origin,
+  ).toString()
+}
+
 function buildSongArtifactObjectKey(
   communityId: string,
   songArtifactUploadId: string,

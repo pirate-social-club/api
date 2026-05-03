@@ -148,11 +148,16 @@ export async function createCommunityListing(input: {
   if (!input.body.asset?.trim() && !input.body.live_room?.trim()) {
     throw badRequestError("asset or live_room is required")
   }
-  await requireVerifiedHuman(input.userRepository, input.userId)
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   const assetId = input.body.asset?.trim() ? decodePublicAssetId(input.body.asset) : null
   try {
-    await requireCommunityMember(db.client, input.communityId, input.userId)
+    const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
+    if (membership.membership_status !== "member" && membership.role_status !== "active") {
+      throw notFoundError("Community not found")
+    }
+    await requireVerifiedHuman(input.userRepository, input.userId, {
+      bypassForCommunityOwner: membership.role_status === "active",
+    })
     if (assetId) {
       const asset = await getAssetRow(db.client, input.communityId, assetId)
       if (!asset) {

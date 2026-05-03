@@ -9,6 +9,8 @@ import {
   type OmittedStructuredSurface,
 } from "../lib/communities/community-machine-access-service"
 import { listPublicCommunityPosts } from "../lib/posts/post-service"
+import { fetchPublishedPublicSongArtifactContent } from "../lib/song-artifacts/song-artifact-upload-service"
+import { decodePublicSongArtifactUploadId, publicCommunityId, publicPostId } from "../lib/public-ids"
 import {
   absoluteUrl,
   configuredApiOrigin,
@@ -31,7 +33,6 @@ import { serializeCommunityPreview } from "../serializers/community"
 import { serializeLocalizedPostResponse } from "../serializers/post"
 import type { Env } from "../env"
 import type { CommunityPreview } from "../types"
-import { publicCommunityId, publicPostId } from "../lib/public-ids"
 
 const publicCommunities = new Hono<{ Bindings: Env }>()
 
@@ -318,6 +319,34 @@ publicCommunities.get("/:communityId/posts", async (c) => {
   }
   c.header("Link", serializeLinkHeader(links))
   return c.json(responseBody, 200)
+})
+
+publicCommunities.get("/:communityId/song-artifact-uploads/:songArtifactUploadId/content", async (c) => {
+  const communityRepository = getCommunityRepository(c.env)
+  const communityId = await resolveCommunityId(communityRepository, c.req.param("communityId"))
+  return await fetchPublishedPublicSongArtifactContent({
+    env: c.env,
+    communityId,
+    songArtifactUploadId: decodePublicSongArtifactUploadId(c.req.param("songArtifactUploadId")),
+    communityRepository,
+    origin: new URL(c.req.url).origin,
+  })
+})
+
+publicCommunities.on("HEAD", "/:communityId/song-artifact-uploads/:songArtifactUploadId/content", async (c) => {
+  const communityRepository = getCommunityRepository(c.env)
+  const communityId = await resolveCommunityId(communityRepository, c.req.param("communityId"))
+  const response = await fetchPublishedPublicSongArtifactContent({
+    env: c.env,
+    communityId,
+    songArtifactUploadId: decodePublicSongArtifactUploadId(c.req.param("songArtifactUploadId")),
+    communityRepository,
+    origin: new URL(c.req.url).origin,
+  })
+  return new Response(null, {
+    status: response.status,
+    headers: response.headers,
+  })
 })
 
 export default publicCommunities

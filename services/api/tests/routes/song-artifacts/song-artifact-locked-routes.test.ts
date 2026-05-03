@@ -1326,8 +1326,17 @@ describe("song artifact locked routes", () => {
       media_refs: Array<{ storage_ref: string }>
     }
     expect(postBody.access_mode).toBe("public")
-    expect(postBody.media_refs[0]?.storage_ref).toBe(videoUpload.storage_ref)
+    expect(postBody.media_refs[0]?.storage_ref).toContain(`/public-communities/${communityId}/song-artifact-uploads/`)
     expect((postBody.media_refs[0] as { poster_ref?: string }).poster_ref).toBe("http://pirate.test/community-media/post_image/public-video-cover.jpg")
+
+    const publicHeadResponse = await app.request(postBody.media_refs[0]?.storage_ref ?? "", {
+      method: "HEAD",
+    }, ctx.env)
+    expect(publicHeadResponse.status).toBe(200)
+
+    const publicContentResponse = await app.request(postBody.media_refs[0]?.storage_ref ?? "", {}, ctx.env)
+    expect(publicContentResponse.status).toBe(200)
+    expect(new Uint8Array(await publicContentResponse.arrayBuffer())).toEqual(videoBytes)
 
     const assetResponse = await app.request(
       `http://pirate.test/communities/${communityId}/assets/${postBody.asset}`,
@@ -1361,6 +1370,73 @@ describe("song artifact locked routes", () => {
     )
     expect(contentResponse.status).toBe(200)
     expect(new Uint8Array(await contentResponse.arrayBuffer())).toEqual(videoBytes)
+  })
+
+  test("publishes a free video post with public media delivery and no commerce asset", async () => {
+    const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
+    installLockedSongFetchMocks({
+      originalFetch,
+      storedObjects,
+    })
+
+    const ctx = await createRouteTestContext({
+      FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
+      FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
+      FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
+      FILEBASE_S3_BUCKET_MUSIC: "pirate-song-media",
+    })
+    cleanup = ctx.cleanup
+
+    const author = await exchangeJwt(ctx.env, "video-author-free")
+    await completeUniqueHumanVerification(ctx.env, author.accessToken)
+    const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "Free Video Club")
+    const videoBytes = new TextEncoder().encode("free-video-bytes")
+    const videoUpload = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "primary_video",
+      mimeType: "video/mp4",
+      filename: "free-video.mp4",
+      bytes: videoBytes,
+    })
+
+    const createdPost = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        idempotency_key: "free-video-post-1",
+        post_type: "video",
+        title: "Free video",
+        media_refs: [{
+          storage_ref: videoUpload.storage_ref,
+          mime_type: "video/mp4",
+          size_bytes: videoBytes.byteLength,
+          poster_ref: "http://pirate.test/community-media/post_image/free-video-cover.jpg",
+          poster_mime_type: "image/jpeg",
+          poster_size_bytes: 1234,
+        }],
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(createdPost.status).toBe(201)
+    const postBody = await json(createdPost) as {
+      access_mode?: string | null
+      asset?: string | null
+      media_refs: Array<{ storage_ref: string }>
+    }
+    expect(postBody.access_mode).toBeNull()
+    expect(postBody.asset).toBeNull()
+    expect(postBody.media_refs[0]?.storage_ref).toContain(`/public-communities/${communityId}/song-artifact-uploads/`)
+
+    const publicHeadResponse = await app.request(postBody.media_refs[0]?.storage_ref ?? "", {
+      method: "HEAD",
+    }, ctx.env)
+    expect(publicHeadResponse.status).toBe(200)
+
+    const publicContentResponse = await app.request(postBody.media_refs[0]?.storage_ref ?? "", {}, ctx.env)
+    expect(publicContentResponse.status).toBe(200)
+    expect(new Uint8Array(await publicContentResponse.arrayBuffer())).toEqual(videoBytes)
   })
 
   test("creates a members-only locked video commerce asset with Story CDR access", async () => {

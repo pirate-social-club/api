@@ -94,7 +94,7 @@ app.use(
   "/*",
   cors({
     origin: configuredCorsOrigin,
-    allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
+    allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowHeaders: [
       "Content-Type",
       "Authorization",

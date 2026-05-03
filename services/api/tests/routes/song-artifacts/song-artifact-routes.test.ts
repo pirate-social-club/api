@@ -64,6 +64,161 @@ afterEach(async () => {
 })
 
 describe("song artifact routes", () => {
+  test("allows an unverified community owner to upload and bundle song artifacts", async () => {
+    const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
+
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      if (request.url === "https://openrouter.test/api/v1/chat/completions") {
+        return Response.json({
+          choices: [{
+            message: {
+              content: JSON.stringify({
+                age_gate_rating: "safe",
+                reason: "clean lyrics",
+              }),
+            },
+          }],
+        })
+      }
+
+      if (request.url === "https://acrcloud.test/v1/identify") {
+        return Response.json({
+          status: { code: 0, msg: "Success" },
+          metadata: { music: [] },
+        })
+      }
+
+      if (request.url === "https://console-v2.acrcloud.test/api/buckets/30358/files") {
+        return Response.json({
+          data: {
+            id: 52,
+            acr_id: "acr_unverified_owner_upload",
+            state: 0,
+          },
+        })
+      }
+
+      if (request.url === "https://elevenlabs.test/forced-alignment") {
+        return Response.json({
+          provider: "elevenlabs",
+          segments: [{
+            start_ms: 0,
+            end_ms: 900,
+            text: "Owner line",
+          }],
+        })
+      }
+
+      if (!request.url.startsWith("https://s3.filebase.test/")) {
+        return await originalFetch(request)
+      }
+
+      if (request.method === "PUT") {
+        storedObjects.set(request.url, {
+          body: new Uint8Array(await request.arrayBuffer()),
+          contentType: request.headers.get("content-type") || "application/octet-stream",
+        })
+        return new Response(null, { status: 200 })
+      }
+
+      if (request.method === "GET") {
+        const stored = storedObjects.get(request.url)
+        if (!stored) {
+          return new Response("missing", { status: 404 })
+        }
+        return new Response(stored.body.slice().buffer, {
+          status: 200,
+          headers: {
+            "content-type": stored.contentType,
+            "content-length": String(stored.body.byteLength),
+          },
+        })
+      }
+
+      return new Response("unexpected method", { status: 500 })
+    }
+
+    const ctx = await createRouteTestContext({
+      FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
+      FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
+      FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
+      FILEBASE_S3_BUCKET_MUSIC: "pirate-song-media",
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      OPENROUTER_MODEL: "google/gemini-3.1-flash-lite-preview",
+      ACRCLOUD_ACCESS_KEY: "test-acrcloud-access",
+      ACRCLOUD_ACCESS_SECRET: "test-acrcloud-secret",
+      ACRCLOUD_HOST: "acrcloud.test",
+      ACRCLOUD_PERSONAL_ACCESS_TOKEN: "test-acrcloud-pat",
+      ACRCLOUD_BUCKET_ID: "30358",
+      ACRCLOUD_CONSOLE_BASE_URL: "https://console-v2.acrcloud.test/api",
+      ELEVENLABS_API_KEY: "test-elevenlabs-key",
+      ELEVENLABS_FORCE_ALIGNMENT_URL: "https://elevenlabs.test/forced-alignment",
+      PIRATE_API_PUBLIC_ORIGIN: "http://pirate.test",
+      SONG_PREVIEW_FFMPEG_BIN: "__test_passthrough__",
+    })
+    cleanup = ctx.cleanup
+
+    const owner = await exchangeJwt(ctx.env, "song-artifact-unverified-owner")
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Unverified Owner Songs",
+      membership_mode: "request",
+      handle_policy: {
+        policy_template: "standard",
+      },
+    }, ctx.env, owner.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: { id: string }
+    }
+    const communityId = communityCreateBody.community.id.replace(/^com_/, "")
+
+    const uploadIntent = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
+      {
+        artifact_kind: "primary_audio",
+        mime_type: "audio/wav",
+        filename: "owner.wav",
+        size_bytes: makeSilentWavBytes().byteLength,
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(uploadIntent.status).toBe(201)
+    const uploadIntentBody = await json(uploadIntent) as {
+      id: string
+      storage_ref: string
+    }
+
+    const uploadContent = await app.request(
+      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${uploadIntentBody.id}/content`,
+      {
+        method: "PUT",
+        headers: {
+          authorization: `Bearer ${owner.accessToken}`,
+          "content-type": "application/octet-stream",
+        },
+        body: Buffer.from(makeSilentWavBytes()),
+      },
+      ctx.env,
+    )
+    expect(uploadContent.status).toBe(200)
+
+    const bundleCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifacts`,
+      {
+        primary_audio: {
+          song_artifact_upload: uploadIntentBody.id,
+        },
+        lyrics: "Owner line",
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(bundleCreate.status).toBe(201)
+  })
+
   testWithTimeout("generates a server-side preview crop and uses it for locked song publication", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
 
@@ -559,6 +714,15 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     )
     expect(readContent.status).toBe(200)
     expect(new Uint8Array(await readContent.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]))
+
+    const headContent = await app.request(
+      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${uploadIntentBody.id}/content`,
+      { method: "HEAD" },
+      ctx.env,
+    )
+    expect(headContent.status).toBe(200)
+    expect(headContent.headers.get("content-length")).toBe("8")
+    expect((await headContent.arrayBuffer()).byteLength).toBe(0)
 
     const bundleCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifacts`,

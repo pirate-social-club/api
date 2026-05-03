@@ -20,6 +20,7 @@ const publicAccess = () => new Response(null, { status: 204 })
 const agentDelegatedAccess = () => new Response(null, { status: 204 })
 
 communityAuthPolicy.get("/:communityId/song-artifact-uploads/:uploadId/content", publicAccess)
+communityAuthPolicy.on("HEAD", "/:communityId/song-artifact-uploads/:uploadId/content", publicAccess)
 communityAuthPolicy.post("/:communityId/posts", agentDelegatedAccess)
 communityAuthPolicy.post("/:communityId/posts/:postId/comments", agentDelegatedAccess)
 
