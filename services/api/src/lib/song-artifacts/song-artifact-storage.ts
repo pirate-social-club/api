@@ -296,12 +296,15 @@ export async function uploadSongArtifactBytes(input: {
 export async function fetchSongArtifactBytes(input: {
   env: Env
   objectKey: string
+  rangeHeader?: string | null
 }): Promise<Response> {
+  const rangeHeader = input.rangeHeader?.trim()
   const request = await buildS3SignedRequest({
     method: "GET",
     config: resolveFilebaseConfig(input.env, "music"),
     objectKey: input.objectKey,
     payloadHash: EMPTY_SHA256_HEX,
+    headers: rangeHeader ? { range: rangeHeader } : undefined,
   })
   const upstream = await fetch(request)
   if (upstream.status === 404) {
@@ -323,10 +326,16 @@ export async function fetchSongArtifactBytes(input: {
   if (contentLength) {
     headers.set("content-length", contentLength)
   }
+  const contentRange = upstream.headers.get("content-range")
+  if (contentRange) {
+    headers.set("content-range", contentRange)
+  }
+  const acceptRanges = upstream.headers.get("accept-ranges")
+  headers.set("accept-ranges", acceptRanges || "bytes")
   headers.set("cache-control", "public, max-age=31536000, immutable")
 
   return new Response(upstream.body, {
-    status: 200,
+    status: upstream.status,
     headers,
   })
 }

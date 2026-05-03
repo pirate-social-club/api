@@ -330,6 +330,7 @@ publicCommunities.get("/:communityId/song-artifact-uploads/:songArtifactUploadId
     songArtifactUploadId: decodePublicSongArtifactUploadId(c.req.param("songArtifactUploadId")),
     communityRepository,
     origin: new URL(c.req.url).origin,
+    rangeHeader: c.req.header("range"),
   })
 })
 
@@ -342,6 +343,7 @@ publicCommunities.on("HEAD", "/:communityId/song-artifact-uploads/:songArtifactU
     songArtifactUploadId: decodePublicSongArtifactUploadId(c.req.param("songArtifactUploadId")),
     communityRepository,
     origin: new URL(c.req.url).origin,
+    rangeHeader: c.req.header("range"),
   })
   return new Response(null, {
     status: response.status,

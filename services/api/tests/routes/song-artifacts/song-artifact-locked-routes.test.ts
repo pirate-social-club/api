@@ -1437,6 +1437,16 @@ describe("song artifact locked routes", () => {
     const publicContentResponse = await app.request(postBody.media_refs[0]?.storage_ref ?? "", {}, ctx.env)
     expect(publicContentResponse.status).toBe(200)
     expect(new Uint8Array(await publicContentResponse.arrayBuffer())).toEqual(videoBytes)
+
+    const publicRangeResponse = await app.request(postBody.media_refs[0]?.storage_ref ?? "", {
+      headers: {
+        range: "bytes=0-3",
+      },
+    }, ctx.env)
+    expect(publicRangeResponse.status).toBe(206)
+    expect(publicRangeResponse.headers.get("accept-ranges")).toBe("bytes")
+    expect(publicRangeResponse.headers.get("content-range")).toBe(`bytes 0-3/${videoBytes.byteLength}`)
+    expect(new Uint8Array(await publicRangeResponse.arrayBuffer())).toEqual(videoBytes.slice(0, 4))
   })
 
   test("creates a members-only locked video commerce asset with Story CDR access", async () => {

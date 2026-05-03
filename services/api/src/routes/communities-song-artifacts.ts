@@ -81,6 +81,7 @@ export function registerCommunitySongArtifactRoutes(communities: Hono<Authentica
       env: c.env,
       communityId,
       songArtifactUploadId: decodePublicSongArtifactUploadId(c.req.param("songArtifactUploadId")),
+      rangeHeader: c.req.header("range"),
     })
   })
 
@@ -90,6 +91,7 @@ export function registerCommunitySongArtifactRoutes(communities: Hono<Authentica
       env: c.env,
       communityId,
       songArtifactUploadId: decodePublicSongArtifactUploadId(c.req.param("songArtifactUploadId")),
+      rangeHeader: c.req.header("range"),
     })
     return new Response(null, {
       status: response.status,

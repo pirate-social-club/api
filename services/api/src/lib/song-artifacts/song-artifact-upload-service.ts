@@ -161,6 +161,7 @@ export async function fetchSongArtifactContent(input: {
   env: Env
   communityId: string
   songArtifactUploadId: string
+  rangeHeader?: string | null
 }): Promise<Response> {
   const client = getControlPlaneClient(input.env)
   const upload = await requireSongArtifactUpload(client, input.communityId, input.songArtifactUploadId)
@@ -170,6 +171,7 @@ export async function fetchSongArtifactContent(input: {
   return await fetchSongArtifactBytes({
     env: input.env,
     objectKey: upload.storage_object_key,
+    rangeHeader: input.rangeHeader,
   })
 }
 
@@ -179,6 +181,7 @@ export async function fetchPublishedPublicSongArtifactContent(input: {
   songArtifactUploadId: string
   communityRepository: SongArtifactCommunityRepository
   origin: string
+  rangeHeader?: string | null
 }): Promise<Response> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
@@ -226,5 +229,6 @@ export async function fetchPublishedPublicSongArtifactContent(input: {
     env: input.env,
     communityId: input.communityId,
     songArtifactUploadId: input.songArtifactUploadId,
+    rangeHeader: input.rangeHeader,
   })
 }

@@ -68,9 +68,26 @@ export function installLockedSongFetchMocks(input: {
       if (!stored) {
         return new Response("missing", { status: 404 })
       }
+      const range = request.headers.get("range")?.match(/^bytes=(\d+)-(\d*)$/)
+      if (range) {
+        const start = Number(range[1])
+        const requestedEnd = range[2] ? Number(range[2]) : stored.body.byteLength - 1
+        const end = Math.min(requestedEnd, stored.body.byteLength - 1)
+        const body = stored.body.slice(start, end + 1)
+        return new Response(body.buffer, {
+          status: 206,
+          headers: {
+            "accept-ranges": "bytes",
+            "content-type": stored.contentType,
+            "content-length": String(body.byteLength),
+            "content-range": `bytes ${start}-${end}/${stored.body.byteLength}`,
+          },
+        })
+      }
       return new Response(stored.body.slice().buffer, {
         status: 200,
         headers: {
+          "accept-ranges": "bytes",
           "content-type": stored.contentType,
           "content-length": String(stored.body.byteLength),
         },
