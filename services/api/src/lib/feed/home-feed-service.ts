@@ -15,6 +15,8 @@ import { numberOrNull, requiredNumber, requiredString, rowValue } from "../sql-r
 import { serializeLocalizedPostResponse } from "../../serializers/post"
 import type { CommunityFollowProjectionRow, CommunityMembershipProjectionRow, CommunityRow } from "../auth/auth-db-rows"
 import { resolveCommunityAvatarRef } from "../communities/community-identity-media"
+import { resolveAgeGateViewerState } from "../posts/age-gate-viewer-state"
+import type { UserRepository } from "../auth/repositories"
 import type {
   Env,
   HomeFeedCommunitySummary,
@@ -338,7 +340,15 @@ export async function listHomeFeed(input: {
   timeRange?: string | null
   cursor?: string | null
   communityRepository: HomeFeedCommunityRepository
+  userRepository?: UserRepository | null
 }): Promise<HomeFeedResponse> {
+  const ageGateState = input.userId && input.userRepository
+    ? await resolveAgeGateViewerState({
+        userId: input.userId,
+        userRepository: input.userRepository,
+        postAgeGatePolicy: "18_plus",
+      })
+    : null
   const activeCommunities = await input.communityRepository.listActiveCommunities()
   const membershipRows = input.userId
     ? await input.communityRepository.listCommunityMembershipProjectionsByUserId(input.userId)
@@ -488,6 +498,7 @@ export async function listHomeFeed(input: {
             like_count: row.like_count,
             viewer_vote: viewerVote,
           },
+          ageGateViewerState: post.age_gate_policy === "18_plus" ? ageGateState ?? "proof_required" : null,
         })
         await enqueuePostTranslationOnReadIfNeeded({
           client: db.client,

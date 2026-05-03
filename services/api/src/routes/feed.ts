@@ -1,6 +1,7 @@
 import { Hono } from "hono"
 import { authenticateOptional, type OptionalAuthenticatedEnv } from "../lib/auth-middleware"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
+import { getUserRepository } from "../lib/auth/repositories"
 import { listHomeFeed } from "../lib/feed/home-feed-service"
 
 const feed = new Hono<OptionalAuthenticatedEnv>()
@@ -17,6 +18,7 @@ feed.get("/home", async (c) => {
     timeRange: c.req.query("time_range") ?? null,
     cursor: c.req.query("cursor") ?? null,
     communityRepository: getCommunityRepository(c.env),
+    userRepository: actor?.userId ? getUserRepository(c.env) : null,
   })
   return c.json(result, 200)
 })

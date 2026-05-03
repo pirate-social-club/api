@@ -19,6 +19,8 @@ import {
   requireMemberAccess,
 } from "./post-access"
 import { enqueueEmbedHydrateOnReadIfNeeded, enqueuePostTranslationOnReadIfNeeded } from "./post-jobs"
+import { resolveAgeGateViewerState } from "./age-gate-viewer-state"
+import type { UserRepository } from "../auth/repositories"
 import type { Env } from "../../env"
 import type { LocalizedPostResponse } from "../../types"
 
@@ -64,6 +66,7 @@ export async function getPost(input: {
   postId: string
   locale?: string | null
   communityRepository: PostReadCommunityRepository
+  userRepository: UserRepository
 }): Promise<LocalizedPostResponse> {
   const projection = await input.communityRepository.getCommunityPostProjectionByPostId(input.postId)
   if (!projection) {
@@ -80,6 +83,11 @@ export async function getPost(input: {
     if (post.status !== "published" && !canReadNonPublishedPost(post, membership, input.userId)) {
       throw notFoundError("Post not found")
     }
+    const ageGateViewerState = await resolveAgeGateViewerState({
+      userId: input.userId,
+      userRepository: input.userRepository,
+      postAgeGatePolicy: post.age_gate_policy,
+    })
     const threadSnapshot = await getLatestThreadSnapshotForRead(db.client, post.post_id)
     const metrics = await getPostReadMetrics({
       executor: db.client,
@@ -92,6 +100,7 @@ export async function getPost(input: {
       locale: input.locale ?? undefined,
       metrics,
       threadSnapshot,
+      ageGateViewerState,
     })
     await enqueuePostTranslationOnReadIfNeeded({
       client: db.client,
@@ -131,6 +140,7 @@ export async function getPublicPost(input: {
     if (!post || !isPubliclyReadablePost(post)) {
       throw notFoundError("Post not found")
     }
+    const ageGateViewerState = post.age_gate_policy === "18_plus" ? "proof_required" as const : null
     const threadSnapshot = await getLatestThreadSnapshotForRead(db.client, post.post_id)
     const metrics = await getPostReadMetrics({
       executor: db.client,
@@ -143,6 +153,7 @@ export async function getPublicPost(input: {
       locale: input.locale ?? undefined,
       metrics,
       threadSnapshot,
+      ageGateViewerState,
     })
     await enqueuePostTranslationOnReadIfNeeded({
       client: db.client,
@@ -170,6 +181,7 @@ export async function listCommunityPosts(input: {
   flairId?: string | null
   sort?: string | null
   communityRepository: PostReadCommunityRepository
+  userRepository: UserRepository
 }): Promise<CommunityFeedResponse> {
   const community = await input.communityRepository.getCommunityById(input.communityId)
   if (!isCommunityLive(community)) {
@@ -190,7 +202,13 @@ export async function listCommunityPosts(input: {
       visibility: null,
     })
 
+    const ageGateState = await resolveAgeGateViewerState({
+      userId: input.userId,
+      userRepository: input.userRepository,
+      postAgeGatePolicy: "18_plus",
+    })
     const items = await Promise.all(feed.items.map(async (item) => {
+      const ageGateViewerState = item.post.age_gate_policy === "18_plus" ? ageGateState : null
       const threadSnapshot = await getLatestThreadSnapshotForRead(db.client, item.post.post_id)
       return buildLocalizedPostResponse({
         executor: db.client,
@@ -204,6 +222,7 @@ export async function listCommunityPosts(input: {
           viewer_vote: item.viewer_vote,
         },
         threadSnapshot,
+        ageGateViewerState,
       })
     }))
     for (const item of items) {
@@ -257,6 +276,7 @@ export async function listPublicCommunityPosts(input: {
     })
 
     const items = await Promise.all(feed.items.map(async (item) => {
+      const ageGateViewerState = item.post.age_gate_policy === "18_plus" ? "proof_required" as const : null
       const threadSnapshot = await getLatestThreadSnapshotForRead(db.client, item.post.post_id)
       return buildLocalizedPostResponse({
         executor: db.client,
@@ -270,6 +290,7 @@ export async function listPublicCommunityPosts(input: {
           viewer_vote: item.viewer_vote,
         },
         threadSnapshot,
+        ageGateViewerState,
       })
     }))
     for (const item of items) {

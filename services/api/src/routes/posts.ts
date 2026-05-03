@@ -22,6 +22,7 @@ posts.get("/:postId", async (c) => {
     postId: decodePublicPostId(c.req.param("postId")),
     locale: c.req.query("locale") ?? null,
     communityRepository,
+    userRepository: getUserRepository(c.env),
   })
   return c.json(serializeLocalizedPostResponse(result), 200)
 })

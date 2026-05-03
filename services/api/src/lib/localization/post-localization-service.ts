@@ -162,6 +162,7 @@ export async function buildLocalizedPostResponse(input: {
   locale?: string | null
   metrics?: Partial<PostReadMetrics>
   threadSnapshot?: CommentThreadSnapshot | null
+  ageGateViewerState?: "proof_required" | "verified_allowed" | null
 }): Promise<LocalizedPostResponse> {
   const resolvedLocale = normalizeContentLocale(input.locale) ?? DEFAULT_CONTENT_LOCALE
   const sourceHash = await computePostSourceHash(input.post)
@@ -187,6 +188,7 @@ export async function buildLocalizedPostResponse(input: {
     like_count: input.metrics?.like_count ?? 0,
     viewer_vote: input.metrics?.viewer_vote ?? null,
     viewer_reaction_kinds: [],
+    age_gate_viewer_state: input.ageGateViewerState ?? null,
     resolved_locale: resolvedLocale,
     translation_state: "same_language",
     machine_translated: false,
