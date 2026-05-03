@@ -46,6 +46,10 @@ import { makeId, nowIso } from "../helpers"
 import type { Env } from "../../env"
 import type { CreatePostRequest, Post } from "../../types"
 import { decodePublicSongArtifactBundleId, publicPostId } from "../public-ids"
+import {
+  createModerationCase,
+  createModerationSignal,
+} from "../moderation/community-moderation-store"
 
 export {
   getPost,
@@ -141,6 +145,7 @@ export async function createPost(input: {
       writeTarget: "top_level_post",
     })
     let analysisOverride: Pick<Post, "analysis_state" | "content_safety_state" | "age_gate_policy" | "status"> | undefined
+    let analysisProviderResult: Record<string, unknown> | null | undefined
     let resolvedSongBundleForAsset: Awaited<ReturnType<typeof resolveSongPostBundle>> | null = null
     let resolvedVideoAsset: Awaited<ReturnType<typeof resolveVideoPostAsset>> | null = null
 
@@ -202,6 +207,7 @@ export async function createPost(input: {
         community,
         body: writeBody,
       })
+      analysisProviderResult = postAnalysis.providerResult
 
       const mergedAnalysisState = mergeAnalysisState(
         resolvedBundle.analysisState,
@@ -213,7 +219,7 @@ export async function createPost(input: {
       analysisOverride = {
         analysis_state: mergedAnalysisState,
         content_safety_state:
-          mergedAnalysisState === "review_required"
+          mergedAnalysisState === "review_required" && postAnalysis.content_safety_state !== "adult"
             ? "pending"
             : postAnalysis.content_safety_state === "safe"
               ? resolvedBundle.contentSafetyState
@@ -260,13 +266,14 @@ export async function createPost(input: {
         community,
         body: writeBody,
       })
+      analysisProviderResult = postAnalysis.providerResult
       const mergedAnalysisState = postAnalysis.analysis_state
       if (mergedAnalysisState === "blocked") {
         throw analysisBlocked("Content analysis blocked publication")
       }
       analysisOverride = {
         analysis_state: mergedAnalysisState,
-        content_safety_state: mergedAnalysisState === "review_required" ? "pending" : postAnalysis.content_safety_state,
+        content_safety_state: mergedAnalysisState === "review_required" && postAnalysis.content_safety_state !== "adult" ? "pending" : postAnalysis.content_safety_state,
         age_gate_policy: community.default_age_gate_policy === "18_plus" || postAnalysis.age_gate_policy === "18_plus" ? "18_plus" : "none",
         status: mergedAnalysisState === "review_required" ? "draft" : "published",
       }
@@ -276,13 +283,14 @@ export async function createPost(input: {
         community,
         body: writeBody,
       })
+      analysisProviderResult = postAnalysis.providerResult
       const mergedAnalysisState = postAnalysis.analysis_state
       if (mergedAnalysisState === "blocked") {
         throw analysisBlocked("Content analysis blocked publication")
       }
       analysisOverride = {
         analysis_state: mergedAnalysisState,
-        content_safety_state: mergedAnalysisState === "review_required" ? "pending" : postAnalysis.content_safety_state,
+        content_safety_state: mergedAnalysisState === "review_required" && postAnalysis.content_safety_state !== "adult" ? "pending" : postAnalysis.content_safety_state,
         age_gate_policy: community.default_age_gate_policy === "18_plus" || postAnalysis.age_gate_policy === "18_plus" ? "18_plus" : "none",
         status: mergedAnalysisState === "review_required" ? "draft" : "published",
       }
@@ -322,6 +330,38 @@ export async function createPost(input: {
         post,
         createdAt,
       })
+
+      if (analysisOverride?.analysis_state === "review_required") {
+        const moderationCase = await createModerationCase({
+          executor: tx,
+          communityId: input.communityId,
+          target: { postId: post.post_id },
+          priority: "medium",
+          openedBy: "platform_analysis",
+          now: createdAt,
+        })
+        const providerResult = analysisProviderResult
+        const categories = providerResult && typeof providerResult === "object" && "categories" in providerResult
+          ? Object.keys((providerResult as { categories: Record<string, boolean> }).categories).filter(
+              (k) => (providerResult as { categories: Record<string, boolean> }).categories[k],
+            )
+          : []
+        await createModerationSignal({
+          executor: tx,
+          communityId: input.communityId,
+          postId: post.post_id,
+          moderationCaseId: moderationCase.moderation_case_id,
+          signalType: categories.length > 0 ? categories.join(",") : "review_required",
+          severity: "medium",
+          provider: (providerResult && typeof providerResult === "object" && "provider" in providerResult
+            ? String((providerResult as { provider: string }).provider)
+            : "openai"),
+          providerLabel: categories.length > 0 ? categories[0] : "review_required",
+          analysisResultRef: null,
+          evidenceRef: providerResult ? JSON.stringify(providerResult) : null,
+          now: createdAt,
+        })
+      }
 
       await tx.commit()
     } catch (error) {

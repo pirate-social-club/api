@@ -6,7 +6,9 @@ import {
   resolveOpenAIModerationOutcome,
 } from "./openai-moderation"
 
-export type PostAnalysisOutcome = Pick<Post, "analysis_state" | "content_safety_state" | "status" | "age_gate_policy">
+export type PostAnalysisOutcome = Pick<Post, "analysis_state" | "content_safety_state" | "status" | "age_gate_policy"> & {
+  providerResult?: Record<string, unknown> | null
+}
 
 export type PostAnalysisProvider = {
   analyze(input: {
@@ -64,6 +66,7 @@ function normalizeModerationOutcome(outcome: PostModerationOutcome): PostAnalysi
     content_safety_state: outcome.content_safety_state,
     age_gate_policy: outcome.age_gate_policy,
     status: outcome.status,
+    providerResult: outcome.providerResult,
   }
 }
 

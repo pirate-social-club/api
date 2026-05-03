@@ -229,18 +229,72 @@ async function hydrateKalshiMarketEmbed(input: {
   checkedAt: string
   fetcher: typeof fetch
 }): Promise<string | null> {
-  const ticker = input.target.providerRef.toUpperCase()
-  const marketUrl = `https://api.elections.kalshi.com/trade-api/v2/markets/${encodeURIComponent(ticker)}`
-  const marketBody = await fetchJsonWithTimeout({ fetcher: input.fetcher, url: marketUrl })
-  const market = objectField(marketBody, "market")
+  const urlTicker = input.target.providerRef.toUpperCase()
+  let market: unknown = null
+  let resolvedTicker = urlTicker
+
+  // Try direct market lookup first
+  const directMarketUrl = `https://api.elections.kalshi.com/trade-api/v2/markets/${encodeURIComponent(urlTicker)}`
+  const directMarketBody = await fetchJsonWithTimeout({ fetcher: input.fetcher, url: directMarketUrl })
+  market = objectField(directMarketBody, "market")
+
+  // If direct lookup fails, try resolving via event ticker
   if (!market || typeof market !== "object") {
-    return null
+    const eventMarketsUrl = new URL("https://api.elections.kalshi.com/trade-api/v2/markets")
+    eventMarketsUrl.searchParams.set("event_ticker", urlTicker)
+    eventMarketsUrl.searchParams.set("limit", "1")
+    const eventMarketsBody = await fetchJsonWithTimeout({ fetcher: input.fetcher, url: eventMarketsUrl.href })
+    const markets = parseJsonArrayField(objectField(eventMarketsBody, "markets"))
+    const firstMarket = markets[0]
+    if (firstMarket && typeof firstMarket === "object") {
+      market = firstMarket
+      const eventMarketTicker = stringField(objectField(firstMarket, "ticker"))
+      if (eventMarketTicker) {
+        resolvedTicker = eventMarketTicker
+      }
+    }
+  }
+
+  if (!market || typeof market !== "object") {
+    // Store an unavailable embed so the frontend shows a graceful fallback
+    // instead of falling through to a generic link preview that shows nothing
+    const fallbackMetadata = await fetchLinkPreviewMetadata({
+      fetcher: input.fetcher,
+      url: input.target.canonicalUrl,
+    })
+
+    await upsertPostEmbed({
+      client: input.client,
+      communityId: input.post.community_id,
+      postId: input.post.post_id,
+      embedKey: input.target.embedKey,
+      provider: "kalshi",
+      providerRef: urlTicker,
+      canonicalUrl: input.target.canonicalUrl,
+      originalUrl: input.target.originalUrl,
+      state: "unavailable",
+      preview: null,
+      oembedHtml: null,
+      oembedCacheAge: 300,
+      unavailableReason: "unknown",
+      checkedAt: input.checkedAt,
+    })
+
+    await updatePostLinkPreviewMetadata({
+      client: input.client,
+      postId: input.post.post_id,
+      linkOgImageUrl: fallbackMetadata?.imageUrl ?? null,
+      linkOgTitle: fallbackMetadata?.title ?? null,
+      updatedAt: input.checkedAt,
+    })
+
+    return input.target.canonicalUrl
   }
 
   const endTs = Math.floor(Date.parse(input.checkedAt) / 1000)
   const startTs = endTs - MARKET_CHART_DAYS * 24 * 60 * 60
   const chartUrl = new URL("https://api.elections.kalshi.com/trade-api/v2/markets/candlesticks")
-  chartUrl.searchParams.set("market_tickers", ticker)
+  chartUrl.searchParams.set("market_tickers", resolvedTicker)
   chartUrl.searchParams.set("start_ts", String(startTs))
   chartUrl.searchParams.set("end_ts", String(endTs))
   chartUrl.searchParams.set("period_interval", "1440")
@@ -279,7 +333,7 @@ async function hydrateKalshiMarketEmbed(input: {
     postId: input.post.post_id,
     embedKey: input.target.embedKey,
     provider: "kalshi",
-    providerRef: ticker,
+    providerRef: resolvedTicker,
     canonicalUrl: input.target.canonicalUrl,
     originalUrl: input.target.originalUrl,
     state: "embed",
@@ -352,15 +406,76 @@ async function hydratePolymarketEventEmbed(input: {
     fetcher: input.fetcher,
     eventSlug: input.target.eventSlug ?? input.target.providerRef,
   })
+
   if (!eventBody || typeof eventBody !== "object") {
-    return null
+    const fallbackMetadata = await fetchLinkPreviewMetadata({
+      fetcher: input.fetcher,
+      url: input.target.canonicalUrl,
+    })
+
+    await upsertPostEmbed({
+      client: input.client,
+      communityId: input.post.community_id,
+      postId: input.post.post_id,
+      embedKey: input.target.embedKey,
+      provider: "polymarket",
+      providerRef: input.target.providerRef,
+      canonicalUrl: input.target.canonicalUrl,
+      originalUrl: input.target.originalUrl,
+      state: "unavailable",
+      preview: null,
+      oembedHtml: null,
+      oembedCacheAge: 300,
+      unavailableReason: "unknown",
+      checkedAt: input.checkedAt,
+    })
+
+    await updatePostLinkPreviewMetadata({
+      client: input.client,
+      postId: input.post.post_id,
+      linkOgImageUrl: fallbackMetadata?.imageUrl ?? null,
+      linkOgTitle: fallbackMetadata?.title ?? null,
+      updatedAt: input.checkedAt,
+    })
+
+    return input.target.canonicalUrl
   }
 
   const title = stringField(objectField(eventBody, "title"))
   const imageUrl = stringField(objectField(eventBody, "image") ?? objectField(eventBody, "icon"))
   const outcomes = parsePolymarketEventOutcomes(eventBody)
   if (!outcomes.length) {
-    return null
+    const fallbackMetadata = await fetchLinkPreviewMetadata({
+      fetcher: input.fetcher,
+      url: input.target.canonicalUrl,
+    })
+
+    await upsertPostEmbed({
+      client: input.client,
+      communityId: input.post.community_id,
+      postId: input.post.post_id,
+      embedKey: input.target.embedKey,
+      provider: "polymarket",
+      providerRef: input.target.providerRef,
+      canonicalUrl: input.target.canonicalUrl,
+      originalUrl: input.target.originalUrl,
+      state: "unavailable",
+      preview: null,
+      oembedHtml: null,
+      oembedCacheAge: 300,
+      unavailableReason: "unknown",
+      checkedAt: input.checkedAt,
+    })
+
+    await updatePostLinkPreviewMetadata({
+      client: input.client,
+      postId: input.post.post_id,
+      linkOgImageUrl: fallbackMetadata?.imageUrl ?? null,
+      linkOgTitle: fallbackMetadata?.title ?? null,
+      updatedAt: input.checkedAt,
+    })
+
+    return input.target.canonicalUrl
   }
 
   const isClosed = objectField(eventBody, "closed") === true
@@ -452,7 +567,37 @@ async function hydratePolymarketMarketEmbed(input: {
     eventSlug: input.target.eventSlug,
   })
   if (!market || typeof market !== "object") {
-    return null
+    const fallbackMetadata = await fetchLinkPreviewMetadata({
+      fetcher: input.fetcher,
+      url: input.target.canonicalUrl,
+    })
+
+    await upsertPostEmbed({
+      client: input.client,
+      communityId: input.post.community_id,
+      postId: input.post.post_id,
+      embedKey: input.target.embedKey,
+      provider: "polymarket",
+      providerRef: input.target.providerRef,
+      canonicalUrl: input.target.canonicalUrl,
+      originalUrl: input.target.originalUrl,
+      state: "unavailable",
+      preview: null,
+      oembedHtml: null,
+      oembedCacheAge: 300,
+      unavailableReason: "unknown",
+      checkedAt: input.checkedAt,
+    })
+
+    await updatePostLinkPreviewMetadata({
+      client: input.client,
+      postId: input.post.post_id,
+      linkOgImageUrl: fallbackMetadata?.imageUrl ?? null,
+      linkOgTitle: fallbackMetadata?.title ?? null,
+      updatedAt: input.checkedAt,
+    })
+
+    return input.target.canonicalUrl
   }
 
   const outcomes = parseJsonArrayField(objectField(market, "outcomes"))

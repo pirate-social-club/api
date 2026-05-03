@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import {
   moreRestrictive,
   resolveAdultContentPolicy,
+  resolveOpenAIModerationOutcome,
   resolveVisualPlatformDecision,
   outcomeFromDecision,
 } from "./openai-moderation"
@@ -158,6 +159,17 @@ describe("outcomeFromDecision", () => {
     expect(out.age_gate_policy).toBe("none")
   })
 
+  test("review preserves adult classification for sexual content", () => {
+    const out = outcomeFromDecision("review", {
+      provider: "openai",
+      categories: { sexual: true },
+    })
+    expect(out.analysis_state).toBe("review_required")
+    expect(out.content_safety_state).toBe("adult")
+    expect(out.status).toBe("draft")
+    expect(out.age_gate_policy).toBe("18_plus")
+  })
+
   test("allow_with_gate produces published adult with 18_plus gate", () => {
     const out = outcomeFromDecision("allow_with_gate", null)
     expect(out.analysis_state).toBe("allow")
@@ -206,5 +218,32 @@ describe("resolveAdultContentPolicy", () => {
     expect(policy.explicit_sexual_content).toBe("disallow")
     expect(policy.suggestive).toBe("allow")
     expect(policy.artistic_nudity).toBe("review")
+  })
+})
+
+describe("resolveOpenAIModerationOutcome", () => {
+  test("visual posts that need scanning require review when OPENAI_API_KEY is missing", async () => {
+    const outcome = await resolveOpenAIModerationOutcome({
+      env: {},
+      community: {
+        community_id: "com_missing_openai_key",
+        default_age_gate_policy: "none",
+      } as Community,
+      body: {
+        idempotency_key: "idem_missing_openai_key",
+        post_type: "image",
+        media_refs: [{
+          storage_ref: "https://example.test/image.jpg",
+          mime_type: "image/jpeg",
+          size_bytes: 12,
+        }],
+      },
+    })
+
+    expect(outcome.analysis_state).toBe("review_required")
+    expect(outcome.content_safety_state).toBe("pending")
+    expect(outcome.status).toBe("draft")
+    expect(outcome.age_gate_policy).toBe("none")
+    expect(outcome.providerResult?.error).toBe("missing_configuration")
   })
 })
