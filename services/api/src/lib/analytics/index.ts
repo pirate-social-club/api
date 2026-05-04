@@ -17,3 +17,9 @@ export {
   type AnalyticsFlushResult,
 } from "./outbox"
 
+export {
+  fetchTinybirdCommunityViewCounts,
+  syncCommunityHealthCounts,
+  upsertCommunityHealthCounts,
+  type CommunityHealthSyncResult,
+} from "./community-analytics-sync"

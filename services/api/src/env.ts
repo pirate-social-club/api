@@ -15,6 +15,7 @@ export type Env = {
   ANALYTICS_HMAC_SECRET?: string
   TINYBIRD_HOST?: string
   TINYBIRD_INGEST_TOKEN?: string
+  TINYBIRD_READ_TOKEN?: string
   TINYBIRD_EVENTS_DATASOURCE?: string
 
   // Community databases and provisioning

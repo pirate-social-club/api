@@ -1,14 +1,25 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import type { CommunityFollowProjectionRow, CommunityMembershipProjectionRow, CommunityRow } from "../auth/auth-db-rows"
 import {
   filterCommunitiesWithPosts,
   filterVisibleHomeFeedProjections,
+  listHomeFeedCommunityViewCounts,
   resolveHomeFeedCommunityIds,
   resolveJoinedHomeFeedCommunityIds,
   sortCommunitySummaries,
   withHomeFeedCommunityIdentity,
 } from "./home-feed-service"
 import type { CommunityAggregate, InternalHomeFeedCommunitySummary } from "./home-feed-service"
+import { buildTestEnv, createControlPlaneTestClient } from "../../../tests/helpers"
+
+let cleanup: (() => Promise<void>) | null = null
+
+afterEach(async () => {
+  if (cleanup) {
+    await cleanup()
+    cleanup = null
+  }
+})
 
 function createCommunityRow(input: {
   communityId: string
@@ -293,6 +304,38 @@ describe("withHomeFeedCommunityIdentity", () => {
     expect(result.avatar_ref?.startsWith("data:image/svg+xml;charset=utf-8,")).toBe(true)
     expect(decodeURIComponent(result.avatar_ref ?? "")).toContain("🇵")
     expect(decodeURIComponent(result.avatar_ref ?? "").includes("\uFFFD")).toBe(false)
+  })
+})
+
+describe("listHomeFeedCommunityViewCounts", () => {
+  test("reads synced community view counts from the control-plane table", async () => {
+    const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanup = setup.cleanup
+    await setup.client.execute({
+      sql: `
+        INSERT INTO community_health_counts (community_id, total_views, updated_at)
+        VALUES (?1, ?2, ?3), (?4, ?5, ?6)
+      `,
+      args: [
+        "cmt_alpha",
+        12,
+        "2026-05-04T00:00:00.000Z",
+        "cmt_beta",
+        0,
+        "2026-05-04T00:00:00.000Z",
+      ],
+    })
+
+    const counts = await listHomeFeedCommunityViewCounts({
+      env: buildTestEnv({
+        CONTROL_PLANE_DATABASE_URL: `file:${setup.databasePath}`,
+        DEV_MEMORY_STORE_ENABLED: "false",
+      }),
+      communityIds: ["cmt_alpha", "cmt_gamma"],
+    })
+
+    expect(counts.get("cmt_alpha")).toBe(12)
+    expect(counts.has("cmt_gamma")).toBe(false)
   })
 })
 

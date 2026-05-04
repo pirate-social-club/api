@@ -5,6 +5,7 @@ import agents from "./routes/agents"
 import analytics from "./routes/analytics"
 import auth from "./routes/auth"
 import botUsers from "./routes/bot-users"
+import debugPipeline from "./routes/debug-pipeline"
 import communityMedia from "./routes/community-media"
 import comments from "./routes/comments"
 import communities from "./routes/communities"
@@ -25,7 +26,7 @@ import profileMedia from "./routes/profile-media"
 import profiles from "./routes/profiles"
 import users from "./routes/users"
 import verification from "./routes/verification"
-import { flushAnalyticsOutbox, isAnalyticsEnabled } from "./lib/analytics"
+import { flushAnalyticsOutbox, isAnalyticsEnabled, syncCommunityHealthCounts } from "./lib/analytics"
 import { getCommunityRepository } from "./lib/communities/db-community-repository"
 import { reconcileStaleCommunityPurchaseSettlements } from "./lib/communities/commerce/settlement-service"
 import { processAvailableCommunityJobs } from "./lib/communities/jobs/runner"
@@ -120,6 +121,7 @@ app.route("/", agents)
 app.route("/analytics", analytics)
 app.route("/auth", auth)
 app.route("/admin/bot-users", botUsers)
+app.route("/admin/debug", debugPipeline)
 app.route("/community-media", communityMedia)
 app.route("/comments", comments)
 app.route("/communities", communities)
@@ -195,6 +197,25 @@ async function flushScheduledAnalytics(env: Env): Promise<void> {
   } catch (error) {
     console.error("[analytics] scheduled flush failed", error)
     captureScheduledError(env, error, "analytics_flush")
+  } finally {
+    db.close?.()
+  }
+}
+
+async function syncScheduledCommunityHealthCounts(env: Env): Promise<void> {
+  if (!isAnalyticsEnabled(env) || !env.TINYBIRD_READ_TOKEN) {
+    return
+  }
+
+  const db = getControlPlaneClient(env)
+  try {
+    const summary = await syncCommunityHealthCounts(env, db)
+    if (summary.synced_communities > 0) {
+      console.info("[analytics] synced community health counts", JSON.stringify(summary))
+    }
+  } catch (error) {
+    console.error("[analytics] scheduled community health sync failed", error)
+    captureScheduledError(env, error, "community_health_sync")
   } finally {
     db.close?.()
   }
@@ -288,6 +309,7 @@ const handler: ExportedHandler<Env> = {
 
   scheduled: async (_controller, env, ctx) => {
     ctx.waitUntil(withRequestControlPlaneClients(() => flushScheduledAnalytics(env)))
+    ctx.waitUntil(withRequestControlPlaneClients(() => syncScheduledCommunityHealthCounts(env)))
     ctx.waitUntil(withRequestControlPlaneClients(() => processScheduledCommunityJobs(env)))
     ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledCommunityMembershipProjections(env)))
     ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledRoyaltyClaims(env)))

@@ -136,7 +136,10 @@ async function getViewerVote(input: {
   return numberOrNull(rowValue(row, "vote_value")) as -1 | 1 | null
 }
 
-function buildCommunitySummary(community: Awaited<ReturnType<CommunityReadRepository["getCommunityById"]>>): InternalHomeFeedCommunitySummary | null {
+function buildCommunitySummary(
+  community: Awaited<ReturnType<CommunityReadRepository["getCommunityById"]>>,
+  communityViewCounts: Map<string, number> = new Map(),
+): InternalHomeFeedCommunitySummary | null {
   if (!community) {
     return null
   }
@@ -149,7 +152,7 @@ function buildCommunitySummary(community: Awaited<ReturnType<CommunityReadReposi
     avatar_ref: null,
     member_count: null,
     follower_count: community.follower_count,
-    view_count: null,
+    view_count: communityViewCounts.get(community.community_id) ?? 0,
     updated_at: community.updated_at,
   }
 }
@@ -332,6 +335,34 @@ async function listHomeFeedProjectionRows(input: {
   return result.rows.map((row) => toHomeFeedProjectionRow(row))
 }
 
+export async function listHomeFeedCommunityViewCounts(input: {
+  env: Env
+  communityIds: string[]
+}): Promise<Map<string, number>> {
+  if (input.communityIds.length === 0) {
+    return new Map()
+  }
+
+  const controlPlaneClient = getControlPlaneClient(input.env)
+  const placeholders = input.communityIds.map((_, index) => `?${index + 1}`).join(", ")
+  const result = await controlPlaneClient.execute({
+    sql: `
+      SELECT community_id, total_views
+      FROM community_health_counts
+      WHERE community_id IN (${placeholders})
+    `,
+    args: input.communityIds,
+  })
+
+  const counts = new Map<string, number>()
+  for (const row of result.rows) {
+    const communityId = requiredString(row, "community_id")
+    const totalViews = requiredNumber(row, "total_views")
+    counts.set(communityId, totalViews)
+  }
+  return counts
+}
+
 export async function listHomeFeed(input: {
   env: Env
   userId: string | null
@@ -376,9 +407,14 @@ export async function listHomeFeed(input: {
     }
   }
 
+  const communityViewCounts = await listHomeFeedCommunityViewCounts({
+    env: input.env,
+    communityIds,
+  })
   const communitySummaries = (
     await Promise.all(communityIds.map(async (communityId) => buildCommunitySummary(
       await input.communityRepository.getCommunityById(communityId),
+      communityViewCounts,
     )))
   )
     .filter((summary): summary is InternalHomeFeedCommunitySummary => Boolean(summary))
