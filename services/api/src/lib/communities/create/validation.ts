@@ -6,6 +6,7 @@ import type {
   CreateCommunityRequest,
   User,
 } from "../../../types"
+import { decodePublicNamespaceVerificationId } from "../../public-ids"
 import { getPrimaryWalletSnapshot } from "../community-serialization"
 import { assertPublicV0GateConfiguration } from "../community-gate-validation"
 import type { GatePolicy } from "../membership/gate-types"
@@ -81,7 +82,9 @@ export async function resolveCreateCommunityAuth(input: {
     user,
     communityDisplayName: input.body.display_name.trim(),
     actorPrimaryWalletSnapshot,
-    namespaceVerificationId: input.body.namespace?.namespace_verification?.trim().replace(/^nv_/, "") || null,
+    namespaceVerificationId: input.body.namespace?.namespace_verification
+      ? decodePublicNamespaceVerificationId(input.body.namespace.namespace_verification)
+      : null,
     createdAt: nowIso(),
   }
 }

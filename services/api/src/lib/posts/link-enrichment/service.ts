@@ -5,6 +5,7 @@ import { updatePostLinkPreviewMetadata } from "../community-post-store"
 import { enqueueCommunityJob } from "../../communities/jobs/store"
 import type { DbExecutor } from "../../db-helpers"
 import { CONTENT_TRANSLATION_PREWARM_LOCALES, sameLanguageLocale } from "../../localization/content-locale"
+import { logPipelineInfo, sanitizeLogText, summarizeUrl } from "../../observability/pipeline-log"
 import { fetchFirecrawlLinkEnrichment } from "./firecrawl-provider"
 import {
   buildLinkEnrichmentSnapshot,
@@ -120,9 +121,26 @@ export async function hydrateGenericLinkEnrichment(input: {
       && input.controlPlaneClient,
   )
 
+  logPipelineInfo("[embed-hydrate] pipeline start", {
+    post_id: input.postId,
+    community_id: input.communityId,
+    normalized_url: summarizeUrl(normalizedUrl),
+    can_use_firecrawl: canUseFirecrawl,
+    has_control_plane: Boolean(input.controlPlaneClient),
+    has_firecrawl_key: Boolean(input.env?.FIRECRAWL_API_KEY?.trim()),
+  })
+
   if (canUseFirecrawl && normalizedUrl && input.controlPlaneClient) {
     const cached = await getLinkEnrichmentByNormalizedUrl(input.controlPlaneClient, normalizedUrl)
     if (cached?.status === "ready") {
+      logPipelineInfo("[embed-hydrate] cache hit", {
+        post_id: input.postId,
+        normalized_url: summarizeUrl(normalizedUrl),
+        provider: cached.provider,
+        has_markdown: Boolean(cached.markdown?.trim()),
+        summary_status: cached.summary_status,
+        has_title: Boolean(cached.title),
+      })
       await materializeSnapshot({
         client: input.communityClient,
         controlPlaneClient: input.controlPlaneClient,
@@ -154,6 +172,14 @@ export async function hydrateGenericLinkEnrichment(input: {
       url: input.url,
     })
     if (firecrawl?.ok) {
+      logPipelineInfo("[embed-hydrate] firecrawl success", {
+        post_id: input.postId,
+        normalized_url: summarizeUrl(normalizedUrl),
+        has_markdown: Boolean(firecrawl.markdown?.trim()),
+        has_title: Boolean(firecrawl.title),
+        has_description: Boolean(firecrawl.description),
+        has_publisher: Boolean(firecrawl.publisher),
+      })
       const record = await upsertLinkEnrichment({
         client: input.controlPlaneClient,
         normalizedUrl,
@@ -196,6 +222,11 @@ export async function hydrateGenericLinkEnrichment(input: {
     }
 
     if (firecrawl && !firecrawl.ok) {
+      logPipelineInfo("[embed-hydrate] firecrawl failed", {
+        post_id: input.postId,
+        normalized_url: summarizeUrl(normalizedUrl),
+        firecrawl_error: sanitizeLogText(firecrawl.error),
+      })
       await upsertLinkEnrichment({
         client: input.controlPlaneClient,
         normalizedUrl,
@@ -215,6 +246,18 @@ export async function hydrateGenericLinkEnrichment(input: {
     }
   }
 
+  if (!canUseFirecrawl) {
+    logPipelineInfo("[embed-hydrate] firecrawl not available, using native metadata only", {
+      post_id: input.postId,
+      normalized_url: summarizeUrl(normalizedUrl),
+      reason: !normalizedUrl
+        ? "no_normalized_url"
+        : !input.env?.FIRECRAWL_API_KEY?.trim()
+          ? "no_firecrawl_key"
+          : "no_control_plane",
+    })
+  }
+
   const metadata = await fetchLinkPreviewMetadata({
     fetcher: input.fetcher,
     url: input.url,
@@ -222,6 +265,15 @@ export async function hydrateGenericLinkEnrichment(input: {
   if (!metadata.imageUrl && !metadata.title) {
     return null
   }
+
+  logPipelineInfo("[embed-hydrate] native fallback", {
+    post_id: input.postId,
+    normalized_url: summarizeUrl(normalizedUrl),
+    has_normalized_url: Boolean(normalizedUrl),
+    has_control_plane: Boolean(input.controlPlaneClient),
+    has_title: Boolean(metadata.title),
+    has_image_url: Boolean(metadata.imageUrl),
+  })
 
   if (normalizedUrl && input.controlPlaneClient) {
     const record = await upsertLinkEnrichment({

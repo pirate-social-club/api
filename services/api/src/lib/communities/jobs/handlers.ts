@@ -26,6 +26,7 @@ import {
 import { upsertLinkEnrichmentUsage } from "../../posts/link-enrichment/repository"
 import { materializePostLabel } from "../../posts/post-label-materializer"
 import { materializePostTranslation } from "../../localization/post-translation-materializer"
+import { logPipelineError, logPipelineInfo, sanitizeLogText, summarizeUrl } from "../../observability/pipeline-log"
 import { generateSongPreviewForBundle } from "../../song-artifacts/song-artifact-preview-service"
 import {
   buildThreadFeedTopic,
@@ -402,6 +403,16 @@ async function runEmbedHydrate(input: {
       throw internalError("Post is missing for embed hydration")
     }
 
+    logPipelineInfo("[embed-hydrate] job starting", {
+      job_id: input.job.job_id,
+      community_id: input.job.community_id,
+      post_id: postId,
+      post_type: post.post_type,
+      has_link_url: Boolean(post.link_url?.trim()),
+      has_control_plane: Boolean(input.env.CONTROL_PLANE_DATABASE_URL),
+      has_firecrawl_key: Boolean(input.env.FIRECRAWL_API_KEY?.trim()),
+    })
+
     return await hydrateLinkPostEmbed({
       client: db.client,
       controlPlaneClient: input.env.CONTROL_PLANE_DATABASE_URL ? getControlPlaneClient(input.env) : null,
@@ -487,11 +498,11 @@ async function runLinkSummaryMaterialize(input: {
       }
     } catch (error) {
       failed += 1
-      console.error("[link-summary] failed to fan out enrichment snapshot", {
-        normalized_url: normalizedUrl,
+      logPipelineError("[link-summary] failed to fan out enrichment snapshot", {
+        normalized_url: summarizeUrl(normalizedUrl),
         community_id: usage.community_id,
         post_id: usage.post_id,
-        error,
+        error: sanitizeLogText(error instanceof Error ? error.message : String(error)),
       })
     }
   }
@@ -597,12 +608,12 @@ async function runLinkSummaryTranslationMaterialize(input: {
       }
     } catch (error) {
       failed += 1
-      console.error("[link-summary-translation] failed to fan out enrichment snapshot", {
-        normalized_url: normalizedUrl,
+      logPipelineError("[link-summary-translation] failed to fan out enrichment snapshot", {
+        normalized_url: summarizeUrl(normalizedUrl),
         locale,
         community_id: usage.community_id,
         post_id: usage.post_id,
-        error,
+        error: sanitizeLogText(error instanceof Error ? error.message : String(error)),
       })
     }
   }

@@ -1,6 +1,7 @@
 import { nowIso } from "../../helpers"
 import type { Env } from "../../../env"
 import { openCommunityDb } from "../community-db-factory"
+import { logPipelineError, logPipelineInfo, sanitizeLogText, summarizeReference } from "../../observability/pipeline-log"
 import {
   findNextRunnableCommunityJob,
   getCommunityJobById,
@@ -62,6 +63,15 @@ export async function processCommunityJobById(input: {
         communityRepository: input.communityRepository,
       })
 
+      logPipelineInfo("[community-job] completed", {
+        job_id: running.job_id,
+        job_type: running.job_type,
+        community_id: running.community_id,
+        ...summarizeReference("subject_id", running.subject_id),
+        attempt_count: running.attempt_count,
+        ...summarizeReference("result_ref", resultRef),
+      })
+
       return await markCommunityJobSucceeded({
         client: db.client,
         jobId: running.job_id,
@@ -71,6 +81,14 @@ export async function processCommunityJobById(input: {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       const failedAt = nowIso()
+      logPipelineError("[community-job] failed", {
+        job_id: running.job_id,
+        job_type: running.job_type,
+        community_id: running.community_id,
+        ...summarizeReference("subject_id", running.subject_id),
+        attempt_count: running.attempt_count,
+        error: sanitizeLogText(message),
+      })
       return await markCommunityJobFailed({
         client: db.client,
         jobId: running.job_id,
