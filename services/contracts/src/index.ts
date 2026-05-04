@@ -1272,6 +1272,12 @@ export type PostVoteResponse = {
   value: -1 | 1;
 };
 
+export type DeletedPostResponse = {
+  id: string;
+  object: "post";
+  deleted: true;
+};
+
 export type CommentVoteResponse = {
   comment: string;
   value: -1 | 1;
@@ -1373,6 +1379,7 @@ export type LocalizedPostResponse = {
   like_count: number;
   comment_count?: number;
   viewer_vote: -1 | 1 | null;
+  viewer_is_author?: boolean;
   viewer_reaction_kinds: Array<"like">;
   age_gate_viewer_state?: "proof_required" | "verified_allowed" | null;
   resolved_locale: string;
@@ -2789,6 +2796,7 @@ export const apiRoutes = {
   communityFollow: (communityId: string) => `/communities/${communityId}/follow`,
   communityUnfollow: (communityId: string) => `/communities/${communityId}/unfollow`,
   communityPosts: (communityId: string) => `/communities/${communityId}/posts`,
+  communityPostDelete: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/delete`,
   communityPostComments: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/comments`,
   communityPostReports: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/reports`,
   communityCommentReports: (communityId: string, commentId: string) => `/communities/${communityId}/comments/${commentId}/reports`,

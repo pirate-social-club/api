@@ -1,4 +1,5 @@
 import type {
+  DeletedPostResponse as ContractDeletedPostResponse,
   LocalizedPostResponse as ContractLocalizedPostResponse,
   Post as ContractPost,
 } from "@pirate/api-contracts"
@@ -37,7 +38,7 @@ export function serializePost(post: Post): CurrentPostResponse {
     id: publicPostId(post.post_id),
     object: "post",
     community: publicCommunityId(post.community_id),
-    author_user: post.author_user_id ? `usr_${post.author_user_id}` : post.author_user_id,
+    author_user: post.identity_mode === "public" && post.author_user_id ? `usr_${post.author_user_id}` : null,
     authorship_mode: post.authorship_mode,
     agent: post.agent_id ? `agt_${post.agent_id}` : post.agent_id,
     agent_ownership_record: post.agent_ownership_record_id ? `aor_${post.agent_ownership_record_id}` : post.agent_ownership_record_id,
@@ -89,6 +90,14 @@ export function serializePost(post: Post): CurrentPostResponse {
   }
 }
 
+export function serializeDeletedPostResponse(post: Pick<Post, "post_id">): ContractDeletedPostResponse {
+  return {
+    id: publicPostId(post.post_id),
+    object: "post",
+    deleted: true,
+  }
+}
+
 export function serializeLocalizedPostResponse(response: LocalizedPostResponse): ContractLocalizedPostResponse {
   return {
     post: serializePost(response.post),
@@ -101,6 +110,7 @@ export function serializeLocalizedPostResponse(response: LocalizedPostResponse):
     like_count: response.like_count,
     comment_count: response.comment_count,
     viewer_vote: response.viewer_vote,
+    viewer_is_author: response.viewer_is_author,
     viewer_reaction_kinds: response.viewer_reaction_kinds,
     age_gate_viewer_state: response.age_gate_viewer_state,
     resolved_locale: response.resolved_locale,

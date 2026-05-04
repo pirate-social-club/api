@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { app } from "../../../src/index"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import {
   addCommunityMember,
@@ -207,16 +208,17 @@ membership_mode: "request",
     const communityCreateBody = await json(communityCreate) as {
       community: { id: string }
     }
+    const communityId = communityCreateBody.community.id.replace(/^com_/, "")
 
     await updateLocalCommunityAnonymousPolicy({
       allowAnonymousIdentity: true,
       anonymousIdentityScope: "community_stable",
       communityDbRoot: ctx.communityDbRoot,
-      communityId: communityCreateBody.community.id.replace(/^com_/, ""),
+      communityId,
     })
 
     const createdPost = await requestJson(
-      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
+      `http://pirate.test/communities/${communityId}/posts`,
       {
         post_type: "text",
         identity_mode: "anonymous",
@@ -232,7 +234,9 @@ membership_mode: "request",
 
     expect(createdPost.status).toBe(201)
     const createdBody = await json(createdPost) as {
+      id: string
       anonymous_label: string | null
+      author_user: string | null
       disclosed_qualifiers_json?: Array<{
         qualifier_template_id: string
         rendered_label: string
@@ -240,6 +244,7 @@ membership_mode: "request",
       identity_mode: string
     }
     expect(createdBody.identity_mode).toBe("anonymous")
+    expect(createdBody.author_user).toBeNull()
     expect(createdBody.anonymous_label).toMatch(/^anon_[a-z]+-[a-z]+-\d{2}$/)
     expect(createdBody.anonymous_label).not.toBe("anonymous")
     expect(createdBody.disclosed_qualifiers_json?.map((entry) => entry.qualifier_template_id)).toEqual([
@@ -250,5 +255,52 @@ membership_mode: "request",
       "Unique Human",
       "18+",
     ])
+
+    const authorRead = await app.request(`http://pirate.test/posts/${createdBody.id}`, {
+      headers: {
+        authorization: `Bearer ${session.accessToken}`,
+      },
+    }, ctx.env)
+    expect(authorRead.status).toBe(200)
+    const authorReadBody = await json(authorRead) as {
+      post: { author_user: string | null; identity_mode: string }
+      viewer_is_author?: boolean
+    }
+    expect(authorReadBody.post.identity_mode).toBe("anonymous")
+    expect(authorReadBody.post.author_user).toBeNull()
+    expect(authorReadBody.viewer_is_author).toBe(true)
+
+    const otherMember = await exchangeJwt(ctx.env, "community-anonymous-other-reader")
+    await addCommunityMember(ctx.communityDbRoot, communityId, otherMember.userId)
+    const otherRead = await app.request(`http://pirate.test/posts/${createdBody.id}`, {
+      headers: {
+        authorization: `Bearer ${otherMember.accessToken}`,
+      },
+    }, ctx.env)
+    expect(otherRead.status).toBe(200)
+    const otherReadBody = await json(otherRead) as {
+      post: { author_user: string | null; identity_mode: string }
+      viewer_is_author?: boolean
+    }
+    expect(otherReadBody.post.identity_mode).toBe("anonymous")
+    expect(otherReadBody.post.author_user).toBeNull()
+    expect(otherReadBody.viewer_is_author).toBe(false)
+
+    const authorFeed = await app.request(`http://pirate.test/communities/${communityId}/posts`, {
+      headers: {
+        authorization: `Bearer ${session.accessToken}`,
+      },
+    }, ctx.env)
+    expect(authorFeed.status).toBe(200)
+    const authorFeedBody = await json(authorFeed) as {
+      items: Array<{
+        post: { id: string; author_user: string | null; identity_mode: string }
+        viewer_is_author?: boolean
+      }>
+    }
+    expect(authorFeedBody.items[0]?.post.id).toBe(createdBody.id)
+    expect(authorFeedBody.items[0]?.post.identity_mode).toBe("anonymous")
+    expect(authorFeedBody.items[0]?.post.author_user).toBeNull()
+    expect(authorFeedBody.items[0]?.viewer_is_author).toBe(true)
   })
 })

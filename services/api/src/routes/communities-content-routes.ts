@@ -7,9 +7,9 @@ import type { CreateCommentRequest } from "../lib/comments/comment-types"
 import { openCommunityDb } from "../lib/communities/community-db-factory"
 import { badRequestError, eligibilityFailed, notFoundError } from "../lib/errors"
 import { getPostById, updatePostLinkPreviewMetadata } from "../lib/posts/community-post-store"
-import { createPost, listCommunityPosts } from "../lib/posts/post-service"
+import { createPost, deletePost, listCommunityPosts } from "../lib/posts/post-service"
 import { serializeComment, serializeCommentListResponse } from "../serializers/comment"
-import { serializeLocalizedPostResponse, serializePost } from "../serializers/post"
+import { serializeDeletedPostResponse, serializeLocalizedPostResponse, serializePost } from "../serializers/post"
 import type { CreatePostRequest } from "../types"
 import { decodePublicPostId } from "../lib/public-ids"
 import { writeAuditEventForEnv } from "../lib/audit"
@@ -197,6 +197,32 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
     } finally {
       db.close()
     }
+  })
+
+  communities.post("/:communityId/posts/:postId/delete", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const postId = decodePublicPostId(c.req.param("postId"))
+    const result = await deletePost({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      postId,
+      communityRepository,
+    })
+    if (!result.alreadyDeleted) {
+      await writeAuditEventForEnv(c.env, {
+        action: "community.post_deleted_by_author",
+        actorId: actor.userId,
+        actorType: "user",
+        communityId,
+        targetId: postId,
+        targetType: "post",
+        metadata: {
+          deleted_at: result.deletedAt,
+        },
+      })
+    }
+    return c.json(serializeDeletedPostResponse(result.post), 200)
   })
 
   communities.get("/:communityId/posts", async (c) => {

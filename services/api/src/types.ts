@@ -368,6 +368,7 @@ export type LocalizedPostResponse = {
   like_count: number
   comment_count?: number
   viewer_vote: -1 | 1 | null
+  viewer_is_author?: boolean
   viewer_reaction_kinds: Array<"like">
   age_gate_viewer_state?: "proof_required" | "verified_allowed" | null
   resolved_locale: string

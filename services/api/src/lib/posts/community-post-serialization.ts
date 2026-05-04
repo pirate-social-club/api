@@ -191,7 +191,7 @@ export function serializePost(row: PostRow): Post {
   return {
     post_id: row.post_id,
     community_id: row.community_id,
-    author_user_id: row.identity_mode === "anonymous" ? null : row.author_user_id,
+    author_user_id: row.author_user_id,
     authorship_mode: row.authorship_mode,
     agent_id: row.agent_id,
     agent_ownership_record_id: row.agent_ownership_record_id,

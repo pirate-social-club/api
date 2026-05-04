@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { createClient } from "@libsql/client"
 import { app } from "../../../src/index"
+import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import {
   addCommunityMember,
@@ -815,5 +817,193 @@ membership_mode: "request",
     expect(listedPostsBody.items[0]?.downvote_count).toBe(1)
     expect(listedPostsBody.items[0]?.like_count).toBe(0)
     expect(listedPostsBody.items[0]?.viewer_vote).toBe(-1)
+  })
+
+  test("authors can soft-delete posts and deleted posts read as stubs", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "community-post-delete-creator")
+    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Pirate Delete Club",
+      membership_mode: "request",
+      namespace: {
+        namespace_verification: namespaceVerificationId,
+      },
+    }, ctx.env, creator.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: { id: string }
+    }
+    const communityId = communityCreateBody.community.id.replace(/^com_/, "")
+
+    const createdPost = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Delete me",
+        body: "This body must not leak after delete.",
+        idempotency_key: "delete-post-key-1",
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(createdPost.status).toBe(201)
+    const postBody = await json(createdPost) as { id: string }
+
+    const removedPost = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Removed by mods",
+        body: "This post should stay in moderation-owned state.",
+        idempotency_key: "delete-post-key-removed-1",
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(removedPost.status).toBe(201)
+    const removedPostBody = await json(removedPost) as { id: string }
+    const communityDb = createClient({
+      url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
+    })
+    try {
+      await communityDb.execute({
+        sql: `
+          UPDATE posts
+          SET status = 'removed'
+          WHERE post_id = ?1
+        `,
+        args: [removedPostBody.id.replace(/^post_/, "")],
+      })
+    } finally {
+      communityDb.close()
+    }
+
+    const deniedRemovedDelete = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts/${removedPostBody.id}/delete`,
+      {},
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(deniedRemovedDelete.status).toBe(400)
+
+    const member = await exchangeJwt(ctx.env, "community-post-delete-member")
+    await addCommunityMember(ctx.communityDbRoot, communityId, member.userId)
+
+    const deniedDelete = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts/${postBody.id}/delete`,
+      {},
+      ctx.env,
+      member.accessToken,
+    )
+    expect(deniedDelete.status).toBe(403)
+
+    const deleted = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts/${postBody.id}/delete`,
+      {},
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(deleted.status).toBe(200)
+    expect(await json(deleted)).toEqual({
+      id: postBody.id,
+      object: "post",
+      deleted: true,
+    })
+
+    const deletedAgain = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts/${postBody.id}/delete`,
+      {},
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(deletedAgain.status).toBe(200)
+    expect(await json(deletedAgain)).toEqual({
+      id: postBody.id,
+      object: "post",
+      deleted: true,
+    })
+
+    const deniedIdempotentDelete = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts/${postBody.id}/delete`,
+      {},
+      ctx.env,
+      member.accessToken,
+    )
+    expect(deniedIdempotentDelete.status).toBe(403)
+
+    const memberRead = await app.request(`http://pirate.test/posts/${postBody.id}`, {
+      headers: {
+        authorization: `Bearer ${member.accessToken}`,
+      },
+    }, ctx.env)
+    expect(memberRead.status).toBe(200)
+    const memberReadBody = await json(memberRead) as {
+      post: {
+        status: string
+        title: string | null
+        body: string | null
+        media_refs: unknown[]
+      }
+      upvote_count: number
+      downvote_count: number
+      viewer_vote: number | null
+      viewer_is_author?: boolean
+    }
+    expect(memberReadBody.post.status).toBe("deleted")
+    expect(memberReadBody.post.title).toBeNull()
+    expect(memberReadBody.post.body).toBeNull()
+    expect(memberReadBody.post.media_refs).toEqual([])
+    expect(memberReadBody.upvote_count).toBe(0)
+    expect(memberReadBody.downvote_count).toBe(0)
+    expect(memberReadBody.viewer_vote).toBeNull()
+    expect(memberReadBody.viewer_is_author).toBe(false)
+
+    const creatorRead = await app.request(`http://pirate.test/posts/${postBody.id}`, {
+      headers: {
+        authorization: `Bearer ${creator.accessToken}`,
+      },
+    }, ctx.env)
+    expect(creatorRead.status).toBe(200)
+    const creatorReadBody = await json(creatorRead) as {
+      post: { status: string; body: string | null }
+      viewer_is_author?: boolean
+    }
+    expect(creatorReadBody.post.status).toBe("deleted")
+    expect(creatorReadBody.post.body).toBeNull()
+    expect(creatorReadBody.viewer_is_author).toBe(true)
+
+    const listedPosts = await app.request(`http://pirate.test/communities/${communityId}/posts`, {
+      headers: {
+        authorization: `Bearer ${member.accessToken}`,
+      },
+    }, ctx.env)
+    expect(listedPosts.status).toBe(200)
+    const listedPostsBody = await json(listedPosts) as { items: unknown[] }
+    expect(listedPostsBody.items).toHaveLength(0)
+
+    const voteDeleted = await requestJson(
+      `http://pirate.test/posts/${postBody.id}/vote`,
+      { value: 1 },
+      ctx.env,
+      member.accessToken,
+    )
+    expect(voteDeleted.status).toBe(400)
+
+    const auditRows = await ctx.client.execute({
+      sql: `
+        SELECT action, actor_type, actor_id, target_type, target_id
+        FROM audit_log
+        WHERE action = 'community.post_deleted_by_author'
+      `,
+      args: [],
+    })
+    expect(auditRows.rows).toHaveLength(1)
+    expect(auditRows.rows[0]?.actor_type).toBe("user")
+    expect(auditRows.rows[0]?.actor_id).toBe(creator.userId)
+    expect(auditRows.rows[0]?.target_type).toBe("post")
+    expect(auditRows.rows[0]?.target_id).toBe(postBody.id.replace(/^post_/, ""))
   })
 })

@@ -499,6 +499,7 @@ export async function listHomeFeed(input: {
             viewer_vote: viewerVote,
           },
           ageGateViewerState: post.age_gate_policy === "18_plus" ? ageGateState ?? "proof_required" : null,
+          viewerUserId: input.userId,
         })
         await enqueuePostTranslationOnReadIfNeeded({
           client: db.client,

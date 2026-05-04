@@ -257,6 +257,28 @@ export async function updatePostLinkPreviewMetadata(input: {
   })
 }
 
+export async function markPostDeleted(input: {
+  executor: DbExecutor
+  postId: string
+  now: string
+}): Promise<Post> {
+  await input.executor.execute({
+    sql: `
+      UPDATE posts
+      SET status = 'deleted',
+          updated_at = ?2
+      WHERE post_id = ?1
+    `,
+    args: [input.postId, input.now],
+  })
+
+  const updated = await getPostById(input.executor, input.postId)
+  if (!updated) {
+    throw internalError("Post row is missing after delete")
+  }
+  return updated
+}
+
 export async function getCommunityPostPolicy(
   executor: DbExecutor,
   communityId: string,

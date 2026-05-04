@@ -21,6 +21,7 @@ import {
   getPostById,
   getPostProjectionMetrics,
   insertPost,
+  markPostDeleted,
   upsertPostVote,
 } from "./community-post-store"
 import {
@@ -451,6 +452,9 @@ export async function castPostVote(input: {
     if (!post) {
       throw notFoundError("Post not found")
     }
+    if (post.status !== "published") {
+      throw badRequestError("Cannot vote on a post that is not published")
+    }
 
     const now = nowIso()
     const vote = await upsertPostVote({
@@ -470,6 +474,85 @@ export async function castPostVote(input: {
     return {
       post: publicPostId(vote.post_id),
       value: vote.value,
+    }
+  } finally {
+    db.close()
+  }
+}
+
+export type DeletePostResult = {
+  post: Pick<Post, "post_id" | "status" | "updated_at">
+  deletedAt: string
+  alreadyDeleted: boolean
+}
+
+export async function deletePost(input: {
+  env: Env
+  userId: string
+  communityId: string
+  postId: string
+  communityRepository: PostServiceCommunityRepository
+}): Promise<DeletePostResult> {
+  const projection = await input.communityRepository.getCommunityPostProjectionByPostId(input.postId)
+  if (!projection || projection.community_id !== input.communityId) {
+    throw notFoundError("Post not found")
+  }
+
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  try {
+    await requireMemberAccess(db.client, input.communityId, input.userId)
+    const post = await getPostById(db.client, input.postId)
+    if (!post || post.community_id !== input.communityId) {
+      throw notFoundError("Post not found")
+    }
+    if (post.author_user_id !== input.userId) {
+      throw eligibilityFailed("You do not have permission to delete this post")
+    }
+    if (post.status === "deleted") {
+      return {
+        post: {
+          post_id: post.post_id,
+          status: post.status,
+          updated_at: post.updated_at,
+        },
+        deletedAt: post.updated_at,
+        alreadyDeleted: true,
+      }
+    }
+    if (post.status !== "published") {
+      throw badRequestError("Cannot delete a post that is not published")
+    }
+
+    const deletedAt = nowIso()
+    const tx = await db.client.transaction("write")
+    try {
+      const deleted = await markPostDeleted({
+        executor: tx,
+        postId: input.postId,
+        now: deletedAt,
+      })
+      await tx.commit()
+
+      await input.communityRepository.updateCommunityPostProjectionStatus({
+        postId: input.postId,
+        status: "deleted",
+        updatedAt: deletedAt,
+      })
+
+      return {
+        post: {
+          post_id: deleted.post_id,
+          status: deleted.status,
+          updated_at: deleted.updated_at,
+        },
+        deletedAt,
+        alreadyDeleted: false,
+      }
+    } catch (error) {
+      await safeRollback(tx, "[posts] rollback failed while deleting post")
+      throw error
+    } finally {
+      tx.close()
     }
   } finally {
     db.close()

@@ -22,7 +22,7 @@ import { enqueueEmbedHydrateOnReadIfNeeded, enqueuePostTranslationOnReadIfNeeded
 import { resolveAgeGateViewerState } from "./age-gate-viewer-state"
 import type { UserRepository } from "../auth/repositories"
 import type { Env } from "../../env"
-import type { LocalizedPostResponse } from "../../types"
+import type { CommentThreadSnapshot, LocalizedPostResponse, Post } from "../../types"
 
 type CommunityFeedResponse = {
   items: LocalizedPostResponse[]
@@ -56,6 +56,85 @@ function formatFeedCursor(cursor: string | null): string | null {
   return cursor ?? null
 }
 
+function buildDeletedPostStubResponse(input: {
+  post: Post
+  threadSnapshot: CommentThreadSnapshot | null
+  viewerUserId?: string | null
+}): LocalizedPostResponse {
+  const redactedPost: Post = {
+    ...input.post,
+    author_user_id: null,
+    agent_id: null,
+    agent_ownership_record_id: null,
+    identity_mode: "public",
+    anonymous_scope: null,
+    anonymous_label: null,
+    agent_handle_snapshot: null,
+    agent_display_name_snapshot: null,
+    agent_owner_handle_snapshot: null,
+    agent_ownership_provider_snapshot: null,
+    disclosed_qualifiers_json: null,
+    label_id: null,
+    post_type: "text",
+    title: null,
+    body: null,
+    caption: null,
+    lyrics: null,
+    link_url: null,
+    link_og_image_url: null,
+    link_og_title: null,
+    link_enrichment_snapshot_json: null,
+    link_enrichment_synced_at: null,
+    embeds: null,
+    media_refs: [],
+    creator_relation: null,
+    promotion_disclosure: null,
+    source_language: null,
+    translation_policy: "none",
+    access_mode: null,
+    asset_id: null,
+    song_artifact_bundle_id: null,
+    parent_post_id: null,
+    song_mode: null,
+    rights_basis: null,
+    upstream_asset_refs: null,
+    analysis_result_ref: null,
+    content_safety_state: "safe",
+    age_gate_policy: "none",
+    label_assignment_status: null,
+    label_assigned_by: null,
+    label_assigned_at: null,
+    label_ai_confidence: null,
+    label_assignment_error: null,
+    label_assignment_model: null,
+    label_assignment_result_json: null,
+  }
+
+  return {
+    post: redactedPost,
+    author_community_role: null,
+    thread_snapshot: input.threadSnapshot,
+    market_context: null,
+    label: null,
+    upvote_count: 0,
+    downvote_count: 0,
+    like_count: 0,
+    comment_count: input.threadSnapshot?.comment_count ?? 0,
+    viewer_vote: null,
+    viewer_is_author: Boolean(input.viewerUserId && input.post.author_user_id === input.viewerUserId),
+    viewer_reaction_kinds: [],
+    age_gate_viewer_state: null,
+    resolved_locale: "en",
+    translation_state: "same_language",
+    machine_translated: false,
+    translated_body: null,
+    translated_title: null,
+    translated_caption: null,
+    translated_embeds: null,
+    source_hash: "",
+  }
+}
+
 function parsePostFeedSort(sort: string | null | undefined): PostFeedSort {
   return sort === "new" || sort === "top" ? sort : "best"
 }
@@ -80,6 +159,10 @@ export async function getPost(input: {
     if (!post) {
       throw notFoundError("Post not found")
     }
+    const threadSnapshot = await getLatestThreadSnapshotForRead(db.client, post.post_id)
+    if (post.status === "deleted") {
+      return buildDeletedPostStubResponse({ post, threadSnapshot, viewerUserId: input.userId })
+    }
     if (post.status !== "published" && !canReadNonPublishedPost(post, membership, input.userId)) {
       throw notFoundError("Post not found")
     }
@@ -88,7 +171,6 @@ export async function getPost(input: {
       userRepository: input.userRepository,
       postAgeGatePolicy: post.age_gate_policy,
     })
-    const threadSnapshot = await getLatestThreadSnapshotForRead(db.client, post.post_id)
     const metrics = await getPostReadMetrics({
       executor: db.client,
       postId: post.post_id,
@@ -101,6 +183,7 @@ export async function getPost(input: {
       metrics,
       threadSnapshot,
       ageGateViewerState,
+      viewerUserId: input.userId,
     })
     await enqueuePostTranslationOnReadIfNeeded({
       client: db.client,
@@ -154,6 +237,7 @@ export async function getPublicPost(input: {
       metrics,
       threadSnapshot,
       ageGateViewerState,
+      viewerUserId: null,
     })
     await enqueuePostTranslationOnReadIfNeeded({
       client: db.client,
@@ -223,6 +307,7 @@ export async function listCommunityPosts(input: {
         },
         threadSnapshot,
         ageGateViewerState,
+        viewerUserId: input.userId,
       })
     }))
     for (const item of items) {
@@ -291,6 +376,7 @@ export async function listPublicCommunityPosts(input: {
         },
         threadSnapshot,
         ageGateViewerState,
+        viewerUserId: null,
       })
     }))
     for (const item of items) {
