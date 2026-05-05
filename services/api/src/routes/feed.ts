@@ -30,7 +30,7 @@ feed.get("/home", async (c) => {
     waitUntil,
   })
   if (!actor && !c.req.header("authorization")) {
-    setPublicReadCacheHeaders(c, { vary: ["Authorization", "Accept-Language"] })
+    setPublicReadCacheHeaders(c, { vary: ["Authorization"] })
   }
   return c.json(result, 200)
 })

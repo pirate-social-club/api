@@ -2,7 +2,8 @@ import type { Context } from "hono"
 
 const PUBLIC_READ_CDN_CACHE_CONTROL = "public, s-maxage=60, stale-while-revalidate=300"
 const PUBLIC_READ_CACHE_CONTROL = "public, max-age=0, s-maxage=60, stale-while-revalidate=300"
-const PUBLIC_READ_CACHE_KEY_HEADER_NAMES = ["origin", "accept", "accept-language"]
+const DEFAULT_PUBLIC_READ_CACHE_KEY_HEADER_NAMES = ["origin", "accept", "accept-language"]
+const FEED_PUBLIC_READ_CACHE_KEY_HEADER_NAMES = ["origin"]
 
 function appendVaryHeader(c: Context, fields: string[]): void {
   const existingFields = (c.res.headers.get("Vary") ?? "")
@@ -49,7 +50,10 @@ export function isPublicReadCacheRequest(request: Request): boolean {
 
 export function buildPublicReadCacheKey(request: Request): Request {
   const url = new URL(request.url)
-  for (const headerName of PUBLIC_READ_CACHE_KEY_HEADER_NAMES) {
+  const headerNames = url.pathname === "/feed/home"
+    ? FEED_PUBLIC_READ_CACHE_KEY_HEADER_NAMES
+    : DEFAULT_PUBLIC_READ_CACHE_KEY_HEADER_NAMES
+  for (const headerName of headerNames) {
     const headerValue = request.headers.get(headerName)
     if (headerValue) {
       url.searchParams.set(`__cache_${headerName}`, headerValue)
