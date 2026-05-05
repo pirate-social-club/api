@@ -189,6 +189,23 @@ function shouldRunVisualPolicy(community: Community): boolean {
   return community.default_age_gate_policy === "18_plus"
 }
 
+function visualPolicyUnavailableResult(env: Env, imageUrls: string[]): Record<string, unknown> {
+  return {
+    provider: "visual_policy_vlm",
+    model: trimEnv(env.OPENROUTER_VISUAL_POLICY_MODEL) || "x-ai/grok-4.3",
+    error: "visual_classifier_unavailable",
+    factsByImage: imageUrls.map((imageUrl) => ({
+      image_url: imageUrl,
+      error: "visual_classifier_unavailable",
+    })),
+    decision: {
+      policyDecision: "queue",
+      reasonCodes: ["visual_classifier_unavailable"],
+      adultSignal: true,
+    },
+  }
+}
+
 export function outcomeFromDecision(decision: ModerationDecisionLevel, providerResult: Record<string, unknown> | null): PostModerationOutcome {
   if (decision === "disallow") {
     return {
@@ -262,7 +279,12 @@ export async function resolveOpenAIModerationOutcome(input: {
         imageUrls,
       })
     : null
-  const visualPolicyDecision = moderationDecisionFromVisualPolicy(visualPolicyResult)
+  const visualPolicyEvidence = visualPolicyResult ?? (useVisualPolicy ? visualPolicyUnavailableResult(input.env, imageUrls) : null)
+  const visualPolicyDecision = visualPolicyResult
+    ? moderationDecisionFromVisualPolicy(visualPolicyResult)
+    : useVisualPolicy
+      ? "review"
+      : "allow"
 
   const apiKey = trimEnv(input.env.OPENAI_API_KEY)
   if (!apiKey) {
@@ -270,7 +292,7 @@ export async function resolveOpenAIModerationOutcome(input: {
     return outcomeFromDecision(combineModerationDecision("review", visualPolicyDecision), {
       provider: "openai",
       error: "missing_configuration",
-      visual_policy: visualPolicyResult,
+      visual_policy: visualPolicyEvidence,
     })
   }
 
@@ -301,7 +323,7 @@ export async function resolveOpenAIModerationOutcome(input: {
         provider: "openai",
         model,
         error: `http_${response.status}`,
-        visual_policy: visualPolicyResult,
+        visual_policy: visualPolicyEvidence,
       })
     }
 
@@ -313,7 +335,7 @@ export async function resolveOpenAIModerationOutcome(input: {
         model,
         error: "invalid_response",
         provider_result: parsed,
-        visual_policy: visualPolicyResult,
+        visual_policy: visualPolicyEvidence,
       })
     }
 
@@ -339,7 +361,7 @@ export async function resolveOpenAIModerationOutcome(input: {
         explicit_sexual_content: adultContentPolicy.explicit_sexual_content,
       },
       platform_decision: platformDecision,
-      visual_policy_decision: visualPolicyResult?.decision.policyDecision ?? "not_configured",
+      visual_policy_decision: visualPolicyResult?.decision.policyDecision ?? (useVisualPolicy ? "unavailable" : "not_configured"),
       visual_policy_enabled: useVisualPolicy,
       decision,
       community_id: input.community.community_id,
@@ -353,7 +375,7 @@ export async function resolveOpenAIModerationOutcome(input: {
       sexual_minors_score: highestCategoryScore(results, "sexual/minors"),
       sexual_score: highestCategoryScore(results, "sexual"),
       sexual_minors_block_threshold: sexualMinorsBlockThreshold,
-      visual_policy: visualPolicyResult,
+      visual_policy: visualPolicyEvidence,
       decision,
     })
   } catch (error) {
@@ -361,7 +383,7 @@ export async function resolveOpenAIModerationOutcome(input: {
       provider: "openai",
       model,
       error: error instanceof Error ? error.message : String(error),
-      visual_policy: visualPolicyResult,
+      visual_policy: visualPolicyEvidence,
     })
   } finally {
     if (timer) {

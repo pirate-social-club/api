@@ -336,6 +336,27 @@ describe("resolveOpenAIModerationOutcome", () => {
     }) as typeof fetch
   }
 
+  function installFailingVisualPolicyFetchMock(openAiCategories: Record<string, boolean> = {}, openAiScores: Record<string, number> = {}) {
+    globalThis.fetch = (async (url: RequestInfo | URL) => {
+      const href = String(url)
+      if (href.includes("openrouter.test")) {
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: "{not valid json",
+            },
+          }],
+        }), { status: 200, headers: { "content-type": "application/json" } })
+      }
+      return new Response(JSON.stringify({
+        results: [{
+          categories: openAiCategories,
+          category_scores: openAiScores,
+        }],
+      }), { status: 200, headers: { "content-type": "application/json" } })
+    }) as typeof fetch
+  }
+
   function restoreFetch() {
     globalThis.fetch = originalFetch
   }
@@ -547,6 +568,78 @@ describe("resolveOpenAIModerationOutcome", () => {
       expect(outcome.analysis_state).toBe("allow")
       expect(outcome.content_safety_state).toBe("adult")
       expect(outcome.age_gate_policy).toBe("18_plus")
+    } finally {
+      restoreFetch()
+    }
+  })
+
+  test("18+ visual policy failure queues the post", async () => {
+    installFailingVisualPolicyFetchMock({})
+    try {
+      const outcome = await resolveOpenAIModerationOutcome({
+        env: {
+          OPENAI_API_KEY: "openai-test",
+          OPENAI_MODERATION_BASE_URL: "https://openai.test/v1",
+          OPENROUTER_API_KEY: "openrouter-test",
+          OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+        },
+        community: {
+          community_id: "com_visual_unavailable",
+          default_age_gate_policy: "18_plus",
+          visual_policy_settings: buildDefaultVisualPolicySettings("visual_unavailable", new Date().toISOString()),
+        } as Community,
+        body: {
+          idempotency_key: "idem_visual_unavailable",
+          post_type: "image",
+          media_refs: [{
+            storage_ref: "https://example.test/image.jpg",
+            mime_type: "image/jpeg",
+            size_bytes: 12,
+          }],
+        },
+      })
+
+      expect(outcome.analysis_state).toBe("review_required")
+      expect(outcome.content_safety_state).toBe("adult")
+      expect(outcome.age_gate_policy).toBe("18_plus")
+      expect((outcome.providerResult?.visual_policy as { decision?: { reasonCodes?: string[] } } | undefined)?.decision?.reasonCodes)
+        .toContain("visual_classifier_unavailable")
+    } finally {
+      restoreFetch()
+    }
+  })
+
+  test("sexual minors still blocks when 18+ visual policy fails", async () => {
+    installFailingVisualPolicyFetchMock(
+      { sexual: true, "sexual/minors": true },
+      { "sexual/minors": 0.98 },
+    )
+    try {
+      const outcome = await resolveOpenAIModerationOutcome({
+        env: {
+          OPENAI_API_KEY: "openai-test",
+          OPENAI_MODERATION_BASE_URL: "https://openai.test/v1",
+          OPENROUTER_API_KEY: "openrouter-test",
+          OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+        },
+        community: {
+          community_id: "com_visual_unavailable_minors",
+          default_age_gate_policy: "18_plus",
+          visual_policy_settings: buildDefaultVisualPolicySettings("visual_unavailable_minors", new Date().toISOString()),
+        } as Community,
+        body: {
+          idempotency_key: "idem_visual_unavailable_minors",
+          post_type: "image",
+          media_refs: [{
+            storage_ref: "https://example.test/image.jpg",
+            mime_type: "image/jpeg",
+            size_bytes: 12,
+          }],
+        },
+      })
+
+      expect(outcome.analysis_state).toBe("blocked")
+      expect(outcome.status).toBe("draft")
     } finally {
       restoreFetch()
     }
