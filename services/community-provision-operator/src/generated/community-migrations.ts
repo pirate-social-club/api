@@ -2288,4 +2288,14 @@ ALTER TABLE posts
 `,
     checksum: "f0c85f1c94bcfc93d9dc0ebc2a0ccd72939ed2a377e38cb5be9b41c8f80555a7",
   },
+  {
+    name: "1063_membership_state_lookup_indexes.sql",
+    sql: `CREATE INDEX IF NOT EXISTS idx_community_memberships_state_lookup
+    ON community_memberships(community_id, user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_community_roles_state_lookup
+    ON community_roles(community_id, user_id, created_at DESC);
+`,
+    checksum: "27a76aa0fd5456ee917812a6a7d14e4ab579169754359946fe752933549c2ab1",
+  },
 ] as const;

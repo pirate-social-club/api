@@ -4,12 +4,20 @@ import type { CommunityDatabaseBindingRepository } from "./db-community-reposito
 import { internalError, notFoundError } from "../errors"
 import { decryptCommunityDbCredential } from "./community-db-credential-crypto"
 import { buildLocalCommunityDbUrl, configureLocalCommunityDbClient, ensureCommunityDbSchema } from "./community-local-db"
+import { ensureRemoteCommunityMembershipStateIndexes } from "./ensure-remote-community-membership-indexes"
 import type { Env } from "../../env"
+
+export type OpenCommunityDbOptions = {
+  ensureRemoteMembershipStateIndexes?: (client: Client) => Promise<void>
+}
+
+const remoteMembershipIndexPreflightComplete = new Set<string>()
 
 export async function openCommunityDb(
   env: Env,
   repo: CommunityDatabaseBindingRepository,
   communityId: string,
+  options?: OpenCommunityDbOptions,
 ): Promise<{ client: Client; close: () => void; databaseUrl: string }> {
   const binding = await repo.getPrimaryCommunityDatabaseBinding(communityId)
   if (!binding || binding.status !== "active") {
@@ -48,6 +56,12 @@ export async function openCommunityDb(
   if (binding.database_url.startsWith("file:")) {
     await configureLocalCommunityDbClient(client)
     await ensureCommunityDbSchema(client)
+  } else {
+    const ensureIndexes = options?.ensureRemoteMembershipStateIndexes ?? ensureRemoteCommunityMembershipStateIndexes
+    if (!remoteMembershipIndexPreflightComplete.has(binding.database_url)) {
+      await ensureIndexes(client)
+      remoteMembershipIndexPreflightComplete.add(binding.database_url)
+    }
   }
   return {
     client,

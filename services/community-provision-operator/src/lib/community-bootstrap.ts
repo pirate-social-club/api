@@ -362,6 +362,26 @@ async function upsertMembershipGatePolicy(
   );
 }
 
+export type MigrateCommunityDatabaseInput = {
+  databaseUrl: string;
+  databaseAuthToken: string;
+};
+
+export async function migrateCommunityDatabase(
+  input: MigrateCommunityDatabaseInput,
+): Promise<{ applied: number; skipped: number }> {
+  const sql = communityBootstrapSql({
+    databaseUrl: input.databaseUrl,
+    databaseAuthToken: input.databaseAuthToken,
+  });
+
+  try {
+    return await applyCommunityMigrations(sql);
+  } finally {
+    await sql.close();
+  }
+}
+
 export async function bootstrapCommunityDatabase(
   input: BootstrapCommunityDatabaseInput,
 ): Promise<{

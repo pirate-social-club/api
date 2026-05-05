@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import { HttpError } from "../src/lib/errors"
-import { provisionCommunityViaOperator } from "../src/lib/communities/provisioning/operator-client"
+import {
+  migrateCommunityDatabaseViaOperator,
+  provisionCommunityViaOperator,
+} from "../src/lib/communities/provisioning/operator-client"
 import type { Env } from "../src/types"
 
 function mockOperatorBinding(handler: (request: Request) => Promise<Response> | Response): Fetcher {
@@ -10,6 +13,81 @@ function mockOperatorBinding(handler: (request: Request) => Promise<Response> | 
 }
 
 describe("community provision operator client", () => {
+  test("migrates a community database through the operator", async () => {
+    let requestId: string | null = null
+    let requestBody: Record<string, unknown> | null = null
+    const operator = mockOperatorBinding(async (request) => {
+      requestId = request.headers.get("x-request-id")
+      requestBody = await request.json() as Record<string, unknown>
+      expect(new URL(request.url).pathname).toBe("/internal/v0/community-provisioning/migrate")
+      expect(request.headers.get("authorization")).toBe("Bearer operator-token")
+      return new Response(JSON.stringify({
+        applied: 1,
+        skipped: 61,
+      }), {
+        headers: { "content-type": "application/json" },
+      })
+    })
+
+    const result = await migrateCommunityDatabaseViaOperator({
+      env: {
+        COMMUNITY_PROVISION_OPERATOR: operator,
+        COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN: "operator-token",
+      } satisfies Env,
+      communityId: "cmt_migrate",
+      databaseUrl: "libsql://community.test.turso.io",
+      databaseAuthToken: "community-db-token",
+    })
+
+    expect(requestId).toMatch(/^opr_/)
+    expect(requestBody).toEqual({
+      database_url: "libsql://community.test.turso.io",
+      database_auth_token: "community-db-token",
+    })
+    expect(result).toEqual({
+      applied: 1,
+      skipped: 61,
+    })
+  })
+
+  test("preserves migrate operator error details", async () => {
+    let requestId: string | null = null
+    const operator = mockOperatorBinding((request) => {
+      requestId = request.headers.get("x-request-id")
+      return new Response(JSON.stringify({
+        error_code: "community_provision_operator_failed",
+        message: "schema_migration_checksum_mismatch:1001_community_core.sql",
+      }), {
+        status: 500,
+        headers: { "content-type": "application/json" },
+      })
+    })
+
+    try {
+      await migrateCommunityDatabaseViaOperator({
+        env: {
+          COMMUNITY_PROVISION_OPERATOR: operator,
+          COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN: "operator-token",
+        } satisfies Env,
+        communityId: "cmt_migrate_error",
+        databaseUrl: "libsql://community.test.turso.io",
+        databaseAuthToken: "community-db-token",
+      })
+      throw new Error("expected migrateCommunityDatabaseViaOperator to throw")
+    } catch (error) {
+      expect(requestId).toMatch(/^opr_/)
+      expect(error instanceof HttpError).toBe(true)
+      expect((error as HttpError).message).toBe("community_provision_operator_failed")
+      expect((error as HttpError).details).toMatchObject({
+        community_id: "cmt_migrate_error",
+        operator_error_code: "community_provision_operator_failed",
+        operator_message: "schema_migration_checksum_mismatch:1001_community_core.sql",
+        operator_status: 500,
+        operator_request_id: requestId,
+      })
+    }
+  })
+
   test("rejects a provision response from an unexpected Turso organization", async () => {
     const operator = mockOperatorBinding(() => new Response(JSON.stringify({
       community_id: "cmt_wrong_org",

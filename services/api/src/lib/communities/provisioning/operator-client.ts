@@ -36,6 +36,11 @@ export type ProvisionCommunityOperatorResult = {
   rotationNumber: number
 }
 
+export type MigrateCommunityDatabaseOperatorResult = {
+  applied: number
+  skipped: number
+}
+
 function trim(value: string | null | undefined): string {
   return String(value ?? "").trim()
 }
@@ -163,6 +168,49 @@ export async function provisionCommunityViaOperator(input: {
 
   validateExpectedOrganizationSlug(input.env, result)
   return result
+}
+
+export async function migrateCommunityDatabaseViaOperator(input: {
+  env: Env
+  communityId: string
+  databaseUrl: string
+  databaseAuthToken: string
+}): Promise<MigrateCommunityDatabaseOperatorResult> {
+  const requestId = makeId("opr")
+
+  const response = await invokeOperator(input.env, {
+    path: "/internal/v0/community-provisioning/migrate",
+    requestId,
+    body: {
+      database_url: input.databaseUrl,
+      database_auth_token: input.databaseAuthToken,
+    },
+  })
+
+  const body = parsedRecord(response.parsed)
+
+  if (!response.ok) {
+    const errorCode = "error_code" in body
+      ? String(body.error_code)
+      : response.status === 401
+        ? "community_provision_operator_unauthorized"
+        : "community_provision_operator_http_error"
+    throw internalError(errorCode, operatorErrorDetails({
+      status: response.status,
+      requestId,
+      communityId: input.communityId,
+      parsed: response.parsed,
+    }))
+  }
+
+  if (!response.parsed || typeof response.parsed !== "object") {
+    throw internalError("community_provision_operator_invalid_response")
+  }
+
+  return {
+    applied: Number(body.applied ?? 0),
+    skipped: Number(body.skipped ?? 0),
+  }
 }
 
 async function invokeOperator(

@@ -11,6 +11,7 @@ import { enqueueCommunityJob } from "../src/lib/communities/jobs/store"
 import type { CommunityDatabaseBindingRepository } from "../src/lib/communities/db-community-repository"
 import { resolveCoreRepoPath } from "../shared/core-repo-paths"
 import { splitSqlStatements, toSqliteCompatibleStatements } from "../shared/sql-migration"
+import { ensureRemoteCommunityMembershipStateIndexes } from "../src/lib/communities/ensure-remote-community-membership-indexes"
 
 const cleanupPaths: string[] = []
 const COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS = 120_000
@@ -95,6 +96,24 @@ async function listTableNames(databasePath: string): Promise<string[]> {
   }
 }
 
+async function listIndexNames(databasePath: string): Promise<string[]> {
+  const client = createClient({
+    url: `file:${databasePath}`,
+  })
+
+  try {
+    const result = await client.execute(`
+      SELECT name
+      FROM sqlite_master
+      WHERE type = 'index'
+      ORDER BY name
+    `)
+    return result.rows.map((row) => String(row.name))
+  } finally {
+    client.close()
+  }
+}
+
 function buildRepository(databasePath: string): CommunityDatabaseBindingRepository {
   return {
     async getPrimaryCommunityDatabaseBinding() {
@@ -169,16 +188,31 @@ describe("openCommunityDb", () => {
       },
     } satisfies CommunityDatabaseBindingRepository
 
+    let ensureCalls = 0
     const db = await openCommunityDb(
       {
         TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
       },
       repo,
       "cmt_remote",
+      { ensureRemoteMembershipStateIndexes: async () => { ensureCalls += 1 } },
     )
 
     expect(db.databaseUrl).toBe(databaseUrl)
     db.close()
+
+    const secondDb = await openCommunityDb(
+      {
+        TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
+      },
+      repo,
+      "cmt_remote",
+      { ensureRemoteMembershipStateIndexes: async () => { ensureCalls += 1 } },
+    )
+
+    expect(secondDb.databaseUrl).toBe(databaseUrl)
+    secondDb.close()
+    expect(ensureCalls).toBe(1)
   })
 
   testWithTimeout("applies pending template migrations for existing local community databases", async () => {
@@ -258,6 +292,35 @@ describe("openCommunityDb", () => {
     expect(moderationActionColumns).toContain("comment_id")
     expect(moderationActionColumns).toContain("previous_post_status")
     expect(moderationActionColumns).toContain("next_post_status")
+
+    const indexNames = await listIndexNames(databasePath)
+    expect(indexNames).toContain("idx_community_memberships_state_lookup")
+    expect(indexNames).toContain("idx_community_roles_state_lookup")
+  }, COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS)
+
+  testWithTimeout("ensures membership state indexes on remote community database open", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-remote-schema-"))
+    cleanupPaths.push(rootDir)
+
+    const databasePath = join(rootDir, `${randomUUID()}.db`)
+    await applyPartialCommunitySchema(databasePath)
+
+    const client = createClient({ url: `file:${databasePath}` })
+    try {
+      const beforeIndexNames = await listIndexNames(databasePath)
+      expect(beforeIndexNames).not.toContain("idx_community_memberships_state_lookup")
+      expect(beforeIndexNames).not.toContain("idx_community_roles_state_lookup")
+
+      await ensureRemoteCommunityMembershipStateIndexes(client)
+
+      const afterIndexNames = await listIndexNames(databasePath)
+      expect(afterIndexNames).toContain("idx_community_memberships_state_lookup")
+      expect(afterIndexNames).toContain("idx_community_roles_state_lookup")
+
+      await ensureRemoteCommunityMembershipStateIndexes(client)
+    } finally {
+      client.close()
+    }
   }, COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS)
 
   testWithTimeout("enqueues community jobs after existing local databases are migrated", async () => {

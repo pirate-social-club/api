@@ -147,6 +147,19 @@ describe("community provision operator handler", () => {
     expect(body.message).toContain("must be a positive integer");
   });
 
+  test("migrate validates required fields", async () => {
+    const handler = createHandler();
+    const response = await handlerRequest(handler, "/internal/v0/community-provisioning/migrate", {
+      body: {
+        database_url: "libsql://community.test.turso.io",
+      },
+    });
+    expect(response.status).toBe(400);
+    const body = await response.json() as { error_code: string; message: string };
+    expect(body.error_code).toBe("invalid_request");
+    expect(body.message).toContain("database_auth_token is required");
+  });
+
   test("invalid JSON body returns 400", async () => {
     const handler = createHandler();
     const env = { ...baseEnv };
@@ -318,6 +331,34 @@ describe("community provision operator success paths", () => {
       job_id: "job_stale",
       community_id: "cmt_stale",
       updated_at: "2026-05-01T17:00:00.000Z",
+    });
+  });
+
+  test("migrate returns applied and skipped counts", async () => {
+    const calls: Array<{ databaseUrl: string; databaseAuthToken: string }> = [];
+    const handler = createHandler({
+      migrateFn: async (input) => {
+        calls.push(input);
+        return { applied: 1, skipped: 61 };
+      },
+    });
+
+    const response = await handlerRequest(handler, "/internal/v0/community-provisioning/migrate", {
+      body: {
+        database_url: "libsql://community.test.turso.io",
+        database_auth_token: "community-db-token",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(calls).toEqual([{
+      databaseUrl: "libsql://community.test.turso.io",
+      databaseAuthToken: "community-db-token",
+    }]);
+    const body = await response.json() as Record<string, unknown>;
+    expect(body).toEqual({
+      applied: 1,
+      skipped: 61,
     });
   });
 

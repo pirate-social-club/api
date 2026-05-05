@@ -3,6 +3,7 @@ import { captureException, withSentry } from "@sentry/cloudflare";
 import { provisionCommunityRuntime } from "./lib/provision-runtime";
 import { rotateCommunityToken } from "./lib/rotate-token";
 import { doctorControlPlane } from "./lib/doctor";
+import { migrateCommunityDatabase } from "./lib/community-bootstrap";
 import { reapStaleCommunityProvisioningJobs } from "./lib/reap-stale";
 
 export type Env = {
@@ -22,6 +23,7 @@ export type OperatorDeps = {
   provisionFn?: typeof provisionCommunityRuntime;
   rotateFn?: typeof rotateCommunityToken;
   doctorFn?: typeof doctorControlPlane;
+  migrateFn?: typeof migrateCommunityDatabase;
   reapStaleFn?: typeof reapStaleCommunityProvisioningJobs;
 };
 
@@ -60,6 +62,11 @@ type DoctorRouteBody = {
 
 type ReapStaleRouteBody = {
   stale_after_ms?: number | string | null;
+};
+
+type MigrateRouteBody = {
+  database_url?: string;
+  database_auth_token?: string;
 };
 
 function json(body: unknown, init?: ResponseInit): Response {
@@ -157,6 +164,7 @@ export function createHandler(deps: OperatorDeps = {}) {
   const provisionFn = deps.provisionFn ?? provisionCommunityRuntime;
   const rotateFn = deps.rotateFn ?? rotateCommunityToken;
   const doctorFn = deps.doctorFn ?? doctorControlPlane;
+  const migrateFn = deps.migrateFn ?? migrateCommunityDatabase;
   const reapStaleFn = deps.reapStaleFn ?? reapStaleCommunityProvisioningJobs;
 
   return async function handle(request: Request, env: Env): Promise<Response> {
@@ -284,6 +292,21 @@ export function createHandler(deps: OperatorDeps = {}) {
             community_id: job.communityId,
             updated_at: job.updatedAt,
           })),
+        });
+      }
+
+      if (url.pathname === "/internal/v0/community-provisioning/migrate") {
+        const body = await request.json() as MigrateRouteBody;
+        requireOrgGuard(env);
+        const databaseUrl = requireText(body.database_url, "database_url");
+        const databaseAuthToken = requireText(body.database_auth_token, "database_auth_token");
+        const result = await migrateFn({
+          databaseUrl,
+          databaseAuthToken,
+        });
+        return json({
+          applied: result.applied,
+          skipped: result.skipped,
         });
       }
 
