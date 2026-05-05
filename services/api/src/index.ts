@@ -203,7 +203,14 @@ async function flushScheduledAnalytics(env: Env): Promise<void> {
 }
 
 async function syncScheduledCommunityHealthCounts(env: Env): Promise<void> {
-  if (!isAnalyticsEnabled(env) || !env.TINYBIRD_READ_TOKEN) {
+  if (!isAnalyticsEnabled(env)) {
+    return
+  }
+
+  if (!env.TINYBIRD_READ_TOKEN) {
+    const error = new Error("TINYBIRD_READ_TOKEN is required to sync community health counts")
+    console.error("[analytics] scheduled community health sync failed", error)
+    captureScheduledError(env, error, "community_health_sync")
     return
   }
 

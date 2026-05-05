@@ -116,6 +116,111 @@ describe("analytics routes", () => {
     expect(result.rows[0]?.properties_json).toBe(JSON.stringify({ tab: "posts" }))
   })
 
+  test("client analytics route canonicalizes community route slugs for community views", async () => {
+    const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanup = setup.cleanup
+    const env = buildTestEnv({
+      DEV_MEMORY_STORE_ENABLED: "false",
+      CONTROL_PLANE_DATABASE_URL: `file:${setup.databasePath}`,
+      ANALYTICS_ENABLED: "true",
+      ANALYTICS_HMAC_SECRET: "analytics-secret",
+      ENVIRONMENT: "staging",
+    })
+
+    await setup.client.execute({
+      sql: `
+        INSERT INTO users (
+          user_id,
+          primary_wallet_attachment_id,
+          verification_state,
+          capability_provider,
+          verification_capabilities_json,
+          verified_at,
+          current_verification_session_id,
+          created_at,
+          updated_at
+        ) VALUES (?1, NULL, 'verified', NULL, '{}', NULL, NULL, ?2, ?2)
+      `,
+      args: ["usr_route_creator", "2026-05-04T00:00:00.000Z"],
+    })
+    await setup.client.execute({
+      sql: `
+        INSERT INTO communities (
+          community_id,
+          creator_user_id,
+          display_name,
+          membership_mode,
+          status,
+          provisioning_state,
+          transfer_state,
+          route_slug,
+          namespace_verification_id,
+          pending_namespace_verification_session_id,
+          primary_database_binding_id,
+          created_at,
+          updated_at
+        ) VALUES (?1, ?2, ?3, 'request', 'active', 'active', 'none', ?4, NULL, NULL, NULL, ?5, ?5)
+      `,
+      args: [
+        "cmt_route_canonical",
+        "usr_route_creator",
+        "Route Canonical",
+        "route-canonical",
+        "2026-05-04T00:00:00.000Z",
+      ],
+    })
+
+    const response = await app.request("http://pirate.test/analytics/events", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        event_id: "evt_route_slug_community_viewed",
+        event_name: "community_viewed",
+        community_id: "route-canonical",
+      }),
+    }, env)
+
+    expect(response.status).toBe(202)
+
+    const result = await setup.client.execute({
+      sql: "SELECT community_id FROM analytics_outbox WHERE analytics_event_id = ?1",
+      args: ["evt_route_slug_community_viewed"],
+    })
+
+    expect(result.rows[0]?.community_id).toBe("cmt_route_canonical")
+  })
+
+  test("client analytics route queues production events when analytics flag is unset", async () => {
+    const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanup = setup.cleanup
+    const env = buildTestEnv({
+      DEV_MEMORY_STORE_ENABLED: "false",
+      CONTROL_PLANE_DATABASE_URL: `file:${setup.databasePath}`,
+      ANALYTICS_HMAC_SECRET: "analytics-secret",
+      ENVIRONMENT: "production",
+    })
+
+    const response = await app.request("http://pirate.test/analytics/events", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        event_id: "evt_route_prod_default",
+        event_name: "community_viewed",
+        community_id: "cmt_route_community",
+      }),
+    }, env)
+
+    expect(response.status).toBe(202)
+
+    const result = await setup.client.execute({
+      sql: "SELECT event_name, community_id FROM analytics_outbox WHERE analytics_event_id = ?1",
+      args: ["evt_route_prod_default"],
+    })
+
+    expect(result.rows[0]?.event_name).toBe("community_viewed")
+    expect(result.rows[0]?.community_id).toBe("cmt_route_community")
+  })
+
   test("client analytics route queues PWA install funnel events", async () => {
     const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
     cleanup = setup.cleanup

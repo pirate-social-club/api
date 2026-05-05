@@ -30,10 +30,12 @@ describe("analytics outbox", () => {
     expect(first).not.toBe(different)
   })
 
-  test("analytics is opt-in", () => {
+  test("analytics is opt-in outside production and defaults on in production", () => {
     expect(isAnalyticsEnabled(buildTestEnv())).toBe(false)
     expect(isAnalyticsEnabled(buildTestEnv({ ANALYTICS_ENABLED: "true" }))).toBe(true)
     expect(isAnalyticsEnabled(buildTestEnv({ ANALYTICS_ENABLED: "1" }))).toBe(true)
+    expect(isAnalyticsEnabled(buildTestEnv({ ENVIRONMENT: "production" }))).toBe(true)
+    expect(isAnalyticsEnabled(buildTestEnv({ ENVIRONMENT: "production", ANALYTICS_ENABLED: "false" }))).toBe(false)
   })
 
   test("queues dedupable raw events", async () => {

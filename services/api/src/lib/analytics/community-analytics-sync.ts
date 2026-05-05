@@ -1,5 +1,8 @@
 import type { Env } from "../../env"
-import type { DbExecutor } from "../db-helpers"
+import { isMissingRelationError, type DbExecutor } from "../db-helpers"
+import { resolveCommunityIdentifier } from "../communities/community-identifier"
+import { getCommunityById, getCommunityByRouteSlug } from "../communities/community-read-repository"
+import type { Client } from "../sql-client"
 import { analyticsEnvironment } from "./events"
 
 export type CommunityHealthSyncResult = {
@@ -80,27 +83,72 @@ export async function fetchTinybirdCommunityViewCounts(env: Env): Promise<Map<st
   return (await fetchTinybirdCommunityViewCountRows(env)).counts
 }
 
+async function canonicalizeCommunityHealthCounts(
+  db: DbExecutor,
+  counts: Map<string, number>,
+): Promise<Map<string, number>> {
+  const canonicalCounts = new Map<string, number>()
+  const repository = {
+    getCommunityById: (communityId: string) => getCommunityById(db as Client, communityId),
+    getCommunityByRouteSlug: (routeSlug: string) => getCommunityByRouteSlug(db as Client, routeSlug),
+  }
+
+  for (const [communityIdentifier, totalViews] of counts) {
+    let communityId = communityIdentifier
+    try {
+      communityId = await resolveCommunityIdentifier(repository, communityIdentifier) ?? communityIdentifier
+    } catch {
+      communityId = communityIdentifier
+    }
+    canonicalCounts.set(communityId, (canonicalCounts.get(communityId) ?? 0) + totalViews)
+  }
+  return canonicalCounts
+}
+
+export async function ensureCommunityHealthCountsTable(db: DbExecutor): Promise<void> {
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS community_health_counts (
+      community_id TEXT PRIMARY KEY,
+      total_views BIGINT NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL
+    )
+  `)
+}
+
 export async function upsertCommunityHealthCounts(
   db: DbExecutor,
   counts: Map<string, number>,
+  options: { bootstrapMissingTable?: boolean } = {},
 ): Promise<number> {
+  if (counts.size === 0) {
+    return 0
+  }
+
   const now = new Date().toISOString()
   for (const [communityId, totalViews] of counts) {
-    await db.execute({
-      sql: `
-        INSERT INTO community_health_counts (
-          community_id,
-          total_views,
-          updated_at
-        ) VALUES (
-          ?1, ?2, ?3
-        )
-        ON CONFLICT (community_id) DO UPDATE SET
-          total_views = excluded.total_views,
-          updated_at = excluded.updated_at
-      `,
-      args: [communityId, totalViews, now],
-    })
+    try {
+      await db.execute({
+        sql: `
+          INSERT INTO community_health_counts (
+            community_id,
+            total_views,
+            updated_at
+          ) VALUES (
+            ?1, ?2, ?3
+          )
+          ON CONFLICT (community_id) DO UPDATE SET
+            total_views = excluded.total_views,
+            updated_at = excluded.updated_at
+        `,
+        args: [communityId, totalViews, now],
+      })
+    } catch (error) {
+      if (options.bootstrapMissingTable !== false && isMissingRelationError(error, "community_health_counts")) {
+        await ensureCommunityHealthCountsTable(db)
+        return upsertCommunityHealthCounts(db, counts, { bootstrapMissingTable: false })
+      }
+      throw error
+    }
   }
   return counts.size
 }
@@ -110,7 +158,7 @@ export async function syncCommunityHealthCounts(
   db: DbExecutor,
 ): Promise<CommunityHealthSyncResult> {
   const fetched = await fetchTinybirdCommunityViewCountRows(env)
-  const synced = await upsertCommunityHealthCounts(db, fetched.counts)
+  const synced = await upsertCommunityHealthCounts(db, await canonicalizeCommunityHealthCounts(db, fetched.counts))
   return {
     fetched_rows: fetched.rowCount,
     synced_communities: synced,

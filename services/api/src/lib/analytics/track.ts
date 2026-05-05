@@ -1,6 +1,8 @@
 import { badRequestError } from "../errors"
 import { getControlPlaneClient } from "../runtime-deps"
 import { authenticateUserToken } from "../auth-middleware"
+import { DatabaseCommunityRepository } from "../communities/db-community-repository"
+import { resolveCommunityIdentifier } from "../communities/community-identifier"
 import {
   isAnalyticsEnabled,
   trackServerEvent,
@@ -222,6 +224,10 @@ export async function trackClientEvent(env: Env, req: AnalyticsRequest, body: Cl
   const userId = await optionalAnalyticsUserId(env, req)
   const db = getControlPlaneClient(env)
   const context = analyticsRequestContext(req, body)
+  const rawCommunityId = optionalString(body.community_id)
+  const communityId = rawCommunityId
+    ? await resolveCommunityIdentifier(new DatabaseCommunityRepository(db), rawCommunityId) ?? rawCommunityId
+    : null
   try {
     await trackServerEvent(env, db, {
       eventId: optionalString(body.event_id) ?? undefined,
@@ -232,7 +238,7 @@ export async function trackClientEvent(env: Env, req: AnalyticsRequest, body: Cl
       sessionId: optionalString(body.session_id) ?? context.sessionId,
       anonymousId: optionalString(body.anonymous_id) ?? context.anonymousId,
       userId,
-      communityId: optionalString(body.community_id),
+      communityId,
       postId: optionalString(body.post_id),
       commentId: optionalString(body.comment_id),
       listingId: optionalString(body.listing_id),

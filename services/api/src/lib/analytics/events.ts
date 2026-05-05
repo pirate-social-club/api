@@ -141,6 +141,12 @@ function optionalString(value: string | null | undefined): string {
 
 export function isAnalyticsEnabled(env: Env): boolean {
   const value = String(env.ANALYTICS_ENABLED || "").trim().toLowerCase()
+  if (value === "0" || value === "false" || value === "no") {
+    return false
+  }
+  if (!value && analyticsEnvironment(env) === "production") {
+    return true
+  }
   return value === "1" || value === "true" || value === "yes"
 }
 
