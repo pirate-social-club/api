@@ -64,6 +64,7 @@ export function serializeCommunity(community: Community): CurrentCommunityRespon
     capture_edit_policy: community.capture_edit_policy as CurrentCommunityResponse["capture_edit_policy"],
     adult_content_policy: community.adult_content_policy as CurrentCommunityResponse["adult_content_policy"],
     graphic_content_policy: community.graphic_content_policy as CurrentCommunityResponse["graphic_content_policy"],
+    visual_policy_settings: community.visual_policy_settings as CurrentCommunityResponse["visual_policy_settings"],
     motion_media_policy: community.motion_media_policy as CurrentCommunityResponse["motion_media_policy"],
     language_policy: community.language_policy as CurrentCommunityResponse["language_policy"],
     civility_policy: community.civility_policy as CurrentCommunityResponse["civility_policy"],
