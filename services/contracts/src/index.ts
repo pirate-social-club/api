@@ -559,6 +559,7 @@ export type Community = {
   motion_media_policy: CommunityMotionMediaPolicy;
   language_policy: CommunityLanguagePolicy;
   civility_policy: CommunityCivilityPolicy;
+  visual_policy_settings: CommunityVisualPolicySettings;
   openai_moderation_settings?: ({
     scan_titles?: boolean;
     scan_post_bodies?: boolean;
@@ -1798,6 +1799,54 @@ type CommunityGraphicContentPolicy = {
   extreme_gore: CommunityModerationDecisionLevel;
   body_horror_disturbing: CommunityModerationDecisionLevel;
   animal_harm: CommunityModerationDecisionLevel;
+};
+
+type CommunityVisualPolicyAction = "allow" | "queue" | "reject";
+
+type CommunityVisualPolicyDisclosureAction = "allow" | "allow_with_disclosure" | "queue" | "reject";
+
+type CommunityVisualPolicySettings = {
+  community: string;
+  policy_origin: CommunityPolicyOrigin;
+  topless: CommunityVisualPolicyAction;
+  visible_nipples: CommunityVisualPolicyAction;
+  visible_buttocks: CommunityVisualPolicyAction;
+  visible_genitals: CommunityVisualPolicyAction;
+  bottomless_obscured: CommunityVisualPolicyAction;
+  implied_sexual_activity: CommunityVisualPolicyAction;
+  explicit_sexual_activity: CommunityVisualPolicyAction;
+  sexualized_contact: CommunityVisualPolicyAction;
+  masturbation: CommunityVisualPolicyAction;
+  oral_sex: CommunityVisualPolicyAction;
+  sex_toy_packaging: CommunityVisualPolicyAction;
+  sex_toy_visible: CommunityVisualPolicyAction;
+  sex_toy_in_use: CommunityVisualPolicyAction;
+  anime_manga: CommunityVisualPolicyAction;
+  furry_anthro: CommunityVisualPolicyAction;
+  fictional_nudity: CommunityVisualPolicyAction;
+  fictional_explicit_sex: CommunityVisualPolicyAction;
+  ambiguous_fictional_age_with_adult_content: Exclude<CommunityVisualPolicyAction, "allow">;
+  possible_minor_with_adult_content: "reject";
+  ai_generated_images: CommunityVisualPolicyAction;
+  ai_generated_adult_images: CommunityVisualPolicyAction;
+  deepfake_or_face_swap_risk: Exclude<CommunityVisualPolicyAction, "allow">;
+  celebrity_adult_likeness: Exclude<CommunityVisualPolicyAction, "allow">;
+  voyeuristic_or_hidden_camera: "reject";
+  watermark: CommunityVisualPolicyAction;
+  adult_platform_watermark: CommunityVisualPolicyAction;
+  product_promotion: CommunityVisualPolicyDisclosureAction;
+  affiliate_or_sales_link: CommunityVisualPolicyDisclosureAction;
+  qr_code: Exclude<CommunityVisualPolicyAction, "allow">;
+  payment_handle: Exclude<CommunityVisualPolicyAction, "allow">;
+  urls_in_image: CommunityVisualPolicyAction;
+  weapons: CommunityVisualPolicyAction;
+  gore_or_injury: CommunityVisualPolicyAction;
+  drugs: CommunityVisualPolicyAction;
+  hate_symbols: Exclude<CommunityVisualPolicyAction, "allow">;
+  personal_documents: Exclude<CommunityVisualPolicyAction, "allow">;
+  uncertain_age_with_adult_content: Exclude<CommunityVisualPolicyAction, "allow">;
+  low_quality_adult_image: Exclude<CommunityVisualPolicyAction, "allow">;
+  model_uncertain: Exclude<CommunityVisualPolicyAction, "allow">;
 };
 
 type CommunityIdentifiedPersonMediaScope = "subject_only" | "subject_or_authorized" | "public_source_allowed";
