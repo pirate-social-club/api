@@ -40,6 +40,9 @@ export function isPublicReadCacheRequest(request: Request): boolean {
   if (url.pathname === "/feed/home") {
     return !request.headers.has("authorization")
   }
+  if (url.pathname === "/feed/home/public") {
+    return true
+  }
 
   return (
     url.pathname.startsWith("/public-posts/")
@@ -50,7 +53,7 @@ export function isPublicReadCacheRequest(request: Request): boolean {
 
 export function buildPublicReadCacheKey(request: Request): Request {
   const url = new URL(request.url)
-  const headerNames = url.pathname === "/feed/home"
+  const headerNames = url.pathname === "/feed/home" || url.pathname === "/feed/home/public"
     ? FEED_PUBLIC_READ_CACHE_KEY_HEADER_NAMES
     : DEFAULT_PUBLIC_READ_CACHE_KEY_HEADER_NAMES
   for (const headerName of headerNames) {

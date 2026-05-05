@@ -83,4 +83,28 @@ describe("feed routes", () => {
       view_count: 0,
     })
   })
+
+  test("GET /feed/home/public returns the public feed without auth variance", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const response = await app.request("http://pirate.test/feed/home/public?sort=best&locale=en", {
+      headers: {
+        Authorization: "Bearer ignored-public-token",
+      },
+    }, ctx.env)
+    expect(response.status).toBe(200)
+    expect(response.headers.get("cdn-cache-control")).toBe("public, s-maxage=60, stale-while-revalidate=300")
+    expect(response.headers.get("cache-control")).toBe("public, max-age=0, s-maxage=60, stale-while-revalidate=300")
+    expect(response.headers.get("vary")).not.toContain("Authorization")
+    const body = await json(response) as {
+      items: unknown[]
+      top_communities: unknown[]
+      next_cursor: string | null
+    }
+
+    expect(body.items).toEqual([])
+    expect(body.top_communities).toEqual([])
+    expect(body.next_cursor).toBeNull()
+  })
 })
