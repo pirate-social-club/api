@@ -130,6 +130,24 @@ describe("resolveVisualPlatformDecision", () => {
     expect(decision).toBe("disallow")
   })
 
+  test("sexual flag is ignored when a visual policy pass is authoritative", () => {
+    const categories = { sexual: true }
+    const results = makeResults({ sexual: 0.8 })
+    const decision = resolveVisualPlatformDecision(categories, results, BLOCK_THRESHOLD, defaultAdultPolicy, {
+      ignoreBroadSexualCategory: true,
+    })
+    expect(decision).toBe("allow")
+  })
+
+  test("sexual/minors is not ignored when a visual policy pass is authoritative", () => {
+    const categories = { sexual: true, "sexual/minors": true }
+    const results = makeResultsWithMinors(0.97)
+    const decision = resolveVisualPlatformDecision(categories, results, BLOCK_THRESHOLD, permissiveAdultPolicy, {
+      ignoreBroadSexualCategory: true,
+    })
+    expect(decision).toBe("disallow")
+  })
+
   test("sexual flagged with review policy returns review", () => {
     const categories = { sexual: true }
     const results = makeResults({ sexual: 0.8 })
@@ -294,6 +312,21 @@ describe("resolveOpenAIModerationOutcome", () => {
     }) as typeof fetch
   }
 
+  function installOpenAIModerationFetchMock(openAiCategories: Record<string, boolean> = {}) {
+    globalThis.fetch = (async (url: RequestInfo | URL) => {
+      const href = String(url)
+      if (href.includes("openrouter.test")) {
+        throw new Error("OpenRouter should not be called")
+      }
+      return new Response(JSON.stringify({
+        results: [{
+          categories: openAiCategories,
+          category_scores: {},
+        }],
+      }), { status: 200, headers: { "content-type": "application/json" } })
+    }) as typeof fetch
+  }
+
   function restoreFetch() {
     globalThis.fetch = originalFetch
   }
@@ -352,7 +385,7 @@ describe("resolveOpenAIModerationOutcome", () => {
         },
         community: {
           community_id: "com_visual_reject",
-          default_age_gate_policy: "none",
+          default_age_gate_policy: "18_plus",
           visual_policy_settings: buildDefaultVisualPolicySettings("visual_reject", new Date().toISOString()),
         } as Community,
         body: {
@@ -403,7 +436,7 @@ describe("resolveOpenAIModerationOutcome", () => {
         },
         community: {
           community_id: "com_visual_adult_allow",
-          default_age_gate_policy: "none",
+          default_age_gate_policy: "18_plus",
           visual_policy_settings: buildDefaultVisualPolicySettings("visual_adult_allow", new Date().toISOString()),
         } as Community,
         body: {
@@ -420,6 +453,90 @@ describe("resolveOpenAIModerationOutcome", () => {
       expect(outcome.analysis_state).toBe("allow")
       expect(outcome.content_safety_state).toBe("adult")
       expect(outcome.status).toBe("published")
+      expect(outcome.age_gate_policy).toBe("18_plus")
+    } finally {
+      restoreFetch()
+    }
+  })
+
+  test("non-18+ image moderation does not call Grok", async () => {
+    installOpenAIModerationFetchMock({})
+    try {
+      const outcome = await resolveOpenAIModerationOutcome({
+        env: {
+          OPENAI_API_KEY: "openai-test",
+          OPENAI_MODERATION_BASE_URL: "https://openai.test/v1",
+          OPENROUTER_API_KEY: "openrouter-test",
+          OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+        },
+        community: {
+          community_id: "com_sfw_no_grok",
+          default_age_gate_policy: "none",
+          visual_policy_settings: buildDefaultVisualPolicySettings("sfw_no_grok", new Date().toISOString()),
+        } as Community,
+        body: {
+          idempotency_key: "idem_sfw_no_grok",
+          post_type: "image",
+          media_refs: [{
+            storage_ref: "https://example.test/image.jpg",
+            mime_type: "image/jpeg",
+            size_bytes: 12,
+          }],
+        },
+      })
+
+      expect(outcome.analysis_state).toBe("allow")
+      expect(outcome.providerResult?.visual_policy).toBeNull()
+    } finally {
+      restoreFetch()
+    }
+  })
+
+  test("18+ visual policy ignores OpenAI broad sexual but keeps Grok decision", async () => {
+    installModerationFetchMock({
+      visualStyle: "photographic",
+      characterContext: "real_person",
+      apparentAgeRisk: "adult",
+      nudity: "topless",
+      visibleNipples: true,
+      sexualActivity: "none",
+      sexualizedContact: false,
+      masturbation: false,
+      oralSex: false,
+      sexToy: "none",
+      voyeuristicOrHiddenCamera: false,
+      commercialSignal: "none",
+      syntheticRisk: "none",
+      imageTextSignal: "none",
+      safetySignal: "none",
+      quality: "clear",
+    }, { sexual: true })
+    try {
+      const outcome = await resolveOpenAIModerationOutcome({
+        env: {
+          OPENAI_API_KEY: "openai-test",
+          OPENAI_MODERATION_BASE_URL: "https://openai.test/v1",
+          OPENROUTER_API_KEY: "openrouter-test",
+          OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+        },
+        community: {
+          community_id: "com_visual_ignores_openai_sexual",
+          default_age_gate_policy: "18_plus",
+          visual_policy_settings: buildDefaultVisualPolicySettings("visual_ignore_openai_sexual", new Date().toISOString()),
+        } as Community,
+        body: {
+          idempotency_key: "idem_visual_ignore_openai_sexual",
+          post_type: "image",
+          media_refs: [{
+            storage_ref: "https://example.test/image.jpg",
+            mime_type: "image/jpeg",
+            size_bytes: 12,
+          }],
+        },
+      })
+
+      expect(outcome.analysis_state).toBe("allow")
+      expect(outcome.content_safety_state).toBe("adult")
       expect(outcome.age_gate_policy).toBe("18_plus")
     } finally {
       restoreFetch()
