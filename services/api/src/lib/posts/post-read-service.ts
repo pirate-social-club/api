@@ -21,6 +21,7 @@ import {
 import { enqueueEmbedHydrateOnReadIfNeeded, enqueuePostTranslationOnReadIfNeeded } from "./post-jobs"
 import { resolveAgeGateViewerState } from "./age-gate-viewer-state"
 import type { UserRepository } from "../auth/repositories"
+import type { Client } from "../sql-client"
 import type { Env } from "../../env"
 import type { CommentThreadSnapshot, LocalizedPostResponse, Post } from "../../types"
 
@@ -219,40 +220,54 @@ export async function getPublicPost(input: {
 
   const db = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
   try {
-    const post = await getPostById(db.client, input.postId)
-    if (!post || !isPubliclyReadablePost(post)) {
-      throw notFoundError("Post not found")
-    }
-    const ageGateViewerState = post.age_gate_policy === "18_plus" ? "proof_required" as const : null
-    const threadSnapshot = await getLatestThreadSnapshotForRead(db.client, post.post_id)
-    const metrics = await getPostReadMetrics({
-      executor: db.client,
-      postId: post.post_id,
-      viewerUserId: null,
-    })
-    const response = await buildLocalizedPostResponse({
-      executor: db.client,
-      post,
-      locale: input.locale ?? undefined,
-      metrics,
-      threadSnapshot,
-      ageGateViewerState,
-      viewerUserId: null,
-    })
-    await enqueuePostTranslationOnReadIfNeeded({
+    return await getPublicPostFromCommunityDb({
       client: db.client,
       communityId: projection.community_id,
-      response,
+      locale: input.locale,
+      postId: input.postId,
     })
-    await enqueueEmbedHydrateOnReadIfNeeded({
-      client: db.client,
-      communityId: projection.community_id,
-      post,
-    })
-    return response
   } finally {
     db.close()
   }
+}
+
+export async function getPublicPostFromCommunityDb(input: {
+  client: Client
+  communityId: string
+  postId: string
+  locale?: string | null
+}): Promise<LocalizedPostResponse> {
+  const post = await getPostById(input.client, input.postId)
+  if (!post || post.community_id !== input.communityId || !isPubliclyReadablePost(post)) {
+    throw notFoundError("Post not found")
+  }
+  const ageGateViewerState = post.age_gate_policy === "18_plus" ? "proof_required" as const : null
+  const threadSnapshot = await getLatestThreadSnapshotForRead(input.client, post.post_id)
+  const metrics = await getPostReadMetrics({
+    executor: input.client,
+    postId: post.post_id,
+    viewerUserId: null,
+  })
+  const response = await buildLocalizedPostResponse({
+    executor: input.client,
+    post,
+    locale: input.locale ?? undefined,
+    metrics,
+    threadSnapshot,
+    ageGateViewerState,
+    viewerUserId: null,
+  })
+  await enqueuePostTranslationOnReadIfNeeded({
+    client: input.client,
+    communityId: input.communityId,
+    response,
+  })
+  await enqueueEmbedHydrateOnReadIfNeeded({
+    client: input.client,
+    communityId: input.communityId,
+    post,
+  })
+  return response
 }
 
 export async function listCommunityPosts(input: {

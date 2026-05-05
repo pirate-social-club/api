@@ -7,6 +7,27 @@ export async function executeFirst(executor: DbExecutor, stmt: InStatement): Pro
   return result.rows[0] ?? null
 }
 
+export function isMissingRelationError(error: unknown, relationName: string): boolean {
+  if (!error || typeof error !== "object") {
+    return false
+  }
+
+  const record = error as Record<string, unknown>
+  const code = typeof record.code === "string" ? record.code : ""
+  const message = error instanceof Error ? error.message : String(record.message ?? "")
+  const lowerMessage = message.toLowerCase()
+  const lowerRelationName = relationName.toLowerCase()
+
+  return code === "42P01"
+    || (
+      lowerMessage.includes(lowerRelationName)
+      && (
+        lowerMessage.includes("does not exist")
+        || lowerMessage.includes("no such table")
+      )
+    )
+}
+
 const globalScope = globalThis as typeof globalThis & {
   __pirateSingletons?: Map<string, unknown>
 }

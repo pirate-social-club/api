@@ -33,6 +33,7 @@ import { serializeCommunityPreview } from "../serializers/community"
 import { serializeLocalizedPostResponse } from "../serializers/post"
 import type { Env } from "../env"
 import type { CommunityPreview } from "../types"
+import { setPublicReadCacheHeaders } from "./cache-headers"
 
 const publicCommunities = new Hono<{ Bindings: Env }>()
 
@@ -193,12 +194,14 @@ publicCommunities.get("/:communityId", async (c) => {
     links,
   }
   if (wantsMarkdown(c.req.raw, c.req.query("format"))) {
+    setPublicReadCacheHeaders(c, { vary: ["Accept"] })
     return markdownResponse(communityMarkdown({
       preview: responseBody,
       links,
       omittedSurfaces,
     }), links)
   }
+  setPublicReadCacheHeaders(c, { vary: ["Accept"] })
   c.header("Link", serializeLinkHeader(links))
   return c.json(responseBody, 200)
 })
@@ -310,6 +313,7 @@ publicCommunities.get("/:communityId/posts", async (c) => {
     links,
   }
   if (wantsMarkdown(c.req.raw, c.req.query("format"))) {
+    setPublicReadCacheHeaders(c, { vary: ["Accept"] })
     return markdownResponse(postListMarkdown({
       communityId,
       items,
@@ -317,6 +321,7 @@ publicCommunities.get("/:communityId/posts", async (c) => {
       omittedSurfaces,
     }), links)
   }
+  setPublicReadCacheHeaders(c, { vary: ["Accept"] })
   c.header("Link", serializeLinkHeader(links))
   return c.json(responseBody, 200)
 })

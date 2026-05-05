@@ -1,5 +1,6 @@
 import { openCommunityDb } from "../communities/community-db-factory"
 import { isCommunityLive } from "../communities/community-status"
+import type { Client } from "../sql-client"
 import type {
   CommunityCommentProjectionRepository,
   CommunityDatabaseBindingRepository,
@@ -141,29 +142,48 @@ export async function listPublicPostComments(input: {
     if (!post || post.community_id !== projection.community_id || !isPubliclyReadableThreadRoot(post)) {
       throw notFoundError("Post not found")
     }
-
-    const comments = await listTopLevelComments({
-      executor: db.client,
-      threadRootPostId: input.threadRootPostId,
-      viewerUserId: "",
-      limit: parseCommentLimit(input.limit),
-      sort: parseCommentSort(input.sort),
-      cursor: input.cursor ?? null,
-    })
-    const localizedItems = await localizeCommentItems({
+    return await listPublicPostCommentsFromCommunityDb({
       client: db.client,
       communityId: projection.community_id,
-      locale: input.locale ?? null,
-      items: comments.items,
+      cursor: input.cursor,
+      limit: input.limit,
+      locale: input.locale,
+      sort: input.sort,
+      threadRootPostId: input.threadRootPostId,
     })
-    const threadSnapshot = await getLatestThreadSnapshotForRead(db.client, input.threadRootPostId)
-    return {
-      items: localizedItems,
-      next_cursor: comments.next_cursor,
-      thread_snapshot: threadSnapshot,
-    }
   } finally {
     db.close()
+  }
+}
+
+export async function listPublicPostCommentsFromCommunityDb(input: {
+  client: Client
+  communityId: string
+  threadRootPostId: string
+  locale?: string | null
+  sort?: string | null
+  cursor?: string | null
+  limit?: string | null
+}): Promise<CommentListResponse> {
+  const comments = await listTopLevelComments({
+    executor: input.client,
+    threadRootPostId: input.threadRootPostId,
+    viewerUserId: "",
+    limit: parseCommentLimit(input.limit),
+    sort: parseCommentSort(input.sort),
+    cursor: input.cursor ?? null,
+  })
+  const localizedItems = await localizeCommentItems({
+    client: input.client,
+    communityId: input.communityId,
+    locale: input.locale ?? null,
+    items: comments.items,
+  })
+  const threadSnapshot = await getLatestThreadSnapshotForRead(input.client, input.threadRootPostId)
+  return {
+    items: localizedItems,
+    next_cursor: comments.next_cursor,
+    thread_snapshot: threadSnapshot,
   }
 }
 

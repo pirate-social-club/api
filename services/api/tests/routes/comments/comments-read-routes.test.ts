@@ -223,6 +223,8 @@ describe("comment read routes", () => {
       ctx.env,
     )
     expect(publicTopLevel.status).toBe(200)
+    expect(publicTopLevel.headers.get("cdn-cache-control")).toBe("public, s-maxage=60, stale-while-revalidate=300")
+    expect(publicTopLevel.headers.get("cache-control")).toBe("public, max-age=0, s-maxage=60, stale-while-revalidate=300")
     const publicTopLevelBody = await json(publicTopLevel) as {
       items: Array<{
         comment: { id: string }
@@ -242,6 +244,8 @@ describe("comment read routes", () => {
       ctx.env,
     )
     expect(publicReplies.status).toBe(200)
+    expect(publicReplies.headers.get("cdn-cache-control")).toBe("public, s-maxage=60, stale-while-revalidate=300")
+    expect(publicReplies.headers.get("cache-control")).toBe("public, max-age=0, s-maxage=60, stale-while-revalidate=300")
     const publicRepliesBody = await json(publicReplies) as {
       items: Array<{
         comment: { id: string }

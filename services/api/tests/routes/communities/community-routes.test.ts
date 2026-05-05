@@ -607,6 +607,9 @@ describe("community routes", () => {
     expect(previewBody.namespace_verification).toBe(namespaceVerificationId)
     expect(previewBody.route_slug).toBe(communityCreateBody.community.route_slug)
     expect(preview.headers.get("link")).toContain("/public-communities/")
+    expect(preview.headers.get("cdn-cache-control")).toBe("public, s-maxage=60, stale-while-revalidate=300")
+    expect(preview.headers.get("cache-control")).toBe("public, max-age=0, s-maxage=60, stale-while-revalidate=300")
+    expect(preview.headers.get("vary")).toContain("Accept")
     expect(previewBody.omitted_surfaces).toEqual([])
     expect(previewBody.links.canonical.href).toBe(`http://pirate.test/c/${communityCreateBody.community.route_slug}`)
     expect(previewBody.links.self.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.id}`)
@@ -620,6 +623,7 @@ describe("community routes", () => {
     )
     expect(previewMarkdown.status).toBe(200)
     expect(previewMarkdown.headers.get("content-type")).toContain("text/markdown")
+    expect(previewMarkdown.headers.get("cdn-cache-control")).toBe("public, s-maxage=60, stale-while-revalidate=300")
     expect(await previewMarkdown.text()).toContain("# Public Community Club")
 
     const posts = await app.request(
@@ -628,6 +632,8 @@ describe("community routes", () => {
       ctx.env,
     )
     expect(posts.status).toBe(200)
+    expect(posts.headers.get("cdn-cache-control")).toBe("public, s-maxage=60, stale-while-revalidate=300")
+    expect(posts.headers.get("cache-control")).toBe("public, max-age=0, s-maxage=60, stale-while-revalidate=300")
     const postsBody = await json(posts) as {
       items: Array<{
         post: { id: string; title: string | null }
@@ -675,6 +681,8 @@ describe("community routes", () => {
       ctx.env,
     )
     expect(publicPost.status).toBe(200)
+    expect(publicPost.headers.get("cdn-cache-control")).toBe("public, s-maxage=60, stale-while-revalidate=300")
+    expect(publicPost.headers.get("cache-control")).toBe("public, max-age=0, s-maxage=60, stale-while-revalidate=300")
     const publicPostBody = await json(publicPost) as {
       post: { id: string; title: string | null }
       resolved_locale: string
@@ -713,6 +721,8 @@ describe("community routes", () => {
       ctx.env,
     )
     expect(topComments.status).toBe(200)
+    expect(topComments.headers.get("cdn-cache-control")).toBe("public, s-maxage=60, stale-while-revalidate=300")
+    expect(topComments.headers.get("cache-control")).toBe("public, max-age=0, s-maxage=60, stale-while-revalidate=300")
     const topCommentsBody = await json(topComments) as {
       items: unknown[]
       top_comments_limit: number
@@ -729,6 +739,28 @@ describe("community routes", () => {
     expect(topCommentsBody.links.markdown.href).toBe(`http://pirate.test/public-posts/${createdPostBody.id}/top-comments?format=markdown`)
     expect(topCommentsBody.links.post.href).toBe(`http://pirate.test/public-posts/${createdPostBody.id}`)
     expect(topCommentsBody.links.community.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.id}`)
+
+    const publicThread = await app.request(
+      `http://pirate.test/public-posts/${createdPostBody.id}/thread?locale=zh-Hans&limit=10`,
+      {},
+      ctx.env,
+    )
+    expect(publicThread.status).toBe(200)
+    expect(publicThread.headers.get("cdn-cache-control")).toBe("public, s-maxage=60, stale-while-revalidate=300")
+    const publicThreadBody = await json(publicThread) as {
+      post: { post: { id: string; title: string | null }; resolved_locale: string }
+      community: { id: string; display_name: string }
+      comments: { items: unknown[]; next_cursor: string | null }
+      omitted_surfaces: unknown[]
+      links: { self: { href: string }; community: { href: string } }
+    }
+    expect(publicThreadBody.post.post.id).toBe(createdPostBody.id)
+    expect(publicThreadBody.post.post.title).toBe("Public route post")
+    expect(publicThreadBody.community.id).toBe(communityCreateBody.community.id)
+    expect(publicThreadBody.comments.items).toEqual([])
+    expect(publicThreadBody.comments.next_cursor).toBeNull()
+    expect(publicThreadBody.links.self.href).toBe(`http://pirate.test/public-posts/${createdPostBody.id}`)
+    expect(publicThreadBody.links.community.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.id}`)
 
     const topCommentsMarkdown = await app.request(
       `http://pirate.test/public-posts/${createdPostBody.id}/top-comments?format=markdown`,
