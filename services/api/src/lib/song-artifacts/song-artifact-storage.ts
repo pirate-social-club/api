@@ -209,7 +209,7 @@ export async function uploadFilebaseObject(input: {
   const payloadHash = await sha256Hex(input.bytes)
   const request = await buildS3SignedRequest({
     method: "PUT",
-    config: resolveFilebaseConfig(input.env, "music"),
+    config: resolveFilebaseConfig(input.env),
     objectKey: input.objectKey,
     payloadHash,
     headers: {
@@ -225,7 +225,7 @@ export async function uploadFilebaseObject(input: {
     )
   }
 
-  const config = resolveFilebaseConfig(input.env, "music")
+  const config = resolveFilebaseConfig(input.env)
   return {
     storageBucket: config.bucket,
     storageObjectKey: input.objectKey,
@@ -264,7 +264,7 @@ export async function uploadSongArtifactBytes(input: {
   )
   const request = await buildS3SignedRequest({
     method: "PUT",
-    config: resolveFilebaseConfig(input.env, "music"),
+    config: resolveFilebaseConfig(input.env),
     objectKey,
     payloadHash,
     headers: {
@@ -276,11 +276,11 @@ export async function uploadSongArtifactBytes(input: {
   if (!response.ok) {
     const responseText = await response.text().catch(() => "")
     throw providerUnavailable(
-      `Filebase song upload failed with status ${response.status}${responseText ? `: ${responseText}` : ""}`,
+      `Filebase artifact upload failed with status ${response.status}${responseText ? `: ${responseText}` : ""}`,
     )
   }
 
-  const config = resolveFilebaseConfig(input.env, "music")
+  const config = resolveFilebaseConfig(input.env)
   const storageRef = buildSongArtifactContentUrl(input.origin, input.communityId, input.songArtifactUploadId)
   return {
     storageRef,
@@ -301,7 +301,7 @@ export async function fetchSongArtifactBytes(input: {
   const rangeHeader = input.rangeHeader?.trim()
   const request = await buildS3SignedRequest({
     method: "GET",
-    config: resolveFilebaseConfig(input.env, "music"),
+    config: resolveFilebaseConfig(input.env),
     objectKey: input.objectKey,
     payloadHash: EMPTY_SHA256_HEX,
     headers: rangeHeader ? { range: rangeHeader } : undefined,
@@ -313,7 +313,7 @@ export async function fetchSongArtifactBytes(input: {
   if (!upstream.ok) {
     const responseText = await upstream.text().catch(() => "")
     throw providerUnavailable(
-      `Filebase song fetch failed with status ${upstream.status}${responseText ? `: ${responseText}` : ""}`,
+      `Filebase artifact fetch failed with status ${upstream.status}${responseText ? `: ${responseText}` : ""}`,
     )
   }
 

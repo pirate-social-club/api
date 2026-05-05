@@ -225,7 +225,7 @@ describe("song artifact locked routes", () => {
       FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
       FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
       FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
-      FILEBASE_S3_BUCKET_MUSIC: "pirate-song-media",
+      FILEBASE_MEDIA_BUCKET: "pirate-media",
       OPENROUTER_API_KEY: "test-openrouter-key",
       OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
       OPENROUTER_MODEL: "google/gemini-3.1-flash-lite-preview",
@@ -800,7 +800,7 @@ describe("song artifact locked routes", () => {
       FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
       FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
       FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
-      FILEBASE_S3_BUCKET_MUSIC: "pirate-song-media",
+      FILEBASE_MEDIA_BUCKET: "pirate-media",
       OPENROUTER_API_KEY: "test-openrouter-key",
       OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
       OPENROUTER_MODEL: "google/gemini-3.1-flash-lite-preview",
@@ -1000,7 +1000,7 @@ describe("song artifact locked routes", () => {
       FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
       FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
       FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
-      FILEBASE_S3_BUCKET_MUSIC: "pirate-song-media",
+      FILEBASE_MEDIA_BUCKET: "pirate-media",
       STORY_CDR_WRITER_PRIVATE_KEY: "0x3000000000000000000000000000000000000000000000000000000000000003",
       STORY_ROYALTY_SPG_NFT_CONTRACT: "0x4444444444444444444444444444444444444444",
       STORY_ROYALTY_COMMERCIAL_REV_SHARE_PCT: "10",
@@ -1279,7 +1279,7 @@ describe("song artifact locked routes", () => {
       FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
       FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
       FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
-      FILEBASE_S3_BUCKET_MUSIC: "pirate-song-media",
+      FILEBASE_MEDIA_BUCKET: "pirate-media",
     })
     cleanup = ctx.cleanup
 
@@ -1383,7 +1383,7 @@ describe("song artifact locked routes", () => {
       FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
       FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
       FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
-      FILEBASE_S3_BUCKET_MUSIC: "pirate-song-media",
+      FILEBASE_MEDIA_BUCKET: "pirate-media",
     })
     cleanup = ctx.cleanup
 
@@ -1504,7 +1504,7 @@ describe("song artifact locked routes", () => {
       FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
       FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
       FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
-      FILEBASE_S3_BUCKET_MUSIC: "pirate-song-media",
+      FILEBASE_MEDIA_BUCKET: "pirate-media",
       STORY_CONTRACT_OWNER_PRIVATE_KEY: "0x1000000000000000000000000000000000000000000000000000000000000001",
       STORY_OPERATOR_PRIVATE_KEY: "0x2000000000000000000000000000000000000000000000000000000000000002",
       STORY_CDR_WRITER_PRIVATE_KEY: "0x3000000000000000000000000000000000000000000000000000000000000003",

@@ -108,7 +108,7 @@ describe("song artifact catalog routes", () => {
       FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
       FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
       FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
-      FILEBASE_S3_BUCKET_MUSIC: "pirate-song-media",
+      FILEBASE_MEDIA_BUCKET: "pirate-media",
       OPENROUTER_API_KEY: "test-openrouter-key",
       OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
       OPENROUTER_MODEL: "google/gemini-3.1-flash-lite-preview",

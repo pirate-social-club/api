@@ -147,7 +147,7 @@ export async function uploadMedia<TKind extends string>(input: UploadMediaInput<
   const { objectKey } = resolveObjectKey(input.objectKeyPrefix, input.kind, mimeType)
   const request = await buildS3SignedRequest({
     method: "PUT",
-    config: resolveFilebaseConfig(input.env, "media"),
+    config: resolveFilebaseConfig(input.env),
     objectKey,
     payloadHash,
     headers: {
@@ -170,7 +170,7 @@ export async function uploadMedia<TKind extends string>(input: UploadMediaInput<
     ipfs_cid: ipfsCid,
     mime_type: mimeType,
     size_bytes: input.file.size,
-    storage_bucket: resolveFilebaseConfig(input.env, "media").bucket,
+    storage_bucket: resolveFilebaseConfig(input.env).bucket,
     storage_object_key: objectKey,
   }
 }
@@ -198,7 +198,7 @@ export function assertMediaObject<TKind extends string>(input: AssertMediaObject
 export async function fetchMedia(input: FetchMediaInput): Promise<Response> {
   const request = await buildS3SignedRequest({
     method: "GET",
-    config: resolveFilebaseConfig(input.env, "media"),
+    config: resolveFilebaseConfig(input.env),
     objectKey: input.objectKey,
     payloadHash: EMPTY_SHA256_HEX,
   })
