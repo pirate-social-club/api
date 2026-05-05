@@ -26,6 +26,7 @@ import profileMedia from "./routes/profile-media"
 import profiles from "./routes/profiles"
 import users from "./routes/users"
 import verification from "./routes/verification"
+import { buildPublicReadCacheKey, isPublicReadCacheRequest, isPublicReadCacheResponse } from "./routes/cache-headers"
 import { flushAnalyticsOutbox, isAnalyticsEnabled, syncCommunityHealthCounts } from "./lib/analytics"
 import { getCommunityRepository } from "./lib/communities/db-community-repository"
 import { reconcileStaleCommunityPurchaseSettlements } from "./lib/communities/commerce/settlement-service"
@@ -186,6 +187,25 @@ app.onError((error, c) => {
   })
 })
 
+async function fetchWithPublicReadCache(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  if (!isPublicReadCacheRequest(req) || typeof caches === "undefined") {
+    return app.fetch(req, env, ctx)
+  }
+
+  const cache = await caches.open("public-read")
+  const cacheKey = buildPublicReadCacheKey(req)
+  const cachedResponse = await cache.match(cacheKey)
+  if (cachedResponse) {
+    return cachedResponse
+  }
+
+  const response = await app.fetch(req, env, ctx)
+  if (isPublicReadCacheResponse(response)) {
+    ctx.waitUntil(cache.put(cacheKey, response.clone()))
+  }
+  return response
+}
+
 async function flushScheduledAnalytics(env: Env): Promise<void> {
   if (!isAnalyticsEnabled(env)) {
     return
@@ -312,7 +332,7 @@ async function reconcileScheduledCommunityMembershipProjections(env: Env): Promi
 }
 
 const handler: ExportedHandler<Env> = {
-  fetch: (req, env, ctx) => app.fetch(req, env, ctx),
+  fetch: (req, env, ctx) => fetchWithPublicReadCache(req, env, ctx),
 
   scheduled: async (_controller, env, ctx) => {
     ctx.waitUntil(withRequestControlPlaneClients(() => flushScheduledAnalytics(env)))
