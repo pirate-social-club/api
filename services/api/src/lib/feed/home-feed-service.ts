@@ -1,4 +1,4 @@
-import { executeFirst } from "../db-helpers"
+import { isMissingRelationError, type DbExecutor } from "../db-helpers"
 import { openCommunityDb } from "../communities/community-db-factory"
 import type { Client } from "../sql-client"
 import type {
@@ -6,23 +6,33 @@ import type {
   CommunityMembershipProjectionRepository,
   CommunityReadRepository,
 } from "../communities/db-community-repository"
-import { getLatestThreadSnapshotForRead } from "../comments/community-comment-store"
 import { buildLocalizedPostResponse } from "../localization/post-localization-service"
 import { enqueueEmbedHydrateOnReadIfNeeded, enqueuePostTranslationOnReadIfNeeded } from "../posts/post-jobs"
-import { getPostById } from "../posts/community-post-store"
-import { getControlPlaneClient } from "../runtime-deps"
+import { getControlPlaneClient, withRequestControlPlaneClients } from "../runtime-deps"
 import { numberOrNull, requiredNumber, requiredString, rowValue } from "../sql-row"
 import { serializeLocalizedPostResponse } from "../../serializers/post"
+import { ensureCommunityHealthCountsTable, fetchTinybirdCommunityViewCounts, upsertCommunityHealthCounts } from "../analytics/community-analytics-sync"
 import type { CommunityFollowProjectionRow, CommunityMembershipProjectionRow, CommunityRow } from "../auth/auth-db-rows"
 import { resolveCommunityAvatarRef } from "../communities/community-identity-media"
 import { resolveAgeGateViewerState } from "../posts/age-gate-viewer-state"
+import {
+  POST_SELECT_COLUMNS,
+  serializePost,
+  toPostRow,
+} from "../posts/community-post-serialization"
+import {
+  serializeThreadSnapshot,
+  toThreadSnapshotRow,
+} from "../comments/community-comment-serialization"
 import type { UserRepository } from "../auth/repositories"
 import type {
+  CommentThreadSnapshot,
   Env,
   HomeFeedCommunitySummary,
   HomeFeedItem,
   HomeFeedResponse,
   HomeFeedSort,
+  Post,
 } from "../../types"
 
 type HomeFeedProjectionRow = {
@@ -34,6 +44,13 @@ type HomeFeedProjectionRow = {
   downvote_count: number
   comment_count: number
   like_count: number
+}
+
+type HomeFeedWaitUntil = (promise: Promise<void>) => void
+
+type HomeFeedPostReadJob = {
+  post: Post
+  response: Parameters<typeof enqueuePostTranslationOnReadIfNeeded>[0]["response"]
 }
 
 export type HomeFeedCommunityIdentity = {
@@ -55,6 +72,8 @@ type HomeFeedCommunityRepository =
     CommunityMembershipProjectionRepository,
     "listCommunityMembershipProjectionsByUserId" | "listCommunityFollowProjectionsByUserId"
   >
+
+const HOME_FEED_COMMUNITY_READ_CONCURRENCY = 4
 
 function parseHomeFeedSort(sort: string | null | undefined): HomeFeedSort {
   return sort === "new" || sort === "top" ? sort : "best"
@@ -114,26 +133,170 @@ function toHomeFeedProjectionRow(row: unknown): HomeFeedProjectionRow {
   }
 }
 
-async function getViewerVote(input: {
-  client: Client
-  postId: string
-  userId: string | null
-}): Promise<-1 | 1 | null> {
-  if (!input.userId) {
-    return null
+function placeholders(count: number): string {
+  return Array.from({ length: count }, (_, index) => `?${index + 1}`).join(", ")
+}
+
+async function listPostsById(client: Client, postIds: string[]): Promise<Map<string, Post>> {
+  if (postIds.length === 0) {
+    return new Map()
   }
 
-  const row = await executeFirst(input.client, {
+  const result = await client.execute({
     sql: `
-      SELECT vote_value
-      FROM post_votes
-      WHERE post_id = ?1
-        AND user_id = ?2
-      LIMIT 1
+      SELECT ${POST_SELECT_COLUMNS}
+      FROM posts
+      WHERE post_id IN (${placeholders(postIds.length)})
     `,
-    args: [input.postId, input.userId],
+    args: postIds,
   })
-  return numberOrNull(rowValue(row, "vote_value")) as -1 | 1 | null
+
+  const postsById = new Map<string, Post>()
+  for (const row of result.rows) {
+    const post = serializePost(toPostRow(row))
+    postsById.set(post.post_id, post)
+  }
+  return postsById
+}
+
+async function listLatestThreadSnapshotsForRead(
+  client: Client,
+  threadRootPostIds: string[],
+): Promise<Map<string, CommentThreadSnapshot | null>> {
+  if (threadRootPostIds.length === 0) {
+    return new Map()
+  }
+
+  const result = await client.execute({
+    sql: `
+      SELECT thread_snapshot_id, community_id, thread_root_post_id, snapshot_seq,
+             published_through_comment_created_at, comment_count, swarm_manifest_ref,
+             swarm_feed_ref, created_at
+      FROM thread_snapshots
+      WHERE thread_root_post_id IN (${placeholders(threadRootPostIds.length)})
+      ORDER BY thread_root_post_id ASC, snapshot_seq DESC, created_at DESC
+    `,
+    args: threadRootPostIds,
+  })
+
+  const snapshotsByPostId = new Map<string, CommentThreadSnapshot | null>()
+  for (const row of result.rows) {
+    const snapshot = toThreadSnapshotRow(row)
+    if (!snapshotsByPostId.has(snapshot.thread_root_post_id)) {
+      snapshotsByPostId.set(snapshot.thread_root_post_id, serializeThreadSnapshot(snapshot))
+    }
+  }
+  return snapshotsByPostId
+}
+
+async function listViewerVotes(input: {
+  client: Client
+  postIds: string[]
+  userId: string | null
+}): Promise<Map<string, -1 | 1 | null>> {
+  if (!input.userId || input.postIds.length === 0) {
+    return new Map()
+  }
+
+  const result = await input.client.execute({
+    sql: `
+      SELECT post_id, vote_value
+      FROM post_votes
+      WHERE user_id = ?1
+        AND post_id IN (${input.postIds.map((_, index) => `?${index + 2}`).join(", ")})
+    `,
+    args: [input.userId, ...input.postIds],
+  })
+
+  const votesByPostId = new Map<string, -1 | 1 | null>()
+  for (const row of result.rows) {
+    votesByPostId.set(requiredString(row, "post_id"), numberOrNull(rowValue(row, "vote_value")) as -1 | 1 | null)
+  }
+  return votesByPostId
+}
+
+async function enqueuePostReadJobsForCommunity(input: {
+  client: DbExecutor
+  communityId: string
+  jobs: HomeFeedPostReadJob[]
+}): Promise<void> {
+  for (const job of input.jobs) {
+    await enqueuePostTranslationOnReadIfNeeded({
+      client: input.client,
+      communityId: input.communityId,
+      response: job.response,
+    })
+    await enqueueEmbedHydrateOnReadIfNeeded({
+      client: input.client,
+      communityId: input.communityId,
+      post: job.post,
+    })
+  }
+}
+
+function enqueuePostReadJobs(input: {
+  env: Env
+  communityId: string
+  communityRepository: HomeFeedCommunityRepository
+  jobs: HomeFeedPostReadJob[]
+  waitUntil?: HomeFeedWaitUntil
+  fallbackClient: DbExecutor
+}): Promise<void> {
+  if (input.jobs.length === 0) {
+    return Promise.resolve()
+  }
+
+  if (!input.waitUntil) {
+    return enqueuePostReadJobsForCommunity({
+      client: input.fallbackClient,
+      communityId: input.communityId,
+      jobs: input.jobs,
+    })
+  }
+
+  input.waitUntil(withRequestControlPlaneClients(async () => {
+    const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+    try {
+      await enqueuePostReadJobsForCommunity({
+        client: db.client,
+        communityId: input.communityId,
+        jobs: input.jobs,
+      })
+    } finally {
+      db.close()
+    }
+  }).catch((error: unknown) => {
+    console.error("[home-feed] deferred post read job enqueue failed", {
+      communityId: input.communityId,
+      error,
+    })
+  }))
+
+  return Promise.resolve()
+}
+
+async function mapWithConcurrency<T, TResult>(
+  items: T[],
+  limit: number,
+  mapper: (item: T, index: number) => Promise<TResult>,
+): Promise<TResult[]> {
+  const results = new Array<TResult>(items.length)
+  let nextIndex = 0
+
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const index = nextIndex
+      nextIndex += 1
+
+      if (index >= items.length) {
+        return
+      }
+
+      results[index] = await mapper(items[index] as T, index)
+    }
+  }))
+
+  return results
 }
 
 function buildCommunitySummary(
@@ -213,9 +376,13 @@ async function resolveTopCommunitiesIdentity(
   env: Env,
   communityRepository: HomeFeedCommunityRepository,
   summaries: InternalHomeFeedCommunitySummary[],
+  cachedIdentityByCommunityId: Map<string, HomeFeedCommunityIdentity | null> = new Map(),
 ): Promise<InternalHomeFeedCommunitySummary[]> {
   const resolved = await Promise.all(
     summaries.map(async (summary) => {
+      if (cachedIdentityByCommunityId.has(summary.community_id)) {
+        return withHomeFeedCommunityIdentity(summary, cachedIdentityByCommunityId.get(summary.community_id) ?? null)
+      }
       const db = await openCommunityDb(env, communityRepository, summary.community_id).catch(() => null)
       if (!db) {
         return withHomeFeedCommunityIdentity(summary, null)
@@ -345,13 +512,41 @@ export async function listHomeFeedCommunityViewCounts(input: {
 
   const controlPlaneClient = getControlPlaneClient(input.env)
   const placeholders = input.communityIds.map((_, index) => `?${index + 1}`).join(", ")
-  const result = await controlPlaneClient.execute({
+  const statement = {
     sql: `
       SELECT community_id, total_views
       FROM community_health_counts
       WHERE community_id IN (${placeholders})
     `,
     args: input.communityIds,
+  }
+  const result = await controlPlaneClient.execute({
+    ...statement,
+  }).catch(async (error: unknown) => {
+    if (isMissingRelationError(error, "community_health_counts")) {
+      try {
+        await ensureCommunityHealthCountsTable(controlPlaneClient)
+      } catch (bootstrapError) {
+        console.error("[home-feed] failed to create community health counts table", bootstrapError)
+        return { rows: [] }
+      }
+
+      if (String(input.env.TINYBIRD_READ_TOKEN || "").trim()) {
+        try {
+          await upsertCommunityHealthCounts(controlPlaneClient, await fetchTinybirdCommunityViewCounts(input.env))
+        } catch (syncError) {
+          console.error("[home-feed] failed to bootstrap community health counts", syncError)
+        }
+      }
+
+      return controlPlaneClient.execute(statement).catch((retryError: unknown) => {
+        if (isMissingRelationError(retryError, "community_health_counts")) {
+          return { rows: [] }
+        }
+        throw retryError
+      })
+    }
+    throw error
   })
 
   const counts = new Map<string, number>()
@@ -372,6 +567,7 @@ export async function listHomeFeed(input: {
   cursor?: string | null
   communityRepository: HomeFeedCommunityRepository
   userRepository?: UserRepository | null
+  waitUntil?: HomeFeedWaitUntil
 }): Promise<HomeFeedResponse> {
   const ageGateState = input.userId && input.userRepository
     ? await resolveAgeGateViewerState({
@@ -497,31 +693,46 @@ export async function listHomeFeed(input: {
     rows.push(row)
     rowsByCommunityId.set(row.community_id, rows)
   }
+  const communityIdentityById = new Map<string, HomeFeedCommunityIdentity | null>()
 
-  for (const [communityId, rows] of rowsByCommunityId) {
+  const communityItemGroups = await mapWithConcurrency([...rowsByCommunityId.entries()], HOME_FEED_COMMUNITY_READ_CONCURRENCY, async ([communityId, rows]) => {
     const db = await openCommunityDb(input.env, input.communityRepository, communityId)
     try {
       const baseCommunity = communitySummaryById[communityId]
+      const identity = await getHomeFeedCommunityIdentity(db.client, communityId)
+      communityIdentityById.set(communityId, identity)
       const community = baseCommunity
         ? withHomeFeedCommunityIdentity(
           baseCommunity,
-          await getHomeFeedCommunityIdentity(db.client, communityId),
+          identity,
         )
         : null
+      const communityItems: HomeFeedItem[] = []
+      const postsById = await listPostsById(db.client, rows.map((row) => row.source_post_id))
+      const publishedRows = rows.filter((row) => {
+        const post = postsById.get(row.source_post_id)
+        return post
+          && post.status === "published"
+          && (post.visibility !== "members_only" || memberCommunityIdSet.has(communityId))
+      })
+      const publishedPostIds = publishedRows.map((row) => row.source_post_id)
+      const threadSnapshotsByPostId = await listLatestThreadSnapshotsForRead(db.client, publishedPostIds)
+      const viewerVotesByPostId = await listViewerVotes({
+        client: db.client,
+        postIds: publishedPostIds,
+        userId: input.userId,
+      })
+      const postReadJobs: HomeFeedPostReadJob[] = []
       for (const row of rows) {
-        const post = await getPostById(db.client, row.source_post_id)
+        const post = postsById.get(row.source_post_id) ?? null
         if (!post || post.status !== "published") {
           continue
         }
         if (post.visibility === "members_only" && !memberCommunityIdSet.has(communityId)) {
           continue
         }
-        const threadSnapshot = await getLatestThreadSnapshotForRead(db.client, post.post_id)
-        const viewerVote = await getViewerVote({
-          client: db.client,
-          postId: post.post_id,
-          userId: input.userId,
-        })
+        const threadSnapshot = threadSnapshotsByPostId.get(post.post_id) ?? null
+        const viewerVote = viewerVotesByPostId.get(post.post_id) ?? null
         const localized = await buildLocalizedPostResponse({
           executor: db.client,
           post,
@@ -537,28 +748,29 @@ export async function listHomeFeed(input: {
           ageGateViewerState: post.age_gate_policy === "18_plus" ? ageGateState ?? "proof_required" : null,
           viewerUserId: input.userId,
         })
-        await enqueuePostTranslationOnReadIfNeeded({
-          client: db.client,
-          communityId,
-          response: localized,
-        })
-        await enqueueEmbedHydrateOnReadIfNeeded({
-          client: db.client,
-          communityId,
-          post,
-        })
+        postReadJobs.push({ post, response: localized })
         if (!community) {
           continue
         }
-        items.push({
+        communityItems.push({
           community: serializeHomeFeedCommunitySummary(community),
           post: serializeLocalizedPostResponse(localized),
         })
       }
+      await enqueuePostReadJobs({
+        env: input.env,
+        communityId,
+        communityRepository: input.communityRepository,
+        jobs: postReadJobs,
+        waitUntil: input.waitUntil,
+        fallbackClient: db.client,
+      })
+      return communityItems
     } finally {
       db.close()
     }
-  }
+  })
+  items.push(...communityItemGroups.flat())
 
   const itemByPostId = Object.fromEntries(items.map((item) => [item.post.post.id.replace(/^post_/, ""), item] as const))
   const orderedItems = pageRows
@@ -569,6 +781,7 @@ export async function listHomeFeed(input: {
     input.env,
     input.communityRepository,
     sortedCommunities.slice(0, 6),
+    communityIdentityById,
   )
 
   return {

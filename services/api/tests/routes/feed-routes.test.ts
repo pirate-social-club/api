@@ -57,6 +57,9 @@ describe("feed routes", () => {
 
     const response = await app.request("http://pirate.test/feed/home?sort=new&time_range=all", {}, ctx.env)
     expect(response.status).toBe(200)
+    expect(response.headers.get("cdn-cache-control")).toBe("public, s-maxage=60, stale-while-revalidate=300")
+    expect(response.headers.get("cache-control")).toBe("public, max-age=0, s-maxage=60, stale-while-revalidate=300")
+    expect(response.headers.get("vary")).toContain("Authorization")
     const body = await json(response) as {
       items: unknown[]
       top_communities: Array<{

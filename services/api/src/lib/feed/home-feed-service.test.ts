@@ -10,7 +10,7 @@ import {
   withHomeFeedCommunityIdentity,
 } from "./home-feed-service"
 import type { CommunityAggregate, InternalHomeFeedCommunitySummary } from "./home-feed-service"
-import { buildTestEnv, createControlPlaneTestClient } from "../../../tests/helpers"
+import { buildTestEnv, createControlPlaneTestClient, withMockedFetch } from "../../../tests/helpers"
 
 let cleanup: (() => Promise<void>) | null = null
 
@@ -336,6 +336,48 @@ describe("listHomeFeedCommunityViewCounts", () => {
 
     expect(counts.get("cmt_alpha")).toBe(12)
     expect(counts.has("cmt_gamma")).toBe(false)
+  })
+
+  test("returns empty counts when the health counts table has not migrated yet", async () => {
+    const setup = await createControlPlaneTestClient()
+    cleanup = setup.cleanup
+
+    const counts = await listHomeFeedCommunityViewCounts({
+      env: buildTestEnv({
+        CONTROL_PLANE_DATABASE_URL: `file:${setup.databasePath}`,
+        DEV_MEMORY_STORE_ENABLED: "false",
+      }),
+      communityIds: ["cmt_alpha"],
+    })
+
+    expect(counts.size).toBe(0)
+  })
+
+  test("bootstraps synced counts when the health counts table is missing", async () => {
+    const setup = await createControlPlaneTestClient()
+    cleanup = setup.cleanup
+
+    await withMockedFetch(() => (async () => {
+      return new Response(JSON.stringify({
+        data: [
+          { day: "2026-05-01", community_id: "cmt_alpha", views: 2 },
+          { day: "2026-05-02", community_id: "cmt_alpha", views: 3 },
+          { day: "2026-05-01", community_id: "cmt_beta", views: 7 },
+        ],
+      }), { status: 200 })
+    }) as typeof fetch, async () => {
+      const counts = await listHomeFeedCommunityViewCounts({
+        env: buildTestEnv({
+          CONTROL_PLANE_DATABASE_URL: `file:${setup.databasePath}`,
+          DEV_MEMORY_STORE_ENABLED: "false",
+          TINYBIRD_READ_TOKEN: "tb_read_test",
+        }),
+        communityIds: ["cmt_alpha"],
+      })
+
+      expect(counts.get("cmt_alpha")).toBe(5)
+      expect(counts.has("cmt_beta")).toBe(false)
+    })
   })
 })
 
