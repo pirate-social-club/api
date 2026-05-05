@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import {
+  DEFAULT_SPACES_FABRIC_PUBLISH_CHALLENGE_TTL_HOURS,
+  getSpacesFabricPublishChallengeTtlMs,
   inspectSpacesNamespace,
   normalizeRootLabel,
   mintSpacesChallenge,
-  SPACES_FABRIC_PUBLISH_CHALLENGE_TTL_MS,
   verifySpacesFabricPublish,
 } from "../src/lib/verification/spaces-verifier"
 import { ensureHnsZone, getHnsVerifierBaseUrl, inspectHnsRoot, isHnsVerifierConfigured, normalizeHnsRootLabel, verifyHnsTxtRecord } from "../src/lib/verification/hns-verifier"
@@ -86,7 +87,21 @@ describe("mintSpacesChallenge", () => {
     const result = await mintSpacesChallenge(env, "myspace", "test-pubkey", "nvs_123")
     const issuedAt = new Date(result.challengePayload.issued_at).getTime()
     const expiresAt = new Date(result.challengeExpiresAt).getTime()
-    expect(expiresAt - issuedAt).toBe(SPACES_FABRIC_PUBLISH_CHALLENGE_TTL_MS)
+    expect(expiresAt - issuedAt).toBe(getSpacesFabricPublishChallengeTtlMs(env))
+    expect(getSpacesFabricPublishChallengeTtlMs(env)).toBe(
+      DEFAULT_SPACES_FABRIC_PUBLISH_CHALLENGE_TTL_HOURS * 60 * 60 * 1000,
+    )
+  })
+
+  test("challenge expiry supports a bounded Spaces TTL override", async () => {
+    const customEnv = { ...env, SPACES_CHALLENGE_TTL_HOURS: "72" } as any
+    const result = await mintSpacesChallenge(customEnv, "myspace", "test-pubkey", "nvs_123")
+    const issuedAt = new Date(result.challengePayload.issued_at).getTime()
+    const expiresAt = new Date(result.challengeExpiresAt).getTime()
+    expect(expiresAt - issuedAt).toBe(72 * 60 * 60 * 1000)
+    expect(getSpacesFabricPublishChallengeTtlMs({ ...env, SPACES_CHALLENGE_TTL_HOURS: "999" } as any)).toBe(
+      DEFAULT_SPACES_FABRIC_PUBLISH_CHALLENGE_TTL_HOURS * 60 * 60 * 1000,
+    )
   })
 
   test("normalizes root label in the payload", async () => {

@@ -41,7 +41,15 @@ type SpacesVerifyPublishResponse = {
   failure_reason?: string | null
 }
 
-export const SPACES_FABRIC_PUBLISH_CHALLENGE_TTL_MS = 24 * 60 * 60 * 1000
+export const DEFAULT_SPACES_FABRIC_PUBLISH_CHALLENGE_TTL_HOURS = 168
+
+export function getSpacesFabricPublishChallengeTtlMs(env: Env): number {
+  const rawTtlHours = Number(env.SPACES_CHALLENGE_TTL_HOURS)
+  const ttlHours = Number.isFinite(rawTtlHours) && rawTtlHours >= 1 && rawTtlHours <= 168
+    ? rawTtlHours
+    : DEFAULT_SPACES_FABRIC_PUBLISH_CHALLENGE_TTL_HOURS
+  return ttlHours * 60 * 60 * 1000
+}
 
 export type SpacesInspection = {
   rootExists: boolean
@@ -305,7 +313,7 @@ export async function mintSpacesChallenge(
   }
 
   const issuedAt = new Date()
-  const challengeExpiresAt = new Date(issuedAt.getTime() + SPACES_FABRIC_PUBLISH_CHALLENGE_TTL_MS).toISOString()
+  const challengeExpiresAt = new Date(issuedAt.getTime() + getSpacesFabricPublishChallengeTtlMs(env)).toISOString()
   const domain = getSpacesChallengeDomain(env)
   const nonce = `${sessionId}:${randomNonceHex()}`
   const txtValue = `pirate-space-verify=${nonce}`

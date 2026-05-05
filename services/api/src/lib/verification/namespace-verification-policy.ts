@@ -27,7 +27,7 @@ export function getHnsChallengeTtlHours(env: Env): number {
   if (Number.isFinite(rawTtlHours) && rawTtlHours >= 1 && rawTtlHours <= 168) {
     return rawTtlHours
   }
-  return 24
+  return 168
 }
 
 export type HnsSessionAssertionSnapshot = {

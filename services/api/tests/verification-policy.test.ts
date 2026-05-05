@@ -4,6 +4,7 @@ import {
   deriveHnsInspectionSnapshot,
   deriveAcceptedHnsSnapshot,
   deriveSpacesAcceptedSnapshot,
+  getHnsChallengeTtlHours,
   isTrustedHnsAuthorityObservation,
   parseStoredSpacesChallenge,
 } from "../src/lib/verification/namespace-verification-policy"
@@ -90,6 +91,17 @@ describe("boolToDb", () => {
 
   test("converts undefined to null", () => {
     expect(boolToDb(undefined)).toBeNull()
+  })
+})
+
+describe("getHnsChallengeTtlHours", () => {
+  test("defaults to seven days", () => {
+    expect(getHnsChallengeTtlHours({} as any)).toBe(168)
+  })
+
+  test("supports a bounded override", () => {
+    expect(getHnsChallengeTtlHours({ HNS_CHALLENGE_TTL_HOURS: "72" } as any)).toBe(72)
+    expect(getHnsChallengeTtlHours({ HNS_CHALLENGE_TTL_HOURS: "999" } as any)).toBe(168)
   })
 })
 

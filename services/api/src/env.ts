@@ -65,7 +65,6 @@ export type Env = {
   // Media storage
   FILEBASE_S3_ACCESS_KEY?: string
   FILEBASE_S3_SECRET_KEY?: string
-  FILEBASE_S3_BUCKET_MUSIC?: string
   FILEBASE_S3_ENDPOINT?: string
   FILEBASE_S3_REGION?: string
   FILEBASE_MEDIA_BUCKET?: string
@@ -180,6 +179,7 @@ export type Env = {
   SPACES_VERIFIER_BASE_URL?: string
   SPACES_VERIFIER_AUTH_TOKEN?: string
   SPACES_VERIFIER_CHALLENGE_DOMAIN?: string
+  SPACES_CHALLENGE_TTL_HOURS?: string
   HNS_VERIFIER_BASE_URL?: string
   HNS_VERIFIER_AUTH_TOKEN?: string
   HNS_CHALLENGE_TTL_HOURS?: string
