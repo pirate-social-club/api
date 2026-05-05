@@ -352,7 +352,8 @@ export async function listModerationCases(input: {
       FROM moderation_cases mc
       LEFT JOIN posts p ON p.post_id = mc.post_id
       WHERE mc.community_id = ?1
-      ORDER BY CASE mc.status WHEN 'open' THEN 0 ELSE 1 END ASC, mc.updated_at DESC, mc.moderation_case_id DESC
+        AND mc.status = 'open'
+      ORDER BY mc.updated_at DESC, mc.moderation_case_id DESC
     `,
     args: [input.communityId],
   })

@@ -352,5 +352,18 @@ describe("moderation routes", () => {
     expect(approveBody.post?.analysis_state).toBe("allow")
     expect(approveBody.post?.content_safety_state).toBe("safe")
     expect(approveBody.actions[0]?.action_type).toBe("restore")
+
+    const casesAfterApprove = await app.request(
+      `http://pirate.test/communities/${community.communityId}/moderation/cases`,
+      {
+        headers: {
+          authorization: `Bearer ${owner.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(casesAfterApprove.status).toBe(200)
+    const casesAfterApproveBody = await json(casesAfterApprove) as { items: Array<{ moderation_case_id: string }> }
+    expect(casesAfterApproveBody.items).toHaveLength(0)
   })
 })
