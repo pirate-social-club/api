@@ -139,6 +139,51 @@ export function buildDefaultGraphicContentPolicy(communityId: string, updatedAt:
   }
 }
 
+export function buildDefaultVisualPolicySettings(communityId: string, updatedAt: string): Community["visual_policy_settings"] {
+  return {
+    ...defaultPolicyFields(communityId, updatedAt),
+    topless: "allow",
+    visible_nipples: "allow",
+    visible_buttocks: "queue",
+    visible_genitals: "reject",
+    bottomless_obscured: "queue",
+    implied_sexual_activity: "queue",
+    explicit_sexual_activity: "reject",
+    sexualized_contact: "reject",
+    masturbation: "reject",
+    oral_sex: "reject",
+    sex_toy_packaging: "queue",
+    sex_toy_visible: "queue",
+    sex_toy_in_use: "reject",
+    anime_manga: "allow",
+    furry_anthro: "allow",
+    fictional_nudity: "allow",
+    fictional_explicit_sex: "reject",
+    ambiguous_fictional_age_with_adult_content: "queue",
+    possible_minor_with_adult_content: "reject",
+    ai_generated_images: "allow",
+    ai_generated_adult_images: "queue",
+    deepfake_or_face_swap_risk: "reject",
+    celebrity_adult_likeness: "reject",
+    voyeuristic_or_hidden_camera: "reject",
+    watermark: "allow",
+    adult_platform_watermark: "queue",
+    product_promotion: "allow_with_disclosure",
+    affiliate_or_sales_link: "allow_with_disclosure",
+    qr_code: "queue",
+    payment_handle: "queue",
+    urls_in_image: "queue",
+    weapons: "reject",
+    gore_or_injury: "reject",
+    drugs: "queue",
+    hate_symbols: "reject",
+    personal_documents: "queue",
+    uncertain_age_with_adult_content: "queue",
+    low_quality_adult_image: "queue",
+    model_uncertain: "queue",
+  }
+}
+
 export function buildDefaultMotionMediaPolicy(communityId: string, updatedAt: string): Community["motion_media_policy"] {
   return {
     ...defaultPolicyFields(communityId, updatedAt),

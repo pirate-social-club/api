@@ -455,6 +455,136 @@ membership_mode: "request",
     expect(fetchedBody.openai_moderation_settings?.scan_link_preview_text).toBe(false)
   })
 
+  test("community owner can persist visual policy settings", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "community-visual-policy-user")
+    await completeUniqueHumanVerification(ctx.env, session.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Visual Club",
+membership_mode: "request",
+      handle_policy: {
+        policy_template: "standard",
+      },
+    }, ctx.env, session.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: {
+        id: string
+      }
+    }
+
+    const visualPolicySettings = {
+      topless: "allow",
+      visible_nipples: "allow",
+      visible_buttocks: "queue",
+      visible_genitals: "reject",
+      bottomless_obscured: "queue",
+      implied_sexual_activity: "queue",
+      explicit_sexual_activity: "reject",
+      sexualized_contact: "reject",
+      masturbation: "reject",
+      oral_sex: "reject",
+      sex_toy_packaging: "queue",
+      sex_toy_visible: "queue",
+      sex_toy_in_use: "reject",
+      anime_manga: "allow",
+      furry_anthro: "allow",
+      fictional_nudity: "allow",
+      fictional_explicit_sex: "queue",
+      ambiguous_fictional_age_with_adult_content: "queue",
+      possible_minor_with_adult_content: "reject",
+      ai_generated_images: "allow",
+      ai_generated_adult_images: "queue",
+      deepfake_or_face_swap_risk: "reject",
+      celebrity_adult_likeness: "reject",
+      voyeuristic_or_hidden_camera: "reject",
+      watermark: "allow",
+      adult_platform_watermark: "queue",
+      product_promotion: "allow_with_disclosure",
+      affiliate_or_sales_link: "queue",
+      qr_code: "reject",
+      payment_handle: "queue",
+      urls_in_image: "queue",
+      weapons: "reject",
+      gore_or_injury: "reject",
+      drugs: "queue",
+      hate_symbols: "reject",
+      personal_documents: "queue",
+      uncertain_age_with_adult_content: "queue",
+      low_quality_adult_image: "queue",
+      model_uncertain: "queue",
+    } as const
+
+    const visualPolicyUpdate = await app.request(
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/visual-policy`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${session.accessToken}`,
+        },
+        body: settingsJson({
+          visual_policy_settings: visualPolicySettings,
+        }),
+      },
+      ctx.env,
+    )
+    expect(visualPolicyUpdate.status).toBe(200)
+    const updatedCommunity = await json(visualPolicyUpdate) as {
+      visual_policy_settings: {
+        fictional_explicit_sex: string
+        product_promotion: string
+        qr_code: string
+        voyeuristic_or_hidden_camera: string
+      }
+    }
+    expect(updatedCommunity.visual_policy_settings.fictional_explicit_sex).toBe("queue")
+    expect(updatedCommunity.visual_policy_settings.product_promotion).toBe("allow_with_disclosure")
+    expect(updatedCommunity.visual_policy_settings.qr_code).toBe("reject")
+    expect(updatedCommunity.visual_policy_settings.voyeuristic_or_hidden_camera).toBe("reject")
+
+    const invalidFloorUpdate = await app.request(
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/visual-policy`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${session.accessToken}`,
+        },
+        body: settingsJson({
+          visual_policy_settings: {
+            ...visualPolicySettings,
+            voyeuristic_or_hidden_camera: "queue",
+          },
+        }),
+      },
+      ctx.env,
+    )
+    expect(invalidFloorUpdate.status).toBe(400)
+
+    const fetchedCommunity = await app.request(
+      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}`,
+      {
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(fetchedCommunity.status).toBe(200)
+    const fetchedBody = await json(fetchedCommunity) as {
+      visual_policy_settings: {
+        fictional_explicit_sex: string
+        qr_code: string
+      }
+    }
+    expect(fetchedBody.visual_policy_settings.fictional_explicit_sex).toBe("queue")
+    expect(fetchedBody.visual_policy_settings.qr_code).toBe("reject")
+  })
+
   test("community owner can persist membership gates settings", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup

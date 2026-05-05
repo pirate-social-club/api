@@ -121,6 +121,7 @@ type CommunitySourcePolicy = ContractCommunity["source_policy"]
 type CommunityCaptureEditPolicy = ContractCommunity["capture_edit_policy"]
 type CommunityAdultContentPolicy = ContractCommunity["adult_content_policy"]
 type CommunityGraphicContentPolicy = ContractCommunity["graphic_content_policy"]
+type CommunityVisualPolicySettings = ContractCommunity["visual_policy_settings"]
 type CommunityMotionMediaPolicy = ContractCommunity["motion_media_policy"]
 type CommunityLanguagePolicy = ContractCommunity["language_policy"]
 type CommunityCivilityPolicy = ContractCommunity["civility_policy"]
@@ -443,6 +444,7 @@ export type Community = {
   capture_edit_policy: CommunityCaptureEditPolicy
   adult_content_policy: CommunityAdultContentPolicy
   graphic_content_policy: CommunityGraphicContentPolicy
+  visual_policy_settings: CommunityVisualPolicySettings
   motion_media_policy: CommunityMotionMediaPolicy
   language_policy: CommunityLanguagePolicy
   civility_policy: CommunityCivilityPolicy

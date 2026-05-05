@@ -39,6 +39,10 @@ export type UpdateCommunitySafetyRequestBody = {
   openai_moderation_settings: NonNullable<Community["openai_moderation_settings"]>
 }
 
+export type UpdateCommunityVisualPolicyRequestBody = {
+  visual_policy_settings: Omit<Community["visual_policy_settings"], "community" | "policy_origin">
+}
+
 export type UpdateCommunityGatesRequestBody = {
   membership_mode: "request" | "gated"
   default_age_gate_policy?: "none" | "18_plus" | null
@@ -115,6 +119,18 @@ function isEscalationDecisionLevel(
   return value === "review" || value === "disallow"
 }
 
+function isVisualPolicyAction(value: unknown): value is "allow" | "queue" | "reject" {
+  return value === "allow" || value === "queue" || value === "reject"
+}
+
+function isVisualEscalationAction(value: unknown): value is "queue" | "reject" {
+  return value === "queue" || value === "reject"
+}
+
+function isVisualDisclosureAction(value: unknown): value is "allow" | "allow_with_disclosure" | "queue" | "reject" {
+  return value === "allow" || value === "allow_with_disclosure" || value === "queue" || value === "reject"
+}
+
 export function assertUpdateCommunitySafetyRequest(
   body: UpdateCommunitySafetyRequestBody | null,
 ): asserts body is UpdateCommunitySafetyRequestBody {
@@ -168,6 +184,66 @@ export function assertUpdateCommunitySafetyRequest(
     || typeof openai.scan_images !== "boolean"
   ) {
     throw badRequestError("Invalid openai_moderation_settings payload")
+  }
+}
+
+export function assertUpdateCommunityVisualPolicyRequest(
+  body: UpdateCommunityVisualPolicyRequestBody | null,
+): asserts body is UpdateCommunityVisualPolicyRequestBody {
+  if (!body || !body.visual_policy_settings) {
+    throw badRequestError("Invalid community visual policy payload")
+  }
+
+  const settings = body.visual_policy_settings as Record<string, unknown>
+  const actionKeys = [
+    "topless",
+    "visible_nipples",
+    "visible_buttocks",
+    "visible_genitals",
+    "bottomless_obscured",
+    "implied_sexual_activity",
+    "explicit_sexual_activity",
+    "sexualized_contact",
+    "masturbation",
+    "oral_sex",
+    "sex_toy_packaging",
+    "sex_toy_visible",
+    "sex_toy_in_use",
+    "anime_manga",
+    "furry_anthro",
+    "fictional_nudity",
+    "fictional_explicit_sex",
+    "ai_generated_images",
+    "ai_generated_adult_images",
+    "watermark",
+    "adult_platform_watermark",
+    "urls_in_image",
+    "weapons",
+    "gore_or_injury",
+    "drugs",
+  ]
+  const escalationKeys = [
+    "ambiguous_fictional_age_with_adult_content",
+    "deepfake_or_face_swap_risk",
+    "celebrity_adult_likeness",
+    "qr_code",
+    "payment_handle",
+    "hate_symbols",
+    "personal_documents",
+    "uncertain_age_with_adult_content",
+    "low_quality_adult_image",
+    "model_uncertain",
+  ]
+
+  if (
+    actionKeys.some((key) => !isVisualPolicyAction(settings[key]))
+    || escalationKeys.some((key) => !isVisualEscalationAction(settings[key]))
+    || !isVisualDisclosureAction(settings.product_promotion)
+    || !isVisualDisclosureAction(settings.affiliate_or_sales_link)
+    || settings.possible_minor_with_adult_content !== "reject"
+    || settings.voyeuristic_or_hidden_camera !== "reject"
+  ) {
+    throw badRequestError("Invalid visual_policy_settings payload")
   }
 }
 

@@ -7,11 +7,13 @@ import {
   updateCommunityReferenceLinks,
   updateCommunityRules,
   updateCommunitySafety,
+  updateCommunityVisualPolicy,
   type UpdateCommunityGatesRequestBody,
   type UpdateCommunityLabelPolicyRequestBody,
   type UpdateCommunityReferenceLinksRequestBody,
   type UpdateCommunityRulesRequestBody,
   type UpdateCommunitySafetyRequestBody,
+  type UpdateCommunityVisualPolicyRequestBody,
 } from "../lib/communities/create/service"
 import {
   getCommunityMachineAccessPolicy,
@@ -114,6 +116,20 @@ export function registerCommunitySettingsRoutes(communities: Hono<AuthenticatedE
     const body = await requireJsonBody<UpdateCommunitySafetyRequestBody>(c, "Invalid community safety payload")
 
     const result = await updateCommunitySafety({
+      env: c.env,
+      actor,
+      communityId,
+      body,
+      communityRepository,
+    })
+    return c.json(serializeCommunity(result), 200)
+  })
+
+  communities.post("/:communityId/visual-policy", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const body = await requireJsonBody<UpdateCommunityVisualPolicyRequestBody>(c, "Invalid community visual policy payload")
+
+    const result = await updateCommunityVisualPolicy({
       env: c.env,
       actor,
       communityId,

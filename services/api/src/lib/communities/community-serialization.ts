@@ -12,6 +12,7 @@ import {
   buildDefaultCaptureEditPolicy,
   buildDefaultAdultContentPolicy,
   buildDefaultGraphicContentPolicy,
+  buildDefaultVisualPolicySettings,
   buildDefaultMotionMediaPolicy,
   buildDefaultLanguagePolicy,
   buildDefaultProvenancePolicy,
@@ -317,6 +318,7 @@ export function serializeCommunity(env: Env, row: CommunityRow, local: LocalComm
   const displayName = local?.display_name ?? row.display_name
   const adultContentPolicy = storedSettings.adult_content_policy as Community["adult_content_policy"] | undefined
   const graphicContentPolicy = storedSettings.graphic_content_policy as Community["graphic_content_policy"] | undefined
+  const visualPolicySettings = storedSettings.visual_policy_settings as Community["visual_policy_settings"] | undefined
   const civilityPolicy = storedSettings.civility_policy as Community["civility_policy"] | undefined
   const openAIModerationSettings = storedSettings.openai_moderation_settings as {
     scan_titles: boolean
@@ -376,6 +378,8 @@ export function serializeCommunity(env: Env, row: CommunityRow, local: LocalComm
       adultContentPolicy ?? buildDefaultAdultContentPolicy(row.community_id, policyUpdatedAt, defaultAgeGatePolicy),
     graphic_content_policy:
       graphicContentPolicy ?? buildDefaultGraphicContentPolicy(row.community_id, policyUpdatedAt),
+    visual_policy_settings:
+      visualPolicySettings ?? buildDefaultVisualPolicySettings(row.community_id, policyUpdatedAt),
     motion_media_policy: buildDefaultMotionMediaPolicy(row.community_id, policyUpdatedAt),
     language_policy: buildDefaultLanguagePolicy(row.community_id, policyUpdatedAt),
     civility_policy: civilityPolicy ?? buildDefaultCivilityPolicy(row.community_id, policyUpdatedAt),

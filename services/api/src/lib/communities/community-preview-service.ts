@@ -282,6 +282,30 @@ export async function getPublicCommunityPreview(input: {
   return await buildPreviewForViewer(input)
 }
 
+export async function getPublicCommunityPreviewFromCommunityDb(input: {
+  env: Env
+  client: Awaited<ReturnType<typeof openCommunityDb>>["client"]
+  communityId: string
+  locale?: string | null
+  communityRepository: CommunityPreviewRepository
+}): Promise<CommunityPreview> {
+  const community = await getActiveCommunityForPreview(input.communityRepository, input.communityId)
+  const gatePolicy = await getMembershipGatePolicy(input.client, input.communityId)
+  return await buildCommunityPreview({
+    env: input.env,
+    client: input.client,
+    communityId: input.communityId,
+    communityDisplayName: community.display_name,
+    communityCreatedAt: community.created_at,
+    namespaceVerificationId: community.namespace_verification_id ?? null,
+    routeSlug: community.route_slug ?? null,
+    locale: input.locale ?? null,
+    gatePolicy,
+    viewerMembershipStatus: "not_member",
+    viewerFollowing: false,
+  })
+}
+
 async function listPublicCommunityRules(input: {
   client: Awaited<ReturnType<typeof openCommunityDb>>["client"]
   communityId: string
