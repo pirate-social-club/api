@@ -1,5 +1,11 @@
 import { detectSupportedEmbedTarget } from "./embed-url-detection"
 import { fetchLinkPreviewMetadata } from "./link-preview-fetcher"
+import {
+  extractTweetMediaUrl,
+  extractTweetText,
+  fetchXPostOEmbed,
+  fetchYouTubeOEmbed,
+} from "./link-embed-preview"
 import { hydrateGenericLinkEnrichment } from "./link-enrichment/service"
 import { upsertPostEmbed, refreshPostEmbedsProjection } from "./post-embed-store"
 import { updatePostLinkPreviewMetadata } from "./community-post-store"
@@ -15,102 +21,8 @@ type KalshiMarketEmbed = Extract<PostEmbed, { provider: "kalshi" }>
 type PolymarketMarketEmbed = Extract<PostEmbed, { provider: "polymarket" }>
 type PredictionMarketPreview = KalshiMarketEmbed["preview"] | PolymarketMarketEmbed["preview"]
 
-type XPostOEmbedResponse = {
-  html?: unknown
-  cache_age?: unknown
-  author_name?: unknown
-  author_url?: unknown
-}
-type YouTubeOEmbedResponse = {
-  title?: unknown
-  author_name?: unknown
-  author_url?: unknown
-  thumbnail_url?: unknown
-  thumbnail_width?: unknown
-  thumbnail_height?: unknown
-  html?: unknown
-}
-
-const X_OEMBED_TIMEOUT_MS = 8_000
-const YOUTUBE_OEMBED_TIMEOUT_MS = 8_000
 const MARKET_EMBED_TIMEOUT_MS = 8_000
 const MARKET_CHART_DAYS = 30
-
-function decodeHtmlEntities(value: string): string {
-  return value.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/giu, (match, entity: string) => {
-    const normalized = entity.toLowerCase()
-    if (normalized.startsWith("#x")) {
-      const codePoint = Number.parseInt(normalized.slice(2), 16)
-      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : match
-    }
-    if (normalized.startsWith("#")) {
-      const codePoint = Number.parseInt(normalized.slice(1), 10)
-      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : match
-    }
-    switch (normalized) {
-      case "amp":
-        return "&"
-      case "apos":
-        return "'"
-      case "gt":
-        return ">"
-      case "lt":
-        return "<"
-      case "quot":
-        return '"'
-      default:
-        return match
-    }
-  })
-}
-
-function stripTags(value: string): string {
-  return decodeHtmlEntities(value.replace(/<[^>]*>/gu, " "))
-    .replace(/\s+/gu, " ")
-    .trim()
-}
-
-function sanitizeXPostOEmbedHtml(value: unknown): string | null {
-  const html = String(value ?? "").trim()
-  if (!html || !html.includes("twitter-tweet")) {
-    return null
-  }
-
-  return html.replace(/<script\b[\s\S]*?<\/script>/giu, "").trim()
-}
-
-function escapeHtmlAttribute(value: string): string {
-  return value
-    .replace(/&/gu, "&amp;")
-    .replace(/"/gu, "&quot;")
-    .replace(/</gu, "&lt;")
-    .replace(/>/gu, "&gt;")
-}
-
-function sanitizeYouTubeVideoOEmbedHtml(input: {
-  title: string | null
-  videoId: string
-}): string {
-  const title = escapeHtmlAttribute(input.title || "YouTube video")
-  const videoId = encodeURIComponent(input.videoId)
-  return `<iframe title="${title}" src="https://www.youtube-nocookie.com/embed/${videoId}" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>`
-}
-
-function parseCacheAge(value: unknown): number | null {
-  const parsed = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10)
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
-}
-
-function extractTweetText(html: string): string | null {
-  const paragraphMatch = /<p\b[^>]*>([\s\S]*?)<\/p>/iu.exec(html)
-  const text = stripTags(paragraphMatch?.[1] ?? "")
-  return text ? text.slice(0, 500) : null
-}
-
-function extractTweetMediaUrl(html: string): string | null {
-  const match = html.match(/https?:\/\/pic\.(?:twitter|x)\.com\/[a-zA-Z0-9]+/iu)
-  return match?.[0] ?? null
-}
 
 function numberField(value: unknown): number | null {
   const parsed = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10)
@@ -671,101 +583,6 @@ async function hydratePolymarketMarketEmbed(input: {
   })
 
   return input.target.canonicalUrl
-}
-
-async function fetchXPostOEmbed(input: {
-  canonicalUrl: string
-  fetcher: typeof fetch
-}): Promise<{
-  html: string
-  cacheAge: number | null
-  authorName: string | null
-  authorUrl: string | null
-} | null> {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), X_OEMBED_TIMEOUT_MS)
-  const url = new URL("https://publish.x.com/oembed")
-  url.searchParams.set("url", input.canonicalUrl)
-  url.searchParams.set("omit_script", "1")
-  url.searchParams.set("dnt", "true")
-  url.searchParams.set("theme", "dark")
-
-  try {
-    const response = await input.fetcher(url.href, {
-      headers: {
-        accept: "application/json",
-        "user-agent": "Pirate embed hydrator",
-      },
-      signal: controller.signal,
-    })
-    if (!response.ok) {
-      return null
-    }
-
-    const body = await response.json() as XPostOEmbedResponse
-    const html = sanitizeXPostOEmbedHtml(body.html)
-    if (!html) {
-      return null
-    }
-
-    return {
-      html,
-      cacheAge: parseCacheAge(body.cache_age),
-      authorName: String(body.author_name ?? "").trim() || null,
-      authorUrl: String(body.author_url ?? "").trim() || null,
-    }
-  } finally {
-    clearTimeout(timeout)
-  }
-}
-
-async function fetchYouTubeOEmbed(input: {
-  canonicalUrl: string
-  videoId: string
-  fetcher: typeof fetch
-}): Promise<{
-  html: string
-  cacheAge: number | null
-  preview: YouTubeVideoEmbed["preview"]
-} | null> {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), YOUTUBE_OEMBED_TIMEOUT_MS)
-  const url = new URL("https://www.youtube.com/oembed")
-  url.searchParams.set("url", input.canonicalUrl)
-  url.searchParams.set("format", "json")
-
-  try {
-    const response = await input.fetcher(url.href, {
-      headers: {
-        accept: "application/json",
-        "user-agent": "Pirate embed hydrator",
-      },
-      signal: controller.signal,
-    })
-    if (!response.ok) {
-      return null
-    }
-
-    const body = await response.json() as YouTubeOEmbedResponse
-    const title = String(body.title ?? "").trim() || null
-    return {
-      html: sanitizeYouTubeVideoOEmbedHtml({
-        title,
-        videoId: input.videoId,
-      }),
-      cacheAge: parseCacheAge(response.headers.get("cache-control")?.match(/max-age=(\d+)/iu)?.[1] ?? null),
-      preview: {
-        title,
-        author_name: String(body.author_name ?? "").trim() || null,
-        author_url: String(body.author_url ?? "").trim() || null,
-        thumbnail_url: String(body.thumbnail_url ?? "").trim() || null,
-        thumbnail_width: numberField(body.thumbnail_width),
-        thumbnail_height: numberField(body.thumbnail_height),
-      },
-    }
-  } finally {
-    clearTimeout(timeout)
-  }
 }
 
 async function hydrateXPostEmbed(input: {

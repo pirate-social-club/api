@@ -14,6 +14,8 @@ import type { CreatePostRequest } from "../types"
 import { decodePublicPostId } from "../lib/public-ids"
 import { writeAuditEventForEnv } from "../lib/audit"
 import { nowIso } from "../lib/helpers"
+import { resolveComposerLinkPreview } from "../lib/posts/link-embed-preview"
+import type { ComposerLinkPreviewResult } from "../lib/posts/link-embed-preview"
 import { normalizeLinkUrl } from "../lib/posts/link-enrichment/url-normalization"
 import { upsertLinkEnrichment } from "../lib/posts/link-enrichment/repository"
 import { getControlPlaneClient } from "../lib/runtime-deps"
@@ -25,6 +27,34 @@ import {
 type LinkPreviewOverrideRequest = {
   image_url?: string | null
   title?: string | null
+}
+
+type ComposerLinkPreviewResponse = {
+  kind: "embed" | "link"
+  provider: "x" | "youtube" | "kalshi" | "polymarket" | null
+  canonical_url: string
+  original_url: string
+  state: "embed" | "preview" | "unavailable"
+  title: string | null
+  image_url: string | null
+  preview: Record<string, unknown> | null
+  oembed_html: string | null
+  oembed_cache_age: number | null
+}
+
+function serializeComposerLinkPreview(preview: ComposerLinkPreviewResult): ComposerLinkPreviewResponse {
+  return {
+    kind: preview.kind,
+    provider: preview.provider,
+    canonical_url: preview.canonicalUrl,
+    original_url: preview.originalUrl,
+    state: preview.state,
+    title: preview.title,
+    image_url: preview.imageUrl,
+    preview: preview.preview,
+    oembed_html: preview.oembedHtml,
+    oembed_cache_age: preview.oembedCacheAge,
+  }
 }
 
 function requirePreviewTitle(value: string | null | undefined): string {
@@ -223,6 +253,42 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
       })
     }
     return c.json(serializeDeletedPostResponse(result.post), 200)
+  })
+
+  communities.get("/:communityId/link-preview", async (c) => {
+    const { communityId } = await getResolvedCommunityRouteContext(c)
+    const url = c.req.query("url")
+    if (!url || !url.trim()) {
+      throw badRequestError("url is required")
+    }
+
+    let normalizedUrl: URL
+    try {
+      normalizedUrl = new URL(url.trim())
+    } catch {
+      throw badRequestError("url must be a valid HTTP or HTTPS URL")
+    }
+    if (normalizedUrl.protocol !== "http:" && normalizedUrl.protocol !== "https:") {
+      throw badRequestError("url must be a valid HTTP or HTTPS URL")
+    }
+
+    const preview = await resolveComposerLinkPreview({
+      url: normalizedUrl.href,
+      fetcher: fetch,
+    })
+
+    return c.json(preview ? serializeComposerLinkPreview(preview) : {
+      kind: "link",
+      provider: null,
+      canonical_url: normalizedUrl.href,
+      original_url: normalizedUrl.href,
+      state: "preview",
+      title: null,
+      image_url: null,
+      preview: null,
+      oembed_html: null,
+      oembed_cache_age: null,
+    })
   })
 
   communities.get("/:communityId/posts", async (c) => {
