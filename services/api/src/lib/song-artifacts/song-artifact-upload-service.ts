@@ -1,5 +1,9 @@
 import type { UserRepository } from "../auth/repositories"
 import { openCommunityDb } from "../communities/community-db-factory"
+import {
+  OWNER_OR_ADMIN_ROLE,
+  hasCommunityRole,
+} from "../communities/membership/membership-state-store"
 import { badRequestError, notFoundError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
@@ -71,7 +75,7 @@ export async function createSongArtifactUpload(input: {
   try {
     const membership = await requireMemberAccess(db.client, input.communityId, input.userId)
     await requireVerifiedHuman(input.userRepository, input.userId, {
-      bypassForCommunityOwner: membership.role_status === "active",
+      bypassForCommunityOwner: hasCommunityRole(membership, OWNER_OR_ADMIN_ROLE),
     })
 
     const client = getControlPlaneClient(input.env)
@@ -106,7 +110,7 @@ export async function uploadSongArtifactContent(input: {
   try {
     const membership = await requireMemberAccess(db.client, input.communityId, input.userId)
     await requireVerifiedHuman(input.userRepository, input.userId, {
-      bypassForCommunityOwner: membership.role_status === "active",
+      bypassForCommunityOwner: hasCommunityRole(membership, OWNER_OR_ADMIN_ROLE),
     })
 
     const client = getControlPlaneClient(input.env)

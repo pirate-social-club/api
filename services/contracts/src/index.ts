@@ -223,15 +223,13 @@ export type VerySessionBinding = {
 
 export type RequestedVerificationCapability = "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender";
 
-export type VerificationRequirement =
-  | {
-    proof_type: "minimum_age";
-    minimum_age?: number;
-  }
-  | {
-    proof_type: "nationality";
-    required_values?: string[];
-  };
+export type VerificationRequirement = ({
+  proof_type: "minimum_age";
+  minimum_age?: number;
+} | {
+  proof_type: "nationality";
+  required_values?: Array<string>;
+});
 
 export type VerificationIntent = "profile_verification" | "community_creation" | "community_join" | "post_access_18_plus" | "commerce_pricing" | "qualifier_disclosure";
 
@@ -461,7 +459,7 @@ export type NamespaceVerificationSession = {
   family: "hns" | "spaces";
   submitted_root_label: string;
   normalized_root_label?: string | null;
-  status: "draft" | "inspecting" | "challenge_required" | "challenge_pending" | "verifying" | "verified" | "failed" | "expired" | "disputed";
+  status: "draft" | "inspecting" | "dns_setup_required" | "challenge_required" | "challenge_pending" | "verifying" | "verified" | "failed" | "expired" | "disputed";
   challenge_kind?: "dns_txt" | "fabric_txt_publish" | null;
   challenge_host?: string | null;
   challenge_txt_value?: string | null;
@@ -1172,6 +1170,10 @@ export type Post = {
   label?: string | null;
   post_type: "text" | "image" | "video" | "link" | "song";
   status: "draft" | "published" | "hidden" | "removed" | "deleted";
+  comments_locked?: boolean;
+  comments_locked_at?: number | null;
+  comments_locked_by_user?: string | null;
+  comments_lock_reason?: string | null;
   visibility: "public" | "members_only";
   title?: string | null;
   body?: string | null;
@@ -1179,7 +1181,7 @@ export type Post = {
   link_url?: string | null;
   link_og_image_url?: string | null;
   link_og_title?: string | null;
-  link_enrichment?: Record<string, unknown> | null;
+  link_enrichment?: (Record<string, unknown>) | null;
   embeds?: Array<PostEmbed> | null;
   media_refs?: Array<MediaDescriptor>;
   creator_relation?: PostCreatorRelation | null;
@@ -1198,6 +1200,12 @@ export type Post = {
   content_safety_state: "pending" | "safe" | "sensitive" | "adult";
   age_gate_policy: "none" | "18_plus";
   created: number;
+};
+
+export type DeletedPostResponse = {
+  id: string;
+  object: "post";
+  deleted: true;
 };
 
 export type Comment = {
@@ -1219,6 +1227,10 @@ export type Comment = {
   agent_ownership_provider_snapshot?: AgentOwnershipProvider | null;
   body: string | null;
   status: "published" | "hidden" | "removed" | "deleted";
+  replies_locked?: boolean;
+  replies_locked_at?: number | null;
+  replies_locked_by_user?: string | null;
+  replies_lock_reason?: string | null;
   depth: number;
   direct_reply_count: number;
   descendant_count: number;
@@ -1271,12 +1283,6 @@ export type CommentContext = {
 export type PostVoteResponse = {
   post: string;
   value: -1 | 1;
-};
-
-export type DeletedPostResponse = {
-  id: string;
-  object: "post";
-  deleted: true;
 };
 
 export type CommentVoteResponse = {
@@ -1361,9 +1367,9 @@ export type ModerationCasePostPreview = {
   author_handle: string | null;
 };
 
-export type ModerationCaseListItem = ModerationCase & {
+export type ModerationCaseListItem = (ModerationCase & {
   post: ModerationCasePostPreview | null;
-};
+});
 
 export type ModerationCaseDetail = {
   case: ModerationCase;
@@ -1396,8 +1402,8 @@ export type LocalizedPostResponse = {
   comment_count?: number;
   viewer_vote: -1 | 1 | null;
   viewer_is_author?: boolean;
-  viewer_reaction_kinds: Array<"like">;
   age_gate_viewer_state?: "proof_required" | "verified_allowed" | null;
+  viewer_reaction_kinds: Array<"like">;
   resolved_locale: string;
   translation_state: "ready" | "pending" | "same_language" | "policy_blocked";
   machine_translated: boolean;
@@ -1816,54 +1822,6 @@ type CommunityGraphicContentPolicy = {
   animal_harm: CommunityModerationDecisionLevel;
 };
 
-type CommunityVisualPolicyAction = "allow" | "queue" | "reject";
-
-type CommunityVisualPolicyDisclosureAction = "allow" | "allow_with_disclosure" | "queue" | "reject";
-
-type CommunityVisualPolicySettings = {
-  community: string;
-  policy_origin: CommunityPolicyOrigin;
-  topless: CommunityVisualPolicyAction;
-  visible_nipples: CommunityVisualPolicyAction;
-  visible_buttocks: CommunityVisualPolicyAction;
-  visible_genitals: CommunityVisualPolicyAction;
-  bottomless_obscured: CommunityVisualPolicyAction;
-  implied_sexual_activity: CommunityVisualPolicyAction;
-  explicit_sexual_activity: CommunityVisualPolicyAction;
-  sexualized_contact: CommunityVisualPolicyAction;
-  masturbation: CommunityVisualPolicyAction;
-  oral_sex: CommunityVisualPolicyAction;
-  sex_toy_packaging: CommunityVisualPolicyAction;
-  sex_toy_visible: CommunityVisualPolicyAction;
-  sex_toy_in_use: CommunityVisualPolicyAction;
-  anime_manga: CommunityVisualPolicyAction;
-  furry_anthro: CommunityVisualPolicyAction;
-  fictional_nudity: CommunityVisualPolicyAction;
-  fictional_explicit_sex: CommunityVisualPolicyAction;
-  ambiguous_fictional_age_with_adult_content: Exclude<CommunityVisualPolicyAction, "allow">;
-  possible_minor_with_adult_content: "reject";
-  ai_generated_images: CommunityVisualPolicyAction;
-  ai_generated_adult_images: CommunityVisualPolicyAction;
-  deepfake_or_face_swap_risk: Exclude<CommunityVisualPolicyAction, "allow">;
-  celebrity_adult_likeness: Exclude<CommunityVisualPolicyAction, "allow">;
-  voyeuristic_or_hidden_camera: "reject";
-  watermark: CommunityVisualPolicyAction;
-  adult_platform_watermark: CommunityVisualPolicyAction;
-  product_promotion: CommunityVisualPolicyDisclosureAction;
-  affiliate_or_sales_link: CommunityVisualPolicyDisclosureAction;
-  qr_code: Exclude<CommunityVisualPolicyAction, "allow">;
-  payment_handle: Exclude<CommunityVisualPolicyAction, "allow">;
-  urls_in_image: CommunityVisualPolicyAction;
-  weapons: CommunityVisualPolicyAction;
-  gore_or_injury: CommunityVisualPolicyAction;
-  drugs: CommunityVisualPolicyAction;
-  hate_symbols: Exclude<CommunityVisualPolicyAction, "allow">;
-  personal_documents: Exclude<CommunityVisualPolicyAction, "allow">;
-  uncertain_age_with_adult_content: Exclude<CommunityVisualPolicyAction, "allow">;
-  low_quality_adult_image: Exclude<CommunityVisualPolicyAction, "allow">;
-  model_uncertain: Exclude<CommunityVisualPolicyAction, "allow">;
-};
-
 type CommunityIdentifiedPersonMediaScope = "subject_only" | "subject_or_authorized" | "public_source_allowed";
 
 type CommunityImageAuthenticityPolicySettings = {
@@ -2090,6 +2048,54 @@ type CommunityVideoAuthenticityPolicySettings = {
   allow_ai_frame_interpolation: boolean;
   allow_generative_editing: boolean;
   allow_ai_generated: boolean;
+};
+
+type CommunityVisualPolicyAction = "allow" | "queue" | "reject";
+
+type CommunityVisualPolicyDisclosureAction = "allow" | "allow_with_disclosure" | "queue" | "reject";
+
+type CommunityVisualPolicySettings = {
+  community: string;
+  policy_origin: CommunityPolicyOrigin;
+  topless: CommunityVisualPolicyAction;
+  visible_nipples: CommunityVisualPolicyAction;
+  visible_buttocks: CommunityVisualPolicyAction;
+  visible_genitals: CommunityVisualPolicyAction;
+  bottomless_obscured: CommunityVisualPolicyAction;
+  implied_sexual_activity: CommunityVisualPolicyAction;
+  explicit_sexual_activity: CommunityVisualPolicyAction;
+  sexualized_contact: CommunityVisualPolicyAction;
+  masturbation: CommunityVisualPolicyAction;
+  oral_sex: CommunityVisualPolicyAction;
+  sex_toy_packaging: CommunityVisualPolicyAction;
+  sex_toy_visible: CommunityVisualPolicyAction;
+  sex_toy_in_use: CommunityVisualPolicyAction;
+  anime_manga: CommunityVisualPolicyAction;
+  furry_anthro: CommunityVisualPolicyAction;
+  fictional_nudity: CommunityVisualPolicyAction;
+  fictional_explicit_sex: CommunityVisualPolicyAction;
+  ambiguous_fictional_age_with_adult_content: "queue" | "reject";
+  possible_minor_with_adult_content: "reject";
+  ai_generated_images: CommunityVisualPolicyAction;
+  ai_generated_adult_images: CommunityVisualPolicyAction;
+  deepfake_or_face_swap_risk: "queue" | "reject";
+  celebrity_adult_likeness: "queue" | "reject";
+  voyeuristic_or_hidden_camera: "reject";
+  watermark: CommunityVisualPolicyAction;
+  adult_platform_watermark: CommunityVisualPolicyAction;
+  product_promotion: CommunityVisualPolicyDisclosureAction;
+  affiliate_or_sales_link: CommunityVisualPolicyDisclosureAction;
+  qr_code: "queue" | "reject";
+  payment_handle: "queue" | "reject";
+  urls_in_image: CommunityVisualPolicyAction;
+  weapons: CommunityVisualPolicyAction;
+  gore_or_injury: CommunityVisualPolicyAction;
+  drugs: CommunityVisualPolicyAction;
+  hate_symbols: "queue" | "reject";
+  personal_documents: "queue" | "reject";
+  uncertain_age_with_adult_content: "queue" | "reject";
+  low_quality_adult_image: "queue" | "reject";
+  model_uncertain: "queue" | "reject";
 };
 
 type CreateCentralizedCommunityRequest = (CreateCommunityRequestBase & {
@@ -2383,6 +2389,21 @@ type ImageMediaDescriptor = {
   height?: number | null;
 };
 
+type KalshiMarketEmbed = {
+  embed: string;
+  embed_key: string;
+  provider: "kalshi";
+  provider_ref?: string | null;
+  canonical_url: string;
+  original_url: string;
+  state: "pending" | "preview" | "embed" | "unavailable";
+  preview?: PredictionMarketEmbedPreview | null;
+  oembed_html?: string | null;
+  oembed_cache_age?: number | null;
+  unavailable_reason?: "deleted" | "withheld" | "private" | "unsupported" | "unknown" | null;
+  last_checked_at?: number | null;
+};
+
 type MajeurGovernanceBackend = {
   governance_mode: "majeur";
   governance_chain: number;
@@ -2533,6 +2554,21 @@ type NamespaceAttachmentInput = {
   route_family?: string | null;
 };
 
+type PolymarketMarketEmbed = {
+  embed: string;
+  embed_key: string;
+  provider: "polymarket";
+  provider_ref?: string | null;
+  canonical_url: string;
+  original_url: string;
+  state: "pending" | "preview" | "embed" | "unavailable";
+  preview?: PredictionMarketEmbedPreview | null;
+  oembed_html?: string | null;
+  oembed_cache_age?: number | null;
+  unavailable_reason?: "deleted" | "withheld" | "private" | "unsupported" | "unknown" | null;
+  last_checked_at?: number | null;
+};
+
 type PostCreatorRelation = "captured" | "created" | "subject" | "authorized_repost" | "fan_work" | "found";
 
 type PostEmbed = (XPostEmbed | YouTubeVideoEmbed | KalshiMarketEmbed | PolymarketMarketEmbed);
@@ -2543,6 +2579,41 @@ type PostLabel = {
   label: string;
   color_token?: string | null;
   status: "active" | "archived";
+};
+
+type PredictionMarketChartPoint = {
+  ts: number;
+  price?: number | null;
+  volume?: number | null;
+  open_interest?: number | null;
+};
+
+type PredictionMarketEmbedPreview = {
+  question?: string | null;
+  title?: string | null;
+  image_url?: string | null;
+  yes_price?: number | null;
+  yes_bid?: number | null;
+  yes_ask?: number | null;
+  no_bid?: number | null;
+  no_ask?: number | null;
+  last_price?: number | null;
+  volume?: number | null;
+  volume_24h?: number | null;
+  liquidity?: number | null;
+  open_interest?: number | null;
+  status?: string | null;
+  resolution?: "yes" | "no" | null;
+  resolved_outcome?: string | null;
+  close_time?: string | null;
+  updated_at?: string | null;
+  chart?: Array<PredictionMarketChartPoint> | null;
+  outcomes?: Array<PredictionMarketOutcome> | null;
+};
+
+type PredictionMarketOutcome = {
+  label: string;
+  probability: number;
 };
 
 type PromotionAffiliationKind = "self" | "brand" | "client" | "partner" | "employer" | "other";
@@ -2751,71 +2822,6 @@ type YouTubeVideoEmbed = {
   last_checked_at?: number | null;
 };
 
-type PredictionMarketChartPoint = {
-  ts: number;
-  price?: number | null;
-  volume?: number | null;
-  open_interest?: number | null;
-};
-
-type PredictionMarketOutcome = {
-  label: string;
-  probability: number;
-};
-
-type PredictionMarketEmbedPreview = {
-  question?: string | null;
-  title?: string | null;
-  image_url?: string | null;
-  yes_price?: number | null;
-  yes_bid?: number | null;
-  yes_ask?: number | null;
-  no_bid?: number | null;
-  no_ask?: number | null;
-  last_price?: number | null;
-  volume?: number | null;
-  volume_24h?: number | null;
-  liquidity?: number | null;
-  open_interest?: number | null;
-  status?: string | null;
-  resolution?: "yes" | "no" | null;
-  resolved_outcome?: string | null;
-  close_time?: string | null;
-  updated_at?: string | null;
-  chart?: Array<PredictionMarketChartPoint> | null;
-  outcomes?: Array<PredictionMarketOutcome> | null;
-};
-
-type KalshiMarketEmbed = {
-  embed: string;
-  embed_key: string;
-  provider: "kalshi";
-  provider_ref?: string | null;
-  canonical_url: string;
-  original_url: string;
-  state: "pending" | "preview" | "embed" | "unavailable";
-  preview?: PredictionMarketEmbedPreview | null;
-  oembed_html?: string | null;
-  oembed_cache_age?: number | null;
-  unavailable_reason?: "deleted" | "withheld" | "private" | "unsupported" | "unknown" | null;
-  last_checked_at?: number | null;
-};
-
-type PolymarketMarketEmbed = {
-  embed: string;
-  embed_key: string;
-  provider: "polymarket";
-  provider_ref?: string | null;
-  canonical_url: string;
-  original_url: string;
-  state: "pending" | "preview" | "embed" | "unavailable";
-  preview?: PredictionMarketEmbedPreview | null;
-  oembed_html?: string | null;
-  oembed_cache_age?: number | null;
-  unavailable_reason?: "deleted" | "withheld" | "private" | "unsupported" | "unknown" | null;
-  last_checked_at?: number | null;
-};
-
 export const apiRoutes = {
   authSessionExchange: "/auth/session/exchange",
   usersMe: "/users/me",
@@ -2860,7 +2866,6 @@ export const apiRoutes = {
   communityFollow: (communityId: string) => `/communities/${communityId}/follow`,
   communityUnfollow: (communityId: string) => `/communities/${communityId}/unfollow`,
   communityPosts: (communityId: string) => `/communities/${communityId}/posts`,
-  communityPostDelete: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/delete`,
   communityPostComments: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/comments`,
   communityPostReports: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/reports`,
   communityCommentReports: (communityId: string, commentId: string) => `/communities/${communityId}/comments/${commentId}/reports`,
@@ -2880,7 +2885,11 @@ export const apiRoutes = {
   job: (jobId: string) => `/jobs/${jobId}`,
   post: (postId: string) => `/posts/${postId}`,
   postVote: (postId: string) => `/posts/${postId}/vote`,
+  communityPostRemove: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/remove`,
+  communityPostCommentsLock: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/comments-lock`,
   commentRemove: (commentId: string) => `/comments/${commentId}/remove`,
+  commentDelete: (commentId: string) => `/comments/${commentId}/delete`,
+  commentRepliesLock: (commentId: string) => `/comments/${commentId}/replies-lock`,
   commentReplies: (commentId: string) => `/comments/${commentId}/replies`,
   commentContext: (commentId: string) => `/comments/${commentId}/context`,
   commentVote: (commentId: string) => `/comments/${commentId}/vote`,

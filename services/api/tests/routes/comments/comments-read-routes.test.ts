@@ -365,7 +365,7 @@ describe("comment read routes", () => {
     const commentBody = await json(commentResponse) as { id: string }
 
     const deleted = await Promise.resolve(app.request(
-      `http://pirate.test/comments/${commentBody.id}/remove`,
+      `http://pirate.test/comments/${commentBody.id}/delete`,
       {
         method: "POST",
         headers: {

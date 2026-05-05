@@ -15,6 +15,7 @@ import {
   completeUniqueHumanVerification,
   createCommunity,
   exchangeJwt,
+  grantCommunityRole,
   insertThreadSnapshot,
   requestJson,
 } from "./comments-routes-test-helpers"
@@ -823,5 +824,142 @@ describe("comments routes", () => {
     const acceptedVoteBody = await json(acceptedVote) as { comment_id: string; value: number }
     expect(`cmt_${acceptedVoteBody.comment_id}`).toBe(commentBody.id)
     expect(acceptedVoteBody.value).toBe(1)
+  })
+
+  test("comment delete remains author-owned while moderator remove and replies-lock are mod actions", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "comments-routes-split-creator")
+    const community = await createCommunity(ctx.env, creator.accessToken, "Comment Mod Split Club")
+
+    const moderator = await exchangeJwt(ctx.env, "comments-routes-split-mod")
+    await addCommunityMember(ctx.communityDbRoot, community.communityId, moderator.userId)
+    await grantCommunityRole({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: community.communityId,
+      userId: moderator.userId,
+      role: "moderator",
+    })
+
+    const author = await exchangeJwt(ctx.env, "comments-routes-split-author")
+    await completeUniqueHumanVerification(ctx.env, author.accessToken)
+    await addCommunityMember(ctx.communityDbRoot, community.communityId, author.userId)
+
+    const member = await exchangeJwt(ctx.env, "comments-routes-split-member")
+    await addCommunityMember(ctx.communityDbRoot, community.communityId, member.userId)
+
+    const createdPost = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Split comment moderation",
+        body: "Route split body",
+        idempotency_key: "comments-routes-split-post-1",
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(createdPost.status).toBe(201)
+    const postBody = await json(createdPost) as { id: string }
+
+    const authorDeleteComment = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/comments`,
+      { body: "Author tombstone comment" },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(authorDeleteComment.status).toBe(201)
+    const authorDeleteBody = await json(authorDeleteComment) as { id: string }
+
+    const modDeleteDenied = await requestJson(
+      `http://pirate.test/comments/${authorDeleteBody.id}/delete`,
+      {},
+      ctx.env,
+      moderator.accessToken,
+    )
+    expect(modDeleteDenied.status).toBe(403)
+
+    const authorDelete = await requestJson(
+      `http://pirate.test/comments/${authorDeleteBody.id}/delete`,
+      {},
+      ctx.env,
+      author.accessToken,
+    )
+    expect(authorDelete.status).toBe(200)
+    const authorDeleteResult = await json(authorDelete) as { status: string; body: string | null }
+    expect(authorDeleteResult.status).toBe("deleted")
+    expect(authorDeleteResult.body).toBe("[deleted]")
+
+    const modRemoveComment = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/comments`,
+      { body: "Moderator remove comment" },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(modRemoveComment.status).toBe(201)
+    const modRemoveBody = await json(modRemoveComment) as { id: string }
+
+    const memberRemoveDenied = await requestJson(
+      `http://pirate.test/comments/${modRemoveBody.id}/remove`,
+      {},
+      ctx.env,
+      member.accessToken,
+    )
+    expect(memberRemoveDenied.status).toBe(403)
+
+    const lock = await requestJson(
+      `http://pirate.test/comments/${modRemoveBody.id}/replies-lock`,
+      { locked: true, reason: "settle down" },
+      ctx.env,
+      moderator.accessToken,
+    )
+    expect(lock.status).toBe(200)
+    const lockBody = await json(lock) as {
+      replies_locked: boolean
+      replies_lock_reason: string | null
+      replies_locked_by_user: string | null
+    }
+    expect(lockBody.replies_locked).toBe(true)
+    expect(lockBody.replies_lock_reason).toBe("settle down")
+    expect(lockBody.replies_locked_by_user).toBe(`usr_${moderator.userId}`)
+
+    const remove = await requestJson(
+      `http://pirate.test/comments/${modRemoveBody.id}/remove`,
+      {},
+      ctx.env,
+      moderator.accessToken,
+    )
+    expect(remove.status).toBe(200)
+    const removeBody = await json(remove) as { status: string; body: string | null }
+    expect(removeBody.status).toBe("removed")
+
+    const auditRows = await ctx.client.execute({
+      sql: `
+        SELECT action, actor_id, target_type, target_id
+        FROM audit_log
+        WHERE action IN (
+          'community.comment_deleted_by_author',
+          'community.comment_removed_by_moderator',
+          'community.comment_replies_locked_by_moderator'
+        )
+        ORDER BY created_at ASC, audit_event_id ASC
+      `,
+      args: [],
+    })
+    expect(auditRows.rows.map((row) => row.action)).toEqual([
+      "community.comment_deleted_by_author",
+      "community.comment_replies_locked_by_moderator",
+      "community.comment_removed_by_moderator",
+    ])
+    expect(auditRows.rows[0]?.actor_id).toBe(author.userId)
+    expect(auditRows.rows[0]?.target_type).toBe("comment")
+    expect(auditRows.rows[0]?.target_id).toBe(authorDeleteBody.id.replace(/^cmt_/, ""))
+    expect(auditRows.rows[1]?.actor_id).toBe(moderator.userId)
+    expect(auditRows.rows[1]?.target_type).toBe("comment")
+    expect(auditRows.rows[1]?.target_id).toBe(modRemoveBody.id.replace(/^cmt_/, ""))
+    expect(auditRows.rows[2]?.actor_id).toBe(moderator.userId)
+    expect(auditRows.rows[2]?.target_type).toBe("comment")
+    expect(auditRows.rows[2]?.target_id).toBe(modRemoveBody.id.replace(/^cmt_/, ""))
   })
 })

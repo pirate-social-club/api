@@ -1,4 +1,10 @@
-import { canAccessCommunity, getCommunityMembershipState } from "../communities/membership/membership-state-store"
+import {
+  ANY_COMMUNITY_ROLE,
+  canAccessCommunity,
+  getCommunityMembershipState,
+  hasCommunityRole,
+  type CommunityMembershipRow,
+} from "../communities/membership/membership-state-store"
 import type { UserRepository } from "../auth/repositories"
 import { eligibilityFailed, notFoundError, verificationRequired } from "../errors"
 
@@ -16,7 +22,7 @@ export async function requireCommunityAccess(input: {
   client: Parameters<typeof getCommunityMembershipState>[0]
   communityId: string
   userId: string
-}): Promise<{ role_status: "active" | "revoked" | null }> {
+}): Promise<CommunityMembershipRow> {
   const membership = await getCommunityMembershipState(input.client, input.communityId, input.userId)
   if (!canAccessCommunity(membership)) {
     throw notFoundError("Community not found")
@@ -24,13 +30,13 @@ export async function requireCommunityAccess(input: {
   return membership
 }
 
-export async function requireOwner(input: {
+export async function requireAnyCommunityRole(input: {
   client: Parameters<typeof getCommunityMembershipState>[0]
   communityId: string
   userId: string
 }): Promise<void> {
   const membership = await requireCommunityAccess(input)
-  if (membership.role_status !== "active") {
+  if (!hasCommunityRole(membership, ANY_COMMUNITY_ROLE)) {
     throw eligibilityFailed("Moderator access is required")
   }
 }

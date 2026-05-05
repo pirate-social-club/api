@@ -38,6 +38,7 @@ async function createControlPlaneClient(url = "file::memory:") {
       status TEXT NOT NULL,
       title TEXT,
       description TEXT,
+      source_language TEXT,
       publisher TEXT,
       published_at TEXT,
       image_url TEXT,
@@ -191,6 +192,64 @@ describe("link summary materialization", () => {
       translations?: Record<string, { summary: { key_points: string[] } }>
     }
     expect(snapshot.translations?.ar?.summary.key_points).toEqual(["مصادرة سفن قبالة اليونان", "إسرائيل تستند إلى الحصار", "تركيا تدين التحرك"])
+  })
+
+  test("translates English display fields when source metadata is non-English", async () => {
+    const controlPlaneClient = await createControlPlaneClient()
+    await controlPlaneClient.execute({
+      sql: `
+        INSERT INTO link_enrichments (
+          link_enrichment_id, normalized_url, canonical_url, provider, status,
+          title, description, source_language, publisher, published_at, image_url,
+          markdown, summary_json, translations_json, summary_status, summary_model, error,
+          fetched_at, summarized_at, created_at, updated_at
+        ) VALUES (
+          'len_english_translation', 'https://example.ma/story', 'https://example.ma/story',
+          'firecrawl', 'ready', 'الداخلية تحقق في اختلالات رخص البناء والتعمير بفاس', NULL, 'ar', 'Example',
+          '2026-05-02T09:00:00.000Z', NULL,
+          '# Story title\\n\\nArticle body.',
+          '{"summary_paragraph":"The Ministry is investigating construction irregularities.","short_summary":"The ministry opened a Fez probe.","key_points":["Interior Ministry investigates Fez","Probe follows 22 deaths","Permits are under review"],"generated_at":"2026-05-02T10:00:00.000Z","model":"test/summary"}',
+          NULL, 'ready', 'test/summary', NULL,
+          '2026-05-02T09:00:00.000Z', '2026-05-02T10:00:00.000Z',
+          '2026-05-02T09:00:00.000Z', '2026-05-02T10:00:00.000Z'
+        )
+      `,
+    })
+
+    const result = await translateAndStoreLinkSummary({
+      env: {
+        OPENROUTER_API_KEY: "or-test",
+        OPENROUTER_BASE_URL: "https://openrouter.test/v1",
+        OPENROUTER_LINK_SUMMARY_TRANSLATION_MODEL: "test/translation-model",
+      },
+      controlPlaneClient,
+      normalizedUrl: "https://example.ma/story",
+      locale: "en",
+      now: "2026-05-02T11:00:00.000Z",
+      fetcher: (async () => new Response(JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                target_locale: "en",
+                title: "Interior Ministry investigates building permit failures in Fez",
+                description: null,
+                summary_paragraph: "The Ministry is investigating construction irregularities.",
+                short_summary: "The ministry opened a Fez probe.",
+                key_points: ["Interior Ministry investigates Fez", "Probe follows 22 deaths", "Permits are under review"],
+              }),
+            },
+          },
+        ],
+      }), {
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch,
+    })
+
+    expect(result.resultRef).toBe("ready:https://example.ma/story:en")
+    const rows = await controlPlaneClient.execute("SELECT translations_json FROM link_enrichments")
+    const translations = JSON.parse(String(rows.rows[0]?.translations_json)) as Record<string, { title: string }>
+    expect(translations.en?.title).toBe("Interior Ministry investigates building permit failures in Fez")
   })
 
   test("marks ready enrichments without markdown as unavailable", async () => {

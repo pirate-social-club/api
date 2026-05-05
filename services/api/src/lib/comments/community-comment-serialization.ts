@@ -1,4 +1,4 @@
-import { requiredNumber, requiredString, rowValue, stringOrNull } from "../sql-row"
+import { numberOrNull, requiredNumber, requiredString, rowValue, stringOrNull } from "../sql-row"
 import type {
   Comment,
   CommentAnonymousScope,
@@ -26,6 +26,10 @@ export type CommentRow = {
   body: string | null
   source_language: string | null
   status: CommentStatus
+  replies_locked: number | null
+  replies_locked_at: string | null
+  replies_locked_by_user_id: string | null
+  replies_lock_reason: string | null
   depth: number
   direct_reply_count: number
   descendant_count: number
@@ -72,6 +76,10 @@ export function toCommentRow(row: unknown): CommentRow {
     body: stringOrNull(rowValue(row, "body")),
     source_language: stringOrNull(rowValue(row, "source_language")),
     status: requiredString(row, "status") as CommentStatus,
+    replies_locked: numberOrNull(rowValue(row, "replies_locked")),
+    replies_locked_at: stringOrNull(rowValue(row, "replies_locked_at")),
+    replies_locked_by_user_id: stringOrNull(rowValue(row, "replies_locked_by_user_id")),
+    replies_lock_reason: stringOrNull(rowValue(row, "replies_lock_reason")),
     depth: requiredNumber(row, "depth"),
     direct_reply_count: requiredNumber(row, "direct_reply_count"),
     descendant_count: requiredNumber(row, "descendant_count"),
@@ -107,6 +115,10 @@ export function serializeComment(row: CommentRow): Comment {
     body: row.body,
     source_language: row.source_language,
     status: row.status,
+    replies_locked: row.replies_locked === 1,
+    replies_locked_at: row.replies_locked_at,
+    replies_locked_by_user_id: row.replies_locked_by_user_id,
+    replies_lock_reason: row.replies_lock_reason,
     depth: row.depth,
     direct_reply_count: row.direct_reply_count,
     descendant_count: row.descendant_count,

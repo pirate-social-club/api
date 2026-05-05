@@ -4,7 +4,7 @@ import { fetchLinkPreviewMetadata } from "../link-preview-fetcher"
 import { updatePostLinkPreviewMetadata } from "../community-post-store"
 import { enqueueCommunityJob } from "../../communities/jobs/store"
 import type { DbExecutor } from "../../db-helpers"
-import { CONTENT_TRANSLATION_PREWARM_LOCALES, sameLanguageLocale } from "../../localization/content-locale"
+import { CONTENT_TRANSLATION_PREWARM_LOCALES, detectSourceLanguageFromText, sameLanguageLocale } from "../../localization/content-locale"
 import { logPipelineInfo, sanitizeLogText, summarizeUrl } from "../../observability/pipeline-log"
 import { fetchFirecrawlLinkEnrichment } from "./firecrawl-provider"
 import {
@@ -85,7 +85,7 @@ async function enqueueSummaryTranslationsIfNeeded(input: {
     return
   }
   for (const locale of CONTENT_TRANSLATION_PREWARM_LOCALES) {
-    if (sameLanguageLocale("en", locale)) {
+    if (sameLanguageLocale("en", locale) && sameLanguageLocale(input.record.source_language ?? "en", "en")) {
       continue
     }
     await enqueueCommunityJob({
@@ -100,8 +100,15 @@ async function enqueueSummaryTranslationsIfNeeded(input: {
         post_id: input.postId,
       }),
       createdAt: input.createdAt,
-    })
+      })
   }
+}
+
+function detectLinkMetadataSourceLanguage(input: {
+  title?: string | null
+  description?: string | null
+}): string | null {
+  return detectSourceLanguageFromText([input.title, input.description])
 }
 
 export async function hydrateGenericLinkEnrichment(input: {
@@ -188,6 +195,10 @@ export async function hydrateGenericLinkEnrichment(input: {
         status: "ready",
         title: firecrawl.title,
         description: firecrawl.description,
+        sourceLanguage: detectLinkMetadataSourceLanguage({
+          title: firecrawl.title,
+          description: firecrawl.description,
+        }),
         publisher: firecrawl.publisher,
         publishedAt: firecrawl.publishedAt,
         imageUrl: firecrawl.imageUrl,
@@ -235,6 +246,7 @@ export async function hydrateGenericLinkEnrichment(input: {
         status: "failed",
         title: null,
         description: null,
+        sourceLanguage: null,
         publisher: null,
         publishedAt: null,
         imageUrl: null,
@@ -284,6 +296,10 @@ export async function hydrateGenericLinkEnrichment(input: {
       status: "ready",
       title: metadata.title,
       description: null,
+      sourceLanguage: detectLinkMetadataSourceLanguage({
+        title: metadata.title,
+        description: null,
+      }),
       publisher: null,
       publishedAt: null,
       imageUrl: metadata.imageUrl,

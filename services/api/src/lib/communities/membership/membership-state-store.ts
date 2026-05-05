@@ -2,10 +2,17 @@ import type { Client } from "../../sql-client"
 import { executeFirst } from "../../db-helpers"
 import { rowValue, stringOrNull } from "../../sql-row"
 
+export type CommunityRole = "owner" | "admin" | "moderator"
+
 export type CommunityMembershipRow = {
   membership_status: "member" | "left" | "banned" | null
+  role: CommunityRole | null
   role_status: "active" | "revoked" | null
 }
+
+export const ANY_COMMUNITY_ROLE = ["owner", "admin", "moderator"] as const satisfies readonly CommunityRole[]
+export const OWNER_OR_ADMIN_ROLE = ["owner", "admin"] as const satisfies readonly CommunityRole[]
+export const OWNER_ROLE = ["owner"] as const satisfies readonly CommunityRole[]
 
 export async function getCommunityMembershipState(
   client: Client,
@@ -26,14 +33,38 @@ export async function getCommunityMembershipState(
             LIMIT 1
           ) AS membership_status,
           (
-            SELECT status
+            SELECT role
             FROM community_roles
             WHERE community_id = ?1
               AND user_id = ?2
               AND role IN ('owner', 'admin', 'moderator')
-            ORDER BY created_at DESC
+              AND status = 'active'
+            ORDER BY CASE role
+              WHEN 'owner' THEN 0
+              WHEN 'admin' THEN 1
+              ELSE 2
+            END
             LIMIT 1
-          ) AS role_status
+          ) AS role,
+          CASE
+            WHEN EXISTS (
+              SELECT 1
+              FROM community_roles
+              WHERE community_id = ?1
+                AND user_id = ?2
+                AND role IN ('owner', 'admin', 'moderator')
+                AND status = 'active'
+            ) THEN 'active'
+            WHEN EXISTS (
+              SELECT 1
+              FROM community_roles
+              WHERE community_id = ?1
+                AND user_id = ?2
+                AND role IN ('owner', 'admin', 'moderator')
+                AND status = 'revoked'
+            ) THEN 'revoked'
+            ELSE NULL
+          END AS role_status
       `,
       args: [communityId, userId],
     },
@@ -41,12 +72,17 @@ export async function getCommunityMembershipState(
 
   return {
     membership_status: stringOrNull(rowValue(row, "membership_status")) as CommunityMembershipRow["membership_status"],
+    role: stringOrNull(rowValue(row, "role")) as CommunityMembershipRow["role"],
     role_status: stringOrNull(rowValue(row, "role_status")) as CommunityMembershipRow["role_status"],
   }
 }
 
+export function hasCommunityRole(state: CommunityMembershipRow, allowed: readonly CommunityRole[]): boolean {
+  return state.role_status === "active" && state.role != null && allowed.includes(state.role)
+}
+
 export function canAccessCommunity(state: CommunityMembershipRow): boolean {
-  return state.membership_status === "member" || state.role_status === "active"
+  return state.membership_status === "member" || hasCommunityRole(state, ANY_COMMUNITY_ROLE)
 }
 
 export async function getCommunityMemberCount(

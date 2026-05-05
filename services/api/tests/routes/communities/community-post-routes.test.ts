@@ -17,6 +17,35 @@ function settingsJson(body: Record<string, unknown>): string {
   return JSON.stringify(body)
 }
 
+async function grantCommunityRole(input: {
+  communityDbRoot: string
+  communityId: string
+  userId: string
+  role: "owner" | "admin" | "moderator"
+}): Promise<void> {
+  const client = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+  try {
+    const now = new Date().toISOString()
+    await client.execute({
+      sql: `
+        INSERT INTO community_roles (
+          role_assignment_id, community_id, user_id, role, status, granted_at, created_at, updated_at
+        ) VALUES (
+          ?1, ?2, ?3, ?4, 'active', ?5, ?5, ?5
+        )
+        ON CONFLICT(role_assignment_id) DO UPDATE SET
+          status = excluded.status,
+          updated_at = excluded.updated_at
+      `,
+      args: [`rol_${input.communityId}_${input.userId}_${input.role}`, input.communityId, input.userId, input.role, now],
+    })
+  } finally {
+    client.close()
+  }
+}
+
 beforeEach(() => {
   resetRuntimeCaches()
 })
@@ -1005,5 +1034,103 @@ membership_mode: "request",
     expect(auditRows.rows[0]?.actor_id).toBe(creator.userId)
     expect(auditRows.rows[0]?.target_type).toBe("post")
     expect(auditRows.rows[0]?.target_id).toBe(postBody.id.replace(/^post_/, ""))
+  })
+
+  test("moderators can remove posts and lock thread comments", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "community-post-mod-creator")
+    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Pirate Mod Post Club",
+      membership_mode: "request",
+      namespace: {
+        namespace_verification: namespaceVerificationId,
+      },
+    }, ctx.env, creator.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as { community: { id: string } }
+    const communityId = communityCreateBody.community.id.replace(/^com_/, "")
+
+    const moderator = await exchangeJwt(ctx.env, "community-post-moderator")
+    await addCommunityMember(ctx.communityDbRoot, communityId, moderator.userId)
+    await grantCommunityRole({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      userId: moderator.userId,
+      role: "moderator",
+    })
+
+    const member = await exchangeJwt(ctx.env, "community-post-nonmod")
+    await addCommunityMember(ctx.communityDbRoot, communityId, member.userId)
+
+    const createdPost = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Remove and lock me",
+        body: "Moderators should own this state change.",
+        idempotency_key: "mod-post-remove-lock-1",
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(createdPost.status).toBe(201)
+    const postBody = await json(createdPost) as { id: string }
+
+    const deniedRemove = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts/${postBody.id}/remove`,
+      {},
+      ctx.env,
+      member.accessToken,
+    )
+    expect(deniedRemove.status).toBe(403)
+
+    const lock = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts/${postBody.id}/comments-lock`,
+      { locked: true, reason: "cooldown" },
+      ctx.env,
+      moderator.accessToken,
+    )
+    expect(lock.status).toBe(200)
+    const lockBody = await json(lock) as {
+      comments_locked: boolean
+      comments_lock_reason: string | null
+      comments_locked_by_user: string | null
+    }
+    expect(lockBody.comments_locked).toBe(true)
+    expect(lockBody.comments_lock_reason).toBe("cooldown")
+    expect(lockBody.comments_locked_by_user).toBe(`usr_${moderator.userId}`)
+
+    const remove = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts/${postBody.id}/remove`,
+      {},
+      ctx.env,
+      moderator.accessToken,
+    )
+    expect(remove.status).toBe(200)
+    const removeBody = await json(remove) as { status: string }
+    expect(removeBody.status).toBe("removed")
+
+    const auditRows = await ctx.client.execute({
+      sql: `
+        SELECT action, actor_id, target_type, target_id
+        FROM audit_log
+        WHERE action IN ('community.post_removed_by_moderator', 'community.thread_locked_by_moderator')
+        ORDER BY created_at ASC, audit_event_id ASC
+      `,
+      args: [],
+    })
+    expect(auditRows.rows.map((row) => row.action)).toEqual([
+      "community.thread_locked_by_moderator",
+      "community.post_removed_by_moderator",
+    ])
+    expect(auditRows.rows[0]?.actor_id).toBe(moderator.userId)
+    expect(auditRows.rows[0]?.target_type).toBe("post")
+    expect(auditRows.rows[0]?.target_id).toBe(postBody.id.replace(/^post_/, ""))
+    expect(auditRows.rows[1]?.actor_id).toBe(moderator.userId)
+    expect(auditRows.rows[1]?.target_type).toBe("post")
+    expect(auditRows.rows[1]?.target_id).toBe(postBody.id.replace(/^post_/, ""))
   })
 })

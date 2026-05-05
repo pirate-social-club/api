@@ -1,7 +1,11 @@
 import type { Client } from "../../sql-client"
 import { badRequestError, notFoundError } from "../../errors"
 import { nowIso } from "../../helpers"
-import { getCommunityMembershipState } from "../membership/membership-state-store"
+import {
+  ANY_COMMUNITY_ROLE,
+  getCommunityMembershipState,
+  hasCommunityRole,
+} from "../membership/membership-state-store"
 import { openCommunityDb } from "../community-db-factory"
 import type { CommunityDatabaseBindingRepository } from "../db-community-repository"
 import { getPostById } from "../../posts/community-post-store"
@@ -75,7 +79,7 @@ async function authorizeAssetAccess(input: {
   const membership = await getCommunityMembershipState(input.client, input.communityId, input.userId)
   const privilegedReason = asset.creator_user_id === input.userId
     ? "creator"
-    : membership.role_status === "active"
+    : hasCommunityRole(membership, ANY_COMMUNITY_ROLE)
       ? "moderator"
       : null
   const isPrivilegedViewer = privilegedReason != null

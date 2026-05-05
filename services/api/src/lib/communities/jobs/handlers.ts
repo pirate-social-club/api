@@ -16,6 +16,11 @@ import {
 } from "../../localization/community-localization-service"
 import { getPostById } from "../../posts/community-post-store"
 import { hydrateLinkPostEmbed } from "../../posts/embed-hydrator"
+import { detectSupportedEmbedTarget } from "../../posts/embed-url-detection"
+import {
+  getLinkEnrichmentByNormalizedUrl,
+  upsertLinkEnrichmentUsage,
+} from "../../posts/link-enrichment/repository"
 import {
   generateAndStoreLinkSummary,
   listLinkSummaryFanoutUsages,
@@ -23,7 +28,6 @@ import {
   translateAndStoreLinkSummary,
   writeLinkEnrichmentSnapshotToPost,
 } from "../../posts/link-enrichment/summary-service"
-import { upsertLinkEnrichmentUsage } from "../../posts/link-enrichment/repository"
 import { materializePostLabel } from "../../posts/post-label-materializer"
 import { materializePostTranslation } from "../../localization/post-translation-materializer"
 import { logPipelineError, logPipelineInfo, sanitizeLogText, summarizeUrl } from "../../observability/pipeline-log"
@@ -413,7 +417,7 @@ async function runEmbedHydrate(input: {
       has_firecrawl_key: Boolean(input.env.FIRECRAWL_API_KEY?.trim()),
     })
 
-    return await hydrateLinkPostEmbed({
+    const resultRef = await hydrateLinkPostEmbed({
       client: db.client,
       controlPlaneClient: input.env.CONTROL_PLANE_DATABASE_URL ? getControlPlaneClient(input.env) : null,
       env: input.env,
@@ -423,6 +427,20 @@ async function runEmbedHydrate(input: {
       },
       checkedAt: nowIso(),
     })
+
+    const effectiveLinkUrl = post.link_url ?? payload?.link_url ?? null
+    const isGenericLink = post.post_type === "link"
+      && Boolean(effectiveLinkUrl?.trim())
+      && !detectSupportedEmbedTarget(effectiveLinkUrl)
+    const expectsControlPlaneEnrichment = Boolean(input.env.CONTROL_PLANE_DATABASE_URL)
+    if (isGenericLink && expectsControlPlaneEnrichment && resultRef && !resultRef.startsWith("skipped:")) {
+      const updated = await getPostById(db.client, postId)
+      if (!updated?.link_enrichment_snapshot_json) {
+        throw internalError("generic_link_enrichment_missing_snapshot")
+      }
+    }
+
+    return resultRef
   } finally {
     db.close()
   }
@@ -510,8 +528,9 @@ async function runLinkSummaryMaterialize(input: {
   if (summary.resultRef.startsWith("ready:") || summary.resultRef === "skipped:summary_ready") {
     const queueDb = await openCommunityDb(input.env, input.communityRepository, input.job.community_id)
     try {
+      const record = await getLinkEnrichmentByNormalizedUrl(controlPlaneClient, normalizedUrl)
       for (const locale of CONTENT_TRANSLATION_PREWARM_LOCALES) {
-        if (sameLanguageLocale("en", locale)) {
+        if (sameLanguageLocale("en", locale) && sameLanguageLocale(record?.source_language ?? "en", "en")) {
           continue
         }
         await enqueueCommunityJob({

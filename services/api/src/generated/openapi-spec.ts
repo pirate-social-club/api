@@ -2744,6 +2744,90 @@ const spec = {
         "operationId": "post_communities_by_community_id_posts_by_post_id_comments"
       }
     },
+    "/communities/{community_id}/posts/{post_id}/remove": {
+      "post": {
+        "tags": [
+          "Moderation"
+        ],
+        "summary": "Remove a post as a moderator",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/PostId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Post"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "403": {
+            "$ref": "#/components/responses/EligibilityFailed"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "post_communities_by_community_id_posts_by_post_id_remove"
+      }
+    },
+    "/communities/{community_id}/posts/{post_id}/comments-lock": {
+      "post": {
+        "tags": [
+          "Moderation"
+        ],
+        "summary": "Lock or unlock comments on a post thread",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/PostId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommentLockRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Post"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "403": {
+            "$ref": "#/components/responses/EligibilityFailed"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "post_communities_by_community_id_posts_by_post_id_comments_lock"
+      }
+    },
     "/communities/{community_id}/posts/{post_id}/reports": {
       "post": {
         "tags": [
@@ -3247,7 +3331,7 @@ const spec = {
         "tags": [
           "Comments"
         ],
-        "summary": "Tombstone a comment",
+        "summary": "Remove a comment as a moderator",
         "parameters": [
           {
             "$ref": "#/components/parameters/CommentId"
@@ -3274,6 +3358,40 @@ const spec = {
           }
         },
         "operationId": "post_comments_by_comment_id_remove"
+      }
+    },
+    "/comments/{comment_id}/delete": {
+      "post": {
+        "tags": [
+          "Comments"
+        ],
+        "summary": "Tombstone a comment as its author",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommentId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Comment"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "403": {
+            "$ref": "#/components/responses/EligibilityFailed"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "post_comments_by_comment_id_delete"
       }
     },
     "/comments/{comment_id}/replies": {
@@ -3356,6 +3474,50 @@ const spec = {
           }
         },
         "operationId": "post_comments_by_comment_id_replies"
+      }
+    },
+    "/comments/{comment_id}/replies-lock": {
+      "post": {
+        "tags": [
+          "Moderation"
+        ],
+        "summary": "Lock or unlock replies under a comment",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommentId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommentLockRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Comment"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "403": {
+            "$ref": "#/components/responses/EligibilityFailed"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "post_comments_by_comment_id_replies_lock"
       }
     },
     "/comments/{comment_id}/context": {
@@ -6041,6 +6203,7 @@ const spec = {
           "motion_media_policy",
           "language_policy",
           "civility_policy",
+          "visual_policy_settings",
           "provenance_policy",
           "promotion_policy",
           "created_by_user",
@@ -6315,6 +6478,9 @@ const spec = {
           },
           "civility_policy": {
             "$ref": "./communities-community.yaml#/CommunityCivilityPolicy"
+          },
+          "visual_policy_settings": {
+            "$ref": "./communities-core.yaml#/CommunityVisualPolicySettings"
           },
           "openai_moderation_settings": {
             "type": "object",
@@ -8491,6 +8657,22 @@ const spec = {
               "deleted"
             ]
           },
+          "comments_locked": {
+            "type": "boolean"
+          },
+          "comments_locked_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "comments_locked_by_user": {
+            "type": "string",
+            "nullable": true
+          },
+          "comments_lock_reason": {
+            "type": "string",
+            "nullable": true
+          },
           "visibility": {
             "type": "string",
             "enum": [
@@ -8523,6 +8705,11 @@ const spec = {
           "link_og_title": {
             "type": "string",
             "nullable": true
+          },
+          "link_enrichment": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
           },
           "embeds": {
             "type": "array",
@@ -8855,6 +9042,22 @@ const spec = {
               "deleted"
             ]
           },
+          "replies_locked": {
+            "type": "boolean"
+          },
+          "replies_locked_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "replies_locked_by_user": {
+            "type": "string",
+            "nullable": true
+          },
+          "replies_lock_reason": {
+            "type": "string",
+            "nullable": true
+          },
           "depth": {
             "type": "integer"
           },
@@ -8893,6 +9096,20 @@ const spec = {
           "created": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "CommentLockRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "locked": {
+            "type": "boolean",
+            "default": true
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
           }
         }
       },
@@ -8973,7 +9190,7 @@ const spec = {
           "items": {
             "type": "array",
             "items": {
-              "$ref": "./moderation.yaml#/ModerationCase"
+              "$ref": "./moderation.yaml#/ModerationCaseListItem"
             }
           },
           "next_cursor": {
@@ -9466,6 +9683,17 @@ const spec = {
             ],
             "nullable": true
           },
+          "viewer_is_author": {
+            "type": "boolean"
+          },
+          "age_gate_viewer_state": {
+            "type": "string",
+            "enum": [
+              "proof_required",
+              "verified_allowed"
+            ],
+            "nullable": true
+          },
           "viewer_reaction_kinds": {
             "type": "array",
             "items": {
@@ -9506,31 +9734,8 @@ const spec = {
             "type": "array",
             "nullable": true,
             "items": {
-              "$ref": "#/components/schemas/LocalizedPostEmbedTranslation"
+              "$ref": "./posts.yaml#/LocalizedPostEmbedTranslation"
             }
-          },
-          "source_hash": {
-            "type": "string"
-          }
-        }
-      },
-      "LocalizedPostEmbedTranslation": {
-        "type": "object",
-        "required": [
-          "embed_key",
-          "source_hash"
-        ],
-        "properties": {
-          "embed_key": {
-            "type": "string"
-          },
-          "translated_question": {
-            "type": "string",
-            "nullable": true
-          },
-          "translated_title": {
-            "type": "string",
-            "nullable": true
           },
           "source_hash": {
             "type": "string"
@@ -9684,10 +9889,10 @@ const spec = {
       "DismissTaskRequest": {
         "type": "object",
         "required": [
-          "task"
+          "task_id"
         ],
         "properties": {
-          "task": {
+          "task_id": {
             "type": "string"
           }
         }

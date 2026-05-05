@@ -7,13 +7,20 @@ import type { CreateCommentRequest } from "../lib/comments/comment-types"
 import { openCommunityDb } from "../lib/communities/community-db-factory"
 import { badRequestError, eligibilityFailed, notFoundError } from "../lib/errors"
 import { getPostById, updatePostLinkPreviewMetadata } from "../lib/posts/community-post-store"
-import { createPost, deletePost, listCommunityPosts } from "../lib/posts/post-service"
+import {
+  createPost,
+  deletePost,
+  listCommunityPosts,
+  removePostAsModerator,
+  setPostCommentLock,
+} from "../lib/posts/post-service"
 import { serializeComment, serializeCommentListResponse } from "../serializers/comment"
 import { serializeDeletedPostResponse, serializeLocalizedPostResponse, serializePost } from "../serializers/post"
 import type { CreatePostRequest } from "../types"
 import { decodePublicPostId } from "../lib/public-ids"
 import { writeAuditEventForEnv } from "../lib/audit"
 import { nowIso } from "../lib/helpers"
+import { detectSourceLanguageFromText } from "../lib/localization/content-locale"
 import { resolveComposerLinkPreview } from "../lib/posts/link-embed-preview"
 import type { ComposerLinkPreviewResult } from "../lib/posts/link-embed-preview"
 import { normalizeLinkUrl } from "../lib/posts/link-enrichment/url-normalization"
@@ -165,6 +172,7 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
           canonical_url: post.link_url,
           title,
           description: null,
+          source_language: detectSourceLanguageFromText([title]),
           publisher: null,
           image_url: imageUrl,
           summary: {
@@ -196,6 +204,7 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
           status: "ready",
           title,
           description: null,
+          sourceLanguage: detectSourceLanguageFromText([title]),
           publisher: null,
           publishedAt: null,
           imageUrl,
@@ -253,6 +262,58 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
       })
     }
     return c.json(serializeDeletedPostResponse(result.post), 200)
+  })
+
+  communities.post("/:communityId/posts/:postId/remove", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const postId = decodePublicPostId(c.req.param("postId"))
+    const result = await removePostAsModerator({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      postId,
+      communityRepository,
+    })
+    await writeAuditEventForEnv(c.env, {
+      action: "community.post_removed_by_moderator",
+      actorId: actor.userId,
+      actorType: "user",
+      communityId,
+      targetId: postId,
+      targetType: "post",
+      metadata: {
+        removed_at: result.updated_at,
+      },
+    })
+    return c.json(serializePost(result), 200)
+  })
+
+  communities.post("/:communityId/posts/:postId/comments-lock", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const body = await requireJsonBody<{ locked?: boolean; reason?: string | null }>(c, "Invalid comment lock payload")
+    const postId = decodePublicPostId(c.req.param("postId"))
+    const result = await setPostCommentLock({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      postId,
+      locked: body.locked !== false,
+      reason: body.reason ?? null,
+      communityRepository,
+    })
+    await writeAuditEventForEnv(c.env, {
+      action: result.comments_locked ? "community.thread_locked_by_moderator" : "community.thread_unlocked_by_moderator",
+      actorId: actor.userId,
+      actorType: "user",
+      communityId,
+      targetId: postId,
+      targetType: "post",
+      metadata: {
+        locked: result.comments_locked,
+        reason: result.comments_lock_reason,
+      },
+    })
+    return c.json(serializePost(result), 200)
   })
 
   communities.get("/:communityId/link-preview", async (c) => {

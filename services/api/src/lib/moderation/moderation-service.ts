@@ -1,5 +1,4 @@
 import { openCommunityDb } from "../communities/community-db-factory"
-import { canAccessCommunity, getCommunityMembershipState } from "../communities/membership/membership-state-store"
 import type {
   CommunityDatabaseBindingRepository,
   CommunityPostProjectionRepository,
@@ -7,7 +6,7 @@ import type {
 import type { ProfileRepository, UserRepository } from "../auth/repositories"
 import { getProfilePublicHandleLabel } from "../auth/auth-serializers"
 import type { DbExecutor } from "../db-helpers"
-import { badRequestError, eligibilityFailed, internalError, notFoundError, verificationRequired } from "../errors"
+import { badRequestError, internalError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import { getPostById } from "../posts/community-post-store"
 import { getCommentById } from "../comments/community-comment-store"
@@ -39,6 +38,11 @@ import type {
   ModerationSignalSeverity,
   UserReport,
 } from "./moderation-types"
+import {
+  requireAnyCommunityRole,
+  requireCommunityAccess,
+  requireVerifiedHuman,
+} from "./moderation-access"
 
 type ModerationCommunityRepository =
   & CommunityDatabaseBindingRepository
@@ -57,39 +61,6 @@ function reportPriority(reasonCode: CreateUserReportRequest["reason_code"]): Mod
     case "other":
     default:
       return "low"
-  }
-}
-
-async function requireVerifiedHuman(userRepository: UserRepository, userId: string): Promise<void> {
-  const user = await userRepository.getUserById(userId)
-  if (!user) {
-    throw notFoundError("User not found")
-  }
-  if (user.verification_capabilities.unique_human.state !== "verified") {
-    throw verificationRequired("unique_human verification is required")
-  }
-}
-
-async function requireCommunityAccess(input: {
-  client: Parameters<typeof getCommunityMembershipState>[0]
-  communityId: string
-  userId: string
-}): Promise<{ role_status: "active" | "revoked" | null }> {
-  const membership = await getCommunityMembershipState(input.client, input.communityId, input.userId)
-  if (!canAccessCommunity(membership)) {
-    throw notFoundError("Community not found")
-  }
-  return membership
-}
-
-async function requireOwner(input: {
-  client: Parameters<typeof getCommunityMembershipState>[0]
-  communityId: string
-  userId: string
-}): Promise<void> {
-  const membership = await requireCommunityAccess(input)
-  if (membership.role_status !== "active") {
-    throw eligibilityFailed("Moderator access is required")
   }
 }
 
@@ -303,7 +274,7 @@ export async function listCommunityModerationCases(input: {
 }): Promise<ModerationCaseListResponse> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
-    await requireOwner({
+    await requireAnyCommunityRole({
       client: db.client,
       communityId: input.communityId,
       userId: input.userId,
@@ -347,7 +318,7 @@ export async function getModerationCaseDetail(input: {
 }): Promise<ModerationCaseDetail> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
-    await requireOwner({
+    await requireAnyCommunityRole({
       client: db.client,
       communityId: input.communityId,
       userId: input.userId,
@@ -493,7 +464,7 @@ export async function resolveModerationCaseWithAction(input: {
   assertCreateModerationActionRequest(input.body)
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
-    await requireOwner({
+    await requireAnyCommunityRole({
       client: db.client,
       communityId: input.communityId,
       userId: input.userId,

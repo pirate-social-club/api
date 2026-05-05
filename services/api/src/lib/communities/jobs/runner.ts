@@ -1,3 +1,4 @@
+import { captureException } from "@sentry/cloudflare"
 import { nowIso } from "../../helpers"
 import type { Env } from "../../../env"
 import { openCommunityDb } from "../community-db-factory"
@@ -89,6 +90,22 @@ export async function processCommunityJobById(input: {
         attempt_count: running.attempt_count,
         error: sanitizeLogText(message),
       })
+      if (input.env.SENTRY_DSN) {
+        captureException(error, {
+          tags: {
+            pipeline: "community_jobs",
+            job_id: running.job_id,
+            job_type: running.job_type,
+            community_id: running.community_id,
+          },
+          extra: {
+            subject_type: running.subject_type,
+            subject_id: running.subject_id,
+            attempt_count: running.attempt_count,
+            error: message,
+          },
+        })
+      }
       return await markCommunityJobFailed({
         client: db.client,
         jobId: running.job_id,

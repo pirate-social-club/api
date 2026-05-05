@@ -71,6 +71,7 @@ debugPipeline.get("/post-pipeline", async (c) => {
             provider: record.provider,
             status: record.status,
             title: record.title,
+            source_language: record.source_language,
             has_markdown: Boolean(record.markdown?.trim()),
             summary_status: record.summary_status,
             has_summary: Boolean(record.summary_json),
@@ -96,6 +97,7 @@ debugPipeline.get("/post-pipeline", async (c) => {
     }
 
     return c.json({
+      debug_schema_version: 2,
       post: {
         post_id: post.post_id,
         community_id: post.community_id,
@@ -104,6 +106,10 @@ debugPipeline.get("/post-pipeline", async (c) => {
         source_language: post.source_language,
         translation_policy: post.translation_policy,
         link_url: post.link_url,
+        link_og_title: post.link_og_title,
+        has_link_og_image: Boolean(post.link_og_image_url),
+        has_link_enrichment_snapshot: Boolean(post.link_enrichment_snapshot_json),
+        link_enrichment_synced_at: post.link_enrichment_synced_at,
         status: post.status,
         created_at: post.created_at,
       },

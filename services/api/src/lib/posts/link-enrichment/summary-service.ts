@@ -1,6 +1,6 @@
 import type { Env } from "../../../env"
 import type { DbExecutor } from "../../db-helpers"
-import { normalizeContentLocale, sameLanguageLocale } from "../../localization/content-locale"
+import { detectSourceLanguageFromText, normalizeContentLocale, sameLanguageLocale } from "../../localization/content-locale"
 import type { Client } from "../../sql-client"
 import { updatePostLinkPreviewMetadata } from "../community-post-store"
 import {
@@ -130,15 +130,17 @@ export async function translateAndStoreLinkSummary(input: {
   if (!locale) {
     return { resultRef: "skipped:invalid_locale", snapshotJson: null }
   }
-  if (sameLanguageLocale("en", locale)) {
-    const record = await getLinkEnrichmentByNormalizedUrl(input.controlPlaneClient, input.normalizedUrl)
+  const record = await getLinkEnrichmentByNormalizedUrl(input.controlPlaneClient, input.normalizedUrl)
+  const sourceLanguage = record
+    ? record.source_language ?? detectSourceLanguageFromText([record.title, record.description]) ?? "en"
+    : "en"
+  if (sameLanguageLocale("en", locale) && sameLanguageLocale(sourceLanguage, "en")) {
     return {
-      resultRef: "skipped:canonical_locale",
+      resultRef: `skipped:canonical_locale:${sourceLanguage}`,
       snapshotJson: record ? JSON.stringify(buildLinkEnrichmentSnapshot(record)) : null,
     }
   }
 
-  const record = await getLinkEnrichmentByNormalizedUrl(input.controlPlaneClient, input.normalizedUrl)
   if (!record) {
     return { resultRef: "skipped:missing_enrichment", snapshotJson: null }
   }

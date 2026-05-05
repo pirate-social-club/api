@@ -9,8 +9,10 @@ import { loadCommunityProjection } from "../communities/create/repository"
 import { detectSourceLanguageFromText } from "../localization/content-locale"
 import { emitCommentReply, emitPostCommented } from "../notifications/notification-emitters"
 import {
+  ANY_COMMUNITY_ROLE,
   canAccessCommunity,
   getCommunityMembershipState,
+  hasCommunityRole,
   type CommunityMembershipRow,
 } from "../communities/membership/membership-state-store"
 import type {
@@ -31,6 +33,8 @@ import {
   getCommunityCommentPolicy,
   insertComment,
   markCommentDeleted,
+  setCommentRepliesLocked,
+  setCommentStatus,
   upsertCommentVote,
 } from "./community-comment-store"
 import { incrementAncestorCommentCounters, incrementThreadPostCommentCounters, insertCommentClosureRows } from "./comment-closure-store"
@@ -147,9 +151,12 @@ export async function createComment(input: {
 
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
+    let membership: CommunityMembershipRow | null = null
     if (!input.bypassAuthorAccessChecks) {
-      await requireMemberAccess(db.client, input.communityId, input.userId)
+      membership = await requireMemberAccess(db.client, input.communityId, input.userId)
     }
+    const canBypassLocks = input.bypassAuthorAccessChecks === true
+      || (membership != null && hasCommunityRole(membership, ANY_COMMUNITY_ROLE))
 
     const idempotencyKey = input.body.idempotency_key?.trim() ?? ""
     const existing = idempotencyKey
@@ -167,6 +174,9 @@ export async function createComment(input: {
     const threadRootPost = await getPostById(db.client, input.threadRootPostId)
     if (!threadRootPost || threadRootPost.community_id !== input.communityId || threadRootPost.status !== "published") {
       throw notFoundError("Post not found")
+    }
+    if (!input.parentCommentId && threadRootPost.comments_locked && !canBypassLocks) {
+      throw eligibilityFailed("Comments are locked for this post")
     }
 
     const policy = await getCommunityCommentPolicy(db.client, input.communityId)
@@ -197,6 +207,9 @@ export async function createComment(input: {
     }
     if (parentComment && parentComment.status !== "published") {
       throw eligibilityFailed("Replies are not allowed on removed or deleted comments")
+    }
+    if (parentComment && parentComment.replies_locked && !canBypassLocks) {
+      throw eligibilityFailed("Replies are locked for this comment")
     }
 
     const agentWriteAuthorization = await authorizeAgentWrite({
@@ -434,7 +447,7 @@ export async function deleteComment(input: {
 
   const db = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
   try {
-    const membership = await requireMemberAccess(db.client, projection.community_id, input.userId)
+    await requireMemberAccess(db.client, projection.community_id, input.userId)
 
     const comment = await getCommentById(db.client, input.commentId)
     if (!comment) {
@@ -443,7 +456,7 @@ export async function deleteComment(input: {
     if (comment.status === "deleted") {
       return comment
     }
-    if (comment.author_user_id !== input.userId && membership.role_status !== "active") {
+    if (comment.author_user_id !== input.userId) {
       throw eligibilityFailed("You do not have permission to delete this comment")
     }
 
@@ -492,6 +505,130 @@ export async function deleteComment(input: {
     } finally {
       tx.close()
     }
+  } finally {
+    db.close()
+  }
+}
+
+export async function removeCommentAsModerator(input: {
+  env: Env
+  userId: string
+  commentId: string
+  communityRepository: CommentServiceCommunityRepository
+}): Promise<Comment> {
+  const projection = await input.communityRepository.getCommunityCommentProjectionByCommentId(input.commentId)
+  if (!projection) {
+    throw notFoundError("Comment not found")
+  }
+
+  const db = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
+  try {
+    const membership = await requireMemberAccess(db.client, projection.community_id, input.userId)
+    if (!hasCommunityRole(membership, ANY_COMMUNITY_ROLE)) {
+      throw eligibilityFailed("Moderator access is required")
+    }
+
+    const comment = await getCommentById(db.client, input.commentId)
+    if (!comment) {
+      throw notFoundError("Comment not found")
+    }
+    if (comment.status === "deleted") {
+      throw badRequestError("Cannot remove a deleted comment")
+    }
+    if (comment.status === "removed") {
+      return comment
+    }
+
+    const updatedAt = nowIso()
+    const tx = await db.client.transaction("write")
+    try {
+      const removed = await setCommentStatus({
+        executor: tx,
+        commentId: input.commentId,
+        status: "removed",
+        now: updatedAt,
+      })
+      await tx.commit()
+
+      try {
+        await input.communityRepository.recordCommunityCommentProjection({
+          communityId: removed.community_id,
+          threadRootPostId: removed.thread_root_post_id,
+          sourceCommentId: removed.comment_id,
+          parentCommentId: removed.parent_comment_id,
+          depth: removed.depth,
+          status: removed.status,
+          sourceCreatedAt: removed.created_at,
+          actorUserId: input.userId,
+          createdAt: updatedAt,
+        })
+      } catch {
+        await enqueueProjectionRetry({
+          client: db.client,
+          communityId: removed.community_id,
+          comment: removed,
+          createdAt: updatedAt,
+        })
+      }
+
+      await syncThreadRootPostProjectionMetrics({
+        client: db.client,
+        communityRepository: input.communityRepository,
+        threadRootPostId: removed.thread_root_post_id,
+        updatedAt,
+      })
+
+      return removed
+    } catch (error) {
+      await safeRollback(tx, "[comments] rollback failed while removing comment")
+      throw error
+    } finally {
+      tx.close()
+    }
+  } finally {
+    db.close()
+  }
+}
+
+export async function setCommentReplyLock(input: {
+  env: Env
+  userId: string
+  commentId: string
+  locked: boolean
+  reason?: string | null
+  communityRepository: CommentServiceCommunityRepository
+}): Promise<Comment> {
+  const projection = await input.communityRepository.getCommunityCommentProjectionByCommentId(input.commentId)
+  if (!projection) {
+    throw notFoundError("Comment not found")
+  }
+
+  const db = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
+  try {
+    const membership = await requireMemberAccess(db.client, projection.community_id, input.userId)
+    if (!hasCommunityRole(membership, ANY_COMMUNITY_ROLE)) {
+      throw eligibilityFailed("Moderator access is required")
+    }
+
+    const comment = await getCommentById(db.client, input.commentId)
+    if (!comment) {
+      throw notFoundError("Comment not found")
+    }
+    if (comment.status !== "published") {
+      throw badRequestError("Cannot lock replies on a comment that is not published")
+    }
+
+    const updatedAt = nowIso()
+    const updated = await setCommentRepliesLocked({
+      executor: db.client,
+      commentId: input.commentId,
+      locked: input.locked,
+      actorUserId: input.userId,
+      reason: input.reason?.trim() || null,
+      now: updatedAt,
+    })
+
+    return updated
   } finally {
     db.close()
   }

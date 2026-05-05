@@ -1,4 +1,4 @@
-import { numberOrNull, requiredString, rowValue, stringOrNull } from "../sql-row"
+import { numberOrNull, requiredNumber, requiredString, rowValue, stringOrNull } from "../sql-row"
 import type { Post } from "../../types"
 
 type LabelAssignmentResultJson = Post["label_assignment_result_json"]
@@ -9,7 +9,8 @@ export const POST_SELECT_COLUMNS = `
   agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot, disclosed_qualifiers_json,
   label_id, label_assignment_status, label_assigned_by, label_assigned_at, label_ai_confidence,
   label_assignment_error, label_assignment_model, label_assignment_result_json,
-  post_type, status, visibility, title, body, caption, lyrics,
+  post_type, status, 0 AS comments_locked, NULL AS comments_locked_at, NULL AS comments_locked_by_user_id, NULL AS comments_lock_reason,
+  visibility, title, body, caption, lyrics,
   link_url, link_og_image_url, link_og_title, link_enrichment_snapshot_json, link_enrichment_synced_at,
   embeds_json, media_refs_json, song_artifact_bundle_id, source_language, translation_policy,
   access_mode, asset_id, parent_post_id, upstream_asset_refs_json, song_mode, rights_basis, analysis_state, analysis_result_ref,
@@ -41,6 +42,10 @@ export type PostRow = {
   label_assignment_result_json: string | null
   post_type: Post["post_type"]
   status: Post["status"]
+  comments_locked: number
+  comments_locked_at: string | null
+  comments_locked_by_user_id: string | null
+  comments_lock_reason: string | null
   visibility: Post["visibility"]
   title: string | null
   body: string | null
@@ -156,6 +161,10 @@ export function toPostRow(row: unknown): PostRow {
     label_assignment_result_json: stringOrNull(rowValue(row, "label_assignment_result_json")),
     post_type: requiredString(row, "post_type") as Post["post_type"],
     status: requiredString(row, "status") as Post["status"],
+    comments_locked: requiredNumber(row, "comments_locked"),
+    comments_locked_at: stringOrNull(rowValue(row, "comments_locked_at")),
+    comments_locked_by_user_id: stringOrNull(rowValue(row, "comments_locked_by_user_id")),
+    comments_lock_reason: stringOrNull(rowValue(row, "comments_lock_reason")),
     visibility: requiredString(row, "visibility") as Post["visibility"],
     title: stringOrNull(rowValue(row, "title")),
     body: stringOrNull(rowValue(row, "body")),
@@ -213,6 +222,10 @@ export function serializePost(row: PostRow): Post {
     label_assignment_result_json: parseLabelAssignmentResult(row.label_assignment_result_json),
     post_type: row.post_type,
     status: row.status,
+    comments_locked: row.comments_locked === 1,
+    comments_locked_at: row.comments_locked_at,
+    comments_locked_by_user_id: row.comments_locked_by_user_id,
+    comments_lock_reason: row.comments_lock_reason,
     visibility: row.visibility,
     title: row.title,
     body: row.body,

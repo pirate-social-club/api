@@ -21,6 +21,7 @@ function toRecord(row: unknown): LinkEnrichmentRecord {
     status: requiredString(row, "status") as LinkEnrichmentStatus,
     title: stringOrNull(rowValue(row, "title")),
     description: stringOrNull(rowValue(row, "description")),
+    source_language: stringOrNull(rowValue(row, "source_language")),
     publisher: stringOrNull(rowValue(row, "publisher")),
     published_at: stringOrNull(rowValue(row, "published_at")),
     image_url: stringOrNull(rowValue(row, "image_url")),
@@ -73,6 +74,7 @@ export async function upsertLinkEnrichment(input: {
   status: LinkEnrichmentStatus
   title: string | null
   description: string | null
+  sourceLanguage?: string | null
   publisher: string | null
   publishedAt: string | null
   imageUrl: string | null
@@ -90,14 +92,14 @@ export async function upsertLinkEnrichment(input: {
     sql: `
       INSERT INTO link_enrichments (
         link_enrichment_id, normalized_url, canonical_url, provider, status,
-        title, description, publisher, published_at, image_url,
+        title, description, source_language, publisher, published_at, image_url,
         markdown, summary_json, translations_json, summary_status, summary_model,
         error, fetched_at, summarized_at, created_at, updated_at
       ) VALUES (
         ?1, ?2, ?3, ?4, ?5,
-        ?6, ?7, ?8, ?9, ?10,
-        ?11, ?12, ?13, ?14, ?15,
-        ?16, ?17, NULL, ?18, ?18
+        ?6, ?7, ?8, ?9, ?10, ?11,
+        ?12, ?13, ?14, ?15, ?16,
+        ?17, ?18, NULL, ?19, ?19
       )
       ON CONFLICT(normalized_url) DO UPDATE SET
         canonical_url = excluded.canonical_url,
@@ -105,6 +107,7 @@ export async function upsertLinkEnrichment(input: {
         status = excluded.status,
         title = excluded.title,
         description = excluded.description,
+        source_language = COALESCE(excluded.source_language, link_enrichments.source_language),
         publisher = excluded.publisher,
         published_at = excluded.published_at,
         image_url = excluded.image_url,
@@ -125,6 +128,7 @@ export async function upsertLinkEnrichment(input: {
       input.status,
       input.title,
       input.description,
+      input.sourceLanguage ?? null,
       input.publisher,
       input.publishedAt,
       input.imageUrl,
@@ -384,6 +388,7 @@ export function buildLinkEnrichmentSnapshot(record: LinkEnrichmentRecord): LinkE
     canonical_url: record.canonical_url,
     title: record.title,
     description: record.description,
+    source_language: record.source_language,
     publisher: record.publisher,
     published_at: record.published_at,
     image_url: record.image_url,

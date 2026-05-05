@@ -7,7 +7,15 @@ import {
   type AuthenticatedEnv,
 } from "../lib/auth-middleware"
 import { trackApiEvent } from "../lib/analytics/track"
-import { castCommentVote, createComment, deleteComment, getCommentContext, listCommentReplies } from "../lib/comments/comment-service"
+import {
+  castCommentVote,
+  createComment,
+  deleteComment,
+  getCommentContext,
+  listCommentReplies,
+  removeCommentAsModerator,
+  setCommentReplyLock,
+} from "../lib/comments/comment-service"
 import { assertAgentDelegatedWriteMatchesActor } from "../lib/agents/agent-write-authorization"
 import type { CreateCommentRequest } from "../lib/comments/comment-types"
 import { writeAuditEventForEnv } from "../lib/audit"
@@ -148,12 +156,77 @@ comments.post("/:commentId/vote", async (c) => {
 
 comments.post("/:commentId/remove", async (c) => {
   const actor = c.get("actor")
+  const commentId = decodePublicCommentId(c.req.param("commentId"))
+  const result = await removeCommentAsModerator({
+    env: c.env,
+    userId: actor.userId,
+    commentId,
+    communityRepository: getCommunityRepository(c.env),
+  })
+  await writeAuditEventForEnv(c.env, {
+    action: "community.comment_removed_by_moderator",
+    actorId: actor.userId,
+    actorType: "user",
+    communityId: result.community_id,
+    targetId: commentId,
+    targetType: "comment",
+    metadata: {
+      removed_at: result.updated_at,
+    },
+  })
+  return c.json(serializeComment(result), 200)
+})
+
+comments.post("/:commentId/delete", async (c) => {
+  const actor = c.get("actor")
+  const commentId = decodePublicCommentId(c.req.param("commentId"))
   const result = await deleteComment({
     env: c.env,
     userId: actor.userId,
-    commentId: decodePublicCommentId(c.req.param("commentId")),
+    commentId,
     userRepository: getUserRepository(c.env),
     communityRepository: getCommunityRepository(c.env),
+  })
+  await writeAuditEventForEnv(c.env, {
+    action: "community.comment_deleted_by_author",
+    actorId: actor.userId,
+    actorType: "user",
+    communityId: result.community_id,
+    targetId: commentId,
+    targetType: "comment",
+    metadata: {
+      deleted_at: result.updated_at,
+    },
+  })
+  return c.json(serializeComment(result), 200)
+})
+
+comments.post("/:commentId/replies-lock", async (c) => {
+  const actor = c.get("actor")
+  const body = await c.req.json().catch(() => null) as { locked?: boolean; reason?: string | null } | null
+  if (!body || typeof body !== "object") {
+    throw badRequestError("Invalid reply lock payload")
+  }
+  const commentId = decodePublicCommentId(c.req.param("commentId"))
+  const result = await setCommentReplyLock({
+    env: c.env,
+    userId: actor.userId,
+    commentId,
+    locked: body.locked !== false,
+    reason: body.reason ?? null,
+    communityRepository: getCommunityRepository(c.env),
+  })
+  await writeAuditEventForEnv(c.env, {
+    action: result.replies_locked ? "community.comment_replies_locked_by_moderator" : "community.comment_replies_unlocked_by_moderator",
+    actorId: actor.userId,
+    actorType: "user",
+    communityId: result.community_id,
+    targetId: commentId,
+    targetType: "comment",
+    metadata: {
+      locked: result.replies_locked,
+      reason: result.replies_lock_reason,
+    },
   })
   return c.json(serializeComment(result), 200)
 })

@@ -187,6 +187,10 @@ export type Comment = {
   agent_ownership_provider_snapshot?: AgentOwnershipProvider | null
   body: string | null
   status: "published" | "hidden" | "removed" | "deleted"
+  replies_locked?: boolean
+  replies_locked_at?: string | null
+  replies_locked_by_user_id?: string | null
+  replies_lock_reason?: string | null
   depth: number
   direct_reply_count: number
   descendant_count: number
@@ -274,6 +278,10 @@ export type Post = {
   label_id?: string | null
   post_type: "text" | "image" | "video" | "link" | "song"
   status: "draft" | "published" | "hidden" | "removed" | "deleted"
+  comments_locked?: boolean
+  comments_locked_at?: string | null
+  comments_locked_by_user_id?: string | null
+  comments_lock_reason?: string | null
   visibility: "public" | "members_only"
   title?: string | null
   body?: string | null

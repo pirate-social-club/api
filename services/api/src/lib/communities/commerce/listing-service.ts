@@ -1,7 +1,12 @@
 import { badRequestError, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
 import { loadCommunityProjection } from "../create/service"
-import { getCommunityMembershipState } from "../membership/membership-state-store"
+import {
+  OWNER_OR_ADMIN_ROLE,
+  canAccessCommunity,
+  getCommunityMembershipState,
+  hasCommunityRole,
+} from "../membership/membership-state-store"
 import { openCommunityDb } from "../community-db-factory"
 import type {
   CommunityDatabaseBindingRepository,
@@ -152,11 +157,11 @@ export async function createCommunityListing(input: {
   const assetId = input.body.asset?.trim() ? decodePublicAssetId(input.body.asset) : null
   try {
     const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
-    if (membership.membership_status !== "member" && membership.role_status !== "active") {
+    if (!canAccessCommunity(membership)) {
       throw notFoundError("Community not found")
     }
     await requireVerifiedHuman(input.userRepository, input.userId, {
-      bypassForCommunityOwner: membership.role_status === "active",
+      bypassForCommunityOwner: hasCommunityRole(membership, OWNER_OR_ADMIN_ROLE),
     })
     if (assetId) {
       const asset = await getAssetRow(db.client, input.communityId, assetId)
@@ -166,7 +171,7 @@ export async function createCommunityListing(input: {
       assertAssetReadyForStoryRoyaltyCommerce(asset, input.env)
       if (asset.creator_user_id !== input.userId) {
         const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
-        if (membership.role_status !== "active") {
+        if (!hasCommunityRole(membership, OWNER_OR_ADMIN_ROLE)) {
           throw notFoundError("Asset not found")
         }
       }
@@ -244,7 +249,7 @@ export async function updateCommunityListing(input: {
     }
     if (listing.created_by_user_id !== input.userId) {
       const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
-      if (membership.role_status !== "active") {
+      if (!hasCommunityRole(membership, OWNER_OR_ADMIN_ROLE)) {
         throw notFoundError("Listing not found")
       }
     }

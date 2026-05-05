@@ -24,6 +24,7 @@ export type LinkEnrichmentSnapshot = {
   canonical_url: string | null
   title: string | null
   description: string | null
+  source_language: string | null
   publisher: string | null
   published_at: string | null
   image_url: string | null
@@ -48,6 +49,7 @@ export type LinkEnrichmentRecord = {
   status: LinkEnrichmentStatus
   title: string | null
   description: string | null
+  source_language: string | null
   publisher: string | null
   published_at: string | null
   image_url: string | null

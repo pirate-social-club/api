@@ -105,6 +105,36 @@ export async function addCommunityMember(communityDbRoot: string, communityId: s
   }
 }
 
+export async function grantCommunityRole(input: {
+  communityDbRoot: string
+  communityId: string
+  userId: string
+  role: "owner" | "admin" | "moderator"
+}): Promise<void> {
+  const client = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+
+  try {
+    const now = new Date().toISOString()
+    await client.execute({
+      sql: `
+        INSERT INTO community_roles (
+          role_assignment_id, community_id, user_id, role, status, granted_at, created_at, updated_at
+        ) VALUES (
+          ?1, ?2, ?3, ?4, 'active', ?5, ?5, ?5
+        )
+        ON CONFLICT(role_assignment_id) DO UPDATE SET
+          status = excluded.status,
+          updated_at = excluded.updated_at
+      `,
+      args: [`rol_${input.communityId}_${input.userId}_${input.role}`, input.communityId, input.userId, input.role, now],
+    })
+  } finally {
+    client.close()
+  }
+}
+
 function rawPublicId(value: string, prefix: string): string {
   const publicPrefix = `${prefix}_`
   if (!value.startsWith(publicPrefix)) {

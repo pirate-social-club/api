@@ -22,6 +22,7 @@ async function createControlPlaneClient() {
       status TEXT NOT NULL,
       title TEXT,
       description TEXT,
+      source_language TEXT,
       publisher TEXT,
       published_at TEXT,
       image_url TEXT,

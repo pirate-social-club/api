@@ -12,6 +12,7 @@ import type { CommunityDatabaseBindingRepository } from "../src/lib/communities/
 import { resolveCoreRepoPath } from "../shared/core-repo-paths"
 import { splitSqlStatements, toSqliteCompatibleStatements } from "../shared/sql-migration"
 import { ensureRemoteCommunityMembershipStateIndexes } from "../src/lib/communities/ensure-remote-community-membership-indexes"
+import { ensureRemoteThreadCommentLockColumns } from "../src/lib/communities/ensure-remote-thread-comment-lock-columns"
 
 const cleanupPaths: string[] = []
 const COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS = 120_000
@@ -189,13 +190,17 @@ describe("openCommunityDb", () => {
     } satisfies CommunityDatabaseBindingRepository
 
     let ensureCalls = 0
+    let ensureLockColumnCalls = 0
     const db = await openCommunityDb(
       {
         TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
       },
       repo,
       "cmt_remote",
-      { ensureRemoteMembershipStateIndexes: async () => { ensureCalls += 1 } },
+      {
+        ensureRemoteMembershipStateIndexes: async () => { ensureCalls += 1 },
+        ensureRemoteThreadCommentLockColumns: async () => { ensureLockColumnCalls += 1 },
+      },
     )
 
     expect(db.databaseUrl).toBe(databaseUrl)
@@ -207,12 +212,16 @@ describe("openCommunityDb", () => {
       },
       repo,
       "cmt_remote",
-      { ensureRemoteMembershipStateIndexes: async () => { ensureCalls += 1 } },
+      {
+        ensureRemoteMembershipStateIndexes: async () => { ensureCalls += 1 },
+        ensureRemoteThreadCommentLockColumns: async () => { ensureLockColumnCalls += 1 },
+      },
     )
 
     expect(secondDb.databaseUrl).toBe(databaseUrl)
     secondDb.close()
     expect(ensureCalls).toBe(1)
+    expect(ensureLockColumnCalls).toBe(1)
   })
 
   testWithTimeout("applies pending template migrations for existing local community databases", async () => {
@@ -256,6 +265,10 @@ describe("openCommunityDb", () => {
     expect(postColumns).toContain("comment_count")
     expect(postColumns).toContain("top_level_comment_count")
     expect(postColumns).toContain("last_comment_at")
+    expect(postColumns).toContain("comments_locked")
+    expect(postColumns).toContain("comments_locked_at")
+    expect(postColumns).toContain("comments_locked_by_user_id")
+    expect(postColumns).toContain("comments_lock_reason")
 
     const assetColumns = await getTableColumns(databasePath, "assets")
     expect(assetColumns).toContain("story_royalty_policy_id")
@@ -293,6 +306,12 @@ describe("openCommunityDb", () => {
     expect(moderationActionColumns).toContain("previous_post_status")
     expect(moderationActionColumns).toContain("next_post_status")
 
+    const commentColumns = await getTableColumns(databasePath, "comments")
+    expect(commentColumns).toContain("replies_locked")
+    expect(commentColumns).toContain("replies_locked_at")
+    expect(commentColumns).toContain("replies_locked_by_user_id")
+    expect(commentColumns).toContain("replies_lock_reason")
+
     const indexNames = await listIndexNames(databasePath)
     expect(indexNames).toContain("idx_community_memberships_state_lookup")
     expect(indexNames).toContain("idx_community_roles_state_lookup")
@@ -318,6 +337,53 @@ describe("openCommunityDb", () => {
       expect(afterIndexNames).toContain("idx_community_roles_state_lookup")
 
       await ensureRemoteCommunityMembershipStateIndexes(client)
+    } finally {
+      client.close()
+    }
+  }, COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS)
+
+  testWithTimeout("ensures thread and comment lock columns on remote community database open", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-remote-lock-columns-"))
+    cleanupPaths.push(rootDir)
+
+    const databasePath = join(rootDir, `${randomUUID()}.db`)
+    await applyPartialCommunitySchema(databasePath)
+
+    const client = createClient({ url: `file:${databasePath}` })
+    try {
+      const beforePostColumns = await getTableColumns(databasePath, "posts")
+      expect(beforePostColumns).not.toContain("comments_locked")
+      expect(beforePostColumns).not.toContain("comments_lock_reason")
+
+      await client.execute(`
+        CREATE TABLE comments (
+          comment_id TEXT PRIMARY KEY,
+          community_id TEXT NOT NULL,
+          thread_root_post_id TEXT NOT NULL,
+          parent_comment_id TEXT,
+          body TEXT,
+          status TEXT NOT NULL
+        )
+      `)
+      const beforeCommentColumns = await getTableColumns(databasePath, "comments")
+      expect(beforeCommentColumns).not.toContain("replies_locked")
+      expect(beforeCommentColumns).not.toContain("replies_lock_reason")
+
+      await ensureRemoteThreadCommentLockColumns(client)
+
+      const afterPostColumns = await getTableColumns(databasePath, "posts")
+      expect(afterPostColumns).toContain("comments_locked")
+      expect(afterPostColumns).toContain("comments_locked_at")
+      expect(afterPostColumns).toContain("comments_locked_by_user_id")
+      expect(afterPostColumns).toContain("comments_lock_reason")
+
+      const afterCommentColumns = await getTableColumns(databasePath, "comments")
+      expect(afterCommentColumns).toContain("replies_locked")
+      expect(afterCommentColumns).toContain("replies_locked_at")
+      expect(afterCommentColumns).toContain("replies_locked_by_user_id")
+      expect(afterCommentColumns).toContain("replies_lock_reason")
+
+      await ensureRemoteThreadCommentLockColumns(client)
     } finally {
       client.close()
     }

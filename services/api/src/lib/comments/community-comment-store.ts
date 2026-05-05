@@ -120,7 +120,9 @@ export async function getCommentById(executor: DbExecutor, commentId: string): P
              anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot,
              body, source_language, status, depth,
              direct_reply_count, descendant_count, upvote_count, downvote_count, score,
-             last_reply_at, content_hash, swarm_body_ref, idempotency_key, created_at, updated_at
+             last_reply_at, content_hash, swarm_body_ref, idempotency_key,
+             0 AS replies_locked, NULL AS replies_locked_at, NULL AS replies_locked_by_user_id, NULL AS replies_lock_reason,
+             created_at, updated_at
       FROM comments
       WHERE comment_id = ?1
       LIMIT 1
@@ -479,4 +481,61 @@ export async function markCommentDeleted(input: {
     throw internalError("Comment row is missing after delete")
   }
   return updated
+}
+
+export async function setCommentStatus(input: {
+  executor: DbExecutor
+  commentId: string
+  status: "published" | "hidden" | "removed"
+  now: string
+}): Promise<Comment> {
+  await input.executor.execute({
+    sql: `
+      UPDATE comments
+      SET status = ?2,
+          updated_at = ?3
+      WHERE comment_id = ?1
+    `,
+    args: [input.commentId, input.status, input.now],
+  })
+
+  const updated = await getCommentById(input.executor, input.commentId)
+  if (!updated) {
+    throw internalError("Comment row is missing after status update")
+  }
+  return updated
+}
+
+export async function setCommentRepliesLocked(input: {
+  executor: DbExecutor
+  commentId: string
+  locked: boolean
+  actorUserId: string
+  reason: string | null
+  now: string
+}): Promise<Comment> {
+  await input.executor.execute({
+    sql: `
+      UPDATE comments
+      SET replies_locked = ?2,
+          replies_locked_at = CASE WHEN ?2 = 1 THEN ?3 ELSE NULL END,
+          replies_locked_by_user_id = CASE WHEN ?2 = 1 THEN ?4 ELSE NULL END,
+          replies_lock_reason = CASE WHEN ?2 = 1 THEN ?5 ELSE NULL END,
+          updated_at = ?3
+      WHERE comment_id = ?1
+    `,
+    args: [input.commentId, input.locked ? 1 : 0, input.now, input.actorUserId, input.reason],
+  })
+
+  const updated = await getCommentById(input.executor, input.commentId)
+  if (!updated) {
+    throw internalError("Comment row is missing after lock update")
+  }
+  return {
+    ...updated,
+    replies_locked: input.locked,
+    replies_locked_at: input.locked ? input.now : null,
+    replies_locked_by_user_id: input.locked ? input.actorUserId : null,
+    replies_lock_reason: input.locked ? input.reason : null,
+  }
 }

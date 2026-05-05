@@ -1,8 +1,10 @@
 import type { Client } from "../sql-client"
 import type { UserRepository } from "../auth/repositories"
 import {
+  ANY_COMMUNITY_ROLE,
   canAccessCommunity,
   getCommunityMembershipState,
+  hasCommunityRole,
   type CommunityMembershipRow,
 } from "../communities/membership/membership-state-store"
 import { notFoundError, verificationRequired } from "../errors"
@@ -29,7 +31,7 @@ export function canReadNonPublishedPost(
   membership: CommunityMembershipRow,
   userId: string,
 ): boolean {
-  return membership.role_status === "active" || post.author_user_id === userId
+  return hasCommunityRole(membership, ANY_COMMUNITY_ROLE) || post.author_user_id === userId
 }
 
 export async function requireVerifiedHuman(userRepository: UserRepository, userId: string): Promise<void> {

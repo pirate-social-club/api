@@ -21,7 +21,7 @@ import type {
   ModerationCase,
   ModerationCaseDetail,
 } from "./moderation-types"
-import { requireOwner, requireVerifiedHuman } from "./moderation-access"
+import { requireAnyCommunityRole, requireVerifiedHuman } from "./moderation-access"
 import { assertCreateModerationActionRequest } from "./moderation-validation"
 import { buildModerationCaseDetail } from "./case-detail-service"
 
@@ -150,7 +150,7 @@ export async function resolveModerationCaseWithAction(input: {
   assertCreateModerationActionRequest(input.body)
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
-    await requireOwner({
+    await requireAnyCommunityRole({
       client: db.client,
       communityId: input.communityId,
       userId: input.userId,

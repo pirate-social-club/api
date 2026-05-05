@@ -10,7 +10,7 @@ import type {
   ModerationCaseDetail,
   ModerationCaseListResponse,
 } from "./moderation-types"
-import { requireOwner } from "./moderation-access"
+import { requireAnyCommunityRole } from "./moderation-access"
 import { buildModerationCaseDetail } from "./case-detail-service"
 
 export async function listCommunityModerationCases(input: {
@@ -21,7 +21,7 @@ export async function listCommunityModerationCases(input: {
 }): Promise<ModerationCaseListResponse> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
-    await requireOwner({
+    await requireAnyCommunityRole({
       client: db.client,
       communityId: input.communityId,
       userId: input.userId,
@@ -47,7 +47,7 @@ export async function getModerationCaseDetail(input: {
 }): Promise<ModerationCaseDetail> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
-    await requireOwner({
+    await requireAnyCommunityRole({
       client: db.client,
       communityId: input.communityId,
       userId: input.userId,

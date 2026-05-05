@@ -1,6 +1,6 @@
 import type { Client } from "../../sql-client"
 import { badRequestError, notFoundError, verificationRequired } from "../../errors"
-import { getCommunityMembershipState } from "../membership/membership-state-store"
+import { canAccessCommunity, getCommunityMembershipState } from "../membership/membership-state-store"
 import type { CommunityReadRepository } from "../db-community-repository"
 import type { UserRepository } from "../../auth/repositories"
 import { getPrimaryWalletSnapshot } from "../community-serialization"
@@ -16,7 +16,7 @@ export async function requireCommunityMember(
   userId: string,
 ): Promise<void> {
   const membership = await getCommunityMembershipState(client, communityId, userId)
-  if (membership.membership_status !== "member" && membership.role_status !== "active") {
+  if (!canAccessCommunity(membership)) {
     throw notFoundError("Community not found")
   }
 }
