@@ -256,7 +256,7 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
   })
 
   communities.get("/:communityId/link-preview", async (c) => {
-    const { communityId } = await getResolvedCommunityRouteContext(c)
+    await getResolvedCommunityRouteContext(c)
     const url = c.req.query("url")
     if (!url || !url.trim()) {
       throw badRequestError("url is required")

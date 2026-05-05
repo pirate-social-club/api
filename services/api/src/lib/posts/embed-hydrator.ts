@@ -24,11 +24,6 @@ type PredictionMarketPreview = KalshiMarketEmbed["preview"] | PolymarketMarketEm
 const MARKET_EMBED_TIMEOUT_MS = 8_000
 const MARKET_CHART_DAYS = 30
 
-function numberField(value: unknown): number | null {
-  const parsed = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10)
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
-}
-
 function stringField(value: unknown): string | null {
   const text = String(value ?? "").trim()
   return text || null

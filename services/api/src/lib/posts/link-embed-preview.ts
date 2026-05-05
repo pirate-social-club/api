@@ -85,11 +85,6 @@ function numberField(value: unknown): number | null {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
 }
 
-function stringField(value: unknown): string | null {
-  const text = String(value ?? "").trim()
-  return text || null
-}
-
 type XPostOEmbedResponse = {
   html?: unknown
   cache_age?: unknown
