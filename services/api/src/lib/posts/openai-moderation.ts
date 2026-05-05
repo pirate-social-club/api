@@ -147,11 +147,7 @@ export function resolveVisualPlatformDecision(
     return "disallow"
   }
 
-  if (options.ignoreBroadSexualCategory) {
-    return "allow"
-  }
-
-  if (flagged(categories, "sexual")) {
+  if (flagged(categories, "sexual") && !options.ignoreBroadSexualCategory) {
     const nudityPolicy: PolicyDecisionLevel = adultContentPolicy.explicit_nudity
     const sexualContentPolicy: PolicyDecisionLevel = adultContentPolicy.explicit_sexual_content
     const combined = moreRestrictive(nudityPolicy, sexualContentPolicy)

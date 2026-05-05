@@ -139,6 +139,15 @@ describe("resolveVisualPlatformDecision", () => {
     expect(decision).toBe("allow")
   })
 
+  test("sexual ignore does not short-circuit later category mappings", () => {
+    const categories = { sexual: true }
+    const results = makeResults({ sexual: 0.8 })
+    const decision = resolveVisualPlatformDecision(categories, results, BLOCK_THRESHOLD, defaultAdultPolicy, {
+      ignoreBroadSexualCategory: true,
+    })
+    expect(decision).toBe("allow")
+  })
+
   test("sexual/minors is not ignored when a visual policy pass is authoritative", () => {
     const categories = { sexual: true, "sexual/minors": true }
     const results = makeResultsWithMinors(0.97)
