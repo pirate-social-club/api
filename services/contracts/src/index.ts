@@ -1350,6 +1350,21 @@ export type ModerationCase = {
   resolved_at?: number | null;
 };
 
+export type ModerationCasePostPreview = {
+  post_id: string;
+  post_type: string;
+  status: string;
+  title: string | null;
+  body: string | null;
+  caption: string | null;
+  media_refs_json: string | null;
+  author_handle: string | null;
+};
+
+export type ModerationCaseListItem = ModerationCase & {
+  post: ModerationCasePostPreview | null;
+};
+
 export type ModerationCaseDetail = {
   case: ModerationCase;
   post: Post | null;
@@ -1360,7 +1375,7 @@ export type ModerationCaseDetail = {
 };
 
 export type ModerationCaseListResponse = {
-  items: Array<ModerationCase>;
+  items: Array<ModerationCaseListItem>;
   next_cursor: string | null;
 };
 

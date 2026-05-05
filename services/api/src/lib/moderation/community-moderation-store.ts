@@ -329,6 +329,9 @@ function serializeModerationCaseListItem(row: unknown): ModerationCaseListItem {
           body: stringOrNull(rowValue(row, "post_body")),
           caption: stringOrNull(rowValue(row, "post_caption")),
           media_refs_json: stringOrNull(rowValue(row, "media_refs_json")),
+          author_handle: stringOrNull(rowValue(row, "author_handle")),
+          author_user_id: stringOrNull(rowValue(row, "author_user_id")),
+          identity_mode: stringOrNull(rowValue(row, "identity_mode")),
         }
       : null,
   }
@@ -344,7 +347,8 @@ export async function listModerationCases(input: {
         mc.moderation_case_id, mc.community_id, mc.post_id, mc.comment_id, mc.status, mc.queue_scope,
         mc.priority, mc.opened_by, mc.created_at, mc.updated_at, mc.resolved_at,
         p.post_id as post_post_id, p.post_type, p.status as post_status, p.title as post_title,
-        p.body as post_body, p.caption as post_caption, p.media_refs_json
+        p.body as post_body, p.caption as post_caption, p.media_refs_json,
+        p.author_user_id, p.identity_mode, NULL as author_handle
       FROM moderation_cases mc
       LEFT JOIN posts p ON p.post_id = mc.post_id
       WHERE mc.community_id = ?1
@@ -488,6 +492,10 @@ export async function approveReviewHeldPost(input: {
       UPDATE posts
       SET status = 'published',
           analysis_state = 'allow',
+          content_safety_state = CASE
+            WHEN age_gate_policy = '18_plus' THEN content_safety_state
+            ELSE 'safe'
+          END,
           updated_at = ?2
       WHERE post_id = ?1
     `,

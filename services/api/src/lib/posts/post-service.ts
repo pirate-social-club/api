@@ -51,6 +51,7 @@ import {
   createModerationCase,
   createModerationSignal,
 } from "../moderation/community-moderation-store"
+import type { ModerationSignalSeverity } from "../moderation/moderation-types"
 
 export {
   getPost,
@@ -93,6 +94,60 @@ function resolveAnonymousScope(input: {
   }
 
   return requestedScope
+}
+
+const HIGH_SEVERITY_VISUAL_REASON_CODES = new Set([
+  "possible_minor_with_adult_content",
+  "explicit_sexual_activity",
+  "visible_genitals",
+  "voyeuristic_or_hidden_camera",
+  "deepfake_or_face_swap_risk",
+  "celebrity_adult_likeness",
+  "gore_or_injury",
+  "hate_symbol_or_text",
+  "weapon",
+])
+
+function readProviderCategories(providerResult: unknown): string[] {
+  if (!providerResult || typeof providerResult !== "object" || !("categories" in providerResult)) {
+    return []
+  }
+  const categories = (providerResult as { categories?: unknown }).categories
+  if (!categories || typeof categories !== "object") {
+    return []
+  }
+  return Object.keys(categories).filter((key) => (categories as Record<string, unknown>)[key] === true)
+}
+
+function readVisualPolicyReasonCodes(providerResult: unknown): string[] {
+  if (!providerResult || typeof providerResult !== "object") {
+    return []
+  }
+  const visualPolicy = (providerResult as { visual_policy?: unknown }).visual_policy
+  if (!visualPolicy || typeof visualPolicy !== "object") {
+    return []
+  }
+  const decision = (visualPolicy as { decision?: unknown }).decision
+  if (!decision || typeof decision !== "object") {
+    return []
+  }
+  const reasonCodes = (decision as { reasonCodes?: unknown }).reasonCodes
+  return Array.isArray(reasonCodes) ? reasonCodes.filter((code): code is string => typeof code === "string") : []
+}
+
+function moderationSeverityFromProviderResult(providerResult: unknown): ModerationSignalSeverity {
+  const categories = readProviderCategories(providerResult)
+  if (categories.some((category) => category === "sexual/minors" || category === "violence/graphic" || category === "self-harm/intent")) {
+    return "high"
+  }
+  const visualReasonCodes = readVisualPolicyReasonCodes(providerResult)
+  if (visualReasonCodes.some((code) => HIGH_SEVERITY_VISUAL_REASON_CODES.has(code))) {
+    return "high"
+  }
+  if (categories.length > 0 || visualReasonCodes.length > 0) {
+    return "medium"
+  }
+  return "medium"
 }
 
 export async function createPost(input: {
@@ -333,31 +388,30 @@ export async function createPost(input: {
       })
 
       if (analysisOverride?.analysis_state === "review_required") {
+        const providerResult = analysisProviderResult
+        const severity = moderationSeverityFromProviderResult(providerResult)
         const moderationCase = await createModerationCase({
           executor: tx,
           communityId: input.communityId,
           target: { postId: post.post_id },
-          priority: "medium",
+          priority: severity,
           openedBy: "platform_analysis",
           now: createdAt,
         })
-        const providerResult = analysisProviderResult
-        const categories = providerResult && typeof providerResult === "object" && "categories" in providerResult
-          ? Object.keys((providerResult as { categories: Record<string, boolean> }).categories).filter(
-              (k) => (providerResult as { categories: Record<string, boolean> }).categories[k],
-            )
-          : []
+        const categories = readProviderCategories(providerResult)
+        const visualReasonCodes = readVisualPolicyReasonCodes(providerResult)
+        const signalTypes = categories.length > 0 ? categories : visualReasonCodes
         await createModerationSignal({
           executor: tx,
           communityId: input.communityId,
           postId: post.post_id,
           moderationCaseId: moderationCase.moderation_case_id,
-          signalType: categories.length > 0 ? categories.join(",") : "review_required",
-          severity: "medium",
+          signalType: signalTypes.length > 0 ? signalTypes.join(",") : "review_required",
+          severity,
           provider: (providerResult && typeof providerResult === "object" && "provider" in providerResult
             ? String((providerResult as { provider: string }).provider)
             : "openai"),
-          providerLabel: categories.length > 0 ? categories[0] : "review_required",
+          providerLabel: signalTypes.length > 0 ? signalTypes[0] as string : "review_required",
           analysisResultRef: null,
           evidenceRef: providerResult ? JSON.stringify(providerResult) : null,
           now: createdAt,

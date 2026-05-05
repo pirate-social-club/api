@@ -91,6 +91,9 @@ export type ModerationCaseListItem = ModerationCase & {
     body: string | null
     caption: string | null
     media_refs_json: string | null
+    author_handle: string | null
+    author_user_id: string | null
+    identity_mode: string | null
   } | null
 }
 

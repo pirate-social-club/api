@@ -4,7 +4,8 @@ import type {
   CommunityDatabaseBindingRepository,
   CommunityPostProjectionRepository,
 } from "../communities/db-community-repository"
-import type { UserRepository } from "../auth/repositories"
+import type { ProfileRepository, UserRepository } from "../auth/repositories"
+import { getProfilePublicHandleLabel } from "../auth/auth-serializers"
 import type { DbExecutor } from "../db-helpers"
 import { badRequestError, eligibilityFailed, internalError, notFoundError, verificationRequired } from "../errors"
 import { nowIso } from "../helpers"
@@ -298,6 +299,7 @@ export async function listCommunityModerationCases(input: {
   userId: string
   communityId: string
   communityRepository: ModerationCommunityRepository
+  profileRepository?: ProfileRepository
 }): Promise<ModerationCaseListResponse> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
@@ -306,11 +308,29 @@ export async function listCommunityModerationCases(input: {
       communityId: input.communityId,
       userId: input.userId,
     })
-    return {
-      items: await listModerationCases({
+    const items = await listModerationCases({
         executor: db.client,
         communityId: input.communityId,
-      }),
+      })
+    if (input.profileRepository) {
+      const authorHandleByUserId = new Map<string, string | null>()
+      for (const item of items) {
+        const authorUserId = item.post?.identity_mode === "public" ? item.post.author_user_id : null
+        if (!authorUserId || authorHandleByUserId.has(authorUserId)) {
+          continue
+        }
+        const profile = await input.profileRepository.getProfileByUserId(authorUserId).catch(() => null)
+        authorHandleByUserId.set(authorUserId, profile ? getProfilePublicHandleLabel(profile) : null)
+      }
+      for (const item of items) {
+        const authorUserId = item.post?.identity_mode === "public" ? item.post.author_user_id : null
+        if (item.post && authorUserId) {
+          item.post.author_handle = authorHandleByUserId.get(authorUserId) ?? null
+        }
+      }
+    }
+    return {
+      items,
       next_cursor: null,
     }
   } finally {

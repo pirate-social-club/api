@@ -1,12 +1,15 @@
 import { describe, expect, test } from "bun:test"
 import {
+  combineModerationDecision,
   moreRestrictive,
+  moderationDecisionFromVisualPolicy,
   resolveAdultContentPolicy,
   resolveOpenAIModerationOutcome,
   resolveVisualPlatformDecision,
   outcomeFromDecision,
 } from "./openai-moderation"
 import type { Community } from "../../types"
+import { buildDefaultVisualPolicySettings } from "../communities/community-policy-defaults"
 
 type AdultContentPolicy = Community["adult_content_policy"]
 
@@ -69,6 +72,39 @@ describe("moreRestrictive", () => {
     expect(moreRestrictive("allow", "allow")).toBe("allow")
     expect(moreRestrictive("review", "review")).toBe("review")
     expect(moreRestrictive("disallow", "disallow")).toBe("disallow")
+  })
+})
+
+describe("combineModerationDecision", () => {
+  test("returns the stricter moderation decision", () => {
+    expect(combineModerationDecision("allow", "allow_with_gate")).toBe("allow_with_gate")
+    expect(combineModerationDecision("allow_with_gate", "review")).toBe("review")
+    expect(combineModerationDecision("review", "disallow")).toBe("disallow")
+    expect(combineModerationDecision("disallow", "allow")).toBe("disallow")
+  })
+})
+
+describe("moderationDecisionFromVisualPolicy", () => {
+  test("maps visual policy decisions onto post moderation decisions", () => {
+    expect(moderationDecisionFromVisualPolicy(null)).toBe("allow")
+    expect(moderationDecisionFromVisualPolicy({
+      provider: "visual_policy_vlm",
+      model: "x-ai/grok-4.3",
+      factsByImage: [],
+      decision: { policyDecision: "allow", reasonCodes: [], adultSignal: true },
+    })).toBe("allow_with_gate")
+    expect(moderationDecisionFromVisualPolicy({
+      provider: "visual_policy_vlm",
+      model: "x-ai/grok-4.3",
+      factsByImage: [],
+      decision: { policyDecision: "queue", reasonCodes: ["adult_platform_watermark"], adultSignal: true },
+    })).toBe("review")
+    expect(moderationDecisionFromVisualPolicy({
+      provider: "visual_policy_vlm",
+      model: "x-ai/grok-4.3",
+      factsByImage: [],
+      decision: { policyDecision: "reject", reasonCodes: ["explicit_sexual_activity"], adultSignal: true },
+    })).toBe("disallow")
   })
 })
 
@@ -170,6 +206,19 @@ describe("outcomeFromDecision", () => {
     expect(out.age_gate_policy).toBe("18_plus")
   })
 
+  test("review preserves adult classification from visual policy adult signals", () => {
+    const out = outcomeFromDecision("review", {
+      provider: "openai",
+      visual_policy: {
+        decision: { adultSignal: true },
+      },
+    })
+    expect(out.analysis_state).toBe("review_required")
+    expect(out.content_safety_state).toBe("adult")
+    expect(out.status).toBe("draft")
+    expect(out.age_gate_policy).toBe("18_plus")
+  })
+
   test("allow_with_gate produces published adult with 18_plus gate", () => {
     const out = outcomeFromDecision("allow_with_gate", null)
     expect(out.analysis_state).toBe("allow")
@@ -222,6 +271,33 @@ describe("resolveAdultContentPolicy", () => {
 })
 
 describe("resolveOpenAIModerationOutcome", () => {
+  const originalFetch = globalThis.fetch
+
+  function installModerationFetchMock(visualFacts: Record<string, unknown>, openAiCategories: Record<string, boolean> = {}) {
+    globalThis.fetch = (async (url: RequestInfo | URL) => {
+      const href = String(url)
+      if (href.includes("openrouter.test")) {
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: JSON.stringify(visualFacts),
+            },
+          }],
+        }), { status: 200, headers: { "content-type": "application/json" } })
+      }
+      return new Response(JSON.stringify({
+        results: [{
+          categories: openAiCategories,
+          category_scores: {},
+        }],
+      }), { status: 200, headers: { "content-type": "application/json" } })
+    }) as typeof fetch
+  }
+
+  function restoreFetch() {
+    globalThis.fetch = originalFetch
+  }
+
   test("visual posts that need scanning require review when OPENAI_API_KEY is missing", async () => {
     const outcome = await resolveOpenAIModerationOutcome({
       env: {},
@@ -245,5 +321,108 @@ describe("resolveOpenAIModerationOutcome", () => {
     expect(outcome.status).toBe("draft")
     expect(outcome.age_gate_policy).toBe("none")
     expect(outcome.providerResult?.error).toBe("missing_configuration")
+  })
+
+  test("Grok visual policy rejection blocks even when OpenAI moderation allows", async () => {
+    installModerationFetchMock({
+      visualStyle: "photographic",
+      characterContext: "real_person",
+      apparentAgeRisk: "adult",
+      nudity: "topless",
+      visibleNipples: true,
+      sexualActivity: "explicit",
+      sexualizedContact: true,
+      masturbation: false,
+      oralSex: false,
+      sexToy: "none",
+      voyeuristicOrHiddenCamera: false,
+      commercialSignal: "adult_platform_watermark",
+      syntheticRisk: "none",
+      imageTextSignal: "url",
+      safetySignal: "none",
+      quality: "clear",
+    })
+    try {
+      const outcome = await resolveOpenAIModerationOutcome({
+        env: {
+          OPENAI_API_KEY: "openai-test",
+          OPENAI_MODERATION_BASE_URL: "https://openai.test/v1",
+          OPENROUTER_API_KEY: "openrouter-test",
+          OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+        },
+        community: {
+          community_id: "com_visual_reject",
+          default_age_gate_policy: "none",
+          visual_policy_settings: buildDefaultVisualPolicySettings("visual_reject", new Date().toISOString()),
+        } as Community,
+        body: {
+          idempotency_key: "idem_visual_reject",
+          post_type: "image",
+          media_refs: [{
+            storage_ref: "https://example.test/image.jpg",
+            mime_type: "image/jpeg",
+            size_bytes: 12,
+          }],
+        },
+      })
+
+      expect(outcome.analysis_state).toBe("blocked")
+      expect(outcome.status).toBe("draft")
+      expect((outcome.providerResult?.visual_policy as { model?: string } | undefined)?.model).toBe("x-ai/grok-4.3")
+    } finally {
+      restoreFetch()
+    }
+  })
+
+  test("Grok visual policy adult allow applies the 18+ gate when OpenAI moderation allows", async () => {
+    installModerationFetchMock({
+      visualStyle: "photographic",
+      characterContext: "real_person",
+      apparentAgeRisk: "adult",
+      nudity: "topless",
+      visibleNipples: true,
+      sexualActivity: "none",
+      sexualizedContact: false,
+      masturbation: false,
+      oralSex: false,
+      sexToy: "none",
+      voyeuristicOrHiddenCamera: false,
+      commercialSignal: "none",
+      syntheticRisk: "none",
+      imageTextSignal: "none",
+      safetySignal: "none",
+      quality: "clear",
+    })
+    try {
+      const outcome = await resolveOpenAIModerationOutcome({
+        env: {
+          OPENAI_API_KEY: "openai-test",
+          OPENAI_MODERATION_BASE_URL: "https://openai.test/v1",
+          OPENROUTER_API_KEY: "openrouter-test",
+          OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+        },
+        community: {
+          community_id: "com_visual_adult_allow",
+          default_age_gate_policy: "none",
+          visual_policy_settings: buildDefaultVisualPolicySettings("visual_adult_allow", new Date().toISOString()),
+        } as Community,
+        body: {
+          idempotency_key: "idem_visual_adult_allow",
+          post_type: "image",
+          media_refs: [{
+            storage_ref: "https://example.test/image.jpg",
+            mime_type: "image/jpeg",
+            size_bytes: 12,
+          }],
+        },
+      })
+
+      expect(outcome.analysis_state).toBe("allow")
+      expect(outcome.content_safety_state).toBe("adult")
+      expect(outcome.status).toBe("published")
+      expect(outcome.age_gate_policy).toBe("18_plus")
+    } finally {
+      restoreFetch()
+    }
   })
 })

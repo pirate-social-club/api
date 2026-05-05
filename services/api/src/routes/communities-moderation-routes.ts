@@ -46,12 +46,13 @@ export function registerCommunityModerationRoutes(communities: Hono<Authenticate
   })
 
   communities.get("/:communityId/moderation/cases", async (c) => {
-    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const { actor, communityId, communityRepository, profileRepository } = await getResolvedCommunityRouteContext(c)
     const result = await listCommunityModerationCases({
       env: c.env,
       userId: actor.userId,
       communityId,
       communityRepository,
+      profileRepository,
     })
     return c.json(result, 200)
   })

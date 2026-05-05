@@ -1,6 +1,10 @@
 import type { Env } from "../../env"
 import type { Community, CreatePostRequest, Post } from "../../types"
 import { buildDefaultAdultContentPolicy } from "../communities/community-policy-defaults"
+import {
+  resolveVisualPolicyProviderResult,
+  type VisualPolicyProviderResult,
+} from "./visual-policy-analysis"
 
 type ModerationDecisionLevel = "allow" | "allow_with_gate" | "review" | "disallow"
 
@@ -106,6 +110,13 @@ function hasSexualCategory(categories: Record<string, boolean> | undefined): boo
   return Object.entries(categories).some(([key, flagged]) => flagged && ADULT_CATEGORIES.has(key))
 }
 
+function hasVisualAdultSignal(providerResult: Record<string, unknown> | null): boolean {
+  const visualPolicy = providerResult?.visual_policy
+  if (!visualPolicy || typeof visualPolicy !== "object") return false
+  const decision = (visualPolicy as { decision?: unknown }).decision
+  return Boolean(decision && typeof decision === "object" && (decision as { adultSignal?: unknown }).adultSignal === true)
+}
+
 type PolicyDecisionLevel = "allow" | "review" | "disallow"
 
 export function moreRestrictive(left: PolicyDecisionLevel, right: PolicyDecisionLevel): PolicyDecisionLevel {
@@ -152,6 +163,27 @@ export function resolveVisualPlatformDecision(
   return "allow"
 }
 
+function moderationDecisionSeverity(decision: ModerationDecisionLevel): number {
+  if (decision === "disallow") return 4
+  if (decision === "review") return 3
+  if (decision === "allow_with_gate") return 2
+  return 1
+}
+
+export function combineModerationDecision(
+  left: ModerationDecisionLevel,
+  right: ModerationDecisionLevel,
+): ModerationDecisionLevel {
+  return moderationDecisionSeverity(left) >= moderationDecisionSeverity(right) ? left : right
+}
+
+export function moderationDecisionFromVisualPolicy(result: VisualPolicyProviderResult | null): ModerationDecisionLevel {
+  if (!result) return "allow"
+  if (result.decision.policyDecision === "reject") return "disallow"
+  if (result.decision.policyDecision === "queue") return "review"
+  return result.decision.adultSignal ? "allow_with_gate" : "allow"
+}
+
 export function outcomeFromDecision(decision: ModerationDecisionLevel, providerResult: Record<string, unknown> | null): PostModerationOutcome {
   if (decision === "disallow") {
     return {
@@ -166,11 +198,12 @@ export function outcomeFromDecision(decision: ModerationDecisionLevel, providerR
     const hasAdultCategories = providerResult && typeof providerResult === "object"
       && "categories" in providerResult
       && hasSexualCategory(providerResult.categories as Record<string, boolean> | undefined)
+    const hasAdultSignal = hasAdultCategories || hasVisualAdultSignal(providerResult)
     return {
       analysis_state: "review_required",
-      content_safety_state: hasAdultCategories ? "adult" : "pending",
+      content_safety_state: hasAdultSignal ? "adult" : "pending",
       status: "draft",
-      age_gate_policy: hasAdultCategories ? "18_plus" : "none",
+      age_gate_policy: hasAdultSignal ? "18_plus" : "none",
       providerResult,
     }
   }
@@ -215,12 +248,21 @@ export async function resolveOpenAIModerationOutcome(input: {
     return outcomeFromDecision("allow", null)
   }
 
+  const imageUrls = moderationInput.map((item) => item.image_url.url)
+  const visualPolicyResult = await resolveVisualPolicyProviderResult({
+    env: input.env,
+    community: input.community,
+    imageUrls,
+  })
+  const visualPolicyDecision = moderationDecisionFromVisualPolicy(visualPolicyResult)
+
   const apiKey = trimEnv(input.env.OPENAI_API_KEY)
   if (!apiKey) {
     console.warn("[moderation] review required — missing OPENAI_API_KEY")
-    return outcomeFromDecision("review", {
+    return outcomeFromDecision(combineModerationDecision("review", visualPolicyDecision), {
       provider: "openai",
       error: "missing_configuration",
+      visual_policy: visualPolicyResult,
     })
   }
 
@@ -247,21 +289,23 @@ export async function resolveOpenAIModerationOutcome(input: {
       signal: controller.signal,
     })
     if (!response.ok) {
-      return outcomeFromDecision("review", {
+      return outcomeFromDecision(combineModerationDecision("review", visualPolicyDecision), {
         provider: "openai",
         model,
         error: `http_${response.status}`,
+        visual_policy: visualPolicyResult,
       })
     }
 
     const parsed = await response.json().catch(() => null)
     const results = normalizeModerationResults(parsed)
     if (!results) {
-      return outcomeFromDecision("review", {
+      return outcomeFromDecision(combineModerationDecision("review", visualPolicyDecision), {
         provider: "openai",
         model,
         error: "invalid_response",
         provider_result: parsed,
+        visual_policy: visualPolicyResult,
       })
     }
 
@@ -273,7 +317,8 @@ export async function resolveOpenAIModerationOutcome(input: {
       return merged
     }, {})
     const adultContentPolicy = resolveAdultContentPolicy(input.community)
-    const decision = resolveVisualPlatformDecision(categories, results, sexualMinorsBlockThreshold, adultContentPolicy)
+    const platformDecision = resolveVisualPlatformDecision(categories, results, sexualMinorsBlockThreshold, adultContentPolicy)
+    const decision = combineModerationDecision(platformDecision, visualPolicyDecision)
     console.info("[moderation] visual decision", {
       categories: Object.keys(categories).filter(k => categories[k]),
       sexual_minors_score: highestCategoryScore(results, "sexual/minors"),
@@ -283,6 +328,8 @@ export async function resolveOpenAIModerationOutcome(input: {
         explicit_nudity: adultContentPolicy.explicit_nudity,
         explicit_sexual_content: adultContentPolicy.explicit_sexual_content,
       },
+      platform_decision: platformDecision,
+      visual_policy_decision: visualPolicyResult?.decision.policyDecision ?? "not_configured",
       decision,
       community_id: input.community.community_id,
       post_type: input.body.post_type,
@@ -295,13 +342,15 @@ export async function resolveOpenAIModerationOutcome(input: {
       sexual_minors_score: highestCategoryScore(results, "sexual/minors"),
       sexual_score: highestCategoryScore(results, "sexual"),
       sexual_minors_block_threshold: sexualMinorsBlockThreshold,
+      visual_policy: visualPolicyResult,
       decision,
     })
   } catch (error) {
-    return outcomeFromDecision("review", {
+    return outcomeFromDecision(combineModerationDecision("review", visualPolicyDecision), {
       provider: "openai",
       model,
       error: error instanceof Error ? error.message : String(error),
+      visual_policy: visualPolicyResult,
     })
   } finally {
     if (timer) {
