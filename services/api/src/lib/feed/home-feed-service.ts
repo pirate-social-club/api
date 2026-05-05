@@ -74,6 +74,31 @@ type HomeFeedCommunityRepository =
   >
 
 const HOME_FEED_COMMUNITY_READ_CONCURRENCY = 4
+const HOME_FEED_TIMING_LOG_THRESHOLD_MS = 1_000
+
+type HomeFeedCommunityTiming = {
+  community_id: string
+  rows: number
+  returned_items: number
+  total_ms: number
+  open_ms: number
+  identity_ms: number
+  posts_ms: number
+  snapshots_ms: number
+  votes_ms: number
+  localize_ms: number
+  enqueue_ms: number
+}
+
+function elapsedMs(startedAt: number): number {
+  return Math.round(performance.now() - startedAt)
+}
+
+function summarizeCommunityTimings(timings: HomeFeedCommunityTiming[]): HomeFeedCommunityTiming[] {
+  return [...timings]
+    .sort((left, right) => right.total_ms - left.total_ms)
+    .slice(0, 8)
+}
 
 function parseHomeFeedSort(sort: string | null | undefined): HomeFeedSort {
   return sort === "new" || sort === "top" ? sort : "best"
@@ -569,6 +594,9 @@ export async function listHomeFeed(input: {
   userRepository?: UserRepository | null
   waitUntil?: HomeFeedWaitUntil
 }): Promise<HomeFeedResponse> {
+  const requestStartedAt = performance.now()
+  const phaseTimings: Record<string, number> = {}
+  let phaseStartedAt = performance.now()
   const ageGateState = input.userId && input.userRepository
     ? await resolveAgeGateViewerState({
         userId: input.userId,
@@ -583,6 +611,8 @@ export async function listHomeFeed(input: {
   const followRows = input.userId
     ? await input.communityRepository.listCommunityFollowProjectionsByUserId(input.userId)
     : []
+  phaseTimings.viewer_ms = elapsedMs(phaseStartedAt)
+  phaseStartedAt = performance.now()
   const memberCommunityIdSet = new Set(resolveJoinedHomeFeedCommunityIds({
     activeCommunities,
     membershipRows,
@@ -596,13 +626,35 @@ export async function listHomeFeed(input: {
   })
 
   if (communityIds.length === 0) {
+    phaseTimings.resolve_communities_ms = elapsedMs(phaseStartedAt)
+    const totalMs = elapsedMs(requestStartedAt)
+    if (totalMs >= HOME_FEED_TIMING_LOG_THRESHOLD_MS) {
+      console.info("[home-feed] timing", JSON.stringify({
+        total_ms: totalMs,
+        authenticated: Boolean(input.userId),
+        locale: input.locale ?? null,
+        sort: input.sort ?? null,
+        time_range: input.timeRange ?? null,
+        cursor: input.cursor ?? null,
+        active_communities: activeCommunities.length,
+        candidate_communities: 0,
+        projection_rows: 0,
+        page_rows: 0,
+        returned_items: 0,
+        top_communities: 0,
+        phases: phaseTimings,
+        slow_communities: [],
+      }))
+    }
     return {
       items: [],
       top_communities: [],
       next_cursor: null,
     }
   }
+  phaseTimings.resolve_communities_ms = elapsedMs(phaseStartedAt)
 
+  phaseStartedAt = performance.now()
   const communityViewCounts = await listHomeFeedCommunityViewCounts({
     env: input.env,
     communityIds,
@@ -614,7 +666,9 @@ export async function listHomeFeed(input: {
     )))
   )
     .filter((summary): summary is InternalHomeFeedCommunitySummary => Boolean(summary))
+  phaseTimings.community_summaries_ms = elapsedMs(phaseStartedAt)
 
+  phaseStartedAt = performance.now()
   const sort = parseHomeFeedSort(input.sort)
   const now = Date.now()
   const allRows = filterVisibleHomeFeedProjections(
@@ -685,6 +739,7 @@ export async function listHomeFeed(input: {
   const offset = parseOffsetCursor(input.cursor)
   const pageRows = sortedRows.slice(offset, offset + 25)
   const nextCursor = offset + 25 < sortedRows.length ? `o:${offset + 25}` : null
+  phaseTimings.projections_and_rank_ms = elapsedMs(phaseStartedAt)
 
   const items: HomeFeedItem[] = []
   const rowsByCommunityId = new Map<string, HomeFeedProjectionRow[]>()
@@ -694,12 +749,19 @@ export async function listHomeFeed(input: {
     rowsByCommunityId.set(row.community_id, rows)
   }
   const communityIdentityById = new Map<string, HomeFeedCommunityIdentity | null>()
+  const communityTimings: HomeFeedCommunityTiming[] = []
 
+  phaseStartedAt = performance.now()
   const communityItemGroups = await mapWithConcurrency([...rowsByCommunityId.entries()], HOME_FEED_COMMUNITY_READ_CONCURRENCY, async ([communityId, rows]) => {
+    const communityStartedAt = performance.now()
+    const openStartedAt = performance.now()
     const db = await openCommunityDb(input.env, input.communityRepository, communityId)
+    const openMs = elapsedMs(openStartedAt)
     try {
       const baseCommunity = communitySummaryById[communityId]
+      const identityStartedAt = performance.now()
       const identity = await getHomeFeedCommunityIdentity(db.client, communityId)
+      const identityMs = elapsedMs(identityStartedAt)
       communityIdentityById.set(communityId, identity)
       const community = baseCommunity
         ? withHomeFeedCommunityIdentity(
@@ -708,7 +770,9 @@ export async function listHomeFeed(input: {
         )
         : null
       const communityItems: HomeFeedItem[] = []
+      const postsStartedAt = performance.now()
       const postsById = await listPostsById(db.client, rows.map((row) => row.source_post_id))
+      const postsMs = elapsedMs(postsStartedAt)
       const publishedRows = rows.filter((row) => {
         const post = postsById.get(row.source_post_id)
         return post
@@ -716,13 +780,18 @@ export async function listHomeFeed(input: {
           && (post.visibility !== "members_only" || memberCommunityIdSet.has(communityId))
       })
       const publishedPostIds = publishedRows.map((row) => row.source_post_id)
+      const snapshotsStartedAt = performance.now()
       const threadSnapshotsByPostId = await listLatestThreadSnapshotsForRead(db.client, publishedPostIds)
+      const snapshotsMs = elapsedMs(snapshotsStartedAt)
+      const votesStartedAt = performance.now()
       const viewerVotesByPostId = await listViewerVotes({
         client: db.client,
         postIds: publishedPostIds,
         userId: input.userId,
       })
+      const votesMs = elapsedMs(votesStartedAt)
       const postReadJobs: HomeFeedPostReadJob[] = []
+      let localizeMs = 0
       for (const row of rows) {
         const post = postsById.get(row.source_post_id) ?? null
         if (!post || post.status !== "published") {
@@ -733,6 +802,7 @@ export async function listHomeFeed(input: {
         }
         const threadSnapshot = threadSnapshotsByPostId.get(post.post_id) ?? null
         const viewerVote = viewerVotesByPostId.get(post.post_id) ?? null
+        const localizeStartedAt = performance.now()
         const localized = await buildLocalizedPostResponse({
           executor: db.client,
           post,
@@ -748,6 +818,7 @@ export async function listHomeFeed(input: {
           ageGateViewerState: post.age_gate_policy === "18_plus" ? ageGateState ?? "proof_required" : null,
           viewerUserId: input.userId,
         })
+        localizeMs += elapsedMs(localizeStartedAt)
         postReadJobs.push({ post, response: localized })
         if (!community) {
           continue
@@ -757,6 +828,7 @@ export async function listHomeFeed(input: {
           post: serializeLocalizedPostResponse(localized),
         })
       }
+      const enqueueStartedAt = performance.now()
       await enqueuePostReadJobs({
         env: input.env,
         communityId,
@@ -765,24 +837,65 @@ export async function listHomeFeed(input: {
         waitUntil: input.waitUntil,
         fallbackClient: db.client,
       })
+      const enqueueMs = elapsedMs(enqueueStartedAt)
+      communityTimings.push({
+        community_id: communityId,
+        rows: rows.length,
+        returned_items: communityItems.length,
+        total_ms: elapsedMs(communityStartedAt),
+        open_ms: openMs,
+        identity_ms: identityMs,
+        posts_ms: postsMs,
+        snapshots_ms: snapshotsMs,
+        votes_ms: votesMs,
+        localize_ms: localizeMs,
+        enqueue_ms: enqueueMs,
+      })
       return communityItems
     } finally {
       db.close()
     }
   })
+  phaseTimings.community_fanout_ms = elapsedMs(phaseStartedAt)
   items.push(...communityItemGroups.flat())
 
+  phaseStartedAt = performance.now()
   const itemByPostId = Object.fromEntries(items.map((item) => [item.post.post.id.replace(/^post_/, ""), item] as const))
   const orderedItems = pageRows
     .map((row) => itemByPostId[row.source_post_id])
     .filter((item): item is HomeFeedItem => Boolean(item))
+  phaseTimings.order_items_ms = elapsedMs(phaseStartedAt)
 
+  phaseStartedAt = performance.now()
   const topCommunities = await resolveTopCommunitiesIdentity(
     input.env,
     input.communityRepository,
     sortedCommunities.slice(0, 6),
     communityIdentityById,
   )
+  phaseTimings.top_communities_ms = elapsedMs(phaseStartedAt)
+  const totalMs = elapsedMs(requestStartedAt)
+  if (totalMs >= HOME_FEED_TIMING_LOG_THRESHOLD_MS) {
+    console.info("[home-feed] timing", JSON.stringify({
+      total_ms: totalMs,
+      authenticated: Boolean(input.userId),
+      locale: input.locale ?? null,
+      sort: input.sort ?? null,
+      parsed_sort: sort,
+      time_range: input.timeRange ?? null,
+      cursor: input.cursor ?? null,
+      active_communities: activeCommunities.length,
+      candidate_communities: communityIds.length,
+      projection_rows: allRows.length,
+      time_filtered_rows: timeFilteredRows.length,
+      page_rows: pageRows.length,
+      page_communities: rowsByCommunityId.size,
+      returned_items: orderedItems.length,
+      top_communities: topCommunities.length,
+      phases: phaseTimings,
+      slow_communities: summarizeCommunityTimings(communityTimings),
+    }))
+  }
 
   return {
     items: orderedItems,
