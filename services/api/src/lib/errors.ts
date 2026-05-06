@@ -31,8 +31,8 @@ export function verificationRequired(message: string): HttpError {
   return new HttpError(403, "verification_required", message)
 }
 
-export function eligibilityFailed(message: string): HttpError {
-  return new HttpError(403, "eligibility_failed", message)
+export function eligibilityFailed(message: string, details: Record<string, unknown> | null = null): HttpError {
+  return new HttpError(403, "eligibility_failed", message, false, details)
 }
 
 export function gateFailed(message: string): HttpError {
@@ -47,8 +47,8 @@ export function gateFailedWithDetails(message: string, details: GateFailureDetai
   return new HttpError(403, "gate_failed", message, false, details as Record<string, unknown>)
 }
 
-export function conflictError(message: string): HttpError {
-  return new HttpError(409, "conflict", message)
+export function conflictError(message: string, details: Record<string, unknown> | null = null): HttpError {
+  return new HttpError(409, "conflict", message, false, details)
 }
 
 export function analysisBlocked(message: string): HttpError {

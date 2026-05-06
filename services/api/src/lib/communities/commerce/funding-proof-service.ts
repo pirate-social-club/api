@@ -41,10 +41,20 @@ export type BuyerFundingReceipt = {
   chainRef: string
 }
 
+type CheckoutFundingQuote = Pick<
+  PurchaseQuoteRow,
+  | "quote_id"
+  | "route_provider"
+  | "funding_mode"
+  | "final_price_usd"
+  | "source_chain_json"
+  | "funding_destination_address"
+>
+
 let testBuyerFundingVerifier:
   | ((input: {
     env: Env
-    quote: PurchaseQuoteRow
+    quote: CheckoutFundingQuote
     buyerAddress: string
     fundingTxRef: string
   }) => Promise<BuyerFundingReceipt>)
@@ -56,7 +66,7 @@ export function setCommunityCommerceBuyerFundingVerifierForTests(
   testBuyerFundingVerifier = verifier
 }
 
-function requireCheckoutFundingAmountAtomic(quote: PurchaseQuoteRow): bigint {
+function requireCheckoutFundingAmountAtomic(quote: CheckoutFundingQuote): bigint {
   if (!Number.isFinite(quote.final_price_usd) || quote.final_price_usd <= 0) {
     throw badRequestError("Quote funding amount is invalid")
   }
@@ -76,7 +86,7 @@ function topicAddress(topic: string): string | null {
 
 async function verifyPirateCheckoutUsdcFundingReceipt(input: {
   env: Env
-  quote: PurchaseQuoteRow
+  quote: CheckoutFundingQuote
   buyerAddress: string
   fundingTxRef: string
 }): Promise<BuyerFundingReceipt> {
@@ -184,54 +194,24 @@ export async function verifyPirateCheckoutUsdcFunding(input: {
   amountUsd: number
   buyerAddress: string
   fundingTxRef: string
+  fundingDestinationAddress?: string | null
+  sourceChainJson?: string | null
 }): Promise<BuyerFundingReceipt> {
-  const now = new Date().toISOString()
+  const txRef = input.fundingTxRef.trim()
+  if (!txRef) {
+    throw badRequestError("funding_tx_ref is required")
+  }
   return await verifyPirateCheckoutUsdcFundingReceipt({
     env: input.env,
     buyerAddress: input.buyerAddress,
-    fundingTxRef: input.fundingTxRef,
+    fundingTxRef: txRef,
     quote: {
       quote_id: input.quoteId,
-      community_id: "global_handles",
-      listing_id: "global_handle_paid_quote",
-      buyer_user_id: "",
-      asset_id: null,
-      live_room_id: null,
-      base_price_usd: input.amountUsd,
-      pricing_tier: "global_handle_paid",
-      final_price_usd: input.amountUsd,
-      allocation_snapshot_json: null,
-      funding_mode: "routed",
-      funding_asset_json: null,
-      source_chain_json: JSON.stringify({
-        chain_namespace: "eip155",
-        chain_id: resolvePirateCheckoutSourceChainId(input.env),
-        display_name: "Base",
-      }),
       route_provider: "pirate_checkout",
-      funding_destination_address: resolvePirateCheckoutOperatorAddress(input.env),
-      route_policy_compliant: true,
-      route_live_available: true,
-      policy_origin: "default",
-      destination_settlement_chain_json: "{}",
-      destination_settlement_token: "USDC",
-      destination_settlement_amount_atomic: null,
-      destination_settlement_decimals: null,
-      treasury_denomination: "USD",
-      quote_ttl_seconds: 0,
-      route_required: true,
-      route_status_policy: "fail",
-      route_hop_tolerance: 0,
-      settlement_mode: "delivery_only_story_settlement",
-      verification_snapshot_ref: null,
-      pricing_policy_version: null,
-      status: "active",
-      quoted_at: now,
-      expires_at: now,
-      consumed_at: null,
-      failed_at: null,
-      created_at: now,
-      updated_at: now,
+      funding_mode: "routed",
+      final_price_usd: input.amountUsd,
+      source_chain_json: input.sourceChainJson ?? null,
+      funding_destination_address: input.fundingDestinationAddress ?? null,
     },
   })
 }
