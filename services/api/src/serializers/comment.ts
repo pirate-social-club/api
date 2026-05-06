@@ -75,6 +75,7 @@ export function serializeCommentListItem(item: CommentListItem): ContractComment
     object: "comment_list_item",
     comment: serializeComment(item.comment),
     viewer_vote: item.viewer_vote,
+    viewer_can_delete: item.viewer_can_delete ?? false,
     resolved_locale: item.resolved_locale,
     translation_state: item.translation_state,
     machine_translated: item.machine_translated,

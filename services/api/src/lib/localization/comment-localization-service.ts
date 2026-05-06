@@ -21,7 +21,7 @@ function hasTranslatableCommentContent(comment: Comment): boolean {
 
 export async function buildLocalizedCommentListItem(input: {
   executor: DbExecutor
-  item: Pick<CommentListItem, "comment" | "viewer_vote">
+  item: Pick<CommentListItem, "comment" | "viewer_vote" | "viewer_can_delete">
   locale?: string | null
 }): Promise<CommentListItem> {
   const resolvedLocale = normalizeContentLocale(input.locale) ?? DEFAULT_CONTENT_LOCALE
@@ -30,6 +30,7 @@ export async function buildLocalizedCommentListItem(input: {
   const response: CommentListItem = {
     comment: input.item.comment,
     viewer_vote: input.item.viewer_vote,
+    viewer_can_delete: input.item.viewer_can_delete,
     resolved_locale: resolvedLocale,
     translation_state: "same_language",
     machine_translated: false,

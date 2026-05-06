@@ -264,7 +264,8 @@ export async function listTopLevelComments(input: {
                WHERE comment_id = comments.comment_id
                  AND user_id = ?1
                LIMIT 1
-             ) AS viewer_vote
+             ) AS viewer_vote,
+             CASE WHEN status != 'deleted' AND author_user_id = ?1 THEN 1 ELSE 0 END AS viewer_can_delete
       FROM comments
       WHERE thread_root_post_id = ?2
         AND parent_comment_id IS NULL
@@ -305,7 +306,8 @@ export async function listReplies(input: {
                WHERE comment_id = comments.comment_id
                  AND user_id = ?1
                LIMIT 1
-             ) AS viewer_vote
+             ) AS viewer_vote,
+             CASE WHEN status != 'deleted' AND author_user_id = ?1 THEN 1 ELSE 0 END AS viewer_can_delete
       FROM comments
       WHERE parent_comment_id = ?2
         AND status != 'hidden'
@@ -345,7 +347,8 @@ export async function getCommentContext(input: {
                WHERE comment_id = c.comment_id
                  AND user_id = ?1
                LIMIT 1
-             ) AS viewer_vote
+             ) AS viewer_vote,
+             CASE WHEN c.status != 'deleted' AND c.author_user_id = ?1 THEN 1 ELSE 0 END AS viewer_can_delete
       FROM comment_closure cc
       JOIN comments c
         ON c.comment_id = cc.ancestor_comment_id
@@ -372,7 +375,8 @@ export async function getCommentContext(input: {
                WHERE comment_id = comments.comment_id
                  AND user_id = ?1
                LIMIT 1
-             ) AS viewer_vote
+             ) AS viewer_vote,
+             CASE WHEN status != 'deleted' AND author_user_id = ?1 THEN 1 ELSE 0 END AS viewer_can_delete
       FROM comments
       WHERE comment_id = ?2
       LIMIT 1
