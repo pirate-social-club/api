@@ -9,6 +9,7 @@ import {
   fetchCommunityJobsByType,
   insertCommentTranslation,
   requestJson,
+  setCommentMediaRefs,
 } from "./comments-routes-test-helpers"
 
 let cleanup: (() => Promise<void>) | null = null
@@ -363,6 +364,15 @@ describe("comment read routes", () => {
     )
     expect(commentResponse.status).toBe(201)
     const commentBody = await json(commentResponse) as { id: string }
+    await setCommentMediaRefs({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: community.communityId,
+      commentId: commentBody.id,
+      mediaRefs: [{
+        storage_ref: "https://media.test/deleted-comment-image.gif",
+        mime_type: "image/gif",
+      }],
+    })
 
     const deleted = await Promise.resolve(app.request(
       `http://pirate.test/comments/${commentBody.id}/delete`,
@@ -375,10 +385,11 @@ describe("comment read routes", () => {
       ctx.env,
     ))
     expect(deleted.status).toBe(200)
-    const deletedBody = await json(deleted) as { id: string; status: string; body: string | null }
+    const deletedBody = await json(deleted) as { id: string; status: string; body: string | null; media_refs?: unknown[] }
     expect(deletedBody.id).toBe(commentBody.id)
     expect(deletedBody.status).toBe("deleted")
     expect(deletedBody.body).toBe("[deleted]")
+    expect(deletedBody.media_refs).toEqual([])
 
     const context = await app.request(
       `http://pirate.test/comments/${commentBody.id}/context?limit=10`,
@@ -391,9 +402,10 @@ describe("comment read routes", () => {
     )
     expect(context.status).toBe(200)
     const contextBody = await json(context) as {
-      comment: { comment: { status: string; body: string | null } }
+      comment: { comment: { status: string; body: string | null; media_refs?: unknown[] } }
     }
     expect(contextBody.comment.comment.status).toBe("deleted")
     expect(contextBody.comment.comment.body).toBe("[deleted]")
+    expect(contextBody.comment.comment.media_refs).toEqual([])
   })
 })

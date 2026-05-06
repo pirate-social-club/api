@@ -70,14 +70,14 @@ export async function insertComment(input: {
         comment_id, community_id, thread_root_post_id, parent_comment_id, author_user_id,
         authorship_mode, agent_id, agent_ownership_record_id, identity_mode, anonymous_scope,
         anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot,
-        body, source_language, status, depth, direct_reply_count, descendant_count, upvote_count, downvote_count, score,
+        body, media_refs_json, source_language, status, depth, direct_reply_count, descendant_count, upvote_count, downvote_count, score,
         last_reply_at, content_hash, swarm_body_ref, idempotency_key, created_at, updated_at, agent_handle_snapshot
       ) VALUES (
         ?1, ?2, ?3, ?4, ?5,
         ?6, ?7, ?8, ?9, ?10,
         ?11, ?12, ?13, ?14,
-        ?15, ?16, 'published', ?17, 0, 0, 0, 0, 0,
-        NULL, ?18, NULL, ?19, ?20, ?20, ?21
+        ?15, ?16, ?17, 'published', ?18, 0, 0, 0, 0, 0,
+        NULL, ?19, NULL, ?20, ?21, ?21, ?22
       )
     `,
     args: [
@@ -95,7 +95,8 @@ export async function insertComment(input: {
       input.agentWriteAuthorization?.agentDisplayNameSnapshot ?? null,
       input.agentWriteAuthorization?.agentOwnerHandleSnapshot ?? null,
       input.agentWriteAuthorization?.agentOwnershipProviderSnapshot ?? null,
-      input.body.body.trim(),
+      input.body.body?.trim() ?? "",
+      JSON.stringify(input.body.media_refs ?? []),
       input.sourceLanguage,
       input.depth,
       input.contentHash,
@@ -118,7 +119,7 @@ export async function getCommentById(executor: DbExecutor, commentId: string): P
       SELECT comment_id, community_id, thread_root_post_id, parent_comment_id, author_user_id,
              authorship_mode, agent_id, agent_ownership_record_id, identity_mode, anonymous_scope,
              anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot,
-             body, source_language, status, depth,
+             body, media_refs_json, source_language, status, depth,
              direct_reply_count, descendant_count, upvote_count, downvote_count, score,
              last_reply_at, content_hash, swarm_body_ref, idempotency_key,
              0 AS replies_locked, NULL AS replies_locked_at, NULL AS replies_locked_by_user_id, NULL AS replies_lock_reason,
@@ -144,7 +145,7 @@ export async function findCommentByIdempotencyKey(input: {
       SELECT comment_id, community_id, thread_root_post_id, parent_comment_id, author_user_id,
              authorship_mode, agent_id, agent_ownership_record_id, identity_mode, anonymous_scope,
              anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot,
-             body, source_language, status, depth,
+             body, media_refs_json, source_language, status, depth,
              direct_reply_count, descendant_count, upvote_count, downvote_count, score,
              last_reply_at, content_hash, swarm_body_ref, idempotency_key, created_at, updated_at
       FROM comments
@@ -168,7 +169,7 @@ export async function listThreadCommentsForSnapshot(
       SELECT comment_id, community_id, thread_root_post_id, parent_comment_id, author_user_id,
              authorship_mode, agent_id, agent_ownership_record_id, identity_mode, anonymous_scope,
              anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot,
-             body, source_language, status, depth,
+             body, media_refs_json, source_language, status, depth,
              direct_reply_count, descendant_count, upvote_count, downvote_count, score,
              last_reply_at, content_hash, swarm_body_ref, idempotency_key, created_at, updated_at
       FROM comments
@@ -254,7 +255,7 @@ export async function listTopLevelComments(input: {
       SELECT comment_id, community_id, thread_root_post_id, parent_comment_id, author_user_id,
              authorship_mode, agent_id, agent_ownership_record_id, identity_mode, anonymous_scope,
              anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot,
-             body, source_language, status, depth,
+             body, media_refs_json, source_language, status, depth,
              direct_reply_count, descendant_count, upvote_count, downvote_count, score,
              last_reply_at, content_hash, swarm_body_ref, idempotency_key, created_at, updated_at,
              (
@@ -295,7 +296,7 @@ export async function listReplies(input: {
       SELECT comment_id, community_id, thread_root_post_id, parent_comment_id, author_user_id,
              authorship_mode, agent_id, agent_ownership_record_id, identity_mode, anonymous_scope,
              anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot,
-             body, source_language, status, depth,
+             body, media_refs_json, source_language, status, depth,
              direct_reply_count, descendant_count, upvote_count, downvote_count, score,
              last_reply_at, content_hash, swarm_body_ref, idempotency_key, created_at, updated_at,
              (
@@ -335,7 +336,7 @@ export async function getCommentContext(input: {
       SELECT c.comment_id, c.community_id, c.thread_root_post_id, c.parent_comment_id, c.author_user_id,
              c.authorship_mode, c.agent_id, c.agent_ownership_record_id, c.identity_mode, c.anonymous_scope,
              c.anonymous_label, c.agent_display_name_snapshot, c.agent_owner_handle_snapshot,
-             c.agent_ownership_provider_snapshot, c.agent_handle_snapshot, c.body, c.source_language, c.status, c.depth,
+             c.agent_ownership_provider_snapshot, c.agent_handle_snapshot, c.body, c.media_refs_json, c.source_language, c.status, c.depth,
              c.direct_reply_count, c.descendant_count, c.upvote_count, c.downvote_count, c.score,
              c.last_reply_at, c.content_hash, c.swarm_body_ref, c.created_at, c.updated_at,
              (
@@ -362,7 +363,7 @@ export async function getCommentContext(input: {
       SELECT comment_id, community_id, thread_root_post_id, parent_comment_id, author_user_id,
              authorship_mode, agent_id, agent_ownership_record_id, identity_mode, anonymous_scope,
              anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot,
-             body, source_language, status, depth,
+             body, media_refs_json, source_language, status, depth,
              direct_reply_count, descendant_count, upvote_count, downvote_count, score,
              last_reply_at, content_hash, swarm_body_ref, idempotency_key, created_at, updated_at,
              (
@@ -470,6 +471,7 @@ export async function markCommentDeleted(input: {
       UPDATE comments
       SET status = 'deleted',
           body = '[deleted]',
+          media_refs_json = '[]',
           updated_at = ?2
       WHERE comment_id = ?1
     `,

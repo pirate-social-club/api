@@ -23,7 +23,8 @@ export type Comment = ApiComment & {
 }
 export type CreateCommentRequest = {
   idempotency_key?: string | null
-  body: string
+  body?: string | null
+  media_refs?: ApiComment["media_refs"]
   authorship_mode?: "human_direct" | "user_agent"
   agent_id?: string | null
   agent_action_proof?: AgentActionProof | null

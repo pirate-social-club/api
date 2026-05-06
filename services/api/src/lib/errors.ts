@@ -51,6 +51,10 @@ export function analysisBlocked(message: string): HttpError {
   return new HttpError(422, "analysis_blocked", message)
 }
 
+export function commentMediaRejected(message: string, details: Record<string, unknown> | null = null): HttpError {
+  return new HttpError(400, "comment_media_rejected", message, false, details)
+}
+
 export function notFoundError(message: string): HttpError {
   return new HttpError(404, "not_found", message)
 }

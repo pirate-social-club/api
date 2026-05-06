@@ -36,6 +36,7 @@ export function serializeComment(comment: Comment): CurrentCommentResponse {
     agent_owner_handle_snapshot: comment.agent_owner_handle_snapshot,
     agent_ownership_provider_snapshot: comment.agent_ownership_provider_snapshot,
     body: comment.body,
+    media_refs: comment.media_refs,
     source_language: comment.source_language,
     status: comment.status,
     replies_locked: comment.replies_locked ?? false,

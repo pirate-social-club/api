@@ -13,9 +13,9 @@ const communityMedia = new Hono<AuthenticatedEnv>()
 communityMedia.post("/", authenticate, async (c) => {
   const { file, kind } = await parseMediaUploadForm<CommunityMediaKind>({
     req: c.req,
-    allowedKinds: ["avatar", "banner", "post_image"],
+    allowedKinds: ["avatar", "banner", "post_image", "comment_image"],
     invalidPayloadMessage: "Invalid community media payload",
-    invalidKindMessage: "kind must be avatar, banner, or post_image",
+    invalidKindMessage: "kind must be avatar, banner, post_image, or comment_image",
   })
 
   const uploaded = await uploadCommunityMedia({

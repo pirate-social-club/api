@@ -15,6 +15,14 @@ type CommunityVisibilityRow = {
   membership_mode: "request" | "gated"
 }
 
+const COMMENT_IMAGE_MIME_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+  "image/avif",
+])
+
 export function assertCreateCommentRequest(body: CreateCommentRequest): void {
   const authorshipMode = body.authorship_mode ?? "human_direct"
   if (Object.prototype.hasOwnProperty.call(body, "community_id")) {
@@ -26,8 +34,27 @@ export function assertCreateCommentRequest(body: CreateCommentRequest): void {
   if (Object.prototype.hasOwnProperty.call(body, "parent_comment_id")) {
     throw badRequestError("parent_comment_id must not be provided in the comment body")
   }
-  if (!body.body?.trim()) {
-    throw badRequestError("body is required")
+  if (body.media_refs != null && !Array.isArray(body.media_refs)) {
+    throw badRequestError("media_refs must be an array")
+  }
+  const mediaRefs = body.media_refs ?? []
+  if (!body.body?.trim() && mediaRefs.length === 0) {
+    throw badRequestError("body or media_refs is required")
+  }
+  if (mediaRefs.length > 1) {
+    throw badRequestError("comments support at most one media_ref")
+  }
+  for (const ref of mediaRefs) {
+    if (!ref?.storage_ref?.trim()) {
+      throw badRequestError("comment media_refs must include storage_ref")
+    }
+    if (!ref.mime_type?.trim()) {
+      throw badRequestError("comment media_refs must include mime_type")
+    }
+    const mimeType = ref.mime_type.trim().toLowerCase()
+    if (!COMMENT_IMAGE_MIME_TYPES.has(mimeType)) {
+      throw badRequestError("comment media_refs require JPEG, PNG, WebP, GIF, or AVIF media")
+    }
   }
   if (authorshipMode !== "user_agent" && body.agent_id) {
     throw badRequestError("agent_id is only allowed when authorship_mode = user_agent")
