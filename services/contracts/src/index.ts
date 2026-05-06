@@ -812,6 +812,109 @@ export type CommunityPurchaseSettlementFailure = {
   expires_at: number;
 };
 
+export type CommunityHandle = {
+  id: string;
+  object: "community_handle";
+  community: string;
+  namespace: string;
+  user: string;
+  label: string;
+  label_normalized: string;
+  status: "active" | "grace_period" | "expired" | "revoked" | "reserved";
+  issuance_source: "claim" | "auction" | "admin_grant";
+  quote?: string | null;
+  price_cents: number;
+  currency: "USD";
+  pricing_model?: "free" | "flat_by_length" | "custom_curve" | "gated_then_flat" | null;
+  pricing_tier?: string | null;
+  settlement_wallet_attachment?: string | null;
+  funding_tx_ref?: string | null;
+  settlement_tx_ref?: string | null;
+  lease_started_at?: number | null;
+  lease_expires_at?: number | null;
+  created: number;
+};
+
+export type CommunityHandleMeResponse = {
+  handle: CommunityHandle | null;
+};
+
+export type CommunityHandlePricingModel = "free" | "flat_by_length" | "custom_curve" | "gated_then_flat";
+
+export type CommunityHandlePolicySettings = {
+  flat_price_cents?: number | null;
+  premium_price_cents?: number | null;
+  premium_max_length?: number | null;
+  min_length?: number | null;
+  max_length?: number | null;
+  quote_ttl_seconds?: number | null;
+  reserved_labels?: Array<string> | null;
+};
+
+export type CommunityHandlePolicy = {
+  id: string;
+  object: "community_handle_policy";
+  community: string;
+  namespace: string;
+  policy_template: "standard" | "premium" | "membership_gated" | "custom";
+  pricing_model?: CommunityHandlePricingModel | null;
+  membership_required_for_claim: boolean;
+  settings: CommunityHandlePolicySettings;
+  updated_at?: number | null;
+};
+
+export type UpdateCommunityHandlePolicyRequest = {
+  policy_template?: "standard" | "premium" | "membership_gated" | "custom";
+  pricing_model?: CommunityHandlePricingModel | null;
+  membership_required_for_claim?: boolean;
+  settings?: CommunityHandlePolicySettings | null;
+};
+
+export type CommunityHandleQuoteRequest = {
+  desired_label: string;
+};
+
+export type CommunityHandlePaymentInstructions = {
+  chain: CommunityMoneyChainRef;
+  token_address: string;
+  recipient_address: string;
+  amount_atomic: string;
+  amount_display: string;
+};
+
+export type CommunityHandleQuote = {
+  id: string;
+  object: "community_handle_quote";
+  community: string;
+  namespace: string;
+  desired_label: string;
+  label: string;
+  label_normalized: string;
+  eligible: boolean;
+  availability: "available" | "taken" | "reserved" | "already_claimed_by_viewer" | "viewer_has_claim" | "namespace_unavailable";
+  reason?: string | null;
+  price_cents: number;
+  currency: "USD";
+  pricing_model?: "free" | "flat_by_length" | "custom_curve" | "gated_then_flat" | null;
+  pricing_tier?: string | null;
+  payment_instructions?: CommunityHandlePaymentInstructions | null;
+  quote_ttl_seconds: number;
+  quoted_at: number;
+  expires_at: number;
+};
+
+export type CommunityHandleClaimRequest = {
+  quote: string;
+  settlement_wallet_attachment?: string | null;
+  funding_tx_ref?: string | null;
+  settlement_tx_ref?: string | null;
+};
+
+export type CommunityHandleClaimConflictDetails = {
+  availability: CommunityHandleQuote["availability"];
+  reason: string;
+};
+
 export type MembershipResult = {
   community: string;
   status: "joined" | "requested" | "left";
@@ -1882,7 +1985,7 @@ type CommunityMoneyAssetRef = {
   display_name?: string | null;
 };
 
-type CommunityMoneyChainRef = {
+export type CommunityMoneyChainRef = {
   chain_namespace: string;
   chain_id?: number | null;
   display_name?: string | null;
@@ -2866,6 +2969,10 @@ export const apiRoutes = {
   communityPurchaseQuotes: (communityId: string) => `/communities/${communityId}/purchase-quotes`,
   communityPurchaseSettlements: (communityId: string) => `/communities/${communityId}/purchase-settlements`,
   communityPurchaseSettlementFailures: (communityId: string) => `/communities/${communityId}/fail-purchase-settlement`,
+  communityHandleMe: (communityId: string) => `/communities/${communityId}/handles/me`,
+  communityHandlePolicy: (communityId: string) => `/communities/${communityId}/handle-policy`,
+  communityHandleQuote: (communityId: string) => `/communities/${communityId}/handles/quote`,
+  communityHandleClaim: (communityId: string) => `/communities/${communityId}/handles/claim`,
   communityFollow: (communityId: string) => `/communities/${communityId}/follow`,
   communityUnfollow: (communityId: string) => `/communities/${communityId}/unfollow`,
   communityPosts: (communityId: string) => `/communities/${communityId}/posts`,

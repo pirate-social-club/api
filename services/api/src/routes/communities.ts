@@ -7,6 +7,7 @@ import { registerCommunityAdminRoutes } from "./communities-admin-routes"
 import { registerCommunityCommerceRoutes } from "./communities-commerce"
 import { registerCommunityContentRoutes } from "./communities-content-routes"
 import { registerCommunityCreateRoutes } from "./communities-create-routes"
+import { registerCommunityHandleRoutes } from "./communities-handles-routes"
 import { registerCommunityMembershipRoutes } from "./communities-membership-routes"
 import { registerCommunityModerationRoutes } from "./communities-moderation-routes"
 import { registerCommunityRoleRoutes } from "./communities-role-routes"
@@ -70,6 +71,7 @@ registerCommunityAdminRoutes(communities)
 registerCommunityCreateRoutes(communities)
 registerCommunitySettingsRoutes(communities)
 registerCommunityMembershipRoutes(communities)
+registerCommunityHandleRoutes(communities)
 registerCommunityContentRoutes(communities)
 registerCommunityModerationRoutes(communities)
 registerCommunityRoleRoutes(communities)

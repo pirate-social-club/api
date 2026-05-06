@@ -31,10 +31,20 @@ export type BuyerFundingReceipt = {
   chainRef: string
 }
 
+type CheckoutFundingQuote = Pick<
+  PurchaseQuoteRow,
+  | "quote_id"
+  | "route_provider"
+  | "funding_mode"
+  | "final_price_usd"
+  | "source_chain_json"
+  | "funding_destination_address"
+>
+
 let testBuyerFundingVerifier:
   | ((input: {
     env: Env
-    quote: PurchaseQuoteRow
+    quote: CheckoutFundingQuote
     buyerAddress: string
     fundingTxRef: string
   }) => Promise<BuyerFundingReceipt>)
@@ -46,7 +56,7 @@ export function setCommunityCommerceBuyerFundingVerifierForTests(
   testBuyerFundingVerifier = verifier
 }
 
-function requireCheckoutFundingAmountAtomic(quote: PurchaseQuoteRow): bigint {
+function requireCheckoutFundingAmountAtomic(quote: CheckoutFundingQuote): bigint {
   if (!Number.isFinite(quote.final_price_usd) || quote.final_price_usd <= 0) {
     throw badRequestError("Quote funding amount is invalid")
   }
@@ -66,7 +76,7 @@ function topicAddress(topic: string): string | null {
 
 async function verifyPirateCheckoutUsdcFundingReceipt(input: {
   env: Env
-  quote: PurchaseQuoteRow
+  quote: CheckoutFundingQuote
   buyerAddress: string
   fundingTxRef: string
 }): Promise<BuyerFundingReceipt> {
@@ -143,6 +153,34 @@ async function verifyPirateCheckoutUsdcFundingReceipt(input: {
     throw badRequestError("Funding transaction did not deliver enough USDC to the checkout operator")
   }
   return matched
+}
+
+export async function verifyPirateCheckoutUsdcFunding(input: {
+  env: Env
+  quoteId: string
+  amountUsd: number
+  buyerAddress: string
+  fundingTxRef: string
+  fundingDestinationAddress?: string | null
+  sourceChainJson?: string | null
+}): Promise<BuyerFundingReceipt> {
+  const txRef = input.fundingTxRef.trim()
+  if (!txRef) {
+    throw badRequestError("funding_tx_ref is required")
+  }
+  return await verifyPirateCheckoutUsdcFundingReceipt({
+    env: input.env,
+    buyerAddress: input.buyerAddress,
+    fundingTxRef: txRef,
+    quote: {
+      quote_id: input.quoteId,
+      route_provider: "pirate_checkout",
+      funding_mode: "routed",
+      final_price_usd: input.amountUsd,
+      source_chain_json: input.sourceChainJson ?? null,
+      funding_destination_address: input.fundingDestinationAddress ?? null,
+    },
+  })
 }
 
 export async function confirmBuyerFundingForSettlement(input: {
