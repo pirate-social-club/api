@@ -462,7 +462,8 @@ describe("openCommunityDb", () => {
     })
     const currentSql = await readFile(join(migrationsDir, "1064_thread_comment_locks.sql"), "utf8")
     const currentChecksum = createHash("sha256").update(currentSql).digest("hex")
-    await expect(getMigrationChecksum(databasePath, "1064_thread_comment_locks.sql")).resolves.toBe(currentChecksum)
+    const repairedChecksum = await getMigrationChecksum(databasePath, "1064_thread_comment_locks.sql")
+    expect(repairedChecksum).toBe(currentChecksum)
   }, COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS)
 
   testWithTimeout("ensures membership state indexes on remote community database open", async () => {
