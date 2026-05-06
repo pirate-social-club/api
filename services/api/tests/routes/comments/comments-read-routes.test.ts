@@ -96,14 +96,32 @@ describe("comment read routes", () => {
         machine_translated: boolean
         translated_body: string | null
         source_hash: string
+        viewer_can_delete?: boolean
       }>
     }
     expect(listedCommentsBody.items[0]?.comment.id).toBe(topLevelBody.id)
+    expect(listedCommentsBody.items[0]?.viewer_can_delete).toBe(false)
     expect(listedCommentsBody.items[0]?.resolved_locale).toBe("nl")
     expect(listedCommentsBody.items[0]?.translation_state).toBe("ready")
     expect(listedCommentsBody.items[0]?.machine_translated).toBe(true)
     expect(listedCommentsBody.items[0]?.translated_body).toBe("Vertaalde reactie van Pirate")
     expect(typeof listedCommentsBody.items[0]?.source_hash).toBe("string")
+
+    const creatorListedComments = await app.request(
+      `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/comments?locale=nl&limit=10`,
+      {
+        headers: {
+          authorization: `Bearer ${creator.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(creatorListedComments.status).toBe(200)
+    const creatorListedCommentsBody = await json(creatorListedComments) as {
+      items: Array<{ comment: { id: string }; viewer_can_delete?: boolean }>
+    }
+    expect(creatorListedCommentsBody.items[0]?.comment.id).toBe(topLevelBody.id)
+    expect(creatorListedCommentsBody.items[0]?.viewer_can_delete).toBe(true)
 
     const replies = await app.request(
       `http://pirate.test/comments/${topLevelBody.id}/replies?locale=nl&limit=10`,
@@ -122,9 +140,11 @@ describe("comment read routes", () => {
         translation_state: string
         machine_translated: boolean
         translated_body: string | null
+        viewer_can_delete?: boolean
       }>
     }
     expect(repliesBody.items[0]?.comment.id).toBe(replyBody.id)
+    expect(repliesBody.items[0]?.viewer_can_delete).toBe(true)
     expect(repliesBody.items[0]?.resolved_locale).toBe("nl")
     expect(repliesBody.items[0]?.translation_state).toBe("pending")
     expect(repliesBody.items[0]?.machine_translated).toBe(false)
@@ -144,6 +164,7 @@ describe("comment read routes", () => {
       comment: {
         translation_state: string
         translated_body: string | null
+        viewer_can_delete?: boolean
       }
       replies: Array<{
         comment: { id: string }
@@ -151,6 +172,7 @@ describe("comment read routes", () => {
       }>
     }
     expect(contextBody.comment.translation_state).toBe("ready")
+    expect(contextBody.comment.viewer_can_delete).toBe(false)
     expect(contextBody.comment.translated_body).toBe("Vertaalde reactie van Pirate")
     expect(contextBody.replies[0]?.comment.id).toBe(replyBody.id)
     expect(contextBody.replies[0]?.translation_state).toBe("pending")
@@ -232,9 +254,11 @@ describe("comment read routes", () => {
         resolved_locale: string
         translation_state: string
         translated_body: string | null
+        viewer_can_delete?: boolean
       }>
     }
     expect(publicTopLevelBody.items[0]?.comment.id).toBe(topLevelBody.id)
+    expect(publicTopLevelBody.items[0]?.viewer_can_delete).toBe(false)
     expect(publicTopLevelBody.items[0]?.resolved_locale).toBe("zh-Hans")
     expect(publicTopLevelBody.items[0]?.translation_state).toBe("ready")
     expect(publicTopLevelBody.items[0]?.translated_body).toBe("来自 Pirate 的公开评论")
@@ -252,9 +276,11 @@ describe("comment read routes", () => {
         comment: { id: string }
         resolved_locale: string
         translation_state: string
+        viewer_can_delete?: boolean
       }>
     }
     expect(publicRepliesBody.items[0]?.comment.id).toBe(replyBody.id)
+    expect(publicRepliesBody.items[0]?.viewer_can_delete).toBe(false)
     expect(publicRepliesBody.items[0]?.resolved_locale).toBe("zh-Hans")
     expect(publicRepliesBody.items[0]?.translation_state).toBe("pending")
   })

@@ -1251,6 +1251,7 @@ export type CommentListItem = {
   object: "comment_list_item";
   comment: Comment;
   viewer_vote: -1 | 1 | null;
+  viewer_can_delete?: boolean;
   resolved_locale: string;
   translation_state: "ready" | "pending" | "same_language" | "policy_blocked";
   machine_translated: boolean;

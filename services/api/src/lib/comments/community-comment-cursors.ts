@@ -27,6 +27,7 @@ export function rowToCommentListItem(row: unknown): CommentListItem {
   return {
     comment: serializeComment(toCommentRow(row)),
     viewer_vote: numberOrNull(rowValue(row, "viewer_vote")) as -1 | 1 | null,
+    viewer_can_delete: numberOrNull(rowValue(row, "viewer_can_delete")) === 1,
     resolved_locale: "en",
     translation_state: "same_language",
     machine_translated: false,
