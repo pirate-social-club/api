@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { app } from "../../src/index"
 import {
+  emitCommentReply,
   emitRoyaltyEarnedBatch,
   emitPostCommented,
 } from "../../src/lib/notifications/notification-emitters"
@@ -114,6 +115,44 @@ describe("notification routes", () => {
     expect(tasksBody.items.some((item) => item.type === "global_handle_cleanup_suggested")).toBe(false)
   })
 
+  test("comment reply notifications include target comment payload", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "notification-reply-user")
+    const actorSession = await exchangeJwt(ctx.env, "notification-reply-actor")
+
+    await emitCommentReply({
+      env: ctx.env,
+      actorUserId: rawUserId(actorSession),
+      recipientUserId: rawUserId(session),
+      communityId: "cmt_notifications_reply",
+      commentExcerpt: "Nested reply notification",
+      postTitle: "Reply Route",
+      threadRootPostId: "pst_notifications_reply",
+      parentCommentId: "cmt_notifications_parent",
+      replyCommentId: "cmt_notifications_child",
+    })
+
+    const feed = await app.request(
+      "http://pirate.test/notifications/feed?limit=1",
+      { headers: authHeaders(session.accessToken) },
+      ctx.env,
+    )
+    expect(feed.status).toBe(200)
+    const feedBody = await json(feed) as {
+      items: Array<{
+        event: { type: string; payload: Record<string, unknown> | null }
+      }>
+    }
+    expect(feedBody.items[0]?.event.type).toBe("comment_reply")
+    expect(feedBody.items[0]?.event.payload).toMatchObject({
+      comment_id: "cmt_notifications_child",
+      parent_comment_id: "cmt_notifications_parent",
+      target_path: "/p/pst_notifications_reply?comment=cmt_notifications_child",
+      thread_root_post_id: "pst_notifications_reply",
+    })
+  })
+
   test("reads tasks and activity, then marks and dismisses them", async () => {
     const ctx = await createRouteTestContext({
       ANALYTICS_ENABLED: "true",
@@ -206,6 +245,9 @@ describe("notification routes", () => {
     expect(feedBody.next_cursor).toBeNull()
     expect(feedBody.items[0]?.event.type).toBe("post_commented")
     expect(feedBody.items[0]?.event.payload?.post_title).toBe("Notification Route")
+    expect(feedBody.items[0]?.event.payload?.comment_id).toBe("cmt_notifications_reply")
+    expect(feedBody.items[0]?.event.payload?.thread_root_post_id).toBe("pst_notifications")
+    expect(feedBody.items[0]?.event.payload?.target_path).toBe("/p/pst_notifications?comment=cmt_notifications_reply")
     expect(feedBody.items[0]?.event.payload?.actor_display_name).toBe("Route Actor")
     expect(feedBody.items[0]?.event.payload?.actor_avatar_url).toBe("/avatars/route-actor.png")
     expect(feedBody.items[0]?.receipt.read_at).toBeNull()
