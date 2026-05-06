@@ -15,6 +15,57 @@ export type OpenCommunityDbOptions = {
 
 const remoteMembershipIndexPreflightComplete = new Set<string>()
 const remoteThreadCommentLockColumnPreflightComplete = new Set<string>()
+const remoteMembershipIndexPreflightInFlight = new Map<string, Promise<void>>()
+const remoteThreadCommentLockColumnPreflightInFlight = new Map<string, Promise<void>>()
+
+function formatPreflightError(error: unknown): Record<string, string> {
+  if (!error || typeof error !== "object") {
+    return { message: String(error) }
+  }
+  const record = error as Record<string, unknown>
+  return {
+    message: error instanceof Error ? error.message : String(record.message ?? error),
+    code: typeof record.code === "string" ? record.code : "",
+  }
+}
+
+async function runRemoteCommunityDbPreflight(input: {
+  databaseUrl: string
+  label: string
+  complete: Set<string>
+  inFlight: Map<string, Promise<void>>
+  run: () => Promise<void>
+}): Promise<void> {
+  if (input.complete.has(input.databaseUrl)) {
+    return
+  }
+
+  const existing = input.inFlight.get(input.databaseUrl)
+  if (existing) {
+    await existing
+    return
+  }
+
+  const promise = (async () => {
+    try {
+      await input.run()
+    } catch (error) {
+      console.warn("[community-db-factory] remote community db preflight skipped", {
+        label: input.label,
+        ...formatPreflightError(error),
+      })
+    } finally {
+      input.complete.add(input.databaseUrl)
+    }
+  })()
+
+  input.inFlight.set(input.databaseUrl, promise)
+  try {
+    await promise
+  } finally {
+    input.inFlight.delete(input.databaseUrl)
+  }
+}
 
 export async function openCommunityDb(
   env: Env,
@@ -33,6 +84,7 @@ export async function openCommunityDb(
     const client = createClient({ url: databaseUrl })
     await configureLocalCommunityDbClient(client)
     await ensureCommunityDbSchema(client)
+    await ensureRemoteThreadCommentLockColumns(client)
     return {
       client,
       databaseUrl,
@@ -59,17 +111,24 @@ export async function openCommunityDb(
   if (binding.database_url.startsWith("file:")) {
     await configureLocalCommunityDbClient(client)
     await ensureCommunityDbSchema(client)
+    await ensureRemoteThreadCommentLockColumns(client)
   } else {
     const ensureIndexes = options?.ensureRemoteMembershipStateIndexes ?? ensureRemoteCommunityMembershipStateIndexes
-    if (!remoteMembershipIndexPreflightComplete.has(binding.database_url)) {
-      await ensureIndexes(client)
-      remoteMembershipIndexPreflightComplete.add(binding.database_url)
-    }
+    await runRemoteCommunityDbPreflight({
+      databaseUrl: binding.database_url,
+      label: "membership_state_indexes",
+      complete: remoteMembershipIndexPreflightComplete,
+      inFlight: remoteMembershipIndexPreflightInFlight,
+      run: () => ensureIndexes(client),
+    })
     const ensureLockColumns = options?.ensureRemoteThreadCommentLockColumns ?? ensureRemoteThreadCommentLockColumns
-    if (!remoteThreadCommentLockColumnPreflightComplete.has(binding.database_url)) {
-      await ensureLockColumns(client)
-      remoteThreadCommentLockColumnPreflightComplete.add(binding.database_url)
-    }
+    await runRemoteCommunityDbPreflight({
+      databaseUrl: binding.database_url,
+      label: "thread_comment_lock_columns",
+      complete: remoteThreadCommentLockColumnPreflightComplete,
+      inFlight: remoteThreadCommentLockColumnPreflightInFlight,
+      run: () => ensureLockColumns(client),
+    })
   }
   return {
     client,

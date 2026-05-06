@@ -2298,4 +2298,24 @@ CREATE INDEX IF NOT EXISTS idx_community_roles_state_lookup
 `,
     checksum: "27a76aa0fd5456ee917812a6a7d14e4ab579169754359946fe752933549c2ab1",
   },
+  {
+    name: "1064_thread_comment_locks.sql",
+    sql: `-- Compatibility migration.
+--
+-- These columns are now added by the remote community DB preflight in the API
+-- because SQLite/libSQL does not support ALTER TABLE ADD COLUMN IF NOT EXISTS.
+-- Several production communities already have the columns but lack this ledger
+-- entry, so keeping ALTER TABLE statements here makes fleet migration replay
+-- fail with duplicate-column errors.
+SELECT 1;
+`,
+    checksum: "c768ccfa8e10523f54d2e8960fe534fde388fee6b1aced30d5dcbd7314ca4c96",
+  },
+  {
+    name: "1065_comment_media_refs.sql",
+    sql: `ALTER TABLE comments
+    ADD COLUMN media_refs_json TEXT NOT NULL DEFAULT '[]';
+`,
+    checksum: "3c23aba0b062c852dc0bd620d6931803f131d5f271ac13c868fc0a77ff839afa",
+  },
 ] as const;

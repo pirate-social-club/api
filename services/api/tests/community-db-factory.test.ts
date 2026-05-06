@@ -224,6 +224,97 @@ describe("openCommunityDb", () => {
     expect(ensureLockColumnCalls).toBe(1)
   })
 
+  test("continues opening remote community databases when runtime preflight fails", async () => {
+    const wrapKey = "11".repeat(32)
+    const databaseUrl = "libsql://main-cmt-remote-preflight-fail-pirate-prod.aws-us-east-1.turso.io"
+    const now = new Date().toISOString()
+    const repo = {
+      async getPrimaryCommunityDatabaseBinding() {
+        return {
+          community_database_binding_id: "cdb_remote_preflight_fail",
+          community_id: "cmt_remote_preflight_fail",
+          binding_role: "primary",
+          organization_slug: "pirate-prod",
+          group_name: "region-aws-us-east-1",
+          group_id: "grp_remote",
+          database_name: "main-cmt-remote-preflight-fail",
+          database_id: "db_remote",
+          database_url: databaseUrl,
+          location: "aws-us-east-1",
+          requires_credentials: true,
+          status: "active",
+          transferred_at: null,
+          created_at: now,
+          updated_at: now,
+        }
+      },
+      async getActiveCommunityDbCredential() {
+        return {
+          community_db_credential_id: "cdc_remote_preflight_fail",
+          community_database_binding_id: "cdb_remote_preflight_fail",
+          credential_kind: "database_token",
+          token_name: "worker-cmt_remote_preflight_fail-v1",
+          encrypted_token: encryptCommunityDbCredential({
+            plaintextToken: "remote-token",
+            wrapKey,
+          }),
+          encryption_key_version: 1,
+          token_scope: "database",
+          status: "active",
+          issued_at: now,
+          invalidated_at: null,
+          expires_at: null,
+          created_at: now,
+          updated_at: now,
+        }
+      },
+    } satisfies CommunityDatabaseBindingRepository
+
+    let ensureCalls = 0
+    let ensureLockColumnCalls = 0
+    const db = await openCommunityDb(
+      {
+        TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
+      },
+      repo,
+      "cmt_remote_preflight_fail",
+      {
+        ensureRemoteMembershipStateIndexes: async () => {
+          ensureCalls += 1
+          throw Object.assign(new Error("SQLite error: init_step failed: out of memory"), {
+            code: "SQLITE_NOMEM",
+          })
+        },
+        ensureRemoteThreadCommentLockColumns: async () => {
+          ensureLockColumnCalls += 1
+          throw Object.assign(new Error("SQLite error: out of memory"), {
+            code: "SQLITE_NOMEM",
+          })
+        },
+      },
+    )
+
+    expect(db.databaseUrl).toBe(databaseUrl)
+    db.close()
+
+    const secondDb = await openCommunityDb(
+      {
+        TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
+      },
+      repo,
+      "cmt_remote_preflight_fail",
+      {
+        ensureRemoteMembershipStateIndexes: async () => { ensureCalls += 1 },
+        ensureRemoteThreadCommentLockColumns: async () => { ensureLockColumnCalls += 1 },
+      },
+    )
+
+    expect(secondDb.databaseUrl).toBe(databaseUrl)
+    secondDb.close()
+    expect(ensureCalls).toBe(1)
+    expect(ensureLockColumnCalls).toBe(1)
+  })
+
   testWithTimeout("applies pending template migrations for existing local community databases", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-db-factory-"))
     cleanupPaths.push(rootDir)
