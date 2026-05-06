@@ -17,12 +17,14 @@ import { ensureRemoteThreadCommentLockColumns } from "../src/lib/communities/ens
 const cleanupPaths: string[] = []
 const COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS = 120_000
 const testWithTimeout = test as unknown as (name: string, fn: () => Promise<void>, timeout: number) => void
+const LEGACY_1064_THREAD_COMMENT_LOCKS_CHECKSUM =
+  "bdb8e886939b733f10afff54e25f83cc39ed49c2a6501b7f7604ac3357b8d61f"
 
 afterEach(async () => {
   await Promise.all(cleanupPaths.splice(0).map((path) => rm(path, { recursive: true, force: true })))
 })
 
-async function applyPartialCommunitySchema(databasePath: string): Promise<void> {
+async function applyPartialCommunitySchema(databasePath: string, maxMigration = 1023): Promise<void> {
   const client = createClient({
     url: `file:${databasePath}`,
   })
@@ -43,7 +45,7 @@ async function applyPartialCommunitySchema(databasePath: string): Promise<void> 
     const entries = (await readdir(migrationsDir))
       .filter((entry) => entry.endsWith(".sql"))
       .sort()
-      .filter((entry) => Number.parseInt(entry.slice(0, 4), 10) <= 1023)
+      .filter((entry) => Number.parseInt(entry.slice(0, 4), 10) <= maxMigration)
 
     for (const entry of entries) {
       const sql = await readFile(join(migrationsDir, entry), "utf8")
@@ -61,6 +63,23 @@ async function applyPartialCommunitySchema(databasePath: string): Promise<void> 
         args: [entry, createHash("sha256").update(sql).digest("hex")],
       })
     }
+  } finally {
+    client.close()
+  }
+}
+
+async function getMigrationChecksum(databasePath: string, migrationName: string): Promise<string | null> {
+  const client = createClient({
+    url: `file:${databasePath}`,
+  })
+
+  try {
+    const result = await client.execute({
+      sql: "SELECT checksum FROM schema_migrations WHERE migration_name = ?1 LIMIT 1",
+      args: [migrationName],
+    })
+    const checksum = result.rows[0]?.checksum
+    return typeof checksum === "string" ? checksum : null
   } finally {
     client.close()
   }
@@ -406,6 +425,44 @@ describe("openCommunityDb", () => {
     const indexNames = await listIndexNames(databasePath)
     expect(indexNames).toContain("idx_community_memberships_state_lookup")
     expect(indexNames).toContain("idx_community_roles_state_lookup")
+  }, COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS)
+
+  testWithTimeout("repairs compatible local checksum drift for comment lock migration", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-db-factory-"))
+    cleanupPaths.push(rootDir)
+
+    const databasePath = join(rootDir, `${randomUUID()}.db`)
+    await applyPartialCommunitySchema(databasePath, 1063)
+
+    const client = createClient({ url: `file:${databasePath}` })
+    try {
+      await ensureRemoteThreadCommentLockColumns(client)
+      await client.execute({
+        sql: `
+          INSERT INTO schema_migrations (migration_name, migration_label, checksum)
+          VALUES ('1064_thread_comment_locks.sql', 'community-template', ?1)
+        `,
+        args: [LEGACY_1064_THREAD_COMMENT_LOCKS_CHECKSUM],
+      })
+    } finally {
+      client.close()
+    }
+
+    const db = await openCommunityDb(
+      {
+        LOCAL_COMMUNITY_DB_ROOT: rootDir,
+      },
+      buildRepository(databasePath),
+      "cmt_partial",
+    )
+    db.close()
+
+    const migrationsDir = resolveCoreRepoPath("db/community-template/migrations", {
+      serviceRoot: fileURLToPath(new URL("..", import.meta.url)),
+    })
+    const currentSql = await readFile(join(migrationsDir, "1064_thread_comment_locks.sql"), "utf8")
+    const currentChecksum = createHash("sha256").update(currentSql).digest("hex")
+    await expect(getMigrationChecksum(databasePath, "1064_thread_comment_locks.sql")).resolves.toBe(currentChecksum)
   }, COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS)
 
   testWithTimeout("ensures membership state indexes on remote community database open", async () => {
