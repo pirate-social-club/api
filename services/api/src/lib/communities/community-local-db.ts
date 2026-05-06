@@ -9,6 +9,11 @@ import { internalError } from "../errors"
 import type { GatePolicy } from "./membership/gate-types"
 
 const LOCAL_SQLITE_BUSY_TIMEOUT_MS = 30000
+const COMPATIBLE_LOCAL_MIGRATION_CHECKSUMS: Record<string, Set<string>> = {
+  "1064_thread_comment_locks.sql": new Set([
+    "bdb8e886939b733f10afff54e25f83cc39ed49c2a6501b7f7604ac3357b8d61f",
+  ]),
+}
 
 function localSqliteBusyTimeoutMs(): number {
   if (!Number.isInteger(LOCAL_SQLITE_BUSY_TIMEOUT_MS) || LOCAL_SQLITE_BUSY_TIMEOUT_MS < 0) {
@@ -162,6 +167,17 @@ async function applyMigrationFile(client: Client, migrationFilePath: string): Pr
   const existingChecksum = existing.rows[0]?.checksum
   if (typeof existingChecksum === "string") {
     if (existingChecksum !== checksum) {
+      if (COMPATIBLE_LOCAL_MIGRATION_CHECKSUMS[migrationName]?.has(existingChecksum)) {
+        await client.execute({
+          sql: `
+            UPDATE schema_migrations
+            SET checksum = ?2
+            WHERE migration_name = ?1
+          `,
+          args: [migrationName, checksum],
+        })
+        return
+      }
       throw internalError(`Migration checksum mismatch for ${migrationName}`)
     }
     return
