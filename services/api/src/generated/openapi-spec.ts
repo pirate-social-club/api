@@ -8880,9 +8880,6 @@ const spec = {
       "CreateCommentRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "body"
-        ],
         "properties": {
           "idempotency_key": {
             "type": "string",
@@ -8890,6 +8887,13 @@ const spec = {
           },
           "body": {
             "type": "string"
+          },
+          "media_refs": {
+            "type": "array",
+            "maxItems": 1,
+            "items": {
+              "$ref": "./posts.yaml#/MediaDescriptor"
+            }
           },
           "authorship_mode": {
             "type": "string",
@@ -9032,6 +9036,12 @@ const spec = {
           "body": {
             "type": "string",
             "nullable": true
+          },
+          "media_refs": {
+            "type": "array",
+            "items": {
+              "$ref": "./posts.yaml#/MediaDescriptor"
+            }
           },
           "status": {
             "type": "string",

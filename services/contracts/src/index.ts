@@ -1011,7 +1011,8 @@ export type CreatePostRequest = (((unknown & {
 
 export type CreateCommentRequest = {
   idempotency_key?: string | null;
-  body: string;
+  body?: string;
+  media_refs?: Array<MediaDescriptor>;
   authorship_mode?: "human_direct" | "user_agent";
   agent?: string | null;
   agent_action_proof?: AgentActionProof | null;
@@ -1226,6 +1227,7 @@ export type Comment = {
   agent_owner_handle_snapshot?: string | null;
   agent_ownership_provider_snapshot?: AgentOwnershipProvider | null;
   body: string | null;
+  media_refs?: Array<MediaDescriptor>;
   status: "published" | "hidden" | "removed" | "deleted";
   replies_locked?: boolean;
   replies_locked_at?: number | null;

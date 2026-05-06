@@ -37,6 +37,155 @@ afterEach(async () => {
 })
 
 describe("comments routes", () => {
+  test("comments support image and GIF media refs with validation and moderation", async () => {
+    const ctx = await createRouteTestContext({
+      OPENAI_API_KEY: "test-openai-key",
+      OPENAI_MODERATION_BASE_URL: "https://openai.test/v1",
+    })
+    cleanup = ctx.cleanup
+
+    const originalFetch = globalThis.fetch
+    let moderationCallCount = 0
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const request = new Request(input, init)
+      if (request.url !== "https://openai.test/v1/moderations") {
+        return originalFetch(input, init)
+      }
+
+      moderationCallCount += 1
+      const requestBody = await request.json() as { input?: unknown }
+      const serializedInput = JSON.stringify(requestBody.input).toLowerCase()
+      const blocked = serializedInput.includes("blocked-comment-image")
+      const categories: Record<string, boolean> = {
+        sexual: false,
+        "sexual/minors": blocked,
+        harassment: false,
+        "harassment/threatening": false,
+        hate: false,
+        "hate/threatening": false,
+        illicit: false,
+        "illicit/violent": false,
+        "self-harm": false,
+        "self-harm/intent": false,
+        "self-harm/instructions": false,
+        violence: false,
+        "violence/graphic": false,
+      }
+      return new Response(JSON.stringify({
+        id: "modr_comment_media_test",
+        model: "omni-moderation-latest",
+        results: [{
+          flagged: blocked,
+          categories,
+          category_scores: Object.fromEntries(Object.keys(categories).map((category) => [category, categories[category] ? 0.99 : 0.01])),
+        }],
+      }), {
+        headers: { "content-type": "application/json" },
+      })
+    }
+
+    try {
+      const creator = await exchangeJwt(ctx.env, "comments-media-creator")
+      const community = await createCommunity(ctx.env, creator.accessToken, "Comment Media Club")
+      const member = await exchangeJwt(ctx.env, "comments-media-member")
+      await addCommunityMember(ctx.communityDbRoot, community.communityId, member.userId)
+
+      const createdPost = await requestJson(
+        `http://pirate.test/communities/${community.communityId}/posts`,
+        {
+          post_type: "text",
+          title: "Comment media thread",
+          body: "Testing comment media",
+          idempotency_key: "comments-media-post-1",
+        },
+        ctx.env,
+        creator.accessToken,
+      )
+      expect(createdPost.status).toBe(201)
+      const postBody = await json(createdPost) as { id: string }
+
+      const textOnly = await requestJson(
+        `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/comments`,
+        { body: "Text-only comment still works." },
+        ctx.env,
+        member.accessToken,
+      )
+      expect(textOnly.status).toBe(201)
+      expect(moderationCallCount).toBe(0)
+
+      const imageOnly = await requestJson(
+        `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/comments`,
+        {
+          media_refs: [{
+            storage_ref: "https://media.test/comment-image.jpg",
+            mime_type: "image/jpeg",
+            size_bytes: 1234,
+          }],
+        },
+        ctx.env,
+        member.accessToken,
+      )
+      expect(imageOnly.status).toBe(201)
+      const imageOnlyBody = await json(imageOnly) as { body: string; media_refs?: Array<{ storage_ref: string; mime_type?: string | null }> }
+      expect(imageOnlyBody.body).toBe("")
+      expect(imageOnlyBody.media_refs?.[0]?.storage_ref).toBe("https://media.test/comment-image.jpg")
+
+      const gifOnly = await requestJson(
+        `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/comments`,
+        {
+          media_refs: [{
+            storage_ref: "https://media.test/comment-reaction.gif",
+            mime_type: "image/gif",
+            size_bytes: 4321,
+          }],
+        },
+        ctx.env,
+        member.accessToken,
+      )
+      expect(gifOnly.status).toBe(201)
+      const gifOnlyBody = await json(gifOnly) as { media_refs?: Array<{ mime_type?: string | null }> }
+      expect(gifOnlyBody.media_refs?.[0]?.mime_type).toBe("image/gif")
+
+      const empty = await requestJson(
+        `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/comments`,
+        { body: "   " },
+        ctx.env,
+        member.accessToken,
+      )
+      expect(empty.status).toBe(400)
+
+      const invalidMime = await requestJson(
+        `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/comments`,
+        {
+          media_refs: [{
+            storage_ref: "https://media.test/comment.txt",
+            mime_type: "text/plain",
+          }],
+        },
+        ctx.env,
+        member.accessToken,
+      )
+      expect(invalidMime.status).toBe(400)
+
+      const blocked = await requestJson(
+        `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/comments`,
+        {
+          media_refs: [{
+            storage_ref: "https://media.test/blocked-comment-image.jpg",
+            mime_type: "image/jpeg",
+          }],
+        },
+        ctx.env,
+        member.accessToken,
+      )
+      expect(blocked.status).toBe(400)
+      const blockedBody = await json(blocked) as { code: string }
+      expect(blockedBody.code).toBe("comment_media_rejected")
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   test("user-owned agents can create top-level comments and replies in replies_only communities", async () => {
     const ctx = await createRouteTestContext({
       VERY_API_URL: "https://very.test",

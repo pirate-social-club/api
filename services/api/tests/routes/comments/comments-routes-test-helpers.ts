@@ -228,6 +228,30 @@ export async function insertCommentTranslation(input: {
   }
 }
 
+export async function setCommentMediaRefs(input: {
+  communityDbRoot: string
+  communityId: string
+  commentId: string
+  mediaRefs: unknown[]
+}): Promise<void> {
+  const client = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+
+  try {
+    await client.execute({
+      sql: `
+        UPDATE comments
+        SET media_refs_json = ?2
+        WHERE comment_id = ?1
+      `,
+      args: [rawPublicId(input.commentId, "cmt"), JSON.stringify(input.mediaRefs)],
+    })
+  } finally {
+    client.close()
+  }
+}
+
 export async function fetchCommunityJobsByType(input: {
   communityDbRoot: string
   communityId: string

@@ -21,11 +21,12 @@ import type {
   CommunityPostProjectionRepository,
   CommunityReadRepository,
 } from "../communities/db-community-repository"
-import { badRequestError, eligibilityFailed, notFoundError } from "../errors"
+import { badRequestError, commentMediaRejected, eligibilityFailed, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import type { ProfileRepository, UserRepository } from "../auth/repositories"
 import { authorizeAgentWrite } from "../agents/agent-write-authorization"
 import { getPostById, getPostProjectionMetrics } from "../posts/community-post-store"
+import { resolveOpenAIModerationOutcome } from "../posts/openai-moderation"
 import {
   assertCreateCommentRequest,
   findCommentByIdempotencyKey,
@@ -41,6 +42,7 @@ import { incrementAncestorCommentCounters, incrementThreadPostCommentCounters, i
 import { enqueueCommentTranslationPrewarmJobs } from "./comment-translation-jobs"
 import type { Comment, CommentAnonymousScope, CreateCommentRequest } from "./comment-types"
 import type { Env } from "../../env"
+import type { CreatePostRequest } from "../../types"
 
 export {
   getCommentContext,
@@ -126,6 +128,47 @@ async function enqueueProjectionRetry(input: {
       error,
     })
   }
+}
+
+async function assertCommentMediaModeration(input: {
+  env: Env
+  community: Awaited<ReturnType<typeof loadCommunityProjection>>
+  body: CreateCommentRequest
+}): Promise<void> {
+  if (!input.body.media_refs?.length) {
+    return
+  }
+
+  const moderationBody: CreatePostRequest = {
+    idempotency_key: input.body.idempotency_key?.trim() || "comment-media-moderation",
+    post_type: "image",
+    media_refs: input.body.media_refs as NonNullable<Extract<CreatePostRequest, { post_type: "image" }>["media_refs"]>,
+    title: null,
+    caption: input.body.body?.trim() || undefined,
+  }
+  const outcome = await resolveOpenAIModerationOutcome({
+    env: input.env,
+    community: input.community,
+    body: moderationBody,
+  })
+
+  // Comments do not have an age-gate render path, so adult-gated media is rejected for v1.
+  if (outcome.analysis_state !== "allow" || outcome.age_gate_policy === "18_plus") {
+    throw commentMediaRejected("Comment image was rejected by media moderation", {
+      analysis_state: outcome.analysis_state,
+      content_safety_state: outcome.content_safety_state,
+      age_gate_policy: outcome.age_gate_policy,
+      provider_result: outcome.providerResult,
+    })
+  }
+}
+
+function commentNotificationExcerpt(comment: Comment): string {
+  const body = comment.body?.trim()
+  if (body) {
+    return body
+  }
+  return comment.media_refs?.length ? "sent an image" : ""
 }
 
 export async function createComment(input: {
@@ -234,6 +277,12 @@ export async function createComment(input: {
       writeTarget: "comment",
     })
 
+    await assertCommentMediaModeration({
+      env: input.env,
+      community,
+      body: writeBody,
+    })
+
     const createdAt = nowIso()
     const depth = parentComment ? parentComment.depth + 1 : 0
     const tx = await db.client.transaction("write")
@@ -247,10 +296,13 @@ export async function createComment(input: {
         parentCommentId: input.parentCommentId ?? null,
         authorUserId: input.userId,
         body: writeBody,
-        sourceLanguage: detectSourceLanguageFromText([writeBody.body]),
+        sourceLanguage: detectSourceLanguageFromText([writeBody.body ?? ""]),
         depth,
         createdAt,
-        contentHash: `0x${await sha256Hex(writeBody.body.trim())}`,
+        contentHash: `0x${await sha256Hex(JSON.stringify({
+          body: writeBody.body?.trim() ?? "",
+          media_refs: writeBody.media_refs ?? [],
+        }))}`,
         agentWriteAuthorization: agentWriteAuthorization ?? undefined,
       })
 
@@ -343,7 +395,7 @@ export async function createComment(input: {
           await emitCommentReply({
             env: input.env,
             actorUserId: input.userId,
-            commentExcerpt: createdComment.body,
+            commentExcerpt: commentNotificationExcerpt(createdComment),
             postTitle: threadRootPost?.title ?? null,
             recipientUserId: parentComment.author_user_id,
             communityId: input.communityId,
@@ -358,7 +410,7 @@ export async function createComment(input: {
           await emitPostCommented({
             env: input.env,
             actorUserId: input.userId,
-            commentExcerpt: createdComment.body,
+            commentExcerpt: commentNotificationExcerpt(createdComment),
             postAuthorUserId: threadRootPost.author_user_id,
             communityId: input.communityId,
             postId: input.threadRootPostId,

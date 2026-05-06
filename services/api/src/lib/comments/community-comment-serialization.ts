@@ -24,6 +24,7 @@ export type CommentRow = {
   agent_owner_handle_snapshot: string | null
   agent_ownership_provider_snapshot: string | null
   body: string | null
+  media_refs_json: string | null
   source_language: string | null
   status: CommentStatus
   replies_locked: number | null
@@ -74,6 +75,7 @@ export function toCommentRow(row: unknown): CommentRow {
     agent_owner_handle_snapshot: stringOrNull(rowValue(row, "agent_owner_handle_snapshot")),
     agent_ownership_provider_snapshot: stringOrNull(rowValue(row, "agent_ownership_provider_snapshot")),
     body: stringOrNull(rowValue(row, "body")),
+    media_refs_json: stringOrNull(rowValue(row, "media_refs_json")),
     source_language: stringOrNull(rowValue(row, "source_language")),
     status: requiredString(row, "status") as CommentStatus,
     replies_locked: numberOrNull(rowValue(row, "replies_locked")),
@@ -95,6 +97,18 @@ export function toCommentRow(row: unknown): CommentRow {
   }
 }
 
+function parseMediaRefs(value: string | null): Comment["media_refs"] {
+  if (!value) {
+    return []
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown
+    return Array.isArray(parsed) ? parsed as Comment["media_refs"] : []
+  } catch {
+    return []
+  }
+}
+
 export function serializeComment(row: CommentRow): Comment {
   return {
     comment_id: row.comment_id,
@@ -113,6 +127,7 @@ export function serializeComment(row: CommentRow): Comment {
     agent_owner_handle_snapshot: row.agent_owner_handle_snapshot,
     agent_ownership_provider_snapshot: row.agent_ownership_provider_snapshot as Comment["agent_ownership_provider_snapshot"],
     body: row.body,
+    media_refs: parseMediaRefs(row.media_refs_json),
     source_language: row.source_language,
     status: row.status,
     replies_locked: row.replies_locked === 1,

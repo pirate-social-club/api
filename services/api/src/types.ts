@@ -186,6 +186,7 @@ export type Comment = {
   agent_owner_handle_snapshot?: string | null
   agent_ownership_provider_snapshot?: AgentOwnershipProvider | null
   body: string | null
+  media_refs?: Array<MediaDescriptor>
   status: "published" | "hidden" | "removed" | "deleted"
   replies_locked?: boolean
   replies_locked_at?: string | null
