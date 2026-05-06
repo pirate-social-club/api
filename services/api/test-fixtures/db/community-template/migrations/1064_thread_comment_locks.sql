@@ -1,25 +1,8 @@
-ALTER TABLE posts
-  ADD COLUMN comments_locked INTEGER NOT NULL DEFAULT 0
-  CHECK (comments_locked IN (0, 1));
-
-ALTER TABLE posts
-  ADD COLUMN comments_locked_at TEXT;
-
-ALTER TABLE posts
-  ADD COLUMN comments_locked_by_user_id TEXT;
-
-ALTER TABLE posts
-  ADD COLUMN comments_lock_reason TEXT;
-
-ALTER TABLE comments
-  ADD COLUMN replies_locked INTEGER NOT NULL DEFAULT 0
-  CHECK (replies_locked IN (0, 1));
-
-ALTER TABLE comments
-  ADD COLUMN replies_locked_at TEXT;
-
-ALTER TABLE comments
-  ADD COLUMN replies_locked_by_user_id TEXT;
-
-ALTER TABLE comments
-  ADD COLUMN replies_lock_reason TEXT;
+-- Compatibility migration.
+--
+-- These columns are now added by the remote community DB preflight in the API
+-- because SQLite/libSQL does not support ALTER TABLE ADD COLUMN IF NOT EXISTS.
+-- Several production communities already have the columns but lack this ledger
+-- entry, so keeping ALTER TABLE statements here makes fleet migration replay
+-- fail with duplicate-column errors.
+SELECT 1;
