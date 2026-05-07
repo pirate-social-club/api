@@ -39,8 +39,49 @@ type ParsedContentTranslation = {
   translated_caption: string | null
 }
 
+const DEFAULT_TRANSLATION_MAX_COMPLETION_TOKENS = 1_024
+const MIN_TRANSLATION_MAX_COMPLETION_TOKENS = 512
+const MAX_TRANSLATION_MAX_COMPLETION_TOKENS = 4_096
+
+class MalformedTranslationJsonError extends Error {
+  constructor() {
+    super("OpenRouter translation response was malformed JSON")
+  }
+}
+
 function isNullableString(value: unknown): value is string | null {
   return value === null || typeof value === "string"
+}
+
+function parsePositiveInteger(value: string | undefined): number | null {
+  const parsed = Number.parseInt(trimEnv(value), 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
+
+function clampCompletionTokens(value: number): number {
+  return Math.min(MAX_TRANSLATION_MAX_COMPLETION_TOKENS, Math.max(MIN_TRANSLATION_MAX_COMPLETION_TOKENS, value))
+}
+
+function estimateTranslationMaxCompletionTokens(sourceText: {
+  title?: string | null
+  body?: string | null
+  caption?: string | null
+}): number {
+  const sourceLength = [
+    sourceText.title,
+    sourceText.body,
+    sourceText.caption,
+  ].reduce((total, value) => total + String(value ?? "").length, 0)
+  const estimatedTokens = Math.ceil(sourceLength / 2) + 256
+  return clampCompletionTokens(Math.max(DEFAULT_TRANSLATION_MAX_COMPLETION_TOKENS, estimatedTokens))
+}
+
+function parseTranslationJson(content: string): unknown {
+  try {
+    return JSON.parse(content)
+  } catch {
+    throw new MalformedTranslationJsonError()
+  }
 }
 
 function targetLocaleMatchesRequested(parsedTargetLocale: string, requestedTargetLocale: string): boolean {
@@ -110,107 +151,124 @@ export async function requestContentTranslation(input: {
 
   const baseUrl = trimEnv(input.env.OPENROUTER_BASE_URL) || "https://openrouter.ai/api/v1"
   const model = trimEnv(input.env.OPENROUTER_TRANSLATION_MODEL) || "google/gemini-2.5-flash-lite-preview-09-2025"
-  const timeoutMs = Number.parseInt(trimEnv(input.env.OPENROUTER_TRANSLATION_TIMEOUT_MS) || trimEnv(input.env.OPENROUTER_TIMEOUT_MS), 10)
+  const timeoutMs = parsePositiveInteger(input.env.OPENROUTER_TRANSLATION_TIMEOUT_MS)
+    ?? parsePositiveInteger(input.env.OPENROUTER_TIMEOUT_MS)
+  const initialMaxCompletionTokens = parsePositiveInteger(input.env.OPENROUTER_TRANSLATION_MAX_COMPLETION_TOKENS)
+    ?? estimateTranslationMaxCompletionTokens(input.sourceText)
   const controller = new AbortController()
-  const timer = Number.isFinite(timeoutMs) && timeoutMs > 0
+  const timer = timeoutMs
     ? setTimeout(() => controller.abort(), timeoutMs)
     : null
 
   try {
-    const response = await fetch(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${apiKey}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        temperature: 0,
-        max_completion_tokens: 240,
-        response_format: {
-          type: "json_schema",
-          json_schema: {
-            name: "content_translation",
-            strict: true,
-            schema: {
-              type: "object",
-              additionalProperties: false,
-              required: [
-                "source_language",
-                "target_locale",
-                "outcome",
-                "translated_title",
-                "translated_body",
-                "translated_caption",
-              ],
-              properties: {
-                source_language: { type: "string" },
-                target_locale: { type: "string" },
-                outcome: {
-                  type: "string",
-                  enum: ["translated", "same_language"],
+    let maxCompletionTokens = clampCompletionTokens(initialMaxCompletionTokens)
+    let lastMalformedJsonError: MalformedTranslationJsonError | null = null
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await fetch(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          temperature: 0,
+          max_completion_tokens: maxCompletionTokens,
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: "content_translation",
+              strict: true,
+              schema: {
+                type: "object",
+                additionalProperties: false,
+                required: [
+                  "source_language",
+                  "target_locale",
+                  "outcome",
+                  "translated_title",
+                  "translated_body",
+                  "translated_caption",
+                ],
+                properties: {
+                  source_language: { type: "string" },
+                  target_locale: { type: "string" },
+                  outcome: {
+                    type: "string",
+                    enum: ["translated", "same_language"],
+                  },
+                  translated_title: { type: ["string", "null"] },
+                  translated_body: { type: ["string", "null"] },
+                  translated_caption: { type: ["string", "null"] },
                 },
-                translated_title: { type: ["string", "null"] },
-                translated_body: { type: ["string", "null"] },
-                translated_caption: { type: ["string", "null"] },
               },
             },
           },
-        },
-        messages: [
-          {
-            role: "system",
-            content:
-              "Translate the supplied social post text into the requested locale. " +
-              "Preserve meaning and tone. Return outcome same_language when translation is unnecessary. " +
-              "Do not invent text for null fields.",
-          },
-          {
-            role: "user",
-            content: JSON.stringify({
-              source_language_hint: input.sourceLanguage ?? null,
-              target_locale: input.targetLocale,
-              title: input.sourceText.title ?? null,
-              body: input.sourceText.body ?? null,
-              caption: input.sourceText.caption ?? null,
-            }),
-          },
-        ],
-      }),
-      signal: controller.signal,
-    })
+          messages: [
+            {
+              role: "system",
+              content:
+                "Translate the supplied social post text into the requested locale. " +
+                "Preserve meaning and tone. Return outcome same_language when translation is unnecessary. " +
+                "Do not invent text for null fields.",
+            },
+            {
+              role: "user",
+              content: JSON.stringify({
+                source_language_hint: input.sourceLanguage ?? null,
+                target_locale: input.targetLocale,
+                title: input.sourceText.title ?? null,
+                body: input.sourceText.body ?? null,
+                caption: input.sourceText.caption ?? null,
+              }),
+            },
+          ],
+        }),
+        signal: controller.signal,
+      })
 
-    if (!response.ok) {
-      throw new Error(`OpenRouter translation request failed with http_${response.status}`)
-    }
+      if (!response.ok) {
+        throw new Error(`OpenRouter translation request failed with http_${response.status}`)
+      }
 
-    const body = await response.json().catch(() => null) as
-      | {
-          choices?: Array<{ message?: { content?: unknown } }>
+      const body = await response.json().catch(() => null) as
+        | {
+            choices?: Array<{ message?: { content?: unknown } }>
+          }
+        | null
+      if (!body) {
+        throw new Error("OpenRouter translation response was not valid JSON")
+      }
+
+      const normalizedContent = normalizeMessageContent(body.choices?.[0]?.message?.content)
+      if (!normalizedContent.trim()) {
+        throw new Error("OpenRouter translation response was empty")
+      }
+
+      try {
+        const parsed = validateParsedContentTranslation(parseTranslationJson(normalizedContent), input.targetLocale)
+
+        return {
+          provider: "openrouter",
+          model,
+          sourceLanguage: parsed.source_language,
+          targetLocale: parsed.target_locale,
+          outcome: parsed.outcome,
+          translatedTitle: parsed.translated_title,
+          translatedBody: parsed.translated_body,
+          translatedCaption: parsed.translated_caption,
+          providerResult: body as Record<string, unknown>,
         }
-      | null
-    if (!body) {
-      throw new Error("OpenRouter translation response was not valid JSON")
+      } catch (error) {
+        if (!(error instanceof MalformedTranslationJsonError) || maxCompletionTokens >= MAX_TRANSLATION_MAX_COMPLETION_TOKENS) {
+          throw error
+        }
+        lastMalformedJsonError = error
+        maxCompletionTokens = MAX_TRANSLATION_MAX_COMPLETION_TOKENS
+      }
     }
-
-    const normalizedContent = normalizeMessageContent(body.choices?.[0]?.message?.content)
-    if (!normalizedContent.trim()) {
-      throw new Error("OpenRouter translation response was empty")
-    }
-
-    const parsed = validateParsedContentTranslation(JSON.parse(normalizedContent), input.targetLocale)
-
-    return {
-      provider: "openrouter",
-      model,
-      sourceLanguage: parsed.source_language,
-      targetLocale: parsed.target_locale,
-      outcome: parsed.outcome,
-      translatedTitle: parsed.translated_title,
-      translatedBody: parsed.translated_body,
-      translatedCaption: parsed.translated_caption,
-      providerResult: body as Record<string, unknown>,
-    }
+    throw lastMalformedJsonError ?? new Error("OpenRouter translation response was malformed JSON")
   } finally {
     if (timer) {
       clearTimeout(timer)
