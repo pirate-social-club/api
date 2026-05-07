@@ -45,7 +45,7 @@ async function createNamespaceBackedCommunity(input: {
   const created = await requestJson("http://pirate.test/communities", {
     display_name: "Country Handle Club",
     membership_mode: "request",
-    handle_policy: { policy_template: "standard" },
+    handle_policy: { policy_template: "standard", pricing_model: "free" },
     namespace: {
       namespace_verification: input.namespaceVerification,
     },
@@ -264,11 +264,11 @@ describe("community handle routes", () => {
     expect(repeatedQuoteResponse.status).toBe(200)
     const repeatedQuote = await json(repeatedQuoteResponse) as { id: string }
     expect(repeatedQuote.id).toBe(quote.id)
-    await expect(countLocalHandleQuotes({
+    expect(await countLocalHandleQuotes({
       communityDbRoot: ctx.communityDbRoot,
       communityId,
       labelNormalized: "amara",
-    })).resolves.toBe(1)
+    })).toBe(1)
 
     const claimResponse = await requestJson(
       `http://pirate.test/communities/${communityId}/handles/claim`,
@@ -430,7 +430,10 @@ describe("community handle routes", () => {
       ctx.env,
       nonMember.accessToken,
     )
-    expect(nonMemberQuoteResponse.status).toBe(404)
+    expect(nonMemberQuoteResponse.status).toBe(403)
+    const nonMemberQuoteError = await json(nonMemberQuoteResponse) as { code: string; message: string }
+    expect(nonMemberQuoteError.code).toBe("eligibility_failed")
+    expect(nonMemberQuoteError.message).toBe("Community membership is required to claim names")
 
     const reservedQuoteResponse = await requestJson(
       `http://pirate.test/communities/${communityId}/handles/quote`,
@@ -488,11 +491,99 @@ describe("community handle routes", () => {
     const expiredClaimError = await json(expiredClaimResponse) as { code: string; message: string }
     expect(expiredClaimError.code).toBe("eligibility_failed")
     expect(expiredClaimError.message).toBe("Handle quote has expired")
-    await expect(getLocalHandleQuoteStatus({
+    expect(await getLocalHandleQuoteStatus({
       communityDbRoot: ctx.communityDbRoot,
       communityId,
       quoteId: expiringQuote.id,
-    })).resolves.toBe("expired")
+    })).toBe("expired")
+  })
+
+  test("community owner can list, reserve, and revoke namespace handles", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "community-handle-admin-creator")
+    const namespaceVerification = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+    const communityId = await createNamespaceBackedCommunity({
+      accessToken: creator.accessToken,
+      env: ctx.env,
+      namespaceVerification,
+    })
+
+    const reserveResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/reserve`,
+      { desired_label: "crown" },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(reserveResponse.status).toBe(200)
+    const reserved = await json(reserveResponse) as {
+      id: string
+      label: string
+      status: string
+      issuance_source: string
+      pricing_tier: string
+    }
+    expect(reserved.label).toBe("crown")
+    expect(reserved.status).toBe("reserved")
+    expect(reserved.issuance_source).toBe("admin_grant")
+    expect(reserved.pricing_tier).toBe("reserved")
+
+    const reservedQuoteResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/quote`,
+      { desired_label: "crown" },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(reservedQuoteResponse.status).toBe(200)
+    const reservedQuote = await json(reservedQuoteResponse) as {
+      eligible: boolean
+      availability: string
+      reason: string | null
+    }
+    expect(reservedQuote.eligible).toBe(false)
+    expect(reservedQuote.availability).toBe("reserved")
+    expect(reservedQuote.reason).toBe("Desired label is reserved")
+
+    const listResponse = await app.request(
+      `http://pirate.test/communities/${communityId}/handles?status=reserved`,
+      {
+        headers: { authorization: `Bearer ${creator.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(listResponse.status).toBe(200)
+    const list = await json(listResponse) as { handles: Array<{ id: string; label: string; status: string }> }
+    expect(list.handles.length).toBe(1)
+    expect(list.handles[0]?.id).toBe(reserved.id)
+    expect(list.handles[0]?.label).toBe("crown")
+    expect(list.handles[0]?.status).toBe("reserved")
+
+    const revokeResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/${reserved.id}/revoke`,
+      { reason: "release for launch smoke" },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(revokeResponse.status).toBe(200)
+    const revoked = await json(revokeResponse) as { id: string; label: string; status: string }
+    expect(revoked.id).toBe(reserved.id)
+    expect(revoked.label).toBe("crown")
+    expect(revoked.status).toBe("revoked")
+
+    const releasedQuoteResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/quote`,
+      { desired_label: "crown" },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(releasedQuoteResponse.status).toBe(200)
+    const releasedQuote = await json(releasedQuoteResponse) as {
+      eligible: boolean
+      availability: string
+    }
+    expect(releasedQuote.eligible).toBe(true)
+    expect(releasedQuote.availability).toBe("available")
   })
 
   test("paid handle claim requires wallet and funding proof", async () => {
@@ -653,5 +744,333 @@ describe("community handle routes", () => {
     expect(paidClaim.label).toBe("longname")
     expect(paidClaim.price_cents).toBe(500)
     expect(paidClaim.funding_tx_ref).toBe("0xfunded")
+  })
+
+  test("claims_enabled blocks quote and claim but preserves /handles/me for existing owners", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "community-handle-claims-enabled-creator")
+    const namespaceVerification = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+    const communityId = await createNamespaceBackedCommunity({
+      accessToken: creator.accessToken,
+      env: ctx.env,
+      namespaceVerification,
+    })
+
+    // Claim a handle while claims are enabled (default)
+    const quoteResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/quote`,
+      { desired_label: "enabled" },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(quoteResponse.status).toBe(200)
+    const quote = await json(quoteResponse) as { id: string }
+
+    const claimResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/claim`,
+      { quote: quote.id },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(claimResponse.status).toBe(200)
+
+    // Disable claims
+    const disableResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      { claims_enabled: false },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(disableResponse.status).toBe(200)
+    const disabledPolicy = await json(disableResponse) as { claims_enabled: boolean }
+    expect(disabledPolicy.claims_enabled).toBe(false)
+
+    // Quote should fail with eligibility error
+    const blockedQuoteResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/quote`,
+      { desired_label: "blocked" },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(blockedQuoteResponse.status).toBe(403)
+    const blockedQuoteError = await json(blockedQuoteResponse) as { code: string; message: string }
+    expect(blockedQuoteError.code).toBe("eligibility_failed")
+    expect(blockedQuoteError.message).toBe("Community name claims are currently disabled")
+
+    // /handles/me should still return the existing handle
+    const myHandleResponse = await app.request(
+      `http://pirate.test/communities/${communityId}/handles/me`,
+      {
+        headers: { authorization: `Bearer ${creator.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(myHandleResponse.status).toBe(200)
+    const myHandle = await json(myHandleResponse) as { handle: { label: string; status: string } | null }
+    expect(myHandle.handle?.label).toBe("enabled")
+    expect(myHandle.handle?.status).toBe("active")
+
+    // Re-enable claims
+    const enableResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      { claims_enabled: true },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(enableResponse.status).toBe(200)
+    const enabledPolicy = await json(enableResponse) as { claims_enabled: boolean }
+    expect(enabledPolicy.claims_enabled).toBe(true)
+
+    // Quote should work again (not blocked by claims disabled)
+    const reenabledQuoteResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/quote`,
+      { desired_label: "reenabled" },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(reenabledQuoteResponse.status).toBe(200)
+    const reenabledQuote = await json(reenabledQuoteResponse) as { eligible: boolean; availability: string; reason?: string | null }
+    // Creator already has a handle, so this returns viewer_has_claim — the important thing
+    // is that it is NOT the "claims are currently disabled" error.
+    expect(reenabledQuote.availability).not.toBe("namespace_unavailable")
+    expect(reenabledQuote.reason).not.toBe("Community name claims are currently disabled")
+  })
+
+  test("fresh community gets premium short names as default handle policy", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "community-handle-default-policy-creator")
+    const namespaceVerification = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+
+    // Create community without explicit handle_policy — should inherit defaults
+    const created = await requestJson("http://pirate.test/communities", {
+      display_name: "Default Policy Club",
+      membership_mode: "request",
+      namespace: {
+        namespace_verification: namespaceVerification,
+      },
+    }, ctx.env, creator.accessToken)
+    expect(created.status).toBe(202)
+    const body = await json(created) as { community: { id: string } }
+    const communityId = rawCommunityId(body.community.id)
+
+    const policyResponse = await app.request(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      {
+        headers: { authorization: `Bearer ${creator.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(policyResponse.status).toBe(200)
+    const policy = await json(policyResponse) as {
+      policy_template: string
+      pricing_model: string
+      membership_required_for_claim: boolean
+      claims_enabled: boolean
+      settings: {
+        flat_price_cents: number
+        premium_price_cents: number
+        premium_max_length: number
+        min_length: number
+        max_length: number
+        special_price_cents_by_label: Record<string, number>
+      }
+    }
+    expect(policy.policy_template).toBe("premium")
+    expect(policy.pricing_model).toBe("flat_by_length")
+    expect(policy.membership_required_for_claim).toBe(true)
+    expect(policy.claims_enabled).toBe(true)
+    expect(policy.settings.flat_price_cents).toBe(500)
+    expect(policy.settings.premium_price_cents).toBe(2500)
+    expect(policy.settings.premium_max_length).toBe(4)
+    expect(policy.settings.min_length).toBe(3)
+    expect(policy.settings.max_length).toBe(32)
+    expect(policy.settings.special_price_cents_by_label.crown).toBe(100000)
+    expect(policy.settings.special_price_cents_by_label["xn--2p8h"]).toBe(100000)
+    expect(policy.settings.special_price_cents_by_label.prince).toBe(50000)
+  })
+
+  test("default premium pricing charges correctly for short and long names", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "community-handle-default-pricing-creator")
+    const namespaceVerification = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+
+    // Create community without explicit handle_policy — defaults to premium short
+    const created = await requestJson("http://pirate.test/communities", {
+      display_name: "Default Pricing Club",
+      membership_mode: "request",
+      namespace: {
+        namespace_verification: namespaceVerification,
+      },
+    }, ctx.env, creator.accessToken)
+    expect(created.status).toBe(202)
+    const body = await json(created) as { community: { id: string } }
+    const communityId = rawCommunityId(body.community.id)
+
+    // 4-char label is premium ($25)
+    const premiumQuoteResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/quote`,
+      { desired_label: "alex" },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(premiumQuoteResponse.status).toBe(200)
+    const premiumQuote = await json(premiumQuoteResponse) as {
+      price_cents: number
+      pricing_tier: string
+    }
+    expect(premiumQuote.price_cents).toBe(2500)
+    expect(premiumQuote.pricing_tier).toBe("premium")
+
+    const crownQuoteResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/quote`,
+      { desired_label: "crown" },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(crownQuoteResponse.status).toBe(200)
+    const crownQuote = await json(crownQuoteResponse) as {
+      price_cents: number
+      pricing_tier: string
+    }
+    expect(crownQuote.price_cents).toBe(100000)
+    expect(crownQuote.pricing_tier).toBe("special")
+
+    // 5-char label is standard ($5)
+    const standardQuoteResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/quote`,
+      { desired_label: "alice" },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(standardQuoteResponse.status).toBe(200)
+    const standardQuote = await json(standardQuoteResponse) as {
+      price_cents: number
+      pricing_tier: string
+    }
+    expect(standardQuote.price_cents).toBe(500)
+    expect(standardQuote.pricing_tier).toBe("standard")
+  })
+
+  test("patron claims price non-members with multiplier and claim uses quoted price", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "community-handle-patron-creator")
+    const patron = await exchangeJwtWithWallet(ctx.env, "community-handle-patron-buyer")
+    const namespaceVerification = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+    const created = await requestJson("http://pirate.test/communities", {
+      display_name: "Patron Pricing Club",
+      membership_mode: "request",
+      namespace: {
+        namespace_verification: namespaceVerification,
+      },
+    }, ctx.env, creator.accessToken)
+    expect(created.status).toBe(202)
+    const body = await json(created) as { community: { id: string } }
+    const communityId = rawCommunityId(body.community.id)
+
+    const enablePatronResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      {
+        membership_required_for_claim: false,
+        settings: {
+          flat_price_cents: 500,
+          premium_price_cents: 2500,
+          premium_max_length: 4,
+          min_length: 3,
+          max_length: 32,
+          non_member_claims_enabled: true,
+          non_member_price_multiplier: 5,
+          special_price_cents_by_label: {
+            crown: 100000,
+          },
+        },
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(enablePatronResponse.status).toBe(200)
+
+    const quoteResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/quote`,
+      { desired_label: "alice" },
+      ctx.env,
+      patron.accessToken,
+    )
+    expect(quoteResponse.status).toBe(200)
+    const quote = await json(quoteResponse) as {
+      id: string
+      price_cents: number
+      pricing_tier: string
+    }
+    expect(quote.price_cents).toBe(2500)
+    expect(quote.pricing_tier).toBe("patron_standard")
+
+    const crownQuoteResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/quote`,
+      { desired_label: "crown" },
+      ctx.env,
+      patron.accessToken,
+    )
+    expect(crownQuoteResponse.status).toBe(200)
+    const crownQuote = await json(crownQuoteResponse) as {
+      price_cents: number
+      pricing_tier: string
+    }
+    expect(crownQuote.price_cents).toBe(500000)
+    expect(crownQuote.pricing_tier).toBe("patron_special")
+
+    const lowerMultiplierResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      {
+        membership_required_for_claim: false,
+        settings: {
+          flat_price_cents: 500,
+          premium_price_cents: 2500,
+          premium_max_length: 4,
+          min_length: 3,
+          max_length: 32,
+          non_member_claims_enabled: true,
+          non_member_price_multiplier: 2,
+        },
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(lowerMultiplierResponse.status).toBe(200)
+
+    setCommunityCommerceBuyerFundingVerifierForTests(async (input) => ({
+      txRef: input.fundingTxRef,
+      fromAddress: input.buyerAddress,
+      toAddress: input.quote.funding_destination_address ?? "0x5000000000000000000000000000000000000005",
+      tokenAddress: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+      amountAtomic: String(BigInt(Math.round(input.quote.final_price_usd * 1_000_000))),
+      chainRef: "eip155:84532",
+    }))
+    const claimResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/claim`,
+      {
+        quote: quote.id,
+        settlement_wallet_attachment: patron.primaryWalletAttachment,
+        funding_tx_ref: "0xpatronfunded",
+      },
+      ctx.env,
+      patron.accessToken,
+    )
+    expect(claimResponse.status).toBe(200)
+    const claim = await json(claimResponse) as {
+      label: string
+      price_cents: number
+      pricing_tier: string
+    }
+    expect(claim.label).toBe("alice")
+    expect(claim.price_cents).toBe(2500)
+    expect(claim.pricing_tier).toBe("patron_standard")
   })
 })

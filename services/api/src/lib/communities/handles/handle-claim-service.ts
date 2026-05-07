@@ -1,11 +1,14 @@
 import type {
   CommunityHandle,
   CommunityHandleClaimRequest,
+  CommunityHandleListResponse,
   CommunityHandleMeResponse,
   CommunityHandlePolicy,
   CommunityHandlePolicySettings,
   CommunityHandleQuote,
   CommunityHandleQuoteRequest,
+  CommunityHandleReserveRequest,
+  CommunityHandleRevokeRequest,
   Env,
   UpdateCommunityHandlePolicyRequest,
 } from "../../../types"
@@ -16,8 +19,9 @@ import type { Client, QueryResultRow, Transaction } from "../../sql-client"
 import { numberOrNull, requiredNumber, requiredString, rowValue, stringOrNull } from "../../sql-row"
 import { nullableUnixSeconds, unixSeconds } from "../../../serializers/time"
 import { openCommunityDb } from "../community-db-factory"
-import type { CommunityReadRepository } from "../db-community-repository"
-import { requireCommunityMember, requireCommunityOwner } from "../commerce/access"
+import type { CommunityDatabaseBindingRepository, CommunityReadRepository } from "../db-community-repository"
+import { requireCommunityOwner } from "../commerce/access"
+import { canAccessCommunity, getCommunityMembershipState } from "../membership/membership-state-store"
 import {
   resolvePirateCheckoutOperatorAddress,
   resolvePirateCheckoutSourceChainId,
@@ -28,6 +32,7 @@ import { verifyPirateCheckoutUsdcFunding } from "../commerce/funding-proof-servi
 import { getCommunityMoneyPolicy } from "../commerce/policy-service"
 
 type HandlePricingModel = NonNullable<CommunityHandleQuote["pricing_model"]>
+type HandleCommunityRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
 
 type NamespacePolicyRow = {
   namespace_handle_policy_id: string
@@ -38,6 +43,7 @@ type NamespacePolicyRow = {
   policy_template: CommunityHandlePolicy["policy_template"]
   pricing_model: HandlePricingModel | null
   membership_required_for_claim: boolean
+  claims_enabled: boolean
   settings_json: string | null
   updated_at: string | null
 }
@@ -50,6 +56,9 @@ type HandleClaimSettings = {
   max_length?: number
   quote_ttl_seconds?: number
   reserved_labels?: string[]
+  special_price_cents_by_label?: Record<string, number>
+  non_member_claims_enabled?: boolean
+  non_member_price_multiplier?: number
 }
 
 type Availability =
@@ -62,8 +71,10 @@ type Availability =
 
 const DEFAULT_MIN_LABEL_LENGTH = 3
 const DEFAULT_MAX_LABEL_LENGTH = 32
-const DEFAULT_PREMIUM_MAX_LENGTH = 6
+const DEFAULT_PREMIUM_MAX_LENGTH = 4
 const DEFAULT_HANDLE_QUOTE_TTL_SECONDS = 10 * 60
+const DEFAULT_NON_MEMBER_PRICE_MULTIPLIER = 5
+const MIN_NON_MEMBER_PRICE_MULTIPLIER = 2
 const RESERVED_LABELS = new Set([
   "admin",
   "administrator",
@@ -85,7 +96,9 @@ export function normalizeCommunityHandleLabel(desiredLabel: string): {
   const withoutAt = trimmed.startsWith("@") ? trimmed.slice(1) : trimmed
   const withoutSuffix = withoutAt.includes("@") ? withoutAt.slice(0, withoutAt.indexOf("@")) : withoutAt
 
-  if (!withoutSuffix || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(withoutSuffix)) {
+  const isAsciiLabel = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(withoutSuffix)
+  const isPunycodeLabel = /^xn--[a-z0-9-]+$/u.test(withoutSuffix)
+  if (!withoutSuffix || (!isAsciiLabel && !isPunycodeLabel)) {
     throw badRequestError("Invalid desired_label")
   }
 
@@ -111,12 +124,31 @@ function parseSettings(raw: string | null): HandleClaimSettings {
       reserved_labels: Array.isArray(parsed.reserved_labels)
         ? parsed.reserved_labels.filter((value): value is string => typeof value === "string")
         : undefined,
+      special_price_cents_by_label: parseSpecialPrices(parsed.special_price_cents_by_label),
+      non_member_claims_enabled: typeof parsed.non_member_claims_enabled === "boolean"
+        ? parsed.non_member_claims_enabled
+        : undefined,
+      non_member_price_multiplier: finiteMultiplier(parsed.non_member_price_multiplier),
     }
   } catch {
     throw internalError("Community handle policy settings are malformed", {
       reason: "invalid_settings_json",
     })
   }
+}
+
+function parseSpecialPrices(value: unknown): Record<string, number> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined
+  }
+  const entries = Object.entries(value)
+    .map(([label, price]) => {
+      const parsedPrice = finiteNonNegativeInteger(price)
+      if (parsedPrice == null) return null
+      return [normalizeCommunityHandleLabel(label).labelNormalized, parsedPrice] as const
+    })
+    .filter((entry): entry is readonly [string, number] => entry != null)
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined
 }
 
 function finiteNonNegativeInteger(value: unknown): number | undefined {
@@ -129,12 +161,23 @@ function finitePositiveInteger(value: unknown): number | undefined {
   return Number.isInteger(numeric) && numeric > 0 ? numeric : undefined
 }
 
+function finiteMultiplier(value: unknown): number | undefined {
+  if (value == null) return undefined
+  const numeric = typeof value === "number" ? value : Number(value)
+  return Number.isFinite(numeric) && numeric >= MIN_NON_MEMBER_PRICE_MULTIPLIER ? numeric : undefined
+}
+
 function addSeconds(iso: string, seconds: number): string {
   return new Date(Date.parse(iso) + seconds * 1000).toISOString()
 }
 
 function withPrefix(prefix: string, value: string): string {
   return value.startsWith(`${prefix}_`) ? value : `${prefix}_${value}`
+}
+
+function normalizeSubmittedPrefixedId(prefix: string, value: string): string {
+  const trimmed = value.trim()
+  return trimmed.startsWith(`${prefix}_${prefix}_`) ? trimmed.slice(prefix.length + 1) : trimmed
 }
 
 function serializePolicy(row: NamespacePolicyRow): CommunityHandlePolicy {
@@ -146,6 +189,7 @@ function serializePolicy(row: NamespacePolicyRow): CommunityHandlePolicy {
     policy_template: row.policy_template,
     pricing_model: row.pricing_model,
     membership_required_for_claim: row.membership_required_for_claim,
+    claims_enabled: row.claims_enabled,
     settings: parseSettings(row.settings_json),
     updated_at: nullableUnixSeconds(row.updated_at),
   }
@@ -250,7 +294,7 @@ async function getNamespacePolicy(executor: Client | Transaction, communityId: s
     sql: `
       SELECT nb.community_id, nb.namespace_id, nb.display_label, nb.normalized_label,
              nhp.namespace_handle_policy_id, nhp.policy_template, nhp.pricing_model,
-             nhp.membership_required_for_claim, nhp.settings_json, nhp.updated_at
+             nhp.membership_required_for_claim, nhp.claims_enabled, nhp.settings_json, nhp.updated_at
       FROM namespace_bindings nb
       LEFT JOIN namespace_handle_policies nhp
         ON nhp.namespace_id = nb.namespace_id
@@ -271,12 +315,13 @@ async function getNamespacePolicy(executor: Client | Transaction, communityId: s
     policy_template: (stringOrNull(rowValue(row, "policy_template")) ?? "standard") as CommunityHandlePolicy["policy_template"],
     pricing_model: stringOrNull(rowValue(row, "pricing_model")) as HandlePricingModel | null,
     membership_required_for_claim: numberOrNull(rowValue(row, "membership_required_for_claim")) !== 0,
+    claims_enabled: numberOrNull(rowValue(row, "claims_enabled")) !== 0,
     settings_json: stringOrNull(rowValue(row, "settings_json")),
     updated_at: stringOrNull(rowValue(row, "updated_at")),
   }
 }
 
-async function getActiveHandleForLabel(
+async function getBlockingHandleForLabel(
   executor: Client | Transaction,
   namespaceId: string,
   labelNormalized: string,
@@ -287,7 +332,8 @@ async function getActiveHandleForLabel(
       FROM community_handles
       WHERE namespace_id = ?1
         AND label_normalized = ?2
-        AND status = 'active'
+        AND status IN ('active', 'reserved')
+      ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END
       LIMIT 1
     `,
     args: [namespaceId, labelNormalized],
@@ -318,10 +364,13 @@ function resolvePrice(input: {
   labelNormalized: string
   policy: NamespacePolicyRow
   settings: HandleClaimSettings
+  isMember: boolean
 }): {
   priceCents: number
   pricingModel: HandlePricingModel | null
   pricingTier: string | null
+  patronClaim: boolean
+  appliedMultiplier: number
 } {
   const pricingModel = input.policy.pricing_model ?? (
     input.settings.flat_price_cents == null ? "free" : "flat_by_length"
@@ -329,20 +378,33 @@ function resolvePrice(input: {
   if (pricingModel === "custom_curve") {
     throw eligibilityFailed("Custom handle pricing is not available yet")
   }
+  const patronClaim = !input.isMember
+  const appliedMultiplier = patronClaim
+    ? input.settings.non_member_price_multiplier ?? DEFAULT_NON_MEMBER_PRICE_MULTIPLIER
+    : 1
+  const applyMultiplier = (priceCents: number): number => Math.round(priceCents * appliedMultiplier)
+  const tier = (baseTier: string): string => patronClaim ? `patron_${baseTier}` : baseTier
   if (pricingModel === "free") {
-    return { priceCents: 0, pricingModel, pricingTier: "free" }
+    return { priceCents: 0, pricingModel, pricingTier: tier("free"), patronClaim, appliedMultiplier }
+  }
+
+  const specialPriceCents = input.settings.special_price_cents_by_label?.[input.labelNormalized]
+  if (specialPriceCents != null) {
+    return { priceCents: applyMultiplier(specialPriceCents), pricingModel, pricingTier: tier("special"), patronClaim, appliedMultiplier }
   }
 
   const premiumMaxLength = input.settings.premium_max_length ?? DEFAULT_PREMIUM_MAX_LENGTH
-  const isPremium = input.labelNormalized.length <= premiumMaxLength
+  const isPremium = input.policy.policy_template === "premium" && input.labelNormalized.length <= premiumMaxLength
   const priceCents = isPremium
     ? input.settings.premium_price_cents ?? input.settings.flat_price_cents ?? 0
     : input.settings.flat_price_cents ?? 0
 
   return {
-    priceCents,
+    priceCents: applyMultiplier(priceCents),
     pricingModel,
-    pricingTier: isPremium ? "premium" : "standard",
+    pricingTier: tier(isPremium ? "premium" : "standard"),
+    patronClaim,
+    appliedMultiplier,
   }
 }
 
@@ -396,6 +458,15 @@ function optionalIntegerSetting(
   return numeric
 }
 
+function optionalMultiplierSetting(value: unknown, key: keyof CommunityHandlePolicySettings): number | undefined {
+  if (value == null) return undefined
+  const numeric = typeof value === "number" ? value : Number(value)
+  if (!Number.isFinite(numeric) || numeric < MIN_NON_MEMBER_PRICE_MULTIPLIER) {
+    throw badRequestError(`${String(key)} must be a number >= ${MIN_NON_MEMBER_PRICE_MULTIPLIER}`)
+  }
+  return numeric
+}
+
 function sanitizeSettings(input: CommunityHandlePolicySettings | null | undefined): HandleClaimSettings {
   if (!input) return {}
   const settings: HandleClaimSettings = {
@@ -408,6 +479,11 @@ function sanitizeSettings(input: CommunityHandlePolicySettings | null | undefine
     reserved_labels: Array.isArray(input.reserved_labels)
       ? input.reserved_labels.map((label) => normalizeCommunityHandleLabel(label).labelNormalized)
       : undefined,
+    special_price_cents_by_label: parseSpecialPrices(input.special_price_cents_by_label),
+    non_member_claims_enabled: typeof input.non_member_claims_enabled === "boolean"
+      ? input.non_member_claims_enabled
+      : undefined,
+    non_member_price_multiplier: optionalMultiplierSetting(input.non_member_price_multiplier, "non_member_price_multiplier"),
   }
   if (
     settings.min_length != null
@@ -426,17 +502,26 @@ async function requireClaimAccess(input: {
   communityId: string
   userId: string
   policy: NamespacePolicyRow
-}): Promise<void> {
-  if (input.policy.membership_required_for_claim) {
-    await requireCommunityMember(input.client as Client, input.communityId, input.userId)
+  settings: HandleClaimSettings
+}): Promise<{ isMember: boolean }> {
+  const membership = await getCommunityMembershipState(input.client as Client, input.communityId, input.userId)
+  const isMember = canAccessCommunity(membership)
+  if (isMember) {
+    return { isMember }
   }
+  const patronClaimsEnabled = input.settings.non_member_claims_enabled === true
+    || input.policy.membership_required_for_claim === false
+  if (!patronClaimsEnabled) {
+    throw eligibilityFailed("Community membership is required to claim names")
+  }
+  return { isMember: false }
 }
 
 export async function getMyCommunityHandle(input: {
   env: Env
   userId: string
   communityId: string
-  communityRepository: Pick<CommunityReadRepository, "getCommunityById">
+  communityRepository: HandleCommunityRepository
 }): Promise<CommunityHandleMeResponse> {
   const community = await input.communityRepository.getCommunityById(input.communityId)
   if (!community) {
@@ -459,7 +544,7 @@ export async function getCommunityHandlePolicy(input: {
   env: Env
   userId: string
   communityId: string
-  communityRepository: Pick<CommunityReadRepository, "getCommunityById">
+  communityRepository: HandleCommunityRepository
 }): Promise<CommunityHandlePolicy> {
   await requireCommunityOwner({
     communityId: input.communityId,
@@ -483,7 +568,7 @@ export async function updateCommunityHandlePolicy(input: {
   userId: string
   communityId: string
   body: UpdateCommunityHandlePolicyRequest
-  communityRepository: Pick<CommunityReadRepository, "getCommunityById">
+  communityRepository: HandleCommunityRepository
 }): Promise<CommunityHandlePolicy> {
   await requireCommunityOwner({
     communityId: input.communityId,
@@ -504,14 +589,15 @@ export async function updateCommunityHandlePolicy(input: {
       sql: `
         INSERT INTO namespace_handle_policies (
           namespace_handle_policy_id, community_id, namespace_id, policy_template, pricing_model,
-          membership_required_for_claim, settings_json, created_at, updated_at
+          membership_required_for_claim, claims_enabled, settings_json, created_at, updated_at
         ) VALUES (
-          ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8
+          ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9
         )
         ON CONFLICT(namespace_handle_policy_id) DO UPDATE SET
           policy_template = excluded.policy_template,
           pricing_model = excluded.pricing_model,
           membership_required_for_claim = excluded.membership_required_for_claim,
+          claims_enabled = excluded.claims_enabled,
           settings_json = excluded.settings_json,
           updated_at = excluded.updated_at
       `,
@@ -528,6 +614,9 @@ export async function updateCommunityHandlePolicy(input: {
         "membership_required_for_claim" in input.body
           ? input.body.membership_required_for_claim === true ? 1 : 0
           : current.membership_required_for_claim ? 1 : 0,
+        "claims_enabled" in input.body
+          ? input.body.claims_enabled === true ? 1 : 0
+          : current.claims_enabled ? 1 : 0,
         JSON.stringify(nextSettings),
         updatedAt,
       ],
@@ -542,12 +631,188 @@ export async function updateCommunityHandlePolicy(input: {
   }
 }
 
+export async function listCommunityHandles(input: {
+  env: Env
+  userId: string
+  communityId: string
+  status?: string | null
+  communityRepository: HandleCommunityRepository
+}): Promise<CommunityHandleListResponse> {
+  await requireCommunityOwner({
+    communityId: input.communityId,
+    userId: input.userId,
+    communityRepository: input.communityRepository,
+  })
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  try {
+    const policy = await getNamespacePolicy(db.client, input.communityId)
+    if (!policy) {
+      throw eligibilityFailed("Community names are not available for this community")
+    }
+    const status = input.status?.trim()
+    const allowedStatuses = new Set(["active", "grace_period", "expired", "revoked", "reserved"])
+    if (status && !allowedStatuses.has(status)) {
+      throw badRequestError("Invalid handle status")
+    }
+    const result = await db.client.execute({
+      sql: `
+        SELECT *
+        FROM community_handles
+        WHERE community_id = ?1
+          AND namespace_id = ?2
+          AND (?3 IS NULL OR status = ?3)
+        ORDER BY created_at DESC
+        LIMIT 200
+      `,
+      args: [input.communityId, policy.namespace_id, status || null],
+    })
+    return { handles: result.rows.map(serializeHandle) }
+  } finally {
+    db.close()
+  }
+}
+
+export async function reserveCommunityHandle(input: {
+  env: Env
+  userId: string
+  communityId: string
+  body: CommunityHandleReserveRequest
+  communityRepository: HandleCommunityRepository
+}): Promise<CommunityHandle> {
+  await requireCommunityOwner({
+    communityId: input.communityId,
+    userId: input.userId,
+    communityRepository: input.communityRepository,
+  })
+  const desired = normalizeCommunityHandleLabel(input.body.desired_label)
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  try {
+    const tx = await db.client.transaction("write")
+    try {
+      const policy = await getNamespacePolicy(tx, input.communityId)
+      if (!policy) {
+        throw eligibilityFailed("Community names are not available for this community")
+      }
+      const settings = parseSettings(policy.settings_json)
+      assertLabelLength(desired.labelNormalized, settings)
+      if (isReservedLabel(desired.labelNormalized, settings)) {
+        const reason = "Desired label is already reserved"
+        throw conflictError(reason, availabilityDetails("reserved", reason))
+      }
+      const blockingHandle = await getBlockingHandleForLabel(tx, policy.namespace_id, desired.labelNormalized)
+      if (blockingHandle) {
+        const status = requiredString(blockingHandle, "status")
+        const reason = status === "reserved"
+          ? "Desired label is already reserved"
+          : "Desired label is unavailable"
+        throw conflictError(reason, availabilityDetails(status === "reserved" ? "reserved" : "taken", reason))
+      }
+      const now = nowIso()
+      const handleId = makeId("ch")
+      await tx.execute({
+        sql: `
+          INSERT INTO community_handles (
+            community_handle_id, community_id, user_id, namespace_id, handle_claim_quote_id,
+            label_normalized, label_display, status, issuance_source, price_cents, currency,
+            pricing_model, pricing_tier, settlement_wallet_attachment_id, funding_tx_ref, settlement_tx_ref,
+            lease_started_at, lease_expires_at, created_at, updated_at
+          ) VALUES (
+            ?1, ?2, ?3, ?4, NULL,
+            ?5, ?6, 'reserved', 'admin_grant', 0, 'USD',
+            NULL, 'reserved', NULL, NULL, NULL,
+            NULL, NULL, ?7, ?7
+          )
+        `,
+        args: [
+          handleId,
+          input.communityId,
+          input.userId,
+          policy.namespace_id,
+          desired.labelNormalized,
+          desired.labelDisplay,
+          now,
+        ],
+      })
+      const result = await tx.execute({
+        sql: `SELECT * FROM community_handles WHERE community_handle_id = ?1 LIMIT 1`,
+        args: [handleId],
+      })
+      const handle = result.rows[0]
+      if (!handle) {
+        throw internalError("Created reserved community handle row is missing")
+      }
+      await tx.commit()
+      return serializeHandle(handle)
+    } catch (error) {
+      await tx.rollback().catch(() => undefined)
+      throw error
+    } finally {
+      tx.close()
+    }
+  } finally {
+    db.close()
+  }
+}
+
+export async function revokeCommunityHandle(input: {
+  env: Env
+  userId: string
+  communityId: string
+  handleId: string
+  body?: CommunityHandleRevokeRequest | null
+  communityRepository: HandleCommunityRepository
+}): Promise<CommunityHandle> {
+  void input.body
+  await requireCommunityOwner({
+    communityId: input.communityId,
+    userId: input.userId,
+    communityRepository: input.communityRepository,
+  })
+  const rawHandleId = normalizeSubmittedPrefixedId("ch", input.handleId)
+  if (!rawHandleId) {
+    throw badRequestError("handle id is required")
+  }
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  try {
+    const now = nowIso()
+    await db.client.execute({
+      sql: `
+        UPDATE community_handles
+        SET status = 'revoked',
+            lease_expires_at = COALESCE(lease_expires_at, ?3),
+            updated_at = ?3
+        WHERE community_handle_id = ?1
+          AND community_id = ?2
+          AND status IN ('active', 'grace_period', 'reserved')
+      `,
+      args: [rawHandleId, input.communityId, now],
+    })
+    const result = await db.client.execute({
+      sql: `
+        SELECT *
+        FROM community_handles
+        WHERE community_handle_id = ?1
+          AND community_id = ?2
+        LIMIT 1
+      `,
+      args: [rawHandleId, input.communityId],
+    })
+    const handle = result.rows[0]
+    if (!handle) {
+      throw notFoundError("Community handle not found")
+    }
+    return serializeHandle(handle)
+  } finally {
+    db.close()
+  }
+}
+
 export async function quoteCommunityHandle(input: {
   env: Env
   userId: string
   communityId: string
   body: CommunityHandleQuoteRequest
-  communityRepository: Pick<CommunityReadRepository, "getCommunityById">
+  communityRepository: HandleCommunityRepository
 }): Promise<CommunityHandleQuote> {
   const community = await input.communityRepository.getCommunityById(input.communityId)
   if (!community) {
@@ -560,17 +825,21 @@ export async function quoteCommunityHandle(input: {
     if (!policy) {
       throw eligibilityFailed("Community names are not available for this community")
     }
-    await requireClaimAccess({
+    if (!policy.claims_enabled) {
+      throw eligibilityFailed("Community name claims are currently disabled")
+    }
+    const settings = parseSettings(policy.settings_json)
+    const claimAccess = await requireClaimAccess({
       client: db.client,
       communityId: input.communityId,
       userId: input.userId,
       policy,
+      settings,
     })
 
-    const settings = parseSettings(policy.settings_json)
     assertLabelLength(desired.labelNormalized, settings)
     const activeForUser = await getActiveHandleForUser(db.client, policy.namespace_id, input.userId)
-    const activeForLabel = await getActiveHandleForLabel(db.client, policy.namespace_id, desired.labelNormalized)
+    const blockingForLabel = await getBlockingHandleForLabel(db.client, policy.namespace_id, desired.labelNormalized)
 
     let eligible = true
     let availability: Availability = "available"
@@ -587,16 +856,18 @@ export async function quoteCommunityHandle(input: {
       eligible = false
       availability = "viewer_has_claim"
       reason = "You already have an active name in this community"
-    } else if (activeForLabel) {
+    } else if (blockingForLabel) {
       eligible = false
-      availability = "taken"
-      reason = "Desired label is unavailable"
+      const status = requiredString(blockingForLabel, "status")
+      availability = status === "reserved" ? "reserved" : "taken"
+      reason = status === "reserved" ? "Desired label is reserved" : "Desired label is unavailable"
     }
 
     const price = resolvePrice({
       labelNormalized: desired.labelNormalized,
       policy,
       settings,
+      isMember: claimAccess.isMember,
     })
     const moneyPolicy = await getCommunityMoneyPolicy({ env: input.env, communityId: input.communityId })
     const quoteTtlSeconds = settings.quote_ttl_seconds ?? moneyPolicy.quote_ttl_seconds ?? DEFAULT_HANDLE_QUOTE_TTL_SECONDS
@@ -668,6 +939,10 @@ export async function quoteCommunityHandle(input: {
           policy_template: policy.policy_template,
           pricing_model: policy.pricing_model,
           membership_required_for_claim: policy.membership_required_for_claim,
+          claims_enabled: policy.claims_enabled,
+          is_member: claimAccess.isMember,
+          patron_claim: price.patronClaim,
+          applied_multiplier: price.appliedMultiplier,
           settings,
         }),
       ],
@@ -728,7 +1003,7 @@ export async function claimCommunityHandle(input: {
   communityId: string
   body: CommunityHandleClaimRequest
   userRepository: UserRepository
-  communityRepository: Pick<CommunityReadRepository, "getCommunityById">
+  communityRepository: HandleCommunityRepository
 }): Promise<CommunityHandle> {
   const community = await input.communityRepository.getCommunityById(input.communityId)
   if (!community) {
@@ -804,14 +1079,18 @@ export async function claimCommunityHandle(input: {
       if (!policy || policy.namespace_id !== requiredString(quote, "namespace_id")) {
         throw eligibilityFailed("Community names are not available for this community")
       }
+      if (!policy.claims_enabled) {
+        throw eligibilityFailed("Community name claims are currently disabled")
+      }
+      const settings = parseSettings(policy.settings_json)
       await requireClaimAccess({
         client: tx,
         communityId: input.communityId,
         userId: input.userId,
         policy,
+        settings,
       })
 
-      const settings = parseSettings(policy.settings_json)
       const labelNormalized = requiredString(quote, "label_normalized")
       const labelDisplay = requiredString(quote, "label_display")
       if (isReservedLabel(labelNormalized, settings)) {
@@ -829,10 +1108,11 @@ export async function claimCommunityHandle(input: {
           : "You already have an active name in this community"
         throw conflictError(reason, availabilityDetails(availability, reason))
       }
-      const activeForLabel = await getActiveHandleForLabel(tx, policy.namespace_id, labelNormalized)
-      if (activeForLabel) {
-        const reason = "Desired label is unavailable"
-        throw conflictError(reason, availabilityDetails("taken", reason))
+      const blockingForLabel = await getBlockingHandleForLabel(tx, policy.namespace_id, labelNormalized)
+      if (blockingForLabel) {
+        const status = requiredString(blockingForLabel, "status")
+        const reason = status === "reserved" ? "Desired label is reserved" : "Desired label is unavailable"
+        throw conflictError(reason, availabilityDetails(status === "reserved" ? "reserved" : "taken", reason))
       }
 
       const priceCents = requiredNumber(quote, "price_cents")

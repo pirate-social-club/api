@@ -39,8 +39,9 @@ export function assertCreateRequest(
   if ((body.governance_mode ?? "centralized") !== "centralized") {
     throw eligibilityFailed("Only centralized community creation is allowed in public v0")
   }
-  if ((body.handle_policy?.policy_template ?? "standard") !== "standard") {
-    throw eligibilityFailed("Public v0 community creation requires the standard handle policy")
+  const handlePolicyTemplate = body.handle_policy?.policy_template ?? "premium"
+  if (handlePolicyTemplate !== "standard" && handlePolicyTemplate !== "premium") {
+    throw eligibilityFailed("Public v0 community creation requires a standard or premium handle policy")
   }
   if (body.donation_policy != null) {
     throw eligibilityFailed("Public v0 community creation does not accept donation payloads")
