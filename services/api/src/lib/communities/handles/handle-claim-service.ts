@@ -88,10 +88,13 @@ const RESERVED_LABELS = new Set([
   "support",
 ])
 
-export function normalizeCommunityHandleLabel(desiredLabel: string): {
+export function normalizeCommunityHandleLabel(desiredLabel: unknown): {
   labelNormalized: string
   labelDisplay: string
 } {
+  if (typeof desiredLabel !== "string") {
+    throw badRequestError("Invalid desired_label")
+  }
   const trimmed = desiredLabel.trim().toLowerCase()
   const withoutAt = trimmed.startsWith("@") ? trimmed.slice(1) : trimmed
   const withoutSuffix = withoutAt.includes("@") ? withoutAt.slice(0, withoutAt.indexOf("@")) : withoutAt
@@ -901,7 +904,7 @@ export async function quoteCommunityHandle(input: {
     if (existingQuote) {
       return serializeQuote(existingQuote, {
         env: input.env,
-        desiredLabel: input.body.desired_label,
+        desiredLabel: desired.labelDisplay,
         eligible,
         availability,
         reason,
@@ -957,7 +960,7 @@ export async function quoteCommunityHandle(input: {
     }
     return serializeQuote(row, {
       env: input.env,
-      desiredLabel: input.body.desired_label,
+      desiredLabel: desired.labelDisplay,
       eligible,
       availability,
       reason,
@@ -1008,6 +1011,9 @@ export async function claimCommunityHandle(input: {
   const community = await input.communityRepository.getCommunityById(input.communityId)
   if (!community) {
     throw notFoundError("Community not found")
+  }
+  if (typeof input.body.quote !== "string") {
+    throw badRequestError("Invalid quote")
   }
   const submittedQuoteId = input.body.quote.trim()
   const quoteId = submittedQuoteId.startsWith("hcq_hcq_")
