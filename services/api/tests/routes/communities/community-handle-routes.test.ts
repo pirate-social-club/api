@@ -423,6 +423,28 @@ describe("community handle routes", () => {
     expect(shortQuoteError.code).toBe("bad_request")
     expect(shortQuoteError.message).toBe("desired_label must be at least 3 characters")
 
+    const invalidQuotePayloadResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/quote`,
+      { label: "sana" },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(invalidQuotePayloadResponse.status).toBe(400)
+    const invalidQuotePayloadError = await json(invalidQuotePayloadResponse) as { code: string; message: string }
+    expect(invalidQuotePayloadError.code).toBe("bad_request")
+    expect(invalidQuotePayloadError.message).toBe("Invalid desired_label")
+
+    const invalidClaimPayloadResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/claim`,
+      {},
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(invalidClaimPayloadResponse.status).toBe(400)
+    const invalidClaimPayloadError = await json(invalidClaimPayloadResponse) as { code: string; message: string }
+    expect(invalidClaimPayloadError.code).toBe("bad_request")
+    expect(invalidClaimPayloadError.message).toBe("Invalid quote")
+
     const nonMember = await exchangeJwt(ctx.env, "community-handle-validation-non-member")
     const nonMemberQuoteResponse = await requestJson(
       `http://pirate.test/communities/${communityId}/handles/quote`,
