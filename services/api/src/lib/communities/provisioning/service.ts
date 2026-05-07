@@ -179,19 +179,43 @@ async function upsertLocalNamespaceAttachment(input: {
         sql: `
           INSERT INTO namespace_handle_policies (
             namespace_handle_policy_id, community_id, namespace_id, policy_template, pricing_model,
-            membership_required_for_claim, settings_json, created_at, updated_at
+            membership_required_for_claim, claims_enabled, settings_json, created_at, updated_at
           ) VALUES (
-            ?1, ?2, ?3, 'standard', NULL, 1, NULL, ?4, ?4
+            ?1, ?2, ?3, 'premium', 'flat_by_length', 1, 1, ?4, ?5, ?5
           )
           ON CONFLICT(namespace_handle_policy_id) DO UPDATE SET
             namespace_id = excluded.namespace_id,
             membership_required_for_claim = excluded.membership_required_for_claim,
+            claims_enabled = excluded.claims_enabled,
             updated_at = excluded.updated_at
         `,
         args: [
           namespaceHandlePolicyId,
           input.communityId,
           namespaceId,
+          JSON.stringify({
+            flat_price_cents: 500,
+            premium_price_cents: 2500,
+            premium_max_length: 4,
+            min_length: 3,
+            max_length: 32,
+            non_member_claims_enabled: false,
+            non_member_price_multiplier: 5,
+            special_price_cents_by_label: {
+              crown: 100000,
+              "xn--2p8h": 100000,
+              prince: 50000,
+              "xn--tq9h": 50000,
+              princess: 50000,
+              "xn--6q8h": 50000,
+              diamond: 75000,
+              "xn--tr8h": 75000,
+              ring: 50000,
+              "xn--sr8h": 50000,
+              "xn--cs8h": 50000,
+              "xn--cz8h": 25000,
+            },
+          }),
           input.now,
         ],
       })

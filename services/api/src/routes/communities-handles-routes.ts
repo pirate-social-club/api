@@ -4,7 +4,10 @@ import {
   claimCommunityHandle,
   getCommunityHandlePolicy,
   getMyCommunityHandle,
+  listCommunityHandles,
   quoteCommunityHandle,
+  reserveCommunityHandle,
+  revokeCommunityHandle,
   updateCommunityHandlePolicy,
 } from "../lib/communities/handles/handle-claim-service"
 import {
@@ -14,6 +17,8 @@ import {
 import type {
   CommunityHandleClaimRequest,
   CommunityHandleQuoteRequest,
+  CommunityHandleReserveRequest,
+  CommunityHandleRevokeRequest,
   UpdateCommunityHandlePolicyRequest,
 } from "../types"
 
@@ -40,10 +45,35 @@ export function registerCommunityHandleRoutes(communities: Hono<AuthenticatedEnv
     return c.json(result, 200)
   })
 
+  communities.get("/:communityId/handles", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await listCommunityHandles({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      status: c.req.query("status"),
+      communityRepository,
+    })
+    return c.json(result, 200)
+  })
+
   communities.post("/:communityId/handle-policy", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<UpdateCommunityHandlePolicyRequest>(c, "Invalid community handle policy payload")
     const result = await updateCommunityHandlePolicy({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      body,
+      communityRepository,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.post("/:communityId/handles/reserve", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const body = await requireJsonBody<CommunityHandleReserveRequest>(c, "Invalid community handle reserve payload")
+    const result = await reserveCommunityHandle({
       env: c.env,
       userId: actor.userId,
       communityId,
@@ -60,6 +90,20 @@ export function registerCommunityHandleRoutes(communities: Hono<AuthenticatedEnv
       env: c.env,
       userId: actor.userId,
       communityId,
+      body,
+      communityRepository,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.post("/:communityId/handles/:handleId/revoke", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const body = await requireJsonBody<CommunityHandleRevokeRequest>(c, "Invalid community handle revoke payload")
+    const result = await revokeCommunityHandle({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      handleId: c.req.param("handleId"),
       body,
       communityRepository,
     })

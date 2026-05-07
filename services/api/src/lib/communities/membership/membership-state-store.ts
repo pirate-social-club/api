@@ -19,61 +19,81 @@ export async function getCommunityMembershipState(
   communityId: string,
   userId: string,
 ): Promise<CommunityMembershipRow> {
-  const row = await executeFirst(
+  const activeMemberRow = await executeFirst(
     client,
     {
       sql: `
-        SELECT
-          (
-            SELECT status
-            FROM community_memberships
-            WHERE community_id = ?1
-              AND user_id = ?2
-            ORDER BY created_at DESC
-            LIMIT 1
-          ) AS membership_status,
-          (
-            SELECT role
-            FROM community_roles
-            WHERE community_id = ?1
-              AND user_id = ?2
-              AND role IN ('owner', 'admin', 'moderator')
-              AND status = 'active'
-            ORDER BY CASE role
-              WHEN 'owner' THEN 0
-              WHEN 'admin' THEN 1
-              ELSE 2
-            END
-            LIMIT 1
-          ) AS role,
-          CASE
-            WHEN EXISTS (
-              SELECT 1
-              FROM community_roles
-              WHERE community_id = ?1
-                AND user_id = ?2
-                AND role IN ('owner', 'admin', 'moderator')
-                AND status = 'active'
-            ) THEN 'active'
-            WHEN EXISTS (
-              SELECT 1
-              FROM community_roles
-              WHERE community_id = ?1
-                AND user_id = ?2
-                AND role IN ('owner', 'admin', 'moderator')
-                AND status = 'revoked'
-            ) THEN 'revoked'
-            ELSE NULL
-          END AS role_status
+        SELECT status
+        FROM community_memberships
+        WHERE community_id = ?1
+          AND user_id = ?2
+          AND status = 'member'
+        LIMIT 1
+      `,
+      args: [communityId, userId],
+    },
+  )
+  const activeRoleRow = await executeFirst(
+    client,
+    {
+      sql: `
+        SELECT role
+        FROM community_roles
+        WHERE community_id = ?1
+          AND user_id = ?2
+          AND role IN ('owner', 'admin', 'moderator')
+          AND status = 'active'
+        ORDER BY CASE role
+          WHEN 'owner' THEN 0
+          WHEN 'admin' THEN 1
+          ELSE 2
+        END
+        LIMIT 1
       `,
       args: [communityId, userId],
     },
   )
 
+  const membershipStatus = activeMemberRow
+    ? "member"
+    : stringOrNull(rowValue(await executeFirst(
+      client,
+      {
+        sql: `
+          SELECT status
+          FROM community_memberships
+          WHERE community_id = ?1
+            AND user_id = ?2
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+        args: [communityId, userId],
+      },
+    ), "status")) as CommunityMembershipRow["membership_status"]
+
+  const role = stringOrNull(rowValue(activeRoleRow, "role")) as CommunityMembershipRow["role"]
+  const roleStatus = role
+    ? "active"
+    : stringOrNull(rowValue(await executeFirst(
+      client,
+      {
+        sql: `
+          SELECT status
+          FROM community_roles
+          WHERE community_id = ?1
+            AND user_id = ?2
+            AND role IN ('owner', 'admin', 'moderator')
+            AND status = 'revoked'
+          LIMIT 1
+        `,
+        args: [communityId, userId],
+      },
+    ), "status")) as CommunityMembershipRow["role_status"]
+
   return {
-    membership_status: stringOrNull(rowValue(row, "membership_status")) as CommunityMembershipRow["membership_status"],
-    role: stringOrNull(rowValue(row, "role")) as CommunityMembershipRow["role"],
-    role_status: stringOrNull(rowValue(row, "role_status")) as CommunityMembershipRow["role_status"],
+    membership_status: membershipStatus,
+    role,
+    role_status: roleStatus,
   }
 }
 

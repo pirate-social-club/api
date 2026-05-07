@@ -839,6 +839,18 @@ export type CommunityHandleMeResponse = {
   handle: CommunityHandle | null;
 };
 
+export type CommunityHandleListResponse = {
+  handles: Array<CommunityHandle>;
+};
+
+export type CommunityHandleReserveRequest = {
+  desired_label: string;
+};
+
+export type CommunityHandleRevokeRequest = {
+  reason?: string | null;
+};
+
 export type CommunityHandlePricingModel = "free" | "flat_by_length" | "custom_curve" | "gated_then_flat";
 
 export type CommunityHandlePolicySettings = {
@@ -849,6 +861,9 @@ export type CommunityHandlePolicySettings = {
   max_length?: number | null;
   quote_ttl_seconds?: number | null;
   reserved_labels?: Array<string> | null;
+  special_price_cents_by_label?: Record<string, number> | null;
+  non_member_claims_enabled?: boolean | null;
+  non_member_price_multiplier?: number | null;
 };
 
 export type CommunityHandlePolicy = {
@@ -859,6 +874,7 @@ export type CommunityHandlePolicy = {
   policy_template: "standard" | "premium" | "membership_gated" | "custom";
   pricing_model?: CommunityHandlePricingModel | null;
   membership_required_for_claim: boolean;
+  claims_enabled: boolean;
   settings: CommunityHandlePolicySettings;
   updated_at?: number | null;
 };
@@ -867,6 +883,7 @@ export type UpdateCommunityHandlePolicyRequest = {
   policy_template?: "standard" | "premium" | "membership_gated" | "custom";
   pricing_model?: CommunityHandlePricingModel | null;
   membership_required_for_claim?: boolean;
+  claims_enabled?: boolean;
   settings?: CommunityHandlePolicySettings | null;
 };
 
@@ -2970,7 +2987,10 @@ export const apiRoutes = {
   communityPurchaseSettlements: (communityId: string) => `/communities/${communityId}/purchase-settlements`,
   communityPurchaseSettlementFailures: (communityId: string) => `/communities/${communityId}/fail-purchase-settlement`,
   communityHandleMe: (communityId: string) => `/communities/${communityId}/handles/me`,
+  communityHandles: (communityId: string) => `/communities/${communityId}/handles`,
   communityHandlePolicy: (communityId: string) => `/communities/${communityId}/handle-policy`,
+  communityHandleReserve: (communityId: string) => `/communities/${communityId}/handles/reserve`,
+  communityHandleRevoke: (communityId: string, handleId: string) => `/communities/${communityId}/handles/${handleId}/revoke`,
   communityHandleQuote: (communityId: string) => `/communities/${communityId}/handles/quote`,
   communityHandleClaim: (communityId: string) => `/communities/${communityId}/handles/claim`,
   communityFollow: (communityId: string) => `/communities/${communityId}/follow`,

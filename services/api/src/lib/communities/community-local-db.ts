@@ -9,6 +9,29 @@ import { internalError } from "../errors"
 import type { GatePolicy } from "./membership/gate-types"
 
 const LOCAL_SQLITE_BUSY_TIMEOUT_MS = 30000
+const DEFAULT_HANDLE_POLICY_SETTINGS = {
+  flat_price_cents: 500,
+  premium_price_cents: 2500,
+  premium_max_length: 4,
+  min_length: 3,
+  max_length: 32,
+  non_member_claims_enabled: false,
+  non_member_price_multiplier: 5,
+  special_price_cents_by_label: {
+    crown: 100000,
+    "xn--2p8h": 100000,
+    prince: 50000,
+    "xn--tq9h": 50000,
+    princess: 50000,
+    "xn--6q8h": 50000,
+    diamond: 75000,
+    "xn--tr8h": 75000,
+    ring: 50000,
+    "xn--sr8h": 50000,
+    "xn--cs8h": 50000,
+    "xn--cz8h": 25000,
+  },
+} satisfies Record<string, unknown>
 const COMPATIBLE_LOCAL_MIGRATION_CHECKSUMS: Record<string, Set<string>> = {
   "1064_thread_comment_locks.sql": new Set([
     "bdb8e886939b733f10afff54e25f83cc39ed49c2a6501b7f7604ac3357b8d61f",
@@ -39,6 +62,7 @@ export type LocalCommunityBootstrapInput = {
   governanceMode: "centralized" | "multisig" | "majeur"
   handlePolicyTemplate: "standard" | "premium" | "membership_gated" | "custom"
   pricingModel: "free" | "flat_by_length" | "custom_curve" | "gated_then_flat" | null
+  handlePolicySettings?: Record<string, unknown> | null
   gatePolicy: GatePolicy | null
   rules: Array<LocalCommunityRule>
   initialSettings?: Record<string, unknown> | null
@@ -346,6 +370,11 @@ export async function bootstrapLocalCommunityDb(input: LocalCommunityBootstrapIn
       if (input.namespaceVerificationId && input.namespaceLabel) {
         const namespaceId = `ns_${input.communityId}`
         const namespaceHandlePolicyId = `nhp_${input.communityId}`
+        const handlePolicySettings = input.handlePolicySettings && Object.keys(input.handlePolicySettings).length > 0
+          ? input.handlePolicySettings
+          : input.pricingModel === "free"
+            ? null
+            : DEFAULT_HANDLE_POLICY_SETTINGS
 
         await tx.execute({
           sql: `
@@ -376,14 +405,15 @@ export async function bootstrapLocalCommunityDb(input: LocalCommunityBootstrapIn
           sql: `
             INSERT INTO namespace_handle_policies (
               namespace_handle_policy_id, community_id, namespace_id, policy_template, pricing_model,
-              membership_required_for_claim, settings_json, created_at, updated_at
+              membership_required_for_claim, claims_enabled, settings_json, created_at, updated_at
             ) VALUES (
-              ?1, ?2, ?3, ?4, ?5, 1, NULL, ?6, ?6
+              ?1, ?2, ?3, ?4, ?5, 1, 1, ?6, ?7, ?7
             )
             ON CONFLICT(namespace_handle_policy_id) DO UPDATE SET
               policy_template = excluded.policy_template,
               pricing_model = excluded.pricing_model,
               membership_required_for_claim = excluded.membership_required_for_claim,
+              claims_enabled = excluded.claims_enabled,
               updated_at = excluded.updated_at
           `,
           args: [
@@ -392,6 +422,7 @@ export async function bootstrapLocalCommunityDb(input: LocalCommunityBootstrapIn
             namespaceId,
             input.handlePolicyTemplate,
             input.pricingModel,
+            handlePolicySettings ? JSON.stringify(handlePolicySettings) : null,
             now,
           ],
         })

@@ -2398,4 +2398,18 @@ CREATE INDEX IF NOT EXISTS idx_community_handle_claim_quotes_namespace_label
 `,
     checksum: "b62b389194dae608050039ff00d8ed00085712daf97b52d62c53ddbb4e8ac460",
   },
+  {
+    name: "1067_namespace_handle_policies_claims_enabled.sql",
+    sql: `ALTER TABLE namespace_handle_policies ADD COLUMN claims_enabled INTEGER NOT NULL DEFAULT 1 CHECK (claims_enabled IN (0, 1));
+`,
+    checksum: "fb2f7eadc02043c445867b7e1bad4b2850e5291ddefaf25f8e0967635454d842",
+  },
+  {
+    name: "1068_community_handle_reserved_unique_index.sql",
+    sql: `CREATE UNIQUE INDEX IF NOT EXISTS idx_community_handles_claim_blocking_namespace_label
+    ON community_handles(namespace_id, label_normalized)
+    WHERE status IN ('active', 'reserved');
+`,
+    checksum: "5d8c99fb563b64a01da2d4fadbf46e9e8868ff07cc64b9f2ddcbf3b2d3cde98c",
+  },
 ] as const;
