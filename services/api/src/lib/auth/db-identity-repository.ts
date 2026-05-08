@@ -9,6 +9,7 @@ import {
   getGlobalHandleRow,
   getGlobalHandleRowByLabelNormalized,
   getVerifiedLinkedHandleRowByLabelNormalized,
+  getActiveWalletAttachmentRowByAddress,
   listLinkedHandleRows,
   getProfileRow,
   getUserRow,
@@ -78,6 +79,32 @@ function isActiveAuthProviderSubjectConflict(error: unknown): boolean {
     || hasUniqueConstraintField(error, "provider_subject")
 }
 
+async function resolveExistingUserIdForWalletIdentity(
+  executor: Parameters<typeof getActiveWalletAttachmentRowByAddress>[0],
+  identity: UpstreamIdentity,
+): Promise<string | null> {
+  if (
+    (identity.provider !== "privy" && identity.provider !== "jwt")
+    || identity.walletAddresses.length === 0
+  ) {
+    return null
+  }
+
+  const userIds = new Set<string>()
+  for (const walletAddress of identity.walletAddresses) {
+    const existingWallet = await getActiveWalletAttachmentRowByAddress(executor, walletAddress)
+    if (existingWallet) {
+      userIds.add(existingWallet.user_id)
+    }
+  }
+
+  if (userIds.size > 1) {
+    throw internalError("Identity wallets are already attached to multiple users")
+  }
+
+  return [...userIds][0] ?? null
+}
+
 export class DatabaseIdentityRepository {
   constructor(private readonly client: Client) {}
 
@@ -103,108 +130,138 @@ export class DatabaseIdentityRepository {
         })
       } else {
         const createdAt = nowIso()
-        const userId = makeId("usr")
         const authProviderLinkId = makeId("apl")
+        const existingWalletUserId = await resolveExistingUserIdForWalletIdentity(tx, identity)
 
-        await tx.execute({
-          sql: `
-            INSERT INTO users (
-              user_id,
-              primary_wallet_attachment_id,
-              verification_state,
-              capability_provider,
-              verification_capabilities_json,
-              verified_at,
-              current_verification_session_id,
-              created_at,
-              updated_at
-            ) VALUES (?1, NULL, 'unverified', NULL, ?2, NULL, NULL, ?3, ?3)
-          `,
-          args: [userId, JSON.stringify(buildDefaultVerificationCapabilities()), createdAt],
-        })
+        if (existingWalletUserId) {
+          await tx.execute({
+            sql: `
+              INSERT INTO auth_provider_links (
+                auth_provider_link_id,
+                user_id,
+                provider,
+                provider_subject,
+                provider_user_ref,
+                status,
+                linked_at,
+                revoked_at,
+                created_at,
+                updated_at
+              ) VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, NULL, ?6, ?6)
+            `,
+            args: [authProviderLinkId, existingWalletUserId, provider, providerSubject, providerUserRef, createdAt],
+          })
 
-        let insertedGlobalHandleId: string | null = null
-        let attempts = 0
-        while (!insertedGlobalHandleId && attempts < 12) {
-          attempts += 1
-          const candidate = generateHandleCandidate()
-          const globalHandleId = makeId("ghd")
+          await reconcileWalletAttachments(tx, {
+            userId: existingWalletUserId,
+            identity,
+            updatedAt: createdAt,
+          })
 
-          try {
-            await tx.execute({
-              sql: `
-                INSERT INTO global_handles (
-                  global_handle_id,
-                  user_id,
-                  label_normalized,
-                  label_display,
-                  status,
-                  tier,
-                  issuance_source,
-                  redirect_target_global_handle_id,
-                  price_paid_usd,
-                  free_rename_consumed,
-                  issued_at,
-                  replaced_at,
-                  created_at,
-                  updated_at
-                ) VALUES (?1, ?2, ?3, ?4, 'active', 'generated', 'generated_signup', NULL, NULL, 0, ?5, NULL, ?5, ?5)
-              `,
-              args: [globalHandleId, userId, candidate.labelNormalized, candidate.labelDisplay, createdAt],
-            })
-            insertedGlobalHandleId = globalHandleId
-          } catch (error) {
-            if (!hasUniqueConstraintField(error, "global_handles.label_normalized")) {
-              throw error
+          resolvedUserId = existingWalletUserId
+        } else {
+          const userId = makeId("usr")
+
+          await tx.execute({
+            sql: `
+              INSERT INTO users (
+                user_id,
+                primary_wallet_attachment_id,
+                verification_state,
+                capability_provider,
+                verification_capabilities_json,
+                verified_at,
+                current_verification_session_id,
+                created_at,
+                updated_at
+              ) VALUES (?1, NULL, 'unverified', NULL, ?2, NULL, NULL, ?3, ?3)
+            `,
+            args: [userId, JSON.stringify(buildDefaultVerificationCapabilities()), createdAt],
+          })
+
+          let insertedGlobalHandleId: string | null = null
+          let attempts = 0
+          while (!insertedGlobalHandleId && attempts < 12) {
+            attempts += 1
+            const candidate = generateHandleCandidate()
+            const globalHandleId = makeId("ghd")
+
+            try {
+              await tx.execute({
+                sql: `
+                  INSERT INTO global_handles (
+                    global_handle_id,
+                    user_id,
+                    label_normalized,
+                    label_display,
+                    status,
+                    tier,
+                    issuance_source,
+                    redirect_target_global_handle_id,
+                    price_paid_usd,
+                    free_rename_consumed,
+                    issued_at,
+                    replaced_at,
+                    created_at,
+                    updated_at
+                  ) VALUES (?1, ?2, ?3, ?4, 'active', 'generated', 'generated_signup', NULL, NULL, 0, ?5, NULL, ?5, ?5)
+                `,
+                args: [globalHandleId, userId, candidate.labelNormalized, candidate.labelDisplay, createdAt],
+              })
+              insertedGlobalHandleId = globalHandleId
+            } catch (error) {
+              if (!hasUniqueConstraintField(error, "global_handles.label_normalized")) {
+                throw error
+              }
             }
           }
+
+          if (!insertedGlobalHandleId) {
+            throw internalError("Could not allocate a generated global handle after repeated retries")
+          }
+
+          await tx.execute({
+            sql: `
+              INSERT INTO profiles (
+                user_id,
+                display_name,
+                bio,
+                avatar_ref,
+                cover_ref,
+                global_handle_id,
+                created_at,
+                updated_at
+              ) VALUES (?1, NULL, NULL, NULL, NULL, ?2, ?3, ?3)
+            `,
+            args: [userId, insertedGlobalHandleId, createdAt],
+          })
+
+          await tx.execute({
+            sql: `
+              INSERT INTO auth_provider_links (
+                auth_provider_link_id,
+                user_id,
+                provider,
+                provider_subject,
+                provider_user_ref,
+                status,
+                linked_at,
+                revoked_at,
+                created_at,
+                updated_at
+              ) VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, NULL, ?6, ?6)
+            `,
+            args: [authProviderLinkId, userId, provider, providerSubject, providerUserRef, createdAt],
+          })
+
+          await reconcileWalletAttachments(tx, {
+            userId,
+            identity,
+            updatedAt: createdAt,
+          })
+
+          resolvedUserId = userId
         }
-
-        if (!insertedGlobalHandleId) {
-          throw internalError("Could not allocate a generated global handle after repeated retries")
-        }
-
-        await tx.execute({
-          sql: `
-            INSERT INTO profiles (
-              user_id,
-              display_name,
-              bio,
-              avatar_ref,
-              cover_ref,
-              global_handle_id,
-              created_at,
-              updated_at
-            ) VALUES (?1, NULL, NULL, NULL, NULL, ?2, ?3, ?3)
-          `,
-          args: [userId, insertedGlobalHandleId, createdAt],
-        })
-
-        await tx.execute({
-          sql: `
-            INSERT INTO auth_provider_links (
-              auth_provider_link_id,
-              user_id,
-              provider,
-              provider_subject,
-              provider_user_ref,
-              status,
-              linked_at,
-              revoked_at,
-              created_at,
-              updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, NULL, ?6, ?6)
-          `,
-          args: [authProviderLinkId, userId, provider, providerSubject, providerUserRef, createdAt],
-        })
-
-        await reconcileWalletAttachments(tx, {
-          userId,
-          identity,
-          updatedAt: createdAt,
-        })
-
-        resolvedUserId = userId
       }
 
       await tx.commit()
