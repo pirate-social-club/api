@@ -8,6 +8,27 @@ import type {
 } from "../../types"
 import { nullableUnixSeconds, unixSeconds } from "../../serializers/time"
 
+type NotificationFeedCursor = {
+  createdAt: string
+  eventId?: string
+}
+
+function parseNotificationFeedCursor(cursor: string): NotificationFeedCursor {
+  const separatorIndex = cursor.indexOf("|")
+  if (separatorIndex === -1) {
+    return { createdAt: cursor }
+  }
+
+  return {
+    createdAt: decodeURIComponent(cursor.slice(0, separatorIndex)),
+    eventId: decodeURIComponent(cursor.slice(separatorIndex + 1)),
+  }
+}
+
+function encodeNotificationFeedCursor(row: Record<string, unknown>): string {
+  return `${encodeURIComponent(String(row.event_created_at))}|${encodeURIComponent(String(row.event_id))}`
+}
+
 export async function getNotificationSummary(input: {
   executor: DbExecutor
   userId: string
@@ -45,42 +66,38 @@ export async function listNotificationFeed(input: {
   type?: NotificationEventType
 }): Promise<NotificationFeedResponse> {
   const limit = Math.min(100, Math.max(1, input.limit ?? 25))
-
-  let sql: string
-  let args: unknown[]
-  if (input.cursor) {
-    const typeFilter = input.type ? " AND e.type = ?3" : ""
-    sql = `
-      SELECT
-        e.event_id, e.type, e.actor_user_id, e.subject_type, e.subject_id,
-        e.object_type, e.object_id, e.payload_json as event_payload, e.created_at as event_created_at,
-        r.recipient_user_id, r.seen_at, r.read_at, r.created_at as receipt_created_at
-      FROM notification_receipts r
-      JOIN notification_events e ON e.event_id = r.event_id
-      WHERE r.recipient_user_id = ?1 AND e.created_at < ?2${typeFilter}
-      ORDER BY e.created_at DESC
-      LIMIT ?${input.type ? 4 : 3}
-    `
-    args = input.type
-      ? [input.userId, input.cursor, input.type, limit + 1]
-      : [input.userId, input.cursor, limit + 1]
-  } else {
-    const typeFilter = input.type ? " AND e.type = ?2" : ""
-    sql = `
-      SELECT
-        e.event_id, e.type, e.actor_user_id, e.subject_type, e.subject_id,
-        e.object_type, e.object_id, e.payload_json as event_payload, e.created_at as event_created_at,
-        r.recipient_user_id, r.seen_at, r.read_at, r.created_at as receipt_created_at
-      FROM notification_receipts r
-      JOIN notification_events e ON e.event_id = r.event_id
-      WHERE r.recipient_user_id = ?1${typeFilter}
-      ORDER BY e.created_at DESC
-      LIMIT ?${input.type ? 3 : 2}
-    `
-    args = input.type
-      ? [input.userId, input.type, limit + 1]
-      : [input.userId, limit + 1]
+  const cursor = input.cursor ? parseNotificationFeedCursor(input.cursor) : null
+  const cursorFilter = cursor
+    ? cursor.eventId
+      ? " AND (e.created_at < ?2 OR (e.created_at = ?2 AND e.event_id < ?3))"
+      : " AND e.created_at < ?2"
+    : ""
+  const typeParamIndex = cursor ? (cursor.eventId ? 4 : 3) : 2
+  const limitParamIndex = input.type ? typeParamIndex + 1 : typeParamIndex
+  const typeFilter = input.type ? ` AND e.type = ?${typeParamIndex}` : " AND e.type <> 'xmtp_message'"
+  const args: unknown[] = [input.userId]
+  if (cursor) {
+    args.push(cursor.createdAt)
+    if (cursor.eventId) {
+      args.push(cursor.eventId)
+    }
   }
+  if (input.type) {
+    args.push(input.type)
+  }
+  args.push(limit + 1)
+
+  const sql = `
+    SELECT
+      e.event_id, e.type, e.actor_user_id, e.subject_type, e.subject_id,
+      e.object_type, e.object_id, e.payload_json as event_payload, e.created_at as event_created_at,
+      r.recipient_user_id, r.seen_at, r.read_at, r.created_at as receipt_created_at
+    FROM notification_receipts r
+    JOIN notification_events e ON e.event_id = r.event_id
+    WHERE r.recipient_user_id = ?1${cursorFilter}${typeFilter}
+    ORDER BY e.created_at DESC, e.event_id DESC
+    LIMIT ?${limitParamIndex}
+  `
 
   const result = await input.executor.execute({ sql, args })
   const rows = result.rows
@@ -108,7 +125,7 @@ export async function listNotificationFeed(input: {
     },
   } satisfies NotificationFeedItem))
 
-  const nextCursor = hasMore && rows.length > 0 ? String(rows[Math.min(limit, rows.length) - 1].event_created_at) : null
+  const nextCursor = hasMore && rows.length > 0 ? encodeNotificationFeedCursor(rows[Math.min(limit, rows.length) - 1] as Record<string, unknown>) : null
 
   return { items, next_cursor: nextCursor }
 }

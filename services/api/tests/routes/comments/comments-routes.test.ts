@@ -9,7 +9,7 @@ import { setClawkeyProviderForTests } from "../../../src/lib/agents/clawkey-prov
 import { setSelfProviderForTests } from "../../../src/lib/verification/self-provider"
 import { buildVerifiedSelfProvider, createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { createSignedAgentChallenge } from "../../agent-test-helpers"
-import { updateLocalCommunityAgentPostingPolicy } from "../communities/community-routes-test-helpers"
+import { updateLocalCommunityAgentPostingPolicy, updateLocalCommunityAnonymousPolicy } from "../communities/community-routes-test-helpers"
 import {
   addCommunityMember,
   completeUniqueHumanVerification,
@@ -37,6 +37,93 @@ afterEach(async () => {
 })
 
 describe("comments routes", () => {
+  test("anonymous comment notifications use the visible pseudonym", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "comments-anonymous-notification-creator")
+    const community = await createCommunity(ctx.env, creator.accessToken, "Anonymous Notification Club")
+    await updateLocalCommunityAnonymousPolicy({
+      allowAnonymousIdentity: true,
+      anonymousIdentityScope: "community_stable",
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: community.communityId,
+    })
+
+    const member = await exchangeJwt(ctx.env, "comments-anonymous-notification-member")
+    await addCommunityMember(ctx.communityDbRoot, community.communityId, member.userId)
+    await ctx.client.execute({
+      sql: `
+        UPDATE profiles
+        SET display_name = ?2,
+            updated_at = ?3
+        WHERE user_id = ?1
+      `,
+      args: [member.userId, "Omar Crossings", "2026-05-08T12:00:00.000Z"],
+    })
+
+    const createdPost = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Anonymous comment notifications",
+        body: "Notification identity should match the target comment.",
+        idempotency_key: "comments-anonymous-notification-post",
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(createdPost.status).toBe(201)
+    const postBody = await json(createdPost) as { id: string }
+
+    const commentResponse = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/comments`,
+      {
+        anonymous_scope: "community_stable",
+        body: "international waters detail should not get buried here",
+        identity_mode: "anonymous",
+        idempotency_key: "comments-anonymous-notification-comment",
+      },
+      ctx.env,
+      member.accessToken,
+    )
+    expect(commentResponse.status).toBe(201)
+    const commentBody = await json(commentResponse) as {
+      anonymous_label: string | null
+      author_user: string | null
+      id: string
+      identity_mode: string
+    }
+    expect(commentBody.identity_mode).toBe("anonymous")
+    expect(commentBody.author_user).toBeNull()
+    expect(commentBody.anonymous_label).toMatch(/^anon_[a-z]+-[a-z]+-\d{2}$/)
+
+    const feed = await app.request(
+      "http://pirate.test/notifications/feed?limit=1",
+      { headers: { authorization: `Bearer ${creator.accessToken}` } },
+      ctx.env,
+    )
+    expect(feed.status).toBe(200)
+    const feedBody = await json(feed) as {
+      items: Array<{
+        event: {
+          actor_user: string | null
+          payload: Record<string, unknown> | null
+          type: string
+        }
+      }>
+    }
+    expect(feedBody.items[0]?.event.type).toBe("post_commented")
+    expect(feedBody.items[0]?.event.actor_user).toBeNull()
+    expect(feedBody.items[0]?.event.payload).toMatchObject({
+      actor_avatar_url: null,
+      actor_display_name: commentBody.anonymous_label,
+    })
+    expect(String(feedBody.items[0]?.event.payload?.comment_id ?? "")).toMatch(/^cmt_/)
+    expect(String(feedBody.items[0]?.event.payload?.target_path ?? "")).toMatch(/^\/p\/pst_.+\?comment=cmt_/)
+    expect(feedBody.items[0]?.event.payload?.actor_display_name).not.toBe("Omar Crossings")
+  })
+
   test("comments support image and GIF media refs with validation and moderation", async () => {
     const ctx = await createRouteTestContext({
       OPENAI_API_KEY: "test-openai-key",

@@ -153,6 +153,125 @@ describe("notification routes", () => {
     })
   })
 
+  test("feed pagination skips chat rows before applying the activity limit", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "notification-feed-pagination-user")
+    const userId = rawUserId(session)
+
+    const rows = [
+      { id: "nev_hidden_chat_new", type: "xmtp_message", subject: "chat_new", createdAt: "2026-05-08T12:05:00.000Z" },
+      { id: "nev_visible_new", type: "post_commented", subject: "pst_visible_new", createdAt: "2026-05-08T12:04:00.000Z" },
+      { id: "nev_hidden_chat_mid", type: "xmtp_message", subject: "chat_mid", createdAt: "2026-05-08T12:03:00.000Z" },
+      { id: "nev_visible_mid", type: "post_commented", subject: "pst_visible_mid", createdAt: "2026-05-08T12:02:00.000Z" },
+      { id: "nev_visible_old", type: "post_commented", subject: "pst_visible_old", createdAt: "2026-05-08T12:01:00.000Z" },
+    ]
+
+    for (const row of rows) {
+      await ctx.client.execute({
+        sql: `
+          INSERT INTO notification_events (
+            event_id, type, actor_user_id, subject_type, subject_id,
+            object_type, object_id, payload_json, dedupe_key, created_at
+          )
+          VALUES (?1, ?2, NULL, ?3, ?4, NULL, NULL, ?5, NULL, ?6)
+        `,
+        args: [
+          row.id,
+          row.type,
+          row.type === "xmtp_message" ? "conversation" : "post",
+          row.subject,
+          JSON.stringify({ target_path: row.type === "xmtp_message" ? `/chat/c/${row.subject}` : `/p/${row.subject}` }),
+          row.createdAt,
+        ],
+      })
+      await ctx.client.execute({
+        sql: `
+          INSERT INTO notification_receipts (event_id, recipient_user_id, created_at)
+          VALUES (?1, ?2, ?3)
+        `,
+        args: [row.id, userId, row.createdAt],
+      })
+    }
+
+    const firstPage = await app.request(
+      "http://pirate.test/notifications/feed?limit=2",
+      { headers: authHeaders(session.accessToken) },
+      ctx.env,
+    )
+    expect(firstPage.status).toBe(200)
+    const firstPageBody = await json(firstPage) as {
+      items: Array<{ event: { subject: string; type: string } }>
+      next_cursor: string | null
+    }
+    expect(firstPageBody.items.map((item) => item.event.type)).toEqual(["post_commented", "post_commented"])
+    expect(firstPageBody.items.map((item) => item.event.subject)).toEqual(["pst_visible_new", "pst_visible_mid"])
+    expect(firstPageBody.next_cursor).toBe("2026-05-08T12%3A02%3A00.000Z|nev_visible_mid")
+
+    const nextPage = await app.request(
+      `http://pirate.test/notifications/feed?limit=2&cursor=${encodeURIComponent(firstPageBody.next_cursor ?? "")}`,
+      { headers: authHeaders(session.accessToken) },
+      ctx.env,
+    )
+    expect(nextPage.status).toBe(200)
+    const nextPageBody = await json(nextPage) as typeof firstPageBody
+    expect(nextPageBody.items.map((item) => item.event.type)).toEqual(["post_commented"])
+    expect(nextPageBody.items.map((item) => item.event.subject)).toEqual(["pst_visible_old"])
+    expect(nextPageBody.next_cursor).toBeNull()
+  })
+
+  test("feed pagination preserves visible events that share a timestamp", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "notification-feed-tie-pagination-user")
+    const userId = rawUserId(session)
+    const createdAt = "2026-05-08T12:10:00.000Z"
+
+    for (const subject of ["pst_d", "pst_c", "pst_b", "pst_a"]) {
+      const eventId = `nev_same_time_${subject.replace("pst_", "")}`
+      await ctx.client.execute({
+        sql: `
+          INSERT INTO notification_events (
+            event_id, type, actor_user_id, subject_type, subject_id,
+            object_type, object_id, payload_json, dedupe_key, created_at
+          )
+          VALUES (?1, 'post_commented', NULL, 'post', ?2, NULL, NULL, ?3, NULL, ?4)
+        `,
+        args: [eventId, subject, JSON.stringify({ target_path: `/p/${subject}` }), createdAt],
+      })
+      await ctx.client.execute({
+        sql: `
+          INSERT INTO notification_receipts (event_id, recipient_user_id, created_at)
+          VALUES (?1, ?2, ?3)
+        `,
+        args: [eventId, userId, createdAt],
+      })
+    }
+
+    const firstPage = await app.request(
+      "http://pirate.test/notifications/feed?limit=2",
+      { headers: authHeaders(session.accessToken) },
+      ctx.env,
+    )
+    expect(firstPage.status).toBe(200)
+    const firstPageBody = await json(firstPage) as {
+      items: Array<{ event: { subject: string } }>
+      next_cursor: string | null
+    }
+    expect(firstPageBody.items.map((item) => item.event.subject)).toEqual(["pst_d", "pst_c"])
+    expect(firstPageBody.next_cursor).toBe("2026-05-08T12%3A10%3A00.000Z|nev_same_time_c")
+
+    const nextPage = await app.request(
+      `http://pirate.test/notifications/feed?limit=2&cursor=${encodeURIComponent(firstPageBody.next_cursor ?? "")}`,
+      { headers: authHeaders(session.accessToken) },
+      ctx.env,
+    )
+    expect(nextPage.status).toBe(200)
+    const nextPageBody = await json(nextPage) as typeof firstPageBody
+    expect(nextPageBody.items.map((item) => item.event.subject)).toEqual(["pst_b", "pst_a"])
+    expect(nextPageBody.next_cursor).toBeNull()
+  })
+
   test("reads tasks and activity, then marks and dismisses them", async () => {
     const ctx = await createRouteTestContext({
       ANALYTICS_ENABLED: "true",
@@ -170,6 +289,17 @@ describe("notification routes", () => {
       `,
       args: [rawUserId(actorSession), "Route Actor", "/avatars/route-actor.png"],
     })
+    const actorHandle = await ctx.client.execute({
+      sql: `
+        SELECT gh.label_display
+        FROM profiles p
+        JOIN global_handles gh ON gh.global_handle_id = p.global_handle_id
+        WHERE p.user_id = ?1
+        LIMIT 1
+      `,
+      args: [rawUserId(actorSession)],
+    })
+    const actorHandleLabel = String(actorHandle.rows[0]?.label_display ?? "")
 
     const task = await createNamespaceVerificationTask({
       env: ctx.env,
@@ -248,7 +378,7 @@ describe("notification routes", () => {
     expect(feedBody.items[0]?.event.payload?.comment_id).toBe("cmt_notifications_reply")
     expect(feedBody.items[0]?.event.payload?.thread_root_post_id).toBe("pst_notifications")
     expect(feedBody.items[0]?.event.payload?.target_path).toBe("/p/pst_notifications?comment=cmt_notifications_reply")
-    expect(feedBody.items[0]?.event.payload?.actor_display_name).toBe("Route Actor")
+    expect(feedBody.items[0]?.event.payload?.actor_display_name).toBe(actorHandleLabel)
     expect(feedBody.items[0]?.event.payload?.actor_avatar_url).toBe("/avatars/route-actor.png")
     expect(feedBody.items[0]?.receipt.read_at).toBeNull()
 
