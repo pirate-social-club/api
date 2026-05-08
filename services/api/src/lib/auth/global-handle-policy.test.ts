@@ -8,7 +8,7 @@ import {
 } from "./global-handle-policy"
 
 describe("global handle paid policy", () => {
-  test("uses the accessible v4 base curve", () => {
+  test("uses the accessible v5 base curve", () => {
     expect(resolveGlobalHandlePaidPrice({ labelNormalized: "longname" }).priceCents).toBe(500)
     expect(resolveGlobalHandlePaidPrice({ labelNormalized: "sevennn" }).priceCents).toBe(1_000)
     expect(resolveGlobalHandlePaidPrice({ labelNormalized: "sixsix" }).priceCents).toBe(2_500)
@@ -19,7 +19,7 @@ describe("global handle paid policy", () => {
 
   test("applies exact premium terms and clean price bands", () => {
     expect(resolveGlobalHandlePaidPrice({ labelNormalized: "olivia" })).toMatchObject({
-      priceCents: 25_000,
+      priceCents: 10_000,
       pricingTier: "first_name",
       policyVersion: GLOBAL_HANDLE_PAID_POLICY_VERSION,
     })
@@ -31,15 +31,15 @@ describe("global handle paid policy", () => {
 
   test("prices generated first-name matches exactly without fuzzy typo matching", () => {
     expect(resolveGlobalHandlePaidPrice({ labelNormalized: "liam" })).toMatchObject({
-      priceCents: 100_000,
+      priceCents: 50_000,
       pricingTier: "first_name",
     })
     expect(resolveGlobalHandlePaidPrice({ labelNormalized: "michael" })).toMatchObject({
-      priceCents: 10_000,
+      priceCents: 5_000,
       pricingTier: "first_name",
     })
     expect(resolveGlobalHandlePaidPrice({ labelNormalized: "maria" })).toMatchObject({
-      priceCents: 15_000,
+      priceCents: 10_000,
       pricingTier: "first_name",
     })
     expect(resolveGlobalHandlePaidPrice({ labelNormalized: "oliviia" })).toMatchObject({

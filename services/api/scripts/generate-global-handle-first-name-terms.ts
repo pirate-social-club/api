@@ -58,18 +58,18 @@ function multiplierForRank(input: {
   totalRank: number
 }): number {
   const latestMultiplier =
-    input.latestRank <= 10 ? 12
-      : input.latestRank <= 25 ? 10
-        : input.latestRank <= 50 ? 8
-          : input.latestRank <= 100 ? 6
-            : input.latestRank <= 250 ? 4
-              : input.latestRank <= 500 ? 3
+    input.latestRank <= 10 ? 5
+      : input.latestRank <= 25 ? 4
+        : input.latestRank <= 50 ? 3
+          : input.latestRank <= 100 ? 2.5
+            : input.latestRank <= 250 ? 2
+              : input.latestRank <= 500 ? 1.5
                 : 1
   const totalMultiplier =
-    input.totalRank <= 25 ? 8
-      : input.totalRank <= 100 ? 6
-        : input.totalRank <= 250 ? 4
-          : input.totalRank <= 500 ? 3
+    input.totalRank <= 25 ? 4
+      : input.totalRank <= 100 ? 3
+        : input.totalRank <= 250 ? 2.5
+          : input.totalRank <= 500 ? 2
             : 1
   return Math.max(latestMultiplier, totalMultiplier)
 }
