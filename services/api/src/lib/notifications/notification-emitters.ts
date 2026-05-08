@@ -1,12 +1,32 @@
 import { nowIso } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
 import { insertNotificationEvent, insertNotificationReceipt } from "./notification-event-store"
-import { buildActorIdentityPayload, hasNotificationEventDedupeKey } from "./notification-event-helpers"
+import {
+  buildActorIdentityPayload,
+  buildActorIdentityPayloadFromSnapshot,
+  hasNotificationEventDedupeKey,
+  type NotificationActorIdentity,
+} from "./notification-event-helpers"
 import { trackNotificationGeneratedSafely } from "./notification-tracking"
 import type { Env } from "../../env"
 
+async function resolveActorIdentityPayload(input: {
+  client: ReturnType<typeof getControlPlaneClient>
+  identity?: NotificationActorIdentity | null
+  userId: string
+}): Promise<Record<string, unknown>> {
+  return input.identity
+    ? buildActorIdentityPayloadFromSnapshot(input.identity)
+    : buildActorIdentityPayload(input.client, input.userId)
+}
+
+function resolveNotificationActorUserId(actorUserId: string, identity?: NotificationActorIdentity | null): string | null {
+  return identity?.exposeActorUser === false ? null : actorUserId
+}
+
 export async function emitCommentReply(input: {
   env: Env
+  actorIdentity?: NotificationActorIdentity | null
   actorUserId: string
   recipientUserId: string
   communityId: string
@@ -21,13 +41,17 @@ export async function emitCommentReply(input: {
   const client = getControlPlaneClient(input.env)
   try {
     const now = nowIso()
-    const actorPayload = await buildActorIdentityPayload(client, input.actorUserId)
+    const actorPayload = await resolveActorIdentityPayload({
+      client,
+      identity: input.actorIdentity,
+      userId: input.actorUserId,
+    })
     const dedupeKey = `comment_reply:${input.replyCommentId}:${input.recipientUserId}`
     const alreadyExists = await hasNotificationEventDedupeKey(client, dedupeKey)
     const eventId = await insertNotificationEvent({
       executor: client,
       type: "comment_reply",
-      actorUserId: input.actorUserId,
+      actorUserId: resolveNotificationActorUserId(input.actorUserId, input.actorIdentity),
       subjectType: "comment",
       subjectId: input.parentCommentId,
       objectType: "comment",
@@ -35,9 +59,11 @@ export async function emitCommentReply(input: {
       payload: {
         ...actorPayload,
         community_id: input.communityId,
+        comment_id: input.replyCommentId,
         comment_excerpt: input.commentExcerpt ?? null,
+        parent_comment_id: input.parentCommentId,
         post_title: input.postTitle ?? null,
-        target_path: `/p/${input.threadRootPostId}`,
+        target_path: `/p/${input.threadRootPostId}?comment=${encodeURIComponent(input.replyCommentId)}`,
         thread_root_post_id: input.threadRootPostId,
       },
       dedupeKey,
@@ -66,6 +92,7 @@ export async function emitCommentReply(input: {
 
 export async function emitPostCommented(input: {
   env: Env
+  actorIdentity?: NotificationActorIdentity | null
   actorUserId: string
   postAuthorUserId: string
   communityId: string
@@ -79,13 +106,17 @@ export async function emitPostCommented(input: {
   const client = getControlPlaneClient(input.env)
   try {
     const now = nowIso()
-    const actorPayload = await buildActorIdentityPayload(client, input.actorUserId)
+    const actorPayload = await resolveActorIdentityPayload({
+      client,
+      identity: input.actorIdentity,
+      userId: input.actorUserId,
+    })
     const dedupeKey = `post_commented:${input.commentId}:${input.postAuthorUserId}`
     const alreadyExists = await hasNotificationEventDedupeKey(client, dedupeKey)
     const eventId = await insertNotificationEvent({
       executor: client,
       type: "post_commented",
-      actorUserId: input.actorUserId,
+      actorUserId: resolveNotificationActorUserId(input.actorUserId, input.actorIdentity),
       subjectType: "post",
       subjectId: input.postId,
       objectType: "comment",
@@ -93,9 +124,11 @@ export async function emitPostCommented(input: {
       payload: {
         ...actorPayload,
         community_id: input.communityId,
+        comment_id: input.commentId,
         comment_excerpt: input.commentExcerpt ?? null,
         post_title: input.postTitle ?? null,
-        target_path: `/p/${input.postId}`,
+        target_path: `/p/${input.postId}?comment=${encodeURIComponent(input.commentId)}`,
+        thread_root_post_id: input.postId,
       },
       dedupeKey,
       createdAt: now,

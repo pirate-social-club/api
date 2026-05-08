@@ -171,6 +171,18 @@ function commentNotificationExcerpt(comment: Comment): string {
   return comment.media_refs?.length ? "sent an image" : ""
 }
 
+function commentNotificationActorIdentity(comment: Comment) {
+  if (comment.identity_mode !== "anonymous") {
+    return undefined
+  }
+
+  return {
+    actorAvatarUrl: null,
+    actorDisplayName: comment.anonymous_label ?? "anon",
+    exposeActorUser: false,
+  }
+}
+
 export async function createComment(input: {
   env: Env
   requestUrl?: string
@@ -394,6 +406,7 @@ export async function createComment(input: {
         if (parentComment && parentComment.author_user_id) {
           await emitCommentReply({
             env: input.env,
+            actorIdentity: commentNotificationActorIdentity(createdComment),
             actorUserId: input.userId,
             commentExcerpt: commentNotificationExcerpt(createdComment),
             postTitle: threadRootPost?.title ?? null,
@@ -409,6 +422,7 @@ export async function createComment(input: {
         if (threadRootPost?.author_user_id && threadRootPost.author_user_id !== input.userId && !notifiedUserIds.has(threadRootPost.author_user_id)) {
           await emitPostCommented({
             env: input.env,
+            actorIdentity: commentNotificationActorIdentity(createdComment),
             actorUserId: input.userId,
             commentExcerpt: commentNotificationExcerpt(createdComment),
             postAuthorUserId: threadRootPost.author_user_id,
