@@ -38,6 +38,15 @@ import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/run
 import { makeSentryOptions, captureScheduledError } from "./lib/sentry"
 import type { Env } from "./env"
 
+// Staging has an existing Durable Object class with this name. Keep exporting a
+// compatibility class until the live-room runtime lands on main or is explicitly
+// removed with a Wrangler delete-class migration.
+export class LiveRoomRuntimeDO {
+  fetch(): Response {
+    return new Response("Live room runtime is not available in this API build.", { status: 410 })
+  }
+}
+
 const app = new Hono<{ Bindings: Env }>()
 
 function buildVersionPayload(env: Env) {
