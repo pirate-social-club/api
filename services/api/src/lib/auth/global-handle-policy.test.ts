@@ -8,30 +8,30 @@ import {
 } from "./global-handle-policy"
 
 describe("global handle paid policy", () => {
-  test("uses the accessible v1 base curve", () => {
+  test("uses the accessible v2 base curve", () => {
     expect(resolveGlobalHandlePaidPrice({ labelNormalized: "longname" }).priceCents).toBe(500)
-    expect(resolveGlobalHandlePaidPrice({ labelNormalized: "sevennn" }).priceCents).toBe(1_500)
-    expect(resolveGlobalHandlePaidPrice({ labelNormalized: "sixsix" }).priceCents).toBe(5_000)
-    expect(resolveGlobalHandlePaidPrice({ labelNormalized: "fives" }).priceCents).toBe(15_000)
-    expect(resolveGlobalHandlePaidPrice({ labelNormalized: "four" }).priceCents).toBe(50_000)
-    expect(resolveGlobalHandlePaidPrice({ labelNormalized: "abc" }).priceCents).toBe(250_000)
+    expect(resolveGlobalHandlePaidPrice({ labelNormalized: "sevennn" }).priceCents).toBe(1_000)
+    expect(resolveGlobalHandlePaidPrice({ labelNormalized: "sixsix" }).priceCents).toBe(2_500)
+    expect(resolveGlobalHandlePaidPrice({ labelNormalized: "fives" }).priceCents).toBe(5_000)
+    expect(resolveGlobalHandlePaidPrice({ labelNormalized: "four" }).priceCents).toBe(10_000)
+    expect(resolveGlobalHandlePaidPrice({ labelNormalized: "abc" }).priceCents).toBe(25_000)
   })
 
   test("applies exact premium terms and clean price bands", () => {
     expect(resolveGlobalHandlePaidPrice({ labelNormalized: "olivia" })).toMatchObject({
-      priceCents: 50_000,
+      priceCents: 25_000,
       pricingTier: "first_name",
       policyVersion: GLOBAL_HANDLE_PAID_POLICY_VERSION,
     })
     expect(resolveGlobalHandlePaidPrice({ labelNormalized: "captain" })).toMatchObject({
-      priceCents: 5_000,
+      priceCents: 2_500,
       pricingTier: "common_word",
     })
   })
 
   test("discounts hyphenated and numbered labels after premium matching", () => {
     expect(resolveGlobalHandlePaidPrice({ labelNormalized: "my-name" })).toMatchObject({
-      priceCents: 1_000,
+      priceCents: 500,
       pricingTier: "discounted",
     })
     expect(resolveGlobalHandlePaidPrice({ labelNormalized: "name123" })).toMatchObject({
@@ -40,16 +40,16 @@ describe("global handle paid policy", () => {
     })
   })
 
-  test("reserves exact reserved and above-ceiling labels", () => {
+  test("reserves exact reserved labels and prices commercial terms through the multiplier layer", () => {
     expect(resolveGlobalHandlePaidPrice({ labelNormalized: "pirate" })).toMatchObject({
       eligible: false,
       reason: "Desired label is reserved",
       pricingTier: "reserved",
     })
     expect(resolveGlobalHandlePaidPrice({ labelNormalized: "loan" })).toMatchObject({
-      eligible: false,
-      reason: "Manual sale only",
-      pricingTier: "manual_sale",
+      eligible: true,
+      priceCents: 500_000,
+      pricingTier: "commercial_keyword",
     })
   })
 

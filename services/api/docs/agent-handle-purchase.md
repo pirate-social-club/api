@@ -26,10 +26,10 @@ If the name requires payment, the API returns `402 payment_required`.
   "details": {
     "quote": "ghq_...",
     "desired_label": "captain.pirate",
-    "price_cents": 5000,
+    "price_cents": 2500,
     "currency": "USD",
     "payment_protocol": "x402",
-    "policy_version": "global_handle_paid_v1",
+    "policy_version": "global_handle_paid_v2",
     "pricing_tier": "common_word",
     "quote_ttl_seconds": 900,
     "expires_at": 1770000000,
@@ -41,8 +41,8 @@ If the name requires payment, the API returns `402 payment_required`.
       },
       "token_address": "0x...",
       "recipient_address": "0x...",
-      "amount_atomic": "50000000",
-      "amount_display": "50.00"
+      "amount_atomic": "25000000",
+      "amount_display": "25.00"
     }
   }
 }
@@ -72,7 +72,7 @@ Successful response:
   "tier": "premium",
   "status": "active",
   "issuance_source": "paid_upgrade",
-  "price_paid_cents": 5000
+  "price_paid_cents": 2500
 }
 ```
 

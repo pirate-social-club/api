@@ -4,7 +4,7 @@ import { GLOBAL_HANDLE_PREMIUM_TERMS, GLOBAL_HANDLE_RESERVED_TERMS } from "./glo
 
 const GLOBAL_HANDLE_SUFFIX = ".pirate"
 const FREE_CLEANUP_RENAME_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
-export const GLOBAL_HANDLE_PAID_POLICY_VERSION = "global_handle_paid_v1"
+export const GLOBAL_HANDLE_PAID_POLICY_VERSION = "global_handle_paid_v2"
 const MANUAL_SALE_THRESHOLD_CENTS = 25_000 * 100
 const PREMIUM_TERMS_BY_LABEL = new Map(GLOBAL_HANDLE_PREMIUM_TERMS.map((term) => [term.term, term]))
 const PRICE_BANDS_CENTS = [
@@ -84,11 +84,11 @@ function desiredHandleTier(labelNormalized: string): HandleUpgradeQuote["tier"] 
 
 function basePriceCentsForLength(labelLength: number): number | null {
   if (labelLength >= 8) return 5 * 100
-  if (labelLength === 7) return 15 * 100
-  if (labelLength === 6) return 50 * 100
-  if (labelLength === 5) return 150 * 100
-  if (labelLength === 4) return 500 * 100
-  if (labelLength === 3) return 2_500 * 100
+  if (labelLength === 7) return 10 * 100
+  if (labelLength === 6) return 25 * 100
+  if (labelLength === 5) return 50 * 100
+  if (labelLength === 4) return 100 * 100
+  if (labelLength === 3) return 250 * 100
   return null
 }
 
