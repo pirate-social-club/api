@@ -1,3 +1,5 @@
+import { GLOBAL_HANDLE_FIRST_NAME_TERMS } from "./global-handle-first-name-terms"
+
 export type GlobalHandlePremiumTerm = {
   term: string
   type: "commercial_keyword" | "common_word" | "first_name" | "platform" | "surname" | "trophy"
@@ -5,11 +7,7 @@ export type GlobalHandlePremiumTerm = {
   source_note: string
 }
 
-export const GLOBAL_HANDLE_PREMIUM_TERMS: readonly GlobalHandlePremiumTerm[] = [
-  { term: "olivia", type: "first_name", multiplier: 10, source_note: "SSA-style top first name seed" },
-  { term: "liam", type: "first_name", multiplier: 10, source_note: "SSA-style top first name seed" },
-  { term: "maria", type: "first_name", multiplier: 6, source_note: "Common international first name seed" },
-  { term: "michael", type: "first_name", multiplier: 6, source_note: "Common first name seed" },
+const MANUAL_GLOBAL_HANDLE_PREMIUM_TERMS = [
   { term: "smith", type: "surname", multiplier: 8, source_note: "Census-style top surname seed" },
   { term: "garcia", type: "surname", multiplier: 8, source_note: "Census-style top surname seed" },
   { term: "studio", type: "common_word", multiplier: 4, source_note: "Common brandable word seed" },
@@ -50,6 +48,12 @@ export const GLOBAL_HANDLE_PREMIUM_TERMS: readonly GlobalHandlePremiumTerm[] = [
   { term: "lawyer", type: "commercial_keyword", multiplier: 25, source_note: "High-commercial-intent keyword seed" },
   { term: "insurance", type: "commercial_keyword", multiplier: 25, source_note: "High-commercial-intent keyword seed" },
   { term: "hosting", type: "commercial_keyword", multiplier: 12, source_note: "Commercial keyword seed" },
+] as const satisfies readonly GlobalHandlePremiumTerm[]
+
+export const GLOBAL_HANDLE_PREMIUM_TERMS: readonly GlobalHandlePremiumTerm[] = [
+  ...GLOBAL_HANDLE_FIRST_NAME_TERMS,
+  // Appended last so manual trophy/commercial classifications override generated first-name duplicates.
+  ...MANUAL_GLOBAL_HANDLE_PREMIUM_TERMS,
 ]
 
 export const GLOBAL_HANDLE_RESERVED_TERMS = new Set([

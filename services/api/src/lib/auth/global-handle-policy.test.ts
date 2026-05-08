@@ -8,7 +8,7 @@ import {
 } from "./global-handle-policy"
 
 describe("global handle paid policy", () => {
-  test("uses the accessible v2 base curve", () => {
+  test("uses the accessible v4 base curve", () => {
     expect(resolveGlobalHandlePaidPrice({ labelNormalized: "longname" }).priceCents).toBe(500)
     expect(resolveGlobalHandlePaidPrice({ labelNormalized: "sevennn" }).priceCents).toBe(1_000)
     expect(resolveGlobalHandlePaidPrice({ labelNormalized: "sixsix" }).priceCents).toBe(2_500)
@@ -26,6 +26,25 @@ describe("global handle paid policy", () => {
     expect(resolveGlobalHandlePaidPrice({ labelNormalized: "captain" })).toMatchObject({
       priceCents: 2_500,
       pricingTier: "common_word",
+    })
+  })
+
+  test("prices generated first-name matches exactly without fuzzy typo matching", () => {
+    expect(resolveGlobalHandlePaidPrice({ labelNormalized: "liam" })).toMatchObject({
+      priceCents: 100_000,
+      pricingTier: "first_name",
+    })
+    expect(resolveGlobalHandlePaidPrice({ labelNormalized: "michael" })).toMatchObject({
+      priceCents: 10_000,
+      pricingTier: "first_name",
+    })
+    expect(resolveGlobalHandlePaidPrice({ labelNormalized: "maria" })).toMatchObject({
+      priceCents: 15_000,
+      pricingTier: "first_name",
+    })
+    expect(resolveGlobalHandlePaidPrice({ labelNormalized: "oliviia" })).toMatchObject({
+      priceCents: 1_000,
+      pricingTier: "base",
     })
   })
 

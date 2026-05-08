@@ -4,7 +4,7 @@ import { GLOBAL_HANDLE_PREMIUM_TERMS, GLOBAL_HANDLE_RESERVED_TERMS } from "./glo
 
 const GLOBAL_HANDLE_SUFFIX = ".pirate"
 const FREE_CLEANUP_RENAME_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
-export const GLOBAL_HANDLE_PAID_POLICY_VERSION = "global_handle_paid_v3"
+export const GLOBAL_HANDLE_PAID_POLICY_VERSION = "global_handle_paid_v4"
 const MANUAL_SALE_THRESHOLD_CENTS = 25_000 * 100
 const PREMIUM_TERMS_BY_LABEL = new Map(GLOBAL_HANDLE_PREMIUM_TERMS.map((term) => [term.term, term]))
 const PRICE_BANDS_CENTS = [
