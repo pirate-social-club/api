@@ -128,6 +128,21 @@ async function expireStalePaidGlobalHandleQuotes(input: {
   userId?: string | null
   now: string
 }): Promise<void> {
+  if (input.userId) {
+    await input.executor.execute({
+      sql: `
+        UPDATE global_handle_paid_quotes
+        SET status = 'expired',
+            updated_at = ?1
+        WHERE status = 'quoted'
+          AND expires_at <= ?1
+          AND user_id = ?2
+      `,
+      args: [input.now, input.userId],
+    })
+    return
+  }
+
   await input.executor.execute({
     sql: `
       UPDATE global_handle_paid_quotes
@@ -135,9 +150,8 @@ async function expireStalePaidGlobalHandleQuotes(input: {
           updated_at = ?1
       WHERE status = 'quoted'
         AND expires_at <= ?1
-        AND (?2 IS NULL OR user_id = ?2)
     `,
-    args: [input.now, input.userId ?? null],
+    args: [input.now],
   })
 }
 
