@@ -1,5 +1,9 @@
+import { execFile } from "node:child_process"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
+import { promisify } from "node:util"
+
+const execFileAsync = promisify(execFile)
 
 type NameStats = {
   term: string
@@ -17,19 +21,22 @@ function readArg(name: string, fallback: string): string {
 }
 
 async function runText(command: string[]): Promise<string> {
-  const process = Bun.spawn(command, {
-    stdout: "pipe",
-    stderr: "pipe",
-  })
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(process.stdout).text(),
-    new Response(process.stderr).text(),
-    process.exited,
-  ])
-  if (exitCode !== 0) {
-    throw new Error(`${command.join(" ")} failed: ${stderr.trim()}`)
+  const [binary, ...args] = command
+  if (!binary) {
+    throw new Error("Command is required")
   }
-  return stdout
+  try {
+    const { stdout } = await execFileAsync(binary, args, {
+      encoding: "utf8",
+      maxBuffer: 32 * 1024 * 1024,
+    })
+    return stdout
+  } catch (error) {
+    const stderr = error instanceof Error && "stderr" in error && typeof error.stderr === "string"
+      ? error.stderr.trim()
+      : String(error)
+    throw new Error(`${command.join(" ")} failed: ${stderr}`)
+  }
 }
 
 function normalizeName(value: string): string | null {
