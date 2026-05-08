@@ -29,6 +29,56 @@ export type SessionExchangeRequest = {
   });
 };
 
+export type OAuthDeviceAuthorizeRequest = {
+  client_id: "freedom-desktop";
+  scope?: string;
+};
+
+export type OAuthDeviceAuthorizeResponse = {
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  verification_uri_complete: string;
+  expires_in: number;
+  interval: number;
+};
+
+export type OAuthDeviceVerifyRequest = {
+  user_code: string;
+};
+
+export type OAuthDeviceVerifyResponse = {
+  client_id: string;
+  scope: string;
+  status: "authorized";
+  user_code: string;
+};
+
+export type OAuthDeviceTokenRequest = ({
+  grant_type?: "urn:ietf:params:oauth:grant-type:device_code";
+  client_id: "freedom-desktop";
+  device_code: string;
+} | {
+  grant_type: "refresh_token";
+  client_id: "freedom-desktop";
+  refresh_token: string;
+});
+
+export type OAuthDeviceTokenResponse = {
+  access_token: string;
+  refresh_token: string;
+  token_type: "Bearer";
+  expires_in: number;
+  refresh_expires_in: number;
+  scope: string;
+};
+
+export type OAuthDeviceAuthorizationPendingResponse = {
+  error: "authorization_pending";
+  error_description: string;
+  interval: number;
+};
+
 export type VerificationCapabilities = {
   unique_human: VerificationCapabilityState;
   age_over_18: (VerifiedCapabilityState & {
@@ -816,54 +866,45 @@ export type CommunityHandle = {
   id: string;
   object: "community_handle";
   community: string;
-  namespace: string;
   user: string;
+  namespace: string;
   label: string;
   label_normalized: string;
   status: "active" | "grace_period" | "expired" | "revoked" | "reserved";
   issuance_source: "claim" | "auction" | "admin_grant";
-  quote?: string | null;
+  quote: string | null;
   price_cents: number;
   currency: "USD";
-  pricing_model?: "free" | "flat_by_length" | "custom_curve" | "gated_then_flat" | null;
-  pricing_tier?: string | null;
-  settlement_wallet_attachment?: string | null;
-  funding_tx_ref?: string | null;
-  settlement_tx_ref?: string | null;
-  lease_started_at?: number | null;
-  lease_expires_at?: number | null;
+  pricing_model: "free" | "flat_by_length" | "custom_curve" | "gated_then_flat" | null;
+  pricing_tier: string | null;
+  settlement_wallet_attachment: string | null;
+  funding_tx_ref: string | null;
+  settlement_tx_ref: string | null;
+  lease_started_at: number | null;
+  lease_expires_at: number | null;
   created: number;
 };
 
-export type CommunityHandleMeResponse = {
-  handle: CommunityHandle | null;
+export type CommunityHandleClaimRequest = {
+  quote: string;
+  settlement_wallet_attachment?: string | null;
+  funding_tx_ref?: string | null;
+  settlement_tx_ref?: string | null;
 };
 
 export type CommunityHandleListResponse = {
   handles: Array<CommunityHandle>;
 };
 
-export type CommunityHandleReserveRequest = {
-  desired_label: string;
+export type CommunityHandleMeResponse = {
+  handle: CommunityHandle | null;
 };
 
-export type CommunityHandleRevokeRequest = {
-  reason?: string | null;
-};
-
-export type CommunityHandlePricingModel = "free" | "flat_by_length" | "custom_curve" | "gated_then_flat";
-
-export type CommunityHandlePolicySettings = {
-  flat_price_cents?: number | null;
-  premium_price_cents?: number | null;
-  premium_max_length?: number | null;
-  min_length?: number | null;
-  max_length?: number | null;
-  quote_ttl_seconds?: number | null;
-  reserved_labels?: Array<string> | null;
-  special_price_cents_by_label?: Record<string, number> | null;
-  non_member_claims_enabled?: boolean | null;
-  non_member_price_multiplier?: number | null;
+export type CommunityHandleStatusResponse = {
+  available: boolean;
+  reason: string | null;
+  claims_enabled: boolean | null;
+  namespace: string | null;
 };
 
 export type CommunityHandlePolicy = {
@@ -872,27 +913,29 @@ export type CommunityHandlePolicy = {
   community: string;
   namespace: string;
   policy_template: "standard" | "premium" | "membership_gated" | "custom";
-  pricing_model?: CommunityHandlePricingModel | null;
-  membership_required_for_claim: boolean;
+  pricing_model: "free" | "flat_by_length" | "custom_curve" | "gated_then_flat" | null;
   claims_enabled: boolean;
   settings: CommunityHandlePolicySettings;
-  updated_at?: number | null;
+  updated_at: number | null;
 };
 
-export type UpdateCommunityHandlePolicyRequest = {
-  policy_template?: "standard" | "premium" | "membership_gated" | "custom";
-  pricing_model?: CommunityHandlePricingModel | null;
-  membership_required_for_claim?: boolean;
-  claims_enabled?: boolean;
-  settings?: CommunityHandlePolicySettings | null;
-};
-
-export type CommunityHandleQuoteRequest = {
-  desired_label: string;
+export type CommunityHandlePolicySettings = {
+  flat_price_cents?: number;
+  premium_price_cents?: number;
+  premium_max_length?: number;
+  min_length?: number;
+  max_length?: number;
+  quote_ttl_seconds?: number;
+  reserved_labels?: Array<string>;
+  special_price_cents_by_label?: Record<string, number>;
 };
 
 export type CommunityHandlePaymentInstructions = {
-  chain: CommunityMoneyChainRef;
+  chain: {
+    chain_namespace: string;
+    chain_id: number;
+    display_name: string;
+  };
   token_address: string;
   recipient_address: string;
   amount_atomic: string;
@@ -909,27 +952,34 @@ export type CommunityHandleQuote = {
   label_normalized: string;
   eligible: boolean;
   availability: "available" | "taken" | "reserved" | "already_claimed_by_viewer" | "viewer_has_claim" | "namespace_unavailable";
-  reason?: string | null;
+  reason: string | null;
   price_cents: number;
   currency: "USD";
-  pricing_model?: "free" | "flat_by_length" | "custom_curve" | "gated_then_flat" | null;
-  pricing_tier?: string | null;
-  payment_instructions?: CommunityHandlePaymentInstructions | null;
+  pricing_model: "free" | "flat_by_length" | "custom_curve" | "gated_then_flat" | null;
+  pricing_tier: string | null;
+  payment_instructions: CommunityHandlePaymentInstructions | null;
   quote_ttl_seconds: number;
   quoted_at: number;
   expires_at: number;
 };
 
-export type CommunityHandleClaimRequest = {
-  quote: string;
-  settlement_wallet_attachment?: string | null;
-  funding_tx_ref?: string | null;
-  settlement_tx_ref?: string | null;
+export type CommunityHandleQuoteRequest = {
+  desired_label: string;
 };
 
-export type CommunityHandleClaimConflictDetails = {
-  availability: CommunityHandleQuote["availability"];
-  reason: string;
+export type CommunityHandleReserveRequest = {
+  desired_label: string;
+};
+
+export type CommunityHandleRevokeRequest = {
+  reason?: string | null;
+};
+
+export type UpdateCommunityHandlePolicyRequest = {
+  policy_template?: "standard" | "premium" | "membership_gated" | "custom";
+  pricing_model?: "free" | "flat_by_length" | "custom_curve" | "gated_then_flat";
+  claims_enabled?: boolean;
+  settings?: CommunityHandlePolicySettings | null;
 };
 
 export type MembershipResult = {
@@ -1062,6 +1112,7 @@ export type CreateSongArtifactUploadRequest = {
 
 export type CreateSongArtifactBundleRequest = {
   primary_audio: SongArtifactUploadRef;
+  title: string;
   lyrics: string;
   cover_art?: SongArtifactUploadRef | null;
   preview_audio?: SongArtifactUploadRef | null;
@@ -1239,6 +1290,7 @@ export type SongArtifactBundle = {
   community: string;
   creator_user: string;
   status: "draft" | "validating" | "ready" | "consuming" | "consumed" | "failed";
+  title: string;
   primary_audio: SongAudioArtifactDescriptor;
   media_refs: Array<MediaDescriptor>;
   lyrics: string;
@@ -1264,6 +1316,11 @@ export type SongArtifactBundle = {
   moderation_result_ref?: string | null;
   moderation_result?: (Record<string, unknown>) | null;
   created: number;
+};
+
+export type SongArtifactBundleListResponse = {
+  items: Array<SongArtifactBundle>;
+  next_cursor: string | null;
 };
 
 export type SongPreviewGeneratePayload = {
@@ -1312,6 +1369,8 @@ export type Post = {
   access_mode?: "public" | "locked" | null;
   asset?: string | null;
   song_artifact_bundle?: string | null;
+  anchor_live_room?: string | null;
+  song_title?: string | null;
   parent_post?: string | null;
   song_mode?: "original" | "remix" | null;
   rights_basis?: "none" | "original" | "derivative" | "attribution_only" | null;
@@ -2002,7 +2061,7 @@ type CommunityMoneyAssetRef = {
   display_name?: string | null;
 };
 
-export type CommunityMoneyChainRef = {
+type CommunityMoneyChainRef = {
   chain_namespace: string;
   chain_id?: number | null;
   display_name?: string | null;
@@ -2498,7 +2557,6 @@ type GovernanceVerificationState = "not_required" | "pending" | "verified" | "br
 type HandlePolicyInput = {
   policy_template: "standard" | "premium" | "membership_gated" | "custom";
   pricing_model?: "free" | "flat_by_length" | "custom_curve" | "gated_then_flat" | null;
-  membership_required_for_claim?: boolean;
 };
 
 type HumanVerificationLane = "very" | "self";
@@ -2986,13 +3044,6 @@ export const apiRoutes = {
   communityPurchaseQuotes: (communityId: string) => `/communities/${communityId}/purchase-quotes`,
   communityPurchaseSettlements: (communityId: string) => `/communities/${communityId}/purchase-settlements`,
   communityPurchaseSettlementFailures: (communityId: string) => `/communities/${communityId}/fail-purchase-settlement`,
-  communityHandleMe: (communityId: string) => `/communities/${communityId}/handles/me`,
-  communityHandles: (communityId: string) => `/communities/${communityId}/handles`,
-  communityHandlePolicy: (communityId: string) => `/communities/${communityId}/handle-policy`,
-  communityHandleReserve: (communityId: string) => `/communities/${communityId}/handles/reserve`,
-  communityHandleRevoke: (communityId: string, handleId: string) => `/communities/${communityId}/handles/${handleId}/revoke`,
-  communityHandleQuote: (communityId: string) => `/communities/${communityId}/handles/quote`,
-  communityHandleClaim: (communityId: string) => `/communities/${communityId}/handles/claim`,
   communityFollow: (communityId: string) => `/communities/${communityId}/follow`,
   communityUnfollow: (communityId: string) => `/communities/${communityId}/unfollow`,
   communityPosts: (communityId: string) => `/communities/${communityId}/posts`,
