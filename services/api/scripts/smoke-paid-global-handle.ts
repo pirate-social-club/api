@@ -8,6 +8,7 @@ const ERC20_ABI = [
 type ChallengeDetails = {
   quote: string
   price_cents: number
+  expires_at?: number
   payment_instructions: {
     chain: {
       chain_namespace: string
