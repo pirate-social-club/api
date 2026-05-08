@@ -20,6 +20,21 @@ function makeJsonRequest(url: string, body: unknown, env: Env): Promise<Response
   ))
 }
 
+function makeAuthedJsonRequest(url: string, body: unknown, env: Env, accessToken: string): Promise<Response> {
+  return Promise.resolve(app.request(
+    url,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    },
+    env,
+  ))
+}
+
 function rawUserId(publicUserId: string): string {
   return publicUserId.replace(/^usr_/, "")
 }
@@ -266,6 +281,115 @@ describe("auth routes", () => {
     expect(onboardingBody.missing_requirements).toEqual(["unique_human_verification", "namespace_verification"])
   })
 
+  test("OAuth device flow authorizes Freedom and rotates refresh tokens", async () => {
+    const ctx = await createRouteTestContext({
+      OAUTH_DEVICE_CODE_TTL_SECONDS: "900",
+      OAUTH_DEVICE_POLL_INTERVAL_SECONDS: "5",
+      OAUTH_DEVICE_REFRESH_TOKEN_TTL_SECONDS: "86400",
+      PIRATE_WEB_PUBLIC_ORIGIN: "http://localhost:5173",
+    })
+
+    try {
+      const jwt = await mintUpstreamJwt(ctx.env, { sub: "freedom-device-user" })
+      const exchange = await makeJsonRequest("http://pirate.test/auth/session/exchange", {
+        proof: {
+          type: "jwt_based_auth",
+          jwt,
+        },
+      }, ctx.env)
+      expect(exchange.status).toBe(200)
+      const exchangeBody = await json(exchange) as { access_token: string; user: { id: string } }
+
+      const authorize = await makeJsonRequest("http://pirate.test/oauth/device_authorize", {
+        client_id: "freedom-desktop",
+        scope: "live_room:attach live_room:manage song_artifacts:read profile:read",
+      }, ctx.env)
+      expect(authorize.status).toBe(200)
+      const authorizeBody = await json(authorize) as {
+        device_code: string
+        user_code: string
+        verification_uri: string
+        verification_uri_complete: string
+        expires_in: number
+        interval: number
+      }
+      expect(authorizeBody.device_code).toMatch(/^pdev_/)
+      expect(authorizeBody.user_code).toMatch(/^PTR-[A-Z2-9]{4}-[A-Z2-9]{4}$/)
+      expect(authorizeBody.verification_uri).toBe("http://localhost:5173/authorize-device")
+      expect(authorizeBody.verification_uri_complete).toContain(encodeURIComponent(authorizeBody.user_code))
+      expect(authorizeBody.expires_in).toBe(900)
+      expect(authorizeBody.interval).toBe(5)
+
+      const pending = await makeJsonRequest("http://pirate.test/oauth/device/token", {
+        client_id: "freedom-desktop",
+        device_code: authorizeBody.device_code,
+      }, ctx.env)
+      expect(pending.status).toBe(400)
+      expect(await json(pending)).toMatchObject({
+        error: "authorization_pending",
+        interval: 5,
+      })
+
+      const verify = await makeAuthedJsonRequest("http://pirate.test/oauth/device/verify", {
+        user_code: authorizeBody.user_code,
+      }, ctx.env, exchangeBody.access_token)
+      expect(verify.status).toBe(200)
+      expect(await json(verify)).toMatchObject({
+        client_id: "freedom-desktop",
+        scope: "live_room:attach live_room:manage song_artifacts:read profile:read",
+        status: "authorized",
+        user_code: authorizeBody.user_code,
+      })
+
+      const token = await makeJsonRequest("http://pirate.test/oauth/device/token", {
+        client_id: "freedom-desktop",
+        device_code: authorizeBody.device_code,
+      }, ctx.env)
+      expect(token.status).toBe(200)
+      const tokenBody = await json(token) as {
+        access_token: string
+        refresh_token: string
+        expires_in: number
+        refresh_expires_in: number
+        scope: string
+      }
+      expect(tokenBody.access_token).toContain(".")
+      expect(tokenBody.refresh_token).toMatch(/^pdrf_/)
+      expect(tokenBody.expires_in).toBe(3600)
+      expect(tokenBody.refresh_expires_in).toBe(86400)
+      expect(tokenBody.scope).toBe("live_room:attach live_room:manage song_artifacts:read profile:read")
+
+      const me = await app.request("http://pirate.test/users/me", {
+        headers: {
+          authorization: `Bearer ${tokenBody.access_token}`,
+        },
+      }, ctx.env)
+      expect(me.status).toBe(200)
+      const meBody = await json(me) as { id: string }
+      expect(meBody.id).toBe(exchangeBody.user.id)
+
+      const refresh = await makeJsonRequest("http://pirate.test/oauth/device/token", {
+        grant_type: "refresh_token",
+        client_id: "freedom-desktop",
+        refresh_token: tokenBody.refresh_token,
+      }, ctx.env)
+      expect(refresh.status).toBe(200)
+      const refreshBody = await json(refresh) as { access_token: string; refresh_token: string }
+      expect(refreshBody.access_token).toContain(".")
+      expect(refreshBody.refresh_token).toMatch(/^pdrf_/)
+      expect(refreshBody.refresh_token).not.toBe(tokenBody.refresh_token)
+
+      const oldRefresh = await makeJsonRequest("http://pirate.test/oauth/device/token", {
+        grant_type: "refresh_token",
+        client_id: "freedom-desktop",
+        refresh_token: tokenBody.refresh_token,
+      }, ctx.env)
+      await expectAuthError(oldRefresh)
+    } finally {
+      await ctx.cleanup()
+    }
+  })
+
   test("malformed JWT returns auth_error", async () => {
     const env = buildTestEnv()
     const response = await makeJsonRequest("http://pirate.test/auth/session/exchange", {
@@ -362,6 +486,14 @@ describe("auth routes", () => {
         "0x2222222222222222222222222222222222222222",
       ],
       selectedWalletAddress: walletAddress ?? "0x1111111111111111111111111111111111111111",
+      wallets: [
+        {
+          chainNamespace: "bip122:000000000019d6689c085ae165831e93",
+          walletAddress: "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr",
+          walletAddressNormalized: "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr",
+          scriptPubkeyHex: "5120a60869f0dbcf1dc659c9cecbaf8050135ea9e8cdc487053f1dc6880949dc684c",
+        },
+      ],
     }))
 
     const response = await makeJsonRequest("http://pirate.test/auth/session/exchange", {
@@ -374,14 +506,17 @@ describe("auth routes", () => {
 
     expect(response.status).toBe(200)
     const body = await json(response) as {
-      wallet_attachments: Array<{ wallet_address: string; is_primary: boolean }>
+      wallet_attachments: Array<{ chain_namespace: string; wallet_address: string; is_primary: boolean }>
       user: { primary_wallet_attachment: string | null }
     }
 
-    expect(body.wallet_attachments).toHaveLength(2)
+    expect(body.wallet_attachments).toHaveLength(3)
     expect(body.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_address).toBe(
       "0x2222222222222222222222222222222222222222",
     )
+    expect(body.wallet_attachments.find((attachment) => (
+      attachment.chain_namespace === "bip122:000000000019d6689c085ae165831e93"
+    ))?.wallet_address).toBe("bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr")
     expect(typeof body.user.primary_wallet_attachment).toBe("string")
   })
 

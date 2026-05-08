@@ -1,4 +1,4 @@
-import { exposeMemoryWalletAttachments, getMemoryRecordByUserId } from "./memory-auth-store"
+import { exposeMemoryWalletAttachments, getMemoryRecordByUserId, getMemoryWalletAttachmentById } from "./memory-auth-store"
 import type { User, WalletAttachmentSummary } from "../../../types"
 
 export class MemoryUserRepository {
@@ -8,5 +8,9 @@ export class MemoryUserRepository {
 
   async getWalletAttachmentsByUserId(userId: string): Promise<WalletAttachmentSummary[]> {
     return exposeMemoryWalletAttachments(getMemoryRecordByUserId(userId)?.walletAttachments ?? [])
+  }
+
+  async getWalletAttachmentById(walletAttachmentId: string): Promise<(WalletAttachmentSummary & { user_id: string; status: string }) | null> {
+    return getMemoryWalletAttachmentById(walletAttachmentId)
   }
 }

@@ -6,6 +6,9 @@ import { createControlPlaneTestClient } from "./helpers"
 
 const WALLET_A = "0x1111111111111111111111111111111111111111"
 const WALLET_B = "0x2222222222222222222222222222222222222222"
+const BITCOIN_MAINNET_NAMESPACE = "bip122:000000000019d6689c085ae165831e93"
+const BITCOIN_TAPROOT_ADDRESS = "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr"
+const BITCOIN_TAPROOT_SCRIPT = "5120a60869f0dbcf1dc659c9cecbaf8050135ea9e8cdc487053f1dc6880949dc684c"
 
 let cleanup: (() => Promise<void>) | null = null
 
@@ -102,6 +105,80 @@ describe("control-plane identity repository", () => {
     expect(second.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_address).toBe(WALLET_B)
     expect(second.user.primary_wallet_attachment).toBe(second.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_attachment)
     expect(second.profile.primary_wallet_address).toBe(WALLET_B)
+  })
+
+  test("privy identities persist bitcoin wallets without taking primary from the selected evm wallet", async () => {
+    const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanup = setup.cleanup
+    const repo = new DatabaseIdentityRepository(setup.client)
+
+    const session = await repo.exchangeIdentity({
+      provider: "privy",
+      providerSubject: "did:privy:bitcoin-alice",
+      providerUserRef: "did:privy:bitcoin-alice",
+      walletAddresses: [WALLET_A],
+      selectedWalletAddress: WALLET_A,
+      wallets: [
+        {
+          chainNamespace: BITCOIN_MAINNET_NAMESPACE,
+          walletAddress: BITCOIN_TAPROOT_ADDRESS,
+          walletAddressNormalized: BITCOIN_TAPROOT_ADDRESS,
+          scriptPubkeyHex: BITCOIN_TAPROOT_SCRIPT,
+        },
+      ],
+    })
+
+    expect(session.wallet_attachments).toHaveLength(2)
+    expect(session.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_address).toBe(WALLET_A)
+    expect(session.profile.primary_wallet_address).toBe(WALLET_A)
+    const bitcoinAttachment = session.wallet_attachments.find((attachment) => (
+      attachment.chain_namespace === BITCOIN_MAINNET_NAMESPACE
+    ))
+    expect(bitcoinAttachment).toMatchObject({
+      chain_namespace: BITCOIN_MAINNET_NAMESPACE,
+      wallet_address: BITCOIN_TAPROOT_ADDRESS,
+      is_primary: false,
+    })
+  })
+
+  test("new provider subjects with an existing bitcoin wallet resolve to the wallet owner", async () => {
+    const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanup = setup.cleanup
+    const repo = new DatabaseIdentityRepository(setup.client)
+    const bitcoinWallet = {
+      chainNamespace: BITCOIN_MAINNET_NAMESPACE,
+      walletAddress: BITCOIN_TAPROOT_ADDRESS,
+      walletAddressNormalized: BITCOIN_TAPROOT_ADDRESS,
+      scriptPubkeyHex: BITCOIN_TAPROOT_SCRIPT,
+    }
+
+    const first = await repo.exchangeIdentity({
+      provider: "privy",
+      providerSubject: "did:privy:bitcoin-owner-a",
+      providerUserRef: "did:privy:bitcoin-owner-a",
+      walletAddresses: [],
+      selectedWalletAddress: null,
+      wallets: [bitcoinWallet],
+      selectedWallet: bitcoinWallet,
+    })
+
+    const second = await repo.exchangeIdentity({
+      provider: "privy",
+      providerSubject: "did:privy:bitcoin-owner-b",
+      providerUserRef: "did:privy:bitcoin-owner-b",
+      walletAddresses: [],
+      selectedWalletAddress: null,
+      wallets: [bitcoinWallet],
+      selectedWallet: bitcoinWallet,
+    })
+
+    expect(second.user.id).toBe(first.user.id)
+    expect(second.wallet_attachments).toHaveLength(1)
+    expect(second.wallet_attachments[0]).toMatchObject({
+      chain_namespace: BITCOIN_MAINNET_NAMESPACE,
+      wallet_address: BITCOIN_TAPROOT_ADDRESS,
+      is_primary: true,
+    })
   })
 
   test("new provider subjects with an existing wallet resolve to the wallet owner", async () => {

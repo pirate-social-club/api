@@ -22,6 +22,7 @@ import {
 } from "./auth-db-rows"
 import { deriveOnboardingStatus } from "./auth-db-onboarding-queries"
 import { firstRow } from "./auth-db-query-helpers"
+import { listIdentityWallets, resolveSelectedIdentityWallet } from "./upstream-wallets"
 import type { UpstreamIdentity } from "../../types"
 
 export {
@@ -117,6 +118,27 @@ export async function getActiveWalletAttachmentRowByAddress(
       LIMIT 1
     `,
     args: [walletAddressNormalized],
+  })
+
+  return row ? { ...toWalletAttachmentRow(row), user_id: String((row as Record<string, unknown>).user_id) } : null
+}
+
+export async function getActiveWalletAttachmentRowByWallet(
+  executor: DbExecutor,
+  chainNamespace: string,
+  walletAddressNormalized: string,
+): Promise<(WalletAttachmentRow & { user_id: string }) | null> {
+  const row = await firstRow(executor, {
+    sql: `
+      SELECT wallet_attachment_id, user_id, chain_namespace, wallet_address_normalized, wallet_address_display, is_primary
+      FROM wallet_attachments
+      WHERE chain_namespace = ?1
+        AND wallet_address_normalized = ?2
+        AND status = 'active'
+      ORDER BY is_primary DESC, attached_at ASC
+      LIMIT 1
+    `,
+    args: [chainNamespace, walletAddressNormalized],
   })
 
   return row ? { ...toWalletAttachmentRow(row), user_id: String((row as Record<string, unknown>).user_id) } : null
@@ -239,18 +261,23 @@ export async function reconcileWalletAttachments(
     updatedAt: string
   },
 ): Promise<void> {
-  if (
-    (input.identity.provider !== "privy" && input.identity.provider !== "jwt")
-    || input.identity.walletAddresses.length === 0
-  ) {
+  if (input.identity.provider !== "privy" && input.identity.provider !== "jwt") {
+    return
+  }
+
+  const identityWallets = listIdentityWallets(input.identity)
+  if (identityWallets.length === 0) {
     return
   }
 
   const knownRows = await listActiveWalletAttachmentRows(executor, input.userId)
-  const knownByAddress = new Map(knownRows.map((row) => [row.wallet_address_normalized, row]))
+  const knownByAddress = new Map(knownRows.map((row) => [
+    `${row.chain_namespace}:${row.wallet_address_normalized}`,
+    row,
+  ]))
 
-  for (const walletAddress of input.identity.walletAddresses) {
-    if (knownByAddress.has(walletAddress)) {
+  for (const wallet of identityWallets) {
+    if (knownByAddress.has(`${wallet.chainNamespace}:${wallet.walletAddressNormalized}`)) {
       continue
     }
 
@@ -271,13 +298,14 @@ export async function reconcileWalletAttachments(
           detached_at,
           created_at,
           updated_at
-        ) VALUES (?1, ?2, 'eip155:1', ?3, ?4, ?5, ?6, 'external', 0, 'active', ?7, NULL, ?7, ?7)
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'external', 0, 'active', ?8, NULL, ?8, ?8)
       `,
       args: [
         makeId("wal"),
         input.userId,
-        walletAddress,
-        walletAddress,
+        wallet.chainNamespace,
+        wallet.walletAddressNormalized,
+        wallet.walletAddress,
         input.identity.provider,
         input.identity.providerSubject,
         input.updatedAt,
@@ -286,10 +314,13 @@ export async function reconcileWalletAttachments(
   }
 
   const activeRows = await listActiveWalletAttachmentRows(executor, input.userId)
-  const selectedWalletAddress = input.identity.selectedWalletAddress ?? input.identity.walletAddresses[0] ?? null
+  const selectedWallet = resolveSelectedIdentityWallet(input.identity)
   const desiredPrimaryRow =
-    (selectedWalletAddress
-      ? activeRows.find((row) => row.wallet_address_normalized === selectedWalletAddress)
+    (selectedWallet
+      ? activeRows.find((row) => (
+        row.chain_namespace === selectedWallet.chainNamespace
+          && row.wallet_address_normalized === selectedWallet.walletAddressNormalized
+      ))
       : null)
     ?? activeRows.find((row) => row.is_primary === 1)
     ?? activeRows[0]

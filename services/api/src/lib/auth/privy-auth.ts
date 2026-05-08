@@ -2,11 +2,14 @@ import { PrivyClient, verifyAccessToken, type LinkedAccount } from "@privy-io/no
 import { createRemoteJWKSet, importSPKI, type JWTVerifyGetKey } from "jose"
 import { authError } from "../errors"
 import { dedupeStrings, normalizeAddress } from "../helpers"
+import { parseBitcoinAddress } from "../bitcoin/bitcoin-address"
 import type { Env } from "../../env"
-import type { UpstreamIdentity } from "../../types"
+import type { UpstreamIdentity, UpstreamWalletIdentity } from "../../types"
 
 const DEFAULT_PRIVY_AUTH_API_URL = "https://auth.privy.io"
 const ETHEREUM_CHAIN_TYPE = "ethereum"
+const BITCOIN_SEGWIT_CHAIN_TYPE = "bitcoin-segwit"
+const BITCOIN_TAPROOT_CHAIN_TYPE = "bitcoin-taproot"
 const LINKED_WALLET_TYPE = "wallet"
 
 let cachedJwks:
@@ -26,6 +29,46 @@ function collectEthereumWallets(linkedAccounts: LinkedAccount[]): string[] {
     const normalized = normalizeAddress(account.address)
     return normalized ? [normalized] : []
   }))
+}
+
+function collectWalletIdentities(linkedAccounts: LinkedAccount[]): UpstreamWalletIdentity[] {
+  const wallets = new Map<string, UpstreamWalletIdentity>()
+  for (const account of linkedAccounts) {
+    if (account.type !== LINKED_WALLET_TYPE || !("chain_type" in account)) {
+      continue
+    }
+
+    if (account.chain_type === ETHEREUM_CHAIN_TYPE) {
+      const normalized = normalizeAddress(account.address)
+      if (!normalized) {
+        continue
+      }
+      const wallet = {
+        chainNamespace: "eip155:1",
+        walletAddress: normalized,
+        walletAddressNormalized: normalized,
+        scriptPubkeyHex: null,
+      }
+      wallets.set(`${wallet.chainNamespace}:${wallet.walletAddressNormalized}`, wallet)
+      continue
+    }
+
+    if (account.chain_type === BITCOIN_SEGWIT_CHAIN_TYPE || account.chain_type === BITCOIN_TAPROOT_CHAIN_TYPE) {
+      const parsed = parseBitcoinAddress(account.address)
+      if (!parsed) {
+        continue
+      }
+      const wallet = {
+        chainNamespace: parsed.chainNamespace,
+        walletAddress: parsed.address,
+        walletAddressNormalized: parsed.addressNormalized,
+        scriptPubkeyHex: parsed.scriptPubkeyHex,
+      }
+      wallets.set(`${wallet.chainNamespace}:${wallet.walletAddressNormalized}`, wallet)
+    }
+  }
+
+  return [...wallets.values()]
 }
 
 async function getPrivyVerificationKey(env: Env): Promise<JWTVerifyGetKey | CryptoKey> {
@@ -100,6 +143,7 @@ export async function verifyPrivyAccessProof(params: {
     throw authError("Authentication failed")
   })
   const walletAddresses = collectEthereumWallets(user.linked_accounts)
+  const wallets = collectWalletIdentities(user.linked_accounts)
   const requestedWallet = normalizeAddress(params.walletAddress)
   if (requestedWallet && !walletAddresses.includes(requestedWallet)) {
     throw authError("Privy proof does not include the requested wallet")
@@ -111,6 +155,10 @@ export async function verifyPrivyAccessProof(params: {
     providerUserRef: user.id,
     walletAddresses,
     selectedWalletAddress: requestedWallet ?? walletAddresses[0] ?? null,
+    wallets,
+    selectedWallet: requestedWallet
+      ? wallets.find((wallet) => wallet.chainNamespace === "eip155:1" && wallet.walletAddressNormalized === requestedWallet) ?? null
+      : wallets.find((wallet) => wallet.chainNamespace === "eip155:1") ?? wallets[0] ?? null,
   }
 }
 

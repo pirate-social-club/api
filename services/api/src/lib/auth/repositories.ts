@@ -42,6 +42,11 @@ export type PublicProfileResolution = {
   }>
 }
 
+export type WalletAttachmentRecord = WalletAttachmentSummary & {
+  user_id: string
+  status: string
+}
+
 export interface SessionRepository {
   exchangeIdentity(identity: UpstreamIdentity): Promise<SessionSnapshot>
   close?(): void | Promise<void>
@@ -50,6 +55,7 @@ export interface SessionRepository {
 export interface UserRepository {
   getUserById(userId: string): Promise<User | null>
   getWalletAttachmentsByUserId(userId: string): Promise<WalletAttachmentSummary[]>
+  getWalletAttachmentById(walletAttachmentId: string): Promise<WalletAttachmentRecord | null>
   close?(): void | Promise<void>
 }
 
