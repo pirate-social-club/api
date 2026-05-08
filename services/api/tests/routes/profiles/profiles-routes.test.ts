@@ -385,7 +385,7 @@ describe("profile routes", () => {
     expect(quote.quote).toMatch(/^ghq_/)
     expect(quote.desired_label).toBe("captain.pirate")
     expect(quote.price_cents).toBe(2_500)
-    expect(quote.policy_version).toBe("global_handle_paid_v5")
+    expect(quote.policy_version).toBe("global_handle_paid_v1")
     expect(quote.pricing_tier).toBe("common_word")
     expect(quote.payment_instructions).toEqual({
       chain: {
@@ -605,7 +605,7 @@ describe("profile routes", () => {
     expect(body.details.desired_label).toBe("captain.pirate")
     expect(body.details.price_cents).toBe(2_500)
     expect(body.details.payment_protocol).toBe("x402")
-    expect(body.details.policy_version).toBe("global_handle_paid_v5")
+    expect(body.details.policy_version).toBe("global_handle_paid_v1")
     expect(body.details.quote_ttl_seconds).toBe(900)
     expect(body.details.expires_at).toBeGreaterThan(Math.floor(Date.now() / 1000))
     expect(body.details.payment_instructions).toMatchObject({

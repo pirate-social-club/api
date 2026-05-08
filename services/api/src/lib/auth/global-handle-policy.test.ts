@@ -8,7 +8,7 @@ import {
 } from "./global-handle-policy"
 
 describe("global handle paid policy", () => {
-  test("uses the accessible v5 base curve", () => {
+  test("uses the accessible launch base curve", () => {
     expect(resolveGlobalHandlePaidPrice({ labelNormalized: "longname" }).priceCents).toBe(500)
     expect(resolveGlobalHandlePaidPrice({ labelNormalized: "sevennn" }).priceCents).toBe(1_000)
     expect(resolveGlobalHandlePaidPrice({ labelNormalized: "sixsix" }).priceCents).toBe(2_500)

@@ -29,7 +29,7 @@ If the name requires payment, the API returns `402 payment_required`.
     "price_cents": 2500,
     "currency": "USD",
     "payment_protocol": "x402",
-    "policy_version": "global_handle_paid_v5",
+    "policy_version": "global_handle_paid_v1",
     "pricing_tier": "common_word",
     "quote_ttl_seconds": 900,
     "expires_at": 1770000000,
