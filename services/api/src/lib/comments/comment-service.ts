@@ -271,6 +271,7 @@ export async function createComment(input: {
         async renameGlobalHandle() { return null },
         async claimRedditGlobalHandle() { return null },
         async quoteGlobalHandleUpgrade() { return null },
+        async claimPaidGlobalHandle() { return null },
         async syncLinkedHandles() { return null },
         async setPrimaryPublicHandle() { return null },
       },

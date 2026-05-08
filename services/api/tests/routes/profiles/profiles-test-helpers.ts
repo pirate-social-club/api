@@ -50,3 +50,35 @@ export async function exchangeJwt(env: Env, sub: string): Promise<{ accessToken:
     publicUserId,
   }
 }
+
+export async function exchangeJwtWithWallet(env: Env, sub: string, walletAddress = "0x1000000000000000000000000000000000000001"): Promise<{
+  accessToken: string
+  userId: string
+  publicUserId: string
+  primaryWalletAttachment: string
+}> {
+  const jwt = await mintUpstreamJwt(env, {
+    sub,
+    wallet_address: walletAddress,
+  })
+  const response = await requestJson("http://pirate.test/auth/session/exchange", "POST", {
+    proof: {
+      type: "jwt_based_auth",
+      jwt,
+    },
+  }, env)
+  const body = await json(response) as {
+    access_token: string
+    user: {
+      id: string
+      primary_wallet_attachment: string
+    }
+  }
+  const publicUserId = body.user.id
+  return {
+    accessToken: body.access_token,
+    userId: publicUserId.replace(/^usr_/, ""),
+    publicUserId,
+    primaryWalletAttachment: body.user.primary_wallet_attachment,
+  }
+}

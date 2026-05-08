@@ -4,6 +4,7 @@ import { envFlag, isLocalEnvironment } from "../helpers"
 import { getControlPlaneClient, isPostgresControlPlaneUrl } from "../runtime-deps"
 import type {
   Env,
+  GlobalHandlePaidClaimRequest,
   GlobalHandle,
   HandleUpgradeQuote,
   Job,
@@ -67,6 +68,7 @@ export interface ProfileRepository {
   renameGlobalHandle(userId: string, desiredLabel: string): Promise<GlobalHandle | null>
   claimRedditGlobalHandle(userId: string, desiredLabel: string): Promise<GlobalHandle | null>
   quoteGlobalHandleUpgrade(userId: string, desiredLabel: string): Promise<HandleUpgradeQuote | null>
+  claimPaidGlobalHandle(userId: string, body: GlobalHandlePaidClaimRequest): Promise<GlobalHandle | null>
   syncLinkedHandles(userId: string): Promise<Profile | null>
   setPrimaryPublicHandle(userId: string, linkedHandleId: string | null): Promise<Profile | null>
   close?(): void | Promise<void>

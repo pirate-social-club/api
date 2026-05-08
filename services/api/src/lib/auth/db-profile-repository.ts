@@ -1,10 +1,10 @@
-import type { Client } from "../sql-client"
+import type { Client, QueryResultRow, Transaction } from "../sql-client"
 import { safeRollback } from "../transactions"
-import { conflictError, notFoundError } from "../errors"
+import { badRequestError, conflictError, eligibilityFailed, internalError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import { getAddress } from "ethers"
 import type { Env } from "../../env"
-import type { GlobalHandle, HandleUpgradeQuote, Profile } from "../../types"
+import type { GlobalHandle, GlobalHandlePaidClaimRequest, HandleUpgradeQuote, Profile } from "../../types"
 import type { GlobalHandleRow } from "./auth-db-rows"
 import { DatabaseIdentityRepository } from "./db-identity-repository"
 import {
@@ -27,9 +27,11 @@ import {
 import { assembleProfile, getPrimaryWalletAddressFromRows, getProfilePublicHandleLabel, parseRedditImportSummary, serializeGlobalHandle, serializeUser } from "./auth-serializers"
 import {
   assertFreeCleanupRenameEligible,
+  GLOBAL_HANDLE_PAID_POLICY_VERSION,
   buildHandleUpgradeQuote,
   isCleanupRenameAvailable,
   normalizeDesiredGlobalHandleLabel,
+  resolveGlobalHandlePaidPrice,
 } from "./global-handle-policy"
 import { assertRedditHandleClaimEligible, buildRedditHandleClaimQuote } from "./reddit-handle-claim-policy"
 import { makeId } from "../helpers"
@@ -38,6 +40,14 @@ import type { PublicProfileResolution } from "./repositories"
 import { unixSeconds } from "../../serializers/time"
 import { publicCommunityId } from "../public-ids"
 import { parseOptionalJsonField } from "../json"
+import { rowValue } from "../sql-row"
+import {
+  resolvePirateCheckoutOperatorAddress,
+  resolvePirateCheckoutSourceChainId,
+  resolvePirateCheckoutSourceChainName,
+  resolvePirateCheckoutUsdcTokenAddress,
+} from "../communities/commerce/checkout-config"
+import { verifyPirateCheckoutUsdcFunding } from "../communities/commerce/funding-proof-service"
 
 export type UpdateProfileInput = {
   display_name?: string | null
@@ -50,6 +60,85 @@ export type UpdateProfileInput = {
   preferred_locale?: string | null
   display_verified_nationality_badge?: boolean | null
   xmtp_inbox_id?: string | null
+}
+
+const GLOBAL_HANDLE_PAID_QUOTE_TTL_SECONDS = 15 * 60
+
+function withPrefix(prefix: string, value: string): string {
+  return value.startsWith(`${prefix}_`) ? value : `${prefix}_${value}`
+}
+
+function normalizeSubmittedPrefixedId(prefix: string, value: string): string {
+  const trimmed = value.trim()
+  if (trimmed.startsWith(`${prefix}_${prefix}_`)) {
+    return trimmed.slice(prefix.length + 1)
+  }
+  return trimmed.startsWith(`${prefix}_`) ? trimmed.slice(prefix.length + 1) : trimmed
+}
+
+function addSeconds(iso: string, seconds: number): string {
+  return new Date(Date.parse(iso) + seconds * 1000).toISOString()
+}
+
+function buildGlobalHandlePaymentInstructions(env: Env, priceCents: number): NonNullable<HandleUpgradeQuote["payment_instructions"]> {
+  const chainId = resolvePirateCheckoutSourceChainId(env)
+  return {
+    chain: {
+      chain_namespace: "eip155",
+      chain_id: chainId,
+      display_name: resolvePirateCheckoutSourceChainName(chainId),
+    },
+    token_address: resolvePirateCheckoutUsdcTokenAddress(env),
+    recipient_address: resolvePirateCheckoutOperatorAddress(env),
+    amount_atomic: String(BigInt(priceCents) * 10_000n),
+    amount_display: (priceCents / 100).toFixed(2),
+  }
+}
+
+function serializePaidGlobalHandleQuote(env: Env, row: QueryResultRow): HandleUpgradeQuote {
+  const priceCents = Number(rowValue(row, "price_cents"))
+  return {
+    quote: withPrefix("ghq", String(rowValue(row, "global_handle_paid_quote_id"))),
+    desired_label: String(rowValue(row, "label_display")),
+    tier: String(rowValue(row, "tier")) as HandleUpgradeQuote["tier"],
+    price_cents: priceCents,
+    currency: "USD",
+    eligible: true,
+    reason: null,
+    policy_version: String(rowValue(row, "policy_version")),
+    pricing_tier: String(rowValue(row, "pricing_tier")),
+    quote_ttl_seconds: Number(rowValue(row, "quote_ttl_seconds")),
+    quoted_at: unixSeconds(String(rowValue(row, "quoted_at"))),
+    expires_at: unixSeconds(String(rowValue(row, "expires_at"))),
+    payment_instructions: priceCents > 0 ? buildGlobalHandlePaymentInstructions(env, priceCents) : null,
+  }
+}
+
+function paidGlobalHandleQuoteStillMatchesPolicy(row: QueryResultRow): boolean {
+  const labelNormalized = String(rowValue(row, "label_normalized"))
+  const currentPrice = resolveGlobalHandlePaidPrice({ labelNormalized })
+  return currentPrice.eligible
+    && currentPrice.priceCents === Number(rowValue(row, "price_cents"))
+    && currentPrice.policyVersion === String(rowValue(row, "policy_version"))
+    && currentPrice.pricingTier === String(rowValue(row, "pricing_tier"))
+}
+
+async function expireStalePaidGlobalHandleQuotes(input: {
+  executor: Client | Transaction
+  userId?: string | null
+  now: string
+}): Promise<void> {
+  await input.executor.execute({
+    sql: `
+      UPDATE global_handle_paid_quotes
+      SET status = 'expired',
+          updated_at = ?1
+      WHERE status = 'quoted'
+        AND expires_at <= ?1
+        AND (?2 IS NULL OR user_id = ?2)
+    `,
+    args: [input.now, input.userId ?? null],
+  })
 }
 
 function normalizeWalletAddress(value: string): string | null {
@@ -273,76 +362,12 @@ export class DatabaseProfileRepository {
     desired: ReturnType<typeof normalizeDesiredGlobalHandleLabel>
     tier: GlobalHandle["tier"]
     issuanceSource: GlobalHandle["issuance_source"]
+    pricePaidCents?: number | null
+    paidQuoteId?: string | null
   }): Promise<void> {
     const tx = await this.client.transaction("write")
     try {
-      const updatedAt = nowIso()
-      const nextGlobalHandleId = makeId("ghd")
-
-      await tx.execute({
-        sql: `
-          UPDATE global_handles
-          SET status = 'redirect',
-              redirect_target_global_handle_id = NULL,
-              replaced_at = ?2,
-              updated_at = ?2
-          WHERE global_handle_id = ?1
-        `,
-        args: [input.activeGlobalHandle.global_handle_id, updatedAt],
-      })
-
-      await tx.execute({
-        sql: `
-          INSERT INTO global_handles (
-            global_handle_id,
-            user_id,
-            label_normalized,
-            label_display,
-            status,
-            tier,
-            issuance_source,
-            redirect_target_global_handle_id,
-            price_paid_usd,
-            free_rename_consumed,
-            issued_at,
-            replaced_at,
-            created_at,
-            updated_at
-          ) VALUES (
-            ?1, ?2, ?3, ?4, 'active', ?5, ?6, NULL, NULL, 1, ?7, NULL, ?7, ?7
-          )
-        `,
-        args: [
-          nextGlobalHandleId,
-          input.userId,
-          input.desired.labelNormalized,
-          input.desired.labelDisplay,
-          input.tier,
-          input.issuanceSource,
-          updatedAt,
-        ],
-      })
-
-      await tx.execute({
-        sql: `
-          UPDATE global_handles
-          SET redirect_target_global_handle_id = ?2,
-              updated_at = ?3
-          WHERE global_handle_id = ?1
-        `,
-        args: [input.activeGlobalHandle.global_handle_id, nextGlobalHandleId, updatedAt],
-      })
-
-      await tx.execute({
-        sql: `
-          UPDATE profiles
-          SET global_handle_id = ?2,
-              updated_at = ?3
-          WHERE user_id = ?1
-        `,
-        args: [input.userId, nextGlobalHandleId, updatedAt],
-      })
-
+      await this.writeGlobalHandleTransition(tx, input)
       await tx.commit()
     } catch (error) {
       await safeRollback(tx, "[profiles] rollback failed while renaming global handle")
@@ -350,6 +375,89 @@ export class DatabaseProfileRepository {
     } finally {
       tx.close()
     }
+  }
+
+  private async writeGlobalHandleTransition(
+    executor: Client | Transaction,
+    input: {
+      userId: string
+      activeGlobalHandle: GlobalHandleRow
+      desired: ReturnType<typeof normalizeDesiredGlobalHandleLabel>
+      tier: GlobalHandle["tier"]
+      issuanceSource: GlobalHandle["issuance_source"]
+      pricePaidCents?: number | null
+      paidQuoteId?: string | null
+    },
+  ): Promise<void> {
+    const updatedAt = nowIso()
+    const nextGlobalHandleId = makeId("ghd")
+
+    await executor.execute({
+      sql: `
+        UPDATE global_handles
+        SET status = 'redirect',
+            redirect_target_global_handle_id = NULL,
+            replaced_at = ?2,
+            updated_at = ?2
+        WHERE global_handle_id = ?1
+      `,
+      args: [input.activeGlobalHandle.global_handle_id, updatedAt],
+    })
+
+    await executor.execute({
+      sql: `
+        INSERT INTO global_handles (
+          global_handle_id,
+          user_id,
+          label_normalized,
+          label_display,
+          status,
+          tier,
+          issuance_source,
+          redirect_target_global_handle_id,
+          price_paid_usd,
+          global_handle_paid_quote_id,
+          free_rename_consumed,
+          issued_at,
+          replaced_at,
+          created_at,
+          updated_at
+        ) VALUES (
+          ?1, ?2, ?3, ?4, 'active', ?5, ?6, NULL, ?7, ?8, 1, ?9, NULL, ?9, ?9
+        )
+      `,
+      args: [
+        nextGlobalHandleId,
+        input.userId,
+        input.desired.labelNormalized,
+        input.desired.labelDisplay,
+        input.tier,
+        input.issuanceSource,
+        input.pricePaidCents == null ? null : input.pricePaidCents / 100,
+        input.paidQuoteId ?? null,
+        updatedAt,
+      ],
+    })
+
+    await executor.execute({
+      sql: `
+        UPDATE global_handles
+        SET redirect_target_global_handle_id = ?2,
+            updated_at = ?3
+        WHERE global_handle_id = ?1
+      `,
+      args: [input.activeGlobalHandle.global_handle_id, nextGlobalHandleId, updatedAt],
+    })
+
+    await executor.execute({
+      sql: `
+        UPDATE profiles
+        SET global_handle_id = ?2,
+            updated_at = ?3
+        WHERE user_id = ?1
+      `,
+      args: [input.userId, nextGlobalHandleId, updatedAt],
+    })
   }
 
   async renameGlobalHandle(userId: string, desiredLabel: string): Promise<GlobalHandle | null> {
@@ -462,6 +570,92 @@ export class DatabaseProfileRepository {
     return nextGlobalHandleRow ? serializeGlobalHandle(nextGlobalHandleRow) : null
   }
 
+  private async attachPaidQuote(input: {
+    userId: string
+    quote: HandleUpgradeQuote
+    desired: ReturnType<typeof normalizeDesiredGlobalHandleLabel>
+    activeGlobalHandleId: string
+  }): Promise<HandleUpgradeQuote> {
+    if (!input.quote.eligible || input.quote.price_cents <= 0 || input.quote.benefit_source === "verified_reddit_username") {
+      return input.quote
+    }
+
+    const quotedAt = nowIso()
+    await expireStalePaidGlobalHandleQuotes({
+      executor: this.client,
+      userId: input.userId,
+      now: quotedAt,
+    })
+
+    const existing = (await this.client.execute({
+      sql: `
+        SELECT *
+        FROM global_handle_paid_quotes
+        WHERE user_id = ?1
+          AND label_normalized = ?2
+          AND status = 'quoted'
+          AND expires_at > ?3
+          AND price_cents = ?4
+          AND policy_version = ?5
+          AND pricing_tier = ?6
+        ORDER BY created_at DESC
+        LIMIT 1
+      `,
+      args: [
+        input.userId,
+        input.desired.labelNormalized,
+        quotedAt,
+        input.quote.price_cents,
+        input.quote.policy_version ?? GLOBAL_HANDLE_PAID_POLICY_VERSION,
+        input.quote.pricing_tier ?? "base",
+      ],
+    })).rows[0]
+    if (existing) {
+      return serializePaidGlobalHandleQuote(this.env, existing)
+    }
+
+    const quoteId = makeId("ghq").replace(/^ghq_/, "")
+    const expiresAt = addSeconds(quotedAt, GLOBAL_HANDLE_PAID_QUOTE_TTL_SECONDS)
+    await this.client.execute({
+      sql: `
+        INSERT INTO global_handle_paid_quotes (
+          global_handle_paid_quote_id, user_id, current_global_handle_id, label_normalized, label_display, status, tier,
+          price_cents, currency, policy_version, pricing_tier, quote_ttl_seconds,
+          settlement_wallet_attachment_id, funding_tx_ref, settlement_tx_ref,
+          quoted_at, expires_at, claimed_at, created_at, updated_at
+        ) VALUES (
+          ?1, ?2, ?3, ?4, ?5, 'quoted', ?6,
+          ?7, 'USD', ?8, ?9, ?10,
+          NULL, NULL, NULL,
+          ?11, ?12, NULL, ?11, ?11
+        )
+      `,
+      args: [
+        quoteId,
+        input.userId,
+        input.activeGlobalHandleId,
+        input.desired.labelNormalized,
+        input.desired.labelDisplay,
+        input.quote.tier,
+        input.quote.price_cents,
+        input.quote.policy_version ?? GLOBAL_HANDLE_PAID_POLICY_VERSION,
+        input.quote.pricing_tier ?? "base",
+        GLOBAL_HANDLE_PAID_QUOTE_TTL_SECONDS,
+        quotedAt,
+        expiresAt,
+      ],
+    })
+
+    const created = (await this.client.execute({
+      sql: `SELECT * FROM global_handle_paid_quotes WHERE global_handle_paid_quote_id = ?1 LIMIT 1`,
+      args: [quoteId],
+    })).rows[0]
+    if (!created) {
+      throw internalError("Created global handle quote row is missing")
+    }
+    return serializePaidGlobalHandleQuote(this.env, created)
+  }
+
   async quoteGlobalHandleUpgrade(userId: string, desiredLabel: string): Promise<HandleUpgradeQuote | null> {
     const userRow = await getUserRow(this.client, userId)
     const profileRow = await getProfileRow(this.client, userId)
@@ -498,7 +692,7 @@ export class DatabaseProfileRepository {
       return redditQuote
     }
 
-    return buildHandleUpgradeQuote({
+    const paidQuote = buildHandleUpgradeQuote({
       desiredLabel: desired.labelDisplay,
       labelNormalized: desired.labelNormalized,
       currentActiveLabelNormalized: activeGlobalHandleRow.label_normalized,
@@ -508,10 +702,213 @@ export class DatabaseProfileRepository {
       }),
       labelAvailable,
     })
+    return await this.attachPaidQuote({
+      userId,
+      quote: paidQuote,
+      desired,
+      activeGlobalHandleId: activeGlobalHandleRow.global_handle_id,
+    })
   }
 
-  private async getActiveGlobalHandleOwnerUserId(labelNormalized: string): Promise<string | null> {
-    const activeRow = await this.client.execute({
+  async claimPaidGlobalHandle(userId: string, body: GlobalHandlePaidClaimRequest): Promise<GlobalHandle | null> {
+    if (typeof body.quote !== "string" || !body.quote.trim()) {
+      throw badRequestError("quote is required")
+    }
+    const submittedQuoteId = normalizeSubmittedPrefixedId("ghq", body.quote)
+    const quoteId = submittedQuoteId.startsWith("ghq_") ? submittedQuoteId.slice("ghq_".length) : submittedQuoteId
+    const quotedAt = nowIso()
+    await expireStalePaidGlobalHandleQuotes({ executor: this.client, userId, now: quotedAt })
+
+    const quote = (await this.client.execute({
+      sql: `
+        SELECT *
+        FROM global_handle_paid_quotes
+        WHERE global_handle_paid_quote_id = ?1
+          AND user_id = ?2
+        LIMIT 1
+      `,
+      args: [quoteId, userId],
+    })).rows[0]
+    if (!quote) {
+      throw notFoundError("Global handle quote not found")
+    }
+    const existingForQuote = (await this.client.execute({
+      sql: `
+        SELECT global_handle_id, user_id, label_normalized, label_display, status, tier, issuance_source,
+               redirect_target_global_handle_id, price_paid_usd, free_rename_consumed, issued_at,
+               replaced_at, created_at, updated_at
+        FROM global_handles
+        WHERE global_handle_paid_quote_id = ?1
+          AND user_id = ?2
+        LIMIT 1
+      `,
+      args: [quoteId, userId],
+    })).rows[0]
+    if (existingForQuote) {
+      return serializeGlobalHandle(existingForQuote as unknown as GlobalHandleRow)
+    }
+    if (String(rowValue(quote, "status")) !== "quoted") {
+      throw eligibilityFailed("Global handle quote is no longer claimable")
+    }
+    if (Date.parse(String(rowValue(quote, "expires_at"))) <= Date.parse(quotedAt)) {
+      throw eligibilityFailed("Global handle quote has expired")
+    }
+
+    const settlementWalletAttachment = body.settlement_wallet_attachment?.trim()
+    if (!settlementWalletAttachment) {
+      throw badRequestError("settlement_wallet_attachment is required for paid handle claims")
+    }
+    const wallet = (await this.client.execute({
+      sql: `
+        SELECT wallet_attachment_id, wallet_address_display
+        FROM wallet_attachments
+        WHERE wallet_attachment_id = ?1
+          AND user_id = ?2
+          AND status = 'active'
+        LIMIT 1
+      `,
+      args: [settlementWalletAttachment, userId],
+    })).rows[0]
+    if (!wallet) {
+      throw eligibilityFailed("settlement_wallet_attachment is not available for this user")
+    }
+    if (!body.funding_tx_ref?.trim()) {
+      throw badRequestError("funding_tx_ref is required for paid handle claims")
+    }
+    const priceCents = Number(rowValue(quote, "price_cents"))
+    await verifyPirateCheckoutUsdcFunding({
+      env: this.env,
+      quoteId,
+      amountUsd: priceCents / 100,
+      buyerAddress: String(rowValue(wallet, "wallet_address_display")),
+      fundingTxRef: body.funding_tx_ref,
+    })
+
+    const tx = await this.client.transaction("write")
+    let deferredEligibilityError: Error | null = null
+    try {
+      const latestQuote = (await tx.execute({
+        sql: `
+          SELECT *
+          FROM global_handle_paid_quotes
+          WHERE global_handle_paid_quote_id = ?1
+            AND user_id = ?2
+          LIMIT 1
+        `,
+        args: [quoteId, userId],
+      })).rows[0]
+      if (!latestQuote || String(rowValue(latestQuote, "status")) !== "quoted") {
+        const existing = (await tx.execute({
+          sql: `
+            SELECT global_handle_id, user_id, label_normalized, label_display, status, tier, issuance_source,
+                   redirect_target_global_handle_id, price_paid_usd, free_rename_consumed, issued_at,
+                   replaced_at, created_at, updated_at
+            FROM global_handles
+            WHERE global_handle_paid_quote_id = ?1
+              AND user_id = ?2
+            LIMIT 1
+          `,
+          args: [quoteId, userId],
+        })).rows[0]
+        if (existing) {
+          await tx.commit()
+          return serializeGlobalHandle(existing as unknown as GlobalHandleRow)
+        }
+        throw eligibilityFailed("Global handle quote is no longer claimable")
+      }
+      if (Date.parse(String(rowValue(latestQuote, "expires_at"))) <= Date.parse(nowIso())) {
+        await tx.execute({
+          sql: `
+            UPDATE global_handle_paid_quotes
+            SET status = 'expired',
+                updated_at = ?2
+            WHERE global_handle_paid_quote_id = ?1
+          `,
+          args: [quoteId, nowIso()],
+        })
+        deferredEligibilityError = eligibilityFailed("Global handle quote has expired")
+      } else if (!paidGlobalHandleQuoteStillMatchesPolicy(latestQuote)) {
+        await tx.execute({
+          sql: `
+            UPDATE global_handle_paid_quotes
+            SET status = 'failed',
+                updated_at = ?2
+            WHERE global_handle_paid_quote_id = ?1
+          `,
+          args: [quoteId, nowIso()],
+        })
+        deferredEligibilityError = eligibilityFailed("Global handle quote is no longer claimable under the current pricing policy")
+      } else {
+        const profileRow = await getProfileRow(tx, userId)
+        if (!profileRow) {
+          throw notFoundError("Profile not found")
+        }
+        const activeGlobalHandleRow = await getGlobalHandleRow(tx, profileRow.global_handle_id)
+        if (!activeGlobalHandleRow) {
+          throw notFoundError("Global handle not found")
+        }
+        const labelNormalized = String(rowValue(latestQuote, "label_normalized"))
+        const desired = {
+          labelNormalized,
+          labelDisplay: String(rowValue(latestQuote, "label_display")),
+        }
+        const activeLabelOwnerUserId = await this.getActiveGlobalHandleOwnerUserId(labelNormalized, tx)
+        if (activeLabelOwnerUserId != null && activeLabelOwnerUserId !== userId) {
+          throw conflictError("Desired label is unavailable")
+        }
+        await this.writeGlobalHandleTransition(tx, {
+          userId,
+          activeGlobalHandle: activeGlobalHandleRow,
+          desired,
+          tier: String(rowValue(latestQuote, "tier")) as GlobalHandle["tier"],
+          issuanceSource: "paid_upgrade",
+          pricePaidCents: priceCents,
+          paidQuoteId: quoteId,
+        })
+
+        const updatedAt = nowIso()
+        await tx.execute({
+          sql: `
+            UPDATE global_handle_paid_quotes
+            SET status = 'claimed',
+                settlement_wallet_attachment_id = ?2,
+                funding_tx_ref = ?3,
+                settlement_tx_ref = ?4,
+                claimed_at = ?5,
+                updated_at = ?5
+            WHERE global_handle_paid_quote_id = ?1
+              AND status = 'quoted'
+          `,
+          args: [
+            quoteId,
+            settlementWalletAttachment,
+            body.funding_tx_ref.trim(),
+            body.funding_tx_ref.trim(),
+            updatedAt,
+          ],
+        })
+      }
+      await tx.commit()
+    } catch (error) {
+      await safeRollback(tx, "[profiles] rollback failed while claiming paid global handle")
+      if (hasUniqueConstraintField(error, "global_handles.label_normalized")) {
+        throw conflictError("Desired label is unavailable")
+      }
+      throw error
+    } finally {
+      tx.close()
+    }
+    if (deferredEligibilityError) {
+      throw deferredEligibilityError
+    }
+
+    const nextGlobalHandleRow = await getProfileRow(this.client, userId)
+      .then((nextProfile) => nextProfile ? getGlobalHandleRow(this.client, nextProfile.global_handle_id) : null)
+    return nextGlobalHandleRow ? serializeGlobalHandle(nextGlobalHandleRow) : null
+  }
+
+  private async getActiveGlobalHandleOwnerUserId(labelNormalized: string, executor: Client | Transaction = this.client): Promise<string | null> {
+    const activeRow = await executor.execute({
       sql: `
         SELECT user_id
         FROM global_handles

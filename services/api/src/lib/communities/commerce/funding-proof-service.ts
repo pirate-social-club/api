@@ -1,5 +1,5 @@
 import { Interface, JsonRpcProvider, getAddress, zeroPadValue } from "ethers"
-import { badRequestError } from "../../errors"
+import { badRequestError, fundingConfirmationTimeout } from "../../errors"
 import type { Env } from "../../../env"
 import type { Client } from "../../sql-client"
 import { parseJsonValue, type PurchaseQuoteRow } from "./row-types"
@@ -21,6 +21,16 @@ const ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a116
 const ERC20_TRANSFER_INTERFACE = new Interface([
   "event Transfer(address indexed from, address indexed to, uint256 value)",
 ])
+
+function isTransactionWaitTimeout(error: unknown): boolean {
+  const candidate = error as { code?: unknown; shortMessage?: unknown; message?: unknown } | null
+  const code = typeof candidate?.code === "string" ? candidate.code : ""
+  const message = [
+    typeof candidate?.shortMessage === "string" ? candidate.shortMessage : "",
+    typeof candidate?.message === "string" ? candidate.message : "",
+  ].join(" ").toLowerCase()
+  return code === "TIMEOUT" || message.includes("timeout") || message.includes("timed out")
+}
 
 export type BuyerFundingReceipt = {
   txRef: string
@@ -95,11 +105,34 @@ async function verifyPirateCheckoutUsdcFundingReceipt(input: {
   const expectedToken = getAddress(resolvePirateCheckoutUsdcTokenAddress(input.env))
 
   const provider = new JsonRpcProvider(resolvePirateCheckoutRpcUrl(input.env), expectedSourceChainId)
-  const receipt = await provider.waitForTransaction(
-    input.fundingTxRef,
-    1,
-    resolvePirateCheckoutTxWaitTimeoutMs(input.env),
-  )
+  const txWaitTimeoutMs = resolvePirateCheckoutTxWaitTimeoutMs(input.env)
+  let receipt: Awaited<ReturnType<typeof provider.waitForTransaction>>
+  try {
+    receipt = await provider.waitForTransaction(
+      input.fundingTxRef,
+      1,
+      txWaitTimeoutMs,
+    )
+  } catch (error) {
+    if (isTransactionWaitTimeout(error)) {
+      console.warn("[pirate-checkout] funding confirmation timed out", {
+        quoteId: input.quote.quote_id,
+        fundingTxRef: input.fundingTxRef,
+        sourceChainId: expectedSourceChainId,
+        timeoutMs: txWaitTimeoutMs,
+      })
+      throw fundingConfirmationTimeout(
+        "Funding transaction confirmation timed out",
+        {
+          quote_id: input.quote.quote_id,
+          funding_tx_ref: input.fundingTxRef,
+          source_chain_id: expectedSourceChainId,
+          timeout_ms: txWaitTimeoutMs,
+        },
+      )
+    }
+    throw error
+  }
   if (!receipt || receipt.status !== 1) {
     throw badRequestError("Funding transaction is not confirmed")
   }
@@ -143,6 +176,64 @@ async function verifyPirateCheckoutUsdcFundingReceipt(input: {
     throw badRequestError("Funding transaction did not deliver enough USDC to the checkout operator")
   }
   return matched
+}
+
+export async function verifyPirateCheckoutUsdcFunding(input: {
+  env: Env
+  quoteId: string
+  amountUsd: number
+  buyerAddress: string
+  fundingTxRef: string
+}): Promise<BuyerFundingReceipt> {
+  const now = new Date().toISOString()
+  return await verifyPirateCheckoutUsdcFundingReceipt({
+    env: input.env,
+    buyerAddress: input.buyerAddress,
+    fundingTxRef: input.fundingTxRef,
+    quote: {
+      quote_id: input.quoteId,
+      community_id: "global_handles",
+      listing_id: "global_handle_paid_quote",
+      buyer_user_id: "",
+      asset_id: null,
+      live_room_id: null,
+      base_price_usd: input.amountUsd,
+      pricing_tier: "global_handle_paid",
+      final_price_usd: input.amountUsd,
+      allocation_snapshot_json: null,
+      funding_mode: "routed",
+      funding_asset_json: null,
+      source_chain_json: JSON.stringify({
+        chain_namespace: "eip155",
+        chain_id: resolvePirateCheckoutSourceChainId(input.env),
+        display_name: "Base",
+      }),
+      route_provider: "pirate_checkout",
+      funding_destination_address: resolvePirateCheckoutOperatorAddress(input.env),
+      route_policy_compliant: true,
+      route_live_available: true,
+      policy_origin: "default",
+      destination_settlement_chain_json: "{}",
+      destination_settlement_token: "USDC",
+      destination_settlement_amount_atomic: null,
+      destination_settlement_decimals: null,
+      treasury_denomination: "USD",
+      quote_ttl_seconds: 0,
+      route_required: true,
+      route_status_policy: "fail",
+      route_hop_tolerance: 0,
+      settlement_mode: "delivery_only_story_settlement",
+      verification_snapshot_ref: null,
+      pricing_policy_version: null,
+      status: "active",
+      quoted_at: now,
+      expires_at: now,
+      consumed_at: null,
+      failed_at: null,
+      created_at: now,
+      updated_at: now,
+    },
+  })
 }
 
 export async function confirmBuyerFundingForSettlement(input: {

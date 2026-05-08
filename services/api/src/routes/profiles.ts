@@ -1,6 +1,6 @@
 import { Hono } from "hono"
-import { authError, badRequestError, notFoundError } from "../lib/errors"
-import { getProfileRepository } from "../lib/auth/repositories"
+import { authError, badRequestError, paymentRequired, notFoundError } from "../lib/errors"
+import { getProfileRepository, getUserRepository } from "../lib/auth/repositories"
 import { authenticateAdminOrUser, type AuthenticatedEnv } from "../lib/auth-middleware"
 import { trackApiEvent } from "../lib/analytics/track"
 import { decodePublicUserId } from "../lib/public-ids"
@@ -44,6 +44,14 @@ function requireXmtpInboxId(value: unknown): string | null {
     throw badRequestError("Invalid xmtp_inbox_id")
   }
   return trimmed
+}
+
+async function resolveSettlementWalletAttachment(env: AuthenticatedEnv["Bindings"], userId: string, value: unknown): Promise<string | null> {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim()
+  }
+  const wallets = await getUserRepository(env).getWalletAttachmentsByUserId(userId)
+  return wallets.find((wallet) => wallet.is_primary)?.wallet_attachment ?? null
 }
 
 profiles.get("/me", async (c) => {
@@ -207,6 +215,101 @@ profiles.post("/me/global-handle/reddit-claim", async (c) => {
       tier: globalHandle.tier,
       handle_length: globalHandle.label.replace(/\.pirate$/i, "").length,
       shorter_by: Math.max(0, 8 - globalHandle.label.replace(/\.pirate$/i, "").length),
+    },
+  })
+  return c.json(serializeGlobalHandle(globalHandle), 200)
+})
+
+profiles.post("/me/global-handle/claim", async (c) => {
+  const actor = c.get("actor")
+  const body = await c.req.json<{
+    quote?: unknown
+    settlement_wallet_attachment?: unknown
+    funding_tx_ref?: unknown
+  }>().catch(() => null)
+  if (!body || typeof body.quote !== "string") {
+    throw badRequestError("Invalid paid handle claim payload")
+  }
+
+  const repository = getProfileRepository(c.env)
+  const globalHandle = await repository.claimPaidGlobalHandle(actor.userId, {
+    quote: body.quote,
+    settlement_wallet_attachment: typeof body.settlement_wallet_attachment === "string"
+      ? body.settlement_wallet_attachment
+      : null,
+    funding_tx_ref: typeof body.funding_tx_ref === "string" ? body.funding_tx_ref : null,
+  })
+  if (!globalHandle) {
+    throw authError("Authentication failed")
+  }
+  await trackApiEvent(c.env, c.req, {
+    eventName: "handle_claim_succeeded",
+    userId: actor.userId,
+    properties: {
+      source: "paid_upgrade",
+      tier: globalHandle.tier,
+      handle_length: globalHandle.label.replace(/\.pirate$/i, "").length,
+      price_cents: globalHandle.price_paid_cents ?? null,
+    },
+  })
+  return c.json(serializeGlobalHandle(globalHandle), 200)
+})
+
+profiles.post("/me/global-handle/x402-claim", async (c) => {
+  const actor = c.get("actor")
+  const body = await c.req.json<{
+    desired_label?: unknown
+    quote?: unknown
+    settlement_wallet_attachment?: unknown
+    funding_tx_ref?: unknown
+  }>().catch(() => null)
+  if (!body || typeof body !== "object") {
+    throw badRequestError("Invalid x402 paid handle claim payload")
+  }
+
+  const repository = getProfileRepository(c.env)
+  const fundingTxRef = typeof body.funding_tx_ref === "string" ? body.funding_tx_ref.trim() : ""
+  if (!fundingTxRef) {
+    if (typeof body.desired_label !== "string") {
+      throw badRequestError("desired_label is required before payment")
+    }
+    const quote = await repository.quoteGlobalHandleUpgrade(actor.userId, body.desired_label)
+    if (!quote) {
+      throw authError("Authentication failed")
+    }
+    const challenge = serializeHandleUpgradeQuote(quote)
+    if (!challenge.eligible || challenge.price_cents <= 0 || !challenge.quote || !challenge.payment_instructions) {
+      return c.json(challenge, 200)
+    }
+    throw paymentRequired("Payment required to claim this .pirate name", {
+      ...(challenge as unknown as Record<string, unknown>),
+      payment_protocol: "x402",
+      quote: challenge.quote,
+      payment_instructions: challenge.payment_instructions as unknown as Record<string, unknown>,
+    })
+  }
+
+  if (typeof body.quote !== "string" || !body.quote.trim()) {
+    throw badRequestError("quote is required with funding_tx_ref")
+  }
+  const settlementWalletAttachment = await resolveSettlementWalletAttachment(c.env, actor.userId, body.settlement_wallet_attachment)
+  const globalHandle = await repository.claimPaidGlobalHandle(actor.userId, {
+    quote: body.quote,
+    settlement_wallet_attachment: settlementWalletAttachment,
+    funding_tx_ref: fundingTxRef,
+  })
+  if (!globalHandle) {
+    throw authError("Authentication failed")
+  }
+  await trackApiEvent(c.env, c.req, {
+    eventName: "handle_claim_succeeded",
+    userId: actor.userId,
+    properties: {
+      source: "paid_upgrade",
+      tier: globalHandle.tier,
+      handle_length: globalHandle.label.replace(/\.pirate$/i, "").length,
+      price_cents: globalHandle.price_paid_cents ?? null,
+      payment_protocol: "x402",
     },
   })
   return c.json(serializeGlobalHandle(globalHandle), 200)

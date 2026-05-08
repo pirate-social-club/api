@@ -23,6 +23,10 @@ export function badRequestError(message: string): HttpError {
   return new HttpError(400, "bad_request", message)
 }
 
+export function paymentRequired(message: string, details: Record<string, unknown> | null = null): HttpError {
+  return new HttpError(402, "payment_required", message, true, details)
+}
+
 export function verificationRequired(message: string): HttpError {
   return new HttpError(403, "verification_required", message)
 }
@@ -65,6 +69,10 @@ export function structuredSurfaceDisabled(message: string, details: Record<strin
 
 export function providerUnavailable(message: string, details: Record<string, unknown> | null = null): HttpError {
   return new HttpError(502, "provider_unavailable", message, true, details)
+}
+
+export function fundingConfirmationTimeout(message: string, details: Record<string, unknown> | null = null): HttpError {
+  return new HttpError(504, "funding_confirmation_timeout", message, true, details)
 }
 
 export function internalError(message: string, details: Record<string, unknown> | null = null): HttpError {

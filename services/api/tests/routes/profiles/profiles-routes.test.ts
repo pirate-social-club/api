@@ -1,8 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { app } from "../../../src/index"
+import { setCommunityCommerceBuyerFundingVerifierForTests } from "../../../src/lib/communities/commerce/funding-proof-service"
+import {
+  resolvePirateCheckoutOperatorAddress,
+  resolvePirateCheckoutUsdcTokenAddress,
+} from "../../../src/lib/communities/commerce/checkout-config"
 import { setRedditSnapshotImporterForTests, setRedditVerificationCheckerForTests } from "../../../src/lib/onboarding/reddit-bootstrap"
+import type { Env } from "../../../src/types"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
-import { exchangeJwt, requestJson } from "./profiles-test-helpers"
+import { exchangeJwt, exchangeJwtWithWallet, requestJson } from "./profiles-test-helpers"
 
 let cleanup: (() => Promise<void>) | null = null
 
@@ -40,6 +46,17 @@ async function verifyAndImportReddit(input: {
     reddit_username: input.redditUsername,
   }, input.env, input.accessToken)
   expect(imported.status).toBe(202)
+}
+
+function setSuccessfulPaidHandleFundingVerifier(env: Env): void {
+  setCommunityCommerceBuyerFundingVerifierForTests(async (input) => ({
+    txRef: input.fundingTxRef,
+    fromAddress: input.buyerAddress,
+    toAddress: input.quote.funding_destination_address ?? resolvePirateCheckoutOperatorAddress(env),
+    tokenAddress: resolvePirateCheckoutUsdcTokenAddress(env),
+    amountAtomic: String(BigInt(Math.round(input.quote.final_price_usd * 1_000_000))),
+    chainRef: "eip155:84532",
+  }))
 }
 
 describe("profile routes", () => {
@@ -336,9 +353,381 @@ describe("profile routes", () => {
     }
     expect(premiumQuoteBody.desired_label).toBe("captain.pirate")
     expect(premiumQuoteBody.tier).toBe("premium")
-    expect(premiumQuoteBody.price_cents).toBe(25_000)
+    expect(premiumQuoteBody.price_cents).toBe(5_000)
     expect(premiumQuoteBody.eligible).toBe(true)
     expect(premiumQuoteBody.reason ?? null).toBeNull()
+  })
+
+  test("paid global handle claim requires funding proof and records the paid upgrade", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwtWithWallet(ctx.env, "profile-paid-global-handle-user")
+
+    const quoteResponse = await requestJson("http://pirate.test/profiles/me/quote-handle-upgrade", "POST", {
+      desired_label: "captain",
+    }, ctx.env, session.accessToken)
+    expect(quoteResponse.status).toBe(200)
+    const quote = await json(quoteResponse) as {
+      quote: string
+      desired_label: string
+      price_cents: number
+      policy_version: string
+      pricing_tier: string
+      payment_instructions: {
+        chain: { chain_namespace: string; chain_id: number; display_name: string }
+        token_address: string
+        recipient_address: string
+        amount_atomic: string
+        amount_display: string
+      } | null
+    }
+    expect(quote.quote).toMatch(/^ghq_/)
+    expect(quote.desired_label).toBe("captain.pirate")
+    expect(quote.price_cents).toBe(5_000)
+    expect(quote.policy_version).toBe("global_handle_paid_v1")
+    expect(quote.pricing_tier).toBe("common_word")
+    expect(quote.payment_instructions).toEqual({
+      chain: {
+        chain_namespace: "eip155",
+        chain_id: 84532,
+        display_name: "Base Sepolia",
+      },
+      token_address: resolvePirateCheckoutUsdcTokenAddress(ctx.env),
+      recipient_address: resolvePirateCheckoutOperatorAddress(ctx.env),
+      amount_atomic: "50000000",
+      amount_display: "50.00",
+    })
+
+    const missingWalletResponse = await requestJson("http://pirate.test/profiles/me/global-handle/claim", "POST", {
+      quote: quote.quote,
+    }, ctx.env, session.accessToken)
+    expect(missingWalletResponse.status).toBe(400)
+    const missingWallet = await json(missingWalletResponse) as { code: string; message: string }
+    expect(missingWallet.code).toBe("bad_request")
+    expect(missingWallet.message).toBe("settlement_wallet_attachment is required for paid handle claims")
+
+    setSuccessfulPaidHandleFundingVerifier(ctx.env)
+    const claimedResponse = await requestJson("http://pirate.test/profiles/me/global-handle/claim", "POST", {
+      quote: quote.quote,
+      settlement_wallet_attachment: session.primaryWalletAttachment,
+      funding_tx_ref: "0xpaid",
+    }, ctx.env, session.accessToken)
+    expect(claimedResponse.status).toBe(200)
+    const claimed = await json(claimedResponse) as {
+      label: string
+      tier: string
+      issuance_source: string
+      price_paid_cents: number
+    }
+    expect(claimed.label).toBe("captain.pirate")
+    expect(claimed.tier).toBe("premium")
+    expect(claimed.issuance_source).toBe("paid_upgrade")
+    expect(claimed.price_paid_cents).toBe(5_000)
+
+    const quoteRows = await ctx.client.execute({
+      sql: `
+        SELECT status, funding_tx_ref
+        FROM global_handle_paid_quotes
+        WHERE global_handle_paid_quote_id = ?1
+      `,
+      args: [quote.quote.replace(/^ghq_/, "")],
+    })
+    expect(quoteRows.rows[0]?.status).toBe("claimed")
+    expect(quoteRows.rows[0]?.funding_tx_ref).toBe("0xpaid")
+  })
+
+  test("paid global handle claim fails and marks the quote failed when pricing policy drifts", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwtWithWallet(ctx.env, "profile-paid-global-handle-policy-drift-user")
+
+    const quoteResponse = await requestJson("http://pirate.test/profiles/me/quote-handle-upgrade", "POST", {
+      desired_label: "captain",
+    }, ctx.env, session.accessToken)
+    expect(quoteResponse.status).toBe(200)
+    const quote = await json(quoteResponse) as { quote: string; price_cents: number }
+    expect(quote.price_cents).toBe(5_000)
+    const quoteId = quote.quote.replace(/^ghq_/, "")
+
+    await ctx.client.execute({
+      sql: `
+        UPDATE global_handle_paid_quotes
+        SET price_cents = ?2
+        WHERE global_handle_paid_quote_id = ?1
+      `,
+      args: [quoteId, 7_500],
+    })
+
+    setSuccessfulPaidHandleFundingVerifier(ctx.env)
+    const claimedResponse = await requestJson("http://pirate.test/profiles/me/global-handle/claim", "POST", {
+      quote: quote.quote,
+      settlement_wallet_attachment: session.primaryWalletAttachment,
+      funding_tx_ref: "0xpolicydrift",
+    }, ctx.env, session.accessToken)
+    expect(claimedResponse.status).toBe(403)
+    const claimed = await json(claimedResponse) as { code: string; message: string }
+    expect(claimed.code).toBe("eligibility_failed")
+    expect(claimed.message).toBe("Global handle quote is no longer claimable under the current pricing policy")
+
+    const quoteRows = await ctx.client.execute({
+      sql: `
+        SELECT status
+        FROM global_handle_paid_quotes
+        WHERE global_handle_paid_quote_id = ?1
+      `,
+      args: [quoteId],
+    })
+    expect(quoteRows.rows[0]?.status).toBe("failed")
+  })
+
+  test("paid global handle claim is idempotent for a previously claimed quote", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwtWithWallet(ctx.env, "profile-paid-global-handle-idempotent-user")
+
+    const quoteResponse = await requestJson("http://pirate.test/profiles/me/quote-handle-upgrade", "POST", {
+      desired_label: "captain",
+    }, ctx.env, session.accessToken)
+    expect(quoteResponse.status).toBe(200)
+    const quote = await json(quoteResponse) as { quote: string }
+
+    let verifierCalls = 0
+    setCommunityCommerceBuyerFundingVerifierForTests(async (input) => {
+      verifierCalls += 1
+      return {
+        txRef: input.fundingTxRef,
+        fromAddress: input.buyerAddress,
+        toAddress: input.quote.funding_destination_address ?? resolvePirateCheckoutOperatorAddress(ctx.env),
+        tokenAddress: resolvePirateCheckoutUsdcTokenAddress(ctx.env),
+        amountAtomic: String(BigInt(Math.round(input.quote.final_price_usd * 1_000_000))),
+        chainRef: "eip155:84532",
+      }
+    })
+
+    const claimBody = {
+      quote: quote.quote,
+      settlement_wallet_attachment: session.primaryWalletAttachment,
+      funding_tx_ref: "0xidempotent",
+    }
+    const firstClaimResponse = await requestJson("http://pirate.test/profiles/me/global-handle/claim", "POST", claimBody, ctx.env, session.accessToken)
+    expect(firstClaimResponse.status).toBe(200)
+    const firstClaim = await json(firstClaimResponse) as { label: string; issuance_source: string }
+    expect(firstClaim.label).toBe("captain.pirate")
+    expect(firstClaim.issuance_source).toBe("paid_upgrade")
+
+    const secondClaimResponse = await requestJson("http://pirate.test/profiles/me/global-handle/claim", "POST", claimBody, ctx.env, session.accessToken)
+    expect(secondClaimResponse.status).toBe(200)
+    const secondClaim = await json(secondClaimResponse) as { label: string; issuance_source: string }
+    expect(secondClaim).toEqual(firstClaim)
+    expect(verifierCalls).toBe(1)
+  })
+
+  test("paid global handle claim returns conflict when another user claims the quoted label first", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const firstSession = await exchangeJwtWithWallet(
+      ctx.env,
+      "profile-paid-global-handle-race-first-user",
+      "0x1000000000000000000000000000000000000001",
+    )
+    const secondSession = await exchangeJwtWithWallet(
+      ctx.env,
+      "profile-paid-global-handle-race-second-user",
+      "0x1000000000000000000000000000000000000002",
+    )
+
+    const firstQuoteResponse = await requestJson("http://pirate.test/profiles/me/quote-handle-upgrade", "POST", {
+      desired_label: "captain",
+    }, ctx.env, firstSession.accessToken)
+    expect(firstQuoteResponse.status).toBe(200)
+    const firstQuote = await json(firstQuoteResponse) as { quote: string }
+
+    const secondQuoteResponse = await requestJson("http://pirate.test/profiles/me/quote-handle-upgrade", "POST", {
+      desired_label: "captain",
+    }, ctx.env, secondSession.accessToken)
+    expect(secondQuoteResponse.status).toBe(200)
+    const secondQuote = await json(secondQuoteResponse) as { quote: string }
+
+    setSuccessfulPaidHandleFundingVerifier(ctx.env)
+    const firstClaimResponse = await requestJson("http://pirate.test/profiles/me/global-handle/claim", "POST", {
+      quote: firstQuote.quote,
+      settlement_wallet_attachment: firstSession.primaryWalletAttachment,
+      funding_tx_ref: "0xracefirst",
+    }, ctx.env, firstSession.accessToken)
+    expect(firstClaimResponse.status).toBe(200)
+
+    const secondClaimResponse = await requestJson("http://pirate.test/profiles/me/global-handle/claim", "POST", {
+      quote: secondQuote.quote,
+      settlement_wallet_attachment: secondSession.primaryWalletAttachment,
+      funding_tx_ref: "0xracesecond",
+    }, ctx.env, secondSession.accessToken)
+    expect(secondClaimResponse.status).toBe(409)
+    const secondClaim = await json(secondClaimResponse) as { code: string; message: string }
+    expect(secondClaim.code).toBe("conflict")
+    expect(secondClaim.message).toBe("Desired label is unavailable")
+  })
+
+  test("x402 global handle claim without proof returns a payment challenge", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwtWithWallet(ctx.env, "profile-x402-paid-global-handle-challenge-user")
+
+    const response = await requestJson("http://pirate.test/profiles/me/global-handle/x402-claim", "POST", {
+      desired_label: "captain",
+    }, ctx.env, session.accessToken)
+    expect(response.status).toBe(402)
+    const body = await json(response) as {
+      code: string
+      retryable: boolean
+      details: {
+        quote: string
+        desired_label: string
+        price_cents: number
+        payment_protocol: string
+        policy_version: string
+        quote_ttl_seconds: number
+        expires_at: number
+        payment_instructions: {
+          token_address: string
+          recipient_address: string
+          amount_atomic: string
+        }
+      }
+    }
+    expect(body.code).toBe("payment_required")
+    expect(body.retryable).toBe(true)
+    expect(body.details.quote).toMatch(/^ghq_/)
+    expect(body.details.desired_label).toBe("captain.pirate")
+    expect(body.details.price_cents).toBe(5_000)
+    expect(body.details.payment_protocol).toBe("x402")
+    expect(body.details.policy_version).toBe("global_handle_paid_v1")
+    expect(body.details.quote_ttl_seconds).toBe(900)
+    expect(body.details.expires_at).toBeGreaterThan(Math.floor(Date.now() / 1000))
+    expect(body.details.payment_instructions).toMatchObject({
+      token_address: resolvePirateCheckoutUsdcTokenAddress(ctx.env),
+      recipient_address: resolvePirateCheckoutOperatorAddress(ctx.env),
+      amount_atomic: "50000000",
+    })
+  })
+
+  test("x402 global handle claim with proof claims the quoted handle", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwtWithWallet(ctx.env, "profile-x402-paid-global-handle-claim-user")
+
+    const challengeResponse = await requestJson("http://pirate.test/profiles/me/global-handle/x402-claim", "POST", {
+      desired_label: "captain",
+    }, ctx.env, session.accessToken)
+    expect(challengeResponse.status).toBe(402)
+    const challenge = await json(challengeResponse) as { details: { quote: string } }
+
+    setSuccessfulPaidHandleFundingVerifier(ctx.env)
+    const claimResponse = await requestJson("http://pirate.test/profiles/me/global-handle/x402-claim", "POST", {
+      quote: challenge.details.quote,
+      funding_tx_ref: "0xx402claim",
+    }, ctx.env, session.accessToken)
+    expect(claimResponse.status).toBe(200)
+    const claimed = await json(claimResponse) as {
+      label: string
+      tier: string
+      issuance_source: string
+      price_paid_cents: number
+    }
+    expect(claimed.label).toBe("captain.pirate")
+    expect(claimed.tier).toBe("premium")
+    expect(claimed.issuance_source).toBe("paid_upgrade")
+    expect(claimed.price_paid_cents).toBe(5_000)
+  })
+
+  test("x402 global handle claim replay returns the already claimed handle", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwtWithWallet(ctx.env, "profile-x402-paid-global-handle-replay-user")
+
+    const challengeResponse = await requestJson("http://pirate.test/profiles/me/global-handle/x402-claim", "POST", {
+      desired_label: "captain",
+    }, ctx.env, session.accessToken)
+    expect(challengeResponse.status).toBe(402)
+    const challenge = await json(challengeResponse) as { details: { quote: string } }
+
+    let verifierCalls = 0
+    setCommunityCommerceBuyerFundingVerifierForTests(async (input) => {
+      verifierCalls += 1
+      return {
+        txRef: input.fundingTxRef,
+        fromAddress: input.buyerAddress,
+        toAddress: input.quote.funding_destination_address ?? resolvePirateCheckoutOperatorAddress(ctx.env),
+        tokenAddress: resolvePirateCheckoutUsdcTokenAddress(ctx.env),
+        amountAtomic: String(BigInt(Math.round(input.quote.final_price_usd * 1_000_000))),
+        chainRef: "eip155:84532",
+      }
+    })
+
+    const claimBody = {
+      quote: challenge.details.quote,
+      funding_tx_ref: "0xx402replay",
+    }
+    const firstClaimResponse = await requestJson("http://pirate.test/profiles/me/global-handle/x402-claim", "POST", claimBody, ctx.env, session.accessToken)
+    expect(firstClaimResponse.status).toBe(200)
+    const firstClaim = await json(firstClaimResponse) as { label: string; issuance_source: string }
+    expect(firstClaim.label).toBe("captain.pirate")
+    expect(firstClaim.issuance_source).toBe("paid_upgrade")
+
+    const secondClaimResponse = await requestJson("http://pirate.test/profiles/me/global-handle/x402-claim", "POST", claimBody, ctx.env, session.accessToken)
+    expect(secondClaimResponse.status).toBe(200)
+    const secondClaim = await json(secondClaimResponse) as { label: string; issuance_source: string }
+    expect(secondClaim).toEqual(firstClaim)
+    expect(verifierCalls).toBe(1)
+  })
+
+  test("x402 global handle claim rejects policy drift and marks the quote failed", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwtWithWallet(ctx.env, "profile-x402-paid-global-handle-policy-drift-user")
+
+    const challengeResponse = await requestJson("http://pirate.test/profiles/me/global-handle/x402-claim", "POST", {
+      desired_label: "captain",
+    }, ctx.env, session.accessToken)
+    expect(challengeResponse.status).toBe(402)
+    const challenge = await json(challengeResponse) as { details: { quote: string } }
+    const quoteId = challenge.details.quote.replace(/^ghq_/, "")
+
+    await ctx.client.execute({
+      sql: `
+        UPDATE global_handle_paid_quotes
+        SET price_cents = ?2
+        WHERE global_handle_paid_quote_id = ?1
+      `,
+      args: [quoteId, 7_500],
+    })
+
+    setSuccessfulPaidHandleFundingVerifier(ctx.env)
+    const claimResponse = await requestJson("http://pirate.test/profiles/me/global-handle/x402-claim", "POST", {
+      quote: challenge.details.quote,
+      funding_tx_ref: "0xx402policydrift",
+    }, ctx.env, session.accessToken)
+    expect(claimResponse.status).toBe(403)
+    const claim = await json(claimResponse) as { code: string; message: string }
+    expect(claim.code).toBe("eligibility_failed")
+    expect(claim.message).toBe("Global handle quote is no longer claimable under the current pricing policy")
+
+    const quoteRows = await ctx.client.execute({
+      sql: `
+        SELECT status
+        FROM global_handle_paid_quotes
+        WHERE global_handle_paid_quote_id = ?1
+      `,
+      args: [quoteId],
+    })
+    expect(quoteRows.rows[0]?.status).toBe("failed")
   })
 
   test("reddit claim can issue a shorter verified username handle without using the cleanup rename path", async () => {
@@ -400,7 +789,7 @@ describe("profile routes", () => {
     expect(quoteBody.price_cents).toBe(0)
     expect(quoteBody.eligible).toBe(true)
     expect(quoteBody.benefit_source).toBe("verified_reddit_username")
-    expect(quoteBody.reputation_discount_cents).toBe(25_000)
+    expect(quoteBody.reputation_discount_cents).toBe(5_000)
 
     const claimed = await requestJson("http://pirate.test/profiles/me/global-handle/reddit-claim", "POST", {
       desired_label: "captain",

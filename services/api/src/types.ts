@@ -303,6 +303,7 @@ export type Post = {
   access_mode?: "public" | "locked" | null
   asset_id?: string | null
   song_artifact_bundle_id?: string | null
+  song_title?: string | null
   parent_post_id?: string | null
   song_mode?: "original" | "remix" | null
   rights_basis?: "none" | "original" | "derivative" | "attribution_only" | null
@@ -514,14 +515,38 @@ export type CommunityPreview = {
 }
 
 export type HandleUpgradeQuote = {
+  quote?: string | null
   desired_label: string
   tier: "standard" | "premium"
   price_cents: number
+  currency?: "USD"
   eligible: boolean
   reason?: string | null
+  policy_version?: string | null
+  pricing_tier?: string | null
+  quote_ttl_seconds?: number | null
+  quoted_at?: number | null
+  expires_at?: number | null
+  payment_instructions?: {
+    chain: {
+      chain_namespace: "eip155"
+      chain_id: number
+      display_name: string
+    }
+    token_address: string
+    recipient_address: string
+    amount_atomic: string
+    amount_display: string
+  } | null
   benefit_source?: "verified_reddit_username" | "reddit_reputation" | null
   reputation_discount_cents?: number | null
   claim_reason?: string | null
+}
+
+export type GlobalHandlePaidClaimRequest = {
+  quote: string
+  settlement_wallet_attachment?: string | null
+  funding_tx_ref?: string | null
 }
 
 export type { Env } from "./env"
