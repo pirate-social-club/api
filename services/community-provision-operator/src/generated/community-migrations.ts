@@ -2412,4 +2412,10 @@ CREATE INDEX IF NOT EXISTS idx_community_handle_claim_quotes_namespace_label
 `,
     checksum: "5d8c99fb563b64a01da2d4fadbf46e9e8868ff07cc64b9f2ddcbf3b2d3cde98c",
   },
+  {
+    name: "1071_community_handle_protocol_owner_wallet.sql",
+    sql: `ALTER TABLE community_handles ADD COLUMN protocol_owner_wallet_attachment_id TEXT;
+`,
+    checksum: "8723be63143a0072a7d09c81a21c485856067bbd9f9640323d642be3810141ab",
+  },
 ] as const;

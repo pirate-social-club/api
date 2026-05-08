@@ -93,6 +93,7 @@ export type {
   SessionExchangeRequest,
   SessionExchangeResponse,
   SongArtifactBundle,
+  SongArtifactBundleListResponse,
   SongArtifactUpload,
   StartNamespaceVerificationSessionRequest,
   StartVerificationSessionRequest,
@@ -314,6 +315,7 @@ export type Post = {
   translation_policy?: "none" | "machine_allowed" | "human_only" | "hybrid" | null
   access_mode?: "public" | "locked" | null
   asset_id?: string | null
+  anchor_live_room_id?: string | null
   song_artifact_bundle_id?: string | null
   song_title?: string | null
   parent_post_id?: string | null
@@ -563,10 +565,19 @@ export type GlobalHandlePaidClaimRequest = {
 
 export type { Env } from "./env"
 
+export type UpstreamWalletIdentity = {
+  chainNamespace: string
+  walletAddress: string
+  walletAddressNormalized: string
+  scriptPubkeyHex?: string | null
+}
+
 export type UpstreamIdentity = {
   provider: "jwt" | "privy"
   providerSubject: string
   providerUserRef: string | null
   walletAddresses: string[]
   selectedWalletAddress: string | null
+  wallets?: UpstreamWalletIdentity[]
+  selectedWallet?: UpstreamWalletIdentity | null
 }

@@ -10,7 +10,12 @@ import type {
 } from "../src/lib/communities/db-community-repository"
 import { insertPost } from "../src/lib/posts/community-post-store"
 import { buildDefaultVerificationCapabilities } from "../src/lib/verification/verification-capabilities"
-import type { CommunityCommentProjectionRow, CommunityDatabaseBindingRow, CommunityRow } from "../src/lib/auth/auth-db-rows"
+import type {
+  CommunityCommentProjectionRow,
+  CommunityDatabaseBindingRow,
+  CommunityPostProjectionRow,
+  CommunityRow,
+} from "../src/lib/auth/auth-db-rows"
 import type { UserRepository } from "../src/lib/auth/repositories"
 import type { Env, User } from "../src/types"
 
@@ -53,6 +58,9 @@ export function buildUserRepository(users: Record<string, User>): UserRepository
     async getWalletAttachmentsByUserId() {
       return []
     },
+    async getWalletAttachmentById() {
+      return null
+    },
   }
 }
 
@@ -82,10 +90,11 @@ function buildCommunityRow(input: {
 export type TestCommunityRepository =
   & CommunityReadRepository
   & CommunityDatabaseBindingRepository
-  & Pick<CommunityPostProjectionRepository, "updateCommunityPostProjectionMetrics">
+  & CommunityPostProjectionRepository
   & CommunityCommentProjectionRepository
   & {
     projections: Map<string, CommunityCommentProjectionRow>
+    postProjections: Map<string, CommunityPostProjectionRow>
     failProjectionWrites: boolean
   }
 
@@ -97,6 +106,7 @@ export function buildTestCommunityRepository(input: {
   databaseName: string
 }): TestCommunityRepository {
   const projections = new Map<string, CommunityCommentProjectionRow>()
+  const postProjections = new Map<string, CommunityPostProjectionRow>()
   const now = new Date().toISOString()
   const community = buildCommunityRow({
     communityId: input.communityId,
@@ -106,6 +116,7 @@ export function buildTestCommunityRepository(input: {
   })
   const repo = {
     projections,
+    postProjections,
     failProjectionWrites: false,
     async getCommunityById(requestedCommunityId: string) {
       return requestedCommunityId === input.communityId ? community : null
@@ -152,6 +163,62 @@ export function buildTestCommunityRepository(input: {
     },
     async updateCommunityPostProjectionMetrics() {
       return undefined
+    },
+    async updateCommunityPostProjectionStatus(input: {
+      postId: string
+      status: CommunityPostProjectionRow["status"]
+      updatedAt: string
+    }) {
+      const existing = repo.postProjections.get(input.postId)
+      if (existing) {
+        repo.postProjections.set(input.postId, {
+          ...existing,
+          status: input.status,
+          updated_at: input.updatedAt,
+        })
+      }
+    },
+    async recordCommunityPostProjection(input: {
+      communityId: string
+      sourcePostId: string
+      authorUserId: string | null
+      identityMode: "public" | "anonymous"
+      postType: "text" | "image" | "video" | "link" | "song"
+      status: "draft" | "published" | "hidden" | "removed" | "deleted"
+      visibility: "public" | "members_only"
+      sourceCreatedAt: string
+      projectedPayloadJson: string
+      actorUserId: string
+      createdAt: string
+    }) {
+      if (repo.failProjectionWrites) {
+        throw new Error("projection unavailable")
+      }
+      const existing = repo.postProjections.get(input.sourcePostId)
+      const row: CommunityPostProjectionRow = {
+        projection_id: existing?.projection_id ?? `cpp_${input.sourcePostId}`,
+        community_id: input.communityId,
+        source_post_id: input.sourcePostId,
+        author_user_id: input.authorUserId,
+        identity_mode: input.identityMode,
+        post_type: input.postType,
+        status: input.status,
+        visibility: input.visibility,
+        source_created_at: input.sourceCreatedAt,
+        projected_payload_json: input.projectedPayloadJson,
+        upvote_count: existing?.upvote_count ?? 0,
+        downvote_count: existing?.downvote_count ?? 0,
+        comment_count: existing?.comment_count ?? 0,
+        like_count: existing?.like_count ?? 0,
+        projection_version: existing?.projection_version ?? 1,
+        created_at: existing?.created_at ?? input.createdAt,
+        updated_at: input.createdAt,
+      }
+      repo.postProjections.set(input.sourcePostId, row)
+      return row
+    },
+    async getCommunityPostProjectionByPostId(postId: string) {
+      return repo.postProjections.get(postId) ?? null
     },
     async recordCommunityCommentProjection(input: {
       communityId: string

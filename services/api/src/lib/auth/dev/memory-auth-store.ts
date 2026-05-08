@@ -3,6 +3,7 @@ import { buildDefaultVerificationCapabilities } from "../../verification/verific
 import { makeId, nowIso } from "../../helpers"
 import { normalizeIdentityCountryAlpha2 } from "../../identity/country-codes"
 import { generateHandleCandidate } from "../handle-generator"
+import { listIdentityWallets, resolveSelectedIdentityWallet } from "../upstream-wallets"
 import { nullableUnixSeconds, unixSeconds } from "../../../serializers/time"
 import type {
   GlobalHandle,
@@ -196,12 +197,16 @@ export function getPrimaryWalletAddress(record: Pick<MemoryAuthRecord, "user" | 
 function buildNewRecord(identity: UpstreamIdentity): MemoryAuthRecord {
   const timestamp = nowIso()
   const userId = makeId("usr")
-  const primaryWalletAddress = identity.selectedWalletAddress ?? identity.walletAddresses[0] ?? null
-  const walletAttachments = identity.walletAddresses.map((walletAddress) => ({
+  const identityWallets = listIdentityWallets(identity)
+  const selectedWallet = resolveSelectedIdentityWallet(identity)
+  const primaryWalletAddress = selectedWallet?.walletAddress ?? null
+  const walletAttachments = identityWallets.map((wallet) => ({
     wallet_attachment_id: makeId("wal"),
-    chain_namespace: "eip155:1",
-    wallet_address: walletAddress,
-    is_primary: primaryWalletAddress === walletAddress,
+    chain_namespace: wallet.chainNamespace,
+    wallet_address: wallet.walletAddress,
+    is_primary: selectedWallet != null
+      && selectedWallet.chainNamespace === wallet.chainNamespace
+      && selectedWallet.walletAddressNormalized === wallet.walletAddressNormalized,
   }))
   const primaryWalletAttachmentId =
     walletAttachments.find((attachment) => attachment.is_primary)?.wallet_attachment_id ?? null
@@ -287,22 +292,29 @@ function buildNewRecord(identity: UpstreamIdentity): MemoryAuthRecord {
 }
 
 function mergeWallets(existing: MemoryWalletAttachment[], identity: UpstreamIdentity): MemoryWalletAttachment[] {
-  const byAddress = new Map(existing.map((attachment) => [attachment.wallet_address, attachment]))
-  for (const walletAddress of identity.walletAddresses) {
-    if (!byAddress.has(walletAddress)) {
-      byAddress.set(walletAddress, {
+  const identityWallets = listIdentityWallets(identity)
+  const byAddress = new Map(existing.map((attachment) => [
+    `${attachment.chain_namespace}:${attachment.wallet_address}`,
+    attachment,
+  ]))
+  for (const wallet of identityWallets) {
+    const key = `${wallet.chainNamespace}:${wallet.walletAddressNormalized}`
+    if (!byAddress.has(key)) {
+      byAddress.set(key, {
         wallet_attachment_id: makeId("wal"),
-        chain_namespace: "eip155:1",
-        wallet_address: walletAddress,
+        chain_namespace: wallet.chainNamespace,
+        wallet_address: wallet.walletAddress,
         is_primary: false,
       })
     }
   }
 
-  const selectedWalletAddress = identity.selectedWalletAddress ?? identity.walletAddresses[0] ?? null
+  const selectedWallet = resolveSelectedIdentityWallet(identity)
   const attachments = [...byAddress.values()]
   for (const attachment of attachments) {
-    attachment.is_primary = selectedWalletAddress != null && attachment.wallet_address === selectedWalletAddress
+    attachment.is_primary = selectedWallet != null
+      && attachment.chain_namespace === selectedWallet.chainNamespace
+      && attachment.wallet_address === selectedWallet.walletAddress
   }
   if (!attachments.some((attachment) => attachment.is_primary) && attachments[0]) {
     attachments[0].is_primary = true
@@ -312,6 +324,24 @@ function mergeWallets(existing: MemoryWalletAttachment[], identity: UpstreamIden
 
 export function getMemoryRecordByUserId(userId: string): MemoryAuthRecord | null {
   return getMemoryStore().byUserId.get(userId) ?? null
+}
+
+export function getMemoryWalletAttachmentById(walletAttachmentId: string): (WalletAttachmentSummary & { user_id: string; status: string }) | null {
+  const rawId = walletAttachmentId.startsWith("wal_wal_") ? walletAttachmentId.slice("wal_".length) : walletAttachmentId
+  for (const record of getMemoryStore().byUserId.values()) {
+    const attachment = record.walletAttachments.find((wallet) => wallet.wallet_attachment_id === rawId)
+    if (attachment) {
+      return {
+        wallet_attachment: attachment.wallet_attachment_id,
+        user_id: record.user.user_id,
+        chain_namespace: attachment.chain_namespace,
+        wallet_address: attachment.wallet_address,
+        is_primary: attachment.is_primary,
+        status: "active",
+      }
+    }
+  }
+  return null
 }
 
 export async function exchangeMemoryIdentity(

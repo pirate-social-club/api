@@ -9,11 +9,12 @@ import type {
   CommunityHandleQuoteRequest,
   CommunityHandleReserveRequest,
   CommunityHandleRevokeRequest,
+  CommunityHandleStatusResponse,
   Env,
   UpdateCommunityHandlePolicyRequest,
 } from "../../../types"
 import type { UserRepository } from "../../auth/repositories"
-import { conflictError, badRequestError, eligibilityFailed, internalError, notFoundError } from "../../errors"
+import { HttpError, conflictError, badRequestError, eligibilityFailed, internalError, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
 import type { Client, QueryResultRow, Transaction } from "../../sql-client"
 import { numberOrNull, requiredNumber, requiredString, rowValue, stringOrNull } from "../../sql-row"
@@ -30,6 +31,8 @@ import {
 } from "../commerce/checkout-config"
 import { verifyPirateCheckoutUsdcFunding } from "../commerce/funding-proof-service"
 import { getCommunityMoneyPolicy } from "../commerce/policy-service"
+import { parseBitcoinAddress, type ParsedBitcoinAddress } from "../../bitcoin/bitcoin-address"
+import type { WalletAttachmentRecord } from "../../auth/repositories"
 
 type HandlePricingModel = NonNullable<CommunityHandleQuote["pricing_model"]>
 type HandleCommunityRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
@@ -42,7 +45,6 @@ type NamespacePolicyRow = {
   normalized_label: string
   policy_template: CommunityHandlePolicy["policy_template"]
   pricing_model: HandlePricingModel | null
-  membership_required_for_claim: boolean
   claims_enabled: boolean
   settings_json: string | null
   updated_at: string | null
@@ -57,8 +59,7 @@ type HandleClaimSettings = {
   quote_ttl_seconds?: number
   reserved_labels?: string[]
   special_price_cents_by_label?: Record<string, number>
-  non_member_claims_enabled?: boolean
-  non_member_price_multiplier?: number
+  issuance_mode?: "app_internal" | "spaces_subspace"
 }
 
 type Availability =
@@ -73,8 +74,6 @@ const DEFAULT_MIN_LABEL_LENGTH = 3
 const DEFAULT_MAX_LABEL_LENGTH = 32
 const DEFAULT_PREMIUM_MAX_LENGTH = 4
 const DEFAULT_HANDLE_QUOTE_TTL_SECONDS = 10 * 60
-const DEFAULT_NON_MEMBER_PRICE_MULTIPLIER = 5
-const MIN_NON_MEMBER_PRICE_MULTIPLIER = 2
 const RESERVED_LABELS = new Set([
   "admin",
   "administrator",
@@ -124,14 +123,11 @@ function parseSettings(raw: string | null): HandleClaimSettings {
       min_length: finitePositiveInteger(parsed.min_length),
       max_length: finitePositiveInteger(parsed.max_length),
       quote_ttl_seconds: finitePositiveInteger(parsed.quote_ttl_seconds),
+      issuance_mode: parsed.issuance_mode === "spaces_subspace" ? "spaces_subspace" : undefined,
       reserved_labels: Array.isArray(parsed.reserved_labels)
         ? parsed.reserved_labels.filter((value): value is string => typeof value === "string")
         : undefined,
       special_price_cents_by_label: parseSpecialPrices(parsed.special_price_cents_by_label),
-      non_member_claims_enabled: typeof parsed.non_member_claims_enabled === "boolean"
-        ? parsed.non_member_claims_enabled
-        : undefined,
-      non_member_price_multiplier: finiteMultiplier(parsed.non_member_price_multiplier),
     }
   } catch {
     throw internalError("Community handle policy settings are malformed", {
@@ -164,12 +160,6 @@ function finitePositiveInteger(value: unknown): number | undefined {
   return Number.isInteger(numeric) && numeric > 0 ? numeric : undefined
 }
 
-function finiteMultiplier(value: unknown): number | undefined {
-  if (value == null) return undefined
-  const numeric = typeof value === "number" ? value : Number(value)
-  return Number.isFinite(numeric) && numeric >= MIN_NON_MEMBER_PRICE_MULTIPLIER ? numeric : undefined
-}
-
 function addSeconds(iso: string, seconds: number): string {
   return new Date(Date.parse(iso) + seconds * 1000).toISOString()
 }
@@ -191,7 +181,6 @@ function serializePolicy(row: NamespacePolicyRow): CommunityHandlePolicy {
     namespace: withPrefix("ns", row.namespace_id),
     policy_template: row.policy_template,
     pricing_model: row.pricing_model,
-    membership_required_for_claim: row.membership_required_for_claim,
     claims_enabled: row.claims_enabled,
     settings: parseSettings(row.settings_json),
     updated_at: nullableUnixSeconds(row.updated_at),
@@ -217,11 +206,83 @@ function serializeHandle(row: QueryResultRow): CommunityHandle {
     pricing_model: stringOrNull(rowValue(row, "pricing_model")) as CommunityHandle["pricing_model"],
     pricing_tier: stringOrNull(rowValue(row, "pricing_tier")),
     settlement_wallet_attachment: stringOrNull(rowValue(row, "settlement_wallet_attachment_id")),
+    protocol_owner_wallet_attachment: stringOrNull(rowValue(row, "protocol_owner_wallet_attachment_id")),
     funding_tx_ref: stringOrNull(rowValue(row, "funding_tx_ref")),
     settlement_tx_ref: stringOrNull(rowValue(row, "settlement_tx_ref")),
     lease_started_at: nullableUnixSeconds(stringOrNull(rowValue(row, "lease_started_at"))),
     lease_expires_at: nullableUnixSeconds(stringOrNull(rowValue(row, "lease_expires_at"))),
     created: unixSeconds(requiredString(row, "created_at")),
+  }
+}
+
+function protocolIssuanceRequired(settings: HandleClaimSettings): boolean {
+  return settings.issuance_mode === "spaces_subspace"
+}
+
+function findTaprootProtocolOwnerWallet(
+  wallets: Array<Pick<WalletAttachmentRecord, "chain_namespace" | "wallet_address" | "wallet_attachment">>,
+): { wallet: Pick<WalletAttachmentRecord, "chain_namespace" | "wallet_address" | "wallet_attachment">; parsed: ParsedBitcoinAddress } | null {
+  for (const wallet of wallets) {
+    if (!wallet.chain_namespace.startsWith("bip122:")) {
+      continue
+    }
+    const parsed = parseBitcoinAddress(wallet.wallet_address)
+    if (parsed?.kind === "p2tr") {
+      return { wallet, parsed }
+    }
+  }
+  return null
+}
+
+async function requireProtocolOwnerWalletForClaim(input: {
+  body: CommunityHandleClaimRequest
+  userId: string
+  userRepository: UserRepository
+}): Promise<{ walletAttachmentId: string; scriptPubkeyHex: string }> {
+  const submittedWalletAttachment = input.body.protocol_owner_wallet_attachment?.trim()
+  if (!submittedWalletAttachment) {
+    throw new HttpError(400, "bad_request", "protocol_owner_wallet_attachment is required for protocol-issued names", false, {
+      protocol_owner_wallet_attachment: "missing",
+    })
+  }
+
+  const wallet = await input.userRepository.getWalletAttachmentById(submittedWalletAttachment)
+  if (!wallet) {
+    throw notFoundError("protocol_owner_wallet_attachment was not found")
+  }
+  if (wallet.user_id !== input.userId) {
+    throw eligibilityFailed("protocol_owner_wallet_attachment belongs to a different user", {
+      protocol_owner_wallet_attachment: "wrong_user",
+    })
+  }
+  if (wallet.status !== "active") {
+    throw eligibilityFailed("protocol_owner_wallet_attachment is not active", {
+      protocol_owner_wallet_attachment: "not_active",
+    })
+  }
+  if (!wallet.chain_namespace.startsWith("bip122:")) {
+    throw eligibilityFailed("protocol_owner_wallet_attachment must be a Bitcoin wallet", {
+      protocol_owner_wallet_attachment: "wrong_chain",
+      chain_namespace: wallet.chain_namespace,
+    })
+  }
+
+  const parsed = parseBitcoinAddress(wallet.wallet_address)
+  if (!parsed) {
+    throw eligibilityFailed("protocol_owner_wallet_attachment has an invalid Bitcoin address", {
+      protocol_owner_wallet_attachment: "invalid_bitcoin_address",
+    })
+  }
+  if (parsed.kind !== "p2tr") {
+    throw eligibilityFailed("protocol_owner_wallet_attachment must be a Bitcoin Taproot wallet", {
+      protocol_owner_wallet_attachment: "not_taproot",
+      bitcoin_address_kind: parsed.kind,
+    })
+  }
+
+  return {
+    walletAttachmentId: wallet.wallet_attachment,
+    scriptPubkeyHex: parsed.scriptPubkeyHex,
   }
 }
 
@@ -231,6 +292,9 @@ function serializeQuote(row: QueryResultRow, input: {
   availability: Availability
   reason: string | null
   desiredLabel: string
+  protocolIssuanceRequired?: boolean
+  protocolIssuanceEligible?: boolean
+  protocolIssuanceReason?: string | null
 }): CommunityHandleQuote {
   const priceCents = requiredNumber(row, "price_cents")
   return {
@@ -248,6 +312,13 @@ function serializeQuote(row: QueryResultRow, input: {
     currency: "USD",
     pricing_model: stringOrNull(rowValue(row, "pricing_model")) as CommunityHandleQuote["pricing_model"],
     pricing_tier: stringOrNull(rowValue(row, "pricing_tier")),
+    protocol_issuance_required: input.protocolIssuanceRequired === true,
+    protocol_issuance_eligible: input.protocolIssuanceRequired === true
+      ? input.protocolIssuanceEligible === true
+      : true,
+    protocol_issuance_reason: input.protocolIssuanceRequired === true
+      ? input.protocolIssuanceReason ?? null
+      : null,
     payment_instructions: input.eligible && priceCents > 0
       ? buildPaymentInstructions(input.env, priceCents)
       : null,
@@ -297,7 +368,7 @@ async function getNamespacePolicy(executor: Client | Transaction, communityId: s
     sql: `
       SELECT nb.community_id, nb.namespace_id, nb.display_label, nb.normalized_label,
              nhp.namespace_handle_policy_id, nhp.policy_template, nhp.pricing_model,
-             nhp.membership_required_for_claim, nhp.claims_enabled, nhp.settings_json, nhp.updated_at
+             nhp.claims_enabled, nhp.settings_json, nhp.updated_at
       FROM namespace_bindings nb
       LEFT JOIN namespace_handle_policies nhp
         ON nhp.namespace_id = nb.namespace_id
@@ -317,7 +388,6 @@ async function getNamespacePolicy(executor: Client | Transaction, communityId: s
     normalized_label: requiredString(row, "normalized_label"),
     policy_template: (stringOrNull(rowValue(row, "policy_template")) ?? "standard") as CommunityHandlePolicy["policy_template"],
     pricing_model: stringOrNull(rowValue(row, "pricing_model")) as HandlePricingModel | null,
-    membership_required_for_claim: numberOrNull(rowValue(row, "membership_required_for_claim")) !== 0,
     claims_enabled: numberOrNull(rowValue(row, "claims_enabled")) !== 0,
     settings_json: stringOrNull(rowValue(row, "settings_json")),
     updated_at: stringOrNull(rowValue(row, "updated_at")),
@@ -367,13 +437,10 @@ function resolvePrice(input: {
   labelNormalized: string
   policy: NamespacePolicyRow
   settings: HandleClaimSettings
-  isMember: boolean
 }): {
   priceCents: number
   pricingModel: HandlePricingModel | null
   pricingTier: string | null
-  patronClaim: boolean
-  appliedMultiplier: number
 } {
   const pricingModel = input.policy.pricing_model ?? (
     input.settings.flat_price_cents == null ? "free" : "flat_by_length"
@@ -381,19 +448,13 @@ function resolvePrice(input: {
   if (pricingModel === "custom_curve") {
     throw eligibilityFailed("Custom handle pricing is not available yet")
   }
-  const patronClaim = !input.isMember
-  const appliedMultiplier = patronClaim
-    ? input.settings.non_member_price_multiplier ?? DEFAULT_NON_MEMBER_PRICE_MULTIPLIER
-    : 1
-  const applyMultiplier = (priceCents: number): number => Math.round(priceCents * appliedMultiplier)
-  const tier = (baseTier: string): string => patronClaim ? `patron_${baseTier}` : baseTier
   if (pricingModel === "free") {
-    return { priceCents: 0, pricingModel, pricingTier: tier("free"), patronClaim, appliedMultiplier }
+    return { priceCents: 0, pricingModel, pricingTier: "free" }
   }
 
   const specialPriceCents = input.settings.special_price_cents_by_label?.[input.labelNormalized]
   if (specialPriceCents != null) {
-    return { priceCents: applyMultiplier(specialPriceCents), pricingModel, pricingTier: tier("special"), patronClaim, appliedMultiplier }
+    return { priceCents: specialPriceCents, pricingModel, pricingTier: "special" }
   }
 
   const premiumMaxLength = input.settings.premium_max_length ?? DEFAULT_PREMIUM_MAX_LENGTH
@@ -403,11 +464,9 @@ function resolvePrice(input: {
     : input.settings.flat_price_cents ?? 0
 
   return {
-    priceCents: applyMultiplier(priceCents),
+    priceCents,
     pricingModel,
-    pricingTier: tier(isPremium ? "premium" : "standard"),
-    patronClaim,
-    appliedMultiplier,
+    pricingTier: isPremium ? "premium" : "standard",
   }
 }
 
@@ -461,15 +520,6 @@ function optionalIntegerSetting(
   return numeric
 }
 
-function optionalMultiplierSetting(value: unknown, key: keyof CommunityHandlePolicySettings): number | undefined {
-  if (value == null) return undefined
-  const numeric = typeof value === "number" ? value : Number(value)
-  if (!Number.isFinite(numeric) || numeric < MIN_NON_MEMBER_PRICE_MULTIPLIER) {
-    throw badRequestError(`${String(key)} must be a number >= ${MIN_NON_MEMBER_PRICE_MULTIPLIER}`)
-  }
-  return numeric
-}
-
 function sanitizeSettings(input: CommunityHandlePolicySettings | null | undefined): HandleClaimSettings {
   if (!input) return {}
   const settings: HandleClaimSettings = {
@@ -479,14 +529,11 @@ function sanitizeSettings(input: CommunityHandlePolicySettings | null | undefine
     min_length: optionalIntegerSetting(input.min_length, "min_length", { min: 1 }),
     max_length: optionalIntegerSetting(input.max_length, "max_length", { min: 1 }),
     quote_ttl_seconds: optionalIntegerSetting(input.quote_ttl_seconds, "quote_ttl_seconds", { min: 60 }),
+    issuance_mode: input.issuance_mode === "spaces_subspace" ? "spaces_subspace" : undefined,
     reserved_labels: Array.isArray(input.reserved_labels)
       ? input.reserved_labels.map((label) => normalizeCommunityHandleLabel(label).labelNormalized)
       : undefined,
     special_price_cents_by_label: parseSpecialPrices(input.special_price_cents_by_label),
-    non_member_claims_enabled: typeof input.non_member_claims_enabled === "boolean"
-      ? input.non_member_claims_enabled
-      : undefined,
-    non_member_price_multiplier: optionalMultiplierSetting(input.non_member_price_multiplier, "non_member_price_multiplier"),
   }
   if (
     settings.min_length != null
@@ -504,20 +551,13 @@ async function requireClaimAccess(input: {
   client: Client | Transaction
   communityId: string
   userId: string
-  policy: NamespacePolicyRow
-  settings: HandleClaimSettings
 }): Promise<{ isMember: boolean }> {
   const membership = await getCommunityMembershipState(input.client as Client, input.communityId, input.userId)
   const isMember = canAccessCommunity(membership)
   if (isMember) {
     return { isMember }
   }
-  const patronClaimsEnabled = input.settings.non_member_claims_enabled === true
-    || input.policy.membership_required_for_claim === false
-  if (!patronClaimsEnabled) {
-    throw eligibilityFailed("Community membership is required to claim names")
-  }
-  return { isMember: false }
+  throw eligibilityFailed("Community membership is required to claim names")
 }
 
 export async function getMyCommunityHandle(input: {
@@ -538,6 +578,64 @@ export async function getMyCommunityHandle(input: {
     }
     const handle = await getActiveHandleForUser(db.client, policy.namespace_id, input.userId)
     return { handle: handle ? serializeHandle(handle) : null }
+  } finally {
+    db.close()
+  }
+}
+
+export async function getCommunityHandleStatus(input: {
+  env: Env
+  userId: string
+  communityId: string
+  communityRepository: HandleCommunityRepository
+}): Promise<CommunityHandleStatusResponse> {
+  const community = await input.communityRepository.getCommunityById(input.communityId)
+  if (!community) {
+    throw notFoundError("Community not found")
+  }
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  try {
+    const policy = await getNamespacePolicy(db.client, input.communityId)
+    if (!policy) {
+      return {
+        available: false,
+        reason: "Community names are not available for this community",
+        claims_enabled: null,
+        namespace: null,
+      }
+    }
+    if (!policy.claims_enabled) {
+      return {
+        available: false,
+        reason: "Community name claims are currently disabled",
+        claims_enabled: false,
+        namespace: withPrefix("ns", policy.namespace_id),
+      }
+    }
+    const access = await requireClaimAccess({
+      client: db.client,
+      communityId: input.communityId,
+      userId: input.userId,
+    }).catch((error: unknown) => {
+      if (error instanceof HttpError && error.code === "eligibility_failed") {
+        return { blockedReason: error.message }
+      }
+      throw error
+    })
+    if ("blockedReason" in access) {
+      return {
+        available: false,
+        reason: access.blockedReason,
+        claims_enabled: true,
+        namespace: withPrefix("ns", policy.namespace_id),
+      }
+    }
+    return {
+      available: true,
+      reason: null,
+      claims_enabled: true,
+      namespace: withPrefix("ns", policy.namespace_id),
+    }
   } finally {
     db.close()
   }
@@ -614,9 +712,7 @@ export async function updateCommunityHandlePolicy(input: {
         "pricing_model" in input.body
           ? assertPricingModel(input.body.pricing_model)
           : current.pricing_model,
-        "membership_required_for_claim" in input.body
-          ? input.body.membership_required_for_claim === true ? 1 : 0
-          : current.membership_required_for_claim ? 1 : 0,
+        1,
         "claims_enabled" in input.body
           ? input.body.claims_enabled === true ? 1 : 0
           : current.claims_enabled ? 1 : 0,
@@ -815,6 +911,7 @@ export async function quoteCommunityHandle(input: {
   userId: string
   communityId: string
   body: CommunityHandleQuoteRequest
+  userRepository: UserRepository
   communityRepository: HandleCommunityRepository
 }): Promise<CommunityHandleQuote> {
   const community = await input.communityRepository.getCommunityById(input.communityId)
@@ -836,8 +933,6 @@ export async function quoteCommunityHandle(input: {
       client: db.client,
       communityId: input.communityId,
       userId: input.userId,
-      policy,
-      settings,
     })
 
     assertLabelLength(desired.labelNormalized, settings)
@@ -870,10 +965,21 @@ export async function quoteCommunityHandle(input: {
       labelNormalized: desired.labelNormalized,
       policy,
       settings,
-      isMember: claimAccess.isMember,
     })
     const moneyPolicy = await getCommunityMoneyPolicy({ env: input.env, communityId: input.communityId })
     const quoteTtlSeconds = settings.quote_ttl_seconds ?? moneyPolicy.quote_ttl_seconds ?? DEFAULT_HANDLE_QUOTE_TTL_SECONDS
+    const requiresProtocolIssuance = protocolIssuanceRequired(settings)
+    const protocolOwner = requiresProtocolIssuance
+      ? findTaprootProtocolOwnerWallet(await input.userRepository.getWalletAttachmentsByUserId(input.userId))
+      : null
+    const protocolIssuanceEligible = !requiresProtocolIssuance || protocolOwner != null
+    const protocolIssuanceReason = requiresProtocolIssuance && !protocolOwner
+      ? "A Bitcoin Taproot wallet is required for protocol-issued names"
+      : null
+    if (!protocolIssuanceEligible && eligible) {
+      eligible = false
+      reason = protocolIssuanceReason
+    }
     const quotedAt = nowIso()
     await expireStaleHandleQuotes({
       executor: db.client,
@@ -908,6 +1014,9 @@ export async function quoteCommunityHandle(input: {
         eligible,
         availability,
         reason,
+        protocolIssuanceRequired: requiresProtocolIssuance,
+        protocolIssuanceEligible,
+        protocolIssuanceReason,
       })
     }
     const expiresAt = addSeconds(quotedAt, quoteTtlSeconds)
@@ -941,11 +1050,8 @@ export async function quoteCommunityHandle(input: {
         JSON.stringify({
           policy_template: policy.policy_template,
           pricing_model: policy.pricing_model,
-          membership_required_for_claim: policy.membership_required_for_claim,
           claims_enabled: policy.claims_enabled,
           is_member: claimAccess.isMember,
-          patron_claim: price.patronClaim,
-          applied_multiplier: price.appliedMultiplier,
           settings,
         }),
       ],
@@ -964,6 +1070,9 @@ export async function quoteCommunityHandle(input: {
       eligible,
       availability,
       reason,
+      protocolIssuanceRequired: requiresProtocolIssuance,
+      protocolIssuanceEligible,
+      protocolIssuanceReason,
     })
   } finally {
     db.close()
@@ -988,6 +1097,9 @@ async function verifyPaymentForPaidClaim(input: {
   if (!wallet) {
     throw eligibilityFailed("settlement_wallet_attachment is not available for this user")
   }
+  if (!wallet.chain_namespace.startsWith("eip155:")) {
+    throw eligibilityFailed("settlement_wallet_attachment must be an EVM wallet")
+  }
   if (!input.body.funding_tx_ref?.trim()) {
     throw badRequestError("funding_tx_ref is required for paid handle claims")
   }
@@ -998,6 +1110,137 @@ async function verifyPaymentForPaidClaim(input: {
     buyerAddress: wallet.wallet_address,
     fundingTxRef: input.body.funding_tx_ref,
   })
+}
+
+async function getExistingHandleForQuote(
+  executor: Client | Transaction,
+  quoteId: string,
+): Promise<QueryResultRow | null> {
+  const existingForQuote = await executor.execute({
+    sql: `
+      SELECT *
+      FROM community_handles
+      WHERE handle_claim_quote_id = ?1
+      LIMIT 1
+    `,
+    args: [quoteId],
+  })
+  return existingForQuote.rows[0] ?? null
+}
+
+async function getClaimQuote(
+  executor: Client | Transaction,
+  input: {
+    quoteId: string
+    communityId: string
+    userId: string
+  },
+): Promise<QueryResultRow> {
+  const quoteResult = await executor.execute({
+    sql: `
+      SELECT *
+      FROM community_handle_claim_quotes
+      WHERE handle_claim_quote_id = ?1
+        AND community_id = ?2
+        AND user_id = ?3
+      LIMIT 1
+    `,
+    args: [input.quoteId, input.communityId, input.userId],
+  })
+  const quote = quoteResult.rows[0]
+  if (!quote) {
+    throw notFoundError("Handle quote not found")
+  }
+  return quote
+}
+
+async function assertClaimQuoteStillClaimable(input: {
+  executor: Client | Transaction
+  communityId: string
+  userId: string
+  quoteId: string
+  quote: QueryResultRow
+  now: string
+  paymentVerified: boolean
+}): Promise<{
+  policy: NamespacePolicyRow
+  labelNormalized: string
+  labelDisplay: string
+  priceCents: number
+  protocolIssuanceRequired: boolean
+}> {
+  const status = requiredString(input.quote, "status")
+  await expireStaleHandleQuotes({
+    executor: input.executor,
+    communityId: input.communityId,
+    userId: input.userId,
+    now: input.now,
+  })
+  if (status !== "quoted") {
+    throw eligibilityFailed("Handle quote is no longer claimable")
+  }
+  if (Date.parse(requiredString(input.quote, "expires_at")) <= Date.parse(input.now)) {
+    await input.executor.execute({
+      sql: `
+        UPDATE community_handle_claim_quotes
+        SET status = 'expired',
+            updated_at = ?2
+        WHERE handle_claim_quote_id = ?1
+      `,
+      args: [input.quoteId, input.now],
+    })
+    throw eligibilityFailed("Handle quote has expired")
+  }
+
+  const policy = await getNamespacePolicy(input.executor, input.communityId)
+  if (!policy || policy.namespace_id !== requiredString(input.quote, "namespace_id")) {
+    throw eligibilityFailed("Community names are not available for this community")
+  }
+  if (!policy.claims_enabled) {
+    throw eligibilityFailed("Community name claims are currently disabled")
+  }
+  const settings = parseSettings(policy.settings_json)
+  await requireClaimAccess({
+    client: input.executor,
+    communityId: input.communityId,
+    userId: input.userId,
+  })
+
+  const labelNormalized = requiredString(input.quote, "label_normalized")
+  const labelDisplay = requiredString(input.quote, "label_display")
+  if (isReservedLabel(labelNormalized, settings)) {
+    const reason = "Desired label is reserved"
+    throw eligibilityFailed(reason, availabilityDetails("reserved", reason))
+  }
+  const activeForUser = await getActiveHandleForUser(input.executor, policy.namespace_id, input.userId)
+  if (activeForUser) {
+    const activeLabel = requiredString(activeForUser, "label_normalized")
+    const availability: Availability = activeLabel === labelNormalized
+      ? "already_claimed_by_viewer"
+      : "viewer_has_claim"
+    const reason = input.paymentVerified
+      ? "Payment was verified, but you already have an active name in this community"
+      : activeLabel === labelNormalized
+        ? "Desired label is already active for this community"
+        : "You already have an active name in this community"
+    throw conflictError(reason, availabilityDetails(availability, reason))
+  }
+  const blockingForLabel = await getBlockingHandleForLabel(input.executor, policy.namespace_id, labelNormalized)
+  if (blockingForLabel) {
+    const status = requiredString(blockingForLabel, "status")
+    const reason = input.paymentVerified
+      ? "Payment was verified, but this name became unavailable before the claim completed"
+      : status === "reserved" ? "Desired label is reserved" : "Desired label is unavailable"
+    throw conflictError(reason, availabilityDetails(status === "reserved" ? "reserved" : "taken", reason))
+  }
+
+  return {
+    policy,
+    labelNormalized,
+    labelDisplay,
+    priceCents: requiredNumber(input.quote, "price_cents"),
+    protocolIssuanceRequired: protocolIssuanceRequired(settings),
+  }
 }
 
 export async function claimCommunityHandle(input: {
@@ -1022,113 +1265,97 @@ export async function claimCommunityHandle(input: {
   if (!quoteId.trim()) {
     throw badRequestError("quote is required")
   }
+
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  let priceCents = 0
+  let requiresProtocolIssuance = false
+  let protocolOwnerWalletAttachmentId: string | null = null
   try {
-    const tx = await db.client.transaction("write")
+    const quote = await getClaimQuote(db.client, {
+      quoteId,
+      communityId: input.communityId,
+      userId: input.userId,
+    })
+    const existing = await getExistingHandleForQuote(db.client, quoteId)
+    if (existing) {
+      return serializeHandle(existing)
+    }
+    const checked = await assertClaimQuoteStillClaimable({
+      executor: db.client,
+      communityId: input.communityId,
+      userId: input.userId,
+      quoteId,
+      quote,
+      now: nowIso(),
+      paymentVerified: false,
+    })
+    priceCents = checked.priceCents
+    requiresProtocolIssuance = checked.protocolIssuanceRequired
+  } finally {
+    db.close()
+  }
+
+  if (requiresProtocolIssuance) {
+    protocolOwnerWalletAttachmentId = (await requireProtocolOwnerWalletForClaim({
+      body: input.body,
+      userId: input.userId,
+      userRepository: input.userRepository,
+    })).walletAttachmentId
+  }
+
+  if (priceCents > 0) {
+    await verifyPaymentForPaidClaim({
+      env: input.env,
+      body: input.body,
+      quoteId,
+      priceCents,
+      userWalletAttachments: await input.userRepository.getWalletAttachmentsByUserId(input.userId),
+    })
+  }
+  const paymentVerified = priceCents > 0
+
+  if (requiresProtocolIssuance) {
+    protocolOwnerWalletAttachmentId = (await requireProtocolOwnerWalletForClaim({
+      body: input.body,
+      userId: input.userId,
+      userRepository: input.userRepository,
+    })).walletAttachmentId
+  }
+
+  const writeDb = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  try {
+    const tx = await writeDb.client.transaction("write")
     try {
-      const quoteResult = await tx.execute({
-        sql: `
-          SELECT *
-          FROM community_handle_claim_quotes
-          WHERE handle_claim_quote_id = ?1
-            AND community_id = ?2
-            AND user_id = ?3
-          LIMIT 1
-        `,
-        args: [quoteId, input.communityId, input.userId],
+      const quote = await getClaimQuote(tx, {
+        quoteId,
+        communityId: input.communityId,
+        userId: input.userId,
       })
-      const quote = quoteResult.rows[0]
-      if (!quote) {
-        throw notFoundError("Handle quote not found")
-      }
 
-      const existingForQuote = await tx.execute({
-        sql: `
-          SELECT *
-          FROM community_handles
-          WHERE handle_claim_quote_id = ?1
-          LIMIT 1
-        `,
-        args: [quoteId],
-      })
-      if (existingForQuote.rows[0]) {
+      const existingForQuote = await getExistingHandleForQuote(tx, quoteId)
+      if (existingForQuote) {
         await tx.commit()
-        return serializeHandle(existingForQuote.rows[0])
+        return serializeHandle(existingForQuote)
       }
 
-      const status = requiredString(quote, "status")
       const now = nowIso()
-      await expireStaleHandleQuotes({
+      const checked = await assertClaimQuoteStillClaimable({
         executor: tx,
         communityId: input.communityId,
         userId: input.userId,
-        now,
-      })
-      if (status !== "quoted") {
-        throw eligibilityFailed("Handle quote is no longer claimable")
-      }
-      if (Date.parse(requiredString(quote, "expires_at")) <= Date.parse(now)) {
-        await tx.execute({
-          sql: `
-            UPDATE community_handle_claim_quotes
-            SET status = 'expired',
-                updated_at = ?2
-            WHERE handle_claim_quote_id = ?1
-          `,
-          args: [quoteId, now],
-        })
-        await tx.commit()
-        throw eligibilityFailed("Handle quote has expired")
-      }
-
-      const policy = await getNamespacePolicy(tx, input.communityId)
-      if (!policy || policy.namespace_id !== requiredString(quote, "namespace_id")) {
-        throw eligibilityFailed("Community names are not available for this community")
-      }
-      if (!policy.claims_enabled) {
-        throw eligibilityFailed("Community name claims are currently disabled")
-      }
-      const settings = parseSettings(policy.settings_json)
-      await requireClaimAccess({
-        client: tx,
-        communityId: input.communityId,
-        userId: input.userId,
-        policy,
-        settings,
-      })
-
-      const labelNormalized = requiredString(quote, "label_normalized")
-      const labelDisplay = requiredString(quote, "label_display")
-      if (isReservedLabel(labelNormalized, settings)) {
-        const reason = "Desired label is reserved"
-        throw eligibilityFailed(reason, availabilityDetails("reserved", reason))
-      }
-      const activeForUser = await getActiveHandleForUser(tx, policy.namespace_id, input.userId)
-      if (activeForUser) {
-        const activeLabel = requiredString(activeForUser, "label_normalized")
-        const availability: Availability = activeLabel === labelNormalized
-          ? "already_claimed_by_viewer"
-          : "viewer_has_claim"
-        const reason = activeLabel === labelNormalized
-          ? "Desired label is already active for this community"
-          : "You already have an active name in this community"
-        throw conflictError(reason, availabilityDetails(availability, reason))
-      }
-      const blockingForLabel = await getBlockingHandleForLabel(tx, policy.namespace_id, labelNormalized)
-      if (blockingForLabel) {
-        const status = requiredString(blockingForLabel, "status")
-        const reason = status === "reserved" ? "Desired label is reserved" : "Desired label is unavailable"
-        throw conflictError(reason, availabilityDetails(status === "reserved" ? "reserved" : "taken", reason))
-      }
-
-      const priceCents = requiredNumber(quote, "price_cents")
-      await verifyPaymentForPaidClaim({
-        env: input.env,
-        body: input.body,
         quoteId,
-        priceCents,
-        userWalletAttachments: await input.userRepository.getWalletAttachmentsByUserId(input.userId),
+        quote,
+        now,
+        paymentVerified,
       })
+      if (checked.protocolIssuanceRequired && !protocolOwnerWalletAttachmentId) {
+        throw eligibilityFailed("protocol_owner_wallet_attachment is required for protocol-issued names", {
+          protocol_owner_wallet_attachment: "missing",
+        })
+      }
+      const persistedProtocolOwnerWalletAttachmentId = checked.protocolIssuanceRequired
+        ? protocolOwnerWalletAttachmentId
+        : null
 
       const handleId = makeId("ch")
       await tx.execute({
@@ -1136,27 +1363,28 @@ export async function claimCommunityHandle(input: {
           INSERT INTO community_handles (
             community_handle_id, community_id, user_id, namespace_id, handle_claim_quote_id,
             label_normalized, label_display, status, issuance_source, price_cents, currency,
-            pricing_model, pricing_tier, settlement_wallet_attachment_id, funding_tx_ref, settlement_tx_ref,
+            pricing_model, pricing_tier, settlement_wallet_attachment_id, protocol_owner_wallet_attachment_id, funding_tx_ref, settlement_tx_ref,
             lease_started_at, lease_expires_at, created_at, updated_at
           ) VALUES (
             ?1, ?2, ?3, ?4, ?5,
             ?6, ?7, 'active', 'claim', ?8, 'USD',
-            ?9, ?10, ?11, ?12, ?13,
-            ?14, NULL, ?14, ?14
+            ?9, ?10, ?11, ?12, ?13, ?14,
+            ?15, NULL, ?15, ?15
           )
         `,
         args: [
           handleId,
           input.communityId,
           input.userId,
-          policy.namespace_id,
+          checked.policy.namespace_id,
           quoteId,
-          labelNormalized,
-          labelDisplay,
-          priceCents,
+          checked.labelNormalized,
+          checked.labelDisplay,
+          checked.priceCents,
           stringOrNull(rowValue(quote, "pricing_model")),
           stringOrNull(rowValue(quote, "pricing_tier")),
           input.body.settlement_wallet_attachment?.trim() || null,
+          persistedProtocolOwnerWalletAttachmentId,
           input.body.funding_tx_ref?.trim() || null,
           input.body.settlement_tx_ref?.trim() || input.body.funding_tx_ref?.trim() || null,
           now,
@@ -1191,6 +1419,6 @@ export async function claimCommunityHandle(input: {
       tx.close()
     }
   } finally {
-    db.close()
+    writeDb.close()
   }
 }

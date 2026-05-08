@@ -878,6 +878,7 @@ export type CommunityHandle = {
   pricing_model: "free" | "flat_by_length" | "custom_curve" | "gated_then_flat" | null;
   pricing_tier: string | null;
   settlement_wallet_attachment: string | null;
+  protocol_owner_wallet_attachment: string | null;
   funding_tx_ref: string | null;
   settlement_tx_ref: string | null;
   lease_started_at: number | null;
@@ -888,6 +889,7 @@ export type CommunityHandle = {
 export type CommunityHandleClaimRequest = {
   quote: string;
   settlement_wallet_attachment?: string | null;
+  protocol_owner_wallet_attachment?: string | null;
   funding_tx_ref?: string | null;
   settlement_tx_ref?: string | null;
 };
@@ -928,6 +930,7 @@ export type CommunityHandlePolicySettings = {
   quote_ttl_seconds?: number;
   reserved_labels?: Array<string>;
   special_price_cents_by_label?: Record<string, number>;
+  issuance_mode?: "app_internal" | "spaces_subspace";
 };
 
 export type CommunityHandlePaymentInstructions = {
@@ -957,6 +960,9 @@ export type CommunityHandleQuote = {
   currency: "USD";
   pricing_model: "free" | "flat_by_length" | "custom_curve" | "gated_then_flat" | null;
   pricing_tier: string | null;
+  protocol_issuance_required: boolean;
+  protocol_issuance_eligible: boolean;
+  protocol_issuance_reason: string | null;
   payment_instructions: CommunityHandlePaymentInstructions | null;
   quote_ttl_seconds: number;
   quoted_at: number;

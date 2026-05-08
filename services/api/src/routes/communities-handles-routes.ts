@@ -2,6 +2,7 @@ import { Hono } from "hono"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import {
   claimCommunityHandle,
+  getCommunityHandleStatus,
   getCommunityHandlePolicy,
   getMyCommunityHandle,
   listCommunityHandles,
@@ -26,6 +27,17 @@ export function registerCommunityHandleRoutes(communities: Hono<AuthenticatedEnv
   communities.get("/:communityId/handles/me", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const result = await getMyCommunityHandle({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      communityRepository,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.get("/:communityId/handles/status", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await getCommunityHandleStatus({
       env: c.env,
       userId: actor.userId,
       communityId,
@@ -84,13 +96,14 @@ export function registerCommunityHandleRoutes(communities: Hono<AuthenticatedEnv
   })
 
   communities.post("/:communityId/handles/quote", async (c) => {
-    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const { actor, communityId, communityRepository, userRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<CommunityHandleQuoteRequest>(c, "Invalid community handle quote payload")
     const result = await quoteCommunityHandle({
       env: c.env,
       userId: actor.userId,
       communityId,
       body,
+      userRepository,
       communityRepository,
     })
     return c.json(result, 200)

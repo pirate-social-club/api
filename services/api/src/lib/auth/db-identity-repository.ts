@@ -9,7 +9,7 @@ import {
   getGlobalHandleRow,
   getGlobalHandleRowByLabelNormalized,
   getVerifiedLinkedHandleRowByLabelNormalized,
-  getActiveWalletAttachmentRowByAddress,
+  getActiveWalletAttachmentRowByWallet,
   listLinkedHandleRows,
   getProfileRow,
   getUserRow,
@@ -17,6 +17,7 @@ import {
   loadSnapshot,
   reconcileWalletAttachments,
 } from "./auth-db-user-queries"
+import { listIdentityWallets } from "./upstream-wallets"
 import { listCreatedCommunityRowsByCreatorUserId } from "./auth-db-community-queries"
 import {
   hasUniqueConstraintField,
@@ -73,6 +74,11 @@ function normalizePublicLinkedHandleLabel(value: string): string {
   return value.trim().toLowerCase().replace(/^@+/u, "")
 }
 
+function normalizeSubmittedPrefixedId(prefix: string, value: string): string {
+  const trimmed = value.trim()
+  return trimmed.startsWith(`${prefix}_${prefix}_`) ? trimmed.slice(prefix.length + 1) : trimmed
+}
+
 function isActiveAuthProviderSubjectConflict(error: unknown): boolean {
   return hasUniqueConstraintName(error, "idx_auth_provider_links_active_subject")
     || hasUniqueConstraintField(error, "auth_provider_links.provider_subject")
@@ -80,19 +86,25 @@ function isActiveAuthProviderSubjectConflict(error: unknown): boolean {
 }
 
 async function resolveExistingUserIdForWalletIdentity(
-  executor: Parameters<typeof getActiveWalletAttachmentRowByAddress>[0],
+  executor: Parameters<typeof getActiveWalletAttachmentRowByWallet>[0],
   identity: UpstreamIdentity,
 ): Promise<string | null> {
-  if (
-    (identity.provider !== "privy" && identity.provider !== "jwt")
-    || identity.walletAddresses.length === 0
-  ) {
+  if (identity.provider !== "privy" && identity.provider !== "jwt") {
+    return null
+  }
+
+  const wallets = listIdentityWallets(identity)
+  if (wallets.length === 0) {
     return null
   }
 
   const userIds = new Set<string>()
-  for (const walletAddress of identity.walletAddresses) {
-    const existingWallet = await getActiveWalletAttachmentRowByAddress(executor, walletAddress)
+  for (const wallet of wallets) {
+    const existingWallet = await getActiveWalletAttachmentRowByWallet(
+      executor,
+      wallet.chainNamespace,
+      wallet.walletAddressNormalized,
+    )
     if (existingWallet) {
       userIds.add(existingWallet.user_id)
     }
@@ -308,6 +320,33 @@ export class DatabaseIdentityRepository {
   async getWalletAttachmentsByUserId(userId: string): Promise<WalletAttachmentSummary[]> {
     const walletRows = await listActiveWalletAttachmentRows(this.client, userId)
     return serializeWalletAttachments(walletRows)
+  }
+
+  async getWalletAttachmentById(walletAttachmentId: string): Promise<(WalletAttachmentSummary & { user_id: string; status: string }) | null> {
+    const rawId = normalizeSubmittedPrefixedId("wal", walletAttachmentId)
+    if (!rawId) {
+      return null
+    }
+    const row = (await this.client.execute({
+      sql: `
+        SELECT wallet_attachment_id, user_id, chain_namespace, wallet_address_normalized, wallet_address_display, is_primary, status
+        FROM wallet_attachments
+        WHERE wallet_attachment_id = ?1
+        LIMIT 1
+      `,
+      args: [rawId],
+    })).rows[0]
+    if (!row) {
+      return null
+    }
+    return {
+      wallet_attachment: String((row as Record<string, unknown>).wallet_attachment_id),
+      user_id: String((row as Record<string, unknown>).user_id),
+      chain_namespace: String((row as Record<string, unknown>).chain_namespace),
+      wallet_address: String((row as Record<string, unknown>).wallet_address_display),
+      is_primary: Number((row as Record<string, unknown>).is_primary ?? 0) === 1,
+      status: String((row as Record<string, unknown>).status),
+    }
   }
 
   async getOnboardingStatusByUserId(userId: string): Promise<OnboardingStatus | null> {
