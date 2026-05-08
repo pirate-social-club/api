@@ -1,4 +1,4 @@
-import { conflictError } from "../../errors"
+import { badRequestError, conflictError, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
 import { getProfilePublicHandleLabel } from "../auth-serializers"
 import {
@@ -9,7 +9,7 @@ import {
 } from "../global-handle-policy"
 import { assertRedditHandleClaimEligible, buildRedditHandleClaimQuote } from "../reddit-handle-claim-policy"
 import { exposeMemoryGlobalHandle, exposeMemoryProfile, getMemoryRecordByUserId, getMemoryStore, type MemoryGlobalHandle } from "./memory-auth-store"
-import type { GlobalHandle, HandleUpgradeQuote, Profile } from "../../../types"
+import type { GlobalHandle, GlobalHandlePaidClaimRequest, HandleUpgradeQuote, Profile } from "../../../types"
 import type { PublicProfileResolution, UpdateProfileInput } from "../repositories"
 
 export class MemoryProfileRepository {
@@ -289,7 +289,7 @@ export class MemoryProfileRepository {
       return redditQuote
     }
 
-    return buildHandleUpgradeQuote({
+    const quote = buildHandleUpgradeQuote({
       desiredLabel: desired.labelDisplay,
       labelNormalized: desired.labelNormalized,
       currentActiveLabelNormalized: record.profile.global_handle.label.replace(/\.pirate$/i, "").toLowerCase(),
@@ -299,6 +299,87 @@ export class MemoryProfileRepository {
       }),
       labelAvailable,
     })
+    if (!quote.eligible || quote.price_cents <= 0) {
+      return quote
+    }
+    return {
+      ...quote,
+      quote: `ghq_mem_${desired.labelNormalized}`,
+      currency: "USD",
+      quote_ttl_seconds: 900,
+      quoted_at: Math.floor(Date.now() / 1000),
+      expires_at: Math.floor(Date.now() / 1000) + 900,
+      payment_instructions: null,
+    }
+  }
+
+  async claimPaidGlobalHandle(userId: string, body: GlobalHandlePaidClaimRequest): Promise<GlobalHandle | null> {
+    const record = getMemoryRecordByUserId(userId)
+    if (!record) {
+      return null
+    }
+    const quote = body.quote?.trim()
+    if (!quote) {
+      throw badRequestError("quote is required")
+    }
+    const labelNormalized = quote.replace(/^ghq_mem_/, "").replace(/^ghq_/, "")
+    if (!body.settlement_wallet_attachment?.trim()) {
+      throw badRequestError("settlement_wallet_attachment is required for paid handle claims")
+    }
+    if (!body.funding_tx_ref?.trim()) {
+      throw badRequestError("funding_tx_ref is required for paid handle claims")
+    }
+    if (!record.walletAttachments.some((wallet) => wallet.wallet_attachment_id === body.settlement_wallet_attachment)) {
+      throw notFoundError("settlement_wallet_attachment is not available for this user")
+    }
+    if (!this.isGlobalHandleAvailable(userId, `${labelNormalized}.pirate`)) {
+      throw conflictError("Desired label is unavailable")
+    }
+    const paidQuote = buildHandleUpgradeQuote({
+      desiredLabel: `${labelNormalized}.pirate`,
+      labelNormalized,
+      currentActiveLabelNormalized: record.profile.global_handle.label.replace(/\.pirate$/i, "").toLowerCase(),
+      cleanupRenameAvailable: false,
+      labelAvailable: true,
+    })
+    if (!paidQuote.eligible || paidQuote.price_cents <= 0) {
+      throw badRequestError("Global handle quote is not payable")
+    }
+
+    const updatedAt = nowIso()
+    const next: MemoryGlobalHandle = {
+      global_handle_id: makeId("ghl"),
+      label: `${labelNormalized}.pirate`,
+      tier: paidQuote.tier,
+      status: "active",
+      issuance_source: "paid_upgrade",
+      redirect_target_global_handle_id: null,
+      price_paid_cents: paidQuote.price_cents,
+      free_rename_consumed: true,
+      issued_at: updatedAt,
+      replaced_at: null,
+    }
+
+    record.profile = {
+      ...record.profile,
+      global_handle: next,
+      linked_handles: [
+        {
+          linked_handle_id: `global:${next.global_handle_id}`,
+          label: next.label,
+          kind: "pirate",
+          verification_state: "verified",
+        },
+        ...(record.profile.linked_handles ?? []).filter((handle) => handle.kind !== "pirate"),
+      ],
+      updated_at: updatedAt,
+    }
+    record.onboarding = {
+      ...record.onboarding,
+      generated_handle_assigned: false,
+      cleanup_rename_available: false,
+    }
+    return exposeMemoryGlobalHandle(next)
   }
 
   private isGlobalHandleAvailable(userId: string, labelDisplay: string): boolean {

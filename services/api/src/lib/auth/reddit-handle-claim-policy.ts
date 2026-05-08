@@ -1,10 +1,9 @@
 import { eligibilityFailed } from "../errors"
 import type { HandleUpgradeQuote, RedditImportSummary } from "../../types"
+import { resolveGlobalHandlePaidPrice } from "./global-handle-policy"
 
 const REDDIT_STANDARD_HANDLE_MIN_LENGTH = 8
 const REDDIT_MIN_CLAIM_LENGTH = 5
-const PREMIUM_7_HANDLE_UPGRADE_PRICE_USD = 250
-const usdToCents = (value: number) => Math.round(value * 100)
 
 function requiredImportedRedditScore(labelLength: number): number | null {
   if (labelLength >= REDDIT_STANDARD_HANDLE_MIN_LENGTH) {
@@ -43,14 +42,15 @@ export function buildRedditHandleClaimQuote(input: {
   const tier: HandleUpgradeQuote["tier"] = input.labelNormalized.length >= REDDIT_STANDARD_HANDLE_MIN_LENGTH
     ? "standard"
     : "premium"
+  const paidPrice = resolveGlobalHandlePaidPrice({ labelNormalized: input.labelNormalized })
   const base = {
     desired_label: input.desiredLabel,
     tier,
     price_cents: 0,
     benefit_source: "verified_reddit_username" as const,
-    reputation_discount_cents: input.labelNormalized.length === 7
-      ? usdToCents(PREMIUM_7_HANDLE_UPGRADE_PRICE_USD)
-      : 0,
+    reputation_discount_cents: paidPrice.eligible ? paidPrice.priceCents : 0,
+    policy_version: paidPrice.policyVersion,
+    pricing_tier: paidPrice.pricingTier,
   }
 
   if (input.labelNormalized === input.currentActiveLabelNormalized) {
@@ -85,6 +85,15 @@ export function buildRedditHandleClaimQuote(input: {
       ...base,
       eligible: false,
       reason: "Desired label must match a verified Reddit username",
+      claim_reason: null,
+    }
+  }
+
+  if (!paidPrice.eligible) {
+    return {
+      ...base,
+      eligible: false,
+      reason: paidPrice.reason,
       claim_reason: null,
     }
   }

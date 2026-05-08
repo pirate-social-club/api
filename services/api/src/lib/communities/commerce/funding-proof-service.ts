@@ -1,5 +1,5 @@
 import { Interface, JsonRpcProvider, getAddress, zeroPadValue } from "ethers"
-import { badRequestError } from "../../errors"
+import { badRequestError, fundingConfirmationTimeout } from "../../errors"
 import type { Env } from "../../../env"
 import type { Client } from "../../sql-client"
 import { parseJsonValue, type PurchaseQuoteRow } from "./row-types"
@@ -21,6 +21,16 @@ const ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a116
 const ERC20_TRANSFER_INTERFACE = new Interface([
   "event Transfer(address indexed from, address indexed to, uint256 value)",
 ])
+
+function isTransactionWaitTimeout(error: unknown): boolean {
+  const candidate = error as { code?: unknown; shortMessage?: unknown; message?: unknown } | null
+  const code = typeof candidate?.code === "string" ? candidate.code : ""
+  const message = [
+    typeof candidate?.shortMessage === "string" ? candidate.shortMessage : "",
+    typeof candidate?.message === "string" ? candidate.message : "",
+  ].join(" ").toLowerCase()
+  return code === "TIMEOUT" || message.includes("timeout") || message.includes("timed out")
+}
 
 export type BuyerFundingReceipt = {
   txRef: string
@@ -105,11 +115,34 @@ async function verifyPirateCheckoutUsdcFundingReceipt(input: {
   const expectedToken = getAddress(resolvePirateCheckoutUsdcTokenAddress(input.env))
 
   const provider = new JsonRpcProvider(resolvePirateCheckoutRpcUrl(input.env), expectedSourceChainId)
-  const receipt = await provider.waitForTransaction(
-    input.fundingTxRef,
-    1,
-    resolvePirateCheckoutTxWaitTimeoutMs(input.env),
-  )
+  const txWaitTimeoutMs = resolvePirateCheckoutTxWaitTimeoutMs(input.env)
+  let receipt: Awaited<ReturnType<typeof provider.waitForTransaction>>
+  try {
+    receipt = await provider.waitForTransaction(
+      input.fundingTxRef,
+      1,
+      txWaitTimeoutMs,
+    )
+  } catch (error) {
+    if (isTransactionWaitTimeout(error)) {
+      console.warn("[pirate-checkout] funding confirmation timed out", {
+        quoteId: input.quote.quote_id,
+        fundingTxRef: input.fundingTxRef,
+        sourceChainId: expectedSourceChainId,
+        timeoutMs: txWaitTimeoutMs,
+      })
+      throw fundingConfirmationTimeout(
+        "Funding transaction confirmation timed out",
+        {
+          quote_id: input.quote.quote_id,
+          funding_tx_ref: input.fundingTxRef,
+          source_chain_id: expectedSourceChainId,
+          timeout_ms: txWaitTimeoutMs,
+        },
+      )
+    }
+    throw error
+  }
   if (!receipt || receipt.status !== 1) {
     throw badRequestError("Funding transaction is not confirmed")
   }
