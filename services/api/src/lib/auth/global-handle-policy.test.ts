@@ -29,6 +29,29 @@ describe("global handle paid policy", () => {
     })
   })
 
+  test("prices exact-match prestige and obvious valuable terms", () => {
+    expect(resolveGlobalHandlePaidPrice({ labelNormalized: "king" })).toMatchObject({
+      priceCents: 100_000,
+      pricingTier: "trophy",
+    })
+    expect(resolveGlobalHandlePaidPrice({ labelNormalized: "queen" })).toMatchObject({
+      priceCents: 50_000,
+      pricingTier: "trophy",
+    })
+    expect(resolveGlobalHandlePaidPrice({ labelNormalized: "sheikh" })).toMatchObject({
+      priceCents: 25_000,
+      pricingTier: "trophy",
+    })
+    expect(resolveGlobalHandlePaidPrice({ labelNormalized: "crown" })).toMatchObject({
+      priceCents: 50_000,
+      pricingTier: "trophy",
+    })
+    expect(resolveGlobalHandlePaidPrice({ labelNormalized: "tax" })).toMatchObject({
+      priceCents: 500_000,
+      pricingTier: "commercial_keyword",
+    })
+  })
+
   test("discounts hyphenated and numbered labels after premium matching", () => {
     expect(resolveGlobalHandlePaidPrice({ labelNormalized: "my-name" })).toMatchObject({
       priceCents: 500,
