@@ -1,3 +1,8 @@
+---
+name: pirate-name-purchase
+description: Buy a global .pirate name through Pirate's x402 paid-handle API. Use when a user asks an agent to quote, pay for, or claim a .pirate domain/name without visiting the Pirate web app.
+---
+
 # Pirate .pirate Name Purchase
 
 Use this skill when a user asks an agent to quote or buy a global `.pirate` name without opening the Pirate website.
