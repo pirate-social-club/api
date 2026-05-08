@@ -35,7 +35,7 @@ import type {
   Post,
 } from "../../types"
 
-type HomeFeedProjectionRow = {
+export type HomeFeedProjectionRow = {
   community_id: string
   source_post_id: string
   source_created_at: string
@@ -131,8 +131,12 @@ function parseOffsetCursor(cursor: string | null | undefined): number {
   return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : 0
 }
 
-function getProjectionScore(row: HomeFeedProjectionRow): number {
+function getProjectionVoteScore(row: HomeFeedProjectionRow): number {
   return row.upvote_count - row.downvote_count
+}
+
+function getProjectionEngagementScore(row: HomeFeedProjectionRow): number {
+  return getProjectionVoteScore(row) * 3 + row.comment_count * 2 + row.like_count
 }
 
 function getProjectionCreatedAtMs(row: HomeFeedProjectionRow): number {
@@ -142,7 +146,7 @@ function getProjectionCreatedAtMs(row: HomeFeedProjectionRow): number {
 
 function getBestProjectionRank(row: HomeFeedProjectionRow, now: number): number {
   const ageHours = Math.max(0, (now - getProjectionCreatedAtMs(row)) / 3_600_000)
-  return getProjectionScore(row) / Math.pow(ageHours + 2, 1.5)
+  return getProjectionEngagementScore(row) / Math.pow(ageHours + 2, 1.5)
 }
 
 function toHomeFeedProjectionRow(row: unknown): HomeFeedProjectionRow {
@@ -507,6 +511,58 @@ export function sortCommunitySummaries(
   })
 }
 
+export function sortCommunitySummariesByViews(
+  summaries: InternalHomeFeedCommunitySummary[],
+): InternalHomeFeedCommunitySummary[] {
+  return [...summaries].sort((left, right) => {
+    const leftViews = left.view_count ?? 0
+    const rightViews = right.view_count ?? 0
+    if (rightViews !== leftViews) return rightViews - leftViews
+
+    const leftUpdated = Date.parse(left.updated_at)
+    const rightUpdated = Date.parse(right.updated_at)
+    if (rightUpdated !== leftUpdated) return rightUpdated - leftUpdated
+
+    return left.community_id.localeCompare(right.community_id)
+  })
+}
+
+export function sortHomeFeedProjectionRows(
+  rows: readonly HomeFeedProjectionRow[],
+  sort: HomeFeedSort,
+  now: number,
+): HomeFeedProjectionRow[] {
+  return [...rows].sort((left, right) => {
+    if (sort === "new") {
+      return getProjectionCreatedAtMs(right) - getProjectionCreatedAtMs(left)
+    }
+
+    const leftHasEngagement = getProjectionEngagementScore(left) > 0
+    const rightHasEngagement = getProjectionEngagementScore(right) > 0
+    if (leftHasEngagement !== rightHasEngagement) {
+      return rightHasEngagement ? 1 : -1
+    }
+
+    if (sort === "top") {
+      const scoreDiff = getProjectionEngagementScore(right) - getProjectionEngagementScore(left)
+      if (scoreDiff !== 0) {
+        return scoreDiff
+      }
+    } else {
+      const rankDiff = getBestProjectionRank(right, now) - getBestProjectionRank(left, now)
+      if (rankDiff !== 0) {
+        return rankDiff
+      }
+    }
+
+    const createdAtDiff = getProjectionCreatedAtMs(right) - getProjectionCreatedAtMs(left)
+    if (createdAtDiff !== 0) {
+      return createdAtDiff
+    }
+    return right.source_post_id.localeCompare(left.source_post_id)
+  })
+}
+
 async function listHomeFeedProjectionRows(input: {
   env: Env
   communityIds: string[]
@@ -688,7 +744,7 @@ export async function listHomeFeed(input: {
   const communityAggregateById = new Map<string, CommunityAggregate>()
   for (const row of timeFilteredRows) {
     const existing = communityAggregateById.get(row.community_id)
-    const rowScore = getProjectionScore(row)
+    const rowScore = getProjectionEngagementScore(row)
     const rowBestRank = getBestProjectionRank(row, now)
     const rowCreatedAtMs = getProjectionCreatedAtMs(row)
     if (!existing) {
@@ -712,29 +768,7 @@ export async function listHomeFeed(input: {
 
   const communitiesWithPosts = filterCommunitiesWithPosts(communitySummaries, communityAggregateById, cutoffMs != null)
 
-  const sortedCommunities = sortCommunitySummaries(communitiesWithPosts, communityAggregateById, sort)
-
-  const sortedRows = [...timeFilteredRows].sort((left, right) => {
-    if (sort === "new") {
-      return getProjectionCreatedAtMs(right) - getProjectionCreatedAtMs(left)
-    }
-    if (sort === "top") {
-      const scoreDiff = getProjectionScore(right) - getProjectionScore(left)
-      if (scoreDiff !== 0) {
-        return scoreDiff
-      }
-    } else {
-      const rankDiff = getBestProjectionRank(right, now) - getBestProjectionRank(left, now)
-      if (rankDiff !== 0) {
-        return rankDiff
-      }
-    }
-    const createdAtDiff = getProjectionCreatedAtMs(right) - getProjectionCreatedAtMs(left)
-    if (createdAtDiff !== 0) {
-      return createdAtDiff
-    }
-    return right.source_post_id.localeCompare(left.source_post_id)
-  })
+  const sortedRows = sortHomeFeedProjectionRows(timeFilteredRows, sort, now)
 
   const offset = parseOffsetCursor(input.cursor)
   const pageRows = sortedRows.slice(offset, offset + 25)
@@ -870,7 +904,7 @@ export async function listHomeFeed(input: {
   const topCommunities = await resolveTopCommunitiesIdentity(
     input.env,
     input.communityRepository,
-    sortedCommunities.slice(0, 6),
+    sortCommunitySummariesByViews(communitiesWithPosts).slice(0, 6),
     communityIdentityById,
   )
   phaseTimings.top_communities_ms = elapsedMs(phaseStartedAt)

@@ -6,10 +6,12 @@ import {
   listHomeFeedCommunityViewCounts,
   resolveHomeFeedCommunityIds,
   resolveJoinedHomeFeedCommunityIds,
+  sortCommunitySummariesByViews,
   sortCommunitySummaries,
+  sortHomeFeedProjectionRows,
   withHomeFeedCommunityIdentity,
 } from "./home-feed-service"
-import type { CommunityAggregate, InternalHomeFeedCommunitySummary } from "./home-feed-service"
+import type { CommunityAggregate, HomeFeedProjectionRow, InternalHomeFeedCommunitySummary } from "./home-feed-service"
 import { buildTestEnv, createControlPlaneTestClient, withMockedFetch } from "../../../tests/helpers"
 
 let cleanup: (() => Promise<void>) | null = null
@@ -230,10 +232,68 @@ describe("filterVisibleHomeFeedProjections", () => {
   })
 })
 
+describe("sortHomeFeedProjectionRows", () => {
+  const now = Date.parse("2026-04-18T12:00:00.000Z")
+
+  function row(input: Partial<HomeFeedProjectionRow> & { source_post_id: string }): HomeFeedProjectionRow {
+    return {
+      community_id: "cmt_alpha",
+      source_post_id: input.source_post_id,
+      source_created_at: input.source_created_at ?? "2026-04-18T10:00:00.000Z",
+      visibility: input.visibility ?? "public",
+      upvote_count: input.upvote_count ?? 0,
+      downvote_count: input.downvote_count ?? 0,
+      comment_count: input.comment_count ?? 0,
+      like_count: input.like_count ?? 0,
+    }
+  }
+
+  test("sorts top by engagement score and pushes zero-engagement posts below engaged posts", () => {
+    const result = sortHomeFeedProjectionRows([
+      row({ source_post_id: "pst_recent_zero", source_created_at: "2026-04-18T11:59:00.000Z" }),
+      row({ source_post_id: "pst_commented", comment_count: 2, source_created_at: "2026-04-18T09:00:00.000Z" }),
+      row({ source_post_id: "pst_upvoted", upvote_count: 1, source_created_at: "2026-04-18T08:00:00.000Z" }),
+    ], "top", now)
+
+    expect(result.map((item) => item.source_post_id)).toEqual([
+      "pst_commented",
+      "pst_upvoted",
+      "pst_recent_zero",
+    ])
+  })
+
+  test("sorts best by time-decayed engagement and pushes zero-engagement posts below engaged posts", () => {
+    const result = sortHomeFeedProjectionRows([
+      row({ source_post_id: "pst_recent_zero", source_created_at: "2026-04-18T11:59:00.000Z" }),
+      row({ source_post_id: "pst_old_upvoted", upvote_count: 2, source_created_at: "2026-04-18T00:00:00.000Z" }),
+      row({ source_post_id: "pst_recent_liked", like_count: 1, source_created_at: "2026-04-18T11:00:00.000Z" }),
+    ], "best", now)
+
+    expect(result.map((item) => item.source_post_id)).toEqual([
+      "pst_recent_liked",
+      "pst_old_upvoted",
+      "pst_recent_zero",
+    ])
+  })
+
+  test("leaves new sorted by recency without engagement gating", () => {
+    const result = sortHomeFeedProjectionRows([
+      row({ source_post_id: "pst_old_engaged", upvote_count: 5, source_created_at: "2026-04-18T00:00:00.000Z" }),
+      row({ source_post_id: "pst_recent_zero", source_created_at: "2026-04-18T11:59:00.000Z" }),
+    ], "new", now)
+
+    expect(result.map((item) => item.source_post_id)).toEqual([
+      "pst_recent_zero",
+      "pst_old_engaged",
+    ])
+  })
+})
+
 function createCommunitySummary(input: {
   communityId: string
   displayName?: string
   updatedAt?: string
+  viewCount?: number | null
 }): InternalHomeFeedCommunitySummary {
   return {
     id: `com_${input.communityId}`,
@@ -244,7 +304,7 @@ function createCommunitySummary(input: {
     avatar_ref: null,
     member_count: null,
     follower_count: null,
-    view_count: null,
+    view_count: input.viewCount ?? null,
     updated_at: input.updatedAt ?? "2026-04-18T00:00:00.000Z",
   }
 }
@@ -274,6 +334,22 @@ describe("filterCommunitiesWithPosts", () => {
     const result = filterCommunitiesWithPosts([alpha, beta], aggregates, false)
 
     expect(result.map((summary) => summary.community_id)).toEqual(["cmt_alpha", "cmt_beta"])
+  })
+})
+
+describe("sortCommunitySummariesByViews", () => {
+  test("selects viewed communities before zero-view feed-ranked communities", () => {
+    const palestine = createCommunitySummary({ communityId: "cmt_palestine", viewCount: 130 })
+    const baddie = createCommunitySummary({ communityId: "cmt_baddie", viewCount: 0 })
+    const kuwait = createCommunitySummary({ communityId: "cmt_kuwait", viewCount: 0 })
+
+    const result = sortCommunitySummariesByViews([baddie, kuwait, palestine])
+
+    expect(result.map((summary) => summary.community_id)).toEqual([
+      "cmt_palestine",
+      "cmt_baddie",
+      "cmt_kuwait",
+    ])
   })
 })
 
