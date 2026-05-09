@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { createClient } from "@libsql/client"
 import { hydrateGenericLinkEnrichment } from "./service"
+import { MAX_POST_JSON_PROJECTION_LENGTH } from "../community-post-serialization"
 
 const clients: Array<{ close: () => void }> = []
 
@@ -228,6 +229,71 @@ describe("hydrateGenericLinkEnrichment", () => {
     expect(snapshot.provider).toBe("firecrawl")
     expect(snapshot.description).toBe("Cached description")
     expect(snapshot.published_at).toBe("2026-05-01T12:00:00.000Z")
+  })
+
+  test("caps oversized cached enrichment fields before materializing a post snapshot", async () => {
+    const controlPlaneClient = await createControlPlaneClient()
+    const communityClient = await createCommunityClient()
+    const oversizedText = "x".repeat(MAX_POST_JSON_PROJECTION_LENGTH)
+    await controlPlaneClient.execute({
+      sql: `
+        INSERT INTO link_enrichments (
+          link_enrichment_id, normalized_url, canonical_url, provider, status,
+          title, description, publisher, published_at, image_url,
+          markdown, summary_json, translations_json, summary_status, summary_model, error,
+          fetched_at, summarized_at, created_at, updated_at
+        ) VALUES (
+          'len_oversized', 'https://example.com/oversized', 'https://example.com/oversized',
+          'firecrawl', 'ready', ?1, ?1, 'Example',
+          '2026-05-01T12:00:00.000Z', 'https://cdn.example.com/oversized.jpg',
+          '# Oversized', ?2, NULL, 'ready', 'test-model',
+          NULL, '2026-05-02T08:00:00.000Z', NULL,
+          '2026-05-02T08:00:00.000Z', '2026-05-02T08:00:00.000Z'
+        )
+      `,
+      args: [
+        oversizedText,
+        JSON.stringify({
+          summary_paragraph: oversizedText,
+          short_summary: oversizedText,
+          key_points: [oversizedText, oversizedText],
+          generated_at: "2026-05-02T08:30:00.000Z",
+          model: "test-model",
+        }),
+      ],
+    })
+
+    await hydrateGenericLinkEnrichment({
+      env: {
+        FIRECRAWL_API_KEY: "fc-test",
+      },
+      controlPlaneClient,
+      communityClient,
+      postId: "pst_firecrawl",
+      url: "https://example.com/oversized",
+      checkedAt: "2026-05-02T09:00:00.000Z",
+      fetcher: (() => {
+        throw new Error("fetch should not be called for cache hits")
+      }) as typeof fetch,
+    })
+
+    const postRows = await communityClient.execute("SELECT link_enrichment_snapshot_json FROM posts WHERE post_id = 'pst_firecrawl'")
+    const rawSnapshot = String(postRows.rows[0]?.link_enrichment_snapshot_json)
+    const snapshot = JSON.parse(rawSnapshot) as {
+      title: string
+      description: string
+      summary: {
+        summary_paragraph: string
+        short_summary: string
+        key_points: string[]
+      }
+    }
+    expect(rawSnapshot.length < MAX_POST_JSON_PROJECTION_LENGTH).toBe(true)
+    expect(snapshot.title).toHaveLength(2000)
+    expect(snapshot.description).toHaveLength(2000)
+    expect(snapshot.summary.summary_paragraph).toHaveLength(4000)
+    expect(snapshot.summary.short_summary).toHaveLength(2000)
+    expect(snapshot.summary.key_points[0]).toHaveLength(1000)
   })
 
   test("uses Firecrawl, caches the enrichment, and materializes a community snapshot", async () => {

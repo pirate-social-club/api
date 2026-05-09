@@ -14,6 +14,7 @@ import {
   createSongArtifactBundleDraft,
   finalizeSongArtifactBundle,
   getSongArtifactBundle,
+  listSongArtifactBundles,
 } from "./song-artifact-repository"
 import { parseSongPreviewWindow } from "./song-artifact-preview"
 import {
@@ -28,7 +29,7 @@ import {
   requireVerifiedHuman,
 } from "./song-artifact-access"
 import type { Env } from "../../env"
-import type { CreateSongArtifactBundleRequest, SongArtifactBundle } from "../../types"
+import type { CreateSongArtifactBundleRequest, SongArtifactBundle, SongArtifactBundleListResponse } from "../../types"
 import type { SongArtifactCommunityRepository } from "./song-artifact-types"
 
 export async function createSongArtifactBundle(input: {
@@ -42,6 +43,10 @@ export async function createSongArtifactBundle(input: {
   const lyrics = input.body.lyrics?.trim() || ""
   if (!lyrics) {
     throw badRequestError("lyrics is required")
+  }
+  const title = input.body.title?.trim() || ""
+  if (!title) {
+    throw badRequestError("title is required")
   }
   if (input.body.preview_audio) {
     throw badRequestError("preview_audio uploads are not supported; use preview_window")
@@ -110,6 +115,7 @@ export async function createSongArtifactBundle(input: {
       songArtifactBundleId,
       body: {
         ...input.body,
+        title,
         lyrics,
         preview_window: previewWindow,
       },
@@ -195,4 +201,29 @@ export async function getSongArtifactBundleForCreator(input: {
     throw notFoundError("Song artifact bundle not found")
   }
   return bundle
+}
+
+export async function listSongArtifactBundlesForCreator(input: {
+  env: Env
+  userId: string
+  communityId: string
+  query?: string | null
+  limit: number
+  communityRepository: SongArtifactCommunityRepository
+}): Promise<SongArtifactBundleListResponse> {
+  await requireActiveCommunity(input.communityRepository, input.communityId)
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  try {
+    await requireMemberAccess(db.client, input.communityId, input.userId)
+  } finally {
+    db.close()
+  }
+
+  return await listSongArtifactBundles({
+    client: getControlPlaneClient(input.env),
+    communityId: input.communityId,
+    creatorUserId: input.userId,
+    query: input.query,
+    limit: input.limit,
+  })
 }

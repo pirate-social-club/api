@@ -10,6 +10,8 @@ import {
 import { detectSourceLanguageFromText } from "../localization/content-locale"
 import { numberOrNull, requiredNumber, rowValue, stringOrNull } from "../sql-row"
 import {
+  boundedPostJsonProjection,
+  OVERSIZED_LINK_ENRICHMENT_SNAPSHOT_JSON,
   POST_SELECT_COLUMNS,
   serializePost,
   toPostRow,
@@ -18,13 +20,14 @@ import type { CreatePostRequest, Post } from "../../types"
 import { decodePublicSongArtifactBundleId } from "../public-ids"
 
 type StoryLicensePreset = NonNullable<CreatePostRequest["license_preset"]>
+type PostWriteRequest = CreatePostRequest & { song_title?: string | null }
 
 function isStoryLicensePreset(value: unknown): value is StoryLicensePreset {
   return value === "non-commercial" || value === "commercial-use" || value === "commercial-remix"
 }
 
 function validateOriginalAssetLicense(input: {
-  body: CreatePostRequest
+  body: PostWriteRequest
   contentLabel: string
   requireLicense: boolean
 }): void {
@@ -87,7 +90,7 @@ export async function insertPost(input: {
   client: DbExecutor
   communityId: string
   authorUserId: string
-  body: CreatePostRequest
+  body: PostWriteRequest
   createdAt: string
   analysisOverride?: Pick<Post, "analysis_state" | "content_safety_state" | "age_gate_policy" | "status">
   agentWriteAuthorization?: {
@@ -117,8 +120,10 @@ export async function insertPost(input: {
   const disclosedQualifiersJson = disclosedQualifierSnapshots
     ? JSON.stringify(disclosedQualifierSnapshots)
     : null
-  const mediaRefsJson = input.body.media_refs ? JSON.stringify(input.body.media_refs) : null
-  const upstreamAssetRefsJson = input.body.upstream_asset_refs ? JSON.stringify(input.body.upstream_asset_refs) : null
+  const mediaRefsJson = boundedPostJsonProjection(input.body.media_refs ? JSON.stringify(input.body.media_refs) : null)
+  const upstreamAssetRefsJson = boundedPostJsonProjection(
+    input.body.upstream_asset_refs ? JSON.stringify(input.body.upstream_asset_refs) : null,
+  )
   const translationPolicy = input.body.translation_policy ?? "none"
   const visibility = input.body.visibility ?? "public"
   const idempotencyKey = input.body.idempotency_key?.trim() ?? ""
@@ -143,7 +148,7 @@ export async function insertPost(input: {
         identity_mode, anonymous_scope, anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot,
         agent_ownership_provider_snapshot, disclosed_qualifiers_json, label_id, label_assignment_status,
         label_assigned_by, label_assigned_at, label_ai_confidence, label_assignment_error, label_assignment_model,
-        label_assignment_result_json, post_type, status, song_mode, title, body, caption, visibility, lyrics,
+        label_assignment_result_json, post_type, status, song_mode, title, song_title, body, caption, visibility, lyrics,
         link_url, media_refs_json, song_artifact_bundle_id, source_language, translation_policy, rights_basis,
         access_mode, asset_id, parent_post_id, upstream_asset_refs_json, analysis_state, analysis_result_ref, content_safety_state,
         age_gate_policy, created_at, updated_at, idempotency_key, agent_handle_snapshot
@@ -152,8 +157,8 @@ export async function insertPost(input: {
         ?7, ?8, ?9, ?10, ?11, ?12,
         ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22,
         ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32,
-        ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, NULL, ?41,
-        ?42, ?43, ?43, ?44, ?45
+        ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, NULL,
+        ?42, ?43, ?44, ?44, ?45, ?46
       )
     `,
     args: [
@@ -182,6 +187,7 @@ export async function insertPost(input: {
       status,
       input.body.song_mode ?? null,
       title,
+      input.body.song_title ?? null,
       input.body.body ?? null,
       input.body.caption ?? null,
       visibility,
@@ -250,7 +256,10 @@ export async function updatePostLinkPreviewMetadata(input: {
       input.postId,
       input.linkOgImageUrl,
       input.linkOgTitle,
-      input.linkEnrichmentSnapshotJson ?? null,
+      boundedPostJsonProjection(
+        input.linkEnrichmentSnapshotJson,
+        OVERSIZED_LINK_ENRICHMENT_SNAPSHOT_JSON,
+      ),
       input.linkEnrichmentSyncedAt ?? null,
       input.updatedAt,
     ],
@@ -522,7 +531,7 @@ export async function updatePostLabelAssignment(input: {
       input.aiConfidence ?? null,
       input.assignmentError ?? null,
       input.assignmentModel ?? null,
-      input.assignmentResultJson ?? null,
+      boundedPostJsonProjection(input.assignmentResultJson),
       input.now,
     ],
   })

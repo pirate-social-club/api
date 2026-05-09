@@ -119,6 +119,7 @@ describe("song artifact local fallback routes", () => {
           start_ms: 0,
           duration_ms: 30_000,
         },
+        title: "Local Fallback Paid",
         lyrics: "Paid line",
       },
       ctx.env,

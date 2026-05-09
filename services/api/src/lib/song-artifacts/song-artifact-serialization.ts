@@ -30,6 +30,7 @@ export type SongArtifactBundleRow = {
   community_id: string
   creator_user_id: string
   status: SongArtifactBundle["status"]
+  title: string | null
   primary_audio_json: string
   lyrics_text: string
   lyrics_sha256: string
@@ -119,6 +120,7 @@ export function toSongArtifactBundleRow(row: unknown): SongArtifactBundleRow {
     community_id: requiredString(row, "community_id"),
     creator_user_id: requiredString(row, "creator_user_id"),
     status: requiredString(row, "status") as SongArtifactBundle["status"],
+    title: stringOrNull(rowValue(row, "title")),
     primary_audio_json: requiredString(row, "primary_audio_json"),
     lyrics_text: requiredString(row, "lyrics_text"),
     lyrics_sha256: requiredString(row, "lyrics_sha256"),
@@ -158,6 +160,7 @@ export function serializeSongArtifactBundle(row: SongArtifactBundleRow): SongArt
     community: `com_${row.community_id}`,
     creator_user: `usr_${row.creator_user_id}`,
     status: row.status,
+    title: row.title?.trim() || "Untitled track",
     primary_audio: primaryAudio,
     media_refs: primaryAudio.storage_ref && primaryAudio.mime_type
       ? [{

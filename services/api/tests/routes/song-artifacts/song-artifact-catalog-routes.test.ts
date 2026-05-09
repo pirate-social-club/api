@@ -176,6 +176,7 @@ describe("song artifact catalog routes", () => {
         primary_audio: {
           song_artifact_upload: uploadIntentBody.id,
         },
+        title: "Catalog Song",
         lyrics: "Line one",
       },
       ctx.env,

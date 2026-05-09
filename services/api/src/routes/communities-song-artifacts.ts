@@ -7,8 +7,9 @@ import {
 import {
   createSongArtifactBundle,
   getSongArtifactBundleForCreator,
+  listSongArtifactBundlesForCreator,
 } from "../lib/song-artifacts/song-artifact-bundle-service"
-import type { AuthenticatedEnv } from "../lib/auth-middleware"
+import { requireScope, type AuthenticatedEnv } from "../lib/auth-middleware"
 import {
   getResolvedCommunityRouteContext,
   getRequestOrigin,
@@ -23,6 +24,19 @@ import {
   decodePublicSongArtifactBundleId,
   decodePublicSongArtifactUploadId,
 } from "../lib/public-ids"
+import { badRequestError } from "../lib/errors"
+
+const DEFAULT_SONG_ARTIFACT_LIST_LIMIT = 25
+const MAX_SONG_ARTIFACT_LIST_LIMIT = 50
+
+function songArtifactListLimit(value: string | undefined): number {
+  if (value === undefined) return DEFAULT_SONG_ARTIFACT_LIST_LIMIT
+  const parsed = Number.parseInt(value, 10)
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    throw badRequestError("Invalid limit")
+  }
+  return Math.min(parsed, MAX_SONG_ARTIFACT_LIST_LIMIT)
+}
 
 export function registerCommunitySongArtifactRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.post("/:communityId/song-artifact-uploads", async (c) => {
@@ -112,6 +126,20 @@ export function registerCommunitySongArtifactRoutes(communities: Hono<Authentica
       communityRepository,
     })
     return c.json(result, 201)
+  })
+
+  communities.get("/:communityId/song-artifacts", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    requireScope(actor, "song_artifacts:read")
+    const result = await listSongArtifactBundlesForCreator({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      query: c.req.query("q") ?? null,
+      limit: songArtifactListLimit(c.req.query("limit")),
+      communityRepository,
+    })
+    return c.json(result, 200)
   })
 
   communities.get("/:communityId/song-artifacts/:songArtifactBundleId", async (c) => {

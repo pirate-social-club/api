@@ -12,6 +12,17 @@ import type {
   LinkSummaryStatus,
 } from "./types"
 
+const SNAPSHOT_TEXT_LIMIT = 2_000
+const SNAPSHOT_SUMMARY_TEXT_LIMIT = 4_000
+const SNAPSHOT_KEY_POINT_LIMIT = 1_000
+
+function limitSnapshotText(value: string | null, maxLength = SNAPSHOT_TEXT_LIMIT): string | null {
+  if (!value) {
+    return value
+  }
+  return value.length > maxLength ? value.slice(0, maxLength) : value
+}
+
 function toRecord(row: unknown): LinkEnrichmentRecord {
   return {
     link_enrichment_id: requiredString(row, "link_enrichment_id"),
@@ -316,10 +327,15 @@ function parseSummary(value: string | null): LinkEnrichmentSnapshot["summary"] {
     }
     return {
       status: "ready",
-      summary_paragraph: typeof parsed.summary_paragraph === "string" ? parsed.summary_paragraph : null,
-      short_summary: typeof parsed.short_summary === "string" ? parsed.short_summary : null,
+      summary_paragraph: typeof parsed.summary_paragraph === "string"
+        ? limitSnapshotText(parsed.summary_paragraph, SNAPSHOT_SUMMARY_TEXT_LIMIT)
+        : null,
+      short_summary: typeof parsed.short_summary === "string" ? limitSnapshotText(parsed.short_summary) : null,
       key_points: Array.isArray(parsed.key_points)
-        ? parsed.key_points.filter((item): item is string => typeof item === "string")
+        ? parsed.key_points
+          .filter((item): item is string => typeof item === "string")
+          .slice(0, 5)
+          .map((item) => limitSnapshotText(item, SNAPSHOT_KEY_POINT_LIMIT) ?? "")
         : [],
       generated_at: typeof parsed.generated_at === "string" ? parsed.generated_at : null,
       model: typeof parsed.model === "string" ? parsed.model : null,
@@ -358,13 +374,18 @@ export function parseLinkEnrichmentTranslations(value: string | null): Record<st
         : {}
       translations[locale] = {
         locale,
-        title: typeof record.title === "string" ? record.title : null,
-        description: typeof record.description === "string" ? record.description : null,
+        title: typeof record.title === "string" ? limitSnapshotText(record.title) : null,
+        description: typeof record.description === "string" ? limitSnapshotText(record.description) : null,
         summary: {
-          summary_paragraph: typeof summary.summary_paragraph === "string" ? summary.summary_paragraph : null,
-          short_summary: typeof summary.short_summary === "string" ? summary.short_summary : null,
+          summary_paragraph: typeof summary.summary_paragraph === "string"
+            ? limitSnapshotText(summary.summary_paragraph, SNAPSHOT_SUMMARY_TEXT_LIMIT)
+            : null,
+          short_summary: typeof summary.short_summary === "string" ? limitSnapshotText(summary.short_summary) : null,
           key_points: Array.isArray(summary.key_points)
-            ? summary.key_points.filter((item): item is string => typeof item === "string")
+            ? summary.key_points
+              .filter((item): item is string => typeof item === "string")
+              .slice(0, 5)
+              .map((item) => limitSnapshotText(item, SNAPSHOT_KEY_POINT_LIMIT) ?? "")
             : [],
         },
         generated_at: typeof record.generated_at === "string" ? record.generated_at : null,
@@ -384,21 +405,21 @@ export function buildLinkEnrichmentSnapshot(record: LinkEnrichmentRecord): LinkE
     version: 1,
     provider: record.provider,
     status: record.status,
-    normalized_url: record.normalized_url,
-    canonical_url: record.canonical_url,
-    title: record.title,
-    description: record.description,
+    normalized_url: limitSnapshotText(record.normalized_url) ?? "",
+    canonical_url: limitSnapshotText(record.canonical_url),
+    title: limitSnapshotText(record.title),
+    description: limitSnapshotText(record.description),
     source_language: record.source_language,
-    publisher: record.publisher,
+    publisher: limitSnapshotText(record.publisher),
     published_at: record.published_at,
-    image_url: record.image_url,
+    image_url: limitSnapshotText(record.image_url),
     summary: {
       ...parseSummary(record.summary_json),
       status: record.summary_status,
       model: record.summary_model,
     },
     ...(Object.keys(translations).length ? { translations } : {}),
-    error: record.error,
+    error: limitSnapshotText(record.error),
     fetched_at: record.fetched_at,
   }
 }
