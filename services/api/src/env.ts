@@ -40,6 +40,10 @@ export type Env = {
   PIRATE_APP_JWT_ISSUER?: string
   PIRATE_APP_JWT_AUDIENCE?: string
   PIRATE_APP_JWT_TTL_SECONDS?: string
+  PIRATE_WEB_PUBLIC_ORIGIN?: string
+  OAUTH_DEVICE_CODE_TTL_SECONDS?: string
+  OAUTH_DEVICE_POLL_INTERVAL_SECONDS?: string
+  OAUTH_DEVICE_REFRESH_TOKEN_TTL_SECONDS?: string
   PRIVY_APP_ID?: string
   PRIVY_APP_SECRET?: string
   PRIVY_API_URL?: string
@@ -86,6 +90,9 @@ export type Env = {
   PIRATE_CHECKOUT_RPC_URL?: string
   PIRATE_CHECKOUT_SOURCE_CHAIN_ID?: string
   PIRATE_CHECKOUT_USDC_TOKEN_ADDRESS?: string
+  // Caps RPC receipt waits for routed checkout funding confirmation. Paid
+  // handle claims can be retried with the same funding_tx_ref after timeout.
+  // Use 15000-30000 for pilot smoke.
   PIRATE_CHECKOUT_TX_WAIT_TIMEOUT_MS?: string
 
   // Story and song processing
@@ -102,6 +109,17 @@ export type Env = {
   COMMUNITY_JOB_WORKER_MAX_COMMUNITIES_PER_TICK?: string
   SONG_PREVIEW_FFMPEG_BIN?: string
   SONG_PREVIEW_FFPROBE_BIN?: string
+  AGORA_APP_ID?: string
+  AGORA_APP_CERTIFICATE?: string
+  LIVE_ROOM_AGORA_TOKEN_TTL_SECONDS?: string
+  LIVE_ROOM_JACKTRIP_HOST?: string
+  LIVE_ROOM_JACKTRIP_HOST_TEMPLATE?: string
+  LIVE_ROOM_JACKTRIP_PORT?: string
+  LIVE_ROOM_JACKTRIP_BIND_PORT?: string
+  LIVE_ROOM_JACKTRIP_QUALITY?: string
+  LIVE_ROOM_JACKTRIP_BUFFER_STRATEGY?: string
+  LIVE_ROOM_JACKTRIP_LINUX_AUDIO_SETUP_RECOMMENDED?: string
+  LIVE_ROOM_RUNTIME?: DurableObjectNamespace
   STORY_TX_WAIT_TIMEOUT_MS?: string
   STORY_RUNTIME_SIGNER_MIN_BALANCE_WEI?: string
   STORY_RUNTIME_SIGNER_TARGET_BALANCE_WEI?: string

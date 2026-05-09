@@ -353,7 +353,7 @@ describe("profile routes", () => {
     }
     expect(premiumQuoteBody.desired_label).toBe("captain.pirate")
     expect(premiumQuoteBody.tier).toBe("premium")
-    expect(premiumQuoteBody.price_cents).toBe(5_000)
+    expect(premiumQuoteBody.price_cents).toBe(2_500)
     expect(premiumQuoteBody.eligible).toBe(true)
     expect(premiumQuoteBody.reason ?? null).toBeNull()
   })
@@ -384,7 +384,7 @@ describe("profile routes", () => {
     }
     expect(quote.quote).toMatch(/^ghq_/)
     expect(quote.desired_label).toBe("captain.pirate")
-    expect(quote.price_cents).toBe(5_000)
+    expect(quote.price_cents).toBe(2_500)
     expect(quote.policy_version).toBe("global_handle_paid_v1")
     expect(quote.pricing_tier).toBe("common_word")
     expect(quote.payment_instructions).toEqual({
@@ -395,8 +395,8 @@ describe("profile routes", () => {
       },
       token_address: resolvePirateCheckoutUsdcTokenAddress(ctx.env),
       recipient_address: resolvePirateCheckoutOperatorAddress(ctx.env),
-      amount_atomic: "50000000",
-      amount_display: "50.00",
+      amount_atomic: "25000000",
+      amount_display: "25.00",
     })
 
     const missingWalletResponse = await requestJson("http://pirate.test/profiles/me/global-handle/claim", "POST", {
@@ -423,7 +423,7 @@ describe("profile routes", () => {
     expect(claimed.label).toBe("captain.pirate")
     expect(claimed.tier).toBe("premium")
     expect(claimed.issuance_source).toBe("paid_upgrade")
-    expect(claimed.price_paid_cents).toBe(5_000)
+    expect(claimed.price_paid_cents).toBe(2_500)
 
     const quoteRows = await ctx.client.execute({
       sql: `
@@ -448,7 +448,7 @@ describe("profile routes", () => {
     }, ctx.env, session.accessToken)
     expect(quoteResponse.status).toBe(200)
     const quote = await json(quoteResponse) as { quote: string; price_cents: number }
-    expect(quote.price_cents).toBe(5_000)
+    expect(quote.price_cents).toBe(2_500)
     const quoteId = quote.quote.replace(/^ghq_/, "")
 
     await ctx.client.execute({
@@ -603,7 +603,7 @@ describe("profile routes", () => {
     expect(body.retryable).toBe(true)
     expect(body.details.quote).toMatch(/^ghq_/)
     expect(body.details.desired_label).toBe("captain.pirate")
-    expect(body.details.price_cents).toBe(5_000)
+    expect(body.details.price_cents).toBe(2_500)
     expect(body.details.payment_protocol).toBe("x402")
     expect(body.details.policy_version).toBe("global_handle_paid_v1")
     expect(body.details.quote_ttl_seconds).toBe(900)
@@ -611,7 +611,7 @@ describe("profile routes", () => {
     expect(body.details.payment_instructions).toMatchObject({
       token_address: resolvePirateCheckoutUsdcTokenAddress(ctx.env),
       recipient_address: resolvePirateCheckoutOperatorAddress(ctx.env),
-      amount_atomic: "50000000",
+      amount_atomic: "25000000",
     })
   })
 
@@ -642,7 +642,7 @@ describe("profile routes", () => {
     expect(claimed.label).toBe("captain.pirate")
     expect(claimed.tier).toBe("premium")
     expect(claimed.issuance_source).toBe("paid_upgrade")
-    expect(claimed.price_paid_cents).toBe(5_000)
+    expect(claimed.price_paid_cents).toBe(2_500)
   })
 
   test("x402 global handle claim replay returns the already claimed handle", async () => {
@@ -789,7 +789,7 @@ describe("profile routes", () => {
     expect(quoteBody.price_cents).toBe(0)
     expect(quoteBody.eligible).toBe(true)
     expect(quoteBody.benefit_source).toBe("verified_reddit_username")
-    expect(quoteBody.reputation_discount_cents).toBe(5_000)
+    expect(quoteBody.reputation_discount_cents).toBe(2_500)
 
     const claimed = await requestJson("http://pirate.test/profiles/me/global-handle/reddit-claim", "POST", {
       desired_label: "captain",

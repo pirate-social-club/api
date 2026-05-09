@@ -155,6 +155,49 @@ describe("community-job-runner", () => {
     }
   })
 
+  test("processes post projection retry jobs from the local community post row", async () => {
+    const rootDir = await createCommunityJobRunnerRoot("pirate-community-post-projection-runner-")
+
+    const databasePath = join(rootDir, "post-projection.db")
+    const communityId = "cmt_job_runner_post_projection"
+    const env: Env = {
+      LOCAL_COMMUNITY_DB_ROOT: rootDir,
+    }
+    const repo = buildCommunityRepository(databasePath, communityId)
+    const { postId } = await seedCommunityState({
+      env,
+      repo,
+      communityId,
+      memberUserIds: ["usr_owner"],
+    })
+
+    const db = await openCommunityDb(env, repo, communityId)
+    try {
+      await enqueueCommunityJob({
+        client: db.client,
+        communityId,
+        jobType: "post_projection_sync",
+        subjectType: "post",
+        subjectId: postId,
+        payloadJson: JSON.stringify({ post_id: postId }),
+        createdAt: new Date().toISOString(),
+      })
+    } finally {
+      db.close()
+    }
+
+    expect(repo.postProjections.has(postId)).toBe(false)
+    const processed = await processNextCommunityJob({
+      env,
+      communityId,
+      communityRepository: repo,
+    })
+
+    expect(processed?.job_type).toBe("post_projection_sync")
+    expect(processed?.result_ref).toBe(postId)
+    expect(repo.postProjections.get(postId)?.source_post_id).toBe(postId)
+  })
+
   test("drains available jobs across active communities and the worker loop stops when idle", async () => {
     const rootDir = await createCommunityJobRunnerRoot("pirate-community-job-loop-")
 
@@ -192,6 +235,23 @@ describe("community-job-runner", () => {
       },
       async getActiveCommunityDbCredential(bindingId: string) {
         return alphaRepo.getActiveCommunityDbCredential(bindingId) ?? betaRepo.getActiveCommunityDbCredential(bindingId)
+      },
+      async recordCommunityPostProjection(input: Parameters<TestCommunityRepository["recordCommunityPostProjection"]>[0]) {
+        return input.communityId === "cmt_job_alpha"
+          ? alphaRepo.recordCommunityPostProjection(input)
+          : betaRepo.recordCommunityPostProjection(input)
+      },
+      async getCommunityPostProjectionByPostId(postId: string) {
+        return alphaRepo.getCommunityPostProjectionByPostId(postId)
+          ?? betaRepo.getCommunityPostProjectionByPostId(postId)
+      },
+      async updateCommunityPostProjectionStatus(input: Parameters<TestCommunityRepository["updateCommunityPostProjectionStatus"]>[0]) {
+        await alphaRepo.updateCommunityPostProjectionStatus(input)
+        await betaRepo.updateCommunityPostProjectionStatus(input)
+      },
+      async updateCommunityPostProjectionMetrics(input: Parameters<TestCommunityRepository["updateCommunityPostProjectionMetrics"]>[0]) {
+        await alphaRepo.updateCommunityPostProjectionMetrics(input)
+        await betaRepo.updateCommunityPostProjectionMetrics(input)
       },
       async recordCommunityCommentProjection(input: Parameters<TestCommunityRepository["recordCommunityCommentProjection"]>[0]) {
         return input.communityId === "cmt_job_alpha"

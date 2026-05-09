@@ -5,6 +5,7 @@ import { requiredNumber, requiredString, rowValue, stringOrNull } from "../../sq
 
 export type CommunityJobType =
   | "comment_projection_sync"
+  | "post_projection_sync"
   | "comment_body_mirror"
   | "thread_snapshot_publish"
   | "embed_hydrate"
