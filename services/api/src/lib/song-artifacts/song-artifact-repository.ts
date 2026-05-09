@@ -16,6 +16,7 @@ import {
   toSongArtifactBundleRow,
   toSongArtifactUploadRow,
 } from "./song-artifact-serialization"
+import { ensureSongArtifactBundleTitleColumn } from "./ensure-song-artifact-bundle-title-column"
 import type { SongArtifactStorageProvider } from "./song-artifact-storage-provider"
 
 async function getSongArtifactUploadRow(
@@ -44,6 +45,7 @@ async function getSongArtifactBundleRow(
   communityId: string,
   songArtifactBundleId: string,
 ): Promise<SongArtifactBundleRow | null> {
+  await ensureSongArtifactBundleTitleColumn(client)
   const row = await executeFirst(client, {
     sql: `
       SELECT song_artifact_bundle_id, community_id, creator_user_id, status, primary_audio_json,
@@ -222,6 +224,7 @@ export async function createSongArtifactBundleDraft(input: {
   lyricsSha256: string
   createdAt: string
 }): Promise<SongArtifactBundle> {
+  await ensureSongArtifactBundleTitleColumn(input.client)
   await input.client.execute({
     sql: `
       INSERT INTO song_artifact_bundles (
@@ -395,6 +398,7 @@ export async function listSongArtifactBundles(input: {
   query?: string | null
   limit: number
 }): Promise<SongArtifactBundleListResponse> {
+  await ensureSongArtifactBundleTitleColumn(input.client)
   const query = input.query?.trim()
   const hasQuery = Boolean(query)
   const rows = await input.client.execute({

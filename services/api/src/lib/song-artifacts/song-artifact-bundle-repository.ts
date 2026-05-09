@@ -10,12 +10,14 @@ import {
   serializeSongArtifactBundle,
   toSongArtifactBundleRow,
 } from "./song-artifact-serialization"
+import { ensureSongArtifactBundleTitleColumn } from "./ensure-song-artifact-bundle-title-column"
 
 async function getSongArtifactBundleRow(
   client: Client,
   communityId: string,
   songArtifactBundleId: string,
 ): Promise<SongArtifactBundleRow | null> {
+  await ensureSongArtifactBundleTitleColumn(client)
   const row = await executeFirst(client, {
     sql: `
       SELECT song_artifact_bundle_id, community_id, creator_user_id, status, primary_audio_json,
@@ -51,6 +53,7 @@ export async function createSongArtifactBundleDraft(input: {
   lyricsSha256: string
   createdAt: string
 }): Promise<SongArtifactBundle> {
+  await ensureSongArtifactBundleTitleColumn(input.client)
   await input.client.execute({
     sql: `
       INSERT INTO song_artifact_bundles (
