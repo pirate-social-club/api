@@ -1,0 +1,11 @@
+{
+  "controlPlane": {
+    "compatibleChecksumDrifts": [
+      {
+        "migrationName": "0084_control_plane_altcha_used_challenges.sql",
+        "oldChecksum": "5d0f0b7923b963c46ea2f8960497bf4b4b098a96e3a1bb93846f8e8564457f8c",
+        "reason": "local ALTCHA migration drift before rate-limit table was added"
+      }
+    ]
+  }
+}
