@@ -5,6 +5,7 @@ import type {
   CreateSongArtifactBundleRequest,
   CreateSongArtifactUploadRequest,
   SongArtifactBundle,
+  SongArtifactBundleListResponse,
   SongArtifactUpload,
 } from "../../types"
 import {
@@ -46,7 +47,7 @@ async function getSongArtifactBundleRow(
   const row = await executeFirst(client, {
     sql: `
       SELECT song_artifact_bundle_id, community_id, creator_user_id, status, primary_audio_json,
-             lyrics_text, lyrics_sha256, cover_art_json, preview_audio_json, preview_window_json,
+             title, lyrics_text, lyrics_sha256, cover_art_json, preview_audio_json, preview_window_json,
              preview_status, preview_error, canvas_video_json,
              instrumental_audio_json, vocal_audio_json, translation_status, translation_error,
              translated_lyrics_ref, translated_lyrics_json, alignment_status, alignment_error,
@@ -225,7 +226,7 @@ export async function createSongArtifactBundleDraft(input: {
     sql: `
       INSERT INTO song_artifact_bundles (
         song_artifact_bundle_id, community_id, creator_user_id, status, primary_audio_json,
-        lyrics_text, lyrics_sha256, cover_art_json, preview_audio_json, canvas_video_json,
+        title, lyrics_text, lyrics_sha256, cover_art_json, preview_audio_json, canvas_video_json,
         instrumental_audio_json, vocal_audio_json, translation_status,
         translation_error, translated_lyrics_ref, translated_lyrics_json, alignment_status,
         alignment_error, timed_lyrics_ref, timed_lyrics_json, moderation_status, moderation_error,
@@ -233,12 +234,12 @@ export async function createSongArtifactBundleDraft(input: {
         preview_error, created_at, updated_at
       ) VALUES (
         ?1, ?2, ?3, 'validating', ?4,
-        ?5, ?6, ?7, ?8, ?9,
-        ?10, ?11, 'pending',
+        ?5, ?6, ?7, ?8, ?9, ?10,
+        ?11, ?12, 'pending',
         NULL, NULL, NULL, 'processing',
         NULL, NULL, NULL, 'processing', NULL,
-        NULL, NULL, ?12, 'completed',
-        NULL, ?13, ?13
+        NULL, NULL, ?13, 'completed',
+        NULL, ?14, ?14
       )
     `,
     args: [
@@ -246,6 +247,7 @@ export async function createSongArtifactBundleDraft(input: {
       input.communityId,
       input.userId,
       JSON.stringify(input.primaryAudio),
+      input.body.title.trim(),
       input.body.lyrics,
       input.lyricsSha256,
       input.coverArt ? JSON.stringify(input.coverArt) : null,
@@ -380,6 +382,47 @@ export async function getSongArtifactBundle(
 ): Promise<SongArtifactBundle | null> {
   const row = await getSongArtifactBundleRow(client, communityId, songArtifactBundleId)
   return row ? serializeSongArtifactBundle(row) : null
+}
+
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, (match) => `\\${match}`)
+}
+
+export async function listSongArtifactBundles(input: {
+  client: Client
+  communityId: string
+  creatorUserId: string
+  query?: string | null
+  limit: number
+}): Promise<SongArtifactBundleListResponse> {
+  const query = input.query?.trim()
+  const hasQuery = Boolean(query)
+  const rows = await input.client.execute({
+    sql: `
+      SELECT song_artifact_bundle_id, community_id, creator_user_id, status, primary_audio_json,
+             title, lyrics_text, lyrics_sha256, cover_art_json, preview_audio_json, preview_window_json,
+             preview_status, preview_error, canvas_video_json,
+             instrumental_audio_json, vocal_audio_json, translation_status, translation_error,
+             translated_lyrics_ref, translated_lyrics_json, alignment_status, alignment_error,
+             timed_lyrics_ref, timed_lyrics_json, moderation_status, moderation_error,
+             moderation_result_ref, moderation_result_json, created_at, updated_at
+      FROM song_artifact_bundles
+      WHERE community_id = ?1
+        AND creator_user_id = ?2
+        AND status = 'ready'
+        ${hasQuery ? "AND LOWER(title) LIKE ?3 ESCAPE '\\'" : ""}
+      ORDER BY updated_at DESC, song_artifact_bundle_id DESC
+      LIMIT ?${hasQuery ? "4" : "3"}
+    `,
+    args: hasQuery
+      ? [input.communityId, input.creatorUserId, `%${escapeLikePattern(query!.toLowerCase())}%`, input.limit]
+      : [input.communityId, input.creatorUserId, input.limit],
+  })
+
+  return {
+    items: rows.rows.map((row) => serializeSongArtifactBundle(toSongArtifactBundleRow(row))),
+    next_cursor: null,
+  }
 }
 
 export async function markSongArtifactBundleConsumed(input: {

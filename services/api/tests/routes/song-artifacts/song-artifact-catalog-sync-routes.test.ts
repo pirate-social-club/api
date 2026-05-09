@@ -181,6 +181,7 @@ describe("song artifact catalog sync routes", () => {
         primary_audio: {
           song_artifact_upload: uploadIntentBody.id,
         },
+        title: "Catalog Sync Song",
         lyrics: "Line one",
       },
       ctx.env,
@@ -386,6 +387,7 @@ describe("song artifact catalog sync routes", () => {
         primary_audio: {
           song_artifact_upload: uploadIntentBody.id,
         },
+        title: "Catalog Sync Song",
         lyrics: "Line one",
       },
       ctx.env,

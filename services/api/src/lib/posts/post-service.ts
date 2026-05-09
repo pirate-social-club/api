@@ -195,7 +195,7 @@ export async function createPost(input: {
       return existing
     }
 
-    let writeBody = input.body
+    let writeBody: CreatePostRequest & { song_title?: string | null } = input.body
     const agentWriteAuthorization = await authorizeAgentWrite({
       env: input.env,
       requestUrl: input.requestUrl,
@@ -262,6 +262,7 @@ export async function createPost(input: {
         access_mode: accessMode,
         asset_id: input.body.asset_id ?? makeId("ast"),
         song_artifact_bundle: resolvedBundle.bundle.id,
+        song_title: resolvedBundle.bundle.title,
       }
 
       const postAnalysis = await postAnalysisProvider.analyze({

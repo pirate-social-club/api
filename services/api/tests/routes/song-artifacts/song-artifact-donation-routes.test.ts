@@ -198,6 +198,7 @@ describe("song artifact donation routes", () => {
       {
         primary_audio: { song_artifact_upload: primaryUploadIntentBody.id },
         preview_window: { start_ms: 0, duration_ms: 30_000 },
+        title: "No Donation Song",
         lyrics: "No donation line",
       },
       ctx.env,
@@ -415,6 +416,7 @@ describe("song artifact donation routes", () => {
           song_artifact_upload: primaryUploadIntentBody.id,
         },
         preview_window: { start_ms: 0, duration_ms: 30_000 },
+        title: "Public Royalty Song",
         lyrics: "Public royalty line",
       },
       ctx.env,
@@ -645,6 +647,7 @@ describe("song artifact donation routes", () => {
       {
         primary_audio: { song_artifact_upload: primaryUploadIntentBody.id },
         preview_window: { start_ms: 0, duration_ms: 30_000 },
+        title: "Clear Donation Song",
         lyrics: "Clear donation line",
       },
       ctx.env,
@@ -858,6 +861,7 @@ describe("song artifact donation routes", () => {
       {
         primary_audio: { song_artifact_upload: primaryUploadIntentBody.id },
         preview_window: { start_ms: 0, duration_ms: 30_000 },
+        title: "Paused Partner Song",
         lyrics: "Paused partner line",
       },
       ctx.env,

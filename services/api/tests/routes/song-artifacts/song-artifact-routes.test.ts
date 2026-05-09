@@ -211,6 +211,7 @@ describe("song artifact routes", () => {
         primary_audio: {
           song_artifact_upload: uploadIntentBody.id,
         },
+        title: "Owner Song",
         lyrics: "Owner line",
       },
       ctx.env,
@@ -419,6 +420,7 @@ describe("song artifact routes", () => {
           start_ms: 0,
           duration_ms: 1_000,
         },
+        title: "Paid Song",
         lyrics: "Paid line",
       },
       ctx.env,
@@ -730,6 +732,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
         primary_audio: {
           song_artifact_upload: uploadIntentBody.id,
         },
+        title: "Published Song",
         lyrics: "Line one\nLine two",
       },
       ctx.env,
@@ -814,6 +817,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
         primary_audio: {
           song_artifact_upload: uploadIntentBody.id,
         },
+        title: "Preview Window Song",
         lyrics: "Preview line one\nPreview line two",
         preview_window: {
           start_ms: 42_000,
@@ -842,6 +846,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
         primary_audio: {
           song_artifact_upload: uploadIntentBody.id,
         },
+        title: "Conflicting Preview Song",
         lyrics: "Conflicting preview source",
         preview_audio: {
           song_artifact_upload: "sau_conflicting_preview",
@@ -956,6 +961,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
         primary_audio: {
           song_artifact_upload: uploadIntentBody.id,
         },
+        title: "Local Dev Song",
         lyrics: "Line one\nLine two",
       },
       ctx.env,

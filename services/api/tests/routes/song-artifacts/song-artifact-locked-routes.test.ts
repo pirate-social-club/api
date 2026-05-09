@@ -319,6 +319,7 @@ describe("song artifact locked routes", () => {
           start_ms: 0,
           duration_ms: 30_000,
         },
+        title: "Paid Anthem",
         lyrics: "Paid line",
       },
       ctx.env,
@@ -386,7 +387,7 @@ describe("song artifact locked routes", () => {
     }
     expect(authorAssetBody.id).toBe(assetId)
     expect(authorAssetBody.access_mode).toBe("locked")
-    expect(authorAssetBody.display_title).toBe("Paid anthem")
+    expect(authorAssetBody.display_title).toBe("Paid Anthem")
     expect(authorAssetBody.locked_delivery_status).toBe("ready")
     expect(authorAssetBody.primary_content_ref).toBe(primaryUploadIntentBody.storage_ref)
     expect(authorAssetBody.story_ip).toBe("0x1010101010101010101010101010101010101010")
@@ -685,7 +686,7 @@ describe("song artifact locked routes", () => {
       asset: assetId,
       purchase: purchaseBody.id,
       story_ip: "0x1010101010101010101010101010101010101010",
-      title: "Paid anthem",
+      title: "Paid Anthem",
       tx_hash: "0xroyalty-paid-song",
     })
 
@@ -848,6 +849,7 @@ describe("song artifact locked routes", () => {
           start_ms: 0,
           duration_ms: 30_000,
         },
+        title: "Derivative Commerce",
         lyrics: "Derivative line",
       },
       ctx.env,
@@ -1084,6 +1086,7 @@ describe("song artifact locked routes", () => {
           start_ms: 0,
           duration_ms: 30_000,
         },
+        title: "Derivative Registered",
         lyrics: "Derivative registered line",
       },
       ctx.env,

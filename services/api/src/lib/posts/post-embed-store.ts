@@ -4,6 +4,7 @@ import { makeId } from "../helpers"
 import { numberOrNull, requiredString, rowValue, stringOrNull } from "../sql-row"
 import type { Post } from "../../types"
 import { nullableUnixSeconds } from "../../serializers/time"
+import { boundedPostJsonProjection } from "./community-post-serialization"
 
 type PostEmbed = NonNullable<Post["embeds"]>[number]
 type XPostEmbed = Extract<PostEmbed, { provider: "x" }>
@@ -136,7 +137,7 @@ export async function upsertPostEmbed(input: {
       input.canonicalUrl,
       input.originalUrl,
       input.state,
-      input.preview ? JSON.stringify(input.preview) : null,
+      boundedPostJsonProjection(input.preview ? JSON.stringify(input.preview) : null),
       input.oembedHtml,
       input.oembedCacheAge,
       input.unavailableReason ?? null,
@@ -200,7 +201,7 @@ export async function refreshPostEmbedsProjection(input: {
     `,
     args: [
       input.postId,
-      embeds?.length ? JSON.stringify(embeds) : null,
+      boundedPostJsonProjection(embeds?.length ? JSON.stringify(embeds) : null),
       input.updatedAt,
     ],
   })

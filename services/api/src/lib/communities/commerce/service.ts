@@ -111,6 +111,7 @@ export async function createAssetForPost(input: {
   artifactKind: SongArtifactUpload["artifact_kind"]
   bundleId: string | null
   bundle?: SongArtifactBundle | null
+  displayTitle?: string | null
   licensePreset?: StoryLicensePreset | null
   commercialRevSharePct?: number | null
   userRepository: UserRepository
@@ -286,7 +287,7 @@ export async function createAssetForPost(input: {
       input.post.asset_id,
       input.communityId,
       input.post.post_id,
-      input.post.title?.trim() || null,
+      input.displayTitle?.trim() || input.post.title?.trim() || null,
       input.bundleId,
       input.post.author_user_id ?? "",
       input.assetKind,
@@ -354,6 +355,7 @@ export async function createSongAssetForPost(input: {
     artifactKind: "primary_audio",
     bundleId: input.bundle.id,
     bundle: input.bundle,
+    displayTitle: input.bundle.title,
     licensePreset: input.licensePreset,
     commercialRevSharePct: input.commercialRevSharePct,
     userRepository: input.userRepository,

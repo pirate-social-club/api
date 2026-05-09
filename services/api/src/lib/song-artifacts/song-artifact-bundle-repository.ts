@@ -19,7 +19,7 @@ async function getSongArtifactBundleRow(
   const row = await executeFirst(client, {
     sql: `
       SELECT song_artifact_bundle_id, community_id, creator_user_id, status, primary_audio_json,
-             lyrics_text, lyrics_sha256, cover_art_json, preview_audio_json, preview_window_json,
+             title, lyrics_text, lyrics_sha256, cover_art_json, preview_audio_json, preview_window_json,
              preview_status, preview_error, canvas_video_json,
              instrumental_audio_json, vocal_audio_json, translation_status, translation_error,
              translated_lyrics_ref, translated_lyrics_json, alignment_status, alignment_error,
@@ -55,7 +55,7 @@ export async function createSongArtifactBundleDraft(input: {
     sql: `
       INSERT INTO song_artifact_bundles (
         song_artifact_bundle_id, community_id, creator_user_id, status, primary_audio_json,
-        lyrics_text, lyrics_sha256, cover_art_json, preview_audio_json, canvas_video_json,
+        title, lyrics_text, lyrics_sha256, cover_art_json, preview_audio_json, canvas_video_json,
         instrumental_audio_json, vocal_audio_json, translation_status,
         translation_error, translated_lyrics_ref, translated_lyrics_json, alignment_status,
         alignment_error, timed_lyrics_ref, timed_lyrics_json, moderation_status, moderation_error,
@@ -63,12 +63,12 @@ export async function createSongArtifactBundleDraft(input: {
         preview_error, created_at, updated_at
       ) VALUES (
         ?1, ?2, ?3, 'validating', ?4,
-        ?5, ?6, ?7, ?8, ?9,
-        ?10, ?11, 'pending',
+        ?5, ?6, ?7, ?8, ?9, ?10,
+        ?11, ?12, 'pending',
         NULL, NULL, NULL, 'processing',
         NULL, NULL, NULL, 'processing', NULL,
-        NULL, NULL, ?12, 'completed',
-        NULL, ?13, ?13
+        NULL, NULL, ?13, 'completed',
+        NULL, ?14, ?14
       )
     `,
     args: [
@@ -76,6 +76,7 @@ export async function createSongArtifactBundleDraft(input: {
       input.communityId,
       input.userId,
       JSON.stringify(input.primaryAudio),
+      input.body.title.trim(),
       input.body.lyrics,
       input.lyricsSha256,
       input.coverArt ? JSON.stringify(input.coverArt) : null,
