@@ -275,4 +275,41 @@ describe("community role routes", () => {
     )
     expect(afterGrant.status).toBe(201)
   })
+
+  test("moderator role bypasses unique human verification for song upload intents", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const owner = await exchangeJwt(ctx.env, "community-role-song-owner")
+    await completeUniqueHumanVerification(ctx.env, owner.accessToken)
+    const moderator = await exchangeJwt(ctx.env, "community-role-song-moderator")
+    const communityId = await createTestCommunity({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+    })
+
+    const grantModerator = await requestJson(
+      `http://pirate.test/communities/${communityId}/roles/grant`,
+      {
+        user_id: moderator.userId,
+        role: "moderator",
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(grantModerator.status).toBe(200)
+
+    const uploadIntent = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
+      {
+        artifact_kind: "primary_audio",
+        mime_type: "audio/wav",
+        filename: "moderator.wav",
+        size_bytes: 44,
+      },
+      ctx.env,
+      moderator.accessToken,
+    )
+    expect(uploadIntent.status).toBe(201)
+  })
 })
