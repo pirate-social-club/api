@@ -12,6 +12,16 @@ const LOCAL_FOLLOWER_COUNT_RENAME_MIGRATIONS = new Set([
   "0064_control_plane_communities_follower_count_column.sql",
 ])
 
+type LocalControlPlaneMigrationDriftPolicy = {
+  controlPlane?: {
+    compatibleChecksumDrifts?: Array<{
+      migrationName?: string
+      oldChecksum?: string
+      reason?: string
+    }>
+  }
+}
+
 export type LocalDevStorage = {
   repoRoot: string
   coreRepoRoot: string
@@ -249,6 +259,71 @@ async function recordAppliedMigration(
   })
 }
 
+async function updateAppliedMigrationChecksum(
+  client: Client,
+  migrationName: string,
+  checksum: string,
+): Promise<void> {
+  await client.execute({
+    sql: `
+      UPDATE schema_migrations
+      SET checksum = ?2
+      WHERE migration_name = ?1
+    `,
+    args: [migrationName, checksum],
+  })
+}
+
+async function loadCompatibleLocalControlPlaneChecksumDrifts(input: {
+  coreRepoRoot: string
+  expectedChecksumsByName: Map<string, string>
+}): Promise<Map<string, Set<string>>> {
+  const policyPath = resolve(input.coreRepoRoot, "db/local-control-plane-migration-drifts.json")
+  const rawPolicy = await readFile(policyPath, "utf8")
+  const policy = JSON.parse(rawPolicy) as LocalControlPlaneMigrationDriftPolicy
+  const compatibleChecksums = new Map<string, Set<string>>()
+
+  for (const drift of policy.controlPlane?.compatibleChecksumDrifts ?? []) {
+    const migrationName = String(drift.migrationName ?? "").trim()
+    const oldChecksum = String(drift.oldChecksum ?? "").trim()
+    const reason = String(drift.reason ?? "").trim()
+    if (!migrationName || !oldChecksum || !reason) {
+      throw new Error("invalid local control-plane migration drift policy entry")
+    }
+    const expectedChecksum = input.expectedChecksumsByName.get(migrationName)
+    if (!expectedChecksum) {
+      throw new Error(`local control-plane drift policy references unknown migration: ${migrationName}`)
+    }
+    if (oldChecksum === expectedChecksum) {
+      throw new Error(`local control-plane drift policy oldChecksum matches current migration: ${migrationName}`)
+    }
+
+    const checksums = compatibleChecksums.get(migrationName) ?? new Set<string>()
+    checksums.add(oldChecksum)
+    compatibleChecksums.set(migrationName, checksums)
+  }
+
+  return compatibleChecksums
+}
+
+async function repairCompatibleLocalControlPlaneMigration(input: {
+  client: Client
+  migrationName: string
+  migrationPath: string
+  existingChecksum: string
+  migrationChecksum: string
+  compatibleChecksumsByName: Map<string, Set<string>>
+}): Promise<boolean> {
+  const compatibleChecksums = input.compatibleChecksumsByName.get(input.migrationName)
+  if (!compatibleChecksums?.has(input.existingChecksum)) {
+    return false
+  }
+
+  await applySqlFile(input.client, input.migrationPath)
+  await updateAppliedMigrationChecksum(input.client, input.migrationName, input.migrationChecksum)
+  return true
+}
+
 async function listTableColumns(client: Client, tableName: string): Promise<Set<string>> {
   const result = await client.execute(`PRAGMA table_info(${tableName})`)
   return new Set(result.rows.map((row) => String(row.name)))
@@ -292,6 +367,15 @@ export async function applyLocalControlPlaneMigrations(storage: LocalDevStorage)
     const baselineMigrationPath = join(migrationsDir, baselineMigrationName)
     const baselineSql = await readFile(baselineMigrationPath, "utf8")
     const baselineChecksum = createHash("sha256").update(baselineSql).digest("hex")
+    const expectedChecksumsByName = new Map<string, string>()
+    for (const migrationName of entries) {
+      const migrationSql = await readFile(join(migrationsDir, migrationName), "utf8")
+      expectedChecksumsByName.set(migrationName, createHash("sha256").update(migrationSql).digest("hex"))
+    }
+    const compatibleChecksumsByName = await loadCompatibleLocalControlPlaneChecksumDrifts({
+      coreRepoRoot: storage.coreRepoRoot,
+      expectedChecksumsByName,
+    })
 
     await ensureSchemaMigrationsTable(client)
 
@@ -312,12 +396,26 @@ export async function applyLocalControlPlaneMigrations(storage: LocalDevStorage)
       }
 
       const migrationPath = join(migrationsDir, migrationName)
-      const migrationSql = await readFile(migrationPath, "utf8")
-      const migrationChecksum = createHash("sha256").update(migrationSql).digest("hex")
+      const migrationChecksum = expectedChecksumsByName.get(migrationName)
+      if (!migrationChecksum) {
+        throw new Error(`missing expected checksum for ${migrationName}`)
+      }
       const existingChecksum = appliedMigrations.get(migrationName)
 
       if (existingChecksum) {
         if (existingChecksum !== migrationChecksum) {
+          const repaired = await repairCompatibleLocalControlPlaneMigration({
+            client,
+            migrationName,
+            migrationPath,
+            existingChecksum,
+            migrationChecksum,
+            compatibleChecksumsByName,
+          })
+          if (repaired) {
+            appliedMigrations.set(migrationName, migrationChecksum)
+            continue
+          }
           throw new Error(`migration checksum mismatch for ${migrationName}`)
         }
         continue

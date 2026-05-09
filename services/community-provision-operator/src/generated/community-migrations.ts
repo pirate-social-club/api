@@ -2413,9 +2413,682 @@ CREATE INDEX IF NOT EXISTS idx_community_handle_claim_quotes_namespace_label
     checksum: "5d8c99fb563b64a01da2d4fadbf46e9e8868ff07cc64b9f2ddcbf3b2d3cde98c",
   },
   {
+    name: "1069_post_song_title.sql",
+    sql: `ALTER TABLE posts ADD COLUMN song_title TEXT;
+
+`,
+    checksum: "03a5f95f8fe4bec0492dd6d7a2c4c2d7d9e4df7e0af244dcd58cae869cb9e802",
+  },
+  {
+    name: "1070_live_rooms.sql",
+    sql: `CREATE TABLE live_rooms (
+    live_room_id TEXT PRIMARY KEY,
+    community_id TEXT NOT NULL,
+    anchor_post_id TEXT NOT NULL,
+    host_user_id TEXT NOT NULL,
+    guest_user_id TEXT,
+    room_kind TEXT NOT NULL CHECK (room_kind IN ('solo', 'duet')),
+    status TEXT NOT NULL CHECK (status IN ('scheduled', 'live', 'ended', 'canceled')),
+    access_mode TEXT NOT NULL CHECK (access_mode IN ('free', 'gated', 'paid')),
+    visibility TEXT NOT NULL CHECK (visibility IN ('public', 'unlisted')),
+    title TEXT NOT NULL,
+    description TEXT,
+    cover_ref TEXT,
+    event_start_at INTEGER,
+    live_started_at INTEGER,
+    ended_at INTEGER,
+    canceled_at INTEGER,
+    broadcast_ref TEXT,
+    replay_status TEXT NOT NULL CHECK (replay_status IN ('none', 'processing', 'review_pending', 'published', 'failed')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (community_id) REFERENCES communities(community_id),
+    FOREIGN KEY (anchor_post_id) REFERENCES posts(post_id)
+);
+
+CREATE INDEX idx_live_rooms_community_status
+    ON live_rooms(community_id, status, created_at DESC);
+
+CREATE TABLE live_room_performer_allocations (
+    allocation_id TEXT PRIMARY KEY,
+    live_room_id TEXT NOT NULL,
+    community_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('host', 'guest')),
+    share_bps INTEGER NOT NULL CHECK (share_bps >= 0 AND share_bps <= 10000),
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (live_room_id) REFERENCES live_rooms(live_room_id)
+);
+
+CREATE UNIQUE INDEX idx_live_room_allocations_role
+    ON live_room_performer_allocations(live_room_id, role);
+
+CREATE TABLE live_room_setlists (
+    setlist_id TEXT PRIMARY KEY,
+    live_room_id TEXT NOT NULL,
+    community_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('draft', 'ready', 'locked')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (live_room_id) REFERENCES live_rooms(live_room_id)
+);
+
+CREATE UNIQUE INDEX idx_live_room_setlists_room
+    ON live_room_setlists(live_room_id);
+
+CREATE TABLE live_room_setlist_items (
+    setlist_item_id TEXT PRIMARY KEY,
+    setlist_id TEXT NOT NULL,
+    live_room_id TEXT NOT NULL,
+    community_id TEXT NOT NULL,
+    position INTEGER NOT NULL CHECK (position >= 0),
+    song_artifact_bundle_id TEXT,
+    title TEXT NOT NULL,
+    artist TEXT,
+    rights_basis TEXT NOT NULL CHECK (rights_basis IN ('original', 'licensed', 'cover', 'public_domain', 'unknown')),
+    license_ref TEXT,
+    rights_status TEXT NOT NULL CHECK (rights_status IN ('pending', 'ready', 'blocked')),
+    blocking_rights_failure INTEGER NOT NULL DEFAULT 0 CHECK (blocking_rights_failure IN (0, 1)),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (setlist_id) REFERENCES live_room_setlists(setlist_id),
+    FOREIGN KEY (live_room_id) REFERENCES live_rooms(live_room_id)
+);
+
+CREATE UNIQUE INDEX idx_live_room_setlist_items_position
+    ON live_room_setlist_items(setlist_id, position);
+
+CREATE TABLE live_room_guest_invites (
+    guest_invite_id TEXT PRIMARY KEY,
+    live_room_id TEXT NOT NULL,
+    community_id TEXT NOT NULL,
+    guest_user_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'accepted', 'revoked')),
+    accepted_at TEXT,
+    revoked_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (live_room_id) REFERENCES live_rooms(live_room_id)
+);
+
+CREATE UNIQUE INDEX idx_live_room_guest_invites_active
+    ON live_room_guest_invites(live_room_id, guest_user_id)
+    WHERE status IN ('pending', 'accepted');
+`,
+    checksum: "47dcdd32d64789c6f93e6162f137b7238c75914532256aa0d186d5a8b68fa179",
+  },
+  {
     name: "1071_community_handle_protocol_owner_wallet.sql",
     sql: `ALTER TABLE community_handles ADD COLUMN protocol_owner_wallet_attachment_id TEXT;
 `,
     checksum: "8723be63143a0072a7d09c81a21c485856067bbd9f9640323d642be3810141ab",
+  },
+  {
+    name: "1072_community_handle_protocol_issuance.sql",
+    sql: `CREATE TABLE IF NOT EXISTS protocol_issuance_batches (
+    protocol_issuance_batch_id TEXT PRIMARY KEY,
+    community_id TEXT NOT NULL,
+    namespace_id TEXT NOT NULL,
+    parent_space TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (
+        status IN ('open', 'processing', 'published', 'failed')
+    ),
+    worker_checkpoint TEXT NOT NULL CHECK (
+        worker_checkpoint IN (
+            'pending_stage',
+            'staged',
+            'batched',
+            'committed',
+            'proving_submitted',
+            'proving_complete',
+            'broadcast',
+            'confirming',
+            'published',
+            'failed'
+        )
+    ),
+    subsd_root_before TEXT,
+    subsd_root_after TEXT,
+    proof_required INTEGER NOT NULL DEFAULT 0 CHECK (proof_required IN (0, 1)),
+    runpod_job_id TEXT,
+    runpod_status TEXT,
+    proof_input_ref TEXT,
+    proof_receipt_ref TEXT,
+    bitcoin_txid TEXT,
+    bitcoin_commit_ref TEXT,
+    fabric_submission_ref TEXT,
+    error_code TEXT,
+    error_message TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    committed_at TEXT,
+    proving_submitted_at TEXT,
+    proving_completed_at TEXT,
+    broadcast_at TEXT,
+    published_at TEXT,
+    FOREIGN KEY (community_id) REFERENCES communities(community_id),
+    FOREIGN KEY (namespace_id) REFERENCES namespace_bindings(namespace_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_protocol_issuance_batches_parent_checkpoint
+    ON protocol_issuance_batches(parent_space, worker_checkpoint, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_protocol_issuance_batches_status
+    ON protocol_issuance_batches(status, updated_at);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_protocol_issuance_batches_runpod_job
+    ON protocol_issuance_batches(runpod_job_id)
+    WHERE runpod_job_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_protocol_issuance_batches_bitcoin_tx
+    ON protocol_issuance_batches(bitcoin_txid)
+    WHERE bitcoin_txid IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS community_handle_protocol_issuances (
+    community_handle_protocol_issuance_id TEXT PRIMARY KEY,
+    community_handle_id TEXT NOT NULL,
+    protocol_issuance_batch_id TEXT,
+    community_id TEXT NOT NULL,
+    namespace_id TEXT NOT NULL,
+    public_status TEXT NOT NULL CHECK (
+        public_status IN ('issuing', 'issued', 'failed')
+    ),
+    parent_space TEXT NOT NULL,
+    sname TEXT NOT NULL,
+    script_pubkey_hex TEXT NOT NULL,
+    cert_ref TEXT,
+    certificate_payload_ref TEXT,
+    error_code TEXT,
+    error_message TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    issued_at TEXT,
+    FOREIGN KEY (community_handle_id) REFERENCES community_handles(community_handle_id) ON DELETE CASCADE,
+    FOREIGN KEY (protocol_issuance_batch_id) REFERENCES protocol_issuance_batches(protocol_issuance_batch_id),
+    FOREIGN KEY (community_id) REFERENCES communities(community_id),
+    FOREIGN KEY (namespace_id) REFERENCES namespace_bindings(namespace_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_protocol_issuances_handle_once
+    ON community_handle_protocol_issuances(community_handle_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_protocol_issuances_sname_active
+    ON community_handle_protocol_issuances(parent_space, sname)
+    WHERE public_status IN ('issuing', 'issued');
+
+CREATE INDEX IF NOT EXISTS idx_protocol_issuances_pending_parent
+    ON community_handle_protocol_issuances(parent_space, public_status, created_at)
+    WHERE protocol_issuance_batch_id IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_protocol_issuances_batch
+    ON community_handle_protocol_issuances(protocol_issuance_batch_id);
+`,
+    checksum: "0e0bc36597187f380cd58806d2810e8fb5ceff402ac2940d0927923795548610",
+  },
+  {
+    name: "1073_wallet_bound_purchases.sql",
+    sql: `PRAGMA foreign_keys = OFF;
+PRAGMA legacy_alter_table = ON;
+
+ALTER TABLE purchase_quotes RENAME TO purchase_quotes_old;
+
+CREATE TABLE purchase_quotes (
+    quote_id TEXT PRIMARY KEY,
+    community_id TEXT NOT NULL,
+    listing_id TEXT NOT NULL,
+    buyer_kind TEXT NOT NULL DEFAULT 'user' CHECK (
+        buyer_kind IN ('user', 'wallet')
+    ),
+    buyer_user_id TEXT,
+    buyer_wallet_address TEXT,
+    buyer_wallet_address_normalized TEXT,
+    buyer_chain_ref TEXT,
+    asset_id TEXT,
+    live_room_id TEXT,
+    base_price_usd REAL NOT NULL CHECK (
+        base_price_usd >= 0
+    ),
+    pricing_tier TEXT,
+    final_price_usd REAL NOT NULL CHECK (
+        final_price_usd >= 0
+    ),
+    funding_mode TEXT NOT NULL CHECK (
+        funding_mode IN ('direct', 'routed')
+    ),
+    funding_asset_json TEXT,
+    source_chain_json TEXT,
+    route_provider TEXT,
+    route_policy_compliant INTEGER NOT NULL CHECK (
+        route_policy_compliant IN (0, 1)
+    ),
+    route_live_available INTEGER CHECK (
+        route_live_available IN (0, 1)
+    ),
+    policy_origin TEXT NOT NULL CHECK (
+        policy_origin IN ('default', 'explicit')
+    ),
+    destination_settlement_chain_json TEXT NOT NULL,
+    destination_settlement_token TEXT NOT NULL,
+    treasury_denomination TEXT,
+    quote_ttl_seconds INTEGER NOT NULL CHECK (
+        quote_ttl_seconds > 0
+    ),
+    route_required INTEGER NOT NULL CHECK (
+        route_required IN (0, 1)
+    ),
+    route_status_policy TEXT NOT NULL CHECK (
+        route_status_policy IN ('fail', 'fallback_display', 'queue')
+    ),
+    route_hop_tolerance INTEGER NOT NULL CHECK (
+        route_hop_tolerance >= 0
+    ),
+    verification_snapshot_ref TEXT,
+    pricing_policy_version TEXT,
+    status TEXT NOT NULL CHECK (
+        status IN ('active', 'expired', 'consumed', 'failed')
+    ),
+    quoted_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    consumed_at TEXT,
+    failed_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    allocation_snapshot_json TEXT,
+    destination_settlement_amount_atomic TEXT,
+    destination_settlement_decimals INTEGER,
+    settlement_mode TEXT NOT NULL DEFAULT 'delivery_only_story_settlement' CHECK (
+        settlement_mode IN ('delivery_only_story_settlement', 'royalty_native_story_payment')
+    ),
+    funding_destination_address TEXT,
+    FOREIGN KEY (community_id) REFERENCES communities(community_id),
+    FOREIGN KEY (listing_id) REFERENCES listings(listing_id),
+    CHECK (
+        buyer_user_id IS NOT NULL OR buyer_wallet_address_normalized IS NOT NULL
+    ),
+    CHECK (
+        (buyer_kind = 'user' AND buyer_user_id IS NOT NULL AND buyer_wallet_address_normalized IS NULL) OR
+        (buyer_kind = 'wallet' AND buyer_user_id IS NULL AND buyer_wallet_address_normalized IS NOT NULL)
+    ),
+    CHECK (
+        (asset_id IS NOT NULL AND live_room_id IS NULL) OR
+        (asset_id IS NULL AND live_room_id IS NOT NULL)
+    )
+);
+
+INSERT INTO purchase_quotes (
+    quote_id, community_id, listing_id, buyer_kind, buyer_user_id,
+    asset_id, live_room_id, base_price_usd, pricing_tier, final_price_usd,
+    funding_mode, funding_asset_json, source_chain_json, route_provider,
+    route_policy_compliant, route_live_available, policy_origin,
+    destination_settlement_chain_json, destination_settlement_token, treasury_denomination,
+    quote_ttl_seconds, route_required, route_status_policy, route_hop_tolerance,
+    verification_snapshot_ref, pricing_policy_version, status, quoted_at, expires_at,
+    consumed_at, failed_at, created_at, updated_at, allocation_snapshot_json,
+    destination_settlement_amount_atomic, destination_settlement_decimals, settlement_mode,
+    funding_destination_address
+)
+SELECT
+    quote_id, community_id, listing_id, 'user', buyer_user_id,
+    asset_id, live_room_id, base_price_usd, pricing_tier, final_price_usd,
+    funding_mode, funding_asset_json, source_chain_json, route_provider,
+    route_policy_compliant, route_live_available, policy_origin,
+    destination_settlement_chain_json, destination_settlement_token, treasury_denomination,
+    quote_ttl_seconds, route_required, route_status_policy, route_hop_tolerance,
+    verification_snapshot_ref, pricing_policy_version, status, quoted_at, expires_at,
+    consumed_at, failed_at, created_at, updated_at, allocation_snapshot_json,
+    destination_settlement_amount_atomic, destination_settlement_decimals, settlement_mode,
+    funding_destination_address
+FROM purchase_quotes_old;
+
+DROP TABLE purchase_quotes_old;
+
+CREATE INDEX idx_purchase_quotes_buyer_status
+    ON purchase_quotes(buyer_user_id, status, expires_at DESC)
+    WHERE buyer_kind = 'user';
+
+CREATE INDEX idx_purchase_quotes_wallet_status
+    ON purchase_quotes(buyer_chain_ref, buyer_wallet_address_normalized, status, expires_at DESC)
+    WHERE buyer_kind = 'wallet';
+
+CREATE INDEX idx_purchase_quotes_listing_status
+    ON purchase_quotes(listing_id, status, expires_at DESC);
+
+CREATE INDEX idx_purchase_quotes_community_status
+    ON purchase_quotes(community_id, status, expires_at DESC);
+
+CREATE INDEX idx_purchase_quotes_status_expires
+    ON purchase_quotes(status, expires_at DESC);
+
+ALTER TABLE purchases RENAME TO purchases_old;
+
+CREATE TABLE purchases (
+    purchase_id TEXT PRIMARY KEY,
+    community_id TEXT NOT NULL,
+    listing_id TEXT NOT NULL,
+    asset_id TEXT,
+    live_room_id TEXT,
+    buyer_kind TEXT NOT NULL DEFAULT 'user' CHECK (
+        buyer_kind IN ('user', 'wallet')
+    ),
+    buyer_user_id TEXT,
+    buyer_wallet_address TEXT,
+    buyer_wallet_address_normalized TEXT,
+    buyer_chain_ref TEXT,
+    settlement_wallet_attachment_id TEXT NOT NULL,
+    purchase_price_usd REAL NOT NULL CHECK (
+        purchase_price_usd >= 0
+    ),
+    pricing_tier TEXT,
+    settlement_chain TEXT NOT NULL,
+    settlement_token TEXT NOT NULL,
+    settlement_tx_ref TEXT NOT NULL,
+    donation_partner_id TEXT,
+    donation_share_pct REAL CHECK (
+        donation_share_pct IS NULL OR (donation_share_pct >= 0 AND donation_share_pct <= 100)
+    ),
+    donation_amount_usd REAL CHECK (
+        donation_amount_usd IS NULL OR donation_amount_usd >= 0
+    ),
+    donation_settlement_ref TEXT,
+    created_at TEXT NOT NULL,
+    settlement_mode TEXT NOT NULL DEFAULT 'delivery_only_story_settlement' CHECK (
+        settlement_mode IN ('delivery_only_story_settlement', 'royalty_native_story_payment')
+    ),
+    FOREIGN KEY (community_id) REFERENCES communities(community_id),
+    CHECK (
+        buyer_user_id IS NOT NULL OR buyer_wallet_address_normalized IS NOT NULL
+    ),
+    CHECK (
+        (buyer_kind = 'user' AND buyer_user_id IS NOT NULL AND buyer_wallet_address_normalized IS NULL) OR
+        (buyer_kind = 'wallet' AND buyer_user_id IS NULL AND buyer_wallet_address_normalized IS NOT NULL)
+    ),
+    CHECK (
+        (asset_id IS NOT NULL AND live_room_id IS NULL) OR
+        (asset_id IS NULL AND live_room_id IS NOT NULL)
+    )
+);
+
+INSERT INTO purchases (
+    purchase_id, community_id, listing_id, asset_id, live_room_id, buyer_kind, buyer_user_id,
+    settlement_wallet_attachment_id, purchase_price_usd, pricing_tier, settlement_chain,
+    settlement_token, settlement_tx_ref, donation_partner_id, donation_share_pct,
+    donation_amount_usd, donation_settlement_ref, created_at, settlement_mode
+)
+SELECT
+    purchase_id, community_id, listing_id, asset_id, live_room_id, 'user', buyer_user_id,
+    settlement_wallet_attachment_id, purchase_price_usd, pricing_tier, settlement_chain,
+    settlement_token, settlement_tx_ref, donation_partner_id, donation_share_pct,
+    donation_amount_usd, donation_settlement_ref, created_at, settlement_mode
+FROM purchases_old;
+
+DROP TABLE purchases_old;
+
+CREATE INDEX idx_purchases_buyer_created
+    ON purchases(buyer_user_id, created_at DESC)
+    WHERE buyer_kind = 'user';
+
+CREATE INDEX idx_purchases_wallet_created
+    ON purchases(buyer_chain_ref, buyer_wallet_address_normalized, created_at DESC)
+    WHERE buyer_kind = 'wallet';
+
+CREATE INDEX idx_purchases_community_created
+    ON purchases(community_id, created_at DESC);
+
+ALTER TABLE purchase_entitlements RENAME TO purchase_entitlements_old;
+
+CREATE TABLE purchase_entitlements (
+    purchase_entitlement_id TEXT PRIMARY KEY,
+    purchase_id TEXT NOT NULL,
+    community_id TEXT NOT NULL,
+    buyer_kind TEXT NOT NULL DEFAULT 'user' CHECK (
+        buyer_kind IN ('user', 'wallet')
+    ),
+    buyer_user_id TEXT,
+    buyer_wallet_address TEXT,
+    buyer_wallet_address_normalized TEXT,
+    buyer_chain_ref TEXT,
+    entitlement_kind TEXT NOT NULL CHECK (
+        entitlement_kind IN ('asset_access', 'live_room_access', 'replay_access', 'license')
+    ),
+    target_ref TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (
+        status IN ('active', 'revoked', 'expired')
+    ),
+    granted_at TEXT NOT NULL,
+    revoked_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (purchase_id) REFERENCES purchases(purchase_id),
+    FOREIGN KEY (community_id) REFERENCES communities(community_id),
+    CHECK (
+        buyer_user_id IS NOT NULL OR buyer_wallet_address_normalized IS NOT NULL
+    ),
+    CHECK (
+        (buyer_kind = 'user' AND buyer_user_id IS NOT NULL AND buyer_wallet_address_normalized IS NULL) OR
+        (buyer_kind = 'wallet' AND buyer_user_id IS NULL AND buyer_wallet_address_normalized IS NOT NULL)
+    )
+);
+
+INSERT INTO purchase_entitlements (
+    purchase_entitlement_id, purchase_id, community_id, buyer_kind, buyer_user_id,
+    entitlement_kind, target_ref, status, granted_at, revoked_at, created_at, updated_at
+)
+SELECT
+    purchase_entitlement_id, purchase_id, community_id, 'user', buyer_user_id,
+    entitlement_kind, target_ref, status, granted_at, revoked_at, created_at, updated_at
+FROM purchase_entitlements_old;
+
+DROP TABLE purchase_entitlements_old;
+
+CREATE INDEX idx_purchase_entitlements_buyer_status
+    ON purchase_entitlements(buyer_user_id, status)
+    WHERE buyer_kind = 'user';
+
+CREATE INDEX idx_purchase_entitlements_wallet_status
+    ON purchase_entitlements(buyer_chain_ref, buyer_wallet_address_normalized, status)
+    WHERE buyer_kind = 'wallet';
+
+CREATE INDEX idx_purchase_entitlements_target
+    ON purchase_entitlements(entitlement_kind, target_ref, status);
+
+ALTER TABLE purchase_quote_verification_snapshots RENAME TO purchase_quote_verification_snapshots_old;
+
+CREATE TABLE purchase_quote_verification_snapshots (
+    verification_snapshot_ref TEXT PRIMARY KEY,
+    community_id TEXT NOT NULL,
+    quote_id TEXT NOT NULL,
+    buyer_kind TEXT NOT NULL DEFAULT 'user' CHECK (
+        buyer_kind IN ('user', 'wallet')
+    ),
+    buyer_user_id TEXT,
+    buyer_wallet_address TEXT,
+    buyer_wallet_address_normalized TEXT,
+    buyer_chain_ref TEXT,
+    provider TEXT,
+    nationality_state TEXT NOT NULL,
+    nationality_value TEXT,
+    pricing_tier TEXT,
+    pricing_policy_version TEXT NOT NULL,
+    snapshot_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (community_id) REFERENCES communities(community_id),
+    FOREIGN KEY (quote_id) REFERENCES purchase_quotes(quote_id),
+    CHECK (
+        buyer_user_id IS NOT NULL OR buyer_wallet_address_normalized IS NOT NULL
+    ),
+    CHECK (
+        (buyer_kind = 'user' AND buyer_user_id IS NOT NULL AND buyer_wallet_address_normalized IS NULL) OR
+        (buyer_kind = 'wallet' AND buyer_user_id IS NULL AND buyer_wallet_address_normalized IS NOT NULL)
+    )
+);
+
+INSERT INTO purchase_quote_verification_snapshots (
+    verification_snapshot_ref, community_id, quote_id, buyer_kind, buyer_user_id,
+    provider, nationality_state, nationality_value, pricing_tier,
+    pricing_policy_version, snapshot_json, created_at, updated_at
+)
+SELECT
+    verification_snapshot_ref, community_id, quote_id, 'user', buyer_user_id,
+    provider, nationality_state, nationality_value, pricing_tier,
+    pricing_policy_version, snapshot_json, created_at, updated_at
+FROM purchase_quote_verification_snapshots_old;
+
+DROP TABLE purchase_quote_verification_snapshots_old;
+
+CREATE INDEX idx_purchase_quote_verification_snapshots_quote
+    ON purchase_quote_verification_snapshots(quote_id);
+
+ALTER TABLE purchase_allocation_legs RENAME TO purchase_allocation_legs_old;
+
+CREATE TABLE purchase_allocation_legs (
+    purchase_allocation_leg_id TEXT PRIMARY KEY,
+    purchase_id TEXT NOT NULL,
+    quote_id TEXT NOT NULL,
+    community_id TEXT NOT NULL,
+    recipient_type TEXT NOT NULL CHECK (
+        recipient_type IN ('creator', 'charity', 'community_treasury')
+    ),
+    recipient_ref TEXT,
+    waterfall_position INTEGER NOT NULL CHECK (
+        waterfall_position >= 0
+    ),
+    share_bps INTEGER NOT NULL CHECK (
+        share_bps >= 0 AND share_bps <= 10000
+    ),
+    amount_usd REAL NOT NULL CHECK (
+        amount_usd >= 0
+    ),
+    settlement_strategy TEXT NOT NULL CHECK (
+        settlement_strategy IN ('story_payout', 'provider_payout', 'treasury_payout')
+    ),
+    status TEXT NOT NULL CHECK (
+        status IN ('quoted', 'pending', 'confirmed', 'failed')
+    ),
+    settlement_ref TEXT,
+    failure_reason TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    provider_receipt_ref TEXT,
+    tax_receipt_ref TEXT,
+    submitted_at TEXT,
+    confirmed_at TEXT,
+    failed_at TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (purchase_id) REFERENCES purchases(purchase_id),
+    FOREIGN KEY (quote_id) REFERENCES purchase_quotes(quote_id),
+    FOREIGN KEY (community_id) REFERENCES communities(community_id)
+);
+
+INSERT INTO purchase_allocation_legs (
+    purchase_allocation_leg_id, purchase_id, quote_id, community_id, recipient_type, recipient_ref,
+    waterfall_position, share_bps, amount_usd, settlement_strategy, status, settlement_ref,
+    failure_reason, created_at, updated_at, provider_receipt_ref, tax_receipt_ref,
+    submitted_at, confirmed_at, failed_at, attempt_count
+)
+SELECT
+    purchase_allocation_leg_id, purchase_id, quote_id, community_id, recipient_type, recipient_ref,
+    waterfall_position, share_bps, amount_usd, settlement_strategy, status, settlement_ref,
+    failure_reason, created_at, updated_at, provider_receipt_ref, tax_receipt_ref,
+    submitted_at, confirmed_at, failed_at, attempt_count
+FROM purchase_allocation_legs_old;
+
+DROP TABLE purchase_allocation_legs_old;
+
+CREATE INDEX idx_purchase_allocation_legs_purchase
+    ON purchase_allocation_legs(purchase_id, waterfall_position ASC, created_at ASC);
+
+ALTER TABLE purchase_settlement_effects RENAME TO purchase_settlement_effects_old;
+
+CREATE TABLE purchase_settlement_effects (
+    purchase_settlement_effect_id TEXT PRIMARY KEY,
+    community_id TEXT NOT NULL,
+    quote_id TEXT NOT NULL,
+    purchase_id TEXT NOT NULL,
+    effect_kind TEXT NOT NULL CHECK (
+        effect_kind IN ('buyer_funding_receipt', 'charity_payout', 'story_royalty_payment', 'story_entitlement_mint')
+    ),
+    effect_key TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (
+        status IN ('submitted', 'confirmed', 'failed')
+    ),
+    settlement_ref TEXT,
+    provider_receipt_ref TEXT,
+    tax_receipt_ref TEXT,
+    metadata_json TEXT,
+    failure_reason TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    submitted_at TEXT,
+    confirmed_at TEXT,
+    failed_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (community_id) REFERENCES communities(community_id),
+    FOREIGN KEY (quote_id) REFERENCES purchase_quotes(quote_id)
+);
+
+INSERT INTO purchase_settlement_effects (
+    purchase_settlement_effect_id, community_id, quote_id, purchase_id, effect_kind,
+    effect_key, idempotency_key, status, settlement_ref, provider_receipt_ref,
+    tax_receipt_ref, metadata_json, failure_reason, attempt_count, submitted_at,
+    confirmed_at, failed_at, created_at, updated_at
+)
+SELECT
+    purchase_settlement_effect_id, community_id, quote_id, purchase_id, effect_kind,
+    effect_key, idempotency_key, status, settlement_ref, provider_receipt_ref,
+    tax_receipt_ref, metadata_json, failure_reason, attempt_count, submitted_at,
+    confirmed_at, failed_at, created_at, updated_at
+FROM purchase_settlement_effects_old;
+
+DROP TABLE purchase_settlement_effects_old;
+
+CREATE UNIQUE INDEX idx_purchase_settlement_effects_idempotency
+    ON purchase_settlement_effects(idempotency_key);
+
+CREATE UNIQUE INDEX idx_purchase_settlement_effects_quote_kind_key
+    ON purchase_settlement_effects(community_id, quote_id, effect_kind, effect_key);
+
+CREATE INDEX idx_purchase_settlement_effects_purchase
+    ON purchase_settlement_effects(purchase_id, effect_kind, status);
+
+ALTER TABLE purchase_settlement_attempts RENAME TO purchase_settlement_attempts_old;
+
+CREATE TABLE purchase_settlement_attempts (
+    attempt_id TEXT PRIMARY KEY,
+    quote_id TEXT NOT NULL UNIQUE,
+    purchase_id TEXT NOT NULL,
+    community_id TEXT NOT NULL,
+    settlement_wallet_attachment_id TEXT NOT NULL,
+    settlement_tx_ref TEXT,
+    status TEXT NOT NULL CHECK (
+        status IN ('attempting', 'finalized', 'failed')
+    ),
+    failure_reason TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (quote_id) REFERENCES purchase_quotes(quote_id),
+    FOREIGN KEY (community_id) REFERENCES communities(community_id)
+);
+
+INSERT INTO purchase_settlement_attempts (
+    attempt_id, quote_id, purchase_id, community_id, settlement_wallet_attachment_id,
+    settlement_tx_ref, status, failure_reason, attempt_count, created_at, updated_at
+)
+SELECT
+    attempt_id, quote_id, purchase_id, community_id, settlement_wallet_attachment_id,
+    settlement_tx_ref, status, failure_reason, attempt_count, created_at, updated_at
+FROM purchase_settlement_attempts_old;
+
+DROP TABLE purchase_settlement_attempts_old;
+
+CREATE INDEX idx_purchase_settlement_attempts_status_updated
+    ON purchase_settlement_attempts(status, updated_at ASC);
+
+PRAGMA foreign_keys = ON;
+PRAGMA legacy_alter_table = OFF;
+`,
+    checksum: "ff1e232ac840090ebb5734e7956415d905ddbb54919932b5b52c1ab78b9c0edc",
   },
 ] as const;

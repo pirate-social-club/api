@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
+import { createHash } from "node:crypto"
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -59,6 +60,44 @@ async function listTriggerNames(databasePath: string): Promise<string[]> {
       ORDER BY name
     `)
     return result.rows.map((row) => String(row.name))
+  } finally {
+    client.close()
+  }
+}
+
+async function listAltchaRateLimitSchemaObjectNames(databasePath: string): Promise<string[]> {
+  const client = createClient({
+    url: `file:${databasePath}`,
+  })
+
+  try {
+    const result = await client.execute(`
+      SELECT name
+      FROM sqlite_master
+      WHERE name IN (
+        'altcha_challenge_rate_limits',
+        'idx_altcha_challenge_rate_limits_window'
+      )
+      ORDER BY name
+    `)
+    return result.rows.map((row) => String(row.name))
+  } finally {
+    client.close()
+  }
+}
+
+async function getMigrationChecksum(databasePath: string, migrationName: string): Promise<string | null> {
+  const client = createClient({
+    url: `file:${databasePath}`,
+  })
+
+  try {
+    const result = await client.execute({
+      sql: "SELECT checksum FROM schema_migrations WHERE migration_name = ?1 LIMIT 1",
+      args: [migrationName],
+    })
+    const checksum = result.rows[0]?.checksum
+    return typeof checksum === "string" ? checksum : null
   } finally {
     client.close()
   }
@@ -245,6 +284,52 @@ describe("applyLocalControlPlaneMigrations", () => {
     await expect(applyLocalControlPlaneMigrations(
       buildStorage(rootDir, databasePath),
     )).rejects.toThrow("migration checksum mismatch for 0051_control_plane_notifications.sql")
+  })
+
+  test("repairs compatible local control-plane checksum drift for ALTCHA rate limits", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-local-dev-storage-altcha-drift-"))
+    cleanupPaths.push(rootDir)
+
+    const databasePath = join(rootDir, "control-plane.db")
+    const storage = buildStorage(rootDir, databasePath)
+    await applyLocalControlPlaneMigrations(storage)
+
+    const client = createClient({
+      url: `file:${databasePath}`,
+    })
+
+    try {
+      await client.execute("DROP INDEX IF EXISTS idx_altcha_challenge_rate_limits_window")
+      await client.execute("DROP TABLE IF EXISTS altcha_challenge_rate_limits")
+      await client.execute({
+        sql: `
+          UPDATE schema_migrations
+          SET checksum = ?2
+          WHERE migration_name = ?1
+        `,
+        args: [
+          "0084_control_plane_altcha_used_challenges.sql",
+          "5d0f0b7923b963c46ea2f8960497bf4b4b098a96e3a1bb93846f8e8564457f8c",
+        ],
+      })
+    } finally {
+      client.close()
+    }
+
+    await applyLocalControlPlaneMigrations(storage)
+
+    expect(await listAltchaRateLimitSchemaObjectNames(databasePath)).toEqual([
+      "altcha_challenge_rate_limits",
+      "idx_altcha_challenge_rate_limits_window",
+    ])
+
+    const migrationSql = await readFile(
+      join(storage.coreRepoRoot, "db/control-plane/migrations/0084_control_plane_altcha_used_challenges.sql"),
+      "utf8",
+    )
+    const currentChecksum = createHash("sha256").update(migrationSql).digest("hex")
+    expect(await getMigrationChecksum(databasePath, "0084_control_plane_altcha_used_challenges.sql"))
+      .toBe(currentChecksum)
   })
 
   test("does not rehome configured local control-plane database paths outside the current service .local", async () => {

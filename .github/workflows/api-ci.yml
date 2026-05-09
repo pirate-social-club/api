@@ -6,12 +6,14 @@ on:
       - ".github/workflows/api-ci.yml"
       - "services/api/**"
       - "services/cli/**"
+      - "services/community-provision-operator/**"
       - "services/contracts/**"
   push:
     paths:
       - ".github/workflows/api-ci.yml"
       - "services/api/**"
       - "services/cli/**"
+      - "services/community-provision-operator/**"
       - "services/contracts/**"
   workflow_dispatch:
 
@@ -54,6 +56,20 @@ jobs:
       - name: Typecheck generated contracts package
         working-directory: services/contracts
         run: bun run check
+
+      - name: Check out core migration source
+        uses: actions/checkout@v4
+        with:
+          repository: pirate-social-club/core
+          path: core
+
+      - name: Check generated community migration manifest freshness
+        working-directory: services/community-provision-operator
+        env:
+          PIRATE_CORE_REPO: ${{ github.workspace }}/core
+        run: |
+          bun run generate:migrations
+          git diff --exit-code -- src/generated/community-migrations.ts
 
       - name: Install API dependencies
         working-directory: services/api

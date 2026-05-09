@@ -37,7 +37,7 @@ Migrations are bundled as TS constants. Regenerate after changing `core/db/commu
 bun run generate:migrations
 ```
 
-**Note:** The generation script reads from `../../../../core/db/community-template/migrations` relative to this package. This requires the workspace layout with `core/` checked out alongside `api/`. In standalone CI, either check out `core` or skip regeneration and use the committed `src/generated/community-migrations.ts`.
+**Note:** The generation script reads from `../../../../core/db/community-template/migrations` relative to this package by default. Set `PIRATE_CORE_REPO` to point at a different core checkout.
 
 ## Type Check
 

@@ -2,9 +2,12 @@ import { readdirSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { createHash } from "node:crypto";
 
+const CORE_REPO_ROOT = process.env.PIRATE_CORE_REPO
+  ? resolve(process.env.PIRATE_CORE_REPO)
+  : resolve(import.meta.dir, "../../../../core");
 const MIGRATIONS_DIR = resolve(
-  import.meta.dir,
-  "../../../../core/db/community-template/migrations",
+  CORE_REPO_ROOT,
+  "db/community-template/migrations",
 );
 const OUTPUT_FILE = resolve(
   import.meta.dir,
