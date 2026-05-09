@@ -13,6 +13,7 @@ import { resolveCoreRepoPath } from "../shared/core-repo-paths"
 import { splitSqlStatements, toSqliteCompatibleStatements } from "../shared/sql-migration"
 import { ensureRemoteCommunityMembershipStateIndexes } from "../src/lib/communities/ensure-remote-community-membership-indexes"
 import { ensureRemoteThreadCommentLockColumns } from "../src/lib/communities/ensure-remote-thread-comment-lock-columns"
+import { ensureRemoteLiveRoomTables } from "../src/lib/communities/ensure-remote-live-room-tables"
 
 const cleanupPaths: string[] = []
 const COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS = 120_000
@@ -210,6 +211,7 @@ describe("openCommunityDb", () => {
 
     let ensureCalls = 0
     let ensureLockColumnCalls = 0
+    let ensureLiveRoomTableCalls = 0
     const db = await openCommunityDb(
       {
         TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
@@ -219,6 +221,7 @@ describe("openCommunityDb", () => {
       {
         ensureRemoteMembershipStateIndexes: async () => { ensureCalls += 1 },
         ensureRemoteThreadCommentLockColumns: async () => { ensureLockColumnCalls += 1 },
+        ensureRemoteLiveRoomTables: async () => { ensureLiveRoomTableCalls += 1 },
       },
     )
 
@@ -234,6 +237,7 @@ describe("openCommunityDb", () => {
       {
         ensureRemoteMembershipStateIndexes: async () => { ensureCalls += 1 },
         ensureRemoteThreadCommentLockColumns: async () => { ensureLockColumnCalls += 1 },
+        ensureRemoteLiveRoomTables: async () => { ensureLiveRoomTableCalls += 1 },
       },
     )
 
@@ -241,6 +245,7 @@ describe("openCommunityDb", () => {
     secondDb.close()
     expect(ensureCalls).toBe(1)
     expect(ensureLockColumnCalls).toBe(1)
+    expect(ensureLiveRoomTableCalls).toBe(1)
   })
 
   test("continues opening remote community databases when runtime preflight fails", async () => {
@@ -291,6 +296,7 @@ describe("openCommunityDb", () => {
 
     let ensureCalls = 0
     let ensureLockColumnCalls = 0
+    let ensureLiveRoomTableCalls = 0
     const db = await openCommunityDb(
       {
         TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
@@ -310,6 +316,12 @@ describe("openCommunityDb", () => {
             code: "SQLITE_NOMEM",
           })
         },
+        ensureRemoteLiveRoomTables: async () => {
+          ensureLiveRoomTableCalls += 1
+          throw Object.assign(new Error("SQLite error: out of memory"), {
+            code: "SQLITE_NOMEM",
+          })
+        },
       },
     )
 
@@ -325,6 +337,7 @@ describe("openCommunityDb", () => {
       {
         ensureRemoteMembershipStateIndexes: async () => { ensureCalls += 1 },
         ensureRemoteThreadCommentLockColumns: async () => { ensureLockColumnCalls += 1 },
+        ensureRemoteLiveRoomTables: async () => { ensureLiveRoomTableCalls += 1 },
       },
     )
 
@@ -332,6 +345,7 @@ describe("openCommunityDb", () => {
     secondDb.close()
     expect(ensureCalls).toBe(1)
     expect(ensureLockColumnCalls).toBe(1)
+    expect(ensureLiveRoomTableCalls).toBe(1)
   })
 
   testWithTimeout("applies pending template migrations for existing local community databases", async () => {
@@ -533,6 +547,42 @@ describe("openCommunityDb", () => {
       expect(afterCommentColumns).toContain("replies_lock_reason")
 
       await ensureRemoteThreadCommentLockColumns(client)
+    } finally {
+      client.close()
+    }
+  }, COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS)
+
+  testWithTimeout("ensures live room tables on remote community database open", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-remote-live-rooms-"))
+    cleanupPaths.push(rootDir)
+
+    const databasePath = join(rootDir, `${randomUUID()}.db`)
+    await applyPartialCommunitySchema(databasePath, 1069)
+
+    const client = createClient({ url: `file:${databasePath}` })
+    try {
+      const beforeTableNames = await listTableNames(databasePath)
+      expect(beforeTableNames).not.toContain("live_rooms")
+      expect(beforeTableNames).not.toContain("live_room_setlists")
+
+      await ensureRemoteLiveRoomTables(client)
+
+      const afterTableNames = await listTableNames(databasePath)
+      expect(afterTableNames).toContain("live_rooms")
+      expect(afterTableNames).toContain("live_room_performer_allocations")
+      expect(afterTableNames).toContain("live_room_setlists")
+      expect(afterTableNames).toContain("live_room_setlist_items")
+      expect(afterTableNames).toContain("live_room_guest_invites")
+
+      const afterIndexNames = await listIndexNames(databasePath)
+      expect(afterIndexNames).toContain("idx_live_rooms_community_status")
+      expect(afterIndexNames).toContain("idx_live_room_setlists_room")
+      expect(afterIndexNames).toContain("idx_live_room_guest_invites_active")
+
+      const checksum = await getMigrationChecksum(databasePath, "1070_live_rooms.sql")
+      expect(checksum).toBe("47dcdd32d64789c6f93e6162f137b7238c75914532256aa0d186d5a8b68fa179")
+
+      await ensureRemoteLiveRoomTables(client)
     } finally {
       client.close()
     }

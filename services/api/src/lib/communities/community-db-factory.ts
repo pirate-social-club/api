@@ -6,17 +6,21 @@ import { decryptCommunityDbCredential } from "./community-db-credential-crypto"
 import { buildLocalCommunityDbUrl, configureLocalCommunityDbClient, ensureCommunityDbSchema } from "./community-local-db"
 import { ensureRemoteCommunityMembershipStateIndexes } from "./ensure-remote-community-membership-indexes"
 import { ensureRemoteThreadCommentLockColumns } from "./ensure-remote-thread-comment-lock-columns"
+import { ensureRemoteLiveRoomTables } from "./ensure-remote-live-room-tables"
 import type { Env } from "../../env"
 
 export type OpenCommunityDbOptions = {
   ensureRemoteMembershipStateIndexes?: (client: Client) => Promise<void>
   ensureRemoteThreadCommentLockColumns?: (client: Client) => Promise<void>
+  ensureRemoteLiveRoomTables?: (client: Client) => Promise<void>
 }
 
 const remoteMembershipIndexPreflightComplete = new Set<string>()
 const remoteThreadCommentLockColumnPreflightComplete = new Set<string>()
+const remoteLiveRoomTablePreflightComplete = new Set<string>()
 const remoteMembershipIndexPreflightInFlight = new Map<string, Promise<void>>()
 const remoteThreadCommentLockColumnPreflightInFlight = new Map<string, Promise<void>>()
+const remoteLiveRoomTablePreflightInFlight = new Map<string, Promise<void>>()
 
 function formatPreflightError(error: unknown): Record<string, string> {
   if (!error || typeof error !== "object") {
@@ -128,6 +132,14 @@ export async function openCommunityDb(
       complete: remoteThreadCommentLockColumnPreflightComplete,
       inFlight: remoteThreadCommentLockColumnPreflightInFlight,
       run: () => ensureLockColumns(client),
+    })
+    const ensureLiveRoomTables = options?.ensureRemoteLiveRoomTables ?? ensureRemoteLiveRoomTables
+    await runRemoteCommunityDbPreflight({
+      databaseUrl: binding.database_url,
+      label: "live_room_tables",
+      complete: remoteLiveRoomTablePreflightComplete,
+      inFlight: remoteLiveRoomTablePreflightInFlight,
+      run: () => ensureLiveRoomTables(client),
     })
   }
   return {
