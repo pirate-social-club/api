@@ -354,7 +354,7 @@ describe("notification routes", () => {
     })
     expect(tasksBody.items.find((item) => item.type === "global_handle_cleanup_suggested")).toMatchObject({
       payload: {
-        target_path: "/settings/profile",
+        target_path: "/settings/domains",
       },
     })
 

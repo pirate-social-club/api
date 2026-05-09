@@ -131,7 +131,7 @@ async function syncGlobalHandleCleanupTask(executor: DbExecutor, userId: string)
     subjectType: "profile",
     subjectId: userId,
     priority: 2,
-    payload: { target_path: "/settings/profile" },
+    payload: { target_path: "/settings/domains" },
     createdAt: nowIso(),
   })
 }
