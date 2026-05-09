@@ -486,8 +486,6 @@ export async function bootstrapCommunityLocalSnapshot(input: {
           premium_max_length: 4,
           min_length: 3,
           max_length: 32,
-          non_member_claims_enabled: false,
-          non_member_price_multiplier: 5,
           special_price_cents_by_label: {
             crown: 100000,
             "xn--2p8h": 100000,
