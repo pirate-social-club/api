@@ -22,6 +22,7 @@ import { setStoryPurchaseSettlementExecutorForTests } from "../src/lib/story/sto
 import { setSwarmPublisherForTests } from "../src/lib/swarm/swarm-publisher"
 import { setCommunityCommerceCharityPayoutExecutorForTests } from "../src/lib/communities/commerce/charity-payout-service"
 import { setCommunityCommerceBuyerFundingVerifierForTests } from "../src/lib/communities/commerce/funding-proof-service"
+import { invalidateMembershipGatePolicyCache } from "../src/lib/communities/membership/gate-policy-store"
 import {
   applyLocalControlPlaneMigrations,
   resolveLocalDevStorage,
@@ -64,6 +65,7 @@ export function resetMemoryStore(): void {
 
 export function resetRuntimeCaches(): void {
   resetMemoryStore()
+  invalidateMembershipGatePolicyCache()
   setClawkeyProviderForTests(null)
   setSelfProviderForTests(null)
   setVeryProviderForTests(null)

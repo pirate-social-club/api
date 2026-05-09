@@ -15,7 +15,7 @@ import {
   getCommunityMembershipState,
 } from "./membership-state-store"
 import { getPendingMembershipRequestByApplicant } from "./membership-request-store"
-import { getMembershipGatePolicy } from "./gate-policy-store"
+import { getCachedMembershipGatePolicy, getMembershipGatePolicy } from "./gate-policy-store"
 import type { GatePolicy, GatePolicyEvaluation, RequiredActionNode, RequiredActionSet } from "./gate-types"
 import type { CommunityMembershipRepository } from "./types"
 import { gateFailureReasonFromPolicyEvaluation, throwUnsatisfiedMembershipGate } from "./gate-failure-service"
@@ -139,7 +139,11 @@ export async function enforceCommunityActionGate(input: {
   altchaScope: AltchaScope
   altchaProof?: AltchaProofInput
 }): Promise<void> {
-  const policy = await getMembershipGatePolicy(input.client, input.communityId)
+  const policy = await getCachedMembershipGatePolicy({
+    env: input.env,
+    client: input.client,
+    communityId: input.communityId,
+  })
   if (!policy) {
     return
   }

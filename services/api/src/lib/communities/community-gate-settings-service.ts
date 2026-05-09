@@ -7,6 +7,7 @@ import { eligibilityFailed, internalError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import { writeAuditEventForEnv } from "../audit"
 import { openCommunityDb } from "./community-db-factory"
+import { invalidateMembershipGatePolicyCache } from "./membership/gate-policy-store"
 import {
   assertPublicV0GateConfiguration,
   assertUpdateCommunityGatesRequest,
@@ -225,6 +226,7 @@ export async function updateCommunityGates(input: {
     } finally {
       tx.close()
     }
+    invalidateMembershipGatePolicyCache(input.communityId)
     await recordCommunityGateUpdateAudit({
       env: input.env,
       actorUserId: actor.userId,
