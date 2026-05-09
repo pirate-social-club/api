@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { solveChallenge, type Challenge, type Payload } from "altcha-lib"
+import { deriveKey } from "altcha-lib/algorithms/pbkdf2"
 import { app } from "../../../src/index"
 import { setSelfProviderForTests } from "../../../src/lib/verification/self-provider"
 import type { SelfProvider } from "../../../src/lib/verification/self-provider"
+import type { AltchaScope } from "../../../src/lib/verification/altcha-provider"
+import type { Env } from "../../../src/types"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import {
   completeNationalityVerification,
@@ -25,6 +29,28 @@ function gatePolicy(gate: Record<string, unknown>): Record<string, unknown> {
   }
 }
 
+async function solveAltchaProofFromRoute(input: {
+  env: Env
+  accessToken: string
+  scope: AltchaScope
+  action: string
+}): Promise<string> {
+  const response = await app.request(
+    `http://pirate.test/verification/altcha/challenge?scope=${input.scope}&action=${encodeURIComponent(input.action)}`,
+    {
+      headers: { authorization: `Bearer ${input.accessToken}` },
+    },
+    input.env,
+  )
+  expect(response.status).toBe(200)
+  const challenge = await json(response) as Challenge
+  const solution = await solveChallenge({ challenge, deriveKey })
+  if (!solution) {
+    throw new Error("ALTCHA challenge did not solve")
+  }
+  return btoa(JSON.stringify({ challenge, solution } satisfies Payload))
+}
+
 beforeEach(() => {
   resetRuntimeCaches()
 })
@@ -38,6 +64,178 @@ afterEach(async () => {
 })
 
 describe("community membership gate routes", () => {
+  test("ALTCHA-gated communities require solved proofs for join, post, comments, and replies", async () => {
+    const ctx = await createRouteTestContext({
+      ALTCHA_HMAC_SECRET: "test-altcha-secret",
+      ALTCHA_HMAC_KEY_SECRET: "test-altcha-key-secret",
+      ALTCHA_POW_COST: "1",
+      ALTCHA_POW_COUNTER_MIN: "1",
+      ALTCHA_POW_COUNTER_MAX: "2",
+    })
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "altcha-gate-route-creator")
+    const created = await createMembershipGatedCommunity({
+      env: ctx.env,
+      creatorAccessToken: creator.accessToken,
+      displayName: "ALTCHA Gate Club",
+      gate: { type: "altcha_pow" },
+    })
+
+    const member = await exchangeJwt(ctx.env, "altcha-gate-route-member")
+
+    const deniedJoin = await app.request(
+      `http://pirate.test/communities/${created.communityId}/join`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${member.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(deniedJoin.status).toBe(403)
+    const deniedJoinBody = await json(deniedJoin) as {
+      code: string
+      details?: { missing_capabilities?: string[]; membership_gate_summaries?: Array<{ gate_type: string }> }
+    }
+    expect(deniedJoinBody.code).toBe("gate_failed")
+    expect(deniedJoinBody.details?.missing_capabilities).toContain("altcha_pow")
+    expect(deniedJoinBody.details?.membership_gate_summaries?.[0]?.gate_type).toBe("altcha_pow")
+
+    const joinProof = await solveAltchaProofFromRoute({
+      env: ctx.env,
+      accessToken: member.accessToken,
+      scope: "community_join",
+      action: `community:${created.communityId}`,
+    })
+    const joined = await app.request(
+      `http://pirate.test/communities/${created.communityId}/join`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${member.accessToken}`,
+          "x-pirate-altcha": joinProof,
+        },
+      },
+      ctx.env,
+    )
+    expect(joined.status).toBe(200)
+    const joinedBody = await json(joined) as { status: string }
+    expect(joinedBody.status).toBe("joined")
+
+    const deniedPost = await requestJson(
+      `http://pirate.test/communities/${created.communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Missing proof",
+        body: "This should be blocked",
+        idempotency_key: "altcha-route-post-missing-proof",
+      },
+      ctx.env,
+      member.accessToken,
+    )
+    expect(deniedPost.status).toBe(403)
+
+    const postProof = await solveAltchaProofFromRoute({
+      env: ctx.env,
+      accessToken: member.accessToken,
+      scope: "post_create",
+      action: `community:${created.communityId}`,
+    })
+    const createdPost = await app.request(
+      `http://pirate.test/communities/${created.communityId}/posts`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${member.accessToken}`,
+          "content-type": "application/json",
+          "x-pirate-altcha": postProof,
+        },
+        body: JSON.stringify({
+          post_type: "text",
+          title: "Solved proof",
+          body: "This post has a valid ALTCHA proof",
+          idempotency_key: "altcha-route-post-valid-proof",
+        }),
+      },
+      ctx.env,
+    )
+    expect(createdPost.status).toBe(201)
+    const postBody = await json(createdPost) as { id: string }
+
+    const replayedPost = await app.request(
+      `http://pirate.test/communities/${created.communityId}/posts`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${member.accessToken}`,
+          "content-type": "application/json",
+          "x-pirate-altcha": postProof,
+        },
+        body: JSON.stringify({
+          post_type: "text",
+          title: "Replayed proof",
+          body: "This should be blocked",
+          idempotency_key: "altcha-route-post-replayed-proof",
+        }),
+      },
+      ctx.env,
+    )
+    expect(replayedPost.status).toBe(403)
+    const replayedPostBody = await json(replayedPost) as {
+      code: string
+      details?: { gate_evaluation?: { trace?: { reason?: string } } }
+    }
+    expect(replayedPostBody.code).toBe("gate_failed")
+    expect(replayedPostBody.details?.gate_evaluation?.trace?.reason).toBe("replayed")
+
+    const commentProof = await solveAltchaProofFromRoute({
+      env: ctx.env,
+      accessToken: member.accessToken,
+      scope: "comment_create",
+      action: `post:${postBody.id}`,
+    })
+    const topLevelComment = await app.request(
+      `http://pirate.test/communities/${created.communityId}/posts/${postBody.id}/comments`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${member.accessToken}`,
+          "content-type": "application/json",
+          "x-pirate-altcha": commentProof,
+        },
+        body: JSON.stringify({ body: "Top-level comment with proof" }),
+      },
+      ctx.env,
+    )
+    expect(topLevelComment.status).toBe(201)
+    const topLevelBody = await json(topLevelComment) as { id: string; depth: number }
+    expect(topLevelBody.depth).toBe(0)
+
+    const replyProof = await solveAltchaProofFromRoute({
+      env: ctx.env,
+      accessToken: member.accessToken,
+      scope: "comment_create",
+      action: `comment:${topLevelBody.id}`,
+    })
+    const reply = await app.request(
+      `http://pirate.test/comments/${topLevelBody.id}/replies`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${member.accessToken}`,
+          "content-type": "application/json",
+          "x-pirate-altcha": replyProof,
+        },
+        body: JSON.stringify({ body: "Reply with proof" }),
+      },
+      ctx.env,
+    )
+    expect(reply.status).toBe(201)
+    const replyBody = await json(reply) as { parent_comment: string | null; depth: number }
+    expect(replyBody.parent_comment).toBe(topLevelBody.id)
+    expect(replyBody.depth).toBe(1)
+  })
+
   test("create wallet score-gated community succeeds with valid config", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup

@@ -43,6 +43,7 @@
     "@sentry/cloudflare": "^10.51.0",
     "@story-protocol/core-sdk": "^1.4.4",
     "agora-token": "^2.0.3",
+    "altcha-lib": "^2.0.3",
     "ethers": "^6.16.0",
     "hono": "^4.8.5",
     "jose": "^6.2.2",

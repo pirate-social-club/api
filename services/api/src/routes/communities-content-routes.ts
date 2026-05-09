@@ -17,7 +17,7 @@ import {
 import { serializeComment, serializeCommentListResponse } from "../serializers/comment"
 import { serializeDeletedPostResponse, serializeLocalizedPostResponse, serializePost } from "../serializers/post"
 import type { CreatePostRequest } from "../types"
-import { decodePublicPostId } from "../lib/public-ids"
+import { decodePublicPostId, publicCommunityId } from "../lib/public-ids"
 import { writeAuditEventForEnv } from "../lib/audit"
 import { nowIso } from "../lib/helpers"
 import { detectSourceLanguageFromText } from "../lib/localization/content-locale"
@@ -26,6 +26,7 @@ import type { ComposerLinkPreviewResult } from "../lib/posts/link-embed-preview"
 import { normalizeLinkUrl } from "../lib/posts/link-enrichment/url-normalization"
 import { upsertLinkEnrichment } from "../lib/posts/link-enrichment/repository"
 import { getControlPlaneClient } from "../lib/runtime-deps"
+import { ALTCHA_HEADER, readAltchaProof } from "../lib/verification/altcha-provider"
 import {
   getResolvedCommunityRouteContext,
   requireJsonBody,
@@ -104,6 +105,12 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
       communityId,
       body,
       bypassAuthorAccessChecks: actor.authType === "admin",
+      altchaProof: readAltchaProof({
+        headerValue: c.req.header(ALTCHA_HEADER),
+        body,
+        scope: "post_create",
+        action: `community:${publicCommunityId(communityId)}`,
+      }),
       userRepository,
       profileRepository,
       communityRepository,
@@ -387,6 +394,12 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
       threadRootPostId: postId,
       body,
       bypassAuthorAccessChecks: actor.authType === "admin",
+      altchaProof: readAltchaProof({
+        headerValue: c.req.header(ALTCHA_HEADER),
+        body,
+        scope: "comment_create",
+        action: `post:${c.req.param("postId")}`,
+      }),
       userRepository,
       profileRepository,
       communityRepository,

@@ -2,6 +2,7 @@ import type { UserRepository } from "../../auth/repositories"
 import { internalError, notFoundError } from "../../errors"
 import type { Env } from "../../../env"
 import type { Community, JoinEligibility, User } from "../../../types"
+import type { Client } from "../../sql-client"
 import { openCommunityDb } from "../community-db-factory"
 import { isCommunityLive } from "../community-status"
 import {
@@ -17,8 +18,9 @@ import { getPendingMembershipRequestByApplicant } from "./membership-request-sto
 import { getMembershipGatePolicy } from "./gate-policy-store"
 import type { GatePolicy, GatePolicyEvaluation, RequiredActionNode, RequiredActionSet } from "./gate-types"
 import type { CommunityMembershipRepository } from "./types"
-import { gateFailureReasonFromPolicyEvaluation } from "./gate-failure-service"
+import { gateFailureReasonFromPolicyEvaluation, throwUnsatisfiedMembershipGate } from "./gate-failure-service"
 import { publicCommunityId } from "../../public-ids"
+import type { AltchaProofInput, AltchaScope } from "../../verification/altcha-provider"
 
 export function satisfiesBaselineJoinGate(user: User): boolean {
   if (user.verification_capabilities.unique_human.state === "verified") {
@@ -62,6 +64,7 @@ function missingCapabilitiesFromRequiredActionSet(
       || item.capability === "gender"
       || item.capability === "unique_human"
       || item.capability === "wallet_score"
+      || item.capability === "altcha_pow"
     ) {
       capabilities.add(item.capability)
     }
@@ -104,6 +107,9 @@ export async function evaluateGatedMembership(input: {
   userRepository: Pick<UserRepository, "getWalletAttachmentsByUserId">
   communityId: string
   policy: GatePolicy | null
+  mode?: "preview" | "enforce"
+  altchaScope?: AltchaScope
+  altchaProof?: AltchaProofInput
 }): Promise<{
   gateSummaries: ReturnType<typeof buildMembershipGateSummariesFromPolicy>
   walletScoreStatus: JoinEligibility["wallet_score_status"]
@@ -117,8 +123,43 @@ export async function evaluateGatedMembership(input: {
     policy: input.policy,
     user: input.user,
     walletAttachments,
+    mode: input.mode ?? "preview",
+    altchaScope: input.altchaScope,
+    altchaProof: input.altchaProof,
   })
   return { gateSummaries, walletScoreStatus, evaluation }
+}
+
+export async function enforceCommunityActionGate(input: {
+  env: Env
+  client: Client
+  userId: string
+  userRepository: UserRepository
+  communityId: string
+  altchaScope: AltchaScope
+  altchaProof?: AltchaProofInput
+}): Promise<void> {
+  const policy = await getMembershipGatePolicy(input.client, input.communityId)
+  if (!policy) {
+    return
+  }
+  const user = await input.userRepository.getUserById(input.userId)
+  if (!user) {
+    throw internalError("Resolved user row is missing for action gate evaluation")
+  }
+  const { gateSummaries, walletScoreStatus, evaluation } = await evaluateGatedMembership({
+    env: input.env,
+    user,
+    userRepository: input.userRepository,
+    communityId: input.communityId,
+    policy,
+    mode: "enforce",
+    altchaScope: input.altchaScope,
+    altchaProof: input.altchaProof,
+  })
+  if (!evaluation.satisfied) {
+    throwUnsatisfiedMembershipGate({ evaluation, gateSummaries, walletScoreStatus })
+  }
 }
 
 export async function getJoinEligibility(input: {

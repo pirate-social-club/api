@@ -19,6 +19,7 @@ export type GateExpression =
 
 export type GateAtom =
   | { type: "unique_human"; provider: "very" | "self" }
+  | { type: "altcha_pow" }
   | { type: "minimum_age"; provider: "self"; minimum_age: number }
   | { type: "nationality"; provider: "self"; allowed: string[] }
   | { type: "gender"; provider: "self"; allowed: Array<"M" | "F"> }
@@ -60,6 +61,7 @@ export type RequiredAction =
   | { kind: "action"; provider: "self"; capability: "gender"; allowed_markers: Array<"M" | "F"> }
   | { kind: "action"; provider: "self"; capability: "unique_human" }
   | { kind: "action"; provider: "very"; capability: "unique_human" }
+  | { kind: "action"; provider: "altcha"; capability: "altcha_pow"; scope: string }
   | { kind: "action"; provider: "passport"; capability: "wallet_score"; minimum_score: number; actual_score: number | null }
   | { kind: "action"; provider: "wallet"; capability: "erc721_holding"; chain_namespace: string; contract_address: string }
   | {
@@ -95,7 +97,7 @@ export type ProofRequirement = {
   config?: Record<string, unknown> | null
 }
 
-export type MissingMembershipCapability = "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score"
+export type MissingMembershipCapability = "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "altcha_pow"
 export type SuggestedVerificationProvider = "self" | "very" | "passport"
 
 export type MembershipGateEvaluation = {

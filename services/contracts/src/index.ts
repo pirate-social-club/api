@@ -1030,8 +1030,8 @@ export type GateExpression = {
 };
 
 export type GateAtom = {
-  type: "unique_human" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "erc721_holding" | "erc721_inventory_match";
-  provider?: "self" | "very" | "passport" | "courtyard" | null;
+  type: "unique_human" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "altcha_pow" | "erc721_holding" | "erc721_inventory_match";
+  provider?: "self" | "very" | "passport" | "courtyard" | "altcha" | null;
   minimum_age?: number;
   allowed?: Array<string>;
   minimum_score?: number;
@@ -1615,7 +1615,7 @@ export type LocalizedPostEmbedTranslation = {
 };
 
 export type MembershipGateSummary = {
-  gate_type: "nationality" | "gender" | "unique_human" | "age_over_18" | "minimum_age" | "wallet_score" | "erc721_holding" | "erc721_inventory_match";
+  gate_type: "nationality" | "gender" | "unique_human" | "age_over_18" | "minimum_age" | "wallet_score" | "altcha_pow" | "erc721_holding" | "erc721_inventory_match";
   accepted_providers?: Array<"self" | "very" | "passport"> | null;
   required_value?: string | null;
   required_values?: Array<string> | null;
@@ -1667,7 +1667,7 @@ export type JoinEligibility = {
   joinable_now: boolean;
   status: "joinable" | "requestable" | "pending_request" | "verification_required" | "gate_failed" | "already_joined" | "banned";
   membership_gate_summaries: Array<MembershipGateSummary>;
-  missing_capabilities?: Array<"unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score">;
+  missing_capabilities?: Array<"unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "altcha_pow">;
   suggested_verification_provider?: "self" | "very" | "passport" | null;
   suggested_verification_intent?: "community_join" | null;
   failure_reason?: "missing_verification" | "provider_not_accepted" | "nationality_mismatch" | "gender_mismatch" | "minimum_age_mismatch" | "erc721_holding_required" | "erc721_inventory_match_required" | "token_inventory_unavailable" | "wallet_score_too_low" | "unsupported" | "banned" | null;
@@ -2528,7 +2528,7 @@ type GateRule = {
   community: string;
   scope: "membership" | "viewer" | "posting";
   gate_family: "token_holding" | "identity_proof";
-  gate_type: "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "erc721_holding" | "erc721_inventory_match";
+  gate_type: "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "altcha_pow" | "erc721_holding" | "erc721_inventory_match";
   proof_requirements?: Array<ProofRequirement> | null;
   chain_namespace?: string | null;
   gate_config?: (Record<string, unknown>) | null;
@@ -2539,7 +2539,7 @@ type GateRule = {
 type GateRuleInput = {
   scope: "membership" | "viewer" | "posting";
   gate_family: "token_holding" | "identity_proof";
-  gate_type: "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "erc721_holding" | "erc721_inventory_match";
+  gate_type: "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "altcha_pow" | "erc721_holding" | "erc721_inventory_match";
   proof_requirements?: Array<ProofRequirement> | null;
   chain_namespace?: string | null;
   gate_config?: (Record<string, unknown>) | null;
@@ -2840,8 +2840,9 @@ type RequiredActionNode = {
   kind: "action" | "set";
   mode?: "all" | "any";
   items?: Array<Record<string, unknown>>;
-  provider?: "self" | "very" | "passport" | "wallet";
-  capability?: "minimum_age" | "nationality" | "gender" | "unique_human" | "wallet_score" | "erc721_holding" | "erc721_inventory_match";
+  provider?: "self" | "very" | "passport" | "wallet" | "altcha";
+  capability?: "minimum_age" | "nationality" | "gender" | "unique_human" | "wallet_score" | "altcha_pow" | "erc721_holding" | "erc721_inventory_match";
+  scope?: string;
   required_age?: number;
   allowed_countries?: Array<string>;
   allowed_markers?: Array<"M" | "F">;
@@ -3022,6 +3023,7 @@ export const apiRoutes = {
   verificationSession: (verificationSessionId: string) => `/verification-sessions/${verificationSessionId}`,
   verificationSessionComplete: (verificationSessionId: string) => `/verification-sessions/${verificationSessionId}/complete`,
   passportWalletScore: "/verification/passport-wallet-score",
+  altchaChallenge: "/verification/altcha/challenge",
   agentOwnershipSessions: "/agent-ownership-sessions",
   agentOwnershipPairing: "/agent-ownership-pairing",
   agentOwnershipPairingClaim: "/agent-ownership-pairing/claim",

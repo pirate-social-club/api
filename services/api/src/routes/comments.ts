@@ -25,6 +25,7 @@ import {
   serializeCommentListResponse,
 } from "../serializers/comment"
 import { decodePublicCommentId } from "../lib/public-ids"
+import { ALTCHA_HEADER, readAltchaProof } from "../lib/verification/altcha-provider"
 
 const comments = new Hono<AuthenticatedEnv>()
 
@@ -67,6 +68,12 @@ comments.post("/:commentId/replies", async (c) => {
     parentCommentId: commentId,
     body,
     bypassAuthorAccessChecks: actor.authType === "admin",
+    altchaProof: readAltchaProof({
+      headerValue: c.req.header(ALTCHA_HEADER),
+      body,
+      scope: "comment_create",
+      action: `comment:${c.req.param("commentId")}`,
+    }),
     userRepository: getUserRepository(c.env),
     profileRepository: getProfileRepository(c.env),
     communityRepository,

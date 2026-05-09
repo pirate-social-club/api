@@ -34,6 +34,7 @@ import type { CommunityMembershipRepository, MembershipResult } from "./types"
 import { requireOwnedCommunity } from "../create/service"
 import { unixSeconds } from "../../../serializers/time"
 import { publicCommunityId } from "../../public-ids"
+import type { AltchaProofInput } from "../../verification/altcha-provider"
 
 function sanitizeMembershipRequestNote(note: string | null | undefined): string | null {
   const trimmed = typeof note === "string" ? note.trim() : ""
@@ -66,6 +67,7 @@ export async function joinCommunity(input: {
   communityId: string
   note?: string | null
   bypassMembershipGateChecks?: boolean
+  altchaProof?: AltchaProofInput
   userRepository: UserRepository
   profileRepository?: ProfileRepository
   communityRepository: CommunityMembershipRepository
@@ -171,6 +173,9 @@ export async function joinCommunity(input: {
       userRepository: input.userRepository,
       communityId: input.communityId,
       policy,
+      mode: "enforce",
+      altchaScope: "community_join",
+      altchaProof: input.altchaProof,
     })
     if (!evaluation.satisfied) {
       throwUnsatisfiedMembershipGate({ evaluation, gateSummaries, walletScoreStatus })

@@ -52,6 +52,7 @@ function missingCapabilitiesFromRequiredActionSet(
       || item.capability === "gender"
       || item.capability === "unique_human"
       || item.capability === "wallet_score"
+      || item.capability === "altcha_pow"
     ) {
       capabilities.add(item.capability)
     }

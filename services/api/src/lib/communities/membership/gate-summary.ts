@@ -113,6 +113,8 @@ export function buildMembershipGateSummaryFromAtom(atom: GateAtom): MembershipGa
   }
 
   switch (atom.type) {
+    case "altcha_pow":
+      break
     case "minimum_age":
       summary.required_minimum_age = atom.minimum_age
       break

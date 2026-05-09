@@ -3,6 +3,7 @@ import type { User, WalletAttachmentSummary } from "../../../types"
 import type { CommunityGateRuleRow, GateAtom, GateExpression, GatePolicy, GatePolicyEvaluation, GateTraceNode, RequiredAction, RequiredActionNode, RequiredActionSet } from "./gate-types"
 import { evaluateIdentityGateRule } from "./identity-gate-evaluation"
 import { evaluateTokenGateRule } from "./token-gate-evaluation"
+import { verifyAndConsumeAltchaProof, type AltchaProofInput, type AltchaScope } from "../../verification/altcha-provider"
 
 type AtomEvaluation = {
   passed: boolean
@@ -10,11 +11,16 @@ type AtomEvaluation = {
   requiredAction: RequiredAction | null
 }
 
+export type EvaluationMode = "preview" | "enforce"
+
 export async function evaluateMembershipGatePolicy(input: {
   env: Env
   policy: GatePolicy | null
   user: User
   walletAttachments: WalletAttachmentSummary[]
+  mode?: EvaluationMode
+  altchaScope?: AltchaScope
+  altchaProof?: AltchaProofInput
 }): Promise<GatePolicyEvaluation> {
   if (!input.policy) {
     return {
@@ -29,6 +35,9 @@ export async function evaluateMembershipGatePolicy(input: {
     expression: input.policy.expression,
     user: input.user,
     walletAttachments: input.walletAttachments,
+    mode: input.mode ?? "preview",
+    altchaScope: input.altchaScope ?? input.altchaProof?.scope ?? "community_join",
+    altchaProof: input.altchaProof,
   })
 
   return {
@@ -43,6 +52,9 @@ async function evaluateExpression(input: {
   expression: GateExpression
   user: User
   walletAttachments: WalletAttachmentSummary[]
+  mode: EvaluationMode
+  altchaScope: AltchaScope
+  altchaProof?: AltchaProofInput
 }): Promise<{ passed: boolean; trace: GateTraceNode; requiredActionSet: RequiredActionSet | null }> {
   const { expression } = input
   if (expression.op === "gate") {
@@ -56,9 +68,11 @@ async function evaluateExpression(input: {
     }
   }
 
-  const children = await Promise.all(expression.children.map((child) =>
-    evaluateExpression({ ...input, expression: child }),
-  ))
+  const children = input.mode === "enforce"
+    ? await evaluateChildrenSequentially({ ...input, expression })
+    : await Promise.all(expression.children.map((child) =>
+        evaluateExpression({ ...input, expression: child }),
+      ))
   const passed = expression.op === "and"
     ? children.every((child) => child.passed)
     : children.some((child) => child.passed)
@@ -85,6 +99,29 @@ async function evaluateExpression(input: {
   }
 }
 
+async function evaluateChildrenSequentially(input: {
+  env: Env
+  expression: Extract<GateExpression, { op: "and" | "or" }>
+  user: User
+  walletAttachments: WalletAttachmentSummary[]
+  mode: EvaluationMode
+  altchaScope: AltchaScope
+  altchaProof?: AltchaProofInput
+}): Promise<Array<{ passed: boolean; trace: GateTraceNode; requiredActionSet: RequiredActionSet | null }>> {
+  const children: Array<{ passed: boolean; trace: GateTraceNode; requiredActionSet: RequiredActionSet | null }> = []
+  for (const childExpression of input.expression.children) {
+    const child = await evaluateExpression({ ...input, expression: childExpression })
+    children.push(child)
+    if (input.expression.op === "or" && child.passed) {
+      break
+    }
+    if (input.expression.op === "and" && !child.passed) {
+      break
+    }
+  }
+  return children
+}
+
 function collapseActionSet(set: RequiredActionSet): RequiredActionSet {
   const items: RequiredActionNode[] = []
   for (const item of set.items) {
@@ -102,8 +139,13 @@ async function evaluateAtom(input: {
   atom: GateAtom
   user: User
   walletAttachments: WalletAttachmentSummary[]
+  mode: EvaluationMode
+  altchaScope: AltchaScope
+  altchaProof?: AltchaProofInput
 }): Promise<AtomEvaluation> {
   switch (input.atom.type) {
+    case "altcha_pow":
+      return evaluateAltchaAtom({ ...input, atom: input.atom })
     case "unique_human":
       return evaluateIdentityAtom(input, [{
         proof_type: "unique_human",
@@ -159,6 +201,56 @@ async function evaluateAtom(input: {
         atom: input.atom,
         walletAttachments: input.walletAttachments,
       })
+  }
+}
+
+async function evaluateAltchaAtom(input: {
+  env: Env
+  atom: Extract<GateAtom, { type: "altcha_pow" }>
+  user: User
+  mode: EvaluationMode
+  altchaScope: AltchaScope
+  altchaProof?: AltchaProofInput
+}): Promise<AtomEvaluation> {
+  if (input.mode === "preview") {
+    return {
+      passed: false,
+      trace: {
+        kind: "gate",
+        gate_type: "altcha_pow",
+        provider: "altcha",
+        passed: false,
+        reason: "missing_altcha_pow",
+      },
+      requiredAction: {
+        kind: "action",
+        provider: "altcha",
+        capability: "altcha_pow",
+        scope: input.altchaScope,
+      },
+    }
+  }
+
+  const result = await verifyAndConsumeAltchaProof({
+    env: input.env,
+    actorUserId: input.user.user_id,
+    proof: input.altchaProof,
+  })
+  return {
+    passed: result.verified,
+    trace: {
+      kind: "gate",
+      gate_type: "altcha_pow",
+      provider: "altcha",
+      passed: result.verified,
+      reason: result.verified ? undefined : result.reason ?? "invalid_altcha_pow",
+    },
+    requiredAction: result.verified ? null : {
+      kind: "action",
+      provider: "altcha",
+      capability: "altcha_pow",
+      scope: input.altchaScope,
+    },
   }
 }
 
