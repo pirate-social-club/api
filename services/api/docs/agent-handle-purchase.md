@@ -36,10 +36,10 @@ If the name requires payment, the API returns `402 payment_required`.
     "payment_instructions": {
       "chain": {
         "chain_namespace": "eip155",
-        "chain_id": 84532,
-        "display_name": "Base Sepolia"
+        "chain_id": 8453,
+        "display_name": "Base"
       },
-      "token_address": "0x...",
+      "token_address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
       "recipient_address": "0x...",
       "amount_atomic": "25000000",
       "amount_display": "25.00"

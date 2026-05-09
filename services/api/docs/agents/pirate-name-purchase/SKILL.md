@@ -69,7 +69,7 @@ If payment is required, Pirate returns `402 payment_required` with quote details
         "chain_id": 8453,
         "display_name": "Base"
       },
-      "token_address": "0x...",
+      "token_address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
       "recipient_address": "0x...",
       "amount_atomic": "100000000",
       "amount_display": "100.00"
@@ -164,6 +164,25 @@ Staging claim example, using a private key from Infisical:
 rtk infisical run --project-config-dir ../../../core --env staging --path /services/api -- \
   bun scripts/smoke-paid-global-handle.ts \
   --origin https://api-staging.pirate.sc \
+  --label olivia \
+  --claim
+```
+
+Production quote-only example:
+
+```bash
+rtk infisical run --project-config-dir ../../../core --env prod --path /services/api -- \
+  bun scripts/smoke-paid-global-handle.ts \
+  --origin https://api.pirate.sc \
+  --label olivia
+```
+
+Production claim example, using a funded Base mainnet buyer wallet:
+
+```bash
+rtk infisical run --project-config-dir ../../../core --env prod --path /services/api -- \
+  bun scripts/smoke-paid-global-handle.ts \
+  --origin https://api.pirate.sc \
   --label olivia \
   --claim
 ```
