@@ -48,22 +48,55 @@ export function readSeedAccounts(path = SEED_ACCOUNTS_PATH): Record<string, stri
   if (!existsSync(path)) {
     return {}
   }
-  const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Invalid seed accounts file: ${path}`)
-  }
+  const parsed = readSeedAccountsRaw(path)
   return Object.fromEntries(
-    Object.entries(parsed as Record<string, unknown>).flatMap(([alias, userId]) => {
-      if (typeof userId !== "string" || !userId.trim()) {
-        return []
-      }
-      return [[alias, userId.trim()]]
+    Object.entries(parsed).flatMap(([alias, value]) => {
+      const userId = seedAccountUserId(value)
+      return userId ? [[alias, userId]] : []
     }),
   )
 }
 
+export function readSeedAccountsRaw(path = SEED_ACCOUNTS_PATH): Record<string, unknown> {
+  if (!existsSync(path)) {
+    return {}
+  }
+  const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`Invalid seed accounts file: ${path}`)
+  }
+  return parsed as Record<string, unknown>
+}
+
 export function writeSeedAccounts(accounts: Record<string, string>, path = SEED_ACCOUNTS_PATH): void {
+  const existing = readSeedAccountsRaw(path)
+  const next: Record<string, unknown> = { ...existing }
+  for (const [alias, userId] of Object.entries(accounts)) {
+    const current = next[alias]
+    next[alias] = current && typeof current === "object" && !Array.isArray(current)
+      ? { ...current, user_id: userId }
+      : userId
+  }
+  writeSeedAccountsRaw(next, path)
+}
+
+export function writeSeedAccountEntries(entries: Record<string, unknown>, path = SEED_ACCOUNTS_PATH): void {
+  writeSeedAccountsRaw({ ...readSeedAccountsRaw(path), ...entries }, path)
+}
+
+function writeSeedAccountsRaw(accounts: Record<string, unknown>, path: string): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
   writeFileSync(path, `${JSON.stringify(accounts, null, 2)}\n`, { mode: 0o600 })
   chmodSync(path, 0o600)
+}
+
+function seedAccountUserId(value: unknown): string | null {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim()
+  }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const userId = (value as Record<string, unknown>).user_id
+    return typeof userId === "string" && userId.trim() ? userId.trim() : null
+  }
+  return null
 }

@@ -8,8 +8,9 @@ import {
 } from "@pirate/api-contracts"
 import { createHmac } from "node:crypto"
 import { getFlag, hasFlag, requireFlag } from "../args.js"
-import { readOptionalTextFile } from "../command-utils.js"
-import { readSeedAccounts, writeSeedAccounts } from "../config.js"
+import { readJsonFile, readOptionalTextFile } from "../command-utils.js"
+import { deriveBotWallet } from "../bot-wallet.js"
+import { readSeedAccounts, writeSeedAccountEntries, writeSeedAccounts } from "../config.js"
 import { apiRequest } from "../http.js"
 import { exitWithUsage, printJson } from "../output.js"
 import { apiAuthHeadersForSession, requireStoredSession, resolveBaseUrl } from "../session.js"
@@ -28,6 +29,7 @@ import { finalizeSpacesCommunity, launchSpacesCommunity } from "./community-spac
 export {
   assertExecutableNamespaceVerificationId,
   buildConventionalFolderPlan,
+  buildJsonManifestPlan,
   buildManifestPlan,
   parseSimpleYaml,
 } from "./community-manifest.js"
@@ -100,6 +102,10 @@ export async function runCommunity(
     }
     case "preview": {
       await previewCommunity(rest, args)
+      return
+    }
+    case "members": {
+      await membersCommunity(rest, args)
       return
     }
     case "roles": {
@@ -183,7 +189,7 @@ export async function runCommunity(
       return
     }
     default:
-      exitWithUsage("Usage: pirate community <create|attach-namespace|get|lookup|update|preview|roles|accounts|apply|rules|gates|links|labels|safety|settings|donation-policy|seed-post|seed-comment|join|follow|launch-spaces|finalize-spaces>")
+      exitWithUsage("Usage: pirate community <create|attach-namespace|get|lookup|update|preview|members|roles|accounts|apply|rules|gates|links|labels|safety|settings|donation-policy|seed-post|seed-comment|join|follow|launch-spaces|finalize-spaces>")
   }
 }
 
@@ -277,6 +283,32 @@ async function previewCommunity(rest: string[], args: ParsedArgs): Promise<void>
   printJson(result)
 }
 
+async function membersCommunity(rest: string[], args: ParsedArgs): Promise<void> {
+  const session = requireStoredSession()
+  const communityId = rest[0]
+  if (!communityId) {
+    exitWithUsage("Usage: pirate community members <community_id|@slug> [--locale <locale>]")
+  }
+
+  const locale = getFlag(args, "locale")
+  const suffix = locale ? `?locale=${encodeURIComponent(locale)}` : ""
+  const result = await apiRequest<CommunityPreview>({
+    baseUrl: session.baseUrl,
+    path: `${apiRoutes.communityPreview(communityId)}${suffix}`,
+    ...apiAuthHeadersForSession(session),
+  })
+  const preview = result as Record<string, unknown>
+  printJson({
+    community_id: typeof preview.id === "string" ? preview.id : communityId,
+    route_slug: typeof preview.route_slug === "string" ? preview.route_slug : null,
+    display_name: typeof preview.display_name === "string" ? preview.display_name : null,
+    membership_mode: typeof preview.membership_mode === "string" ? preview.membership_mode : null,
+    member_count: typeof preview.member_count === "number" ? preview.member_count : null,
+    follower_count: typeof preview.follower_count === "number" ? preview.follower_count : null,
+    viewer_membership_status: typeof preview.viewer_membership_status === "string" ? preview.viewer_membership_status : null,
+  })
+}
+
 async function runCommunityRoles(rest: string[], args: ParsedArgs): Promise<void> {
   const session = requireStoredSession()
   const action = rest[0]
@@ -329,8 +361,12 @@ function resolveCommunityRoleTargetUserId(args: ParsedArgs): string {
 
 async function runCommunityAccounts(rest: string[], args: ParsedArgs): Promise<void> {
   const action = rest[0]
+  if (action === "provision-batch") {
+    await provisionBatchCommunityAccounts(args)
+    return
+  }
   if (action !== "ensure") {
-    exitWithUsage("Usage: pirate community accounts ensure --alias <name> --subject <jwt-subject> [--display-name <name>] [--handle <label>]")
+    exitWithUsage("Usage: pirate community accounts <ensure|provision-batch>")
   }
 
   const baseUrl = resolveBaseUrl(getFlag(args, "base-url"))
@@ -391,6 +427,164 @@ async function runCommunityAccounts(rest: string[], args: ParsedArgs): Promise<v
     profile,
     global_handle: globalHandle,
   })
+}
+
+type ProvisionBatchAccountSpec = {
+  alias: string | null
+  avatar_ref: string | null
+  bio: string | null
+  communities: string[]
+  cover_ref: string | null
+  display_name: string | null
+  handle: string
+}
+
+type BotUserProvisionResponse = {
+  created?: boolean
+  handle?: string
+  user_id?: string
+  wallet_address?: string
+}
+
+async function provisionBatchCommunityAccounts(args: ParsedArgs): Promise<void> {
+  const file = requireFlag(args, "file")
+  const walletMasterSecret = process.env.BOT_WALLET_MASTER_SECRET
+  const adminToken = getFlag(args, "admin-token") || process.env.PIRATE_ADMIN_TOKEN
+  const baseUrl = resolveBaseUrl(getFlag(args, "base-url"))
+  if (!walletMasterSecret) {
+    exitWithUsage("Missing BOT_WALLET_MASTER_SECRET.")
+  }
+  if (!adminToken) {
+    exitWithUsage("Missing admin token. Use --admin-token <token> or PIRATE_ADMIN_TOKEN.")
+  }
+
+  const specs = readProvisionBatchSpecs(file)
+  const accountsFile = getFlag(args, "accounts-file") ?? undefined
+  const existing = readSeedAccounts(accountsFile)
+  const entries: Record<string, unknown> = {}
+  const aliases = new Set<string>()
+  const succeeded: Array<{ alias: string; handle: string; user_id: string; created: boolean | null }> = []
+
+  for (const spec of specs) {
+    const alias = spec.alias ?? deriveSeedAccountAlias(spec.handle)
+    if (aliases.has(alias)) {
+      throw new Error(`Duplicate provision-batch alias ${alias}`)
+    }
+    aliases.add(alias)
+    const wallet = deriveBotWallet({ handle: spec.handle, walletMasterSecret })
+    if (existing[alias] && !hasFlag(args, "force")) {
+      throw new Error(`Seed account alias ${alias} already points to ${existing[alias]}; pass --force to replace it`)
+    }
+    try {
+      const response = await apiRequest<BotUserProvisionResponse>({
+        baseUrl,
+        path: "/admin/bot-users/provision",
+        method: "POST",
+        adminToken,
+        body: {
+          handle: wallet.handle,
+          wallet_address: wallet.walletAddress,
+          ...(spec.display_name ? { display_name: spec.display_name } : {}),
+          ...(spec.bio ? { bio: spec.bio } : {}),
+          ...(spec.avatar_ref ? { avatar_ref: spec.avatar_ref } : {}),
+          ...(spec.cover_ref ? { cover_ref: spec.cover_ref } : {}),
+        },
+      })
+      const userId = response.user_id
+      if (!userId) {
+        throw new Error(`Provision response for ${spec.handle} did not include user_id`)
+      }
+      entries[alias] = {
+        user_id: userId,
+        provider: "bot_wallet",
+        handle: response.handle ?? wallet.handle,
+        wallet_address: response.wallet_address ?? wallet.walletAddress,
+        ...(spec.communities.length > 0 ? { communities: spec.communities } : {}),
+      }
+      succeeded.push({
+        alias,
+        handle: response.handle ?? wallet.handle,
+        user_id: userId,
+        created: typeof response.created === "boolean" ? response.created : null,
+      })
+    } catch (error) {
+      printJson({
+        status: "failed",
+        failed: { alias, handle: spec.handle, error: error instanceof Error ? error.message : String(error) },
+        succeeded,
+        seed_accounts_path: accountsFile ?? null,
+      })
+      process.exitCode = 1
+      return
+    }
+  }
+
+  writeSeedAccountEntries(entries, accountsFile)
+  printJson({
+    status: "ok",
+    count: succeeded.length,
+    seed_accounts_path: accountsFile ?? null,
+    accounts: succeeded,
+  })
+}
+
+function readProvisionBatchSpecs(file: string): ProvisionBatchAccountSpec[] {
+  const parsed = readJsonFile(file)
+  const rawSpecs = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === "object" && Array.isArray((parsed as Record<string, unknown>).accounts)
+      ? (parsed as Record<string, unknown>).accounts
+      : null
+  if (!Array.isArray(rawSpecs)) {
+    throw new Error("provision-batch file must be a JSON array or an object with an accounts array")
+  }
+  return rawSpecs.map((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new Error(`provision-batch account ${index + 1} must be an object`)
+    }
+    const record = item as Record<string, unknown>
+    const handle = stringSpecField(record, "handle", index, true) as string
+    const communities = Array.isArray(record.communities)
+      ? record.communities.map((value) => {
+        if (typeof value !== "string" || !value.trim()) {
+          throw new Error(`provision-batch account ${index + 1} communities must contain only non-empty strings`)
+        }
+        return value.trim()
+      })
+      : []
+    return {
+      alias: stringSpecField(record, "alias", index),
+      avatar_ref: stringSpecField(record, "avatar_ref", index),
+      bio: stringSpecField(record, "bio", index),
+      communities,
+      cover_ref: stringSpecField(record, "cover_ref", index),
+      display_name: stringSpecField(record, "display_name", index),
+      handle,
+    }
+  })
+}
+
+function stringSpecField(
+  record: Record<string, unknown>,
+  field: string,
+  index: number,
+  required = false,
+): string | null {
+  const value = record[field]
+  if (value == null) {
+    if (required) {
+      throw new Error(`provision-batch account ${index + 1} missing required ${field}`)
+    }
+    return null
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`provision-batch account ${index + 1} ${field} must be a non-empty string`)
+  }
+  return value.trim()
+}
+
+function deriveSeedAccountAlias(handle: string): string {
+  return handle.trim().toLowerCase().replace(/\.pirate$/, "")
 }
 
 function buildAccountProfilePatch(args: ParsedArgs): Record<string, unknown> {

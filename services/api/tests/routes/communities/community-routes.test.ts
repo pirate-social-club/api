@@ -340,7 +340,7 @@ describe("community routes", () => {
     try {
       const namespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
         family: "spaces",
-        root_label: "\u{1F1F5}\u{1F1F8}",
+        root_label: "@\u{1F1F5}\u{1F1F8}",
       }, ctx.env, session.accessToken)
       expect(namespaceSession.status).toBe(201)
       const namespaceBody = await json(namespaceSession) as { id: string }

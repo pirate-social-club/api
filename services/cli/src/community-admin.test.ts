@@ -9,6 +9,7 @@ import { getFlag, requireFlag } from "./args.js"
 import {
   assertExecutableNamespaceVerificationId,
   buildConventionalFolderPlan,
+  buildJsonManifestPlan,
   buildManifestPlan,
   buildSelfNationalityGatePayload,
   parseSimpleYaml,
@@ -85,17 +86,22 @@ describe("seed accounts resolution", () => {
     rmSync(tmpDir, { recursive: true, force: true })
   })
 
-  test("skips non-string values", () => {
+  test("reads string and metadata seed account entries", () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "pirate-cli-test-"))
     const accountsPath = join(tmpDir, "seed-accounts.json")
     writeFileSync(accountsPath, JSON.stringify({
       valid: "usr_123",
+      metadata: {
+        user_id: "usr_456",
+        provider: "bot_wallet",
+        communities: ["@example"],
+      },
       invalid: 42,
       also_invalid: null,
     }))
 
     const accounts = readSeedAccounts(accountsPath)
-    expect(accounts).toEqual({ valid: "usr_123" })
+    expect(accounts).toEqual({ valid: "usr_123", metadata: "usr_456" })
 
     rmSync(tmpDir, { recursive: true, force: true })
   })
@@ -108,6 +114,30 @@ describe("seed accounts resolution", () => {
 
     expect(readSeedAccounts(accountsPath)).toEqual({ editorial: "usr_abc123" })
     expect(readFileSync(accountsPath, "utf8").includes("\"editorial\": \"usr_abc123\"")).toBe(true)
+
+    rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  test("writeSeedAccounts preserves existing metadata entries", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "pirate-cli-test-"))
+    const accountsPath = join(tmpDir, "seed-accounts.json")
+    writeFileSync(accountsPath, JSON.stringify({
+      lantern: {
+        user_id: "usr_old",
+        provider: "bot_wallet",
+        communities: ["@xn--t77hga"],
+      },
+    }))
+
+    writeSeedAccounts({ lantern: "usr_new", velvet: "usr_velvet" }, accountsPath)
+
+    const raw = JSON.parse(readFileSync(accountsPath, "utf8")) as Record<string, unknown>
+    expect(raw.lantern).toEqual({
+      user_id: "usr_new",
+      provider: "bot_wallet",
+      communities: ["@xn--t77hga"],
+    })
+    expect(raw.velvet).toBe("usr_velvet")
 
     rmSync(tmpDir, { recursive: true, force: true })
   })
@@ -184,6 +214,20 @@ describe("CLI args parsing for admin commands", () => {
     expect(getFlag(args, "subject")).toBe("launch-editorial-001")
     expect(getFlag(args, "display-name")).toBe("Editorial")
     expect(getFlag(args, "handle")).toBe("editorial")
+  })
+
+  test("parses community members and provision-batch args", () => {
+    const membersArgs = parseArgs(["community", "members", "@xn--t77hga"])
+    expect(membersArgs.positionals).toEqual(["community", "members", "@xn--t77hga"])
+
+    const batchArgs = parseArgs([
+      "community", "accounts", "provision-batch",
+      "--file", "accounts.json",
+      "--accounts-file", "seed-accounts.json",
+    ])
+    expect(batchArgs.positionals).toEqual(["community", "accounts", "provision-batch"])
+    expect(getFlag(batchArgs, "file")).toBe("accounts.json")
+    expect(getFlag(batchArgs, "accounts-file")).toBe("seed-accounts.json")
   })
 
   test("parses post and comment vote args", () => {
@@ -671,7 +715,9 @@ describe("manifest parsing", () => {
       { as_user_id: "usr_editorial", comment_alias: "welcome-reply", value: "-1" },
     ]))
 
-    const plan = buildManifestPlan(tmpDir, manifestPath, null)
+    expect(() => buildManifestPlan(tmpDir, manifestPath, null)).toThrow("Vote seed files require --allow-vote-seed")
+
+    const plan = buildManifestPlan(tmpDir, manifestPath, null, { allowVoteSeed: true })
     expect(plan.steps.map((step) => step.kind)).toEqual([
       "profile-update",
       "join",
@@ -691,6 +737,72 @@ describe("manifest parsing", () => {
     expect("postAlias" in plan.steps[4] ? plan.steps[4].postAlias : null).toBe("welcome")
     expect("alias" in plan.steps[4] ? plan.steps[4].alias : null).toBe("welcome-reply")
     expect("commentAlias" in plan.steps[6] ? plan.steps[6].commentAlias : null).toBe("welcome-reply")
+
+    rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  test("buildJsonManifestPlan builds seed operation steps from inline fields", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "pirate-cli-json-manifest-"))
+    const manifestPath = join(tmpDir, "incremental.json")
+    writeFileSync(join(tmpDir, "comment.md"), "Inline comment")
+    writeFileSync(manifestPath, JSON.stringify({
+      community_id: "cmt_test123",
+      seed_accounts: {
+        editorial: "usr_editorial",
+        curator: { user_id: "usr_curator", provider: "bot_wallet" },
+      },
+      joins: [{ as: "editorial" }],
+      follows: [{ as: "curator" }],
+      seed_comments: [
+        {
+          as: "curator",
+          alias: "reply",
+          post_id: "pst_123",
+          idempotency_key: "reply-001",
+          body_file: "comment.md",
+        },
+      ],
+    }))
+
+    const plan = buildJsonManifestPlan(manifestPath, null)
+    expect(plan.communityId).toBe("cmt_test123")
+    expect(plan.steps.map((step) => step.kind)).toEqual(["join", "follow", "seed-comment"])
+    expect("asUserId" in plan.steps[0] ? plan.steps[0].asUserId : null).toBe("usr_editorial")
+    expect("asUserId" in plan.steps[2] ? plan.steps[2].asUserId : null).toBe("usr_curator")
+    expect(plan.steps[2]?.kind === "seed-comment" ? plan.steps[2].body : null).toEqual({
+      idempotency_key: "reply-001",
+      body: "Inline comment",
+      identity_mode: "public",
+    })
+
+    rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  test("buildJsonManifestPlan rejects inline and file fields together", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "pirate-cli-json-manifest-"))
+    const manifestPath = join(tmpDir, "bad.json")
+    writeFileSync(manifestPath, JSON.stringify({
+      community_id: "cmt_test123",
+      joins: [],
+      joins_file: "joins.json",
+    }))
+
+    expect(() => buildJsonManifestPlan(manifestPath, null)).toThrow("cannot specify both joins and joins_file")
+
+    rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  test("buildJsonManifestPlan guards inline vote fields", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "pirate-cli-json-manifest-"))
+    const manifestPath = join(tmpDir, "votes.json")
+    writeFileSync(manifestPath, JSON.stringify({
+      community_id: "cmt_test123",
+      seed_accounts: { curator: "usr_curator" },
+      post_votes: [{ as: "curator", post_id: "pst_123", value: 1 }],
+    }))
+
+    expect(() => buildJsonManifestPlan(manifestPath, null)).toThrow("Vote seed files require --allow-vote-seed")
+    expect(buildJsonManifestPlan(manifestPath, null, { allowVoteSeed: true }).steps.map((step) => step.kind)).toEqual(["post-vote"])
 
     rmSync(tmpDir, { recursive: true, force: true })
   })
