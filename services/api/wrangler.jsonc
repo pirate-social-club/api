@@ -99,8 +99,13 @@
 	        "COMMUNITY_PROVISION_EXPECTED_ORGANIZATION_SLUG": "pirate-social",
 	        "COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION": "aws-us-east-1",
 	        "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
-	        "PASSPORT_API_URL": "https://api.passport.xyz",
-	        "PASSPORT_SCORER_ID": "12028"
+        "PASSPORT_API_URL": "https://api.passport.xyz",
+	        "PASSPORT_SCORER_ID": "12028",
+        "ALTCHA_POW_COST_COMMUNITY_JOIN": "2000",
+        "ALTCHA_POW_COST_POST_CREATE": "8000",
+        "ALTCHA_POW_COST_COMMENT_CREATE": "5000",
+        "ALTCHA_POW_COST_POST_VOTE": "2000",
+        "ALTCHA_POW_COST_COMMENT_VOTE": "2000"
       }
     },
     "production": {
@@ -150,8 +155,13 @@
 	        "COMMUNITY_PROVISION_EXPECTED_ORGANIZATION_SLUG": "pirate-prod",
 	        "COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION": "aws-us-east-1",
 	        "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
-	        "PASSPORT_API_URL": "https://api.passport.xyz",
-	        "PASSPORT_SCORER_ID": "12028"
+        "PASSPORT_API_URL": "https://api.passport.xyz",
+	        "PASSPORT_SCORER_ID": "12028",
+        "ALTCHA_POW_COST_COMMUNITY_JOIN": "2000",
+        "ALTCHA_POW_COST_POST_CREATE": "8000",
+        "ALTCHA_POW_COST_COMMENT_CREATE": "5000",
+        "ALTCHA_POW_COST_POST_VOTE": "2000",
+        "ALTCHA_POW_COST_COMMENT_VOTE": "2000"
       }
     }
   }

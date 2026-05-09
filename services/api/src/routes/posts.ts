@@ -8,6 +8,7 @@ import { castPostVote, getPost } from "../lib/posts/post-service"
 import { serializeLocalizedPostResponse } from "../serializers/post"
 import { decodePublicPostId } from "../lib/public-ids"
 import { writeAuditEventForEnv } from "../lib/audit"
+import { ALTCHA_HEADER, readAltchaProof } from "../lib/verification/altcha-provider"
 
 const posts = new Hono<AuthenticatedEnv>()
 
@@ -42,6 +43,12 @@ posts.post("/:postId/vote", async (c) => {
     postId,
     value: body.value,
     bypassVoterAccessChecks: actor.authType === "admin",
+    altchaProof: readAltchaProof({
+      headerValue: c.req.header(ALTCHA_HEADER),
+      body,
+      scope: "post_vote",
+      action: `post:${c.req.param("postId")}`,
+    }),
     userRepository: getUserRepository(c.env),
     communityRepository,
   })

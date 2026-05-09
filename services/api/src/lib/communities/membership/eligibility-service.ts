@@ -162,6 +162,51 @@ export async function enforceCommunityActionGate(input: {
   }
 }
 
+function gatePolicyContainsAltchaPow(policy: GatePolicy): boolean {
+  const visit = (expression: GatePolicy["expression"]): boolean => {
+    if (expression.op === "gate") {
+      return expression.gate.type === "altcha_pow"
+    }
+    return expression.children.some(visit)
+  }
+  return visit(policy.expression)
+}
+
+export async function enforceCommunityAltchaActionGate(input: {
+  env: Env
+  client: Client
+  userId: string
+  userRepository: UserRepository
+  communityId: string
+  altchaScope: AltchaScope
+  altchaProof?: AltchaProofInput
+}): Promise<void> {
+  const policy = await getMembershipGatePolicy(input.client, input.communityId)
+  if (!policy || !gatePolicyContainsAltchaPow(policy)) {
+    return
+  }
+  const user = await input.userRepository.getUserById(input.userId)
+  if (!user) {
+    throw internalError("Resolved user row is missing for action gate evaluation")
+  }
+  const { gateSummaries, walletScoreStatus, evaluation } = await evaluateGatedMembership({
+    env: input.env,
+    user,
+    userRepository: input.userRepository,
+    communityId: input.communityId,
+    policy: {
+      version: 1,
+      expression: { op: "gate", gate: { type: "altcha_pow" } },
+    },
+    mode: "enforce",
+    altchaScope: input.altchaScope,
+    altchaProof: input.altchaProof,
+  })
+  if (!evaluation.satisfied) {
+    throwUnsatisfiedMembershipGate({ evaluation, gateSummaries, walletScoreStatus })
+  }
+}
+
 export async function getJoinEligibility(input: {
   env: Env
   userId: string

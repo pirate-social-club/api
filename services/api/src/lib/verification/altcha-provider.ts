@@ -11,6 +11,8 @@ export type AltchaScope =
   | "community_join"
   | "post_create"
   | "comment_create"
+  | "post_vote"
+  | "comment_vote"
 
 export type AltchaProofInput = {
   payload: string
@@ -27,11 +29,27 @@ const ALTCHA_SCOPES = new Set<AltchaScope>([
   "community_join",
   "post_create",
   "comment_create",
+  "post_vote",
+  "comment_vote",
 ])
+
+const ALTCHA_SCOPE_ENV_SUFFIX: Record<AltchaScope, string> = {
+  community_join: "COMMUNITY_JOIN",
+  post_create: "POST_CREATE",
+  comment_create: "COMMENT_CREATE",
+  post_vote: "POST_VOTE",
+  comment_vote: "COMMENT_VOTE",
+}
 
 function parseIntegerEnv(value: string | undefined, fallback: number): number {
   const parsed = Number(value)
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function getScopeEnvValue(env: Env, prefix: string, scope: AltchaScope): string | undefined {
+  const key = `${prefix}_${ALTCHA_SCOPE_ENV_SUFFIX[scope]}` as keyof Env
+  const value = env[key]
+  return typeof value === "string" ? value : undefined
 }
 
 function getAltchaSecrets(env: Env): { hmacSignatureSecret: string; hmacKeySignatureSecret: string } {
@@ -76,9 +94,9 @@ export async function createAltchaChallenge(input: {
   action: string
 }): Promise<Challenge> {
   const { hmacSignatureSecret, hmacKeySignatureSecret } = getAltchaSecrets(input.env)
-  const cost = parseIntegerEnv(input.env.ALTCHA_POW_COST, 5_000)
-  const counterMin = parseIntegerEnv(input.env.ALTCHA_POW_COUNTER_MIN, 5_000)
-  const counterMax = Math.max(counterMin, parseIntegerEnv(input.env.ALTCHA_POW_COUNTER_MAX, 10_000))
+  const cost = parseIntegerEnv(getScopeEnvValue(input.env, "ALTCHA_POW_COST", input.scope), parseIntegerEnv(input.env.ALTCHA_POW_COST, 5_000))
+  const counterMin = parseIntegerEnv(getScopeEnvValue(input.env, "ALTCHA_POW_COUNTER_MIN", input.scope), parseIntegerEnv(input.env.ALTCHA_POW_COUNTER_MIN, 5_000))
+  const counterMax = Math.max(counterMin, parseIntegerEnv(getScopeEnvValue(input.env, "ALTCHA_POW_COUNTER_MAX", input.scope), parseIntegerEnv(input.env.ALTCHA_POW_COUNTER_MAX, 10_000)))
   const ttlSeconds = parseIntegerEnv(input.env.ALTCHA_CHALLENGE_TTL_SECONDS, 20 * 60)
 
   return await createChallenge({

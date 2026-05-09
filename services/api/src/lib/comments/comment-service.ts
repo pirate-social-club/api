@@ -15,7 +15,7 @@ import {
   hasCommunityRole,
   type CommunityMembershipRow,
 } from "../communities/membership/membership-state-store"
-import { enforceCommunityActionGate } from "../communities/membership/eligibility-service"
+import { enforceCommunityAltchaActionGate } from "../communities/membership/eligibility-service"
 import type {
   CommunityCommentProjectionRepository,
   CommunityDatabaseBindingRepository,
@@ -212,7 +212,7 @@ export async function createComment(input: {
     let membership: CommunityMembershipRow | null = null
     if (!input.bypassAuthorAccessChecks) {
       membership = await requireMemberAccess(db.client, input.communityId, input.userId)
-      await enforceCommunityActionGate({
+      await enforceCommunityAltchaActionGate({
         env: input.env,
         client: db.client,
         userId: input.userId,
@@ -472,6 +472,7 @@ export async function castCommentVote(input: {
   commentId: string
   value: -1 | 1
   bypassVoterAccessChecks?: boolean
+  altchaProof?: AltchaProofInput
   userRepository: UserRepository
   communityRepository: CommentServiceCommunityRepository
 }): Promise<{ comment_id: string; value: -1 | 1 }> {
@@ -484,6 +485,15 @@ export async function castCommentVote(input: {
   try {
     if (!input.bypassVoterAccessChecks) {
       await requireMemberAccess(db.client, projection.community_id, input.userId)
+      await enforceCommunityAltchaActionGate({
+        env: input.env,
+        client: db.client,
+        userId: input.userId,
+        userRepository: input.userRepository,
+        communityId: projection.community_id,
+        altchaScope: "comment_vote",
+        altchaProof: input.altchaProof,
+      })
     }
     const comment = await getCommentById(db.client, input.commentId)
     if (!comment || comment.status !== "published") {

@@ -134,6 +134,12 @@ comments.post("/:commentId/vote", async (c) => {
     commentId: decodePublicCommentId(c.req.param("commentId")),
     value: body.value,
     bypassVoterAccessChecks: actor.authType === "admin",
+    altchaProof: readAltchaProof({
+      headerValue: c.req.header(ALTCHA_HEADER),
+      body,
+      scope: "comment_vote",
+      action: `comment:${c.req.param("commentId")}`,
+    }),
     userRepository: getUserRepository(c.env),
     communityRepository,
   })

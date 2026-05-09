@@ -39,7 +39,7 @@ import {
 import {
   requireMemberAccess,
 } from "./post-access"
-import { enforceCommunityActionGate } from "../communities/membership/eligibility-service"
+import { enforceCommunityAltchaActionGate } from "../communities/membership/eligibility-service"
 import {
   ANY_COMMUNITY_ROLE,
   hasCommunityRole,
@@ -183,7 +183,7 @@ export async function createPost(input: {
     const postAnalysisProvider = resolvePostAnalysisProvider(input.env)
     if (!input.bypassAuthorAccessChecks) {
       await requireMemberAccess(db.client, input.communityId, input.userId)
-      await enforceCommunityActionGate({
+      await enforceCommunityAltchaActionGate({
         env: input.env,
         client: db.client,
         userId: input.userId,
@@ -508,6 +508,7 @@ export async function castPostVote(input: {
   postId: string
   value: -1 | 1
   bypassVoterAccessChecks?: boolean
+  altchaProof?: AltchaProofInput
   userRepository: UserRepository
   communityRepository: PostServiceCommunityRepository
 }): Promise<{ post: string; value: -1 | 1 }> {
@@ -520,6 +521,15 @@ export async function castPostVote(input: {
   try {
     if (!input.bypassVoterAccessChecks) {
       await requireMemberAccess(db.client, projection.community_id, input.userId)
+      await enforceCommunityAltchaActionGate({
+        env: input.env,
+        client: db.client,
+        userId: input.userId,
+        userRepository: input.userRepository,
+        communityId: projection.community_id,
+        altchaScope: "post_vote",
+        altchaProof: input.altchaProof,
+      })
     }
     const post = await getPostById(db.client, input.postId)
     if (!post) {

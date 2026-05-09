@@ -64,7 +64,7 @@ afterEach(async () => {
 })
 
 describe("community membership gate routes", () => {
-  test("ALTCHA-gated communities require solved proofs for join, post, comments, and replies", async () => {
+  test("ALTCHA-gated communities require solved proofs for join, posts, comments, replies, and votes", async () => {
     const ctx = await createRouteTestContext({
       ALTCHA_HMAC_SECRET: "test-altcha-secret",
       ALTCHA_HMAC_KEY_SECRET: "test-altcha-key-secret",
@@ -188,6 +188,37 @@ describe("community membership gate routes", () => {
     expect(replayedPostBody.code).toBe("gate_failed")
     expect(replayedPostBody.details?.gate_evaluation?.trace?.reason).toBe("replayed")
 
+    const deniedPostVote = await requestJson(
+      `http://pirate.test/posts/${postBody.id}/vote`,
+      { value: 1 },
+      ctx.env,
+      member.accessToken,
+    )
+    expect(deniedPostVote.status).toBe(403)
+
+    const postVoteProof = await solveAltchaProofFromRoute({
+      env: ctx.env,
+      accessToken: member.accessToken,
+      scope: "post_vote",
+      action: `post:${postBody.id}`,
+    })
+    const postVote = await app.request(
+      `http://pirate.test/posts/${postBody.id}/vote`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${member.accessToken}`,
+          "content-type": "application/json",
+          "x-pirate-altcha": postVoteProof,
+        },
+        body: JSON.stringify({ value: 1 }),
+      },
+      ctx.env,
+    )
+    expect(postVote.status).toBe(200)
+    const postVoteBody = await json(postVote) as { value: number }
+    expect(postVoteBody.value).toBe(1)
+
     const commentProof = await solveAltchaProofFromRoute({
       env: ctx.env,
       accessToken: member.accessToken,
@@ -210,6 +241,37 @@ describe("community membership gate routes", () => {
     expect(topLevelComment.status).toBe(201)
     const topLevelBody = await json(topLevelComment) as { id: string; depth: number }
     expect(topLevelBody.depth).toBe(0)
+
+    const deniedCommentVote = await requestJson(
+      `http://pirate.test/comments/${topLevelBody.id}/vote`,
+      { value: 1 },
+      ctx.env,
+      member.accessToken,
+    )
+    expect(deniedCommentVote.status).toBe(403)
+
+    const commentVoteProof = await solveAltchaProofFromRoute({
+      env: ctx.env,
+      accessToken: member.accessToken,
+      scope: "comment_vote",
+      action: `comment:${topLevelBody.id}`,
+    })
+    const commentVote = await app.request(
+      `http://pirate.test/comments/${topLevelBody.id}/vote`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${member.accessToken}`,
+          "content-type": "application/json",
+          "x-pirate-altcha": commentVoteProof,
+        },
+        body: JSON.stringify({ value: 1 }),
+      },
+      ctx.env,
+    )
+    expect(commentVote.status).toBe(200)
+    const commentVoteBody = await json(commentVote) as { value: number }
+    expect(commentVoteBody.value).toBe(1)
 
     const replyProof = await solveAltchaProofFromRoute({
       env: ctx.env,
@@ -234,6 +296,110 @@ describe("community membership gate routes", () => {
     const replyBody = await json(reply) as { parent_comment: string | null; depth: number }
     expect(replyBody.parent_comment).toBe(topLevelBody.id)
     expect(replyBody.depth).toBe(1)
+  })
+
+  test("wallet score OR ALTCHA join still requires action ALTCHA proofs for contribution", async () => {
+    const ctx = await createRouteTestContext({
+      ALTCHA_HMAC_SECRET: "test-altcha-secret",
+      ALTCHA_HMAC_KEY_SECRET: "test-altcha-key-secret",
+      ALTCHA_POW_COST: "1",
+      ALTCHA_POW_COUNTER_MIN: "1",
+      ALTCHA_POW_COUNTER_MAX: "2",
+    })
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "wallet-or-altcha-creator")
+    await completeUniqueHumanVerification(ctx.env, creator.accessToken)
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Wallet Or ALTCHA Club",
+      membership_mode: "gated",
+      gate_policy: {
+        version: 1,
+        expression: {
+          op: "or",
+          children: [
+            {
+              op: "gate",
+              gate: {
+                type: "wallet_score",
+                provider: "passport",
+                minimum_score: 5,
+              },
+            },
+            {
+              op: "gate",
+              gate: { type: "altcha_pow" },
+            },
+          ],
+        },
+      },
+    }, ctx.env, creator.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: { id: string }
+    }
+
+    const member = await exchangeJwt(ctx.env, "wallet-or-altcha-member")
+    await setPassportWalletScore(ctx.env, member.userId, {
+      score: 6,
+      scoreThreshold: 5,
+      passingScore: true,
+    })
+
+    const joined = await app.request(
+      `http://pirate.test/communities/${communityCreateBody.community.id}/join`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${member.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(joined.status).toBe(200)
+
+    const deniedPost = await requestJson(
+      `http://pirate.test/communities/${communityCreateBody.community.id}/posts`,
+      {
+        post_type: "text",
+        title: "Wallet pass should not bypass action proof",
+        body: "This should still require ALTCHA.",
+        idempotency_key: "wallet-or-altcha-action-denied",
+      },
+      ctx.env,
+      member.accessToken,
+    )
+    expect(deniedPost.status).toBe(403)
+    const deniedPostBody = await json(deniedPost) as {
+      code: string
+      details?: { missing_capabilities?: string[] }
+    }
+    expect(deniedPostBody.code).toBe("gate_failed")
+    expect(deniedPostBody.details?.missing_capabilities).toContain("altcha_pow")
+
+    const postProof = await solveAltchaProofFromRoute({
+      env: ctx.env,
+      accessToken: member.accessToken,
+      scope: "post_create",
+      action: `community:${communityCreateBody.community.id}`,
+    })
+    const createdPost = await app.request(
+      `http://pirate.test/communities/${communityCreateBody.community.id}/posts`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${member.accessToken}`,
+          "content-type": "application/json",
+          "x-pirate-altcha": postProof,
+        },
+        body: JSON.stringify({
+          post_type: "text",
+          title: "Wallet pass plus action proof",
+          body: "This should be allowed.",
+          idempotency_key: "wallet-or-altcha-action-allowed",
+        }),
+      },
+      ctx.env,
+    )
+    expect(createdPost.status).toBe(201)
   })
 
   test("create wallet score-gated community succeeds with valid config", async () => {

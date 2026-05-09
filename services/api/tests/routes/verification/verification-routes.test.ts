@@ -103,6 +103,42 @@ describe("verification routes", () => {
     expect(thirdBody.details?.window_seconds).toBe(60)
   })
 
+  test("ALTCHA challenges use scope-specific difficulty with global fallback", async () => {
+    const ctx = await createRouteTestContext({
+      ALTCHA_HMAC_SECRET: "test-altcha-secret",
+      ALTCHA_HMAC_KEY_SECRET: "test-altcha-key-secret",
+      ALTCHA_POW_COST: "3",
+      ALTCHA_POW_COST_POST_CREATE: "7",
+      ALTCHA_POW_COST_POST_VOTE: "2",
+      ALTCHA_POW_COUNTER_MIN: "1",
+      ALTCHA_POW_COUNTER_MAX: "2",
+    })
+    cleanup = ctx.cleanup
+
+    const postChallenge = await createAltchaChallenge({
+      env: ctx.env,
+      actorUserId: "user_altcha_cost",
+      scope: "post_create",
+      action: "community:com_cost",
+    })
+    const voteChallenge = await createAltchaChallenge({
+      env: ctx.env,
+      actorUserId: "user_altcha_cost",
+      scope: "post_vote",
+      action: "post:post_cost",
+    })
+    const commentChallenge = await createAltchaChallenge({
+      env: ctx.env,
+      actorUserId: "user_altcha_cost",
+      scope: "comment_create",
+      action: "post:post_cost",
+    })
+
+    expect(postChallenge.parameters.cost).toBe(7)
+    expect(voteChallenge.parameters.cost).toBe(2)
+    expect(commentChallenge.parameters.cost).toBe(3)
+  })
+
   test("ALTCHA proofs verify once and reject replay or binding mismatch", async () => {
     const ctx = await createRouteTestContext({
       ALTCHA_HMAC_SECRET: "test-altcha-secret",
