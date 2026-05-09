@@ -5,8 +5,8 @@ import {
   type CreateCommunityRequest,
   type Job,
 } from "@pirate/api-contracts"
-import { existsSync, readdirSync, readFileSync } from "node:fs"
-import { basename, join, resolve } from "node:path"
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
+import { basename, dirname, join, resolve } from "node:path"
 import { getFlag, hasFlag } from "../args.js"
 import { readJsonFile, readJsonObject, stringField } from "../command-utils.js"
 import { readSeedAccounts } from "../config.js"
@@ -19,23 +19,30 @@ import { waitForCommunityJob } from "./community-jobs.js"
 import { normalizeReferenceLinksPayload, parseRulesFile } from "./community-settings.js"
 
 export async function applyCommunityManifest(rest: string[], args: ParsedArgs): Promise<void> {
-  const folder = rest[0]
-  if (!folder) {
-    exitWithUsage("Usage: pirate community apply <folder> [--community-id <id>] [--dry-run]")
+  const input = rest[0]
+  if (!input) {
+    exitWithUsage("Usage: pirate community apply <folder|manifest.json> [--community-id <id>] [--dry-run] [--allow-vote-seed]")
   }
-  const resolvedFolder = resolve(folder)
-  if (!existsSync(resolvedFolder)) {
-    throw new Error(`Folder not found: ${resolvedFolder}`)
+  const resolvedInput = resolve(input)
+  if (!existsSync(resolvedInput)) {
+    throw new Error(`Community manifest input not found: ${resolvedInput}`)
   }
 
   const session = requireStoredSession()
   const communityIdOverride = getFlag(args, "community-id")
   const dryRun = hasFlag(args, "dry-run")
+  const allowVoteSeed = hasFlag(args, "allow-vote-seed")
 
-  const manifestPath = join(resolvedFolder, "community.yaml")
-  const plan = existsSync(manifestPath)
-    ? buildManifestPlan(resolvedFolder, manifestPath, communityIdOverride)
-    : buildConventionalFolderPlan(resolvedFolder, communityIdOverride)
+  const inputStat = statSync(resolvedInput)
+  const manifestPath = inputStat.isDirectory() ? join(resolvedInput, "community.yaml") : resolvedInput
+  if (inputStat.isFile() && !resolvedInput.endsWith(".json")) {
+    throw new Error(`Community manifest file must be .json: ${resolvedInput}`)
+  }
+  const plan = inputStat.isFile()
+    ? buildJsonManifestPlan(resolvedInput, communityIdOverride, { allowVoteSeed })
+    : existsSync(manifestPath)
+      ? buildManifestPlan(resolvedInput, manifestPath, communityIdOverride, { allowVoteSeed })
+      : buildConventionalFolderPlan(resolvedInput, communityIdOverride, { allowVoteSeed })
 
   if (dryRun) {
     printJson({
@@ -176,6 +183,10 @@ type ManifestCreateInput = {
   acceptedAgentOwnershipProviders: Array<"self_agent_id" | "clawkey"> | null
 }
 
+type ManifestPlanOptions = {
+  allowVoteSeed?: boolean
+}
+
 const MANIFEST_FIELDS = new Set([
   "community_id",
   "route_slug",
@@ -201,13 +212,21 @@ const MANIFEST_FIELDS = new Set([
   "safety_file",
   "donation_policy_file",
   "seed_accounts_file",
+  "seed_accounts",
   "profile_updates_file",
+  "profile_updates",
   "joins_file",
+  "joins",
   "follows_file",
+  "follows",
   "seed_posts_file",
+  "seed_posts",
   "seed_comments_file",
+  "seed_comments",
   "post_votes_file",
+  "post_votes",
   "comment_votes_file",
+  "comment_votes",
 ])
 
 const CONVENTIONAL_FILES = new Map<string, string>([
@@ -230,9 +249,23 @@ const CONVENTIONAL_FILES = new Map<string, string>([
 
 const CONVENTIONAL_METADATA_FILES = new Set(["name.txt", "namespace-verification-id.txt"])
 
-export function buildManifestPlan(folder: string, manifestPath: string, communityIdOverride: string | null): ManifestPlan {
+export function buildManifestPlan(
+  folder: string,
+  manifestPath: string,
+  communityIdOverride: string | null,
+  options: ManifestPlanOptions = {},
+): ManifestPlan {
   const rawManifest = readFileSync(manifestPath, "utf8")
-  return buildManifestPlanFromObject(folder, parseSimpleYaml(rawManifest), communityIdOverride, true)
+  return buildManifestPlanFromObject(folder, parseSimpleYaml(rawManifest), communityIdOverride, true, options)
+}
+
+export function buildJsonManifestPlan(
+  manifestPath: string,
+  communityIdOverride: string | null,
+  options: ManifestPlanOptions = {},
+): ManifestPlan {
+  const parsed = readJsonObject(manifestPath, "JSON community manifest")
+  return buildManifestPlanFromObject(dirname(manifestPath), parsed, communityIdOverride, true, options)
 }
 
 function buildManifestPlanFromObject(
@@ -240,6 +273,7 @@ function buildManifestPlanFromObject(
   manifest: Record<string, unknown>,
   communityIdOverride: string | null,
   requireCompleteCreateMetadata: boolean,
+  options: ManifestPlanOptions,
 ): ManifestPlan {
   validateManifestFields(manifest)
   const steps: ManifestStep[] = []
@@ -247,10 +281,7 @@ function buildManifestPlanFromObject(
   const seedCommentAliases = new Set<string>()
   const seedPostIdempotencyKeys = new Set<string>()
   const seedCommentIdempotencyKeys = new Set<string>()
-  const accountsFile = manifest["seed_accounts_file"] as string | undefined
-  const seedAccounts = accountsFile
-    ? readSeedAccounts(resolveRequiredManifestFile(folder, accountsFile))
-    : readSeedAccounts()
+  const seedAccounts = readManifestSeedAccounts(folder, manifest)
 
   const descriptionFile = manifest["description_file"] as string | undefined
   const descriptionText = descriptionFile
@@ -327,125 +358,109 @@ function buildManifestPlanFromObject(
     steps.push({ kind: "donation-policy", body: readJsonFile(donationPath), method: "POST", pathSuffix: "donation-policy" })
   }
 
-  const profileUpdatesFile = manifest["profile_updates_file"] as string | undefined
-  if (profileUpdatesFile) {
-    for (const item of readManifestArray(resolveRequiredManifestFile(folder, profileUpdatesFile), "profile_updates")) {
-      steps.push({
-        kind: "profile-update",
-        requiresAdmin: true,
-        asUserId: resolveManifestActorUserId(item, seedAccounts),
-        body: buildProfileUpdateManifestBody(folder, item),
-      })
-    }
+  for (const item of readManifestArrayField(folder, manifest, "profile_updates", "profile_updates_file")) {
+    steps.push({
+      kind: "profile-update",
+      requiresAdmin: true,
+      asUserId: resolveManifestActorUserId(item, seedAccounts),
+      body: buildProfileUpdateManifestBody(folder, item),
+    })
   }
 
-  const joinsFile = manifest["joins_file"] as string | undefined
-  if (joinsFile) {
-    for (const item of readManifestArray(resolveRequiredManifestFile(folder, joinsFile), "joins")) {
-      steps.push({
-        kind: "join",
-        requiresAdmin: true,
-        asUserId: resolveManifestActorUserId(item, seedAccounts),
-        body: { note: manifestStringField(item, "note") },
-      })
-    }
+  for (const item of readManifestArrayField(folder, manifest, "joins", "joins_file")) {
+    steps.push({
+      kind: "join",
+      requiresAdmin: true,
+      asUserId: resolveManifestActorUserId(item, seedAccounts),
+      body: { note: manifestStringField(item, "note") },
+    })
   }
 
-  const followsFile = manifest["follows_file"] as string | undefined
-  if (followsFile) {
-    for (const item of readManifestArray(resolveRequiredManifestFile(folder, followsFile), "follows")) {
-      steps.push({
-        kind: "follow",
-        requiresAdmin: true,
-        asUserId: resolveManifestActorUserId(item, seedAccounts),
-      })
-    }
+  for (const item of readManifestArrayField(folder, manifest, "follows", "follows_file")) {
+    steps.push({
+      kind: "follow",
+      requiresAdmin: true,
+      asUserId: resolveManifestActorUserId(item, seedAccounts),
+    })
   }
 
-  const seedPostsFile = manifest["seed_posts_file"] as string | undefined
-  if (seedPostsFile) {
-    for (const item of readManifestArray(resolveRequiredManifestFile(folder, seedPostsFile), "seed_posts")) {
-      const alias = manifestStringField(item, "alias")
-      const body = buildSeedPostManifestBody(folder, item)
-      trackUnique(seedPostIdempotencyKeys, String(body.idempotency_key), "seed post idempotency_key")
-      if (alias) {
-        trackUnique(seedPostAliases, alias, "seed post alias")
-      }
-      steps.push({
-        kind: "seed-post",
-        requiresAdmin: true,
-        asUserId: resolveManifestActorUserId(item, seedAccounts),
-        alias,
-        body,
-      })
+  for (const item of readManifestArrayField(folder, manifest, "seed_posts", "seed_posts_file")) {
+    const alias = manifestStringField(item, "alias")
+    const body = buildSeedPostManifestBody(folder, item)
+    trackUnique(seedPostIdempotencyKeys, String(body.idempotency_key), "seed post idempotency_key")
+    if (alias) {
+      trackUnique(seedPostAliases, alias, "seed post alias")
     }
+    steps.push({
+      kind: "seed-post",
+      requiresAdmin: true,
+      asUserId: resolveManifestActorUserId(item, seedAccounts),
+      alias,
+      body,
+    })
   }
 
-  const seedCommentsFile = manifest["seed_comments_file"] as string | undefined
-  if (seedCommentsFile) {
-    for (const item of readManifestArray(resolveRequiredManifestFile(folder, seedCommentsFile), "seed_comments")) {
-      const alias = manifestStringField(item, "alias")
-      const postAlias = manifestStringField(item, "post_alias")
-      if (postAlias && !seedPostAliases.has(postAlias)) {
-        throw new Error(`Seed comment references unknown post_alias ${postAlias}`)
-      }
-      const body = buildSeedCommentManifestBody(folder, item)
-      trackUnique(seedCommentIdempotencyKeys, String(body.idempotency_key), "seed comment idempotency_key")
-      if (alias) {
-        trackUnique(seedCommentAliases, alias, "seed comment alias")
-      }
-      steps.push({
-        kind: "seed-comment",
-        requiresAdmin: true,
-        asUserId: resolveManifestActorUserId(item, seedAccounts),
-        alias,
-        postId: manifestStringField(item, "post_id"),
-        postAlias,
-        body,
-      })
+  for (const item of readManifestArrayField(folder, manifest, "seed_comments", "seed_comments_file")) {
+    const alias = manifestStringField(item, "alias")
+    const postAlias = manifestStringField(item, "post_alias")
+    if (postAlias && !seedPostAliases.has(postAlias)) {
+      throw new Error(`Seed comment references unknown post_alias ${postAlias}`)
     }
+    const body = buildSeedCommentManifestBody(folder, item)
+    trackUnique(seedCommentIdempotencyKeys, String(body.idempotency_key), "seed comment idempotency_key")
+    if (alias) {
+      trackUnique(seedCommentAliases, alias, "seed comment alias")
+    }
+    steps.push({
+      kind: "seed-comment",
+      requiresAdmin: true,
+      asUserId: resolveManifestActorUserId(item, seedAccounts),
+      alias,
+      postId: manifestStringField(item, "post_id"),
+      postAlias,
+      body,
+    })
   }
 
-  const postVotesFile = manifest["post_votes_file"] as string | undefined
-  if (postVotesFile) {
-    for (const item of readManifestArray(resolveRequiredManifestFile(folder, postVotesFile), "post_votes")) {
-      const postAlias = manifestStringField(item, "post_alias")
-      if (postAlias && !seedPostAliases.has(postAlias)) {
-        throw new Error(`Post vote references unknown post_alias ${postAlias}`)
-      }
-      steps.push({
-        kind: "post-vote",
-        requiresAdmin: true,
-        asUserId: resolveManifestActorUserId(item, seedAccounts),
-        targetId: manifestStringField(item, "post_id"),
-        postAlias,
-        commentAlias: null,
-        value: voteValueField(item, "value"),
-      })
+  assertExclusiveManifestFields(manifest, "post_votes", "post_votes_file")
+  assertExclusiveManifestFields(manifest, "comment_votes", "comment_votes_file")
+  if ((hasManifestCollection(manifest, "post_votes", "post_votes_file") || hasManifestCollection(manifest, "comment_votes", "comment_votes_file")) && !options.allowVoteSeed) {
+    throw new Error("Vote seed files require --allow-vote-seed")
+  }
+  for (const item of readManifestArrayField(folder, manifest, "post_votes", "post_votes_file")) {
+    const postAlias = manifestStringField(item, "post_alias")
+    if (postAlias && !seedPostAliases.has(postAlias)) {
+      throw new Error(`Post vote references unknown post_alias ${postAlias}`)
     }
+    steps.push({
+      kind: "post-vote",
+      requiresAdmin: true,
+      asUserId: resolveManifestActorUserId(item, seedAccounts),
+      targetId: manifestStringField(item, "post_id"),
+      postAlias,
+      commentAlias: null,
+      value: voteValueField(item, "value"),
+    })
   }
 
-  const commentVotesFile = manifest["comment_votes_file"] as string | undefined
-  if (commentVotesFile) {
-    for (const item of readManifestArray(resolveRequiredManifestFile(folder, commentVotesFile), "comment_votes")) {
-      const targetId = manifestStringField(item, "comment_id")
-      const commentAlias = manifestStringField(item, "comment_alias")
-      if (!targetId && !commentAlias) {
-        throw new Error("Comment vote manifest item requires comment_id or comment_alias")
-      }
-      if (commentAlias && !seedCommentAliases.has(commentAlias)) {
-        throw new Error(`Comment vote references unknown comment_alias ${commentAlias}`)
-      }
-      steps.push({
-        kind: "comment-vote",
-        requiresAdmin: true,
-        asUserId: resolveManifestActorUserId(item, seedAccounts),
-        targetId,
-        postAlias: null,
-        commentAlias,
-        value: voteValueField(item, "value"),
-      })
+  for (const item of readManifestArrayField(folder, manifest, "comment_votes", "comment_votes_file")) {
+    const targetId = manifestStringField(item, "comment_id")
+    const commentAlias = manifestStringField(item, "comment_alias")
+    if (!targetId && !commentAlias) {
+      throw new Error("Comment vote manifest item requires comment_id or comment_alias")
     }
+    if (commentAlias && !seedCommentAliases.has(commentAlias)) {
+      throw new Error(`Comment vote references unknown comment_alias ${commentAlias}`)
+    }
+    steps.push({
+      kind: "comment-vote",
+      requiresAdmin: true,
+      asUserId: resolveManifestActorUserId(item, seedAccounts),
+      targetId,
+      postAlias: null,
+      commentAlias,
+      value: voteValueField(item, "value"),
+    })
   }
 
   const communityId = communityIdOverride ?? manifestStringField(manifest, "community_id")
@@ -460,7 +475,11 @@ function buildManifestPlanFromObject(
   return { communityId, lookupIdentifier, create, steps }
 }
 
-export function buildConventionalFolderPlan(folder: string, communityIdOverride: string | null): ManifestPlan {
+export function buildConventionalFolderPlan(
+  folder: string,
+  communityIdOverride: string | null,
+  options: ManifestPlanOptions = {},
+): ManifestPlan {
   validateConventionalFolderFiles(folder)
   const manifest: Record<string, unknown> = {}
   const folderLookup = manifestFolderLookupIdentifier(folder)
@@ -483,7 +502,7 @@ export function buildConventionalFolderPlan(folder: string, communityIdOverride:
     }
   }
 
-  return buildManifestPlanFromObject(folder, manifest, communityIdOverride, false)
+  return buildManifestPlanFromObject(folder, manifest, communityIdOverride, false, options)
 }
 
 async function executeManifestStep(
@@ -886,6 +905,75 @@ function readManifestArray(filePath: string, key: string): Array<Record<string, 
     }
     return item as Record<string, unknown>
   })
+}
+
+function readManifestArrayField(
+  folder: string,
+  manifest: Record<string, unknown>,
+  inlineField: string,
+  fileField: string,
+): Array<Record<string, unknown>> {
+  assertExclusiveManifestFields(manifest, inlineField, fileField)
+  if (manifest[inlineField] !== undefined) {
+    return manifestArrayValue(manifest[inlineField], inlineField)
+  }
+  const fileName = manifestStringField(manifest, fileField)
+  if (!fileName) {
+    return []
+  }
+  return readManifestArray(resolveRequiredManifestFile(folder, fileName), inlineField)
+}
+
+function readManifestSeedAccounts(folder: string, manifest: Record<string, unknown>): Record<string, string> {
+  assertExclusiveManifestFields(manifest, "seed_accounts", "seed_accounts_file")
+  if (manifest.seed_accounts !== undefined) {
+    return manifestSeedAccountsValue(manifest.seed_accounts)
+  }
+  const accountsFile = manifestStringField(manifest, "seed_accounts_file")
+  return accountsFile ? readSeedAccounts(resolveRequiredManifestFile(folder, accountsFile)) : readSeedAccounts()
+}
+
+function manifestArrayValue(value: unknown, key: string): Array<Record<string, unknown>> {
+  const arrayValue = Array.isArray(value)
+    ? value
+    : value && typeof value === "object" && Array.isArray((value as Record<string, unknown>)[key])
+      ? (value as Record<string, unknown>)[key]
+      : null
+  if (!Array.isArray(arrayValue)) {
+    throw new Error(`${key} must be a JSON array or an object with a ${key} array`)
+  }
+  return arrayValue.map((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new Error(`${key} item ${index + 1} must be an object`)
+    }
+    return item as Record<string, unknown>
+  })
+}
+
+function manifestSeedAccountsValue(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("seed_accounts must be a JSON object")
+  }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).flatMap(([alias, entry]) => {
+      const userId = typeof entry === "string" && entry.trim()
+        ? entry.trim()
+        : entry && typeof entry === "object" && !Array.isArray(entry) && typeof (entry as Record<string, unknown>).user_id === "string"
+          ? ((entry as Record<string, unknown>).user_id as string).trim()
+          : null
+      return userId ? [[alias, userId]] : []
+    }),
+  )
+}
+
+function assertExclusiveManifestFields(manifest: Record<string, unknown>, inlineField: string, fileField: string): void {
+  if (manifest[inlineField] !== undefined && manifest[fileField] !== undefined) {
+    throw new Error(`Manifest cannot specify both ${inlineField} and ${fileField}`)
+  }
+}
+
+function hasManifestCollection(manifest: Record<string, unknown>, inlineField: string, fileField: string): boolean {
+  return manifest[inlineField] !== undefined || manifest[fileField] !== undefined
 }
 
 function resolveManifestActorUserId(item: Record<string, unknown>, seedAccounts: Record<string, string>): string {

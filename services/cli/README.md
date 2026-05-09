@@ -13,7 +13,7 @@ Implemented commands:
 - `pirate verify human start [--provider self|very]`
 - `pirate verify human status --session-id <id>`
 - `pirate verify human complete --session-id <id> [--attestation-id <id>] [--proof-hash <hash>] [--proof <proof>] [--provider-payload-ref <ref>]`
-- `pirate verify namespace start <root>`
+- `pirate verify namespace start <root|@root>`
 - `pirate verify namespace complete <session_id> [--restart-challenge]`
 - `pirate verify namespace status <session_id|verification_id> [--kind session|verification|auto]`
 - `pirate community create --display-name <name> --namespace-verification-id <id> [--description <text>]`
@@ -33,7 +33,9 @@ Implemented commands:
 - `pirate community seed-comment <community_id|@slug> <post_id> (--as <alias>|--as-user-id <usr_...>) --idempotency-key <key> (--body <text>|--body-file <file>) [--accounts-file <path>]`
 - `pirate community join <community_id|@slug> [--as <alias>|--as-user-id <usr_...>] [--note <text>]`
 - `pirate community follow <community_id|@slug> [--as <alias>|--as-user-id <usr_...>]`
-- `pirate community apply <folder> [--community-id <id>] [--dry-run]`
+- `pirate community members <community_id|@slug> [--locale <locale>]`
+- `pirate community accounts provision-batch --file <accounts.json> [--accounts-file <path>] [--admin-token <token>] [--base-url <url>]`
+- `pirate community apply <folder|manifest.json> [--community-id <id>] [--dry-run] [--allow-vote-seed]`
 - `pirate job get <job_id>`
 - `pirate post create <community_id> --title <title> --body <body> [--idempotency-key <key>]`
 - `pirate post get <post_id> [--locale <locale>]`
@@ -75,7 +77,12 @@ Seed account aliases are stored in `~/.config/pirate/seed-accounts.json`:
 ```json
 {
   "editorial": "usr_abc123",
-  "curator": "usr_def456"
+  "curator": "usr_def456",
+  "lantern": {
+    "user_id": "usr_ghi789",
+    "provider": "bot_wallet",
+    "communities": ["@example"]
+  }
 }
 ```
 
@@ -108,7 +115,7 @@ Switch back to a normal user session with `pirate auth login`.
 
 ## Community Manifests
 
-`community apply` reads a folder with `community.yaml` and applies all settings in sequence. If the manifest does not include `community_id`, apply resolves `route_slug`/`namespace` first. If lookup returns 404 and the manifest includes `display_name` plus `namespace_verification_id`, it creates the community, waits for provisioning, then applies the remaining settings and seed operations.
+`community apply` reads a folder with `community.yaml` or a self-contained JSON manifest file and applies all settings in sequence. If the manifest does not include `community_id`, apply resolves `route_slug`/`namespace` first. If lookup returns 404 and the manifest includes `display_name` plus `namespace_verification_id`, it creates the community, waits for provisioning, then applies the remaining settings and seed operations.
 
 ```
 pirate-communities/
@@ -126,6 +133,29 @@ pirate-communities/
 ```
 
 `community.yaml` is a flat key-value manifest. Nested objects, YAML arrays, and multiline YAML strings are not supported; put structured data in JSON sidecar files.
+
+A JSON manifest uses the same top-level fields, but can inline the seed arrays instead of using sidecar references:
+
+```json
+{
+  "community_id": "cmt_xxx",
+  "seed_accounts": {
+    "lantern": {
+      "user_id": "usr_abc123",
+      "provider": "bot_wallet"
+    }
+  },
+  "joins": [{ "as": "lantern" }],
+  "seed_comments": [{
+    "as": "lantern",
+    "post_id": "pst_xxx",
+    "idempotency_key": "prod-2026-05-06-lantern-001",
+    "body": "This is the part people keep skipping."
+  }]
+}
+```
+
+Inline keys are `seed_accounts`, `profile_updates`, `joins`, `follows`, `seed_posts`, `seed_comments`, `post_votes`, and `comment_votes`. Do not specify an inline key and its `_file` variant together. Paths inside inline items, such as `body_file` or `bio_file`, resolve relative to the JSON manifest file.
 
 If `community.yaml` is absent, `community apply` uses the standard community folder convention directly:
 
@@ -175,7 +205,7 @@ All fields are optional, except create requires both `display_name` and `namespa
 
 Create is intentionally idempotent by lookup: use `community_id` for a known target, or `route_slug`/`namespace` for a namespace-backed target. A folder name beginning with `@` is also used as a fallback lookup identifier. The CLI only calls create after lookup misses.
 
-Seed sidecar files are JSON arrays or objects with a matching array key. Seed posts and seed comments require `idempotency_key`. A seed post can declare `alias`, and later seed comments or post votes can target it with `post_alias`. A seed comment can declare `alias`, and later comment votes can target it with `comment_alias`.
+Seed sidecar files are JSON arrays or objects with a matching array key. Seed posts and seed comments require `idempotency_key`. A seed post can declare `alias`, and later seed comments or post votes can target it with `post_alias`. A seed comment can declare `alias`, and later comment votes can target it with `comment_alias`. Vote sidecars require `--allow-vote-seed`, including dry-runs.
 
 `seed-posts.json`:
 
@@ -220,6 +250,7 @@ Seed sidecar files are JSON arrays or objects with a matching array key. Seed po
 ```bash
 pirate community apply ./pirate-communities/@xn--t77hga --dry-run
 pirate community apply ./pirate-communities/@xn--t77hga --community-id cmt_xxx
+pirate community apply ./pirate-communities/@xn--t77hga/incremental-comments.json --dry-run
 ```
 
 ## Usage
@@ -247,6 +278,7 @@ rtk bun run src/index.ts onboarding status
 rtk bun run src/index.ts verify human start
 rtk bun run src/index.ts verify human complete --session-id ver_xxx
 rtk bun run src/index.ts verify namespace start demo-root
+rtk bun run src/index.ts verify namespace start @demo-space
 rtk bun run src/index.ts verify namespace complete nvs_xxx
 rtk bun run src/index.ts community create --display-name "Demo Club" --namespace-verification-id nv_xxx
 rtk bun run src/index.ts post create cmt_xxx --title "Hello" --body "From the CLI"
