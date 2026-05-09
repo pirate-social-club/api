@@ -292,7 +292,7 @@ async function loadCompatibleLocalControlPlaneChecksumDrifts(input: {
     }
     const expectedChecksum = input.expectedChecksumsByName.get(migrationName)
     if (!expectedChecksum) {
-      throw new Error(`local control-plane drift policy references unknown migration: ${migrationName}`)
+      continue
     }
     if (oldChecksum === expectedChecksum) {
       throw new Error(`local control-plane drift policy oldChecksum matches current migration: ${migrationName}`)
