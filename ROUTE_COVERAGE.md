@@ -12,6 +12,7 @@ It only maps the live route surface to where direct route-level coverage appears
 Mounted in `services/api/src/index.ts`:
 
 - `/auth`
+- `/oauth`
 - `/analytics`
 - `/` for discovery routes
 - `/` for agent routes
@@ -47,6 +48,7 @@ Mounted in `services/api/src/index.ts`:
 | `/admin/debug/post-pipeline` | `src/routes/debug-pipeline.ts` | `tests/routes/debug-pipeline-routes.test.ts` | direct | Admin-only diagnostic endpoint for post translation/summary pipeline state. |
 | discovery routes under `/` | `src/routes/discovery.ts` | `tests/routes/discovery-routes.test.ts` | direct | Covers well-known discovery responses. |
 | `/auth/session/exchange` | `src/routes/auth.ts` | `tests/routes/auth/auth-routes.test.ts` | direct | Also exercised by many other route suites for setup. |
+| `/oauth/device_*` | `src/routes/oauth.ts` | `tests/routes/auth/auth-routes.test.ts` | direct | Covers Freedom Desktop device authorization start, pending poll, user approval, access-token issuance, and refresh-token rotation. |
 | `/users/me` | `src/routes/users.ts` | `tests/routes/auth/auth-routes.test.ts` | direct | Covered via auth flow tests. |
 | `/onboarding/*` | `src/routes/onboarding.ts` | `tests/routes/onboarding-routes.test.ts`, `tests/routes/auth/auth-routes.test.ts` | direct | Includes status, reddit verification, reddit imports. |
 | verification routes under `/` | `src/routes/verification.ts` | `tests/routes/verification/verification-routes.test.ts` | direct | Heavy route coverage, but suite stability is currently weak. |
@@ -55,7 +57,8 @@ Mounted in `services/api/src/index.ts`:
 | `/communities` core and membership paths | `src/routes/communities.ts`, `src/routes/communities-core.ts` | `tests/routes/communities/community-routes.test.ts`, `tests/routes/communities/community-membership-routes.test.ts`, `tests/routes/communities/community-settings-routes.test.ts`, `tests/routes/communities/community-post-routes.test.ts`, `tests/routes/communities/community-agent-post-routes.test.ts`, moderation and gates suites | direct | Split route files exist, but broad behavior is still distributed across several large suites. |
 | `/communities/:communityId/posts/*` | `src/routes/communities-content-routes.ts` | `tests/routes/communities/community-post-routes.test.ts`, `tests/routes/communities/community-agent-post-routes.test.ts` | direct | Covers post create/list/comment attachment, link preview admin override, author self-delete, and post lifecycle edge cases. |
 | `/communities/*` commerce paths | `src/routes/communities-commerce.ts` | `tests/routes/song-artifacts/song-artifact-routes.test.ts`, `tests/routes/song-artifacts/song-artifact-locked-routes.test.ts`, `tests/routes/song-artifacts/song-artifact-donation-routes.test.ts`, `tests/community-commerce-*.test.ts` | direct/partial | Asset/listing/purchase coverage exists; Story/CDR route paths are mapped in `STORY_CDR_PATHS.md`. |
-| `/communities/*/song-artifact-*` | `src/routes/communities-song-artifacts.ts` | `tests/routes/song-artifacts/song-artifact-routes.test.ts`, `tests/routes/song-artifacts/song-artifact-catalog-*.test.ts`, `tests/routes/song-artifacts/song-artifact-locked-routes.test.ts`, `tests/routes/song-artifacts/song-artifact-donation-routes.test.ts` | direct | Covers song uploads, bundles, locked assets, catalog sync, donation-sidecar paths, and local fallback paths. |
+| `/communities/*/live-rooms` | `src/routes/communities-live-rooms.ts` | `tests/routes/communities/community-live-room-routes.test.ts` | direct | Covers v2 live-room creation, setlist/allocation validation, attach preconditions, and cancellation. Runtime/DO token issuance is intentionally not wired yet. |
+| `/communities/*/song-artifact-*` | `src/routes/communities-song-artifacts.ts` | `tests/routes/song-artifacts/song-artifact-routes.test.ts`, `tests/routes/song-artifacts/song-artifact-catalog-*.test.ts`, `tests/routes/song-artifacts/song-artifact-locked-routes.test.ts`, `tests/routes/song-artifacts/song-artifact-donation-routes.test.ts`, `tests/routes/communities/community-live-room-routes.test.ts` | direct | Covers song uploads, bundles, picker-style listing, locked assets, catalog sync, donation-sidecar paths, and local fallback paths. |
 | `/comments/*` | `src/routes/comments.ts` | `tests/routes/comments/comments-routes.test.ts`, `tests/routes/comments/comments-read-routes.test.ts`, `tests/comment-service*.test.ts` | direct | Covers create/read/replies/context/vote/delete through route and service tests. |
 | `/public-comments/*` | `src/routes/public-comments.ts` | `tests/routes/comments/comments-read-routes.test.ts` | direct | Covers public post comments and public replies. |
 | `/feed/home` | `src/routes/feed.ts` | `tests/routes/feed-routes.test.ts`, `src/lib/feed/home-feed-service.test.ts`, broader public-post tests | direct | Route coverage includes the empty-feed/community-summary path; service tests cover ranking helpers. |
