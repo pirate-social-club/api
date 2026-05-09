@@ -169,6 +169,174 @@ const spec = {
         "operationId": "post_auth_session_exchange"
       }
     },
+    "/oauth/device_authorize": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Start OAuth device authorization for Freedom Desktop",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OAuthDeviceAuthorizeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthDeviceAuthorizeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        },
+        "operationId": "post_oauth_device_authorize"
+      }
+    },
+    "/oauth/device/verify": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Authorize a pending OAuth device code for the authenticated user",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "user_code",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthDeviceVerifyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          }
+        },
+        "operationId": "get_oauth_device_verify"
+      },
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Authorize a pending OAuth device code for the authenticated user",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OAuthDeviceVerifyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthDeviceVerifyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          }
+        },
+        "operationId": "post_oauth_device_verify"
+      }
+    },
+    "/oauth/device/token": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Poll or refresh an OAuth device credential",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OAuthDeviceTokenRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthDeviceTokenResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/OAuthDeviceAuthorizationPendingResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          }
+        },
+        "operationId": "post_oauth_device_token"
+      }
+    },
     "/verification-sessions": {
       "post": {
         "tags": [
@@ -3153,6 +3321,57 @@ const spec = {
       }
     },
     "/communities/{community_id}/song-artifacts": {
+      "get": {
+        "tags": [
+          "Posts"
+        ],
+        "summary": "List ready song artifact bundles for the authenticated creator",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 25
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SongArtifactBundleListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "get_communities_by_community_id_song_artifacts"
+      },
       "post": {
         "tags": [
           "Posts"
@@ -4284,6 +4503,15 @@ const spec = {
           }
         }
       },
+      "BadRequest": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "./schemas/common.yaml#/Error"
+            }
+          }
+        }
+      },
       "RateLimited": {
         "content": {
           "application/json": {
@@ -4294,15 +4522,6 @@ const spec = {
         }
       },
       "NotFound": {
-        "content": {
-          "application/json": {
-            "schema": {
-              "$ref": "./schemas/common.yaml#/Error"
-            }
-          }
-        }
-      },
-      "BadRequest": {
         "content": {
           "application/json": {
             "schema": {
@@ -4437,6 +4656,253 @@ const spec = {
             "items": {
               "$ref": "./auth.yaml#/WalletAttachmentSummary"
             }
+          }
+        }
+      },
+      "OAuthDeviceAuthorizeRequest": {
+        "type": "object",
+        "required": [
+          "client_id"
+        ],
+        "properties": {
+          "client_id": {
+            "type": "string",
+            "enum": [
+              "freedom-desktop"
+            ]
+          },
+          "scope": {
+            "type": "string"
+          }
+        }
+      },
+      "OAuthDeviceAuthorizeResponse": {
+        "type": "object",
+        "required": [
+          "device_code",
+          "user_code",
+          "verification_uri",
+          "verification_uri_complete",
+          "expires_in",
+          "interval"
+        ],
+        "properties": {
+          "device_code": {
+            "type": "string"
+          },
+          "user_code": {
+            "type": "string"
+          },
+          "verification_uri": {
+            "type": "string",
+            "format": "uri"
+          },
+          "verification_uri_complete": {
+            "type": "string",
+            "format": "uri"
+          },
+          "expires_in": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "interval": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "OAuthDeviceVerifyResponse": {
+        "type": "object",
+        "required": [
+          "client_id",
+          "scope",
+          "status",
+          "user_code"
+        ],
+        "properties": {
+          "client_id": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "authorized"
+            ]
+          },
+          "user_code": {
+            "type": "string"
+          }
+        }
+      },
+      "OAuthDeviceVerifyRequest": {
+        "type": "object",
+        "required": [
+          "user_code"
+        ],
+        "properties": {
+          "user_code": {
+            "type": "string"
+          }
+        }
+      },
+      "OAuthDeviceTokenRequest": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "client_id",
+              "device_code"
+            ],
+            "properties": {
+              "grant_type": {
+                "type": "string",
+                "enum": [
+                  "urn:ietf:params:oauth:grant-type:device_code"
+                ]
+              },
+              "client_id": {
+                "type": "string",
+                "enum": [
+                  "freedom-desktop"
+                ]
+              },
+              "device_code": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "grant_type",
+              "client_id",
+              "refresh_token"
+            ],
+            "properties": {
+              "grant_type": {
+                "type": "string",
+                "enum": [
+                  "refresh_token"
+                ]
+              },
+              "client_id": {
+                "type": "string",
+                "enum": [
+                  "freedom-desktop"
+                ]
+              },
+              "refresh_token": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
+      "OAuthDeviceTokenResponse": {
+        "type": "object",
+        "required": [
+          "access_token",
+          "refresh_token",
+          "token_type",
+          "expires_in",
+          "refresh_expires_in",
+          "scope"
+        ],
+        "properties": {
+          "access_token": {
+            "type": "string"
+          },
+          "refresh_token": {
+            "type": "string"
+          },
+          "token_type": {
+            "type": "string",
+            "enum": [
+              "Bearer"
+            ]
+          },
+          "expires_in": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "refresh_expires_in": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "scope": {
+            "type": "string"
+          }
+        }
+      },
+      "OAuthDeviceAuthorizationPendingResponse": {
+        "type": "object",
+        "required": [
+          "error",
+          "error_description",
+          "interval"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "enum": [
+              "authorization_pending"
+            ]
+          },
+          "error_description": {
+            "type": "string"
+          },
+          "interval": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "bad_request",
+              "auth_error",
+              "payment_required",
+              "verification_required",
+              "eligibility_failed",
+              "gate_failed",
+              "posting_trust_tier_too_low",
+              "posting_quota_exhausted",
+              "analysis_blocked",
+              "analysis_review_required",
+              "label_required",
+              "invalid_label_selection",
+              "label_required_but_none_applicable",
+              "conflict",
+              "not_found",
+              "rate_limited",
+              "payment_failed",
+              "settlement_pending",
+              "provider_unavailable",
+              "internal_error"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean",
+            "default": false
+          },
+          "details": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
           }
         }
       },
@@ -8762,6 +9228,16 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "anchor_live_room": {
+            "type": "string",
+            "nullable": true,
+            "readOnly": true
+          },
+          "song_title": {
+            "type": "string",
+            "nullable": true,
+            "readOnly": true
+          },
           "parent_post": {
             "type": "string",
             "nullable": true
@@ -9419,16 +9895,39 @@ const spec = {
           }
         }
       },
+      "SongArtifactBundleListResponse": {
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "./song-artifacts.yaml#/SongArtifactBundle"
+            }
+          },
+          "next_cursor": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
       "CreateSongArtifactBundleRequest": {
         "type": "object",
         "additionalProperties": false,
         "required": [
           "primary_audio",
+          "title",
           "lyrics"
         ],
         "properties": {
           "primary_audio": {
             "$ref": "./song-artifacts.yaml#/SongArtifactUploadRef"
+          },
+          "title": {
+            "type": "string"
           },
           "lyrics": {
             "type": "string"
@@ -9467,6 +9966,7 @@ const spec = {
           "community",
           "creator_user",
           "status",
+          "title",
           "primary_audio",
           "media_refs",
           "lyrics",
@@ -9505,6 +10005,9 @@ const spec = {
               "consumed",
               "failed"
             ]
+          },
+          "title": {
+            "type": "string"
           },
           "primary_audio": {
             "$ref": "./song-artifacts.yaml#/SongAudioArtifactDescriptor"
