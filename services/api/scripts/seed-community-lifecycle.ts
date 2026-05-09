@@ -22,6 +22,7 @@ type SeedUser = {
   synthetic?: boolean
   wallet_address?: string
   verify_unique_human?: boolean
+  verify_unique_human_explicit?: boolean
   verification_provider?: "self" | "very"
   profile?: ProfileSeed
 }
@@ -30,7 +31,9 @@ type VoteSeed = { voter: string; value: -1 | 1 }
 type CommentSeed = {
   key: string
   author: string
+  idempotency_key?: string
   body: string
+  seed_note?: string
   replies?: CommentSeed[]
   votes?: VoteSeed[]
 }
@@ -207,7 +210,9 @@ function parseComments(value: unknown, label: string): CommentSeed[] {
     return {
       key: str(comment.key, `${label}[${index}].key`),
       author: str(comment.author, `${label}[${index}].author`),
+      idempotency_key: optionalString(comment.idempotency_key),
       body: str(comment.body, `${label}[${index}].body`),
+      seed_note: optionalString(comment.seed_note),
       replies: parseComments(comment.replies, `${label}[${index}].replies`),
       votes: parseVotes(comment.votes, `${label}[${index}].votes`),
     }
@@ -247,6 +252,7 @@ function parseManifest(raw: unknown): SeedManifest {
         synthetic: user.synthetic === true,
         wallet_address: optionalWalletAddress(user.wallet_address, `users[${index}].wallet_address`),
         verify_unique_human: user.verify_unique_human !== false,
+        verify_unique_human_explicit: "verify_unique_human" in user,
         verification_provider: user.verification_provider === "self" || user.verification_provider === "very"
           ? user.verification_provider
           : undefined,
@@ -353,6 +359,7 @@ function validateManifest(input: {
 }): string[] {
   const warnings: string[] = []
   const userKeys = new Set(input.manifest.users.map((user) => user.key))
+  const commentIdempotencyKeys = new Set<string>()
   assertUnique(input.manifest.users.map((user) => user.key), "users")
   assertUnique(input.manifest.communities.map((community) => community.key), "communities")
   assertUnique(
@@ -386,7 +393,20 @@ function validateManifest(input: {
         throw new Error(`post ${community.key}.${post.key} needs body.idempotency_key`)
       }
       for (const vote of post.votes ?? []) requireKnownUser(vote.voter, `post ${community.key}.${post.key}.votes`)
-      validateComments({ comments: post.comments ?? [], userKeys, prefix: `${community.key}.${post.key}` })
+      validateComments({
+        comments: post.comments ?? [],
+        userKeys,
+        mode: input.mode,
+        prefix: `${community.key}.${post.key}`,
+        idempotencyKeys: commentIdempotencyKeys,
+      })
+    }
+  }
+
+  if (input.mode === "prod-launch-seed") {
+    const prodVerifyUsers = input.manifest.users.filter((user) => user.verify_unique_human_explicit && user.verify_unique_human === true)
+    if (prodVerifyUsers.length > 0) {
+      warnings.push(`prod-launch-seed ignores verify_unique_human; real users must be verified before seeding: ${prodVerifyUsers.map((user) => user.key).join(", ")}`)
     }
   }
 
@@ -412,12 +432,23 @@ function validateManifest(input: {
 function validateComments(input: {
   comments: CommentSeed[]
   userKeys: Set<string>
+  mode: SeedMode
   prefix: string
+  idempotencyKeys: Set<string>
 }): void {
   assertUnique(input.comments.map((comment) => comment.key), `${input.prefix}.comments`)
   for (const comment of input.comments) {
     if (!input.userKeys.has(comment.author)) {
       throw new Error(`comment ${input.prefix}.${comment.key}.author references unknown user ${comment.author}`)
+    }
+    if (input.mode === "prod-launch-seed" && !comment.idempotency_key?.trim()) {
+      throw new Error(`comment ${input.prefix}.${comment.key} needs idempotency_key for prod-launch-seed`)
+    }
+    if (comment.idempotency_key) {
+      if (input.idempotencyKeys.has(comment.idempotency_key)) {
+        throw new Error(`Duplicate comment idempotency_key ${comment.idempotency_key}`)
+      }
+      input.idempotencyKeys.add(comment.idempotency_key)
     }
     for (const vote of comment.votes ?? []) {
       if (!input.userKeys.has(vote.voter)) {
@@ -427,7 +458,9 @@ function validateComments(input: {
     validateComments({
       comments: comment.replies ?? [],
       userKeys: input.userKeys,
+      mode: input.mode,
       prefix: `${input.prefix}.${comment.key}`,
+      idempotencyKeys: input.idempotencyKeys,
     })
   }
 }
@@ -670,11 +703,14 @@ async function seedComment(
     method: "POST",
     path,
     token: user(ctx, comment.author).accessToken,
-    body: { body: comment.body },
+    body: {
+      body: comment.body,
+      ...(comment.idempotency_key ? { idempotency_key: comment.idempotency_key } : {}),
+    },
     ok: [201],
   })
   ctx.comments.set(key, created.body.comment_id)
-  ctx.report.push(`created comment ${key} -> ${created.body.comment_id}`)
+  ctx.report.push(`created comment ${key} -> ${created.body.comment_id}${comment.seed_note ? ` (${comment.seed_note})` : ""}`)
   await applyVotes(ctx, "comment", created.body.comment_id, comment.votes ?? [])
   for (const reply of comment.replies ?? []) {
     await seedComment(ctx, community, communityId, postId, reply, `${key}.${reply.key}`, created.body.comment_id)
