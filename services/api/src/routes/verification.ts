@@ -1,5 +1,6 @@
 import { Hono } from "hono"
 import { badRequestError, HttpError, notFoundError } from "../lib/errors"
+import { sha256Hex } from "../lib/crypto"
 import { getControlPlaneVerificationRepository } from "../lib/verification/verification-repository"
 import { proxyVeryBridgeRequest } from "../lib/verification/very-provider"
 import { refreshPassportWalletScore } from "../lib/verification/passport-wallet-score-service"
@@ -49,16 +50,50 @@ function namespaceVerificationErrorProperties(input: {
 }
 
 verification.post("/verification-sessions/:verificationSessionId/receive-self-proof", async (c) => {
+  const verificationSessionId = decodePublicVerificationSessionId(c.req.param("verificationSessionId"))
   const payload = (await c.req.json<Record<string, unknown>>().catch(() => null)) ?? null
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    console.warn("[self-provider] callback rejected", {
+      verificationSessionId,
+      reason: "invalid_payload",
+    })
     throw badRequestError("Invalid Self verification callback payload")
   }
+  const userContextData = typeof payload.userContextData === "string"
+    ? payload.userContextData
+    : typeof payload.user_context_data === "string"
+      ? payload.user_context_data
+      : null
+  console.info("[self-provider] callback received", {
+    verificationSessionId,
+    payloadKeys: Object.keys(payload).sort(),
+    attestationId: typeof payload.attestationId === "string" || typeof payload.attestationId === "number"
+      ? payload.attestationId
+      : typeof payload.attestation_id === "string" || typeof payload.attestation_id === "number"
+        ? payload.attestation_id
+        : null,
+    hasProof: payload.proof != null,
+    publicSignalsLength: Array.isArray(payload.publicSignals)
+      ? payload.publicSignals.length
+      : Array.isArray(payload.public_signals)
+        ? payload.public_signals.length
+        : null,
+    userContextDataHash: userContextData ? await sha256Hex(userContextData) : null,
+    userContextDataLength: userContextData?.length ?? null,
+  })
   const repo = getControlPlaneVerificationRepository(c.env)
   const result = await repo.completeSelfVerificationCallback({
-    verificationSessionId: decodePublicVerificationSessionId(c.req.param("verificationSessionId")),
+    verificationSessionId,
     payload,
   })
   if (!result) {
+    console.warn("[self-provider] callback rejected", {
+      verificationSessionId,
+      reason: "verification_session_not_found",
+      payloadKeys: Object.keys(payload).sort(),
+      userContextDataHash: userContextData ? await sha256Hex(userContextData) : null,
+      userContextDataLength: userContextData?.length ?? null,
+    })
     throw notFoundError("Verification session not found")
   }
   await trackApiEvent(c.env, c.req, {

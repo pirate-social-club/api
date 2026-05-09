@@ -1,5 +1,5 @@
 import type { Client } from "../sql-client"
-import { internalError, providerUnavailable, verificationRequired } from "../errors"
+import { badRequestError, internalError, providerUnavailable, verificationRequired } from "../errors"
 import { makeId } from "../helpers"
 import {
   serializeNamespaceVerificationSession,
@@ -40,6 +40,11 @@ export async function startNamespaceVerificationSession(
     rootLabel: string
   },
 ): Promise<NamespaceVerificationSession> {
+  const inferredFamily = namespaceFamilyForRootInput(input.rootLabel)
+  if (input.family !== inferredFamily) {
+    throw badRequestError("Namespace family must match root label prefix: @ for Spaces, bare label for HNS")
+  }
+
   const now = new Date()
   const createdAt = now.toISOString()
   const expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
@@ -194,4 +199,8 @@ export async function startNamespaceVerificationSession(
     throw internalError("Namespace verification session row is missing after creation")
   }
   return serializeNamespaceVerificationSession(row)
+}
+
+export function namespaceFamilyForRootInput(rootLabel: string): "hns" | "spaces" {
+  return rootLabel.trim().startsWith("@") ? "spaces" : "hns"
 }

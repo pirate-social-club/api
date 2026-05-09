@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
 import { buildTestEnv } from "./helpers"
-import { canonicalizeRequestedCapabilities, getSelfProvider, mapCapabilitiesToDisclosures } from "../src/lib/verification/self-provider"
+import { canonicalizeRequestedCapabilities, getSelfProvider, mapCapabilitiesToDisclosures, selfUserDefinedDataMatches } from "../src/lib/verification/self-provider"
 
 describe("self-provider capability canonicalization", () => {
   test("adds unique_human when age_over_18 is requested", () => {
@@ -82,10 +82,13 @@ describe("self-provider capability canonicalization", () => {
     expect(started.launch.endpoint_type).toBe("staging_https")
     expect(started.launch.dev_mode).toBe(true)
     expect(started.launch.disclosures).toEqual({ nationality: true })
+    expect(started.launch.session_id).toMatch(/^[0-9a-f-]{36}$/u)
     expect(started.launch.user_id).toMatch(/^[0-9a-f-]{36}$/u)
     expect(started.launch.user_defined_data).toContain("ver_self_sdk")
+    expect(started.launch.session_id).not.toBe(started.upstreamSessionRef)
     expect(started.upstreamSessionRef).toContain("\"kind\":\"self-sdk\"")
     expect(started.upstreamSessionRef).toContain("\"mockPassport\":true")
+    expect(started.upstreamSessionRef).toContain(`"sessionId":"${started.launch.session_id}"`)
   })
 
   test("non-production Self sessions prefer the live HTTPS request origin over a stale configured origin", async () => {
@@ -187,5 +190,32 @@ describe("self-provider capability canonicalization", () => {
     expect(started.launch.disclosures).toEqual({ nationality: true })
     expect(started.upstreamSessionRef).toContain("\"verificationConfig\":{}")
     expect(started.upstreamSessionRef).not.toContain("\"excludedCountries\"")
+  })
+})
+
+describe("self-provider userDefinedData comparison", () => {
+  const utf8ToHex = (value: string): string => Array.from(
+    new TextEncoder().encode(value),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("")
+
+  test("accepts exact raw userDefinedData", () => {
+    const value = JSON.stringify({ verification_session_id: "ver_self", user_id: "usr_test" })
+
+    expect(selfUserDefinedDataMatches(value, value)).toBe(true)
+  })
+
+  test("accepts Self verifier hex-encoded userDefinedData", () => {
+    const value = JSON.stringify({ verification_session_id: "ver_self", user_id: "usr_test" })
+
+    expect(selfUserDefinedDataMatches(value, utf8ToHex(value))).toBe(true)
+    expect(selfUserDefinedDataMatches(value, `0x${utf8ToHex(value)}`)).toBe(true)
+  })
+
+  test("rejects mismatched userDefinedData", () => {
+    const expected = JSON.stringify({ verification_session_id: "ver_expected", user_id: "usr_test" })
+    const received = JSON.stringify({ verification_session_id: "ver_received", user_id: "usr_test" })
+
+    expect(selfUserDefinedDataMatches(expected, utf8ToHex(received))).toBe(false)
   })
 })

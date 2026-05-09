@@ -4,6 +4,7 @@ import type {
   VerificationConfig,
   VerificationResult,
 } from "@selfxyz/core"
+import { sha256Hex } from "../crypto"
 import { badRequestError, providerUnavailable } from "../errors"
 import { isProductionEnv, makeId } from "../helpers"
 import { normalizeIdentityCountryCode, normalizeIdentityCountryCodes } from "../identity/country-codes"
@@ -35,6 +36,7 @@ type SelfSdkSessionRef = {
   kind: "self-sdk"
   endpoint: string
   mockPassport: boolean
+  sessionId: string | null
   scope: string
   selfUserId: string
   userDefinedData: string
@@ -109,10 +111,125 @@ function decodeSelfSdkSessionRef(upstreamSessionRef: string): SelfSdkSessionRef 
     ) {
       return null
     }
-    return parsed as SelfSdkSessionRef
+    return {
+      ...(parsed as Omit<SelfSdkSessionRef, "sessionId">),
+      sessionId: typeof parsed.sessionId === "string" ? parsed.sessionId : null,
+    }
   } catch {
     return null
   }
+}
+
+const utf8Encoder = new TextEncoder()
+const utf8Decoder = new TextDecoder("utf-8", { fatal: true })
+
+function stripHexPrefix(value: string): string {
+  return value.startsWith("0x") || value.startsWith("0X") ? value.slice(2) : value
+}
+
+function isEvenHex(value: string): boolean {
+  return value.length > 0 && value.length % 2 === 0 && /^[0-9a-fA-F]+$/u.test(value)
+}
+
+function utf8ToHex(value: string): string {
+  return Array.from(utf8Encoder.encode(value), (byte) => byte.toString(16).padStart(2, "0")).join("")
+}
+
+function hexToUtf8(value: string): string | null {
+  const normalized = stripHexPrefix(value)
+  if (!isEvenHex(normalized)) {
+    return null
+  }
+
+  const bytes = new Uint8Array(normalized.length / 2)
+  for (let index = 0; index < normalized.length; index += 2) {
+    bytes[index / 2] = Number.parseInt(normalized.slice(index, index + 2), 16)
+  }
+
+  try {
+    return utf8Decoder.decode(bytes)
+  } catch {
+    return null
+  }
+}
+
+export function selfUserDefinedDataMatches(expected: string, received: string): boolean {
+  if (received === expected) {
+    return true
+  }
+
+  const receivedHex = stripHexPrefix(received)
+  if (!isEvenHex(receivedHex)) {
+    return false
+  }
+
+  if (receivedHex.toLowerCase() === utf8ToHex(expected).toLowerCase()) {
+    return true
+  }
+
+  return hexToUtf8(receivedHex) === expected
+}
+
+function parseVerificationSessionIdFromUserDefinedData(value: string): string | null {
+  const decoded = hexToUtf8(value) ?? value
+  try {
+    const parsed = JSON.parse(decoded) as unknown
+    if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null
+    }
+    const verificationSessionId = (parsed as { verification_session_id?: unknown }).verification_session_id
+    return typeof verificationSessionId === "string" ? verificationSessionId : null
+  } catch {
+    return null
+  }
+}
+
+async function logSelfContextMismatch(input: {
+  sessionRef: SelfSdkSessionRef
+  payload: SelfProofPayload
+  result: VerificationResult
+}): Promise<void> {
+  const userIdentifierMatches = input.result.userData.userIdentifier === input.sessionRef.selfUserId
+  const userDefinedDataMatches = selfUserDefinedDataMatches(input.sessionRef.userDefinedData, input.result.userData.userDefinedData)
+  console.warn("[self-provider] user context mismatch", {
+    sessionId: input.sessionRef.sessionId,
+    attestationId: input.payload.attestationId,
+    scope: input.sessionRef.scope,
+    endpoint: input.sessionRef.endpoint,
+    userIdentifierMatches,
+    userDefinedDataMatches,
+    isValid: input.result.isValidDetails.isValid,
+    expectedUserIdentifierHash: await sha256Hex(input.sessionRef.selfUserId),
+    receivedUserIdentifierHash: await sha256Hex(input.result.userData.userIdentifier),
+    expectedUserDefinedDataHash: await sha256Hex(input.sessionRef.userDefinedData),
+    receivedUserDefinedDataHash: await sha256Hex(input.result.userData.userDefinedData),
+    userContextDataHash: await sha256Hex(input.payload.userContextData),
+    userContextDataLength: input.payload.userContextData.length,
+    expectedUserDefinedDataLength: input.sessionRef.userDefinedData.length,
+    receivedUserDefinedDataLength: input.result.userData.userDefinedData.length,
+    expectedVerificationSessionId: parseVerificationSessionIdFromUserDefinedData(input.sessionRef.userDefinedData),
+    receivedVerificationSessionId: parseVerificationSessionIdFromUserDefinedData(input.result.userData.userDefinedData),
+  })
+}
+
+async function logSelfPendingCallback(input: {
+  upstreamSessionRef: string
+  sessionRef: SelfSdkSessionRef | null
+  payload: SelfProofPayload | null
+}): Promise<void> {
+  console.warn("[self-provider] callback could not be evaluated", {
+    hasSessionRef: Boolean(input.sessionRef),
+    hasPayload: Boolean(input.payload),
+    upstreamSessionRefHash: await sha256Hex(input.upstreamSessionRef),
+    upstreamSessionRefPrefix: input.upstreamSessionRef.slice(0, 16),
+    sessionId: input.sessionRef?.sessionId ?? null,
+    expectedVerificationSessionId: input.sessionRef
+      ? parseVerificationSessionIdFromUserDefinedData(input.sessionRef.userDefinedData)
+      : null,
+    attestationId: input.payload?.attestationId ?? null,
+    userContextDataHash: input.payload ? await sha256Hex(input.payload.userContextData) : null,
+    userContextDataLength: input.payload?.userContextData.length ?? null,
+  })
 }
 
 export function canonicalizeRequestedCapabilities(
@@ -475,6 +592,7 @@ function createSelfSdkProvider(env: Env, options: { mockPassport: boolean }): Se
       const verificationConfig = buildVerificationConfig(input.requestedCapabilities, input.verificationRequirements ?? [])
       const endpoint = buildSelfEndpoint(env, input.verificationSessionId, input.publicOrigin)
       const scope = input.verificationIntent ?? "profile_verification"
+      const selfSessionId = crypto.randomUUID()
       const selfUserId = crypto.randomUUID()
       const userDefinedData = JSON.stringify({
         verification_session_id: input.verificationSessionId,
@@ -483,6 +601,7 @@ function createSelfSdkProvider(env: Env, options: { mockPassport: boolean }): Se
       const upstreamSessionRef = encodeSelfSdkSessionRef({
         endpoint,
         mockPassport: options.mockPassport,
+        sessionId: selfSessionId,
         scope,
         selfUserId,
         userDefinedData,
@@ -509,7 +628,7 @@ function createSelfSdkProvider(env: Env, options: { mockPassport: boolean }): Se
           endpoint,
           endpoint_type: endpointType,
           scope,
-          session_id: upstreamSessionRef,
+          session_id: selfSessionId,
           user_id: selfUserId,
           user_id_type: "uuid",
           disclosures,
@@ -524,6 +643,11 @@ function createSelfSdkProvider(env: Env, options: { mockPassport: boolean }): Se
       const sessionRef = decodeSelfSdkSessionRef(input.upstreamSessionRef)
       const payload = parseSelfProofPayload(input)
       if (!sessionRef || !payload) {
+        await logSelfPendingCallback({
+          upstreamSessionRef: input.upstreamSessionRef,
+          sessionRef,
+          payload,
+        })
         return { status: "pending" }
       }
 
@@ -545,16 +669,38 @@ function createSelfSdkProvider(env: Env, options: { mockPassport: boolean }): Se
         )
         if (
           result.userData.userIdentifier !== sessionRef.selfUserId
-          || result.userData.userDefinedData !== sessionRef.userDefinedData
+          || !selfUserDefinedDataMatches(sessionRef.userDefinedData, result.userData.userDefinedData)
         ) {
+          await logSelfContextMismatch({ sessionRef, payload, result })
           return { status: "failed", failureReason: "self_user_context_mismatch" }
         }
         const claims = buildClaimsFromVerificationResult(result)
         if (!claims) {
+          console.warn("[self-provider] proof result invalid", {
+            sessionId: sessionRef.sessionId,
+            attestationId: payload.attestationId,
+            scope: sessionRef.scope,
+            endpoint: sessionRef.endpoint,
+            expectedVerificationSessionId: parseVerificationSessionIdFromUserDefinedData(sessionRef.userDefinedData),
+            isValid: result.isValidDetails.isValid,
+            userContextDataHash: await sha256Hex(payload.userContextData),
+            userContextDataLength: payload.userContextData.length,
+          })
           return { status: "failed", failureReason: "self_proof_invalid" }
         }
         return { status: "verified", claims }
       } catch (error) {
+        console.warn("[self-provider] verifier failed", {
+          sessionId: sessionRef.sessionId,
+          attestationId: payload.attestationId,
+          scope: sessionRef.scope,
+          endpoint: sessionRef.endpoint,
+          expectedVerificationSessionId: parseVerificationSessionIdFromUserDefinedData(sessionRef.userDefinedData),
+          errorName: error instanceof Error ? error.name : null,
+          errorMessage: error instanceof Error ? error.message : String(error),
+          userContextDataHash: await sha256Hex(payload.userContextData),
+          userContextDataLength: payload.userContextData.length,
+        })
         return {
           status: "failed",
           failureReason: error instanceof Error ? error.message : "self_verification_failed",

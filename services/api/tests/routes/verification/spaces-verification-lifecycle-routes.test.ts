@@ -51,7 +51,7 @@ describe("spaces verification lifecycle routes", () => {
     }, async () => {
       const createdNamespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
         family: "spaces",
-        root_label: "\u{1F1F5}\u{1F1F8}",
+        root_label: "@\u{1F1F5}\u{1F1F8}",
       }, ctx.env, session.accessToken)
 
       expect(createdNamespaceSession.status).toBe(201)
@@ -292,7 +292,7 @@ describe("spaces verification lifecycle routes", () => {
     }, async () => {
       const createdNamespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
         family: "spaces",
-        root_label: "\u{1F1F5}\u{1F1F8}",
+        root_label: "@\u{1F1F5}\u{1F1F8}",
       }, ctx.env, session.accessToken)
       const createdBody = await json(createdNamespaceSession) as {
         id: string

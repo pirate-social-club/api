@@ -113,7 +113,7 @@ async function startSpacesNamespaceSession(
 ): Promise<NamespaceVerificationSession> {
   const body: StartNamespaceVerificationSessionRequest = {
     family: "spaces",
-    root_label: rootLabel,
+    root_label: `@${rootLabel}`,
   }
   return apiRequest<NamespaceVerificationSession>({
     baseUrl: session.baseUrl,

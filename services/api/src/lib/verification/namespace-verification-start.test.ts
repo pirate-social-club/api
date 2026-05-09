@@ -88,6 +88,22 @@ class PlatformManagedZoneBootstrapClient implements Client {
 }
 
 describe("startNamespaceVerificationSession", () => {
+  test("rejects namespace family and root prefix mismatches", async () => {
+    const client = new PlatformManagedZoneBootstrapClient()
+
+    await expect(startNamespaceVerificationSession(client, {}, {
+      userId: "usr_test",
+      family: "hns",
+      rootLabel: "@clawitzer",
+    })).rejects.toThrow("Namespace family must match root label prefix")
+
+    await expect(startNamespaceVerificationSession(client, {}, {
+      userId: "usr_test",
+      family: "spaces",
+      rootLabel: "clawitzer",
+    })).rejects.toThrow("Namespace family must match root label prefix")
+  })
+
   test("starts HNS sessions with nameserver and TXT records before delegation is detected", async () => {
     const calls: string[] = []
     globalThis.fetch = async (input, init) => {

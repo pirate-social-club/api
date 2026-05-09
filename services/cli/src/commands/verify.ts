@@ -82,10 +82,10 @@ export async function runVerify(
       case "start": {
         const root = rest[1]
         if (!root) {
-          exitWithUsage("Usage: pirate verify namespace start <root>")
+          exitWithUsage("Usage: pirate verify namespace start <root|@root>")
         }
         const body: StartNamespaceVerificationSessionRequest = {
-          family: "hns",
+          family: namespaceFamilyForRootInput(root),
           root_label: root,
         }
         const result = await apiRequest<NamespaceVerificationSession>({
@@ -144,4 +144,8 @@ export async function runVerify(
 
 export function inferNamespaceStatusKind(id: string): "session" | "verification" {
   return id.startsWith("nv_") ? "verification" : "session"
+}
+
+export function namespaceFamilyForRootInput(root: string): "hns" | "spaces" {
+  return root.trim().startsWith("@") ? "spaces" : "hns"
 }
