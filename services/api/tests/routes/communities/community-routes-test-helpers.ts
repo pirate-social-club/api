@@ -128,6 +128,79 @@ export async function prepareVerifiedNamespace(env: Env, accessToken: string): P
   }
 }
 
+export async function prepareVerifiedSpacesNamespace(env: Env, accessToken: string, rootLabel = "@pesto"): Promise<string> {
+  const verificationSession = await requestJson("http://pirate.test/verification-sessions", {
+    provider: "self",
+  }, env, accessToken)
+  const verificationBody = await json(verificationSession) as { id: string }
+  await requestJson(
+    `http://pirate.test/verification-sessions/${verificationBody.id}/complete`,
+    {},
+    env,
+    accessToken,
+  )
+
+  const originalFetch = globalThis.fetch
+  const originalSpacesVerifierBaseUrl = env.SPACES_VERIFIER_BASE_URL
+  env.SPACES_VERIFIER_BASE_URL = "http://spaces-verifier.test"
+  globalThis.fetch = (async (input, init) => {
+    const url = typeof input === "string" ? input : input.toString()
+    if (url.startsWith("http://spaces-verifier.test/inspect?")) {
+      return new Response(JSON.stringify({
+        root_exists: true,
+        root_key_proof_verified: true,
+        root_pubkey: "spaces-root-pubkey",
+        observation_provider: "spaces_verifier",
+        anchor_fresh_enough: true,
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }
+    if (url === "http://spaces-verifier.test/verify-publish") {
+      const body = JSON.parse(String(init?.body)) as { txt_value: string; web_url: string; freedom_url: string }
+      return new Response(JSON.stringify({
+        fabric_publish_verified: true,
+        root_key_proof_verified: true,
+        web_target_verified: true,
+        freedom_target_verified: true,
+        observed_web_url: body.web_url,
+        observed_freedom_url: body.freedom_url,
+        observed_txt_values: [body.txt_value],
+        records: { "pirate-verify": [body.txt_value] },
+        observation_provider: "spaces_verifier+fabric_zone",
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }
+
+    return originalFetch(input, init)
+  }) as typeof fetch
+
+  try {
+    const namespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
+      family: "spaces",
+      root_label: rootLabel,
+    }, env, accessToken)
+    const namespaceBody = await json(namespaceSession) as { id: string }
+    const completed = await requestJson(
+      `http://pirate.test/namespace-verification-sessions/${namespaceBody.id}/complete`,
+      {},
+      env,
+      accessToken,
+    )
+    const completedBody = await json(completed) as { namespace_verification: string | null }
+    if (!completedBody.namespace_verification) {
+      throw new Error("spaces namespace verification did not complete")
+    }
+    return completedBody.namespace_verification
+  } finally {
+    globalThis.fetch = originalFetch
+    env.SPACES_VERIFIER_BASE_URL = originalSpacesVerifierBaseUrl
+  }
+}
+
 export async function completeUniqueHumanVerification(
   env: Env,
   accessToken: string,

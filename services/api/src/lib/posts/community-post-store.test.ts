@@ -170,6 +170,10 @@ describe("getPostById", () => {
         label_assignment_result_json TEXT,
         post_type TEXT NOT NULL,
         status TEXT NOT NULL,
+        comments_locked INTEGER NOT NULL DEFAULT 0,
+        comments_locked_at TEXT,
+        comments_locked_by_user_id TEXT,
+        comments_lock_reason TEXT,
         visibility TEXT NOT NULL,
         title TEXT,
         body TEXT,
@@ -183,6 +187,7 @@ describe("getPostById", () => {
         embeds_json TEXT,
         media_refs_json TEXT,
         song_artifact_bundle_id TEXT,
+        song_title TEXT,
         source_language TEXT,
         translation_policy TEXT,
         access_mode TEXT,
@@ -198,6 +203,12 @@ describe("getPostById", () => {
         idempotency_key TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
+      )
+    `)
+    await client.execute(`
+      CREATE TABLE live_rooms (
+        live_room_id TEXT PRIMARY KEY,
+        anchor_post_id TEXT
       )
     `)
     await client.execute({

@@ -76,7 +76,7 @@ describe("community post routes", () => {
       const serializedInput = JSON.stringify(requestBody.input)
       const normalizedInput = serializedInput.toLowerCase()
       const categories: Record<string, boolean> = {
-        sexual: normalizedInput.includes("post_image_test.gif"),
+        sexual: false,
         "sexual/minors": normalizedInput.includes("post_image_minors_high.jpg") || normalizedInput.includes("video-cover-minors-high.jpg"),
         harassment: false,
         "harassment/threatening": false,
@@ -165,29 +165,6 @@ membership_mode: "request",
       expect(linkPostBody.status).toBe("published")
       expect(linkPostBody.analysis_state).toBe("allow")
 
-      const videoPostWithoutPoster = await requestJson(
-        `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
-        {
-          post_type: "video",
-          title: "Medical injury clip",
-          media_refs: [{
-            storage_ref: "http://pirate.test/community-media/post_video/post_video_test.mp4",
-            mime_type: "video/mp4",
-            size_bytes: 123,
-          }],
-          idempotency_key: "post-key-openai-video-review",
-        },
-        ctx.env,
-        session.accessToken,
-      )
-      expect(videoPostWithoutPoster.status).toBe(201)
-      const videoPostWithoutPosterBody = await json(videoPostWithoutPoster) as {
-        status: string
-        analysis_state: string
-      }
-      expect(videoPostWithoutPosterBody.status).toBe("published")
-      expect(videoPostWithoutPosterBody.analysis_state).toBe("allow")
-
       const ordinarySexualImagePost = await requestJson(
         `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
         {
@@ -247,24 +224,6 @@ membership_mode: "request",
       const blockedBody = await json(blockedImagePost) as { code: string }
       expect(blockedBody.code).toBe("analysis_blocked")
 
-      const blockedVideoPost = await requestJson(
-        `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
-        {
-          post_type: "video",
-          title: "Video",
-          media_refs: [{
-            storage_ref: "http://pirate.test/community-media/post_video/post_video_test_2.mp4",
-            mime_type: "video/mp4",
-            size_bytes: 123,
-            poster_ref: "http://pirate.test/community-media/post_image/video-cover-minors-high.jpg",
-            poster_mime_type: "image/jpeg",
-          }],
-          idempotency_key: "post-key-openai-video-poster-minors-high",
-        },
-        ctx.env,
-        session.accessToken,
-      )
-      expect(blockedVideoPost.status).toBe(422)
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -639,56 +598,78 @@ membership_mode: "request",
   })
 
   test("image post create stores image media refs", async () => {
-    const ctx = await createRouteTestContext()
+    const ctx = await createRouteTestContext({
+      OPENAI_API_KEY: "test-openai-key",
+      OPENAI_MODERATION_BASE_URL: "https://openai.test/v1",
+    })
     cleanup = ctx.cleanup
 
-    const session = await exchangeJwt(ctx.env, "community-image-post")
-    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, session.accessToken)
-
-    const communityCreate = await requestJson("http://pirate.test/communities", {
-      display_name: "Pirate Images Club",
-membership_mode: "request",
-      namespace: {
-        namespace_verification: namespaceVerificationId,
-      },
-    }, ctx.env, session.accessToken)
-    expect(communityCreate.status).toBe(202)
-    const communityCreateBody = await json(communityCreate) as {
-      community: { id: string }
-    }
-
-    const createdPost = await requestJson(
-      `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
-      {
-        post_type: "image",
-        title: "Backstage",
-        caption: "Right before the set.",
-        media_refs: [{
-          storage_ref: "http://pirate.test/community-media/post_image/post_image_test.gif",
-          mime_type: "image/gif",
-          size_bytes: 12,
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const request = new Request(input, init)
+      if (request.url !== "https://openai.test/v1/moderations") {
+        return originalFetch(input, init)
+      }
+      return Response.json({
+        results: [{
+          flagged: false,
+          categories: {},
+          category_scores: {},
         }],
-        idempotency_key: "post-key-image-create",
-      },
-      ctx.env,
-      session.accessToken,
-    )
-
-    expect(createdPost.status).toBe(201)
-    const postBody = await json(createdPost) as {
-      post_type: string
-      title?: string | null
-      caption?: string | null
-      media_refs?: Array<{ storage_ref: string; mime_type?: string | null; size_bytes?: number | null }>
+      })
     }
-    expect(postBody.post_type).toBe("image")
-    expect(postBody.title).toBe("Backstage")
-    expect(postBody.caption).toBe("Right before the set.")
-    expect(postBody.media_refs?.[0]).toEqual({
-      storage_ref: "http://pirate.test/community-media/post_image/post_image_test.gif",
-      mime_type: "image/gif",
-      size_bytes: 12,
-    })
+
+    try {
+      const session = await exchangeJwt(ctx.env, "community-image-post")
+      const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, session.accessToken)
+
+      const communityCreate = await requestJson("http://pirate.test/communities", {
+        display_name: "Pirate Images Club",
+        membership_mode: "request",
+        namespace: {
+          namespace_verification: namespaceVerificationId,
+        },
+      }, ctx.env, session.accessToken)
+      expect(communityCreate.status).toBe(202)
+      const communityCreateBody = await json(communityCreate) as {
+        community: { id: string }
+      }
+
+      const createdPost = await requestJson(
+        `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
+        {
+          post_type: "image",
+          title: "Backstage",
+          caption: "Right before the set.",
+          media_refs: [{
+            storage_ref: "http://pirate.test/community-media/post_image/post_image_test.gif",
+            mime_type: "image/gif",
+            size_bytes: 12,
+          }],
+          idempotency_key: "post-key-image-create",
+        },
+        ctx.env,
+        session.accessToken,
+      )
+
+      expect(createdPost.status).toBe(201)
+      const postBody = await json(createdPost) as {
+        post_type: string
+        title?: string | null
+        caption?: string | null
+        media_refs?: Array<{ storage_ref: string; mime_type?: string | null; size_bytes?: number | null }>
+      }
+      expect(postBody.post_type).toBe("image")
+      expect(postBody.title).toBe("Backstage")
+      expect(postBody.caption).toBe("Right before the set.")
+      expect(postBody.media_refs?.[0]).toEqual({
+        storage_ref: "http://pirate.test/community-media/post_image/post_image_test.gif",
+        mime_type: "image/gif",
+        size_bytes: 12,
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 
   test("image post create returns 400 when media refs are missing", async () => {

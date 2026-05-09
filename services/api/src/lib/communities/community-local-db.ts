@@ -34,6 +34,9 @@ const COMPATIBLE_LOCAL_MIGRATION_CHECKSUMS: Record<string, Set<string>> = {
   "1064_thread_comment_locks.sql": new Set([
     "bdb8e886939b733f10afff54e25f83cc39ed49c2a6501b7f7604ac3357b8d61f",
   ]),
+  "1073_wallet_bound_purchases.sql": new Set([
+    "3df9d051d1fff3dfec40ed08344e2985f6f55bb012e0471ec2fac51768454a81",
+  ]),
 }
 
 function localSqliteBusyTimeoutMs(): number {

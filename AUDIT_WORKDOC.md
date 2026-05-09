@@ -1,5 +1,7 @@
 # Pirate API Audit Workdoc
 
+> STALE SNAPSHOT: this workdoc predates the May 9, 2026 audit cleanup. Several line references, file lists, and task statuses below are no longer authoritative. Use it as historical context only; current status should be checked against `README.md`, `.github/workflows/api-ci.yml`, service READMEs, and the live tree.
+
 ## Purpose
 
 This document turns the current `pirate-api` review into concrete work items that another AI can verify independently.

@@ -4,6 +4,7 @@ import { provisionCommunityRuntime } from "./lib/provision-runtime";
 import { rotateCommunityToken } from "./lib/rotate-token";
 import { doctorControlPlane } from "./lib/doctor";
 import { migrateCommunityDatabase } from "./lib/community-bootstrap";
+import { requireText, trim } from "./lib/helpers";
 import { reapStaleCommunityProvisioningJobs } from "./lib/reap-stale";
 
 export type Env = {
@@ -77,18 +78,6 @@ function json(body: unknown, init?: ResponseInit): Response {
       ...(init?.headers ?? {}),
     },
   });
-}
-
-function trim(value: string | null | undefined): string {
-  return String(value ?? "").trim();
-}
-
-function requireText(value: string | null | undefined, label: string): string {
-  const normalized = trim(value);
-  if (!normalized) {
-    throw new Error(`${label} is required`);
-  }
-  return normalized;
 }
 
 function requireOperatorAuth(request: Request, env: Env): Response | null {

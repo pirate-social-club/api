@@ -1,6 +1,4 @@
-export function nowIso(): string {
-  return new Date().toISOString()
-}
+export { makeId, nowIso } from "@pirate/api-shared"
 
 export function envFlag(value: string | undefined, fallback = false): boolean {
   if (value == null || value.trim() === "") return fallback
@@ -31,8 +29,4 @@ export function normalizeAddress(value: unknown): string | null {
 
 export function dedupeStrings(values: string[]): string[] {
   return [...new Set(values)]
-}
-
-export function makeId(prefix: string): string {
-  return `${prefix}_${crypto.randomUUID().replace(/-/g, "")}`
 }

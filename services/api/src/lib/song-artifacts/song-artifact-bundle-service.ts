@@ -32,6 +32,57 @@ import type { Env } from "../../env"
 import type { CreateSongArtifactBundleRequest, SongArtifactBundle, SongArtifactBundleListResponse } from "../../types"
 import type { SongArtifactCommunityRepository } from "./song-artifact-types"
 
+const SONG_BUNDLE_SLOW_STEP_MS = 10_000
+const SONG_BUNDLE_STALLED_STEP_MS = 45_000
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+async function withSongBundleStep<T>(
+  step: string,
+  fields: Record<string, unknown>,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const startedAt = Date.now()
+  console.info("[song-artifacts] bundle step started", { ...fields, step })
+  const slowTimer = setTimeout(() => {
+    console.warn("[song-artifacts] bundle step still pending", {
+      ...fields,
+      elapsed_ms: Date.now() - startedAt,
+      step,
+    })
+  }, SONG_BUNDLE_SLOW_STEP_MS)
+  const stalledTimer = setTimeout(() => {
+    console.warn("[song-artifacts] bundle step appears stalled", {
+      ...fields,
+      elapsed_ms: Date.now() - startedAt,
+      step,
+    })
+  }, SONG_BUNDLE_STALLED_STEP_MS)
+
+  try {
+    const result = await operation()
+    console.info("[song-artifacts] bundle step completed", {
+      ...fields,
+      elapsed_ms: Date.now() - startedAt,
+      step,
+    })
+    return result
+  } catch (error) {
+    console.error("[song-artifacts] bundle step failed", {
+      ...fields,
+      elapsed_ms: Date.now() - startedAt,
+      message: errorMessage(error),
+      step,
+    })
+    throw error
+  } finally {
+    clearTimeout(slowTimer)
+    clearTimeout(stalledTimer)
+  }
+}
+
 export async function createSongArtifactBundle(input: {
   env: Env
   userId: string
@@ -52,63 +103,115 @@ export async function createSongArtifactBundle(input: {
     throw badRequestError("preview_audio uploads are not supported; use preview_window")
   }
   const previewWindow = parseSongPreviewWindow(input.body.preview_window)
+  const requestStartedAt = Date.now()
+  console.info("[song-artifacts] create bundle requested", {
+    community_id: input.communityId,
+    has_canvas_video: Boolean(input.body.canvas_video),
+    has_cover_art: Boolean(input.body.cover_art),
+    has_instrumental_audio: Boolean(input.body.instrumental_audio),
+    has_preview_window: Boolean(previewWindow),
+    has_vocal_audio: Boolean(input.body.vocal_audio),
+    lyrics_length: lyrics.length,
+    title_length: title.length,
+    user_id: input.userId,
+  })
 
-  await requireActiveCommunity(input.communityRepository, input.communityId)
+  await withSongBundleStep("require active community", {
+    community_id: input.communityId,
+  }, () => requireActiveCommunity(input.communityRepository, input.communityId))
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await withSongBundleStep("open community db", {
+    community_id: input.communityId,
+  }, () => openCommunityDb(input.env, input.communityRepository, input.communityId))
   try {
-    const membership = await requireMemberAccess(db.client, input.communityId, input.userId)
-    await requireVerifiedHuman(input.userRepository, input.userId, {
+    const membership = await withSongBundleStep("require member access", {
+      community_id: input.communityId,
+      user_id: input.userId,
+    }, () => requireMemberAccess(db.client, input.communityId, input.userId))
+    await withSongBundleStep("require verified human", {
+      bypass_for_community_owner: hasCommunityRole(membership, ANY_COMMUNITY_ROLE),
+      community_id: input.communityId,
+      user_id: input.userId,
+    }, () => requireVerifiedHuman(input.userRepository, input.userId, {
       bypassForCommunityOwner: hasCommunityRole(membership, ANY_COMMUNITY_ROLE),
-    })
+    }))
     const client = getControlPlaneClient(input.env)
-    const primaryAudioUpload = await requireResolvedUpload({
+    const primaryAudioUpload = await withSongBundleStep("resolve primary audio upload", {
+      community_id: input.communityId,
+      upload_ref: input.body.primary_audio.song_artifact_upload,
+      user_id: input.userId,
+    }, () => requireResolvedUpload({
       client,
       communityId: input.communityId,
       userId: input.userId,
       ref: input.body.primary_audio,
       expectedKind: "primary_audio",
-    })
-    const coverArtUpload = input.body.cover_art
-      ? await requireResolvedUpload({
+    }))
+    const coverArtRef = input.body.cover_art
+    const coverArtUpload = coverArtRef
+      ? await withSongBundleStep("resolve cover art upload", {
+          community_id: input.communityId,
+          upload_ref: coverArtRef.song_artifact_upload,
+          user_id: input.userId,
+        }, () => requireResolvedUpload({
           client,
           communityId: input.communityId,
           userId: input.userId,
-          ref: input.body.cover_art,
+          ref: coverArtRef,
           expectedKind: "cover_art",
-        })
+        }))
       : null
-    const canvasVideoUpload = input.body.canvas_video
-      ? await requireResolvedUpload({
+    const canvasVideoRef = input.body.canvas_video
+    const canvasVideoUpload = canvasVideoRef
+      ? await withSongBundleStep("resolve canvas video upload", {
+          community_id: input.communityId,
+          upload_ref: canvasVideoRef.song_artifact_upload,
+          user_id: input.userId,
+        }, () => requireResolvedUpload({
           client,
           communityId: input.communityId,
           userId: input.userId,
-          ref: input.body.canvas_video,
+          ref: canvasVideoRef,
           expectedKind: "canvas_video",
-        })
+        }))
       : null
-    const instrumentalAudioUpload = input.body.instrumental_audio
-      ? await requireResolvedUpload({
+    const instrumentalAudioRef = input.body.instrumental_audio
+    const instrumentalAudioUpload = instrumentalAudioRef
+      ? await withSongBundleStep("resolve instrumental audio upload", {
+          community_id: input.communityId,
+          upload_ref: instrumentalAudioRef.song_artifact_upload,
+          user_id: input.userId,
+        }, () => requireResolvedUpload({
           client,
           communityId: input.communityId,
           userId: input.userId,
-          ref: input.body.instrumental_audio,
+          ref: instrumentalAudioRef,
           expectedKind: "instrumental_audio",
-        })
+        }))
       : null
-    const vocalAudioUpload = input.body.vocal_audio
-      ? await requireResolvedUpload({
+    const vocalAudioRef = input.body.vocal_audio
+    const vocalAudioUpload = vocalAudioRef
+      ? await withSongBundleStep("resolve vocal audio upload", {
+          community_id: input.communityId,
+          upload_ref: vocalAudioRef.song_artifact_upload,
+          user_id: input.userId,
+        }, () => requireResolvedUpload({
           client,
           communityId: input.communityId,
           userId: input.userId,
-          ref: input.body.vocal_audio,
+          ref: vocalAudioRef,
           expectedKind: "vocal_audio",
-        })
+        }))
       : null
 
     const createdAt = nowIso()
     const songArtifactBundleId = makeId("sab")
-    await createSongArtifactBundleDraft({
+    const lyricsSha256 = `0x${await sha256Hex(lyrics)}`
+    await withSongBundleStep("create bundle draft", {
+      community_id: input.communityId,
+      song_artifact_bundle_id: songArtifactBundleId,
+      user_id: input.userId,
+    }, () => createSongArtifactBundleDraft({
       client,
       communityId: input.communityId,
       userId: input.userId,
@@ -125,16 +228,27 @@ export async function createSongArtifactBundle(input: {
       canvasVideo: canvasVideoUpload ? videoDescriptorFromUpload(canvasVideoUpload) : null,
       instrumentalAudio: instrumentalAudioUpload ? descriptorFromUpload(instrumentalAudioUpload) : null,
       vocalAudio: vocalAudioUpload ? descriptorFromUpload(vocalAudioUpload) : null,
-      lyricsSha256: `0x${await sha256Hex(lyrics)}`,
+      lyricsSha256,
       createdAt,
-    })
+    }))
 
-    const analysis = await analyzeSongBundle({
+    const analysis = await withSongBundleStep("analyze song bundle", {
+      community_id: input.communityId,
+      primary_audio_upload: primaryAudioUpload.id,
+      song_artifact_bundle_id: songArtifactBundleId,
+    }, () => analyzeSongBundle({
       env: input.env,
       lyrics,
       primaryAudioUpload,
-    })
-    const finalized = await finalizeSongArtifactBundle({
+    }))
+    const finalized = await withSongBundleStep("finalize bundle", {
+      alignment_status: analysis.alignmentStatus,
+      analysis_state: analysis.analysisState,
+      community_id: input.communityId,
+      moderation_status: analysis.moderationStatus,
+      preview_status: previewWindow ? "pending" : "completed",
+      song_artifact_bundle_id: songArtifactBundleId,
+    }, () => finalizeSongArtifactBundle({
       client,
       communityId: input.communityId,
       songArtifactBundleId,
@@ -157,11 +271,14 @@ export async function createSongArtifactBundle(input: {
       previewStatus: previewWindow ? "pending" : "completed",
       previewError: null,
       updatedAt: nowIso(),
-    })
+    }))
 
     if (finalized.preview_status === "pending") {
       const songArtifactBundleId = finalized.id.replace(/^sab_/, "")
-      await enqueueCommunityJob({
+      await withSongBundleStep("enqueue preview generation job", {
+        community_id: input.communityId,
+        song_artifact_bundle: finalized.id,
+      }, () => enqueueCommunityJob({
         client: db.client,
         communityId: input.communityId,
         jobType: "song_preview_generate",
@@ -173,7 +290,7 @@ export async function createSongArtifactBundle(input: {
           preview_window: finalized.preview_window,
         }),
         createdAt: nowIso(),
-      })
+      }))
     }
 
     if (analysis.analysisState === "blocked") {
@@ -183,7 +300,26 @@ export async function createSongArtifactBundle(input: {
       throw analysisBlocked("Song artifact analysis requires review before publication")
     }
 
+    console.info("[song-artifacts] create bundle completed", {
+      alignment_status: finalized.alignment_status,
+      analysis_state: analysis.analysisState,
+      community_id: input.communityId,
+      elapsed_ms: Date.now() - requestStartedAt,
+      moderation_status: finalized.moderation_status,
+      preview_status: finalized.preview_status,
+      song_artifact_bundle: finalized.id,
+      status: finalized.status,
+      user_id: input.userId,
+    })
     return finalized
+  } catch (error) {
+    console.error("[song-artifacts] create bundle failed", {
+      community_id: input.communityId,
+      elapsed_ms: Date.now() - requestStartedAt,
+      message: errorMessage(error),
+      user_id: input.userId,
+    })
+    throw error
   } finally {
     db.close()
   }

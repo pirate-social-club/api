@@ -5,6 +5,8 @@ import { nullableUnixSeconds, unixSeconds } from "../../../serializers/time"
 import { openCommunityDb } from "../community-db-factory"
 import type { CommunityDatabaseBindingRepository } from "../db-community-repository"
 import type { UserRepository } from "../../auth/repositories"
+import { getPostById } from "../../posts/community-post-store"
+import { isPubliclyReadablePost } from "../../posts/post-access"
 import {
   boolToSqlite,
 } from "./row-types"
@@ -44,6 +46,13 @@ import {
   assertExecutableQuoteAllocationSnapshot,
   resolveQuoteAllocationSnapshot,
 } from "./allocation"
+import {
+  type BuyerIdentity,
+  buyerIdentityFields,
+  buyerMatchesFields,
+  userBuyer,
+} from "./buyer-identity"
+import type { PurchaseQuoteRow } from "./row-types"
 import type {
   CommunityPurchaseQuote,
   CommunityPurchaseQuotePreflight,
@@ -124,17 +133,47 @@ export async function preflightCommunityPurchaseQuote(input: {
   }
 }
 
-export async function createCommunityPurchaseQuote(input: {
+export type PublicCommunityPurchaseQuote = Omit<CommunityPurchaseQuote, "buyer_user"> & {
+  buyer_kind: "wallet"
+  buyer_wallet: {
+    chain_ref: string
+    address: string
+  }
+}
+
+function serializePublicQuote(row: PurchaseQuoteRow): PublicCommunityPurchaseQuote {
+  const serialized = serializeQuote({
+    ...row,
+    buyer_kind: "user",
+    buyer_user_id: "public-wallet-buyer",
+  })
+  const { buyer_user: _buyerUser, ...rest } = serialized
+  return {
+    ...rest,
+    buyer_kind: "wallet",
+    buyer_wallet: {
+      chain_ref: row.buyer_chain_ref ?? "eip155",
+      address: row.buyer_wallet_address ?? "",
+    },
+  }
+}
+
+async function createCommunityPurchaseQuoteRowForBuyer(input: {
   env: Env
-  userId: string
+  buyer: BuyerIdentity
+  userId?: string
+  publicBuyer?: boolean
   communityId: string
   body: CommunityPurchaseQuoteRequest
   communityRepository: CommunityDatabaseBindingRepository
   userRepository: UserRepository
-}): Promise<CommunityPurchaseQuote> {
+}): Promise<PurchaseQuoteRow> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
-    await requireCommunityMember(db.client, input.communityId, input.userId)
+    if (input.userId) {
+      await requireCommunityMember(db.client, input.communityId, input.userId)
+    }
+    const buyerFields = buyerIdentityFields(input.buyer)
     const listing = await getListingRowById(db.client, input.communityId, decodePublicId(input.body.listing, "lst"))
     if (!listing || listing.status !== "active") {
       throw notFoundError("Listing not found")
@@ -146,10 +185,21 @@ export async function createCommunityPurchaseQuote(input: {
         throw notFoundError("Asset not found")
       }
       assertAssetReadyForStoryRoyaltyCommerce(asset, input.env)
+      if (input.publicBuyer) {
+        if (asset.access_mode !== "locked" || asset.locked_delivery_status !== "ready") {
+          throw notFoundError("Listing not found")
+        }
+        const post = await getPostById(db.client, asset.source_post_id)
+        if (!post || !isPubliclyReadablePost(post)) {
+          throw notFoundError("Listing not found")
+        }
+      }
       settlementMode = resolvePurchaseSettlementMode({
         storyRoyaltyRegistrationStatus: asset.story_royalty_registration_status,
         storyIpId: asset.story_ip_id,
       })
+    } else if (input.publicBuyer) {
+      throw notFoundError("Listing not found")
     }
     const moneyPolicy = await getCommunityMoneyPolicy({ env: input.env, communityId: input.communityId })
     const route = resolveRoutePolicy({ moneyPolicy, body: input.body })
@@ -157,11 +207,11 @@ export async function createCommunityPurchaseQuote(input: {
       throw eligibilityFailed("Funding lane does not satisfy community money policy")
     }
     const pricingPolicy = await getCommunityPricingPolicy({ env: input.env, communityId: input.communityId })
-    const buyer = await input.userRepository.getUserById(input.userId)
+    const buyerUser = input.userId ? await input.userRepository.getUserById(input.userId) : null
     const resolvedPrice = resolveRegionalPrice({
       listing: serializeListing(listing),
       pricingPolicy,
-      buyer,
+      buyer: buyerUser,
     })
     const quoteId = makeId("qte")
     const quotedAt = nowIso()
@@ -253,7 +303,9 @@ export async function createCommunityPurchaseQuote(input: {
     await db.client.execute({
       sql: `
         INSERT INTO purchase_quotes (
-          quote_id, community_id, listing_id, buyer_user_id, asset_id, live_room_id, base_price_usd,
+          quote_id, community_id, listing_id, buyer_kind, buyer_user_id,
+          buyer_wallet_address, buyer_wallet_address_normalized, buyer_chain_ref,
+          asset_id, live_room_id, base_price_usd,
           pricing_tier, final_price_usd, allocation_snapshot_json, funding_mode, funding_asset_json, source_chain_json,
           route_provider, funding_destination_address, route_policy_compliant, route_live_available, policy_origin,
           destination_settlement_chain_json, destination_settlement_token, destination_settlement_amount_atomic,
@@ -262,19 +314,25 @@ export async function createCommunityPurchaseQuote(input: {
           settlement_mode, verification_snapshot_ref, pricing_policy_version, status, quoted_at, expires_at,
           consumed_at, failed_at, created_at, updated_at
         ) VALUES (
-          ?1, ?2, ?3, ?4, ?5, NULL, ?6,
-          ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-          ?14, ?15, ?16, ?17, ?18, ?19,
-          ?20, ?21, ?22, ?23, ?24, ?25,
-          ?26, ?27, ?28, ?29, 'active', ?30, ?31,
-          NULL, NULL, ?30, ?30
+          ?1, ?2, ?3, ?4, ?5,
+          ?6, ?7, ?8,
+          ?9, NULL, ?10,
+          ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+          ?18, ?19, ?20, ?21, ?22, ?23,
+          ?24, ?25, ?26, ?27, ?28, ?29,
+          ?30, ?31, ?32, ?33, 'active', ?34, ?35,
+          NULL, NULL, ?34, ?34
         )
       `,
       args: [
         quoteId,
         input.communityId,
         listing.listing_id,
-        input.userId,
+        buyerFields.buyer_kind,
+        buyerFields.buyer_user_id,
+        buyerFields.buyer_wallet_address,
+        buyerFields.buyer_wallet_address_normalized,
+        buyerFields.buyer_chain_ref,
         listing.asset_id,
         listing.price_usd,
         resolvedPrice.pricingTier,
@@ -308,18 +366,26 @@ export async function createCommunityPurchaseQuote(input: {
       await db.client.execute({
         sql: `
           INSERT INTO purchase_quote_verification_snapshots (
-            verification_snapshot_ref, community_id, quote_id, buyer_user_id, provider, nationality_state,
+            verification_snapshot_ref, community_id, quote_id, buyer_kind, buyer_user_id,
+            buyer_wallet_address, buyer_wallet_address_normalized, buyer_chain_ref,
+            provider, nationality_state,
             nationality_value, pricing_tier, pricing_policy_version, snapshot_json, created_at, updated_at
           ) VALUES (
-            ?1, ?2, ?3, ?4, ?5, ?6,
-            ?7, ?8, ?9, ?10, ?11, ?11
+            ?1, ?2, ?3, ?4, ?5,
+            ?6, ?7, ?8,
+            ?9, ?10,
+            ?11, ?12, ?13, ?14, ?15, ?15
           )
         `,
         args: [
           verificationSnapshotRef,
           input.communityId,
           quoteId,
-          input.userId,
+          buyerFields.buyer_kind,
+          buyerFields.buyer_user_id,
+          buyerFields.buyer_wallet_address,
+          buyerFields.buyer_wallet_address_normalized,
+          buyerFields.buyer_chain_ref,
           String(resolvedPrice.verificationSnapshot?.provider ?? "self"),
           String(resolvedPrice.verificationSnapshot?.nationality_state ?? "verified"),
           String(resolvedPrice.verificationSnapshot?.nationality_value ?? ""),
@@ -334,10 +400,50 @@ export async function createCommunityPurchaseQuote(input: {
     if (!quote) {
       throw notFoundError("Quote not found")
     }
-    return serializeQuote(quote)
+    return quote
   } finally {
     db.close()
   }
+}
+
+export async function createCommunityPurchaseQuote(input: {
+  env: Env
+  userId: string
+  communityId: string
+  body: CommunityPurchaseQuoteRequest
+  communityRepository: CommunityDatabaseBindingRepository
+  userRepository: UserRepository
+}): Promise<CommunityPurchaseQuote> {
+  const quote = await createCommunityPurchaseQuoteRowForBuyer({
+    env: input.env,
+    buyer: userBuyer(input.userId),
+    userId: input.userId,
+    communityId: input.communityId,
+    body: input.body,
+    communityRepository: input.communityRepository,
+    userRepository: input.userRepository,
+  })
+  return serializeQuote(quote)
+}
+
+export async function createPublicCommunityPurchaseQuote(input: {
+  env: Env
+  buyer: BuyerIdentity
+  communityId: string
+  body: CommunityPurchaseQuoteRequest
+  communityRepository: CommunityDatabaseBindingRepository
+  userRepository: UserRepository
+}): Promise<PublicCommunityPurchaseQuote> {
+  const quote = await createCommunityPurchaseQuoteRowForBuyer({
+    env: input.env,
+    buyer: input.buyer,
+    publicBuyer: true,
+    communityId: input.communityId,
+    body: input.body,
+    communityRepository: input.communityRepository,
+    userRepository: input.userRepository,
+  })
+  return serializePublicQuote(quote)
 }
 
 export async function failCommunityPurchase(input: {
@@ -352,7 +458,7 @@ export async function failCommunityPurchase(input: {
     await requireCommunityMember(db.client, input.communityId, input.userId)
     const quoteId = decodePublicId(input.body.quote, "pq")
     const quote = await getPurchaseQuoteRow(db.client, input.communityId, quoteId)
-    if (!quote || quote.buyer_user_id !== input.userId) {
+    if (!quote || !buyerMatchesFields(userBuyer(input.userId), quote)) {
       throw notFoundError("Purchase quote not found")
     }
     const now = nowIso()

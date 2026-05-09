@@ -7,6 +7,10 @@ Backend services for Pirate.
 - `services/api`
 - `services/cli`
 - `services/contracts`
+- `services/shared`
+- `services/community-protocol-issuer`
+- `services/community-provision-operator`
+- `services/community-protocol-prover-runpod`
 
 ## Default Checks
 

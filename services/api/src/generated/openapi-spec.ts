@@ -39,6 +39,9 @@ const spec = {
       "name": "Profiles"
     },
     {
+      "name": "Public Names"
+    },
+    {
       "name": "Communities"
     },
     {
@@ -417,6 +420,61 @@ const spec = {
           }
         },
         "operationId": "get_verification_passport_wallet_score"
+      }
+    },
+    "/verification/altcha/challenge": {
+      "get": {
+        "tags": [
+          "Verification"
+        ],
+        "summary": "Create an ALTCHA proof-of-work challenge",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "community_join",
+                "post_create",
+                "comment_create"
+              ]
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "operationId": "get_verification_altcha_challenge"
       }
     },
     "/verification-sessions/{verification_session_id}": {
@@ -1771,6 +1829,132 @@ const spec = {
           }
         },
         "operationId": "get_public_profiles_by_handle_label"
+      }
+    },
+    "/public-names/quotes": {
+      "post": {
+        "tags": [
+          "Public Names"
+        ],
+        "security": [],
+        "summary": "Quote a public wallet-owned .pirate name purchase",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicNameQuoteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicNameQuote"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/EligibilityFailed"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "operationId": "post_public_names_quotes"
+      }
+    },
+    "/public-names/claims": {
+      "post": {
+        "tags": [
+          "Public Names"
+        ],
+        "security": [],
+        "summary": "Claim a public wallet-owned .pirate name after checkout funding",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicNameClaimRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicNameRegistrationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/EligibilityFailed"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "operationId": "post_public_names_claims"
+      }
+    },
+    "/public-names/{label}/status": {
+      "get": {
+        "tags": [
+          "Public Names"
+        ],
+        "security": [],
+        "summary": "Check public .pirate name availability or wallet-owned registration status",
+        "parameters": [
+          {
+            "name": "label",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicNameStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "operationId": "get_public_names_by_label_status"
       }
     },
     "/communities": {
@@ -6603,6 +6787,243 @@ const spec = {
           }
         }
       },
+      "PublicNameQuoteRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "desired_label",
+          "buyer_wallet_address"
+        ],
+        "properties": {
+          "desired_label": {
+            "type": "string"
+          },
+          "buyer_wallet_address": {
+            "type": "string"
+          }
+        }
+      },
+      "PublicNameQuote": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "quote",
+          "desired_label",
+          "label_normalized",
+          "buyer",
+          "price_cents",
+          "currency",
+          "eligible",
+          "reason",
+          "policy_version",
+          "quote_ttl_seconds",
+          "quoted_at",
+          "expires_at",
+          "payment_instructions"
+        ],
+        "properties": {
+          "quote": {
+            "type": "string"
+          },
+          "desired_label": {
+            "type": "string"
+          },
+          "label_normalized": {
+            "type": "string"
+          },
+          "buyer": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "wallet_address",
+              "chain_ref"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "wallet"
+                ]
+              },
+              "wallet_address": {
+                "type": "string"
+              },
+              "chain_ref": {
+                "type": "string"
+              }
+            }
+          },
+          "price_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "USD"
+            ]
+          },
+          "eligible": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "policy_version": {
+            "type": "string"
+          },
+          "pricing_tier": {
+            "type": "string",
+            "nullable": true
+          },
+          "quote_ttl_seconds": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "quoted_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "expires_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "payment_instructions": {
+            "$ref": "#/PublicNamePaymentInstructions"
+          }
+        }
+      },
+      "PublicNameClaimRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "quote",
+          "funding_tx_ref"
+        ],
+        "properties": {
+          "quote": {
+            "type": "string"
+          },
+          "funding_tx_ref": {
+            "type": "string"
+          }
+        }
+      },
+      "PublicNameRegistrationResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "registration",
+          "quote",
+          "funding_tx_ref",
+          "settlement_tx_ref"
+        ],
+        "properties": {
+          "registration": {
+            "$ref": "#/PublicNameRegistration"
+          },
+          "quote": {
+            "type": "string"
+          },
+          "funding_tx_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "settlement_tx_ref": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "PublicNameStatus": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "label",
+              "label_normalized",
+              "status"
+            ],
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "label_normalized": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "available"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "label",
+              "label_normalized",
+              "status",
+              "registration"
+            ],
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "label_normalized": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "registered"
+                ]
+              },
+              "registration": {
+                "$ref": "#/PublicNameRegistration"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "label",
+              "label_normalized",
+              "status",
+              "owner_kind"
+            ],
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "label_normalized": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "taken"
+                ]
+              },
+              "owner_kind": {
+                "type": "string",
+                "enum": [
+                  "user"
+                ]
+              }
+            }
+          }
+        ]
+      },
       "CreateCommunityRequest": {
         "oneOf": [
           {
@@ -8439,7 +8860,8 @@ const spec = {
                 "minimum_age",
                 "nationality",
                 "gender",
-                "wallet_score"
+                "wallet_score",
+                "altcha_pow"
               ]
             }
           },

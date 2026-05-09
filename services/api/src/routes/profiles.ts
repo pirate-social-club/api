@@ -1,11 +1,19 @@
 import { Hono } from "hono"
+import type { Context } from "hono"
 import { authError, badRequestError, paymentRequired, notFoundError } from "../lib/errors"
 import { getProfileRepository, getUserRepository } from "../lib/auth/repositories"
-import { authenticateAdminOrUser, type AuthenticatedEnv } from "../lib/auth-middleware"
+import {
+  authenticateAdminUserOrAgentDelegated,
+  authenticateAdminOrUser,
+  type ActorContext,
+  type AdminActorContext,
+  type AuthenticatedEnv,
+} from "../lib/auth-middleware"
 import { trackApiEvent } from "../lib/analytics/track"
 import { decodePublicUserId } from "../lib/public-ids"
 import { requireTrimmedStringOrNull } from "./route-helpers"
 import { writeAuditEventForEnv } from "../lib/audit"
+import { getControlPlaneClient } from "../lib/runtime-deps"
 import {
   serializeGlobalHandle,
   serializeHandleUpgradeQuote,
@@ -13,6 +21,119 @@ import {
 } from "../serializers/profile"
 
 const profiles = new Hono<AuthenticatedEnv>()
+
+function normalizeSubmittedGlobalHandleQuoteId(value: string): string {
+  const trimmed = value.trim()
+  if (trimmed.startsWith("ghq_ghq_")) {
+    return trimmed.slice("ghq_".length)
+  }
+  return trimmed.startsWith("ghq_") ? trimmed.slice("ghq_".length) : trimmed
+}
+
+async function getGlobalHandleQuoteUserId(env: AuthenticatedEnv["Bindings"], quote: string): Promise<string> {
+  const quoteId = normalizeSubmittedGlobalHandleQuoteId(quote)
+  if (!quoteId) {
+    throw badRequestError("quote is required with funding_tx_ref")
+  }
+  const row = (await getControlPlaneClient(env).execute({
+    sql: `
+      SELECT user_id
+      FROM global_handle_paid_quotes
+      WHERE global_handle_paid_quote_id = ?1
+      LIMIT 1
+    `,
+    args: [quoteId],
+  })).rows[0]
+  const userId = typeof row?.user_id === "string" ? row.user_id.trim() : ""
+  if (!userId) {
+    throw notFoundError("Global handle quote not found")
+  }
+  return userId
+}
+
+async function authenticateOptionalX402ProfileActor(
+  c: Context<AuthenticatedEnv>,
+): Promise<ActorContext | AdminActorContext | null> {
+  const authorization = c.req.header("authorization")
+  if (!authorization?.startsWith("Bearer ") && !c.req.header("x-admin-token")) {
+    return null
+  }
+  return authenticateAdminUserOrAgentDelegated({
+    allowAgentDelegated: false,
+    authorization,
+    env: c.env,
+    xAdminAsUserId: c.req.header("x-admin-as-user-id"),
+    xAdminToken: c.req.header("x-admin-token"),
+  })
+}
+
+profiles.post("/me/global-handle/x402-claim", async (c) => {
+  const body = await c.req.json<{
+    desired_label?: unknown
+    quote?: unknown
+    settlement_wallet_attachment?: unknown
+    funding_tx_ref?: unknown
+  }>().catch(() => null)
+  if (!body || typeof body !== "object") {
+    throw badRequestError("Invalid x402 paid handle claim payload")
+  }
+
+  const repository = getProfileRepository(c.env)
+  const fundingTxRef = typeof body.funding_tx_ref === "string" ? body.funding_tx_ref.trim() : ""
+  const actor = await authenticateOptionalX402ProfileActor(c)
+  if (!fundingTxRef) {
+    if (!actor) {
+      throw authError("Authentication failed")
+    }
+    if (typeof body.desired_label !== "string") {
+      throw badRequestError("desired_label is required before payment")
+    }
+    const quote = await repository.quoteGlobalHandleUpgrade(actor.userId, body.desired_label)
+    if (!quote) {
+      throw authError("Authentication failed")
+    }
+    const challenge = serializeHandleUpgradeQuote(quote)
+    if (!challenge.eligible || challenge.price_cents <= 0 || !challenge.quote || !challenge.payment_instructions) {
+      return c.json(challenge, 200)
+    }
+    throw paymentRequired("Payment required to claim this .pirate name", {
+      ...(challenge as unknown as Record<string, unknown>),
+      payment_protocol: "x402",
+      quote: challenge.quote,
+      payment_instructions: challenge.payment_instructions as unknown as Record<string, unknown>,
+    })
+  }
+
+  if (typeof body.quote !== "string" || !body.quote.trim()) {
+    throw badRequestError("quote is required with funding_tx_ref")
+  }
+  // x402/MPP retries commonly use `Authorization: Payment ...`, which cannot
+  // also carry the Pirate Bearer token. For paid retries, the quote is already
+  // bound to a user and the funding proof must come from that user's wallet.
+  const userId = actor?.userId ?? await getGlobalHandleQuoteUserId(c.env, body.quote)
+  const settlementWalletAttachment = await resolveSettlementWalletAttachment(c.env, userId, body.settlement_wallet_attachment)
+  const globalHandle = await repository.claimPaidGlobalHandle(userId, {
+    quote: body.quote,
+    settlement_wallet_attachment: settlementWalletAttachment,
+    funding_tx_ref: fundingTxRef,
+  })
+  if (!globalHandle) {
+    throw authError("Authentication failed")
+  }
+  await trackApiEvent(c.env, c.req, {
+    eventName: "handle_claim_succeeded",
+    userId,
+    properties: {
+      source: "paid_upgrade",
+      tier: globalHandle.tier,
+      handle_length: globalHandle.label.replace(/\.pirate$/i, "").length,
+      price_cents: globalHandle.price_paid_cents ?? null,
+      payment_protocol: "x402",
+      authenticated_retry: actor != null,
+    },
+  })
+  return c.json(serializeGlobalHandle(globalHandle), 200)
+})
 
 profiles.use("/me", authenticateAdminOrUser)
 profiles.use("/me/*", authenticateAdminOrUser)
@@ -250,66 +371,6 @@ profiles.post("/me/global-handle/claim", async (c) => {
       tier: globalHandle.tier,
       handle_length: globalHandle.label.replace(/\.pirate$/i, "").length,
       price_cents: globalHandle.price_paid_cents ?? null,
-    },
-  })
-  return c.json(serializeGlobalHandle(globalHandle), 200)
-})
-
-profiles.post("/me/global-handle/x402-claim", async (c) => {
-  const actor = c.get("actor")
-  const body = await c.req.json<{
-    desired_label?: unknown
-    quote?: unknown
-    settlement_wallet_attachment?: unknown
-    funding_tx_ref?: unknown
-  }>().catch(() => null)
-  if (!body || typeof body !== "object") {
-    throw badRequestError("Invalid x402 paid handle claim payload")
-  }
-
-  const repository = getProfileRepository(c.env)
-  const fundingTxRef = typeof body.funding_tx_ref === "string" ? body.funding_tx_ref.trim() : ""
-  if (!fundingTxRef) {
-    if (typeof body.desired_label !== "string") {
-      throw badRequestError("desired_label is required before payment")
-    }
-    const quote = await repository.quoteGlobalHandleUpgrade(actor.userId, body.desired_label)
-    if (!quote) {
-      throw authError("Authentication failed")
-    }
-    const challenge = serializeHandleUpgradeQuote(quote)
-    if (!challenge.eligible || challenge.price_cents <= 0 || !challenge.quote || !challenge.payment_instructions) {
-      return c.json(challenge, 200)
-    }
-    throw paymentRequired("Payment required to claim this .pirate name", {
-      ...(challenge as unknown as Record<string, unknown>),
-      payment_protocol: "x402",
-      quote: challenge.quote,
-      payment_instructions: challenge.payment_instructions as unknown as Record<string, unknown>,
-    })
-  }
-
-  if (typeof body.quote !== "string" || !body.quote.trim()) {
-    throw badRequestError("quote is required with funding_tx_ref")
-  }
-  const settlementWalletAttachment = await resolveSettlementWalletAttachment(c.env, actor.userId, body.settlement_wallet_attachment)
-  const globalHandle = await repository.claimPaidGlobalHandle(actor.userId, {
-    quote: body.quote,
-    settlement_wallet_attachment: settlementWalletAttachment,
-    funding_tx_ref: fundingTxRef,
-  })
-  if (!globalHandle) {
-    throw authError("Authentication failed")
-  }
-  await trackApiEvent(c.env, c.req, {
-    eventName: "handle_claim_succeeded",
-    userId: actor.userId,
-    properties: {
-      source: "paid_upgrade",
-      tier: globalHandle.tier,
-      handle_length: globalHandle.label.replace(/\.pirate$/i, "").length,
-      price_cents: globalHandle.price_paid_cents ?? null,
-      payment_protocol: "x402",
     },
   })
   return c.json(serializeGlobalHandle(globalHandle), 200)

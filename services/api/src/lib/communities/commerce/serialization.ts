@@ -20,6 +20,7 @@ import {
 import {
   parseJsonValue,
 } from "./row-types"
+import { requireUserBuyerId } from "./buyer-identity"
 import { nullableUnixSeconds, unixSeconds } from "../../../serializers/time"
 
 export function usdToCents(value: number | null | undefined): number | null {
@@ -136,7 +137,7 @@ export function serializeQuote(row: PurchaseQuoteRow): CommunityPurchaseQuote {
     object: "community_purchase_quote",
     community: `com_${row.community_id}`,
     listing: `lst_${row.listing_id}`,
-    buyer_user: `usr_${row.buyer_user_id}`,
+    buyer_user: `usr_${requireUserBuyerId(row)}`,
     asset: row.asset_id ? `asset_${row.asset_id}` : row.asset_id,
     live_room: row.live_room_id,
     base_price_cents: usdToCents(row.base_price_usd) ?? 0,
@@ -190,7 +191,7 @@ export function serializePurchase(
     listing: `lst_${row.listing_id}`,
     asset: row.asset_id ? `asset_${row.asset_id}` : row.asset_id,
     live_room: row.live_room_id,
-    buyer_user: `usr_${row.buyer_user_id}`,
+    buyer_user: `usr_${requireUserBuyerId(row)}`,
     settlement_wallet_attachment: row.settlement_wallet_attachment_id,
     purchase_price_cents: usdToCents(row.purchase_price_usd) ?? 0,
     pricing_tier: row.pricing_tier,

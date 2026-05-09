@@ -64,6 +64,8 @@ function validateGateAtom(input: unknown): GateAtom {
   }
   const atom = input as Record<string, unknown>
   switch (atom.type) {
+    case "altcha_pow":
+      return { type: "altcha_pow" }
     case "unique_human": {
       if (atom.provider !== "self" && atom.provider !== "very") {
         throw eligibilityFailed("unique_human gate provider must be self or very")

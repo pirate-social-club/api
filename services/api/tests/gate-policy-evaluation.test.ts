@@ -68,9 +68,16 @@ function orPolicy(...atoms: GateAtom[]): GatePolicy {
   }
 }
 
+type RequiredActionNode = NonNullable<Awaited<ReturnType<typeof evaluateMembershipGatePolicy>>["requiredActionSet"]>["items"][number]
+
+function flattenActionNodes(items: RequiredActionNode[]): RequiredActionNode[] {
+  return items.flatMap((item) => item.kind === "set" ? flattenActionNodes(item.items as RequiredActionNode[]) : [item])
+}
+
 const passportAtom: GateAtom = { type: "wallet_score", provider: "passport", minimum_score: 30 }
 const palmAtom: GateAtom = { type: "unique_human", provider: "very" }
 const ageAtom: GateAtom = { type: "minimum_age", provider: "self", minimum_age: 18 }
+const altchaAtom: GateAtom = { type: "altcha_pow" }
 
 describe("evaluateMembershipGatePolicy", () => {
   describe("null policy", () => {
@@ -228,6 +235,57 @@ describe("evaluateMembershipGatePolicy", () => {
       })
       expect(result.satisfied).toBe(false)
       expect(result.requiredActionSet!.mode).toBe("any")
+    })
+
+    test("preview exposes ALTCHA as a required action alternative", async () => {
+      const result = await evaluateMembershipGatePolicy({
+        env: {},
+        policy: orPolicy(palmAtom, altchaAtom),
+        user: makeUser({ uniqueHuman: { state: "unverified" } }),
+        walletAttachments: [],
+        altchaScope: "post_create",
+      })
+      expect(result.satisfied).toBe(false)
+      expect(result.requiredActionSet?.mode).toBe("any")
+      const actions = flattenActionNodes(result.requiredActionSet?.items ?? []).filter((item) => item.kind === "action")
+      expect(actions.some((item) => item.kind === "action" && item.provider === "altcha" && item.capability === "altcha_pow" && item.scope === "post_create")).toBe(true)
+    })
+
+    test("enforce short-circuits before ALTCHA when identity passes", async () => {
+      const result = await evaluateMembershipGatePolicy({
+        env: {},
+        policy: orPolicy(palmAtom, altchaAtom),
+        user: makeUser({ uniqueHuman: { state: "verified", provider: "very" } }),
+        walletAttachments: [],
+        mode: "enforce",
+        altchaScope: "post_create",
+      })
+      expect(result.satisfied).toBe(true)
+      expect(result.requiredActionSet).toBeNull()
+      expect(result.trace.kind).toBe("op")
+      if (result.trace.kind === "op") {
+        expect(result.trace.children).toHaveLength(1)
+        const child = result.trace.children[0]
+        expect(child?.kind).toBe("gate")
+        if (child?.kind === "gate") {
+          expect(child.gate_type).toBe("unique_human")
+        }
+      }
+    })
+
+    test("enforce reports missing ALTCHA proof when identity alternatives fail", async () => {
+      const result = await evaluateMembershipGatePolicy({
+        env: {},
+        policy: orPolicy(palmAtom, altchaAtom),
+        user: makeUser({ uniqueHuman: { state: "unverified" } }),
+        walletAttachments: [],
+        mode: "enforce",
+        altchaScope: "comment_create",
+      })
+      expect(result.satisfied).toBe(false)
+      expect(result.requiredActionSet?.mode).toBe("any")
+      const actions = flattenActionNodes(result.requiredActionSet?.items ?? []).filter((item) => item.kind === "action")
+      expect(actions.some((item) => item.kind === "action" && item.provider === "altcha" && item.capability === "altcha_pow" && item.scope === "comment_create")).toBe(true)
     })
   })
 

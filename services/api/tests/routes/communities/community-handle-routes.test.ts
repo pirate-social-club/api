@@ -13,6 +13,7 @@ import { createRouteTestContext, json, mintUpstreamJwt, resetRuntimeCaches } fro
 import {
   exchangeJwt,
   prepareVerifiedNamespace,
+  prepareVerifiedSpacesNamespace,
   requestJson,
 } from "./community-routes-test-helpers"
 
@@ -1070,7 +1071,7 @@ describe("community handle routes", () => {
     cleanup = ctx.cleanup
 
     const creator = await exchangeJwtWithWallet(ctx.env, "community-handle-protocol-owner-creator")
-    const namespaceVerification = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+    const namespaceVerification = await prepareVerifiedSpacesNamespace(ctx.env, creator.accessToken)
     const communityId = await createNamespaceBackedCommunity({
       accessToken: creator.accessToken,
       env: ctx.env,
@@ -1166,9 +1167,68 @@ describe("community handle routes", () => {
     const claim = await json(claimResponse) as {
       label: string
       protocol_owner_wallet_attachment: string | null
+      protocol_issuance?: {
+        status: "issuing" | "issued" | "failed"
+        sname: string
+        parent_space: string
+        issued_at: number | null
+      }
     }
     expect(claim.label).toBe("protocolok")
     expect(claim.protocol_owner_wallet_attachment).toBe("wal_protocol_taproot_owner")
+    expect(claim.protocol_issuance).toEqual({
+      status: "issuing",
+      sname: "protocolok@pesto",
+      parent_space: "@pesto",
+      issued_at: null,
+    })
+
+    const meResponse = await app.request(
+      `http://pirate.test/communities/${communityId}/handles/me`,
+      { headers: { authorization: `Bearer ${creator.accessToken}` } },
+      ctx.env,
+    )
+    expect(meResponse.status).toBe(200)
+    const me = await json(meResponse) as {
+      handle: {
+        protocol_issuance?: {
+          status: "issuing" | "issued" | "failed"
+          sname: string
+          parent_space: string
+          issued_at: number | null
+        }
+      } | null
+    }
+    expect(me.handle?.protocol_issuance).toEqual({
+      status: "issuing",
+      sname: "protocolok@pesto",
+      parent_space: "@pesto",
+      issued_at: null,
+    })
+
+    const client = createClient({
+      url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
+    })
+    try {
+      const issuanceRows = await client.execute({
+        sql: `
+          SELECT hpi.public_status, hpi.parent_space, hpi.sname, hpi.script_pubkey_hex
+          FROM community_handle_protocol_issuances hpi
+          JOIN community_handles ch
+            ON ch.community_handle_id = hpi.community_handle_id
+          WHERE ch.label_normalized = 'protocolok'
+        `,
+      })
+      expect(issuanceRows.rows).toHaveLength(1)
+      expect(issuanceRows.rows[0]).toMatchObject({
+        public_status: "issuing",
+        parent_space: "@pesto",
+        sname: "protocolok@pesto",
+        script_pubkey_hex: "5120a60869f0dbcf1dc659c9cecbaf8050135ea9e8cdc487053f1dc6880949dc684c",
+      })
+    } finally {
+      client.close()
+    }
   })
 
   test("protocol owner wallet validation distinguishes wrong user, wrong chain, inactive, and non-taproot wallets", async () => {
@@ -1177,7 +1237,7 @@ describe("community handle routes", () => {
 
     const creator = await exchangeJwtWithWallet(ctx.env, "community-handle-protocol-validation-creator")
     const other = await exchangeJwt(ctx.env, "community-handle-protocol-validation-other")
-    const namespaceVerification = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+    const namespaceVerification = await prepareVerifiedSpacesNamespace(ctx.env, creator.accessToken)
     const communityId = await createNamespaceBackedCommunity({
       accessToken: creator.accessToken,
       env: ctx.env,
@@ -1254,6 +1314,45 @@ describe("community handle routes", () => {
       expect(error.code).toBe("eligibility_failed")
       expect(error.details.protocol_owner_wallet_attachment).toBe(expectedDetail)
     }
+  })
+
+  test("protocol issuance policy only enables for Spaces namespaces with a valid mode", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwtWithWallet(ctx.env, "community-handle-protocol-mode-creator")
+    const namespaceVerification = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+    const communityId = await createNamespaceBackedCommunity({
+      accessToken: creator.accessToken,
+      env: ctx.env,
+      namespaceVerification,
+    })
+
+    const invalidModeResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      {
+        settings: { issuance_mode: "fabric_zone" },
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(invalidModeResponse.status).toBe(400)
+    const invalidModeError = await json(invalidModeResponse) as { code: string; message: string }
+    expect(invalidModeError.code).toBe("bad_request")
+    expect(invalidModeError.message).toBe("issuance_mode must be app_internal or spaces_subspace")
+
+    const hnsProtocolResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      {
+        settings: { issuance_mode: "spaces_subspace" },
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(hnsProtocolResponse.status).toBe(400)
+    const hnsProtocolError = await json(hnsProtocolResponse) as { code: string; message: string }
+    expect(hnsProtocolError.code).toBe("bad_request")
+    expect(hnsProtocolError.message).toBe("spaces_subspace issuance requires a Spaces namespace")
   })
 
   test("claims_enabled blocks quote and claim but preserves /handles/me for existing owners", async () => {

@@ -22,6 +22,7 @@ export type {
   CommunityHandleClaimRequest,
   CommunityHandleListResponse,
   CommunityHandleMeResponse,
+  CommunityHandleProtocolIssuance,
   CommunityHandleStatusResponse,
   CommunityHandlePolicy,
   CommunityHandlePolicySettings,

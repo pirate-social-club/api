@@ -26,6 +26,17 @@ export function installLockedSongFetchMocks(input: {
       })
     }
 
+    if (request.url.endsWith("/moderations")) {
+      return Response.json({
+        results: [
+          {
+            categories: {},
+            category_scores: {},
+          },
+        ],
+      })
+    }
+
     if (request.url === "https://acrcloud.test/v1/identify") {
       return Response.json({
         status: {

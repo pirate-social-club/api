@@ -1,92 +1,104 @@
-# Agent .pirate Handle Purchase
+# Agent .pirate Name Purchase
 
-Agents buy paid global `.pirate` names through the same authenticated profile and quote ledger used by the human Settings flow.
+Agents buy wallet-owned `.pirate` names through the public name purchase API.
 
-## Endpoint
+## Endpoints
 
-`POST /profiles/me/global-handle/x402-claim`
+- `POST /public-names/quotes`
+- `POST /public-names/claims`
+- `GET /public-names/:label/status`
 
-Auth: Bearer user session token. For v1, agents authenticate as wallet-backed users; the claimed handle attaches to that profile.
+Auth: none. The buyer wallet address in the quote owns the registration and must send the checkout USDC payment.
 
-## Request A: Ask For Payment Terms
-
-```json
-{
-  "desired_label": "captain"
-}
-```
-
-If the name requires payment, the API returns `402 payment_required`.
+## Quote
 
 ```json
 {
-  "code": "payment_required",
-  "message": "Payment required to claim this .pirate name",
-  "retryable": true,
-  "details": {
-    "quote": "ghq_...",
-    "desired_label": "captain.pirate",
-    "price_cents": 2500,
-    "currency": "USD",
-    "payment_protocol": "x402",
-    "policy_version": "global_handle_paid_v1",
-    "pricing_tier": "common_word",
-    "quote_ttl_seconds": 900,
-    "expires_at": 1770000000,
-    "payment_instructions": {
-      "chain": {
-        "chain_namespace": "eip155",
-        "chain_id": 8453,
-        "display_name": "Base"
-      },
-      "token_address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
-      "recipient_address": "0x...",
-      "amount_atomic": "25000000",
-      "amount_display": "25.00"
-    }
-  }
+  "desired_label": "captain",
+  "buyer_wallet_address": "0x2000000000000000000000000000000000000002"
 }
 ```
-
-If the quote is free or not payable, the API returns the quote body with `200` instead of a payment challenge.
-
-## Request B: Retry With Payment Proof
-
-After funding the exact `payment_instructions`, retry with the quote and transaction reference.
-
-```json
-{
-  "quote": "ghq_...",
-  "funding_tx_ref": "0x..."
-}
-```
-
-`settlement_wallet_attachment` is optional. If omitted, the API uses the authenticated user's primary wallet attachment.
 
 Successful response:
 
 ```json
 {
-  "object": "global_handle",
-  "label": "captain.pirate",
-  "tier": "premium",
-  "status": "active",
-  "issuance_source": "paid_upgrade",
-  "price_paid_cents": 2500
+  "quote": "pnq_...",
+  "desired_label": "captain.pirate",
+  "label_normalized": "captain",
+  "buyer": {
+    "kind": "wallet",
+    "wallet_address": "0x2000000000000000000000000000000000000002",
+    "chain_ref": "eip155:8453"
+  },
+  "price_cents": 25000,
+  "currency": "USD",
+  "eligible": true,
+  "reason": null,
+  "policy_version": "global_handle_paid_v1",
+  "pricing_tier": "common_word",
+  "quote_ttl_seconds": 900,
+  "expires_at": 1770000000,
+  "payment_instructions": {
+    "chain": {
+      "chain_namespace": "eip155",
+      "chain_id": 8453,
+      "display_name": "Base"
+    },
+    "token_address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    "recipient_address": "0x...",
+    "amount_atomic": "250000000",
+    "amount_display": "250.00"
+  }
+}
+```
+
+## Claim
+
+After funding the exact `payment_instructions` from `buyer.wallet_address`, submit:
+
+```json
+{
+  "quote": "pnq_...",
+  "funding_tx_ref": "0x..."
+}
+```
+
+Successful response:
+
+```json
+{
+  "registration": {
+    "id": "pnr_...",
+    "label": "captain.pirate",
+    "label_normalized": "captain",
+    "status": "active",
+    "owner_kind": "wallet",
+    "owner_wallet_address": "0x2000000000000000000000000000000000000002",
+    "chain_ref": "eip155:8453",
+    "price_paid_cents": 25000,
+    "currency": "USD",
+    "issued_at": 1770000100,
+    "expires_at": null,
+    "pirate_user_id": null
+  },
+  "quote": "pnq_...",
+  "funding_tx_ref": "0x...",
+  "settlement_tx_ref": "0x..."
 }
 ```
 
 ## Guarantees
 
 - Quote TTL is authoritative.
-- Claim rechecks current pricing policy before issuing the handle.
-- Replaying the same paid quote returns the already issued handle.
-- Concurrent claims for the same label resolve through the unique active-label constraint.
+- Claim verifies the funding transaction came from the quote's buyer wallet.
+- Claim rechecks current pricing policy before registering the name.
+- Replaying the same paid quote returns the already issued registration.
+- Concurrent claims for the same label resolve through active-label constraints and transactional checks.
 
 ## Errors
 
-- `400 bad_request`: malformed request or missing `quote` on paid retry.
-- `402 payment_required`: payment terms are available and no proof was supplied.
-- `403 eligibility_failed`: expired quote, policy drift, unavailable settlement wallet, or invalid claim eligibility.
-- `404 not_found`: quote not found for the authenticated user.
-- `409 conflict`: another user claimed the label first.
+- `400 bad_request`: malformed request, invalid buyer wallet, or missing funding proof.
+- `403 eligibility_failed`: expired quote, policy drift, reserved label, or invalid payment.
+- `404 not_found`: quote not found.
+- `409 conflict`: another wallet or Pirate user claimed the label first.

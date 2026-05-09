@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { createClient } from "@libsql/client"
+import { Wallet } from "ethers"
 import { app } from "../../../src/index"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { getCommunityRepository } from "../../../src/lib/communities/db-community-repository"
@@ -13,7 +14,11 @@ import { setStoryCdrUploaderForTests } from "../../../src/lib/story/story-cdr"
 import { setStoryRuntimeFundingAssertionForTests } from "../../../src/lib/story/story-runtime-funding"
 import { setStoryPurchaseSettlementExecutorForTests } from "../../../src/lib/story/story-settlement-service"
 import { setCommunityCommerceBuyerFundingVerifierForTests } from "../../../src/lib/communities/commerce/funding-proof-service"
-import { updateSongArtifactBundlePreview } from "../../../src/lib/song-artifacts/song-artifact-bundle-repository"
+import {
+  publicAssetAccessMessage,
+  publicPurchaseQuoteMessage,
+} from "../../../src/lib/communities/commerce/public-wallet-proof"
+import { updateSongArtifactBundlePreview } from "../../../src/lib/song-artifacts/song-artifact-repository"
 import { getControlPlaneClient } from "../../../src/lib/runtime-deps"
 import type { Env } from "../../../src/types"
 import {
@@ -458,6 +463,153 @@ describe("song artifact locked routes", () => {
     }
     expect(listingBody.donation_partner).toBe("don_charity_water")
     expect(listingBody.donation_share_bps).toBe(1000)
+
+    const publicBuyerWallet = Wallet.createRandom()
+    const publicQuoteIssuedAt = Math.floor(Date.now() / 1000)
+    const publicQuoteNonce = "public-quote-nonce-1"
+    const publicQuoteMessage = publicPurchaseQuoteMessage({
+      communityId,
+      listing: listingBody.id,
+      walletAddress: publicBuyerWallet.address,
+      chainRef: "eip155",
+      nonce: publicQuoteNonce,
+      issuedAt: publicQuoteIssuedAt,
+    })
+    const publicQuoteCreate = await requestJson(
+      `http://pirate.test/public-communities/${communityId}/purchase-quotes`,
+      {
+        listing: listingBody.id,
+        ...routedCheckoutQuoteFields,
+        wallet_proof: {
+          wallet_address: publicBuyerWallet.address,
+          chain_ref: "eip155",
+          nonce: publicQuoteNonce,
+          issued_at: publicQuoteIssuedAt,
+          signature: await publicBuyerWallet.signMessage(publicQuoteMessage),
+        },
+      },
+      ctx.env,
+    )
+    expect(publicQuoteCreate.status).toBe(201)
+    const publicQuoteBody = await json(publicQuoteCreate) as {
+      id: string
+      buyer_kind: string
+      buyer_wallet: { address: string }
+      final_price_cents: number
+    }
+    expect(publicQuoteBody.buyer_kind).toBe("wallet")
+    expect(publicQuoteBody.buyer_wallet.address).toBe(publicBuyerWallet.address)
+    expect(publicQuoteBody.final_price_cents).toBe(499)
+
+    const publicAccessIssuedAt = Math.floor(Date.now() / 1000)
+    const publicAccessNonce = "public-access-nonce-1"
+    const publicAccessMessage = publicAssetAccessMessage({
+      communityId,
+      asset: assetId,
+      walletAddress: publicBuyerWallet.address,
+      chainRef: "eip155",
+      nonce: publicAccessNonce,
+      issuedAt: publicAccessIssuedAt,
+    })
+    const publicAccessBeforePurchase = await requestJson(
+      `http://pirate.test/public-communities/${communityId}/assets/${assetId}/access`,
+      {
+        wallet_proof: {
+          wallet_address: publicBuyerWallet.address,
+          chain_ref: "eip155",
+          nonce: publicAccessNonce,
+          issued_at: publicAccessIssuedAt,
+          signature: await publicBuyerWallet.signMessage(publicAccessMessage),
+        },
+      },
+      ctx.env,
+    )
+    expect(publicAccessBeforePurchase.status).toBe(200)
+    const publicAccessBeforePurchaseBody = await json(publicAccessBeforePurchase) as {
+      access_granted: boolean
+      decision_reason: string | null
+    }
+    expect(publicAccessBeforePurchaseBody.access_granted).toBe(false)
+    expect(publicAccessBeforePurchaseBody.decision_reason).toBe("purchase_required")
+
+    const publicPurchaseSettle = await requestJson(
+      `http://pirate.test/public-communities/${communityId}/purchase-settlements`,
+      {
+        quote: publicQuoteBody.id,
+        funding_tx_ref: "0xfunding-public-paid-song-1",
+        settlement_tx_ref: "tx-public-paid-song-1",
+      },
+      ctx.env,
+    )
+    expect(publicPurchaseSettle.status).toBe(201)
+    const publicPurchaseBody = await json(publicPurchaseSettle) as {
+      buyer_kind: string
+      buyer_wallet: { address: string }
+      settlement_wallet_attachment: string | null
+      settlement_tx_ref: string
+      entitlement_kind: string
+      entitlement_target_ref: string
+    }
+    expect(publicPurchaseBody.buyer_kind).toBe("wallet")
+    expect(publicPurchaseBody.buyer_wallet.address).toBe(publicBuyerWallet.address)
+    expect(publicPurchaseBody.settlement_wallet_attachment).toBeNull()
+    expect(publicPurchaseBody.settlement_tx_ref).toBe("0xroyalty-paid-song")
+    expect(publicPurchaseBody.entitlement_kind).toBe("asset_access")
+    expect(publicPurchaseBody.entitlement_target_ref).toBe(assetId)
+    expect(royaltySettlementCalls.at(-1)?.buyerAddress).toBe(publicBuyerWallet.address)
+
+    const publicAccessAfterPurchaseIssuedAt = Math.floor(Date.now() / 1000)
+    const publicAccessAfterPurchaseNonce = "public-access-nonce-2"
+    const publicAccessAfterPurchaseMessage = publicAssetAccessMessage({
+      communityId,
+      asset: assetId,
+      walletAddress: publicBuyerWallet.address,
+      chainRef: "eip155",
+      nonce: publicAccessAfterPurchaseNonce,
+      issuedAt: publicAccessAfterPurchaseIssuedAt,
+    })
+    const publicAccessAfterPurchase = await requestJson(
+      `http://pirate.test/public-communities/${communityId}/assets/${assetId}/access`,
+      {
+        wallet_proof: {
+          wallet_address: publicBuyerWallet.address,
+          chain_ref: "eip155",
+          nonce: publicAccessAfterPurchaseNonce,
+          issued_at: publicAccessAfterPurchaseIssuedAt,
+          signature: await publicBuyerWallet.signMessage(publicAccessAfterPurchaseMessage),
+        },
+      },
+      ctx.env,
+    )
+    expect(publicAccessAfterPurchase.status).toBe(200)
+    const publicAccessAfterPurchaseBody = await json(publicAccessAfterPurchase) as {
+      access_granted: boolean
+      decision_reason: string | null
+      story_cdr_access?: {
+        access_scope: string
+        ciphertext_ref: string
+      }
+    }
+    expect(publicAccessAfterPurchaseBody.access_granted).toBe(true)
+    expect(publicAccessAfterPurchaseBody.decision_reason).toBe("purchase_entitlement")
+    expect(publicAccessAfterPurchaseBody.story_cdr_access?.access_scope).toBe("asset.share")
+    expect(publicAccessAfterPurchaseBody.story_cdr_access?.ciphertext_ref).toBe(
+      `/public-communities/com_${communityId}/assets/${assetId}/content`,
+    )
+
+    const publicCiphertextAfterPurchase = await app.request(
+      `http://pirate.test/public-communities/${communityId}/assets/${assetId}/content`,
+      {},
+      ctx.env,
+    )
+    expect(publicCiphertextAfterPurchase.status).toBe(200)
+    expect(publicCiphertextAfterPurchase.headers.get("content-type")).toBe("application/octet-stream")
+    const publicCiphertext = new Uint8Array(await publicCiphertextAfterPurchase.arrayBuffer())
+    expect(publicCiphertext).not.toEqual(primaryBytes)
+
+    charityPayoutCalls.length = 0
+    royaltySettlementCalls.length = 0
+    storySettlementCalls.length = 0
 
     const quoteCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/purchase-quotes`,
@@ -1283,6 +1435,7 @@ describe("song artifact locked routes", () => {
       FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
       FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
       FILEBASE_MEDIA_BUCKET: "pirate-media",
+      OPENAI_API_KEY: "test-openai-key",
     })
     cleanup = ctx.cleanup
 
@@ -1387,6 +1540,7 @@ describe("song artifact locked routes", () => {
       FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
       FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
       FILEBASE_MEDIA_BUCKET: "pirate-media",
+      OPENAI_API_KEY: "test-openai-key",
     })
     cleanup = ctx.cleanup
 
@@ -1508,6 +1662,7 @@ describe("song artifact locked routes", () => {
       FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
       FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
       FILEBASE_MEDIA_BUCKET: "pirate-media",
+      OPENAI_API_KEY: "test-openai-key",
       STORY_CONTRACT_OWNER_PRIVATE_KEY: "0x1000000000000000000000000000000000000000000000000000000000000001",
       STORY_OPERATOR_PRIVATE_KEY: "0x2000000000000000000000000000000000000000000000000000000000000002",
       STORY_CDR_WRITER_PRIVATE_KEY: "0x3000000000000000000000000000000000000000000000000000000000000003",

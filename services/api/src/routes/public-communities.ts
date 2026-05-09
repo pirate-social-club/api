@@ -1,7 +1,20 @@
 import { Hono } from "hono"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
+import { getUserRepository } from "../lib/auth/repositories"
 import { resolveCommunityIdentifier } from "../lib/communities/community-identifier"
 import { getPublicCommunityPreview } from "../lib/communities/community-preview-service"
+import {
+  createPublicCommunityPurchaseQuote,
+  fetchPublicCommunityAssetContent,
+  resolvePublicCommunityAssetAccess,
+  settlePublicCommunityPurchase,
+  type PublicCommunityPurchaseSettlementRequest,
+} from "../lib/communities/commerce/service"
+import {
+  verifyPublicAssetAccessWalletProof,
+  verifyPublicPurchaseQuoteWalletProof,
+  type PublicWalletProof,
+} from "../lib/communities/commerce/public-wallet-proof"
 import {
   omittedSurfacesForPolicy,
   omittedSurfaceForPolicy,
@@ -10,7 +23,12 @@ import {
 } from "../lib/communities/community-machine-access-service"
 import { listPublicCommunityPosts } from "../lib/posts/post-service"
 import { fetchPublishedPublicSongArtifactContent } from "../lib/song-artifacts/song-artifact-upload-service"
-import { decodePublicSongArtifactUploadId, publicCommunityId, publicPostId } from "../lib/public-ids"
+import {
+  decodePublicAssetId,
+  decodePublicSongArtifactUploadId,
+  publicCommunityId,
+  publicPostId,
+} from "../lib/public-ids"
 import {
   absoluteUrl,
   configuredApiOrigin,
@@ -32,7 +50,7 @@ import { omitThreadBody } from "../lib/posts/thread-body-omission"
 import { serializeCommunityPreview } from "../serializers/community"
 import { serializeLocalizedPostResponse } from "../serializers/post"
 import type { Env } from "../env"
-import type { CommunityPreview } from "../types"
+import type { CommunityPreview, CommunityPurchaseQuoteRequest } from "../types"
 import { setPublicReadCacheHeaders } from "./cache-headers"
 
 const publicCommunities = new Hono<{ Bindings: Env }>()
@@ -170,6 +188,168 @@ function omitCommunityStats<T extends Record<string, unknown>>(preview: T): Omit
   const { member_count: _memberCount, follower_count: _followerCount, ...rest } = preview
   return rest
 }
+
+function requirePublicPurchaseQuoteBody(value: unknown): CommunityPurchaseQuoteRequest & { wallet_proof: PublicWalletProof } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw badRequestError("Invalid public purchase quote payload")
+  }
+  const body = value as Record<string, unknown>
+  const proof = body.wallet_proof
+  if (typeof body.listing !== "string" || !body.listing.trim()) {
+    throw badRequestError("listing is required")
+  }
+  if (!proof || typeof proof !== "object" || Array.isArray(proof)) {
+    throw badRequestError("wallet_proof is required")
+  }
+  const walletProof = proof as Record<string, unknown>
+  if (
+    typeof walletProof.wallet_address !== "string"
+    || typeof walletProof.nonce !== "string"
+    || typeof walletProof.issued_at !== "number"
+    || typeof walletProof.signature !== "string"
+  ) {
+    throw badRequestError("wallet_proof is invalid")
+  }
+  return {
+    listing: body.listing,
+    funding_asset: body.funding_asset as CommunityPurchaseQuoteRequest["funding_asset"],
+    source_chain: body.source_chain as CommunityPurchaseQuoteRequest["source_chain"],
+    route_provider: typeof body.route_provider === "string" ? body.route_provider : null,
+    client_estimated_slippage_bps: typeof body.client_estimated_slippage_bps === "number"
+      ? body.client_estimated_slippage_bps
+      : 0,
+    client_estimated_hop_count: typeof body.client_estimated_hop_count === "number"
+      ? body.client_estimated_hop_count
+      : 0,
+    client_route_valid_for_seconds: typeof body.client_route_valid_for_seconds === "number"
+      ? body.client_route_valid_for_seconds
+      : null,
+    wallet_proof: {
+      wallet_address: walletProof.wallet_address,
+      chain_ref: typeof walletProof.chain_ref === "string" ? walletProof.chain_ref : null,
+      nonce: walletProof.nonce,
+      issued_at: walletProof.issued_at,
+      signature: walletProof.signature,
+    },
+  }
+}
+
+function requirePublicAssetAccessBody(value: unknown): { wallet_proof: PublicWalletProof } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw badRequestError("Invalid public asset access payload")
+  }
+  const body = value as Record<string, unknown>
+  const proof = body.wallet_proof
+  if (!proof || typeof proof !== "object" || Array.isArray(proof)) {
+    throw badRequestError("wallet_proof is required")
+  }
+  const walletProof = proof as Record<string, unknown>
+  if (
+    typeof walletProof.wallet_address !== "string"
+    || typeof walletProof.nonce !== "string"
+    || typeof walletProof.issued_at !== "number"
+    || typeof walletProof.signature !== "string"
+  ) {
+    throw badRequestError("wallet_proof is invalid")
+  }
+  return {
+    wallet_proof: {
+      wallet_address: walletProof.wallet_address,
+      chain_ref: typeof walletProof.chain_ref === "string" ? walletProof.chain_ref : null,
+      nonce: walletProof.nonce,
+      issued_at: walletProof.issued_at,
+      signature: walletProof.signature,
+    },
+  }
+}
+
+function requirePublicPurchaseSettlementBody(value: unknown): PublicCommunityPurchaseSettlementRequest {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw badRequestError("Invalid public purchase settlement payload")
+  }
+  const body = value as Record<string, unknown>
+  if (typeof body.quote !== "string" || !body.quote.trim()) {
+    throw badRequestError("quote is required")
+  }
+  if (typeof body.funding_tx_ref !== "string" || !body.funding_tx_ref.trim()) {
+    throw badRequestError("funding_tx_ref is required")
+  }
+  if (
+    body.settlement_tx_ref != null
+    && (typeof body.settlement_tx_ref !== "string" || !body.settlement_tx_ref.trim())
+  ) {
+    throw badRequestError("settlement_tx_ref is invalid")
+  }
+  return {
+    quote: body.quote,
+    funding_tx_ref: body.funding_tx_ref,
+    settlement_tx_ref: typeof body.settlement_tx_ref === "string" ? body.settlement_tx_ref : null,
+  }
+}
+
+publicCommunities.post("/:communityId/purchase-quotes", async (c) => {
+  const communityRepository = getCommunityRepository(c.env)
+  const communityId = await resolveCommunityId(communityRepository, c.req.param("communityId"))
+  const body = requirePublicPurchaseQuoteBody(await c.req.json().catch(() => null))
+  const buyer = verifyPublicPurchaseQuoteWalletProof({
+    communityId,
+    listing: body.listing,
+    proof: body.wallet_proof,
+  })
+  const result = await createPublicCommunityPurchaseQuote({
+    env: c.env,
+    buyer,
+    communityId,
+    body,
+    communityRepository,
+    userRepository: getUserRepository(c.env),
+  })
+  return c.json(result, 201)
+})
+
+publicCommunities.post("/:communityId/assets/:assetId/access", async (c) => {
+  const communityRepository = getCommunityRepository(c.env)
+  const communityId = await resolveCommunityId(communityRepository, c.req.param("communityId"))
+  const asset = decodePublicAssetId(c.req.param("assetId"))
+  const body = requirePublicAssetAccessBody(await c.req.json().catch(() => null))
+  const buyer = verifyPublicAssetAccessWalletProof({
+    communityId,
+    asset: c.req.param("assetId"),
+    proof: body.wallet_proof,
+  })
+  const result = await resolvePublicCommunityAssetAccess({
+    env: c.env,
+    buyer,
+    communityId,
+    assetId: asset,
+    communityRepository,
+  })
+  return c.json(result, 200)
+})
+
+publicCommunities.get("/:communityId/assets/:assetId/content", async (c) => {
+  const communityRepository = getCommunityRepository(c.env)
+  const communityId = await resolveCommunityId(communityRepository, c.req.param("communityId"))
+  return await fetchPublicCommunityAssetContent({
+    env: c.env,
+    communityId,
+    assetId: decodePublicAssetId(c.req.param("assetId")),
+    communityRepository,
+  })
+})
+
+publicCommunities.post("/:communityId/purchase-settlements", async (c) => {
+  const communityRepository = getCommunityRepository(c.env)
+  const communityId = await resolveCommunityId(communityRepository, c.req.param("communityId"))
+  const body = requirePublicPurchaseSettlementBody(await c.req.json().catch(() => null))
+  const result = await settlePublicCommunityPurchase({
+    env: c.env,
+    communityId,
+    body,
+    communityRepository,
+  })
+  return c.json(result.settlement, 201)
+})
 
 publicCommunities.get("/:communityId", async (c) => {
   const communityRepository = getCommunityRepository(c.env)

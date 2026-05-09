@@ -9,6 +9,7 @@ import type {
   CommunityHandleQuoteRequest,
   CommunityHandleReserveRequest,
   CommunityHandleRevokeRequest,
+  CommunityHandleProtocolIssuance,
   CommunityHandleStatusResponse,
   Env,
   UpdateCommunityHandlePolicyRequest,
@@ -43,6 +44,7 @@ type NamespacePolicyRow = {
   namespace_id: string
   display_label: string
   normalized_label: string
+  route_family: string | null
   policy_template: CommunityHandlePolicy["policy_template"]
   pricing_model: HandlePricingModel | null
   claims_enabled: boolean
@@ -173,6 +175,28 @@ function normalizeSubmittedPrefixedId(prefix: string, value: string): string {
   return trimmed.startsWith(`${prefix}_${prefix}_`) ? trimmed.slice(prefix.length + 1) : trimmed
 }
 
+const HANDLE_PROTOCOL_ISSUANCE_SELECT = `
+  ch.*,
+  hpi.public_status AS protocol_issuance_status,
+  hpi.sname AS protocol_issuance_sname,
+  hpi.parent_space AS protocol_issuance_parent_space,
+  hpi.issued_at AS protocol_issuance_issued_at
+`
+
+const HANDLE_PROTOCOL_ISSUANCE_JOIN = `
+  LEFT JOIN community_handle_protocol_issuances hpi
+    ON hpi.community_handle_id = ch.community_handle_id
+`
+
+function parentSpaceFromNamespaceLabel(normalizedLabel: string): string {
+  const bareLabel = normalizedLabel.startsWith("@") ? normalizedLabel.slice(1) : normalizedLabel
+  return `@${bareLabel}`
+}
+
+function protocolSnameForHandle(labelNormalized: string, parentSpace: string): string {
+  return `${labelNormalized}@${parentSpace.startsWith("@") ? parentSpace.slice(1) : parentSpace}`
+}
+
 function serializePolicy(row: NamespacePolicyRow): CommunityHandlePolicy {
   return {
     id: withPrefix("nhp", row.namespace_handle_policy_id),
@@ -187,7 +211,21 @@ function serializePolicy(row: NamespacePolicyRow): CommunityHandlePolicy {
   }
 }
 
+function serializeProtocolIssuance(row: QueryResultRow): CommunityHandleProtocolIssuance | null {
+  const status = stringOrNull(rowValue(row, "protocol_issuance_status"))
+  if (!status) {
+    return null
+  }
+  return {
+    status,
+    sname: requiredString(row, "protocol_issuance_sname"),
+    parent_space: requiredString(row, "protocol_issuance_parent_space"),
+    issued_at: nullableUnixSeconds(stringOrNull(rowValue(row, "protocol_issuance_issued_at"))),
+  }
+}
+
 function serializeHandle(row: QueryResultRow): CommunityHandle {
+  const protocolIssuance = serializeProtocolIssuance(row)
   return {
     id: withPrefix("ch", requiredString(row, "community_handle_id")),
     object: "community_handle",
@@ -211,12 +249,32 @@ function serializeHandle(row: QueryResultRow): CommunityHandle {
     settlement_tx_ref: stringOrNull(rowValue(row, "settlement_tx_ref")),
     lease_started_at: nullableUnixSeconds(stringOrNull(rowValue(row, "lease_started_at"))),
     lease_expires_at: nullableUnixSeconds(stringOrNull(rowValue(row, "lease_expires_at"))),
+    ...(protocolIssuance ? { protocol_issuance: protocolIssuance } : {}),
     created: unixSeconds(requiredString(row, "created_at")),
   }
 }
 
 function protocolIssuanceRequired(settings: HandleClaimSettings): boolean {
   return settings.issuance_mode === "spaces_subspace"
+}
+
+function namespaceSupportsSpacesSubspace(policy: Pick<NamespacePolicyRow, "display_label" | "normalized_label" | "route_family">): boolean {
+  return policy.route_family === "spaces"
+    || policy.display_label.startsWith("@")
+    || policy.normalized_label.startsWith("@")
+}
+
+function requireProtocolIssuanceSupport(
+  policy: Pick<NamespacePolicyRow, "display_label" | "normalized_label" | "route_family">,
+  settings: HandleClaimSettings,
+): boolean {
+  if (!protocolIssuanceRequired(settings)) {
+    return false
+  }
+  if (!namespaceSupportsSpacesSubspace(policy)) {
+    throw eligibilityFailed("Protocol-issued names require a Spaces namespace")
+  }
+  return true
 }
 
 function findTaprootProtocolOwnerWallet(
@@ -366,7 +424,7 @@ async function expireStaleHandleQuotes(input: {
 async function getNamespacePolicy(executor: Client | Transaction, communityId: string): Promise<NamespacePolicyRow | null> {
   const result = await executor.execute({
     sql: `
-      SELECT nb.community_id, nb.namespace_id, nb.display_label, nb.normalized_label,
+      SELECT nb.community_id, nb.namespace_id, nb.display_label, nb.normalized_label, nb.route_family,
              nhp.namespace_handle_policy_id, nhp.policy_template, nhp.pricing_model,
              nhp.claims_enabled, nhp.settings_json, nhp.updated_at
       FROM namespace_bindings nb
@@ -386,6 +444,7 @@ async function getNamespacePolicy(executor: Client | Transaction, communityId: s
     namespace_id: requiredString(row, "namespace_id"),
     display_label: requiredString(row, "display_label"),
     normalized_label: requiredString(row, "normalized_label"),
+    route_family: stringOrNull(rowValue(row, "route_family")),
     policy_template: (stringOrNull(rowValue(row, "policy_template")) ?? "standard") as CommunityHandlePolicy["policy_template"],
     pricing_model: stringOrNull(rowValue(row, "pricing_model")) as HandlePricingModel | null,
     claims_enabled: numberOrNull(rowValue(row, "claims_enabled")) !== 0,
@@ -421,11 +480,12 @@ async function getActiveHandleForUser(
 ): Promise<QueryResultRow | null> {
   const result = await executor.execute({
     sql: `
-      SELECT *
-      FROM community_handles
-      WHERE namespace_id = ?1
-        AND user_id = ?2
-        AND status = 'active'
+      SELECT ${HANDLE_PROTOCOL_ISSUANCE_SELECT}
+      FROM community_handles ch
+      ${HANDLE_PROTOCOL_ISSUANCE_JOIN}
+      WHERE ch.namespace_id = ?1
+        AND ch.user_id = ?2
+        AND ch.status = 'active'
       LIMIT 1
     `,
     args: [namespaceId, userId],
@@ -520,6 +580,12 @@ function optionalIntegerSetting(
   return numeric
 }
 
+function optionalIssuanceModeSetting(value: unknown): HandleClaimSettings["issuance_mode"] {
+  if (value == null || value === "app_internal") return undefined
+  if (value === "spaces_subspace") return "spaces_subspace"
+  throw badRequestError("issuance_mode must be app_internal or spaces_subspace")
+}
+
 function sanitizeSettings(input: CommunityHandlePolicySettings | null | undefined): HandleClaimSettings {
   if (!input) return {}
   const settings: HandleClaimSettings = {
@@ -529,7 +595,7 @@ function sanitizeSettings(input: CommunityHandlePolicySettings | null | undefine
     min_length: optionalIntegerSetting(input.min_length, "min_length", { min: 1 }),
     max_length: optionalIntegerSetting(input.max_length, "max_length", { min: 1 }),
     quote_ttl_seconds: optionalIntegerSetting(input.quote_ttl_seconds, "quote_ttl_seconds", { min: 60 }),
-    issuance_mode: input.issuance_mode === "spaces_subspace" ? "spaces_subspace" : undefined,
+    issuance_mode: optionalIssuanceModeSetting(input.issuance_mode),
     reserved_labels: Array.isArray(input.reserved_labels)
       ? input.reserved_labels.map((label) => normalizeCommunityHandleLabel(label).labelNormalized)
       : undefined,
@@ -685,6 +751,9 @@ export async function updateCommunityHandlePolicy(input: {
     const nextSettings = "settings" in input.body
       ? sanitizeSettings(input.body.settings ?? null)
       : parseSettings(current.settings_json)
+    if (protocolIssuanceRequired(nextSettings) && !namespaceSupportsSpacesSubspace(current)) {
+      throw badRequestError("spaces_subspace issuance requires a Spaces namespace")
+    }
     const updatedAt = nowIso()
     await db.client.execute({
       sql: `
@@ -755,12 +824,13 @@ export async function listCommunityHandles(input: {
     }
     const result = await db.client.execute({
       sql: `
-        SELECT *
-        FROM community_handles
-        WHERE community_id = ?1
-          AND namespace_id = ?2
-          AND (?3 IS NULL OR status = ?3)
-        ORDER BY created_at DESC
+        SELECT ${HANDLE_PROTOCOL_ISSUANCE_SELECT}
+        FROM community_handles ch
+        ${HANDLE_PROTOCOL_ISSUANCE_JOIN}
+        WHERE ch.community_id = ?1
+          AND ch.namespace_id = ?2
+          AND (?3 IS NULL OR ch.status = ?3)
+        ORDER BY ch.created_at DESC
         LIMIT 200
       `,
       args: [input.communityId, policy.namespace_id, status || null],
@@ -968,7 +1038,7 @@ export async function quoteCommunityHandle(input: {
     })
     const moneyPolicy = await getCommunityMoneyPolicy({ env: input.env, communityId: input.communityId })
     const quoteTtlSeconds = settings.quote_ttl_seconds ?? moneyPolicy.quote_ttl_seconds ?? DEFAULT_HANDLE_QUOTE_TTL_SECONDS
-    const requiresProtocolIssuance = protocolIssuanceRequired(settings)
+    const requiresProtocolIssuance = requireProtocolIssuanceSupport(policy, settings)
     const protocolOwner = requiresProtocolIssuance
       ? findTaprootProtocolOwnerWallet(await input.userRepository.getWalletAttachmentsByUserId(input.userId))
       : null
@@ -1118,14 +1188,78 @@ async function getExistingHandleForQuote(
 ): Promise<QueryResultRow | null> {
   const existingForQuote = await executor.execute({
     sql: `
-      SELECT *
-      FROM community_handles
-      WHERE handle_claim_quote_id = ?1
+      SELECT ${HANDLE_PROTOCOL_ISSUANCE_SELECT}
+      FROM community_handles ch
+      ${HANDLE_PROTOCOL_ISSUANCE_JOIN}
+      WHERE ch.handle_claim_quote_id = ?1
       LIMIT 1
     `,
     args: [quoteId],
   })
   return existingForQuote.rows[0] ?? null
+}
+
+async function createProtocolIssuanceForHandle(input: {
+  executor: Client | Transaction
+  communityId: string
+  namespaceId: string
+  namespaceNormalizedLabel: string
+  communityHandleId: string
+  labelNormalized: string
+  scriptPubkeyHex: string
+  now: string
+}): Promise<void> {
+  const parentSpace = parentSpaceFromNamespaceLabel(input.namespaceNormalizedLabel)
+  const sname = protocolSnameForHandle(input.labelNormalized, parentSpace)
+  await input.executor.execute({
+    sql: `
+      INSERT INTO community_handle_protocol_issuances (
+        community_handle_protocol_issuance_id,
+        community_handle_id,
+        protocol_issuance_batch_id,
+        community_id,
+        namespace_id,
+        public_status,
+        parent_space,
+        sname,
+        script_pubkey_hex,
+        cert_ref,
+        certificate_payload_ref,
+        error_code,
+        error_message,
+        created_at,
+        updated_at,
+        issued_at
+      ) VALUES (
+        ?1,
+        ?2,
+        NULL,
+        ?3,
+        ?4,
+        'issuing',
+        ?5,
+        ?6,
+        ?7,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        ?8,
+        ?8,
+        NULL
+      )
+    `,
+    args: [
+      makeId("chpi"),
+      input.communityHandleId,
+      input.communityId,
+      input.namespaceId,
+      parentSpace,
+      sname,
+      input.scriptPubkeyHex,
+      input.now,
+    ],
+  })
 }
 
 async function getClaimQuote(
@@ -1239,7 +1373,7 @@ async function assertClaimQuoteStillClaimable(input: {
     labelNormalized,
     labelDisplay,
     priceCents: requiredNumber(input.quote, "price_cents"),
-    protocolIssuanceRequired: protocolIssuanceRequired(settings),
+    protocolIssuanceRequired: requireProtocolIssuanceSupport(policy, settings),
   }
 }
 
@@ -1269,7 +1403,7 @@ export async function claimCommunityHandle(input: {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   let priceCents = 0
   let requiresProtocolIssuance = false
-  let protocolOwnerWalletAttachmentId: string | null = null
+  let protocolOwner: { walletAttachmentId: string; scriptPubkeyHex: string } | null = null
   try {
     const quote = await getClaimQuote(db.client, {
       quoteId,
@@ -1296,11 +1430,11 @@ export async function claimCommunityHandle(input: {
   }
 
   if (requiresProtocolIssuance) {
-    protocolOwnerWalletAttachmentId = (await requireProtocolOwnerWalletForClaim({
+    protocolOwner = await requireProtocolOwnerWalletForClaim({
       body: input.body,
       userId: input.userId,
       userRepository: input.userRepository,
-    })).walletAttachmentId
+    })
   }
 
   if (priceCents > 0) {
@@ -1313,14 +1447,6 @@ export async function claimCommunityHandle(input: {
     })
   }
   const paymentVerified = priceCents > 0
-
-  if (requiresProtocolIssuance) {
-    protocolOwnerWalletAttachmentId = (await requireProtocolOwnerWalletForClaim({
-      body: input.body,
-      userId: input.userId,
-      userRepository: input.userRepository,
-    })).walletAttachmentId
-  }
 
   const writeDb = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
@@ -1348,13 +1474,13 @@ export async function claimCommunityHandle(input: {
         now,
         paymentVerified,
       })
-      if (checked.protocolIssuanceRequired && !protocolOwnerWalletAttachmentId) {
+      if (checked.protocolIssuanceRequired && !protocolOwner) {
         throw eligibilityFailed("protocol_owner_wallet_attachment is required for protocol-issued names", {
           protocol_owner_wallet_attachment: "missing",
         })
       }
       const persistedProtocolOwnerWalletAttachmentId = checked.protocolIssuanceRequired
-        ? protocolOwnerWalletAttachmentId
+        ? protocolOwner?.walletAttachmentId ?? null
         : null
 
       const handleId = makeId("ch")
@@ -1391,6 +1517,22 @@ export async function claimCommunityHandle(input: {
         ],
       })
 
+      if (checked.protocolIssuanceRequired) {
+        if (!protocolOwner) {
+          throw internalError("Protocol owner wallet validation result is missing")
+        }
+        await createProtocolIssuanceForHandle({
+          executor: tx,
+          communityId: input.communityId,
+          namespaceId: checked.policy.namespace_id,
+          namespaceNormalizedLabel: checked.policy.normalized_label,
+          communityHandleId: handleId,
+          labelNormalized: checked.labelNormalized,
+          scriptPubkeyHex: protocolOwner.scriptPubkeyHex,
+          now,
+        })
+      }
+
       await tx.execute({
         sql: `
           UPDATE community_handle_claim_quotes
@@ -1403,7 +1545,13 @@ export async function claimCommunityHandle(input: {
       })
 
       const handleResult = await tx.execute({
-        sql: `SELECT * FROM community_handles WHERE community_handle_id = ?1 LIMIT 1`,
+        sql: `
+          SELECT ${HANDLE_PROTOCOL_ISSUANCE_SELECT}
+          FROM community_handles ch
+          ${HANDLE_PROTOCOL_ISSUANCE_JOIN}
+          WHERE ch.community_handle_id = ?1
+          LIMIT 1
+        `,
         args: [handleId],
       })
       const handle = handleResult.rows[0]

@@ -39,6 +39,7 @@ import {
 import {
   requireMemberAccess,
 } from "./post-access"
+import { enforceCommunityActionGate } from "../communities/membership/eligibility-service"
 import {
   ANY_COMMUNITY_ROLE,
   hasCommunityRole,
@@ -52,6 +53,7 @@ import { analysisBlocked, badRequestError, eligibilityFailed, notFoundError } fr
 import { makeId, nowIso } from "../helpers"
 import type { Env } from "../../env"
 import type { CreatePostRequest, Post } from "../../types"
+import type { AltchaProofInput } from "../verification/altcha-provider"
 import { decodePublicSongArtifactBundleId, publicPostId } from "../public-ids"
 import {
   createModerationCase,
@@ -163,6 +165,7 @@ export async function createPost(input: {
   communityId: string
   body: CreatePostRequest
   bypassAuthorAccessChecks?: boolean
+  altchaProof?: AltchaProofInput
   userRepository: UserRepository
   profileRepository: ProfileRepository
   communityRepository: PostServiceCommunityRepository
@@ -180,6 +183,15 @@ export async function createPost(input: {
     const postAnalysisProvider = resolvePostAnalysisProvider(input.env)
     if (!input.bypassAuthorAccessChecks) {
       await requireMemberAccess(db.client, input.communityId, input.userId)
+      await enforceCommunityActionGate({
+        env: input.env,
+        client: db.client,
+        userId: input.userId,
+        userRepository: input.userRepository,
+        communityId: input.communityId,
+        altchaScope: "post_create",
+        altchaProof: input.altchaProof,
+      })
     }
 
     const idempotencyKey = input.body.idempotency_key?.trim() ?? ""

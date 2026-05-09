@@ -6,15 +6,21 @@ on:
       - ".github/workflows/api-ci.yml"
       - "services/api/**"
       - "services/cli/**"
+      - "services/community-protocol-issuer/**"
+      - "services/community-protocol-prover-runpod/**"
       - "services/community-provision-operator/**"
       - "services/contracts/**"
+      - "services/shared/**"
   push:
     paths:
       - ".github/workflows/api-ci.yml"
       - "services/api/**"
       - "services/cli/**"
+      - "services/community-protocol-issuer/**"
+      - "services/community-protocol-prover-runpod/**"
       - "services/community-provision-operator/**"
       - "services/contracts/**"
+      - "services/shared/**"
   workflow_dispatch:
 
 permissions:
@@ -40,6 +46,14 @@ jobs:
       - name: Run repo hygiene checks
         run: node scripts/check-repo-hygiene.mjs
 
+      - name: Install shared dependencies
+        working-directory: services/shared
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck shared package
+        working-directory: services/shared
+        run: bun run check
+
       - name: Install contracts dependencies
         working-directory: services/contracts
         run: bun install --frozen-lockfile
@@ -63,6 +77,10 @@ jobs:
           repository: pirate-social-club/core
           path: core
 
+      - name: Install community provision operator dependencies
+        working-directory: services/community-provision-operator
+        run: bun install --frozen-lockfile
+
       - name: Check generated community migration manifest freshness
         working-directory: services/community-provision-operator
         env:
@@ -70,6 +88,14 @@ jobs:
         run: |
           bun run generate:migrations
           git diff --exit-code -- src/generated/community-migrations.ts
+
+      - name: Typecheck community provision operator
+        working-directory: services/community-provision-operator
+        run: bun run check
+
+      - name: Run community provision operator tests
+        working-directory: services/community-provision-operator
+        run: bun run test
 
       - name: Install API dependencies
         working-directory: services/api
@@ -86,6 +112,10 @@ jobs:
       - name: Run API tests
         working-directory: services/api
         run: bun run test
+
+      - name: Run API coverage report
+        working-directory: services/api
+        run: bun run coverage
 
   cli:
     runs-on: ubuntu-latest
@@ -114,3 +144,42 @@ jobs:
       - name: Run CLI tests
         working-directory: services/cli
         run: bun run test
+
+  community-protocol-issuer:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.21
+
+      - name: Install issuer dependencies
+        working-directory: services/community-protocol-issuer
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck issuer
+        working-directory: services/community-protocol-issuer
+        run: bun run check
+
+      - name: Run issuer tests
+        working-directory: services/community-protocol-issuer
+        run: bun run test
+
+  community-protocol-prover-runpod:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run prover tests
+        run: python -m unittest discover -s services/community-protocol-prover-runpod -p 'test_*.py'

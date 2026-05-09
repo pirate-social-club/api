@@ -9,6 +9,7 @@ import {
 import { openCommunityDb } from "../community-db-factory"
 import type { CommunityDatabaseBindingRepository } from "../db-community-repository"
 import { getPostById } from "../../posts/community-post-store"
+import { isPubliclyReadablePost } from "../../posts/post-access"
 import { fetchSongArtifactBytes } from "../../song-artifacts/song-artifact-storage"
 import { sha256Hex } from "../../crypto"
 import type { UserRepository } from "../../auth/repositories"
@@ -20,11 +21,13 @@ import type { AssetRow } from "./row-types"
 import {
   buildAssetContentPath,
   getActiveEntitlementForBuyer,
+  getActiveEntitlementForBuyerIdentity,
   getAssetRow,
   requireCommunityMember,
   resolvePrimaryWalletAddress,
   serializeAsset,
 } from "./shared"
+import type { BuyerIdentity } from "./buyer-identity"
 import {
   buildStoryCdrAccessPackage,
   fetchPrimaryAssetContent,
@@ -53,6 +56,10 @@ function shouldAttemptStoryRoyaltyRegistration(input: {
     return false
   }
   return input.assetKind !== "song_audio" || input.hasSongBundle
+}
+
+function buildPublicAssetContentPath(communityId: string, assetId: string): string {
+  return `/public-communities/${encodeURIComponent(`com_${communityId}`)}/assets/${encodeURIComponent(`asset_${assetId}`)}/content`
 }
 
 type AuthorizedAssetAccess = {
@@ -416,7 +423,7 @@ export async function resolveCommunityAssetAccess(input: {
         access_granted: true,
         decision_reason: privilegedReason ?? "public",
         delivery_kind: "primary_content_ref",
-        delivery_ref: buildAssetContentPath(asset.community_id, asset.asset_id),
+        delivery_ref: buildPublicAssetContentPath(asset.community_id, asset.asset_id),
         story_cdr_access: null,
       }
     }
@@ -495,6 +502,125 @@ export async function resolveCommunityAssetAccess(input: {
       delivery_ref: null,
       story_cdr_access: null,
     }
+  } finally {
+    db.close()
+  }
+}
+
+export async function resolvePublicCommunityAssetAccess(input: {
+  env: Env
+  buyer: BuyerIdentity
+  communityId: string
+  assetId: string
+  communityRepository: CommunityDatabaseBindingRepository
+}): Promise<AssetAccessResponse> {
+  if (input.buyer.kind !== "wallet") {
+    throw badRequestError("Wallet buyer is required")
+  }
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  try {
+    const asset = await getAssetRow(db.client, input.communityId, input.assetId)
+    if (!asset) {
+      throw notFoundError("Asset not found")
+    }
+    const post = await getPostById(db.client, asset.source_post_id)
+    if (!post || !isPubliclyReadablePost(post)) {
+      throw notFoundError("Asset not found")
+    }
+
+    if (asset.access_mode === "public") {
+      return {
+        asset: `asset_${asset.asset_id}`,
+        community: `com_${asset.community_id}`,
+        source_post: `post_${asset.source_post_id}`,
+        access_mode: asset.access_mode,
+        source_post_status: "published",
+        story_status: asset.story_status,
+        locked_delivery_status: asset.locked_delivery_status,
+        access_granted: true,
+        decision_reason: "public",
+        delivery_kind: "primary_content_ref",
+        delivery_ref: buildAssetContentPath(asset.community_id, asset.asset_id),
+        story_cdr_access: null,
+      }
+    }
+
+    const entitlement = await getActiveEntitlementForBuyerIdentity(
+      db.client,
+      input.communityId,
+      input.buyer,
+      asset.asset_id,
+    )
+    if (entitlement && asset.locked_delivery_status === "ready") {
+      return {
+        asset: `asset_${asset.asset_id}`,
+        community: `com_${asset.community_id}`,
+        source_post: `post_${asset.source_post_id}`,
+        access_mode: asset.access_mode,
+        source_post_status: "published",
+        story_status: asset.story_status,
+        locked_delivery_status: asset.locked_delivery_status,
+        access_granted: true,
+        decision_reason: "purchase_entitlement",
+        delivery_kind: "story_cdr_ref",
+        delivery_ref: buildPublicAssetContentPath(asset.community_id, asset.asset_id),
+        story_cdr_access: await buildStoryCdrAccessPackage({
+          env: input.env,
+          asset,
+          callerWalletAddress: input.buyer.walletAddress,
+          userId: `wallet:${input.buyer.chainRef}:${input.buyer.walletAddressNormalized}`,
+          decisionReason: "purchase_entitlement",
+          ciphertextRef: buildPublicAssetContentPath(asset.community_id, asset.asset_id),
+        }),
+      }
+    }
+
+    return {
+      asset: `asset_${asset.asset_id}`,
+      community: `com_${asset.community_id}`,
+      source_post: `post_${asset.source_post_id}`,
+      access_mode: asset.access_mode,
+      source_post_status: "published",
+      story_status: asset.story_status,
+      locked_delivery_status: asset.locked_delivery_status,
+      access_granted: false,
+      decision_reason: asset.locked_delivery_status === "ready" ? "purchase_required" : "delivery_pending",
+      delivery_kind: null,
+      delivery_ref: null,
+      story_cdr_access: null,
+    }
+  } finally {
+    db.close()
+  }
+}
+
+export async function fetchPublicCommunityAssetContent(input: {
+  env: Env
+  communityId: string
+  assetId: string
+  communityRepository: CommunityDatabaseBindingRepository
+}): Promise<Response> {
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  try {
+    const asset = await getAssetRow(db.client, input.communityId, input.assetId)
+    if (!asset) {
+      throw notFoundError("Asset content not found")
+    }
+    const post = await getPostById(db.client, asset.source_post_id)
+    if (!post || !isPubliclyReadablePost(post)) {
+      throw notFoundError("Asset content not found")
+    }
+    if (asset.access_mode === "public" || !asset.locked_delivery_storage_ref) {
+      return await fetchPrimaryAssetContent({
+        env: input.env,
+        communityId: input.communityId,
+        storageRef: asset.primary_content_ref,
+      })
+    }
+    return await fetchSongArtifactBytes({
+      env: input.env,
+      objectKey: asset.locked_delivery_storage_ref,
+    })
   } finally {
     db.close()
   }

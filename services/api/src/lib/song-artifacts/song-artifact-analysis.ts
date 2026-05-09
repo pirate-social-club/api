@@ -24,6 +24,12 @@ type AlignmentOutcome = {
   timedLyrics: Record<string, unknown> | null
 }
 
+const SONG_ANALYSIS_SLOW_STEP_MS = 10_000
+const SONG_ANALYSIS_STALLED_STEP_MS = 45_000
+const DEFAULT_OPENROUTER_TIMEOUT_MS = 20_000
+const DEFAULT_ACRCLOUD_TIMEOUT_MS = 30_000
+const DEFAULT_ELEVENLABS_TIMEOUT_MS = 120_000
+
 export type SongBundleAnalysisResult = {
   analysisState: Post["analysis_state"]
   contentSafetyState: Post["content_safety_state"]
@@ -38,6 +44,59 @@ export type SongBundleAnalysisResult = {
 
 function trimEnv(value: string | undefined): string {
   return String(value || "").trim()
+}
+
+function providerTimeoutMs(value: string | undefined, fallbackMs: number): number {
+  const parsed = Number.parseInt(trimEnv(value) || "", 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallbackMs
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+async function withSongAnalysisStep<T>(
+  step: string,
+  fields: Record<string, unknown>,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const startedAt = Date.now()
+  console.info("[song-artifacts] analysis step started", { ...fields, step })
+  const slowTimer = setTimeout(() => {
+    console.warn("[song-artifacts] analysis step still pending", {
+      ...fields,
+      elapsed_ms: Date.now() - startedAt,
+      step,
+    })
+  }, SONG_ANALYSIS_SLOW_STEP_MS)
+  const stalledTimer = setTimeout(() => {
+    console.warn("[song-artifacts] analysis step appears stalled", {
+      ...fields,
+      elapsed_ms: Date.now() - startedAt,
+      step,
+    })
+  }, SONG_ANALYSIS_STALLED_STEP_MS)
+
+  try {
+    const result = await operation()
+    console.info("[song-artifacts] analysis step completed", {
+      ...fields,
+      elapsed_ms: Date.now() - startedAt,
+      step,
+    })
+    return result
+  } catch (error) {
+    console.error("[song-artifacts] analysis step failed", {
+      ...fields,
+      elapsed_ms: Date.now() - startedAt,
+      message: errorMessage(error),
+      step,
+    })
+    throw error
+  } finally {
+    clearTimeout(slowTimer)
+    clearTimeout(stalledTimer)
+  }
 }
 
 function resolveProviderLyricsOutcome(result: Record<string, unknown>): {
@@ -94,14 +153,17 @@ async function classifyLyricsAgeGate(input: {
 
   const baseUrl = trimEnv(input.env.OPENROUTER_BASE_URL) || "https://openrouter.ai/api/v1"
   const model = trimEnv(input.env.OPENROUTER_MODEL) || "google/gemini-3.1-flash-lite-preview"
-  const timeoutMs = Number.parseInt(trimEnv(input.env.OPENROUTER_TIMEOUT_MS) || "", 10)
+  const timeoutMs = providerTimeoutMs(input.env.OPENROUTER_TIMEOUT_MS, DEFAULT_OPENROUTER_TIMEOUT_MS)
   const controller = new AbortController()
-  const timer = Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? setTimeout(() => controller.abort(), timeoutMs)
-    : null
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
-    const response = await fetch(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
+    const response = await withSongAnalysisStep("openrouter lyrics classification request", {
+      lyrics_length: input.lyrics.length,
+      model,
+      provider: "openrouter",
+      timeout_ms: timeoutMs,
+    }, () => fetch(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
       method: "POST",
       headers: {
         authorization: `Bearer ${apiKey}`,
@@ -148,7 +210,7 @@ async function classifyLyricsAgeGate(input: {
         ],
       }),
       signal: controller.signal,
-    })
+    }))
     if (!response.ok) {
       return {
         provider: "openrouter",
@@ -261,23 +323,41 @@ async function identifyAudioWithAcrCloud(input: {
   const accessSecret = trimEnv(input.env.ACRCLOUD_ACCESS_SECRET)
   const host = trimEnv(input.env.ACRCLOUD_HOST)
   if (!accessKey || !accessSecret || !host || !input.upload.storage_object_key) {
+    console.info("[song-artifacts] ACRCloud identification skipped", {
+      has_access_key: Boolean(accessKey),
+      has_access_secret: Boolean(accessSecret),
+      has_host: Boolean(host),
+      has_storage_object_key: Boolean(input.upload.storage_object_key),
+      provider: "acrcloud",
+      upload: input.upload.id,
+    })
     return {
       provider: "acrcloud",
       error: "missing_configuration",
     }
   }
+  const storageObjectKey = input.upload.storage_object_key
 
   const path = trimEnv(input.env.ACRCLOUD_IDENTIFY_PATH) || "/v1/identify"
   const endpoint = `https://${host.replace(/^https?:\/\//, "").replace(/\/+$/, "")}${path.startsWith("/") ? path : `/${path}`}`
   const timestamp = Math.floor(Date.now() / 1000).toString()
   const stringToSign = ["POST", path.startsWith("/") ? path : `/${path}`, accessKey, "audio", "1", timestamp].join("\n")
   const signature = await buildAcrCloudSignature(accessSecret, stringToSign)
-  const contentResponse = await fetchSongArtifactBytes({
+  const contentResponse = await withSongAnalysisStep("acrcloud load audio sample", {
+    content_hash_present: Boolean(input.upload.content_hash),
+    filename: input.upload.filename,
+    provider: "acrcloud",
+    size_bytes: input.upload.size_bytes,
+    upload: input.upload.id,
+  }, () => fetchSongArtifactBytes({
     env: input.env,
-    objectKey: input.upload.storage_object_key,
-  })
+    objectKey: storageObjectKey,
+  }))
   const contentType = input.upload.mime_type || "application/octet-stream"
-  const content = await contentResponse.arrayBuffer()
+  const content = await withSongAnalysisStep("acrcloud read audio sample", {
+    provider: "acrcloud",
+    upload: input.upload.id,
+  }, () => contentResponse.arrayBuffer())
   const body = new FormData()
   body.set("access_key", accessKey)
   body.set("sample_bytes", String(content.byteLength))
@@ -287,18 +367,22 @@ async function identifyAudioWithAcrCloud(input: {
   body.set("signature_version", "1")
   body.set("sample", new File([content], input.upload.filename || "audio.bin", { type: contentType }))
 
-  const timeoutMs = Number.parseInt(trimEnv(input.env.ACRCLOUD_TIMEOUT_MS) || "", 10)
+  const timeoutMs = providerTimeoutMs(input.env.ACRCLOUD_TIMEOUT_MS, DEFAULT_ACRCLOUD_TIMEOUT_MS)
   const controller = new AbortController()
-  const timer = Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? setTimeout(() => controller.abort(), timeoutMs)
-    : null
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
-    const response = await fetch(endpoint, {
+    const response = await withSongAnalysisStep("acrcloud identify request", {
+      endpoint_host: host.replace(/^https?:\/\//, "").replace(/\/+$/, ""),
+      provider: "acrcloud",
+      sample_bytes: content.byteLength,
+      timeout_ms: timeoutMs,
+      upload: input.upload.id,
+    }, () => fetch(endpoint, {
       method: "POST",
       body,
       signal: controller.signal,
-    })
+    }))
     if (!response.ok) {
       return {
         provider: "acrcloud",
@@ -372,17 +456,21 @@ async function alignLyricsWithElevenLabs(input: {
   const apiKey = trimEnv(input.env.ELEVENLABS_API_KEY)
   const url = trimEnv(input.env.ELEVENLABS_FORCE_ALIGNMENT_URL) || "https://api.elevenlabs.io/v1/forced-alignment"
   if (!apiKey || !url) {
+    console.info("[song-artifacts] ElevenLabs forced alignment skipped", {
+      has_api_key: Boolean(apiKey),
+      has_url: Boolean(url),
+      provider: "elevenlabs",
+      upload: input.primaryAudioUpload.id,
+    })
     return {
       provider: "elevenlabs",
       error: "missing_configuration",
     }
   }
 
-  const timeoutMs = Number.parseInt(trimEnv(input.env.ELEVENLABS_TIMEOUT_MS) || "", 10)
+  const timeoutMs = providerTimeoutMs(input.env.ELEVENLABS_TIMEOUT_MS, DEFAULT_ELEVENLABS_TIMEOUT_MS)
   const controller = new AbortController()
-  const timer = Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? setTimeout(() => controller.abort(), timeoutMs)
-    : null
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
     if (!input.primaryAudioUpload.storage_object_key) {
@@ -391,12 +479,21 @@ async function alignLyricsWithElevenLabs(input: {
         error: "missing_audio_object",
       }
     }
+    const storageObjectKey = input.primaryAudioUpload.storage_object_key
 
-    const audioResponse = await fetchSongArtifactBytes({
+    const audioResponse = await withSongAnalysisStep("elevenlabs load alignment audio", {
+      filename: input.primaryAudioUpload.filename,
+      provider: "elevenlabs",
+      size_bytes: input.primaryAudioUpload.size_bytes,
+      upload: input.primaryAudioUpload.id,
+    }, () => fetchSongArtifactBytes({
       env: input.env,
-      objectKey: input.primaryAudioUpload.storage_object_key,
-    })
-    const audioBytes = await audioResponse.arrayBuffer()
+      objectKey: storageObjectKey,
+    }))
+    const audioBytes = await withSongAnalysisStep("elevenlabs read alignment audio", {
+      provider: "elevenlabs",
+      upload: input.primaryAudioUpload.id,
+    }, () => audioResponse.arrayBuffer())
     const form = new FormData()
     form.set(
       "file",
@@ -408,14 +505,20 @@ async function alignLyricsWithElevenLabs(input: {
     )
     form.set("text", input.lyrics)
 
-    const response = await fetch(url, {
+    const response = await withSongAnalysisStep("elevenlabs forced alignment request", {
+      audio_bytes: audioBytes.byteLength,
+      lyrics_length: input.lyrics.length,
+      provider: "elevenlabs",
+      timeout_ms: timeoutMs,
+      upload: input.primaryAudioUpload.id,
+    }, () => fetch(url, {
       method: "POST",
       headers: {
         "xi-api-key": apiKey,
       },
       body: form,
       signal: controller.signal,
-    })
+    }))
     if (!response.ok) {
       return {
         provider: "elevenlabs",
@@ -513,22 +616,48 @@ export async function analyzeSongBundle(input: {
   lyrics: string
   primaryAudioUpload: SongArtifactUpload
 }): Promise<SongBundleAnalysisResult> {
-  const lyricsModeration = await evaluateLyricsModeration({
+  const startedAt = Date.now()
+  console.info("[song-artifacts] song analysis started", {
+    lyrics_length: input.lyrics.length,
+    primary_audio_upload: input.primaryAudioUpload.id,
+    primary_audio_size_bytes: input.primaryAudioUpload.size_bytes,
+  })
+  const lyricsModeration = await withSongAnalysisStep("lyrics moderation", {
+    lyrics_length: input.lyrics.length,
+    primary_audio_upload: input.primaryAudioUpload.id,
+  }, () => evaluateLyricsModeration({
     env: input.env,
     lyrics: input.lyrics,
-  })
-  const audioIdentification = await evaluateAudioIdentification({
+  }))
+  const audioIdentification = await withSongAnalysisStep("audio identification", {
+    primary_audio_upload: input.primaryAudioUpload.id,
+  }, () => evaluateAudioIdentification({
     env: input.env,
     primaryAudioUpload: input.primaryAudioUpload,
-  })
-  const alignment = await evaluateAlignment({
+  }))
+  const alignment = await withSongAnalysisStep("forced alignment", {
+    lyrics_length: input.lyrics.length,
+    primary_audio_upload: input.primaryAudioUpload.id,
+  }, () => evaluateAlignment({
     env: input.env,
     lyrics: input.lyrics,
     primaryAudioUpload: input.primaryAudioUpload,
+  }))
+  const analysisState = mergeAnalysisStates(lyricsModeration.analysisState, audioIdentification.analysisState)
+  console.info("[song-artifacts] song analysis completed", {
+    alignment_error: alignment.alignmentError,
+    alignment_status: alignment.alignmentStatus,
+    analysis_state: analysisState,
+    audio_identification_error: audioIdentification.moderationError,
+    audio_identification_status: audioIdentification.moderationStatus,
+    elapsed_ms: Date.now() - startedAt,
+    lyrics_moderation_error: lyricsModeration.moderationError,
+    lyrics_moderation_status: lyricsModeration.moderationStatus,
+    primary_audio_upload: input.primaryAudioUpload.id,
   })
 
   return {
-    analysisState: mergeAnalysisStates(lyricsModeration.analysisState, audioIdentification.analysisState),
+    analysisState,
     contentSafetyState: lyricsModeration.contentSafetyState,
     ageGatePolicy: lyricsModeration.ageGatePolicy,
     moderationStatus:
@@ -540,7 +669,7 @@ export async function analyzeSongBundle(input: {
       provider: "song_bundle_analysis",
       lyrics: lyricsModeration.moderationResult,
       audio_identification: audioIdentification.moderationResult,
-      analysis_state: mergeAnalysisStates(lyricsModeration.analysisState, audioIdentification.analysisState),
+      analysis_state: analysisState,
       content_safety_state: lyricsModeration.contentSafetyState,
       age_gate_policy: lyricsModeration.ageGatePolicy,
     },

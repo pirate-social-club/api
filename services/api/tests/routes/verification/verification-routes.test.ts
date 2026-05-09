@@ -1,10 +1,16 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { solveChallenge, type Payload } from "altcha-lib"
+import { deriveKey } from "altcha-lib/algorithms/pbkdf2"
 import { app } from "../../../src/index"
 import { json, createRouteTestContext, resetRuntimeCaches } from "../../helpers"
 import { mintUpstreamJwt } from "../../helpers"
 import { setSelfProviderForTests } from "../../../src/lib/verification/self-provider"
 import { setVeryProviderForTests } from "../../../src/lib/verification/very-provider"
 import { setPassportProviderForTests } from "../../../src/lib/verification/passport-provider"
+import {
+  createAltchaChallenge,
+  verifyAndConsumeAltchaProof,
+} from "../../../src/lib/verification/altcha-provider"
 import { prepareVerifiedNamespace } from "../communities/community-routes-test-helpers"
 import {
   exchangeJwt,
@@ -26,6 +32,148 @@ afterEach(async () => {
 })
 
 describe("verification routes", () => {
+  test("ALTCHA challenge endpoint binds scope and action, purges expired state, and rate limits", async () => {
+    const ctx = await createRouteTestContext({
+      ALTCHA_HMAC_SECRET: "test-altcha-secret",
+      ALTCHA_HMAC_KEY_SECRET: "test-altcha-key-secret",
+      ALTCHA_CHALLENGE_RATE_LIMIT: "2",
+      ALTCHA_CHALLENGE_RATE_LIMIT_WINDOW_SECONDS: "60",
+    })
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-altcha-user")
+    const actorUserId = session.userId
+    const oldTimestamp = "2026-01-01T00:00:00.000Z"
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO altcha_used_challenges (
+          challenge_hash, actor_user_id, scope, action_ref, used_at, expires_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+      `,
+      args: ["expired-altcha-challenge", actorUserId, "community_join", "community:cmt_expired", oldTimestamp, oldTimestamp],
+    })
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO altcha_challenge_rate_limits (
+          actor_user_id, window_start, request_count, updated_at
+        ) VALUES (?1, ?2, ?3, ?4)
+      `,
+      args: [actorUserId, oldTimestamp, 1, oldTimestamp],
+    })
+
+    const requestChallenge = () => app.request(
+      "http://pirate.test/verification/altcha/challenge?scope=community_join&action=community:cmt_altcha",
+      { headers: { authorization: `Bearer ${session.accessToken}` } },
+      ctx.env,
+    )
+
+    const first = await requestChallenge()
+    expect(first.status).toBe(200)
+    const firstBody = await json(first) as {
+      parameters?: { algorithm?: string; data?: { actor?: string; scope?: string; action?: string } }
+      signature?: string
+    }
+    expect(firstBody.parameters?.algorithm).toBe("PBKDF2/SHA-256")
+    expect(typeof firstBody.signature).toBe("string")
+    expect(firstBody.parameters?.data).toEqual({
+      actor: actorUserId,
+      scope: "community_join",
+      action: "community:cmt_altcha",
+    })
+
+    const expiredChallengeRows = await ctx.client.execute({
+      sql: "SELECT COUNT(*) AS count FROM altcha_used_challenges WHERE challenge_hash = ?1",
+      args: ["expired-altcha-challenge"],
+    })
+    expect(Number(expiredChallengeRows.rows[0]?.count ?? 0)).toBe(0)
+    const staleLimitRows = await ctx.client.execute({
+      sql: "SELECT COUNT(*) AS count FROM altcha_challenge_rate_limits WHERE window_start = ?1",
+      args: [oldTimestamp],
+    })
+    expect(Number(staleLimitRows.rows[0]?.count ?? 0)).toBe(0)
+
+    const second = await requestChallenge()
+    expect(second.status).toBe(200)
+
+    const third = await requestChallenge()
+    expect(third.status).toBe(429)
+    const thirdBody = await json(third) as { code: string; details?: { limit?: number; window_seconds?: number } }
+    expect(thirdBody.code).toBe("rate_limited")
+    expect(thirdBody.details?.limit).toBe(2)
+    expect(thirdBody.details?.window_seconds).toBe(60)
+  })
+
+  test("ALTCHA proofs verify once and reject replay or binding mismatch", async () => {
+    const ctx = await createRouteTestContext({
+      ALTCHA_HMAC_SECRET: "test-altcha-secret",
+      ALTCHA_HMAC_KEY_SECRET: "test-altcha-key-secret",
+      ALTCHA_POW_COST: "1",
+      ALTCHA_POW_COUNTER_MIN: "1",
+      ALTCHA_POW_COUNTER_MAX: "2",
+    })
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-altcha-proof-user")
+    const challenge = await createAltchaChallenge({
+      env: ctx.env,
+      actorUserId: session.userId,
+      scope: "community_join",
+      action: "community:cmt_altcha",
+    })
+    const solution = await solveChallenge({ challenge, deriveKey })
+    if (!solution) {
+      throw new Error("ALTCHA challenge did not solve")
+    }
+    const payload = btoa(JSON.stringify({ challenge, solution } satisfies Payload))
+
+    const verified = await verifyAndConsumeAltchaProof({
+      env: ctx.env,
+      actorUserId: session.userId,
+      proof: {
+        payload,
+        scope: "community_join",
+        action: "community:cmt_altcha",
+      },
+    })
+    expect(verified).toEqual({ verified: true })
+
+    const replayed = await verifyAndConsumeAltchaProof({
+      env: ctx.env,
+      actorUserId: session.userId,
+      proof: {
+        payload,
+        scope: "community_join",
+        action: "community:cmt_altcha",
+      },
+    })
+    expect(replayed).toEqual({ verified: false, reason: "replayed" })
+
+    const mismatchChallenge = await createAltchaChallenge({
+      env: ctx.env,
+      actorUserId: session.userId,
+      scope: "post_create",
+      action: "community:cmt_altcha",
+    })
+    const mismatchSolution = await solveChallenge({ challenge: mismatchChallenge, deriveKey })
+    if (!mismatchSolution) {
+      throw new Error("ALTCHA mismatch challenge did not solve")
+    }
+    const mismatchPayload = btoa(JSON.stringify({
+      challenge: mismatchChallenge,
+      solution: mismatchSolution,
+    } satisfies Payload))
+    const mismatch = await verifyAndConsumeAltchaProof({
+      env: ctx.env,
+      actorUserId: session.userId,
+      proof: {
+        payload: mismatchPayload,
+        scope: "community_join",
+        action: "community:cmt_altcha",
+      },
+    })
+    expect(mismatch).toEqual({ verified: false, reason: "binding_mismatch" })
+  })
+
   test("verification session start accepts self gender capability requests", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup

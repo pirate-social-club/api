@@ -19,6 +19,8 @@ Current route surface:
   `GET /profiles/me`, `PATCH /profiles/me`, handle rename/upgrade/sync endpoints under `/profiles/me/*`, `GET /profiles/{user_id}`
 - public profile and agent routes
   `GET /public-profiles/{handle_label}`, `GET /public-agents/{handle_label}`
+- public name routes
+  `POST /public-names/quotes`, `POST /public-names/claims`, `GET /public-names/{label}/status`
 - media routes
   `POST /profile-media`, `POST /community-media`
 - jobs and posts
@@ -28,7 +30,7 @@ Current route surface:
 - agents
   ownership pairing/session, user-agent handle, delegated credential, and public resolution endpoints
 - communities
-  create/read/preview, join eligibility, join, namespace attach, pending namespace session, rules, gates, safety, posts, money policy, pricing policy, asset access/content, listings, purchases, purchase quotes/settlements, song artifact uploads, and song artifact bundles under `/communities/{community_id}/*`
+  create/read/preview, join eligibility, join, namespace attach, pending namespace session, rules, gates, safety, role/admin endpoints, namespace handle policy/quote/claim/admin, posts, moderation cases, money policy, pricing policy, asset access/content, listings, purchases, purchase quotes/settlements, live rooms, song artifact uploads, and song artifact bundles under `/communities/{community_id}/*`
 
 Current auth support:
 
@@ -66,8 +68,16 @@ Shared primitives that are intentionally cross-domain stay at the `src/lib/` roo
 
 Route registration now lives under `src/routes/`. The community router is intentionally split into:
 
-- `communities-core.ts`
+- `communities-create-routes.ts`
+- `communities-membership-routes.ts`
+- `communities-settings-routes.ts`
+- `communities-admin-routes.ts`
+- `communities-role-routes.ts`
+- `communities-handles-routes.ts`
+- `communities-content-routes.ts`
+- `communities-moderation-routes.ts`
 - `communities-commerce.ts`
+- `communities-live-rooms.ts`
 - `communities-song-artifacts.ts`
 
 with shared request helpers in `communities-route-helpers.ts`.
@@ -123,6 +133,16 @@ Enforcement rules:
 - public read surfaces only return `visibility = 'public'`
   This includes `GET /public-posts/{post_id}`, `GET /public-communities/{community}/posts`, public comment reads, and the home feed
 - authenticated member reads can still return `members_only` posts
+
+## Test Coverage
+
+Generate a report-only coverage baseline:
+
+```bash
+rtk bun run coverage
+```
+
+The current coverage command does not enforce thresholds. Use it to inspect drift before adding policy gates.
 
 ## Local Dev
 

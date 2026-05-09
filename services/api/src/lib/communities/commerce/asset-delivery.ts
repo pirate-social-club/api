@@ -142,6 +142,7 @@ export async function buildStoryCdrAccessPackage(input: {
   callerWalletAddress: string
   userId: string
   decisionReason: "creator" | "moderator" | "purchase_entitlement"
+  ciphertextRef?: string
 }): Promise<NonNullable<AssetAccessResponse["story_cdr_access"]>> {
   if (!input.asset.story_cdr_vault_uuid || !input.asset.story_namespace || !input.asset.locked_delivery_secret_json) {
     throw notFoundError("Locked asset CDR metadata not found")
@@ -164,6 +165,7 @@ export async function buildStoryCdrAccessPackage(input: {
     decisionReason: input.decisionReason,
   })
   const readConditionAddress = input.asset.story_read_condition || STORY_DELIVERY_CONTRACTS.signedAccessConditionV1
+  const ciphertextRef = input.ciphertextRef ?? buildAssetContentPath(input.asset.community_id, input.asset.asset_id)
   if (
     readConditionAddress === STORY_DELIVERY_CONTRACTS.tokenGateCondition
     && input.decisionReason === "purchase_entitlement"
@@ -173,7 +175,7 @@ export async function buildStoryCdrAccessPackage(input: {
       rpc_url: resolveStoryRpcUrl(input.env),
       cdr_contract_address: cdrContracts.cdrAddress,
       read_condition_address: readConditionAddress,
-      ciphertext_ref: buildAssetContentPath(input.asset.community_id, input.asset.asset_id),
+      ciphertext_ref: ciphertextRef,
       cipher_algorithm: metadata.algorithm,
       cipher_iv_b64: metadata.iv_b64,
       mime_type: metadata.mime_type,
@@ -204,7 +206,7 @@ export async function buildStoryCdrAccessPackage(input: {
     rpc_url: resolveStoryRpcUrl(input.env),
     cdr_contract_address: cdrContracts.cdrAddress,
     read_condition_address: readConditionAddress,
-    ciphertext_ref: buildAssetContentPath(input.asset.community_id, input.asset.asset_id),
+    ciphertext_ref: ciphertextRef,
     cipher_algorithm: metadata.algorithm,
     cipher_iv_b64: metadata.iv_b64,
     mime_type: metadata.mime_type,

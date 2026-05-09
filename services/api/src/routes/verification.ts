@@ -4,6 +4,13 @@ import { sha256Hex } from "../lib/crypto"
 import { getControlPlaneVerificationRepository } from "../lib/verification/verification-repository"
 import { proxyVeryBridgeRequest } from "../lib/verification/very-provider"
 import { refreshPassportWalletScore } from "../lib/verification/passport-wallet-score-service"
+import {
+  createAltchaChallenge,
+  enforceAltchaChallengeRateLimit,
+  isAltchaScope,
+  normalizeAltchaAction,
+  purgeExpiredAltchaState,
+} from "../lib/verification/altcha-provider"
 import { authenticate, authenticateAdminOrUser, type AuthenticatedEnv } from "../lib/auth-middleware"
 import { trackApiEvent } from "../lib/analytics/track"
 import { logVerificationDebug } from "../lib/verification/verification-logging"
@@ -125,6 +132,7 @@ verification.post("/verification-sessions/very-widget-verify", async (c) => {
 authenticatedVerification.use("/verification-sessions", authenticate)
 authenticatedVerification.use("/verification-sessions/*", authenticate)
 authenticatedVerification.use("/verification/passport-wallet-score", authenticate)
+authenticatedVerification.use("/verification/altcha/challenge", authenticate)
 authenticatedNamespaceVerification.use("/namespace-verification-sessions", authenticateAdminOrUser)
 authenticatedNamespaceVerification.use("/namespace-verification-sessions/*", authenticateAdminOrUser)
 authenticatedNamespaceVerification.use("/namespace-verifications/*", authenticateAdminOrUser)
@@ -261,6 +269,24 @@ authenticatedVerification.post("/verification/passport-wallet-score", async (c) 
     wallet_score_status: joinEligibility.wallet_score_status ?? refreshed.walletScoreStatus,
     join_eligibility: joinEligibility,
   }, 200)
+})
+
+authenticatedVerification.get("/verification/altcha/challenge", async (c) => {
+  const actor = c.get("actor")
+  const scope = c.req.query("scope")
+  const action = normalizeAltchaAction(c.req.query("action"))
+  if (!isAltchaScope(scope) || !action) {
+    throw badRequestError("Invalid ALTCHA challenge request")
+  }
+  await purgeExpiredAltchaState({ env: c.env })
+  await enforceAltchaChallengeRateLimit({ env: c.env, actorUserId: actor.userId })
+  const challenge = await createAltchaChallenge({
+    env: c.env,
+    actorUserId: actor.userId,
+    scope,
+    action,
+  })
+  return c.json(challenge, 200)
 })
 
 authenticatedVerification.post("/verification-sessions", async (c) => {

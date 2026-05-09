@@ -15,6 +15,7 @@ import {
   hasCommunityRole,
   type CommunityMembershipRow,
 } from "../communities/membership/membership-state-store"
+import { enforceCommunityActionGate } from "../communities/membership/eligibility-service"
 import type {
   CommunityCommentProjectionRepository,
   CommunityDatabaseBindingRepository,
@@ -43,6 +44,7 @@ import { enqueueCommentTranslationPrewarmJobs } from "./comment-translation-jobs
 import type { Comment, CommentAnonymousScope, CreateCommentRequest } from "./comment-types"
 import type { Env } from "../../env"
 import type { CreatePostRequest } from "../../types"
+import type { AltchaProofInput } from "../verification/altcha-provider"
 
 export {
   getCommentContext,
@@ -192,6 +194,7 @@ export async function createComment(input: {
   parentCommentId?: string | null
   body: CreateCommentRequest
   bypassAuthorAccessChecks?: boolean
+  altchaProof?: AltchaProofInput
   userRepository: UserRepository
   profileRepository?: ProfileRepository
   communityRepository: CommentServiceCommunityRepository
@@ -209,6 +212,15 @@ export async function createComment(input: {
     let membership: CommunityMembershipRow | null = null
     if (!input.bypassAuthorAccessChecks) {
       membership = await requireMemberAccess(db.client, input.communityId, input.userId)
+      await enforceCommunityActionGate({
+        env: input.env,
+        client: db.client,
+        userId: input.userId,
+        userRepository: input.userRepository,
+        communityId: input.communityId,
+        altchaScope: "comment_create",
+        altchaProof: input.altchaProof,
+      })
     }
     const canBypassLocks = input.bypassAuthorAccessChecks === true
       || (membership != null && hasCommunityRole(membership, ANY_COMMUNITY_ROLE))

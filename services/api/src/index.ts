@@ -20,6 +20,7 @@ import posts from "./routes/posts"
 import publicComments from "./routes/public-comments"
 import publicAgents from "./routes/public-agents"
 import publicCommunities from "./routes/public-communities"
+import publicNames from "./routes/public-names"
 import publicNamespaces from "./routes/public-namespaces"
 import publicPosts from "./routes/public-posts"
 import publicProfiles from "./routes/public-profiles"
@@ -107,6 +108,7 @@ app.use(
       "X-Admin-As-User-Id",
       "X-Admin-Token",
       "X-Agent-Connection-Token",
+      "X-Pirate-Altcha",
       "X-Pirate-Anonymous-Id",
       "X-Pirate-Session-Id",
     ],
@@ -139,6 +141,7 @@ app.route("/posts", posts)
 app.route("/public-comments", publicComments)
 app.route("/public-agents", publicAgents)
 app.route("/public-communities", publicCommunities)
+app.route("/public-names", publicNames)
 app.route("/public-namespaces", publicNamespaces)
 app.route("/public-posts", publicPosts)
 app.route("/public-profiles", publicProfiles)

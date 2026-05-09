@@ -122,7 +122,7 @@ export async function getCommentById(executor: DbExecutor, commentId: string): P
              body, media_refs_json, source_language, status, depth,
              direct_reply_count, descendant_count, upvote_count, downvote_count, score,
              last_reply_at, content_hash, swarm_body_ref, idempotency_key,
-             0 AS replies_locked, NULL AS replies_locked_at, NULL AS replies_locked_by_user_id, NULL AS replies_lock_reason,
+             replies_locked, replies_locked_at, replies_locked_by_user_id, replies_lock_reason,
              created_at, updated_at
       FROM comments
       WHERE comment_id = ?1

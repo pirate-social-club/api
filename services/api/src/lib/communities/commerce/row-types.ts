@@ -84,7 +84,11 @@ export type PurchaseQuoteRow = {
   quote_id: string
   community_id: string
   listing_id: string
-  buyer_user_id: string
+  buyer_kind: "user" | "wallet"
+  buyer_user_id: string | null
+  buyer_wallet_address: string | null
+  buyer_wallet_address_normalized: string | null
+  buyer_chain_ref: string | null
   asset_id: string | null
   live_room_id: string | null
   base_price_usd: number
@@ -150,7 +154,11 @@ export type PurchaseRow = {
   listing_id: string
   asset_id: string | null
   live_room_id: string | null
-  buyer_user_id: string
+  buyer_kind: "user" | "wallet"
+  buyer_user_id: string | null
+  buyer_wallet_address: string | null
+  buyer_wallet_address_normalized: string | null
+  buyer_chain_ref: string | null
   settlement_wallet_attachment_id: string
   purchase_price_usd: number
   pricing_tier: string | null
@@ -168,7 +176,11 @@ export type PurchaseEntitlementRow = {
   purchase_entitlement_id: string
   purchase_id: string
   community_id: string
-  buyer_user_id: string
+  buyer_kind: "user" | "wallet"
+  buyer_user_id: string | null
+  buyer_wallet_address: string | null
+  buyer_wallet_address_normalized: string | null
+  buyer_chain_ref: string | null
   entitlement_kind: CommunityPurchase["entitlement_kind"]
   target_ref: string
   status: "active" | "revoked" | "expired"

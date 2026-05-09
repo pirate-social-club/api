@@ -9,6 +9,7 @@ import {
   type PurchaseSettlementMode,
   toChainRefString,
 } from "./row-types"
+import { requireUserBuyerId } from "./buyer-identity"
 import { serializePurchaseAllocationLeg } from "./allocation"
 import { centsToUsd, pctToBps, usdToCents } from "./serialization"
 import { unixSeconds } from "../../../serializers/time"
@@ -107,7 +108,7 @@ export function serializeSettlement(
     quote: `pq_${quote.quote_id}`,
     community: `com_${purchase.community_id}`,
     listing: `lst_${purchase.listing_id}`,
-    buyer_user: `usr_${purchase.buyer_user_id}`,
+    buyer_user: `usr_${requireUserBuyerId(purchase)}`,
     asset: purchase.asset_id ? `asset_${purchase.asset_id}` : null,
     live_room: purchase.live_room_id,
     settlement_wallet_attachment: purchase.settlement_wallet_attachment_id,

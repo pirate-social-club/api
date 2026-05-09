@@ -1,18 +1,4 @@
-export function nowIso(date = new Date()): string {
-  return date.toISOString();
-}
-
-export function makeId(prefix: string): string {
-  return `${prefix}_${crypto.randomUUID().replace(/-/g, "")}`;
-}
-
-export function requireText(value: string | null | undefined, label: string): string {
-  const normalized = String(value ?? "").trim();
-  if (!normalized) {
-    throw new Error(`${label} is required`);
-  }
-  return normalized;
-}
+export { makeId, nowIso, requireText, trim } from "@pirate/api-shared";
 
 export function requirePositiveInt(value: number, label: string): number {
   if (!Number.isInteger(value) || value <= 0) {

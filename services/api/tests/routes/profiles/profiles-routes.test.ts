@@ -645,6 +645,45 @@ describe("profile routes", () => {
     expect(claimed.price_paid_cents).toBe(2_500)
   })
 
+  test("x402 global handle claim accepts Payment authorization retry without Bearer auth", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwtWithWallet(ctx.env, "profile-x402-paid-global-handle-payment-auth-user")
+
+    const challengeResponse = await requestJson("http://pirate.test/profiles/me/global-handle/x402-claim", "POST", {
+      desired_label: "captain",
+    }, ctx.env, session.accessToken)
+    expect(challengeResponse.status).toBe(402)
+    const challenge = await json(challengeResponse) as { details: { quote: string } }
+
+    setSuccessfulPaidHandleFundingVerifier(ctx.env)
+    const claimResponse = await app.request(
+      "http://pirate.test/profiles/me/global-handle/x402-claim",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Payment test-x402-credential",
+        },
+        body: JSON.stringify({
+          quote: challenge.details.quote,
+          funding_tx_ref: "0xx402paymentauth",
+        }),
+      },
+      ctx.env,
+    )
+    expect(claimResponse.status).toBe(200)
+    const claimed = await json(claimResponse) as {
+      label: string
+      issuance_source: string
+      price_paid_cents: number
+    }
+    expect(claimed.label).toBe("captain.pirate")
+    expect(claimed.issuance_source).toBe("paid_upgrade")
+    expect(claimed.price_paid_cents).toBe(2_500)
+  })
+
   test("x402 global handle claim replay returns the already claimed handle", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup

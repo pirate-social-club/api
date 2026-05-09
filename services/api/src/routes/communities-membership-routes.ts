@@ -19,7 +19,8 @@ import {
   getResolvedCommunityRouteContext,
   optionalJsonBody,
 } from "./communities-route-helpers"
-import { decodePublicMembershipRequestId } from "../lib/public-ids"
+import { decodePublicMembershipRequestId, publicCommunityId } from "../lib/public-ids"
+import { ALTCHA_HEADER, readAltchaProof } from "../lib/verification/altcha-provider"
 
 export function registerCommunityMembershipRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.get("/:communityId/preview", async (c) => {
@@ -55,6 +56,12 @@ export function registerCommunityMembershipRoutes(communities: Hono<Authenticate
       communityId,
       note: body?.note ?? null,
       bypassMembershipGateChecks: actor.authType === "admin",
+      altchaProof: readAltchaProof({
+        headerValue: c.req.header(ALTCHA_HEADER),
+        body,
+        scope: "community_join",
+        action: `community:${publicCommunityId(communityId)}`,
+      }),
       userRepository,
       profileRepository,
       communityRepository,

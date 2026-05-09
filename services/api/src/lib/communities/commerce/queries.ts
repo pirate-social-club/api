@@ -14,6 +14,7 @@ import type {
   PurchaseQuoteRow,
   PurchaseRow,
 } from "./row-types"
+import type { BuyerIdentity } from "./buyer-identity"
 import {
   numberOrNull,
   requiredString,
@@ -63,7 +64,11 @@ function toPurchaseEntitlementRow(row: unknown): PurchaseEntitlementRow {
     purchase_entitlement_id: requiredString(row, "purchase_entitlement_id"),
     purchase_id: requiredString(row, "purchase_id"),
     community_id: requiredString(row, "community_id"),
-    buyer_user_id: requiredString(row, "buyer_user_id"),
+    buyer_kind: (stringOrNull(row, "buyer_kind") ?? "user") as PurchaseEntitlementRow["buyer_kind"],
+    buyer_user_id: stringOrNull(row, "buyer_user_id"),
+    buyer_wallet_address: stringOrNull(row, "buyer_wallet_address"),
+    buyer_wallet_address_normalized: stringOrNull(row, "buyer_wallet_address_normalized"),
+    buyer_chain_ref: stringOrNull(row, "buyer_chain_ref"),
     entitlement_kind: requiredString(row, "entitlement_kind") as CommunityPurchase["entitlement_kind"],
     target_ref: requiredString(row, "target_ref"),
     status: requiredString(row, "status") as PurchaseEntitlementRow["status"],
@@ -264,7 +269,10 @@ export async function getActiveEntitlementForBuyer(
 ): Promise<PurchaseEntitlementRow | null> {
   const row = await executeFirst(client, {
     sql: `
-      SELECT purchase_entitlement_id, purchase_id, community_id, buyer_user_id, entitlement_kind,
+      SELECT purchase_entitlement_id, purchase_id, community_id,
+             COALESCE(buyer_kind, 'user') AS buyer_kind, buyer_user_id,
+             buyer_wallet_address, buyer_wallet_address_normalized, buyer_chain_ref,
+             entitlement_kind,
              target_ref, status, granted_at, revoked_at, created_at, updated_at
       FROM purchase_entitlements
       WHERE community_id = ?1
@@ -279,6 +287,37 @@ export async function getActiveEntitlementForBuyer(
   return row ? toPurchaseEntitlementRow(row) : null
 }
 
+export async function getActiveEntitlementForBuyerIdentity(
+  client: Client,
+  communityId: string,
+  buyer: BuyerIdentity,
+  targetRef: string,
+): Promise<PurchaseEntitlementRow | null> {
+  if (buyer.kind === "user") {
+    return getActiveEntitlementForBuyer(client, communityId, buyer.userId, targetRef)
+  }
+  const row = await executeFirst(client, {
+    sql: `
+      SELECT purchase_entitlement_id, purchase_id, community_id,
+             COALESCE(buyer_kind, 'user') AS buyer_kind, buyer_user_id,
+             buyer_wallet_address, buyer_wallet_address_normalized, buyer_chain_ref,
+             entitlement_kind,
+             target_ref, status, granted_at, revoked_at, created_at, updated_at
+      FROM purchase_entitlements
+      WHERE community_id = ?1
+        AND buyer_kind = 'wallet'
+        AND buyer_chain_ref = ?2
+        AND buyer_wallet_address_normalized = ?3
+        AND target_ref = ?4
+        AND status = 'active'
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+    args: [communityId, buyer.chainRef, buyer.walletAddressNormalized, targetRef],
+  })
+  return row ? toPurchaseEntitlementRow(row) : null
+}
+
 export async function getPurchaseQuoteRow(
   client: Client,
   communityId: string,
@@ -286,7 +325,10 @@ export async function getPurchaseQuoteRow(
 ): Promise<PurchaseQuoteRow | null> {
   const row = await executeFirst(client, {
     sql: `
-      SELECT quote_id, community_id, listing_id, buyer_user_id, asset_id, live_room_id, base_price_usd,
+      SELECT quote_id, community_id, listing_id,
+             COALESCE(buyer_kind, 'user') AS buyer_kind, buyer_user_id,
+             buyer_wallet_address, buyer_wallet_address_normalized, buyer_chain_ref,
+             asset_id, live_room_id, base_price_usd,
              pricing_tier, final_price_usd, allocation_snapshot_json, funding_mode, funding_asset_json, source_chain_json,
              route_provider, funding_destination_address, route_policy_compliant, route_live_available, policy_origin,
              destination_settlement_chain_json, destination_settlement_token, destination_settlement_amount_atomic,
@@ -305,7 +347,11 @@ export async function getPurchaseQuoteRow(
     quote_id: requiredString(row, "quote_id"),
     community_id: requiredString(row, "community_id"),
     listing_id: requiredString(row, "listing_id"),
-    buyer_user_id: requiredString(row, "buyer_user_id"),
+    buyer_kind: (stringOrNull(row, "buyer_kind") ?? "user") as PurchaseQuoteRow["buyer_kind"],
+    buyer_user_id: stringOrNull(row, "buyer_user_id"),
+    buyer_wallet_address: stringOrNull(row, "buyer_wallet_address"),
+    buyer_wallet_address_normalized: stringOrNull(row, "buyer_wallet_address_normalized"),
+    buyer_chain_ref: stringOrNull(row, "buyer_chain_ref"),
     asset_id: stringOrNull(row, "asset_id"),
     live_room_id: stringOrNull(row, "live_room_id"),
     base_price_usd: Number(numberOrNull(row, "base_price_usd") ?? 0),
@@ -410,7 +456,9 @@ export async function listPurchaseRows(
   const limitArgIndex = input.after ? 5 : 3
   const result = await client.execute({
     sql: `
-      SELECT purchase_id, community_id, listing_id, asset_id, live_room_id, buyer_user_id,
+      SELECT purchase_id, community_id, listing_id, asset_id, live_room_id,
+             COALESCE(buyer_kind, 'user') AS buyer_kind, buyer_user_id,
+             buyer_wallet_address, buyer_wallet_address_normalized, buyer_chain_ref,
              settlement_wallet_attachment_id, purchase_price_usd, pricing_tier, settlement_mode, settlement_chain,
              settlement_token, settlement_tx_ref, donation_partner_id, donation_share_pct,
              donation_amount_usd, created_at
@@ -431,7 +479,11 @@ export async function listPurchaseRows(
     listing_id: requiredString(row, "listing_id"),
     asset_id: stringOrNull(row, "asset_id"),
     live_room_id: stringOrNull(row, "live_room_id"),
-    buyer_user_id: requiredString(row, "buyer_user_id"),
+    buyer_kind: (stringOrNull(row, "buyer_kind") ?? "user") as PurchaseRow["buyer_kind"],
+    buyer_user_id: stringOrNull(row, "buyer_user_id"),
+    buyer_wallet_address: stringOrNull(row, "buyer_wallet_address"),
+    buyer_wallet_address_normalized: stringOrNull(row, "buyer_wallet_address_normalized"),
+    buyer_chain_ref: stringOrNull(row, "buyer_chain_ref"),
     settlement_wallet_attachment_id: requiredString(row, "settlement_wallet_attachment_id"),
     purchase_price_usd: Number(numberOrNull(row, "purchase_price_usd") ?? 0),
     pricing_tier: stringOrNull(row, "pricing_tier"),
@@ -453,7 +505,9 @@ export async function getPurchaseRow(
 ): Promise<PurchaseRow | null> {
   const row = await executeFirst(client, {
     sql: `
-      SELECT purchase_id, community_id, listing_id, asset_id, live_room_id, buyer_user_id,
+      SELECT purchase_id, community_id, listing_id, asset_id, live_room_id,
+             COALESCE(buyer_kind, 'user') AS buyer_kind, buyer_user_id,
+             buyer_wallet_address, buyer_wallet_address_normalized, buyer_chain_ref,
              settlement_wallet_attachment_id, purchase_price_usd, pricing_tier, settlement_mode, settlement_chain,
              settlement_token, settlement_tx_ref, donation_partner_id, donation_share_pct,
              donation_amount_usd, created_at
@@ -470,7 +524,11 @@ export async function getPurchaseRow(
     listing_id: requiredString(row, "listing_id"),
     asset_id: stringOrNull(row, "asset_id"),
     live_room_id: stringOrNull(row, "live_room_id"),
-    buyer_user_id: requiredString(row, "buyer_user_id"),
+    buyer_kind: (stringOrNull(row, "buyer_kind") ?? "user") as PurchaseRow["buyer_kind"],
+    buyer_user_id: stringOrNull(row, "buyer_user_id"),
+    buyer_wallet_address: stringOrNull(row, "buyer_wallet_address"),
+    buyer_wallet_address_normalized: stringOrNull(row, "buyer_wallet_address_normalized"),
+    buyer_chain_ref: stringOrNull(row, "buyer_chain_ref"),
     settlement_wallet_attachment_id: requiredString(row, "settlement_wallet_attachment_id"),
     purchase_price_usd: Number(numberOrNull(row, "purchase_price_usd") ?? 0),
     pricing_tier: stringOrNull(row, "pricing_tier"),
@@ -491,7 +549,10 @@ export async function getEntitlementRowByPurchase(
 ): Promise<PurchaseEntitlementRow | null> {
   const row = await executeFirst(client, {
     sql: `
-      SELECT purchase_entitlement_id, purchase_id, community_id, buyer_user_id, entitlement_kind,
+      SELECT purchase_entitlement_id, purchase_id, community_id,
+             COALESCE(buyer_kind, 'user') AS buyer_kind, buyer_user_id,
+             buyer_wallet_address, buyer_wallet_address_normalized, buyer_chain_ref,
+             entitlement_kind,
              target_ref, status, granted_at, revoked_at, created_at, updated_at
       FROM purchase_entitlements
       WHERE purchase_id = ?1
@@ -515,7 +576,10 @@ export async function listLatestEntitlementRowsByPurchaseIds(
 
   const result = await client.execute({
     sql: `
-      SELECT purchase_entitlement_id, purchase_id, community_id, buyer_user_id, entitlement_kind,
+      SELECT purchase_entitlement_id, purchase_id, community_id,
+             COALESCE(buyer_kind, 'user') AS buyer_kind, buyer_user_id,
+             buyer_wallet_address, buyer_wallet_address_normalized, buyer_chain_ref,
+             entitlement_kind,
              target_ref, status, granted_at, revoked_at, created_at, updated_at
       FROM purchase_entitlements
       WHERE purchase_id IN (${inClause.placeholders})

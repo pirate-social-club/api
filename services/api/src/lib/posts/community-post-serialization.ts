@@ -50,7 +50,7 @@ export const POST_SELECT_COLUMNS = `
   agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot, disclosed_qualifiers_json,
   label_id, label_assignment_status, label_assigned_by, label_assigned_at, label_ai_confidence,
   label_assignment_error, label_assignment_model, ${boundedJsonProjection("label_assignment_result_json")},
-  post_type, status, 0 AS comments_locked, NULL AS comments_locked_at, NULL AS comments_locked_by_user_id, NULL AS comments_lock_reason,
+  post_type, status, comments_locked, comments_locked_at, comments_locked_by_user_id, comments_lock_reason,
   visibility, title, body, caption, lyrics,
   link_url, link_og_image_url, link_og_title, ${boundedJsonProjection("link_enrichment_snapshot_json", sqlStringLiteral(OVERSIZED_LINK_ENRICHMENT_SNAPSHOT_JSON))}, link_enrichment_synced_at,
   ${boundedJsonProjection("embeds_json")}, ${boundedJsonProjection("media_refs_json")}, song_artifact_bundle_id, song_title, source_language, translation_policy,

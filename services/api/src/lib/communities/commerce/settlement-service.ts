@@ -13,7 +13,7 @@ import {
 } from "../../story/story-royalty-settlement-service"
 import type { UserRepository } from "../../auth/repositories"
 import {
-  getActiveEntitlementForBuyer,
+  getActiveEntitlementForBuyerIdentity,
   getAssetRow,
   getEntitlementRowByPurchase,
   listLatestEntitlementRowsByPurchaseIds,
@@ -53,6 +53,14 @@ import {
 } from "./charity-payout-service"
 import { confirmBuyerFundingForSettlement } from "./funding-proof-service"
 import {
+  type BuyerIdentity,
+  buyerIdentityFields,
+  buyerMatchesFields,
+  requireUserBuyerId,
+  requireWalletBuyerIdentity,
+  userBuyer,
+} from "./buyer-identity"
+import {
   beginPurchaseSettlementEffectAttempt,
   confirmPurchaseSettlementEffect,
   failPurchaseSettlementEffect,
@@ -65,7 +73,13 @@ import {
   reservePurchaseSettlementAttempt,
   type PurchaseSettlementAttemptRow,
 } from "./settlement-attempts"
-import type { PurchaseQuoteRow, QuoteAllocationSnapshot } from "./row-types"
+import type {
+  PurchaseAllocationLegRow,
+  PurchaseEntitlementRow,
+  PurchaseQuoteRow,
+  PurchaseRow,
+  QuoteAllocationSnapshot,
+} from "./row-types"
 import type {
   CommunityPurchase,
   CommunityPurchaseListResponse,
@@ -89,8 +103,26 @@ export type RoyaltyEarningEventForNotification = {
 }
 
 export type SettleCommunityPurchaseResult = {
-  settlement: CommunityPurchaseSettlement
+  settlement: CommunityPurchaseSettlement | PublicCommunityPurchaseSettlement
   royaltyEarningEvents: RoyaltyEarningEventForNotification[]
+}
+
+export type PublicCommunityPurchaseSettlement = Omit<
+  CommunityPurchaseSettlement,
+  "buyer_user" | "settlement_wallet_attachment"
+> & {
+  buyer_kind: "wallet"
+  buyer_wallet: {
+    chain_ref: string
+    address: string
+  }
+  settlement_wallet_attachment: null
+}
+
+export type PublicCommunityPurchaseSettlementRequest = {
+  quote: string
+  funding_tx_ref: string
+  settlement_tx_ref?: string | null
 }
 
 export type PurchaseSettlementReconciliationSummary = {
@@ -113,10 +145,49 @@ function derivePurchaseEntitlementId(purchaseId: string): string {
   return `ent_${purchaseId.replace(/^pur_/, "")}`
 }
 
+function serializePublicSettlement(
+  purchase: PurchaseRow,
+  entitlement: PurchaseEntitlementRow,
+  quote: PurchaseQuoteRow,
+  allocations: PurchaseAllocationLegRow[],
+): PublicCommunityPurchaseSettlement {
+  const serialized = serializeSettlement({
+    ...purchase,
+    buyer_kind: "user",
+    buyer_user_id: "public-wallet-buyer",
+  }, entitlement, quote, allocations)
+  const {
+    buyer_user: _buyerUser,
+    settlement_wallet_attachment: _settlementWalletAttachment,
+    ...rest
+  } = serialized
+  return {
+    ...rest,
+    buyer_kind: "wallet",
+    buyer_wallet: {
+      chain_ref: purchase.buyer_chain_ref ?? "eip155",
+      address: purchase.buyer_wallet_address ?? "",
+    },
+    settlement_wallet_attachment: null,
+  }
+}
+
+function serializeSettlementForBuyer(
+  purchase: PurchaseRow,
+  entitlement: PurchaseEntitlementRow,
+  quote: PurchaseQuoteRow,
+  allocations: PurchaseAllocationLegRow[],
+): CommunityPurchaseSettlement | PublicCommunityPurchaseSettlement {
+  if (purchase.buyer_kind === "wallet") {
+    return serializePublicSettlement(purchase, entitlement, quote, allocations)
+  }
+  return serializeSettlement(purchase, entitlement, quote, allocations)
+}
+
 async function finalizeLocalPurchaseSettlement(input: {
   client: Awaited<ReturnType<typeof openCommunityDb>>["client"]
   communityId: string
-  userId: string
+  buyer: BuyerIdentity
   quote: PurchaseQuoteRow
   purchaseId: string
   settlementChain: CommunityPurchaseSettlement["settlement_chain"]
@@ -128,21 +199,26 @@ async function finalizeLocalPurchaseSettlement(input: {
   donationAmountUsd: number | null
   settlementWalletAttachmentId: string
   createdAt: string
-}): Promise<CommunityPurchaseSettlement> {
+}): Promise<CommunityPurchaseSettlement | PublicCommunityPurchaseSettlement> {
   const settlementTxRef = input.settlementTxRef.trim()
   if (!settlementTxRef) {
     throw badRequestError("settlement_tx_ref is required")
   }
+  const buyerFields = buyerIdentityFields(input.buyer)
 
   let entitlement = input.quote.asset_id
-    ? await getActiveEntitlementForBuyer(input.client, input.communityId, input.userId, input.quote.asset_id)
+    ? await getActiveEntitlementForBuyerIdentity(input.client, input.communityId, input.buyer, input.quote.asset_id)
     : null
   if (!entitlement) {
     entitlement = {
       purchase_entitlement_id: derivePurchaseEntitlementId(input.purchaseId),
       purchase_id: input.purchaseId,
       community_id: input.communityId,
-      buyer_user_id: input.userId,
+      buyer_kind: buyerFields.buyer_kind,
+      buyer_user_id: buyerFields.buyer_user_id,
+      buyer_wallet_address: buyerFields.buyer_wallet_address,
+      buyer_wallet_address_normalized: buyerFields.buyer_wallet_address_normalized,
+      buyer_chain_ref: buyerFields.buyer_chain_ref,
       entitlement_kind: "asset_access",
       target_ref: input.quote.asset_id || input.quote.listing_id,
       status: "active",
@@ -158,15 +234,17 @@ async function finalizeLocalPurchaseSettlement(input: {
     await tx.execute({
       sql: `
         INSERT INTO purchases (
-          purchase_id, community_id, listing_id, asset_id, live_room_id, buyer_user_id,
+          purchase_id, community_id, listing_id, asset_id, live_room_id, buyer_kind, buyer_user_id,
+          buyer_wallet_address, buyer_wallet_address_normalized, buyer_chain_ref,
           settlement_wallet_attachment_id, purchase_price_usd, pricing_tier, settlement_chain,
           settlement_mode, settlement_token, settlement_tx_ref, donation_partner_id, donation_share_pct,
           donation_amount_usd, donation_settlement_ref, created_at
         ) VALUES (
-          ?1, ?2, ?3, ?4, NULL, ?5,
-          ?6, ?7, ?8, ?9,
+          ?1, ?2, ?3, ?4, NULL, ?5, ?6,
+          ?7, ?8, ?9,
           ?10, ?11, ?12, ?13,
-          ?14, ?15, ?16, ?17
+          ?14, ?15, ?16, ?17,
+          ?18, ?19, ?20, ?21
         )
         ON CONFLICT(purchase_id) DO NOTHING
       `,
@@ -175,7 +253,11 @@ async function finalizeLocalPurchaseSettlement(input: {
         input.communityId,
         input.quote.listing_id,
         input.quote.asset_id,
-        input.userId,
+        buyerFields.buyer_kind,
+        buyerFields.buyer_user_id,
+        buyerFields.buyer_wallet_address,
+        buyerFields.buyer_wallet_address_normalized,
+        buyerFields.buyer_chain_ref,
         input.settlementWalletAttachmentId,
         input.quote.final_price_usd,
         input.quote.pricing_tier,
@@ -249,11 +331,13 @@ async function finalizeLocalPurchaseSettlement(input: {
     await tx.execute({
       sql: `
         INSERT INTO purchase_entitlements (
-          purchase_entitlement_id, purchase_id, community_id, buyer_user_id, entitlement_kind,
+          purchase_entitlement_id, purchase_id, community_id, buyer_kind, buyer_user_id,
+          buyer_wallet_address, buyer_wallet_address_normalized, buyer_chain_ref, entitlement_kind,
           target_ref, status, granted_at, revoked_at, created_at, updated_at
         ) VALUES (
           ?1, ?2, ?3, ?4, ?5,
-          ?6, ?7, ?8, NULL, ?8, ?8
+          ?6, ?7, ?8, ?9,
+          ?10, ?11, ?12, NULL, ?12, ?12
         )
         ON CONFLICT(purchase_entitlement_id) DO UPDATE SET
           status = excluded.status,
@@ -265,7 +349,11 @@ async function finalizeLocalPurchaseSettlement(input: {
         entitlement.purchase_entitlement_id,
         entitlement.purchase_id,
         entitlement.community_id,
+        entitlement.buyer_kind,
         entitlement.buyer_user_id,
+        entitlement.buyer_wallet_address,
+        entitlement.buyer_wallet_address_normalized,
+        entitlement.buyer_chain_ref,
         entitlement.entitlement_kind,
         entitlement.target_ref,
         entitlement.status,
@@ -322,7 +410,7 @@ async function finalizeLocalPurchaseSettlement(input: {
     throw notFoundError("Purchase entitlement not found")
   }
   const allocations = await listPurchaseAllocationLegRows(input.client, input.purchaseId)
-  return serializeSettlement(purchase, finalizedEntitlement, input.quote, allocations)
+  return serializeSettlementForBuyer(purchase, finalizedEntitlement, input.quote, allocations)
 }
 
 function buildConfirmedCharityPayoutsFromEffects(
@@ -474,10 +562,13 @@ async function reconcileStaleCommunityPurchaseSettlementAttempt(input: {
   )
 
   try {
+    const buyer = quote.buyer_kind === "wallet"
+      ? requireWalletBuyerIdentity(quote)
+      : userBuyer(requireUserBuyerId(quote))
     await finalizeLocalPurchaseSettlement({
       client: input.client,
       communityId: input.communityId,
-      userId: quote.buyer_user_id,
+      buyer,
       quote,
       purchaseId: input.attempt.purchase_id,
       settlementChain,
@@ -557,20 +648,21 @@ export async function reconcileStaleCommunityPurchaseSettlements(input: {
   return summary
 }
 
-export async function settleCommunityPurchase(input: {
+async function settleCommunityPurchaseForBuyer(input: {
   env: Env
-  userId: string
   communityId: string
-  body: CommunityPurchaseSettlementRequest
+  buyer: BuyerIdentity
+  body: PublicCommunityPurchaseSettlementRequest
   communityRepository: CommunityDatabaseBindingRepository
-  userRepository: UserRepository
+  settlementWalletAttachmentId: string
+  resolveBuyerWalletAddress: () => Promise<string>
 }): Promise<SettleCommunityPurchaseResult> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
-    await requireCommunityMember(db.client, input.communityId, input.userId)
+    const buyer = input.buyer
     const quoteId = decodePublicId(input.body.quote, "pq")
     const quote = await getPurchaseQuoteRow(db.client, input.communityId, quoteId)
-    if (!quote || quote.buyer_user_id !== input.userId) {
+    if (!quote || !buyerMatchesFields(buyer, quote)) {
       throw notFoundError("Purchase quote not found")
     }
     const purchaseId = derivePurchaseIdForQuote(quote.quote_id)
@@ -583,7 +675,7 @@ export async function settleCommunityPurchase(input: {
         if (existingPurchase && existingEntitlement) {
           const allocations = await listPurchaseAllocationLegRows(db.client, existingPurchase.purchase_id)
           return {
-            settlement: serializeSettlement(existingPurchase, existingEntitlement, quote, allocations),
+            settlement: serializeSettlementForBuyer(existingPurchase, existingEntitlement, quote, allocations),
             royaltyEarningEvents: [],
           }
         }
@@ -609,7 +701,7 @@ export async function settleCommunityPurchase(input: {
       communityId: input.communityId,
       quoteId: quote.quote_id,
       purchaseId,
-      settlementWalletAttachmentId: input.body.settlement_wallet_attachment,
+      settlementWalletAttachmentId: input.settlementWalletAttachmentId,
       settlementTxRef: input.body.settlement_tx_ref ?? null,
       now: createdAt,
     })
@@ -621,7 +713,7 @@ export async function settleCommunityPurchase(input: {
       if (existingPurchase && existingEntitlement) {
         const allocations = await listPurchaseAllocationLegRows(db.client, existingPurchase.purchase_id)
         return {
-          settlement: serializeSettlement(existingPurchase, existingEntitlement, quote, allocations),
+          settlement: serializeSettlementForBuyer(existingPurchase, existingEntitlement, quote, allocations),
           royaltyEarningEvents: [],
         }
       }
@@ -660,11 +752,7 @@ export async function settleCommunityPurchase(input: {
           throw badRequestError("Locked asset is not ready for purchase settlement")
         }
       }
-      const buyerWalletAddress = await resolveWalletAttachmentAddress({
-        userRepository: input.userRepository,
-        userId: input.userId,
-        walletAttachmentId: input.body.settlement_wallet_attachment,
-      })
+      const buyerWalletAddress = await input.resolveBuyerWalletAddress()
       const purchaseRef = derivePurchaseRef({
         communityId: input.communityId,
         purchaseId,
@@ -823,7 +911,7 @@ export async function settleCommunityPurchase(input: {
       const settlement = await finalizeLocalPurchaseSettlement({
         client: db.client,
         communityId: input.communityId,
-        userId: input.userId,
+        buyer,
         quote,
         purchaseId,
         settlementChain,
@@ -833,7 +921,7 @@ export async function settleCommunityPurchase(input: {
         donationPartnerId,
         donationSharePct,
         donationAmountUsd,
-        settlementWalletAttachmentId: input.body.settlement_wallet_attachment,
+        settlementWalletAttachmentId: input.settlementWalletAttachmentId,
         createdAt,
       })
       return {
@@ -851,6 +939,69 @@ export async function settleCommunityPurchase(input: {
     }
   } finally {
     db.close()
+  }
+}
+
+export async function settleCommunityPurchase(input: {
+  env: Env
+  userId: string
+  communityId: string
+  body: CommunityPurchaseSettlementRequest
+  communityRepository: CommunityDatabaseBindingRepository
+  userRepository: UserRepository
+}): Promise<SettleCommunityPurchaseResult> {
+  const membershipDb = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  try {
+    await requireCommunityMember(membershipDb.client, input.communityId, input.userId)
+  } finally {
+    membershipDb.close()
+  }
+
+  return settleCommunityPurchaseForBuyer({
+    env: input.env,
+    communityId: input.communityId,
+    buyer: userBuyer(input.userId),
+    body: input.body,
+    communityRepository: input.communityRepository,
+    settlementWalletAttachmentId: input.body.settlement_wallet_attachment,
+    resolveBuyerWalletAddress: () => resolveWalletAttachmentAddress({
+      userRepository: input.userRepository,
+      userId: input.userId,
+      walletAttachmentId: input.body.settlement_wallet_attachment,
+    }),
+  })
+}
+
+export async function settlePublicCommunityPurchase(input: {
+  env: Env
+  communityId: string
+  body: PublicCommunityPurchaseSettlementRequest
+  communityRepository: CommunityDatabaseBindingRepository
+}): Promise<SettleCommunityPurchaseResult> {
+  const quoteDb = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  try {
+    const quoteId = decodePublicId(input.body.quote, "pq")
+    const quote = await getPurchaseQuoteRow(quoteDb.client, input.communityId, quoteId)
+    if (!quote) {
+      throw notFoundError("Purchase quote not found")
+    }
+    const buyer = requireWalletBuyerIdentity(quote)
+    // Public settlement intentionally uses the on-chain checkout receipt as the
+    // wallet-control gate: funding must come from the wallet bound to the quote.
+    // This synthetic attachment id is only a ledger marker, not a user wallet
+    // attachment id that can be resolved through the user repository.
+    const walletLedgerAttachmentId = `wallet:${buyer.chainRef}:${buyer.walletAddressNormalized}`
+    return await settleCommunityPurchaseForBuyer({
+      env: input.env,
+      communityId: input.communityId,
+      buyer,
+      body: input.body,
+      communityRepository: input.communityRepository,
+      settlementWalletAttachmentId: walletLedgerAttachmentId,
+      resolveBuyerWalletAddress: async () => buyer.walletAddress,
+    })
+  } finally {
+    quoteDb.close()
   }
 }
 
@@ -904,7 +1055,7 @@ export async function getCommunityPurchase(input: {
   try {
     await requireCommunityMember(db.client, input.communityId, input.userId)
     const purchase = await getPurchaseRow(db.client, input.communityId, input.purchaseId)
-    if (!purchase || purchase.buyer_user_id !== input.userId) {
+    if (!purchase || !buyerMatchesFields(userBuyer(input.userId), purchase)) {
       throw notFoundError("Purchase not found")
     }
     const entitlement = await getEntitlementRowByPurchase(db.client, purchase.purchase_id)
