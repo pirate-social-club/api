@@ -58,6 +58,11 @@ type CommentProjectionSyncPayload = {
   source_created_at?: string
 }
 
+type PostProjectionSyncPayload = {
+  post_id?: string
+  source_created_at?: string
+}
+
 type CommentBodyMirrorPayload = {
   comment_id?: string
   thread_root_post_id?: string
@@ -166,6 +171,50 @@ async function runCommentProjectionSync(input: {
     })
 
     return comment.comment_id
+  } finally {
+    db.close()
+  }
+}
+
+async function runPostProjectionSync(input: {
+  job: CommunityJobRow
+  env: Env
+  communityRepository: CommunityJobRepository
+}): Promise<string | null> {
+  const db = await openCommunityDb(input.env, input.communityRepository, input.job.community_id)
+  try {
+    const payload = parseJobPayload<PostProjectionSyncPayload>(input.job.payload_json)
+    const postId = payload?.post_id ?? input.job.subject_id
+    const existing = await input.communityRepository.getCommunityPostProjectionByPostId(postId)
+    if (existing) {
+      return postId
+    }
+
+    const post = await getPostById(db.client, postId)
+    if (!post) {
+      throw internalError("Post is missing for projection sync")
+    }
+
+    const community = await input.communityRepository.getCommunityById(input.job.community_id)
+    if (!community) {
+      throw internalError("Community is missing for projection sync")
+    }
+
+    await input.communityRepository.recordCommunityPostProjection({
+      communityId: post.community_id,
+      sourcePostId: post.post_id,
+      authorUserId: post.author_user_id ?? null,
+      identityMode: post.identity_mode,
+      postType: post.post_type,
+      status: post.status,
+      visibility: post.visibility,
+      sourceCreatedAt: post.created_at,
+      projectedPayloadJson: JSON.stringify(post),
+      actorUserId: post.author_user_id ?? community.creator_user_id,
+      createdAt: nowIso(),
+    })
+
+    return post.post_id
   } finally {
     db.close()
   }
@@ -717,6 +766,8 @@ export async function runCommunityJob(input: {
   switch (input.job.job_type) {
     case "comment_projection_sync":
       return runCommentProjectionSync(input)
+    case "post_projection_sync":
+      return runPostProjectionSync(input)
     case "comment_body_mirror":
       return runCommentBodyMirror(input)
     case "thread_snapshot_publish":

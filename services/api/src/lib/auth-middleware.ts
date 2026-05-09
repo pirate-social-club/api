@@ -1,16 +1,17 @@
 import { createHash, timingSafeEqual } from "node:crypto"
 import { createMiddleware } from "hono/factory"
-import { authError } from "./errors"
+import { authError, eligibilityFailed } from "./errors"
 import { getControlPlaneAgentOwnershipRepository } from "./agents/agent-ownership-repository"
 import { getUserRepository } from "./auth/repositories"
-import { verifyPirateAccessToken } from "./auth/pirate-session-token"
+import { DEFAULT_PIRATE_APP_SCOPE, verifyPirateAccessToken } from "./auth/pirate-session-token"
 import type { Env } from "../env"
 
 export type ActorContext = {
   userId: string
-  authType: "user" | "agent_delegated"
+  authType: "user" | "agent_delegated" | "device"
   delegatedAgentId?: string
   delegatedCredentialOwnershipRecordId?: string
+  scope?: string
 }
 
 export type AdminActorContext = {
@@ -45,7 +46,8 @@ export async function authenticateUserToken(input: {
 
   return {
     userId: session.userId,
-    authType: "user",
+    authType: session.scope === DEFAULT_PIRATE_APP_SCOPE ? "user" : "device",
+    scope: session.scope,
   }
 }
 
@@ -61,6 +63,16 @@ export async function authenticateAgentDelegatedToken(input: {
     authType: "agent_delegated",
     delegatedAgentId: session.agentId,
     delegatedCredentialOwnershipRecordId: session.currentOwnershipRecordId,
+  }
+}
+
+export function requireScope(actor: ActorContext | AdminActorContext, requiredScope: string): void {
+  if (actor.authType === "admin" || actor.authType !== "device") {
+    return
+  }
+  const scopes = new Set((actor.scope || "").split(/\s+/).filter(Boolean))
+  if (!scopes.has(requiredScope)) {
+    throw eligibilityFailed("Insufficient OAuth scope", { required_scope: requiredScope })
   }
 }
 

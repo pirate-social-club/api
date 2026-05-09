@@ -13,6 +13,7 @@ import discovery from "./routes/discovery"
 import feed from "./routes/feed"
 import jobs from "./routes/jobs"
 import notifications from "./routes/notifications"
+import oauth from "./routes/oauth"
 import royalties from "./routes/royalties"
 import onboarding from "./routes/onboarding"
 import posts from "./routes/posts"
@@ -36,16 +37,10 @@ import { HttpError, errorResponse } from "./lib/errors"
 import { reconcileRoyaltyClaimEvents } from "./lib/royalties/royalty-claim-history"
 import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/runtime-deps"
 import { makeSentryOptions, captureScheduledError } from "./lib/sentry"
+import { LiveRoomRuntimeDO } from "./lib/communities/live-rooms/runtime"
 import type { Env } from "./env"
 
-// Staging has an existing Durable Object class with this name. Keep exporting a
-// compatibility class until the live-room runtime lands on main or is explicitly
-// removed with a Wrangler delete-class migration.
-export class LiveRoomRuntimeDO {
-  fetch(): Response {
-    return new Response("Live room runtime is not available in this API build.", { status: 410 })
-  }
-}
+export { LiveRoomRuntimeDO }
 
 const app = new Hono<{ Bindings: Env }>()
 
@@ -138,6 +133,7 @@ app.route("/communities", communities)
 app.route("/feed", feed)
 app.route("/jobs", jobs)
 app.route("/notifications", notifications)
+app.route("/oauth", oauth)
 app.route("/royalties", royalties)
 app.route("/posts", posts)
 app.route("/public-comments", publicComments)

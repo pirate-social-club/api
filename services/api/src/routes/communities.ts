@@ -8,6 +8,7 @@ import { registerCommunityCommerceRoutes } from "./communities-commerce"
 import { registerCommunityContentRoutes } from "./communities-content-routes"
 import { registerCommunityCreateRoutes } from "./communities-create-routes"
 import { registerCommunityHandleRoutes } from "./communities-handles-routes"
+import { registerCommunityLiveRoomRoutes } from "./communities-live-rooms"
 import { registerCommunityMembershipRoutes } from "./communities-membership-routes"
 import { registerCommunityModerationRoutes } from "./communities-moderation-routes"
 import { registerCommunityRoleRoutes } from "./communities-role-routes"
@@ -77,5 +78,6 @@ registerCommunityModerationRoutes(communities)
 registerCommunityRoleRoutes(communities)
 registerCommunityCommerceRoutes(communities)
 registerCommunitySongArtifactRoutes(communities)
+registerCommunityLiveRoomRoutes(communities)
 
 export default communities

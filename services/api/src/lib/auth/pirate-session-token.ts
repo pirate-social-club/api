@@ -4,6 +4,7 @@ import type { Env } from "../../env"
 
 const SESSION_JWT_ALG = "RS256"
 const DEFAULT_TTL_SECONDS = 60 * 60
+export const DEFAULT_PIRATE_APP_SCOPE = "pirate_app_session"
 type SessionJwtKey = Awaited<ReturnType<typeof importPKCS8>>
 
 let cachedPrivateKey: { pem: string; key: SessionJwtKey } | null = null
@@ -37,6 +38,7 @@ async function getPublicKey(env: Env): Promise<SessionJwtKey> {
 
 export async function mintPirateAccessToken(params: {
   env: Env
+  scope?: string
   userId: string
 }): Promise<string> {
   const issuer = String(params.env.PIRATE_APP_JWT_ISSUER || "").trim() || "pirate-api"
@@ -44,7 +46,7 @@ export async function mintPirateAccessToken(params: {
   const ttlSecondsRaw = Number(params.env.PIRATE_APP_JWT_TTL_SECONDS || String(DEFAULT_TTL_SECONDS))
   const ttlSeconds = Number.isFinite(ttlSecondsRaw) && ttlSecondsRaw > 0 ? Math.floor(ttlSecondsRaw) : DEFAULT_TTL_SECONDS
 
-  return await new SignJWT({ scope: "pirate_app_session" })
+  return await new SignJWT({ scope: params.scope?.trim() || DEFAULT_PIRATE_APP_SCOPE })
     .setProtectedHeader({ alg: SESSION_JWT_ALG, typ: "JWT" })
     .setIssuer(issuer)
     .setAudience(audience)
@@ -57,7 +59,7 @@ export async function mintPirateAccessToken(params: {
 export async function verifyPirateAccessToken(params: {
   env: Env
   token: string
-}): Promise<{ userId: string }> {
+}): Promise<{ scope: string; userId: string }> {
   const issuer = String(params.env.PIRATE_APP_JWT_ISSUER || "").trim() || "pirate-api"
   const audience = String(params.env.PIRATE_APP_JWT_AUDIENCE || "").trim() || "pirate-app"
 
@@ -73,7 +75,11 @@ export async function verifyPirateAccessToken(params: {
     throw authError("Authentication failed")
   }
 
-  return { userId }
+  const scope = typeof verification.payload.scope === "string" && verification.payload.scope.trim()
+    ? verification.payload.scope.trim()
+    : DEFAULT_PIRATE_APP_SCOPE
+
+  return { scope, userId }
 }
 
 export async function getPirateAccessTokenJwks(params: {
