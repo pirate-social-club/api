@@ -84,11 +84,11 @@ function desiredHandleTier(labelNormalized: string): HandleUpgradeQuote["tier"] 
 
 function basePriceCentsForLength(labelLength: number): number | null {
   if (labelLength >= 8) return 5 * 100
-  if (labelLength === 7) return 15 * 100
-  if (labelLength === 6) return 50 * 100
-  if (labelLength === 5) return 150 * 100
-  if (labelLength === 4) return 500 * 100
-  if (labelLength === 3) return 2_500 * 100
+  if (labelLength === 7) return 10 * 100
+  if (labelLength === 6) return 25 * 100
+  if (labelLength === 5) return 50 * 100
+  if (labelLength === 4) return 100 * 100
+  if (labelLength === 3) return 250 * 100
   return null
 }
 

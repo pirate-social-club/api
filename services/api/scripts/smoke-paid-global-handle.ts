@@ -8,6 +8,7 @@ const ERC20_ABI = [
 type ChallengeDetails = {
   quote: string
   price_cents: number
+  expires_at?: number
   payment_instructions: {
     chain: {
       chain_namespace: string
@@ -201,6 +202,19 @@ async function main(): Promise<void> {
     step: "claim",
     status: claim.status,
     body: claim.body,
+  }, null, 2))
+  const replay = await requestJson(`${origin}/profiles/me/global-handle/x402-claim`, {
+    method: "POST",
+    headers: jsonHeaders(accessToken),
+    body: JSON.stringify({
+      quote: details.quote,
+      funding_tx_ref: fundingTxRef,
+    }),
+  })
+  console.log(JSON.stringify({
+    step: "claim_replay",
+    status: replay.status,
+    body: replay.body,
   }, null, 2))
 }
 
