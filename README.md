@@ -9,6 +9,7 @@ Backend services for Pirate.
 - `services/contracts`
 - `services/shared`
 - `services/community-protocol-issuer`
+- `services/community-protocol-subsd`
 - `services/community-provision-operator`
 - `services/community-protocol-prover-runpod`
 

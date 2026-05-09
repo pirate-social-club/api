@@ -497,6 +497,7 @@ Current foundation:
 - `services/community-protocol-issuer/src/lib/protocol-issuance-db.ts` adapts the community DB tables through a small SQL client port.
 - `services/community-protocol-issuer/src/lib/subsd-client.ts` contains the HTTP client boundary and normalizes `AlreadyStaged` / `AlreadyCommitted` idempotency outcomes.
 - `subsd-client.ts` is aligned to upstream `spacesprotocol/subs` route shapes: `/requests` takes a `requests` array, local commit derives proof requirement from `prev_root`, commit status requires `status = "finalized"`, and publish sends sub-label names rather than certificate payloads.
+- `services/community-protocol-subsd` packages a persistent pinned `subsd` image. This is the staging/prod path for protocol-local state; it must run with a durable data directory and private network exposure only.
 - Stage requests omit `dev_private_key`; upstream defines it as optional and test-only.
 - This foundation stages unbatched handle issuance rows, creates batches by parent Space, commits batches when thresholds are met, records proof-required batches, and marks only the conflicting handle failed on hard script-pubkey conflicts.
 - Batch creation and issuance attachment are one store operation so the worker cannot leave an empty batch between two writes.
@@ -574,9 +575,16 @@ Staging Infisical placeholders:
 /services/community-protocol-issuer
   COMMUNITY_PROTOCOL_ISSUER_RUNPOD_ENDPOINT_ID=auto-created-by-provisioner
   COMMUNITY_PROTOCOL_ISSUER_RUNPOD_API_KEY=x
+  COMMUNITY_PROTOCOL_ISSUER_SUBSD_BASE_URL=http://127.0.0.1:7777
   COMMUNITY_PROTOCOL_ISSUER_PROOF_ARTIFACT_STORE=file
   COMMUNITY_PROTOCOL_ISSUER_PROOF_ARTIFACT_DIR=/var/lib/pirate/community-protocol-issuer/proofs
   COMMUNITY_PROTOCOL_ISSUER_PROOF_JOB_MAX_AGE_SECONDS=604800
+
+/services/community-protocol-subsd
+  SUBSD_RPC_URL=http://127.0.0.1:7225
+  SUBSD_WALLET=wallet_99
+  SUBSD_DATA_DIR=/var/lib/pirate/subsd/data
+  SUBSD_PORT=7777
 
 /services/community-protocol-prover-runpod
   SUBS_PROVER_TIMEOUT_SECONDS=604800
