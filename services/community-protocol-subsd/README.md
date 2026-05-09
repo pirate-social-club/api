@@ -54,7 +54,7 @@ t3333333k/community-protocol-subsd@sha256:be9ac7cff697a576d7926707531e9b0c580c53
 Single host example:
 
 ```bash
-rtk docker run --detach --name pirate-subsd --restart unless-stopped --network host --volume pirate-subsd-data:/var/lib/pirate/subsd --env SUBSD_RPC_URL=http://127.0.0.1:7225 --env SUBSD_WALLET=wallet_99 t3333333k/community-protocol-subsd@sha256:be9ac7cff697a576d7926707531e9b0c580c5368dfe7b06e59dd12c80cbf5618
+rtk docker run --detach --name pirate-subsd --restart unless-stopped --network host --volume pirate-subsd-data:/var/lib/pirate/subsd --env SUBSD_RPC_URL=http://127.0.0.1:7225 --env SUBSD_WALLET=default t3333333k/community-protocol-subsd@sha256:be9ac7cff697a576d7926707531e9b0c580c5368dfe7b06e59dd12c80cbf5618
 ```
 
 For staging/prod, bind `subsd` only on private networking or localhost behind an SSH tunnel. The upstream service has no product auth layer.
