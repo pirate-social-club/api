@@ -2,7 +2,7 @@
 
 Queue-based RunPod worker for Spaces `subs` proof jobs.
 
-The issuer submits one proof job per protocol issuance batch. This worker is intentionally narrow:
+The issuer submits proof jobs for a protocol issuance batch until `subsd /proving/next` returns no pending request. A batch can require more than one proof job. This worker is intentionally narrow:
 
 1. Validate `proof_input_base64`.
 2. Write the decoded proving request to a temp file.

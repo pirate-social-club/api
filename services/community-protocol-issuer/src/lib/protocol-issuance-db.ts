@@ -301,16 +301,24 @@ export function createProtocolIssuanceStore(client: ProtocolIssuanceSqlClient): 
               runpod_job_id = ?2,
               runpod_status = ?3,
               proof_input_ref = ?4,
+              proof_receipt_ref = COALESCE(?6, proof_receipt_ref),
               error_code = NULL,
               error_message = NULL,
               proving_submitted_at = ?5,
               updated_at = ?5
           WHERE protocol_issuance_batch_id = ?1
             AND status = 'processing'
-            AND worker_checkpoint = 'committed'
+            AND worker_checkpoint IN ('committed', 'proving_submitted')
             AND proof_required = 1
         `,
-        args: [input.batchId, input.runpodJobId, input.runpodStatus, input.proofInputRef, input.now],
+        args: [
+          input.batchId,
+          input.runpodJobId,
+          input.runpodStatus,
+          input.proofInputRef,
+          input.now,
+          input.proofReceiptRef ?? null,
+        ],
       });
     },
 

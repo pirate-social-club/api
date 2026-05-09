@@ -86,8 +86,8 @@ Issuer service
   -> groups by parent_space
   -> creates batch
   -> commits batch in subsd
-  -> sends one proof job to RunPod if proof is required
-  -> fulfills proof into subsd
+  -> sends proof job(s) to RunPod if proof is required
+  -> fulfills each proof into subsd until /proving/next returns none
   -> broadcasts Bitcoin transaction
   -> waits for finality
   -> publishes certs to Fabric
@@ -97,11 +97,11 @@ Issuer service
 Core distinction:
 
 ```text
-Proof job = batch-scoped
+Proof jobs = batch-scoped
 Protocol issuance = handle-scoped
 ```
 
-A batch may contain many handles. It has one Merkle update, one proof job when needed, one Bitcoin commit, and one finality/publish lifecycle.
+A batch may contain many handles. It has one Merkle update, one or more proof jobs when needed, one Bitcoin commit, and one finality/publish lifecycle. The issuer must not broadcast after the first proof result; it keeps asking `subsd /proving/next` after each successful fulfill and only advances to `proving_complete` when `subsd` returns `Option::None`.
 
 ## Public Status Model
 
@@ -517,7 +517,9 @@ Current foundation:
   - poll RunPod `/status/:job_id`
   - store returned fulfill payload through the artifact-store interface
   - fulfill proof into `POST /spaces/:space/proving/fulfill`
-  - move to `proving_complete`
+  - call `GET /spaces/:space/proving/next` again
+  - if another proving request exists, submit the next RunPod job and stay at `proving_submitted`
+  - move to `proving_complete` only when `subsd` returns no pending proving request
   - continue to Bitcoin broadcast/finality/publish.
 - RunPod is still disposable compute only. Job results are copied into Pirate artifact storage before `subsd` fulfillment.
 - Implemented artifact stores:

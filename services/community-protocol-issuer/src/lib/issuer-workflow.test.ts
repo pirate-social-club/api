@@ -10,6 +10,7 @@ import type {
   MarkBatchCommittedInput,
   MarkBatchFailedInput,
   MarkBatchPublishedInput,
+  MarkBatchProvingSubmittedInput,
   PendingProtocolIssuance,
   ProtocolIssuanceBatch,
   ProtocolIssuanceStore,
@@ -127,13 +128,16 @@ class MemoryStore implements ProtocolIssuanceStore {
     }
   }
 
-  async markBatchProvingSubmitted(input: { batchId: string; runpodJobId: string; runpodStatus: string; proofInputRef: string }): Promise<void> {
+  async markBatchProvingSubmitted(input: MarkBatchProvingSubmittedInput): Promise<void> {
     const batch = this.batches.get(input.batchId);
     if (batch) {
       batch.workerCheckpoint = "proving_submitted";
       batch.runpodJobId = input.runpodJobId;
       batch.runpodStatus = input.runpodStatus;
       batch.proofInputRef = input.proofInputRef;
+      if (input.proofReceiptRef !== undefined) {
+        batch.proofReceiptRef = input.proofReceiptRef;
+      }
       batch.errorCode = null;
       batch.errorMessage = null;
       batch.provingSubmittedAt = "2026-05-09T00:05:00.000Z";
@@ -239,12 +243,14 @@ function mockSubsd(input?: {
   broadcastTxid?: string | null;
   certificateErrorFor?: string;
   provingRequestBase64?: string | null;
+  provingRequestSequence?: Array<string | null>;
 }): SubsdClient & { staged: string[]; committedSpaces: string[]; broadcastSpaces: string[]; publishedSpaces: string[]; fulfilledProofs: string[] } {
   const staged: string[] = [];
   const committedSpaces: string[] = [];
   const broadcastSpaces: string[] = [];
   const publishedSpaces: string[] = [];
   const fulfilledProofs: string[] = [];
+  const provingRequestSequence = input?.provingRequestSequence ? [...input.provingRequestSequence] : null;
   return {
     staged,
     committedSpaces,
@@ -264,6 +270,11 @@ function mockSubsd(input?: {
       };
     },
     async getNextProvingRequest() {
+      if (provingRequestSequence) {
+        return {
+          requestBase64: provingRequestSequence.shift() ?? null,
+        };
+      }
       return {
         requestBase64: input?.provingRequestBase64 === undefined ? "proof-input" : input.provingRequestBase64,
       };
@@ -343,7 +354,7 @@ describe("issuer workflow", () => {
       issuance({ id: "ice" }),
       issuance({ id: "snow" }),
     ]);
-    const subsd = mockSubsd();
+    const subsd = mockSubsd({ provingRequestBase64: null });
 
     const result = await runIssuerWorkflow({
       store,
@@ -496,7 +507,7 @@ describe("issuer workflow", () => {
       issuanceIds: rows.map((row) => row.id),
       now: "2026-05-09T00:00:00.000Z",
     });
-    const subsd = mockSubsd();
+    const subsd = mockSubsd({ provingRequestBase64: null });
 
     const result = await runIssuerWorkflow({
       store,
@@ -576,7 +587,7 @@ describe("issuer workflow", () => {
     batch.workerCheckpoint = "proving_submitted";
     batch.proofRequired = true;
     batch.runpodJobId = "rp_job_test";
-    const subsd = mockSubsd();
+    const subsd = mockSubsd({ provingRequestBase64: null });
     const proofClient = mockProofClient();
     const artifactStore = new MemoryProofArtifactStore();
 
@@ -597,6 +608,49 @@ describe("issuer workflow", () => {
     expect(batch).toMatchObject({
       workerCheckpoint: "confirming",
       runpodStatus: "COMPLETED",
+    });
+    expect(batch.proofReceiptRef).toStartWith("memory://");
+  });
+
+  test("submits another proof job when subsd has additional proving requests", async () => {
+    const row = issuance({ id: "proof-more" });
+    const store = new MemoryStore([row]);
+    const batch = await store.createBatchWithIssuances({
+      id: "pib_more_proving",
+      communityId: row.communityId,
+      namespaceId: row.namespaceId,
+      parentSpace: row.parentSpace,
+      issuanceIds: [row.id],
+      now: "2026-05-09T00:00:00.000Z",
+    });
+    batch.status = "processing";
+    batch.workerCheckpoint = "proving_submitted";
+    batch.proofRequired = true;
+    batch.runpodJobId = "rp_job_first";
+    const subsd = mockSubsd({ provingRequestSequence: ["next-proof-input"] });
+    const proofClient = mockProofClient();
+    const artifactStore = new MemoryProofArtifactStore();
+
+    const result = await runIssuerWorkflow({
+      store,
+      subsd,
+      proofClient,
+      artifactStore,
+      config: { minBatchSize: 1, maxBatchSize: 5, maxBatchAgeSeconds: 1800 },
+      now: new Date("2026-05-09T00:05:00.000Z"),
+    });
+
+    expect(result).toMatchObject({
+      batchesProofCompleted: 0,
+      batchesProofSubmitted: 1,
+      batchesBroadcast: 0,
+    });
+    expect(subsd.fulfilledProofs).toEqual(["fulfill-payload"]);
+    expect(proofClient.submitted).toHaveLength(1);
+    expect(proofClient.submitted[0]?.proofInputBase64).toBe("next-proof-input");
+    expect(batch).toMatchObject({
+      workerCheckpoint: "proving_submitted",
+      runpodStatus: "IN_QUEUE",
     });
     expect(batch.proofReceiptRef).toStartWith("memory://");
   });

@@ -97,6 +97,7 @@ export type MarkBatchProvingSubmittedInput = {
   runpodJobId: string;
   runpodStatus: string;
   proofInputRef: string;
+  proofReceiptRef?: string | null;
   now: string;
 };
 

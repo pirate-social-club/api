@@ -419,6 +419,14 @@ describe("protocol issuance DB store", () => {
         proofInputRef: "proof-input-ref",
         now: "2026-05-09T00:02:00.000Z",
       });
+      await store.markBatchProvingSubmitted({
+        batchId: "pib_proof",
+        runpodJobId: "rp_job_next",
+        runpodStatus: "IN_QUEUE",
+        proofInputRef: "proof-input-ref-next",
+        proofReceiptRef: "proof-receipt-ref-first",
+        now: "2026-05-09T00:02:30.000Z",
+      });
       await store.markBatchProvingComplete({
         batchId: "pib_proof",
         runpodStatus: "COMPLETED",
@@ -435,9 +443,9 @@ describe("protocol issuance DB store", () => {
       });
       expect(rows.rows[0]).toMatchObject({
         worker_checkpoint: "proving_complete",
-        runpod_job_id: "rp_job",
+        runpod_job_id: "rp_job_next",
         runpod_status: "COMPLETED",
-        proof_input_ref: "proof-input-ref",
+        proof_input_ref: "proof-input-ref-next",
         proof_receipt_ref: "proof-receipt-ref",
       });
     } finally {

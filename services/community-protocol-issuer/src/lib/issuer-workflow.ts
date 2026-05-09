@@ -289,9 +289,9 @@ async function pollSubmittedProofBatch(input: {
   batch: BatchWithIssuances;
   proofJobMaxAgeSeconds?: number;
   now: string;
-}): Promise<{ completed: boolean; failed: boolean }> {
+}): Promise<{ completed: boolean; failed: boolean; submittedNext: boolean }> {
   if (!input.proofClient || !input.artifactStore || !input.batch.batch.runpodJobId) {
-    return { completed: false, failed: false };
+    return { completed: false, failed: false, submittedNext: false };
   }
   if (isOlderThan({
     timestamp: input.batch.batch.provingSubmittedAt,
@@ -304,7 +304,7 @@ async function pollSubmittedProofBatch(input: {
       errorMessage: "RunPod proof job exceeded max age",
       now: input.now,
     });
-    return { completed: false, failed: true };
+    return { completed: false, failed: true, submittedNext: false };
   }
   try {
     const status = await input.proofClient.getProofJobStatus({
@@ -317,7 +317,7 @@ async function pollSubmittedProofBatch(input: {
         errorMessage: `RunPod proof job is ${status.providerStatus}`,
         now: input.now,
       });
-      return { completed: false, failed: false };
+      return { completed: false, failed: false, submittedNext: false };
     }
     if (status.status === "failed") {
       await input.store.markBatchFailed({
@@ -326,10 +326,10 @@ async function pollSubmittedProofBatch(input: {
         errorMessage: status.errorMessage,
         now: input.now,
       });
-      return { completed: false, failed: true };
+      return { completed: false, failed: true, submittedNext: false };
     }
     if (status.status !== "completed") {
-      return { completed: false, failed: false };
+      return { completed: false, failed: false, submittedNext: false };
     }
     const proofReceiptRef = await input.artifactStore.putBase64({
       kind: "proof_receipt",
@@ -347,7 +347,32 @@ async function pollSubmittedProofBatch(input: {
         errorMessage: fulfilled.message ?? "subsd proof fulfill failed",
         now: input.now,
       });
-      return { completed: false, failed: false };
+      return { completed: false, failed: false, submittedNext: false };
+    }
+    const nextRequest = await input.subsd.getNextProvingRequest({
+      parentSpace: input.batch.batch.parentSpace,
+    });
+    if (nextRequest.requestBase64) {
+      const proofInputRef = await input.artifactStore.putBase64({
+        kind: "proof_input",
+        batchId: input.batch.batch.id,
+        valueBase64: nextRequest.requestBase64,
+      });
+      const nextJob = await input.proofClient.submitProofJob({
+        batchId: input.batch.batch.id,
+        parentSpace: input.batch.batch.parentSpace,
+        proofInputRef,
+        proofInputBase64: nextRequest.requestBase64,
+      });
+      await input.store.markBatchProvingSubmitted({
+        batchId: input.batch.batch.id,
+        runpodJobId: nextJob.jobId,
+        runpodStatus: nextJob.status,
+        proofInputRef,
+        proofReceiptRef,
+        now: input.now,
+      });
+      return { completed: false, failed: false, submittedNext: true };
     }
     await input.store.markBatchProvingComplete({
       batchId: input.batch.batch.id,
@@ -355,7 +380,7 @@ async function pollSubmittedProofBatch(input: {
       proofReceiptRef,
       now: input.now,
     });
-    return { completed: true, failed: false };
+    return { completed: true, failed: false, submittedNext: false };
   } catch (error) {
     await input.store.recordBatchRetryableError({
       batchId: input.batch.batch.id,
@@ -363,7 +388,7 @@ async function pollSubmittedProofBatch(input: {
       errorMessage: error instanceof Error ? error.message : String(error),
       now: input.now,
     });
-    return { completed: false, failed: false };
+    return { completed: false, failed: false, submittedNext: false };
   }
 }
 
@@ -553,6 +578,9 @@ export async function runIssuerWorkflow(input: {
     });
     if (result.completed) {
       batchesProofCompleted += 1;
+    }
+    if (result.submittedNext) {
+      batchesProofSubmitted += 1;
     }
     if (result.failed) {
       failed += batch.issuances.length;
