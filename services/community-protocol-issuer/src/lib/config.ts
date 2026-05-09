@@ -2,8 +2,11 @@ import type { IssuerWorkflowConfig } from "./issuer-workflow.js";
 import { requireText, trim } from "@pirate/api-shared";
 
 export type IssuerRuntimeConfig = IssuerWorkflowConfig & {
-  communityDbUrl: string;
+  communityDbUrl: string | null;
   communityDbAuthToken: string | null;
+  communityId: string | null;
+  controlPlaneDatabaseUrl: string | null;
+  tursoCommunityDbWrapKey: string | null;
   subsdBaseUrl: string;
   runpodEndpointId: string | null;
   runpodApiKey: string | null;
@@ -65,10 +68,18 @@ export function readIssuerRuntimeConfig(env: Record<string, string | undefined>)
   if (minBatchSize > maxBatchSize) {
     throw new Error("COMMUNITY_PROTOCOL_ISSUER_MIN_BATCH_SIZE must be <= COMMUNITY_PROTOCOL_ISSUER_MAX_BATCH_SIZE");
   }
+  const communityDbUrl = readOptionalString(env, "COMMUNITY_PROTOCOL_ISSUER_COMMUNITY_DB_URL");
+  const communityId = readOptionalString(env, "COMMUNITY_PROTOCOL_ISSUER_COMMUNITY_ID");
+  if (!communityDbUrl && !communityId) {
+    throw new Error("Either COMMUNITY_PROTOCOL_ISSUER_COMMUNITY_DB_URL or COMMUNITY_PROTOCOL_ISSUER_COMMUNITY_ID is required");
+  }
 
   return {
-    communityDbUrl: readRequiredString(env, "COMMUNITY_PROTOCOL_ISSUER_COMMUNITY_DB_URL"),
+    communityDbUrl,
     communityDbAuthToken: readOptionalString(env, "COMMUNITY_PROTOCOL_ISSUER_COMMUNITY_DB_AUTH_TOKEN"),
+    communityId,
+    controlPlaneDatabaseUrl: readOptionalString(env, "CONTROL_PLANE_DATABASE_URL"),
+    tursoCommunityDbWrapKey: readOptionalString(env, "TURSO_COMMUNITY_DB_WRAP_KEY"),
     subsdBaseUrl: readRequiredString(env, "COMMUNITY_PROTOCOL_ISSUER_SUBSD_BASE_URL"),
     runpodEndpointId: readOptionalString(env, "COMMUNITY_PROTOCOL_ISSUER_RUNPOD_ENDPOINT_ID"),
     runpodApiKey: readOptionalString(env, "COMMUNITY_PROTOCOL_ISSUER_RUNPOD_API_KEY"),

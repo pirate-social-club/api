@@ -541,12 +541,16 @@ Current foundation:
   - coordinate RunPod execution timeout, `SUBS_PROVER_TIMEOUT_SECONDS`, and `COMMUNITY_PROTOCOL_ISSUER_PROOF_JOB_MAX_AGE_SECONDS`; the shortest timer wins operationally.
 - V1 assumes a single worker instance per community DB. A distributed parent-space lock is required before running concurrent workers.
 - The one-shot runner is `bun src/main.ts` in `services/community-protocol-issuer`.
+- The runner can either receive a direct community DB URL/token or resolve the active community DB credential from the control plane via `COMMUNITY_PROTOCOL_ISSUER_COMMUNITY_ID`. Prefer the control-plane resolver for staging/prod so rotated Turso tokens are not copied into the issuer secret namespace.
 
 Runner environment:
 
 ```text
-COMMUNITY_PROTOCOL_ISSUER_COMMUNITY_DB_URL
-COMMUNITY_PROTOCOL_ISSUER_COMMUNITY_DB_AUTH_TOKEN optional
+COMMUNITY_PROTOCOL_ISSUER_COMMUNITY_DB_URL optional direct community DB URL
+COMMUNITY_PROTOCOL_ISSUER_COMMUNITY_DB_AUTH_TOKEN optional direct community DB auth token
+COMMUNITY_PROTOCOL_ISSUER_COMMUNITY_ID optional control-plane resolver community id
+CONTROL_PLANE_DATABASE_URL required when using COMMUNITY_PROTOCOL_ISSUER_COMMUNITY_ID
+TURSO_COMMUNITY_DB_WRAP_KEY required when using COMMUNITY_PROTOCOL_ISSUER_COMMUNITY_ID
 COMMUNITY_PROTOCOL_ISSUER_SUBSD_BASE_URL
 COMMUNITY_PROTOCOL_ISSUER_MIN_BATCH_SIZE default 5
 COMMUNITY_PROTOCOL_ISSUER_MAX_BATCH_SIZE default 50

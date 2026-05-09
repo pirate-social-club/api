@@ -11,6 +11,9 @@ describe("issuer runtime config", () => {
     expect(readIssuerRuntimeConfig(baseEnv)).toEqual({
       communityDbUrl: "file:/tmp/community.db",
       communityDbAuthToken: null,
+      communityId: null,
+      controlPlaneDatabaseUrl: null,
+      tursoCommunityDbWrapKey: null,
       subsdBaseUrl: "http://127.0.0.1:7226",
       runpodEndpointId: null,
       runpodApiKey: null,
@@ -22,6 +25,21 @@ describe("issuer runtime config", () => {
       btcFeeRateSatVb: undefined,
       proofJobMaxAgeSeconds: undefined,
       scanLimit: undefined,
+    });
+  });
+
+  test("reads control-plane community DB resolver settings", () => {
+    expect(readIssuerRuntimeConfig({
+      COMMUNITY_PROTOCOL_ISSUER_COMMUNITY_ID: "cmt_test",
+      CONTROL_PLANE_DATABASE_URL: "postgresql://control.example/pirate",
+      TURSO_COMMUNITY_DB_WRAP_KEY: "11".repeat(32),
+      COMMUNITY_PROTOCOL_ISSUER_SUBSD_BASE_URL: "http://127.0.0.1:7226",
+    })).toMatchObject({
+      communityDbUrl: null,
+      communityDbAuthToken: null,
+      communityId: "cmt_test",
+      controlPlaneDatabaseUrl: "postgresql://control.example/pirate",
+      tursoCommunityDbWrapKey: "11".repeat(32),
     });
   });
 
@@ -60,7 +78,7 @@ describe("issuer runtime config", () => {
   test("requires community DB and subsd base URL", () => {
     expect(() => readIssuerRuntimeConfig({
       COMMUNITY_PROTOCOL_ISSUER_SUBSD_BASE_URL: "http://127.0.0.1:7226",
-    })).toThrow("COMMUNITY_PROTOCOL_ISSUER_COMMUNITY_DB_URL is required");
+    })).toThrow("Either COMMUNITY_PROTOCOL_ISSUER_COMMUNITY_DB_URL or COMMUNITY_PROTOCOL_ISSUER_COMMUNITY_ID is required");
     expect(() => readIssuerRuntimeConfig({
       COMMUNITY_PROTOCOL_ISSUER_COMMUNITY_DB_URL: "file:/tmp/community.db",
     })).toThrow("COMMUNITY_PROTOCOL_ISSUER_SUBSD_BASE_URL is required");

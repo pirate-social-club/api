@@ -1,4 +1,5 @@
 import { readIssuerRuntimeConfig } from "./config.js";
+import { resolveCommunityDbFromControlPlane } from "./community-db-resolver.js";
 import { runIssuerWorkflow, type IssuerWorkflowResult } from "./issuer-workflow.js";
 import { openLibsqlProtocolIssuanceStore } from "./libsql-store.js";
 import { FileProofArtifactStore, MemoryProofArtifactStore } from "./proof-artifact-store.js";
@@ -23,6 +24,21 @@ export async function runIssuerOnce(input: {
   if (config.proofArtifactStore === "file" && !config.proofArtifactDir) {
     throw new Error("COMMUNITY_PROTOCOL_ISSUER_PROOF_ARTIFACT_DIR is required for file artifact storage");
   }
+  const communityDb = config.communityDbUrl
+    ? {
+      url: config.communityDbUrl,
+      authToken: config.communityDbAuthToken,
+    }
+    : config.communityId && config.controlPlaneDatabaseUrl && config.tursoCommunityDbWrapKey
+      ? await resolveCommunityDbFromControlPlane({
+        communityId: config.communityId,
+        controlPlaneDatabaseUrl: config.controlPlaneDatabaseUrl,
+        tursoCommunityDbWrapKey: config.tursoCommunityDbWrapKey,
+      })
+      : null;
+  if (!communityDb) {
+    throw new Error("CONTROL_PLANE_DATABASE_URL and TURSO_COMMUNITY_DB_WRAP_KEY are required when using COMMUNITY_PROTOCOL_ISSUER_COMMUNITY_ID");
+  }
   const artifactStore = config.proofArtifactStore === "file" && config.proofArtifactDir
     ? new FileProofArtifactStore(config.proofArtifactDir)
     : config.proofArtifactStore === "memory"
@@ -35,8 +51,8 @@ export async function runIssuerOnce(input: {
     })
     : undefined;
   const opened = await openLibsqlProtocolIssuanceStore({
-    url: config.communityDbUrl,
-    authToken: config.communityDbAuthToken,
+    url: communityDb.url,
+    authToken: communityDb.authToken,
   });
   try {
     return await runIssuerWorkflow({
