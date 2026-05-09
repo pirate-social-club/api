@@ -90,6 +90,7 @@ export function readIssuerRuntimeConfig(env: Record<string, string | undefined>)
     maxBatchAgeSeconds: readPositiveInt(env, "COMMUNITY_PROTOCOL_ISSUER_MAX_BATCH_AGE_SECONDS", 30 * 60),
     btcFeeRateSatVb: readOptionalPositiveInt(env, "COMMUNITY_PROTOCOL_ISSUER_BTC_FEE_RATE_SAT_VB"),
     proofJobMaxAgeSeconds: readOptionalPositiveInt(env, "COMMUNITY_PROTOCOL_ISSUER_PROOF_JOB_MAX_AGE_SECONDS"),
+    maxProofJobsPerBatch: readPositiveInt(env, "COMMUNITY_PROTOCOL_ISSUER_MAX_PROOF_JOBS_PER_BATCH", 16),
     scanLimit: readOptionalPositiveInt(env, "COMMUNITY_PROTOCOL_ISSUER_SCAN_LIMIT"),
   };
 }

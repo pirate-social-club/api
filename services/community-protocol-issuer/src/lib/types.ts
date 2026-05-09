@@ -40,6 +40,7 @@ export type ProtocolIssuanceBatch = {
   runpodStatus: string | null;
   proofInputRef: string | null;
   proofReceiptRef: string | null;
+  proofJobsSubmitted: number;
   errorCode: string | null;
   errorMessage: string | null;
   createdAt: string;

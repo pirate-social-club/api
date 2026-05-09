@@ -53,6 +53,14 @@ function booleanValue(row: Row, key: string): boolean {
   return value === true || value === 1;
 }
 
+function numberValue(row: Row, key: string): number {
+  const value = row[key];
+  if (typeof value !== "number") {
+    throw new Error(`Expected number column ${key}`);
+  }
+  return value;
+}
+
 function enumValue<T extends string>(row: Row, key: string, allowed: readonly T[]): T {
   const value = stringValue(row, key);
   if (!allowed.includes(value as T)) {
@@ -101,6 +109,7 @@ function mapBatch(row: Row): ProtocolIssuanceBatch {
     runpodStatus: nullableStringValue(row, "runpod_status"),
     proofInputRef: nullableStringValue(row, "proof_input_ref"),
     proofReceiptRef: nullableStringValue(row, "proof_receipt_ref"),
+    proofJobsSubmitted: numberValue(row, "proof_jobs_submitted"),
     errorCode: nullableStringValue(row, "error_code"),
     errorMessage: nullableStringValue(row, "error_message"),
     createdAt: stringValue(row, "created_at"),
@@ -302,6 +311,7 @@ export function createProtocolIssuanceStore(client: ProtocolIssuanceSqlClient): 
               runpod_status = ?3,
               proof_input_ref = ?4,
               proof_receipt_ref = COALESCE(?6, proof_receipt_ref),
+              proof_jobs_submitted = proof_jobs_submitted + 1,
               error_code = NULL,
               error_message = NULL,
               proving_submitted_at = ?5,

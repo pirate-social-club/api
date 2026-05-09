@@ -24,6 +24,7 @@ describe("issuer runtime config", () => {
       maxBatchAgeSeconds: 1800,
       btcFeeRateSatVb: undefined,
       proofJobMaxAgeSeconds: undefined,
+      maxProofJobsPerBatch: 16,
       scanLimit: undefined,
     });
   });
@@ -58,12 +59,14 @@ describe("issuer runtime config", () => {
       COMMUNITY_PROTOCOL_ISSUER_PROOF_ARTIFACT_STORE: "file",
       COMMUNITY_PROTOCOL_ISSUER_PROOF_ARTIFACT_DIR: "/tmp/proofs",
       COMMUNITY_PROTOCOL_ISSUER_PROOF_JOB_MAX_AGE_SECONDS: "3600",
+      COMMUNITY_PROTOCOL_ISSUER_MAX_PROOF_JOBS_PER_BATCH: "4",
     })).toMatchObject({
       runpodEndpointId: "endpoint-test",
       runpodApiKey: "key-test",
       proofArtifactStore: "file",
       proofArtifactDir: "/tmp/proofs",
       proofJobMaxAgeSeconds: 3600,
+      maxProofJobsPerBatch: 4,
     });
   });
 

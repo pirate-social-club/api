@@ -15,6 +15,7 @@ export type IssuerWorkflowConfig = {
   maxBatchAgeSeconds: number;
   btcFeeRateSatVb?: number;
   proofJobMaxAgeSeconds?: number;
+  maxProofJobsPerBatch?: number;
   scanLimit?: number;
 };
 
@@ -45,6 +46,24 @@ function isOlderThan(input: {
     return false;
   }
   return Date.parse(input.timestamp) <= Date.parse(input.now) - input.maxAgeSeconds * 1000;
+}
+
+function maxProofJobsPerBatch(configured: number | undefined): number {
+  return configured ?? 16;
+}
+
+async function failBatchForProofJobLimit(input: {
+  store: ProtocolIssuanceStore;
+  batch: BatchWithIssuances;
+  maxProofJobs: number;
+  now: string;
+}): Promise<void> {
+  await input.store.markBatchFailed({
+    batchId: input.batch.batch.id,
+    errorCode: "proof_job_limit_exceeded",
+    errorMessage: `Protocol issuance batch exceeded max proof jobs (${input.maxProofJobs})`,
+    now: input.now,
+  });
 }
 
 function groupByParentSpace(issuances: PendingProtocolIssuance[]): Map<string, PendingProtocolIssuance[]> {
@@ -233,10 +252,21 @@ async function submitProofForCommittedBatch(input: {
   proofClient?: ProofJobClient;
   artifactStore?: ProofArtifactStore;
   batch: BatchWithIssuances;
+  maxProofJobsPerBatch?: number;
   now: string;
-}): Promise<{ submitted: boolean }> {
+}): Promise<{ submitted: boolean; failed: boolean }> {
   if (!input.proofClient || !input.artifactStore) {
-    return { submitted: false };
+    return { submitted: false, failed: false };
+  }
+  const maxProofJobs = maxProofJobsPerBatch(input.maxProofJobsPerBatch);
+  if (input.batch.batch.proofJobsSubmitted >= maxProofJobs) {
+    await failBatchForProofJobLimit({
+      store: input.store,
+      batch: input.batch,
+      maxProofJobs,
+      now: input.now,
+    });
+    return { submitted: false, failed: true };
   }
   try {
     const provingRequest = await input.subsd.getNextProvingRequest({
@@ -249,7 +279,7 @@ async function submitProofForCommittedBatch(input: {
         errorMessage: "subsd did not return a pending proving request",
         now: input.now,
       });
-      return { submitted: false };
+      return { submitted: false, failed: false };
     }
     const proofInputRef = await input.artifactStore.putBase64({
       kind: "proof_input",
@@ -269,7 +299,7 @@ async function submitProofForCommittedBatch(input: {
       proofInputRef,
       now: input.now,
     });
-    return { submitted: true };
+    return { submitted: true, failed: false };
   } catch (error) {
     await input.store.recordBatchRetryableError({
       batchId: input.batch.batch.id,
@@ -277,7 +307,7 @@ async function submitProofForCommittedBatch(input: {
       errorMessage: error instanceof Error ? error.message : String(error),
       now: input.now,
     });
-    return { submitted: false };
+    return { submitted: false, failed: false };
   }
 }
 
@@ -288,6 +318,7 @@ async function pollSubmittedProofBatch(input: {
   artifactStore?: ProofArtifactStore;
   batch: BatchWithIssuances;
   proofJobMaxAgeSeconds?: number;
+  maxProofJobsPerBatch?: number;
   now: string;
 }): Promise<{ completed: boolean; failed: boolean; submittedNext: boolean }> {
   if (!input.proofClient || !input.artifactStore || !input.batch.batch.runpodJobId) {
@@ -353,6 +384,16 @@ async function pollSubmittedProofBatch(input: {
       parentSpace: input.batch.batch.parentSpace,
     });
     if (nextRequest.requestBase64) {
+      const maxProofJobs = maxProofJobsPerBatch(input.maxProofJobsPerBatch);
+      if (input.batch.batch.proofJobsSubmitted >= maxProofJobs) {
+        await failBatchForProofJobLimit({
+          store: input.store,
+          batch: input.batch,
+          maxProofJobs,
+          now: input.now,
+        });
+        return { completed: false, failed: true, submittedNext: false };
+      }
       const proofInputRef = await input.artifactStore.putBase64({
         kind: "proof_input",
         batchId: input.batch.batch.id,
@@ -494,6 +535,9 @@ export async function runIssuerWorkflow(input: {
   if (input.config.minBatchSize > input.config.maxBatchSize) {
     throw new Error("minBatchSize must be <= maxBatchSize");
   }
+  if (input.config.maxProofJobsPerBatch !== undefined) {
+    assertPositiveInteger(input.config.maxProofJobsPerBatch, "maxProofJobsPerBatch");
+  }
 
   const now = (input.now ?? new Date()).toISOString();
   const created = await createBatchesForUnbatchedIssuances({
@@ -544,10 +588,14 @@ export async function runIssuerWorkflow(input: {
         proofClient: input.proofClient,
         artifactStore: input.artifactStore,
         batch,
+        maxProofJobsPerBatch: input.config.maxProofJobsPerBatch,
         now,
       });
       if (result.submitted) {
         batchesProofSubmitted += 1;
+      }
+      if (result.failed) {
+        failed += batch.issuances.length;
       }
     } else {
       const result = await broadcastCommittedBatch({
@@ -574,6 +622,7 @@ export async function runIssuerWorkflow(input: {
       artifactStore: input.artifactStore,
       batch,
       proofJobMaxAgeSeconds: input.config.proofJobMaxAgeSeconds,
+      maxProofJobsPerBatch: input.config.maxProofJobsPerBatch,
       now,
     });
     if (result.completed) {

@@ -67,6 +67,7 @@ class MemoryStore implements ProtocolIssuanceStore {
       runpodStatus: null,
       proofInputRef: null,
       proofReceiptRef: null,
+      proofJobsSubmitted: 0,
       errorCode: null,
       errorMessage: null,
       createdAt: input.now,
@@ -135,6 +136,7 @@ class MemoryStore implements ProtocolIssuanceStore {
       batch.runpodJobId = input.runpodJobId;
       batch.runpodStatus = input.runpodStatus;
       batch.proofInputRef = input.proofInputRef;
+      batch.proofJobsSubmitted += 1;
       if (input.proofReceiptRef !== undefined) {
         batch.proofReceiptRef = input.proofReceiptRef;
       }
@@ -569,7 +571,49 @@ describe("issuer workflow", () => {
       runpodJobId: "rp_job_test",
       runpodStatus: "IN_QUEUE",
     });
+    expect(batch?.proofJobsSubmitted).toBe(1);
     expect(batch?.proofInputRef).toStartWith("memory://");
+  });
+
+  test("fails proof-required batches before submitting beyond the proof job cap", async () => {
+    const row = issuance({ id: "proof-limit" });
+    const store = new MemoryStore([row]);
+    const batch = await store.createBatchWithIssuances({
+      id: "pib_proof_limit",
+      communityId: row.communityId,
+      namespaceId: row.namespaceId,
+      parentSpace: row.parentSpace,
+      issuanceIds: [row.id],
+      now: "2026-05-09T00:00:00.000Z",
+    });
+    batch.status = "processing";
+    batch.workerCheckpoint = "committed";
+    batch.proofRequired = true;
+    batch.proofJobsSubmitted = 1;
+    const proofClient = mockProofClient();
+
+    const result = await runIssuerWorkflow({
+      store,
+      subsd: mockSubsd({ provingRequestBase64: "proof-input" }),
+      proofClient,
+      artifactStore: new MemoryProofArtifactStore(),
+      config: {
+        minBatchSize: 1,
+        maxBatchSize: 5,
+        maxBatchAgeSeconds: 1800,
+        maxProofJobsPerBatch: 1,
+      },
+      now: new Date("2026-05-09T00:05:00.000Z"),
+    });
+
+    expect(result.failed).toBe(1);
+    expect(proofClient.submitted).toEqual([]);
+    expect(batch).toMatchObject({
+      status: "failed",
+      workerCheckpoint: "failed",
+      errorCode: "proof_job_limit_exceeded",
+    });
+    expect(row.publicStatus).toBe("failed");
   });
 
   test("fulfills completed proof jobs and broadcasts the proved batch", async () => {
@@ -627,6 +671,7 @@ describe("issuer workflow", () => {
     batch.workerCheckpoint = "proving_submitted";
     batch.proofRequired = true;
     batch.runpodJobId = "rp_job_first";
+    batch.proofJobsSubmitted = 1;
     const subsd = mockSubsd({ provingRequestSequence: ["next-proof-input"] });
     const proofClient = mockProofClient();
     const artifactStore = new MemoryProofArtifactStore();
@@ -652,7 +697,57 @@ describe("issuer workflow", () => {
       workerCheckpoint: "proving_submitted",
       runpodStatus: "IN_QUEUE",
     });
+    expect(batch.proofJobsSubmitted).toBe(2);
     expect(batch.proofReceiptRef).toStartWith("memory://");
+  });
+
+  test("fails multi-proof batches instead of submitting beyond the proof job cap", async () => {
+    const row = issuance({ id: "proof-more-limit" });
+    const store = new MemoryStore([row]);
+    const batch = await store.createBatchWithIssuances({
+      id: "pib_more_proving_limit",
+      communityId: row.communityId,
+      namespaceId: row.namespaceId,
+      parentSpace: row.parentSpace,
+      issuanceIds: [row.id],
+      now: "2026-05-09T00:00:00.000Z",
+    });
+    batch.status = "processing";
+    batch.workerCheckpoint = "proving_submitted";
+    batch.proofRequired = true;
+    batch.runpodJobId = "rp_job_first";
+    batch.proofJobsSubmitted = 1;
+    const subsd = mockSubsd({ provingRequestSequence: ["next-proof-input"] });
+    const proofClient = mockProofClient();
+
+    const result = await runIssuerWorkflow({
+      store,
+      subsd,
+      proofClient,
+      artifactStore: new MemoryProofArtifactStore(),
+      config: {
+        minBatchSize: 1,
+        maxBatchSize: 5,
+        maxBatchAgeSeconds: 1800,
+        maxProofJobsPerBatch: 1,
+      },
+      now: new Date("2026-05-09T00:05:00.000Z"),
+    });
+
+    expect(result).toMatchObject({
+      batchesProofCompleted: 0,
+      batchesProofSubmitted: 0,
+      batchesBroadcast: 0,
+      failed: 1,
+    });
+    expect(subsd.fulfilledProofs).toEqual(["fulfill-payload"]);
+    expect(proofClient.submitted).toEqual([]);
+    expect(batch).toMatchObject({
+      status: "failed",
+      workerCheckpoint: "failed",
+      errorCode: "proof_job_limit_exceeded",
+    });
+    expect(row.publicStatus).toBe("failed");
   });
 
   test("marks failed RunPod jobs terminal instead of retrying forever", async () => {

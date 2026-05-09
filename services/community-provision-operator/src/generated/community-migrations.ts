@@ -3091,4 +3091,11 @@ PRAGMA legacy_alter_table = OFF;
 `,
     checksum: "ff1e232ac840090ebb5734e7956415d905ddbb54919932b5b52c1ab78b9c0edc",
   },
+  {
+    name: "1074_protocol_issuance_proof_job_count.sql",
+    sql: `ALTER TABLE protocol_issuance_batches
+    ADD COLUMN proof_jobs_submitted INTEGER NOT NULL DEFAULT 0 CHECK (proof_jobs_submitted >= 0);
+`,
+    checksum: "0c20fc3f674479a3cedcfe3f563939d10ea4fffc1860ef1a2ee474cdd1b9675c",
+  },
 ] as const;

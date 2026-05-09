@@ -52,6 +52,7 @@ async function createTestClient(): Promise<ProtocolIssuanceSqlClient & { close()
       runpod_status TEXT,
       proof_input_ref TEXT,
       proof_receipt_ref TEXT,
+      proof_jobs_submitted INTEGER NOT NULL DEFAULT 0 CHECK (proof_jobs_submitted >= 0),
       bitcoin_txid TEXT,
       bitcoin_commit_ref TEXT,
       fabric_submission_ref TEXT,
@@ -80,7 +81,11 @@ async function createMigrationBackedTestClient(): Promise<ProtocolIssuanceSqlCli
     import.meta.dir,
     "../../../api/test-fixtures/db/community-template/migrations/1072_community_handle_protocol_issuance.sql",
   ), "utf8");
-  const statements = migration
+  const counterMigration = readFileSync(resolve(
+    import.meta.dir,
+    "../../../api/test-fixtures/db/community-template/migrations/1074_protocol_issuance_proof_job_count.sql",
+  ), "utf8");
+  const statements = `${migration}\n${counterMigration}`
     .split(";")
     .map((statement) => statement.trim())
     .filter(Boolean);
@@ -153,6 +158,7 @@ describe("protocol issuance DB store", () => {
         "proving_completed_at",
         "broadcast_at",
         "published_at",
+        "proof_jobs_submitted",
       ]);
       expect(issuanceColumns.rows.map((row) => row.name)).toEqual([
         "community_handle_protocol_issuance_id",
@@ -436,7 +442,7 @@ describe("protocol issuance DB store", () => {
 
       const rows = await client.execute({
         sql: `
-          SELECT worker_checkpoint, runpod_job_id, runpod_status, proof_input_ref, proof_receipt_ref
+          SELECT worker_checkpoint, runpod_job_id, runpod_status, proof_input_ref, proof_receipt_ref, proof_jobs_submitted
           FROM protocol_issuance_batches
           WHERE protocol_issuance_batch_id = 'pib_proof'
         `,
@@ -447,6 +453,7 @@ describe("protocol issuance DB store", () => {
         runpod_status: "COMPLETED",
         proof_input_ref: "proof-input-ref-next",
         proof_receipt_ref: "proof-receipt-ref",
+        proof_jobs_submitted: 2,
       });
     } finally {
       client.close();

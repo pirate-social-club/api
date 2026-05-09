@@ -103,6 +103,8 @@ Protocol issuance = handle-scoped
 
 A batch may contain many handles. It has one Merkle update, one or more proof jobs when needed, one Bitcoin commit, and one finality/publish lifecycle. The issuer must not broadcast after the first proof result; it keeps asking `subsd /proving/next` after each successful fulfill and only advances to `proving_complete` when `subsd` returns `Option::None`.
 
+`protocol_issuance_batches.proof_receipt_ref` stores the latest receipt ref, and after completion it is the final receipt ref. It is not a complete proof receipt history. Earlier proof inputs/receipts remain in the configured artifact store for audit, and `proof_jobs_submitted` is the durable circuit-breaker counter for the batch.
+
 ## Public Status Model
 
 Expose only:
@@ -202,6 +204,7 @@ CREATE TABLE protocol_issuance_batches (
   runpod_status TEXT,
   proof_input_ref TEXT,
   proof_receipt_ref TEXT,
+  proof_jobs_submitted INTEGER NOT NULL DEFAULT 0 CHECK (proof_jobs_submitted >= 0),
 
   bitcoin_txid TEXT,
   bitcoin_commit_ref TEXT,
@@ -528,6 +531,7 @@ Current foundation:
 - RunPod proof jobs require `COMMUNITY_PROTOCOL_ISSUER_PROOF_ARTIFACT_STORE=file` and `COMMUNITY_PROTOCOL_ISSUER_PROOF_ARTIFACT_DIR`.
 - RunPod terminal failures (`FAILED`, `TIMED_OUT`, `CANCELLED`) mark the batch and linked issuance rows failed. They are not retried forever against the same job id.
 - `COMMUNITY_PROTOCOL_ISSUER_PROOF_JOB_MAX_AGE_SECONDS` optionally marks a stale queued/running RunPod job failed so a stuck job does not leave users in `issuing` indefinitely.
+- `COMMUNITY_PROTOCOL_ISSUER_MAX_PROOF_JOBS_PER_BATCH` defaults to `16`. If `subsd` continues returning proving requests after that many submitted jobs for one batch, the issuer marks the batch and linked issuance rows failed with `proof_job_limit_exceeded`.
 - `services/community-protocol-prover-runpod` defines the RunPod worker contract and command-adapter container:
   - input: `proof_input_base64`, `batch_id`, `parent_space`, `proof_input_ref`.
   - output: `fulfill_payload_base64` plus echoed batch metadata.

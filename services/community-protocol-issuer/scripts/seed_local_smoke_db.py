@@ -37,7 +37,12 @@ def main() -> None:
     try:
         conn.execute("PRAGMA foreign_keys = ON")
         if not args.append:
-            for migration in ("1001_community_core.sql", "1066_community_handle_claims.sql", "1072_community_handle_protocol_issuance.sql"):
+            for migration in (
+                "1001_community_core.sql",
+                "1066_community_handle_claims.sql",
+                "1072_community_handle_protocol_issuance.sql",
+                "1074_protocol_issuance_proof_job_count.sql",
+            ):
                 conn.executescript((MIGRATIONS / migration).read_text(encoding="utf8"))
 
         ts = now_iso()
