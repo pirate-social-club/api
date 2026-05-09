@@ -581,8 +581,8 @@ Staging Infisical placeholders:
   COMMUNITY_PROTOCOL_ISSUER_PROOF_JOB_MAX_AGE_SECONDS=604800
 
 /services/community-protocol-subsd
-  SUBSD_RPC_URL=http://127.0.0.1:7225
-  SUBSD_WALLET=wallet_99
+  SUBSD_RPC_URL=http://127.0.0.1:7226
+  SUBSD_WALLET=default
   SUBSD_DATA_DIR=/var/lib/pirate/subsd/data
   SUBSD_PORT=7777
 
