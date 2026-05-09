@@ -327,6 +327,49 @@ function providerErrorDetails(error: unknown): Record<string, unknown> | null {
   return null
 }
 
+type VerificationCompletionInput = {
+  verificationSessionId: string
+  userId: string
+  attestationId?: string | null
+  proof?: unknown
+  proofHash?: string | null
+  providerPayloadRef?: unknown
+}
+
+async function selfCompletionDiagnostics(
+  row: VerificationSessionRow,
+  input: VerificationCompletionInput,
+): Promise<Record<string, unknown>> {
+  const providerPayloadRef = typeof input.providerPayloadRef === "string" ? input.providerPayloadRef : null
+  const proof = typeof input.proof === "string" ? input.proof : null
+  const createdAtMs = Date.parse(row.created_at)
+  return {
+    verificationSessionId: input.verificationSessionId,
+    userId: input.userId,
+    currentStatus: row.status,
+    existingFailureCode: row.failure_code,
+    verificationIntent: row.verification_intent,
+    policyId: row.policy_id,
+    walletAttachmentId: row.wallet_attachment_id,
+    requestedCapabilities: parseJsonField<RequestedVerificationCapability[]>(
+      row.requested_capabilities_json,
+      "verification_sessions.requested_capabilities_json",
+    ),
+    verificationRequirements: parseVerificationRequirements(row.verification_requirements_json),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    expiresAt: row.expires_at,
+    ageSeconds: Number.isFinite(createdAtMs) ? Math.max(0, Math.round((Date.now() - createdAtMs) / 1000)) : null,
+    upstreamSessionRefHash: row.upstream_session_ref ? await sha256Hex(row.upstream_session_ref) : null,
+    upstreamSessionRefPrefix: row.upstream_session_ref?.slice(0, 16) ?? null,
+    attestationId: input.attestationId ?? null,
+    proofHash: input.proofHash ?? (proof ? await sha256Hex(proof) : null),
+    proofLength: proof?.length ?? null,
+    providerPayloadRefHash: providerPayloadRef ? await sha256Hex(providerPayloadRef) : null,
+    providerPayloadRefLength: providerPayloadRef?.length ?? null,
+  }
+}
+
 async function completeVerySession(
   client: Client,
   env: Env,
@@ -430,17 +473,15 @@ async function completeSelfSession(
   client: Client,
   env: Env,
   row: VerificationSessionRow,
-  input: {
-    verificationSessionId: string
-    userId: string
-    attestationId?: string | null
-    proof?: unknown
-    proofHash?: string | null
-    providerPayloadRef?: unknown
-  },
+  input: VerificationCompletionInput,
 ): Promise<VerificationSession> {
   const sessionExpiresAt = row.expires_at
   if (sessionExpiresAt && new Date(sessionExpiresAt) < new Date()) {
+    console.warn("[self-provider] completion outcome", {
+      ...await selfCompletionDiagnostics(row, input),
+      outcome: "expired",
+      failureReason: "provider_expired",
+    })
     await client.execute({
       sql: `UPDATE verification_sessions SET status = 'expired', updated_at = ?2 WHERE verification_session_id = ?1`,
       args: [input.verificationSessionId, new Date().toISOString()],
@@ -459,6 +500,12 @@ async function completeSelfSession(
       providerPayloadRef: input.providerPayloadRef ?? null,
     })
   } catch (error) {
+    console.warn("[self-provider] completion provider unavailable", {
+      ...await selfCompletionDiagnostics(row, input),
+      errorName: error instanceof Error ? error.name : null,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      errorDetails: providerErrorDetails(error),
+    })
     throw providerUnavailable(
       error instanceof Error ? error.message : "Self provider is unavailable"
     )
@@ -494,6 +541,17 @@ async function completeSelfSession(
       missingClaims.push("gender")
     }
     if (missingClaims.length > 0) {
+      console.warn("[self-provider] completion outcome", {
+        ...await selfCompletionDiagnostics(row, input),
+        outcome: "failed",
+        failureReason: `missing_required_claims:${missingClaims.join(",")}`,
+        missingClaims,
+        hasNationality: Boolean(outcome.claims.nationality),
+        hasGender: Boolean(outcome.claims.gender),
+        hasNullifier: Boolean(outcome.claims.nullifier),
+        ageOver18: outcome.claims.age_over_18,
+        minimumAge: outcome.claims.minimum_age ?? null,
+      })
       const updatedAt = new Date().toISOString()
       await client.execute({
         sql: `UPDATE verification_sessions SET status = 'failed', failure_code = ?2, updated_at = ?3 WHERE verification_session_id = ?1`,
@@ -502,14 +560,32 @@ async function completeSelfSession(
       const updatedRow = await getVerificationSessionRowForUser(client, input.verificationSessionId, input.userId)
       return serializeVerificationSession({ row: updatedRow!, attestationRows: [] })
     }
+    console.info("[self-provider] completion outcome", {
+      ...await selfCompletionDiagnostics(row, input),
+      outcome: outcome.status,
+      hasNationality: Boolean(outcome.claims.nationality),
+      hasGender: Boolean(outcome.claims.gender),
+      hasNullifier: Boolean(outcome.claims.nullifier),
+      ageOver18: outcome.claims.age_over_18,
+      minimumAge: outcome.claims.minimum_age ?? null,
+    })
     return finalizeVerification(client, row, input, requestedCapabilities, verificationRequirements, outcome.claims)
   }
 
   if (outcome.status === "pending") {
+    console.warn("[self-provider] completion outcome", {
+      ...await selfCompletionDiagnostics(row, input),
+      outcome: outcome.status,
+    })
     return serializeVerificationSession({ row, attestationRows: [] })
   }
 
   if (outcome.status === "failed") {
+    console.warn("[self-provider] completion outcome", {
+      ...await selfCompletionDiagnostics(row, input),
+      outcome: outcome.status,
+      failureReason: outcome.failureReason,
+    })
     const updatedAt = new Date().toISOString()
     await client.execute({
       sql: `UPDATE verification_sessions SET status = 'failed', failure_code = ?2, updated_at = ?3 WHERE verification_session_id = ?1`,
@@ -520,6 +596,11 @@ async function completeSelfSession(
   }
 
   if (outcome.status === "expired") {
+    console.warn("[self-provider] completion outcome", {
+      ...await selfCompletionDiagnostics(row, input),
+      outcome: outcome.status,
+      failureReason: "provider_expired",
+    })
     const updatedAt = new Date().toISOString()
     await client.execute({
       sql: `UPDATE verification_sessions SET status = 'expired', failure_code = 'provider_expired', updated_at = ?2 WHERE verification_session_id = ?1`,
