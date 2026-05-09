@@ -14,6 +14,7 @@ import { splitSqlStatements, toSqliteCompatibleStatements } from "../shared/sql-
 import { ensureRemoteCommunityMembershipStateIndexes } from "../src/lib/communities/ensure-remote-community-membership-indexes"
 import { ensureRemoteThreadCommentLockColumns } from "../src/lib/communities/ensure-remote-thread-comment-lock-columns"
 import { ensureRemoteLiveRoomTables } from "../src/lib/communities/ensure-remote-live-room-tables"
+import { ensureRemotePostSongTitleColumn } from "../src/lib/communities/ensure-remote-post-song-title-column"
 
 const cleanupPaths: string[] = []
 const COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS = 120_000
@@ -212,6 +213,7 @@ describe("openCommunityDb", () => {
     let ensureCalls = 0
     let ensureLockColumnCalls = 0
     let ensureLiveRoomTableCalls = 0
+    let ensureSongTitleColumnCalls = 0
     const db = await openCommunityDb(
       {
         TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
@@ -221,6 +223,7 @@ describe("openCommunityDb", () => {
       {
         ensureRemoteMembershipStateIndexes: async () => { ensureCalls += 1 },
         ensureRemoteThreadCommentLockColumns: async () => { ensureLockColumnCalls += 1 },
+        ensureRemotePostSongTitleColumn: async () => { ensureSongTitleColumnCalls += 1 },
         ensureRemoteLiveRoomTables: async () => { ensureLiveRoomTableCalls += 1 },
       },
     )
@@ -237,6 +240,7 @@ describe("openCommunityDb", () => {
       {
         ensureRemoteMembershipStateIndexes: async () => { ensureCalls += 1 },
         ensureRemoteThreadCommentLockColumns: async () => { ensureLockColumnCalls += 1 },
+        ensureRemotePostSongTitleColumn: async () => { ensureSongTitleColumnCalls += 1 },
         ensureRemoteLiveRoomTables: async () => { ensureLiveRoomTableCalls += 1 },
       },
     )
@@ -245,6 +249,7 @@ describe("openCommunityDb", () => {
     secondDb.close()
     expect(ensureCalls).toBe(1)
     expect(ensureLockColumnCalls).toBe(1)
+    expect(ensureSongTitleColumnCalls).toBe(1)
     expect(ensureLiveRoomTableCalls).toBe(1)
   })
 
@@ -297,6 +302,7 @@ describe("openCommunityDb", () => {
     let ensureCalls = 0
     let ensureLockColumnCalls = 0
     let ensureLiveRoomTableCalls = 0
+    let ensureSongTitleColumnCalls = 0
     const db = await openCommunityDb(
       {
         TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
@@ -312,6 +318,12 @@ describe("openCommunityDb", () => {
         },
         ensureRemoteThreadCommentLockColumns: async () => {
           ensureLockColumnCalls += 1
+          throw Object.assign(new Error("SQLite error: out of memory"), {
+            code: "SQLITE_NOMEM",
+          })
+        },
+        ensureRemotePostSongTitleColumn: async () => {
+          ensureSongTitleColumnCalls += 1
           throw Object.assign(new Error("SQLite error: out of memory"), {
             code: "SQLITE_NOMEM",
           })
@@ -337,6 +349,7 @@ describe("openCommunityDb", () => {
       {
         ensureRemoteMembershipStateIndexes: async () => { ensureCalls += 1 },
         ensureRemoteThreadCommentLockColumns: async () => { ensureLockColumnCalls += 1 },
+        ensureRemotePostSongTitleColumn: async () => { ensureSongTitleColumnCalls += 1 },
         ensureRemoteLiveRoomTables: async () => { ensureLiveRoomTableCalls += 1 },
       },
     )
@@ -345,6 +358,7 @@ describe("openCommunityDb", () => {
     secondDb.close()
     expect(ensureCalls).toBe(1)
     expect(ensureLockColumnCalls).toBe(1)
+    expect(ensureSongTitleColumnCalls).toBe(1)
     expect(ensureLiveRoomTableCalls).toBe(1)
   })
 
@@ -583,6 +597,32 @@ describe("openCommunityDb", () => {
       expect(checksum).toBe("47dcdd32d64789c6f93e6162f137b7238c75914532256aa0d186d5a8b68fa179")
 
       await ensureRemoteLiveRoomTables(client)
+    } finally {
+      client.close()
+    }
+  }, COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS)
+
+  testWithTimeout("ensures post song title column on remote community database open", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-remote-song-title-"))
+    cleanupPaths.push(rootDir)
+
+    const databasePath = join(rootDir, `${randomUUID()}.db`)
+    await applyPartialCommunitySchema(databasePath, 1068)
+
+    const client = createClient({ url: `file:${databasePath}` })
+    try {
+      const beforePostColumns = await getTableColumns(databasePath, "posts")
+      expect(beforePostColumns).not.toContain("song_title")
+
+      await ensureRemotePostSongTitleColumn(client)
+
+      const afterPostColumns = await getTableColumns(databasePath, "posts")
+      expect(afterPostColumns).toContain("song_title")
+
+      const checksum = await getMigrationChecksum(databasePath, "1069_post_song_title.sql")
+      expect(checksum).toBe("03a5f95f8fe4bec0492dd6d7a2c4c2d7d9e4df7e0af244dcd58cae869cb9e802")
+
+      await ensureRemotePostSongTitleColumn(client)
     } finally {
       client.close()
     }

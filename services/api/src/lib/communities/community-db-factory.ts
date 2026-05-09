@@ -7,20 +7,24 @@ import { buildLocalCommunityDbUrl, configureLocalCommunityDbClient, ensureCommun
 import { ensureRemoteCommunityMembershipStateIndexes } from "./ensure-remote-community-membership-indexes"
 import { ensureRemoteThreadCommentLockColumns } from "./ensure-remote-thread-comment-lock-columns"
 import { ensureRemoteLiveRoomTables } from "./ensure-remote-live-room-tables"
+import { ensureRemotePostSongTitleColumn } from "./ensure-remote-post-song-title-column"
 import type { Env } from "../../env"
 
 export type OpenCommunityDbOptions = {
   ensureRemoteMembershipStateIndexes?: (client: Client) => Promise<void>
   ensureRemoteThreadCommentLockColumns?: (client: Client) => Promise<void>
   ensureRemoteLiveRoomTables?: (client: Client) => Promise<void>
+  ensureRemotePostSongTitleColumn?: (client: Client) => Promise<void>
 }
 
 const remoteMembershipIndexPreflightComplete = new Set<string>()
 const remoteThreadCommentLockColumnPreflightComplete = new Set<string>()
 const remoteLiveRoomTablePreflightComplete = new Set<string>()
+const remotePostSongTitleColumnPreflightComplete = new Set<string>()
 const remoteMembershipIndexPreflightInFlight = new Map<string, Promise<void>>()
 const remoteThreadCommentLockColumnPreflightInFlight = new Map<string, Promise<void>>()
 const remoteLiveRoomTablePreflightInFlight = new Map<string, Promise<void>>()
+const remotePostSongTitleColumnPreflightInFlight = new Map<string, Promise<void>>()
 
 function formatPreflightError(error: unknown): Record<string, string> {
   if (!error || typeof error !== "object") {
@@ -132,6 +136,14 @@ export async function openCommunityDb(
       complete: remoteThreadCommentLockColumnPreflightComplete,
       inFlight: remoteThreadCommentLockColumnPreflightInFlight,
       run: () => ensureLockColumns(client),
+    })
+    const ensureSongTitleColumn = options?.ensureRemotePostSongTitleColumn ?? ensureRemotePostSongTitleColumn
+    await runRemoteCommunityDbPreflight({
+      databaseUrl: binding.database_url,
+      label: "post_song_title_column",
+      complete: remotePostSongTitleColumnPreflightComplete,
+      inFlight: remotePostSongTitleColumnPreflightInFlight,
+      run: () => ensureSongTitleColumn(client),
     })
     const ensureLiveRoomTables = options?.ensureRemoteLiveRoomTables ?? ensureRemoteLiveRoomTables
     await runRemoteCommunityDbPreflight({
