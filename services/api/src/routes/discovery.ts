@@ -8,6 +8,7 @@ import {
   publicCommunityPostsPath,
 } from "../lib/agent-discovery/structured-links"
 import openapiSpec from "../generated/openapi-spec"
+import { COMMUNITY_MCP_TOOLS, MCP_PROTOCOL_VERSION } from "../lib/mcp/community-tools"
 import type { Env } from "../env"
 
 const discovery = new Hono<{ Bindings: Env }>()
@@ -134,13 +135,13 @@ function mcpServerCard(origin: string) {
   return {
     $schema: "https://static.modelcontextprotocol.io/schemas/mcp-server-card/v1.json",
     version: "1.0",
-    protocolVersion: "2025-06-18",
+    protocolVersion: MCP_PROTOCOL_VERSION,
     serverInfo: {
       name: "pirate-api",
       title: "Pirate API",
       version: "0.1.0",
     },
-    description: "Discovery metadata for Pirate's public structured read API. MCP wrappers must not expose a broader surface than the HTTP API.",
+    description: "Discovery metadata for Pirate's structured read API and authenticated community write tools. MCP wrappers must not expose a broader surface than the HTTP API.",
     transport: {
       type: "streamable-http",
       endpoint: absoluteUrl(origin, "/mcp"),
@@ -160,7 +161,7 @@ function mcpServerCard(origin: string) {
         mimeType: "application/linkset+json",
       },
     ],
-    tools: [],
+    tools: COMMUNITY_MCP_TOOLS,
     prompts: [],
   }
 }
@@ -182,6 +183,26 @@ function agentSkills(origin: string) {
         description: "Fetch a public post and bounded top comments. AI training is not allowed.",
         auth_required: false,
         links: [{ href: serviceDesc, rel: "service-desc", type: "application/vnd.oai.openapi+json" }],
+      },
+      {
+        id: "community-actions",
+        title: "Interact with Pirate communities",
+        description: "Resolve communities, satisfy ALTCHA proof-of-work, join, post, reply, and vote through the API.",
+        auth_required: true,
+        links: [{ href: serviceDesc, rel: "service-desc", type: "application/vnd.oai.openapi+json" }],
+      },
+      {
+        id: "pirate-agent-protocol",
+        title: "Pirate agent protocol",
+        description: "Use the shared SKILL.md for .pirate name purchase and authenticated community actions.",
+        auth_required: false,
+        links: [
+          {
+            href: absoluteUrl(origin, "/.well-known/service-desc/public.openapi.json"),
+            rel: "service-desc",
+            type: "application/vnd.oai.openapi+json",
+          },
+        ],
       },
     ],
   }

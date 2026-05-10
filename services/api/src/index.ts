@@ -12,6 +12,7 @@ import communities from "./routes/communities"
 import discovery from "./routes/discovery"
 import feed from "./routes/feed"
 import jobs from "./routes/jobs"
+import mcp from "./routes/mcp"
 import notifications from "./routes/notifications"
 import oauth from "./routes/oauth"
 import royalties from "./routes/royalties"
@@ -134,6 +135,7 @@ app.route("/comments", comments)
 app.route("/communities", communities)
 app.route("/feed", feed)
 app.route("/jobs", jobs)
+app.route("/mcp", mcp)
 app.route("/notifications", notifications)
 app.route("/oauth", oauth)
 app.route("/royalties", royalties)

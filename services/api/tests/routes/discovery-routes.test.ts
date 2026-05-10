@@ -78,10 +78,92 @@ describe("discovery routes", () => {
     const body = await response.json() as {
       serverInfo: { name: string }
       resources: Array<{ uri: string }>
+      tools: Array<{ name: string }>
     }
 
     expect(body.serverInfo.name).toBe("pirate-api")
     expect(body.resources.map((resource) => resource.uri)).toContain("https://api.pirate.test/.well-known/api-catalog")
+    expect(body.tools.map((tool) => tool.name)).toContain("create_post")
+    expect(body.tools.map((tool) => tool.name)).toContain("reply")
+  })
+
+  test("POST /mcp lists community write tools", async () => {
+    const env = buildTestEnv()
+    const response = await app.request("https://api.pirate.test/mcp", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/list",
+        params: {},
+      }),
+    }, env)
+
+    expect(response.status).toBe(200)
+    const body = await response.json() as {
+      result: {
+        tools: Array<{ name: string }>
+      }
+    }
+    expect(body.result.tools.map((tool) => tool.name)).toContain("create_post")
+    expect(body.result.tools.map((tool) => tool.name)).toContain("reply")
+  })
+
+  test("POST /mcp create_post requires bearer auth", async () => {
+    const env = buildTestEnv()
+    const response = await app.request("https://api.pirate.test/mcp", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: {
+          name: "create_post",
+          arguments: {
+            community_id: "com_cmt_test",
+            title: "Hello",
+            body: "Testing MCP.",
+          },
+        },
+      }),
+    }, env)
+
+    expect(response.status).toBe(200)
+    const body = await response.json() as {
+      error: { message: string }
+    }
+    expect(body.error.message).toContain("Authentication required")
+    expect(body.error.message).toContain("no API key is required")
+  })
+
+  test("POST /mcp reply requires bearer auth", async () => {
+    const env = buildTestEnv()
+    const response = await app.request("https://api.pirate.test/mcp", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: {
+          name: "reply",
+          arguments: {
+            community_id: "com_cmt_test",
+            post_id: "post_pst_test",
+            body: "Testing MCP reply.",
+          },
+        },
+      }),
+    }, env)
+
+    expect(response.status).toBe(200)
+    const body = await response.json() as {
+      error: { message: string }
+    }
+    expect(body.error.message).toContain("Authentication required")
+    expect(body.error.message).toContain("no API key is required")
   })
 
   test("GET /.well-known/agent-skills/index.json advertises public read skills", async () => {
@@ -95,6 +177,8 @@ describe("discovery routes", () => {
 
     expect(body.skills.map((skill) => skill.id)).toContain("read-public-community")
     expect(body.skills.map((skill) => skill.id)).toContain("summarize-public-thread")
+    expect(body.skills.map((skill) => skill.id)).toContain("community-actions")
+    expect(body.skills.map((skill) => skill.id)).toContain("pirate-agent-protocol")
   })
 
   test("GET /.well-known/jwks.json exposes the Pirate session signing key", async () => {
