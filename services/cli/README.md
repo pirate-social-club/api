@@ -149,7 +149,7 @@ A JSON manifest uses the same top-level fields, but can inline the seed arrays i
   "seed_comments": [{
     "as": "lantern",
     "post_id": "pst_xxx",
-    "idempotency_key": "prod-2026-05-06-lantern-001",
+    "idempotency_key": "example-idempotency-key-do-not-use",
     "body": "This is the part people keep skipping."
   }]
 }

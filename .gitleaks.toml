@@ -9,6 +9,7 @@ paths = [
   '''^services/api/\.dev\.vars\.example$''',
   '''^services/api/bruno/README\.md$''',
   '''^services/api/bruno/environments/local\.bru$''',
+  '''^services/cli/README\.md$''',
 ]
 regexTarget = "match"
 regexes = [
