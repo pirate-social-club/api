@@ -39,6 +39,7 @@ Mounted in `services/api/src/index.ts`:
 - `/profiles`
 - `/` for verification routes
 - `/health`
+- `/mcp`
 
 ## Coverage Map
 
@@ -77,6 +78,7 @@ Mounted in `services/api/src/index.ts`:
 | `/profile-media/*` | `src/routes/profile-media.ts` | `tests/routes/profiles/profile-media-routes.test.ts` | direct | Upload and fetch covered. |
 | `/community-media/*` | `src/routes/community-media.ts` | `tests/routes/communities/community-media-routes.test.ts` | direct | Upload and fetch covered. |
 | `/health` | `src/index.ts` | `tests/routes/health-routes.test.ts` | direct | Dedicated health route coverage exists. |
+| `/mcp/*` | `src/routes/mcp.ts` | — | pending | New MCP community tools route; coverage to be added. |
 
 ## Weak Spots
 
