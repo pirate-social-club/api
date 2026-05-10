@@ -13,6 +13,7 @@ import { resolveCoreRepoPath } from "../shared/core-repo-paths"
 import { splitSqlStatements, toSqliteCompatibleStatements } from "../shared/sql-migration"
 import { ensureRemoteCommunityMembershipStateIndexes } from "../src/lib/communities/ensure-remote-community-membership-indexes"
 import { ensureRemoteThreadCommentLockColumns } from "../src/lib/communities/ensure-remote-thread-comment-lock-columns"
+import { ensureRemoteCommentGuestAuthorship } from "../src/lib/communities/ensure-remote-comment-guest-authorship"
 import { ensureRemoteLiveRoomTables } from "../src/lib/communities/ensure-remote-live-room-tables"
 import { ensureRemotePostSongTitleColumn } from "../src/lib/communities/ensure-remote-post-song-title-column"
 
@@ -136,6 +137,25 @@ async function listIndexNames(databasePath: string): Promise<string[]> {
   }
 }
 
+async function getTableCreateSql(databasePath: string, tableName: string): Promise<string> {
+  const client = createClient({ url: `file:${databasePath}` })
+  try {
+    const result = await client.execute({
+      sql: `
+        SELECT sql
+        FROM sqlite_schema
+        WHERE type = 'table'
+          AND name = ?1
+        LIMIT 1
+      `,
+      args: [tableName],
+    })
+    return String(result.rows[0]?.sql ?? "")
+  } finally {
+    client.close()
+  }
+}
+
 function buildRepository(databasePath: string): CommunityDatabaseBindingRepository {
   return {
     async getPrimaryCommunityDatabaseBinding() {
@@ -214,6 +234,7 @@ describe("openCommunityDb", () => {
     let ensureLockColumnCalls = 0
     let ensureLiveRoomTableCalls = 0
     let ensureSongTitleColumnCalls = 0
+    let ensureGuestAuthorshipCalls = 0
     const db = await openCommunityDb(
       {
         TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
@@ -223,6 +244,7 @@ describe("openCommunityDb", () => {
       {
         ensureRemoteMembershipStateIndexes: async () => { ensureCalls += 1 },
         ensureRemoteThreadCommentLockColumns: async () => { ensureLockColumnCalls += 1 },
+        ensureRemoteCommentGuestAuthorship: async () => { ensureGuestAuthorshipCalls += 1 },
         ensureRemotePostSongTitleColumn: async () => { ensureSongTitleColumnCalls += 1 },
         ensureRemoteLiveRoomTables: async () => { ensureLiveRoomTableCalls += 1 },
       },
@@ -240,6 +262,7 @@ describe("openCommunityDb", () => {
       {
         ensureRemoteMembershipStateIndexes: async () => { ensureCalls += 1 },
         ensureRemoteThreadCommentLockColumns: async () => { ensureLockColumnCalls += 1 },
+        ensureRemoteCommentGuestAuthorship: async () => { ensureGuestAuthorshipCalls += 1 },
         ensureRemotePostSongTitleColumn: async () => { ensureSongTitleColumnCalls += 1 },
         ensureRemoteLiveRoomTables: async () => { ensureLiveRoomTableCalls += 1 },
       },
@@ -249,6 +272,7 @@ describe("openCommunityDb", () => {
     secondDb.close()
     expect(ensureCalls).toBe(1)
     expect(ensureLockColumnCalls).toBe(1)
+    expect(ensureGuestAuthorshipCalls).toBe(1)
     expect(ensureSongTitleColumnCalls).toBe(1)
     expect(ensureLiveRoomTableCalls).toBe(1)
   })
@@ -303,6 +327,7 @@ describe("openCommunityDb", () => {
     let ensureLockColumnCalls = 0
     let ensureLiveRoomTableCalls = 0
     let ensureSongTitleColumnCalls = 0
+    let ensureGuestAuthorshipCalls = 0
     const db = await openCommunityDb(
       {
         TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
@@ -322,6 +347,7 @@ describe("openCommunityDb", () => {
             code: "SQLITE_NOMEM",
           })
         },
+        ensureRemoteCommentGuestAuthorship: async () => { ensureGuestAuthorshipCalls += 1 },
         ensureRemotePostSongTitleColumn: async () => {
           ensureSongTitleColumnCalls += 1
           throw Object.assign(new Error("SQLite error: out of memory"), {
@@ -349,6 +375,7 @@ describe("openCommunityDb", () => {
       {
         ensureRemoteMembershipStateIndexes: async () => { ensureCalls += 1 },
         ensureRemoteThreadCommentLockColumns: async () => { ensureLockColumnCalls += 1 },
+        ensureRemoteCommentGuestAuthorship: async () => { ensureGuestAuthorshipCalls += 1 },
         ensureRemotePostSongTitleColumn: async () => { ensureSongTitleColumnCalls += 1 },
         ensureRemoteLiveRoomTables: async () => { ensureLiveRoomTableCalls += 1 },
       },
@@ -358,6 +385,7 @@ describe("openCommunityDb", () => {
     secondDb.close()
     expect(ensureCalls).toBe(1)
     expect(ensureLockColumnCalls).toBe(1)
+    expect(ensureGuestAuthorshipCalls).toBe(1)
     expect(ensureSongTitleColumnCalls).toBe(1)
     expect(ensureLiveRoomTableCalls).toBe(1)
   })
@@ -561,6 +589,98 @@ describe("openCommunityDb", () => {
       expect(afterCommentColumns).toContain("replies_lock_reason")
 
       await ensureRemoteThreadCommentLockColumns(client)
+    } finally {
+      client.close()
+    }
+  }, COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS)
+
+  testWithTimeout("rebuilds old comments authorship check to allow guest comments", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-guest-authorship-"))
+    cleanupPaths.push(rootDir)
+
+    const databasePath = join(rootDir, `${randomUUID()}.db`)
+    const client = createClient({ url: `file:${databasePath}` })
+    try {
+      await client.execute("CREATE TABLE communities (community_id TEXT PRIMARY KEY)")
+      await client.execute("CREATE TABLE posts (post_id TEXT PRIMARY KEY)")
+      await client.execute("INSERT INTO communities (community_id) VALUES ('cmt_guest')")
+      await client.execute("INSERT INTO posts (post_id) VALUES ('pst_guest')")
+      await client.execute(`
+        CREATE TABLE comments (
+          comment_id TEXT PRIMARY KEY,
+          community_id TEXT NOT NULL,
+          thread_root_post_id TEXT NOT NULL,
+          parent_comment_id TEXT,
+          author_user_id TEXT,
+          identity_mode TEXT NOT NULL CHECK (
+            identity_mode IN ('public', 'anonymous')
+          ),
+          anonymous_scope TEXT CHECK (
+            anonymous_scope IS NULL OR anonymous_scope IN ('community_stable', 'thread_stable')
+          ),
+          anonymous_label TEXT,
+          body TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (
+            status IN ('published', 'hidden', 'removed', 'deleted')
+          ),
+          depth INTEGER NOT NULL,
+          direct_reply_count INTEGER NOT NULL DEFAULT 0,
+          descendant_count INTEGER NOT NULL DEFAULT 0,
+          upvote_count INTEGER NOT NULL DEFAULT 0,
+          downvote_count INTEGER NOT NULL DEFAULT 0,
+          score INTEGER NOT NULL DEFAULT 0,
+          last_reply_at TEXT,
+          content_hash TEXT,
+          swarm_body_ref TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          source_language TEXT,
+          authorship_mode TEXT NOT NULL DEFAULT 'human_direct' CHECK (
+            authorship_mode IN ('human_direct', 'user_agent')
+          ),
+          agent_id TEXT,
+          agent_ownership_record_id TEXT,
+          agent_display_name_snapshot TEXT,
+          agent_owner_handle_snapshot TEXT,
+          agent_ownership_provider_snapshot TEXT,
+          agent_handle_snapshot TEXT,
+          idempotency_key TEXT NOT NULL DEFAULT '',
+          media_refs_json TEXT NOT NULL DEFAULT '[]',
+          replies_locked INTEGER NOT NULL DEFAULT 0 CHECK (replies_locked IN (0, 1)),
+          replies_locked_at TEXT,
+          replies_locked_by_user_id TEXT,
+          replies_lock_reason TEXT
+        )
+      `)
+      await client.execute("CREATE INDEX idx_comments_agent_authorship ON comments(authorship_mode, agent_id, created_at DESC)")
+      await client.execute(`
+        INSERT INTO comments (
+          comment_id, community_id, thread_root_post_id, identity_mode, body, status,
+          depth, created_at, updated_at
+        ) VALUES (
+          'cmt_old', 'cmt_guest', 'pst_guest', 'public', 'old comment', 'published',
+          0, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
+        )
+      `)
+
+      const beforeSql = await getTableCreateSql(databasePath, "comments")
+      expect(beforeSql).not.toContain("'guest'")
+
+      await ensureRemoteCommentGuestAuthorship(client)
+
+      const afterSql = await getTableCreateSql(databasePath, "comments")
+      expect(afterSql).toContain("'guest'")
+      expect(await listIndexNames(databasePath)).toContain("idx_comments_agent_authorship")
+      await client.execute(`
+        INSERT INTO comments (
+          comment_id, community_id, thread_root_post_id, identity_mode, anonymous_scope,
+          body, status, depth, created_at, updated_at, authorship_mode
+        ) VALUES (
+          'cmt_guest', 'cmt_guest', 'pst_guest', 'anonymous', 'community_stable',
+          'guest comment', 'published', 0, '2026-01-01T00:00:01.000Z',
+          '2026-01-01T00:00:01.000Z', 'guest'
+        )
+      `)
     } finally {
       client.close()
     }

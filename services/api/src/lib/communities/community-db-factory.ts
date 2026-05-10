@@ -6,6 +6,7 @@ import { decryptCommunityDbCredential } from "./community-db-credential-crypto"
 import { buildLocalCommunityDbUrl, configureLocalCommunityDbClient, ensureCommunityDbSchema } from "./community-local-db"
 import { ensureRemoteCommunityMembershipStateIndexes } from "./ensure-remote-community-membership-indexes"
 import { ensureRemoteThreadCommentLockColumns } from "./ensure-remote-thread-comment-lock-columns"
+import { ensureRemoteCommentGuestAuthorship } from "./ensure-remote-comment-guest-authorship"
 import { ensureRemoteLiveRoomTables } from "./ensure-remote-live-room-tables"
 import { ensureRemotePostSongTitleColumn } from "./ensure-remote-post-song-title-column"
 import type { Env } from "../../env"
@@ -13,16 +14,19 @@ import type { Env } from "../../env"
 export type OpenCommunityDbOptions = {
   ensureRemoteMembershipStateIndexes?: (client: Client) => Promise<void>
   ensureRemoteThreadCommentLockColumns?: (client: Client) => Promise<void>
+  ensureRemoteCommentGuestAuthorship?: (client: Client) => Promise<void>
   ensureRemoteLiveRoomTables?: (client: Client) => Promise<void>
   ensureRemotePostSongTitleColumn?: (client: Client) => Promise<void>
 }
 
 const remoteMembershipIndexPreflightComplete = new Set<string>()
 const remoteThreadCommentLockColumnPreflightComplete = new Set<string>()
+const remoteCommentGuestAuthorshipPreflightComplete = new Set<string>()
 const remoteLiveRoomTablePreflightComplete = new Set<string>()
 const remotePostSongTitleColumnPreflightComplete = new Set<string>()
 const remoteMembershipIndexPreflightInFlight = new Map<string, Promise<void>>()
 const remoteThreadCommentLockColumnPreflightInFlight = new Map<string, Promise<void>>()
+const remoteCommentGuestAuthorshipPreflightInFlight = new Map<string, Promise<void>>()
 const remoteLiveRoomTablePreflightInFlight = new Map<string, Promise<void>>()
 const remotePostSongTitleColumnPreflightInFlight = new Map<string, Promise<void>>()
 
@@ -75,6 +79,35 @@ async function runRemoteCommunityDbPreflight(input: {
   }
 }
 
+async function runRequiredRemoteCommunityDbPreflight(input: {
+  databaseUrl: string
+  complete: Set<string>
+  inFlight: Map<string, Promise<void>>
+  run: () => Promise<void>
+}): Promise<void> {
+  if (input.complete.has(input.databaseUrl)) {
+    return
+  }
+
+  const existing = input.inFlight.get(input.databaseUrl)
+  if (existing) {
+    await existing
+    return
+  }
+
+  const promise = (async () => {
+    await input.run()
+    input.complete.add(input.databaseUrl)
+  })()
+
+  input.inFlight.set(input.databaseUrl, promise)
+  try {
+    await promise
+  } finally {
+    input.inFlight.delete(input.databaseUrl)
+  }
+}
+
 export async function openCommunityDb(
   env: Env,
   repo: CommunityDatabaseBindingRepository,
@@ -93,6 +126,7 @@ export async function openCommunityDb(
     await configureLocalCommunityDbClient(client)
     await ensureCommunityDbSchema(client)
     await ensureRemoteThreadCommentLockColumns(client)
+    await ensureRemoteCommentGuestAuthorship(client)
     return {
       client,
       databaseUrl,
@@ -136,6 +170,13 @@ export async function openCommunityDb(
       complete: remoteThreadCommentLockColumnPreflightComplete,
       inFlight: remoteThreadCommentLockColumnPreflightInFlight,
       run: () => ensureLockColumns(client),
+    })
+    const ensureGuestAuthorship = options?.ensureRemoteCommentGuestAuthorship ?? ensureRemoteCommentGuestAuthorship
+    await runRequiredRemoteCommunityDbPreflight({
+      databaseUrl: binding.database_url,
+      complete: remoteCommentGuestAuthorshipPreflightComplete,
+      inFlight: remoteCommentGuestAuthorshipPreflightInFlight,
+      run: () => ensureGuestAuthorship(client),
     })
     const ensureSongTitleColumn = options?.ensureRemotePostSongTitleColumn ?? ensureRemotePostSongTitleColumn
     await runRemoteCommunityDbPreflight({

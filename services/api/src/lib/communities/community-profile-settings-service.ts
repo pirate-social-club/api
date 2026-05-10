@@ -74,6 +74,9 @@ export async function updateCommunity(input: {
     if ("agent_posting_policy" in input.body) {
       nextSettings.agent_posting_policy = input.body.agent_posting_policy ?? null
     }
+    if ("guest_comment_policy" in input.body) {
+      nextSettings.guest_comment_policy = input.body.guest_comment_policy ?? null
+    }
     if ("agent_posting_scope" in input.body) {
       nextSettings.agent_posting_scope = input.body.agent_posting_scope ?? null
     }

@@ -33,6 +33,14 @@ export function assertCreateRequest(
   if (body.banner_ref != null && typeof body.banner_ref !== "string") {
     throw badRequestError("banner_ref must be a string or null")
   }
+  if (
+    body.guest_comment_policy !== undefined
+    && body.guest_comment_policy !== null
+    && body.guest_comment_policy !== "disallow"
+    && body.guest_comment_policy !== "altcha_required"
+  ) {
+    throw badRequestError("Invalid guest_comment_policy payload")
+  }
   if (body.namespace != null && !body.namespace.namespace_verification?.trim()) {
     throw badRequestError("namespace.namespace_verification is required when namespace is provided")
   }

@@ -1595,7 +1595,7 @@ CREATE INDEX idx_posts_agent_authorship
     name: "1036_comment_agent_authorship.sql",
     sql: `ALTER TABLE comments
 ADD COLUMN authorship_mode TEXT NOT NULL DEFAULT 'human_direct' CHECK (
-    authorship_mode IN ('human_direct', 'user_agent')
+    authorship_mode IN ('human_direct', 'user_agent', 'guest')
 );
 
 ALTER TABLE comments
@@ -1616,7 +1616,7 @@ ADD COLUMN agent_ownership_provider_snapshot TEXT;
 CREATE INDEX idx_comments_agent_authorship
     ON comments(authorship_mode, agent_id, created_at DESC);
 `,
-    checksum: "aa648205a1796140aafe3c2c42766e5a0d5b62338ea8d429cc1504839ff4fc15",
+    checksum: "211877f264ae14bf694899bdabc11e7baed6efbfdd518361842075ce8b37ec5a",
   },
   {
     name: "1037_community_text_localization.sql",

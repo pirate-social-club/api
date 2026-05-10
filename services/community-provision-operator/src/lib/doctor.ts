@@ -16,6 +16,12 @@ import type {
   CommunityRow,
 } from "./types";
 
+const COMPATIBLE_COMMUNITY_MIGRATION_CHECKSUMS: Record<string, Set<string>> = {
+  "1036_comment_agent_authorship.sql": new Set([
+    "aa648205a1796140aafe3c2c42766e5a0d5b62338ea8d429cc1504839ff4fc15",
+  ]),
+};
+
 async function inspectCommunityDatabaseSchema(input: {
   databaseUrl: string;
   databaseAuthToken: string;
@@ -57,7 +63,10 @@ async function inspectCommunityDatabaseSchema(input: {
         missingMigrationNames.push(expected.migrationName);
         continue;
       }
-      if (actualChecksum !== expected.checksum) {
+      if (
+        actualChecksum !== expected.checksum
+        && !COMPATIBLE_COMMUNITY_MIGRATION_CHECKSUMS[expected.migrationName]?.has(actualChecksum)
+      ) {
         mismatchedMigrationNames.push(expected.migrationName);
       }
     }

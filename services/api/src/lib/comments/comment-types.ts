@@ -25,7 +25,7 @@ export type CreateCommentRequest = {
   idempotency_key?: string | null
   body?: string | null
   media_refs?: ApiComment["media_refs"]
-  authorship_mode?: "human_direct" | "user_agent"
+  authorship_mode?: "human_direct" | "user_agent" | "guest"
   agent_id?: string | null
   agent_action_proof?: AgentActionProof | null
   identity_mode?: "public" | "anonymous"

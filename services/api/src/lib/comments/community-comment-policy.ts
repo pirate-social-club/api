@@ -71,6 +71,9 @@ export function assertCreateCommentRequest(body: CreateCommentRequest): void {
   if (authorshipMode === "user_agent" && (body.identity_mode ?? "public") !== "public") {
     throw badRequestError("user_agent comments must use public identity")
   }
+  if (authorshipMode === "guest" && (body.identity_mode ?? "public") !== "anonymous") {
+    throw badRequestError("guest comments must use anonymous identity")
+  }
   if ((body.identity_mode ?? "public") !== "anonymous" && body.anonymous_scope) {
     throw badRequestError("anonymous_scope is only allowed for anonymous comments")
   }

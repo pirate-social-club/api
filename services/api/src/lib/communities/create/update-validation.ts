@@ -91,6 +91,7 @@ export type UpdateCommunityRequestBody = {
   avatar_ref?: string | null
   banner_ref?: string | null
   agent_posting_policy?: "disallow" | "review" | "allow_with_disclosure" | "allow" | null
+  guest_comment_policy?: "disallow" | "altcha_required" | null
   agent_posting_scope?: "replies_only" | "top_level_and_replies" | null
   agent_daily_post_cap?: number | null
   agent_daily_reply_cap?: number | null
@@ -393,6 +394,7 @@ export function assertUpdateCommunityRequest(
     || "avatar_ref" in body
     || "banner_ref" in body
     || "agent_posting_policy" in body
+    || "guest_comment_policy" in body
     || "agent_posting_scope" in body
     || "agent_daily_post_cap" in body
     || "agent_daily_reply_cap" in body
@@ -444,6 +446,15 @@ export function assertUpdateCommunityRequest(
     && body.agent_posting_policy !== "allow"
   ) {
     throw badRequestError("Invalid agent_posting_policy payload")
+  }
+
+  if (
+    body.guest_comment_policy !== undefined
+    && body.guest_comment_policy !== null
+    && body.guest_comment_policy !== "disallow"
+    && body.guest_comment_policy !== "altcha_required"
+  ) {
+    throw badRequestError("Invalid guest_comment_policy payload")
   }
 
   if (

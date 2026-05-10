@@ -207,6 +207,12 @@ function parseStoredAgentPostingPolicy(
   return "disallow"
 }
 
+function parseStoredGuestCommentPolicy(
+  storedSettings: Record<string, unknown>,
+): Community["guest_comment_policy"] {
+  return storedSettings.guest_comment_policy === "altcha_required" ? "altcha_required" : "disallow"
+}
+
 function parseStoredAgentPostingScope(
   storedSettings: Record<string, unknown>,
 ): Community["agent_posting_scope"] {
@@ -306,6 +312,7 @@ export function serializeCommunity(env: Env, row: CommunityRow, local: LocalComm
   const humanVerificationLane = parseStoredHumanVerificationLane(storedSettings, local)
   const humanVerificationLaneOrigin = parseStoredHumanVerificationLaneOrigin(storedSettings)
   const agentPostingPolicy = parseStoredAgentPostingPolicy(storedSettings)
+  const guestCommentPolicy = parseStoredGuestCommentPolicy(storedSettings)
   const agentPostingScope = parseStoredAgentPostingScope(storedSettings)
   const agentDailyPostCap = parseStoredPositiveInteger(storedSettings, "agent_daily_post_cap")
   const agentDailyReplyCap = parseStoredPositiveInteger(storedSettings, "agent_daily_reply_cap")
@@ -360,6 +367,7 @@ export function serializeCommunity(env: Env, row: CommunityRow, local: LocalComm
     donation_partner: local?.donation_partner_id ? donationPartner : null,
     default_age_gate_policy: defaultAgeGatePolicy,
     agent_posting_policy: agentPostingPolicy,
+    guest_comment_policy: guestCommentPolicy,
     agent_posting_scope: agentPostingScope,
     agent_daily_post_cap: agentDailyPostCap,
     agent_daily_reply_cap: agentDailyReplyCap,

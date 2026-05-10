@@ -81,6 +81,12 @@ function parsePreviewAllowQualifiersOnAnonymousPosts(
     : null
 }
 
+function parsePreviewGuestCommentPolicy(
+  settings: Record<string, unknown>,
+): CommunityPreview["guest_comment_policy"] {
+  return settings.guest_comment_policy === "altcha_required" ? "altcha_required" : "disallow"
+}
+
 function parsePreviewHumanVerificationLane(
   settings: Record<string, unknown>,
   summaries: NonNullable<CommunityPreview["membership_gate_summaries"]>,
@@ -456,6 +462,7 @@ async function buildCommunityPreview(input: {
     membership_mode: membershipMode,
     allow_anonymous_identity: Number(localRow?.allow_anonymous_identity ?? 0) === 1,
     anonymous_identity_scope: anonymousIdentityScope,
+    guest_comment_policy: parsePreviewGuestCommentPolicy(settings),
     allowed_disclosed_qualifiers: parsePreviewAllowedDisclosedQualifiers(settings),
     allow_qualifiers_on_anonymous_posts: parsePreviewAllowQualifiersOnAnonymousPosts(settings),
     human_verification_lane: parsePreviewHumanVerificationLane(settings, membershipGateSummaries),

@@ -206,6 +206,14 @@ export async function createComment(input: {
   const community = await loadCommunityProjection(input.env, input.communityRepository, communityRow)
 
   assertCreateCommentRequest(input.body)
+  if ((input.body.authorship_mode ?? "human_direct") === "guest") {
+    if (!input.userId.startsWith("usr_guest_")) {
+      throw eligibilityFailed("Guest comments must use the MCP guest flow")
+    }
+    if (community.guest_comment_policy !== "altcha_required") {
+      throw eligibilityFailed("Guest comments are not enabled in this community")
+    }
+  }
 
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
@@ -253,13 +261,14 @@ export async function createComment(input: {
 
     let writeBody = input.body
     if ((input.body.identity_mode ?? "public") === "anonymous") {
-      if (!policy.allow_anonymous_identity) {
+      const isGuestComment = (input.body.authorship_mode ?? "human_direct") === "guest"
+      if (!policy.allow_anonymous_identity && !isGuestComment) {
         throw eligibilityFailed("Anonymous comments are not enabled in this community")
       }
       writeBody = {
         ...input.body,
         anonymous_scope: resolveAnonymousScope({
-          policyScope: policy.anonymous_identity_scope,
+          policyScope: policy.anonymous_identity_scope ?? (isGuestComment ? "community_stable" : null),
           requestedScope: input.body.anonymous_scope ?? undefined,
         }),
       }

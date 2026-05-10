@@ -8,18 +8,31 @@ import {
 import { assertAgentDelegatedWriteMatchesActor } from "../lib/agents/agent-write-authorization"
 import { getProfileRepository, getUserRepository } from "../lib/auth/repositories"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
+import { openCommunityDb } from "../lib/communities/community-db-factory"
 import { resolveCommunityIdentifier } from "../lib/communities/community-identifier"
+import { loadCommunityProjection } from "../lib/communities/create/repository"
+import { isCommunityLive } from "../lib/communities/community-status"
+import { upsertCommunityMembership } from "../lib/communities/membership/membership-state-store"
 import { createComment } from "../lib/comments/comment-service"
+import { getCommentById } from "../lib/comments/community-comment-store"
 import type { CreateCommentRequest } from "../lib/comments/comment-types"
-import { authError, badRequestError, HttpError } from "../lib/errors"
+import { authError, badRequestError, eligibilityFailed, HttpError } from "../lib/errors"
+import { nowIso } from "../lib/helpers"
 import { COMMUNITY_MCP_TOOLS, MCP_PROTOCOL_VERSION } from "../lib/mcp/community-tools"
+import { resolveOrCreateGuestUser } from "../lib/mcp/guest-identity"
+import { getPostById } from "../lib/posts/community-post-store"
 import { createPost } from "../lib/posts/post-service"
 import { serializeComment } from "../serializers/comment"
 import { serializePost } from "../serializers/post"
 import type { Env } from "../env"
 import type { AgentActionProof, CreatePostRequest } from "../types"
 import { decodePublicCommentId, decodePublicPostId } from "../lib/public-ids"
-import { readAltchaProof } from "../lib/verification/altcha-provider"
+import {
+  createAltchaChallenge,
+  enforceAltchaChallengeRateLimit,
+  purgeExpiredAltchaState,
+  readAltchaProof,
+} from "../lib/verification/altcha-provider"
 
 type McpJsonRpcRequest = {
   id?: string | number | null
@@ -52,6 +65,7 @@ type McpReplyArguments = {
   body?: unknown
   idempotency_key?: unknown
   authorship_mode?: unknown
+  guest_id?: unknown
   agent_id?: unknown
   agent_action_proof?: unknown
   altcha?: unknown
@@ -137,15 +151,88 @@ function buildCreatePostBody(args: McpCreatePostArguments): CreatePostRequest {
 function buildCreateCommentBody(args: McpReplyArguments): CreateCommentRequest {
   const authorshipMode = readOptionalString(args.authorship_mode)
   const agentId = readOptionalString(args.agent_id)
-  if (authorshipMode !== undefined && authorshipMode !== "human_direct" && authorshipMode !== "user_agent") {
-    throw badRequestError("authorship_mode must be human_direct or user_agent")
+  if (authorshipMode !== undefined && authorshipMode !== "human_direct" && authorshipMode !== "user_agent" && authorshipMode !== "guest") {
+    throw badRequestError("authorship_mode must be human_direct, user_agent, or guest")
   }
   return {
     body: readRequiredString(args.body, "body"),
     idempotency_key: readOptionalString(args.idempotency_key) ?? `mcp-reply-${crypto.randomUUID()}`,
     ...(authorshipMode ? { authorship_mode: authorshipMode } : {}),
+    ...(authorshipMode === "guest" ? { identity_mode: "anonymous" as const, anonymous_scope: "community_stable" as const } : {}),
     ...(agentId ? { agent_id: agentId } : {}),
     ...(args.agent_action_proof == null ? {} : { agent_action_proof: readAgentActionProof(args.agent_action_proof) }),
+  }
+}
+
+async function resolveCommentTarget(input: {
+  origin: string
+  args: Pick<McpReplyArguments, "community_id" | "post_id" | "comment_id">
+  communityRepository: ReturnType<typeof getCommunityRepository>
+}): Promise<{
+  communityId: string
+  threadRootPostId: string
+  parentCommentId: string | null
+  requestUrl: string
+  altchaAction: string
+}> {
+  const commentIdRaw = readOptionalString(input.args.comment_id)
+  const postIdRaw = readOptionalString(input.args.post_id)
+  if (commentIdRaw) {
+    const parentCommentId = decodePublicCommentId(commentIdRaw)
+    const projection = await input.communityRepository.getCommunityCommentProjectionByCommentId(parentCommentId)
+    if (!projection) {
+      throw badRequestError("comment_id was not found")
+    }
+    return {
+      communityId: projection.community_id,
+      threadRootPostId: projection.thread_root_post_id,
+      parentCommentId,
+      requestUrl: `${input.origin}/comments/${encodeURIComponent(commentIdRaw)}/replies`,
+      altchaAction: `comment:${commentIdRaw.startsWith("cmt_") ? commentIdRaw : `cmt_${commentIdRaw}`}`,
+    }
+  }
+
+  const communityIdentifier = readRequiredString(input.args.community_id, "community_id")
+  if (!postIdRaw) {
+    throw badRequestError("post_id is required when comment_id is omitted")
+  }
+  const communityId = await resolveCommunityIdentifier(input.communityRepository, communityIdentifier) ?? communityIdentifier
+  return {
+    communityId,
+    threadRootPostId: decodePublicPostId(postIdRaw),
+    parentCommentId: null,
+    requestUrl: `${input.origin}/communities/${encodeURIComponent(communityId)}/posts/${encodeURIComponent(postIdRaw)}/comments`,
+    altchaAction: `post:${postIdRaw.startsWith("post_") ? postIdRaw : `post_${postIdRaw}`}`,
+  }
+}
+
+async function ensureGuestMayComment(c: McpContext, communityId: string) {
+  const communityRepository = getCommunityRepository(c.env)
+  const communityRow = await communityRepository.getCommunityById(communityId)
+  if (!isCommunityLive(communityRow)) {
+    throw eligibilityFailed("Community is not available for guest comments")
+  }
+  const community = await loadCommunityProjection(c.env, communityRepository, communityRow)
+  if (community.guest_comment_policy !== "altcha_required") {
+    throw eligibilityFailed("Guest comments are not enabled in this community")
+  }
+}
+
+async function assertCommentTargetExists(input: {
+  client: Parameters<typeof getPostById>[0]
+  communityId: string
+  threadRootPostId: string
+  parentCommentId: string | null
+}): Promise<void> {
+  const post = await getPostById(input.client, input.threadRootPostId)
+  if (!post || post.community_id !== input.communityId || post.status !== "published") {
+    throw badRequestError("post_id was not found")
+  }
+  if (input.parentCommentId) {
+    const comment = await getCommentById(input.client, input.parentCommentId)
+    if (!comment || comment.thread_root_post_id !== input.threadRootPostId || comment.status !== "published") {
+      throw badRequestError("comment_id was not found")
+    }
   }
 }
 
@@ -209,58 +296,156 @@ async function callCreatePostTool(c: McpContext, rawArgs: unknown) {
   }
 }
 
+async function callPrepareGuestCommentTool(c: McpContext, rawArgs: unknown) {
+  const args = readRecord(rawArgs, "prepare_guest_comment arguments are required") as McpReplyArguments
+  const guestId = readRequiredString(args.guest_id, "guest_id")
+  const communityRepository = getCommunityRepository(c.env)
+  const target = await resolveCommentTarget({
+    origin: new URL(c.req.url).origin,
+    args,
+    communityRepository,
+  })
+  await ensureGuestMayComment(c, target.communityId)
+  const db = await openCommunityDb(c.env, communityRepository, target.communityId)
+  let guest: { userId: string }
+  try {
+    await assertCommentTargetExists({
+      client: db.client,
+      communityId: target.communityId,
+      threadRootPostId: target.threadRootPostId,
+      parentCommentId: target.parentCommentId,
+    })
+    guest = await resolveOrCreateGuestUser({
+      env: c.env,
+      communityId: target.communityId,
+      stableGuestId: guestId,
+    })
+    await upsertCommunityMembership({
+      client: db.client,
+      communityId: target.communityId,
+      userId: guest.userId,
+      now: nowIso(),
+    })
+  } finally {
+    db.close()
+  }
+  await purgeExpiredAltchaState({ env: c.env })
+  await enforceAltchaChallengeRateLimit({ env: c.env, actorUserId: guest.userId })
+  const challenge = await createAltchaChallenge({
+    env: c.env,
+    actorUserId: guest.userId,
+    scope: "comment_create",
+    action: target.altchaAction,
+  })
+  return {
+    content: [
+      {
+        type: "text",
+        text: "Prepared Pirate guest comment ALTCHA challenge.",
+      },
+    ],
+    structuredContent: {
+      guest_id: guestId,
+      challenge,
+      scope: "comment_create",
+      action: target.altchaAction,
+    },
+  }
+}
+
 async function callReplyTool(c: McpContext, rawArgs: unknown) {
   const args = readRecord(rawArgs, "reply arguments are required") as McpReplyArguments
-  const actor = await authenticateMcpWrite(c)
-  const communityRepository = getCommunityRepository(c.env)
-  const commentIdRaw = readOptionalString(args.comment_id)
-  const postIdRaw = readOptionalString(args.post_id)
   const body = buildCreateCommentBody(args)
-  if (actor.authType !== "admin") {
-    assertAgentDelegatedWriteMatchesActor({ actor, body })
-  }
-
-  let communityId: string
-  let threadRootPostId: string
-  let parentCommentId: string | null = null
-  let requestUrl: string
-  let altchaAction: string
-
-  if (commentIdRaw) {
-    parentCommentId = decodePublicCommentId(commentIdRaw)
-    const projection = await communityRepository.getCommunityCommentProjectionByCommentId(parentCommentId)
-    if (!projection) {
-      throw badRequestError("comment_id was not found")
+  let userId: string
+  let bypassAuthorAccessChecks = false
+  if ((body.authorship_mode ?? "human_direct") === "guest") {
+    const guestId = readRequiredString(args.guest_id, "guest_id")
+    const communityRepository = getCommunityRepository(c.env)
+    const target = await resolveCommentTarget({
+      origin: new URL(c.req.url).origin,
+      args,
+      communityRepository,
+    })
+    await ensureGuestMayComment(c, target.communityId)
+    const guest = await resolveOrCreateGuestUser({
+      env: c.env,
+      communityId: target.communityId,
+      stableGuestId: guestId,
+    })
+    const db = await openCommunityDb(c.env, communityRepository, target.communityId)
+    try {
+      await upsertCommunityMembership({
+        client: db.client,
+        communityId: target.communityId,
+        userId: guest.userId,
+        now: nowIso(),
+      })
+    } finally {
+      db.close()
     }
-    communityId = projection.community_id
-    threadRootPostId = projection.thread_root_post_id
-    requestUrl = `${new URL(c.req.url).origin}/comments/${encodeURIComponent(commentIdRaw)}/replies`
-    altchaAction = `comment:${commentIdRaw.startsWith("cmt_") ? commentIdRaw : `cmt_${commentIdRaw}`}`
+    userId = guest.userId
+    // Guest writes intentionally complete here; authenticated writes below keep
+    // the delegated-agent authorization path isolated.
+    const result = await createComment({
+      env: c.env,
+      requestUrl: target.requestUrl,
+      userId,
+      communityId: target.communityId,
+      threadRootPostId: target.threadRootPostId,
+      parentCommentId: target.parentCommentId,
+      body,
+      bypassAuthorAccessChecks,
+      altchaProof: readAltchaProof({
+        headerValue: null,
+        body: { altcha: args.altcha },
+        scope: "comment_create",
+        action: target.altchaAction,
+      }),
+      userRepository: getUserRepository(c.env),
+      profileRepository: getProfileRepository(c.env),
+      communityRepository,
+    })
+    const comment = serializeComment(result)
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Created Pirate comment ${comment.id}`,
+        },
+      ],
+      structuredContent: {
+        comment,
+      },
+    }
   } else {
-    const communityIdentifier = readRequiredString(args.community_id, "community_id")
-    if (!postIdRaw) {
-      throw badRequestError("post_id is required when comment_id is omitted")
+    const actor = await authenticateMcpWrite(c)
+    if (actor.authType !== "admin") {
+      assertAgentDelegatedWriteMatchesActor({ actor, body })
     }
-    communityId = await resolveCommunityIdentifier(communityRepository, communityIdentifier) ?? communityIdentifier
-    threadRootPostId = decodePublicPostId(postIdRaw)
-    requestUrl = `${new URL(c.req.url).origin}/communities/${encodeURIComponent(communityId)}/posts/${encodeURIComponent(postIdRaw)}/comments`
-    altchaAction = `post:${postIdRaw.startsWith("post_") ? postIdRaw : `post_${postIdRaw}`}`
+    userId = actor.userId
+    bypassAuthorAccessChecks = actor.authType === "admin"
   }
 
+  const communityRepository = getCommunityRepository(c.env)
+  const target = await resolveCommentTarget({
+    origin: new URL(c.req.url).origin,
+    args,
+    communityRepository,
+  })
   const result = await createComment({
     env: c.env,
-    requestUrl,
-    userId: actor.userId,
-    communityId,
-    threadRootPostId,
-    parentCommentId,
+    requestUrl: target.requestUrl,
+    userId,
+    communityId: target.communityId,
+    threadRootPostId: target.threadRootPostId,
+    parentCommentId: target.parentCommentId,
     body,
-    bypassAuthorAccessChecks: actor.authType === "admin",
+    bypassAuthorAccessChecks,
     altchaProof: readAltchaProof({
       headerValue: null,
       body: { altcha: args.altcha },
       scope: "comment_create",
-      action: altchaAction,
+      action: target.altchaAction,
     }),
     userRepository: getUserRepository(c.env),
     profileRepository: getProfileRepository(c.env),
@@ -309,6 +494,9 @@ mcp.post("/", async (c) => {
       const params = readRecord(request.params, "tools/call params are required") as McpToolCallParams
       if (params.name === "create_post") {
         return jsonRpcResult(request.id, await callCreatePostTool(c, params.arguments))
+      }
+      if (params.name === "prepare_guest_comment") {
+        return jsonRpcResult(request.id, await callPrepareGuestCommentTool(c, params.arguments))
       }
       if (params.name === "reply") {
         return jsonRpcResult(request.id, await callReplyTool(c, params.arguments))

@@ -15,7 +15,7 @@ import { getControlPlaneClient } from "../runtime-deps"
 import type { ActorContext } from "../auth-middleware"
 
 type AgentWritableRequest = {
-  authorship_mode?: "human_direct" | "user_agent"
+  authorship_mode?: "human_direct" | "user_agent" | "guest"
   agent_id?: string | null
   agent_action_proof?: {
     nonce: string

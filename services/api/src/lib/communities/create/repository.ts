@@ -368,6 +368,9 @@ export function buildBootstrapInitialSettings(body: CreateCommunityRequestBody):
   if (body.agent_posting_policy) {
     settings.agent_posting_policy = body.agent_posting_policy
   }
+  if (body.guest_comment_policy) {
+    settings.guest_comment_policy = body.guest_comment_policy
+  }
   if (body.agent_posting_scope) {
     settings.agent_posting_scope = body.agent_posting_scope
   }

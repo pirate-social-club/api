@@ -666,6 +666,7 @@ export type Community = {
   default_age_gate_policy?: "none" | "18_plus";
   gate_policy?: GatePolicy | null;
   agent_posting_policy: "disallow" | "review" | "allow_with_disclosure" | "allow";
+  guest_comment_policy: "disallow" | "altcha_required";
   agent_posting_scope: "replies_only" | "top_level_and_replies";
   agent_daily_post_cap?: number | null;
   agent_daily_reply_cap?: number | null;
@@ -1279,7 +1280,7 @@ export type CreateCommentRequest = {
   idempotency_key?: string | null;
   body?: string;
   media_refs?: Array<MediaDescriptor>;
-  authorship_mode?: "human_direct" | "user_agent";
+  authorship_mode?: "human_direct" | "user_agent" | "guest";
   agent?: string | null;
   agent_action_proof?: AgentActionProof | null;
   identity_mode?: "public" | "anonymous";
@@ -1490,7 +1491,7 @@ export type Comment = {
   thread_root_post: string;
   parent_comment: string | null;
   author_user: string | null;
-  authorship_mode: "human_direct" | "user_agent";
+  authorship_mode: "human_direct" | "user_agent" | "guest";
   agent?: string | null;
   agent_ownership_record?: string | null;
   identity_mode: "public" | "anonymous";
@@ -1732,6 +1733,7 @@ export type CommunityPreview = {
   membership_mode: "open" | "request" | "gated";
   allow_anonymous_identity?: boolean;
   anonymous_identity_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null;
+  guest_comment_policy?: "disallow" | "altcha_required";
   allowed_disclosed_qualifiers?: Array<string> | null;
   allow_qualifiers_on_anonymous_posts?: boolean | null;
   human_verification_lane: HumanVerificationLane;
@@ -2523,6 +2525,7 @@ type CreateCommunityRequestBase = {
   default_age_gate_policy?: "none" | "18_plus";
   gate_policy?: GatePolicy | null;
   agent_posting_policy?: "disallow" | "review" | "allow_with_disclosure" | "allow" | null;
+  guest_comment_policy?: "disallow" | "altcha_required" | null;
   agent_posting_scope?: "replies_only" | "top_level_and_replies" | null;
   agent_daily_post_cap?: number | null;
   agent_daily_reply_cap?: number | null;

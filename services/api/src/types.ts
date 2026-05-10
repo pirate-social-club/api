@@ -189,7 +189,7 @@ export type Comment = {
   thread_root_post_id: string
   parent_comment_id: string | null
   author_user_id: string | null
-  authorship_mode: "human_direct" | "user_agent"
+  authorship_mode: "human_direct" | "user_agent" | "guest"
   agent_id?: string | null
   agent_ownership_record_id?: string | null
   identity_mode: "public" | "anonymous"
@@ -450,6 +450,7 @@ export type Community = {
   link_post_policy?: "allow" | "require_established" | null
   default_age_gate_policy?: "none" | "18_plus"
   agent_posting_policy: "disallow" | "review" | "allow_with_disclosure" | "allow"
+  guest_comment_policy: "disallow" | "altcha_required"
   agent_posting_scope: "replies_only" | "top_level_and_replies"
   agent_daily_post_cap?: number | null
   agent_daily_reply_cap?: number | null
@@ -511,6 +512,7 @@ export type CommunityPreview = {
   membership_mode: "open" | "request" | "gated"
   allow_anonymous_identity?: boolean
   anonymous_identity_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null
+  guest_comment_policy?: "disallow" | "altcha_required"
   allowed_disclosed_qualifiers?: Array<string> | null
   allow_qualifiers_on_anonymous_posts?: boolean | null
   human_verification_lane: HumanVerificationLane

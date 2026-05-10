@@ -1,6 +1,6 @@
 ALTER TABLE comments
 ADD COLUMN authorship_mode TEXT NOT NULL DEFAULT 'human_direct' CHECK (
-    authorship_mode IN ('human_direct', 'user_agent')
+    authorship_mode IN ('human_direct', 'user_agent', 'guest')
 );
 
 ALTER TABLE comments

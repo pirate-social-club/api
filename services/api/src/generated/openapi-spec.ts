@@ -7073,6 +7073,7 @@ const spec = {
           "human_verification_lane",
           "human_verification_lane_origin",
           "agent_posting_policy",
+          "guest_comment_policy",
           "agent_posting_scope",
           "accepted_agent_ownership_providers_origin",
           "accepted_agent_ownership_providers",
@@ -7264,6 +7265,13 @@ const spec = {
               "review",
               "allow_with_disclosure",
               "allow"
+            ]
+          },
+          "guest_comment_policy": {
+            "type": "string",
+            "enum": [
+              "disallow",
+              "altcha_required"
             ]
           },
           "agent_posting_scope": {
@@ -8722,6 +8730,13 @@ const spec = {
             ],
             "nullable": true
           },
+          "guest_comment_policy": {
+            "type": "string",
+            "enum": [
+              "disallow",
+              "altcha_required"
+            ]
+          },
           "allowed_disclosed_qualifiers": {
             "type": "array",
             "items": {
@@ -9797,7 +9812,8 @@ const spec = {
             "type": "string",
             "enum": [
               "human_direct",
-              "user_agent"
+              "user_agent",
+              "guest"
             ],
             "default": "human_direct"
           },
@@ -9885,7 +9901,8 @@ const spec = {
             "type": "string",
             "enum": [
               "human_direct",
-              "user_agent"
+              "user_agent",
+              "guest"
             ]
           },
           "agent": {

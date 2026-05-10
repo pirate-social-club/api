@@ -83,6 +83,7 @@ describe("discovery routes", () => {
 
     expect(body.serverInfo.name).toBe("pirate-api")
     expect(body.resources.map((resource) => resource.uri)).toContain("https://api.pirate.test/.well-known/api-catalog")
+    expect(body.tools.map((tool) => tool.name)).toContain("prepare_guest_comment")
     expect(body.tools.map((tool) => tool.name)).toContain("create_post")
     expect(body.tools.map((tool) => tool.name)).toContain("reply")
   })
@@ -107,6 +108,7 @@ describe("discovery routes", () => {
       }
     }
     expect(body.result.tools.map((tool) => tool.name)).toContain("create_post")
+    expect(body.result.tools.map((tool) => tool.name)).toContain("prepare_guest_comment")
     expect(body.result.tools.map((tool) => tool.name)).toContain("reply")
   })
 
@@ -164,6 +166,57 @@ describe("discovery routes", () => {
     }
     expect(body.error.message).toContain("Authentication required")
     expect(body.error.message).toContain("no API key is required")
+  })
+
+  test("POST /mcp guest reply does not require bearer auth", async () => {
+    const env = buildTestEnv()
+    const response = await app.request("https://api.pirate.test/mcp", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 4,
+        method: "tools/call",
+        params: {
+          name: "reply",
+          arguments: {
+            authorship_mode: "guest",
+            body: "Testing MCP guest reply.",
+          },
+        },
+      }),
+    }, env)
+
+    expect(response.status).toBe(200)
+    const body = await response.json() as {
+      error: { message: string }
+    }
+    expect(body.error.message).toContain("guest_id is required")
+    expect(body.error.message).not.toContain("Authentication required")
+  })
+
+  test("POST /mcp handles prepare_guest_comment as a known tool", async () => {
+    const env = buildTestEnv()
+    const response = await app.request("https://api.pirate.test/mcp", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 5,
+        method: "tools/call",
+        params: {
+          name: "prepare_guest_comment",
+          arguments: {},
+        },
+      }),
+    }, env)
+
+    expect(response.status).toBe(200)
+    const body = await response.json() as {
+      error: { message: string }
+    }
+    expect(body.error.message).toContain("guest_id is required")
+    expect(body.error.message).not.toContain("Unknown tool")
   })
 
   test("GET /.well-known/agent-skills/index.json advertises public read skills", async () => {

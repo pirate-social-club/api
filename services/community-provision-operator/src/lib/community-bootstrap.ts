@@ -8,6 +8,12 @@ type CommunityBootstrapSql = {
   close(): Promise<void>;
 };
 
+const COMPATIBLE_COMMUNITY_MIGRATION_CHECKSUMS: Record<string, Set<string>> = {
+  "1036_comment_agent_authorship.sql": new Set([
+    "aa648205a1796140aafe3c2c42766e5a0d5b62338ea8d429cc1504839ff4fc15",
+  ]),
+};
+
 export type BootstrapCommunityDatabaseInput = {
   databaseUrl: string;
   databaseAuthToken?: string | null;
@@ -242,6 +248,10 @@ async function applyCommunityMigrations(sql: CommunityBootstrapSql): Promise<{ a
 
     if (existingChecksum) {
       if (existingChecksum !== migration.checksum) {
+        if (COMPATIBLE_COMMUNITY_MIGRATION_CHECKSUMS[migration.name]?.has(existingChecksum)) {
+          skipped += 1;
+          continue;
+        }
         throw new Error(`schema_migration_checksum_mismatch:${migration.name}`);
       }
       skipped += 1;
