@@ -43,6 +43,9 @@ Current persistence mode:
 - libsql/local-file control-plane URLs and PostgreSQL control-plane URLs both work through the same repository layer
 - in-memory repository only when `DEV_MEMORY_STORE_ENABLED=true`
 
+ALTCHA proof-of-work gate semantics, scope bindings, and operator tunables are
+documented in [docs/altcha-pow-gates.md](docs/altcha-pow-gates.md).
+
 ## Internal Layout
 
 The service now groups runtime code by domain under `src/lib/`:
