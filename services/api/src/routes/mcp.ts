@@ -8,27 +8,18 @@ import {
 import { assertAgentDelegatedWriteMatchesActor } from "../lib/agents/agent-write-authorization"
 import { getProfileRepository, getUserRepository } from "../lib/auth/repositories"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
-import { openCommunityDb } from "../lib/communities/community-db-factory"
 import { resolveCommunityIdentifier } from "../lib/communities/community-identifier"
-import { upsertCommunityMembership } from "../lib/communities/membership/membership-state-store"
 import { createComment } from "../lib/comments/comment-service"
 import type { CreateCommentRequest } from "../lib/comments/comment-types"
-import { authError, badRequestError, eligibilityFailed, HttpError } from "../lib/errors"
-import { nowIso } from "../lib/helpers"
+import { authError, badRequestError, HttpError } from "../lib/errors"
 import { COMMUNITY_MCP_TOOLS, MCP_PROTOCOL_VERSION } from "../lib/mcp/community-tools"
-import { resolveOrCreateGuestUser } from "../lib/mcp/guest-identity"
 import { createPost } from "../lib/posts/post-service"
 import { serializeComment } from "../serializers/comment"
 import { serializePost } from "../serializers/post"
 import type { Env } from "../env"
 import type { AgentActionProof, CreatePostRequest } from "../types"
 import { decodePublicCommentId, decodePublicPostId } from "../lib/public-ids"
-import {
-  createAltchaChallenge,
-  enforceAltchaChallengeRateLimit,
-  purgeExpiredAltchaState,
-  readAltchaProof,
-} from "../lib/verification/altcha-provider"
+import { readAltchaProof } from "../lib/verification/altcha-provider"
 
 type McpJsonRpcRequest = {
   id?: string | number | null
@@ -61,7 +52,6 @@ type McpReplyArguments = {
   body?: unknown
   idempotency_key?: unknown
   authorship_mode?: unknown
-  guest_id?: unknown
   agent_id?: unknown
   agent_action_proof?: unknown
   altcha?: unknown
@@ -147,66 +137,15 @@ function buildCreatePostBody(args: McpCreatePostArguments): CreatePostRequest {
 function buildCreateCommentBody(args: McpReplyArguments): CreateCommentRequest {
   const authorshipMode = readOptionalString(args.authorship_mode)
   const agentId = readOptionalString(args.agent_id)
-  if (authorshipMode !== undefined && authorshipMode !== "human_direct" && authorshipMode !== "user_agent" && authorshipMode !== "guest") {
-    throw badRequestError("authorship_mode must be human_direct, user_agent, or guest")
+  if (authorshipMode !== undefined && authorshipMode !== "human_direct" && authorshipMode !== "user_agent") {
+    throw badRequestError("authorship_mode must be human_direct or user_agent")
   }
   return {
     body: readRequiredString(args.body, "body"),
     idempotency_key: readOptionalString(args.idempotency_key) ?? `mcp-reply-${crypto.randomUUID()}`,
     ...(authorshipMode ? { authorship_mode: authorshipMode } : {}),
-    ...(authorshipMode === "guest" ? { identity_mode: "anonymous" as const, anonymous_scope: "community_stable" as const } : {}),
     ...(agentId ? { agent_id: agentId } : {}),
     ...(args.agent_action_proof == null ? {} : { agent_action_proof: readAgentActionProof(args.agent_action_proof) }),
-  }
-}
-
-async function resolveCommentTarget(input: {
-  origin: string
-  args: Pick<McpReplyArguments, "community_id" | "post_id" | "comment_id">
-  communityRepository: ReturnType<typeof getCommunityRepository>
-}): Promise<{
-  communityId: string
-  threadRootPostId: string
-  parentCommentId: string | null
-  requestUrl: string
-  altchaAction: string
-}> {
-  const commentIdRaw = readOptionalString(input.args.comment_id)
-  const postIdRaw = readOptionalString(input.args.post_id)
-  if (commentIdRaw) {
-    const parentCommentId = decodePublicCommentId(commentIdRaw)
-    const projection = await input.communityRepository.getCommunityCommentProjectionByCommentId(parentCommentId)
-    if (!projection) {
-      throw badRequestError("comment_id was not found")
-    }
-    return {
-      communityId: projection.community_id,
-      threadRootPostId: projection.thread_root_post_id,
-      parentCommentId,
-      requestUrl: `${input.origin}/comments/${encodeURIComponent(commentIdRaw)}/replies`,
-      altchaAction: `comment:${commentIdRaw.startsWith("cmt_") ? commentIdRaw : `cmt_${commentIdRaw}`}`,
-    }
-  }
-
-  const communityIdentifier = readRequiredString(input.args.community_id, "community_id")
-  if (!postIdRaw) {
-    throw badRequestError("post_id is required when comment_id is omitted")
-  }
-  const communityId = await resolveCommunityIdentifier(input.communityRepository, communityIdentifier) ?? communityIdentifier
-  return {
-    communityId,
-    threadRootPostId: decodePublicPostId(postIdRaw),
-    parentCommentId: null,
-    requestUrl: `${input.origin}/communities/${encodeURIComponent(communityId)}/posts/${encodeURIComponent(postIdRaw)}/comments`,
-    altchaAction: `post:${postIdRaw.startsWith("post_") ? postIdRaw : `post_${postIdRaw}`}`,
-  }
-}
-
-async function ensureGuestMayComment(c: McpContext, communityId: string) {
-  const communityRepository = getCommunityRepository(c.env)
-  const community = await communityRepository.getCommunityById(communityId)
-  if (!community || community.guest_comment_policy !== "altcha_required") {
-    throw eligibilityFailed("Guest comments are not enabled in this community")
   }
 }
 
