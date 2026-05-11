@@ -11,14 +11,20 @@ import {
   evaluateMembershipGatePolicy,
 } from "./gates"
 import {
+  ANY_COMMUNITY_ROLE,
   canAccessCommunity,
   getCommunityMembershipState,
+  hasCommunityRole,
 } from "./membership-state-store"
 import { getPendingMembershipRequestByApplicant } from "./membership-request-store"
 import { getMembershipGatePolicy } from "./gate-policy-store"
-import type { GatePolicy, GatePolicyEvaluation, RequiredActionNode, RequiredActionSet } from "./gate-types"
+import type { GatePolicy, GatePolicyEvaluation } from "./gate-types"
 import type { CommunityMembershipRepository } from "./types"
 import { gateFailureReasonFromPolicyEvaluation, throwUnsatisfiedMembershipGate } from "./gate-failure-service"
+import {
+  missingCapabilitiesFromRequiredActionSet,
+  suggestedProviderFromRequiredActionSet,
+} from "./gate-utils"
 import { publicCommunityId } from "../../public-ids"
 import type { AltchaProofInput, AltchaScope, VerifiedAltchaProof } from "../../verification/altcha-provider"
 
@@ -41,47 +47,6 @@ function getRequiredWalletScore(policy: GatePolicy | null): number | null {
     requiredScore = requiredScore == null ? atom.minimum_score : Math.max(requiredScore, atom.minimum_score)
   }
   return requiredScore
-}
-
-function flattenRequiredActions(actionSet: RequiredActionSet | null): RequiredActionNode[] {
-  if (!actionSet) {
-    return []
-  }
-  return actionSet.items.flatMap((item) => item.kind === "set" ? flattenRequiredActions(item) : [item])
-}
-
-function missingCapabilitiesFromRequiredActionSet(
-  actionSet: RequiredActionSet | null,
-): NonNullable<JoinEligibility["missing_capabilities"]> {
-  const capabilities = new Set<NonNullable<JoinEligibility["missing_capabilities"]>[number]>()
-  for (const item of flattenRequiredActions(actionSet)) {
-    if (item.kind !== "action") {
-      continue
-    }
-    if (
-      item.capability === "minimum_age"
-      || item.capability === "nationality"
-      || item.capability === "gender"
-      || item.capability === "unique_human"
-      || item.capability === "wallet_score"
-      || item.capability === "altcha_pow"
-    ) {
-      capabilities.add(item.capability)
-    }
-  }
-  return [...capabilities]
-}
-
-function suggestedProviderFromRequiredActionSet(
-  actionSet: RequiredActionSet | null,
-): JoinEligibility["suggested_verification_provider"] {
-  const action = flattenRequiredActions(actionSet).find((item) => (
-    item.kind === "action"
-    && (item.provider === "self" || item.provider === "very" || item.provider === "passport")
-  ))
-  return action?.kind === "action" && (action.provider === "self" || action.provider === "very" || action.provider === "passport")
-    ? action.provider
-    : null
 }
 
 export function buildWalletScoreStatus(
@@ -150,6 +115,10 @@ export async function enforceCommunityActionGate(input: {
   if (!user) {
     throw internalError("Resolved user row is missing for action gate evaluation")
   }
+  const membership = await getCommunityMembershipState(input.client, input.communityId, input.userId)
+  if (hasCommunityRole(membership, ANY_COMMUNITY_ROLE)) {
+    return
+  }
   const { gateSummaries, walletScoreStatus, evaluation } = await evaluateGatedMembership({
     env: input.env,
     user,
@@ -162,7 +131,7 @@ export async function enforceCommunityActionGate(input: {
     verifiedAltchaProof: input.verifiedAltchaProof,
   })
   if (!evaluation.satisfied) {
-    throwUnsatisfiedMembershipGate({ evaluation, gateSummaries, walletScoreStatus })
+    throwUnsatisfiedMembershipGate({ evaluation, gateSummaries, walletScoreStatus, altchaScope: input.altchaScope })
   }
 }
 

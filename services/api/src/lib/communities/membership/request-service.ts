@@ -178,7 +178,7 @@ export async function joinCommunity(input: {
       altchaProof: input.altchaProof,
     })
     if (!evaluation.satisfied) {
-      throwUnsatisfiedMembershipGate({ evaluation, gateSummaries, walletScoreStatus })
+      throwUnsatisfiedMembershipGate({ evaluation, gateSummaries, walletScoreStatus, altchaScope: "community_join" })
     }
     await upsertCommunityMembership({
       client: db.client,

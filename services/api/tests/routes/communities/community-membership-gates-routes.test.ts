@@ -236,6 +236,77 @@ describe("community membership gate routes", () => {
     expect(replyBody.depth).toBe(1)
   })
 
+  test("ALTCHA-gated community creator can post without proof-of-work", async () => {
+    const ctx = await createRouteTestContext({
+      ALTCHA_HMAC_SECRET: "test-altcha-secret",
+      ALTCHA_HMAC_KEY_SECRET: "test-altcha-key-secret",
+      ALTCHA_POW_COST: "1",
+      ALTCHA_POW_COUNTER_MIN: "1",
+      ALTCHA_POW_COUNTER_MAX: "2",
+    })
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "altcha-gate-creator-bypass")
+    const created = await createMembershipGatedCommunity({
+      env: ctx.env,
+      creatorAccessToken: creator.accessToken,
+      displayName: "ALTCHA Creator Bypass Club",
+      gate: { type: "altcha_pow" },
+    })
+
+    const creatorPost = await requestJson(
+      `http://pirate.test/communities/${created.communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Creator post without ALTCHA",
+        body: "Creators should bypass action gates",
+        idempotency_key: "altcha-creator-post-bypass",
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(creatorPost.status).toBe(201)
+
+    const member = await exchangeJwt(ctx.env, "altcha-gate-member-bypass")
+    const joinProof = await solveAltchaProofFromRoute({
+      env: ctx.env,
+      accessToken: member.accessToken,
+      scope: "community_join",
+      action: `community:${created.communityId}`,
+    })
+    const joined = await app.request(
+      `http://pirate.test/communities/${created.communityId}/join`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${member.accessToken}`,
+          "x-pirate-altcha": joinProof,
+        },
+      },
+      ctx.env,
+    )
+    expect(joined.status).toBe(200)
+
+    const deniedMemberPost = await requestJson(
+      `http://pirate.test/communities/${created.communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Member post without ALTCHA",
+        body: "Members should still need action gates",
+        idempotency_key: "altcha-member-post-denied",
+      },
+      ctx.env,
+      member.accessToken,
+    )
+    expect(deniedMemberPost.status).toBe(403)
+    const deniedMemberPostBody = await json(deniedMemberPost) as {
+      code: string
+      message: string
+    }
+    expect(deniedMemberPostBody.code).toBe("gate_failed")
+    expect(deniedMemberPostBody.message).toBe("Proof-of-work is required to post in this community")
+  })
+
   test("create wallet score-gated community succeeds with valid config", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
