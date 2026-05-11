@@ -23,8 +23,15 @@ describe("discovery routes", () => {
     expect(body.links.map((link) => link.rel)).toContain("service-desc")
     expect(body.links.map((link) => link.rel)).toContain("mcp")
     expect(body.links.map((link) => link.rel)).toContain("agent-skills")
+    expect(body.links.map((link) => link.rel)).toContain("agent-skill")
     expect(body.links.map((link) => link.rel)).toContain("robots")
     expect(body.links.map((link) => link.rel)).toContain("sitemap")
+    expect(body.links).toContainEqual(expect.objectContaining({
+      href: "https://api.pirate.test/.well-known/agent-skills/pirate-agent-protocol/SKILL.md",
+      rel: "agent-skill",
+      type: "text/markdown",
+      auth_required: false,
+    }))
   })
 
   test("GET /robots.txt advertises public structured routes and sitemap", async () => {
@@ -232,6 +239,56 @@ describe("discovery routes", () => {
     expect(body.skills.map((skill) => skill.id)).toContain("summarize-public-thread")
     expect(body.skills.map((skill) => skill.id)).toContain("community-actions")
     expect(body.skills.map((skill) => skill.id)).toContain("pirate-agent-protocol")
+  })
+
+  test("GET /.well-known/agent-skills/index.json links the Pirate protocol SKILL.md", async () => {
+    const env = buildTestEnv()
+    const response = await app.request("https://api.pirate.test/.well-known/agent-skills/index.json", {}, env)
+
+    expect(response.status).toBe(200)
+    const body = await response.json() as {
+      skills: Array<{
+        id: string
+        links?: Array<{
+          href: string
+          rel: string
+          type: string
+        }>
+      }>
+    }
+
+    const skill = body.skills.find((candidate) => candidate.id === "pirate-agent-protocol")
+    expect(skill?.links).toContainEqual({
+      href: "https://api.pirate.test/.well-known/agent-skills/pirate-agent-protocol/SKILL.md",
+      rel: "describedby",
+      type: "text/markdown",
+    })
+  })
+
+  test("GET /.well-known/agent-skills/pirate-agent-protocol/SKILL.md serves the public agent skill", async () => {
+    const env = buildTestEnv()
+    const response = await app.request("https://api.pirate.test/.well-known/agent-skills/pirate-agent-protocol/SKILL.md", {}, env)
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get("content-type")).toContain("text/markdown")
+
+    const body = await response.text()
+    expect(body).toContain("# Pirate Agent Protocol")
+    expect(body).toContain("prepare_guest_comment")
+    expect(body).toContain(".pirate")
+  })
+
+  test("GET /docs/agents/pirate-name-purchase/SKILL.md serves the public agent skill", async () => {
+    const env = buildTestEnv()
+    const response = await app.request("https://api.pirate.test/docs/agents/pirate-name-purchase/SKILL.md", {}, env)
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get("content-type")).toContain("text/markdown")
+
+    const body = await response.text()
+    expect(body).toContain("# Pirate Agent Protocol")
+    expect(body).toContain("prepare_guest_comment")
+    expect(body).toContain(".pirate")
   })
 
   test("GET /.well-known/jwks.json exposes the Pirate session signing key", async () => {
