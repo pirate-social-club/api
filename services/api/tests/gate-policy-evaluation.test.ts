@@ -287,6 +287,62 @@ describe("evaluateMembershipGatePolicy", () => {
       const actions = flattenActionNodes(result.requiredActionSet?.items ?? []).filter((item) => item.kind === "action")
       expect(actions.some((item) => item.kind === "action" && item.provider === "altcha" && item.capability === "altcha_pow" && item.scope === "comment_create")).toBe(true)
     })
+
+    test("enforce short-circuits ALTCHA when verifiedAltchaProof matches", async () => {
+      const result = await evaluateMembershipGatePolicy({
+        env: {},
+        policy: orPolicy(palmAtom, altchaAtom),
+        user: makeUser({ uniqueHuman: { state: "unverified" } }),
+        walletAttachments: [],
+        mode: "enforce",
+        altchaScope: "comment_create",
+        altchaProof: {
+          payload: "test-payload",
+          scope: "comment_create",
+          action: "post:post_test",
+        },
+        verifiedAltchaProof: {
+          actorUserId: "usr_policy_test",
+          scope: "comment_create",
+          action: "post:post_test",
+        },
+      })
+      expect(result.satisfied).toBe(true)
+      expect(result.requiredActionSet).toBeNull()
+      expect(result.trace.kind).toBe("op")
+      if (result.trace.kind === "op") {
+        expect(result.trace.children).toHaveLength(2)
+        const altchaChild = result.trace.children[1]
+        expect(altchaChild?.kind).toBe("gate")
+        if (altchaChild?.kind === "gate") {
+          expect(altchaChild.gate_type).toBe("altcha_pow")
+          expect(altchaChild.passed).toBe(true)
+        }
+      }
+    })
+
+    test("enforce does not short-circuit ALTCHA when verifiedAltchaProof action mismatches", async () => {
+      const result = await evaluateMembershipGatePolicy({
+        env: {},
+        policy: orPolicy(palmAtom, altchaAtom),
+        user: makeUser({ uniqueHuman: { state: "unverified" } }),
+        walletAttachments: [],
+        mode: "enforce",
+        altchaScope: "comment_create",
+        altchaProof: {
+          payload: "test-payload",
+          scope: "comment_create",
+          action: "post:post_test",
+        },
+        verifiedAltchaProof: {
+          actorUserId: "usr_policy_test",
+          scope: "comment_create",
+          action: "comment:cmt_test",
+        },
+      })
+      expect(result.satisfied).toBe(false)
+      expect(result.requiredActionSet?.mode).toBe("any")
+    })
   })
 
   describe("trace structure", () => {
