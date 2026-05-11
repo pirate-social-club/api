@@ -55,6 +55,17 @@ function actionSpecificMessage(
   }
 }
 
+function suggestedIntentFromScope(altchaScope: AltchaScope | undefined): "community_join" | "post_create" | "comment_create" {
+  switch (altchaScope) {
+    case "post_create":
+      return "post_create"
+    case "comment_create":
+      return "comment_create"
+    default:
+      return "community_join"
+  }
+}
+
 export function throwUnsatisfiedMembershipGate(input: {
   evaluation: GatePolicyEvaluation
   gateSummaries: GateSummary[]
@@ -73,7 +84,7 @@ export function throwUnsatisfiedMembershipGate(input: {
       gate_evaluation: gateEvaluation,
       missing_capabilities: missingCapabilities,
       suggested_verification_provider: suggestedProviderFromRequiredActionSet(input.evaluation.requiredActionSet),
-      suggested_verification_intent: "community_join",
+      suggested_verification_intent: suggestedIntentFromScope(input.altchaScope),
       failure_reason: "missing_verification",
       ...(input.walletScoreStatus ? { wallet_score_status: input.walletScoreStatus } : {}),
     })

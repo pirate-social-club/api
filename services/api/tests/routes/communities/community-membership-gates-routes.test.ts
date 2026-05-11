@@ -327,9 +327,11 @@ describe("community membership gate routes", () => {
     const deniedMemberPostBody = await json(deniedMemberPost) as {
       code: string
       message: string
+      details?: { suggested_verification_intent?: string | null }
     }
     expect(deniedMemberPostBody.code).toBe("gate_failed")
     expect(deniedMemberPostBody.message).toBe("Proof-of-work is required to post in this community")
+    expect(deniedMemberPostBody.details?.suggested_verification_intent).toBe("post_create")
   })
 
   test("create wallet score-gated community succeeds with valid config", async () => {
