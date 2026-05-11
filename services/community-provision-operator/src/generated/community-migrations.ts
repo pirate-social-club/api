@@ -1712,6 +1712,28 @@ CREATE INDEX idx_content_translations_content_updated
     checksum: "e4a52b77ab3e276e0809deb21302000cb7ffefc9570738e512ab09c222854795",
   },
   {
+    name: "1037_rebuild_comments_guest_authorship.sql",
+    sql: `-- Forward compatibility / repair migration.
+--
+-- The 1036_comment_agent_authorship.sql migration was originally shipped with
+-- a CHECK constraint that excluded 'guest' from comments.authorship_mode.
+-- That was corrected in the canonical migration file, but existing community
+-- databases may still have the old constraint.
+--
+-- SQLite does not support ALTER TABLE to change a CHECK constraint, and the
+-- column set in the comments table varies depending on whether runtime
+-- preflight columns (e.g. replies_locked) have already been added.  Because
+-- of this, the actual schema repair is performed by runtime preflight in the
+-- API worker (ensureRemoteCommentGuestAuthorship), which inspects the live
+-- schema and rebuilds the table only when needed.
+--
+-- This migration file exists so that the migration ledger stays consistent
+-- and doctor/provisioning tools can reason about the expected state.
+SELECT 1;
+`,
+    checksum: "1c905750b12cd2979fe43a98cd907487acfbb3ff0dba6cc69ab1d97ed3d1907b",
+  },
+  {
     name: "1038_community_post_labels_ai.sql",
     sql: `ALTER TABLE labels
 ADD COLUMN color_token TEXT;

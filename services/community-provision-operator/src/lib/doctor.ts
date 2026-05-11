@@ -17,9 +17,6 @@ import type {
 } from "./types";
 
 const COMPATIBLE_COMMUNITY_MIGRATION_CHECKSUMS: Record<string, Set<string>> = {
-  "1036_comment_agent_authorship.sql": new Set([
-    "aa648205a1796140aafe3c2c42766e5a0d5b62338ea8d429cc1504839ff4fc15",
-  ]),
 };
 
 async function inspectCommunityDatabaseSchema(input: {
@@ -76,6 +73,22 @@ async function inspectCommunityDatabaseSchema(input: {
       if (!expectedNames.has(migrationName)) {
         unexpectedMigrationNames.push(migrationName);
       }
+    }
+
+    const commentsSchema = await client.execute(`
+      SELECT sql
+      FROM sqlite_schema
+      WHERE type = 'table'
+        AND name = 'comments'
+      LIMIT 1
+    `);
+    const commentsCreateSql = String(commentsSchema.rows[0]?.sql ?? "");
+    if (
+      commentsCreateSql
+      && !/authorship_mode[\s\S]*'guest'/.test(commentsCreateSql)
+      && !mismatchedMigrationNames.includes("1036_comment_agent_authorship.sql")
+    ) {
+      mismatchedMigrationNames.push("1036_comment_agent_authorship.sql");
     }
 
     return {

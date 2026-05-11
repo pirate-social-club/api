@@ -20,7 +20,7 @@ import type { GatePolicy, GatePolicyEvaluation, RequiredActionNode, RequiredActi
 import type { CommunityMembershipRepository } from "./types"
 import { gateFailureReasonFromPolicyEvaluation, throwUnsatisfiedMembershipGate } from "./gate-failure-service"
 import { publicCommunityId } from "../../public-ids"
-import type { AltchaProofInput, AltchaScope } from "../../verification/altcha-provider"
+import type { AltchaProofInput, AltchaScope, VerifiedAltchaProof } from "../../verification/altcha-provider"
 
 export function satisfiesBaselineJoinGate(user: User): boolean {
   if (user.verification_capabilities.unique_human.state === "verified") {
@@ -110,6 +110,7 @@ export async function evaluateGatedMembership(input: {
   mode?: "preview" | "enforce"
   altchaScope?: AltchaScope
   altchaProof?: AltchaProofInput
+  verifiedAltchaProof?: VerifiedAltchaProof
 }): Promise<{
   gateSummaries: ReturnType<typeof buildMembershipGateSummariesFromPolicy>
   walletScoreStatus: JoinEligibility["wallet_score_status"]
@@ -126,6 +127,7 @@ export async function evaluateGatedMembership(input: {
     mode: input.mode ?? "preview",
     altchaScope: input.altchaScope,
     altchaProof: input.altchaProof,
+    verifiedAltchaProof: input.verifiedAltchaProof,
   })
   return { gateSummaries, walletScoreStatus, evaluation }
 }
@@ -138,6 +140,7 @@ export async function enforceCommunityActionGate(input: {
   communityId: string
   altchaScope: AltchaScope
   altchaProof?: AltchaProofInput
+  verifiedAltchaProof?: VerifiedAltchaProof
 }): Promise<void> {
   const policy = await getMembershipGatePolicy(input.client, input.communityId)
   if (!policy) {
@@ -156,6 +159,7 @@ export async function enforceCommunityActionGate(input: {
     mode: "enforce",
     altchaScope: input.altchaScope,
     altchaProof: input.altchaProof,
+    verifiedAltchaProof: input.verifiedAltchaProof,
   })
   if (!evaluation.satisfied) {
     throwUnsatisfiedMembershipGate({ evaluation, gateSummaries, walletScoreStatus })

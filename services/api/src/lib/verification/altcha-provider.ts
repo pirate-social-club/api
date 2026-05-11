@@ -18,6 +18,12 @@ export type AltchaProofInput = {
   action: string
 }
 
+export type VerifiedAltchaProof = {
+  actorUserId: string
+  scope: AltchaScope
+  action: string
+}
+
 export type AltchaVerificationResult = {
   verified: boolean
   reason?: "missing_proof" | "invalid_payload" | "invalid_solution" | "expired" | "binding_mismatch" | "replayed"

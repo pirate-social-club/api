@@ -6,6 +6,7 @@ import { createClient } from "@libsql/client"
 import type { Client } from "@libsql/client"
 import { resolveCoreRepoPath } from "../../../shared/core-repo-paths"
 import { internalError } from "../errors"
+import { ensureRemoteCommentGuestAuthorship } from "./ensure-remote-comment-guest-authorship"
 import type { GatePolicy } from "./membership/gate-types"
 
 const LOCAL_SQLITE_BUSY_TIMEOUT_MS = 30000
@@ -36,9 +37,6 @@ const COMPATIBLE_LOCAL_MIGRATION_CHECKSUMS: Record<string, Set<string>> = {
   ]),
   "1073_wallet_bound_purchases.sql": new Set([
     "3df9d051d1fff3dfec40ed08344e2985f6f55bb012e0471ec2fac51768454a81",
-  ]),
-  "1036_comment_agent_authorship.sql": new Set([
-    "aa648205a1796140aafe3c2c42766e5a0d5b62338ea8d429cc1504839ff4fc15",
   ]),
 }
 
@@ -175,7 +173,9 @@ export async function configureLocalCommunityDbClient(client: Client): Promise<v
   await client.execute(`PRAGMA busy_timeout = ${localSqliteBusyTimeoutMs()}`)
 }
 
-async function applyMigrationFile(client: Client, migrationFilePath: string): Promise<void> {
+async function applyMigrationFile(client: Client, migrationFilePath: string): Promise<{
+  repairCommentGuestAuthorship?: { migrationName: string; checksum: string }
+}> {
   const migrationName = migrationFilePath.split("/").pop()
   if (!migrationName) {
     throw internalError("Invalid migration path")
@@ -195,6 +195,15 @@ async function applyMigrationFile(client: Client, migrationFilePath: string): Pr
   const existingChecksum = existing.rows[0]?.checksum
   if (typeof existingChecksum === "string") {
     if (existingChecksum !== checksum) {
+      // Explicit repair checkpoint for 1036_comment_agent_authorship.sql:
+      // the old migration created a CHECK constraint that excluded 'guest'.
+      // The ledger is updated only after the table repair runs below.
+      if (
+        migrationName === "1036_comment_agent_authorship.sql"
+        && existingChecksum === "aa648205a1796140aafe3c2c42766e5a0d5b62338ea8d429cc1504839ff4fc15"
+      ) {
+        return { repairCommentGuestAuthorship: { migrationName, checksum } }
+      }
       if (COMPATIBLE_LOCAL_MIGRATION_CHECKSUMS[migrationName]?.has(existingChecksum)) {
         await client.execute({
           sql: `
@@ -204,11 +213,11 @@ async function applyMigrationFile(client: Client, migrationFilePath: string): Pr
           `,
           args: [migrationName, checksum],
         })
-        return
+        return {}
       }
       throw internalError(`Migration checksum mismatch for ${migrationName}`)
     }
-    return
+    return {}
   }
 
   const statements = splitSqlStatements(sql)
@@ -235,6 +244,7 @@ async function applyMigrationFile(client: Client, migrationFilePath: string): Pr
   } finally {
     tx.close()
   }
+  return {}
 }
 
 export async function ensureCommunityDbSchema(client: Client): Promise<void> {
@@ -244,8 +254,21 @@ export async function ensureCommunityDbSchema(client: Client): Promise<void> {
     .filter((entry) => entry.endsWith(".sql"))
     .sort()
 
+  let repairCommentGuestAuthorship: { migrationName: string; checksum: string } | undefined
   for (const entry of migrationEntries) {
-    await applyMigrationFile(client, join(migrationsDir, entry))
+    const result = await applyMigrationFile(client, join(migrationsDir, entry))
+    repairCommentGuestAuthorship ??= result.repairCommentGuestAuthorship
+  }
+  if (repairCommentGuestAuthorship) {
+    await ensureRemoteCommentGuestAuthorship(client)
+    await client.execute({
+      sql: `
+        UPDATE schema_migrations
+        SET checksum = ?2
+        WHERE migration_name = ?1
+      `,
+      args: [repairCommentGuestAuthorship.migrationName, repairCommentGuestAuthorship.checksum],
+    })
   }
 }
 

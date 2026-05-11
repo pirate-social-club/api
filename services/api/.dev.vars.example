@@ -62,3 +62,11 @@ ACRCLOUD_BUCKET_ID=
 ACRCLOUD_CONSOLE_BASE_URL=https://api-v2.acrcloud.com/api
 ELEVENLABS_API_KEY=
 ELEVENLABS_FORCE_ALIGNMENT_URL=https://api.elevenlabs.io/v1/forced-alignment
+
+# ALTCHA proof-of-work (required when any community uses altcha_pow gates or guest comments)
+ALTCHA_HMAC_SECRET=replace-me-with-a-long-random-secret
+ALTCHA_HMAC_KEY_SECRET=replace-me-with-a-different-long-random-secret
+# Local dev: keep cost low so challenges solve instantly
+ALTCHA_POW_COST=1
+ALTCHA_POW_COUNTER_MIN=1
+ALTCHA_POW_COUNTER_MAX=2

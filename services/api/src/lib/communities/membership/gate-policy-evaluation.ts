@@ -3,7 +3,7 @@ import type { User, WalletAttachmentSummary } from "../../../types"
 import type { CommunityGateRuleRow, GateAtom, GateExpression, GatePolicy, GatePolicyEvaluation, GateTraceNode, RequiredAction, RequiredActionNode, RequiredActionSet } from "./gate-types"
 import { evaluateIdentityGateRule } from "./identity-gate-evaluation"
 import { evaluateTokenGateRule } from "./token-gate-evaluation"
-import { verifyAndConsumeAltchaProof, type AltchaProofInput, type AltchaScope } from "../../verification/altcha-provider"
+import { verifyAndConsumeAltchaProof, type AltchaProofInput, type AltchaScope, type VerifiedAltchaProof } from "../../verification/altcha-provider"
 
 type AtomEvaluation = {
   passed: boolean
@@ -21,6 +21,7 @@ export async function evaluateMembershipGatePolicy(input: {
   mode?: EvaluationMode
   altchaScope?: AltchaScope
   altchaProof?: AltchaProofInput
+  verifiedAltchaProof?: VerifiedAltchaProof
 }): Promise<GatePolicyEvaluation> {
   if (!input.policy) {
     return {
@@ -38,6 +39,7 @@ export async function evaluateMembershipGatePolicy(input: {
     mode: input.mode ?? "preview",
     altchaScope: input.altchaScope ?? input.altchaProof?.scope ?? "community_join",
     altchaProof: input.altchaProof,
+    verifiedAltchaProof: input.verifiedAltchaProof,
   })
 
   return {
@@ -55,6 +57,7 @@ async function evaluateExpression(input: {
   mode: EvaluationMode
   altchaScope: AltchaScope
   altchaProof?: AltchaProofInput
+  verifiedAltchaProof?: VerifiedAltchaProof
 }): Promise<{ passed: boolean; trace: GateTraceNode; requiredActionSet: RequiredActionSet | null }> {
   const { expression } = input
   if (expression.op === "gate") {
@@ -107,6 +110,7 @@ async function evaluateChildrenSequentially(input: {
   mode: EvaluationMode
   altchaScope: AltchaScope
   altchaProof?: AltchaProofInput
+  verifiedAltchaProof?: VerifiedAltchaProof
 }): Promise<Array<{ passed: boolean; trace: GateTraceNode; requiredActionSet: RequiredActionSet | null }>> {
   const children: Array<{ passed: boolean; trace: GateTraceNode; requiredActionSet: RequiredActionSet | null }> = []
   for (const childExpression of input.expression.children) {
@@ -142,6 +146,7 @@ async function evaluateAtom(input: {
   mode: EvaluationMode
   altchaScope: AltchaScope
   altchaProof?: AltchaProofInput
+  verifiedAltchaProof?: VerifiedAltchaProof
 }): Promise<AtomEvaluation> {
   switch (input.atom.type) {
     case "altcha_pow":
@@ -211,6 +216,7 @@ async function evaluateAltchaAtom(input: {
   mode: EvaluationMode
   altchaScope: AltchaScope
   altchaProof?: AltchaProofInput
+  verifiedAltchaProof?: VerifiedAltchaProof
 }): Promise<AtomEvaluation> {
   if (input.mode === "preview") {
     return {
@@ -228,6 +234,23 @@ async function evaluateAltchaAtom(input: {
         capability: "altcha_pow",
         scope: input.altchaScope,
       },
+    }
+  }
+
+  if (
+    input.verifiedAltchaProof?.actorUserId === input.user.user_id
+    && input.verifiedAltchaProof.scope === input.altchaScope
+    && input.verifiedAltchaProof.action === input.altchaProof?.action
+  ) {
+    return {
+      passed: true,
+      trace: {
+        kind: "gate",
+        gate_type: "altcha_pow",
+        provider: "altcha",
+        passed: true,
+      },
+      requiredAction: null,
     }
   }
 

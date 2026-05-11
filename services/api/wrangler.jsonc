@@ -24,9 +24,9 @@
       "new_sqlite_classes": ["LiveRoomRuntimeDO"]
     }
   ],
-	  "vars": {
-	    // Set PASSPORT_API_KEY with `wrangler secret put PASSPORT_API_KEY`.
-	    "ENVIRONMENT": "development",
+  "vars": {
+    // Set PASSPORT_API_KEY with `wrangler secret put PASSPORT_API_KEY`.
+    "ENVIRONMENT": "development",
       "SENTRY_DSN": "https://0e27176cffcca727ff2c1a10e334f831@o4511308510265344.ingest.us.sentry.io/4511308511379456",
     "JWT_BASED_AUTH_ENABLED": "true",
     "JWT_BASED_AUTH_ISSUERS": "pirate-dev",
@@ -49,11 +49,11 @@
     "ACRCLOUD_HOST": "identify-ap-southeast-1.acrcloud.com",
     "ACRCLOUD_IDENTIFY_PATH": "/v1/identify",
     "ELEVENLABS_FORCE_ALIGNMENT_URL": "https://api.elevenlabs.io/v1/forced-alignment",
-	    "COMMUNITY_PROVISION_EXPECTED_ORGANIZATION_SLUG": "pirate-dev",
-	    "COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION": "aws-us-east-1",
-	    "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
-	    "PASSPORT_API_URL": "https://api.passport.xyz",
-	    "PASSPORT_SCORER_ID": "12028"
+    "COMMUNITY_PROVISION_EXPECTED_ORGANIZATION_SLUG": "pirate-dev",
+    "COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION": "aws-us-east-1",
+    "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
+    "PASSPORT_API_URL": "https://api.passport.xyz",
+    "PASSPORT_SCORER_ID": "12028"
   },
   "env": {
     "staging": {

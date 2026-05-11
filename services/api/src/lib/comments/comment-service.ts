@@ -44,7 +44,7 @@ import { enqueueCommentTranslationPrewarmJobs } from "./comment-translation-jobs
 import type { Comment, CommentAnonymousScope, CreateCommentRequest } from "./comment-types"
 import type { Env } from "../../env"
 import type { CreatePostRequest } from "../../types"
-import type { AltchaProofInput } from "../verification/altcha-provider"
+import { verifyAndConsumeAltchaProof, type AltchaProofInput, type VerifiedAltchaProof } from "../verification/altcha-provider"
 
 export {
   getCommentContext,
@@ -206,12 +206,30 @@ export async function createComment(input: {
   const community = await loadCommunityProjection(input.env, input.communityRepository, communityRow)
 
   assertCreateCommentRequest(input.body)
-  if ((input.body.authorship_mode ?? "human_direct") === "guest") {
+  const isGuestComment = (input.body.authorship_mode ?? "human_direct") === "guest"
+  let verifiedAltchaProof: VerifiedAltchaProof | undefined
+  if (isGuestComment) {
     if (!input.userId.startsWith("usr_guest_")) {
       throw eligibilityFailed("Guest comments must use the MCP guest flow")
     }
     if (community.guest_comment_policy !== "altcha_required") {
       throw eligibilityFailed("Guest comments are not enabled in this community")
+    }
+    if (!input.altchaProof?.payload) {
+      throw eligibilityFailed("ALTCHA proof is required for guest comments")
+    }
+    const altchaResult = await verifyAndConsumeAltchaProof({
+      env: input.env,
+      actorUserId: input.userId,
+      proof: input.altchaProof,
+    })
+    if (!altchaResult.verified) {
+      throw eligibilityFailed(`ALTCHA verification failed: ${altchaResult.reason}`)
+    }
+    verifiedAltchaProof = {
+      actorUserId: input.userId,
+      scope: input.altchaProof.scope,
+      action: input.altchaProof.action,
     }
   }
 
@@ -228,6 +246,7 @@ export async function createComment(input: {
         communityId: input.communityId,
         altchaScope: "comment_create",
         altchaProof: input.altchaProof,
+        verifiedAltchaProof,
       })
     }
     const canBypassLocks = input.bypassAuthorAccessChecks === true
