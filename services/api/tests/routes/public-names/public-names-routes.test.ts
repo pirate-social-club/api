@@ -360,4 +360,136 @@ describe("public names routes", () => {
     expect(statusBody.status).toBe("taken")
     expect(statusBody.owner_kind).toBe("user")
   })
+
+  test("rejects public quotes for labels exceeding max length", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const longLabel = "a".repeat(33)
+    const quoteResponse = await requestJson("http://pirate.test/public-names/quotes", {
+      desired_label: longLabel,
+      buyer_wallet_address: "0x3000000000000000000000000000000000000003",
+    }, ctx.env)
+    expect(quoteResponse.status).toBe(400)
+    const quoteBody = await json(quoteResponse) as { code: string; message: string }
+    expect(quoteBody.code).toBe("bad_request")
+    expect(quoteBody.message).toBe("desired_label must be at most 32 characters")
+
+    const rows = await ctx.client.execute({
+      sql: "SELECT COUNT(*) as count FROM public_name_quote_rate_limits",
+    })
+    expect(Number(rows.rows[0]?.count ?? 0)).toBe(0)
+  })
+
+  test("rate limits public quotes by wallet address", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const buyerWallet = "0x7000000000000000000000000000000000000007"
+    const limit = 5
+
+    for (let i = 0; i < limit; i++) {
+      const res = await requestJson("http://pirate.test/public-names/quotes", {
+        desired_label: `rate-limit-wallet-${i}`,
+        buyer_wallet_address: buyerWallet,
+      }, ctx.env)
+      expect(res.status).toBe(200)
+    }
+
+    const blocked = await requestJson("http://pirate.test/public-names/quotes", {
+      desired_label: "rate-limit-wallet-blocked",
+      buyer_wallet_address: buyerWallet,
+    }, ctx.env)
+    expect(blocked.status).toBe(429)
+    const blockedBody = await json(blocked) as { code: string; message: string; retryable: boolean }
+    expect(blockedBody.code).toBe("rate_limited")
+    expect(blockedBody.retryable).toBe(true)
+  })
+
+  test("rate limits public quotes by IP address", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const ipLimit = 10
+    for (let i = 0; i < ipLimit; i++) {
+      const res = await requestJson("http://pirate.test/public-names/quotes", {
+        desired_label: `rate-limit-ip-${i}`,
+        buyer_wallet_address: `0x${String(i + 100).padStart(40, "0")}`,
+      }, ctx.env, {
+        "x-forwarded-for": "10.0.0.1",
+      })
+      expect(res.status).toBe(200)
+    }
+
+    const blocked = await requestJson("http://pirate.test/public-names/quotes", {
+      desired_label: "rate-limit-ip-blocked",
+      buyer_wallet_address: "0x0000000000000000000000000000000000000101",
+    }, ctx.env, {
+      "x-forwarded-for": "10.0.0.1",
+    })
+    expect(blocked.status).toBe(429)
+    const blockedBody = await json(blocked) as { code: string; retryable: boolean }
+    expect(blockedBody.code).toBe("rate_limited")
+    expect(blockedBody.retryable).toBe(true)
+
+    // Same wallet from a different IP should still succeed
+    const differentIp = await requestJson("http://pirate.test/public-names/quotes", {
+      desired_label: "rate-limit-ip-different-ip",
+      buyer_wallet_address: "0x0000000000000000000000000000000000000101",
+    }, ctx.env, {
+      "x-forwarded-for": "10.0.0.2",
+    })
+    expect(differentIp.status).toBe(200)
+  })
+
+  test("rate limit window resets after window expires", async () => {
+    const ctx = await createRouteTestContext({
+      PUBLIC_NAME_QUOTE_RATE_LIMIT_WINDOW_SECONDS: "1",
+    })
+    cleanup = ctx.cleanup
+
+    const buyerWallet = "0x8000000000000000000000000000000000000008"
+    const limit = 5
+    for (let i = 0; i < limit; i++) {
+      const res = await requestJson("http://pirate.test/public-names/quotes", {
+        desired_label: `rate-limit-window-${i}`,
+        buyer_wallet_address: buyerWallet,
+      }, ctx.env)
+      expect(res.status).toBe(200)
+    }
+
+    const blocked = await requestJson("http://pirate.test/public-names/quotes", {
+      desired_label: "rate-limit-window-blocked",
+      buyer_wallet_address: buyerWallet,
+    }, ctx.env)
+    expect(blocked.status).toBe(429)
+
+    // Wait for window to roll over
+    await new Promise((resolve) => setTimeout(resolve, 1_100))
+
+    const afterWindow = await requestJson("http://pirate.test/public-names/quotes", {
+      desired_label: "rate-limit-window-after",
+      buyer_wallet_address: buyerWallet,
+    }, ctx.env)
+    expect(afterWindow.status).toBe(200)
+  })
+
+  test("invalid wallet returns 400 and does not write rate limit rows", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const res = await requestJson("http://pirate.test/public-names/quotes", {
+      desired_label: "bad-wallet",
+      buyer_wallet_address: "not-an-evm-address",
+    }, ctx.env)
+    expect(res.status).toBe(400)
+    const body = await json(res) as { code: string; message: string }
+    expect(body.code).toBe("bad_request")
+    expect(body.message).toBe("buyer_wallet_address must be a valid EVM address")
+
+    const rows = await ctx.client.execute({
+      sql: "SELECT COUNT(*) as count FROM public_name_quote_rate_limits",
+    })
+    expect(Number(rows.rows[0]?.count ?? 0)).toBe(0)
+  })
 })

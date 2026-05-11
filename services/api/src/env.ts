@@ -103,6 +103,11 @@ export type Env = {
   // Use 15000-30000 for pilot smoke.
   PIRATE_CHECKOUT_TX_WAIT_TIMEOUT_MS?: string
 
+  // Public name rate limiting
+  PUBLIC_NAME_QUOTE_RATE_LIMIT_IP?: string
+  PUBLIC_NAME_QUOTE_RATE_LIMIT_WALLET?: string
+  PUBLIC_NAME_QUOTE_RATE_LIMIT_WINDOW_SECONDS?: string
+
   // Story and song processing
   STORY_CHAIN_ID?: string
   STORY_RPC_URL?: string
