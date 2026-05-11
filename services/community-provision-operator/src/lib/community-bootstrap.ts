@@ -250,7 +250,11 @@ function splitSqlStatements(source: string): string[] {
     statements.push(trailing);
   }
 
-  return statements;
+  return statements.filter((statement) => {
+    // Turso/libSQL rejects this SQLite compatibility PRAGMA over the remote
+    // protocol. It is only needed by local SQLite rebuild migrations.
+    return !/^PRAGMA\s+legacy_alter_table\s*=/iu.test(statement);
+  });
 }
 
 export function listExpectedCommunityMigrationChecksums(): CommunityTemplateMigrationChecksum[] {

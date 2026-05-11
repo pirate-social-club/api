@@ -1,0 +1,47 @@
+{
+  "name": "staging-mcp-smoke",
+  "description": "Minimal staging MCP guest-comment smoke target.",
+  "users": [
+    {
+      "key": "staff",
+      "subject": "seed-staging-mcp-smoke-staff",
+      "synthetic": true,
+      "verify_unique_human": false,
+      "verification_provider": "very"
+    }
+  ],
+  "communities": [
+    {
+      "key": "mcp-guest-comments",
+      "owner": "staff",
+      "create": {
+        "display_name": "MCP Guest Comment Smoke",
+        "description": "Staging target for unauthenticated MCP guest comments with ALTCHA proof-of-work.",
+        "governance_mode": "centralized",
+        "membership_mode": "request",
+        "default_age_gate_policy": "none",
+        "allow_anonymous_identity": true,
+        "anonymous_identity_scope": "community_stable",
+        "guest_comment_policy": "altcha_required",
+        "handle_policy": {
+          "policy_template": "standard"
+        }
+      },
+      "members": ["staff"],
+      "followers": ["staff"],
+      "posts": [
+        {
+          "key": "starter-thread",
+          "author": "staff",
+          "body": {
+            "post_type": "text",
+            "title": "MCP guest comment smoke target",
+            "body": "Public staging thread for validating prepare_guest_comment, ALTCHA solving, guest reply, and replay rejection over MCP.",
+            "idempotency_key": "seed-staging-mcp-guest-comment-smoke-starter",
+            "visibility": "public"
+          }
+        }
+      ]
+    }
+  ]
+}
