@@ -601,13 +601,15 @@ async function resolveUsers(ctx: SeedContext, manifest: SeedManifest): Promise<v
     }
     if (!seedUser.subject) throw new Error(`User ${seedUser.key} needs subject or access_token_env`)
     const jwt = await mintJwt(seedUser.subject, seedUser.wallet_address)
-    const exchanged = await requestJson<{ access_token: string; user: { user_id: string } }>({
+    const exchanged = await requestJson<{ access_token: string; user: { user_id?: string; id?: string } }>({
       apiUrl: ctx.apiUrl,
       method: "POST",
       path: "/auth/session/exchange",
       body: { proof: { type: "jwt_based_auth", jwt } },
     })
-    const session = { ...seedUser, accessToken: exchanged.body.access_token, userId: exchanged.body.user.user_id }
+    const userId = exchanged.body.user.user_id ?? exchanged.body.user.id?.replace(/^usr_/, "")
+    if (!userId) throw new Error(`/auth/session/exchange did not return user_id or id for ${seedUser.key}`)
+    const session = { ...seedUser, accessToken: exchanged.body.access_token, userId }
     ctx.users.set(seedUser.key, session)
     ctx.report.push(`exchanged jwt user ${seedUser.key} -> ${session.userId}`)
     await applyProfile(ctx, session)
@@ -728,7 +730,11 @@ async function verifyPost(ctx: SeedContext, postId: string): Promise<void> {
     method: "GET",
     path: `/public-posts/${encodeURIComponent(postId)}`,
   })
-  requireLink(post.response, `/public-posts/${postId}`)
+  const publicPostId = postId.startsWith("post_") ? postId : `post_${postId}`
+  const link = post.response.headers.get("link")
+  if (!link?.includes(`/public-posts/${postId}`) && !link?.includes(`/public-posts/${publicPostId}`)) {
+    throw new Error(`Response missing Link header containing /public-posts/${postId} or /public-posts/${publicPostId}`)
+  }
   if (!post.body.links?.markdown?.href) throw new Error(`Public post ${postId} did not include markdown link`)
   const markdown = await fetch(new URL(`/public-posts/${encodeURIComponent(postId)}?format=markdown`, ctx.apiUrl), {
     headers: { accept: "text/markdown" },
@@ -750,19 +756,23 @@ async function verifyPost(ctx: SeedContext, postId: string): Promise<void> {
 
 async function seedPosts(ctx: SeedContext, community: CommunitySeed, communityId: string): Promise<void> {
   for (const post of community.posts ?? []) {
-    const created = await requestJson<{ post_id: string; visibility?: string }>({
+    const created = await requestJson<{ post_id?: string; id?: string; visibility?: string }>({
       apiUrl: ctx.apiUrl,
       method: "POST",
       path: `/communities/${encodeURIComponent(communityId)}/posts`,
       token: user(ctx, post.author).accessToken,
       body: post.body,
     })
+    const createdPostId = created.body.post_id ?? created.body.id?.replace(/^post_/, "")
+    if (!createdPostId) {
+      throw new Error(`post create response did not include post_id or id for ${community.key}.${post.key}`)
+    }
     const key = `${community.key}.${post.key}`
-    ctx.posts.set(key, created.body.post_id)
-    ctx.report.push(`created post ${key} -> ${created.body.post_id}`)
-    await applyVotes(ctx, "post", created.body.post_id, post.votes ?? [])
+    ctx.posts.set(key, createdPostId)
+    ctx.report.push(`created post ${key} -> ${createdPostId}`)
+    await applyVotes(ctx, "post", createdPostId, post.votes ?? [])
     for (const comment of post.comments ?? []) {
-      await seedComment(ctx, community, communityId, created.body.post_id, comment, `${key}.${comment.key}`)
+      await seedComment(ctx, community, communityId, createdPostId, comment, `${key}.${comment.key}`)
     }
     const resolvedVisibility = typeof created.body.visibility === "string"
       ? created.body.visibility
@@ -770,7 +780,7 @@ async function seedPosts(ctx: SeedContext, community: CommunitySeed, communityId
         ? post.body.visibility
         : null
     if (resolvedVisibility === "public") {
-      await verifyPost(ctx, created.body.post_id)
+      await verifyPost(ctx, createdPostId)
     } else if (resolvedVisibility === null) {
       ctx.warnings.push(`skipped public verification for ${key}; API response and manifest did not declare visibility`)
     }
@@ -789,7 +799,11 @@ async function verifyCommunity(ctx: SeedContext, communityId: string, owner: Ses
     method: "GET",
     path: `/public-communities/${encodeURIComponent(communityId)}`,
   })
-  requireLink(preview.response, `/public-communities/${communityId}`)
+  const publicCommunityId = communityId.startsWith("com_") ? communityId : `com_${communityId}`
+  const link = preview.response.headers.get("link")
+  if (!link?.includes(`/public-communities/${communityId}`) && !link?.includes(`/public-communities/${publicCommunityId}`)) {
+    throw new Error(`Response missing Link header containing /public-communities/${communityId} or /public-communities/${publicCommunityId}`)
+  }
   if (!preview.body.links?.posts?.href) throw new Error(`Public community ${communityId} did not include posts link`)
   const markdown = await fetch(new URL(`/public-communities/${encodeURIComponent(communityId)}?format=markdown`, ctx.apiUrl), {
     headers: { accept: "text/markdown" },
@@ -812,7 +826,7 @@ async function seedCommunities(ctx: SeedContext, manifest: SeedManifest): Promis
         ...(community.create ?? {}),
         ...(namespaceVerificationId ? { namespace: { namespace_verification_id: namespaceVerificationId } } : {}),
       }
-      const created = await requestJson<{ community: { community_id: string } }>({
+      const created = await requestJson<{ community: { community_id?: string; id?: string } }>({
         apiUrl: ctx.apiUrl,
         method: "POST",
         path: "/communities",
@@ -820,8 +834,12 @@ async function seedCommunities(ctx: SeedContext, manifest: SeedManifest): Promis
         body,
         ok: [202],
       })
-      ctx.communities.set(community.key, created.body.community.community_id)
-      ctx.report.push(`created community ${community.key} -> ${created.body.community.community_id}`)
+      const createdCommunityId = created.body.community.community_id ?? created.body.community.id?.replace(/^com_/, "")
+      if (!createdCommunityId) {
+        throw new Error(`community create response did not include community_id or id for ${community.key}`)
+      }
+      ctx.communities.set(community.key, createdCommunityId)
+      ctx.report.push(`created community ${community.key} -> ${createdCommunityId}`)
     }
     const communityId = ctx.communities.get(community.key)!
     const owner = user(ctx, community.owner)

@@ -13,6 +13,7 @@
   "communities": [
     {
       "key": "mcp-guest-comments",
+      "community_id": "cmt_b53f3e232a4048278f0accb09cddf0a5",
       "owner": "staff",
       "create": {
         "display_name": "MCP Guest Comment Smoke",
@@ -28,7 +29,6 @@
         }
       },
       "members": ["staff"],
-      "followers": ["staff"],
       "posts": [
         {
           "key": "starter-thread",
