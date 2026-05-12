@@ -11,9 +11,14 @@ import {
   getVerifiedLinkedHandleRowByLabelNormalized,
   getActiveWalletAttachmentRowByWallet,
   listLinkedHandleRows,
+  listLinkedHandleRowsByUserIds,
   getProfileRow,
+  listProfileRowsByUserIds,
   getUserRow,
+  listUserRowsByUserIds,
   listActiveWalletAttachmentRows,
+  listActiveWalletAttachmentRowsByUserIds,
+  listGlobalHandleRowsByIds,
   loadSnapshot,
   reconcileWalletAttachments,
 } from "./auth-db-user-queries"
@@ -390,6 +395,71 @@ export class DatabaseIdentityRepository {
       walletRows,
     )
     return assembleProfile(profileRow, globalHandleRow, linkedHandleRows, primaryWalletAddress, serializeUser(userRow))
+  }
+
+  async listProfilesByUserIds(userIds: string[]): Promise<Map<string, Profile>> {
+    const uniqueUserIds = Array.from(new Set(userIds.map((userId) => userId.trim()).filter(Boolean)))
+    if (uniqueUserIds.length === 0) {
+      return new Map()
+    }
+
+    const [userRows, profileRows] = await Promise.all([
+      listUserRowsByUserIds(this.client, uniqueUserIds),
+      listProfileRowsByUserIds(this.client, uniqueUserIds),
+    ])
+    const userById = new Map(userRows.map((row) => [row.user_id, row]))
+    const profileByUserId = new Map(profileRows.map((row) => [row.user_id, row]))
+    const globalHandleIds = profileRows.map((row) => row.global_handle_id)
+    const [globalHandleRows, linkedHandleRows, walletRows] = await Promise.all([
+      listGlobalHandleRowsByIds(this.client, globalHandleIds),
+      listLinkedHandleRowsByUserIds(this.client, uniqueUserIds),
+      listActiveWalletAttachmentRowsByUserIds(this.client, uniqueUserIds),
+    ])
+    const globalHandleById = new Map(globalHandleRows.map((row) => [row.global_handle_id, row]))
+    const linkedHandlesByUserId = new Map<string, typeof linkedHandleRows>()
+    for (const row of linkedHandleRows) {
+      const existing = linkedHandlesByUserId.get(row.user_id)
+      if (existing) {
+        existing.push(row)
+      } else {
+        linkedHandlesByUserId.set(row.user_id, [row])
+      }
+    }
+    const walletsByUserId = new Map<string, typeof walletRows>()
+    for (const row of walletRows) {
+      const existing = walletsByUserId.get(row.user_id)
+      if (existing) {
+        existing.push(row)
+      } else {
+        walletsByUserId.set(row.user_id, [row])
+      }
+    }
+
+    const profiles = new Map<string, Profile>()
+    for (const userId of uniqueUserIds) {
+      const userRow = userById.get(userId)
+      const profileRow = profileByUserId.get(userId)
+      const globalHandleRow = profileRow ? globalHandleById.get(profileRow.global_handle_id) : null
+      if (!userRow || !profileRow || !globalHandleRow) {
+        continue
+      }
+      const userWalletRows = walletsByUserId.get(userId) ?? []
+      const primaryWalletAddress = getPrimaryWalletAddressFromRows(
+        userRow.primary_wallet_attachment_id,
+        userWalletRows,
+      )
+      profiles.set(
+        userId,
+        assembleProfile(
+          profileRow,
+          globalHandleRow,
+          linkedHandlesByUserId.get(userId) ?? [],
+          primaryWalletAddress,
+          serializeUser(userRow),
+        ),
+      )
+    }
+    return profiles
   }
 
   async resolvePublicProfileByHandle(handleLabel: string): Promise<PublicProfileResolution | null> {

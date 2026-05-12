@@ -197,6 +197,10 @@ export class DatabaseProfileRepository {
     return await this.identityRepository.getProfileByUserId(userId)
   }
 
+  async listProfilesByUserIds(userIds: string[]): Promise<Map<string, Profile>> {
+    return await this.identityRepository.listProfilesByUserIds(userIds)
+  }
+
   async resolvePublicProfileByHandle(handleLabel: string): Promise<PublicProfileResolution | null> {
     return await this.identityRepository.resolvePublicProfileByHandle(handleLabel)
   }

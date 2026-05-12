@@ -67,6 +67,7 @@ export interface OnboardingStatusRepository {
 
 export interface ProfileRepository {
   getProfileByUserId(userId: string): Promise<Profile | null>
+  listProfilesByUserIds?(userIds: string[]): Promise<Map<string, Profile>>
   resolvePublicProfileByHandle(handleLabel: string): Promise<PublicProfileResolution | null>
   resolvePublicProfileByWalletAddress(walletAddress: string): Promise<PublicProfileResolution | null>
   updateXmtpInboxId(userId: string, xmtpInboxId: string | null): Promise<Profile | null>
