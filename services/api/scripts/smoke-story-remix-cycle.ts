@@ -572,6 +572,9 @@ async function settleListingPurchase(input: {
     settlement_mode: quote.settlement_mode,
     destination_settlement_amount_atomic: quote.destination_settlement_amount_atomic ?? null,
   })
+  if (quote.settlement_mode !== "royalty_native_story_payment") {
+    throw new Error(`purchase quote did not use Story royalty settlement: ${JSON.stringify(quote)}`)
+  }
   const fundingTx = await sendCheckoutFunding({
     env: input.env,
     buyer: input.buyer,
@@ -602,6 +605,12 @@ async function settleListingPurchase(input: {
     settlement_tx_ref: settlement.settlement_tx_ref,
     allocations: settlement.allocations ?? [],
   })
+  if (settlement.settlement_mode !== "royalty_native_story_payment") {
+    throw new Error(`purchase settlement did not use Story royalty settlement: ${JSON.stringify(settlement)}`)
+  }
+  if (!settlement.settlement_tx_ref) {
+    throw new Error(`purchase settlement is missing settlement_tx_ref: ${JSON.stringify(settlement)}`)
+  }
 }
 
 async function pollOriginalClaimable(input: {
@@ -793,6 +802,10 @@ async function main(): Promise<void> {
   })
   if (remixAsset.story_royalty_registration_status !== "registered") {
     throw new Error(`remix asset was not Story registered: ${JSON.stringify(remixAsset)}`)
+  }
+  const parentIps = remixAsset.story_derivative_parent_ip_ids ?? []
+  if (!parentIps.some((parentIp) => parentIp.toLowerCase() === originalAsset.story_ip?.toLowerCase())) {
+    throw new Error(`remix asset missing original parent IP: ${JSON.stringify(remixAsset)}`)
   }
 
   if (hasFlag("--create-listing") || settlePurchase) {
