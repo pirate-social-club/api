@@ -2,6 +2,8 @@ import type { Client } from "@libsql/client"
 
 const POST_SONG_TITLE_MIGRATION_NAME = "1069_post_song_title.sql"
 const POST_SONG_TITLE_MIGRATION_CHECKSUM = "03a5f95f8fe4bec0492dd6d7a2c4c2d7d9e4df7e0af244dcd58cae869cb9e802"
+const POST_SONG_PRESENTATION_MIGRATION_NAME = "1075_post_song_presentation.sql"
+const POST_SONG_PRESENTATION_MIGRATION_CHECKSUM = "46da9ddcae0b2c5328a943d36dbb819d476e84dc4a5b7ffc5cc1268835b06368"
 
 async function getPostColumnNames(client: Client): Promise<Set<string>> {
   const result = await client.execute("PRAGMA table_info(posts)")
@@ -13,6 +15,26 @@ export async function ensureRemotePostSongTitleColumn(client: Client): Promise<v
   if (!columnNames.has("song_title")) {
     try {
       await client.execute("ALTER TABLE posts ADD COLUMN song_title TEXT")
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (!message.toLowerCase().includes("duplicate column")) {
+        throw error
+      }
+    }
+  }
+  if (!columnNames.has("song_cover_art_ref")) {
+    try {
+      await client.execute("ALTER TABLE posts ADD COLUMN song_cover_art_ref TEXT")
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (!message.toLowerCase().includes("duplicate column")) {
+        throw error
+      }
+    }
+  }
+  if (!columnNames.has("song_duration_ms")) {
+    try {
+      await client.execute("ALTER TABLE posts ADD COLUMN song_duration_ms INTEGER")
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       if (!message.toLowerCase().includes("duplicate column")) {
@@ -39,6 +61,13 @@ export async function ensureRemotePostSongTitleColumn(client: Client): Promise<v
         VALUES (?1, 'community-template', ?2)
       `,
       args: [POST_SONG_TITLE_MIGRATION_NAME, POST_SONG_TITLE_MIGRATION_CHECKSUM],
+    },
+    {
+      sql: `
+        INSERT OR IGNORE INTO schema_migrations (migration_name, migration_label, checksum)
+        VALUES (?1, 'community-template', ?2)
+      `,
+      args: [POST_SONG_PRESENTATION_MIGRATION_NAME, POST_SONG_PRESENTATION_MIGRATION_CHECKSUM],
     },
   ], "write")
 }

@@ -8890,6 +8890,15 @@ const spec = {
             ],
             "nullable": true
           },
+          "viewer_community_role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "admin",
+              "moderator"
+            ],
+            "nullable": true
+          },
           "viewer_following": {
             "type": "boolean",
             "nullable": true
@@ -10692,6 +10701,10 @@ const spec = {
             "$ref": "./communities-community.yaml#/PostLabel",
             "nullable": true
           },
+          "song_presentation": {
+            "$ref": "#/components/schemas/SongPresentation",
+            "nullable": true
+          },
           "upvote_count": {
             "type": "integer",
             "minimum": 0
@@ -11171,6 +11184,29 @@ const spec = {
           },
           "links": {
             "$ref": "./communities-community.yaml#/StructuredAccessLinks"
+          }
+        }
+      },
+      "SongPresentation": {
+        "type": "object",
+        "required": [
+          "title",
+          "cover_art_ref",
+          "duration_ms"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "nullable": true
+          },
+          "cover_art_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "duration_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "nullable": true
           }
         }
       }

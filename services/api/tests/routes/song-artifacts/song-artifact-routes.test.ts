@@ -709,6 +709,36 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     expect(uploaded.status).toBe("uploaded")
     expect(uploaded.content_hash).toMatch(/^0x[0-9a-f]{64}$/)
 
+    const coverUploadIntent = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
+      {
+        artifact_kind: "cover_art",
+        mime_type: "image/jpeg",
+        filename: "cover.jpg",
+        size_bytes: 4,
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(coverUploadIntent.status).toBe(201)
+    const coverUploadIntentBody = await json(coverUploadIntent) as {
+      id: string
+      storage_ref: string
+    }
+    const coverUploadContent = await app.request(
+      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${coverUploadIntentBody.id}/content`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+          "content-type": "image/jpeg",
+        },
+        body: new Uint8Array([9, 8, 7, 6]).buffer,
+      },
+      ctx.env,
+    )
+    expect(coverUploadContent.status).toBe(200)
+
     const readContent = await app.request(
       `http://pirate.test/communities/${communityId}/song-artifact-uploads/${uploadIntentBody.id}/content`,
       {},
@@ -732,6 +762,9 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
         primary_audio: {
           song_artifact_upload: uploadIntentBody.id,
         },
+        cover_art: {
+          song_artifact_upload: coverUploadIntentBody.id,
+        },
         title: "Published Song",
         lyrics: "Line one\nLine two",
       },
@@ -743,6 +776,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
       id: string
       status: string
       media_refs: Array<{ storage_ref: string; mime_type: string }>
+      cover_art: { storage_ref: string; mime_type: string } | null
       moderation_status: string
       alignment_status: string
       timed_lyrics: { segments: unknown[] }
@@ -750,12 +784,31 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     expect(bundleBody.status).toBe("ready")
     expect(bundleBody.media_refs).toHaveLength(1)
     expect(bundleBody.media_refs[0]?.storage_ref).toBe(uploadIntentBody.storage_ref)
+    expect(bundleBody.cover_art?.storage_ref).toBe(coverUploadIntentBody.storage_ref)
     expect(bundleBody.moderation_status).toBe("completed")
     expect(bundleBody.alignment_status).toBe("completed")
     expect(bundleBody.timed_lyrics.segments.length).toBe(2)
     expect(openRouterCallCount).toBe(1)
     expect(acrCloudCallCount).toBe(1)
     expect(elevenLabsCallCount).toBe(1)
+
+    await ctx.client.execute({
+      sql: `
+        UPDATE song_artifact_bundles
+        SET primary_audio_json = ?1
+        WHERE song_artifact_bundle_id = ?2
+      `,
+      args: [
+        JSON.stringify({
+          storage_ref: uploadIntentBody.storage_ref,
+          mime_type: "audio/mpeg",
+          size_bytes: 8,
+          content_hash: uploaded.content_hash,
+          duration_ms: 123_456,
+        }),
+        bundleBody.id.replace(/^sab_/, ""),
+      ],
+    })
 
     const postCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/posts`,
@@ -774,7 +827,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     )
     expect(postCreate.status).toBe(201)
     const postBody = await json(postCreate) as {
-      post_id: string
+      id: string
       post_type: string
       status: string
       song_artifact_bundle: string | null
@@ -784,6 +837,29 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     expect(postBody.status).toBe("published")
     expect(postBody.song_artifact_bundle).toBe(bundleBody.id)
     expect(postBody.media_refs?.[0]?.storage_ref).toBe(uploadIntentBody.storage_ref)
+
+    const postRead = await app.request(
+      `http://pirate.test/posts/${postBody.id}`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(postRead.status).toBe(200)
+    const postReadBody = await json(postRead) as {
+      song_presentation?: {
+        title: string | null
+        cover_art_ref: string | null
+        duration_ms: number | null
+      } | null
+    }
+    expect(postReadBody.song_presentation).toMatchObject({
+      title: "Published Song",
+      cover_art_ref: coverUploadIntentBody.storage_ref,
+      duration_ms: 123_456,
+    })
 
     const bundleRead = await app.request(
       `http://pirate.test/communities/${communityId}/song-artifacts/${bundleBody.id}`,

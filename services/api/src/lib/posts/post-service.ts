@@ -207,7 +207,11 @@ export async function createPost(input: {
       return existing
     }
 
-    let writeBody: CreatePostRequest & { song_title?: string | null } = input.body
+    let writeBody: CreatePostRequest & {
+      song_cover_art_ref?: string | null
+      song_duration_ms?: number | null
+      song_title?: string | null
+    } = input.body
     const agentWriteAuthorization = await authorizeAgentWrite({
       env: input.env,
       requestUrl: input.requestUrl,
@@ -274,6 +278,8 @@ export async function createPost(input: {
         access_mode: accessMode,
         asset_id: input.body.asset_id ?? makeId("ast"),
         song_artifact_bundle: resolvedBundle.bundle.id,
+        song_cover_art_ref: resolvedBundle.bundle.cover_art?.storage_ref ?? null,
+        song_duration_ms: resolvedBundle.bundle.primary_audio.duration_ms ?? null,
         song_title: resolvedBundle.bundle.title,
       }
 

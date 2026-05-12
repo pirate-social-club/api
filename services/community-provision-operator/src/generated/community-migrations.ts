@@ -3124,7 +3124,6 @@ PRAGMA legacy_alter_table = OFF;
     name: "1075_post_song_presentation.sql",
     sql: `ALTER TABLE posts ADD COLUMN song_cover_art_ref TEXT;
 ALTER TABLE posts ADD COLUMN song_duration_ms INTEGER;
-
 `,
     checksum: "46da9ddcae0b2c5328a943d36dbb819d476e84dc4a5b7ffc5cc1268835b06368",
   },

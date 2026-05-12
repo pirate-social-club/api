@@ -713,8 +713,13 @@ describe("openCommunityDb", () => {
       expect(afterIndexNames).toContain("idx_live_room_setlists_room")
       expect(afterIndexNames).toContain("idx_live_room_guest_invites_active")
 
+      const setlistItemColumns = await getTableColumns(databasePath, "live_room_setlist_items")
+      expect(setlistItemColumns).toContain("source_asset_ref")
+
       const checksum = await getMigrationChecksum(databasePath, "1070_live_rooms.sql")
       expect(checksum).toBe("47dcdd32d64789c6f93e6162f137b7238c75914532256aa0d186d5a8b68fa179")
+      const sourceAssetRefChecksum = await getMigrationChecksum(databasePath, "1076_live_room_setlist_source_asset_ref.sql")
+      expect(sourceAssetRefChecksum).toBe("55f125162ffc23a107556a295b1456a74065100e6a98895a11b2560b2540baab")
 
       await ensureRemoteLiveRoomTables(client)
     } finally {
@@ -722,7 +727,7 @@ describe("openCommunityDb", () => {
     }
   }, COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS)
 
-  testWithTimeout("ensures post song title column on remote community database open", async () => {
+  testWithTimeout("ensures post song presentation columns on remote community database open", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-remote-song-title-"))
     cleanupPaths.push(rootDir)
 
@@ -733,14 +738,20 @@ describe("openCommunityDb", () => {
     try {
       const beforePostColumns = await getTableColumns(databasePath, "posts")
       expect(beforePostColumns).not.toContain("song_title")
+      expect(beforePostColumns).not.toContain("song_cover_art_ref")
+      expect(beforePostColumns).not.toContain("song_duration_ms")
 
       await ensureRemotePostSongTitleColumn(client)
 
       const afterPostColumns = await getTableColumns(databasePath, "posts")
       expect(afterPostColumns).toContain("song_title")
+      expect(afterPostColumns).toContain("song_cover_art_ref")
+      expect(afterPostColumns).toContain("song_duration_ms")
 
       const checksum = await getMigrationChecksum(databasePath, "1069_post_song_title.sql")
       expect(checksum).toBe("03a5f95f8fe4bec0492dd6d7a2c4c2d7d9e4df7e0af244dcd58cae869cb9e802")
+      const presentationChecksum = await getMigrationChecksum(databasePath, "1075_post_song_presentation.sql")
+      expect(presentationChecksum).toBe("46da9ddcae0b2c5328a943d36dbb819d476e84dc4a5b7ffc5cc1268835b06368")
 
       await ensureRemotePostSongTitleColumn(client)
     } finally {

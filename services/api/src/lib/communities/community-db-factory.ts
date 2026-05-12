@@ -127,6 +127,7 @@ export async function openCommunityDb(
     await ensureCommunityDbSchema(client)
     await ensureRemoteThreadCommentLockColumns(client)
     await ensureRemoteCommentGuestAuthorship(client)
+    await ensureRemotePostSongTitleColumn(client)
     return {
       client,
       databaseUrl,
@@ -154,6 +155,7 @@ export async function openCommunityDb(
     await configureLocalCommunityDbClient(client)
     await ensureCommunityDbSchema(client)
     await ensureRemoteThreadCommentLockColumns(client)
+    await ensureRemotePostSongTitleColumn(client)
   } else {
     const ensureIndexes = options?.ensureRemoteMembershipStateIndexes ?? ensureRemoteCommunityMembershipStateIndexes
     await runRemoteCommunityDbPreflight({
