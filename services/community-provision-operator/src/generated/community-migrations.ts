@@ -3120,4 +3120,73 @@ PRAGMA legacy_alter_table = OFF;
 `,
     checksum: "0c20fc3f674479a3cedcfe3f563939d10ea4fffc1860ef1a2ee474cdd1b9675c",
   },
+  {
+    name: "1075_post_song_presentation.sql",
+    sql: `ALTER TABLE posts ADD COLUMN song_cover_art_ref TEXT;
+ALTER TABLE posts ADD COLUMN song_duration_ms INTEGER;
+
+`,
+    checksum: "46da9ddcae0b2c5328a943d36dbb819d476e84dc4a5b7ffc5cc1268835b06368",
+  },
+  {
+    name: "1076_live_room_setlist_source_asset_ref.sql",
+    sql: `ALTER TABLE live_room_setlist_items
+    ADD COLUMN source_asset_ref TEXT;
+`,
+    checksum: "55f125162ffc23a107556a295b1456a74065100e6a98895a11b2560b2540baab",
+  },
+  {
+    name: "1077_story_parent_royalty_vault_transfer_effect.sql",
+    sql: `ALTER TABLE purchase_settlement_effects RENAME TO purchase_settlement_effects_old;
+
+CREATE TABLE purchase_settlement_effects (
+    purchase_settlement_effect_id TEXT PRIMARY KEY,
+    community_id TEXT NOT NULL,
+    quote_id TEXT NOT NULL,
+    purchase_id TEXT NOT NULL,
+    effect_kind TEXT NOT NULL CHECK (
+        effect_kind IN ('buyer_funding_receipt', 'charity_payout', 'story_royalty_payment', 'story_parent_royalty_vault_transfer', 'story_entitlement_mint')
+    ),
+    effect_key TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('submitted', 'confirmed', 'failed')),
+    settlement_ref TEXT,
+    provider_receipt_ref TEXT,
+    tax_receipt_ref TEXT,
+    metadata_json TEXT,
+    failure_reason TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 1,
+    submitted_at TEXT,
+    confirmed_at TEXT,
+    failed_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+INSERT INTO purchase_settlement_effects (
+    purchase_settlement_effect_id, community_id, quote_id, purchase_id, effect_kind,
+    effect_key, idempotency_key, status, settlement_ref, provider_receipt_ref,
+    tax_receipt_ref, metadata_json, failure_reason, attempt_count, submitted_at,
+    confirmed_at, failed_at, created_at, updated_at
+)
+SELECT
+    purchase_settlement_effect_id, community_id, quote_id, purchase_id, effect_kind,
+    effect_key, idempotency_key, status, settlement_ref, provider_receipt_ref,
+    tax_receipt_ref, metadata_json, failure_reason, attempt_count, submitted_at,
+    confirmed_at, failed_at, created_at, updated_at
+FROM purchase_settlement_effects_old;
+
+DROP TABLE purchase_settlement_effects_old;
+
+CREATE UNIQUE INDEX idx_purchase_settlement_effects_idempotency
+    ON purchase_settlement_effects(idempotency_key);
+
+CREATE UNIQUE INDEX idx_purchase_settlement_effects_quote_kind_key
+    ON purchase_settlement_effects(community_id, quote_id, effect_kind, effect_key);
+
+CREATE INDEX idx_purchase_settlement_effects_purchase
+    ON purchase_settlement_effects(purchase_id, effect_kind, status);
+`,
+    checksum: "4cac5c7f25c00aef27ba8d61068aa52413ea8a82807c8c5cd84bbad719e09016",
+  },
 ] as const;

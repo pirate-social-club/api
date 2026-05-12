@@ -164,6 +164,62 @@ export type PublicProfileResolution = {
   }>;
 };
 
+export type ProfileActivityPostPage = {
+  kind: "post";
+  post: LocalizedPostResponse;
+  community: CommunityPreview;
+  created: number;
+};
+
+export type ProfileActivityCommentPage = {
+  kind: "comment";
+  comment: CommentListItem;
+  thread_root_post: LocalizedPostResponse;
+  community: CommunityPreview;
+  created: number;
+};
+
+export type ProfileActivityResponse = {
+  tab: "overview" | "posts" | "comments";
+  posts: Array<ProfileActivityPostPage>;
+  comments: Array<ProfileActivityCommentPage>;
+  overview_items: Array<(ProfileActivityPostPage | ProfileActivityCommentPage)>;
+  next_cursor: string | null;
+};
+
+export type WalletIdentityPublicName = {
+  id: string;
+  label: string;
+  label_normalized: string;
+  status: "active";
+  owner_kind: "wallet";
+  owner_wallet_address: string;
+  chain_ref: string;
+  price_paid_cents: number;
+  currency: "USD";
+  issued_at: number;
+  expires_at: number | null;
+  pirate_user_id: string | null;
+};
+
+export type WalletIdentity = {
+  object: "wallet_identity";
+  chain_ref: string;
+  wallet_address: string;
+  display_label: string | null;
+  public_names: Array<WalletIdentityPublicName>;
+};
+
+export type WalletIdentityRedirect = {
+  object: "wallet_identity_redirect";
+  chain_ref: string;
+  wallet_address: string;
+  profile: string;
+  profile_handle: string;
+};
+
+export type WalletIdentityResponse = (WalletIdentity | WalletIdentityRedirect);
+
 export type PublicNameQuoteRequest = {
   desired_label: string;
   buyer_wallet_address: string;
@@ -362,7 +418,7 @@ export type VerificationRequirement = ({
   required_values?: Array<string>;
 });
 
-export type VerificationIntent = "profile_verification" | "community_creation" | "community_join" | "post_access_18_plus" | "commerce_pricing" | "qualifier_disclosure";
+export type VerificationIntent = "profile_verification" | "community_creation" | "community_join" | "post_create" | "comment_create" | "post_access_18_plus" | "commerce_pricing" | "qualifier_disclosure";
 
 export type AgentOwnershipProvider = "self_agent_id" | "clawkey";
 
@@ -656,6 +712,7 @@ export type Community = {
   human_verification_lane_origin: CommunityAgentResolutionOrigin;
   allowed_disclosed_qualifiers?: Array<string> | null;
   allow_qualifiers_on_anonymous_posts?: boolean | null;
+  guest_comment_policy: "disallow" | "altcha_required";
   root_post_min_trust_tier?: "new" | "established" | "trusted" | "high_trust" | null;
   reply_min_trust_tier?: "new" | "established" | "trusted" | "high_trust" | null;
   anonymous_posting_min_trust_tier?: "new" | "established" | "trusted" | "high_trust" | null;
@@ -666,7 +723,6 @@ export type Community = {
   default_age_gate_policy?: "none" | "18_plus";
   gate_policy?: GatePolicy | null;
   agent_posting_policy: "disallow" | "review" | "allow_with_disclosure" | "allow";
-  guest_comment_policy: "disallow" | "altcha_required";
   agent_posting_scope: "replies_only" | "top_level_and_replies";
   agent_daily_post_cap?: number | null;
   agent_daily_reply_cap?: number | null;
@@ -1199,7 +1255,7 @@ export type CompleteNamespaceVerificationSessionRequest = {
 };
 
 export type CreateSongArtifactUploadRequest = {
-  artifact_kind: "primary_audio" | "cover_art" | "preview_audio" | "canvas_video" | "instrumental_audio" | "vocal_audio" | "primary_video";
+  artifact_kind: "primary_audio" | "cover_art" | "preview_audio" | "preview_video" | "canvas_video" | "instrumental_audio" | "vocal_audio" | "primary_video";
   mime_type: string;
   filename?: string | null;
   size_bytes?: number | null;
@@ -1364,7 +1420,7 @@ export type SongArtifactUpload = {
   object: "song_artifact_upload";
   community: string;
   uploader_user: string;
-  artifact_kind: "primary_audio" | "cover_art" | "preview_audio" | "canvas_video" | "instrumental_audio" | "vocal_audio" | "primary_video";
+  artifact_kind: "primary_audio" | "cover_art" | "preview_audio" | "preview_video" | "canvas_video" | "instrumental_audio" | "vocal_audio" | "primary_video";
   status: "pending_upload" | "uploaded" | "failed";
   storage_ref: string;
   mime_type: string;
@@ -1668,12 +1724,19 @@ export type CreateModerationActionRequest = {
   note?: string | null;
 };
 
+export type SongPresentation = {
+  title: string | null;
+  cover_art_ref: string | null;
+  duration_ms: number | null;
+};
+
 export type LocalizedPostResponse = {
   post: Post;
   author_community_role?: "owner" | "moderator" | null;
   thread_snapshot: CommentThreadSnapshot | null;
   market_context?: MarketContextSummary | null;
   label?: PostLabel | null;
+  song_presentation?: SongPresentation | null;
   upvote_count: number;
   downvote_count: number;
   like_count: number;
@@ -1733,9 +1796,9 @@ export type CommunityPreview = {
   membership_mode: "open" | "request" | "gated";
   allow_anonymous_identity?: boolean;
   anonymous_identity_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null;
-  guest_comment_policy?: "disallow" | "altcha_required";
   allowed_disclosed_qualifiers?: Array<string> | null;
   allow_qualifiers_on_anonymous_posts?: boolean | null;
+  guest_comment_policy?: "disallow" | "altcha_required";
   human_verification_lane: HumanVerificationLane;
   member_count?: number | null;
   follower_count?: number | null;
@@ -1747,6 +1810,7 @@ export type CommunityPreview = {
   membership_gate_summaries: Array<MembershipGateSummary>;
   rules: Array<CommunityRule>;
   viewer_membership_status?: "member" | "not_member" | "banned" | null;
+  viewer_community_role?: "owner" | "admin" | "moderator" | null;
   viewer_following?: boolean | null;
   created: number;
 };
@@ -1760,7 +1824,7 @@ export type JoinEligibility = {
   membership_gate_summaries: Array<MembershipGateSummary>;
   missing_capabilities?: Array<"unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "altcha_pow">;
   suggested_verification_provider?: "self" | "very" | "passport" | null;
-  suggested_verification_intent?: "community_join" | null;
+  suggested_verification_intent?: "community_join" | "post_create" | "comment_create" | null;
   failure_reason?: "missing_verification" | "provider_not_accepted" | "nationality_mismatch" | "gender_mismatch" | "minimum_age_mismatch" | "erc721_holding_required" | "erc721_inventory_match_required" | "token_inventory_unavailable" | "wallet_score_too_low" | "unsupported" | "banned" | null;
   wallet_score_status?: ({
     current_score_decimal?: string | null;
@@ -1795,7 +1859,7 @@ export type GateFailureDetails = {
   membership_gate_summaries?: Array<MembershipGateSummary> | null;
   missing_capabilities?: Array<string> | null;
   suggested_verification_provider?: "self" | "very" | "passport" | null;
-  suggested_verification_intent?: "community_join" | null;
+  suggested_verification_intent?: "community_join" | "post_create" | "comment_create" | null;
   failure_reason?: "missing_verification" | "provider_not_accepted" | "nationality_mismatch" | "gender_mismatch" | "minimum_age_mismatch" | "erc721_holding_required" | "erc721_inventory_match_required" | "token_inventory_unavailable" | "wallet_score_too_low" | "unsupported" | "banned" | null;
   wallet_score_status?: ({
     current_score_decimal?: string | null;
@@ -2515,6 +2579,7 @@ type CreateCommunityRequestBase = {
   anonymous_identity_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null;
   allowed_disclosed_qualifiers?: Array<string> | null;
   allow_qualifiers_on_anonymous_posts?: boolean | null;
+  guest_comment_policy?: "disallow" | "altcha_required" | null;
   root_post_min_trust_tier?: "new" | "established" | "trusted" | "high_trust" | null;
   reply_min_trust_tier?: "new" | "established" | "trusted" | "high_trust" | null;
   anonymous_posting_min_trust_tier?: "new" | "established" | "trusted" | "high_trust" | null;
@@ -2525,7 +2590,6 @@ type CreateCommunityRequestBase = {
   default_age_gate_policy?: "none" | "18_plus";
   gate_policy?: GatePolicy | null;
   agent_posting_policy?: "disallow" | "review" | "allow_with_disclosure" | "allow" | null;
-  guest_comment_policy?: "disallow" | "altcha_required" | null;
   agent_posting_scope?: "replies_only" | "top_level_and_replies" | null;
   agent_daily_post_cap?: number | null;
   agent_daily_reply_cap?: number | null;
@@ -2784,6 +2848,7 @@ type MediaDescriptor = {
   poster_width?: number | null;
   poster_height?: number | null;
   poster_frame_ms?: number | null;
+  preview_video?: SongVideoArtifactDescriptor | null;
 };
 
 type ModerationCaseOpenedBy = "platform_analysis" | "user_report" | "mixed";
@@ -3035,6 +3100,7 @@ type VideoMediaDescriptor = {
   poster_width?: number | null;
   poster_height?: number | null;
   poster_frame_ms?: number | null;
+  preview_video?: SongVideoArtifactDescriptor | null;
 };
 
 type WalletScoreCapabilityState = {
@@ -3106,6 +3172,7 @@ export const apiRoutes = {
   authSessionExchange: "/auth/session/exchange",
   usersMe: "/users/me",
   profilesMe: "/profiles/me",
+  walletIdentity: (chainRef: string, walletAddress: string) => `/wallet-identities/${chainRef}/${walletAddress}`,
   publicNameQuotes: "/public-names/quotes",
   publicNameClaims: "/public-names/claims",
   publicNameStatus: (label: string) => `/public-names/${label}/status`,
