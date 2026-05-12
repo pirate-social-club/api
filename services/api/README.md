@@ -136,6 +136,17 @@ Enforcement rules:
 
 ## Test Coverage
 
+Use the focused test entry points by default:
+
+```bash
+rtk bun run test:unit
+rtk bun run test:routes
+```
+
+`test:unit` covers co-located library tests in `src/` and shared library tests in `tests/lib/`. `test:routes` covers route integration tests in `tests/routes/` plus route-style root tests that use `createRouteTestContext()`. Route tests run serially until the remaining process-global test state is isolated.
+
+New pure library tests should be co-located next to the implementation under `src/**/*.test.ts`. Route and HTTP integration tests should stay under `tests/routes/`, with shared route helpers kept near the relevant route group unless they are used across multiple groups.
+
 Generate a report-only coverage baseline:
 
 ```bash
@@ -297,6 +308,16 @@ rtk bun run generate:openapi-spec
 ```
 
 This writes `src/generated/openapi-spec.ts`, which is imported by the discovery router and included in the worker bundle.
+
+## Agent Skill Discovery
+
+The runtime `/.well-known/agent-skills/pirate-agent-protocol/SKILL.md` endpoint serves the canonical Pirate agent protocol skill from `docs/agents/pirate-agent-protocol/SKILL.md`. To regenerate the bundled skill after editing the markdown:
+
+```bash
+rtk bun run generate:agent-skill
+```
+
+This writes `src/generated/pirate-agent-protocol-skill.ts`, which is imported by the discovery router and included in the worker bundle. Use `rtk bun run check:agent-skill` to verify the generated file is current.
 
 ## Example Exchange
 

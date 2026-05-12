@@ -1,8 +1,17 @@
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
 import { describe, expect, test } from "bun:test"
+import PIRATE_AGENT_PROTOCOL_SKILL_MD from "../../src/generated/pirate-agent-protocol-skill"
 import { app } from "../../src/index"
 import { buildTestEnv } from "../helpers"
 
 describe("discovery routes", () => {
+  test("generated Pirate agent protocol skill matches canonical markdown", () => {
+    const canonicalMarkdown = readFileSync(resolve("docs/agents/pirate-agent-protocol/SKILL.md"), "utf-8")
+
+    expect(PIRATE_AGENT_PROTOCOL_SKILL_MD).toBe(canonicalMarkdown)
+  })
+
   test("GET /.well-known/api-catalog advertises public structured discovery links", async () => {
     const env = buildTestEnv()
     const response = await app.request("https://api.pirate.test/.well-known/api-catalog", {}, env)
@@ -278,7 +287,20 @@ describe("discovery routes", () => {
     expect(body).toContain(".pirate")
   })
 
-  test("GET /docs/agents/pirate-name-purchase/SKILL.md serves the public agent skill", async () => {
+  test("GET /docs/agents/pirate-agent-protocol/SKILL.md serves the public agent skill", async () => {
+    const env = buildTestEnv()
+    const response = await app.request("https://api.pirate.test/docs/agents/pirate-agent-protocol/SKILL.md", {}, env)
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get("content-type")).toContain("text/markdown")
+
+    const body = await response.text()
+    expect(body).toContain("# Pirate Agent Protocol")
+    expect(body).toContain("prepare_guest_comment")
+    expect(body).toContain(".pirate")
+  })
+
+  test("GET /docs/agents/pirate-name-purchase/SKILL.md is a compatibility alias", async () => {
     const env = buildTestEnv()
     const response = await app.request("https://api.pirate.test/docs/agents/pirate-name-purchase/SKILL.md", {}, env)
 
