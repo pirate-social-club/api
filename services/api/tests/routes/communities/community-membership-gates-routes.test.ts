@@ -267,6 +267,31 @@ describe("community membership gate routes", () => {
     )
     expect(creatorPost.status).toBe(201)
 
+    const moderator = await exchangeJwt(ctx.env, "altcha-gate-moderator-bypass")
+    const grantModerator = await requestJson(
+      `http://pirate.test/communities/${created.communityId}/roles/grant`,
+      {
+        user_id: moderator.userId,
+        role: "moderator",
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(grantModerator.status).toBe(200)
+
+    const moderatorPost = await requestJson(
+      `http://pirate.test/communities/${created.communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Moderator post without ALTCHA",
+        body: "Moderators should bypass action gates.",
+        idempotency_key: "altcha-moderator-post-bypass",
+      },
+      ctx.env,
+      moderator.accessToken,
+    )
+    expect(moderatorPost.status).toBe(201)
+
     const member = await exchangeJwt(ctx.env, "altcha-gate-member-bypass")
     const joinProof = await solveAltchaProofFromRoute({
       env: ctx.env,
