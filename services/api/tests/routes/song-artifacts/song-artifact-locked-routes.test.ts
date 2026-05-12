@@ -1448,6 +1448,105 @@ describe("song artifact locked routes", () => {
         royaltyPolicy: "0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E",
       },
     ])
+
+    const communityDb = createClient({
+      url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
+    })
+    const rawQuoteId = quoteBody.id.replace(/^pq_/, "")
+    try {
+      await communityDb.execute({
+        sql: `
+          UPDATE purchase_settlement_attempts
+          SET status = 'attempting',
+              failure_reason = NULL,
+              updated_at = '2026-04-21T00:00:00.000Z'
+          WHERE quote_id = ?1
+        `,
+        args: [rawQuoteId],
+      })
+      await communityDb.execute({
+        sql: `
+          UPDATE purchase_settlement_effects
+          SET status = 'submitted',
+              failed_at = NULL,
+              failure_reason = NULL,
+              submitted_at = '2026-04-21T00:00:00.000Z',
+              updated_at = '2026-04-21T00:00:00.000Z'
+          WHERE quote_id = ?1
+            AND effect_kind = 'story_parent_royalty_vault_transfer'
+        `,
+        args: [rawQuoteId],
+      })
+    } finally {
+      communityDb.close()
+    }
+
+    const communityRepository = getCommunityRepository(ctx.env)
+    try {
+      const submittedVaultTransferSummary = await reconcileStaleCommunityPurchaseSettlements({
+        env: ctx.env,
+        communityRepository,
+        staleMs: 1,
+      })
+      expect(submittedVaultTransferSummary).toMatchObject({
+        checked: 1,
+        finalized: 0,
+        failed: 0,
+        stillPending: 1,
+        errors: 0,
+      })
+    } finally {
+      communityRepository.close?.()
+    }
+
+    const failedCommunityDb = createClient({
+      url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
+    })
+    try {
+      await failedCommunityDb.execute({
+        sql: `
+          UPDATE purchase_settlement_attempts
+          SET status = 'attempting',
+              failure_reason = NULL,
+              updated_at = '2026-04-21T00:00:00.000Z'
+          WHERE quote_id = ?1
+        `,
+        args: [rawQuoteId],
+      })
+      await failedCommunityDb.execute({
+        sql: `
+          UPDATE purchase_settlement_effects
+          SET status = 'failed',
+              submitted_at = NULL,
+              failed_at = '2026-04-21T00:00:00.000Z',
+              failure_reason = 'transfer_to_vault_failed',
+              updated_at = '2026-04-21T00:00:00.000Z'
+          WHERE quote_id = ?1
+            AND effect_kind = 'story_parent_royalty_vault_transfer'
+        `,
+        args: [rawQuoteId],
+      })
+    } finally {
+      failedCommunityDb.close()
+    }
+
+    const failedCommunityRepository = getCommunityRepository(ctx.env)
+    try {
+      const failedVaultTransferSummary = await reconcileStaleCommunityPurchaseSettlements({
+        env: ctx.env,
+        communityRepository: failedCommunityRepository,
+        staleMs: 1,
+      })
+      expect(failedVaultTransferSummary).toMatchObject({
+        checked: 1,
+        finalized: 0,
+        failed: 1,
+        stillPending: 0,
+        errors: 0,
+      })
+    } finally {
+      failedCommunityRepository.close?.()
+    }
   }, 10000)
 
   test("creates a public video commerce asset backed by raw Filebase content", async () => {
