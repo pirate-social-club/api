@@ -115,6 +115,35 @@ describe("notification routes", () => {
     expect(tasksBody.items.some((item) => item.type === "global_handle_cleanup_suggested")).toBe(false)
   })
 
+  test("does not suggest global handle cleanup after the free rename window expires", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "notification-expired-cleanup-user")
+
+    await ctx.client.execute({
+      sql: "UPDATE users SET created_at = ?1, updated_at = ?1 WHERE user_id = ?2",
+      args: ["2020-01-01T00:00:00.000Z", rawUserId(session)],
+    })
+
+    const onboarding = await app.request(
+      "http://pirate.test/onboarding/status",
+      { headers: authHeaders(session.accessToken) },
+      ctx.env,
+    )
+    expect(onboarding.status).toBe(200)
+    const onboardingBody = await json(onboarding) as { cleanup_rename_available: boolean }
+    expect(onboardingBody.cleanup_rename_available).toBe(false)
+
+    const tasks = await app.request(
+      "http://pirate.test/notifications/tasks",
+      { headers: authHeaders(session.accessToken) },
+      ctx.env,
+    )
+    expect(tasks.status).toBe(200)
+    const tasksBody = await json(tasks) as { items: Array<{ type: string }> }
+    expect(tasksBody.items.some((item) => item.type === "global_handle_cleanup_suggested")).toBe(false)
+  })
+
   test("comment reply notifications include target comment payload", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup

@@ -1,7 +1,8 @@
 import { nowIso } from "../helpers"
 import { executeFirst, type DbExecutor } from "../db-helpers"
 import { getGlobalHandleRow, getProfileRow, getUserRow } from "../auth/auth-db-user-queries"
-import { parseVerificationCapabilities } from "../auth/auth-serializers"
+import { parseVerificationCapabilities, serializeGlobalHandle } from "../auth/auth-serializers"
+import { isCleanupRenameAvailable } from "../auth/global-handle-policy"
 import { resolveUserTask, upsertUserTask } from "./notification-task-store"
 import type { UserTask } from "../../types"
 import { unixSeconds } from "../../serializers/time"
@@ -105,7 +106,10 @@ async function needsGlobalHandleCleanupTask(executor: DbExecutor, userId: string
   if (!profile) return false
   const activeGlobalHandle = await getGlobalHandleRow(executor, profile.global_handle_id)
   return activeGlobalHandle?.issuance_source === "generated_signup"
-    && !Boolean(activeGlobalHandle.free_rename_consumed)
+    && isCleanupRenameAvailable({
+      userCreatedAt: user.created_at,
+      activeGlobalHandle: serializeGlobalHandle(activeGlobalHandle),
+    })
 }
 
 async function syncGlobalHandleCleanupTask(executor: DbExecutor, userId: string): Promise<void> {
