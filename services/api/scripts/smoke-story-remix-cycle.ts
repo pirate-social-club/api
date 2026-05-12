@@ -1,5 +1,7 @@
 import { SignJWT } from "jose"
 import { Wallet } from "ethers"
+import { Database } from "bun:sqlite"
+import { join } from "node:path"
 import { readDevVarsFromCwd, readWranglerVarsFromCwd } from "./_lib/dev-vars"
 
 type SmokeSession = {
@@ -40,6 +42,147 @@ function requireEnv(name: string): string {
 
 function normalizeApiBaseUrl(value: string): string {
   return value.replace(/\/+$/, "")
+}
+
+function decodePublicId(value: string, prefix: string): string {
+  const normalized = value.trim()
+  const publicPrefix = `${prefix}_`
+  return normalized.startsWith(publicPrefix) ? normalized.slice(publicPrefix.length) : normalized
+}
+
+function shouldUseLocalMembershipSetup(apiBaseUrl: string): boolean {
+  if (hasFlag("--no-local-membership-setup")) return false
+  const explicit = readEnv("PIRATE_SMOKE_ENSURE_LOCAL_MEMBERSHIP")
+  if (explicit) return ["1", "true", "yes", "on"].includes(explicit.toLowerCase())
+  const hostname = new URL(apiBaseUrl).hostname
+  return hostname === "127.0.0.1" || hostname === "localhost"
+}
+
+function ensureLocalMembership(input: {
+  env: Record<string, string | undefined>
+  communityId: string
+  session: SmokeSession
+}): void {
+  const root = input.env.LOCAL_COMMUNITY_DB_ROOT?.trim()
+  if (!root) {
+    throw new Error("LOCAL_COMMUNITY_DB_ROOT is required for local membership setup")
+  }
+  const localDevVars = readDevVarsFromCwd()
+  const communityDbRoot = localDevVars.LOCAL_COMMUNITY_DB_ROOT?.trim() || root
+  const rawUserId = decodePublicId(input.session.userId, "usr")
+  const rawCommunityId = decodePublicId(input.communityId, "com")
+  const now = new Date().toISOString()
+  const db = new Database(join(communityDbRoot, `community-${rawCommunityId}.db`))
+  try {
+    db.run(
+      `
+        INSERT INTO community_memberships (
+          membership_id, community_id, user_id, status, joined_at, left_at, banned_at, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, 'member', ?4, NULL, NULL, ?4, ?4)
+        ON CONFLICT(membership_id) DO UPDATE SET
+          status = 'member',
+          joined_at = excluded.joined_at,
+          left_at = NULL,
+          banned_at = NULL,
+          updated_at = excluded.updated_at
+      `,
+      `mbr_${rawCommunityId}_${rawUserId}`,
+      rawCommunityId,
+      rawUserId,
+      now,
+    )
+  } finally {
+    db.close()
+  }
+  console.log("[smoke] local membership", {
+    community: rawCommunityId,
+    user: rawUserId,
+  })
+}
+
+function resolveSqlitePathFromUrl(value: string | undefined, fallback: string): string {
+  const raw = value?.trim() || fallback
+  return raw.startsWith("file:") ? raw.slice("file:".length) : raw
+}
+
+function unixSeconds(value: string): number {
+  return Math.floor(new Date(value).getTime() / 1000)
+}
+
+function ensureLocalVerification(input: {
+  env: Record<string, string | undefined>
+  session: SmokeSession
+}): void {
+  const localDevVars = readDevVarsFromCwd()
+  const controlPlaneDb = resolveSqlitePathFromUrl(
+    localDevVars.CONTROL_PLANE_DATABASE_URL ?? input.env.CONTROL_PLANE_DATABASE_URL,
+    ".local/control-plane.db",
+  )
+  const rawUserId = decodePublicId(input.session.userId, "usr")
+  const now = new Date().toISOString()
+  const verifiedAt = unixSeconds(now)
+  const capabilities = {
+    unique_human: {
+      state: "verified",
+      provider: "self",
+      proof_type: "unique_human",
+      mechanism: "local_smoke",
+      verified_at: verifiedAt,
+    },
+    age_over_18: {
+      state: "verified",
+      provider: "self",
+      proof_type: "age_over_18",
+      mechanism: "local_smoke",
+      verified_at: verifiedAt,
+    },
+    minimum_age: {
+      state: "verified",
+      value: 18,
+      provider: "self",
+      proof_type: "minimum_age",
+      mechanism: "local_smoke",
+      verified_at: verifiedAt,
+    },
+    nationality: { state: "unverified", value: null, provider: null, proof_type: null, mechanism: null, verified_at: null },
+    gender: { state: "unverified", value: null, provider: null, proof_type: null, mechanism: null, verified_at: null },
+    wallet_score: {
+      state: "unverified",
+      provider: null,
+      proof_type: null,
+      mechanism: null,
+      verified_at: null,
+      score_decimal: null,
+      score_threshold_decimal: null,
+      passing_score: null,
+      last_scored_at: null,
+      expires_at: null,
+      stamps: null,
+    },
+  }
+  const db = new Database(controlPlaneDb)
+  try {
+    db.run(
+      `
+        UPDATE users
+        SET verification_state = 'verified',
+            capability_provider = 'self',
+            verification_capabilities_json = ?2,
+            verified_at = ?3,
+            updated_at = ?3
+        WHERE user_id = ?1
+      `,
+      rawUserId,
+      JSON.stringify(capabilities),
+      now,
+    )
+  } finally {
+    db.close()
+  }
+  console.log("[smoke] local verification", {
+    user: rawUserId,
+    unique_human: "verified",
+  })
 }
 
 async function readResponse<T>(response: Response): Promise<ApiResult<T>> {
@@ -293,6 +436,7 @@ async function main(): Promise<void> {
   const communityId = requireEnv("PIRATE_SMOKE_COMMUNITY_ID").replace(/^com_/, "")
   const titlePrefix = readEnv("PIRATE_SMOKE_TITLE_PREFIX", "Palestine, Don't Cry")
   const skipVerification = hasFlag("--skip-verification")
+  const useLocalSetup = shouldUseLocalMembershipSetup(apiBaseUrl)
 
   const author = await createSession({
     apiBaseUrl,
@@ -304,7 +448,18 @@ async function main(): Promise<void> {
     wallet: author.walletAddress,
     wallet_attachment: author.walletAttachment,
   })
-  if (!skipVerification) {
+  if (useLocalSetup) {
+    ensureLocalMembership({
+      env,
+      communityId,
+      session: author,
+    })
+    ensureLocalVerification({
+      env,
+      session: author,
+    })
+  }
+  if (!skipVerification && !useLocalSetup) {
     await completeUniqueHuman({ apiBaseUrl, session: author })
   }
 
