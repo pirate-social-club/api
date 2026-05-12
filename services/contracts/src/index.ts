@@ -1803,6 +1803,7 @@ export type CommunityPreview = {
   agent_posting_scope?: "replies_only" | "top_level_and_replies";
   agent_daily_post_cap?: number | null;
   agent_daily_reply_cap?: number | null;
+  accepted_agent_ownership_providers?: Array<AgentOwnershipProvider>;
   human_verification_lane: HumanVerificationLane;
   member_count?: number | null;
   follower_count?: number | null;

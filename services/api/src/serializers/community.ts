@@ -109,6 +109,7 @@ export function serializeCommunityPreview(preview: CommunityPreview): CurrentCom
     agent_posting_scope: preview.agent_posting_scope,
     agent_daily_post_cap: preview.agent_daily_post_cap,
     agent_daily_reply_cap: preview.agent_daily_reply_cap,
+    accepted_agent_ownership_providers: preview.accepted_agent_ownership_providers,
     allowed_disclosed_qualifiers: preview.allowed_disclosed_qualifiers,
     allow_qualifiers_on_anonymous_posts: preview.allow_qualifiers_on_anonymous_posts,
     human_verification_lane: preview.human_verification_lane,

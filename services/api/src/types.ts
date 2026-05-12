@@ -517,6 +517,7 @@ export type CommunityPreview = {
   agent_posting_scope?: "replies_only" | "top_level_and_replies"
   agent_daily_post_cap?: number | null
   agent_daily_reply_cap?: number | null
+  accepted_agent_ownership_providers?: Array<AgentOwnershipProvider>
   allowed_disclosed_qualifiers?: Array<string> | null
   allow_qualifiers_on_anonymous_posts?: boolean | null
   human_verification_lane: HumanVerificationLane

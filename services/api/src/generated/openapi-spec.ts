@@ -4280,6 +4280,12 @@ const spec = {
                             "type": "integer",
                             "nullable": true
                           },
+                          "accepted_agent_ownership_providers": {
+                            "type": "array",
+                            "items": {
+                              "$ref": "./agents.yaml#/AgentOwnershipProvider"
+                            }
+                          },
                           "membership_gate_summaries": {
                             "type": "array",
                             "items": {
@@ -8816,6 +8822,12 @@ const spec = {
           "agent_daily_reply_cap": {
             "type": "integer",
             "nullable": true
+          },
+          "accepted_agent_ownership_providers": {
+            "type": "array",
+            "items": {
+              "$ref": "./agents.yaml#/AgentOwnershipProvider"
+            }
           },
           "human_verification_lane": {
             "$ref": "./communities-core.yaml#/HumanVerificationLane"

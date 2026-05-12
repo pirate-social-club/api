@@ -24,6 +24,7 @@ import { serializeDonationPartnerRow } from "./community-donation-partner-serial
 import { parseStoredReferenceLinks } from "./community-serialization"
 import { isCommunityLive } from "./community-status"
 import { getControlPlaneClient } from "../runtime-deps"
+import { dedupeStrings, splitCsv } from "../helpers"
 import type {
   CommunityDatabaseBindingRepository,
   CommunityReadRepository,
@@ -37,8 +38,10 @@ import type {
 import type { GatePolicy } from "./membership/gate-types"
 
 type CommunityPreviewRule = NonNullable<CommunityPreview["rules"]>[number]
+type AgentOwnershipProvider = NonNullable<CommunityPreview["accepted_agent_ownership_providers"]>[number]
 
 type CommunityPreviewRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
+const DEFAULT_PLATFORM_APPROVED_DERIVED_KYA_PROVIDERS = ["clawkey"] as const
 
 function parsePreviewSettingsJson(raw: unknown): Record<string, unknown> {
   if (typeof raw !== "string" || !raw.trim()) {
@@ -111,6 +114,39 @@ function parsePreviewPositiveInteger(
 ): number | null {
   const value = settings[key]
   return Number.isInteger(value) && typeof value === "number" && value > 0 ? value : null
+}
+
+function parsePreviewAcceptedAgentOwnershipProviders(
+  settings: Record<string, unknown>,
+): AgentOwnershipProvider[] | null {
+  const rawProviders = settings.accepted_agent_ownership_providers
+  if (!Array.isArray(rawProviders)) {
+    return null
+  }
+
+  return [...new Set(rawProviders.filter((value): value is AgentOwnershipProvider =>
+    value === "self_agent_id" || value === "clawkey"
+  ))]
+}
+
+function resolvePreviewAcceptedAgentOwnershipProviders(input: {
+  env: Env
+  settings: Record<string, unknown>
+  humanVerificationLane: CommunityPreview["human_verification_lane"]
+}): AgentOwnershipProvider[] {
+  const explicit = parsePreviewAcceptedAgentOwnershipProviders(input.settings)
+  if (explicit !== null) {
+    return explicit
+  }
+
+  if (input.humanVerificationLane === "very") {
+    return input.env.PLATFORM_APPROVED_KYA_PROVIDERS == null
+      ? [...DEFAULT_PLATFORM_APPROVED_DERIVED_KYA_PROVIDERS]
+      : dedupeStrings(splitCsv(input.env.PLATFORM_APPROVED_KYA_PROVIDERS))
+          .filter((value): value is AgentOwnershipProvider => value === "self_agent_id" || value === "clawkey")
+  }
+
+  return []
 }
 
 function parsePreviewHumanVerificationLane(
@@ -471,6 +507,7 @@ async function buildCommunityPreview(input: {
     )),
   ])
 
+  const humanVerificationLane = parsePreviewHumanVerificationLane(settings, membershipGateSummaries)
   const preview: CommunityPreview = {
     community_id: input.communityId,
     display_name: displayName,
@@ -496,9 +533,14 @@ async function buildCommunityPreview(input: {
     agent_posting_scope: parsePreviewAgentPostingScope(settings),
     agent_daily_post_cap: parsePreviewPositiveInteger(settings, "agent_daily_post_cap"),
     agent_daily_reply_cap: parsePreviewPositiveInteger(settings, "agent_daily_reply_cap"),
+    accepted_agent_ownership_providers: resolvePreviewAcceptedAgentOwnershipProviders({
+      env: input.env,
+      settings,
+      humanVerificationLane,
+    }),
     allowed_disclosed_qualifiers: parsePreviewAllowedDisclosedQualifiers(settings),
     allow_qualifiers_on_anonymous_posts: parsePreviewAllowQualifiersOnAnonymousPosts(settings),
-    human_verification_lane: parsePreviewHumanVerificationLane(settings, membershipGateSummaries),
+    human_verification_lane: humanVerificationLane,
     member_count: memberCount,
     follower_count: followerCount,
     donation_policy_mode: donationPolicyMode,
