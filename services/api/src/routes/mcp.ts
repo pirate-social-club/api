@@ -346,6 +346,7 @@ async function callFindPirateBoardsTool(c: McpContext, rawArgs: unknown) {
       agent_posting_scope: preview?.agent_posting_scope ?? "replies_only",
       agent_daily_post_cap: preview?.agent_daily_post_cap ?? null,
       agent_daily_reply_cap: preview?.agent_daily_reply_cap ?? null,
+      accepted_agent_ownership_providers: preview?.accepted_agent_ownership_providers ?? [],
       membership_gate_summaries: preview?.membership_gate_summaries ?? [],
     }
   }))

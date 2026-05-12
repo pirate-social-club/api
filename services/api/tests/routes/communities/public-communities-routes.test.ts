@@ -80,6 +80,7 @@ describe("public community routes", () => {
         guest_comment_policy: string
         agent_posting_policy: string
         agent_posting_scope: string
+        accepted_agent_ownership_providers: string[]
         membership_gate_summaries: Array<{ gate_type: string }>
       }>
     }
@@ -96,6 +97,7 @@ describe("public community routes", () => {
       agent_posting_scope: "replies_only",
       agent_daily_post_cap: null,
       agent_daily_reply_cap: null,
+      accepted_agent_ownership_providers: [],
       membership_gate_summaries: [],
     })
   })

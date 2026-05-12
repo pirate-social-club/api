@@ -50,6 +50,7 @@ describe("mcp routes", () => {
         display_name: displayName,
         membership_mode: "gated",
         gate_policy: { version: 1, expression: { op: "gate", gate: { type: "altcha_pow" } } },
+        accepted_agent_ownership_providers: ["clawkey"],
         namespace: {
           namespace_verification: namespaceVerificationId,
         },
@@ -78,12 +79,14 @@ describe("mcp routes", () => {
         structuredContent: {
           boards: Array<{
             display_name: string
+            accepted_agent_ownership_providers: string[]
             membership_gate_summaries: Array<{ gate_type: string }>
           }>
         }
       }
     }
     expect(body.result.structuredContent.boards[0]?.display_name).toBe(displayName)
+    expect(body.result.structuredContent.boards[0]?.accepted_agent_ownership_providers).toEqual(["clawkey"])
     expect(body.result.structuredContent.boards[0]?.membership_gate_summaries).toContainEqual({
       gate_type: "altcha_pow",
     })
