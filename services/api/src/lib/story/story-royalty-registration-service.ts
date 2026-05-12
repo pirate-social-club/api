@@ -382,6 +382,12 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
         parentIpIds: derivativeParents!.map((parent) => parent.ipId),
         licenseTermsIds: derivativeParents!.map((parent) => parent.licenseTermsId),
       },
+      royaltyShares: [
+        {
+          recipient: input.creatorWalletAddress as `0x${string}`,
+          percentage: 100,
+        },
+      ],
       ipMetadata: {
         ipMetadataURI: metadata.ipMetadataUri,
         ipMetadataHash: metadata.ipMetadataHash,
