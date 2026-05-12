@@ -16,6 +16,7 @@ import { getProfilePublicHandleLabel } from "../../auth/auth-serializers"
 import type { UserRepository } from "../../auth/repositories"
 import type { ProfileRepository } from "../../auth/repositories"
 import {
+  isStoryRoyaltyRegistrationConfigured,
   maybeRegisterStoryRoyaltyForAsset,
   type StoryLicensePreset,
 } from "../../story/story-royalty-registration-service"
@@ -146,6 +147,7 @@ export async function createAssetForPost(input: {
   let lockedDeliveryError: string | null = null
   let lockedDeliveryStorageRef: string | null = null
   let lockedDeliveryMetadataJson: string | null = null
+  let publicationStatus: Asset["publication_status"] = "draft"
   let storyStatus: Asset["story_status"] = "none"
   let storyError: string | null = null
   let storyIpId: string | null = null
@@ -198,6 +200,9 @@ export async function createAssetForPost(input: {
         upstreamAssetRefs: input.post.upstream_asset_refs ?? null,
       })
       storyStatus = lockedDelivery.storyStatus
+      if (lockedDelivery.storyStatus === "published") {
+        publicationStatus = "story_published"
+      }
       storyPublishTxRef = lockedDelivery.storyPublishTxRef
       storyIpId = lockedDelivery.storyIpId
       storyRoyaltyPolicyId = lockedDelivery.storyRoyaltyPolicyId
@@ -268,6 +273,16 @@ export async function createAssetForPost(input: {
       storyDerivativeRegisteredAt = royaltyRegistration.storyDerivativeRegisteredAt
       storyRevenueToken = royaltyRegistration.storyRevenueToken
       storyRoyaltyRegistrationStatus = royaltyRegistration.storyRoyaltyRegistrationStatus
+      storyStatus = "published"
+      publicationStatus = "story_published"
+    } else if (shouldRegisterRoyalty && storyRoyaltyRegistrationStatus === "pending") {
+      const registrationError = isStoryRoyaltyRegistrationConfigured(input.env)
+        ? "story_royalty_registration_unavailable"
+        : "story_royalty_config_missing"
+      storyRoyaltyRegistrationStatus = "failed"
+      storyError = storyError
+        ? `${storyError};royalty_registration_failed:${registrationError}`
+        : `royalty_registration_failed:${registrationError}`
     }
   } catch (error) {
     const registrationError = error instanceof Error ? error.message : String(error)
@@ -291,13 +306,13 @@ export async function createAssetForPost(input: {
       ) VALUES (
         ?1, ?2, ?3, ?4, ?5, ?6, ?7,
         ?8, ?9, ?10, ?11,
-        ?12, ?13, 'draft',
-        ?14, ?15, ?16, ?17, ?18,
-        ?19, ?20, ?21, ?22, ?23,
-        ?24, ?25, ?26, ?27, ?28,
-        ?29, ?30, ?31, ?31, ?32,
-        ?33, ?34, ?35, ?36, ?37,
-        ?38, ?39, ?40
+        ?12, ?13, ?14,
+        ?15, ?16, ?17, ?18, ?19,
+        ?20, ?21, ?22, ?23, ?24,
+        ?25, ?26, ?27, ?28, ?29,
+        ?30, ?31, ?32, ?32, ?33,
+        ?34, ?35, ?36, ?37, ?38,
+        ?39, ?40, ?41
       )
     `,
     args: [
@@ -314,6 +329,7 @@ export async function createAssetForPost(input: {
       input.commercialRevSharePct ?? null,
       input.storageRef,
       input.contentHash ?? `0x${await sha256Hex(input.storageRef)}`,
+      publicationStatus,
       storyStatus,
       storyError,
       storyIpId,
