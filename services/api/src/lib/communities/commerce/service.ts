@@ -429,7 +429,7 @@ export async function listCommunityDerivativeSources(input: {
         await input.profileRepository.getProfileByUserId(userId).catch(() => null),
       ] as const)))
     const items: DerivativeSource[] = rows.map((row) => ({
-      id: `dsrc_${row.asset_id}`,
+      id: `asset_${row.asset_id}`,
       object: "derivative_source",
       community: `com_${row.community_id}`,
       asset: `asset_${row.asset_id}`,
