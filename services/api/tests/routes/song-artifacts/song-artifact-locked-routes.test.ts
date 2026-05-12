@@ -9,7 +9,10 @@ import { reconcileStaleCommunityPurchaseSettlements } from "../../../src/lib/com
 import { setStoryAccessProofSignerForTests } from "../../../src/lib/story/story-access-proof-service"
 import { setStoryAssetPublisherForTests } from "../../../src/lib/story/story-publish-service"
 import { setStoryRoyaltyRegistrarForTests } from "../../../src/lib/story/story-royalty-registration-service"
-import { setStoryRoyaltyPurchaseSettlementExecutorForTests } from "../../../src/lib/story/story-royalty-settlement-service"
+import {
+  setStoryParentRoyaltyVaultTransferExecutorForTests,
+  setStoryRoyaltyPurchaseSettlementExecutorForTests,
+} from "../../../src/lib/story/story-royalty-settlement-service"
 import { setStoryCdrUploaderForTests } from "../../../src/lib/story/story-cdr"
 import { setStoryRuntimeFundingAssertionForTests } from "../../../src/lib/story/story-runtime-funding"
 import { setStoryPurchaseSettlementExecutorForTests } from "../../../src/lib/story/story-settlement-service"
@@ -1087,6 +1090,11 @@ describe("song artifact locked routes", () => {
       entitlementTokenId: string
       amount: string
     }> = []
+    const parentRoyaltyVaultTransferCalls: Array<{
+      childIpId: string
+      parentIpId: string
+      royaltyPolicy: string | null | undefined
+    }> = []
     const charityPayoutCalls: Array<{
       idempotencyKey: string
       donationPartnerId: string
@@ -1134,6 +1142,16 @@ describe("song artifact locked routes", () => {
         royaltyTxHash: "0xroyalty-derivative",
         entitlementTxHash: "0xentitlement-derivative",
         settlementTxHash: "0xroyalty-derivative",
+      }
+    })
+    setStoryParentRoyaltyVaultTransferExecutorForTests(async (input) => {
+      parentRoyaltyVaultTransferCalls.push({
+        childIpId: input.childIpId,
+        parentIpId: input.parentIpId,
+        royaltyPolicy: input.royaltyPolicy,
+      })
+      return {
+        transferTxHash: "0xparent-vault-derivative",
       }
     })
     setCommunityCommerceCharityPayoutExecutorForTests(async (input) => {
@@ -1423,6 +1441,13 @@ describe("song artifact locked routes", () => {
     expect(royaltySettlementCalls[0]?.buyerAddress).toBe("0xbbb0000000000000000000000000000000000000")
     expect(royaltySettlementCalls[0]?.receiverIpId).toBe("0x1111111111111111111111111111111111111111")
     expect(royaltySettlementCalls[0]?.amount).toBe("3590000000000000000")
+    expect(parentRoyaltyVaultTransferCalls).toEqual([
+      {
+        childIpId: "0x1111111111111111111111111111111111111111",
+        parentIpId: "0x3333333333333333333333333333333333333333",
+        royaltyPolicy: "0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E",
+      },
+    ])
   }, 10000)
 
   test("creates a public video commerce asset backed by raw Filebase content", async () => {

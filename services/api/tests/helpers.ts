@@ -16,7 +16,10 @@ import { setStoryAccessProofSignerForTests } from "../src/lib/story/story-access
 import { setStoryCdrUploaderForTests } from "../src/lib/story/story-cdr"
 import { setStoryAssetPublisherForTests } from "../src/lib/story/story-publish-service"
 import { setStoryRoyaltyRegistrarForTests } from "../src/lib/story/story-royalty-registration-service"
-import { setStoryRoyaltyPurchaseSettlementExecutorForTests } from "../src/lib/story/story-royalty-settlement-service"
+import {
+  setStoryParentRoyaltyVaultTransferExecutorForTests,
+  setStoryRoyaltyPurchaseSettlementExecutorForTests,
+} from "../src/lib/story/story-royalty-settlement-service"
 import { setStoryRuntimeFundingAssertionForTests } from "../src/lib/story/story-runtime-funding"
 import { setStoryPurchaseSettlementExecutorForTests } from "../src/lib/story/story-settlement-service"
 import { setSwarmPublisherForTests } from "../src/lib/swarm/swarm-publisher"
@@ -143,6 +146,7 @@ export function resetRuntimeCaches(): void {
   setStoryAssetPublisherForTests(null)
   setStoryRoyaltyRegistrarForTests(null)
   setStoryRoyaltyPurchaseSettlementExecutorForTests(null)
+  setStoryParentRoyaltyVaultTransferExecutorForTests(null)
   setStoryRuntimeFundingAssertionForTests(null)
   setStoryPurchaseSettlementExecutorForTests(null)
   setSwarmPublisherForTests(null)

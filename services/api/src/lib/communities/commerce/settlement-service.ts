@@ -10,6 +10,7 @@ import { derivePurchaseRef } from "../../story/story-identifiers"
 import {
   mintStoryRoyaltyPurchaseEntitlement,
   payStoryRoyaltyOnBehalfForPurchase,
+  transferStoryRoyaltyToParentVault,
 } from "../../story/story-royalty-settlement-service"
 import type { UserRepository } from "../../auth/repositories"
 import {
@@ -865,6 +866,60 @@ async function settleCommunityPurchaseForBuyer(input: {
           purchaseId,
           title: asset.display_title,
         })
+      }
+      const parentIpIds = parseJsonValue<string[]>(asset.story_derivative_parent_ip_ids_json, [])
+        .filter((parentIpId) => typeof parentIpId === "string" && parentIpId.trim())
+      if (parentIpIds.length > 0) {
+        for (const parentIpId of parentIpIds) {
+          const normalizedParentIpId = parentIpId.trim()
+          const transferEffectKey = `${asset.asset_id}:${normalizedParentIpId}`
+          const transferIdempotencyKey = `${quote.quote_id}:story_parent_royalty_vault:${asset.story_ip_id}:${normalizedParentIpId}:${storyPayoutAmount.toString()}`
+          const transferMetadata = JSON.stringify({
+            amount_wip_wei: storyPayoutAmount.toString(),
+            asset: asset.asset_id,
+            child_story_ip_id: asset.story_ip_id,
+            parent_story_ip_id: normalizedParentIpId,
+            story_royalty_policy: asset.story_royalty_policy,
+            title: asset.display_title,
+          })
+          const transferEffect = await beginPurchaseSettlementEffectAttempt({
+            client: db.client,
+            communityId: input.communityId,
+            quoteId: quote.quote_id,
+            purchaseId,
+            effectKind: "story_parent_royalty_vault_transfer",
+            effectKey: transferEffectKey,
+            idempotencyKey: transferIdempotencyKey,
+            now: createdAt,
+          })
+          if (transferEffect.status !== "confirmed") {
+            try {
+              const transfer = await transferStoryRoyaltyToParentVault({
+                env: input.env,
+                childIpId: asset.story_ip_id,
+                parentIpId: normalizedParentIpId,
+                royaltyPolicy: asset.story_royalty_policy,
+              })
+              await confirmPurchaseSettlementEffect({
+                client: db.client,
+                idempotencyKey: transferIdempotencyKey,
+                settlementRef: transfer.transferTxHash,
+                providerReceiptRef: transfer.transferTxHash,
+                taxReceiptRef: null,
+                metadataJson: transferMetadata,
+                now: createdAt,
+              })
+            } catch (error) {
+              await failPurchaseSettlementEffect({
+                client: db.client,
+                idempotencyKey: transferIdempotencyKey,
+                failureReason: error instanceof Error ? error.message : String(error),
+                now: createdAt,
+              })
+              throw error
+            }
+          }
+        }
       }
       if (asset.access_mode === "locked") {
         const entitlementEffectKey = `${asset.asset_id}:${asset.story_entitlement_token_id}:${buyerWalletAddress.toLowerCase()}`
