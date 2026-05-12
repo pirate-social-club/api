@@ -324,6 +324,22 @@ async function repairCompatibleLocalControlPlaneMigration(input: {
   return true
 }
 
+async function repairCompatibleLocalControlPlaneBaselineMigration(input: {
+  client: Client
+  migrationName: string
+  existingChecksum: string
+  migrationChecksum: string
+  compatibleChecksumsByName: Map<string, Set<string>>
+}): Promise<boolean> {
+  const compatibleChecksums = input.compatibleChecksumsByName.get(input.migrationName)
+  if (!compatibleChecksums?.has(input.existingChecksum)) {
+    return false
+  }
+
+  await updateAppliedMigrationChecksum(input.client, input.migrationName, input.migrationChecksum)
+  return true
+}
+
 async function listTableColumns(client: Client, tableName: string): Promise<Set<string>> {
   const result = await client.execute(`PRAGMA table_info(${tableName})`)
   return new Set(result.rows.map((row) => String(row.name)))
@@ -382,7 +398,16 @@ export async function applyLocalControlPlaneMigrations(storage: LocalDevStorage)
     const appliedChecksum = await getAppliedChecksum(client, baselineMigrationName)
     if (appliedChecksum) {
       if (appliedChecksum !== baselineChecksum) {
-        throw new Error(`migration checksum mismatch for ${baselineMigrationName}`)
+        const repaired = await repairCompatibleLocalControlPlaneBaselineMigration({
+          client,
+          migrationName: baselineMigrationName,
+          existingChecksum: appliedChecksum,
+          migrationChecksum: baselineChecksum,
+          compatibleChecksumsByName,
+        })
+        if (!repaired) {
+          throw new Error(`migration checksum mismatch for ${baselineMigrationName}`)
+        }
       }
     } else {
       await applySqlFile(client, baselineMigrationPath)

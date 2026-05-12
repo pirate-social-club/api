@@ -99,7 +99,7 @@ async function syncProfileCompletionTask(executor: DbExecutor, userId: string): 
 
 async function needsGlobalHandleCleanupTask(executor: DbExecutor, userId: string): Promise<boolean> {
   const user = await getUserRow(executor, userId)
-  if (user?.onboarding_dismissed_at) return false
+  if (!user || user.onboarding_dismissed_at) return false
 
   const profile = await getProfileRow(executor, userId)
   if (!profile) return false
