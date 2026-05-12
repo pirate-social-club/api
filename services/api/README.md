@@ -309,6 +309,16 @@ rtk bun run generate:openapi-spec
 
 This writes `src/generated/openapi-spec.ts`, which is imported by the discovery router and included in the worker bundle.
 
+## Agent Skill Discovery
+
+The runtime `/.well-known/agent-skills/pirate-agent-protocol/SKILL.md` endpoint serves the canonical Pirate agent protocol skill from `docs/agents/pirate-agent-protocol/SKILL.md`. To regenerate the bundled skill after editing the markdown:
+
+```bash
+rtk bun run generate:agent-skill
+```
+
+This writes `src/generated/pirate-agent-protocol-skill.ts`, which is imported by the discovery router and included in the worker bundle. Use `rtk bun run check:agent-skill` to verify the generated file is current.
+
 ## Example Exchange
 
 ```bash

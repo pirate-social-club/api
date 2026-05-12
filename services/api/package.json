@@ -16,6 +16,7 @@
     "worker:community-jobs:local": "bun run scripts/run-community-job-worker.ts",
     "deploy": "wrangler deploy",
     "generate:agent-skill": "bun run scripts/generate-agent-skill.ts",
+    "check:agent-skill": "bun run scripts/generate-agent-skill.ts --check",
     "generate:openapi-spec": "bun run scripts/generate-openapi-spec.ts",
     "check": "tsgo --noEmit",
     "lint": "biome check .",
