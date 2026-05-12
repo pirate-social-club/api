@@ -8,7 +8,10 @@ import { buildLocalCommunityDbPath } from "../../../src/lib/communities/communit
 import { reconcileStaleCommunityPurchaseSettlements } from "../../../src/lib/communities/commerce/settlement-service"
 import { setStoryAccessProofSignerForTests } from "../../../src/lib/story/story-access-proof-service"
 import { setStoryAssetPublisherForTests } from "../../../src/lib/story/story-publish-service"
-import { setStoryRoyaltyRegistrarForTests } from "../../../src/lib/story/story-royalty-registration-service"
+import {
+  resolveStoryRoyaltyDerivativeParents,
+  setStoryRoyaltyRegistrarForTests,
+} from "../../../src/lib/story/story-royalty-registration-service"
 import {
   setStoryParentRoyaltyVaultTransferExecutorForTests,
   setStoryRoyaltyPurchaseSettlementExecutorForTests,
@@ -1538,6 +1541,465 @@ describe("song artifact locked routes", () => {
         staleMs: 1,
       })
       expect(failedVaultTransferSummary).toMatchObject({
+        checked: 1,
+        finalized: 0,
+        failed: 1,
+        stillPending: 0,
+        errors: 0,
+      })
+    } finally {
+      failedCommunityRepository.close?.()
+    }
+  }, 10000)
+
+  testWithTimeout("settles a locked remix with multiple Story parent assets", async () => {
+    const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
+    const royaltySettlementCalls: Array<{
+      receiverIpId: string
+      amount: string
+    }> = []
+    const parentRoyaltyVaultTransferCalls: Array<{
+      childIpId: string
+      parentIpId: string
+      royaltyPolicy: string | null | undefined
+    }> = []
+    const expectedParentRefs: string[] = []
+
+    setStoryRuntimeFundingAssertionForTests(async () => {})
+    setStoryCdrUploaderForTests(async () => ({
+      cdrVaultUuid: 6262,
+      writerAddress: "0x0000000000000000000000000000000000000cd2",
+      txHashes: {
+        allocate: "0xalloc-multi-parent",
+        write: "0xwrite-multi-parent",
+      },
+    }))
+    setStoryAssetPublisherForTests(async () => ({
+      entitlementConfiguredTxHash: "0xconfigure-multi-parent",
+      publishTxHash: "0xpublish-multi-parent",
+    }))
+    setStoryRoyaltyRegistrarForTests(async (input) => {
+      if (input.rightsBasis === "original") {
+        const originalByTitle: Record<string, {
+          ip: string
+          token: string
+          terms: string
+        }> = {
+          "Multi Parent Source A": {
+            ip: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            token: "101",
+            terms: "101",
+          },
+          "Multi Parent Source B": {
+            ip: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            token: "202",
+            terms: "202",
+          },
+        }
+        const original = originalByTitle[input.title ?? ""]
+        expect(original).toBeDefined()
+        return {
+          storyIpId: original!.ip,
+          storyIpNftContract: "0x2222222222222222222222222222222222222222",
+          storyIpNftTokenId: original!.token,
+          storyLicenseTermsId: original!.terms,
+          storyLicenseTemplate: null,
+          storyRoyaltyPolicy: "0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E",
+          storyDerivativeParentIpIds: null,
+          storyRevenueToken: "0x1514000000000000000000000000000000000000",
+          storyRoyaltyRegistrationStatus: "registered",
+          storyDerivativeRegisteredAt: null,
+        }
+      }
+
+      expect(input.rightsBasis).toBe("derivative")
+      expect(input.upstreamAssetRefs).toEqual(expectedParentRefs)
+      const resolvedParents = await resolveStoryRoyaltyDerivativeParents({
+        client: input.client,
+        communityId: input.communityId,
+        upstreamAssetRefs: input.upstreamAssetRefs,
+      })
+      expect(resolvedParents).toEqual([
+        {
+          ipId: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          licenseTermsId: 101n,
+        },
+        {
+          ipId: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          licenseTermsId: 202n,
+        },
+      ])
+      return {
+        storyIpId: "0x1111111111111111111111111111111111111111",
+        storyIpNftContract: "0x2222222222222222222222222222222222222222",
+        storyIpNftTokenId: "303",
+        storyLicenseTermsId: "303",
+        storyLicenseTemplate: null,
+        storyRoyaltyPolicy: "0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E",
+        storyDerivativeParentIpIds: resolvedParents!.map((parent) => parent.ipId),
+        storyRevenueToken: "0x1514000000000000000000000000000000000000",
+        storyRoyaltyRegistrationStatus: "registered",
+        storyDerivativeRegisteredAt: "2026-04-21T00:00:00.000Z",
+      }
+    })
+    setStoryRoyaltyPurchaseSettlementExecutorForTests(async (input) => {
+      royaltySettlementCalls.push({
+        receiverIpId: input.receiverIpId,
+        amount: String(input.amount),
+      })
+      return {
+        royaltyTxHash: "0xroyalty-multi-parent",
+        entitlementTxHash: "0xentitlement-multi-parent",
+        settlementTxHash: "0xroyalty-multi-parent",
+      }
+    })
+    setStoryParentRoyaltyVaultTransferExecutorForTests(async (input) => {
+      parentRoyaltyVaultTransferCalls.push({
+        childIpId: input.childIpId,
+        parentIpId: input.parentIpId,
+        royaltyPolicy: input.royaltyPolicy,
+      })
+      return {
+        transferTxHash: `0xparent-vault-${input.parentIpId.slice(2, 6)}`,
+      }
+    })
+
+    installLockedSongFetchMocks({ originalFetch, storedObjects })
+
+    const ctx = await createRouteTestContext({
+      FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
+      FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
+      FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
+      FILEBASE_MEDIA_BUCKET: "pirate-media",
+      STORY_CDR_WRITER_PRIVATE_KEY: "0x3000000000000000000000000000000000000000000000000000000000000003",
+      STORY_ROYALTY_SPG_NFT_CONTRACT: "0x4444444444444444444444444444444444444444",
+      STORY_ROYALTY_COMMERCIAL_REV_SHARE_PCT: "10",
+    })
+    cleanup = ctx.cleanup
+
+    const author = await exchangeJwt(ctx.env, "song-author-multi-parent")
+    const buyer = await exchangeJwt(ctx.env, "song-buyer-multi-parent")
+    await attachPrimaryWallet({
+      client: ctx.client,
+      userId: author.userId,
+      walletAttachmentId: "wal_song_author_multi_parent",
+      walletAddress: "0xaaa0000000000000000000000000000000000000",
+    })
+    await attachPrimaryWallet({
+      client: ctx.client,
+      userId: buyer.userId,
+      walletAttachmentId: "wal_song_buyer_multi_parent",
+      walletAddress: "0xbbb0000000000000000000000000000000000000",
+    })
+    await verifyForLockedCommerce(ctx.env, author.userId, author.accessToken)
+    await verifyForLockedCommerce(ctx.env, buyer.userId, buyer.accessToken)
+
+    const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "Multi Parent Remix Club")
+    await addCommunityMember(String(ctx.env.LOCAL_COMMUNITY_DB_ROOT), communityId, buyer.userId)
+
+    async function createSongPost(input: {
+      title: string
+      filename: string
+      idempotencyKey: string
+      songMode: "original" | "remix"
+      accessMode: "public" | "locked"
+      upstreamAssetRefs?: string[]
+      bytes: Uint8Array
+    }): Promise<{ asset: string }> {
+      const upload = await uploadSongArtifact({
+        env: ctx.env,
+        communityId,
+        accessToken: author.accessToken,
+        artifactKind: "primary_audio",
+        mimeType: "audio/mpeg",
+        filename: input.filename,
+        bytes: input.bytes,
+      })
+      const bundleCreate = await requestJson(
+        `http://pirate.test/communities/${communityId}/song-artifacts`,
+        {
+          primary_audio: {
+            song_artifact_upload: upload.id,
+          },
+          preview_window: {
+            start_ms: 0,
+            duration_ms: 30_000,
+          },
+          title: input.title,
+          lyrics: `${input.title} lyric`,
+        },
+        ctx.env,
+        author.accessToken,
+      )
+      expect(bundleCreate.status).toBe(201)
+      const bundleBody = await json(bundleCreate) as { id: string }
+      await markGeneratedPreviewReady({
+        env: ctx.env,
+        communityId,
+        songArtifactBundleId: bundleBody.id.replace(/^sab_/, ""),
+        previewStorageRef: `http://pirate.test/generated-preview/${communityId}/${input.filename}`,
+        previewSizeBytes: 4,
+      })
+      const postCreate = await requestJson(
+        `http://pirate.test/communities/${communityId}/posts`,
+        {
+          idempotency_key: input.idempotencyKey,
+          post_type: "song",
+          identity_mode: "public",
+          title: input.title,
+          access_mode: input.accessMode,
+          song_mode: input.songMode,
+          rights_basis: input.songMode === "remix" ? "derivative" : "original",
+          license_preset: input.songMode === "original" ? "commercial-remix" : undefined,
+          commercial_rev_share_pct: input.songMode === "original" ? 10 : undefined,
+          upstream_asset_refs: input.upstreamAssetRefs,
+          song_artifact_bundle: bundleBody.id,
+        },
+        ctx.env,
+        author.accessToken,
+      )
+      expect(postCreate.status).toBe(201)
+      const postBody = await json(postCreate) as { asset?: string | null }
+      expect(postBody.asset).toBeTruthy()
+      return { asset: postBody.asset! }
+    }
+
+    const sourceA = await createSongPost({
+      title: "Multi Parent Source A",
+      filename: "multi-parent-source-a.mp3",
+      idempotencyKey: "song-post-multi-parent-source-a",
+      songMode: "original",
+      accessMode: "public",
+      bytes: new Uint8Array([1, 2, 3, 4]),
+    })
+    const sourceB = await createSongPost({
+      title: "Multi Parent Source B",
+      filename: "multi-parent-source-b.mp3",
+      idempotencyKey: "song-post-multi-parent-source-b",
+      songMode: "original",
+      accessMode: "public",
+      bytes: new Uint8Array([5, 6, 7, 8]),
+    })
+    expectedParentRefs.push(`story:asset:${sourceA.asset}`, `story:asset:${sourceB.asset}`)
+
+    const remix = await createSongPost({
+      title: "Multi Parent Remix",
+      filename: "multi-parent-remix.mp3",
+      idempotencyKey: "song-post-multi-parent-remix",
+      songMode: "remix",
+      accessMode: "locked",
+      upstreamAssetRefs: expectedParentRefs,
+      bytes: new Uint8Array([9, 10, 11, 12]),
+    })
+
+    const assetRead = await app.request(
+      `http://pirate.test/communities/${communityId}/assets/${remix.asset}`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(assetRead.status).toBe(200)
+    const assetBody = await json(assetRead) as {
+      story_derivative_parent_ip_ids: string[] | null
+      story_royalty_registration_status: string | null
+      story_error?: string | null
+    }
+    if (assetBody.story_royalty_registration_status !== "registered") {
+      throw new Error(`multi-parent remix registration failed: ${JSON.stringify(assetBody)}`)
+    }
+    expect(assetBody.story_royalty_registration_status).toBe("registered")
+    expect(assetBody.story_derivative_parent_ip_ids).toEqual([
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    ])
+
+    const listingCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/listings`,
+      {
+        asset: remix.asset,
+        price_cents: 200,
+        regional_pricing_enabled: false,
+        status: "active",
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(listingCreate.status).toBe(201)
+    const listingBody = await json(listingCreate) as { id: string }
+
+    const quoteCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/purchase-quotes`,
+      {
+        listing: listingBody.id,
+        ...routedCheckoutQuoteFields,
+      },
+      ctx.env,
+      buyer.accessToken,
+    )
+    expect(quoteCreate.status).toBe(201)
+    const quoteBody = await json(quoteCreate) as {
+      id: string
+      settlement_mode: string
+    }
+    expect(quoteBody.settlement_mode).toBe("royalty_native_story_payment")
+
+    const purchaseSettle = await requestJson(
+      `http://pirate.test/communities/${communityId}/purchase-settlements`,
+      {
+        quote: quoteBody.id,
+        settlement_wallet_attachment: "wal_song_buyer_multi_parent",
+        funding_tx_ref: "0xfunding-multi-parent-1",
+        settlement_tx_ref: "ignored-client-ref",
+      },
+      ctx.env,
+      buyer.accessToken,
+    )
+    expect(purchaseSettle.status).toBe(201)
+    const purchaseBody = await json(purchaseSettle) as {
+      settlement_mode: string
+      settlement_tx_ref: string
+    }
+    expect(purchaseBody.settlement_mode).toBe("royalty_native_story_payment")
+    expect(purchaseBody.settlement_tx_ref).toBe("0xroyalty-multi-parent")
+    expect(royaltySettlementCalls).toEqual([
+      {
+        receiverIpId: "0x1111111111111111111111111111111111111111",
+        amount: "2000000000000000000",
+      },
+    ])
+    expect(parentRoyaltyVaultTransferCalls).toEqual([
+      {
+        childIpId: "0x1111111111111111111111111111111111111111",
+        parentIpId: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        royaltyPolicy: "0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E",
+      },
+      {
+        childIpId: "0x1111111111111111111111111111111111111111",
+        parentIpId: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        royaltyPolicy: "0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E",
+      },
+    ])
+
+    const communityDb = createClient({
+      url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
+    })
+    const rawQuoteId = quoteBody.id.replace(/^pq_/, "")
+    try {
+      const effects = await communityDb.execute({
+        sql: `
+          SELECT effect_kind, effect_key, status, settlement_ref
+          FROM purchase_settlement_effects
+          WHERE quote_id = ?1
+            AND effect_kind = 'story_parent_royalty_vault_transfer'
+          ORDER BY effect_key ASC
+        `,
+        args: [rawQuoteId],
+      })
+      expect(effects.rows.map((row) => ({
+        effect_key: row.effect_key,
+        status: row.status,
+        settlement_ref: row.settlement_ref,
+      }))).toEqual([
+        {
+          effect_key: `${remix.asset.replace(/^asset_/, "")}:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`,
+          status: "confirmed",
+          settlement_ref: "0xparent-vault-aaaa",
+        },
+        {
+          effect_key: `${remix.asset.replace(/^asset_/, "")}:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`,
+          status: "confirmed",
+          settlement_ref: "0xparent-vault-bbbb",
+        },
+      ])
+      await communityDb.execute({
+        sql: `
+          UPDATE purchase_settlement_attempts
+          SET status = 'attempting',
+              failure_reason = NULL,
+              updated_at = '2026-04-21T00:00:00.000Z'
+          WHERE quote_id = ?1
+        `,
+        args: [rawQuoteId],
+      })
+      await communityDb.execute({
+        sql: `
+          UPDATE purchase_settlement_effects
+          SET status = 'submitted',
+              failed_at = NULL,
+              failure_reason = NULL,
+              submitted_at = '2026-04-21T00:00:00.000Z',
+              updated_at = '2026-04-21T00:00:00.000Z'
+          WHERE quote_id = ?1
+            AND effect_kind = 'story_parent_royalty_vault_transfer'
+            AND effect_key = ?2
+        `,
+        args: [rawQuoteId, `${remix.asset.replace(/^asset_/, "")}:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`],
+      })
+    } finally {
+      communityDb.close()
+    }
+
+    const communityRepository = getCommunityRepository(ctx.env)
+    try {
+      const submittedSummary = await reconcileStaleCommunityPurchaseSettlements({
+        env: ctx.env,
+        communityRepository,
+        staleMs: 1,
+      })
+      expect(submittedSummary).toMatchObject({
+        checked: 1,
+        finalized: 0,
+        failed: 0,
+        stillPending: 1,
+        errors: 0,
+      })
+    } finally {
+      communityRepository.close?.()
+    }
+
+    const failedCommunityDb = createClient({
+      url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
+    })
+    try {
+      await failedCommunityDb.execute({
+        sql: `
+          UPDATE purchase_settlement_attempts
+          SET status = 'attempting',
+              failure_reason = NULL,
+              updated_at = '2026-04-21T00:00:00.000Z'
+          WHERE quote_id = ?1
+        `,
+        args: [rawQuoteId],
+      })
+      await failedCommunityDb.execute({
+        sql: `
+          UPDATE purchase_settlement_effects
+          SET status = 'failed',
+              submitted_at = NULL,
+              failed_at = '2026-04-21T00:00:00.000Z',
+              failure_reason = 'second_parent_transfer_failed',
+              updated_at = '2026-04-21T00:00:00.000Z'
+          WHERE quote_id = ?1
+            AND effect_kind = 'story_parent_royalty_vault_transfer'
+            AND effect_key = ?2
+        `,
+        args: [rawQuoteId, `${remix.asset.replace(/^asset_/, "")}:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`],
+      })
+    } finally {
+      failedCommunityDb.close()
+    }
+
+    const failedCommunityRepository = getCommunityRepository(ctx.env)
+    try {
+      const failedSummary = await reconcileStaleCommunityPurchaseSettlements({
+        env: ctx.env,
+        communityRepository: failedCommunityRepository,
+        staleMs: 1,
+      })
+      expect(failedSummary).toMatchObject({
         checked: 1,
         finalized: 0,
         failed: 1,
