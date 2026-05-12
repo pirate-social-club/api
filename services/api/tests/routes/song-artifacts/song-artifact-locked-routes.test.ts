@@ -1738,6 +1738,115 @@ describe("song artifact locked routes", () => {
     expect(postBody.media_refs?.[0]?.storage_ref).toBe("")
     expect(postBody.media_refs?.[0]?.poster_ref).toBe("http://pirate.test/community-media/post_image/locked-video-cover.jpg")
     expect(postBody.media_refs?.[0]?.poster_frame_ms).toBe(2000)
+    expect("preview_video" in (postBody.media_refs?.[0] ?? {})).toBe(false)
+
+    const previewBytes = new TextEncoder().encode("locked-video-preview-bytes")
+    const previewUpload = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "preview_video",
+      mimeType: "video/mp4",
+      filename: "locked-video-preview.mp4",
+      bytes: previewBytes,
+    })
+
+    const createdPreviewPost = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        idempotency_key: "locked-video-commerce-preview-1",
+        post_type: "video",
+        title: "Members-only locked video with trailer",
+        visibility: "members_only",
+        access_mode: "locked",
+        license_preset: "non-commercial",
+        media_refs: [{
+          storage_ref: videoUpload.storage_ref,
+          mime_type: "video/mp4",
+          size_bytes: videoBytes.byteLength,
+          poster_ref: "http://pirate.test/community-media/post_image/locked-video-trailer-cover.jpg",
+          poster_mime_type: "image/jpeg",
+          poster_size_bytes: 3456,
+          poster_width: 1280,
+          poster_height: 720,
+          poster_frame_ms: 2500,
+          preview_video: {
+            storage_ref: previewUpload.storage_ref,
+            mime_type: "video/mp4",
+            size_bytes: previewBytes.byteLength,
+          },
+        }],
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(createdPreviewPost.status).toBe(201)
+    const previewPostBody = await json(createdPreviewPost) as {
+      access_mode: string
+      media_refs?: Array<{
+        storage_ref?: string
+        poster_ref?: string
+        preview_video?: {
+          storage_ref?: string
+          mime_type?: string
+          size_bytes?: number | null
+        }
+      }>
+    }
+    expect(previewPostBody.access_mode).toBe("locked")
+    expect(previewPostBody.media_refs?.[0]?.storage_ref).toBe("")
+    expect(previewPostBody.media_refs?.[0]?.poster_ref).toBe("http://pirate.test/community-media/post_image/locked-video-trailer-cover.jpg")
+    expect(previewPostBody.media_refs?.[0]?.preview_video?.storage_ref).toContain(`/public-communities/${communityId}/song-artifact-uploads/`)
+    expect(previewPostBody.media_refs?.[0]?.preview_video?.mime_type).toBe("video/mp4")
+    expect(previewPostBody.media_refs?.[0]?.preview_video?.size_bytes).toBe(previewBytes.byteLength)
+
+    const previewUrl = previewPostBody.media_refs?.[0]?.preview_video?.storage_ref ?? ""
+    const previewHeadResponse = await app.request(previewUrl, {
+      method: "HEAD",
+    }, ctx.env)
+    expect(previewHeadResponse.status).toBe(200)
+
+    const previewContentResponse = await app.request(previewUrl, {}, ctx.env)
+    expect(previewContentResponse.status).toBe(200)
+    expect(new Uint8Array(await previewContentResponse.arrayBuffer())).toEqual(previewBytes)
+
+    const previewRangeResponse = await app.request(previewUrl, {
+      headers: {
+        range: "bytes=0-3",
+      },
+    }, ctx.env)
+    expect(previewRangeResponse.status).toBe(206)
+    expect(previewRangeResponse.headers.get("accept-ranges")).toBe("bytes")
+    expect(previewRangeResponse.headers.get("content-range")).toBe(`bytes 0-3/${previewBytes.byteLength}`)
+    expect(new Uint8Array(await previewRangeResponse.arrayBuffer())).toEqual(previewBytes.slice(0, 4))
+
+    const wrongPreviewPost = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        idempotency_key: "locked-video-commerce-preview-wrong-kind",
+        post_type: "video",
+        title: "Members-only locked video with invalid trailer",
+        visibility: "members_only",
+        access_mode: "locked",
+        license_preset: "non-commercial",
+        media_refs: [{
+          storage_ref: videoUpload.storage_ref,
+          mime_type: "video/mp4",
+          size_bytes: videoBytes.byteLength,
+          poster_ref: "http://pirate.test/community-media/post_image/locked-video-invalid-cover.jpg",
+          poster_mime_type: "image/jpeg",
+          poster_size_bytes: 3456,
+          preview_video: {
+            storage_ref: videoUpload.storage_ref,
+            mime_type: "video/mp4",
+            size_bytes: videoBytes.byteLength,
+          },
+        }],
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(wrongPreviewPost.status).toBe(404)
 
     const assetResponse = await app.request(
       `http://pirate.test/communities/${communityId}/assets/${postBody.asset}`,

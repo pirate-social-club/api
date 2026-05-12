@@ -160,7 +160,7 @@ export async function uploadSongArtifact(input: {
   env: Env
   communityId: string
   accessToken: string
-  artifactKind: "primary_audio" | "primary_video"
+  artifactKind: "primary_audio" | "primary_video" | "preview_video"
   mimeType: string
   filename: string
   bytes: Uint8Array

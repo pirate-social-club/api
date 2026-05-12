@@ -938,7 +938,7 @@ CREATE TABLE song_artifact_uploads (
     community_id TEXT NOT NULL,
     uploader_user_id TEXT NOT NULL,
     artifact_kind TEXT NOT NULL CHECK (
-        artifact_kind IN ('primary_audio', 'cover_art', 'preview_audio', 'canvas_video', 'instrumental_audio', 'vocal_audio')
+        artifact_kind IN ('primary_audio', 'cover_art', 'preview_audio', 'preview_video', 'canvas_video', 'instrumental_audio', 'vocal_audio')
     ),
     status TEXT NOT NULL CHECK (
         status IN ('pending_upload', 'uploaded', 'failed')
