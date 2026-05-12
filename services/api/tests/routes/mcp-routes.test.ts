@@ -37,6 +37,121 @@ async function mcpCall(env: Record<string, unknown>, body: unknown): Promise<Res
 }
 
 describe("mcp routes", () => {
+  test("find_pirate_boards returns public policy fields", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const creator = await exchangeJwt(ctx.env, "mcp-board-discovery-owner")
+
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO communities (
+          community_id,
+          creator_user_id,
+          display_name,
+          membership_mode,
+          status,
+          provisioning_state,
+          transfer_state,
+          route_slug,
+          namespace_verification_id,
+          pending_namespace_verification_session_id,
+          primary_database_binding_id,
+          created_at,
+          updated_at
+        ) VALUES
+          (?1, ?2, ?3, 'request', 'active', 'active', 'none', ?4, NULL, NULL, NULL, ?5, ?5)
+      `,
+      args: [
+        "cmt_mcp_board_discovery",
+        creator.userId,
+        "MCP Board Discovery",
+        "mcp-board-discovery",
+        "2026-05-12T00:00:00.000Z",
+      ],
+    })
+
+    const response = await mcpCall(ctx.env, {
+      jsonrpc: "2.0",
+      id: "board-discovery",
+      method: "tools/call",
+      params: {
+        name: "find_pirate_boards",
+        arguments: {
+          query: "Discovery",
+        },
+      },
+    })
+    expect(response.status).toBe(200)
+    const body = await json(response) as {
+      result: {
+        structuredContent: {
+          boards: Array<{
+            community: string
+            agent_posting_policy: string
+            agent_posting_scope: string
+            guest_comment_policy: string
+          }>
+        }
+      }
+    }
+    expect(body.result.structuredContent.boards[0]).toMatchObject({
+      community: "com_cmt_mcp_board_discovery",
+      agent_posting_policy: "disallow",
+      agent_posting_scope: "replies_only",
+      guest_comment_policy: "disallow",
+    })
+  })
+
+  test("find_pirate_boards can filter for proof-of-work boards", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const creator = await exchangeJwt(ctx.env, "mcp-pow-board-discovery-owner")
+    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+
+    const communityCreate = await requestJson(
+      "http://pirate.test/communities",
+      {
+        display_name: "MCP PoW Board Discovery",
+        membership_mode: "gated",
+        gate_policy: { version: 1, expression: { op: "gate", gate: { type: "altcha_pow" } } },
+        namespace: {
+          namespace_verification: namespaceVerificationId,
+        },
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(communityCreate.status).toBe(202)
+
+    const response = await mcpCall(ctx.env, {
+      jsonrpc: "2.0",
+      id: "pow-board-discovery",
+      method: "tools/call",
+      params: {
+        name: "find_pirate_boards",
+        arguments: {
+          query: "PoW Board",
+          requires_pow: true,
+        },
+      },
+    })
+    expect(response.status).toBe(200)
+    const body = await json(response) as {
+      result: {
+        structuredContent: {
+          boards: Array<{
+            display_name: string
+            membership_gate_summaries: Array<{ gate_type: string }>
+          }>
+        }
+      }
+    }
+    expect(body.result.structuredContent.boards[0]?.display_name).toBe("MCP PoW Board Discovery")
+    expect(body.result.structuredContent.boards[0]?.membership_gate_summaries).toContainEqual({
+      gate_type: "altcha_pow",
+    })
+  })
+
   test("guest comment flow: prepare, solve ALTCHA, reply, and reject replay", async () => {
     const ctx = await createRouteTestContext({
       ALTCHA_HMAC_SECRET: "test-altcha-secret",

@@ -146,6 +146,18 @@ function communityMarkdown(input: {
           "",
         ]
       : []),
+    ...("agent_posting_policy" in input.preview || "guest_comment_policy" in input.preview
+      ? [
+          "## Agent Access",
+          "",
+          ...("agent_posting_policy" in input.preview ? [`- Agent posting policy: ${input.preview.agent_posting_policy}`] : []),
+          ...("agent_posting_scope" in input.preview ? [`- Agent posting scope: ${input.preview.agent_posting_scope}`] : []),
+          ...("agent_daily_post_cap" in input.preview ? [`- Agent daily post cap: ${input.preview.agent_daily_post_cap ?? "none"}`] : []),
+          ...("agent_daily_reply_cap" in input.preview ? [`- Agent daily reply cap: ${input.preview.agent_daily_reply_cap ?? "none"}`] : []),
+          ...("guest_comment_policy" in input.preview ? [`- Guest comment policy: ${input.preview.guest_comment_policy}`] : []),
+          "",
+        ]
+      : []),
     ...(input.preview.rules?.length
       ? [
           "## Rules",
@@ -399,12 +411,27 @@ publicCommunities.get("/", async (c) => {
 
   const rankedMatches = await repository.searchActiveCommunities({ query, limit: limit + 1 })
 
-  const matches = rankedMatches
+  const matches = await Promise.all(rankedMatches
     .slice(0, limit)
-    .map((community) => ({
-      community: publicCommunityId(community.community_id),
-      display_name: community.display_name,
-      route_slug: community.route_slug,
+    .map(async (community) => {
+      const preview = await getPublicCommunityPreview({
+        env: c.env,
+        communityId: community.community_id,
+        locale: null,
+        communityRepository: repository,
+      }).catch(() => null)
+      return {
+        community: publicCommunityId(community.community_id),
+        display_name: community.display_name,
+        route_slug: community.route_slug,
+        membership_mode: preview?.membership_mode ?? "gated",
+        guest_comment_policy: preview?.guest_comment_policy ?? "disallow",
+        agent_posting_policy: preview?.agent_posting_policy ?? "disallow",
+        agent_posting_scope: preview?.agent_posting_scope ?? "replies_only",
+        agent_daily_post_cap: preview?.agent_daily_post_cap ?? null,
+        agent_daily_reply_cap: preview?.agent_daily_reply_cap ?? null,
+        membership_gate_summaries: preview?.membership_gate_summaries ?? [],
+      }
     }))
 
   return c.json({

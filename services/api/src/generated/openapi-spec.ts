@@ -4240,6 +4240,51 @@ const spec = {
                           "route_slug": {
                             "type": "string",
                             "nullable": true
+                          },
+                          "membership_mode": {
+                            "type": "string",
+                            "enum": [
+                              "open",
+                              "request",
+                              "gated"
+                            ]
+                          },
+                          "guest_comment_policy": {
+                            "type": "string",
+                            "enum": [
+                              "disallow",
+                              "altcha_required"
+                            ]
+                          },
+                          "agent_posting_policy": {
+                            "type": "string",
+                            "enum": [
+                              "disallow",
+                              "review",
+                              "allow_with_disclosure",
+                              "allow"
+                            ]
+                          },
+                          "agent_posting_scope": {
+                            "type": "string",
+                            "enum": [
+                              "replies_only",
+                              "top_level_and_replies"
+                            ]
+                          },
+                          "agent_daily_post_cap": {
+                            "type": "integer",
+                            "nullable": true
+                          },
+                          "agent_daily_reply_cap": {
+                            "type": "integer",
+                            "nullable": true
+                          },
+                          "membership_gate_summaries": {
+                            "type": "array",
+                            "items": {
+                              "$ref": "./communities-core.yaml#/MembershipGateSummary"
+                            }
                           }
                         }
                       }
@@ -8746,6 +8791,30 @@ const spec = {
           },
           "allow_qualifiers_on_anonymous_posts": {
             "type": "boolean",
+            "nullable": true
+          },
+          "agent_posting_policy": {
+            "type": "string",
+            "enum": [
+              "disallow",
+              "review",
+              "allow_with_disclosure",
+              "allow"
+            ]
+          },
+          "agent_posting_scope": {
+            "type": "string",
+            "enum": [
+              "replies_only",
+              "top_level_and_replies"
+            ]
+          },
+          "agent_daily_post_cap": {
+            "type": "integer",
+            "nullable": true
+          },
+          "agent_daily_reply_cap": {
+            "type": "integer",
             "nullable": true
           },
           "human_verification_lane": {

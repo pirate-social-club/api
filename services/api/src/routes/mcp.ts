@@ -11,6 +11,7 @@ import { getCommunityRepository } from "../lib/communities/db-community-reposito
 import { openCommunityDb } from "../lib/communities/community-db-factory"
 import { resolveCommunityIdentifier } from "../lib/communities/community-identifier"
 import { loadCommunityProjection } from "../lib/communities/create/repository"
+import { getPublicCommunityPreview } from "../lib/communities/community-preview-service"
 import { isCommunityLive } from "../lib/communities/community-status"
 import { upsertCommunityMembership } from "../lib/communities/membership/membership-state-store"
 import { createComment } from "../lib/comments/comment-service"
@@ -26,7 +27,7 @@ import { serializeComment } from "../serializers/comment"
 import { serializePost } from "../serializers/post"
 import type { Env } from "../env"
 import type { AgentActionProof, CreatePostRequest } from "../types"
-import { decodePublicCommentId, decodePublicPostId } from "../lib/public-ids"
+import { decodePublicCommentId, decodePublicPostId, publicCommunityId } from "../lib/public-ids"
 import {
   createAltchaChallenge,
   enforceAltchaChallengeRateLimit,
@@ -71,6 +72,15 @@ type McpReplyArguments = {
   altcha?: unknown
 }
 
+type McpFindPirateBoardsArguments = {
+  query?: unknown
+  limit?: unknown
+  can_post_top_level?: unknown
+  can_reply?: unknown
+  guest_reply?: unknown
+  requires_pow?: unknown
+}
+
 const mcp = new Hono<{ Bindings: Env }>()
 type McpContext = Context<{ Bindings: Env }>
 
@@ -112,6 +122,15 @@ function readRequiredString(value: unknown, field: string): string {
 function readOptionalString(value: unknown): string | undefined {
   const text = typeof value === "string" ? value.trim() : ""
   return text || undefined
+}
+
+function readOptionalBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined
+}
+
+function readLimit(value: unknown, fallback = 10): number {
+  const raw = typeof value === "number" ? value : Number.NaN
+  return Number.isFinite(raw) ? Math.min(Math.max(Math.trunc(raw), 1), 25) : fallback
 }
 
 function readAgentActionProof(value: unknown): AgentActionProof | null {
@@ -292,6 +311,74 @@ async function callCreatePostTool(c: McpContext, rawArgs: unknown) {
     ],
     structuredContent: {
       post,
+    },
+  }
+}
+
+async function callFindPirateBoardsTool(c: McpContext, rawArgs: unknown) {
+  const args = (rawArgs == null ? {} : readRecord(rawArgs, "find_pirate_boards arguments must be an object")) as McpFindPirateBoardsArguments
+  const query = readOptionalString(args.query)
+  const limit = readLimit(args.limit)
+  const canPostTopLevel = readOptionalBoolean(args.can_post_top_level)
+  const canReply = readOptionalBoolean(args.can_reply)
+  const guestReply = readOptionalBoolean(args.guest_reply)
+  const requiresPow = readOptionalBoolean(args.requires_pow)
+  const communityRepository = getCommunityRepository(c.env)
+  const communities = query
+    ? await communityRepository.searchActiveCommunities({ query, limit: limit * 2 })
+    : await communityRepository.listActiveCommunities({ limit: limit * 2 })
+  const previews = await Promise.all(communities.map(async (community) => {
+    const preview = await getPublicCommunityPreview({
+      env: c.env,
+      communityId: community.community_id,
+      locale: null,
+      communityRepository,
+    }).catch(() => null)
+    return {
+      community: publicCommunityId(community.community_id),
+      display_name: preview?.display_name ?? community.display_name,
+      route_slug: preview?.route_slug ?? community.route_slug,
+      membership_mode: preview?.membership_mode ?? "gated",
+      guest_comment_policy: preview?.guest_comment_policy ?? "disallow",
+      agent_posting_policy: preview?.agent_posting_policy ?? "disallow",
+      agent_posting_scope: preview?.agent_posting_scope ?? "replies_only",
+      agent_daily_post_cap: preview?.agent_daily_post_cap ?? null,
+      agent_daily_reply_cap: preview?.agent_daily_reply_cap ?? null,
+      membership_gate_summaries: preview?.membership_gate_summaries ?? [],
+    }
+  }))
+  const boards = previews.filter((board) => {
+    if (canPostTopLevel === true && (
+      board.agent_posting_policy === "disallow"
+      || board.agent_posting_scope !== "top_level_and_replies"
+    )) {
+      return false
+    }
+    if (canReply === true && board.agent_posting_policy === "disallow") {
+      return false
+    }
+    if (guestReply === true && board.guest_comment_policy !== "altcha_required") {
+      return false
+    }
+    if (
+      requiresPow === true
+      && !board.membership_gate_summaries.some((summary) => summary.gate_type === "altcha_pow")
+    ) {
+      return false
+    }
+    return true
+  }).slice(0, limit)
+
+  return {
+    content: [
+      {
+        type: "text",
+        text: `Found ${boards.length} Pirate board${boards.length === 1 ? "" : "s"}.`,
+      },
+    ],
+    structuredContent: {
+      query: query ?? null,
+      boards,
     },
   }
 }
@@ -492,6 +579,9 @@ mcp.post("/", async (c) => {
     }
     if (request.method === "tools/call") {
       const params = readRecord(request.params, "tools/call params are required") as McpToolCallParams
+      if (params.name === "find_pirate_boards") {
+        return jsonRpcResult(request.id, await callFindPirateBoardsTool(c, params.arguments))
+      }
       if (params.name === "create_post") {
         return jsonRpcResult(request.id, await callCreatePostTool(c, params.arguments))
       }

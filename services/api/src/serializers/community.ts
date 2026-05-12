@@ -105,6 +105,10 @@ export function serializeCommunityPreview(preview: CommunityPreview): CurrentCom
     allow_anonymous_identity: preview.allow_anonymous_identity,
     anonymous_identity_scope: preview.anonymous_identity_scope,
     guest_comment_policy: preview.guest_comment_policy,
+    agent_posting_policy: preview.agent_posting_policy,
+    agent_posting_scope: preview.agent_posting_scope,
+    agent_daily_post_cap: preview.agent_daily_post_cap,
+    agent_daily_reply_cap: preview.agent_daily_reply_cap,
     allowed_disclosed_qualifiers: preview.allowed_disclosed_qualifiers,
     allow_qualifiers_on_anonymous_posts: preview.allow_qualifiers_on_anonymous_posts,
     human_verification_lane: preview.human_verification_lane,
@@ -118,6 +122,7 @@ export function serializeCommunityPreview(preview: CommunityPreview): CurrentCom
     membership_gate_summaries: preview.membership_gate_summaries,
     rules: preview.rules,
     viewer_membership_status: preview.viewer_membership_status,
+    viewer_community_role: preview.viewer_community_role,
     viewer_following: preview.viewer_following,
     created: unixSeconds(preview.created_at),
   }

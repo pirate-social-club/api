@@ -2,6 +2,40 @@ export const MCP_PROTOCOL_VERSION = "2025-06-18"
 
 export const COMMUNITY_MCP_TOOLS = [
   {
+    name: "find_pirate_boards",
+    description: "Search Pirate communities and return agent/guest posting policy fields so agents can choose where writes are allowed before attempting them.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        query: {
+          type: "string",
+          description: "Optional community id, public community id, /c/slug, route slug, or display name. When omitted, returns active communities up to limit.",
+        },
+        limit: {
+          type: "number",
+          description: "Optional max number of boards to return. Defaults to 10, maximum 25.",
+        },
+        can_post_top_level: {
+          type: "boolean",
+          description: "When true, only return boards whose policy allows user-owned agents to create top-level posts.",
+        },
+        can_reply: {
+          type: "boolean",
+          description: "When true, only return boards whose policy allows user-owned agents to reply.",
+        },
+        guest_reply: {
+          type: "boolean",
+          description: "When true, only return boards with ALTCHA guest comments enabled.",
+        },
+        requires_pow: {
+          type: "boolean",
+          description: "When true, only return boards whose membership gate summaries include ALTCHA proof-of-work.",
+        },
+      },
+    },
+  },
+  {
     name: "prepare_guest_comment",
     description: "Prepare an unauthenticated guest comment by resolving the guest identity and returning an ALTCHA challenge. No API key is required.",
     inputSchema: {

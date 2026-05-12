@@ -87,6 +87,32 @@ function parsePreviewGuestCommentPolicy(
   return settings.guest_comment_policy === "altcha_required" ? "altcha_required" : "disallow"
 }
 
+function parsePreviewAgentPostingPolicy(
+  settings: Record<string, unknown>,
+): CommunityPreview["agent_posting_policy"] {
+  const rawValue = settings.agent_posting_policy
+  if (rawValue === "review" || rawValue === "allow_with_disclosure" || rawValue === "allow") {
+    return rawValue
+  }
+  return "disallow"
+}
+
+function parsePreviewAgentPostingScope(
+  settings: Record<string, unknown>,
+): CommunityPreview["agent_posting_scope"] {
+  return settings.agent_posting_scope === "top_level_and_replies"
+    ? "top_level_and_replies"
+    : "replies_only"
+}
+
+function parsePreviewPositiveInteger(
+  settings: Record<string, unknown>,
+  key: string,
+): number | null {
+  const value = settings[key]
+  return Number.isInteger(value) && typeof value === "number" && value > 0 ? value : null
+}
+
 function parsePreviewHumanVerificationLane(
   settings: Record<string, unknown>,
   summaries: NonNullable<CommunityPreview["membership_gate_summaries"]>,
@@ -259,6 +285,7 @@ async function buildPreviewForViewer(input: {
           : membership && canAccessCommunity(membership)
             ? "member"
             : "not_member",
+      viewerCommunityRole: membership?.role_status === "active" ? membership.role : null,
       viewerFollowing: followStatus === "active",
     })
   } finally {
@@ -308,6 +335,7 @@ export async function getPublicCommunityPreviewFromCommunityDb(input: {
     locale: input.locale ?? null,
     gatePolicy,
     viewerMembershipStatus: "not_member",
+    viewerCommunityRole: null,
     viewerFollowing: false,
   })
 }
@@ -352,6 +380,7 @@ async function buildCommunityPreview(input: {
   locale?: string | null
   gatePolicy: GatePolicy | null
   viewerMembershipStatus: CommunityPreview["viewer_membership_status"]
+  viewerCommunityRole: CommunityPreview["viewer_community_role"]
   viewerFollowing: boolean
 }): Promise<CommunityPreview> {
   const localResult = await input.client.execute({
@@ -463,6 +492,10 @@ async function buildCommunityPreview(input: {
     allow_anonymous_identity: Number(localRow?.allow_anonymous_identity ?? 0) === 1,
     anonymous_identity_scope: anonymousIdentityScope,
     guest_comment_policy: parsePreviewGuestCommentPolicy(settings),
+    agent_posting_policy: parsePreviewAgentPostingPolicy(settings),
+    agent_posting_scope: parsePreviewAgentPostingScope(settings),
+    agent_daily_post_cap: parsePreviewPositiveInteger(settings, "agent_daily_post_cap"),
+    agent_daily_reply_cap: parsePreviewPositiveInteger(settings, "agent_daily_reply_cap"),
     allowed_disclosed_qualifiers: parsePreviewAllowedDisclosedQualifiers(settings),
     allow_qualifiers_on_anonymous_posts: parsePreviewAllowQualifiersOnAnonymousPosts(settings),
     human_verification_lane: parsePreviewHumanVerificationLane(settings, membershipGateSummaries),
@@ -476,6 +509,7 @@ async function buildCommunityPreview(input: {
     reference_links: referenceLinks,
     membership_gate_summaries: membershipGateSummaries,
     viewer_membership_status: input.viewerMembershipStatus,
+    viewer_community_role: input.viewerCommunityRole,
     viewer_following: input.viewerFollowing,
     created_at: input.communityCreatedAt,
   }

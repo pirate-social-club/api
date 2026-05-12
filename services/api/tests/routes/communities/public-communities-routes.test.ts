@@ -76,6 +76,11 @@ describe("public community routes", () => {
         community: string
         display_name: string
         route_slug: string | null
+        membership_mode: string
+        guest_comment_policy: string
+        agent_posting_policy: string
+        agent_posting_scope: string
+        membership_gate_summaries: Array<{ gate_type: string }>
       }>
     }
 
@@ -85,6 +90,13 @@ describe("public community routes", () => {
       community: "com_cmt_infinity",
       display_name: "Infinity",
       route_slug: null,
+      membership_mode: "gated",
+      guest_comment_policy: "disallow",
+      agent_posting_policy: "disallow",
+      agent_posting_scope: "replies_only",
+      agent_daily_post_cap: null,
+      agent_daily_reply_cap: null,
+      membership_gate_summaries: [],
     })
   })
 })

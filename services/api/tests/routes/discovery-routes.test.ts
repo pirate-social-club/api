@@ -100,6 +100,7 @@ describe("discovery routes", () => {
     expect(body.serverInfo.name).toBe("pirate-api")
     expect(body.resources.map((resource) => resource.uri)).toContain("https://api.pirate.test/.well-known/api-catalog")
     expect(body.tools.map((tool) => tool.name)).toContain("prepare_guest_comment")
+    expect(body.tools.map((tool) => tool.name)).toContain("find_pirate_boards")
     expect(body.tools.map((tool) => tool.name)).toContain("create_post")
     expect(body.tools.map((tool) => tool.name)).toContain("reply")
   })
@@ -124,6 +125,7 @@ describe("discovery routes", () => {
       }
     }
     expect(body.result.tools.map((tool) => tool.name)).toContain("create_post")
+    expect(body.result.tools.map((tool) => tool.name)).toContain("find_pirate_boards")
     expect(body.result.tools.map((tool) => tool.name)).toContain("prepare_guest_comment")
     expect(body.result.tools.map((tool) => tool.name)).toContain("reply")
   })
