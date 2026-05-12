@@ -131,6 +131,9 @@ describe("mcp routes", () => {
     }
     const challenge = prepareResult.result?.structuredContent?.challenge
     expect(challenge).toBeDefined()
+    if (!challenge) {
+      throw new Error("ALTCHA challenge was not returned")
+    }
     expect(prepareResult.result?.structuredContent?.scope).toBe("comment_create")
 
     const solution = await solveChallenge({ challenge, deriveKey })
@@ -345,6 +348,9 @@ describe("mcp routes", () => {
     }
     const challenge = prepareResult.result?.structuredContent?.challenge
     expect(challenge).toBeDefined()
+    if (!challenge) {
+      throw new Error("ALTCHA challenge was not returned")
+    }
 
     // Solve ALTCHA
     const solution = await solveChallenge({ challenge, deriveKey })

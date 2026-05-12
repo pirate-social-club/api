@@ -719,11 +719,6 @@ async function seedComment(
   }
 }
 
-function requireLink(response: Response, expectedPath: string): void {
-  const link = response.headers.get("link")
-  if (!link?.includes(expectedPath)) throw new Error(`Response missing Link header containing ${expectedPath}`)
-}
-
 async function verifyPost(ctx: SeedContext, postId: string): Promise<void> {
   const post = await requestJson<{ links?: Record<string, { href?: string }> }>({
     apiUrl: ctx.apiUrl,
