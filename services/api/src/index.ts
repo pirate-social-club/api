@@ -29,6 +29,7 @@ import profileMedia from "./routes/profile-media"
 import profiles from "./routes/profiles"
 import users from "./routes/users"
 import verification from "./routes/verification"
+import walletIdentities from "./routes/wallet-identities"
 import { buildPublicReadCacheKey, isPublicReadCacheRequest, isPublicReadCacheResponse } from "./routes/cache-headers"
 import { flushAnalyticsOutbox, isAnalyticsEnabled, syncCommunityHealthCounts } from "./lib/analytics"
 import { getCommunityRepository } from "./lib/communities/db-community-repository"
@@ -151,6 +152,7 @@ app.route("/profile-media", profileMedia)
 app.route("/users", users)
 app.route("/onboarding", onboarding)
 app.route("/profiles", profiles)
+app.route("/wallet-identities", walletIdentities)
 app.route("/", verification)
 
 app.get("/__debug/sentry-error", (c) => {
