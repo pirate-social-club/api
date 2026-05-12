@@ -3,6 +3,11 @@ import { Interface, JsonRpcProvider, Wallet, getAddress } from "ethers"
 // @ts-expect-error The API tsconfig only loads bun-types/test, but this script runs under Bun.
 import { Database } from "bun:sqlite"
 import { join } from "node:path"
+import { NativeRoyaltyPolicy, StoryClient, WIP_TOKEN_ADDRESS } from "@story-protocol/core-sdk"
+import { http } from "viem"
+import { privateKeyToAccount } from "viem/accounts"
+import { normalizeDirectSignerPrivateKey } from "../src/lib/story/story-direct-signer"
+import { resolveStoryChainId, resolveStoryRpcUrl } from "../src/lib/story/story-runtime-config"
 import { readDevVarsFromCwd, readWranglerVarsFromCwd } from "./_lib/dev-vars"
 
 type SmokeSession = {
@@ -487,6 +492,10 @@ function resolveCheckoutChainName(chainId: number): string {
   return `Chain ${chainId}`
 }
 
+function resolveStoryChainName(chainId: number): "aeneid" | "mainnet" {
+  return chainId === 1514 ? "mainnet" : "aeneid"
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -621,6 +630,43 @@ async function settleListingPurchase(input: {
   if (!settlement.settlement_tx_ref) {
     throw new Error(`purchase settlement is missing settlement_tx_ref: ${JSON.stringify(settlement)}`)
   }
+}
+
+function resolveStorySmokePrivateKey(env: Record<string, string | undefined>): `0x${string}` {
+  const privateKey = normalizeDirectSignerPrivateKey(
+    readEnv("PIRATE_SMOKE_STORY_PRIVATE_KEY")
+      || env.STORY_OPERATOR_PRIVATE_KEY
+      || env.STORY_RUNTIME_PRIVATE_KEY
+      || env.MUSIC_PURCHASE_STORY_SETTLEMENT_PRIVATE_KEY,
+  )
+  if (!privateKey) {
+    throw new Error("PIRATE_SMOKE_STORY_PRIVATE_KEY or STORY_OPERATOR_PRIVATE_KEY is required")
+  }
+  return privateKey as `0x${string}`
+}
+
+async function transferOriginalRevenueToVault(input: {
+  env: Record<string, string | undefined>
+  originalStoryIp: string
+  remixStoryIp: string
+}): Promise<void> {
+  const chainId = resolveStoryChainId(input.env)
+  const storyClient = StoryClient.newClient({
+    account: privateKeyToAccount(resolveStorySmokePrivateKey(input.env)),
+    transport: http(resolveStoryRpcUrl(input.env)),
+    chainId: resolveStoryChainName(chainId),
+  })
+  const result = await storyClient.royalty.transferToVault({
+    ipId: input.remixStoryIp as `0x${string}`,
+    ancestorIpId: input.originalStoryIp as `0x${string}`,
+    royaltyPolicy: NativeRoyaltyPolicy.LAP,
+    token: WIP_TOKEN_ADDRESS,
+  })
+  console.log("[smoke] original parent royalty transferred to vault", {
+    original_story_ip: input.originalStoryIp,
+    remix_story_ip: input.remixStoryIp,
+    tx: result.txHash,
+  })
 }
 
 async function pollOriginalClaimable(input: {
@@ -864,7 +910,12 @@ async function main(): Promise<void> {
         listing: listing.id,
         buyer,
       })
-      if (originalAsset.story_ip) {
+      if (originalAsset.story_ip && remixAsset.story_ip) {
+        await transferOriginalRevenueToVault({
+          env,
+          originalStoryIp: originalAsset.story_ip,
+          remixStoryIp: remixAsset.story_ip,
+        })
         await pollOriginalClaimable({
           apiBaseUrl,
           author,
