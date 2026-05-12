@@ -1,7 +1,7 @@
 import { SignJWT } from "jose"
 import { createClient, type Client } from "@libsql/client"
 import { generateKeyPairSync, randomUUID } from "node:crypto"
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -32,6 +32,14 @@ import { splitSqlStatements, toSqliteCompatibleStatements } from "../shared/sql-
 
 const encoder = new TextEncoder()
 const ROUTE_TEST_LOCK_PATH = join(tmpdir(), "pirate-api-route-test-lock")
+const ROUTE_TEST_LOCK_METADATA_PATH = join(ROUTE_TEST_LOCK_PATH, "owner.json")
+const ROUTE_TEST_LOCK_STALE_MS = 10 * 60 * 1000
+
+type RouteTestLockMetadata = {
+  ownerId: string
+  pid: number
+  acquiredAt: number
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -39,23 +47,83 @@ function sleep(ms: number): Promise<void> {
 
 async function acquireRouteTestLock(timeoutMs = 30000): Promise<() => Promise<void>> {
   const startedAt = Date.now()
+  const ownerId = randomUUID()
 
   while (true) {
     try {
       await mkdir(ROUTE_TEST_LOCK_PATH)
+      await writeFile(ROUTE_TEST_LOCK_METADATA_PATH, JSON.stringify({
+        ownerId,
+        pid: process.pid,
+        acquiredAt: Date.now(),
+      } satisfies RouteTestLockMetadata))
       return async () => {
-        await rm(ROUTE_TEST_LOCK_PATH, { recursive: true, force: true })
+        const metadata = await readRouteTestLockMetadata()
+        if (metadata?.ownerId === ownerId) {
+          await rm(ROUTE_TEST_LOCK_PATH, { recursive: true, force: true })
+        }
       }
     } catch (error) {
       if (!(error instanceof Error) || !("code" in error) || error.code !== "EEXIST") {
         throw error
       }
+      if (await isRouteTestLockStale()) {
+        await rm(ROUTE_TEST_LOCK_PATH, { recursive: true, force: true })
+        continue
+      }
       if (Date.now() - startedAt >= timeoutMs) {
-        throw new Error(`Timed out waiting for route test lock after ${timeoutMs}ms`)
+        const metadata = await readRouteTestLockMetadata()
+        throw new Error(`Timed out waiting for route test lock after ${timeoutMs}ms (${formatRouteTestLockMetadata(metadata)})`)
       }
       await sleep(25)
     }
   }
+}
+
+async function readRouteTestLockMetadata(): Promise<RouteTestLockMetadata | null> {
+  try {
+    const rawMetadata = await readFile(ROUTE_TEST_LOCK_METADATA_PATH, "utf8")
+    const metadata = JSON.parse(rawMetadata) as Partial<RouteTestLockMetadata>
+    if (
+      typeof metadata.ownerId === "string"
+      && typeof metadata.pid === "number"
+      && Number.isInteger(metadata.pid)
+      && typeof metadata.acquiredAt === "number"
+    ) {
+      return metadata as RouteTestLockMetadata
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function isRouteTestLockStale(): Promise<boolean> {
+  const metadata = await readRouteTestLockMetadata()
+  if (!metadata) {
+    try {
+      const lockStats = await stat(ROUTE_TEST_LOCK_PATH)
+      return Date.now() - lockStats.mtimeMs >= ROUTE_TEST_LOCK_STALE_MS
+    } catch {
+      return true
+    }
+  }
+  if (Date.now() - metadata.acquiredAt >= ROUTE_TEST_LOCK_STALE_MS) return true
+  return !isProcessAlive(metadata.pid)
+}
+
+function formatRouteTestLockMetadata(metadata: RouteTestLockMetadata | null): string {
+  if (!metadata) return "lock metadata unavailable"
+  return `owner pid ${metadata.pid}, acquired ${new Date(metadata.acquiredAt).toISOString()}`
 }
 
 export function resetMemoryStore(): void {
@@ -198,32 +266,42 @@ export async function createControlPlaneTestClient(options?: {
   cleanup: () => Promise<void>
 }> {
   const serviceRoot = fileURLToPath(new URL("..", import.meta.url))
-  const databasePath = join(tmpdir(), `pirate-api-auth-${randomUUID()}.db`)
+  const tempDir = await mkdtemp(join(tmpdir(), "pirate-api-auth-"))
+  const databasePath = join(tempDir, "control-plane.db")
   const client = createClient({
     url: `file:${databasePath}`,
   })
 
-  if (options?.includeAllMigrations) {
-    const storage = resolveLocalDevStorage({
-      CONTROL_PLANE_DATABASE_URL: `file:${databasePath}`,
-      LOCAL_COMMUNITY_DB_ROOT: join(tmpdir(), `pirate-api-community-${randomUUID()}`),
-    }, serviceRoot)
-    await applyLocalControlPlaneMigrations(storage)
-  } else {
-    await applySqlFile(client, resolveCoreRepoPath("db/control-plane/migrations/0000_control_plane_baseline_postgres.sql", {
-      serviceRoot,
-    }))
-    await applySqlFile(client, resolveCoreRepoPath("db/control-plane/migrations/0059_control_plane_identity_nullifiers.sql", {
-      serviceRoot,
-    }))
+  try {
+    if (options?.includeAllMigrations) {
+      const storage = resolveLocalDevStorage({
+        CONTROL_PLANE_DATABASE_URL: `file:${databasePath}`,
+        LOCAL_COMMUNITY_DB_ROOT: join(tempDir, "community-dbs"),
+      }, serviceRoot)
+      await applyLocalControlPlaneMigrations(storage)
+    } else {
+      await applySqlFile(client, resolveCoreRepoPath("db/control-plane/migrations/0000_control_plane_baseline_postgres.sql", {
+        serviceRoot,
+      }))
+      await applySqlFile(client, resolveCoreRepoPath("db/control-plane/migrations/0059_control_plane_identity_nullifiers.sql", {
+        serviceRoot,
+      }))
+    }
+  } catch (error) {
+    client.close()
+    await rm(tempDir, { recursive: true, force: true })
+    throw error
   }
 
   return {
     client,
     databasePath,
     cleanup: async () => {
-      client.close()
-      await rm(databasePath, { force: true })
+      try {
+        client.close()
+      } finally {
+        await rm(tempDir, { recursive: true, force: true })
+      }
     },
   }
 }

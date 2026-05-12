@@ -166,9 +166,6 @@ describe("mcp routes", () => {
       }
       error?: { message: string; code?: number }
     }
-    if (replyResult.error) {
-      console.error("MCP reply error:", JSON.stringify(replyResult.error))
-    }
     expect(replyResult.error).toBeUndefined()
     expect(replyResult.result?.structuredContent?.comment?.id).toBeDefined()
 

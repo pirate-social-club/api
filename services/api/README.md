@@ -136,6 +136,17 @@ Enforcement rules:
 
 ## Test Coverage
 
+Use the focused test entry points by default:
+
+```bash
+rtk bun run test:unit
+rtk bun run test:routes
+```
+
+`test:unit` covers co-located library tests in `src/` and shared library tests in `tests/lib/`. `test:routes` covers route integration tests in `tests/routes/` plus route-style root tests that use `createRouteTestContext()`. Route tests run serially until the remaining process-global test state is isolated.
+
+New pure library tests should be co-located next to the implementation under `src/**/*.test.ts`. Route and HTTP integration tests should stay under `tests/routes/`, with shared route helpers kept near the relevant route group unless they are used across multiple groups.
+
 Generate a report-only coverage baseline:
 
 ```bash
