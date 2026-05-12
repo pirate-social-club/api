@@ -233,14 +233,15 @@ export async function createAssetForPost(input: {
   }
 
   try {
-    if (shouldRegisterRoyalty && !creatorWalletAddress) {
+    const shouldRunRoyaltyRegistration = shouldRegisterRoyalty && storyRoyaltyRegistrationStatus !== "registered"
+    if (shouldRunRoyaltyRegistration && !creatorWalletAddress) {
       creatorWalletAddress = await resolvePrimaryWalletAddress({
         env: input.env,
         userRepository: input.userRepository,
         userId: input.post.author_user_id ?? "",
       })
     }
-    const royaltyRegistration = shouldRegisterRoyalty
+    const royaltyRegistration = shouldRunRoyaltyRegistration
       ? await maybeRegisterStoryRoyaltyForAsset({
           env: input.env,
           client: input.client,

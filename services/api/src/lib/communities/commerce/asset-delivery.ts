@@ -58,6 +58,57 @@ type LockedDeliverySecret = {
 
 const abiCoder = AbiCoder.defaultAbiCoder()
 
+type LockedAssetDeliveryResult = {
+  storyStatus: Asset["story_status"]
+  storyPublishTxRef: string
+  storyIpId: string | null
+  storyRoyaltyPolicyId: string | null
+  storyDerivativeParentIpIdsJson: string | null
+  storyRoyaltyRegistrationStatus: "none" | "pending" | "registered" | "failed" | null
+  storyAssetVersionId: string
+  storyCdrVaultUuid: number
+  storyNamespace: string
+  storyEntitlementTokenId: string
+  storyReadCondition: string
+  storyWriteCondition: string
+  lockedDeliveryStatus: Asset["locked_delivery_status"]
+  lockedDeliveryRef: string
+  lockedDeliveryStorageRef: string
+  lockedDeliveryMetadataJson: string
+}
+
+let testLockedAssetDeliveryPreparer: ((input: {
+  env: Env
+  communityId: string
+  assetId: string
+  creatorWalletAddress: string
+  storageRef: string
+  mimeType: string
+  contentHash: string | null
+  artifactKind: SongArtifactUpload["artifact_kind"]
+  bundleId: string | null
+  rightsBasis: Post["rights_basis"]
+  upstreamAssetRefs: string[] | null
+}) => Promise<LockedAssetDeliveryResult>) | null = null
+
+export function setLockedAssetDeliveryPreparerForTests(
+  preparer: ((input: {
+    env: Env
+    communityId: string
+    assetId: string
+    creatorWalletAddress: string
+    storageRef: string
+    mimeType: string
+    contentHash: string | null
+    artifactKind: SongArtifactUpload["artifact_kind"]
+    bundleId: string | null
+    rightsBasis: Post["rights_basis"]
+    upstreamAssetRefs: string[] | null
+  }) => Promise<LockedAssetDeliveryResult>) | null,
+): void {
+  testLockedAssetDeliveryPreparer = preparer
+}
+
 function toOwnedBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
   return new Uint8Array(bytes)
 }
@@ -266,6 +317,10 @@ export async function prepareLockedAssetDelivery(input: {
   lockedDeliveryStorageRef: string
   lockedDeliveryMetadataJson: string
 }> {
+  if (testLockedAssetDeliveryPreparer) {
+    return await testLockedAssetDeliveryPreparer(input)
+  }
+
   const controlPlaneClient = getControlPlaneClient(input.env)
   const upload = await findUploadedSongArtifactByStorageRef({
     client: controlPlaneClient,

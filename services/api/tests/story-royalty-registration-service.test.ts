@@ -5,6 +5,7 @@ import { join } from "node:path"
 import type { CommunityDatabaseBindingRepository } from "../src/lib/communities/db-community-repository"
 import type { ProfileRepository } from "../src/lib/auth/repositories"
 import { openCommunityDb } from "../src/lib/communities/community-db-factory"
+import { setLockedAssetDeliveryPreparerForTests } from "../src/lib/communities/commerce/asset-delivery"
 import { createSongAssetForPost, listCommunityDerivativeSources } from "../src/lib/communities/commerce/service"
 import { insertPost } from "../src/lib/posts/community-post-store"
 import {
@@ -17,6 +18,7 @@ import type { Env, Profile, SongArtifactBundle, User, WalletAttachmentSummary } 
 const cleanupPaths: string[] = []
 
 afterEach(async () => {
+  setLockedAssetDeliveryPreparerForTests(null)
   setStoryRoyaltyRegistrarForTests(null)
   await Promise.all(cleanupPaths.splice(0).map((path) => rm(path, { recursive: true, force: true })))
 })
@@ -276,15 +278,156 @@ describe("story royalty registration service", () => {
   })
 
   test("marks royalty-enabled assets failed instead of leaving pending when registration is unavailable", async () => {
-    const rootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-unavailable-"))
+    async function createUnavailableAsset(input: {
+      env: Env
+      communityId: string
+      userId: string
+      title: string
+      assetId: string
+    }) {
+      const repo = buildRepository()
+      const now = "2026-04-21T00:00:00.000Z"
+      await seedStoryCommunity({
+        env: input.env,
+        repo,
+        communityId: input.communityId,
+        userId: input.userId,
+      })
+
+      const db = await openCommunityDb(input.env, repo, input.communityId)
+      try {
+        const post = await insertPost({
+          client: db.client,
+          communityId: input.communityId,
+          authorUserId: input.userId,
+          body: {
+            post_type: "song",
+            identity_mode: "public",
+            title: input.title,
+            idempotency_key: `${input.assetId}-post`,
+            song_mode: "original",
+            rights_basis: "original",
+            access_mode: "public",
+          },
+          createdAt: now,
+        })
+        const assetPost = {
+          ...post,
+          asset_id: input.assetId,
+        }
+
+        return {
+          repo,
+          asset: await createSongAssetForPost({
+            env: input.env,
+            client: db.client,
+            communityId: input.communityId,
+            post: assetPost,
+            bundle: buildBundle({ id: `sab_${input.assetId}`, title: input.title }),
+            licensePreset: "commercial-remix",
+            commercialRevSharePct: 10,
+            userRepository: {
+              async getUserById(requestedUserId) {
+                return requestedUserId === input.userId ? buildUser(input.userId) : null
+              },
+              async getWalletAttachmentsByUserId() {
+                return [buildWalletAttachment()]
+              },
+              async getWalletAttachmentById() {
+                return null
+              },
+            },
+          }),
+        }
+      } finally {
+        db.close()
+      }
+    }
+
+    const configMissingRootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-config-missing-"))
+    cleanupPaths.push(configMissingRootDir)
+    const configMissingEnv = { LOCAL_COMMUNITY_DB_ROOT: configMissingRootDir } as Env
+    const configMissingCommunityId = "cmt_story_royalty_config_missing"
+    const configMissingUserId = "usr_author_story_config_missing"
+    const configMissing = await createUnavailableAsset({
+      env: configMissingEnv,
+      communityId: configMissingCommunityId,
+      userId: configMissingUserId,
+      title: "Config missing song",
+      assetId: "ast_config_missing_song",
+    })
+
+    expect(configMissing.asset.story_royalty_registration_status).toBe("failed")
+    expect(configMissing.asset.publication_status).toBe("draft")
+    expect(configMissing.asset.story_status).toBe("none")
+    expect(configMissing.asset.story_error).toContain("story_royalty_config_missing")
+
+    const configMissingSources = await listCommunityDerivativeSources({
+      env: configMissingEnv,
+      userId: configMissingUserId,
+      communityId: configMissingCommunityId,
+      kind: "song",
+      query: "Config missing",
+      limit: 25,
+      communityRepository: configMissing.repo,
+      profileRepository: buildProfileRepository(),
+    })
+    expect(configMissingSources.items).toEqual([])
+
+    const unavailableRootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-unavailable-"))
+    cleanupPaths.push(unavailableRootDir)
+    const unavailableEnv = {
+      LOCAL_COMMUNITY_DB_ROOT: unavailableRootDir,
+      STORY_ROYALTY_SPG_NFT_CONTRACT: "0x8888888888888888888888888888888888888888",
+      STORY_ROYALTY_COMMERCIAL_REV_SHARE_PCT: "10",
+    } as Env
+    const unavailable = await createUnavailableAsset({
+      env: unavailableEnv,
+      communityId: "cmt_story_royalty_unavailable",
+      userId: "usr_author_story_unavailable",
+      title: "Unavailable registrar song",
+      assetId: "ast_unavailable_registrar_song",
+    })
+
+    expect(unavailable.asset.story_royalty_registration_status).toBe("failed")
+    expect(unavailable.asset.publication_status).toBe("draft")
+    expect(unavailable.asset.story_status).toBe("none")
+    expect(unavailable.asset.story_error).toContain("story_royalty_registration_unavailable")
+  })
+
+  test("skips duplicate royalty registration when locked delivery already registered the asset", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-locked-"))
     cleanupPaths.push(rootDir)
 
     const env = { LOCAL_COMMUNITY_DB_ROOT: rootDir } as Env
     const repo = buildRepository()
-    const communityId = "cmt_story_royalty_unavailable"
-    const userId = "usr_author_story_unavailable"
+    const communityId = "cmt_story_royalty_locked_registered"
+    const userId = "usr_author_story_locked"
     const now = "2026-04-21T00:00:00.000Z"
     await seedStoryCommunity({ env, repo, communityId, userId })
+    let registrarCalls = 0
+    setStoryRoyaltyRegistrarForTests(async () => {
+      registrarCalls += 1
+      throw new Error("duplicate royalty registration")
+    })
+    setLockedAssetDeliveryPreparerForTests(async (input) => ({
+      storyStatus: "published",
+      storyPublishTxRef: "0xpublish",
+      storyIpId: "0x9999999999999999999999999999999999999999",
+      storyRoyaltyPolicyId: "0x6666666666666666666666666666666666666666",
+      storyDerivativeParentIpIdsJson: null,
+      storyRoyaltyRegistrationStatus: "registered",
+      storyAssetVersionId: "0xassetversion",
+      storyCdrVaultUuid: 4242,
+      storyNamespace: "story-namespace",
+      storyEntitlementTokenId: "1",
+      storyReadCondition: "0x1111111111111111111111111111111111111111",
+      storyWriteCondition: "0x2222222222222222222222222222222222222222",
+      lockedDeliveryStatus: "ready",
+      lockedDeliveryRef: `/communities/${input.communityId}/assets/${input.assetId}/content`,
+      lockedDeliveryStorageRef: "locked-assets/payload.bin",
+      lockedDeliveryMetadataJson: "{}",
+    }))
 
     const db = await openCommunityDb(env, repo, communityId)
     try {
@@ -295,25 +438,23 @@ describe("story royalty registration service", () => {
         body: {
           post_type: "song",
           identity_mode: "public",
-          title: "Unavailable config song",
-          idempotency_key: "story-unavailable-post",
+          title: "Locked registered song",
+          idempotency_key: "locked-registered-post",
           song_mode: "original",
           rights_basis: "original",
-          access_mode: "public",
+          access_mode: "locked",
         },
         createdAt: now,
       })
-      const assetPost = {
-        ...post,
-        asset_id: "ast_unavailable_config_song",
-      }
-
       const asset = await createSongAssetForPost({
         env,
         client: db.client,
         communityId,
-        post: assetPost,
-        bundle: buildBundle({ id: "sab_unavailable", title: "Unavailable config song" }),
+        post: {
+          ...post,
+          asset_id: "ast_locked_registered_song",
+        },
+        bundle: buildBundle({ id: "sab_locked_registered", title: "Locked registered song" }),
         licensePreset: "commercial-remix",
         commercialRevSharePct: 10,
         userRepository: {
@@ -329,25 +470,13 @@ describe("story royalty registration service", () => {
         },
       })
 
-      expect(asset.story_royalty_registration_status).toBe("failed")
-      expect(asset.publication_status).toBe("draft")
-      expect(asset.story_status).toBe("none")
-      expect(asset.story_error).toContain("story_royalty_config_missing")
+      expect(registrarCalls).toBe(0)
+      expect(asset.story_royalty_registration_status).toBe("registered")
+      expect(asset.publication_status).toBe("story_published")
+      expect(asset.story_status).toBe("published")
     } finally {
       db.close()
     }
-
-    const sources = await listCommunityDerivativeSources({
-      env,
-      userId,
-      communityId,
-      kind: "song",
-      query: "Unavailable",
-      limit: 25,
-      communityRepository: repo,
-      profileRepository: buildProfileRepository(),
-    })
-    expect(sources.items).toEqual([])
   })
 
   test("registered original song assets become derivative sources", async () => {
