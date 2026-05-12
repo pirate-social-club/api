@@ -37,6 +37,7 @@ Mounted in `services/api/src/index.ts`:
 - `/users`
 - `/onboarding`
 - `/profiles`
+- `/wallet-identities`
 - `/` for verification routes
 - `/health`
 - `/mcp`
@@ -75,6 +76,7 @@ Mounted in `services/api/src/index.ts`:
 | `/public-namespaces/*` | `src/routes/public-namespaces.ts` | `tests/routes/public-namespaces-routes.test.ts` | direct | Resolves verified, unexpired, Pirate-routed HNS namespaces for gateway and Freedom clients. |
 | `/profiles/*` | `src/routes/profiles.ts` | `tests/routes/profiles/profiles-routes.test.ts` | direct | Includes patch, read, rename, upgrade quote, linked handles, primary handle. |
 | `/public-profiles/:handleLabel` | `src/routes/public-profiles.ts` | `tests/routes/profiles/profiles-routes.test.ts`, `tests/routes/profiles/public-profiles-routes.test.ts` | direct | Covered alongside profile/global-handle tests. |
+| `/wallet-identities/:chainRef/:walletAddress` | `src/routes/wallet-identities.ts` | `tests/routes/wallet-identities-routes.test.ts` | direct | Covers wallet-owned Pirate-name identity projection, profile redirect for attached wallets, 404 for unknown wallets, and chain/address validation errors. |
 | `/profile-media/*` | `src/routes/profile-media.ts` | `tests/routes/profiles/profile-media-routes.test.ts` | direct | Upload and fetch covered. |
 | `/community-media/*` | `src/routes/community-media.ts` | `tests/routes/communities/community-media-routes.test.ts` | direct | Upload and fetch covered. |
 | `/health` | `src/index.ts` | `tests/routes/health-routes.test.ts` | direct | Dedicated health route coverage exists. |
