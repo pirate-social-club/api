@@ -131,6 +131,9 @@ describe("mcp routes", () => {
     }
     const challenge = prepareResult.result?.structuredContent?.challenge
     expect(challenge).toBeDefined()
+    if (!challenge) {
+      throw new Error("ALTCHA challenge was not returned")
+    }
     expect(prepareResult.result?.structuredContent?.scope).toBe("comment_create")
 
     const solution = await solveChallenge({ challenge, deriveKey })
@@ -151,7 +154,7 @@ describe("mcp routes", () => {
           community_id: communityId,
           post_id: postId,
           body: "Hello from MCP guest flow",
-          idempotency_key: "mcp-guest-reply-1",
+          idempotency_key: "reply1",
           altcha: altchaPayload,
         },
       },
@@ -345,6 +348,9 @@ describe("mcp routes", () => {
     }
     const challenge = prepareResult.result?.structuredContent?.challenge
     expect(challenge).toBeDefined()
+    if (!challenge) {
+      throw new Error("ALTCHA challenge was not returned")
+    }
 
     // Solve ALTCHA
     const solution = await solveChallenge({ challenge, deriveKey })
@@ -366,7 +372,7 @@ describe("mcp routes", () => {
           community_id: communityId,
           post_id: postId,
           body: "Guest reply on non-gated community",
-          idempotency_key: "mcp-guest-nongated-reply-1",
+          idempotency_key: "reply2",
           altcha: altchaPayload,
         },
       },
