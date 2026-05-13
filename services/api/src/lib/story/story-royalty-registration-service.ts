@@ -9,6 +9,7 @@ import { nowIso } from "../helpers"
 import { resolveStoryOperatorDirectSigner } from "./story-direct-signer"
 import { resolveStoryChainId, resolveStoryRpcUrl } from "./story-runtime-config"
 import { getAssetRow } from "../communities/commerce/queries"
+import { decodePublicAssetId } from "../public-ids"
 
 type StoryRoyaltyRightsBasis = "none" | "original" | "derivative"
 export type StoryLicensePreset = "non-commercial" | "commercial-use" | "commercial-remix"
@@ -205,10 +206,11 @@ export async function resolveStoryRoyaltyDerivativeParents(input: {
     }
 
     const localAssetId = ref.startsWith("story:asset:") ? ref.slice("story:asset:".length) : ref
-    if (!localAssetId.startsWith("ast_")) {
+    const decodedAssetId = decodePublicAssetId(localAssetId)
+    if (!decodedAssetId.startsWith("ast_")) {
       return null
     }
-    const asset = await getAssetRow(input.client, input.communityId, localAssetId)
+    const asset = await getAssetRow(input.client, input.communityId, decodedAssetId)
     if (!asset?.story_ip_id?.trim() || !asset.story_license_terms_id?.trim()) {
       return null
     }

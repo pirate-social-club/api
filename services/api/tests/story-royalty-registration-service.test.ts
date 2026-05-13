@@ -575,6 +575,7 @@ describe("story royalty registration service", () => {
       user_id: userId,
       display_name: "Registered Artist",
       handle: "registeredartist",
+      global_handle: { label: "registeredartist.pirate" },
       avatar_url: null,
       bio: null,
       location: null,
