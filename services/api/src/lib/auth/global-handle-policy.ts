@@ -3,6 +3,7 @@ import type { GlobalHandle, HandleUpgradeQuote } from "../../types"
 import { GLOBAL_HANDLE_PREMIUM_TERMS, GLOBAL_HANDLE_RESERVED_TERMS } from "./global-handle-premium-terms"
 
 const GLOBAL_HANDLE_SUFFIX = ".pirate"
+const GLOBAL_HANDLE_MAX_LABEL_LENGTH = 32
 const FREE_CLEANUP_RENAME_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 export const GLOBAL_HANDLE_PAID_POLICY_VERSION = "global_handle_paid_v1"
 const MANUAL_SALE_THRESHOLD_CENTS = 25_000 * 100
@@ -49,6 +50,9 @@ export function normalizeDesiredGlobalHandleLabel(desiredLabel: string): {
   const isPunycodeLabel = /^xn--[a-z0-9-]+$/u.test(labelNormalized)
   if (!labelNormalized || (!isAsciiLabel && !isPunycodeLabel)) {
     throw badRequestError("Invalid desired_label")
+  }
+  if (labelNormalized.length > GLOBAL_HANDLE_MAX_LABEL_LENGTH) {
+    throw badRequestError(`desired_label must be at most ${GLOBAL_HANDLE_MAX_LABEL_LENGTH} characters`)
   }
 
   return {

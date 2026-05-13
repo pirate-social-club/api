@@ -104,12 +104,16 @@ function addSeconds(iso: string, seconds: number): string {
   return new Date(Date.parse(iso) + seconds * 1000).toISOString()
 }
 
-function normalizeBuyerWalletAddress(value: string): string {
+export function normalizeBuyerWalletAddress(value: string): string {
   try {
     return getAddress(value.trim()).toLowerCase()
   } catch {
     throw badRequestError("buyer_wallet_address must be a valid EVM address")
   }
+}
+
+export function normalizePublicPirateNameLabel(value: string): ReturnType<typeof normalizeDesiredGlobalHandleLabel> {
+  return normalizeDesiredGlobalHandleLabel(value)
 }
 
 function buildChainRef(env: Env): string {
@@ -527,6 +531,28 @@ export async function claimPublicPirateName(input: {
         })
         deferredEligibilityError = eligibilityFailed("Public pirate name quote is no longer claimable under the current pricing policy")
       } else {
+        const gatedUpdate = await tx.execute({
+          sql: `
+            UPDATE pirate_name_quotes
+            SET status = 'claimed',
+                funding_tx_ref = ?2,
+                settlement_tx_ref = ?2,
+                claimed_at = ?3,
+                updated_at = ?3
+            WHERE pirate_name_quote_id = ?1
+              AND status = 'quoted'
+          `,
+          args: [quoteId, fundingTxRef, now],
+        })
+        if (gatedUpdate.rowsAffected === 0) {
+          const existing = await loadRegistrationForQuote(tx, quoteId)
+          if (existing) {
+            await tx.commit()
+            return serializeRegistration(existing)
+          }
+          throw eligibilityFailed("Public pirate name quote is no longer claimable")
+        }
+
         if (await activeGlobalHandleExists(tx, labelNormalized)) {
           throw conflictError("Desired label is unavailable")
         }
@@ -562,19 +588,6 @@ export async function claimPublicPirateName(input: {
             requiredNumber(latestQuote, "price_cents"),
             now,
           ],
-        })
-        await tx.execute({
-          sql: `
-            UPDATE pirate_name_quotes
-            SET status = 'claimed',
-                funding_tx_ref = ?2,
-                settlement_tx_ref = ?2,
-                claimed_at = ?3,
-                updated_at = ?3
-            WHERE pirate_name_quote_id = ?1
-              AND status = 'quoted'
-          `,
-          args: [quoteId, fundingTxRef, now],
         })
 
         createdRegistration = await loadRegistrationForQuote(tx, quoteId)

@@ -2,7 +2,9 @@ import type { DbExecutor } from "../db-helpers"
 import {
   parseRedditImportSummary,
   parseVerificationCapabilities,
+  serializeGlobalHandle,
 } from "./auth-serializers"
+import { isCleanupRenameAvailable } from "./global-handle-policy"
 import {
   type ExternalReputationSnapshotRow,
   type GlobalHandleRow,
@@ -213,7 +215,11 @@ export async function deriveOnboardingStatus(
 
   return {
     generated_handle_assigned: activeGlobalHandleRow.issuance_source === "generated_signup",
-    cleanup_rename_available: !Boolean(activeGlobalHandleRow.free_rename_consumed),
+    cleanup_rename_available: activeGlobalHandleRow.issuance_source === "generated_signup"
+      && isCleanupRenameAvailable({
+        userCreatedAt: userRow.created_at,
+        activeGlobalHandle: serializeGlobalHandle(activeGlobalHandleRow),
+      }),
     onboarding_dismissed_at: nullableUnixSeconds(userRow.onboarding_dismissed_at),
     unique_human_verification_status: uniqueHumanState,
     namespace_verification_status: namespaceStatus,
