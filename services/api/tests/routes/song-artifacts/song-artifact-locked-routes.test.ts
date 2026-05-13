@@ -1055,10 +1055,12 @@ describe("song artifact locked routes", () => {
       story_royalty_policy: string | null
       story_derivative_parent_ip_ids: string[] | null
       story_royalty_registration_status: string | null
+      story_error: string | null
     }
     expect(assetBody.story_royalty_policy).toBeNull()
     expect(assetBody.story_derivative_parent_ip_ids).toBeNull()
-    expect(assetBody.story_royalty_registration_status).toBe("pending")
+    expect(assetBody.story_royalty_registration_status).toBe("failed")
+    expect(assetBody.story_error).toContain("story_royalty_config_missing")
 
     const listingCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/listings`,
