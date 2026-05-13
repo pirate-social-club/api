@@ -22,5 +22,6 @@ export type ResolvedSongPostBundle = {
 
 export type ResolvedVideoPostAsset = {
   upload: SongArtifactUpload
+  previewUpload?: SongArtifactUpload | null
   mediaRefs: NonNullable<Extract<CreatePostRequest, { post_type: "video" }>["media_refs"]>
 }

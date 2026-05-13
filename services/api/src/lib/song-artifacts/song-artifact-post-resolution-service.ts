@@ -90,9 +90,22 @@ export async function resolveVideoPostAsset(input: {
   if (!upload || upload.uploader_user !== `usr_${input.userId}`) {
     throw notFoundError("Video artifact upload not found")
   }
+  const previewVideoRef = primaryVideo.preview_video
+  const previewVideoUpload = previewVideoRef?.storage_ref?.trim()
+    ? await findUploadedSongArtifactByStorageRef({
+        client,
+        communityId: input.communityId,
+        storageRef: previewVideoRef.storage_ref,
+        artifactKind: "preview_video",
+      })
+    : null
+  if (previewVideoRef?.storage_ref?.trim() && (!previewVideoUpload || previewVideoUpload.uploader_user !== `usr_${input.userId}`)) {
+    throw notFoundError("Video preview artifact upload not found")
+  }
   const descriptor = videoDescriptorFromUpload(upload)
   return {
     upload,
+    previewUpload: previewVideoUpload,
     mediaRefs: [{
       ...descriptor,
       poster_ref: primaryVideo.poster_ref ?? null,
@@ -101,6 +114,7 @@ export async function resolveVideoPostAsset(input: {
       poster_width: primaryVideo.poster_width ?? null,
       poster_height: primaryVideo.poster_height ?? null,
       poster_frame_ms: primaryVideo.poster_frame_ms ?? null,
+      ...(previewVideoUpload ? { preview_video: videoDescriptorFromUpload(previewVideoUpload) } : {}),
     }] as NonNullable<Extract<CreatePostRequest, { post_type: "video" }>["media_refs"]>,
   }
 }

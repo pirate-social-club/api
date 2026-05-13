@@ -324,10 +324,24 @@ export async function createPost(input: {
           input.communityId,
           resolvedVideo.upload.id,
         ),
+        ...(mediaRef.preview_video && resolvedVideo.previewUpload ? {
+          preview_video: {
+            ...mediaRef.preview_video,
+            storage_ref: buildPublicSongArtifactContentUrl(
+              new URL(input.requestUrl).origin,
+              input.communityId,
+              resolvedVideo.previewUpload.id,
+            ),
+          },
+        } : {}),
       }))
-      const lockedPosterMediaRefs = resolvedVideo.mediaRefs[0]?.poster_ref
+      const firstPublicVideoMediaRef = publicVideoMediaRefs[0]
+      const hasPublicLockedVideoMedia =
+        Boolean(firstPublicVideoMediaRef?.poster_ref) ||
+        Boolean(firstPublicVideoMediaRef?.preview_video)
+      const lockedPosterMediaRefs = hasPublicLockedVideoMedia
         ? [{
-          ...resolvedVideo.mediaRefs[0],
+          ...firstPublicVideoMediaRef,
           storage_ref: "",
           content_hash: null,
         }]

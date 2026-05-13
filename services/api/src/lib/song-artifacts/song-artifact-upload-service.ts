@@ -205,8 +205,10 @@ export async function fetchPublishedPublicSongArtifactContent(input: {
         FROM posts
         WHERE community_id = ?1
           AND status = 'published'
-          AND visibility = 'public'
-          AND (access_mode IS NULL OR access_mode = 'public')
+          AND (
+            (visibility = 'public' AND (access_mode IS NULL OR access_mode = 'public'))
+            OR access_mode = 'locked'
+          )
           AND media_refs_json IS NOT NULL
           AND (
             instr(media_refs_json, ?2) > 0

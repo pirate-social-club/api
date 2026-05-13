@@ -9,6 +9,7 @@ export type SongArtifactKind =
   | "primary_audio"
   | "cover_art"
   | "preview_audio"
+  | "preview_video"
   | "canvas_video"
   | "instrumental_audio"
   | "vocal_audio"
@@ -40,6 +41,11 @@ const allowedMimeTypesByKind: Record<SongArtifactKind, Set<string>> = {
     "audio/webm",
     "audio/x-m4a",
     "audio/x-wav",
+  ]),
+  preview_video: new Set([
+    "video/mp4",
+    "video/quicktime",
+    "video/webm",
   ]),
   instrumental_audio: new Set([
     "audio/aac",
@@ -89,6 +95,7 @@ const allowedMimeTypesByKind: Record<SongArtifactKind, Set<string>> = {
 const maxBytesByKind: Record<SongArtifactKind, number> = {
   primary_audio: 64 * 1024 * 1024,
   preview_audio: 32 * 1024 * 1024,
+  preview_video: 64 * 1024 * 1024,
   instrumental_audio: 64 * 1024 * 1024,
   vocal_audio: 64 * 1024 * 1024,
   cover_art: 12 * 1024 * 1024,

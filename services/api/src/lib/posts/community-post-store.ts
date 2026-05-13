@@ -595,6 +595,12 @@ export function assertPostCreateRequest(body: CreatePostRequest, _communityId: s
         throw badRequestError("video poster frames require JPEG, PNG, or WebP media")
       }
     }
+    if (primaryVideo.preview_video) {
+      const previewMimeType = primaryVideo.preview_video.mime_type?.trim().toLowerCase()
+      if (previewMimeType !== "video/mp4" && previewMimeType !== "video/quicktime" && previewMimeType !== "video/webm") {
+        throw badRequestError("video preview_video requires MP4, MOV, or WebM media")
+      }
+    }
     if (body.access_mode && body.access_mode !== "public" && body.access_mode !== "locked") {
       throw badRequestError("video access_mode must be public or locked")
     }
