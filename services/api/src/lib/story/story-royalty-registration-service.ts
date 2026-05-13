@@ -382,6 +382,12 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
         parentIpIds: derivativeParents!.map((parent) => parent.ipId),
         licenseTermsIds: derivativeParents!.map((parent) => parent.licenseTermsId),
       },
+      royaltyShares: [
+        {
+          recipient: input.creatorWalletAddress as `0x${string}`,
+          percentage: 100,
+        },
+      ],
       ipMetadata: {
         ipMetadataURI: metadata.ipMetadataUri,
         ipMetadataHash: metadata.ipMetadataHash,
@@ -390,21 +396,11 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
       },
     })
 
-    const attached = await client.license.registerPilTermsAndAttach({
-      ipId: derivativeResponse.ipId!,
-      licenseTermsData: [
-        {
-          terms: licenseTerms,
-          maxLicenseTokens,
-        },
-      ],
-    })
-
     return {
       storyIpId: derivativeResponse.ipId!,
       storyIpNftContract: spgNftContract,
       storyIpNftTokenId: derivativeResponse.tokenId!.toString(),
-      storyLicenseTermsId: attached.licenseTermsIds?.[0]?.toString() ?? null,
+      storyLicenseTermsId: null,
       storyLicenseTemplate: null,
       storyRoyaltyPolicy: royaltyPolicy,
       storyDerivativeParentIpIds: derivativeParents!.map((parent) => parent.ipId),
