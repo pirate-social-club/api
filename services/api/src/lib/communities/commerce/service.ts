@@ -12,6 +12,7 @@ import { getPostById } from "../../posts/community-post-store"
 import { isPubliclyReadablePost } from "../../posts/post-access"
 import { fetchSongArtifactBytes } from "../../song-artifacts/song-artifact-storage"
 import { sha256Hex } from "../../crypto"
+import { getProfilePublicHandleLabel } from "../../auth/auth-serializers"
 import type { UserRepository } from "../../auth/repositories"
 import type { ProfileRepository } from "../../auth/repositories"
 import {
@@ -428,20 +429,24 @@ export async function listCommunityDerivativeSources(input: {
         userId,
         await input.profileRepository.getProfileByUserId(userId).catch(() => null),
       ] as const)))
-    const items: DerivativeSource[] = rows.map((row) => ({
-      id: `asset_${row.asset_id}`,
-      object: "derivative_source",
-      community: `com_${row.community_id}`,
-      asset: `asset_${row.asset_id}`,
-      title: row.display_title?.trim() || "Untitled asset",
-      kind: derivativeSourceKindFromAssetKind(row.asset_kind),
-      story_ip: row.story_ip_id!,
-      story_license_terms: row.story_license_terms_id!,
-      license_preset: row.license_preset,
-      commercial_rev_share_pct: row.commercial_rev_share_pct,
-      creator_user: `usr_${row.creator_user_id}`,
-      creator_display_name: profilesByUserId.get(row.creator_user_id)?.display_name ?? null,
-    }))
+    const items: DerivativeSource[] = rows.map((row) => {
+      const profile = profilesByUserId.get(row.creator_user_id) ?? null
+      return {
+        id: `asset_${row.asset_id}`,
+        object: "derivative_source",
+        community: `com_${row.community_id}`,
+        asset: `asset_${row.asset_id}`,
+        title: row.display_title?.trim() || "Untitled asset",
+        kind: derivativeSourceKindFromAssetKind(row.asset_kind),
+        story_ip: row.story_ip_id!,
+        story_license_terms: row.story_license_terms_id!,
+        license_preset: row.license_preset,
+        commercial_rev_share_pct: row.commercial_rev_share_pct,
+        creator_user: `usr_${row.creator_user_id}`,
+        creator_handle: profile ? getProfilePublicHandleLabel(profile) : null,
+        creator_display_name: profile?.display_name ?? null,
+      }
+    })
 
     return {
       items,

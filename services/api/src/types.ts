@@ -129,6 +129,7 @@ export type DerivativeSource = {
   license_preset?: Asset["license_preset"] | null
   commercial_rev_share_pct?: number | null
   creator_user: string
+  creator_handle?: string | null
   creator_display_name?: string | null
 }
 

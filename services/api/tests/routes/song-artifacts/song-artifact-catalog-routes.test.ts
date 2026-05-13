@@ -20,6 +20,7 @@ type DerivativeSourceListBody = {
     story_ip: string
     story_license_terms: string
     creator_user: string
+    creator_handle?: string | null
     creator_display_name?: string | null
   }>
   next_cursor: string | null
@@ -238,6 +239,8 @@ describe("song artifact catalog routes", () => {
       "Original Source",
     ])
     expect(songSourcesBody.items.every((item) => item.kind === "song")).toBe(true)
+    expect(songSourcesBody.items.every((item) => item.creator_handle?.endsWith(".pirate"))).toBe(true)
+    expect(songSourcesBody.items.every((item) => !item.creator_handle?.startsWith("usr_"))).toBe(true)
     expect(songSourcesBody.items.every((item) => item.creator_display_name === "Derivative Artist")).toBe(true)
     expect(songSourcesBody.items.find((item) => item.asset === "asset_ast_derivative_song")?.story_license_terms).toBe("18")
 
