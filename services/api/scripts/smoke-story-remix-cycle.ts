@@ -1,5 +1,6 @@
 import { SignJWT } from "jose"
 import { Interface, JsonRpcProvider, Wallet, getAddress } from "ethers"
+// @ts-expect-error The API tsconfig only loads bun-types/test, but this script runs under Bun.
 import { Database } from "bun:sqlite"
 import { join } from "node:path"
 import { readDevVarsFromCwd, readWranglerVarsFromCwd } from "./_lib/dev-vars"
@@ -68,6 +69,12 @@ function shouldUseLocalMembershipSetup(apiBaseUrl: string): boolean {
   if (explicit) return ["1", "true", "yes", "on"].includes(explicit.toLowerCase())
   const hostname = new URL(apiBaseUrl).hostname
   return hostname === "127.0.0.1" || hostname === "localhost"
+}
+
+function toRequestArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength)
+  copy.set(bytes)
+  return copy.buffer
 }
 
 function ensureLocalMembership(input: {
@@ -246,6 +253,11 @@ async function api<T>(input: {
   contentType?: string
   ok?: number[]
 }): Promise<T> {
+  const requestBody = input.body == null
+    ? input.bytes == null
+      ? null
+      : toRequestArrayBuffer(input.bytes)
+    : JSON.stringify(input.body)
   const response = await fetch(`${input.apiBaseUrl}${input.path}`, {
     method: input.method,
     headers: {
@@ -253,9 +265,7 @@ async function api<T>(input: {
       ...(input.body == null ? {} : { "content-type": "application/json" }),
       ...(input.bytes == null ? {} : { "content-type": input.contentType ?? "application/octet-stream" }),
     },
-    body: input.body == null
-      ? input.bytes
-      : JSON.stringify(input.body),
+    body: requestBody,
   })
   const result = await readResponse<T>(response)
   const ok = input.ok ?? [200, 201, 202]
