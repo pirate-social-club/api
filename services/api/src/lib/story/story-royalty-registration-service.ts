@@ -2,7 +2,6 @@ import { StoryClient, WIP_TOKEN_ADDRESS, PILFlavor, royaltyPolicyLapAddress } fr
 import { http } from "viem"
 import { privateKeyToAccount } from "viem/accounts"
 import type { Client } from "../sql-client"
-import { publishJsonToSwarm } from "../swarm/swarm-publisher"
 import type { Env } from "../../env"
 import type { Post, SongArtifactBundle } from "../../types"
 import { nowIso } from "../helpers"
@@ -10,6 +9,7 @@ import { resolveStoryOperatorDirectSigner } from "./story-direct-signer"
 import { resolveStoryChainId, resolveStoryRpcUrl } from "./story-runtime-config"
 import { getAssetRow } from "../communities/commerce/queries"
 import { decodePublicAssetId } from "../public-ids"
+import { publishStoryJsonMetadata } from "./story-metadata-publisher"
 
 type StoryRoyaltyRightsBasis = "none" | "original" | "derivative"
 export type StoryLicensePreset = "non-commercial" | "commercial-use" | "commercial-remix"
@@ -176,10 +176,6 @@ function resolveStoryChainName(env: Pick<Env, "STORY_CHAIN_ID">): "aeneid" | "ma
   return resolveStoryChainId(env) === 1514 ? "mainnet" : "aeneid"
 }
 
-function buildSwarmReferenceUri(reference: string): string {
-  return `bzz://${reference}`
-}
-
 function parseDirectStoryParentRef(ref: string): ResolvedDerivativeParent | null {
   const match = /^story:ip:(0x[a-fA-F0-9]{40})#licenseTermsId=(\d+)$/.exec(ref.trim())
   if (!match) return null
@@ -270,12 +266,12 @@ async function buildStoryRoyaltyMetadata(input: {
   }
 
   const [ipPublished, nftPublished] = await Promise.all([
-    publishJsonToSwarm({
+    publishStoryJsonMetadata({
       env: input.env,
       path: `story-assets/${input.communityId}/${input.assetId}/ip.json`,
       payload: ipPayload,
     }),
-    publishJsonToSwarm({
+    publishStoryJsonMetadata({
       env: input.env,
       path: `story-assets/${input.communityId}/${input.assetId}/nft.json`,
       payload: nftPayload,
@@ -283,10 +279,10 @@ async function buildStoryRoyaltyMetadata(input: {
   ])
 
   return {
-    ipMetadataUri: buildSwarmReferenceUri(ipPublished.reference),
-    ipMetadataHash: `0x${await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(ipPayload))).then((buf) => Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join(""))}` as `0x${string}`,
-    nftMetadataUri: buildSwarmReferenceUri(nftPublished.reference),
-    nftMetadataHash: `0x${await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(nftPayload))).then((buf) => Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join(""))}` as `0x${string}`,
+    ipMetadataUri: ipPublished.uri,
+    ipMetadataHash: ipPublished.hash,
+    nftMetadataUri: nftPublished.uri,
+    nftMetadataHash: nftPublished.hash,
   }
 }
 
