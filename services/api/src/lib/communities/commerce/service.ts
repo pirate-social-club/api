@@ -423,12 +423,10 @@ export async function listCommunityDerivativeSources(input: {
       limit: input.limit,
     })
     const creatorUserIds = Array.from(new Set(rows.map((row) => row.creator_user_id)))
-    const profilesByUserId = input.profileRepository.listProfilesByUserIds
-      ? await input.profileRepository.listProfilesByUserIds(creatorUserIds).catch(() => new Map())
-      : new Map(await Promise.all(creatorUserIds.map(async (userId) => [
-        userId,
-        await input.profileRepository.getProfileByUserId(userId).catch(() => null),
-      ] as const)))
+    const profilesByUserId = new Map(await Promise.all(creatorUserIds.map(async (userId) => [
+      userId,
+      await input.profileRepository.getProfileByUserId(userId).catch(() => null),
+    ] as const)))
     const items: DerivativeSource[] = rows.map((row) => {
       const profile = profilesByUserId.get(row.creator_user_id) ?? null
       return {
