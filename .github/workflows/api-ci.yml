@@ -34,6 +34,12 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Start iron-proxy egress audit
+        uses: ironsh/iron-proxy-action@fa1fd82ec32396d044deba7040a6db576bec927a
+        with:
+          egress-rules: egress-rules.yaml
+          warn: true
+
       - name: Link shared database fixtures
         run: |
           ln -sfn "$GITHUB_WORKSPACE/services/api/test-fixtures/db" "$GITHUB_WORKSPACE/../db"
@@ -50,6 +56,10 @@ jobs:
         working-directory: services/shared
         run: bun install --frozen-lockfile
 
+      - name: Audit shared dependencies
+        working-directory: services/shared
+        run: bun audit --audit-level=high
+
       - name: Typecheck shared package
         working-directory: services/shared
         run: bun run check
@@ -57,6 +67,10 @@ jobs:
       - name: Install contracts dependencies
         working-directory: services/contracts
         run: bun install --frozen-lockfile
+
+      - name: Audit contracts dependencies
+        working-directory: services/contracts
+        run: bun audit --audit-level=high
 
       - name: Check generated contracts freshness when specs are available
         working-directory: services/contracts
@@ -81,6 +95,10 @@ jobs:
         working-directory: services/community-provision-operator
         run: bun install --frozen-lockfile
 
+      - name: Audit community provision operator dependencies
+        working-directory: services/community-provision-operator
+        run: bun audit --audit-level=high
+
       - name: Check generated community migration manifest freshness
         working-directory: services/community-provision-operator
         env:
@@ -101,6 +119,10 @@ jobs:
         working-directory: services/api
         run: bun install --frozen-lockfile
 
+      - name: Audit API dependencies
+        working-directory: services/api
+        run: bun audit --audit-level=high
+
       - name: Typecheck API service
         working-directory: services/api
         run: bun run check
@@ -117,12 +139,22 @@ jobs:
         working-directory: services/api
         run: bun run coverage
 
+      - name: Show iron-proxy egress summary
+        uses: ironsh/iron-proxy-action/summary@fa1fd82ec32396d044deba7040a6db576bec927a
+        if: always()
+
   cli:
     runs-on: ubuntu-latest
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Start iron-proxy egress audit
+        uses: ironsh/iron-proxy-action@fa1fd82ec32396d044deba7040a6db576bec927a
+        with:
+          egress-rules: egress-rules.yaml
+          warn: true
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
@@ -133,9 +165,17 @@ jobs:
         working-directory: services/contracts
         run: bun install --frozen-lockfile
 
+      - name: Audit contracts dependencies
+        working-directory: services/contracts
+        run: bun audit --audit-level=high
+
       - name: Install CLI dependencies
         working-directory: services/cli
         run: bun install --frozen-lockfile
+
+      - name: Audit CLI dependencies
+        working-directory: services/cli
+        run: bun audit --audit-level=high
 
       - name: Typecheck CLI
         working-directory: services/cli
@@ -145,12 +185,22 @@ jobs:
         working-directory: services/cli
         run: bun run test
 
+      - name: Show iron-proxy egress summary
+        uses: ironsh/iron-proxy-action/summary@fa1fd82ec32396d044deba7040a6db576bec927a
+        if: always()
+
   community-protocol-issuer:
     runs-on: ubuntu-latest
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Start iron-proxy egress audit
+        uses: ironsh/iron-proxy-action@fa1fd82ec32396d044deba7040a6db576bec927a
+        with:
+          egress-rules: egress-rules.yaml
+          warn: true
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
@@ -161,6 +211,10 @@ jobs:
         working-directory: services/community-protocol-issuer
         run: bun install --frozen-lockfile
 
+      - name: Audit issuer dependencies
+        working-directory: services/community-protocol-issuer
+        run: bun audit --audit-level=high
+
       - name: Typecheck issuer
         working-directory: services/community-protocol-issuer
         run: bun run check
@@ -169,12 +223,22 @@ jobs:
         working-directory: services/community-protocol-issuer
         run: bun run test
 
+      - name: Show iron-proxy egress summary
+        uses: ironsh/iron-proxy-action/summary@fa1fd82ec32396d044deba7040a6db576bec927a
+        if: always()
+
   community-protocol-prover-runpod:
     runs-on: ubuntu-latest
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Start iron-proxy egress audit
+        uses: ironsh/iron-proxy-action@fa1fd82ec32396d044deba7040a6db576bec927a
+        with:
+          egress-rules: egress-rules.yaml
+          warn: true
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -183,3 +247,7 @@ jobs:
 
       - name: Run prover tests
         run: python -m unittest discover -s services/community-protocol-prover-runpod -p 'test_*.py'
+
+      - name: Show iron-proxy egress summary
+        uses: ironsh/iron-proxy-action/summary@fa1fd82ec32396d044deba7040a6db576bec927a
+        if: always()
