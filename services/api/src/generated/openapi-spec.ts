@@ -1798,6 +1798,58 @@ const spec = {
         "operationId": "get_public_profiles_by_wallet_by_wallet_address"
       }
     },
+    "/wallet-identities/{chain_ref}/{wallet_address}": {
+      "get": {
+        "tags": [
+          "Profiles"
+        ],
+        "security": [],
+        "summary": "Resolve a public wallet identity",
+        "parameters": [
+          {
+            "name": "chain_ref",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "wallet_address",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletIdentityResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "get_wallet_identities_by_chain_ref_by_wallet_address"
+      }
+    },
     "/public-profiles/{handle_label}": {
       "get": {
         "tags": [
@@ -6835,6 +6887,23 @@ const spec = {
                 }
               }
             }
+          }
+        }
+      },
+      "WalletIdentityResponse": {
+        "oneOf": [
+          {
+            "$ref": "./profiles.yaml#/WalletIdentity"
+          },
+          {
+            "$ref": "./profiles.yaml#/WalletIdentityRedirect"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "object",
+          "mapping": {
+            "wallet_identity": "./profiles.yaml#/WalletIdentity",
+            "wallet_identity_redirect": "./profiles.yaml#/WalletIdentityRedirect"
           }
         }
       },
