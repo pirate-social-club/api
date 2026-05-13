@@ -36,6 +36,17 @@ type AuthProviderLinkRow = {
   user_id: string
 }
 
+function buildInClause(values: string[], startIndex = 1): { placeholders: string; args: string[] } | null {
+  const uniqueValues = Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)))
+  if (uniqueValues.length === 0) {
+    return null
+  }
+  return {
+    placeholders: uniqueValues.map((_, index) => `?${startIndex + index}`).join(", "),
+    args: uniqueValues,
+  }
+}
+
 export async function findActiveAuthProviderLink(executor: DbExecutor, provider: string, providerSubject: string): Promise<AuthProviderLinkRow | null> {
   const row = await firstRow(executor, {
     sql: `
@@ -75,6 +86,26 @@ export async function getUserRow(executor: DbExecutor, userId: string): Promise<
   return row ? toUserRow(row) : null
 }
 
+export async function listUserRowsByUserIds(executor: DbExecutor, userIds: string[]): Promise<UserRow[]> {
+  const clause = buildInClause(userIds)
+  if (!clause) {
+    return []
+  }
+  const result = await executor.execute({
+    sql: `
+      SELECT user_id, primary_wallet_attachment_id, verification_state, capability_provider,
+             verification_capabilities_json, verified_at, current_verification_session_id,
+             onboarding_dismissed_at,
+             created_at, updated_at
+      FROM users
+      WHERE user_id IN (${clause.placeholders})
+    `,
+    args: clause.args,
+  })
+
+  return result.rows.map(toUserRow)
+}
+
 export async function dismissOnboardingForUser(executor: DbExecutor, userId: string, dismissedAt: string): Promise<void> {
   await executor.execute({
     sql: `
@@ -102,6 +133,26 @@ export async function getProfileRow(executor: DbExecutor, userId: string): Promi
   })
 
   return row ? toProfileRow(row) : null
+}
+
+export async function listProfileRowsByUserIds(executor: DbExecutor, userIds: string[]): Promise<ProfileRow[]> {
+  const clause = buildInClause(userIds)
+  if (!clause) {
+    return []
+  }
+  const result = await executor.execute({
+    sql: `
+      SELECT user_id, display_name, bio, avatar_ref, cover_ref, preferred_locale,
+             bio_source, avatar_source, cover_source,
+             display_verified_nationality_badge,
+             global_handle_id, primary_linked_handle_id, xmtp_inbox_id, created_at, updated_at
+      FROM profiles
+      WHERE user_id IN (${clause.placeholders})
+    `,
+    args: clause.args,
+  })
+
+  return result.rows.map(toProfileRow)
 }
 
 export async function getActiveWalletAttachmentRowByAddress(
@@ -164,6 +215,31 @@ export async function listLinkedHandleRows(executor: DbExecutor, userId: string)
   return result.rows.map(toLinkedHandleRow)
 }
 
+export async function listLinkedHandleRowsByUserIds(executor: DbExecutor, userIds: string[]): Promise<LinkedHandleRow[]> {
+  const clause = buildInClause(userIds)
+  if (!clause) {
+    return []
+  }
+  const result = await executor.execute({
+    sql: `
+      SELECT linked_handle_id, user_id, wallet_attachment_id, kind, label_normalized, label_display,
+             verification_state, metadata_json, created_at, updated_at
+      FROM linked_handles
+      WHERE user_id IN (${clause.placeholders})
+      ORDER BY
+        user_id ASC,
+        CASE kind
+          WHEN 'ens' THEN 0
+          ELSE 1
+        END,
+        label_display ASC
+    `,
+    args: clause.args,
+  })
+
+  return result.rows.map(toLinkedHandleRow)
+}
+
 export async function getLinkedHandleRow(
   executor: DbExecutor,
   userId: string,
@@ -219,6 +295,25 @@ export async function getGlobalHandleRow(executor: DbExecutor, globalHandleId: s
   return row ? toGlobalHandleRow(row) : null
 }
 
+export async function listGlobalHandleRowsByIds(executor: DbExecutor, globalHandleIds: string[]): Promise<GlobalHandleRow[]> {
+  const clause = buildInClause(globalHandleIds)
+  if (!clause) {
+    return []
+  }
+  const result = await executor.execute({
+    sql: `
+      SELECT global_handle_id, user_id, label_normalized, label_display, status, tier, issuance_source,
+             redirect_target_global_handle_id, price_paid_usd, free_rename_consumed, issued_at,
+             replaced_at, created_at, updated_at
+      FROM global_handles
+      WHERE global_handle_id IN (${clause.placeholders})
+    `,
+    args: clause.args,
+  })
+
+  return result.rows.map(toGlobalHandleRow)
+}
+
 export async function getGlobalHandleRowByLabelNormalized(
   executor: DbExecutor,
   labelNormalized: string,
@@ -251,6 +346,31 @@ export async function listActiveWalletAttachmentRows(executor: DbExecutor, userI
   })
 
   return result.rows.map(toWalletAttachmentRow)
+}
+
+export async function listActiveWalletAttachmentRowsByUserIds(
+  executor: DbExecutor,
+  userIds: string[],
+): Promise<Array<WalletAttachmentRow & { user_id: string }>> {
+  const clause = buildInClause(userIds)
+  if (!clause) {
+    return []
+  }
+  const result = await executor.execute({
+    sql: `
+      SELECT wallet_attachment_id, user_id, chain_namespace, wallet_address_normalized, wallet_address_display, is_primary
+      FROM wallet_attachments
+      WHERE user_id IN (${clause.placeholders})
+        AND status = 'active'
+      ORDER BY user_id ASC, attached_at ASC
+    `,
+    args: clause.args,
+  })
+
+  return result.rows.map((row) => ({
+    ...toWalletAttachmentRow(row),
+    user_id: String((row as Record<string, unknown>).user_id),
+  }))
 }
 
 export async function reconcileWalletAttachments(

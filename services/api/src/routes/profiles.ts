@@ -14,11 +14,18 @@ import { decodePublicUserId } from "../lib/public-ids"
 import { requireTrimmedStringOrNull } from "./route-helpers"
 import { writeAuditEventForEnv } from "../lib/audit"
 import { getControlPlaneClient } from "../lib/runtime-deps"
+import { getCommunityRepository } from "../lib/communities/db-community-repository"
+import {
+  getProfileActivity,
+  parseProfileActivityLimit,
+  parseProfileActivityTab,
+} from "../lib/profile/profile-activity-read-service"
 import {
   serializeGlobalHandle,
   serializeHandleUpgradeQuote,
   serializeProfile,
 } from "../serializers/profile"
+import { serializeProfileActivityResponse } from "../serializers/profile-activity"
 
 const profiles = new Hono<AuthenticatedEnv>()
 
@@ -183,6 +190,21 @@ profiles.get("/me", async (c) => {
     throw authError("Authentication failed")
   }
   return c.json(serializeProfile(profile), 200)
+})
+
+profiles.get("/me/activity", async (c) => {
+  const actor = c.get("actor")
+  const result = await getProfileActivity({
+    env: c.env,
+    repository: getCommunityRepository(c.env),
+    targetUserId: actor.userId,
+    viewerUserId: actor.userId,
+    tab: parseProfileActivityTab(c.req.query("tab")),
+    cursor: c.req.query("cursor") ?? null,
+    limit: parseProfileActivityLimit(c.req.query("limit")),
+    locale: c.req.query("locale") ?? null,
+  })
+  return c.json(serializeProfileActivityResponse(result), 200)
 })
 
 profiles.post("/me", async (c) => {

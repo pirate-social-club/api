@@ -18,6 +18,17 @@ export class MemoryProfileRepository {
     return record ? exposeMemoryProfile(record) : null
   }
 
+  async listProfilesByUserIds(userIds: string[]): Promise<Map<string, Profile>> {
+    const profiles = new Map<string, Profile>()
+    for (const userId of new Set(userIds.map((value) => value.trim()).filter(Boolean))) {
+      const profile = await this.getProfileByUserId(userId)
+      if (profile) {
+        profiles.set(userId, profile)
+      }
+    }
+    return profiles
+  }
+
   async resolvePublicProfileByHandle(handleLabel: string): Promise<PublicProfileResolution | null> {
     const trimmedHandleLabel = handleLabel.trim().toLowerCase()
     const normalizedHandleLabel = trimmedHandleLabel.endsWith(".pirate")
