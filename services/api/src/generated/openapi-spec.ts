@@ -7317,6 +7317,13 @@ const spec = {
             "type": "boolean",
             "nullable": true
           },
+          "guest_comment_policy": {
+            "type": "string",
+            "enum": [
+              "disallow",
+              "altcha_required"
+            ]
+          },
           "root_post_min_trust_tier": {
             "type": "string",
             "enum": [
@@ -7385,13 +7392,6 @@ const spec = {
               "review",
               "allow_with_disclosure",
               "allow"
-            ]
-          },
-          "guest_comment_policy": {
-            "type": "string",
-            "enum": [
-              "disallow",
-              "altcha_required"
             ]
           },
           "agent_posting_scope": {
@@ -8850,13 +8850,6 @@ const spec = {
             ],
             "nullable": true
           },
-          "guest_comment_policy": {
-            "type": "string",
-            "enum": [
-              "disallow",
-              "altcha_required"
-            ]
-          },
           "allowed_disclosed_qualifiers": {
             "type": "array",
             "items": {
@@ -8867,6 +8860,13 @@ const spec = {
           "allow_qualifiers_on_anonymous_posts": {
             "type": "boolean",
             "nullable": true
+          },
+          "guest_comment_policy": {
+            "type": "string",
+            "enum": [
+              "disallow",
+              "altcha_required"
+            ]
           },
           "agent_posting_policy": {
             "type": "string",
@@ -9051,7 +9051,9 @@ const spec = {
           "suggested_verification_intent": {
             "type": "string",
             "enum": [
-              "community_join"
+              "community_join",
+              "post_create",
+              "comment_create"
             ],
             "nullable": true
           },
