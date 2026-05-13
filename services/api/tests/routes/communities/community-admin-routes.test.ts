@@ -43,7 +43,7 @@ describe("admin auth middleware", () => {
           headers: { "content-type": "application/json" },
         })
       },
-    } as Fetcher
+    } as unknown as Fetcher
     const ctx = await createRouteTestContext({
       BUILD_GIT_SHA: "api123",
       COMMUNITY_PROVISION_OPERATOR: operator,
