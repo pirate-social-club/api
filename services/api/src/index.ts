@@ -36,6 +36,7 @@ import { getCommunityRepository } from "./lib/communities/db-community-repositor
 import { reconcileStaleCommunityPurchaseSettlements } from "./lib/communities/commerce/settlement-service"
 import { processAvailableCommunityJobs } from "./lib/communities/jobs/runner"
 import { reconcileCommunityMembershipAndFollowProjections } from "./lib/communities/membership/projection-service"
+import { getCommunityProvisionOperatorVersion } from "./lib/communities/provisioning/operator-client"
 import { HttpError, errorResponse } from "./lib/errors"
 import { reconcileRoyaltyClaimEvents } from "./lib/royalties/royalty-claim-history"
 import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/runtime-deps"
@@ -47,7 +48,7 @@ export { LiveRoomRuntimeDO }
 
 const app = new Hono<{ Bindings: Env }>()
 
-function buildVersionPayload(env: Env) {
+async function buildVersionPayload(env: Env) {
   return {
     service: "api",
     environment: env.ENVIRONMENT ?? null,
@@ -55,6 +56,7 @@ function buildVersionPayload(env: Env) {
     git_ref: env.BUILD_GIT_REF ?? null,
     build_timestamp: env.BUILD_TIMESTAMP ?? null,
     api_origin: env.PIRATE_API_PUBLIC_ORIGIN ?? null,
+    operator: await getCommunityProvisionOperatorVersion(env),
   }
 }
 
@@ -122,7 +124,7 @@ app.use("*", async (_c, next) => {
 })
 
 app.get("/health", (c) => c.json({ ok: true }))
-app.get("/__version", (c) => c.json(buildVersionPayload(c.env), 200, {
+app.get("/__version", async (c) => c.json(await buildVersionPayload(c.env), 200, {
   "cache-control": "no-store",
 }))
 app.route("/", discovery)

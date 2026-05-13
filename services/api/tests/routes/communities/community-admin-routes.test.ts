@@ -28,6 +28,42 @@ afterEach(async () => {
 })
 
 describe("admin auth middleware", () => {
+  test("__version reports community provision operator version when bound", async () => {
+    const operator = {
+      fetch: (request: Request | string) => {
+        const normalizedRequest = typeof request === "string" ? new Request(request) : request
+        expect(new URL(normalizedRequest.url).pathname).toBe("/health")
+        return new Response(JSON.stringify({
+          service: "community-provision-operator",
+          environment: "production",
+          git_sha: "operator123",
+          git_ref: "main",
+          build_timestamp: "2026-05-13T05:54:46Z",
+        }), {
+          headers: { "content-type": "application/json" },
+        })
+      },
+    } as Fetcher
+    const ctx = await createRouteTestContext({
+      BUILD_GIT_SHA: "api123",
+      COMMUNITY_PROVISION_OPERATOR: operator,
+    })
+    cleanup = ctx.cleanup
+
+    const response = await Promise.resolve(app.request("http://pirate.test/__version", {}, ctx.env))
+    expect(response.status).toBe(200)
+    const body = await json(response) as {
+      git_sha: string
+      operator: {
+        service: string
+        git_sha: string
+      } | null
+    }
+    expect(body.git_sha).toBe("api123")
+    expect(body.operator?.service).toBe("community-provision-operator")
+    expect(body.operator?.git_sha).toBe("operator123")
+  })
+
   test("admin token can validate against admin health route", async () => {
     const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
     cleanup = ctx.cleanup

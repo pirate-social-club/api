@@ -41,6 +41,14 @@ export type MigrateCommunityDatabaseOperatorResult = {
   skipped: number
 }
 
+export type CommunityProvisionOperatorVersion = {
+  service: string | null
+  environment: string | null
+  git_sha: string | null
+  git_ref: string | null
+  build_timestamp: string | null
+}
+
 function trim(value: string | null | undefined): string {
   return String(value ?? "").trim()
 }
@@ -98,6 +106,29 @@ export function isCommunityProvisionOperatorConfigured(env: Env): boolean {
 
   const environment = trim(env.ENVIRONMENT).toLowerCase()
   return environment !== "development" && environment !== "test"
+}
+
+export async function getCommunityProvisionOperatorVersion(env: Env): Promise<CommunityProvisionOperatorVersion | null> {
+  if (!env.COMMUNITY_PROVISION_OPERATOR) {
+    return null
+  }
+
+  try {
+    const response = await env.COMMUNITY_PROVISION_OPERATOR.fetch(new Request("https://internal/health"))
+    if (!response.ok) {
+      return null
+    }
+    const body = parsedRecord(await response.json().catch(() => null))
+    return {
+      service: typeof body.service === "string" ? body.service : null,
+      environment: typeof body.environment === "string" ? body.environment : null,
+      git_sha: typeof body.git_sha === "string" ? body.git_sha : null,
+      git_ref: typeof body.git_ref === "string" ? body.git_ref : null,
+      build_timestamp: typeof body.build_timestamp === "string" ? body.build_timestamp : null,
+    }
+  } catch {
+    return null
+  }
 }
 
 export async function provisionCommunityViaOperator(input: {

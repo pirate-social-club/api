@@ -18,6 +18,9 @@ export type Env = {
   COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN: string;
   SENTRY_DSN?: string;
   ENVIRONMENT?: string;
+  BUILD_GIT_REF?: string;
+  BUILD_GIT_SHA?: string;
+  BUILD_TIMESTAMP?: string;
 };
 
 export type OperatorDeps = {
@@ -162,6 +165,11 @@ export function createHandler(deps: OperatorDeps = {}) {
     if (url.pathname === "/health") {
       return json({
         ok: true,
+        service: "community-provision-operator",
+        environment: trim(env.ENVIRONMENT) || null,
+        git_sha: trim(env.BUILD_GIT_SHA) || null,
+        git_ref: trim(env.BUILD_GIT_REF) || null,
+        build_timestamp: trim(env.BUILD_TIMESTAMP) || null,
         runtime: "cloudflare-worker",
         requires_bearer_auth: Boolean(trim(env.COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN)),
         turso_organization_slug: trim(env.TURSO_ORGANIZATION_SLUG),

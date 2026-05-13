@@ -47,8 +47,22 @@ describe("community provision operator handler", () => {
       authToken: null,
     });
     expect(response.status).toBe(200);
-    const body = await response.json() as { ok: boolean; runtime: string; requires_bearer_auth: boolean };
+    const body = await response.json() as {
+      ok: boolean;
+      service: string;
+      environment: string | null;
+      git_sha: string | null;
+      git_ref: string | null;
+      build_timestamp: string | null;
+      runtime: string;
+      requires_bearer_auth: boolean;
+    };
     expect(body.ok).toBe(true);
+    expect(body.service).toBe("community-provision-operator");
+    expect(body.environment).toBe(null);
+    expect(body.git_sha).toBe(null);
+    expect(body.git_ref).toBe(null);
+    expect(body.build_timestamp).toBe(null);
     expect(body.runtime).toBe("cloudflare-worker");
     expect(body.requires_bearer_auth).toBe(true);
   });

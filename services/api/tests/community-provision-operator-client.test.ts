@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { HttpError } from "../src/lib/errors"
 import {
+  getCommunityProvisionOperatorVersion,
   migrateCommunityDatabaseViaOperator,
   provisionCommunityViaOperator,
 } from "../src/lib/communities/provisioning/operator-client"
@@ -13,6 +14,37 @@ function mockOperatorBinding(handler: (request: Request) => Promise<Response> | 
 }
 
 describe("community provision operator client", () => {
+  test("reads operator version metadata from health", async () => {
+    const operator = mockOperatorBinding((request) => {
+      expect(new URL(request.url).pathname).toBe("/health")
+      return new Response(JSON.stringify({
+        service: "community-provision-operator",
+        environment: "production",
+        git_sha: "abc1234",
+        git_ref: "main",
+        build_timestamp: "2026-05-13T05:54:46Z",
+      }), {
+        headers: { "content-type": "application/json" },
+      })
+    })
+
+    const result = await getCommunityProvisionOperatorVersion({
+      COMMUNITY_PROVISION_OPERATOR: operator,
+    } satisfies Env)
+
+    expect(result).toEqual({
+      service: "community-provision-operator",
+      environment: "production",
+      git_sha: "abc1234",
+      git_ref: "main",
+      build_timestamp: "2026-05-13T05:54:46Z",
+    })
+  })
+
+  test("operator version metadata is optional", async () => {
+    await expect(getCommunityProvisionOperatorVersion({} satisfies Env)).resolves.toBe(null)
+  })
+
   test("migrates a community database through the operator", async () => {
     let requestId: string | null = null
     let requestBody: Record<string, unknown> | null = null
