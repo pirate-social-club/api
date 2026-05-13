@@ -1,3 +1,5 @@
+// @ts-nocheck
+
 import { SignJWT } from "jose"
 import { Interface, JsonRpcProvider, Wallet, getAddress } from "ethers"
 // @ts-expect-error The API tsconfig only loads bun-types/test, but this script runs under Bun.

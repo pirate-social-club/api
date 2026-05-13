@@ -1,4 +1,4 @@
-import { StoryClient, WIP_TOKEN_ADDRESS } from "@story-protocol/core-sdk"
+import { NativeRoyaltyPolicy, StoryClient, WIP_TOKEN_ADDRESS } from "@story-protocol/core-sdk"
 import { JsonRpcProvider, Wallet, getAddress } from "ethers"
 import { http, zeroAddress } from "viem"
 import { privateKeyToAccount } from "viem/accounts"
@@ -41,6 +41,9 @@ export type StoryRoyaltyPaymentResult = StoryRoyaltyPurchaseSettlementResult & {
 let testRoyaltySettlementExecutor:
   | ((input: StoryRoyaltyPurchaseSettlementInput) => Promise<StoryRoyaltyPurchaseSettlementResult>)
   | null = null
+let testParentRoyaltyVaultTransferExecutor:
+  | ((input: StoryParentRoyaltyVaultTransferInput) => Promise<StoryParentRoyaltyVaultTransferResult>)
+  | null = null
 
 export function setStoryRoyaltyPurchaseSettlementExecutorForTests(
   executor: ((input: StoryRoyaltyPurchaseSettlementInput) => Promise<StoryRoyaltyPurchaseSettlementResult>) | null,
@@ -48,8 +51,30 @@ export function setStoryRoyaltyPurchaseSettlementExecutorForTests(
   testRoyaltySettlementExecutor = executor
 }
 
+export type StoryParentRoyaltyVaultTransferInput = {
+  env: Env
+  childIpId: string
+  parentIpId: string
+  royaltyPolicy?: string | null
+}
+
+export type StoryParentRoyaltyVaultTransferResult = {
+  transferTxHash: string
+}
+
+export function setStoryParentRoyaltyVaultTransferExecutorForTests(
+  executor: ((input: StoryParentRoyaltyVaultTransferInput) => Promise<StoryParentRoyaltyVaultTransferResult>) | null,
+): void {
+  testParentRoyaltyVaultTransferExecutor = executor
+}
+
 function resolveStoryChainName(env: Pick<Env, "STORY_CHAIN_ID">): "aeneid" | "mainnet" {
   return resolveStoryChainId(env) === 1514 ? "mainnet" : "aeneid"
+}
+
+function resolveRoyaltyPolicyInput(value: string | null | undefined): string | NativeRoyaltyPolicy {
+  const policy = parseExpectedEvmAddress(value)
+  return policy ?? NativeRoyaltyPolicy.LAP
 }
 
 export async function payStoryRoyaltyOnBehalfForPurchase(input: StoryRoyaltyPurchaseSettlementInput): Promise<StoryRoyaltyPaymentResult> {
@@ -101,6 +126,40 @@ export async function payStoryRoyaltyOnBehalfForPurchase(input: StoryRoyaltyPurc
     settlementTxHash: royaltyTxHash,
     entitlementHandled: false,
   }
+}
+
+export async function transferStoryRoyaltyToParentVault(input: StoryParentRoyaltyVaultTransferInput): Promise<StoryParentRoyaltyVaultTransferResult> {
+  if (testParentRoyaltyVaultTransferExecutor) {
+    return await testParentRoyaltyVaultTransferExecutor(input)
+  }
+
+  const settlementConfig = resolveStorySettlementDirectSigner(input.env)
+  if (!settlementConfig.ok) throw new Error(settlementConfig.error)
+  if (!settlementConfig.value) {
+    throw new Error("MUSIC_PURCHASE_STORY_SETTLEMENT_PRIVATE_KEY missing/invalid")
+  }
+
+  const childIpId = parseExpectedEvmAddress(input.childIpId)
+  if (!childIpId) throw new Error("childIpId missing/invalid")
+  const parentIpId = parseExpectedEvmAddress(input.parentIpId)
+  if (!parentIpId) throw new Error("parentIpId missing/invalid")
+
+  const storyClient = StoryClient.newClient({
+    account: privateKeyToAccount(settlementConfig.value.privateKey as `0x${string}`),
+    transport: http(resolveStoryRpcUrl(input.env)),
+    chainId: resolveStoryChainName(input.env),
+  })
+  const transfer = await storyClient.royalty.transferToVault({
+    ipId: childIpId as `0x${string}`,
+    ancestorIpId: parentIpId as `0x${string}`,
+    royaltyPolicy: resolveRoyaltyPolicyInput(input.royaltyPolicy) as `0x${string}` | NativeRoyaltyPolicy,
+    token: WIP_TOKEN_ADDRESS,
+  })
+  const transferTxHash = String(transfer.txHash || "")
+  if (!transferTxHash) {
+    throw new Error("story_parent_royalty_vault_transfer_missing_tx_hash")
+  }
+  return { transferTxHash }
 }
 
 export async function mintStoryRoyaltyPurchaseEntitlement(input: {

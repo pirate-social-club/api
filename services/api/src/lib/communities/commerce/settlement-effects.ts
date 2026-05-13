@@ -7,6 +7,7 @@ export type PurchaseSettlementEffectKind =
   | "buyer_funding_receipt"
   | "charity_payout"
   | "story_royalty_payment"
+  | "story_parent_royalty_vault_transfer"
   | "story_entitlement_mint"
 
 export type PurchaseSettlementEffectStatus = "submitted" | "confirmed" | "failed"
