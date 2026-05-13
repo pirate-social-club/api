@@ -7,6 +7,8 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "generate:migrations": "bun run scripts/generate-migration-manifest.ts",
+    "check:migrations": "bun run scripts/check-migration-manifest.ts",
+    "backfill:migrations": "bun run scripts/backfill-community-migrations.ts",
     "check": "tsc --noEmit",
     "test": "bun test"
   },
