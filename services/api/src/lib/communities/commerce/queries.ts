@@ -5,6 +5,7 @@ import type {
   CommunityListing,
   CommunityMoneyPolicy,
   CommunityPurchase,
+  DerivativeSourceKind,
 } from "../../../types"
 import type {
   AssetRow,
@@ -22,6 +23,20 @@ import {
   stringOrNull,
 } from "./row-types"
 
+export type DerivativeSourceRow = Pick<
+  AssetRow,
+  | "asset_id"
+  | "community_id"
+  | "display_title"
+  | "creator_user_id"
+  | "asset_kind"
+  | "license_preset"
+  | "commercial_rev_share_pct"
+  | "story_ip_id"
+  | "story_license_terms_id"
+  | "updated_at"
+>
+
 function buildInClause(values: string[], startIndex = 1): { placeholders: string; args: string[] } | null {
   const uniqueValues = Array.from(new Set(values.filter((value) => value.trim())))
   if (uniqueValues.length === 0) {
@@ -31,6 +46,10 @@ function buildInClause(values: string[], startIndex = 1): { placeholders: string
     placeholders: uniqueValues.map((_, index) => `?${startIndex + index}`).join(", "),
     args: uniqueValues,
   }
+}
+
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, (match) => `\\${match}`)
 }
 
 function toPurchaseAllocationLegRow(row: unknown): PurchaseAllocationLegRow {
@@ -152,6 +171,74 @@ export async function getAssetRow(
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
   }
+}
+
+function assetKindForDerivativeSourceKind(kind: DerivativeSourceKind | null | undefined): Asset["asset_kind"] | null {
+  if (kind === "song") return "song_audio"
+  if (kind === "video") return "video_file"
+  return null
+}
+
+export async function listDerivativeSourceRows(input: {
+  client: Client
+  communityId: string
+  kind?: DerivativeSourceKind | null
+  query?: string | null
+  limit: number
+}): Promise<DerivativeSourceRow[]> {
+  const assetKind = assetKindForDerivativeSourceKind(input.kind)
+  const query = input.query?.trim()
+  const hasQuery = Boolean(query)
+  const args: Array<string | number> = [input.communityId]
+  let nextArg = 2
+  const filters = [
+    "community_id = ?1",
+    "publication_status = 'story_published'",
+    "story_status = 'published'",
+    "story_royalty_registration_status = 'registered'",
+    "story_ip_id IS NOT NULL",
+    "story_ip_id != ''",
+    "story_license_terms_id IS NOT NULL",
+    "story_license_terms_id != ''",
+  ]
+
+  if (assetKind) {
+    filters.push(`asset_kind = ?${nextArg}`)
+    args.push(assetKind)
+    nextArg += 1
+  }
+  if (hasQuery) {
+    filters.push(`LOWER(COALESCE(display_title, asset_id)) LIKE ?${nextArg} ESCAPE '\\'`)
+    args.push(`%${escapeLikePattern(query!.toLowerCase())}%`)
+    nextArg += 1
+  }
+  args.push(input.limit)
+
+  const rows = await input.client.execute({
+    sql: `
+      SELECT asset_id, community_id, display_title, creator_user_id, asset_kind,
+             license_preset, commercial_rev_share_pct, story_ip_id, story_license_terms_id,
+             updated_at
+      FROM assets
+      WHERE ${filters.join("\n        AND ")}
+      ORDER BY updated_at DESC, asset_id DESC
+      LIMIT ?${nextArg}
+    `,
+    args,
+  })
+
+  return rows.rows.map((row) => ({
+    asset_id: requiredString(row, "asset_id"),
+    community_id: requiredString(row, "community_id"),
+    display_title: stringOrNull(row, "display_title"),
+    creator_user_id: requiredString(row, "creator_user_id"),
+    asset_kind: requiredString(row, "asset_kind") as Asset["asset_kind"],
+    license_preset: stringOrNull(row, "license_preset") as Asset["license_preset"] | null,
+    commercial_rev_share_pct: numberOrNull(row, "commercial_rev_share_pct"),
+    story_ip_id: requiredString(row, "story_ip_id"),
+    story_license_terms_id: requiredString(row, "story_license_terms_id"),
+    updated_at: requiredString(row, "updated_at"),
+  }))
 }
 
 export async function getListingRowById(

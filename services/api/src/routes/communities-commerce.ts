@@ -9,6 +9,7 @@ import {
   getCommunityPricingPolicy,
   getCommunityListing,
   getCommunityPurchase,
+  listCommunityDerivativeSources,
   listCommunityListings,
   listCommunityPurchases,
   preflightCommunityPurchaseQuote,
@@ -31,6 +32,7 @@ import type {
   CommunityPurchaseSettlementFailureRequest,
   CommunityPurchaseSettlementRequest,
   CreateCommunityListingRequest,
+  DerivativeSourceKind,
   UpdateCommunityListingRequest,
   UpdateCommunityMoneyPolicyRequest,
   UpdateCommunityPricingPolicyRequest,
@@ -54,6 +56,19 @@ function commerceListLimit(value: string | undefined): number {
     throw badRequestError("Invalid limit")
   }
   return Math.min(parsed, MAX_COMMERCE_LIST_LIMIT)
+}
+
+function derivativeSourceKind(value: string | undefined): DerivativeSourceKind | null {
+  if (value === undefined || value.trim() === "") {
+    return null
+  }
+  if (value === "song" || value === "video") {
+    return value
+  }
+  if (value === "live") {
+    return "song"
+  }
+  throw badRequestError("Invalid derivative source kind")
 }
 
 export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedEnv>): void {
@@ -109,6 +124,21 @@ export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedE
       communityId,
       body,
       communityRepository,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.get("/:communityId/derivative-sources", async (c) => {
+    const { actor, communityId, communityRepository, profileRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await listCommunityDerivativeSources({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      kind: derivativeSourceKind(c.req.query("kind")),
+      query: c.req.query("q") ?? null,
+      limit: commerceListLimit(c.req.query("limit")),
+      communityRepository,
+      profileRepository,
     })
     return c.json(result, 200)
   })

@@ -188,6 +188,8 @@ describe("getPostById", () => {
         media_refs_json TEXT,
         song_artifact_bundle_id TEXT,
         song_title TEXT,
+        song_cover_art_ref TEXT,
+        song_duration_ms INTEGER,
         source_language TEXT,
         translation_policy TEXT,
         access_mode TEXT,

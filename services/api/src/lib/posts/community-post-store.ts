@@ -20,7 +20,11 @@ import type { CreatePostRequest, Post } from "../../types"
 import { decodePublicSongArtifactBundleId } from "../public-ids"
 
 type StoryLicensePreset = NonNullable<CreatePostRequest["license_preset"]>
-type PostWriteRequest = CreatePostRequest & { song_title?: string | null }
+type PostWriteRequest = CreatePostRequest & {
+  song_cover_art_ref?: string | null
+  song_duration_ms?: number | null
+  song_title?: string | null
+}
 
 function isStoryLicensePreset(value: unknown): value is StoryLicensePreset {
   return value === "non-commercial" || value === "commercial-use" || value === "commercial-remix"
@@ -148,8 +152,8 @@ export async function insertPost(input: {
         identity_mode, anonymous_scope, anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot,
         agent_ownership_provider_snapshot, disclosed_qualifiers_json, label_id, label_assignment_status,
         label_assigned_by, label_assigned_at, label_ai_confidence, label_assignment_error, label_assignment_model,
-        label_assignment_result_json, post_type, status, song_mode, title, song_title, body, caption, visibility, lyrics,
-        link_url, media_refs_json, song_artifact_bundle_id, source_language, translation_policy, rights_basis,
+        label_assignment_result_json, post_type, status, song_mode, title, song_title, song_cover_art_ref, song_duration_ms,
+        body, caption, visibility, lyrics, link_url, media_refs_json, song_artifact_bundle_id, source_language, translation_policy, rights_basis,
         access_mode, asset_id, parent_post_id, upstream_asset_refs_json, analysis_state, analysis_result_ref, content_safety_state,
         age_gate_policy, created_at, updated_at, idempotency_key, agent_handle_snapshot
       ) VALUES (
@@ -157,8 +161,8 @@ export async function insertPost(input: {
         ?7, ?8, ?9, ?10, ?11, ?12,
         ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22,
         ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32,
-        ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, NULL,
-        ?42, ?43, ?44, ?44, ?45, ?46
+        ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42,
+        ?43, NULL, ?44, ?45, ?46, ?46, ?47, ?48
       )
     `,
     args: [
@@ -188,6 +192,8 @@ export async function insertPost(input: {
       input.body.song_mode ?? null,
       title,
       input.body.song_title ?? null,
+      input.body.song_cover_art_ref ?? null,
+      input.body.song_duration_ms ?? null,
       input.body.body ?? null,
       input.body.caption ?? null,
       visibility,

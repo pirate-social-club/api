@@ -53,7 +53,8 @@ export const POST_SELECT_COLUMNS = `
   post_type, status, comments_locked, comments_locked_at, comments_locked_by_user_id, comments_lock_reason,
   visibility, title, body, caption, lyrics,
   link_url, link_og_image_url, link_og_title, ${boundedJsonProjection("link_enrichment_snapshot_json", sqlStringLiteral(OVERSIZED_LINK_ENRICHMENT_SNAPSHOT_JSON))}, link_enrichment_synced_at,
-  ${boundedJsonProjection("embeds_json")}, ${boundedJsonProjection("media_refs_json")}, song_artifact_bundle_id, song_title, source_language, translation_policy,
+  ${boundedJsonProjection("embeds_json")}, ${boundedJsonProjection("media_refs_json")}, song_artifact_bundle_id, song_title,
+  song_cover_art_ref, song_duration_ms, source_language, translation_policy,
   access_mode, asset_id, (
     SELECT live_room_id
     FROM live_rooms
@@ -106,6 +107,8 @@ export type PostRow = {
   media_refs_json: string | null
   song_artifact_bundle_id: string | null
   song_title: string | null
+  song_cover_art_ref: string | null
+  song_duration_ms: number | null
   source_language: string | null
   translation_policy: Post["translation_policy"]
   access_mode: Post["access_mode"]
@@ -227,6 +230,8 @@ export function toPostRow(row: unknown): PostRow {
     media_refs_json: stringOrNull(rowValue(row, "media_refs_json")),
     song_artifact_bundle_id: stringOrNull(rowValue(row, "song_artifact_bundle_id")),
     song_title: stringOrNull(rowValue(row, "song_title")),
+    song_cover_art_ref: stringOrNull(rowValue(row, "song_cover_art_ref")),
+    song_duration_ms: numberOrNull(rowValue(row, "song_duration_ms")),
     source_language: stringOrNull(rowValue(row, "source_language")),
     translation_policy: stringOrNull(rowValue(row, "translation_policy")) as Post["translation_policy"],
     access_mode: stringOrNull(rowValue(row, "access_mode")) as Post["access_mode"],
@@ -290,6 +295,8 @@ export function serializePost(row: PostRow): Post {
     media_refs: parseMediaRefs(row.media_refs_json),
     song_artifact_bundle_id: row.song_artifact_bundle_id,
     song_title: row.song_title,
+    song_cover_art_ref: row.song_cover_art_ref,
+    song_duration_ms: row.song_duration_ms,
     source_language: row.source_language,
     translation_policy: row.translation_policy,
     access_mode: row.access_mode,

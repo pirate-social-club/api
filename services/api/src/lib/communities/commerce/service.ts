@@ -12,7 +12,9 @@ import { getPostById } from "../../posts/community-post-store"
 import { isPubliclyReadablePost } from "../../posts/post-access"
 import { fetchSongArtifactBytes } from "../../song-artifacts/song-artifact-storage"
 import { sha256Hex } from "../../crypto"
+import { getProfilePublicHandleLabel } from "../../auth/auth-serializers"
 import type { UserRepository } from "../../auth/repositories"
+import type { ProfileRepository } from "../../auth/repositories"
 import {
   maybeRegisterStoryRoyaltyForAsset,
   type StoryLicensePreset,
@@ -23,6 +25,7 @@ import {
   getActiveEntitlementForBuyer,
   getActiveEntitlementForBuyerIdentity,
   getAssetRow,
+  listDerivativeSourceRows,
   requireCommunityMember,
   resolvePrimaryWalletAddress,
   serializeAsset,
@@ -36,6 +39,9 @@ import {
 import type {
   Asset,
   AssetAccessResponse,
+  DerivativeSource,
+  DerivativeSourceKind,
+  DerivativeSourceListResponse,
   Env,
   Post,
   SongArtifactBundle,
@@ -44,6 +50,10 @@ import type {
 
 function isStoryRoyaltyAssetKind(assetKind: Asset["asset_kind"]): assetKind is "song_audio" | "video_file" {
   return assetKind === "song_audio" || assetKind === "video_file"
+}
+
+function derivativeSourceKindFromAssetKind(assetKind: Asset["asset_kind"]): DerivativeSourceKind {
+  return assetKind === "video_file" ? "video" : "song"
 }
 
 function shouldAttemptStoryRoyaltyRegistration(input: {
@@ -387,6 +397,59 @@ export async function getCommunityAsset(input: {
       notFoundMessage: "Asset not found",
     })
     return serializeAsset(asset, { redactPrimaryForLocked: !isPrivilegedViewer })
+  } finally {
+    db.close()
+  }
+}
+
+export async function listCommunityDerivativeSources(input: {
+  env: Env
+  userId: string
+  communityId: string
+  kind?: DerivativeSourceKind | null
+  query?: string | null
+  limit: number
+  communityRepository: CommunityDatabaseBindingRepository
+  profileRepository: ProfileRepository
+}): Promise<DerivativeSourceListResponse> {
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  try {
+    await requireCommunityMember(db.client, input.communityId, input.userId)
+    const rows = await listDerivativeSourceRows({
+      client: db.client,
+      communityId: input.communityId,
+      kind: input.kind,
+      query: input.query,
+      limit: input.limit,
+    })
+    const creatorUserIds = Array.from(new Set(rows.map((row) => row.creator_user_id)))
+    const profilesByUserId = new Map(await Promise.all(creatorUserIds.map(async (userId) => [
+      userId,
+      await input.profileRepository.getProfileByUserId(userId).catch(() => null),
+    ] as const)))
+    const items: DerivativeSource[] = rows.map((row) => {
+      const profile = profilesByUserId.get(row.creator_user_id) ?? null
+      return {
+        id: `asset_${row.asset_id}`,
+        object: "derivative_source",
+        community: `com_${row.community_id}`,
+        asset: `asset_${row.asset_id}`,
+        title: row.display_title?.trim() || "Untitled asset",
+        kind: derivativeSourceKindFromAssetKind(row.asset_kind),
+        story_ip: row.story_ip_id!,
+        story_license_terms: row.story_license_terms_id!,
+        license_preset: row.license_preset,
+        commercial_rev_share_pct: row.commercial_rev_share_pct,
+        creator_user: `usr_${row.creator_user_id}`,
+        creator_handle: profile ? getProfilePublicHandleLabel(profile) : null,
+        creator_display_name: profile?.display_name ?? null,
+      }
+    })
+
+    return {
+      items,
+      next_cursor: null,
+    }
   } finally {
     db.close()
   }

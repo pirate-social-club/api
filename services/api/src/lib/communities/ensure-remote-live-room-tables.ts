@@ -2,6 +2,13 @@ import type { Client } from "@libsql/client"
 
 const LIVE_ROOMS_MIGRATION_NAME = "1070_live_rooms.sql"
 const LIVE_ROOMS_MIGRATION_CHECKSUM = "47dcdd32d64789c6f93e6162f137b7238c75914532256aa0d186d5a8b68fa179"
+const LIVE_ROOM_SETLIST_SOURCE_ASSET_REF_MIGRATION_NAME = "1076_live_room_setlist_source_asset_ref.sql"
+const LIVE_ROOM_SETLIST_SOURCE_ASSET_REF_MIGRATION_CHECKSUM = "55f125162ffc23a107556a295b1456a74065100e6a98895a11b2560b2540baab"
+
+async function hasColumn(client: Client, tableName: string, columnName: string): Promise<boolean> {
+  const result = await client.execute(`PRAGMA table_info(${tableName})`)
+  return result.rows.some((row) => String(row.name) === columnName)
+}
 
 export async function ensureRemoteLiveRoomTables(client: Client): Promise<void> {
   await client.batch([
@@ -104,6 +111,7 @@ export async function ensureRemoteLiveRoomTables(client: Client): Promise<void> 
           community_id TEXT NOT NULL,
           position INTEGER NOT NULL CHECK (position >= 0),
           song_artifact_bundle_id TEXT,
+          source_asset_ref TEXT,
           title TEXT NOT NULL,
           artist TEXT,
           rights_basis TEXT NOT NULL CHECK (rights_basis IN ('original', 'licensed', 'cover', 'public_domain', 'unknown')),
@@ -158,4 +166,18 @@ export async function ensureRemoteLiveRoomTables(client: Client): Promise<void> 
       args: [LIVE_ROOMS_MIGRATION_NAME, LIVE_ROOMS_MIGRATION_CHECKSUM],
     },
   ], "write")
+
+  if (!(await hasColumn(client, "live_room_setlist_items", "source_asset_ref"))) {
+    await client.execute("ALTER TABLE live_room_setlist_items ADD COLUMN source_asset_ref TEXT")
+  }
+  await client.execute({
+    sql: `
+      INSERT OR IGNORE INTO schema_migrations (migration_name, migration_label, checksum)
+      VALUES (?1, 'community-template', ?2)
+    `,
+    args: [
+      LIVE_ROOM_SETLIST_SOURCE_ASSET_REF_MIGRATION_NAME,
+      LIVE_ROOM_SETLIST_SOURCE_ASSET_REF_MIGRATION_CHECKSUM,
+    ],
+  })
 }

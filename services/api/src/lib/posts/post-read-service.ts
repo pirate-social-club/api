@@ -132,6 +132,7 @@ function buildDeletedPostStubResponse(input: {
     translated_title: null,
     translated_caption: null,
     translated_embeds: null,
+    song_presentation: null,
     source_hash: "",
   }
 }

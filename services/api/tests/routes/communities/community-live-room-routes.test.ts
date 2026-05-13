@@ -213,6 +213,7 @@ function readySoloRoomBody() {
       items: [
         {
           song_artifact_bundle: undefined as string | undefined,
+          source_asset_ref: undefined as string | undefined,
           title: "Opening Song",
           artist: "Pirate Band",
           rights_basis: "original",
@@ -320,6 +321,54 @@ describe("community live-room routes", () => {
       post: { anchor_live_room: string | null }
     }
     expect(anchorPost.post.anchor_live_room).toBe(room.id)
+  })
+
+  test("owner creates a live room setlist with a Story source asset ref", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const owner = await exchangeJwt(ctx.env, "live-room-story-source-owner")
+    await completeUniqueHumanVerification(ctx.env, owner.accessToken)
+    const communityId = await createTestCommunity({ env: ctx.env, accessToken: owner.accessToken })
+    const body = readySoloRoomBody()
+    body.performer_allocations[0].user = `usr_${owner.userId}`
+    body.setlist.items[0]!.source_asset_ref = "story:asset:ast_live_story_source"
+    body.setlist.items[0]!.song_artifact_bundle = undefined
+    body.setlist.items[0]!.title = "Story Source Song"
+
+    const response = await postLiveRoom({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      communityId,
+      body,
+    })
+    expect(response.status).toBe(201)
+    const room = await json(response) as {
+      id: string
+      setlist: {
+        items: Array<{
+          song_artifact_bundle: string | null
+          source_asset_ref: string | null
+          title: string
+        }>
+      }
+    }
+    expect(room.setlist.items[0]?.song_artifact_bundle).toBeNull()
+    expect(room.setlist.items[0]?.source_asset_ref).toBe("story:asset:asset_ast_live_story_source")
+    expect(room.setlist.items[0]?.title).toBe("Story Source Song")
+
+    const read = await app.request(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}`,
+      {
+        headers: { authorization: `Bearer ${owner.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(read.status).toBe(200)
+    const readBody = await json(read) as {
+      setlist: { items: Array<{ source_asset_ref: string | null }> }
+    }
+    expect(readBody.setlist.items[0]?.source_asset_ref).toBe("story:asset:asset_ast_live_story_source")
   })
 
   test("owner uploads a song artifact and uses it in a live room setlist", async () => {

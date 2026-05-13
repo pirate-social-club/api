@@ -111,6 +111,7 @@ export function serializeLocalizedPostResponse(response: LocalizedPostResponse):
     thread_snapshot: response.thread_snapshot ? serializeCommentThreadSnapshot(response.thread_snapshot) : null,
     market_context: response.market_context,
     label: serializePostLabel(response.label),
+    song_presentation: response.song_presentation ?? null,
     upvote_count: response.upvote_count,
     downvote_count: response.downvote_count,
     like_count: response.like_count,

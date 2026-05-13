@@ -5,6 +5,29 @@ import { DEFAULT_CONTENT_LOCALE, normalizeContentLocale, sameLanguageLocale } fr
 import { getContentTranslation } from "./content-translation-store"
 import type { CommentThreadSnapshot, LocalizedPostResponse, Post } from "../../types"
 
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null
+}
+
+function numberValue(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null
+}
+
+async function buildSongPresentation(input: {
+  post: Post
+}): Promise<LocalizedPostResponse["song_presentation"]> {
+  if (input.post.post_type !== "song") {
+    return null
+  }
+
+  const postTitle = stringValue(input.post.song_title)
+  const postCoverArtRef = stringValue(input.post.song_cover_art_ref)
+  const postDurationMs = numberValue(input.post.song_duration_ms)
+  return postTitle || postCoverArtRef || postDurationMs !== null
+    ? { title: postTitle, cover_art_ref: postCoverArtRef, duration_ms: postDurationMs }
+    : null
+}
+
 export type PostReadMetrics = {
   upvote_count: number
   downvote_count: number
@@ -177,6 +200,9 @@ export async function buildLocalizedPostResponse(input: {
 
   const response: LocalizedPostResponse = {
     post: input.post,
+    song_presentation: await buildSongPresentation({
+      post: input.post,
+    }),
     author_community_role: await getAuthorCommunityRole({
       executor: input.executor,
       post: input.post,

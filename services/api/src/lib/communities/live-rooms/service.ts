@@ -20,7 +20,7 @@ import {
   revokeGuestLiveRoomRuntime,
   type LiveRoomRuntimeAttachResponse,
 } from "./runtime"
-import { decodePublicSongArtifactBundleId, decodePublicUserId, publicId } from "../../public-ids"
+import { decodePublicAssetId, decodePublicSongArtifactBundleId, decodePublicUserId, publicId } from "../../public-ids"
 
 export type LiveRoomKind = "solo" | "duet"
 export type LiveRoomStatus = "scheduled" | "live" | "ended" | "canceled"
@@ -48,6 +48,7 @@ export type CreateLiveRoomRequest = {
     status?: LiveRoomSetlistStatus | null
     items?: Array<{
       song_artifact_bundle?: string | null
+      source_asset_ref?: string | null
       title?: string | null
       artist?: string | null
       rights_basis?: LiveRoomRightsBasis | null
@@ -97,6 +98,7 @@ type SetlistItemRow = {
   setlist_item_id: string
   position: number
   song_artifact_bundle_id: string | null
+  source_asset_ref: string | null
   title: string
   artist: string | null
   rights_basis: LiveRoomRightsBasis
@@ -141,6 +143,7 @@ export type LiveRoom = {
       object: "live_room_setlist_item"
       position: number
       song_artifact_bundle: string | null
+      source_asset_ref: string | null
       title: string
       artist: string | null
       rights_basis: LiveRoomRightsBasis
@@ -273,6 +276,20 @@ function normalizeSongArtifactBundleId(value: unknown): string | null {
   return decodedSongArtifactBundleId
 }
 
+function normalizeSourceAssetRef(value: unknown): string | null {
+  const sourceAssetRef = cleanString(value)
+  if (!sourceAssetRef) return null
+  if (!sourceAssetRef.startsWith("story:asset:")) {
+    throw badRequestError("setlist item source_asset_ref must be a Story asset ref")
+  }
+  const assetRef = sourceAssetRef.slice("story:asset:".length)
+  const decodedAssetId = decodePublicAssetId(assetRef)
+  if (!/^ast_[a-zA-Z0-9_]+$/.test(decodedAssetId)) {
+    throw badRequestError("setlist item source_asset_ref must reference a Pirate asset")
+  }
+  return `story:asset:${publicId(decodedAssetId, "asset")}`
+}
+
 function rowToLiveRoom(row: QueryResultRow): LiveRoomRow {
   return {
     live_room_id: requiredString(row, "live_room_id"),
@@ -319,6 +336,7 @@ function rowToSetlistItem(row: QueryResultRow): SetlistItemRow {
     setlist_item_id: requiredString(row, "setlist_item_id"),
     position: Number(rowValue(row, "position") ?? 0),
     song_artifact_bundle_id: stringOrNull(rowValue(row, "song_artifact_bundle_id")),
+    source_asset_ref: stringOrNull(rowValue(row, "source_asset_ref")),
     title: requiredString(row, "title"),
     artist: stringOrNull(rowValue(row, "artist")),
     rights_basis: requiredString(row, "rights_basis") as LiveRoomRightsBasis,
@@ -354,7 +372,7 @@ async function hydrateLiveRoom(client: LiveRoomExecutor, room: LiveRoomRow): Pro
   const setlist = rowToSetlist(setlistRow)
   const items = (await client.execute({
     sql: `
-      SELECT setlist_item_id, position, song_artifact_bundle_id, title, artist,
+      SELECT setlist_item_id, position, song_artifact_bundle_id, source_asset_ref, title, artist,
              rights_basis, license_ref, rights_status, blocking_rights_failure
       FROM live_room_setlist_items
       WHERE setlist_id = ?1
@@ -399,6 +417,7 @@ async function hydrateLiveRoom(client: LiveRoomExecutor, room: LiveRoomRow): Pro
         object: "live_room_setlist_item",
         position: item.position,
         song_artifact_bundle: item.song_artifact_bundle_id,
+        source_asset_ref: item.source_asset_ref,
         title: item.title,
         artist: item.artist,
         rights_basis: item.rights_basis,
@@ -512,6 +531,7 @@ function normalizeSetlist(body: CreateLiveRoomRequest): {
     title: string
     artist: string | null
     songArtifactBundleId: string | null
+    sourceAssetRef: string | null
     rightsBasis: LiveRoomRightsBasis
     licenseRef: string | null
     rightsStatus: LiveRoomRightsStatus
@@ -537,6 +557,7 @@ function normalizeSetlist(body: CreateLiveRoomRequest): {
         title,
         artist: cleanString(item.artist),
         songArtifactBundleId: normalizeSongArtifactBundleId(item.song_artifact_bundle),
+        sourceAssetRef: normalizeSourceAssetRef(item.source_asset_ref),
         rightsBasis,
         licenseRef,
         rightsStatus: normalizeRightsStatus(item.rights_status),
@@ -779,12 +800,12 @@ export async function createLiveRoom(input: {
           sql: `
             INSERT INTO live_room_setlist_items (
               setlist_item_id, setlist_id, live_room_id, community_id, position,
-              song_artifact_bundle_id, title, artist, rights_basis, license_ref,
+              song_artifact_bundle_id, source_asset_ref, title, artist, rights_basis, license_ref,
               rights_status, blocking_rights_failure, created_at, updated_at
             ) VALUES (
               ?1, ?2, ?3, ?4, ?5,
-              ?6, ?7, ?8, ?9, ?10,
-              ?11, ?12, ?13, ?13
+              ?6, ?7, ?8, ?9, ?10, ?11,
+              ?12, ?13, ?14, ?14
             )
           `,
           args: [
@@ -794,6 +815,7 @@ export async function createLiveRoom(input: {
             input.communityId,
             index,
             item.songArtifactBundleId,
+            item.sourceAssetRef,
             item.title,
             item.artist,
             item.rightsBasis,

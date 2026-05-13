@@ -115,7 +115,31 @@ export type {
   WalletAttachmentSummary,
 } from "@pirate/api-contracts"
 
+export type DerivativeSourceKind = "song" | "video"
+
+export type DerivativeSource = {
+  id: string
+  object: "derivative_source"
+  community: string
+  asset: string
+  title: string
+  kind: DerivativeSourceKind
+  story_ip: string
+  story_license_terms: string
+  license_preset?: Asset["license_preset"] | null
+  commercial_rev_share_pct?: number | null
+  creator_user: string
+  creator_handle?: string | null
+  creator_display_name?: string | null
+}
+
+export type DerivativeSourceListResponse = {
+  items: DerivativeSource[]
+  next_cursor: string | null
+}
+
 import type {
+  Asset,
   Community as ContractCommunity,
   CommunityPreview as ContractCommunityPreview,
   CommunityRoleSummary as ContractCommunityRoleSummary,
@@ -276,6 +300,12 @@ export type PostLabel = {
 
 export type PostLabelAssignmentStatus = "pending" | "assigned" | "failed" | "skipped"
 
+export type SongPresentation = {
+  title: string | null
+  cover_art_ref: string | null
+  duration_ms: number | null
+}
+
 export type Post = {
   post_id: string
   community_id: string
@@ -319,6 +349,8 @@ export type Post = {
   anchor_live_room_id?: string | null
   song_artifact_bundle_id?: string | null
   song_title?: string | null
+  song_cover_art_ref?: string | null
+  song_duration_ms?: number | null
   parent_post_id?: string | null
   song_mode?: "original" | "remix" | null
   rights_basis?: "none" | "original" | "derivative" | "attribution_only" | null
@@ -390,6 +422,7 @@ export type LocalizedPostResponse = {
   thread_snapshot: CommentThreadSnapshot | null
   market_context?: MarketContextSummary | null
   label?: PostLabel | null
+  song_presentation?: SongPresentation | null
   upvote_count: number
   downvote_count: number
   like_count: number
@@ -406,6 +439,33 @@ export type LocalizedPostResponse = {
   translated_caption?: string | null
   translated_embeds?: Array<LocalizedPostEmbedTranslation> | null
   source_hash: string
+}
+
+export type ProfileActivityTab = "overview" | "posts" | "comments"
+
+export type ProfileActivityPostPage = {
+  kind: "post"
+  post: LocalizedPostResponse
+  community: CommunityPreview
+  created_at: string
+}
+
+export type ProfileActivityCommentPage = {
+  kind: "comment"
+  comment: CommentListItem
+  thread_root_post: LocalizedPostResponse
+  community: CommunityPreview
+  created_at: string
+}
+
+export type ProfileActivityItem = ProfileActivityPostPage | ProfileActivityCommentPage
+
+export type ProfileActivityResponse = {
+  tab: ProfileActivityTab
+  posts: ProfileActivityPostPage[]
+  comments: ProfileActivityCommentPage[]
+  overview_items: ProfileActivityItem[]
+  next_cursor: string | null
 }
 
 export type CommunityTextLocalizationItem = {
@@ -532,6 +592,7 @@ export type CommunityPreview = {
   membership_gate_summaries: Array<MembershipGateSummary>
   rules: Array<CommunityRule>
   viewer_membership_status?: "member" | "not_member" | "banned" | null
+  viewer_community_role?: "owner" | "admin" | "moderator" | null
   viewer_following?: boolean | null
   created_at: string
 }
