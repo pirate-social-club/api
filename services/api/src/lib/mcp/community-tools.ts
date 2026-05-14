@@ -36,6 +36,21 @@ export const COMMUNITY_MCP_TOOLS = [
     },
   },
   {
+    name: "get_pirate_board_capabilities",
+    description: "Return a machine-readable action matrix for a Pirate community, including public read access, guest comment eligibility, delegated-agent write eligibility, required auth modes, and proof-of-work requirements.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        community_id: {
+          type: "string",
+          description: "Community id, public community id, /c/slug, route slug, or display name.",
+        },
+      },
+      required: ["community_id"],
+    },
+  },
+  {
     name: "prepare_guest_comment",
     description: "Prepare an unauthenticated guest comment by resolving the guest identity and returning an ALTCHA challenge. No API key is required.",
     inputSchema: {

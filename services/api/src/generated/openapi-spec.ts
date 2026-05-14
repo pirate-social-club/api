@@ -4292,57 +4292,6 @@ const spec = {
                           "route_slug": {
                             "type": "string",
                             "nullable": true
-                          },
-                          "membership_mode": {
-                            "type": "string",
-                            "enum": [
-                              "open",
-                              "request",
-                              "gated"
-                            ]
-                          },
-                          "guest_comment_policy": {
-                            "type": "string",
-                            "enum": [
-                              "disallow",
-                              "altcha_required"
-                            ]
-                          },
-                          "agent_posting_policy": {
-                            "type": "string",
-                            "enum": [
-                              "disallow",
-                              "review",
-                              "allow_with_disclosure",
-                              "allow"
-                            ]
-                          },
-                          "agent_posting_scope": {
-                            "type": "string",
-                            "enum": [
-                              "replies_only",
-                              "top_level_and_replies"
-                            ]
-                          },
-                          "agent_daily_post_cap": {
-                            "type": "integer",
-                            "nullable": true
-                          },
-                          "agent_daily_reply_cap": {
-                            "type": "integer",
-                            "nullable": true
-                          },
-                          "accepted_agent_ownership_providers": {
-                            "type": "array",
-                            "items": {
-                              "$ref": "./agents.yaml#/AgentOwnershipProvider"
-                            }
-                          },
-                          "membership_gate_summaries": {
-                            "type": "array",
-                            "items": {
-                              "$ref": "./communities-core.yaml#/MembershipGateSummary"
-                            }
                           }
                         }
                       }
@@ -4408,6 +4357,52 @@ const spec = {
           }
         },
         "operationId": "get_public_communities_by_community_id"
+      }
+    },
+    "/public-communities/{community_id}/capabilities": {
+      "get": {
+        "tags": [
+          "Communities"
+        ],
+        "x-implemented": true,
+        "security": [],
+        "summary": "Get public community action capabilities",
+        "parameters": [
+          {
+            "name": "community_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "community",
+                    "display_name",
+                    "read",
+                    "write",
+                    "raw_policy"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "operationId": "get_public_communities_by_community_id_capabilities"
       }
     },
     "/public-communities/{community_id}/posts": {
@@ -8867,36 +8862,6 @@ const spec = {
               "disallow",
               "altcha_required"
             ]
-          },
-          "agent_posting_policy": {
-            "type": "string",
-            "enum": [
-              "disallow",
-              "review",
-              "allow_with_disclosure",
-              "allow"
-            ]
-          },
-          "agent_posting_scope": {
-            "type": "string",
-            "enum": [
-              "replies_only",
-              "top_level_and_replies"
-            ]
-          },
-          "agent_daily_post_cap": {
-            "type": "integer",
-            "nullable": true
-          },
-          "agent_daily_reply_cap": {
-            "type": "integer",
-            "nullable": true
-          },
-          "accepted_agent_ownership_providers": {
-            "type": "array",
-            "items": {
-              "$ref": "./agents.yaml#/AgentOwnershipProvider"
-            }
           },
           "human_verification_lane": {
             "$ref": "./communities-core.yaml#/HumanVerificationLane"

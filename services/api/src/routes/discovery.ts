@@ -4,10 +4,12 @@ import { getCommunityRepository } from "../lib/communities/db-community-reposito
 import {
   absoluteUrl,
   configuredApiOrigin,
+  publicCommunityCapabilitiesPath,
   publicCommunityPath,
   publicCommunityPostsPath,
 } from "../lib/agent-discovery/structured-links"
 import openapiSpec from "../generated/openapi-spec"
+import GUEST_COMMENT_AGENT_TOOL from "../generated/agent-tools/guest-comment"
 import PIRATE_AGENT_PROTOCOL_SKILL_MD from "../generated/pirate-agent-protocol-skill"
 import { COMMUNITY_MCP_TOOLS, MCP_PROTOCOL_VERSION } from "../lib/mcp/community-tools"
 import type { Env } from "../env"
@@ -17,6 +19,8 @@ const SCOPES_SUPPORTED = ["pirate_app_session"] as const
 const PIRATE_AGENT_PROTOCOL_SKILL_PATH = "/.well-known/agent-skills/pirate-agent-protocol/SKILL.md"
 const PIRATE_AGENT_PROTOCOL_DOCS_SKILL_PATH = "/docs/agents/pirate-agent-protocol/SKILL.md"
 const PIRATE_AGENT_PROTOCOL_DOCS_SKILL_COMPAT_PATH = "/docs/agents/pirate-name-purchase/SKILL.md"
+const AGENT_TOOLS_INDEX_PATH = "/.well-known/agent-tools/index.json"
+const GUEST_COMMENT_AGENT_TOOL_PATH = "/.well-known/agent-tools/guest-comment.mjs"
 
 function jsonResponse(body: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(body, null, 2), {
@@ -96,6 +100,12 @@ function apiCatalog(origin: string) {
         auth_required: false,
       },
       {
+        href: absoluteUrl(origin, AGENT_TOOLS_INDEX_PATH),
+        rel: "agent-tools",
+        type: "application/json",
+        auth_required: false,
+      },
+      {
         href: absoluteUrl(origin, PIRATE_AGENT_PROTOCOL_SKILL_PATH),
         rel: "agent-skill",
         type: "text/markdown",
@@ -114,6 +124,7 @@ async function sitemapXml(env: Env, origin: string): Promise<string> {
       .filter((community) => community.provisioning_state === "active" && community.status === "active")
     communityUrls = communities.flatMap((community) => [
       absoluteUrl(origin, publicCommunityPath(community.community_id)),
+      absoluteUrl(origin, publicCommunityCapabilitiesPath(community.community_id)),
       absoluteUrl(origin, publicCommunityPostsPath(community.community_id)),
     ])
   } catch {
@@ -224,6 +235,33 @@ function agentSkills(origin: string) {
   }
 }
 
+function agentTools(origin: string) {
+  return {
+    tools: [
+      {
+        id: "guest-comment",
+        title: "Pirate guest comment tool",
+        description: "One-file no-npm Node script for creating Pirate guest comments and replies with local ALTCHA proof-of-work.",
+        auth_required: false,
+        engagement_only: true,
+        runtime: "node >= 20",
+        links: [
+          {
+            href: absoluteUrl(origin, GUEST_COMMENT_AGENT_TOOL_PATH),
+            rel: "tool",
+            type: "text/javascript",
+          },
+          {
+            href: absoluteUrl(origin, PIRATE_AGENT_PROTOCOL_SKILL_PATH),
+            rel: "describedby",
+            type: "text/markdown",
+          },
+        ],
+      },
+    ],
+  }
+}
+
 discovery.get("/.well-known/jwks.json", async (c) => {
   return jsonResponse(await getPirateAccessTokenJwks({ env: c.env }))
 })
@@ -269,6 +307,16 @@ discovery.get("/.well-known/mcp/server-card.json", (c) => {
 
 discovery.get("/.well-known/agent-skills/index.json", (c) => {
   return jsonResponse(agentSkills(configuredApiOrigin(c.env, c.req.url)))
+})
+
+discovery.get(AGENT_TOOLS_INDEX_PATH, (c) => {
+  return jsonResponse(agentTools(configuredApiOrigin(c.env, c.req.url)))
+})
+
+discovery.get(GUEST_COMMENT_AGENT_TOOL_PATH, () => {
+  return textResponse(GUEST_COMMENT_AGENT_TOOL, "text/javascript; charset=utf-8", {
+    headers: { "cache-control": "public, max-age=60, s-maxage=60" },
+  })
 })
 
 discovery.get(PIRATE_AGENT_PROTOCOL_SKILL_PATH, () => {

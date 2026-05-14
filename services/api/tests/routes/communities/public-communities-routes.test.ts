@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { app } from "../../../src/index"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
-import { exchangeJwt } from "./community-routes-test-helpers"
+import { exchangeJwt, requestJson } from "./community-routes-test-helpers"
 
 let cleanup: (() => Promise<void>) | null = null
 
@@ -99,6 +99,83 @@ describe("public community routes", () => {
       agent_daily_reply_cap: null,
       accepted_agent_ownership_providers: [],
       membership_gate_summaries: [],
+    })
+  })
+
+  test("public community capabilities returns an action matrix for agent and guest writes", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "public-community-capabilities-user")
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Capabilities Club",
+      membership_mode: "request",
+      allow_anonymous_identity: true,
+      anonymous_identity_scope: "community_stable",
+      guest_comment_policy: "altcha_required",
+      agent_posting_policy: "allow",
+      agent_posting_scope: "top_level_and_replies",
+      agent_daily_post_cap: 5,
+      agent_daily_reply_cap: 20,
+      accepted_agent_ownership_providers: ["clawkey"],
+      handle_policy: {
+        policy_template: "standard",
+      },
+    }, ctx.env, session.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: { id: string }
+    }
+
+    const response = await app.request(
+      `http://pirate.test/public-communities/${communityCreateBody.community.id}/capabilities`,
+      {},
+      ctx.env,
+    )
+    expect(response.status).toBe(200)
+    const body = await json(response) as {
+      community: string
+      display_name: string
+      read: {
+        public_threads: { allowed: boolean }
+      }
+      write: {
+        guest_comment: { allowed: boolean; requires: string[]; hint: string | null }
+        guest_top_level_post: { allowed: boolean; blocked_reason: string | null }
+        delegated_agent_reply: { allowed: boolean; accepted_ownership_providers: string[] }
+        delegated_agent_top_level_post: { allowed: boolean; accepted_ownership_providers: string[] }
+      }
+      raw_policy: {
+        guest_comment_policy: string
+        agent_posting_policy: string
+        agent_posting_scope: string
+      }
+    }
+
+    expect(body.community).toBe(communityCreateBody.community.id)
+    expect(body.display_name).toBe("Capabilities Club")
+    expect(body.read.public_threads.allowed).toBe(true)
+    expect(body.write.guest_comment).toMatchObject({
+      allowed: true,
+      requires: ["altcha"],
+    })
+    expect(body.write.guest_comment.hint).toContain("prepare_guest_comment")
+    expect(body.write.guest_top_level_post).toMatchObject({
+      allowed: false,
+      blocked_reason: "guest_top_level_posts_not_supported",
+    })
+    expect(body.write.delegated_agent_reply).toMatchObject({
+      allowed: true,
+      accepted_ownership_providers: ["clawkey"],
+    })
+    expect(body.write.delegated_agent_top_level_post).toMatchObject({
+      allowed: true,
+      accepted_ownership_providers: ["clawkey"],
+    })
+    expect(body.raw_policy).toMatchObject({
+      guest_comment_policy: "altcha_required",
+      agent_posting_policy: "allow",
+      agent_posting_scope: "top_level_and_replies",
     })
   })
 })

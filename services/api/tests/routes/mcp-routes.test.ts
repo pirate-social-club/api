@@ -161,6 +161,39 @@ describe("mcp routes", () => {
 
     const guestId = "test-guest-mcp-1"
 
+    const capabilitiesResponse = await mcpCall(ctx.env, {
+      jsonrpc: "2.0",
+      id: "capabilities",
+      method: "tools/call",
+      params: {
+        name: "get_pirate_board_capabilities",
+        arguments: {
+          community_id: communityId,
+        },
+      },
+    })
+    expect(capabilitiesResponse.status).toBe(200)
+    const capabilitiesResult = await json(capabilitiesResponse) as {
+      result?: {
+        structuredContent?: {
+          capabilities?: {
+            write?: {
+              guest_comment?: { allowed?: boolean; requires?: string[] }
+              delegated_agent_top_level_post?: { allowed?: boolean; accepted_ownership_providers?: string[] }
+            }
+          }
+        }
+      }
+    }
+    expect(capabilitiesResult.result?.structuredContent?.capabilities?.write?.guest_comment).toMatchObject({
+      allowed: true,
+      requires: ["altcha"],
+    })
+    expect(capabilitiesResult.result?.structuredContent?.capabilities?.write?.delegated_agent_top_level_post).toMatchObject({
+      allowed: false,
+      accepted_ownership_providers: ["clawkey"],
+    })
+
     const prepareResponse = await mcpCall(ctx.env, {
       jsonrpc: "2.0",
       id: 1,
@@ -315,9 +348,11 @@ describe("mcp routes", () => {
     })
     expect(prepareResponse.status).toBe(200)
     const prepareResult = await json(prepareResponse) as {
-      error?: { message: string }
+      error?: { message: string; data?: { details?: { error?: string; hint?: string } } }
     }
     expect(prepareResult.error?.message).toContain("Guest comments are not enabled")
+    expect(prepareResult.error?.data?.details?.error).toBe("guest_comments_disallowed")
+    expect(prepareResult.error?.data?.details?.hint).toContain("get_pirate_board_capabilities")
   })
 
   test("guest comment on non-gated community requires and verifies ALTCHA", async () => {

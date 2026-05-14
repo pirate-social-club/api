@@ -1,0 +1,31 @@
+{
+  "name": "@pirate/agent-connector",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "bin": {
+    "pirate-agent-connector": "./src/cli.ts"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "types": "./src/index.ts",
+  "scripts": {
+    "check": "tsgo --noEmit",
+    "mcp": "bun run src/cli.ts mcp",
+    "pack:dry": "bun pm pack --dry-run",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "altcha-lib": "^2.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "@typescript/native-preview": "^7.0.0-dev.20260421.2",
+    "bun-types": "^1.3.10",
+    "typescript": "^5.8.3"
+  }
+}

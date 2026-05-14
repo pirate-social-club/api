@@ -32,6 +32,10 @@ export function publicCommunityPostsPath(communityId: string): string {
   return `${publicCommunityPath(communityId)}/posts`
 }
 
+export function publicCommunityCapabilitiesPath(communityId: string): string {
+  return `${publicCommunityPath(communityId)}/capabilities`
+}
+
 export function publicPostPath(postId: string): string {
   return `/public-posts/${encodeURIComponent(postId)}`
 }

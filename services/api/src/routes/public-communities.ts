@@ -21,6 +21,7 @@ import {
   resolveEffectiveCommunityMachineAccessPolicy,
   type OmittedStructuredSurface,
 } from "../lib/communities/community-machine-access-service"
+import { buildCommunityActionMatrix } from "../lib/communities/community-capabilities"
 import { listPublicCommunityPosts } from "../lib/posts/post-service"
 import { fetchPublishedPublicSongArtifactContent } from "../lib/song-artifacts/song-artifact-upload-service"
 import {
@@ -32,6 +33,7 @@ import {
 import {
   absoluteUrl,
   configuredApiOrigin,
+  publicCommunityCapabilitiesPath,
   publicCommunityPath,
   publicCommunityPostsPath,
   publicPostPath,
@@ -89,6 +91,10 @@ function communityLinks(
     },
     posts: {
       href: absoluteUrl(origin, publicCommunityPostsPath(routeCommunityId)),
+      type: "application/json",
+    },
+    capabilities: {
+      href: absoluteUrl(origin, publicCommunityCapabilitiesPath(routeCommunityId)),
       type: "application/json",
     },
   }
@@ -396,6 +402,19 @@ publicCommunities.get("/:communityId", async (c) => {
   setPublicReadCacheHeaders(c, { vary: ["Accept"] })
   c.header("Link", serializeLinkHeader(links))
   return c.json(responseBody, 200)
+})
+
+publicCommunities.get("/:communityId/capabilities", async (c) => {
+  const communityRepository = getCommunityRepository(c.env)
+  const communityId = await resolveCommunityId(communityRepository, c.req.param("communityId"))
+  const preview = await getPublicCommunityPreview({
+    env: c.env,
+    communityId,
+    locale: c.req.query("locale") ?? null,
+    communityRepository,
+  })
+  setPublicReadCacheHeaders(c, { vary: ["Accept"] })
+  return c.json(buildCommunityActionMatrix(preview), 200)
 })
 
 publicCommunities.get("/", async (c) => {

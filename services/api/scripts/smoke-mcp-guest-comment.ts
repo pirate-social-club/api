@@ -32,6 +32,28 @@ async function main(): Promise<void> {
   const postId = requiredArg("--post")
   const guestId = readArg("--guest") ?? `codex-smoke-${Date.now()}`
 
+  const capabilities = await mcpCall(origin, {
+    jsonrpc: "2.0",
+    id: 0,
+    method: "tools/call",
+    params: {
+      name: "get_pirate_board_capabilities",
+      arguments: {
+        community_id: communityId,
+      },
+    },
+  }) as {
+    result?: { structuredContent?: { capabilities?: { write?: { guest_comment?: { allowed?: boolean } } } } }
+    error?: { message?: string }
+  }
+  if (capabilities.error) {
+    throw new Error(`get_pirate_board_capabilities failed: ${capabilities.error.message ?? JSON.stringify(capabilities.error)}`)
+  }
+  const guestCommentAllowed = capabilities.result?.structuredContent?.capabilities?.write?.guest_comment?.allowed
+  if (guestCommentAllowed !== true) {
+    throw new Error(`guest comments are not allowed according to capabilities: ${JSON.stringify(capabilities)}`)
+  }
+
   const prepare = await mcpCall(origin, {
     jsonrpc: "2.0",
     id: 1,
@@ -117,6 +139,7 @@ async function main(): Promise<void> {
     post: postId,
     guest_id: guestId,
     comment: commentId,
+    guest_comment_allowed: guestCommentAllowed,
     prepare_action: prepare.result?.structuredContent?.action ?? null,
     replay_error: replay.error.message,
   }, null, 2))

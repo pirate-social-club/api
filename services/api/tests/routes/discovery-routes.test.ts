@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { describe, expect, test } from "bun:test"
 import PIRATE_AGENT_PROTOCOL_SKILL_MD from "../../src/generated/pirate-agent-protocol-skill"
+import GUEST_COMMENT_AGENT_TOOL from "../../src/generated/agent-tools/guest-comment"
 import { app } from "../../src/index"
 import { buildTestEnv } from "../helpers"
 
@@ -10,6 +11,12 @@ describe("discovery routes", () => {
     const canonicalMarkdown = readFileSync(resolve("docs/agents/pirate-agent-protocol/SKILL.md"), "utf-8")
 
     expect(PIRATE_AGENT_PROTOCOL_SKILL_MD).toBe(canonicalMarkdown)
+  })
+
+  test("generated guest comment tool matches canonical mjs source", () => {
+    const canonicalScript = readFileSync(resolve("scripts/agent-tools/guest-comment.mjs"), "utf-8")
+
+    expect(GUEST_COMMENT_AGENT_TOOL).toBe(canonicalScript)
   })
 
   test("GET /.well-known/api-catalog advertises public structured discovery links", async () => {
@@ -32,6 +39,7 @@ describe("discovery routes", () => {
     expect(body.links.map((link) => link.rel)).toContain("service-desc")
     expect(body.links.map((link) => link.rel)).toContain("mcp")
     expect(body.links.map((link) => link.rel)).toContain("agent-skills")
+    expect(body.links.map((link) => link.rel)).toContain("agent-tools")
     expect(body.links.map((link) => link.rel)).toContain("agent-skill")
     expect(body.links.map((link) => link.rel)).toContain("robots")
     expect(body.links.map((link) => link.rel)).toContain("sitemap")
@@ -81,6 +89,7 @@ describe("discovery routes", () => {
     }
 
     expect(body.paths["/public-communities/{community_id}"]).toBeTruthy()
+    expect(body.paths["/public-communities/{community_id}/capabilities"]).toBeTruthy()
     expect(body.paths["/public-communities/{community_id}/posts"]).toBeTruthy()
     expect(body.paths["/public-posts/{post_id}"]).toBeTruthy()
     expect(body.paths["/public-posts/{post_id}/top-comments"]).toBeTruthy()
@@ -101,6 +110,7 @@ describe("discovery routes", () => {
     expect(body.resources.map((resource) => resource.uri)).toContain("https://api.pirate.test/.well-known/api-catalog")
     expect(body.tools.map((tool) => tool.name)).toContain("prepare_guest_comment")
     expect(body.tools.map((tool) => tool.name)).toContain("find_pirate_boards")
+    expect(body.tools.map((tool) => tool.name)).toContain("get_pirate_board_capabilities")
     expect(body.tools.map((tool) => tool.name)).toContain("create_post")
     expect(body.tools.map((tool) => tool.name)).toContain("reply")
   })
@@ -126,6 +136,7 @@ describe("discovery routes", () => {
     }
     expect(body.result.tools.map((tool) => tool.name)).toContain("create_post")
     expect(body.result.tools.map((tool) => tool.name)).toContain("find_pirate_boards")
+    expect(body.result.tools.map((tool) => tool.name)).toContain("get_pirate_board_capabilities")
     expect(body.result.tools.map((tool) => tool.name)).toContain("prepare_guest_comment")
     expect(body.result.tools.map((tool) => tool.name)).toContain("reply")
   })
@@ -250,6 +261,52 @@ describe("discovery routes", () => {
     expect(body.skills.map((skill) => skill.id)).toContain("summarize-public-thread")
     expect(body.skills.map((skill) => skill.id)).toContain("community-actions")
     expect(body.skills.map((skill) => skill.id)).toContain("pirate-agent-protocol")
+  })
+
+  test("GET /.well-known/agent-tools/index.json advertises the guest comment tool", async () => {
+    const env = buildTestEnv()
+    const response = await app.request("https://api.pirate.test/.well-known/agent-tools/index.json", {}, env)
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get("content-type")).toContain("application/json")
+    const body = await response.json() as {
+      tools: Array<{
+        id: string
+        auth_required: boolean
+        engagement_only: boolean
+        links: Array<{ href: string; rel: string; type: string }>
+      }>
+    }
+
+    expect(body.tools).toContainEqual(expect.objectContaining({
+      id: "guest-comment",
+      auth_required: false,
+      engagement_only: true,
+    }))
+    expect(body.tools[0]?.links).toContainEqual({
+      href: "https://api.pirate.test/.well-known/agent-tools/guest-comment.mjs",
+      rel: "tool",
+      type: "text/javascript",
+    })
+  })
+
+  test("GET /.well-known/agent-tools/guest-comment.mjs serves the no-npm guest comment tool", async () => {
+    const env = buildTestEnv()
+    const response = await app.request("https://api.pirate.test/.well-known/agent-tools/guest-comment.mjs", {}, env)
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get("content-type")).toContain("text/javascript")
+    expect(response.headers.get("cache-control")).toBe("public, max-age=60, s-maxage=60")
+
+    const body = await response.text()
+    expect(body).toContain("node guest-comment.mjs")
+    expect(body).toContain("prepare_guest_comment")
+    expect(body).toContain("solvePirateAltcha")
+    expect(body).not.toContain("altcha-lib")
+    expect(body).toContain('const VERSION = "0.1.0"')
+    expect(body).toContain("--help")
+    expect(body).toContain("--version")
+    expect(body).toContain("normalizeCommunityIdentifier")
   })
 
   test("GET /.well-known/agent-skills/index.json links the Pirate protocol SKILL.md", async () => {

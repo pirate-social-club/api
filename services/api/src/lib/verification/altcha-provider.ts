@@ -83,8 +83,8 @@ export async function createAltchaChallenge(input: {
 }): Promise<Challenge> {
   const { hmacSignatureSecret, hmacKeySignatureSecret } = getAltchaSecrets(input.env)
   const cost = parseIntegerEnv(input.env.ALTCHA_POW_COST, 5_000)
-  const counterMin = parseIntegerEnv(input.env.ALTCHA_POW_COUNTER_MIN, 5_000)
-  const counterMax = Math.max(counterMin, parseIntegerEnv(input.env.ALTCHA_POW_COUNTER_MAX, 10_000))
+  const counterMin = parseIntegerEnv(input.env.ALTCHA_POW_COUNTER_MIN, 1_000)
+  const counterMax = Math.max(counterMin, parseIntegerEnv(input.env.ALTCHA_POW_COUNTER_MAX, 3_000))
   const ttlSeconds = parseIntegerEnv(input.env.ALTCHA_CHALLENGE_TTL_SECONDS, 20 * 60)
 
   return await createChallenge({

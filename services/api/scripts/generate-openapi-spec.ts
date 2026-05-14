@@ -146,6 +146,34 @@ function runtimeOnlyPaths(fullSpec: OpenApiRecord): OpenApiRecord {
       },
     },
     "/public-communities/{community_id}": implementedPath(fullSpec.paths["/public-communities/{community_id}"]),
+    "/public-communities/{community_id}/capabilities": {
+      get: {
+        tags: ["Communities"],
+        "x-implemented": true,
+        security: [],
+        summary: "Get public community action capabilities",
+        description: "Returns a machine-readable action matrix describing public read access, guest comment eligibility, delegated-agent write eligibility, user-token-only actions, and proof-of-work requirements.",
+        parameters: [
+          { name: "community_id", in: "path", required: true, schema: { type: "string" } },
+        ],
+        responses: {
+          "200": {
+            description: "Community action capabilities",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["community", "display_name", "read", "write", "raw_policy"],
+                  additionalProperties: true,
+                },
+              },
+            },
+          },
+          "404": { $ref: "#/components/responses/NotFound" },
+          "429": { $ref: "#/components/responses/RateLimited" },
+        },
+      },
+    },
     "/public-communities/{community_id}/posts": implementedPath(fullSpec.paths["/public-communities/{community_id}/posts"]),
     "/public-posts/{post_id}": implementedPath(fullSpec.paths["/public-posts/{post_id}"]),
     "/public-posts/{post_id}/top-comments": implementedPath(fullSpec.paths["/public-posts/{post_id}/top-comments"]),

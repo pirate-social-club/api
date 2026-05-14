@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node scripts/check-repo-hygiene.mjs && bun run --cwd services/shared check && bun run --cwd services/contracts check && bun run --cwd services/community-protocol-issuer check && bun run --cwd services/community-provision-operator check && bun run --cwd services/api check",
+    "check": "node scripts/check-repo-hygiene.mjs && bun run --cwd services/shared check && bun run --cwd services/contracts check && bun run --cwd services/agent-connector check && bun run --cwd services/community-protocol-issuer check && bun run --cwd services/community-provision-operator check && bun run --cwd services/api check",
     "check:hygiene": "node scripts/check-repo-hygiene.mjs",
-    "test": "bun run --cwd services/api test && bun run --cwd services/cli test && bun run --cwd services/community-protocol-issuer test && bun run --cwd services/community-provision-operator test && python3 -m unittest discover -s services/community-protocol-prover-runpod -p 'test_*.py'",
+    "test": "bun run --cwd services/api test && bun run --cwd services/agent-connector test && bun run --cwd services/cli test && bun run --cwd services/community-protocol-issuer test && bun run --cwd services/community-provision-operator test && python3 -m unittest discover -s services/community-protocol-prover-runpod -p 'test_*.py'",
     "check:cli": "bun run --cwd services/cli check"
   }
 }

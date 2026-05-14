@@ -12,6 +12,7 @@ import { openCommunityDb } from "../lib/communities/community-db-factory"
 import { resolveCommunityIdentifier } from "../lib/communities/community-identifier"
 import { loadCommunityProjection } from "../lib/communities/create/repository"
 import { getPublicCommunityPreview } from "../lib/communities/community-preview-service"
+import { buildCommunityActionMatrix } from "../lib/communities/community-capabilities"
 import { isCommunityLive } from "../lib/communities/community-status"
 import { upsertCommunityMembership } from "../lib/communities/membership/membership-state-store"
 import { createComment } from "../lib/comments/comment-service"
@@ -79,6 +80,10 @@ type McpFindPirateBoardsArguments = {
   can_reply?: unknown
   guest_reply?: unknown
   requires_pow?: unknown
+}
+
+type McpBoardCapabilitiesArguments = {
+  community_id?: unknown
 }
 
 const mcp = new Hono<{ Bindings: Env }>()
@@ -229,11 +234,18 @@ async function ensureGuestMayComment(c: McpContext, communityId: string) {
   const communityRepository = getCommunityRepository(c.env)
   const communityRow = await communityRepository.getCommunityById(communityId)
   if (!isCommunityLive(communityRow)) {
-    throw eligibilityFailed("Community is not available for guest comments")
+    throw eligibilityFailed("Community is not available for guest comments", {
+      error: "community_unavailable",
+      hint: "Choose another community from find_pirate_boards or public community search.",
+    })
   }
   const community = await loadCommunityProjection(c.env, communityRepository, communityRow)
   if (community.guest_comment_policy !== "altcha_required") {
-    throw eligibilityFailed("Guest comments are not enabled in this community")
+    throw eligibilityFailed("Guest comments are not enabled in this community", {
+      error: "guest_comments_disallowed",
+      required: "user_bearer_or_delegated_agent_if_allowed",
+      hint: "Use get_pirate_board_capabilities to inspect allowed write modes, or choose a board with guest_comment_policy altcha_required.",
+    })
   }
 }
 
@@ -382,6 +394,31 @@ async function callFindPirateBoardsTool(c: McpContext, rawArgs: unknown) {
     structuredContent: {
       query: query ?? null,
       boards,
+    },
+  }
+}
+
+async function callGetPirateBoardCapabilitiesTool(c: McpContext, rawArgs: unknown) {
+  const args = readRecord(rawArgs, "get_pirate_board_capabilities arguments are required") as McpBoardCapabilitiesArguments
+  const communityIdentifier = readRequiredString(args.community_id, "community_id")
+  const communityRepository = getCommunityRepository(c.env)
+  const communityId = await resolveCommunityIdentifier(communityRepository, communityIdentifier) ?? communityIdentifier
+  const preview = await getPublicCommunityPreview({
+    env: c.env,
+    communityId,
+    locale: null,
+    communityRepository,
+  })
+  const capabilities = buildCommunityActionMatrix(preview)
+  return {
+    content: [
+      {
+        type: "text",
+        text: `Resolved Pirate board capabilities for ${capabilities.display_name}.`,
+      },
+    ],
+    structuredContent: {
+      capabilities,
     },
   }
 }
@@ -585,6 +622,9 @@ mcp.post("/", async (c) => {
       if (params.name === "find_pirate_boards") {
         return jsonRpcResult(request.id, await callFindPirateBoardsTool(c, params.arguments))
       }
+      if (params.name === "get_pirate_board_capabilities") {
+        return jsonRpcResult(request.id, await callGetPirateBoardCapabilitiesTool(c, params.arguments))
+      }
       if (params.name === "create_post") {
         return jsonRpcResult(request.id, await callCreatePostTool(c, params.arguments))
       }
@@ -608,7 +648,11 @@ mcp.post("/", async (c) => {
       : error instanceof Error
         ? error.message
         : "MCP request failed"
-    return jsonRpcError(request.id, -32000, message)
+    return jsonRpcError(request.id, -32000, message, error instanceof HttpError ? {
+      code: error.code,
+      retryable: error.retryable,
+      ...(error.details ? { details: error.details } : {}),
+    } : undefined)
   }
 })
 
