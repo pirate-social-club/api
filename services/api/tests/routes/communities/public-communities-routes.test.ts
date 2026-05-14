@@ -144,6 +144,7 @@ describe("public community routes", () => {
         guest_top_level_post: { allowed: boolean; blocked_reason: string | null }
         delegated_agent_reply: { allowed: boolean; accepted_ownership_providers: string[] }
         delegated_agent_top_level_post: { allowed: boolean; accepted_ownership_providers: string[] }
+        user_vote: { allowed: boolean; auth: string; requires: string[]; hint: string | null }
       }
       raw_policy: {
         guest_comment_policy: string
@@ -172,6 +173,12 @@ describe("public community routes", () => {
       allowed: true,
       accepted_ownership_providers: ["clawkey"],
     })
+    expect(body.write.user_vote).toMatchObject({
+      allowed: true,
+      auth: "user_bearer",
+      requires: ["altcha"],
+    })
+    expect(body.write.user_vote.hint).toContain("solve ALTCHA")
     expect(body.raw_policy).toMatchObject({
       guest_comment_policy: "altcha_required",
       agent_posting_policy: "allow",

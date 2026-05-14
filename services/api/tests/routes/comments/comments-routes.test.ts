@@ -7,6 +7,7 @@ import {
 } from "../../../src/lib/agents/agent-action-proof"
 import { setClawkeyProviderForTests } from "../../../src/lib/agents/clawkey-provider"
 import { setSelfProviderForTests } from "../../../src/lib/verification/self-provider"
+import { solveTestAltchaPayload } from "../../altcha-test-helpers"
 import { buildVerifiedSelfProvider, createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { createSignedAgentChallenge } from "../../agent-test-helpers"
 import { updateLocalCommunityAgentPostingPolicy, updateLocalCommunityAnonymousPolicy } from "../communities/community-routes-test-helpers"
@@ -1015,8 +1016,14 @@ describe("comments routes", () => {
     expect(contextPageTwoBody.thread_snapshot?.swarm_manifest_ref).toBe("swarm-manifest:test-thread")
   })
 
-  test("POST /comments/:commentId/vote records a member vote without hidden verification", async () => {
-    const ctx = await createRouteTestContext()
+  test("POST /comments/:commentId/vote records a member vote with proof-of-work", async () => {
+    const ctx = await createRouteTestContext({
+      ALTCHA_HMAC_SECRET: "test-altcha-secret",
+      ALTCHA_HMAC_KEY_SECRET: "test-altcha-key-secret",
+      ALTCHA_POW_COST: "1",
+      ALTCHA_POW_COUNTER_MIN: "1",
+      ALTCHA_POW_COUNTER_MAX: "2",
+    })
     cleanup = ctx.cleanup
 
     const creator = await exchangeJwt(ctx.env, "comments-routes-vote-creator")
@@ -1050,9 +1057,27 @@ describe("comments routes", () => {
     const unverifiedMember = await exchangeJwt(ctx.env, "comments-routes-vote-unverified")
     await addCommunityMember(ctx.communityDbRoot, community.communityId, unverifiedMember.userId)
 
-    const acceptedVote = await requestJson(
+    const missingProofVote = await requestJson(
       `http://pirate.test/comments/${commentBody.id}/vote`,
       { value: 1 },
+      ctx.env,
+      unverifiedMember.accessToken,
+    )
+    expect(missingProofVote.status).toBe(403)
+    const missingProofBody = await json(missingProofVote) as { code: string; message: string }
+    expect(missingProofBody.code).toBe("eligibility_failed")
+    expect(missingProofBody.message).toBe("ALTCHA proof is required for votes")
+
+    const altcha = await solveTestAltchaPayload({
+      env: ctx.env,
+      actorUserId: unverifiedMember.userId,
+      scope: "vote",
+      action: `comment:${commentBody.id}:1`,
+    })
+
+    const acceptedVote = await requestJson(
+      `http://pirate.test/comments/${commentBody.id}/vote`,
+      { value: 1, altcha },
       ctx.env,
       unverifiedMember.accessToken,
     )
@@ -1060,6 +1085,14 @@ describe("comments routes", () => {
     const acceptedVoteBody = await json(acceptedVote) as { comment_id: string; value: number }
     expect(`cmt_${acceptedVoteBody.comment_id}`).toBe(commentBody.id)
     expect(acceptedVoteBody.value).toBe(1)
+
+    const replayVote = await requestJson(
+      `http://pirate.test/comments/${commentBody.id}/vote`,
+      { value: 1, altcha },
+      ctx.env,
+      unverifiedMember.accessToken,
+    )
+    expect(replayVote.status).toBe(403)
   })
 
   test("comment delete remains author-owned while moderator remove and replies-lock are mod actions", async () => {

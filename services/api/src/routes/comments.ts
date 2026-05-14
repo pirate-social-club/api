@@ -1,5 +1,5 @@
 import { Hono } from "hono"
-import { badRequestError, notFoundError } from "../lib/errors"
+import { badRequestError, eligibilityFailed, notFoundError } from "../lib/errors"
 import { getProfileRepository, getUserRepository } from "../lib/auth/repositories"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import {
@@ -25,7 +25,7 @@ import {
   serializeCommentListResponse,
 } from "../serializers/comment"
 import { decodePublicCommentId } from "../lib/public-ids"
-import { ALTCHA_HEADER, readAltchaProof } from "../lib/verification/altcha-provider"
+import { ALTCHA_HEADER, readAltchaProof, verifyAndConsumeAltchaProof } from "../lib/verification/altcha-provider"
 
 const comments = new Hono<AuthenticatedEnv>()
 
@@ -123,15 +123,35 @@ comments.get("/:commentId/context", async (c) => {
 comments.post("/:commentId/vote", async (c) => {
   const actor = c.get("actor")
   const communityRepository = getCommunityRepository(c.env)
-  const body = await c.req.json<{ value?: number }>().catch(() => null)
+  const body = await c.req.json<{ value?: number; altcha?: string }>().catch(() => null)
   if (!body || (body.value !== -1 && body.value !== 1)) {
     throw badRequestError("Vote value must be -1 or 1")
+  }
+
+  const commentId = decodePublicCommentId(c.req.param("commentId"))
+  if (actor.authType !== "admin") {
+    const commentRef = c.req.param("commentId").startsWith("cmt_") ? c.req.param("commentId") : `cmt_${c.req.param("commentId")}`
+    const altchaProof = readAltchaProof({
+      headerValue: c.req.header(ALTCHA_HEADER),
+      body,
+      scope: "vote",
+      action: `comment:${commentRef}:${body.value}`,
+    })
+    const altchaResult = await verifyAndConsumeAltchaProof({
+      env: c.env,
+      actorUserId: actor.userId,
+      proof: altchaProof,
+    })
+    if (!altchaResult.verified) {
+      const reason = altchaResult.reason ?? "missing_proof"
+      throw eligibilityFailed(reason === "missing_proof" ? "ALTCHA proof is required for votes" : `ALTCHA verification failed: ${reason}`)
+    }
   }
 
   const result = await castCommentVote({
     env: c.env,
     userId: actor.userId,
-    commentId: decodePublicCommentId(c.req.param("commentId")),
+    commentId,
     value: body.value,
     bypassVoterAccessChecks: actor.authType === "admin",
     userRepository: getUserRepository(c.env),

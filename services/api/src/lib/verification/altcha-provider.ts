@@ -11,6 +11,7 @@ export type AltchaScope =
   | "community_join"
   | "post_create"
   | "comment_create"
+  | "vote"
 
 export type AltchaProofInput = {
   payload: string
@@ -33,6 +34,7 @@ const ALTCHA_SCOPES = new Set<AltchaScope>([
   "community_join",
   "post_create",
   "comment_create",
+  "vote",
 ])
 
 function parseIntegerEnv(value: string | undefined, fallback: number): number {

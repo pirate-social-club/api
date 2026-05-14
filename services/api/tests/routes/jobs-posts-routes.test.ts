@@ -5,6 +5,7 @@ import { buildLocalCommunityDbUrl } from "../../src/lib/communities/community-lo
 import { computePostSourceHash } from "../../src/lib/localization/content-source-hash"
 import { getPostById } from "../../src/lib/posts/community-post-store"
 import type { Env } from "../../src/types"
+import { solveTestAltchaPayload } from "../altcha-test-helpers"
 import { createRouteTestContext, json, mintUpstreamJwt, resetRuntimeCaches } from "../helpers"
 
 let cleanup: (() => Promise<void>) | null = null
@@ -368,8 +369,14 @@ describe("posts routes", () => {
     expect(translationJobs.some((job) => job.subject === `${rawPostId}:nl`)).toBe(true)
   })
 
-  test("POST /posts/:postId/vote records a member vote without hidden verification", async () => {
-    const ctx = await createRouteTestContext()
+  test("POST /posts/:postId/vote records a member vote with proof-of-work", async () => {
+    const ctx = await createRouteTestContext({
+      ALTCHA_HMAC_SECRET: "test-altcha-secret",
+      ALTCHA_HMAC_KEY_SECRET: "test-altcha-key-secret",
+      ALTCHA_POW_COST: "1",
+      ALTCHA_POW_COUNTER_MIN: "1",
+      ALTCHA_POW_COUNTER_MAX: "2",
+    })
     cleanup = ctx.cleanup
 
     const creator = await exchangeJwt(ctx.env, "posts-routes-vote-creator")
@@ -392,9 +399,27 @@ describe("posts routes", () => {
     const unverifiedMember = await exchangeJwt(ctx.env, "posts-routes-unverified-member")
     await addCommunityMember(ctx.communityDbRoot, community.communityId, unverifiedMember.userId)
 
-    const acceptedVote = await requestJson(
+    const missingProofVote = await requestJson(
       `http://pirate.test/posts/${postBody.id}/vote`,
       { value: 1 },
+      ctx.env,
+      unverifiedMember.accessToken,
+    )
+    expect(missingProofVote.status).toBe(403)
+    const missingProofBody = await json(missingProofVote) as { code: string; message: string }
+    expect(missingProofBody.code).toBe("eligibility_failed")
+    expect(missingProofBody.message).toBe("ALTCHA proof is required for votes")
+
+    const altcha = await solveTestAltchaPayload({
+      env: ctx.env,
+      actorUserId: unverifiedMember.userId,
+      scope: "vote",
+      action: `post:${postBody.id}:1`,
+    })
+
+    const acceptedVote = await requestJson(
+      `http://pirate.test/posts/${postBody.id}/vote`,
+      { value: 1, altcha },
       ctx.env,
       unverifiedMember.accessToken,
     )
@@ -402,10 +427,24 @@ describe("posts routes", () => {
     const acceptedVoteBody = await json(acceptedVote) as { post: string; value: number }
     expect(acceptedVoteBody.post).toBe(postBody.id)
     expect(acceptedVoteBody.value).toBe(1)
+
+    const replayVote = await requestJson(
+      `http://pirate.test/posts/${postBody.id}/vote`,
+      { value: 1, altcha },
+      ctx.env,
+      unverifiedMember.accessToken,
+    )
+    expect(replayVote.status).toBe(403)
   })
 
   test("GET /posts/:postId includes refreshed vote metrics for the post author", async () => {
-    const ctx = await createRouteTestContext()
+    const ctx = await createRouteTestContext({
+      ALTCHA_HMAC_SECRET: "test-altcha-secret",
+      ALTCHA_HMAC_KEY_SECRET: "test-altcha-key-secret",
+      ALTCHA_POW_COST: "1",
+      ALTCHA_POW_COUNTER_MIN: "1",
+      ALTCHA_POW_COUNTER_MAX: "2",
+    })
     cleanup = ctx.cleanup
 
     const creator = await exchangeJwt(ctx.env, "posts-routes-self-vote-creator")
@@ -424,10 +463,16 @@ describe("posts routes", () => {
     )
     expect(createdPost.status).toBe(201)
     const postBody = await json(createdPost) as { id: string }
+    const altcha = await solveTestAltchaPayload({
+      env: ctx.env,
+      actorUserId: creator.userId,
+      scope: "vote",
+      action: `post:${postBody.id}:1`,
+    })
 
     const acceptedVote = await requestJson(
       `http://pirate.test/posts/${postBody.id}/vote`,
-      { value: 1 },
+      { value: 1, altcha },
       ctx.env,
       creator.accessToken,
     )
