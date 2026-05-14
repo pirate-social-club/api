@@ -33,6 +33,7 @@ import {
 import {
   absoluteUrl,
   configuredApiOrigin,
+  configuredWebOrigin,
   publicCommunityCapabilitiesPath,
   publicCommunityPath,
   publicCommunityPostsPath,
@@ -70,7 +71,8 @@ async function resolveCommunityId(
 }
 
 function communityLinks(
-  origin: string,
+  apiOrigin: string,
+  webOrigin: string,
   communityId: string,
   routeSlug?: string | null,
 ): StructuredAccessLinks {
@@ -78,23 +80,23 @@ function communityLinks(
   const canonicalSegment = routeSlug?.trim() || routeCommunityId
   return {
     self: {
-      href: absoluteUrl(origin, publicCommunityPath(routeCommunityId)),
+      href: absoluteUrl(apiOrigin, publicCommunityPath(routeCommunityId)),
       type: "application/json",
     },
     canonical: {
-      href: absoluteUrl(origin, `/c/${encodeURIComponent(canonicalSegment).replace(/^%40/u, "@")}`),
+      href: absoluteUrl(webOrigin, `/c/${encodeURIComponent(canonicalSegment).replace(/^%40/u, "@")}`),
       type: "text/html",
     },
     markdown: {
-      href: absoluteUrl(origin, `${publicCommunityPath(routeCommunityId)}?format=markdown`),
+      href: absoluteUrl(apiOrigin, `${publicCommunityPath(routeCommunityId)}?format=markdown`),
       type: "text/markdown",
     },
     posts: {
-      href: absoluteUrl(origin, publicCommunityPostsPath(routeCommunityId)),
+      href: absoluteUrl(apiOrigin, publicCommunityPostsPath(routeCommunityId)),
       type: "application/json",
     },
     capabilities: {
-      href: absoluteUrl(origin, publicCommunityCapabilitiesPath(routeCommunityId)),
+      href: absoluteUrl(apiOrigin, publicCommunityCapabilitiesPath(routeCommunityId)),
       type: "application/json",
     },
   }
@@ -384,7 +386,7 @@ publicCommunities.get("/:communityId", async (c) => {
     communityRepository,
   })
   const omittedSurfaces = omittedSurfacesForPolicy(policy, ["community_stats"])
-  const links = communityLinks(configuredApiOrigin(c.env, c.req.url), communityId, result.route_slug)
+  const links = communityLinks(configuredApiOrigin(c.env, c.req.url), configuredWebOrigin(c.env, c.req.url), communityId, result.route_slug)
   const serializedPreview = serializeCommunityPreview(result)
   const responseBody = {
     ...(policy.included_surfaces.community_stats ? serializedPreview : omitCommunityStats(serializedPreview)),
@@ -490,6 +492,7 @@ publicCommunities.get("/:communityId/posts", async (c) => {
     sort: c.req.query("sort"),
   })
   const origin = configuredApiOrigin(c.env, c.req.url)
+  const webOrigin = configuredWebOrigin(c.env, c.req.url)
   const links = communityPostListLinks({
     origin,
     communityId,
@@ -506,7 +509,7 @@ publicCommunities.get("/:communityId/posts", async (c) => {
         type: "application/json",
       },
       canonical: {
-        href: absoluteUrl(origin, `/p/${encodeURIComponent(routePostId)}`),
+        href: absoluteUrl(webOrigin, `/p/${encodeURIComponent(routePostId)}`),
         type: "text/html",
       },
       markdown: {

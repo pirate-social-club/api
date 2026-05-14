@@ -20,6 +20,14 @@ export function configuredApiOrigin(env: Env, requestUrl: string): string {
   return requestOrigin(requestUrl)
 }
 
+export function configuredWebOrigin(env: Env, requestUrl: string): string {
+  const configured = env.PIRATE_WEB_PUBLIC_ORIGIN?.trim()
+  if (configured) {
+    return new URL(configured).origin
+  }
+  return requestOrigin(requestUrl)
+}
+
 export function absoluteUrl(origin: string, path: string): string {
   return new URL(path, origin).toString()
 }

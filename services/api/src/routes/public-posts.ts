@@ -17,6 +17,7 @@ import { getPublicPostFromCommunityDb } from "../lib/posts/post-read-service"
 import {
   absoluteUrl,
   configuredApiOrigin,
+  configuredWebOrigin,
   publicCommunityPath,
   publicPostPath,
   publicPostTopCommentsPath,
@@ -41,32 +42,33 @@ import { setPublicReadCacheHeaders } from "./cache-headers"
 const publicPosts = new Hono<{ Bindings: Env }>()
 
 function publicPostLinks(input: {
-  origin: string
+  apiOrigin: string
+  webOrigin: string
   postId: string
   communityId: string
   includeTopComments?: boolean
 }): StructuredAccessLinks {
   const links: StructuredAccessLinks = {
     self: {
-      href: absoluteUrl(input.origin, publicPostPath(input.postId)),
+      href: absoluteUrl(input.apiOrigin, publicPostPath(input.postId)),
       type: "application/json",
     },
     canonical: {
-      href: absoluteUrl(input.origin, `/p/${encodeURIComponent(input.postId)}`),
+      href: absoluteUrl(input.webOrigin, `/p/${encodeURIComponent(input.postId)}`),
       type: "text/html",
     },
     markdown: {
-      href: absoluteUrl(input.origin, `${publicPostPath(input.postId)}?format=markdown`),
+      href: absoluteUrl(input.apiOrigin, `${publicPostPath(input.postId)}?format=markdown`),
       type: "text/markdown",
     },
     community: {
-      href: absoluteUrl(input.origin, publicCommunityPath(input.communityId)),
+      href: absoluteUrl(input.apiOrigin, publicCommunityPath(input.communityId)),
       type: "application/json",
     },
   }
   if (input.includeTopComments !== false) {
     links.top_comments = {
-      href: absoluteUrl(input.origin, publicPostTopCommentsPath(input.postId)),
+      href: absoluteUrl(input.apiOrigin, publicPostTopCommentsPath(input.postId)),
       type: "application/json",
     }
   }
@@ -250,7 +252,8 @@ publicPosts.get("/:postId/thread", async (c) => {
       limit: c.req.query("limit") ?? null,
     })
     const links = publicPostLinks({
-      origin: configuredApiOrigin(c.env, c.req.url),
+      apiOrigin: configuredApiOrigin(c.env, c.req.url),
+      webOrigin: configuredWebOrigin(c.env, c.req.url),
       postId: publicPostId(post.post.post_id),
       communityId: publicCommunityId(post.post.community_id),
       includeTopComments: policy.included_surfaces.top_comments,
@@ -300,7 +303,8 @@ publicPosts.get("/:postId", async (c) => {
     })
   }
   const links = publicPostLinks({
-    origin: configuredApiOrigin(c.env, c.req.url),
+    apiOrigin: configuredApiOrigin(c.env, c.req.url),
+    webOrigin: configuredWebOrigin(c.env, c.req.url),
     postId: publicPostId(result.post.post_id),
     communityId: publicCommunityId(result.post.community_id),
     includeTopComments: policy.included_surfaces.top_comments,

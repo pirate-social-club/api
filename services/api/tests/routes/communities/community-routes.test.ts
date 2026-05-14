@@ -397,7 +397,9 @@ describe("community routes", () => {
   })
 
   test("public community routes return preview and published posts without auth", async () => {
-    const ctx = await createRouteTestContext()
+    const ctx = await createRouteTestContext({
+      PIRATE_WEB_PUBLIC_ORIGIN: "https://staging.pirate.sc",
+    })
     cleanup = ctx.cleanup
 
     const session = await exchangeJwt(ctx.env, "community-public-preview-user")
@@ -611,7 +613,7 @@ describe("community routes", () => {
     expect(preview.headers.get("cache-control")).toBe("public, max-age=0, s-maxage=60, stale-while-revalidate=300")
     expect(preview.headers.get("vary")).toContain("Accept")
     expect(previewBody.omitted_surfaces).toEqual([])
-    expect(previewBody.links.canonical.href).toBe(`http://pirate.test/c/${communityCreateBody.community.route_slug}`)
+    expect(previewBody.links.canonical.href).toBe(`https://staging.pirate.sc/c/${communityCreateBody.community.route_slug}`)
     expect(previewBody.links.self.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.id}`)
     expect(previewBody.links.markdown.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.id}?format=markdown`)
     expect(previewBody.links.posts.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.id}/posts`)
@@ -640,6 +642,7 @@ describe("community routes", () => {
         omitted_surfaces: unknown[]
         links: {
           self: { href: string; type: string }
+          canonical: { href: string; type: string }
           community: { href: string; type: string }
           markdown: { href: string; type: string }
           top_comments: { href: string; type: string }
@@ -663,6 +666,7 @@ describe("community routes", () => {
     expect(postsBody.links.community.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.id}`)
     expect(postsBody.items[0]?.omitted_surfaces).toEqual([])
     expect(postsBody.items[0]?.links.self.href).toBe(`http://pirate.test/public-posts/${secondPostBody.id}`)
+    expect(postsBody.items[0]?.links.canonical.href).toBe(`https://staging.pirate.sc/p/${secondPostBody.id}`)
     expect(postsBody.items[0]?.links.markdown.href).toBe(`http://pirate.test/public-posts/${secondPostBody.id}?format=markdown`)
     expect(postsBody.items[0]?.links.top_comments.href).toBe(`http://pirate.test/public-posts/${secondPostBody.id}/top-comments`)
 
@@ -690,6 +694,7 @@ describe("community routes", () => {
       omitted_surfaces: unknown[]
       links: {
         self: { href: string; type: string }
+        canonical: { href: string; type: string }
         community: { href: string; type: string }
         markdown: { href: string; type: string }
         top_comments: { href: string; type: string }
@@ -702,6 +707,7 @@ describe("community routes", () => {
     expect(publicPost.headers.get("link")).toContain("/public-posts/")
     expect(publicPostBody.omitted_surfaces).toEqual([])
     expect(publicPostBody.links.self.href).toBe(`http://pirate.test/public-posts/${createdPostBody.id}`)
+    expect(publicPostBody.links.canonical.href).toBe(`https://staging.pirate.sc/p/${createdPostBody.id}`)
     expect(publicPostBody.links.community.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.id}`)
     expect(publicPostBody.links.markdown.href).toBe(`http://pirate.test/public-posts/${createdPostBody.id}?format=markdown`)
     expect(publicPostBody.links.top_comments.href).toBe(`http://pirate.test/public-posts/${createdPostBody.id}/top-comments`)
