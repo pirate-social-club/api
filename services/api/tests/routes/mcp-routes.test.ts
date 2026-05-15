@@ -1,23 +1,35 @@
+import { sign as signWithPrivateKey } from "node:crypto"
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { solveChallenge, type Challenge, type Payload } from "altcha-lib"
 import { deriveKey } from "altcha-lib/algorithms/pbkdf2"
 import { app } from "../../src/index"
-import { createRouteTestContext, json, resetRuntimeCaches } from "../helpers"
+import {
+  canonicalizeAgentActionProofSignaturePayload,
+  computeAgentActionProofHash,
+} from "../../src/lib/agents/agent-action-proof"
+import { setClawkeyProviderForTests } from "../../src/lib/agents/clawkey-provider"
 import { createAltchaChallenge } from "../../src/lib/verification/altcha-provider"
+import { setSelfProviderForTests } from "../../src/lib/verification/self-provider"
+import { buildVerifiedSelfProvider, createRouteTestContext, json, resetRuntimeCaches } from "../helpers"
+import { createSignedAgentChallenge } from "../agent-test-helpers"
 import {
   addCommunityMember,
+  completeUniqueHumanVerification,
   exchangeJwt,
   prepareVerifiedNamespace,
   requestJson,
+  updateLocalCommunityAgentPostingPolicy,
 } from "./communities/community-routes-test-helpers"
 
 let cleanup: (() => Promise<void>) | null = null
 
 beforeEach(() => {
   resetRuntimeCaches()
+  setSelfProviderForTests(buildVerifiedSelfProvider("self-mcp-routes-test-ref"))
 })
 
 afterEach(async () => {
+  setClawkeyProviderForTests(null)
   if (cleanup) {
     await cleanup()
     cleanup = null
@@ -188,6 +200,197 @@ describe("mcp routes", () => {
     expect(body.result.structuredContent.boards[0]?.membership_gate_summaries).toContainEqual({
       gate_type: "altcha_pow",
     })
+  })
+
+  test("delegated agent tokens can create posts through MCP and reject nonce replay", async () => {
+    const ctx = await createRouteTestContext({
+      PIRATE_WEB_PUBLIC_ORIGIN: "https://pirate.test",
+    })
+    cleanup = ctx.cleanup
+
+    const owner = await exchangeJwt(ctx.env, "mcp-delegated-agent-post-owner")
+    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, owner.accessToken)
+
+    const communityCreate = await requestJson(
+      "http://pirate.test/communities",
+      {
+        display_name: "MCP Delegated Agent Posting Club",
+        membership_mode: "request",
+        namespace: {
+          namespace_verification: namespaceVerificationId,
+        },
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(communityCreate.status).toBe(202)
+    const communityBody = await json(communityCreate) as {
+      community: { id: string }
+    }
+    const rawCommunityId = communityBody.community.id.replace(/^com_/, "")
+
+    await updateLocalCommunityAgentPostingPolicy({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: rawCommunityId,
+      agentPostingPolicy: "allow",
+      agentPostingScope: "top_level_and_replies",
+      acceptedAgentOwnershipProviders: ["clawkey"],
+    })
+
+    const member = await exchangeJwt(ctx.env, "mcp-delegated-agent-post-member")
+    await completeUniqueHumanVerification(ctx.env, member.accessToken)
+    await addCommunityMember(ctx.communityDbRoot, rawCommunityId, member.userId)
+
+    const registerChallenge = createSignedAgentChallenge({
+      message: "clawkey-register-mcp-delegated-post",
+      deviceId: "claw-device-mcp-delegated-post",
+    })
+    const { privateKey } = registerChallenge
+
+    setClawkeyProviderForTests({
+      startRegistration: async () => ({
+        sessionId: "cks_mcp_delegated_post_123",
+        registrationUrl: "https://clawkey.test/register/cks_mcp_delegated_post_123",
+        expiresAt: "2036-04-20T12:00:00.000Z",
+      }),
+      getRegistrationStatus: async () => ({
+        status: "completed",
+        deviceId: "claw-device-mcp-delegated-post",
+        publicKey: null,
+        registeredAt: "2026-04-19T12:00:00.000Z",
+      }),
+    })
+
+    const ownershipStart = await requestJson(
+      "http://pirate.test/agent-ownership-sessions",
+      {
+        session_kind: "register",
+        ownership_provider: "clawkey",
+        display_name: "MCP Delegated Captain Bot",
+        agent_challenge: registerChallenge.challenge,
+      },
+      ctx.env,
+      member.accessToken,
+    )
+    expect(ownershipStart.status).toBe(201)
+    const ownershipStartBody = await json(ownershipStart) as {
+      agent_ownership_session_id: string
+    }
+
+    const ownershipComplete = await requestJson(
+      `http://pirate.test/agent-ownership-sessions/aos_${ownershipStartBody.agent_ownership_session_id}/complete`,
+      {},
+      ctx.env,
+      member.accessToken,
+    )
+    expect(ownershipComplete.status).toBe(200)
+    const ownershipCompleteBody = await json(ownershipComplete) as {
+      agent_id: string
+      resolved_agent_ownership_record_id: string
+    }
+
+    const issueResponse = await requestJson(
+      `http://pirate.test/agents/${ownershipCompleteBody.agent_id}/credential`,
+      {
+        current_ownership_record_id: ownershipCompleteBody.resolved_agent_ownership_record_id,
+      },
+      ctx.env,
+      member.accessToken,
+    )
+    expect(issueResponse.status).toBe(200)
+    const issueBody = await json(issueResponse) as { access_token: string }
+
+    const createUrl = `https://api.pirate.test/communities/${rawCommunityId}/posts`
+    async function signCreatePostPayload(payload: Record<string, unknown>, nonce: string) {
+      const canonicalRequestHash = await computeAgentActionProofHash({
+        method: "POST",
+        url: createUrl,
+        body: payload,
+      })
+      const signedAt = new Date().toISOString()
+      const signature = signWithPrivateKey(
+        null,
+        Buffer.from(canonicalizeAgentActionProofSignaturePayload({
+          nonce,
+          signedAt,
+          canonicalRequestHash,
+        }), "utf8"),
+        privateKey,
+      ).toString("base64")
+      return {
+        nonce,
+        signed_at: signedAt,
+        canonical_request_hash: canonicalRequestHash,
+        signature,
+      }
+    }
+
+    const createPayload = {
+      post_type: "text" as const,
+      title: "MCP Delegated Captain Bot says hi",
+      body: "Created through MCP with a delegated agent credential.",
+      idempotency_key: "mcp-delegated-agent-post-key-1",
+      authorship_mode: "user_agent" as const,
+      agent_id: ownershipCompleteBody.agent_id,
+    }
+    const createProof = await signCreatePostPayload(createPayload, "mcp-delegated-agent-post-nonce-1")
+    const createdPost = await mcpCall(ctx.env, {
+      jsonrpc: "2.0",
+      id: "delegated-agent-create-post",
+      method: "tools/call",
+      params: {
+        name: "create_post",
+        arguments: {
+          community_id: rawCommunityId,
+          ...createPayload,
+          agent_action_proof: createProof,
+        },
+      },
+    }, issueBody.access_token)
+    expect(createdPost.status).toBe(200)
+    const createdBody = await json(createdPost) as {
+      error?: { message?: string; data?: { code?: string } }
+      result?: {
+        content?: Array<{ text?: string }>
+        structuredContent?: {
+          post?: { id?: string; authorship_mode?: string; agent?: string | null }
+          links?: { canonical?: { href?: string } }
+        }
+      }
+    }
+    expect(createdBody.error).toBeUndefined()
+    const post = createdBody.result?.structuredContent?.post
+    expect(post?.id).toMatch(/^post_/)
+    expect(post?.authorship_mode).toBe("user_agent")
+    expect(post?.agent).toBe(`agt_${ownershipCompleteBody.agent_id}`)
+    expect(createdBody.result?.structuredContent?.links?.canonical?.href).toBe(`https://pirate.test/p/${post?.id}`)
+    expect(createdBody.result?.content?.[0]?.text).toContain(`https://pirate.test/p/${post?.id}`)
+
+    const replayPayload = {
+      ...createPayload,
+      title: "MCP Delegated Captain Bot nonce replay",
+      idempotency_key: "mcp-delegated-agent-post-key-2",
+    }
+    const replayProof = await signCreatePostPayload(replayPayload, "mcp-delegated-agent-post-nonce-1")
+    const replayPost = await mcpCall(ctx.env, {
+      jsonrpc: "2.0",
+      id: "delegated-agent-create-post-replay",
+      method: "tools/call",
+      params: {
+        name: "create_post",
+        arguments: {
+          community_id: rawCommunityId,
+          ...replayPayload,
+          agent_action_proof: replayProof,
+        },
+      },
+    }, issueBody.access_token)
+    expect(replayPost.status).toBe(200)
+    const replayBody = await json(replayPost) as {
+      error?: { message?: string; data?: { code?: string } }
+    }
+    expect(replayBody.error?.data?.code).toBe("conflict")
+    expect(replayBody.error?.message).toContain("nonce")
   })
 
   test("guest comment flow: prepare, solve ALTCHA, reply, and reject replay", async () => {
