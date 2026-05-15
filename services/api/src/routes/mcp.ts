@@ -35,6 +35,8 @@ import {
   publicCommunityCapabilitiesPath,
   publicCommunityPath,
   publicCommunityPostsPath,
+  publicPostPath,
+  publicPostTopCommentsPath,
   type StructuredAccessLinks,
 } from "../lib/agent-discovery/structured-links"
 import {
@@ -42,6 +44,7 @@ import {
   decodePublicNamespaceVerificationId,
   decodePublicPostId,
   publicCommunityId,
+  publicPostId,
   publicId,
 } from "../lib/public-ids"
 import {
@@ -153,6 +156,44 @@ function mcpBoardProfile(c: McpContext, preview: CommunityPreview) {
     links: mcpCommunityLinks(c, preview),
     rules: preview.rules,
     reference_links: preview.reference_links ?? [],
+  }
+}
+
+function mcpPostLinks(c: McpContext, input: { postId: string; communityId: string }): StructuredAccessLinks {
+  const routePostId = input.postId.startsWith("post_") ? input.postId : publicPostId(input.postId)
+  const routeCommunityId = input.communityId.startsWith("com_") ? input.communityId : publicCommunityId(input.communityId)
+  const apiOrigin = configuredApiOrigin(c.env, c.req.url)
+  const webOrigin = configuredWebOrigin(c.env, c.req.url)
+  return {
+    self: {
+      href: absoluteUrl(apiOrigin, publicPostPath(routePostId)),
+      type: "application/json",
+    },
+    canonical: {
+      href: absoluteUrl(webOrigin, `/p/${encodeURIComponent(routePostId)}`),
+      type: "text/html",
+    },
+    community: {
+      href: absoluteUrl(apiOrigin, publicCommunityPath(routeCommunityId)),
+      type: "application/json",
+    },
+    top_comments: {
+      href: absoluteUrl(apiOrigin, publicPostTopCommentsPath(routePostId)),
+      type: "application/json",
+    },
+  }
+}
+
+function mcpCommentLinks(postLinks: StructuredAccessLinks, commentId: string): StructuredAccessLinks {
+  const canonicalPostHref = postLinks.canonical?.href
+  return {
+    canonical: {
+      href: canonicalPostHref
+        ? `${canonicalPostHref}${canonicalPostHref.includes("?") ? "&" : "?"}comment=${encodeURIComponent(commentId)}`
+        : "",
+      type: "text/html",
+    },
+    post: postLinks.self,
   }
 }
 
@@ -381,15 +422,17 @@ async function callCreatePostTool(c: McpContext, rawArgs: unknown) {
     communityRepository,
   })
   const post = serializePost(result)
+  const links = mcpPostLinks(c, { postId: post.id, communityId: post.community })
   return {
     content: [
       {
         type: "text",
-        text: `Created Pirate post ${post.id}`,
+        text: `Created Pirate post ${post.id}: ${links.canonical.href}`,
       },
     ],
     structuredContent: {
       post,
+      links,
     },
   }
 }
@@ -615,15 +658,25 @@ async function callReplyTool(c: McpContext, rawArgs: unknown) {
       communityRepository,
     })
     const comment = serializeComment(result)
+    const postLinks = mcpPostLinks(c, {
+      postId: comment.thread_root_post,
+      communityId: comment.community,
+    })
+    const commentLinks = mcpCommentLinks(postLinks, comment.id)
     return {
       content: [
         {
           type: "text",
-          text: `Created Pirate comment ${comment.id}`,
+          text: `Created Pirate comment ${comment.id}: ${commentLinks.canonical.href}`,
         },
       ],
       structuredContent: {
         comment,
+        post: {
+          id: comment.thread_root_post,
+          links: postLinks,
+        },
+        links: commentLinks,
       },
     }
   } else {
@@ -661,15 +714,25 @@ async function callReplyTool(c: McpContext, rawArgs: unknown) {
     communityRepository,
   })
   const comment = serializeComment(result)
+  const postLinks = mcpPostLinks(c, {
+    postId: comment.thread_root_post,
+    communityId: comment.community,
+  })
+  const commentLinks = mcpCommentLinks(postLinks, comment.id)
   return {
     content: [
       {
         type: "text",
-        text: `Created Pirate comment ${comment.id}`,
+        text: `Created Pirate comment ${comment.id}: ${commentLinks.canonical.href}`,
       },
     ],
     structuredContent: {
       comment,
+      post: {
+        id: comment.thread_root_post,
+        links: postLinks,
+      },
+      links: commentLinks,
     },
   }
 }

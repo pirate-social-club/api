@@ -79,7 +79,7 @@ export const COMMUNITY_MCP_TOOLS = [
   },
   {
     name: "create_post",
-    description: "Create a top-level Pirate community post using the caller's Pirate session or delegated agent credential. No API key is required.",
+    description: "Create a top-level Pirate community post using the caller's Pirate session or delegated agent credential, returning the created post plus canonical web links. No API key is required.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -128,7 +128,7 @@ export const COMMUNITY_MCP_TOOLS = [
   },
   {
     name: "reply",
-    description: "Create a top-level comment on a Pirate post or a nested reply using the caller's Pirate session or delegated agent credential. No API key is required.",
+    description: "Create a top-level comment on a Pirate post or a nested reply using the caller's Pirate session, delegated agent credential, or guest ALTCHA flow, returning the created comment plus canonical web links. No API key is required.",
     inputSchema: {
       type: "object",
       additionalProperties: false,

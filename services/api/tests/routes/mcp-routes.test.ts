@@ -24,12 +24,15 @@ afterEach(async () => {
   }
 })
 
-async function mcpCall(env: Record<string, unknown>, body: unknown): Promise<Response> {
+async function mcpCall(env: Record<string, unknown>, body: unknown, accessToken?: string): Promise<Response> {
   return app.request(
     "https://api.pirate.test/mcp",
     {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
+      },
       body: JSON.stringify(body),
     },
     env,
@@ -37,6 +40,64 @@ async function mcpCall(env: Record<string, unknown>, body: unknown): Promise<Res
 }
 
 describe("mcp routes", () => {
+  test("create_post returns canonical post links", async () => {
+    const ctx = await createRouteTestContext({
+      PIRATE_WEB_PUBLIC_ORIGIN: "https://pirate.test",
+    })
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "mcp-create-post-links-owner")
+    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+
+    const communityCreate = await requestJson(
+      "http://pirate.test/communities",
+      {
+        display_name: "MCP Create Post Links",
+        membership_mode: "request",
+        namespace: {
+          namespace_verification: namespaceVerificationId,
+        },
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(communityCreate.status).toBe(202)
+    const communityBody = await json(communityCreate) as {
+      community: { id: string }
+    }
+    const rawCommunityId = communityBody.community.id.replace(/^com_/, "")
+    await addCommunityMember(ctx.communityDbRoot, rawCommunityId, creator.userId)
+
+    const response = await mcpCall(ctx.env, {
+      jsonrpc: "2.0",
+      id: "create-post-links",
+      method: "tools/call",
+      params: {
+        name: "create_post",
+        arguments: {
+          community_id: communityBody.community.id,
+          title: "MCP canonical links",
+          body: "The MCP write response should include human-facing links.",
+          idempotency_key: "mcp-create-post-canonical-links",
+        },
+      },
+    }, creator.accessToken)
+    expect(response.status).toBe(200)
+    const body = await json(response) as {
+      result?: {
+        content?: Array<{ text?: string }>
+        structuredContent?: {
+          post?: { id?: string }
+          links?: { canonical?: { href?: string } }
+        }
+      }
+    }
+    const postId = body.result?.structuredContent?.post?.id
+    expect(postId).toMatch(/^post_/)
+    expect(body.result?.structuredContent?.links?.canonical?.href).toBe(`https://pirate.test/p/${postId}`)
+    expect(body.result?.content?.[0]?.text).toContain(`https://pirate.test/p/${postId}`)
+  })
+
   test("find_pirate_boards can filter for proof-of-work boards", async () => {
     const ctx = await createRouteTestContext({
       PIRATE_WEB_PUBLIC_ORIGIN: "https://staging.pirate.sc",
@@ -294,12 +355,22 @@ describe("mcp routes", () => {
     expect(replyResponse.status).toBe(200)
     const replyResult = await json(replyResponse) as {
       result?: {
-        structuredContent?: { comment?: { id: string } }
+        content?: Array<{ text?: string }>
+        structuredContent?: {
+          comment?: { id: string }
+          post?: { id?: string; links?: { canonical?: { href?: string } } }
+          links?: { canonical?: { href?: string } }
+        }
       }
       error?: { message: string; code?: number }
     }
     expect(replyResult.error).toBeUndefined()
-    expect(replyResult.result?.structuredContent?.comment?.id).toBeDefined()
+    const commentId = replyResult.result?.structuredContent?.comment?.id
+    expect(commentId).toBeDefined()
+    expect(replyResult.result?.structuredContent?.post?.id).toBe(postId)
+    expect(replyResult.result?.structuredContent?.post?.links?.canonical?.href).toBe(`https://staging.pirate.sc/p/${postId}`)
+    expect(replyResult.result?.structuredContent?.links?.canonical?.href).toBe(`https://staging.pirate.sc/p/${postId}?comment=${commentId}`)
+    expect(replyResult.result?.content?.[0]?.text).toContain(`https://staging.pirate.sc/p/${postId}?comment=${commentId}`)
 
     const replayResponse = await mcpCall(ctx.env, {
       jsonrpc: "2.0",
