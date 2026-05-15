@@ -415,21 +415,24 @@ async function callFindPirateBoardsTool(c: McpContext, rawArgs: unknown) {
           communityRepository,
         }).catch(() => null)
       : null
-    return {
-      community: publicCommunityId(community.community_id),
-      description: preview?.description ?? null,
-      display_name: preview?.display_name ?? community.display_name,
-      localized_text: preview?.localized_text ?? null,
-      namespace_verification: publicNamespaceVerificationId(preview?.namespace_verification_id ?? null),
-      route_slug: preview?.route_slug ?? community.route_slug,
-      links: preview
-        ? mcpCommunityLinks(c, preview)
-        : mcpCommunityLinks(c, {
+    const boardProfile = preview
+      ? mcpBoardProfile(c, preview)
+      : {
+          community: publicCommunityId(community.community_id),
+          display_name: community.display_name,
+          description: null,
+          localized_text: null,
+          namespace_verification: null,
+          route_slug: community.route_slug,
+          links: mcpCommunityLinks(c, {
             community_id: community.community_id,
             route_slug: community.route_slug,
           }),
-      rules: preview?.rules ?? [],
-      reference_links: preview?.reference_links ?? [],
+          rules: [],
+          reference_links: [],
+        }
+    return {
+      ...boardProfile,
       membership_mode: preview?.membership_mode ?? "gated",
       guest_comment_policy: preview?.guest_comment_policy ?? "disallow",
       agent_posting_policy: preview?.agent_posting_policy ?? "disallow",
