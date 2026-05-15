@@ -60,6 +60,11 @@ const PUBLIC_READ_WORKER_CACHE_TTL_HEADER = "x-pirate-cache-ttl"
 const publicReadCacheFillRequests = new Map<string, Promise<PublicReadCacheFillResult>>()
 const publicReadCacheRefreshRequests = new Map<string, Promise<void>>()
 
+export function resetPublicReadCacheDedupeForTests(): void {
+  publicReadCacheFillRequests.clear()
+  publicReadCacheRefreshRequests.clear()
+}
+
 type PublicReadCacheFillResult = {
   body: ArrayBuffer
   cacheable: boolean

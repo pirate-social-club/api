@@ -32,6 +32,7 @@ import {
 
 import { resolveCoreRepoPath } from "../shared/core-repo-paths"
 import { splitSqlStatements, toSqliteCompatibleStatements } from "../shared/sql-migration"
+import { resetPublicReadCacheDedupeForTests } from "../src/index"
 
 const encoder = new TextEncoder()
 const ROUTE_TEST_LOCK_PATH = join(tmpdir(), "pirate-api-route-test-lock")
@@ -135,6 +136,7 @@ export function resetMemoryStore(): void {
 
 export function resetRuntimeCaches(): void {
   resetMemoryStore()
+  resetPublicReadCacheDedupeForTests()
   setClawkeyProviderForTests(null)
   setSelfProviderForTests(null)
   setVeryProviderForTests(null)
