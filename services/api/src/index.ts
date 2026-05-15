@@ -57,6 +57,16 @@ export { LiveRoomRuntimeDO }
 const app = new Hono<{ Bindings: Env }>()
 const PUBLIC_READ_WORKER_CACHE_CREATED_HEADER = "x-pirate-cache-created-at"
 const PUBLIC_READ_WORKER_CACHE_TTL_HEADER = "x-pirate-cache-ttl"
+const publicReadCacheFillRequests = new Map<string, Promise<PublicReadCacheFillResult>>()
+const publicReadCacheRefreshRequests = new Map<string, Promise<void>>()
+
+type PublicReadCacheFillResult = {
+  body: ArrayBuffer
+  cacheable: boolean
+  headers: [string, string][]
+  status: number
+  statusText: string
+}
 
 async function buildVersionPayload(env: Env) {
   return {
@@ -221,11 +231,12 @@ async function fetchWithPublicReadCache(req: Request, env: Env, ctx: ExecutionCo
 
   const cache = await caches.open("public-read")
   const cacheKey = buildPublicReadCacheKey(req)
+  const cacheKeyId = cacheKey.url
   const cachedResponse = await cache.match(cacheKey)
   if (cachedResponse) {
     const freshness = getPublicReadCachedResponseFreshness(cachedResponse)
     if (freshness === "stale") {
-      ctx.waitUntil(refreshPublicReadCache(req, env, ctx, cache, cacheKey))
+      ctx.waitUntil(refreshPublicReadCache(req, env, ctx, cache, cacheKey, cacheKeyId))
       return withPublicReadCacheHeaders(cachedResponse, {
         restorePublicCacheHeaders: true,
         stored: null,
@@ -239,14 +250,59 @@ async function fetchWithPublicReadCache(req: Request, env: Env, ctx: ExecutionCo
     })
   }
 
+  const existingFill = publicReadCacheFillRequests.get(cacheKeyId)
+  const fill = existingFill ?? startPublicReadCacheFill(req, env, ctx, cache, cacheKey, cacheKeyId)
+  const result = await fill
+  return withPublicReadCacheHeaders(buildPublicReadCacheFillResponse(result), {
+    deduped: Boolean(existingFill),
+    stored: result.cacheable,
+    status: "miss",
+  })
+}
+
+function startPublicReadCacheFill(
+  req: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  cache: Cache,
+  cacheKey: Request,
+  cacheKeyId: string,
+): Promise<PublicReadCacheFillResult> {
+  const fill = fillPublicReadCache(req, env, ctx, cache, cacheKey).finally(() => {
+    publicReadCacheFillRequests.delete(cacheKeyId)
+  })
+  publicReadCacheFillRequests.set(cacheKeyId, fill)
+  return fill
+}
+
+async function fillPublicReadCache(
+  req: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  cache: Cache,
+  cacheKey: Request,
+): Promise<PublicReadCacheFillResult> {
   const response = await app.fetch(req, env, ctx)
   const cacheable = isPublicReadCacheResponse(response)
-  if (cacheable) {
-    ctx.waitUntil(cache.put(cacheKey, buildPublicReadWorkerCacheResponse(response.clone())))
+  const body = await response.arrayBuffer()
+  const result: PublicReadCacheFillResult = {
+    body,
+    cacheable,
+    headers: [...response.headers.entries()],
+    status: response.status,
+    statusText: response.statusText,
   }
-  return withPublicReadCacheHeaders(response, {
-    stored: cacheable,
-    status: "miss",
+  if (cacheable) {
+    ctx.waitUntil(cache.put(cacheKey, buildPublicReadWorkerCacheResponse(buildPublicReadCacheFillResponse(result))))
+  }
+  return result
+}
+
+function buildPublicReadCacheFillResponse(result: PublicReadCacheFillResult): Response {
+  return new Response(result.body.slice(0), {
+    headers: result.headers,
+    status: result.status,
+    statusText: result.statusText,
   })
 }
 
@@ -280,6 +336,26 @@ async function refreshPublicReadCache(
   ctx: ExecutionContext,
   cache: Cache,
   cacheKey: Request,
+  cacheKeyId: string,
+): Promise<void> {
+  const existingRefresh = publicReadCacheRefreshRequests.get(cacheKeyId)
+  if (existingRefresh) {
+    return existingRefresh
+  }
+
+  const refresh = refreshPublicReadCacheOnce(req, env, ctx, cache, cacheKey).finally(() => {
+    publicReadCacheRefreshRequests.delete(cacheKeyId)
+  })
+  publicReadCacheRefreshRequests.set(cacheKeyId, refresh)
+  return refresh
+}
+
+async function refreshPublicReadCacheOnce(
+  req: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  cache: Cache,
+  cacheKey: Request,
 ): Promise<void> {
   try {
     const response = await app.fetch(req, env, ctx)
@@ -292,6 +368,7 @@ async function refreshPublicReadCache(
 }
 
 function withPublicReadCacheHeaders(response: Response, input: {
+  deduped?: boolean
   restorePublicCacheHeaders?: boolean
   status: "bypass" | "hit" | "miss" | "stale"
   stored: boolean | null
@@ -306,6 +383,9 @@ function withPublicReadCacheHeaders(response: Response, input: {
   annotated.headers.set("x-pirate-cache", input.status)
   if (input.stored !== null) {
     annotated.headers.set("x-pirate-cache-stored", input.stored ? "1" : "0")
+  }
+  if (input.deduped) {
+    annotated.headers.set("x-pirate-cache-deduped", "1")
   }
   return annotated
 }

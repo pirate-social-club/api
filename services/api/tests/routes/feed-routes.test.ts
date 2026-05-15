@@ -156,9 +156,11 @@ describe("feed routes", () => {
     cleanup = ctx.cleanup
     let cachedResponse: Response | undefined
     let storedResponse: Response | undefined
+    let putCount = 0
     setTestCaches({
-      match: async () => cachedResponse,
+      match: async () => cachedResponse?.clone(),
       put: async (_request, response) => {
+        putCount += 1
         storedResponse = response
         cachedResponse = response.clone()
       },
@@ -177,6 +179,7 @@ describe("feed routes", () => {
     expect(storedResponse?.headers.get("cdn-cache-control")).toBe("public, max-age=360")
     expect(storedResponse?.headers.get("x-pirate-cache-created-at")).not.toBeNull()
     await Promise.all(missExecution.waitUntilPromises)
+    expect(putCount).toBe(1)
 
     const hitExecution = createExecutionContext()
     const hit = await fetchHandler(
@@ -214,5 +217,76 @@ describe("feed routes", () => {
     expect(staleExecution.waitUntilPromises.length).toBeGreaterThanOrEqual(1)
     await Promise.all(staleExecution.waitUntilPromises)
     expect(cachedResponse.headers.get("x-pirate-cache-created-at")).not.toBeNull()
+  })
+
+  test("public read cache wrapper dedupes concurrent misses and stale refreshes", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    let cachedResponse: Response | undefined
+    let putCount = 0
+    setTestCaches({
+      match: async () => cachedResponse?.clone(),
+      put: async (_request, response) => {
+        putCount += 1
+        cachedResponse = response.clone()
+      },
+    })
+
+    const firstMissExecution = createExecutionContext()
+    const secondMissExecution = createExecutionContext()
+    const [firstMiss, secondMiss] = await Promise.all([
+      fetchHandler(
+        new Request("http://pirate.test/feed/home/public?sort=best&locale=en&dedupe=miss"),
+        ctx.env,
+        firstMissExecution.ctx,
+      ),
+      fetchHandler(
+        new Request("http://pirate.test/feed/home/public?sort=best&locale=en&dedupe=miss"),
+        ctx.env,
+        secondMissExecution.ctx,
+      ),
+    ])
+    expect([firstMiss.headers.get("x-pirate-cache"), secondMiss.headers.get("x-pirate-cache")]).toEqual(["miss", "miss"])
+    expect([firstMiss.headers.get("x-pirate-cache-deduped"), secondMiss.headers.get("x-pirate-cache-deduped")].filter(Boolean)).toEqual(["1"])
+    await Promise.all([
+      ...firstMissExecution.waitUntilPromises,
+      ...secondMissExecution.waitUntilPromises,
+    ])
+    expect(putCount).toBe(1)
+
+    cachedResponse = new Response(JSON.stringify({
+      items: [],
+      next_cursor: null,
+      top_communities: [],
+    }), {
+      headers: {
+        "cache-control": "public, max-age=360",
+        "cdn-cache-control": "public, max-age=360",
+        "content-type": "application/json",
+        "x-pirate-cache-created-at": String(Date.now() - 61_000),
+      },
+      status: 200,
+    })
+    putCount = 0
+    const firstStaleExecution = createExecutionContext()
+    const secondStaleExecution = createExecutionContext()
+    const [firstStale, secondStale] = await Promise.all([
+      fetchHandler(
+        new Request("http://pirate.test/feed/home/public?sort=best&locale=en&dedupe=stale"),
+        ctx.env,
+        firstStaleExecution.ctx,
+      ),
+      fetchHandler(
+        new Request("http://pirate.test/feed/home/public?sort=best&locale=en&dedupe=stale"),
+        ctx.env,
+        secondStaleExecution.ctx,
+      ),
+    ])
+    expect([firstStale.headers.get("x-pirate-cache"), secondStale.headers.get("x-pirate-cache")]).toEqual(["stale", "stale"])
+    await Promise.all([
+      ...firstStaleExecution.waitUntilPromises,
+      ...secondStaleExecution.waitUntilPromises,
+    ])
+    expect(putCount).toBe(1)
   })
 })
