@@ -15,6 +15,7 @@
     "fund:story-runtime-signers": "bun run scripts/fund-story-runtime-signers.ts",
     "worker:community-jobs:local": "bun run scripts/run-community-job-worker.ts",
     "deploy": "wrangler deploy",
+    "smoke:public-feed-cache": "bun run scripts/smoke-public-feed-cache.ts",
     "generate:agent-tools": "bun run scripts/generate-agent-tools.ts",
     "generate:agent-skill": "bun run scripts/generate-agent-skill.ts",
     "check:agent-skill": "bun run scripts/generate-agent-skill.ts --check",
