@@ -11,6 +11,7 @@ describe("verification endpoint environment config", () => {
 
     expect(vars.ENVIRONMENT).toBe("staging")
     expect(vars.PIRATE_API_PUBLIC_ORIGIN).toBe("https://api-staging.pirate.sc")
+    expect(vars.PIRATE_WEB_PUBLIC_ORIGIN).toBe("https://staging.pirate.sc")
     expect(vars.CORS_ALLOWED_ORIGINS).toBe("https://staging.pirate.sc")
   })
 
@@ -19,6 +20,7 @@ describe("verification endpoint environment config", () => {
 
     expect(vars.ENVIRONMENT).toBe("production")
     expect(vars.PIRATE_API_PUBLIC_ORIGIN).toBe("https://api.pirate.sc")
+    expect(vars.PIRATE_WEB_PUBLIC_ORIGIN).toBe("https://pirate.sc")
     expect(vars.CORS_ALLOWED_ORIGINS).toBe("https://pirate.sc,https://www.pirate.sc")
   })
 })
