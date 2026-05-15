@@ -1,7 +1,9 @@
 import type { Context } from "hono"
 
-const PUBLIC_READ_CDN_CACHE_CONTROL = "public, s-maxage=60, stale-while-revalidate=300"
-const PUBLIC_READ_CACHE_CONTROL = "public, max-age=0, s-maxage=60, stale-while-revalidate=300"
+export const PUBLIC_READ_CACHE_FRESH_SECONDS = 60
+export const PUBLIC_READ_CACHE_STALE_SECONDS = 300
+export const PUBLIC_READ_CDN_CACHE_CONTROL = `public, s-maxage=${PUBLIC_READ_CACHE_FRESH_SECONDS}, stale-while-revalidate=${PUBLIC_READ_CACHE_STALE_SECONDS}`
+export const PUBLIC_READ_CACHE_CONTROL = `public, max-age=0, s-maxage=${PUBLIC_READ_CACHE_FRESH_SECONDS}, stale-while-revalidate=${PUBLIC_READ_CACHE_STALE_SECONDS}`
 const DEFAULT_PUBLIC_READ_CACHE_KEY_HEADER_NAMES = ["origin", "accept", "accept-language"]
 const FEED_PUBLIC_READ_CACHE_KEY_HEADER_NAMES = ["origin"]
 

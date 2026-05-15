@@ -375,7 +375,7 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
     })
     return c.json({
       ...result,
-      items: result.items.map(serializeLocalizedPostResponse),
+      items: result.items.map((item) => serializeLocalizedPostResponse(item)),
     }, 200)
   })
 

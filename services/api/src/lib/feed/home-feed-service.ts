@@ -76,6 +76,12 @@ type HomeFeedCommunityRepository =
 const HOME_FEED_COMMUNITY_READ_CONCURRENCY = 4
 const HOME_FEED_TIMING_LOG_THRESHOLD_MS = 1_000
 
+export const HOME_FEED_SERVER_TIMING: unique symbol = Symbol("home-feed-server-timing")
+
+export type HomeFeedResponseWithTiming = HomeFeedResponse & {
+  [HOME_FEED_SERVER_TIMING]?: string
+}
+
 type HomeFeedCommunityTiming = {
   community_id: string
   rows: number
@@ -92,6 +98,37 @@ type HomeFeedCommunityTiming = {
 
 function elapsedMs(startedAt: number): number {
   return Math.round(performance.now() - startedAt)
+}
+
+function serverTimingMetricName(name: string): string {
+  return name.replace(/_ms$/u, "").replace(/_/gu, "-")
+}
+
+function formatHomeFeedServerTiming(input: {
+  phases: Record<string, number>
+  totalMs: number
+}): string {
+  return [
+    `home-feed;dur=${input.totalMs}`,
+    ...Object.entries(input.phases)
+      .filter((entry): entry is [string, number] => Number.isFinite(entry[1]))
+      .map(([name, duration]) => `${serverTimingMetricName(name)};dur=${duration}`),
+  ].join(", ")
+}
+
+function withHomeFeedServerTiming(
+  response: HomeFeedResponse,
+  input: {
+    phases: Record<string, number>
+    totalMs: number
+  },
+): HomeFeedResponseWithTiming {
+  Object.defineProperty(response, HOME_FEED_SERVER_TIMING, {
+    configurable: true,
+    enumerable: false,
+    value: formatHomeFeedServerTiming(input),
+  })
+  return response as HomeFeedResponseWithTiming
 }
 
 function summarizeCommunityTimings(timings: HomeFeedCommunityTiming[]): HomeFeedCommunityTiming[] {
@@ -649,7 +686,7 @@ export async function listHomeFeed(input: {
   communityRepository: HomeFeedCommunityRepository
   userRepository?: UserRepository | null
   waitUntil?: HomeFeedWaitUntil
-}): Promise<HomeFeedResponse> {
+}): Promise<HomeFeedResponseWithTiming> {
   const requestStartedAt = performance.now()
   const phaseTimings: Record<string, number> = {}
   let phaseStartedAt = performance.now()
@@ -702,11 +739,14 @@ export async function listHomeFeed(input: {
         slow_communities: [],
       }))
     }
-    return {
+    return withHomeFeedServerTiming({
       items: [],
       top_communities: [],
       next_cursor: null,
-    }
+    }, {
+      phases: phaseTimings,
+      totalMs,
+    })
   }
   phaseTimings.resolve_communities_ms = elapsedMs(phaseStartedAt)
 
@@ -859,7 +899,7 @@ export async function listHomeFeed(input: {
         }
         communityItems.push({
           community: serializeHomeFeedCommunitySummary(community),
-          post: serializeLocalizedPostResponse(localized),
+          post: serializeLocalizedPostResponse(localized, { surface: "home_feed" }),
         })
       }
       const enqueueStartedAt = performance.now()
@@ -931,9 +971,12 @@ export async function listHomeFeed(input: {
     }))
   }
 
-  return {
+  return withHomeFeedServerTiming({
     items: orderedItems,
     top_communities: topCommunities.map(serializeHomeFeedCommunitySummary),
     next_cursor: nextCursor,
-  }
+  }, {
+    phases: phaseTimings,
+    totalMs,
+  })
 }

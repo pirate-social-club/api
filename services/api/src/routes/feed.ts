@@ -3,7 +3,7 @@ import type { Context } from "hono"
 import { authenticateOptional, type OptionalAuthenticatedEnv } from "../lib/auth-middleware"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { getUserRepository } from "../lib/auth/repositories"
-import { listHomeFeed } from "../lib/feed/home-feed-service"
+import { HOME_FEED_SERVER_TIMING, listHomeFeed } from "../lib/feed/home-feed-service"
 import { setPublicReadCacheHeaders } from "./cache-headers"
 
 const feed = new Hono<OptionalAuthenticatedEnv>()
@@ -19,6 +19,13 @@ function getWaitUntil(c: Context): ((promise: Promise<void>) => void) | undefine
   return waitUntil
 }
 
+function setHomeFeedServerTiming(c: Context, result: Awaited<ReturnType<typeof listHomeFeed>>): void {
+  const value = result[HOME_FEED_SERVER_TIMING]
+  if (value) {
+    c.header("Server-Timing", value)
+  }
+}
+
 feed.get("/home/public", async (c) => {
   const result = await listHomeFeed({
     env: c.env,
@@ -32,6 +39,7 @@ feed.get("/home/public", async (c) => {
     waitUntil: getWaitUntil(c),
   })
   setPublicReadCacheHeaders(c)
+  setHomeFeedServerTiming(c, result)
   return c.json(result, 200)
 })
 
@@ -53,6 +61,7 @@ feed.get("/home", async (c) => {
   if (!actor && !c.req.header("authorization")) {
     setPublicReadCacheHeaders(c, { vary: ["Authorization"] })
   }
+  setHomeFeedServerTiming(c, result)
   return c.json(result, 200)
 })
 

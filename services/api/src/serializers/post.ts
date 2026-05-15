@@ -104,9 +104,51 @@ export function serializeDeletedPostResponse(post: Pick<Post, "post_id">): Contr
   }
 }
 
-export function serializeLocalizedPostResponse(response: LocalizedPostResponse): ContractLocalizedPostResponse {
+function pruneLinkEnrichmentTranslations(
+  enrichment: Record<string, unknown> | null | undefined,
+  resolvedLocale: string | null | undefined,
+  postSourceLanguage: string | null | undefined,
+): Record<string, unknown> | null | undefined {
+  if (!enrichment || typeof enrichment !== "object") return enrichment
+  const translations = enrichment.translations
+  if (!translations || typeof translations !== "object" || Array.isArray(translations)) return enrichment
+  const keys = Object.keys(translations)
+  if (keys.length <= 1) return enrichment
+
+  const kept: Record<string, unknown> = {}
+  const sourceLanguage = typeof enrichment.source_language === "string"
+    ? enrichment.source_language.split("-")[0]
+    : typeof postSourceLanguage === "string"
+      ? postSourceLanguage.split("-")[0]
+      : null
+  const resolvedBase = resolvedLocale?.split("-")[0] ?? null
+
+  for (const key of keys) {
+    const keyBase = key.split("-")[0]
+    if (key === resolvedLocale || keyBase === resolvedBase || key === sourceLanguage || keyBase === sourceLanguage) {
+      kept[key] = (translations as Record<string, unknown>)[key]
+    }
+  }
+
+  if (Object.keys(kept).length === 0) {
+    const firstKey = keys[0]
+    kept[firstKey] = (translations as Record<string, unknown>)[firstKey]
+  }
+
+  return { ...enrichment, translations: kept }
+}
+
+export function serializeLocalizedPostResponse(response: LocalizedPostResponse, options?: { surface: "home_feed" }): ContractLocalizedPostResponse {
+  const serializedPost = serializePost(response.post)
+  if (options?.surface === "home_feed") {
+    serializedPost.link_enrichment = pruneLinkEnrichmentTranslations(
+      serializedPost.link_enrichment as Record<string, unknown> | null | undefined,
+      response.resolved_locale,
+      response.post.source_language,
+    )
+  }
   return {
-    post: serializePost(response.post),
+    post: serializedPost,
     author_community_role: response.author_community_role,
     thread_snapshot: response.thread_snapshot ? serializeCommentThreadSnapshot(response.thread_snapshot) : null,
     market_context: response.market_context,

@@ -30,7 +30,15 @@ import profiles from "./routes/profiles"
 import users from "./routes/users"
 import verification from "./routes/verification"
 import walletIdentities from "./routes/wallet-identities"
-import { buildPublicReadCacheKey, isPublicReadCacheRequest, isPublicReadCacheResponse } from "./routes/cache-headers"
+import {
+  buildPublicReadCacheKey,
+  isPublicReadCacheRequest,
+  isPublicReadCacheResponse,
+  PUBLIC_READ_CACHE_CONTROL,
+  PUBLIC_READ_CACHE_FRESH_SECONDS,
+  PUBLIC_READ_CACHE_STALE_SECONDS,
+  PUBLIC_READ_CDN_CACHE_CONTROL,
+} from "./routes/cache-headers"
 import { flushAnalyticsOutbox, isAnalyticsEnabled, syncCommunityHealthCounts } from "./lib/analytics"
 import { getCommunityRepository } from "./lib/communities/db-community-repository"
 import { reconcileStaleCommunityPurchaseSettlements } from "./lib/communities/commerce/settlement-service"
@@ -47,6 +55,8 @@ import type { Env } from "./env"
 export { LiveRoomRuntimeDO }
 
 const app = new Hono<{ Bindings: Env }>()
+const PUBLIC_READ_WORKER_CACHE_CREATED_HEADER = "x-pirate-cache-created-at"
+const PUBLIC_READ_WORKER_CACHE_TTL_HEADER = "x-pirate-cache-ttl"
 
 async function buildVersionPayload(env: Env) {
   return {
@@ -203,21 +213,101 @@ app.onError((error, c) => {
 
 async function fetchWithPublicReadCache(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   if (!isPublicReadCacheRequest(req) || typeof caches === "undefined") {
-    return app.fetch(req, env, ctx)
+    return withPublicReadCacheHeaders(await app.fetch(req, env, ctx), {
+      stored: null,
+      status: "bypass",
+    })
   }
 
   const cache = await caches.open("public-read")
   const cacheKey = buildPublicReadCacheKey(req)
   const cachedResponse = await cache.match(cacheKey)
   if (cachedResponse) {
-    return cachedResponse
+    const freshness = getPublicReadCachedResponseFreshness(cachedResponse)
+    if (freshness === "stale") {
+      ctx.waitUntil(refreshPublicReadCache(req, env, ctx, cache, cacheKey))
+      return withPublicReadCacheHeaders(cachedResponse, {
+        restorePublicCacheHeaders: true,
+        stored: null,
+        status: "stale",
+      })
+    }
+    return withPublicReadCacheHeaders(cachedResponse, {
+      restorePublicCacheHeaders: true,
+      stored: null,
+      status: "hit",
+    })
   }
 
   const response = await app.fetch(req, env, ctx)
-  if (isPublicReadCacheResponse(response)) {
-    ctx.waitUntil(cache.put(cacheKey, response.clone()))
+  const cacheable = isPublicReadCacheResponse(response)
+  if (cacheable) {
+    ctx.waitUntil(cache.put(cacheKey, buildPublicReadWorkerCacheResponse(response.clone())))
   }
-  return response
+  return withPublicReadCacheHeaders(response, {
+    stored: cacheable,
+    status: "miss",
+  })
+}
+
+function buildPublicReadWorkerCacheResponse(response: Response): Response {
+  const stored = new Response(response.body, response)
+  const maxAgeSeconds = PUBLIC_READ_CACHE_FRESH_SECONDS + PUBLIC_READ_CACHE_STALE_SECONDS
+  const workerCacheControl = `public, max-age=${maxAgeSeconds}`
+  stored.headers.set("Cache-Control", workerCacheControl)
+  stored.headers.set("CDN-Cache-Control", workerCacheControl)
+  stored.headers.set(PUBLIC_READ_WORKER_CACHE_CREATED_HEADER, String(Date.now()))
+  stored.headers.set(
+    PUBLIC_READ_WORKER_CACHE_TTL_HEADER,
+    `${PUBLIC_READ_CACHE_FRESH_SECONDS},${PUBLIC_READ_CACHE_STALE_SECONDS}`,
+  )
+  return stored
+}
+
+function getPublicReadCachedResponseFreshness(response: Response): "fresh" | "stale" {
+  const created = Number(response.headers.get(PUBLIC_READ_WORKER_CACHE_CREATED_HEADER))
+  if (!Number.isFinite(created) || created <= 0) {
+    return "fresh"
+  }
+
+  const ageMs = Date.now() - created
+  return ageMs > PUBLIC_READ_CACHE_FRESH_SECONDS * 1000 ? "stale" : "fresh"
+}
+
+async function refreshPublicReadCache(
+  req: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  cache: Cache,
+  cacheKey: Request,
+): Promise<void> {
+  try {
+    const response = await app.fetch(req, env, ctx)
+    if (isPublicReadCacheResponse(response)) {
+      await cache.put(cacheKey, buildPublicReadWorkerCacheResponse(response.clone()))
+    }
+  } catch (error) {
+    console.error("[public-read-cache] stale refresh failed", error)
+  }
+}
+
+function withPublicReadCacheHeaders(response: Response, input: {
+  restorePublicCacheHeaders?: boolean
+  status: "bypass" | "hit" | "miss" | "stale"
+  stored: boolean | null
+}): Response {
+  const annotated = new Response(response.body, response)
+  annotated.headers.delete(PUBLIC_READ_WORKER_CACHE_CREATED_HEADER)
+  annotated.headers.delete(PUBLIC_READ_WORKER_CACHE_TTL_HEADER)
+  if (input.restorePublicCacheHeaders) {
+    annotated.headers.set("Cache-Control", PUBLIC_READ_CACHE_CONTROL)
+    annotated.headers.set("CDN-Cache-Control", PUBLIC_READ_CDN_CACHE_CONTROL)
+  }
+  annotated.headers.set("x-pirate-cache", input.status)
+  if (input.stored !== null) {
+    annotated.headers.set("x-pirate-cache-stored", input.stored ? "1" : "0")
+  }
+  return annotated
 }
 
 async function flushScheduledAnalytics(env: Env): Promise<void> {
