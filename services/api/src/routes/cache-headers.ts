@@ -64,6 +64,7 @@ export function buildPublicReadCacheKey(request: Request): Request {
       url.searchParams.set(`__cache_${headerName}`, headerValue)
     }
   }
+  url.searchParams.sort()
   return new Request(url.toString(), { method: "GET" })
 }
 
