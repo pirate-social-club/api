@@ -108,11 +108,13 @@ function attachMaterializedServerTiming(
   return response as HomeFeedResponseWithTiming
 }
 
-function parseMaterializedFeedBody(rawBody: unknown): HomeFeedResponse | null {
-  if (typeof rawBody !== "string" || !rawBody) {
+export function parseMaterializedPublicHomeFeedBody(rawBody: unknown): HomeFeedResponse | null {
+  const parsed = typeof rawBody === "string"
+    ? (rawBody ? JSON.parse(rawBody) as Partial<HomeFeedResponse> : null)
+    : rawBody as Partial<HomeFeedResponse> | null
+  if (!parsed || typeof parsed !== "object") {
     return null
   }
-  const parsed = JSON.parse(rawBody) as Partial<HomeFeedResponse>
   if (!Array.isArray(parsed.items) || !Array.isArray(parsed.top_communities)) {
     return null
   }
@@ -149,7 +151,7 @@ export async function readMaterializedPublicHomeFeed(input: {
       return { result: null, state: "miss" }
     }
 
-    const body = parseMaterializedFeedBody(row.json_body)
+    const body = parseMaterializedPublicHomeFeedBody(row.json_body)
     if (!body) {
       return { result: null, state: "miss" }
     }

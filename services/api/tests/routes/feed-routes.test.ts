@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import handler, { app } from "../../src/index"
-import { buildMaterializedPublicHomeFeedTarget } from "../../src/lib/feed/materialized-public-feed"
+import {
+  buildMaterializedPublicHomeFeedTarget,
+  parseMaterializedPublicHomeFeedBody,
+} from "../../src/lib/feed/materialized-public-feed"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../helpers"
 import { exchangeJwt } from "./communities/community-routes-test-helpers"
 
@@ -238,6 +241,17 @@ describe("feed routes", () => {
     expect(typeof stored.rows[0]?.json_body).toBe("string")
     expect(Date.parse(String(stored.rows[0]?.expires_at))).toBeGreaterThan(Date.now())
     expect(Date.parse(String(stored.rows[0]?.stale_at))).toBeGreaterThan(Date.parse(String(stored.rows[0]?.expires_at)))
+  })
+
+  test("materialized feed parser accepts Postgres JSONB objects", () => {
+    const body = {
+      items: [],
+      top_communities: [],
+      next_cursor: null,
+    }
+
+    expect(parseMaterializedPublicHomeFeedBody(body)).toEqual(body)
+    expect(parseMaterializedPublicHomeFeedBody(JSON.stringify(body))).toEqual(body)
   })
 
   test("public read cache wrapper annotates feed misses and hits", async () => {
