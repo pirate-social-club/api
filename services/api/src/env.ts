@@ -7,6 +7,7 @@ export type Env = {
   DEV_MEMORY_STORE_ENABLED?: string
   CONTROL_PLANE_DATABASE_URL?: string
   CORS_ALLOWED_ORIGINS?: string
+  MATERIALIZED_PUBLIC_HOME_FEED_LOCALES?: string
   PIRATE_ADMIN_TOKEN?: string
   SENTRY_DSN?: string
 

@@ -46,6 +46,7 @@ import { processAvailableCommunityJobs } from "./lib/communities/jobs/runner"
 import { reconcileCommunityMembershipAndFollowProjections } from "./lib/communities/membership/projection-service"
 import { getCommunityProvisionOperatorVersion } from "./lib/communities/provisioning/operator-client"
 import { HttpError, errorResponse } from "./lib/errors"
+import { refreshScheduledMaterializedPublicHomeFeeds } from "./lib/feed/materialized-public-feed"
 import { reconcileRoyaltyClaimEvents } from "./lib/royalties/royalty-claim-history"
 import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/runtime-deps"
 import { makeSentryOptions, captureScheduledError } from "./lib/sentry"
@@ -528,6 +529,7 @@ const handler: ExportedHandler<Env> = {
     ctx.waitUntil(withRequestControlPlaneClients(() => syncScheduledCommunityHealthCounts(env)))
     ctx.waitUntil(withRequestControlPlaneClients(() => processScheduledCommunityJobs(env)))
     ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledCommunityMembershipProjections(env)))
+    ctx.waitUntil(withRequestControlPlaneClients(() => refreshScheduledMaterializedPublicHomeFeeds(env)))
     ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledRoyaltyClaims(env)))
     ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledPurchaseSettlements(env)))
   },

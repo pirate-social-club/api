@@ -30,6 +30,7 @@ import {
   resolveLocalDevStorage,
 } from "../scripts/_lib/local-dev-storage"
 
+import { resetMaterializedPublicHomeFeedForTests } from "../src/lib/feed/materialized-public-feed"
 import { resolveCoreRepoPath } from "../shared/core-repo-paths"
 import { splitSqlStatements, toSqliteCompatibleStatements } from "../shared/sql-migration"
 import { resetPublicReadCacheDedupeForTests } from "../src/index"
@@ -136,6 +137,7 @@ export function resetMemoryStore(): void {
 
 export function resetRuntimeCaches(): void {
   resetMemoryStore()
+  resetMaterializedPublicHomeFeedForTests()
   resetPublicReadCacheDedupeForTests()
   setClawkeyProviderForTests(null)
   setSelfProviderForTests(null)

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import handler, { app } from "../../src/index"
+import { buildMaterializedPublicHomeFeedTarget } from "../../src/lib/feed/materialized-public-feed"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../helpers"
 import { exchangeJwt } from "./communities/community-routes-test-helpers"
 
@@ -149,6 +150,94 @@ describe("feed routes", () => {
     expect(body.top_communities).toEqual([])
     expect(body.next_cursor).toBeNull()
     expect(Object.keys(body)).toEqual(["items", "top_communities", "next_cursor"])
+  })
+
+  test("GET /feed/home/public serves a fresh materialized default public feed", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const target = buildMaterializedPublicHomeFeedTarget({
+      locale: "en",
+      sort: "best",
+      timeRange: "all",
+      cursor: null,
+    })
+    if (!target) {
+      throw new Error("expected materialized target")
+    }
+    const now = Date.now()
+    const materializedBody = {
+      items: [],
+      top_communities: [{
+        id: "com_cached_home",
+        object: "home_feed_community_summary",
+        display_name: "Cached Home",
+        route_slug: "cached-home",
+        avatar_url: null,
+        view_count: 12,
+      }],
+      next_cursor: null,
+    }
+
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO materialized_public_feeds (
+          cache_key,
+          json_body,
+          created_at,
+          refreshed_at,
+          expires_at,
+          stale_at,
+          source_version
+        ) VALUES (?1, ?2, ?3, ?3, ?4, ?5, ?6)
+      `,
+      args: [
+        target.cacheKey,
+        JSON.stringify(materializedBody),
+        new Date(now).toISOString(),
+        new Date(now + 60_000).toISOString(),
+        new Date(now + 600_000).toISOString(),
+        "test-materialized",
+      ],
+    })
+
+    const response = await app.request("http://pirate.test/feed/home/public?sort=best&locale=en", {}, ctx.env)
+    expect(response.status).toBe(200)
+    expect(response.headers.get("x-pirate-materialized-feed")).toBe("hit")
+    expect(response.headers.get("server-timing")).toContain("materialized-public-feed-hit;dur=")
+    expect(response.headers.get("vary")).not.toContain("Authorization")
+    expect(await json(response)).toEqual(materializedBody)
+  })
+
+  test("GET /feed/home/public stores the default public feed after a materialized miss", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const target = buildMaterializedPublicHomeFeedTarget({
+      locale: "en",
+      sort: "best",
+      timeRange: "all",
+      cursor: null,
+    })
+    if (!target) {
+      throw new Error("expected materialized target")
+    }
+
+    const response = await app.request("http://pirate.test/feed/home/public?sort=best&locale=en", {}, ctx.env)
+    expect(response.status).toBe(200)
+    expect(response.headers.get("x-pirate-materialized-feed")).toBe("miss")
+    const stored = await ctx.client.execute({
+      sql: `
+        SELECT json_body, expires_at, stale_at
+        FROM materialized_public_feeds
+        WHERE cache_key = ?1
+        LIMIT 1
+      `,
+      args: [target.cacheKey],
+    })
+
+    expect(stored.rows).toHaveLength(1)
+    expect(typeof stored.rows[0]?.json_body).toBe("string")
+    expect(Date.parse(String(stored.rows[0]?.expires_at))).toBeGreaterThan(Date.now())
+    expect(Date.parse(String(stored.rows[0]?.stale_at))).toBeGreaterThan(Date.parse(String(stored.rows[0]?.expires_at)))
   })
 
   test("public read cache wrapper annotates feed misses and hits", async () => {
