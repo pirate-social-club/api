@@ -27,8 +27,23 @@ import { createPost } from "../lib/posts/post-service"
 import { serializeComment } from "../serializers/comment"
 import { serializePost } from "../serializers/post"
 import type { Env } from "../env"
-import type { AgentActionProof, CreatePostRequest } from "../types"
-import { decodePublicCommentId, decodePublicPostId, publicCommunityId } from "../lib/public-ids"
+import type { AgentActionProof, CommunityPreview, CreatePostRequest } from "../types"
+import {
+  absoluteUrl,
+  configuredApiOrigin,
+  configuredWebOrigin,
+  publicCommunityCapabilitiesPath,
+  publicCommunityPath,
+  publicCommunityPostsPath,
+  type StructuredAccessLinks,
+} from "../lib/agent-discovery/structured-links"
+import {
+  decodePublicCommentId,
+  decodePublicNamespaceVerificationId,
+  decodePublicPostId,
+  publicCommunityId,
+  publicId,
+} from "../lib/public-ids"
 import {
   createAltchaChallenge,
   enforceAltchaChallengeRateLimit,
@@ -88,6 +103,58 @@ type McpBoardCapabilitiesArguments = {
 
 const mcp = new Hono<{ Bindings: Env }>()
 type McpContext = Context<{ Bindings: Env }>
+
+function publicNamespaceVerificationId(namespaceVerificationId?: string | null): string | null {
+  if (!namespaceVerificationId) {
+    return null
+  }
+  return namespaceVerificationId.startsWith("nv_")
+    ? namespaceVerificationId
+    : publicId(decodePublicNamespaceVerificationId(namespaceVerificationId), "nv")
+}
+
+function communityCanonicalPath(communityId: string, routeSlug?: string | null): string {
+  const canonicalSegment = routeSlug?.trim() || publicCommunityId(communityId)
+  return `/c/${encodeURIComponent(canonicalSegment).replace(/^%40/u, "@")}`
+}
+
+function mcpCommunityLinks(c: McpContext, preview: Pick<CommunityPreview, "community_id" | "route_slug">): StructuredAccessLinks {
+  const routeCommunityId = publicCommunityId(preview.community_id)
+  const apiOrigin = configuredApiOrigin(c.env, c.req.url)
+  const webOrigin = configuredWebOrigin(c.env, c.req.url)
+  return {
+    self: {
+      href: absoluteUrl(apiOrigin, publicCommunityPath(routeCommunityId)),
+      type: "application/json",
+    },
+    canonical: {
+      href: absoluteUrl(webOrigin, communityCanonicalPath(preview.community_id, preview.route_slug)),
+      type: "text/html",
+    },
+    posts: {
+      href: absoluteUrl(apiOrigin, publicCommunityPostsPath(routeCommunityId)),
+      type: "application/json",
+    },
+    capabilities: {
+      href: absoluteUrl(apiOrigin, publicCommunityCapabilitiesPath(routeCommunityId)),
+      type: "application/json",
+    },
+  }
+}
+
+function mcpBoardProfile(c: McpContext, preview: CommunityPreview) {
+  return {
+    community: publicCommunityId(preview.community_id),
+    display_name: preview.display_name,
+    description: preview.description ?? null,
+    localized_text: preview.localized_text ?? null,
+    namespace_verification: publicNamespaceVerificationId(preview.namespace_verification_id),
+    route_slug: preview.route_slug ?? null,
+    links: mcpCommunityLinks(c, preview),
+    rules: preview.rules,
+    reference_links: preview.reference_links ?? [],
+  }
+}
 
 function jsonRpcResult(id: McpJsonRpcRequest["id"], result: unknown): Response {
   return Response.json({
@@ -350,8 +417,19 @@ async function callFindPirateBoardsTool(c: McpContext, rawArgs: unknown) {
       : null
     return {
       community: publicCommunityId(community.community_id),
+      description: preview?.description ?? null,
       display_name: preview?.display_name ?? community.display_name,
+      localized_text: preview?.localized_text ?? null,
+      namespace_verification: publicNamespaceVerificationId(preview?.namespace_verification_id ?? null),
       route_slug: preview?.route_slug ?? community.route_slug,
+      links: preview
+        ? mcpCommunityLinks(c, preview)
+        : mcpCommunityLinks(c, {
+            community_id: community.community_id,
+            route_slug: community.route_slug,
+          }),
+      rules: preview?.rules ?? [],
+      reference_links: preview?.reference_links ?? [],
       membership_mode: preview?.membership_mode ?? "gated",
       guest_comment_policy: preview?.guest_comment_policy ?? "disallow",
       agent_posting_policy: preview?.agent_posting_policy ?? "disallow",
@@ -418,6 +496,7 @@ async function callGetPirateBoardCapabilitiesTool(c: McpContext, rawArgs: unknow
       },
     ],
     structuredContent: {
+      board: mcpBoardProfile(c, preview),
       capabilities,
     },
   }

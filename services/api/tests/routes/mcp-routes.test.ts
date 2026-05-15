@@ -38,16 +38,20 @@ async function mcpCall(env: Record<string, unknown>, body: unknown): Promise<Res
 
 describe("mcp routes", () => {
   test("find_pirate_boards can filter for proof-of-work boards", async () => {
-    const ctx = await createRouteTestContext()
+    const ctx = await createRouteTestContext({
+      PIRATE_WEB_PUBLIC_ORIGIN: "https://staging.pirate.sc",
+    })
     cleanup = ctx.cleanup
     const creator = await exchangeJwt(ctx.env, "mcp-pow-board-discovery-owner")
     const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
 
     const displayName = "MCP PoW Board Discovery Static"
+    const description = "Boards discovered through MCP should include enough context to choose safely."
     const communityCreate = await requestJson(
       "http://pirate.test/communities",
       {
         display_name: displayName,
+        description,
         membership_mode: "gated",
         gate_policy: { version: 1, expression: { op: "gate", gate: { type: "altcha_pow" } } },
         accepted_agent_ownership_providers: ["clawkey"],
@@ -59,6 +63,30 @@ describe("mcp routes", () => {
       creator.accessToken,
     )
     expect(communityCreate.status).toBe(202)
+    const communityBody = await json(communityCreate) as {
+      community: { id: string; route_slug: string | null }
+    }
+
+    const rulesResponse = await app.request(
+      `http://pirate.test/communities/${communityBody.community.id.replace(/^com_/, "")}/rules`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${creator.accessToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          rules: [
+            {
+              title: "Keep discovery relevant",
+              body: "Agents should read the board before posting.",
+            },
+          ],
+        }),
+      },
+      ctx.env,
+    )
+    expect(rulesResponse.status).toBe(200)
 
     const response = await mcpCall(ctx.env, {
       jsonrpc: "2.0",
@@ -79,6 +107,11 @@ describe("mcp routes", () => {
         structuredContent: {
           boards: Array<{
             display_name: string
+            description: string | null
+            namespace_verification: string | null
+            route_slug: string | null
+            links: { canonical: { href: string; type: string } }
+            rules: Array<{ title: string; body: string | null }>
             accepted_agent_ownership_providers: string[]
             membership_gate_summaries: Array<{ gate_type: string }>
           }>
@@ -86,6 +119,10 @@ describe("mcp routes", () => {
       }
     }
     expect(body.result.structuredContent.boards[0]?.display_name).toBe(displayName)
+    expect(body.result.structuredContent.boards[0]?.description).toBe(description)
+    expect(body.result.structuredContent.boards[0]?.namespace_verification).toMatch(/^nv_[a-f0-9]+$/)
+    expect(body.result.structuredContent.boards[0]?.links.canonical.href).toBe(`https://staging.pirate.sc/c/${communityBody.community.route_slug}`)
+    expect(body.result.structuredContent.boards[0]?.rules.map((rule) => rule.title)).toEqual(["Keep discovery relevant"])
     expect(body.result.structuredContent.boards[0]?.accepted_agent_ownership_providers).toEqual(["clawkey"])
     expect(body.result.structuredContent.boards[0]?.membership_gate_summaries).toContainEqual({
       gate_type: "altcha_pow",
@@ -94,6 +131,7 @@ describe("mcp routes", () => {
 
   test("guest comment flow: prepare, solve ALTCHA, reply, and reject replay", async () => {
     const ctx = await createRouteTestContext({
+      PIRATE_WEB_PUBLIC_ORIGIN: "https://staging.pirate.sc",
       ALTCHA_HMAC_SECRET: "test-altcha-secret",
       ALTCHA_HMAC_KEY_SECRET: "test-altcha-key-secret",
       ALTCHA_POW_COST: "1",
@@ -176,6 +214,10 @@ describe("mcp routes", () => {
     const capabilitiesResult = await json(capabilitiesResponse) as {
       result?: {
         structuredContent?: {
+          board?: {
+            display_name?: string
+            links?: { canonical?: { href?: string } }
+          }
           capabilities?: {
             write?: {
               guest_comment?: { allowed?: boolean; requires?: string[] }
@@ -185,6 +227,8 @@ describe("mcp routes", () => {
         }
       }
     }
+    expect(capabilitiesResult.result?.structuredContent?.board?.display_name).toBe("MCP Guest PoW Smoke")
+    expect(capabilitiesResult.result?.structuredContent?.board?.links?.canonical?.href).toBeDefined()
     expect(capabilitiesResult.result?.structuredContent?.capabilities?.write?.guest_comment).toMatchObject({
       allowed: true,
       requires: ["altcha"],

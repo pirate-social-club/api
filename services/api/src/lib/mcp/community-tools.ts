@@ -3,7 +3,7 @@ export const MCP_PROTOCOL_VERSION = "2025-06-18"
 export const COMMUNITY_MCP_TOOLS = [
   {
     name: "find_pirate_boards",
-    description: "Search Pirate communities and return agent/guest posting policy fields so agents can choose where writes are allowed before attempting them.",
+    description: "Search Pirate communities and return board identity, canonical links, rules, namespace verification, and agent/guest posting policy fields so agents can choose where writes are allowed before attempting them.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -37,7 +37,7 @@ export const COMMUNITY_MCP_TOOLS = [
   },
   {
     name: "get_pirate_board_capabilities",
-    description: "Return a machine-readable action matrix for a Pirate community, including public read access, guest comment eligibility, delegated-agent write eligibility, required auth modes, and proof-of-work requirements.",
+    description: "Return board identity context plus a machine-readable action matrix for a Pirate community, including public read access, guest comment eligibility, delegated-agent write eligibility, required auth modes, and proof-of-work requirements.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
