@@ -1,108 +1,19 @@
 import type { Env } from "../../../env"
 import type { Client } from "../../sql-client"
 import { fetchLinkPreviewMetadata } from "../link-preview-fetcher"
-import { updatePostLinkPreviewMetadata } from "../community-post-store"
-import { enqueueCommunityJob } from "../../communities/jobs/store"
+import { updatePostLinkPreviewMetadata } from "../community-post-link-preview-store"
 import type { DbExecutor } from "../../db-helpers"
-import { CONTENT_TRANSLATION_PREWARM_LOCALES, detectSourceLanguageFromText, sameLanguageLocale } from "../../localization/content-locale"
+import { detectSourceLanguageFromText } from "../../localization/content-locale"
 import { logPipelineInfo, sanitizeLogText, summarizeUrl } from "../../observability/pipeline-log"
 import { fetchFirecrawlLinkEnrichment } from "./firecrawl-provider"
 import {
-  buildLinkEnrichmentSnapshot,
   getLinkEnrichmentByNormalizedUrl,
   upsertLinkEnrichment,
-  upsertLinkEnrichmentUsage,
 } from "./repository"
 import { normalizeLinkUrl } from "./url-normalization"
-import type { LinkEnrichmentRecord } from "./types"
-
-async function materializeSnapshot(input: {
-  client: DbExecutor
-  controlPlaneClient?: Client | null
-  communityId?: string | null
-  postId: string
-  record: LinkEnrichmentRecord
-  syncedAt: string
-}): Promise<void> {
-  const snapshot = buildLinkEnrichmentSnapshot(input.record)
-  await updatePostLinkPreviewMetadata({
-    client: input.client,
-    postId: input.postId,
-    linkOgImageUrl: input.record.image_url,
-    linkOgTitle: input.record.title,
-    linkEnrichmentSnapshotJson: JSON.stringify(snapshot),
-    linkEnrichmentSyncedAt: input.syncedAt,
-    updatedAt: input.syncedAt,
-  })
-  if (input.controlPlaneClient && input.communityId) {
-    await upsertLinkEnrichmentUsage({
-      client: input.controlPlaneClient,
-      normalizedUrl: input.record.normalized_url,
-      communityId: input.communityId,
-      postId: input.postId,
-      linkEnrichmentId: input.record.link_enrichment_id,
-      snapshotSyncedAt: input.syncedAt,
-      now: input.syncedAt,
-    })
-  }
-}
-
-async function enqueueSummaryIfNeeded(input: {
-  communityClient: DbExecutor
-  communityId?: string | null
-  postId: string
-  record: LinkEnrichmentRecord
-  createdAt: string
-}): Promise<void> {
-  if (!input.communityId || !input.record.markdown?.trim()) {
-    return
-  }
-  if (input.record.summary_status === "ready" || input.record.summary_status === "pending") {
-    return
-  }
-  await enqueueCommunityJob({
-    client: input.communityClient,
-    communityId: input.communityId,
-    jobType: "link_summary_materialize",
-    subjectType: "link_enrichment",
-    subjectId: input.record.normalized_url,
-    payloadJson: JSON.stringify({
-      normalized_url: input.record.normalized_url,
-      post_id: input.postId,
-    }),
-    createdAt: input.createdAt,
-  })
-}
-
-async function enqueueSummaryTranslationsIfNeeded(input: {
-  communityClient: DbExecutor
-  communityId?: string | null
-  postId: string
-  record: LinkEnrichmentRecord
-  createdAt: string
-}): Promise<void> {
-  if (!input.communityId || input.record.summary_status !== "ready") {
-    return
-  }
-  for (const locale of CONTENT_TRANSLATION_PREWARM_LOCALES) {
-    if (sameLanguageLocale("en", locale) && sameLanguageLocale(input.record.source_language ?? "en", "en")) {
-      continue
-    }
-    await enqueueCommunityJob({
-      client: input.communityClient,
-      communityId: input.communityId,
-      jobType: "link_summary_translation_materialize",
-      subjectType: "link_enrichment_translation",
-      subjectId: `${input.record.normalized_url}:${locale}`,
-      payloadJson: JSON.stringify({
-        normalized_url: input.record.normalized_url,
-        locale,
-        post_id: input.postId,
-      }),
-      createdAt: input.createdAt,
-      })
-  }
-}
+import {
+  materializeLinkEnrichmentForPost,
+} from "./post-materialization"
 
 function detectLinkMetadataSourceLanguage(input: {
   title?: string | null
@@ -148,27 +59,13 @@ export async function hydrateGenericLinkEnrichment(input: {
         summary_status: cached.summary_status,
         has_title: Boolean(cached.title),
       })
-      await materializeSnapshot({
-        client: input.communityClient,
+      await materializeLinkEnrichmentForPost({
+        communityClient: input.communityClient,
         controlPlaneClient: input.controlPlaneClient,
         communityId: input.communityId,
         postId: input.postId,
         record: cached,
         syncedAt: input.checkedAt,
-      })
-      await enqueueSummaryIfNeeded({
-        communityClient: input.communityClient,
-        communityId: input.communityId,
-        postId: input.postId,
-        record: cached,
-        createdAt: input.checkedAt,
-      })
-      await enqueueSummaryTranslationsIfNeeded({
-        communityClient: input.communityClient,
-        communityId: input.communityId,
-        postId: input.postId,
-        record: cached,
-        createdAt: input.checkedAt,
       })
       return cached.image_url ?? cached.title ?? cached.normalized_url
     }
@@ -207,27 +104,13 @@ export async function hydrateGenericLinkEnrichment(input: {
         fetchedAt: input.checkedAt,
         now: input.checkedAt,
       })
-      await materializeSnapshot({
-        client: input.communityClient,
+      await materializeLinkEnrichmentForPost({
+        communityClient: input.communityClient,
         controlPlaneClient: input.controlPlaneClient,
         communityId: input.communityId,
         postId: input.postId,
         record,
         syncedAt: input.checkedAt,
-      })
-      await enqueueSummaryIfNeeded({
-        communityClient: input.communityClient,
-        communityId: input.communityId,
-        postId: input.postId,
-        record,
-        createdAt: input.checkedAt,
-      })
-      await enqueueSummaryTranslationsIfNeeded({
-        communityClient: input.communityClient,
-        communityId: input.communityId,
-        postId: input.postId,
-        record,
-        createdAt: input.checkedAt,
       })
       return record.image_url ?? record.title ?? record.normalized_url
     }
@@ -308,20 +191,14 @@ export async function hydrateGenericLinkEnrichment(input: {
       fetchedAt: input.checkedAt,
       now: input.checkedAt,
     })
-    await materializeSnapshot({
-      client: input.communityClient,
+    await materializeLinkEnrichmentForPost({
+      communityClient: input.communityClient,
       controlPlaneClient: input.controlPlaneClient,
       communityId: input.communityId,
       postId: input.postId,
       record,
       syncedAt: input.checkedAt,
-    })
-    await enqueueSummaryTranslationsIfNeeded({
-      communityClient: input.communityClient,
-      communityId: input.communityId,
-      postId: input.postId,
-      record,
-      createdAt: input.checkedAt,
+      enqueueSummary: false,
     })
   } else {
     await updatePostLinkPreviewMetadata({

@@ -7,9 +7,9 @@ import { enqueueEmbedHydrateOnReadIfNeeded, enqueuePostTranslationOnReadIfNeeded
 import { withRequestControlPlaneClients } from "../runtime-deps"
 import { numberOrNull, requiredString, rowValue } from "../sql-row"
 import { serializeLocalizedPostResponse } from "../../serializers/post"
+import { POST_SELECT_COLUMNS } from "../posts/community-post-projection"
 import { resolveCommunityAvatarRef } from "../communities/community-identity-media"
 import {
-  POST_SELECT_COLUMNS,
   serializePost,
   toPostRow,
 } from "../posts/community-post-serialization"

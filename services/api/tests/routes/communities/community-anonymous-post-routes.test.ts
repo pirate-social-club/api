@@ -24,6 +24,73 @@ afterEach(async () => {
 })
 
 describe("community anonymous post routes", () => {
+  async function createAnonymousSnapshotPostFixture(idSuffix: string): Promise<{
+    communityId: string
+    createdBody: {
+      id: string
+      anonymous_label: string | null
+      author_user: string | null
+      disclosed_qualifiers_json?: Array<{
+        qualifier_template_id: string
+        rendered_label: string
+      }> | null
+      identity_mode: string
+    }
+    ctx: Awaited<ReturnType<typeof createRouteTestContext>>
+    session: Awaited<ReturnType<typeof exchangeJwt>>
+  }> {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, `community-anonymous-qualifier-snapshots-${idSuffix}`)
+    await completeUniqueHumanVerification(ctx.env, session.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: `Pirate Anonymous Snapshot Club ${idSuffix}`,
+      membership_mode: "request",
+    }, ctx.env, session.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: { id: string }
+    }
+    const communityId = communityCreateBody.community.id.replace(/^com_/, "")
+
+    await updateLocalCommunityAnonymousPolicy({
+      allowAnonymousIdentity: true,
+      anonymousIdentityScope: "community_stable",
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+    })
+
+    const createdPost = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        post_type: "text",
+        identity_mode: "anonymous",
+        anonymous_scope: "community_stable",
+        disclosed_qualifier_ids: ["unique_human", "age_over_18"],
+        title: "Anonymous Snapshot",
+        body: "Anonymous posts should persist a generated label and qualifier labels.",
+        idempotency_key: `post-key-anonymous-snapshot-${idSuffix}`,
+      },
+      ctx.env,
+      session.accessToken,
+    )
+
+    expect(createdPost.status).toBe(201)
+    const createdBody = await json(createdPost) as {
+      id: string
+      anonymous_label: string | null
+      author_user: string | null
+      disclosed_qualifiers_json?: Array<{
+        qualifier_template_id: string
+        rendered_label: string
+      }> | null
+      identity_mode: string
+    }
+    return { communityId, createdBody, ctx, session }
+  }
+
   test("anonymous post create still requires anonymous posting to be enabled", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
@@ -194,55 +261,8 @@ membership_mode: "request",
   })
 
   test("anonymous post create stores generated labels and disclosed qualifier snapshots", async () => {
-    const ctx = await createRouteTestContext()
-    cleanup = ctx.cleanup
+    const { createdBody } = await createAnonymousSnapshotPostFixture("create")
 
-    const session = await exchangeJwt(ctx.env, "community-anonymous-qualifier-snapshots")
-    await completeUniqueHumanVerification(ctx.env, session.accessToken)
-
-    const communityCreate = await requestJson("http://pirate.test/communities", {
-      display_name: "Pirate Anonymous Snapshot Club",
-membership_mode: "request",
-    }, ctx.env, session.accessToken)
-    expect(communityCreate.status).toBe(202)
-    const communityCreateBody = await json(communityCreate) as {
-      community: { id: string }
-    }
-    const communityId = communityCreateBody.community.id.replace(/^com_/, "")
-
-    await updateLocalCommunityAnonymousPolicy({
-      allowAnonymousIdentity: true,
-      anonymousIdentityScope: "community_stable",
-      communityDbRoot: ctx.communityDbRoot,
-      communityId,
-    })
-
-    const createdPost = await requestJson(
-      `http://pirate.test/communities/${communityId}/posts`,
-      {
-        post_type: "text",
-        identity_mode: "anonymous",
-        anonymous_scope: "community_stable",
-        disclosed_qualifier_ids: ["unique_human", "age_over_18"],
-        title: "Anonymous Snapshot",
-        body: "Anonymous posts should persist a generated label and qualifier labels.",
-        idempotency_key: "post-key-anonymous-snapshot",
-      },
-      ctx.env,
-      session.accessToken,
-    )
-
-    expect(createdPost.status).toBe(201)
-    const createdBody = await json(createdPost) as {
-      id: string
-      anonymous_label: string | null
-      author_user: string | null
-      disclosed_qualifiers_json?: Array<{
-        qualifier_template_id: string
-        rendered_label: string
-      }> | null
-      identity_mode: string
-    }
     expect(createdBody.identity_mode).toBe("anonymous")
     expect(createdBody.author_user).toBeNull()
     expect(createdBody.anonymous_label).toMatch(/^anon_[a-z]+-[a-z]+-\d{2}$/)
@@ -255,6 +275,10 @@ membership_mode: "request",
       "Unique Human",
       "18+",
     ])
+  })
+
+  test("anonymous post reads redact author identity while preserving viewer_is_author", async () => {
+    const { communityId, createdBody, ctx, session } = await createAnonymousSnapshotPostFixture("read")
 
     const authorRead = await app.request(`http://pirate.test/posts/${createdBody.id}`, {
       headers: {

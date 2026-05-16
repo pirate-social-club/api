@@ -17,6 +17,7 @@ export type CommunityJobType =
   | "link_summary_materialize"
   | "link_summary_translation_materialize"
   | "song_preview_generate"
+  | "live_room_viewer_sessions_prune"
 export type CommunityJobStatus = "queued" | "running" | "succeeded" | "failed"
 
 export type CommunityJobRow = {
@@ -34,6 +35,11 @@ export type CommunityJobRow = {
   created_at: string
   updated_at: string
 }
+
+const COMMUNITY_JOB_SELECT_COLUMNS = `
+  job_id, community_id, job_type, subject_type, subject_id, status, payload_json, result_ref,
+  error_code, attempt_count, available_at, created_at, updated_at
+`
 
 function toCommunityJobRow(row: unknown): CommunityJobRow {
   return {
@@ -59,8 +65,7 @@ export async function getCommunityJobById(input: {
 }): Promise<CommunityJobRow | null> {
   const row = await executeFirst(input.client, {
     sql: `
-      SELECT job_id, community_id, job_type, subject_type, subject_id, status, payload_json, result_ref,
-             error_code, attempt_count, available_at, created_at, updated_at
+      SELECT ${COMMUNITY_JOB_SELECT_COLUMNS}
       FROM community_jobs
       WHERE job_id = ?1
       LIMIT 1
@@ -79,8 +84,7 @@ export async function findLatestCommunityJobBySubjectAndType(input: {
 }): Promise<CommunityJobRow | null> {
   const row = await executeFirst(input.client, {
     sql: `
-      SELECT job_id, community_id, job_type, subject_type, subject_id, status, payload_json, result_ref,
-             error_code, attempt_count, available_at, created_at, updated_at
+      SELECT ${COMMUNITY_JOB_SELECT_COLUMNS}
       FROM community_jobs
       WHERE job_type = ?1
         AND subject_type = ?2
@@ -102,8 +106,7 @@ export async function findNextRunnableCommunityJob(input: {
 }): Promise<CommunityJobRow | null> {
   const row = await executeFirst(input.client, {
     sql: `
-      SELECT job_id, community_id, job_type, subject_type, subject_id, status, payload_json, result_ref,
-             error_code, attempt_count, available_at, created_at, updated_at
+      SELECT ${COMMUNITY_JOB_SELECT_COLUMNS}
       FROM community_jobs
       WHERE status IN ('queued', 'failed')
         AND (?1 IS NULL OR community_id = ?1)
@@ -164,8 +167,7 @@ export async function enqueueCommunityJob(input: {
 
   const created = await executeFirst(input.client, {
     sql: `
-      SELECT job_id, community_id, job_type, subject_type, subject_id, status, payload_json, result_ref,
-             error_code, attempt_count, available_at, created_at, updated_at
+      SELECT ${COMMUNITY_JOB_SELECT_COLUMNS}
       FROM community_jobs
       WHERE job_id = ?1
       LIMIT 1

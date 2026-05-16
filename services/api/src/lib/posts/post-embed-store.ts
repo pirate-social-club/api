@@ -4,7 +4,7 @@ import { makeId } from "../helpers"
 import { numberOrNull, requiredString, rowValue, stringOrNull } from "../sql-row"
 import type { Post } from "../../types"
 import { nullableUnixSeconds } from "../../serializers/time"
-import { boundedPostJsonProjection } from "./community-post-serialization"
+import { boundedPostJsonProjection } from "./community-post-projection"
 
 type PostEmbed = NonNullable<Post["embeds"]>[number]
 type XPostEmbed = Extract<PostEmbed, { provider: "x" }>

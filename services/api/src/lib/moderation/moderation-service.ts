@@ -8,7 +8,7 @@ import { getProfilePublicHandleLabel } from "../auth/auth-serializers"
 import type { DbExecutor } from "../db-helpers"
 import { badRequestError, internalError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
-import { getPostById } from "../posts/community-post-store"
+import { getPostById } from "../posts/community-post-query-store"
 import { getCommentById } from "../comments/community-comment-store"
 import type { Env } from "../../env"
 import {

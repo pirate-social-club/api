@@ -3,7 +3,7 @@ import { createClient } from "@libsql/client"
 
 import type { CreatePostRequest, Post } from "../../types"
 import { assertPostCreateRequest, getPostById, sortPublishedLocalizedPostFeedItems } from "./community-post-store"
-import { MAX_POST_JSON_PROJECTION_LENGTH } from "./community-post-serialization"
+import { MAX_POST_JSON_PROJECTION_LENGTH } from "./community-post-projection"
 
 const clients: Array<{ close: () => void }> = []
 

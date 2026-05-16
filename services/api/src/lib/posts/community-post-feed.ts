@@ -1,8 +1,8 @@
 import type { Client } from "../sql-client"
 import { numberOrNull, requiredNumber, rowValue } from "../sql-row"
 import type { Post } from "../../types"
+import { POST_SELECT_COLUMNS } from "./community-post-projection"
 import {
-  POST_SELECT_COLUMNS,
   serializePost,
   toPostRow,
 } from "./community-post-serialization"

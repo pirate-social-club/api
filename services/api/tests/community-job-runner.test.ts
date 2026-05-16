@@ -198,6 +198,95 @@ describe("community-job-runner", () => {
     expect(repo.postProjections.get(postId)?.source_post_id).toBe(postId)
   })
 
+  test("processes live-room viewer session prune jobs", async () => {
+    const rootDir = await createCommunityJobRunnerRoot("pirate-community-live-room-prune-")
+
+    const databasePath = join(rootDir, "live-room-prune.db")
+    const communityId = "cmt_job_live_room_prune"
+    const env: Env = {
+      LOCAL_COMMUNITY_DB_ROOT: rootDir,
+    }
+    const repo = buildCommunityRepository(databasePath, communityId)
+    const { postId } = await seedCommunityState({
+      env,
+      repo,
+      communityId,
+      memberUserIds: ["usr_owner"],
+    })
+
+    const db = await openCommunityDb(env, repo, communityId)
+    try {
+      await db.client.execute({
+        sql: `
+          UPDATE community_jobs
+          SET status = 'succeeded',
+              result_ref = 'skipped:test',
+              available_at = NULL
+        `,
+        args: [],
+      })
+      await db.client.execute({
+        sql: `
+          INSERT INTO live_rooms (
+            live_room_id, community_id, anchor_post_id, host_user_id, room_kind, status, access_mode,
+            visibility, title, replay_status, created_at, updated_at
+          ) VALUES
+            ('lr_old', ?1, ?2, 'usr_owner', 'solo', 'live', 'free', 'public', 'Old room', 'none', ?3, ?3),
+            ('lr_new', ?1, ?2, 'usr_owner', 'solo', 'live', 'free', 'public', 'New room', 'none', ?3, ?3)
+        `,
+        args: [communityId, postId, "2026-01-01T00:00:00.000Z"],
+      })
+      await db.client.execute({
+        sql: `
+          INSERT INTO live_room_viewer_sessions (
+            community_id, live_room_id, viewer_user_id, agora_uid, created_at, updated_at
+          ) VALUES
+            (?1, 'lr_old', 'usr_old', 101, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'),
+            (?1, 'lr_new', 'usr_new', 102, '2026-02-01T00:00:00.000Z', '2026-02-01T00:00:00.000Z')
+        `,
+        args: [communityId],
+      })
+      await enqueueCommunityJob({
+        client: db.client,
+        communityId,
+        jobType: "live_room_viewer_sessions_prune",
+        subjectType: "live_room_viewer_sessions",
+        subjectId: "stale",
+        payloadJson: JSON.stringify({
+          older_than: "2026-01-15T00:00:00.000Z",
+          limit: 10,
+        }),
+        createdAt: new Date().toISOString(),
+      })
+    } finally {
+      db.close()
+    }
+
+    const processed = await processNextCommunityJob({
+      env,
+      communityId,
+      communityRepository: repo,
+    })
+
+    expect(processed?.job_type).toBe("live_room_viewer_sessions_prune")
+    expect(processed?.result_ref).toBe("pruned:1")
+
+    const verifyDb = await openCommunityDb(env, repo, communityId)
+    try {
+      const remaining = await verifyDb.client.execute({
+        sql: `
+          SELECT live_room_id
+          FROM live_room_viewer_sessions
+          ORDER BY live_room_id
+        `,
+        args: [],
+      })
+      expect(remaining.rows.map((row) => row.live_room_id)).toEqual(["lr_new"])
+    } finally {
+      verifyDb.close()
+    }
+  })
+
   test("drains available jobs across active communities and the worker loop stops when idle", async () => {
     const rootDir = await createCommunityJobRunnerRoot("pirate-community-job-loop-")
 
@@ -1312,6 +1401,103 @@ describe("community-job-runner", () => {
       expect(embed.preview?.outcomes?.[1]?.label).toBe("Before November 2026")
       expect(embed.preview?.outcomes?.[2]?.label).toBe("Before September 2026")
       expect(embed.preview?.outcomes?.[2]?.probability).toBe(0.18)
+    } finally {
+      verifyDb.close()
+    }
+  })
+
+  test("stores unavailable prediction market embeds with fallback metadata", async () => {
+    const rootDir = await createCommunityJobRunnerRoot("pirate-community-polymarket-unavailable-")
+    const communityId = "cmt_job_polymarket_unavailable"
+    const env: Env = {
+      LOCAL_COMMUNITY_DB_ROOT: rootDir,
+    }
+    const repo = buildCommunityRepository(join(rootDir, "polymarket-unavailable.db"), communityId)
+
+    await seedCommunityState({
+      env,
+      repo,
+      communityId,
+      memberUserIds: ["usr_owner"],
+    })
+
+    let linkPostId = ""
+    const db = await openCommunityDb(env, repo, communityId)
+    try {
+      const now = new Date("2026-05-02T12:00:00Z").toISOString()
+      const linkPost = await insertPost({
+        client: db.client,
+        communityId,
+        authorUserId: "usr_owner",
+        body: {
+          post_type: "link",
+          link_url: "https://polymarket.com/event/no-provider-data",
+          idempotency_key: "polymarket-unavailable-post",
+        },
+        createdAt: now,
+      })
+      linkPostId = linkPost.post_id
+
+      await enqueueCommunityJob({
+        client: db.client,
+        communityId,
+        jobType: "embed_hydrate",
+        subjectType: "post_embed",
+        subjectId: linkPost.post_id,
+        payloadJson: JSON.stringify({
+          post_id: linkPost.post_id,
+          link_url: linkPost.link_url,
+        }),
+        createdAt: now,
+      })
+    } finally {
+      db.close()
+    }
+
+    await withMockedFetch(() => (async (input) => {
+      const requestUrl = input instanceof Request ? input.url : String(input)
+      const parsed = new URL(requestUrl)
+      if (parsed.origin + parsed.pathname === "https://gamma-api.polymarket.com/events/slug/no-provider-data") {
+        return new Response("not found", { status: 404 })
+      }
+      if (parsed.origin + parsed.pathname === "https://polymarket.com/event/no-provider-data") {
+        return new Response(`
+          <html>
+            <head>
+              <meta property="og:title" content="Fallback market title">
+              <meta property="og:image" content="https://polymarket.test/fallback.png">
+            </head>
+          </html>
+        `, {
+          headers: {
+            "content-type": "text/html",
+          },
+        })
+      }
+      throw new Error(`unexpected fetch ${requestUrl}`)
+    }) as typeof fetch, async () => {
+      const processed = await processNextCommunityJob({
+        env,
+        communityId,
+        communityRepository: repo,
+      })
+
+      expect(processed?.job_type).toBe("embed_hydrate")
+      expect(processed?.error_code).toBeNull()
+      expect(processed?.status).toBe("succeeded")
+      expect(processed?.result_ref).toBe("https://polymarket.com/event/no-provider-data")
+    })
+
+    const verifyDb = await openCommunityDb(env, repo, communityId)
+    try {
+      const post = await getPostById(verifyDb.client, linkPostId)
+      expect(post?.link_og_title).toBe("Fallback market title")
+      expect(post?.link_og_image_url).toBe("https://polymarket.test/fallback.png")
+      const embed = post?.embeds?.[0]
+      if (embed?.provider !== "polymarket") throw new Error("expected Polymarket embed")
+      expect(embed.state).toBe("unavailable")
+      expect(embed.preview).toBeNull()
+      expect(embed.unavailable_reason).toBe("unknown")
     } finally {
       verifyDb.close()
     }

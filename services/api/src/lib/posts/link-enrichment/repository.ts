@@ -1,65 +1,19 @@
 import { executeFirst } from "../../db-helpers"
 import { makeId } from "../../helpers"
-import { rowValue, stringOrNull, requiredString } from "../../sql-row"
 import type { Client } from "../../sql-client"
+import { toLinkEnrichmentRecord } from "./repository-rows"
 import type {
   LinkEnrichmentProvider,
   LinkEnrichmentRecord,
-  LinkEnrichmentSnapshot,
-  LinkEnrichmentTranslation,
   LinkEnrichmentStatus,
-  LinkEnrichmentUsageRecord,
   LinkSummaryStatus,
 } from "./types"
 
-const SNAPSHOT_TEXT_LIMIT = 2_000
-const SNAPSHOT_SUMMARY_TEXT_LIMIT = 4_000
-const SNAPSHOT_KEY_POINT_LIMIT = 1_000
-
-function limitSnapshotText(value: string | null, maxLength = SNAPSHOT_TEXT_LIMIT): string | null {
-  if (!value) {
-    return value
-  }
-  return value.length > maxLength ? value.slice(0, maxLength) : value
-}
-
-function toRecord(row: unknown): LinkEnrichmentRecord {
-  return {
-    link_enrichment_id: requiredString(row, "link_enrichment_id"),
-    normalized_url: requiredString(row, "normalized_url"),
-    canonical_url: stringOrNull(rowValue(row, "canonical_url")),
-    provider: requiredString(row, "provider") as LinkEnrichmentProvider,
-    status: requiredString(row, "status") as LinkEnrichmentStatus,
-    title: stringOrNull(rowValue(row, "title")),
-    description: stringOrNull(rowValue(row, "description")),
-    source_language: stringOrNull(rowValue(row, "source_language")),
-    publisher: stringOrNull(rowValue(row, "publisher")),
-    published_at: stringOrNull(rowValue(row, "published_at")),
-    image_url: stringOrNull(rowValue(row, "image_url")),
-    markdown: stringOrNull(rowValue(row, "markdown")),
-    summary_json: stringOrNull(rowValue(row, "summary_json")),
-    translations_json: stringOrNull(rowValue(row, "translations_json")),
-    summary_status: stringOrNull(rowValue(row, "summary_status")) as LinkSummaryStatus | null,
-    summary_model: stringOrNull(rowValue(row, "summary_model")),
-    error: stringOrNull(rowValue(row, "error")),
-    fetched_at: stringOrNull(rowValue(row, "fetched_at")),
-    summarized_at: stringOrNull(rowValue(row, "summarized_at")),
-    created_at: requiredString(row, "created_at"),
-    updated_at: requiredString(row, "updated_at"),
-  }
-}
-
-function toUsageRecord(row: unknown): LinkEnrichmentUsageRecord {
-  return {
-    normalized_url: requiredString(row, "normalized_url"),
-    community_id: requiredString(row, "community_id"),
-    post_id: requiredString(row, "post_id"),
-    link_enrichment_id: stringOrNull(rowValue(row, "link_enrichment_id")),
-    snapshot_synced_at: stringOrNull(rowValue(row, "snapshot_synced_at")),
-    created_at: requiredString(row, "created_at"),
-    updated_at: requiredString(row, "updated_at"),
-  }
-}
+export {
+  listLinkEnrichmentUsages,
+  updateLinkEnrichmentUsageSnapshotSyncedAt,
+  upsertLinkEnrichmentUsage,
+} from "./repository-usages"
 
 export async function getLinkEnrichmentByNormalizedUrl(
   client: Client,
@@ -74,7 +28,19 @@ export async function getLinkEnrichmentByNormalizedUrl(
     `,
     args: [normalizedUrl],
   })
-  return row ? toRecord(row) : null
+  return row ? toLinkEnrichmentRecord(row) : null
+}
+
+async function getRequiredLinkEnrichmentByNormalizedUrl(input: {
+  client: Client
+  normalizedUrl: string
+  errorMessage: string
+}): Promise<LinkEnrichmentRecord> {
+  const row = await getLinkEnrichmentByNormalizedUrl(input.client, input.normalizedUrl)
+  if (!row) {
+    throw new Error(input.errorMessage)
+  }
+  return row
 }
 
 export async function upsertLinkEnrichment(input: {
@@ -154,11 +120,11 @@ export async function upsertLinkEnrichment(input: {
     ],
   })
 
-  const row = await getLinkEnrichmentByNormalizedUrl(input.client, input.normalizedUrl)
-  if (!row) {
-    throw new Error("Link enrichment is missing after upsert")
-  }
-  return row
+  return getRequiredLinkEnrichmentByNormalizedUrl({
+    client: input.client,
+    normalizedUrl: input.normalizedUrl,
+    errorMessage: "Link enrichment is missing after upsert",
+  })
 }
 
 export async function updateLinkEnrichmentTranslations(input: {
@@ -181,11 +147,11 @@ export async function updateLinkEnrichmentTranslations(input: {
     ],
   })
 
-  const row = await getLinkEnrichmentByNormalizedUrl(input.client, input.normalizedUrl)
-  if (!row) {
-    throw new Error("Link enrichment is missing after translation update")
-  }
-  return row
+  return getRequiredLinkEnrichmentByNormalizedUrl({
+    client: input.client,
+    normalizedUrl: input.normalizedUrl,
+    errorMessage: "Link enrichment is missing after translation update",
+  })
 }
 
 export async function updateLinkEnrichmentSummary(input: {
@@ -220,206 +186,9 @@ export async function updateLinkEnrichmentSummary(input: {
     ],
   })
 
-  const row = await getLinkEnrichmentByNormalizedUrl(input.client, input.normalizedUrl)
-  if (!row) {
-    throw new Error("Link enrichment is missing after summary update")
-  }
-  return row
-}
-
-export async function upsertLinkEnrichmentUsage(input: {
-  client: Client
-  normalizedUrl: string
-  communityId: string
-  postId: string
-  linkEnrichmentId: string | null
-  snapshotSyncedAt: string | null
-  now: string
-}): Promise<void> {
-  await input.client.execute({
-    sql: `
-      INSERT INTO link_enrichment_usages (
-        normalized_url, community_id, post_id, link_enrichment_id,
-        snapshot_synced_at, created_at, updated_at
-      ) VALUES (
-        ?1, ?2, ?3, ?4,
-        ?5, ?6, ?6
-      )
-      ON CONFLICT(normalized_url, community_id, post_id) DO UPDATE SET
-        link_enrichment_id = excluded.link_enrichment_id,
-        snapshot_synced_at = excluded.snapshot_synced_at,
-        updated_at = excluded.updated_at
-    `,
-    args: [
-      input.normalizedUrl,
-      input.communityId,
-      input.postId,
-      input.linkEnrichmentId,
-      input.snapshotSyncedAt,
-      input.now,
-    ],
+  return getRequiredLinkEnrichmentByNormalizedUrl({
+    client: input.client,
+    normalizedUrl: input.normalizedUrl,
+    errorMessage: "Link enrichment is missing after summary update",
   })
-}
-
-export async function listLinkEnrichmentUsages(input: {
-  client: Client
-  normalizedUrl: string
-}): Promise<LinkEnrichmentUsageRecord[]> {
-  const result = await input.client.execute({
-    sql: `
-      SELECT normalized_url, community_id, post_id, link_enrichment_id,
-             snapshot_synced_at, created_at, updated_at
-      FROM link_enrichment_usages
-      WHERE normalized_url = ?1
-      ORDER BY updated_at ASC, community_id ASC, post_id ASC
-    `,
-    args: [input.normalizedUrl],
-  })
-  return result.rows.map(toUsageRecord)
-}
-
-export async function updateLinkEnrichmentUsageSnapshotSyncedAt(input: {
-  client: Client
-  normalizedUrl: string
-  communityId: string
-  postId: string
-  snapshotSyncedAt: string
-  updatedAt: string
-}): Promise<void> {
-  await input.client.execute({
-    sql: `
-      UPDATE link_enrichment_usages
-      SET snapshot_synced_at = ?4,
-          updated_at = ?5
-      WHERE normalized_url = ?1
-        AND community_id = ?2
-        AND post_id = ?3
-    `,
-    args: [
-      input.normalizedUrl,
-      input.communityId,
-      input.postId,
-      input.snapshotSyncedAt,
-      input.updatedAt,
-    ],
-  })
-}
-
-function parseSummary(value: string | null): LinkEnrichmentSnapshot["summary"] {
-  if (!value) {
-    return {
-      status: null,
-      summary_paragraph: null,
-      short_summary: null,
-      key_points: [],
-      generated_at: null,
-      model: null,
-    }
-  }
-
-  try {
-    const parsed = JSON.parse(value) as {
-      summary_paragraph?: unknown
-      short_summary?: unknown
-      key_points?: unknown
-      generated_at?: unknown
-      model?: unknown
-    }
-    return {
-      status: "ready",
-      summary_paragraph: typeof parsed.summary_paragraph === "string"
-        ? limitSnapshotText(parsed.summary_paragraph, SNAPSHOT_SUMMARY_TEXT_LIMIT)
-        : null,
-      short_summary: typeof parsed.short_summary === "string" ? limitSnapshotText(parsed.short_summary) : null,
-      key_points: Array.isArray(parsed.key_points)
-        ? parsed.key_points
-          .filter((item): item is string => typeof item === "string")
-          .slice(0, 5)
-          .map((item) => limitSnapshotText(item, SNAPSHOT_KEY_POINT_LIMIT) ?? "")
-        : [],
-      generated_at: typeof parsed.generated_at === "string" ? parsed.generated_at : null,
-      model: typeof parsed.model === "string" ? parsed.model : null,
-    }
-  } catch {
-    return {
-      status: null,
-      summary_paragraph: null,
-      short_summary: null,
-      key_points: [],
-      generated_at: null,
-      model: null,
-    }
-  }
-}
-
-export function parseLinkEnrichmentTranslations(value: string | null): Record<string, LinkEnrichmentTranslation> {
-  if (!value) {
-    return {}
-  }
-
-  try {
-    const parsed = JSON.parse(value) as Record<string, unknown>
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return {}
-    }
-
-    const translations: Record<string, LinkEnrichmentTranslation> = {}
-    for (const [locale, entry] of Object.entries(parsed)) {
-      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-        continue
-      }
-      const record = entry as Record<string, unknown>
-      const summary = record.summary && typeof record.summary === "object" && !Array.isArray(record.summary)
-        ? record.summary as Record<string, unknown>
-        : {}
-      translations[locale] = {
-        locale,
-        title: typeof record.title === "string" ? limitSnapshotText(record.title) : null,
-        description: typeof record.description === "string" ? limitSnapshotText(record.description) : null,
-        summary: {
-          summary_paragraph: typeof summary.summary_paragraph === "string"
-            ? limitSnapshotText(summary.summary_paragraph, SNAPSHOT_SUMMARY_TEXT_LIMIT)
-            : null,
-          short_summary: typeof summary.short_summary === "string" ? limitSnapshotText(summary.short_summary) : null,
-          key_points: Array.isArray(summary.key_points)
-            ? summary.key_points
-              .filter((item): item is string => typeof item === "string")
-              .slice(0, 5)
-              .map((item) => limitSnapshotText(item, SNAPSHOT_KEY_POINT_LIMIT) ?? "")
-            : [],
-        },
-        generated_at: typeof record.generated_at === "string" ? record.generated_at : null,
-        model: typeof record.model === "string" ? record.model : null,
-        provider: record.provider === "openrouter" ? "openrouter" : null,
-      }
-    }
-    return translations
-  } catch {
-    return {}
-  }
-}
-
-export function buildLinkEnrichmentSnapshot(record: LinkEnrichmentRecord): LinkEnrichmentSnapshot {
-  const translations = parseLinkEnrichmentTranslations(record.translations_json)
-  return {
-    version: 1,
-    provider: record.provider,
-    status: record.status,
-    normalized_url: limitSnapshotText(record.normalized_url) ?? "",
-    canonical_url: limitSnapshotText(record.canonical_url),
-    title: limitSnapshotText(record.title),
-    description: limitSnapshotText(record.description),
-    source_language: record.source_language,
-    publisher: limitSnapshotText(record.publisher),
-    published_at: record.published_at,
-    image_url: limitSnapshotText(record.image_url),
-    summary: {
-      ...parseSummary(record.summary_json),
-      status: record.summary_status,
-      model: record.summary_model,
-    },
-    ...(Object.keys(translations).length ? { translations } : {}),
-    error: limitSnapshotText(record.error),
-    fetched_at: record.fetched_at,
-  }
 }

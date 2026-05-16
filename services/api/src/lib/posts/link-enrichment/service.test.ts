@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { createClient } from "@libsql/client"
 import { hydrateGenericLinkEnrichment } from "./service"
-import { MAX_POST_JSON_PROJECTION_LENGTH } from "../community-post-serialization"
+import { MAX_POST_JSON_PROJECTION_LENGTH } from "../community-post-projection"
 
 const clients: Array<{ close: () => void }> = []
 

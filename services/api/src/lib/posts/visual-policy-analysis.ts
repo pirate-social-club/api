@@ -1,6 +1,11 @@
 import type { Env } from "../../env"
 import type { Community } from "../../types"
 import { buildDefaultVisualPolicySettings } from "../communities/community-policy-defaults"
+import {
+  firstTrimmedEnv,
+  parsePositiveIntegerEnv,
+  requestOpenRouterChatCompletion,
+} from "../openrouter-client"
 
 type VisualPolicyAction = "allow" | "queue" | "reject"
 type VisualPolicyDisclosureAction = "allow" | "allow_with_disclosure" | "queue" | "reject"
@@ -66,21 +71,8 @@ Schema:
   "quality": "clear" | "low_quality" | "uncertain"
 }`
 
-function trimEnv(value: string | undefined): string {
-  return String(value || "").trim()
-}
-
-function parseTimeoutMs(value: string | undefined): number | null {
-  const parsed = Number.parseInt(trimEnv(value), 10)
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
-}
-
-function resolveVisualPolicyOpenRouterBaseUrl(env: Env): string {
-  return trimEnv(env.OPENROUTER_BASE_URL) || "https://openrouter.ai/api/v1"
-}
-
 function resolveVisualPolicyOpenRouterModel(env: Env): string {
-  return trimEnv(env.OPENROUTER_VISUAL_POLICY_MODEL) || "x-ai/grok-4.3"
+  return firstTrimmedEnv(env.OPENROUTER_VISUAL_POLICY_MODEL) || "x-ai/grok-4.3"
 }
 
 function actionSeverity(action: VisualPolicyAction | VisualPolicyDisclosureAction): number {
@@ -244,22 +236,21 @@ export async function classifyVisualFactsWithVlm(input: {
   env: Env
   imageUrl: string
 }): Promise<{ facts: VisualClassifierFacts; raw: unknown; model: string } | null> {
-  const apiKey = trimEnv(input.env.OPENROUTER_API_KEY)
+  const apiKey = firstTrimmedEnv(input.env.OPENROUTER_API_KEY)
   if (!apiKey) return null
-  const baseUrl = resolveVisualPolicyOpenRouterBaseUrl(input.env)
   const model = resolveVisualPolicyOpenRouterModel(input.env)
-  const timeoutMs = parseTimeoutMs(input.env.OPENROUTER_VISUAL_POLICY_TIMEOUT_MS || input.env.OPENROUTER_TIMEOUT_MS)
-  const controller = new AbortController()
-  const timer = timeoutMs ? setTimeout(() => controller.abort(), timeoutMs) : null
+  const timeoutMs = parsePositiveIntegerEnv(firstTrimmedEnv(
+    input.env.OPENROUTER_VISUAL_POLICY_TIMEOUT_MS,
+    input.env.OPENROUTER_TIMEOUT_MS,
+  ))
 
   try {
-    const response = await fetch(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${apiKey}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
+    const { content } = await requestOpenRouterChatCompletion({
+      apiKey,
+      baseUrl: input.env.OPENROUTER_BASE_URL,
+      errorLabel: "visual policy",
+      timeoutMs,
+      body: {
         model,
         temperature: 0,
         response_format: { type: "json_object" },
@@ -270,20 +261,13 @@ export async function classifyVisualFactsWithVlm(input: {
             { type: "image_url", image_url: { url: input.imageUrl } },
           ],
         }],
-      }),
-      signal: controller.signal,
+      },
     })
-    if (!response.ok) return null
-    const parsed = await response.json().catch(() => null)
-    const content = (parsed as { choices?: Array<{ message?: { content?: string } }> } | null)?.choices?.[0]?.message?.content
-    if (typeof content !== "string") return null
     const raw = extractJsonObject(content)
     const facts = normalizeVisualClassifierFacts(raw)
     return facts ? { facts, raw, model } : null
   } catch {
     return null
-  } finally {
-    if (timer) clearTimeout(timer)
   }
 }
 

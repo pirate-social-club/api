@@ -1,7 +1,7 @@
 import type { DbExecutor } from "../db-helpers"
 import { listCommunityLabels } from "../communities/community-label-store"
 import { nowIso } from "../helpers"
-import { updatePostLabelAssignment } from "./community-post-store"
+import { updatePostLabelAssignment } from "./community-post-label-store"
 import { requestPostLabel } from "./post-label-provider"
 import type { Env } from "../../env"
 import type { Community, Post } from "../../types"

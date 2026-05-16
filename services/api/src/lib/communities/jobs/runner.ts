@@ -1,12 +1,10 @@
-import { captureException } from "@sentry/cloudflare"
 import { nowIso } from "../../helpers"
 import type { Env } from "../../../env"
 import { openCommunityDb } from "../community-db-factory"
-import { logPipelineError, logPipelineInfo, sanitizeLogText, summarizeReference } from "../../observability/pipeline-log"
+import { logPipelineInfo, summarizeReference } from "../../observability/pipeline-log"
 import {
   findNextRunnableCommunityJob,
   getCommunityJobById,
-  markCommunityJobFailed,
   markCommunityJobRunning,
   markCommunityJobSucceeded,
   type CommunityJobRow,
@@ -14,22 +12,23 @@ import {
 import { runCommunityJob } from "./handlers"
 import {
   COMMUNITY_JOB_MAX_ATTEMPTS,
-  COMMUNITY_JOB_RETRY_BASE_MS,
-  COMMUNITY_JOB_RETRY_MAX_MS,
   type CommunityJobRepository,
 } from "./runner-types"
+import { recordCommunityJobFailure } from "./runner-failure"
 
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function computeRetryDelayMs(attemptCount: number): number {
-  const exponent = Math.max(0, attemptCount - 1)
-  return Math.min(COMMUNITY_JOB_RETRY_BASE_MS * (2 ** exponent), COMMUNITY_JOB_RETRY_MAX_MS)
+type CommunityJobCommunityProcessingSummary = {
+  community_id: string
+  processed_jobs: number
+  jobs: CommunityJobRow[]
 }
 
-function computeNextRetryAt(now: string, attemptCount: number): string {
-  return new Date(Date.parse(now) + computeRetryDelayMs(attemptCount)).toISOString()
+type CommunityJobProcessingSummary = {
+  processed_jobs: number
+  communities: CommunityJobCommunityProcessingSummary[]
 }
 
 export async function processCommunityJobById(input: {
@@ -80,40 +79,13 @@ export async function processCommunityJobById(input: {
         now: nowIso(),
       })
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
       const failedAt = nowIso()
-      logPipelineError("[community-job] failed", {
-        job_id: running.job_id,
-        job_type: running.job_type,
-        community_id: running.community_id,
-        ...summarizeReference("subject_id", running.subject_id),
-        attempt_count: running.attempt_count,
-        error: sanitizeLogText(message),
-      })
-      if (input.env.SENTRY_DSN) {
-        captureException(error, {
-          tags: {
-            pipeline: "community_jobs",
-            job_id: running.job_id,
-            job_type: running.job_type,
-            community_id: running.community_id,
-          },
-          extra: {
-            subject_type: running.subject_type,
-            subject_id: running.subject_id,
-            attempt_count: running.attempt_count,
-            error: message,
-          },
-        })
-      }
-      return await markCommunityJobFailed({
+      return await recordCommunityJobFailure({
         client: db.client,
-        jobId: running.job_id,
-        errorCode: message || "community_job_failed",
-        availableAt: running.attempt_count >= COMMUNITY_JOB_MAX_ATTEMPTS
-          ? null
-          : computeNextRetryAt(failedAt, running.attempt_count),
-        now: failedAt,
+        env: input.env,
+        job: running,
+        error,
+        failedAt,
       })
     }
   } finally {
@@ -153,11 +125,7 @@ export async function processCommunityJobsForCommunity(input: {
   communityId: string
   communityRepository: CommunityJobRepository
   maxJobs?: number
-}): Promise<{
-  community_id: string
-  processed_jobs: number
-  jobs: CommunityJobRow[]
-}> {
+}): Promise<CommunityJobCommunityProcessingSummary> {
   const maxJobs = Math.max(1, Math.trunc(input.maxJobs ?? 25))
   const jobs: CommunityJobRow[] = []
 
@@ -186,24 +154,13 @@ export async function processAvailableCommunityJobs(input: {
   communityIds?: string[] | null
   maxCommunities?: number
   maxJobsPerCommunity?: number
-}): Promise<{
-  processed_jobs: number
-  communities: Array<{
-    community_id: string
-    processed_jobs: number
-    jobs: CommunityJobRow[]
-  }>
-}> {
+}): Promise<CommunityJobProcessingSummary> {
   const communityIds = (input.communityIds?.length
     ? input.communityIds
     : (await input.communityRepository.listActiveCommunities()).map((community) => community.community_id))
     .slice(0, Math.max(1, Math.trunc(input.maxCommunities ?? 100)))
 
-  const communities: Array<{
-    community_id: string
-    processed_jobs: number
-    jobs: CommunityJobRow[]
-  }> = []
+  const communities: CommunityJobCommunityProcessingSummary[] = []
 
   for (const communityId of communityIds) {
     const processed = await processCommunityJobsForCommunity({
@@ -232,14 +189,7 @@ export async function runCommunityJobWorkerLoop(input: {
   pollIntervalMs?: number
   stopWhenIdle?: boolean
   signal?: AbortSignal
-  onTick?: (summary: {
-    processed_jobs: number
-    communities: Array<{
-      community_id: string
-      processed_jobs: number
-      jobs: CommunityJobRow[]
-    }>
-  }) => void | Promise<void>
+  onTick?: (summary: CommunityJobProcessingSummary) => void | Promise<void>
 }): Promise<void> {
   const pollIntervalMs = Math.max(100, Math.trunc(input.pollIntervalMs ?? 2000))
 

@@ -1,18 +1,18 @@
 import type { Env } from "../../../env"
-import type { DbExecutor } from "../../db-helpers"
 import { detectSourceLanguageFromText, normalizeContentLocale, sameLanguageLocale } from "../../localization/content-locale"
 import type { Client } from "../../sql-client"
-import { updatePostLinkPreviewMetadata } from "../community-post-store"
 import {
-  buildLinkEnrichmentSnapshot,
   getLinkEnrichmentByNormalizedUrl,
-  listLinkEnrichmentUsages,
-  parseLinkEnrichmentTranslations,
   updateLinkEnrichmentSummary,
   updateLinkEnrichmentTranslations,
-  updateLinkEnrichmentUsageSnapshotSyncedAt,
 } from "./repository"
+import { buildLinkEnrichmentSnapshot, parseLinkEnrichmentTranslations } from "./snapshot"
 import { requestLinkSummary } from "./summary-provider"
+import {
+  hasStoredLinkSummaryTranslationInput,
+  keyPointsForLinkSummaryTranslation,
+  parseStoredLinkSummaryTranslationInput,
+} from "./summary-translation-input"
 import { requestLinkSummaryTranslation } from "./translation-provider"
 
 export async function generateAndStoreLinkSummary(input: {
@@ -158,35 +158,13 @@ export async function translateAndStoreLinkSummary(input: {
     }
   }
 
-  let parsedSummary: {
-    summary_paragraph: string | null
-    short_summary: string | null
-    key_points: string[]
-  } = {
-    summary_paragraph: null,
-    short_summary: null,
-    key_points: [],
-  }
-  if (record.summary_json) {
-    try {
-      const parsed = JSON.parse(record.summary_json) as Record<string, unknown>
-      parsedSummary = {
-        summary_paragraph: typeof parsed.summary_paragraph === "string" ? parsed.summary_paragraph : null,
-        short_summary: typeof parsed.short_summary === "string" ? parsed.short_summary : null,
-        key_points: Array.isArray(parsed.key_points)
-          ? parsed.key_points.filter((item): item is string => typeof item === "string").slice(0, 3)
-          : [],
-      }
-    } catch {
-      parsedSummary = {
-        summary_paragraph: null,
-        short_summary: null,
-        key_points: [],
-      }
-    }
-  }
+  const parsedSummary = parseStoredLinkSummaryTranslationInput(record.summary_json)
 
-  if (!record.title && !record.description && !parsedSummary.summary_paragraph && parsedSummary.key_points.length === 0) {
+  if (!hasStoredLinkSummaryTranslationInput({
+    title: record.title,
+    description: record.description,
+    summary: parsedSummary,
+  })) {
     return {
       resultRef: "skipped:no_translatable_fields",
       snapshotJson: JSON.stringify(buildLinkEnrichmentSnapshot(record)),
@@ -200,9 +178,7 @@ export async function translateAndStoreLinkSummary(input: {
     description: record.description,
     summaryParagraph: parsedSummary.summary_paragraph,
     shortSummary: parsedSummary.short_summary,
-    keyPoints: parsedSummary.key_points.length === 3
-      ? parsedSummary.key_points
-      : ["", "", ""],
+    keyPoints: keyPointsForLinkSummaryTranslation(parsedSummary),
     fetcher: input.fetcher,
   })
   const latestRecord = await getLinkEnrichmentByNormalizedUrl(input.controlPlaneClient, input.normalizedUrl)
@@ -235,52 +211,4 @@ export async function translateAndStoreLinkSummary(input: {
     resultRef: `ready:${updated.normalized_url}:${locale}`,
     snapshotJson: JSON.stringify(buildLinkEnrichmentSnapshot(updated)),
   }
-}
-
-export async function writeLinkEnrichmentSnapshotToPost(input: {
-  client: DbExecutor
-  postId: string
-  snapshotJson: string
-  syncedAt: string
-}): Promise<void> {
-  const snapshot = JSON.parse(input.snapshotJson) as {
-    title?: unknown
-    image_url?: unknown
-  }
-  await updatePostLinkPreviewMetadata({
-    client: input.client,
-    postId: input.postId,
-    linkOgImageUrl: typeof snapshot.image_url === "string" ? snapshot.image_url : null,
-    linkOgTitle: typeof snapshot.title === "string" ? snapshot.title : null,
-    linkEnrichmentSnapshotJson: input.snapshotJson,
-    linkEnrichmentSyncedAt: input.syncedAt,
-    updatedAt: input.syncedAt,
-  })
-}
-
-export async function listLinkSummaryFanoutUsages(input: {
-  controlPlaneClient: Client
-  normalizedUrl: string
-}) {
-  return listLinkEnrichmentUsages({
-    client: input.controlPlaneClient,
-    normalizedUrl: input.normalizedUrl,
-  })
-}
-
-export async function markLinkSummaryFanoutSynced(input: {
-  controlPlaneClient: Client
-  normalizedUrl: string
-  communityId: string
-  postId: string
-  syncedAt: string
-}) {
-  await updateLinkEnrichmentUsageSnapshotSyncedAt({
-    client: input.controlPlaneClient,
-    normalizedUrl: input.normalizedUrl,
-    communityId: input.communityId,
-    postId: input.postId,
-    snapshotSyncedAt: input.syncedAt,
-    updatedAt: input.syncedAt,
-  })
 }
