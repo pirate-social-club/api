@@ -30,6 +30,7 @@
     "mint:dev-jwt": "bun run scripts/mint-dev-jwt.ts",
     "smoke:story-remix-cycle": "bun run scripts/smoke-story-remix-cycle.ts",
     "live-room:e2e:local": "bun run scripts/live-room-local-e2e.ts",
+    "live-room:smoke:paid-staging": "bun run scripts/live-room-paid-staging-smoke.ts",
     "seed:local-smoke": "bun run scripts/seed-community-lifecycle.ts --mode local-smoke --manifest scripts/seed-manifests/local-smoke.json",
     "seed:dev": "bun run scripts/seed-community-lifecycle.ts --mode dev-seed --manifest scripts/seed-manifests/dev-seed.json",
     "seed:staging": "bun run scripts/seed-community-lifecycle.ts --mode staging-seed --manifest scripts/seed-manifests/staging-seed.json",
