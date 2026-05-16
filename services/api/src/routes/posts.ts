@@ -66,7 +66,6 @@ posts.post("/:postId/vote", async (c) => {
     postId,
     value: body.value,
     bypassVoterAccessChecks: actor.authType === "admin",
-    userRepository: getUserRepository(c.env),
     communityRepository,
   })
   await trackApiEvent(c.env, c.req, {

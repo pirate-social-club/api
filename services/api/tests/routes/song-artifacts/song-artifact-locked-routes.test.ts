@@ -18,7 +18,6 @@ import {
 } from "../../../src/lib/story/story-royalty-settlement-service"
 import { setStoryCdrUploaderForTests } from "../../../src/lib/story/story-cdr"
 import { setStoryRuntimeFundingAssertionForTests } from "../../../src/lib/story/story-runtime-funding"
-import { setStoryPurchaseSettlementExecutorForTests } from "../../../src/lib/story/story-settlement-service"
 import { setCommunityCommerceBuyerFundingVerifierForTests } from "../../../src/lib/communities/commerce/funding-proof-service"
 import {
   publicAssetAccessMessage,
@@ -114,13 +113,6 @@ afterEach(async () => {
 describe("song artifact locked routes", () => {
   testWithTimeout("publishes a locked song, sells access, and decrypts the purchased asset", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
-    const storySettlementCalls: Array<{
-      purchaseRef: string
-      buyerAddress: string
-      entitlementTokenId: string
-      payoutRecipient: string
-      amountWei: string
-    }> = []
     const royaltySettlementCalls: Array<{
       purchaseRef: string
       buyerAddress: string
@@ -138,18 +130,6 @@ describe("song artifact locked routes", () => {
     }> = []
     let writeAccessAuxData: `0x${string}` | null = null
     setStoryRuntimeFundingAssertionForTests(async () => {})
-    setStoryPurchaseSettlementExecutorForTests(async (input) => {
-      storySettlementCalls.push({
-        purchaseRef: input.purchaseRef,
-        buyerAddress: input.buyerAddress,
-        entitlementTokenId: String(input.entitlementTokenId),
-        payoutRecipient: input.payoutRecipient,
-        amountWei: String(input.amountWei),
-      })
-      return {
-        settlementTxHash: "0xstorysettlementpaid0001",
-      }
-    })
     setStoryRoyaltyRegistrarForTests(async (input) => {
       expect(input.rightsBasis).toBe("original")
       return {
@@ -615,7 +595,6 @@ describe("song artifact locked routes", () => {
 
     charityPayoutCalls.length = 0
     royaltySettlementCalls.length = 0
-    storySettlementCalls.length = 0
 
     const quoteCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/purchase-quotes`,
@@ -726,7 +705,6 @@ describe("song artifact locked routes", () => {
     expect(charityPayoutCalls[0]?.amountAtomic).toBe("500000000000000000")
     expect(charityPayoutCalls[0]?.settlementToken).toBe("WIP")
     expect(charityPayoutCalls[0]?.idempotencyKey).toContain(`${quoteBody.id.replace(/^pq_/, "")}:charity:don_charity_water:60`)
-    expect(storySettlementCalls).toHaveLength(0)
     expect(royaltySettlementCalls).toHaveLength(1)
     expect({
       amount: royaltySettlementCalls[0]?.amount,

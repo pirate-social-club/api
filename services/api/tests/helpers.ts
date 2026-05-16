@@ -21,7 +21,6 @@ import {
   setStoryRoyaltyPurchaseSettlementExecutorForTests,
 } from "../src/lib/story/story-royalty-settlement-service"
 import { setStoryRuntimeFundingAssertionForTests } from "../src/lib/story/story-runtime-funding"
-import { setStoryPurchaseSettlementExecutorForTests } from "../src/lib/story/story-settlement-service"
 import { setSwarmPublisherForTests } from "../src/lib/swarm/swarm-publisher"
 import { setCommunityCommerceCharityPayoutExecutorForTests } from "../src/lib/communities/commerce/charity-payout-service"
 import { setCommunityCommerceBuyerFundingVerifierForTests } from "../src/lib/communities/commerce/funding-proof-service"
@@ -152,7 +151,6 @@ export function resetRuntimeCaches(): void {
   setStoryRoyaltyPurchaseSettlementExecutorForTests(null)
   setStoryParentRoyaltyVaultTransferExecutorForTests(null)
   setStoryRuntimeFundingAssertionForTests(null)
-  setStoryPurchaseSettlementExecutorForTests(null)
   setSwarmPublisherForTests(null)
   setCommunityCommerceCharityPayoutExecutorForTests(null)
   setCommunityCommerceBuyerFundingVerifierForTests(null)

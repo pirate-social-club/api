@@ -4,7 +4,6 @@ import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { setStoryRoyaltyRegistrarForTests } from "../../../src/lib/story/story-royalty-registration-service"
 import { setStoryRoyaltyPurchaseSettlementExecutorForTests } from "../../../src/lib/story/story-royalty-settlement-service"
 import { setStoryRuntimeFundingAssertionForTests } from "../../../src/lib/story/story-runtime-funding"
-import { setStoryPurchaseSettlementExecutorForTests } from "../../../src/lib/story/story-settlement-service"
 import { setCommunityCommerceBuyerFundingVerifierForTests } from "../../../src/lib/communities/commerce/funding-proof-service"
 import { setCommunityCommerceCharityPayoutExecutorForTests } from "../../../src/lib/communities/commerce/charity-payout-service"
 import { openCommunityDb } from "../../../src/lib/communities/community-db-factory"
@@ -99,7 +98,6 @@ describe("song artifact donation routes", () => {
   testWithTimeout("rejects purchase quote when community donation policy is none", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
     setStoryRuntimeFundingAssertionForTests(async () => {})
-    setStoryPurchaseSettlementExecutorForTests(async () => ({ settlementTxHash: "0xstory" }))
     setStoryRoyaltyRegistrarForTests(async (input) => {
       expect(input.rightsBasis).toBe("original")
       return {
@@ -548,7 +546,6 @@ describe("song artifact donation routes", () => {
   testWithTimeout("clears listing donation state when donation share is updated to zero", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
     setStoryRuntimeFundingAssertionForTests(async () => {})
-    setStoryPurchaseSettlementExecutorForTests(async () => ({ settlementTxHash: "0xstory" }))
     setStoryRoyaltyRegistrarForTests(async (input) => {
       expect(input.rightsBasis).toBe("original")
       return {
@@ -762,7 +759,6 @@ describe("song artifact donation routes", () => {
   testWithTimeout("rejects purchase quote when donation partner is paused", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
     setStoryRuntimeFundingAssertionForTests(async () => {})
-    setStoryPurchaseSettlementExecutorForTests(async () => ({ settlementTxHash: "0xstory" }))
     setStoryRoyaltyRegistrarForTests(async (input) => {
       expect(input.rightsBasis).toBe("original")
       return {
