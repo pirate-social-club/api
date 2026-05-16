@@ -22,6 +22,8 @@ const COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS = 120_000
 const testWithTimeout = test as unknown as (name: string, fn: () => Promise<void>, timeout: number) => void
 const LEGACY_1064_THREAD_COMMENT_LOCKS_CHECKSUM =
   "bdb8e886939b733f10afff54e25f83cc39ed49c2a6501b7f7604ac3357b8d61f"
+const LEGACY_1080_POST_COMMENT_LOCKS_CHECKSUM =
+  "cc64b1844768fc2cd585bd76daab9e75a32c596ddbdfbe8d7ac060d38cc5d23f"
 
 afterEach(async () => {
   await Promise.all(cleanupPaths.splice(0).map((path) => rm(path, { recursive: true, force: true })))
@@ -624,6 +626,45 @@ describe("openCommunityDb", () => {
     const currentSql = await readFile(join(migrationsDir, "1064_thread_comment_locks.sql"), "utf8")
     const currentChecksum = createHash("sha256").update(currentSql).digest("hex")
     const repairedChecksum = await getMigrationChecksum(databasePath, "1064_thread_comment_locks.sql")
+    expect(repairedChecksum).toBe(currentChecksum)
+  }, COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS)
+
+  testWithTimeout("repairs compatible local checksum drift for post comment lock migration", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-db-factory-"))
+    cleanupPaths.push(rootDir)
+
+    const databasePath = join(rootDir, `${randomUUID()}.db`)
+    await applyPartialCommunitySchema(databasePath, 1079)
+
+    const client = createClient({ url: `file:${databasePath}` })
+    try {
+      await ensureRemoteThreadCommentLockColumns(client)
+      await client.execute({
+        sql: `
+          INSERT INTO schema_migrations (migration_name, migration_label, checksum)
+          VALUES ('1080_post_comment_locks.sql', 'community-template', ?1)
+        `,
+        args: [LEGACY_1080_POST_COMMENT_LOCKS_CHECKSUM],
+      })
+    } finally {
+      client.close()
+    }
+
+    const db = await openCommunityDb(
+      {
+        LOCAL_COMMUNITY_DB_ROOT: rootDir,
+      },
+      buildRepository(databasePath),
+      "cmt_partial",
+    )
+    db.close()
+
+    const migrationsDir = resolveCoreRepoPath("db/community-template/migrations", {
+      serviceRoot: fileURLToPath(new URL("..", import.meta.url)),
+    })
+    const currentSql = await readFile(join(migrationsDir, "1080_post_comment_locks.sql"), "utf8")
+    const currentChecksum = createHash("sha256").update(currentSql).digest("hex")
+    const repairedChecksum = await getMigrationChecksum(databasePath, "1080_post_comment_locks.sql")
     expect(repairedChecksum).toBe(currentChecksum)
   }, COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS)
 

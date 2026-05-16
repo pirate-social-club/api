@@ -17,6 +17,9 @@ import type {
 } from "./types";
 
 const COMPATIBLE_COMMUNITY_MIGRATION_CHECKSUMS: Record<string, Set<string>> = {
+  "1080_post_comment_locks.sql": new Set([
+    "cc64b1844768fc2cd585bd76daab9e75a32c596ddbdfbe8d7ac060d38cc5d23f",
+  ]),
 };
 
 async function inspectCommunityDatabaseSchema(input: {

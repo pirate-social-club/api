@@ -38,6 +38,9 @@ const COMPATIBLE_LOCAL_MIGRATION_CHECKSUMS: Record<string, Set<string>> = {
   "1073_wallet_bound_purchases.sql": new Set([
     "3df9d051d1fff3dfec40ed08344e2985f6f55bb012e0471ec2fac51768454a81",
   ]),
+  "1080_post_comment_locks.sql": new Set([
+    "cc64b1844768fc2cd585bd76daab9e75a32c596ddbdfbe8d7ac060d38cc5d23f",
+  ]),
 }
 const CONNECTION_PRAGMA_PATTERN = /^PRAGMA\s+(foreign_keys|legacy_alter_table)\s*=\s*(ON|OFF|0|1)\s*;?$/i
 

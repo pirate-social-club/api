@@ -9,6 +9,9 @@ type CommunityBootstrapSql = {
 };
 
 const COMPATIBLE_COMMUNITY_MIGRATION_CHECKSUMS: Record<string, Set<string>> = {
+  "1080_post_comment_locks.sql": new Set([
+    "cc64b1844768fc2cd585bd76daab9e75a32c596ddbdfbe8d7ac060d38cc5d23f",
+  ]),
 };
 
 const OLD_COMMENT_AGENT_AUTHORSHIP_CHECKSUM = "aa648205a1796140aafe3c2c42766e5a0d5b62338ea8d429cc1504839ff4fc15";

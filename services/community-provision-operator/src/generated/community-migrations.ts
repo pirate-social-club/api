@@ -3367,19 +3367,16 @@ PRAGMA foreign_keys = ON;
   },
   {
     name: "1080_post_comment_locks.sql",
-    sql: `ALTER TABLE posts
-  ADD COLUMN comments_locked INTEGER NOT NULL DEFAULT 0
-  CHECK (comments_locked IN (0, 1));
-
-ALTER TABLE posts
-  ADD COLUMN comments_locked_at TEXT;
-
-ALTER TABLE posts
-  ADD COLUMN comments_locked_by_user_id TEXT;
-
-ALTER TABLE posts
-  ADD COLUMN comments_lock_reason TEXT;
+    sql: `-- Compatibility migration.
+--
+-- Post comment lock columns are added by the runtime community DB preflight.
+-- Migration 1064 originally added these columns, but it was converted to a
+-- ledger-only migration because some community databases already had the
+-- columns without a matching schema_migrations entry. Reintroducing ALTER
+-- TABLE statements here makes those databases fail with duplicate-column
+-- errors during migration replay.
+SELECT 1;
 `,
-    checksum: "cc64b1844768fc2cd585bd76daab9e75a32c596ddbdfbe8d7ac060d38cc5d23f",
+    checksum: "1b72ebf9d27d7dbd047dd5f7d83bede1d80919ec15c3203080cd97825eeb899e",
   },
 ] as const;
