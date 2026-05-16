@@ -2,6 +2,8 @@ import type { Client } from "../../sql-client"
 import { executeFirst } from "../../db-helpers"
 import { rowValue, stringOrNull } from "../../sql-row"
 
+type MembershipExecutor = Pick<Client, "execute">
+
 export type CommunityRole = "owner" | "admin" | "moderator"
 
 export type CommunityMembershipRow = {
@@ -15,7 +17,7 @@ export const OWNER_OR_ADMIN_ROLE = ["owner", "admin"] as const satisfies readonl
 export const OWNER_ROLE = ["owner"] as const satisfies readonly CommunityRole[]
 
 export async function getCommunityMembershipState(
-  client: Client,
+  client: MembershipExecutor,
   communityId: string,
   userId: string,
 ): Promise<CommunityMembershipRow> {
