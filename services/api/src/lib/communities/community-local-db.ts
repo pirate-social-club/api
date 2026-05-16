@@ -39,6 +39,13 @@ const COMPATIBLE_LOCAL_MIGRATION_CHECKSUMS: Record<string, Set<string>> = {
     "3df9d051d1fff3dfec40ed08344e2985f6f55bb012e0471ec2fac51768454a81",
   ]),
 }
+const CONNECTION_PRAGMA_PATTERN = /^PRAGMA\s+(foreign_keys|legacy_alter_table)\s*=\s*(ON|OFF|0|1)\s*;?$/i
+
+type ConnectionPragmaName = "foreign_keys" | "legacy_alter_table"
+type ConnectionPragmaStatement = {
+  name: ConnectionPragmaName
+  sql: string
+}
 
 function localSqliteBusyTimeoutMs(): number {
   if (!Number.isInteger(LOCAL_SQLITE_BUSY_TIMEOUT_MS) || LOCAL_SQLITE_BUSY_TIMEOUT_MS < 0) {
@@ -156,6 +163,76 @@ function splitSqlStatements(sql: string): string[] {
   return statements
 }
 
+function parseConnectionPragmaStatement(statement: string): ConnectionPragmaStatement | null {
+  const match = statement.trim().match(CONNECTION_PRAGMA_PATTERN)
+  if (!match) {
+    return null
+  }
+
+  const name = match[1].toLowerCase() as ConnectionPragmaName
+  const rawValue = match[2].toUpperCase()
+  const value = rawValue === "1" ? "ON" : rawValue === "0" ? "OFF" : rawValue
+  return {
+    name,
+    sql: `PRAGMA ${name} = ${value}`,
+  }
+}
+
+function splitConnectionPragmas(statements: string[]): {
+  leadingPragmas: ConnectionPragmaStatement[]
+  bodyStatements: string[]
+  trailingPragmas: ConnectionPragmaStatement[]
+} {
+  const bodyStatements = [...statements]
+  const leadingPragmas: ConnectionPragmaStatement[] = []
+  while (bodyStatements.length > 0) {
+    const pragma = parseConnectionPragmaStatement(bodyStatements[0] ?? "")
+    if (!pragma) {
+      break
+    }
+    leadingPragmas.push(pragma)
+    bodyStatements.shift()
+  }
+
+  const trailingPragmas: ConnectionPragmaStatement[] = []
+  while (bodyStatements.length > 0) {
+    const pragma = parseConnectionPragmaStatement(bodyStatements[bodyStatements.length - 1] ?? "")
+    if (!pragma) {
+      break
+    }
+    trailingPragmas.unshift(pragma)
+    bodyStatements.pop()
+  }
+
+  const embeddedPragma = bodyStatements.find((statement) => parseConnectionPragmaStatement(statement))
+  if (embeddedPragma) {
+    throw internalError("Migration connection PRAGMAs must appear before or after schema statements")
+  }
+
+  return { leadingPragmas, bodyStatements, trailingPragmas }
+}
+
+async function readConnectionPragmaValue(client: Client, name: ConnectionPragmaName): Promise<string | null> {
+  const result = await client.execute(`PRAGMA ${name}`)
+  const firstRow = result.rows[0]
+  if (!firstRow) {
+    return null
+  }
+  const value = Object.values(firstRow)[0]
+  return value === null || value === undefined ? null : String(value)
+}
+
+async function restoreConnectionPragmas(
+  client: Client,
+  originalPragmaValues: Map<ConnectionPragmaName, string | null>,
+): Promise<void> {
+  for (const [name, value] of originalPragmaValues.entries()) {
+    if (value !== null) {
+      await client.execute(`PRAGMA ${name} = ${value}`)
+    }
+  }
+}
+
 async function ensureSchemaMigrationsTable(client: Client): Promise<void> {
   await client.execute(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -171,6 +248,37 @@ export async function configureLocalCommunityDbClient(client: Client): Promise<v
   await client.execute("PRAGMA journal_mode = WAL")
   await client.execute("PRAGMA synchronous = NORMAL")
   await client.execute(`PRAGMA busy_timeout = ${localSqliteBusyTimeoutMs()}`)
+}
+
+async function applyMigrationTransaction(input: {
+  client: Client
+  statements: string[]
+  migrationName: string
+  checksum: string
+}): Promise<void> {
+  const tx = await input.client.transaction("write")
+  try {
+    for (const statement of input.statements) {
+      await tx.execute(statement)
+    }
+    await tx.execute({
+      sql: `
+        INSERT INTO schema_migrations (migration_name, migration_label, checksum)
+        VALUES (?1, 'community-template', ?2)
+      `,
+      args: [input.migrationName, input.checksum],
+    })
+    await tx.commit()
+  } catch (error) {
+    try {
+      await tx.rollback()
+    } catch (rollbackError) {
+      console.error("[community-local-db] rollback failed while initializing local community database", rollbackError)
+    }
+    throw error
+  } finally {
+    tx.close()
+  }
 }
 
 async function applyMigrationFile(client: Client, migrationFilePath: string): Promise<{
@@ -221,28 +329,30 @@ async function applyMigrationFile(client: Client, migrationFilePath: string): Pr
   }
 
   const statements = splitSqlStatements(sql)
-  const tx = await client.transaction("write")
+  const { leadingPragmas, bodyStatements, trailingPragmas } = splitConnectionPragmas(statements)
+  const connectionPragmas = [...leadingPragmas, ...trailingPragmas]
+  const originalPragmaValues = new Map<ConnectionPragmaName, string | null>()
   try {
-    for (const statement of statements) {
-      await tx.execute(statement)
+    for (const pragma of connectionPragmas) {
+      if (!originalPragmaValues.has(pragma.name)) {
+        originalPragmaValues.set(pragma.name, await readConnectionPragmaValue(client, pragma.name))
+      }
     }
-    await tx.execute({
-      sql: `
-        INSERT INTO schema_migrations (migration_name, migration_label, checksum)
-        VALUES (?1, 'community-template', ?2)
-      `,
-      args: [migrationName, checksum],
-    })
-    await tx.commit()
+
+    for (const pragma of leadingPragmas) {
+      await client.execute(pragma.sql)
+    }
+    await applyMigrationTransaction({ client, statements: bodyStatements, migrationName, checksum })
+    for (const pragma of trailingPragmas) {
+      await client.execute(pragma.sql)
+    }
   } catch (error) {
-  try {
-    await tx.rollback()
-  } catch (rollbackError) {
-    console.error("[community-local-db] rollback failed while initializing local community database", rollbackError)
-  }
+    try {
+      await restoreConnectionPragmas(client, originalPragmaValues)
+    } catch (restoreError) {
+      console.error("[community-local-db] failed to restore migration connection pragmas", restoreError)
+    }
     throw error
-  } finally {
-    tx.close()
   }
   return {}
 }

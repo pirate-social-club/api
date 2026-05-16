@@ -88,6 +88,20 @@ async function getMigrationChecksum(databasePath: string, migrationName: string)
   }
 }
 
+async function getForeignKeysPragma(databasePath: string): Promise<number | null> {
+  const client = createClient({
+    url: `file:${databasePath}`,
+  })
+
+  try {
+    const result = await client.execute("PRAGMA foreign_keys")
+    const value = Object.values(result.rows[0] ?? {})[0]
+    return value === null || value === undefined ? null : Number(value)
+  } finally {
+    client.close()
+  }
+}
+
 async function getTableColumns(databasePath: string, tableName: string): Promise<string[]> {
   const client = createClient({
     url: `file:${databasePath}`,
@@ -96,6 +110,19 @@ async function getTableColumns(databasePath: string, tableName: string): Promise
   try {
     const result = await client.execute(`PRAGMA table_info(${tableName})`)
     return result.rows.map((row) => String(row.name))
+  } finally {
+    client.close()
+  }
+}
+
+async function countTableRows(databasePath: string, tableName: string): Promise<number> {
+  const client = createClient({
+    url: `file:${databasePath}`,
+  })
+
+  try {
+    const result = await client.execute(`SELECT COUNT(*) AS row_count FROM ${tableName}`)
+    return Number(result.rows[0]?.row_count ?? 0)
   } finally {
     client.close()
   }
@@ -180,6 +207,56 @@ function buildRepository(databasePath: string): CommunityDatabaseBindingReposito
     async getActiveCommunityDbCredential() {
       return null
     },
+  }
+}
+
+async function seedPostWithComment(databasePath: string): Promise<void> {
+  const client = createClient({
+    url: `file:${databasePath}`,
+  })
+  const now = new Date().toISOString()
+
+  try {
+    await client.execute("PRAGMA foreign_keys = ON")
+    await client.execute({
+      sql: `
+        INSERT INTO communities (
+          community_id, display_name, status, artist_governance_state, membership_mode,
+          default_age_gate_policy, allow_anonymous_identity, donation_policy_mode,
+          donation_partner_status, governance_mode, created_by_user_id, created_at, updated_at
+        ) VALUES (
+          'cmt_partial', 'Partial Community', 'active', 'fan_run', 'open',
+          'none', 0, 'none', 'unconfigured', 'centralized', 'usr_seed', ?1, ?1
+        )
+      `,
+      args: [now],
+    })
+    await client.execute({
+      sql: `
+        INSERT INTO posts (
+          post_id, community_id, author_user_id, identity_mode, post_type, status, body,
+          analysis_state, content_safety_state, age_gate_policy, created_at, updated_at
+        ) VALUES (
+          'pst_seed', 'cmt_partial', 'usr_seed', 'public', 'text', 'published', 'hello',
+          'allow', 'safe', 'none', ?1, ?1
+        )
+      `,
+      args: [now],
+    })
+    await client.execute({
+      sql: `
+        INSERT INTO comments (
+          comment_id, community_id, thread_root_post_id, author_user_id, identity_mode,
+          body, status, depth, created_at, updated_at
+        ) VALUES (
+          'cmt_seed_comment', 'cmt_partial', 'pst_seed', 'usr_seed', 'public',
+          'reply', 'published', 0, ?1, ?1
+        )
+      `,
+      args: [now],
+    })
+  } finally {
+    client.close()
   }
 }
 
@@ -481,6 +558,34 @@ describe("openCommunityDb", () => {
     const indexNames = await listIndexNames(databasePath)
     expect(indexNames).toContain("idx_community_memberships_state_lookup")
     expect(indexNames).toContain("idx_community_roles_state_lookup")
+  }, COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS)
+
+  testWithTimeout("applies table-rebuild migrations with connection-level foreign-key pragmas", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-db-factory-"))
+    cleanupPaths.push(rootDir)
+
+    const databasePath = join(rootDir, `${randomUUID()}.db`)
+    await applyPartialCommunitySchema(databasePath, 1078)
+    await seedPostWithComment(databasePath)
+
+    const beforePostColumns = await getTableColumns(databasePath, "posts")
+    expect(beforePostColumns).not.toContain("crosspost_source_json")
+
+    const db = await openCommunityDb(
+      {
+        LOCAL_COMMUNITY_DB_ROOT: rootDir,
+      },
+      buildRepository(databasePath),
+      "cmt_partial",
+    )
+    db.close()
+
+    const afterPostColumns = await getTableColumns(databasePath, "posts")
+    expect(afterPostColumns).toContain("crosspost_source_json")
+    expect(await countTableRows(databasePath, "posts")).toBe(1)
+    expect(await countTableRows(databasePath, "comments")).toBe(1)
+    expect(await getMigrationChecksum(databasePath, "1079_crosspost_posts.sql")).not.toBeNull()
+    expect(await getForeignKeysPragma(databasePath)).toBe(1)
   }, COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS)
 
   testWithTimeout("repairs compatible local checksum drift for comment lock migration", async () => {
