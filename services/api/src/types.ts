@@ -363,6 +363,7 @@ export type Post = {
   access_mode?: "public" | "locked" | null
   asset_id?: string | null
   anchor_live_room_id?: string | null
+  anchor_live_room_status?: "scheduled" | "live" | "ended" | "canceled" | null
   song_artifact_bundle_id?: string | null
   song_title?: string | null
   song_cover_art_ref?: string | null

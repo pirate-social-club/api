@@ -86,6 +86,18 @@ export function resolveAllocationSettlementAmountAtomic(input: {
   return BigInt(resolveSettlementAmountSnapshot(roundUsd(amountUsd)).amountAtomic)
 }
 
+export function resolvePurchaseEntitlementTarget(
+  quote: Pick<PurchaseQuoteRow, "asset_id" | "live_room_id" | "listing_id">,
+): {
+  entitlementKind: CommunityPurchase["entitlement_kind"]
+  targetRef: string
+} {
+  return {
+    entitlementKind: quote.live_room_id ? "live_room_access" : "asset_access",
+    targetRef: quote.asset_id ?? quote.live_room_id ?? quote.listing_id,
+  }
+}
+
 function toSettlementEntitlementKind(
   entitlementKind: CommunityPurchase["entitlement_kind"],
 ): CommunityPurchaseSettlement["entitlement_kind"] {

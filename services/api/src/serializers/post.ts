@@ -75,6 +75,7 @@ export function serializePost(post: Post): CurrentPostResponse {
     access_mode: post.access_mode,
     asset: post.asset_id ? publicId(post.asset_id, "asset") : null,
     anchor_live_room: post.anchor_live_room_id ?? null,
+    anchor_live_room_status: post.anchor_live_room_status ?? null,
     song_artifact_bundle: post.song_artifact_bundle_id ? publicId(post.song_artifact_bundle_id, "sab") : null,
     song_title: post.song_title,
     parent_post: post.parent_post_id,

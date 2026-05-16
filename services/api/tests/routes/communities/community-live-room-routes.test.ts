@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { createClient } from "@libsql/client"
 import { app } from "../../../src/index"
 import type { Env } from "../../../src/types"
+import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import {
+  addCommunityMember,
   completeUniqueHumanVerification,
   exchangeJwt,
   requestJson,
@@ -10,6 +13,23 @@ import {
 
 let cleanup: (() => Promise<void>) | null = null
 let originalFetch: typeof fetch
+
+const routedCheckoutQuoteFields = {
+  funding_asset: {
+    asset_symbol: "USDC",
+    chain_namespace: "eip155",
+    chain_id: 84532,
+    display_name: "USDC on Base Sepolia",
+  },
+  source_chain: {
+    chain_namespace: "eip155",
+    chain_id: 84532,
+    display_name: "Base Sepolia",
+  },
+  route_provider: "pirate_checkout",
+  client_estimated_slippage_bps: 0,
+  client_estimated_hop_count: 1,
+}
 
 beforeEach(() => {
   resetRuntimeCaches()
@@ -238,6 +258,99 @@ async function postLiveRoom(input: {
   )
 }
 
+async function postPublishLiveRoom(input: {
+  env: Env
+  accessToken: string
+  communityId: string
+  body: Record<string, unknown>
+}): Promise<Response> {
+  return requestJson(
+    `http://pirate.test/communities/${input.communityId}/live-rooms/publish`,
+    input.body,
+    input.env,
+    input.accessToken,
+  )
+}
+
+async function readAtomicPublishRowCounts(input: {
+  communityDbRoot: string
+  communityId: string
+}): Promise<{ liveRooms: number; posts: number; listings: number }> {
+  const client = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+  try {
+    const result = await client.execute({
+      sql: `
+        SELECT
+          (SELECT COUNT(*) FROM live_rooms) AS live_rooms,
+          (SELECT COUNT(*) FROM posts) AS posts,
+          (SELECT COUNT(*) FROM listings) AS listings
+      `,
+      args: [],
+    })
+    const row = result.rows[0] ?? {}
+    return {
+      liveRooms: Number(row.live_rooms ?? 0),
+      posts: Number(row.posts ?? 0),
+      listings: Number(row.listings ?? 0),
+    }
+  } finally {
+    client.close()
+  }
+}
+
+async function countLiveRoomViewerSessions(input: {
+  communityDbRoot: string
+  communityId: string
+  liveRoomId: string
+}): Promise<number> {
+  const client = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+  try {
+    const result = await client.execute({
+      sql: `
+        SELECT COUNT(*) AS count
+        FROM live_room_viewer_sessions
+        WHERE community_id = ?1
+          AND live_room_id = ?2
+      `,
+      args: [input.communityId, input.liveRoomId],
+    })
+    return Number(result.rows[0]?.count ?? 0)
+  } finally {
+    client.close()
+  }
+}
+
+async function insertSyntheticLiveRoomViewerSession(input: {
+  communityDbRoot: string
+  communityId: string
+  liveRoomId: string
+  viewerUserId: string
+  agoraUid: number
+}): Promise<void> {
+  const client = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+  try {
+    const now = new Date().toISOString()
+    await client.execute({
+      sql: `
+        INSERT INTO live_room_viewer_sessions (
+          community_id, live_room_id, viewer_user_id, agora_uid, created_at, updated_at
+        ) VALUES (
+          ?1, ?2, ?3, ?4, ?5, ?5
+        )
+      `,
+      args: [input.communityId, input.liveRoomId, input.viewerUserId, input.agoraUid, now],
+    })
+  } finally {
+    client.close()
+  }
+}
+
 async function createDeviceAccessToken(input: {
   env: Env
   authorizingAccessToken: string
@@ -369,6 +482,501 @@ describe("community live-room routes", () => {
       setlist: { items: Array<{ source_asset_ref: string | null }> }
     }
     expect(readBody.setlist.items[0]?.source_asset_ref).toBe("story:asset:asset_ast_live_story_source")
+  })
+
+  test("publishes paid live room and ticket listing in one transaction", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const owner = await exchangeJwt(ctx.env, "live-room-publish-owner")
+    await completeUniqueHumanVerification(ctx.env, owner.accessToken)
+    const communityId = await createTestCommunity({ env: ctx.env, accessToken: owner.accessToken })
+    const body = readySoloRoomBody()
+    body.access_mode = "paid"
+    body.performer_allocations[0].user = `usr_${owner.userId}`
+
+    const response = await postPublishLiveRoom({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      communityId,
+      body: {
+        room: body,
+        listing: {
+          price_cents: 1500,
+          regional_pricing_enabled: false,
+          status: "active",
+        },
+      },
+    })
+    expect(response.status).toBe(201)
+    const published = await json(response) as {
+      room: { id: string; access_mode: string; anchor_post: string }
+      listing: { id: string; asset: string | null; live_room: string | null; price_cents: number }
+    }
+    expect(published.room.access_mode).toBe("paid")
+    expect(published.listing.asset).toBeNull()
+    expect(published.listing.live_room).toBe(published.room.id)
+    expect(published.listing.price_cents).toBe(1500)
+
+    const anchorPostResponse = await app.request(`http://pirate.test/posts/${published.room.anchor_post}`, {
+      headers: { authorization: `Bearer ${owner.accessToken}` },
+    }, ctx.env)
+    expect(anchorPostResponse.status).toBe(200)
+
+    const beforeFailure = await readAtomicPublishRowCounts({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+    })
+    const failingRoom = readySoloRoomBody()
+    failingRoom.access_mode = "paid"
+    failingRoom.title = "Regional Pricing Rollback Set"
+    failingRoom.performer_allocations[0].user = `usr_${owner.userId}`
+    const failed = await postPublishLiveRoom({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      communityId,
+      body: {
+        room: failingRoom,
+        listing: {
+          price_cents: 1700,
+          regional_pricing_enabled: true,
+          status: "active",
+        },
+      },
+    })
+    expect(failed.status).toBe(400)
+    const afterFailure = await readAtomicPublishRowCounts({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+    })
+    expect(afterFailure).toEqual(beforeFailure)
+  })
+
+  test("paid live-room listing propagates live-room ticket entitlement", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const owner = await exchangeJwt(ctx.env, "live-room-ticket-owner")
+    await completeUniqueHumanVerification(ctx.env, owner.accessToken)
+    const communityId = await createTestCommunity({ env: ctx.env, accessToken: owner.accessToken })
+    const body = readySoloRoomBody()
+    body.access_mode = "paid"
+    body.performer_allocations[0].user = `usr_${owner.userId}`
+
+    const create = await postLiveRoom({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      communityId,
+      body,
+    })
+    expect(create.status).toBe(201)
+    const room = await json(create) as { id: string; access_mode: string }
+    expect(room.access_mode).toBe("paid")
+
+    const missingRoomListing = await requestJson(
+      `http://pirate.test/communities/${communityId}/listings`,
+      {
+        live_room: "lr_missing_live_room",
+        price_cents: 1200,
+        regional_pricing_enabled: false,
+        status: "active",
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(missingRoomListing.status).toBe(404)
+
+    const listingCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/listings`,
+      {
+        live_room: room.id,
+        price_cents: 1200,
+        regional_pricing_enabled: false,
+        status: "active",
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(listingCreate.status).toBe(201)
+    const listingBody = await json(listingCreate) as {
+      id: string
+      asset: string | null
+      live_room: string | null
+      price_cents: number
+    }
+    expect(listingBody.asset).toBeNull()
+    expect(listingBody.live_room).toBe(room.id)
+    expect(listingBody.price_cents).toBe(1200)
+
+    const duplicateListing = await requestJson(
+      `http://pirate.test/communities/${communityId}/listings`,
+      {
+        live_room: room.id,
+        price_cents: 1500,
+        regional_pricing_enabled: false,
+        status: "active",
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(duplicateListing.status).toBe(400)
+
+    const quoteCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/purchase-quotes`,
+      {
+        listing: listingBody.id,
+        ...routedCheckoutQuoteFields,
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(quoteCreate.status).toBe(201)
+    const quoteBody = await json(quoteCreate) as {
+      id: string
+      asset: string | null
+      live_room: string | null
+      final_price_cents: number
+      settlement_mode: string
+    }
+    expect(quoteBody.asset).toBeNull()
+    expect(quoteBody.live_room).toBe(room.id)
+    expect(quoteBody.final_price_cents).toBe(1200)
+    expect(quoteBody.settlement_mode).toBe("delivery_only_story_settlement")
+
+    const accessBeforePurchase = await app.request(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/access`,
+      {
+        headers: { authorization: `Bearer ${owner.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(accessBeforePurchase.status).toBe(200)
+    const accessBeforePurchaseBody = await json(accessBeforePurchase) as {
+      access: { allowed: boolean; decision_reason: string | null; listing: string | null }
+    }
+    expect(accessBeforePurchaseBody.access.allowed).toBe(false)
+    expect(accessBeforePurchaseBody.access.decision_reason).toBe("purchase_required")
+    expect(accessBeforePurchaseBody.access.listing).toBe(listingBody.id)
+
+    const viewerAttachBeforePurchase = await app.request(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/viewer_attach`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${owner.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(viewerAttachBeforePurchase.status).toBe(402)
+
+    const purchaseSettle = await requestJson(
+      `http://pirate.test/communities/${communityId}/purchase-settlements`,
+      {
+        quote: quoteBody.id,
+        settlement_wallet_attachment: "wal_live_room_ticket",
+        funding_tx_ref: "0xfunding-live-room-ticket",
+        settlement_tx_ref: "tx-live-room-ticket",
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(purchaseSettle.status).toBe(201)
+    const purchaseBody = await json(purchaseSettle) as {
+      asset: string | null
+      live_room: string | null
+      entitlement_kind: string
+      entitlement_target_ref: string
+      purchase_entitlement: string
+      settlement_tx_ref: string
+    }
+    expect(purchaseBody.asset).toBeNull()
+    expect(purchaseBody.live_room).toBe(room.id)
+    expect(purchaseBody.entitlement_kind).toBe("live_room_access")
+    expect(purchaseBody.entitlement_target_ref).toBe(room.id)
+    expect(purchaseBody.settlement_tx_ref).toBe("tx-live-room-ticket")
+
+    const hostAttach = await app.request(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/host_attach`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${owner.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(hostAttach.status).toBe(200)
+
+    const viewerAttachAfterPurchase = await app.request(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/viewer_attach`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${owner.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(viewerAttachAfterPurchase.status).toBe(200)
+    const viewerAttachAfterPurchaseBody = await json(viewerAttachAfterPurchase) as {
+      access: { allowed: boolean; purchase_entitlement: string | null }
+      runtime: { seat: string }
+      agora: { configured: boolean }
+    }
+    expect(viewerAttachAfterPurchaseBody.access.allowed).toBe(true)
+    expect(viewerAttachAfterPurchaseBody.access.purchase_entitlement).toBe(purchaseBody.purchase_entitlement)
+    expect(viewerAttachAfterPurchaseBody.runtime.seat).toBe("viewer")
+    expect(viewerAttachAfterPurchaseBody.agora.configured).toBe(false)
+  })
+
+  test("free live-room viewer attach returns Agora subscriber credentials", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    ctx.env.AGORA_APP_ID = "0123456789abcdef0123456789abcdef"
+    ctx.env.AGORA_APP_CERTIFICATE = "abcdef0123456789abcdef0123456789"
+
+    const owner = await exchangeJwt(ctx.env, "live-room-free-viewer-owner")
+    await completeUniqueHumanVerification(ctx.env, owner.accessToken)
+    const viewer = await exchangeJwt(ctx.env, "live-room-free-viewer")
+    await completeUniqueHumanVerification(ctx.env, viewer.accessToken)
+    const intruder = await exchangeJwt(ctx.env, "live-room-free-viewer-renew-intruder")
+    await completeUniqueHumanVerification(ctx.env, intruder.accessToken)
+    const communityId = await createTestCommunity({ env: ctx.env, accessToken: owner.accessToken })
+    const joinViewer = await requestJson(
+      `http://pirate.test/communities/${communityId}/join`,
+      {},
+      ctx.env,
+      viewer.accessToken,
+    )
+    expect(joinViewer.status).toBe(200)
+    await addCommunityMember(String(ctx.env.LOCAL_COMMUNITY_DB_ROOT), communityId, viewer.userId)
+    const joinIntruder = await requestJson(
+      `http://pirate.test/communities/${communityId}/join`,
+      {},
+      ctx.env,
+      intruder.accessToken,
+    )
+    expect(joinIntruder.status).toBe(200)
+    await addCommunityMember(String(ctx.env.LOCAL_COMMUNITY_DB_ROOT), communityId, intruder.userId)
+
+    const body = readySoloRoomBody()
+    body.performer_allocations[0].user = `usr_${owner.userId}`
+    const create = await postLiveRoom({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      communityId,
+      body,
+    })
+    expect(create.status).toBe(201)
+    const room = await json(create) as { id: string }
+
+    const hostAttach = await app.request(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/host_attach`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${owner.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(hostAttach.status).toBe(200)
+
+    const access = await app.request(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/access`,
+      {
+        headers: { authorization: `Bearer ${viewer.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(access.status).toBe(200)
+    const accessBody = await json(access) as {
+      access: { allowed: boolean; decision_reason: string | null; access_mode: string; listing: string | null }
+    }
+    expect(accessBody.access.allowed).toBe(true)
+    expect(accessBody.access.decision_reason).toBeNull()
+    expect(accessBody.access.access_mode).toBe("free")
+    expect(accessBody.access.listing).toBeNull()
+
+    const viewerAttach = await app.request(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/viewer_attach`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${viewer.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(viewerAttach.status).toBe(200)
+    const viewerAttachBody = await json(viewerAttach) as {
+      runtime: { seat: string }
+      agora: { app_id: string | null; channel: string; uid: number; token: string | null; token_expires_at: number | null; configured: boolean }
+    }
+    expect(viewerAttachBody.runtime.seat).toBe("viewer")
+    expect(viewerAttachBody.agora.app_id).toBe(ctx.env.AGORA_APP_ID)
+    expect(viewerAttachBody.agora.configured).toBe(true)
+    expect(viewerAttachBody.agora.token).toMatch(/^007/)
+    await expect(countLiveRoomViewerSessions({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      liveRoomId: room.id,
+    })).resolves.toBe(1)
+
+    const viewerRenew = await requestJson(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/viewer_renew`,
+      { uid: viewerAttachBody.agora.uid },
+      ctx.env,
+      viewer.accessToken,
+    )
+    expect(viewerRenew.status).toBe(200)
+    const viewerRenewBody = await json(viewerRenew) as {
+      runtime: { seat: string }
+      agora: { app_id: string | null; channel: string; uid: number; token: string | null; token_expires_at: number | null; configured: boolean }
+    }
+    expect(viewerRenewBody.runtime.seat).toBe("viewer")
+    expect(viewerRenewBody.agora.uid).toBe(viewerAttachBody.agora.uid)
+    expect(viewerRenewBody.agora.channel).toBe(viewerAttachBody.agora.channel)
+    expect(viewerRenewBody.agora.configured).toBe(true)
+    expect(viewerRenewBody.agora.token).toMatch(/^007/)
+    expect(viewerRenewBody.agora.token_expires_at ?? 0).toBeGreaterThanOrEqual(viewerAttachBody.agora.token_expires_at ?? 0)
+
+    const wrongUid = viewerAttachBody.agora.uid === 0xffffffff ? 0 : viewerAttachBody.agora.uid + 1
+    const viewerRenewWrongUid = await requestJson(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/viewer_renew`,
+      { uid: wrongUid },
+      ctx.env,
+      viewer.accessToken,
+    )
+    expect(viewerRenewWrongUid.status).toBe(404)
+
+    const intruderRenew = await requestJson(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/viewer_renew`,
+      { uid: viewerAttachBody.agora.uid },
+      ctx.env,
+      intruder.accessToken,
+    )
+    expect(intruderRenew.status).toBe(404)
+
+    const end = await app.request(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/end`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${owner.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(end.status).toBe(200)
+    await expect(countLiveRoomViewerSessions({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      liveRoomId: room.id,
+    })).resolves.toBe(0)
+  })
+
+  test("unlisted live rooms are hidden from ordinary members", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const owner = await exchangeJwt(ctx.env, "live-room-unlisted-owner")
+    await completeUniqueHumanVerification(ctx.env, owner.accessToken)
+    const viewer = await exchangeJwt(ctx.env, "live-room-unlisted-viewer")
+    await completeUniqueHumanVerification(ctx.env, viewer.accessToken)
+    const communityId = await createTestCommunity({ env: ctx.env, accessToken: owner.accessToken })
+    const joinViewer = await requestJson(
+      `http://pirate.test/communities/${communityId}/join`,
+      {},
+      ctx.env,
+      viewer.accessToken,
+    )
+    expect(joinViewer.status).toBe(200)
+    await addCommunityMember(String(ctx.env.LOCAL_COMMUNITY_DB_ROOT), communityId, viewer.userId)
+
+    const body = readySoloRoomBody()
+    body.visibility = "unlisted"
+    body.performer_allocations[0].user = `usr_${owner.userId}`
+    const create = await postLiveRoom({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      communityId,
+      body,
+    })
+    expect(create.status).toBe(201)
+    const room = await json(create) as { id: string }
+
+    const ownerRead = await app.request(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}`,
+      {
+        headers: { authorization: `Bearer ${owner.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(ownerRead.status).toBe(200)
+
+    const viewerRead = await app.request(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}`,
+      {
+        headers: { authorization: `Bearer ${viewer.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(viewerRead.status).toBe(404)
+
+    const viewerAccess = await app.request(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/access`,
+      {
+        headers: { authorization: `Bearer ${viewer.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(viewerAccess.status).toBe(404)
+
+    const viewerAttach = await app.request(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/viewer_attach`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${viewer.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(viewerAttach.status).toBe(404)
+  })
+
+  test("cancel clears any viewer sessions for the room", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const owner = await exchangeJwt(ctx.env, "live-room-cancel-session-owner")
+    await completeUniqueHumanVerification(ctx.env, owner.accessToken)
+    const communityId = await createTestCommunity({ env: ctx.env, accessToken: owner.accessToken })
+    const body = readySoloRoomBody()
+    body.performer_allocations[0].user = `usr_${owner.userId}`
+    const create = await postLiveRoom({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      communityId,
+      body,
+    })
+    expect(create.status).toBe(201)
+    const room = await json(create) as { id: string }
+    await insertSyntheticLiveRoomViewerSession({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      liveRoomId: room.id,
+      viewerUserId: "usr_synthetic_cancel_viewer",
+      agoraUid: 1234,
+    })
+    await expect(countLiveRoomViewerSessions({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      liveRoomId: room.id,
+    })).resolves.toBe(1)
+
+    const cancel = await app.request(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/cancel`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${owner.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(cancel.status).toBe(200)
+    await expect(countLiveRoomViewerSessions({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      liveRoomId: room.id,
+    })).resolves.toBe(0)
   })
 
   test("owner uploads a song artifact and uses it in a live room setlist", async () => {
@@ -857,6 +1465,21 @@ describe("community live-room routes", () => {
     })
     expect(create.status).toBe(201)
     const room = await json(create) as { id: string }
+    await addCommunityMember(String(ctx.env.LOCAL_COMMUNITY_DB_ROOT), communityId, guest.userId)
+
+    const pendingGuestAccess = await app.request(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/access`,
+      {
+        headers: { authorization: `Bearer ${guest.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(pendingGuestAccess.status).toBe(200)
+    const pendingGuestAccessBody = await json(pendingGuestAccess) as {
+      access: { guest_invite_status: string | null; decision_reason: string | null }
+    }
+    expect(pendingGuestAccessBody.access.guest_invite_status).toBe("pending")
+    expect(pendingGuestAccessBody.access.decision_reason).toBe("not_live")
 
     const attach = await app.request(
       `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/guest_attach`,
@@ -877,6 +1500,20 @@ describe("community live-room routes", () => {
       ctx.env,
     )
     expect(accept.status).toBe(200)
+
+    const acceptedGuestAccess = await app.request(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/access`,
+      {
+        headers: { authorization: `Bearer ${guest.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(acceptedGuestAccess.status).toBe(200)
+    const acceptedGuestAccessBody = await json(acceptedGuestAccess) as {
+      access: { guest_invite_status: string | null; decision_reason: string | null }
+    }
+    expect(acceptedGuestAccessBody.access.guest_invite_status).toBe("accepted")
+    expect(acceptedGuestAccessBody.access.decision_reason).toBe("not_live")
 
     const attachBeforeHost = await app.request(
       `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/guest_attach`,

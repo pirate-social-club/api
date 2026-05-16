@@ -812,11 +812,14 @@ describe("openCommunityDb", () => {
       expect(afterTableNames).toContain("live_room_setlists")
       expect(afterTableNames).toContain("live_room_setlist_items")
       expect(afterTableNames).toContain("live_room_guest_invites")
+      expect(afterTableNames).toContain("live_room_viewer_sessions")
 
       const afterIndexNames = await listIndexNames(databasePath)
       expect(afterIndexNames).toContain("idx_live_rooms_community_status")
       expect(afterIndexNames).toContain("idx_live_room_setlists_room")
       expect(afterIndexNames).toContain("idx_live_room_guest_invites_active")
+      expect(afterIndexNames).toContain("idx_live_room_viewer_sessions_uid")
+      expect(afterIndexNames).toContain("idx_live_room_viewer_sessions_viewer")
 
       const setlistItemColumns = await getTableColumns(databasePath, "live_room_setlist_items")
       expect(setlistItemColumns).toContain("source_asset_ref")
@@ -825,6 +828,8 @@ describe("openCommunityDb", () => {
       expect(checksum).toBe("47dcdd32d64789c6f93e6162f137b7238c75914532256aa0d186d5a8b68fa179")
       const sourceAssetRefChecksum = await getMigrationChecksum(databasePath, "1076_live_room_setlist_source_asset_ref.sql")
       expect(sourceAssetRefChecksum).toBe("55f125162ffc23a107556a295b1456a74065100e6a98895a11b2560b2540baab")
+      const viewerSessionsChecksum = await getMigrationChecksum(databasePath, "1078_live_room_viewer_sessions.sql")
+      expect(viewerSessionsChecksum).toBe("e56e39e1529e9fcd282795a6df8cc05639529aa59b535ef0c84261336b3ec5bc")
 
       await ensureRemoteLiveRoomTables(client)
     } finally {

@@ -13,9 +13,11 @@ import type {
   CommunityReadRepository,
 } from "../db-community-repository"
 import type { UserRepository } from "../../auth/repositories"
+import type { Client } from "../../sql-client"
 import {
   getAssetRow,
   getListingRowByAssetId,
+  getListingRowByLiveRoomId,
   getListingRowById,
   listListingRows,
   parseListingPolicy,
@@ -28,7 +30,10 @@ import { getCommunityPricingPolicy } from "./policy-service"
 import { assertValidDonationSharePct } from "./quote-helpers"
 import { assertAssetReadyForStoryRoyaltyCommerce } from "./story-royalty"
 import { assertEndaomentPayoutConfigured } from "./endaoment-payout-service"
-import { decodePublicAssetId } from "../../public-ids"
+import {
+  getLiveRoomListingTarget,
+  resolveRequestedListingTarget,
+} from "./listing-targets"
 import {
   decodeCommerceListCursor,
   encodeCommerceListCursor,
@@ -47,6 +52,7 @@ type ListingDonationConfig = {
 }
 
 type CommunityListingRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
+type ListingExecutor = Pick<Client, "execute">
 
 async function resolveListingDonationConfig(input: {
   env: Env
@@ -114,6 +120,20 @@ async function resolveListingDonationConfig(input: {
   }
 }
 
+async function assertRegionalPricingEnabledIfRequested(input: {
+  env: Env
+  communityId: string
+  requested: boolean | null | undefined
+}): Promise<void> {
+  if (!input.requested) {
+    return
+  }
+  const pricingPolicy = await getCommunityPricingPolicy({ env: input.env, communityId: input.communityId })
+  if (!pricingPolicy.regional_pricing_enabled) {
+    throw badRequestError("Community regional pricing is not enabled")
+  }
+}
+
 export async function listCommunityListings(input: {
   env: Env
   userId: string
@@ -142,6 +162,98 @@ export async function listCommunityListings(input: {
   }
 }
 
+export async function createCommunityListingInTransaction(input: {
+  env: Env
+  userId: string
+  communityId: string
+  body: CreateCommunityListingRequest
+  communityRepository: CommunityListingRepository
+  userRepository: UserRepository
+  client: ListingExecutor
+}): Promise<CommunityListing> {
+  const { assetId, liveRoomId } = resolveRequestedListingTarget(input.body)
+  const membership = await getCommunityMembershipState(input.client, input.communityId, input.userId)
+  if (!canAccessCommunity(membership)) {
+    throw notFoundError("Community not found")
+  }
+  await requireVerifiedHuman(input.userRepository, input.userId, {
+    bypassForCommunityOwner: hasCommunityRole(membership, OWNER_OR_ADMIN_ROLE),
+  })
+  if (assetId) {
+    const asset = await getAssetRow(input.client, input.communityId, assetId)
+    if (!asset) {
+      throw notFoundError("Asset not found")
+    }
+    assertAssetReadyForStoryRoyaltyCommerce(asset, input.env)
+    if (asset.creator_user_id !== input.userId && !hasCommunityRole(membership, OWNER_OR_ADMIN_ROLE)) {
+      throw notFoundError("Asset not found")
+    }
+    if (await getListingRowByAssetId(input.client, input.communityId, assetId)) {
+      throw badRequestError("Asset already has a listing")
+    }
+  } else if (liveRoomId) {
+    const liveRoom = await getLiveRoomListingTarget(input.client, input.communityId, liveRoomId)
+    if (!liveRoom) {
+      throw notFoundError("Live room not found")
+    }
+    if (liveRoom.host_user_id !== input.userId && !hasCommunityRole(membership, OWNER_OR_ADMIN_ROLE)) {
+      throw notFoundError("Live room not found")
+    }
+    if (await getListingRowByLiveRoomId(input.client, input.communityId, liveRoomId)) {
+      throw badRequestError("Live room already has a listing")
+    }
+  }
+  await assertRegionalPricingEnabledIfRequested({
+    env: input.env,
+    communityId: input.communityId,
+    requested: input.body.regional_pricing_enabled,
+  })
+  const donationConfig = await resolveListingDonationConfig({
+    env: input.env,
+    communityId: input.communityId,
+    communityRepository: input.communityRepository,
+    current: {
+      donation_partner_id: null,
+      donation_share_pct: null,
+    },
+    requestedPartnerId: input.body.donation_partner,
+    requestedShareBps: input.body.donation_share_bps,
+  })
+  const listingId = makeId("lst")
+  const createdAt = nowIso()
+  await input.client.execute({
+    sql: `
+      INSERT INTO listings (
+        listing_id, community_id, asset_id, live_room_id, listing_mode, status, price_usd,
+        regional_pricing_policy_json, created_by_user_id, created_at, updated_at
+      ) VALUES (
+        ?1, ?2, ?3, ?4, 'fixed_price', ?5, ?6,
+        ?7, ?8, ?9, ?9
+      )
+    `,
+    args: [
+      listingId,
+      input.communityId,
+      assetId,
+      liveRoomId,
+      input.body.status,
+      centsToUsd(input.body.price_cents),
+      JSON.stringify({
+        regional_pricing_enabled: input.body.regional_pricing_enabled,
+        donation_partner_id: donationConfig.donation_partner_id,
+        donation_share_pct: donationConfig.donation_share_pct,
+      }),
+      input.userId,
+      createdAt,
+    ],
+  })
+  const listing = await getListingRowById(input.client, input.communityId, listingId)
+  if (!listing) {
+    throw notFoundError("Listing not found")
+  }
+  return serializeListing(listing)
+}
+
 export async function createCommunityListing(input: {
   env: Env
   userId: string
@@ -150,83 +262,12 @@ export async function createCommunityListing(input: {
   communityRepository: CommunityListingRepository
   userRepository: UserRepository
 }): Promise<CommunityListing> {
-  if (!input.body.asset?.trim() && !input.body.live_room?.trim()) {
-    throw badRequestError("asset or live_room is required")
-  }
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
-  const assetId = input.body.asset?.trim() ? decodePublicAssetId(input.body.asset) : null
   try {
-    const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
-    if (!canAccessCommunity(membership)) {
-      throw notFoundError("Community not found")
-    }
-    await requireVerifiedHuman(input.userRepository, input.userId, {
-      bypassForCommunityOwner: hasCommunityRole(membership, OWNER_OR_ADMIN_ROLE),
+    return await createCommunityListingInTransaction({
+      ...input,
+      client: db.client,
     })
-    if (assetId) {
-      const asset = await getAssetRow(db.client, input.communityId, assetId)
-      if (!asset) {
-        throw notFoundError("Asset not found")
-      }
-      assertAssetReadyForStoryRoyaltyCommerce(asset, input.env)
-      if (asset.creator_user_id !== input.userId) {
-        const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
-        if (!hasCommunityRole(membership, OWNER_OR_ADMIN_ROLE)) {
-          throw notFoundError("Asset not found")
-        }
-      }
-      if (await getListingRowByAssetId(db.client, input.communityId, assetId)) {
-        throw badRequestError("Asset already has a listing")
-      }
-      const pricingPolicy = await getCommunityPricingPolicy({ env: input.env, communityId: input.communityId })
-      if (input.body.regional_pricing_enabled && !pricingPolicy.regional_pricing_enabled) {
-        throw badRequestError("Community regional pricing is not enabled")
-      }
-    }
-    const donationConfig = await resolveListingDonationConfig({
-      env: input.env,
-      communityId: input.communityId,
-      communityRepository: input.communityRepository,
-      current: {
-        donation_partner_id: null,
-        donation_share_pct: null,
-      },
-      requestedPartnerId: input.body.donation_partner,
-      requestedShareBps: input.body.donation_share_bps,
-    })
-    const listingId = makeId("lst")
-    const createdAt = nowIso()
-    await db.client.execute({
-      sql: `
-        INSERT INTO listings (
-          listing_id, community_id, asset_id, live_room_id, listing_mode, status, price_usd,
-          regional_pricing_policy_json, created_by_user_id, created_at, updated_at
-        ) VALUES (
-          ?1, ?2, ?3, ?4, 'fixed_price', ?5, ?6,
-          ?7, ?8, ?9, ?9
-        )
-      `,
-      args: [
-        listingId,
-        input.communityId,
-        assetId,
-        input.body.live_room ?? null,
-        input.body.status,
-        centsToUsd(input.body.price_cents),
-        JSON.stringify({
-          regional_pricing_enabled: input.body.regional_pricing_enabled,
-          donation_partner_id: donationConfig.donation_partner_id,
-          donation_share_pct: donationConfig.donation_share_pct,
-        }),
-        input.userId,
-        createdAt,
-      ],
-    })
-    const listing = await getListingRowById(db.client, input.communityId, listingId)
-    if (!listing) {
-      throw notFoundError("Listing not found")
-    }
-    return serializeListing(listing)
   } finally {
     db.close()
   }
@@ -274,12 +315,11 @@ export async function updateCommunityListing(input: {
       requestedPartnerId: input.body.donation_partner,
       requestedShareBps: input.body.donation_share_bps,
     })
-    if (nextRegional) {
-      const pricingPolicy = await getCommunityPricingPolicy({ env: input.env, communityId: input.communityId })
-      if (!pricingPolicy.regional_pricing_enabled) {
-        throw badRequestError("Community regional pricing is not enabled")
-      }
-    }
+    await assertRegionalPricingEnabledIfRequested({
+      env: input.env,
+      communityId: input.communityId,
+      requested: nextRegional,
+    })
     await db.client.execute({
       sql: `
         UPDATE listings

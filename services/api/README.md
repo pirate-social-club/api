@@ -211,6 +211,12 @@ For local Very widget testing:
 - optionally set `VERY_API_URL` or `VERY_VERIFY_URL` when testing against a non-default Very endpoint
 - the API returns `launch.verify_url` for the Very widget; there is no local verifier proxy
 
+For local Agora live-room testing:
+
+- `AGORA_APP_ID` is public runtime config and may live in `wrangler.jsonc` or `.dev.vars`
+- `AGORA_APP_CERTIFICATE` is a private server-side signing secret; keep it in Infisical or `.dev.vars`, never in web/Vite config
+- optionally set `LIVE_ROOM_AGORA_TOKEN_TTL_SECONDS=60` when testing viewer token renewal
+
 3. Start the Bun local API, web dev server, local verifiers, assistant worker, plus the community job worker:
 
 ```bash

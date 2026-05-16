@@ -23,6 +23,8 @@ import {
   stringOrNull,
 } from "./row-types"
 
+type CommerceExecutor = Pick<Client, "execute">
+
 export type DerivativeSourceRow = Pick<
   AssetRow,
   | "asset_id"
@@ -98,8 +100,24 @@ function toPurchaseEntitlementRow(row: unknown): PurchaseEntitlementRow {
   }
 }
 
+function toListingRow(row: unknown): ListingRow {
+  return {
+    listing_id: requiredString(row, "listing_id"),
+    community_id: requiredString(row, "community_id"),
+    asset_id: stringOrNull(row, "asset_id"),
+    live_room_id: stringOrNull(row, "live_room_id"),
+    listing_mode: requiredString(row, "listing_mode") as CommunityListing["listing_mode"],
+    status: requiredString(row, "status") as CommunityListing["status"],
+    price_usd: Number(numberOrNull(row, "price_usd") ?? 0),
+    regional_pricing_policy_json: stringOrNull(row, "regional_pricing_policy_json"),
+    created_by_user_id: requiredString(row, "created_by_user_id"),
+    created_at: requiredString(row, "created_at"),
+    updated_at: requiredString(row, "updated_at"),
+  }
+}
+
 export async function getAssetRow(
-  client: Client,
+  client: CommerceExecutor,
   communityId: string,
   assetId: string,
 ): Promise<AssetRow | null> {
@@ -242,7 +260,7 @@ export async function listDerivativeSourceRows(input: {
 }
 
 export async function getListingRowById(
-  client: Client,
+  client: CommerceExecutor,
   communityId: string,
   listingId: string,
 ): Promise<ListingRow | null> {
@@ -260,23 +278,11 @@ export async function getListingRowById(
   if (!row) {
     return null
   }
-  return {
-    listing_id: requiredString(row, "listing_id"),
-    community_id: requiredString(row, "community_id"),
-    asset_id: stringOrNull(row, "asset_id"),
-    live_room_id: stringOrNull(row, "live_room_id"),
-    listing_mode: requiredString(row, "listing_mode") as CommunityListing["listing_mode"],
-    status: requiredString(row, "status") as CommunityListing["status"],
-    price_usd: Number(numberOrNull(row, "price_usd") ?? 0),
-    regional_pricing_policy_json: stringOrNull(row, "regional_pricing_policy_json"),
-    created_by_user_id: requiredString(row, "created_by_user_id"),
-    created_at: requiredString(row, "created_at"),
-    updated_at: requiredString(row, "updated_at"),
-  }
+  return toListingRow(row)
 }
 
 export async function getListingRowByAssetId(
-  client: Client,
+  client: CommerceExecutor,
   communityId: string,
   assetId: string,
 ): Promise<ListingRow | null> {
@@ -292,19 +298,27 @@ export async function getListingRowByAssetId(
     `,
     args: [communityId, assetId],
   })
-  return row ? {
-    listing_id: requiredString(row, "listing_id"),
-    community_id: requiredString(row, "community_id"),
-    asset_id: stringOrNull(row, "asset_id"),
-    live_room_id: stringOrNull(row, "live_room_id"),
-    listing_mode: requiredString(row, "listing_mode") as CommunityListing["listing_mode"],
-    status: requiredString(row, "status") as CommunityListing["status"],
-    price_usd: Number(numberOrNull(row, "price_usd") ?? 0),
-    regional_pricing_policy_json: stringOrNull(row, "regional_pricing_policy_json"),
-    created_by_user_id: requiredString(row, "created_by_user_id"),
-    created_at: requiredString(row, "created_at"),
-    updated_at: requiredString(row, "updated_at"),
-  } : null
+  return row ? toListingRow(row) : null
+}
+
+export async function getListingRowByLiveRoomId(
+  client: CommerceExecutor,
+  communityId: string,
+  liveRoomId: string,
+): Promise<ListingRow | null> {
+  const row = await executeFirst(client, {
+    sql: `
+      SELECT listing_id, community_id, asset_id, live_room_id, listing_mode, status, price_usd,
+             regional_pricing_policy_json, created_by_user_id, created_at, updated_at
+      FROM listings
+      WHERE community_id = ?1
+        AND live_room_id = ?2
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+    args: [communityId, liveRoomId],
+  })
+  return row ? toListingRow(row) : null
 }
 
 export async function listListingRows(
@@ -333,23 +347,11 @@ export async function listListingRows(
       ? [communityId, input.after.created_at, input.after.id, input.limit]
       : [communityId, input.limit],
   })
-  return result.rows.map((row) => ({
-    listing_id: requiredString(row, "listing_id"),
-    community_id: requiredString(row, "community_id"),
-    asset_id: stringOrNull(row, "asset_id"),
-    live_room_id: stringOrNull(row, "live_room_id"),
-    listing_mode: requiredString(row, "listing_mode") as CommunityListing["listing_mode"],
-    status: requiredString(row, "status") as CommunityListing["status"],
-    price_usd: Number(numberOrNull(row, "price_usd") ?? 0),
-    regional_pricing_policy_json: stringOrNull(row, "regional_pricing_policy_json"),
-    created_by_user_id: requiredString(row, "created_by_user_id"),
-    created_at: requiredString(row, "created_at"),
-    updated_at: requiredString(row, "updated_at"),
-  }))
+  return result.rows.map(toListingRow)
 }
 
 export async function getActiveEntitlementForBuyer(
-  client: Client,
+  client: CommerceExecutor,
   communityId: string,
   userId: string,
   targetRef: string,

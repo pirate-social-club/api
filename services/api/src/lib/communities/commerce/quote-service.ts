@@ -316,12 +316,12 @@ async function createCommunityPurchaseQuoteRowForBuyer(input: {
         ) VALUES (
           ?1, ?2, ?3, ?4, ?5,
           ?6, ?7, ?8,
-          ?9, NULL, ?10,
-          ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-          ?18, ?19, ?20, ?21, ?22, ?23,
-          ?24, ?25, ?26, ?27, ?28, ?29,
-          ?30, ?31, ?32, ?33, 'active', ?34, ?35,
-          NULL, NULL, ?34, ?34
+          ?9, ?10, ?11,
+          ?12, ?13, ?14, ?15, ?16, ?17, ?18,
+          ?19, ?20, ?21, ?22, ?23, ?24,
+          ?25, ?26, ?27, ?28, ?29, ?30,
+          ?31, ?32, ?33, ?34, 'active', ?35, ?36,
+          NULL, NULL, ?35, ?35
         )
       `,
       args: [
@@ -334,6 +334,7 @@ async function createCommunityPurchaseQuoteRowForBuyer(input: {
         buyerFields.buyer_wallet_address_normalized,
         buyerFields.buyer_chain_ref,
         listing.asset_id,
+        listing.live_room_id,
         listing.price_usd,
         resolvedPrice.pricingTier,
         resolvedPrice.finalPriceUsd,

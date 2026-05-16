@@ -1545,6 +1545,7 @@ export type Post = {
   asset?: string | null;
   song_artifact_bundle?: string | null;
   anchor_live_room?: string | null;
+  anchor_live_room_status?: "scheduled" | "live" | "ended" | "canceled" | null;
   song_title?: string | null;
   parent_post?: string | null;
   crosspost_source?: CrosspostSource | null;

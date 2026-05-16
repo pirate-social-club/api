@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { serializeLocalizedPostResponse } from "../../src/serializers/post"
+import { serializeLocalizedPostResponse, serializePost } from "../../src/serializers/post"
 import type { LocalizedPostResponse, Post } from "../../src/types"
 
 function makeLinkPost(overrides: Partial<Post> = {}): Post {
@@ -137,6 +137,16 @@ function makeLocalizedResponse(post: Post, resolvedLocale: string): LocalizedPos
 }
 
 describe("serializeLocalizedPostResponse feed pruning", () => {
+  test("post serializer includes public live room status snapshot", () => {
+    const result = serializePost(makeLinkPost({
+      anchor_live_room_id: "lr_test",
+      anchor_live_room_status: "live",
+    }))
+
+    expect(result.anchor_live_room).toBe("lr_test")
+    expect(result.anchor_live_room_status).toBe("live")
+  })
+
   test("home_feed surface keeps only resolved locale and source language translations", () => {
     const response = makeLocalizedResponse(makeLinkPost(), "es")
     const result = serializeLocalizedPostResponse(response, { surface: "home_feed" })

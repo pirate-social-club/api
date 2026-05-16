@@ -60,7 +60,13 @@ export const POST_SELECT_COLUMNS = `
     FROM live_rooms
     WHERE live_rooms.anchor_post_id = posts.post_id
     LIMIT 1
-  ) AS anchor_live_room_id, parent_post_id, ${boundedJsonProjection("crosspost_source_json")}, ${boundedJsonProjection("upstream_asset_refs_json")}, song_mode, rights_basis, analysis_state, analysis_result_ref,
+  ) AS anchor_live_room_id, (
+    SELECT status
+    FROM live_rooms
+    WHERE live_rooms.anchor_post_id = posts.post_id
+      AND live_rooms.visibility = 'public'
+    LIMIT 1
+  ) AS anchor_live_room_status, parent_post_id, ${boundedJsonProjection("crosspost_source_json")}, ${boundedJsonProjection("upstream_asset_refs_json")}, song_mode, rights_basis, analysis_state, analysis_result_ref,
   content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
 `
 
@@ -114,6 +120,7 @@ export type PostRow = {
   access_mode: Post["access_mode"]
   asset_id: string | null
   anchor_live_room_id: string | null
+  anchor_live_room_status: Post["anchor_live_room_status"]
   parent_post_id: string | null
   crosspost_source_json: string | null
   upstream_asset_refs_json: string | null
@@ -264,6 +271,7 @@ export function toPostRow(row: unknown): PostRow {
     access_mode: stringOrNull(rowValue(row, "access_mode")) as Post["access_mode"],
     asset_id: stringOrNull(rowValue(row, "asset_id")),
     anchor_live_room_id: stringOrNull(rowValue(row, "anchor_live_room_id")),
+    anchor_live_room_status: stringOrNull(rowValue(row, "anchor_live_room_status")) as Post["anchor_live_room_status"],
     parent_post_id: stringOrNull(rowValue(row, "parent_post_id")),
     crosspost_source_json: stringOrNull(rowValue(row, "crosspost_source_json")),
     upstream_asset_refs_json: stringOrNull(rowValue(row, "upstream_asset_refs_json")),
@@ -330,6 +338,7 @@ export function serializePost(row: PostRow): Post {
     access_mode: row.access_mode,
     asset_id: row.asset_id,
     anchor_live_room_id: row.anchor_live_room_id,
+    anchor_live_room_status: row.anchor_live_room_status,
     parent_post_id: row.parent_post_id,
     crosspost_source: parseCrosspostSource(row.crosspost_source_json),
     upstream_asset_refs: parseJsonArray<string>(row.upstream_asset_refs_json) ?? undefined,

@@ -4,6 +4,8 @@ const LIVE_ROOMS_MIGRATION_NAME = "1070_live_rooms.sql"
 const LIVE_ROOMS_MIGRATION_CHECKSUM = "47dcdd32d64789c6f93e6162f137b7238c75914532256aa0d186d5a8b68fa179"
 const LIVE_ROOM_SETLIST_SOURCE_ASSET_REF_MIGRATION_NAME = "1076_live_room_setlist_source_asset_ref.sql"
 const LIVE_ROOM_SETLIST_SOURCE_ASSET_REF_MIGRATION_CHECKSUM = "55f125162ffc23a107556a295b1456a74065100e6a98895a11b2560b2540baab"
+const LIVE_ROOM_VIEWER_SESSIONS_MIGRATION_NAME = "1078_live_room_viewer_sessions.sql"
+const LIVE_ROOM_VIEWER_SESSIONS_MIGRATION_CHECKSUM = "e56e39e1529e9fcd282795a6df8cc05639529aa59b535ef0c84261336b3ec5bc"
 
 async function hasColumn(client: Client, tableName: string, columnName: string): Promise<boolean> {
   const result = await client.execute(`PRAGMA table_info(${tableName})`)
@@ -160,6 +162,35 @@ export async function ensureRemoteLiveRoomTables(client: Client): Promise<void> 
     },
     {
       sql: `
+        CREATE TABLE IF NOT EXISTS live_room_viewer_sessions (
+          community_id TEXT NOT NULL,
+          live_room_id TEXT NOT NULL,
+          viewer_user_id TEXT NOT NULL,
+          agora_uid INTEGER NOT NULL CHECK (agora_uid >= 0 AND agora_uid <= 4294967295),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (community_id, live_room_id, viewer_user_id),
+          FOREIGN KEY (live_room_id) REFERENCES live_rooms(live_room_id)
+        )
+      `,
+      args: [],
+    },
+    {
+      sql: `
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_live_room_viewer_sessions_uid
+          ON live_room_viewer_sessions(community_id, live_room_id, agora_uid)
+      `,
+      args: [],
+    },
+    {
+      sql: `
+        CREATE INDEX IF NOT EXISTS idx_live_room_viewer_sessions_viewer
+          ON live_room_viewer_sessions(community_id, viewer_user_id, updated_at DESC)
+      `,
+      args: [],
+    },
+    {
+      sql: `
         INSERT OR IGNORE INTO schema_migrations (migration_name, migration_label, checksum)
         VALUES (?1, 'community-template', ?2)
       `,
@@ -178,6 +209,16 @@ export async function ensureRemoteLiveRoomTables(client: Client): Promise<void> 
     args: [
       LIVE_ROOM_SETLIST_SOURCE_ASSET_REF_MIGRATION_NAME,
       LIVE_ROOM_SETLIST_SOURCE_ASSET_REF_MIGRATION_CHECKSUM,
+    ],
+  })
+  await client.execute({
+    sql: `
+      INSERT OR IGNORE INTO schema_migrations (migration_name, migration_label, checksum)
+      VALUES (?1, 'community-template', ?2)
+    `,
+    args: [
+      LIVE_ROOM_VIEWER_SESSIONS_MIGRATION_NAME,
+      LIVE_ROOM_VIEWER_SESSIONS_MIGRATION_CHECKSUM,
     ],
   })
 }

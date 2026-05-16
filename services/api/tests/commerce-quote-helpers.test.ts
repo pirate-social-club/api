@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import type { CommunityListing, CommunityPricingPolicy } from "../src/types"
 
-import { resolveBestVerifiedRegionalPrice } from "../src/lib/communities/commerce/quote-helpers"
+import {
+  resolveBestVerifiedRegionalPrice,
+  resolvePurchaseEntitlementTarget,
+} from "../src/lib/communities/commerce/quote-helpers"
 
 function createListing(overrides: Partial<CommunityListing> = {}): CommunityListing {
   return {
@@ -111,6 +114,30 @@ describe("resolveBestVerifiedRegionalPrice", () => {
       bestVerifiedPriceUsd: 5,
       maxSelfDiscountPercent: 50,
       verificationRequiredProvider: "self",
+    })
+  })
+})
+
+describe("resolvePurchaseEntitlementTarget", () => {
+  test("targets assets when a quote is for an asset listing", () => {
+    expect(resolvePurchaseEntitlementTarget({
+      asset_id: "ast_asset",
+      live_room_id: null,
+      listing_id: "lst_listing",
+    })).toEqual({
+      entitlementKind: "asset_access",
+      targetRef: "ast_asset",
+    })
+  })
+
+  test("targets live rooms when a quote is for a live-room listing", () => {
+    expect(resolvePurchaseEntitlementTarget({
+      asset_id: null,
+      live_room_id: "lr_room",
+      listing_id: "lst_listing",
+    })).toEqual({
+      entitlementKind: "live_room_access",
+      targetRef: "lr_room",
     })
   })
 })

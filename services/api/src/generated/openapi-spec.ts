@@ -9797,6 +9797,17 @@ const spec = {
             "nullable": true,
             "readOnly": true
           },
+          "anchor_live_room_status": {
+            "type": "string",
+            "enum": [
+              "scheduled",
+              "live",
+              "ended",
+              "canceled"
+            ],
+            "nullable": true,
+            "readOnly": true
+          },
           "song_title": {
             "type": "string",
             "nullable": true,

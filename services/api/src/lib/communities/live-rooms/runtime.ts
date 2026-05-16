@@ -2,9 +2,10 @@ import { RtcRole, RtcTokenBuilder } from "agora-token"
 import type { Env } from "../../../env"
 import { sha256Hex } from "../../crypto"
 import { conflictError, internalError } from "../../errors"
-import type { LiveRoom } from "./service"
+import type { LiveRoom } from "./types"
 
 export type LiveRoomSeat = "host" | "guest"
+export type LiveRoomAudienceSeat = "viewer"
 
 export type LiveRoomRuntimeAttachResponse = {
   runtime: {
@@ -24,6 +25,15 @@ export type LiveRoomRuntimeAttachResponse = {
     token_expires_at: number | null
     configured: boolean
   }
+}
+
+export type LiveRoomRuntimeViewerAttachResponse = {
+  runtime: {
+    status: "attached"
+    seat: LiveRoomAudienceSeat
+    room_runtime_id: string
+  }
+  agora: LiveRoomRuntimeAttachResponse["agora"]
 }
 
 export type LiveRoomRuntimeEndResponse = {
@@ -71,7 +81,7 @@ function randomTicket(): string {
 function randomAgoraUid(): number {
   const value = new Uint32Array(1)
   crypto.getRandomValues(value)
-  return value[0] % 0xffffffff
+  return value[0]
 }
 
 function agoraChannelForRoom(room: Pick<LiveRoom, "id">): string {
@@ -86,6 +96,7 @@ function buildAgoraBlock(input: {
   env: Env
   channel: string
   uid: number
+  role?: number
 }): LiveRoomRuntimeAttachResponse["agora"] {
   const appId = input.env.AGORA_APP_ID?.trim() || null
   const appCertificate = input.env.AGORA_APP_CERTIFICATE?.trim() || null
@@ -97,7 +108,7 @@ function buildAgoraBlock(input: {
       appCertificate,
       input.channel,
       input.uid,
-      RtcRole.PUBLISHER,
+      input.role ?? RtcRole.PUBLISHER,
       tokenExpiresAt,
       tokenExpiresAt,
     )
@@ -184,6 +195,45 @@ async function parseRuntimeJson<T>(response: Response): Promise<T> {
     throw internalError("Live room runtime request failed")
   }
   return body as T
+}
+
+export function attachLiveRoomViewerRuntime(input: {
+  env: Env
+  room: LiveRoom
+}): LiveRoomRuntimeViewerAttachResponse {
+  return {
+    runtime: {
+      status: "attached",
+      seat: "viewer",
+      room_runtime_id: runtimeIdForRoom(input.room),
+    },
+    agora: buildAgoraBlock({
+      env: input.env,
+      channel: agoraChannelForRoom(input.room),
+      uid: randomAgoraUid(),
+      role: RtcRole.SUBSCRIBER,
+    }),
+  }
+}
+
+export function renewLiveRoomViewerRuntime(input: {
+  env: Env
+  room: LiveRoom
+  uid: number
+}): LiveRoomRuntimeViewerAttachResponse {
+  return {
+    runtime: {
+      status: "attached",
+      seat: "viewer",
+      room_runtime_id: runtimeIdForRoom(input.room),
+    },
+    agora: buildAgoraBlock({
+      env: input.env,
+      channel: agoraChannelForRoom(input.room),
+      uid: input.uid,
+      role: RtcRole.SUBSCRIBER,
+    }),
+  }
 }
 
 export async function attachLiveRoomRuntime(input: {
