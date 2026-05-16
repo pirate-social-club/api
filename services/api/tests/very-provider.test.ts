@@ -81,10 +81,12 @@ function createMockVeryProvider(overrides?: {
 }
 
 describe("Very provider adapter", () => {
-  test("getVeryProvider throws providerUnavailable when VERY_APP_ID is not set", () => {
+  test("configured Very provider throws providerUnavailable when VERY_APP_ID is not set", async () => {
     const { getVeryProvider } = require("../src/lib/verification/very-provider") as typeof import("../src/lib/verification/very-provider")
+    setVeryProviderForTests(null)
+    const provider = getVeryProvider({} as any)
     try {
-      getVeryProvider({} as any)
+      await provider.startSession(veryStartInput())
       throw new Error("Should have thrown")
     } catch (error: any) {
       expect(error.code).toBe("provider_unavailable")
