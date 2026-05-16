@@ -5206,7 +5206,8 @@ const spec = {
             "type": "string",
             "enum": [
               "qr_deeplink",
-              "widget"
+              "widget",
+              "native_sdk"
             ],
             "nullable": true
           },
@@ -5276,7 +5277,8 @@ const spec = {
             "type": "string",
             "enum": [
               "qr_deeplink",
-              "widget"
+              "widget",
+              "native_sdk"
             ],
             "nullable": true
           },

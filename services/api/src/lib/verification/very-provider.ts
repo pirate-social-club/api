@@ -1,3 +1,4 @@
+import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose"
 import { internalError, providerUnavailable } from "../errors"
 import { envFlag, makeId } from "../helpers"
 import { sha256Hex } from "../crypto"
@@ -8,6 +9,8 @@ import { unixSeconds } from "../../serializers/time"
 
 const VERY_TIMEOUT_MS = 15_000
 const VERY_BRIDGE_API_URL = "https://bridge.very.org/api/v1/"
+const VERY_OAUTH_TOKEN_URL = "https://api.very.org/oauth2/token"
+const VERY_OAUTH_ISSUER = "https://connect.very.org"
 const VERY_VERIFY_API_URL = "https://verify.very.org/api/v1/verify"
 export const VERY_UNIQUE_HUMAN_DOMAIN = "pirate-unique-human-v0"
 const VERY_WIDGET_PSEUDONYM = "0"
@@ -42,6 +45,23 @@ export interface VeryProvider {
     providerPayloadRef: string | null
     expectedBinding?: VerySessionBinding | null
   }): Promise<VerySessionOutcome>
+
+  getNativeSessionOutcome?(input: {
+    authorizationCode: string
+    verificationSessionId: string
+    userId: string
+  }): Promise<VerySessionOutcome>
+}
+
+type VeryOAuthTokenResponse = {
+  access_token?: string
+  token_type?: string
+  expires_in?: number
+  id_token?: string
+  refresh_token?: string
+  scope?: string
+  error?: string
+  error_description?: string
 }
 
 type VeryVerifyResponse = {
@@ -76,6 +96,10 @@ function shouldTrustBridgeCompletionOnVerifier5xx(env: Env): boolean {
   return envFlag(env.VERY_TRUST_BRIDGE_COMPLETION_ON_VERIFIER_5XX, false)
 }
 
+function shouldEnableNativeOAuth(env: Env): boolean {
+  return envFlag(env.VERY_NATIVE_OAUTH_ENABLED, false)
+}
+
 function requireConfiguredVery(env: Env): {
   appId: string
   verifyUrl: string
@@ -89,6 +113,48 @@ function requireConfiguredVery(env: Env): {
   const verifyUrl = trimEnv(env.VERY_VERIFY_URL)
     || (configuredApiUrl ? deriveVeryVerifyUrl(configuredApiUrl) : VERY_VERIFY_API_URL)
   return { appId, verifyUrl }
+}
+
+function requireConfiguredVeryOAuth(env: Env): {
+  clientId: string
+  clientSecret: string
+  issuer: string
+  jwksUrl: string
+  redirectUri: string
+  tokenUrl: string
+} {
+  if (!shouldEnableNativeOAuth(env)) {
+    throw providerUnavailable("Very native SDK OAuth is not enabled")
+  }
+  const clientId = trimEnv(env.VERY_OAUTH_CLIENT_ID)
+  const clientSecret = trimEnv(env.VERY_OAUTH_CLIENT_SECRET)
+  const redirectUri = trimEnv(env.VERY_OAUTH_REDIRECT_URI)
+  if (!clientId) {
+    throw providerUnavailable("Very native SDK OAuth not configured: VERY_OAUTH_CLIENT_ID must be set")
+  }
+  if (!clientSecret) {
+    throw providerUnavailable("Very native SDK OAuth not configured: VERY_OAUTH_CLIENT_SECRET must be set")
+  }
+  if (!redirectUri) {
+    throw providerUnavailable("Very native SDK OAuth not configured: VERY_OAUTH_REDIRECT_URI must be set")
+  }
+
+  const issuer = trimEnv(env.VERY_OAUTH_ISSUER) || VERY_OAUTH_ISSUER
+  const jwksUrl = trimEnv(env.VERY_OAUTH_JWKS_URL) || `${issuer.replace(/\/$/, "")}/.well-known/jwks.json`
+  const tokenUrl = trimEnv(env.VERY_OAUTH_TOKEN_URL) || VERY_OAUTH_TOKEN_URL
+  try {
+    new URL(issuer)
+    new URL(jwksUrl)
+    new URL(redirectUri)
+    new URL(tokenUrl)
+  } catch {
+    throw providerUnavailable("Very native SDK OAuth URL configuration is invalid")
+  }
+  return { clientId, clientSecret, issuer, jwksUrl, redirectUri, tokenUrl }
+}
+
+export function assertVeryNativeOAuthConfigured(env: Env): void {
+  requireConfiguredVeryOAuth(env)
 }
 
 function deriveVeryVerifyUrl(apiUrl: string): string {
@@ -529,10 +595,79 @@ async function verifyVeryPayload(input: {
   }
 }
 
+async function exchangeVeryNativeAuthCode(input: {
+  authorizationCode: string
+  env: Env
+}): Promise<{
+  idToken: string
+  subject: string
+  payload: JWTPayload
+}> {
+  const config = requireConfiguredVeryOAuth(input.env)
+  const body = new URLSearchParams({
+    grant_type: "authorization_code",
+    client_id: config.clientId,
+    client_secret: config.clientSecret,
+    code: input.authorizationCode,
+    redirect_uri: config.redirectUri,
+  })
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), VERY_TIMEOUT_MS)
+
+  try {
+    const response = await fetch(config.tokenUrl, {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body,
+      signal: controller.signal,
+    })
+    const tokenResponse = await response.json().catch(() => null) as VeryOAuthTokenResponse | null
+    if (!response.ok) {
+      throw providerUnavailable(
+        tokenResponse?.error_description || tokenResponse?.error || `Very OAuth token exchange failed with status ${response.status}`,
+        {
+          _diag: {
+            responseStatus: response.status,
+            responseKeys: tokenResponse && typeof tokenResponse === "object" ? Object.keys(tokenResponse).sort() : [],
+          },
+        },
+      )
+    }
+    const idToken = typeof tokenResponse?.id_token === "string" ? tokenResponse.id_token.trim() : ""
+    if (!idToken) {
+      throw providerUnavailable("Very OAuth token response did not include an id_token")
+    }
+
+    const verification = await jwtVerify(
+      idToken,
+      createRemoteJWKSet(new URL(config.jwksUrl)),
+      {
+        audience: config.clientId,
+        issuer: config.issuer,
+      },
+    )
+    const subject = typeof verification.payload.sub === "string" ? verification.payload.sub.trim() : ""
+    if (!subject) {
+      throw providerUnavailable("Very OAuth id_token did not include a subject")
+    }
+    return { idToken, payload: verification.payload, subject }
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw providerUnavailable("Very OAuth token exchange timed out")
+    }
+    throw error
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
 function createConfiguredVeryProvider(env: Env): VeryProvider {
-  const { appId, verifyUrl } = requireConfiguredVery(env)
   return {
     async startSession(input) {
+      const { appId, verifyUrl } = requireConfiguredVery(env)
       const upstreamSessionRef = makeId("vs")
       const sessionBinding = buildVerySessionBinding({
         verificationSessionId: input.verificationSessionId,
@@ -603,6 +738,24 @@ function createConfiguredVeryProvider(env: Env): VeryProvider {
         }
       }
     },
+
+    async getNativeSessionOutcome(input) {
+      const { subject } = await exchangeVeryNativeAuthCode({
+        authorizationCode: input.authorizationCode,
+        env,
+      })
+      const proofHash = await sha256Hex(input.authorizationCode)
+      return {
+        status: "verified",
+        attestationData: {
+          external_user_id: subject,
+          nullifier_hash: await sha256Hex(`${VERY_UNIQUE_HUMAN_DOMAIN}:native:${subject}`),
+          proof_hash: proofHash,
+          provider_session_ref: input.verificationSessionId,
+          provider_status: "native_oauth_verified",
+        },
+      }
+    },
   }
 }
 
@@ -610,6 +763,12 @@ function withLocalWidgetCompletionTrust(provider: VeryProvider): VeryProvider {
   return {
     startSession(input) {
       return provider.startSession(input)
+    },
+
+    getNativeSessionOutcome(input) {
+      return provider.getNativeSessionOutcome
+        ? provider.getNativeSessionOutcome(input)
+        : Promise.resolve({ status: "failed", failureReason: "native_oauth_unavailable" })
     },
 
     async getSessionOutcome(input) {

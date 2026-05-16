@@ -25,6 +25,10 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
+  setSelfProviderForTests(null)
+  setVeryProviderForTests(null)
+  setPassportProviderForTests(null)
+
   if (cleanup) {
     await cleanup()
     cleanup = null
@@ -1090,6 +1094,254 @@ describe("verification routes", () => {
       expect(completedBody.attestation_id).toBe(undefined)
       expect(verifierCalls).toBe(1)
     })
+  })
+
+  test("very native SDK sessions complete from a native authorization code", async () => {
+    const ctx = await createRouteTestContext({
+      VERY_NATIVE_OAUTH_ENABLED: "true",
+      VERY_OAUTH_CLIENT_ID: "very-native-client",
+      VERY_OAUTH_CLIENT_SECRET: "very-native-secret",
+      VERY_OAUTH_REDIRECT_URI: "pirate://verification/callback",
+    })
+    cleanup = ctx.cleanup
+
+    let nativeCompletionCalls = 0
+    const nativeNullifierHash = "a".repeat(64)
+    setVeryProviderForTests({
+      startSession: async () => {
+        throw new Error("widget session should not start for native SDK mode")
+      },
+      getSessionOutcome: async () => ({ status: "pending" }),
+      getNativeSessionOutcome: async (input) => {
+        nativeCompletionCalls += 1
+        expect(input.authorizationCode).toBe("native-code-1")
+        return {
+          status: "verified",
+          attestationData: {
+            external_user_id: "vu-native-user-1",
+            nullifier_hash: nativeNullifierHash,
+            proof_hash: "native-proof-hash-1",
+            provider_status: "native_oauth_verified",
+          },
+        }
+      },
+    } satisfies import("../../../src/lib/verification/very-provider").VeryProvider)
+
+    const session = await exchangeJwt(ctx.env, "verification-very-native-user")
+    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "very",
+      provider_mode: "native_sdk",
+      verification_intent: "profile_verification",
+    }, ctx.env, session.accessToken)
+    expect(createdVerification.status).toBe(201)
+    const createdBody = await json(createdVerification) as {
+      id: string
+      launch?: { mode?: string; very_widget?: unknown }
+      provider_mode?: string | null
+      status: string
+    }
+    expect(createdBody.status).toBe("pending")
+    expect(createdBody.provider_mode).toBe("native_sdk")
+    expect(createdBody.launch?.mode).toBe("native_sdk")
+    expect(createdBody.launch?.very_widget).toBe(undefined)
+
+    const completedVerification = await requestJson(
+      `http://pirate.test/verification-sessions/${createdBody.id}/complete`,
+      {
+        provider_payload_ref: {
+          mode: "native_sdk",
+          code: "native-code-1",
+        },
+      },
+      ctx.env,
+      session.accessToken,
+    )
+    setVeryProviderForTests(null)
+
+    expect(completedVerification.status).toBe(200)
+    const completedBody = await json(completedVerification) as {
+      status: string
+      provider_mode?: string | null
+      proof_hash?: string | null
+    }
+    expect(completedBody.status).toBe("verified")
+    expect(completedBody.provider_mode).toBe("native_sdk")
+    expect(completedBody.proof_hash).toBe("native-proof-hash-1")
+    expect(nativeCompletionCalls).toBe(1)
+
+    const nullifierRows = await ctx.client.execute({
+      sql: "SELECT COUNT(*) AS count FROM identity_nullifiers WHERE nullifier_hash = ?1 AND provider = 'very'",
+      args: [nativeNullifierHash],
+    })
+    expect(Number(nullifierRows.rows[0]?.count ?? 0)).toBe(1)
+  })
+
+  test("very native SDK completion rejects stale authorization codes before exchange", async () => {
+    const ctx = await createRouteTestContext({
+      VERY_NATIVE_AUTH_CODE_TTL_SECONDS: "1",
+      VERY_NATIVE_OAUTH_ENABLED: "true",
+      VERY_OAUTH_CLIENT_ID: "very-native-client",
+      VERY_OAUTH_CLIENT_SECRET: "very-native-secret",
+      VERY_OAUTH_REDIRECT_URI: "pirate://verification/callback",
+    })
+    cleanup = ctx.cleanup
+
+    setVeryProviderForTests({
+      startSession: async () => {
+        throw new Error("widget session should not start for native SDK mode")
+      },
+      getSessionOutcome: async () => ({ status: "pending" }),
+      getNativeSessionOutcome: async () => {
+        throw new Error("stale native auth code should be rejected before provider exchange")
+      },
+    } satisfies import("../../../src/lib/verification/very-provider").VeryProvider)
+
+    const session = await exchangeJwt(ctx.env, "verification-very-native-stale-user")
+    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "very",
+      provider_mode: "native_sdk",
+    }, ctx.env, session.accessToken)
+    expect(createdVerification.status).toBe(201)
+    const createdBody = await json(createdVerification) as { id: string }
+
+    await ctx.client.execute({
+      sql: "UPDATE verification_sessions SET created_at = ?2 WHERE verification_session_id = ?1",
+      args: [createdBody.id.replace(/^vs_/, ""), "2026-01-01T00:00:00.000Z"],
+    })
+
+    const completedVerification = await requestJson(
+      `http://pirate.test/verification-sessions/${createdBody.id}/complete`,
+      {
+        provider_payload_ref: {
+          mode: "native_sdk",
+          code: "stale-native-code",
+        },
+      },
+      ctx.env,
+      session.accessToken,
+    )
+    setVeryProviderForTests(null)
+
+    expect(completedVerification.status).toBe(403)
+    const completedBody = await json(completedVerification) as { message: string }
+    expect(completedBody.message).toBe("Very native SDK authorization code has expired")
+  })
+
+  test("self verification rejects native SDK provider mode", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-self-native-mode-user")
+    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "self",
+      provider_mode: "native_sdk",
+    }, ctx.env, session.accessToken)
+
+    expect(createdVerification.status).toBe(400)
+    const createdBody = await json(createdVerification) as { message: string }
+    expect(createdBody.message).toBe("Self verification sessions only support qr_deeplink provider_mode")
+  })
+
+  test("very verification rejects qr deeplink provider mode", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-very-qr-mode-user")
+    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "very",
+      provider_mode: "qr_deeplink",
+    }, ctx.env, session.accessToken)
+
+    expect(createdVerification.status).toBe(400)
+    const createdBody = await json(createdVerification) as { message: string }
+    expect(createdBody.message).toBe("Very verification sessions do not support qr_deeplink provider_mode")
+  })
+
+  test("very widget sessions reject native SDK completion payloads", async () => {
+    const ctx = await createRouteTestContext({
+      VERY_APP_ID: "very-app",
+    })
+    cleanup = ctx.cleanup
+
+    setVeryProviderForTests({
+      startSession: async (input) => ({
+        upstreamSessionRef: `very-test-ref:${input.verificationSessionId}`,
+        launch: {
+          app_id: "very-app",
+          context: "verification",
+          type_id: "palm_scan",
+          query: {},
+          verify_url: "https://verify.very.org/test",
+        },
+      }),
+      getSessionOutcome: async () => ({ status: "pending" }),
+      getNativeSessionOutcome: async () => {
+        throw new Error("widget session should reject native SDK payloads before provider exchange")
+      },
+    } satisfies import("../../../src/lib/verification/very-provider").VeryProvider)
+
+    const session = await exchangeJwt(ctx.env, "verification-very-widget-native-payload-user")
+    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "very",
+      provider_mode: "widget",
+    }, ctx.env, session.accessToken)
+    expect(createdVerification.status).toBe(201)
+    const createdBody = await json(createdVerification) as { id: string }
+
+    const completedVerification = await requestJson(
+      `http://pirate.test/verification-sessions/${createdBody.id}/complete`,
+      {
+        provider_payload_ref: {
+          mode: "native_sdk",
+          code: "native-code-for-widget-session",
+        },
+      },
+      ctx.env,
+      session.accessToken,
+    )
+
+    expect(completedVerification.status).toBe(400)
+    const completedBody = await json(completedVerification) as { message: string }
+    expect(completedBody.message).toBe("Very native SDK payload cannot complete a widget session")
+  })
+
+  test("very native SDK sessions require native SDK completion payloads", async () => {
+    const ctx = await createRouteTestContext({
+      VERY_NATIVE_OAUTH_ENABLED: "true",
+      VERY_OAUTH_CLIENT_ID: "very-native-client",
+      VERY_OAUTH_CLIENT_SECRET: "very-native-secret",
+      VERY_OAUTH_REDIRECT_URI: "pirate://verification/callback",
+    })
+    cleanup = ctx.cleanup
+
+    setVeryProviderForTests({
+      startSession: async () => {
+        throw new Error("widget session should not start for native SDK mode")
+      },
+      getSessionOutcome: async () => ({ status: "pending" }),
+      getNativeSessionOutcome: async () => {
+        throw new Error("native SDK session should reject missing payload before provider exchange")
+      },
+    } satisfies import("../../../src/lib/verification/very-provider").VeryProvider)
+
+    const session = await exchangeJwt(ctx.env, "verification-very-native-missing-payload-user")
+    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "very",
+      provider_mode: "native_sdk",
+    }, ctx.env, session.accessToken)
+    expect(createdVerification.status).toBe(201)
+    const createdBody = await json(createdVerification) as { id: string }
+
+    const completedVerification = await requestJson(
+      `http://pirate.test/verification-sessions/${createdBody.id}/complete`,
+      {},
+      ctx.env,
+      session.accessToken,
+    )
+
+    expect(completedVerification.status).toBe(400)
+    const completedBody = await json(completedVerification) as { message: string }
+    expect(completedBody.message).toBe("Very native SDK completion requires a native SDK payload")
   })
 
   test("very verification rejects a reused active nullifier for another user", async () => {

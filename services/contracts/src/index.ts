@@ -366,7 +366,7 @@ export type VerificationSession = {
   object: "verification_session";
   user: string;
   provider: "self" | "very";
-  provider_mode?: "qr_deeplink" | "widget" | null;
+  provider_mode?: "qr_deeplink" | "widget" | "native_sdk" | null;
   wallet_attachment?: string | null;
   requested_capabilities: Array<RequestedVerificationCapability>;
   verification_requirements?: Array<VerificationRequirement>;
@@ -387,7 +387,7 @@ export type VerificationSession = {
 };
 
 export type VerificationSessionLaunch = {
-  mode: "qr_deeplink" | "widget" | "none";
+  mode: "qr_deeplink" | "widget" | "native_sdk" | "none";
   self_app?: SelfVerificationLaunch;
   very_widget?: VeryWidgetLaunch;
 };
@@ -1214,7 +1214,7 @@ export type UpdateCommunityPricingPolicyRequest = {
 
 export type StartVerificationSessionRequest = {
   provider: "self" | "very";
-  provider_mode?: "qr_deeplink" | "widget" | null;
+  provider_mode?: "qr_deeplink" | "widget" | "native_sdk" | null;
   requested_capabilities?: Array<RequestedVerificationCapability>;
   verification_requirements?: Array<VerificationRequirement> | null;
   wallet_attachment?: string | null;

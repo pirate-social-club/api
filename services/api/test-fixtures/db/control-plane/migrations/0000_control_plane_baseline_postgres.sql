@@ -79,6 +79,9 @@ CREATE TABLE verification_sessions (
     verification_session_id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
     provider TEXT NOT NULL,
+    provider_mode TEXT CHECK (
+        provider_mode IS NULL OR provider_mode IN ('qr_deeplink', 'widget', 'native_sdk')
+    ),
     session_kind TEXT NOT NULL,
     requested_capabilities_json JSONB NOT NULL,
     verification_requirements_json JSONB NOT NULL DEFAULT '[]'::jsonb,

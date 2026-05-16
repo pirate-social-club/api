@@ -116,6 +116,7 @@ export type VerificationSessionRow = {
   verification_session_id: string
   user_id: string
   provider: "self" | "very" | "passport"
+  provider_mode: "qr_deeplink" | "widget" | "native_sdk" | null
   requested_capabilities_json: string
   verification_requirements_json: string | null
   status: "pending" | "verified" | "failed" | "expired" | "canceled"
@@ -255,6 +256,7 @@ export function toVerificationSessionRow(row: unknown): VerificationSessionRow {
     verification_session_id: requiredString(row, "verification_session_id"),
     user_id: requiredString(row, "user_id"),
     provider: requiredString(row, "provider") as VerificationSessionRow["provider"],
+    provider_mode: stringOrNull(rowValue(row, "provider_mode")) as VerificationSessionRow["provider_mode"],
     requested_capabilities_json: requiredString(row, "requested_capabilities_json"),
     verification_requirements_json: stringOrNull(rowValue(row, "verification_requirements_json")),
     status: requiredString(row, "status") as VerificationSessionRow["status"],

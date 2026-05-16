@@ -293,7 +293,7 @@ authenticatedVerification.post("/verification-sessions", async (c) => {
   const actor = c.get("actor")
   const body = await c.req.json<{
     provider?: "self" | "very"
-    provider_mode?: "qr_deeplink" | "widget" | null
+    provider_mode?: "qr_deeplink" | "widget" | "native_sdk" | null
     requested_capabilities?: RequestedVerificationCapability[] | null
     verification_requirements?: VerificationRequirement[] | null
     wallet_attachment_id?: string | null
@@ -309,6 +309,7 @@ authenticatedVerification.post("/verification-sessions", async (c) => {
   logVerificationDebug(c.env, "[verification-sessions] start request", {
     userId: actor.userId,
     provider: body.provider,
+    providerMode: body.provider_mode ?? null,
     requestedCapabilities: body.requested_capabilities ?? null,
     verificationRequirements: body.verification_requirements ?? null,
     verificationIntent: body.verification_intent ?? null,
@@ -318,6 +319,7 @@ authenticatedVerification.post("/verification-sessions", async (c) => {
   const created = await repo.startVerificationSession({
     userId: actor.userId,
     provider: body.provider,
+    providerMode: body.provider_mode ?? null,
     requestedCapabilities: body.requested_capabilities ?? null,
     verificationRequirements: body.verification_requirements ?? null,
     walletAttachmentId: body.wallet_attachment_id ?? null,
