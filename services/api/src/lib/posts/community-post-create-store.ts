@@ -1,6 +1,6 @@
 import type { DbExecutor } from "../db-helpers"
 import type { Client } from "../sql-client"
-import { internalError } from "../errors"
+import { internalError, providerUnavailable } from "../errors"
 import { executeFirst } from "../db-helpers"
 import { makeId } from "../helpers"
 import {
@@ -10,7 +10,8 @@ import {
 import { detectSourceLanguageFromText } from "../localization/content-locale"
 import {
   boundedPostJsonProjection,
-  POST_SELECT_COLUMNS,
+  postSelectColumnsForSchema,
+  resolvePostProjectionSchema,
 } from "./community-post-projection"
 import {
   serializePost,
@@ -29,9 +30,10 @@ export async function findPostByIdempotencyKey(input: {
   authorUserId: string
   idempotencyKey: string
 }): Promise<Post | null> {
+  const projectionSchema = await resolvePostProjectionSchema(input.client)
   const row = await executeFirst(input.client, {
     sql: `
-      SELECT ${POST_SELECT_COLUMNS}
+      SELECT ${postSelectColumnsForSchema(projectionSchema)}
       FROM posts
       WHERE community_id = ?1
         AND author_user_id = ?2
@@ -100,6 +102,12 @@ export async function insertPost(input: {
   const contentSafetyState = input.analysisOverride?.content_safety_state ?? "safe"
   const status = input.analysisOverride?.status ?? "published"
   const ageGatePolicy = input.analysisOverride?.age_gate_policy ?? "none"
+  const projectionSchema = await resolvePostProjectionSchema(input.client)
+  if (crosspostSourceJson !== null && !projectionSchema.hasCrosspostSourceJson) {
+    throw providerUnavailable("Community database migration is still rolling out", {
+      missing_column: "posts.crosspost_source_json",
+    })
+  }
   const sourceLanguage = detectSourceLanguageFromText([
     title,
     input.body.body,
@@ -107,77 +115,79 @@ export async function insertPost(input: {
     input.body.lyrics,
   ])
 
+  const columns: string[] = []
+  const values: string[] = []
+  const args: unknown[] = []
+  const addValue = (column: string, value: unknown) => {
+    columns.push(column)
+    args.push(value)
+    values.push(`?${args.length}`)
+  }
+  const addSql = (column: string, sql: string) => {
+    columns.push(column)
+    values.push(sql)
+  }
+
+  addValue("post_id", postId)
+  addValue("community_id", input.communityId)
+  addValue("author_user_id", input.authorUserId)
+  addValue("authorship_mode", input.body.authorship_mode ?? "human_direct")
+  addValue("agent_id", input.agentWriteAuthorization?.agentId ?? null)
+  addValue("agent_ownership_record_id", input.agentWriteAuthorization?.agentOwnershipRecordId ?? null)
+  addValue("identity_mode", identityMode)
+  addValue("anonymous_scope", anonymousScope)
+  addValue("anonymous_label", anonymousLabel)
+  addValue("agent_display_name_snapshot", input.agentWriteAuthorization?.agentDisplayNameSnapshot ?? null)
+  addValue("agent_owner_handle_snapshot", input.agentWriteAuthorization?.agentOwnerHandleSnapshot ?? null)
+  addValue("agent_ownership_provider_snapshot", input.agentWriteAuthorization?.agentOwnershipProviderSnapshot ?? null)
+  addValue("disclosed_qualifiers_json", disclosedQualifiersJson)
+  addValue("label_id", input.body.label_id ?? null)
+  addValue("label_assignment_status", labelAssignmentStatus)
+  addValue("label_assigned_by", null)
+  addValue("label_assigned_at", labelAssignedAt)
+  addValue("label_ai_confidence", null)
+  addValue("label_assignment_error", null)
+  addValue("label_assignment_model", null)
+  addValue("label_assignment_result_json", null)
+  addValue("post_type", postType)
+  addValue("status", status)
+  addValue("song_mode", input.body.song_mode ?? null)
+  addValue("title", title)
+  addValue("song_title", input.body.song_title ?? null)
+  addValue("song_cover_art_ref", input.body.song_cover_art_ref ?? null)
+  addValue("song_duration_ms", input.body.song_duration_ms ?? null)
+  addValue("body", input.body.body ?? null)
+  addValue("caption", input.body.caption ?? null)
+  addValue("visibility", visibility)
+  addValue("lyrics", input.body.lyrics ?? null)
+  addValue("link_url", input.body.link_url ?? null)
+  addValue("media_refs_json", mediaRefsJson)
+  addValue("song_artifact_bundle_id", input.body.song_artifact_bundle ? decodePublicSongArtifactBundleId(input.body.song_artifact_bundle) : null)
+  addValue("source_language", sourceLanguage)
+  addValue("translation_policy", translationPolicy)
+  addValue("rights_basis", input.body.rights_basis ?? "none")
+  addValue("access_mode", input.body.access_mode ?? (postType === "song" ? "public" : null))
+  addValue("asset_id", input.body.asset_id ?? null)
+  addValue("parent_post_id", input.body.parent_post_id ?? null)
+  if (projectionSchema.hasCrosspostSourceJson) {
+    addValue("crosspost_source_json", crosspostSourceJson)
+  }
+  addValue("upstream_asset_refs_json", upstreamAssetRefsJson)
+  addValue("analysis_state", analysisState)
+  addSql("analysis_result_ref", "NULL")
+  addValue("content_safety_state", contentSafetyState)
+  addValue("age_gate_policy", ageGatePolicy)
+  addValue("created_at", input.createdAt)
+  addValue("updated_at", input.createdAt)
+  addValue("idempotency_key", idempotencyKey)
+  addValue("agent_handle_snapshot", input.agentWriteAuthorization?.agentHandleSnapshot ?? null)
+
   await input.client.execute({
     sql: `
-      INSERT INTO posts (
-        post_id, community_id, author_user_id, authorship_mode, agent_id, agent_ownership_record_id,
-        identity_mode, anonymous_scope, anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot,
-        agent_ownership_provider_snapshot, disclosed_qualifiers_json, label_id, label_assignment_status,
-        label_assigned_by, label_assigned_at, label_ai_confidence, label_assignment_error, label_assignment_model,
-        label_assignment_result_json, post_type, status, song_mode, title, song_title, song_cover_art_ref, song_duration_ms,
-        body, caption, visibility, lyrics, link_url, media_refs_json, song_artifact_bundle_id, source_language, translation_policy, rights_basis,
-        access_mode, asset_id, parent_post_id, crosspost_source_json, upstream_asset_refs_json, analysis_state, analysis_result_ref, content_safety_state,
-        age_gate_policy, created_at, updated_at, idempotency_key, agent_handle_snapshot
-      ) VALUES (
-        ?1, ?2, ?3, ?4, ?5, ?6,
-        ?7, ?8, ?9, ?10, ?11, ?12,
-        ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22,
-        ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32,
-        ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42,
-        ?43, ?44, NULL, ?45, ?46, ?47, ?47, ?48, ?49
-      )
+      INSERT INTO posts (${columns.join(", ")})
+      VALUES (${values.join(", ")})
     `,
-    args: [
-      postId,
-      input.communityId,
-      input.authorUserId,
-      input.body.authorship_mode ?? "human_direct",
-      input.agentWriteAuthorization?.agentId ?? null,
-      input.agentWriteAuthorization?.agentOwnershipRecordId ?? null,
-      identityMode,
-      anonymousScope,
-      anonymousLabel,
-      input.agentWriteAuthorization?.agentDisplayNameSnapshot ?? null,
-      input.agentWriteAuthorization?.agentOwnerHandleSnapshot ?? null,
-      input.agentWriteAuthorization?.agentOwnershipProviderSnapshot ?? null,
-      disclosedQualifiersJson,
-      input.body.label_id ?? null,
-      labelAssignmentStatus,
-      null,
-      labelAssignedAt,
-      null,
-      null,
-      null,
-      null,
-      postType,
-      status,
-      input.body.song_mode ?? null,
-      title,
-      input.body.song_title ?? null,
-      input.body.song_cover_art_ref ?? null,
-      input.body.song_duration_ms ?? null,
-      input.body.body ?? null,
-      input.body.caption ?? null,
-      visibility,
-      input.body.lyrics ?? null,
-      input.body.link_url ?? null,
-      mediaRefsJson,
-      input.body.song_artifact_bundle ? decodePublicSongArtifactBundleId(input.body.song_artifact_bundle) : null,
-      sourceLanguage,
-      translationPolicy,
-      input.body.rights_basis ?? "none",
-      input.body.access_mode ?? (postType === "song" ? "public" : null),
-      input.body.asset_id ?? null,
-      input.body.parent_post_id ?? null,
-      crosspostSourceJson,
-      upstreamAssetRefsJson,
-      analysisState,
-      contentSafetyState,
-      ageGatePolicy,
-      input.createdAt,
-      idempotencyKey,
-      input.agentWriteAuthorization?.agentHandleSnapshot ?? null,
-    ],
+    args,
   })
 
   const created = await getPostById(input.client, postId)

@@ -1,7 +1,10 @@
 import type { Client } from "../sql-client"
 import { numberOrNull, requiredNumber, rowValue } from "../sql-row"
 import type { Post } from "../../types"
-import { POST_SELECT_COLUMNS } from "./community-post-projection"
+import {
+  postSelectColumnsForSchema,
+  resolvePostProjectionSchema,
+} from "./community-post-projection"
 import {
   serializePost,
   toPostRow,
@@ -70,6 +73,7 @@ export async function listPublishedLocalizedPosts(input: {
   const newCursorParts = input.sort === "new" && input.cursor ? input.cursor.split("|") : null
   const createdAtCursor = newCursorParts?.[0] ?? null
   const postIdCursor = newCursorParts?.[1] ?? null
+  const projectionSchema = await resolvePostProjectionSchema(input.client)
   const buildFeedQuery = (postColumns: string) => ({
     sql: `
       SELECT ${postColumns},
@@ -129,7 +133,7 @@ export async function listPublishedLocalizedPosts(input: {
       input.sort === "new" ? input.limit + 1 : 10_000,
     ],
   })
-  const result = await input.client.execute(buildFeedQuery(POST_SELECT_COLUMNS))
+  const result = await input.client.execute(buildFeedQuery(postSelectColumnsForSchema(projectionSchema)))
 
   const items = result.rows.map((row) => {
     return {

@@ -1,6 +1,9 @@
 import { executeFirst } from "../db-helpers"
 import type { DbExecutor } from "../db-helpers"
-import { POST_SELECT_COLUMNS } from "./community-post-projection"
+import {
+  postSelectColumnsForSchema,
+  resolvePostProjectionSchema,
+} from "./community-post-projection"
 import {
   serializePost,
   toPostRow,
@@ -8,9 +11,10 @@ import {
 import type { Post } from "../../types"
 
 export async function getPostById(client: DbExecutor, postId: string): Promise<Post | null> {
+  const projectionSchema = await resolvePostProjectionSchema(client)
   const row = await executeFirst(client, {
     sql: `
-      SELECT ${POST_SELECT_COLUMNS}
+      SELECT ${postSelectColumnsForSchema(projectionSchema)}
       FROM posts
       WHERE post_id = ?1
       LIMIT 1

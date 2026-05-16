@@ -1,3 +1,5 @@
+import type { DbExecutor } from "../db-helpers"
+
 export const MAX_POST_JSON_PROJECTION_LENGTH = 128 * 1024
 
 export const OVERSIZED_LINK_ENRICHMENT_SNAPSHOT_JSON = JSON.stringify({
@@ -39,7 +41,28 @@ export function boundedPostJsonProjection(value: string | null | undefined, repl
   return value.length > MAX_POST_JSON_PROJECTION_LENGTH ? replacement : value
 }
 
-export const POST_SELECT_COLUMNS = `
+export type PostProjectionSchema = {
+  hasCrosspostSourceJson: boolean
+}
+
+export const CURRENT_POST_PROJECTION_SCHEMA: PostProjectionSchema = {
+  hasCrosspostSourceJson: true,
+}
+
+export async function resolvePostProjectionSchema(executor: DbExecutor): Promise<PostProjectionSchema> {
+  const result = await executor.execute("PRAGMA table_info(posts)")
+  const columnNames = new Set(result.rows.map((row) => String(row.name ?? "")))
+  return {
+    hasCrosspostSourceJson: columnNames.has("crosspost_source_json"),
+  }
+}
+
+export function postSelectColumnsForSchema(schema: PostProjectionSchema = CURRENT_POST_PROJECTION_SCHEMA): string {
+  const crosspostSourceProjection = schema.hasCrosspostSourceJson
+    ? boundedJsonProjection("crosspost_source_json")
+    : "NULL AS crosspost_source_json"
+
+  return `
   post_id, community_id, author_user_id, authorship_mode, agent_id, agent_ownership_record_id,
   identity_mode, anonymous_scope, anonymous_label, agent_display_name_snapshot,
   agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot, disclosed_qualifiers_json,
@@ -61,6 +84,9 @@ export const POST_SELECT_COLUMNS = `
     WHERE live_rooms.anchor_post_id = posts.post_id
       AND live_rooms.visibility = 'public'
     LIMIT 1
-  ) AS anchor_live_room_status, parent_post_id, ${boundedJsonProjection("crosspost_source_json")}, ${boundedJsonProjection("upstream_asset_refs_json")}, song_mode, rights_basis, analysis_state, analysis_result_ref,
+  ) AS anchor_live_room_status, parent_post_id, ${crosspostSourceProjection}, ${boundedJsonProjection("upstream_asset_refs_json")}, song_mode, rights_basis, analysis_state, analysis_result_ref,
   content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
 `
+}
+
+export const POST_SELECT_COLUMNS = postSelectColumnsForSchema()

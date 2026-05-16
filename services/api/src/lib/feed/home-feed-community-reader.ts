@@ -7,7 +7,10 @@ import { enqueueEmbedHydrateOnReadIfNeeded, enqueuePostTranslationOnReadIfNeeded
 import { withRequestControlPlaneClients } from "../runtime-deps"
 import { numberOrNull, requiredString, rowValue } from "../sql-row"
 import { serializeLocalizedPostResponse } from "../../serializers/post"
-import { POST_SELECT_COLUMNS } from "../posts/community-post-projection"
+import {
+  postSelectColumnsForSchema,
+  resolvePostProjectionSchema,
+} from "../posts/community-post-projection"
 import { resolveCommunityAvatarRef } from "../communities/community-identity-media"
 import {
   serializePost,
@@ -77,9 +80,10 @@ async function listPostsById(client: Client, postIds: string[]): Promise<Map<str
     return new Map()
   }
 
+  const projectionSchema = await resolvePostProjectionSchema(client)
   const result = await client.execute({
     sql: `
-      SELECT ${POST_SELECT_COLUMNS}
+      SELECT ${postSelectColumnsForSchema(projectionSchema)}
       FROM posts
       WHERE post_id IN (${placeholders(postIds.length)})
     `,

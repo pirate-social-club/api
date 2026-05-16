@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { createClient } from "@libsql/client"
 
 import type { CreatePostRequest, Post } from "../../types"
-import { assertPostCreateRequest, getPostById, sortPublishedLocalizedPostFeedItems } from "./community-post-store"
+import { assertPostCreateRequest, getPostById, insertPost, sortPublishedLocalizedPostFeedItems } from "./community-post-store"
 import { MAX_POST_JSON_PROJECTION_LENGTH } from "./community-post-projection"
 
 const clients: Array<{ close: () => void }> = []
@@ -84,6 +84,83 @@ function createFeedItem(input: {
   }
 }
 
+async function createPostStoreTables(client: ReturnType<typeof createClient>, input: {
+  crosspostSourceJson?: boolean
+} = {}) {
+  await client.execute(`
+    CREATE TABLE posts (
+      post_id TEXT PRIMARY KEY,
+      community_id TEXT NOT NULL,
+      author_user_id TEXT,
+      authorship_mode TEXT NOT NULL,
+      agent_id TEXT,
+      agent_ownership_record_id TEXT,
+      identity_mode TEXT NOT NULL,
+      anonymous_scope TEXT,
+      anonymous_label TEXT,
+      agent_display_name_snapshot TEXT,
+      agent_owner_handle_snapshot TEXT,
+      agent_ownership_provider_snapshot TEXT,
+      agent_handle_snapshot TEXT,
+      disclosed_qualifiers_json TEXT,
+      label_id TEXT,
+      label_assignment_status TEXT,
+      label_assigned_by TEXT,
+      label_assigned_at TEXT,
+      label_ai_confidence REAL,
+      label_assignment_error TEXT,
+      label_assignment_model TEXT,
+      label_assignment_result_json TEXT,
+      post_type TEXT NOT NULL,
+      status TEXT NOT NULL,
+      comments_locked INTEGER NOT NULL DEFAULT 0,
+      comments_locked_at TEXT,
+      comments_locked_by_user_id TEXT,
+      comments_lock_reason TEXT,
+      visibility TEXT NOT NULL,
+      title TEXT,
+      body TEXT,
+      caption TEXT,
+      lyrics TEXT,
+      link_url TEXT,
+      link_og_image_url TEXT,
+      link_og_title TEXT,
+      link_enrichment_snapshot_json TEXT,
+      link_enrichment_synced_at TEXT,
+      embeds_json TEXT,
+      media_refs_json TEXT,
+      song_artifact_bundle_id TEXT,
+      song_title TEXT,
+      song_cover_art_ref TEXT,
+      song_duration_ms INTEGER,
+      source_language TEXT,
+      translation_policy TEXT,
+      access_mode TEXT,
+      asset_id TEXT,
+      parent_post_id TEXT,
+      ${input.crosspostSourceJson === false ? "" : "crosspost_source_json TEXT,"}
+      upstream_asset_refs_json TEXT,
+      song_mode TEXT,
+      rights_basis TEXT,
+      analysis_state TEXT NOT NULL,
+      analysis_result_ref TEXT,
+      content_safety_state TEXT NOT NULL,
+      age_gate_policy TEXT NOT NULL,
+      idempotency_key TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `)
+  await client.execute(`
+    CREATE TABLE live_rooms (
+      live_room_id TEXT PRIMARY KEY,
+      anchor_post_id TEXT,
+      status TEXT NOT NULL DEFAULT 'open',
+      visibility TEXT NOT NULL DEFAULT 'public'
+    )
+  `)
+}
+
 describe("sortPublishedLocalizedPostFeedItems", () => {
   const now = Date.parse("2026-04-19T12:00:00.000Z")
   const recentPlain = createFeedItem({
@@ -144,77 +221,7 @@ describe("getPostById", () => {
   test("does not hydrate oversized JSON projection columns into the post response", async () => {
     const client = createClient({ url: "file::memory:" })
     clients.push(client)
-    await client.execute(`
-      CREATE TABLE posts (
-        post_id TEXT PRIMARY KEY,
-        community_id TEXT NOT NULL,
-        author_user_id TEXT,
-        authorship_mode TEXT NOT NULL,
-        agent_id TEXT,
-        agent_ownership_record_id TEXT,
-        identity_mode TEXT NOT NULL,
-        anonymous_scope TEXT,
-        anonymous_label TEXT,
-        agent_display_name_snapshot TEXT,
-        agent_owner_handle_snapshot TEXT,
-        agent_ownership_provider_snapshot TEXT,
-        agent_handle_snapshot TEXT,
-        disclosed_qualifiers_json TEXT,
-        label_id TEXT,
-        label_assignment_status TEXT,
-        label_assigned_by TEXT,
-        label_assigned_at TEXT,
-        label_ai_confidence REAL,
-        label_assignment_error TEXT,
-        label_assignment_model TEXT,
-        label_assignment_result_json TEXT,
-        post_type TEXT NOT NULL,
-        status TEXT NOT NULL,
-        comments_locked INTEGER NOT NULL DEFAULT 0,
-        comments_locked_at TEXT,
-        comments_locked_by_user_id TEXT,
-        comments_lock_reason TEXT,
-        visibility TEXT NOT NULL,
-        title TEXT,
-        body TEXT,
-        caption TEXT,
-        lyrics TEXT,
-        link_url TEXT,
-        link_og_image_url TEXT,
-        link_og_title TEXT,
-        link_enrichment_snapshot_json TEXT,
-        link_enrichment_synced_at TEXT,
-        embeds_json TEXT,
-        media_refs_json TEXT,
-        song_artifact_bundle_id TEXT,
-        song_title TEXT,
-        song_cover_art_ref TEXT,
-        song_duration_ms INTEGER,
-        source_language TEXT,
-        translation_policy TEXT,
-        access_mode TEXT,
-        asset_id TEXT,
-        parent_post_id TEXT,
-        crosspost_source_json TEXT,
-        upstream_asset_refs_json TEXT,
-        song_mode TEXT,
-        rights_basis TEXT,
-        analysis_state TEXT NOT NULL,
-        analysis_result_ref TEXT,
-        content_safety_state TEXT NOT NULL,
-        age_gate_policy TEXT NOT NULL,
-        idempotency_key TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )
-    `)
-    await client.execute(`
-      CREATE TABLE live_rooms (
-        live_room_id TEXT PRIMARY KEY,
-        anchor_post_id TEXT,
-        visibility TEXT NOT NULL DEFAULT 'public'
-      )
-    `)
+    await createPostStoreTables(client)
     await client.execute({
       sql: `
         INSERT INTO posts (
@@ -239,6 +246,30 @@ describe("getPostById", () => {
     expect(post?.link_enrichment_snapshot_json?.error).toBe("link_enrichment_snapshot_too_large")
     expect(post?.embeds).toBe(undefined)
     expect(post?.media_refs).toBe(undefined)
+  })
+
+  test("reads and writes non-crosspost rows before the crosspost migration is applied", async () => {
+    const client = createClient({ url: "file::memory:" })
+    clients.push(client)
+    await createPostStoreTables(client, { crosspostSourceJson: false })
+
+    const created = await insertPost({
+      client,
+      communityId: "cmt_test",
+      authorUserId: "usr_test",
+      body: {
+        idempotency_key: "pre-crosspost-migration",
+        post_type: "text",
+        title: "Pre-migration post",
+        body: "This should not require crosspost_source_json.",
+      },
+      createdAt: "2026-05-06T00:00:00.000Z",
+    })
+    const read = await getPostById(client, created.post_id)
+
+    expect(created.crosspost_source).toBeNull()
+    expect(read?.title).toBe("Pre-migration post")
+    expect(read?.crosspost_source).toBeNull()
   })
 })
 
