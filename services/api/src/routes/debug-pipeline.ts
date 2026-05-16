@@ -3,7 +3,7 @@ import { authenticateAdminTokenOnly, type AuthenticatedEnv } from "../lib/auth-m
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { openCommunityDb } from "../lib/communities/community-db-factory"
 import { getControlPlaneClient } from "../lib/runtime-deps"
-import { getPostById } from "../lib/posts/community-post-store"
+import { getPostById } from "../lib/posts/community-post-query-store"
 import { getLinkEnrichmentByNormalizedUrl, listLinkEnrichmentUsages } from "../lib/posts/link-enrichment/repository"
 import { normalizeLinkUrl } from "../lib/posts/link-enrichment/url-normalization"
 import { decodePublicPostId } from "../lib/public-ids"

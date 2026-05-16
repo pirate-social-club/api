@@ -22,7 +22,7 @@ import { authError, badRequestError, eligibilityFailed, HttpError } from "../lib
 import { nowIso } from "../lib/helpers"
 import { COMMUNITY_MCP_TOOLS, MCP_PROTOCOL_VERSION } from "../lib/mcp/community-tools"
 import { resolveOrCreateGuestUser } from "../lib/mcp/guest-identity"
-import { getPostById } from "../lib/posts/community-post-store"
+import { getPostById } from "../lib/posts/community-post-query-store"
 import { createPost } from "../lib/posts/post-service"
 import { serializeComment } from "../serializers/comment"
 import { serializePost } from "../serializers/post"

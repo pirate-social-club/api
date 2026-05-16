@@ -26,7 +26,8 @@ import { badRequestError, commentMediaRejected, eligibilityFailed, notFoundError
 import { nowIso } from "../helpers"
 import type { ProfileRepository, UserRepository } from "../auth/repositories"
 import { authorizeAgentWrite } from "../agents/agent-write-authorization"
-import { getPostById, getPostProjectionMetrics } from "../posts/community-post-store"
+import { getPostProjectionMetrics } from "../posts/community-post-metrics-store"
+import { getPostById } from "../posts/community-post-query-store"
 import { resolveOpenAIModerationOutcome } from "../posts/openai-moderation"
 import {
   assertCreateCommentRequest,

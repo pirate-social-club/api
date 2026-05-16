@@ -8,7 +8,7 @@ import {
 } from "../membership/membership-state-store"
 import { openCommunityDb } from "../community-db-factory"
 import type { CommunityDatabaseBindingRepository } from "../db-community-repository"
-import { getPostById } from "../../posts/community-post-store"
+import { getPostById } from "../../posts/community-post-query-store"
 import { isPubliclyReadablePost } from "../../posts/post-access"
 import { fetchSongArtifactBytes } from "../../song-artifacts/song-artifact-storage"
 import { sha256Hex } from "../../crypto"
