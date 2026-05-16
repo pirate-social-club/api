@@ -125,6 +125,14 @@ export async function insertPost(input: {
     ? JSON.stringify(disclosedQualifierSnapshots)
     : null
   const mediaRefsJson = boundedPostJsonProjection(input.body.media_refs ? JSON.stringify(input.body.media_refs) : null)
+  const crosspostSourceJson = boundedPostJsonProjection(input.body.crosspost_source
+    ? JSON.stringify({
+        version: 1,
+        source_post_id: input.body.crosspost_source.post_id,
+        source_community_id: input.body.crosspost_source.community_id,
+        captured_at: input.body.crosspost_source.captured_at ?? input.createdAt,
+      })
+    : null)
   const upstreamAssetRefsJson = boundedPostJsonProjection(
     input.body.upstream_asset_refs ? JSON.stringify(input.body.upstream_asset_refs) : null,
   )
@@ -154,7 +162,7 @@ export async function insertPost(input: {
         label_assigned_by, label_assigned_at, label_ai_confidence, label_assignment_error, label_assignment_model,
         label_assignment_result_json, post_type, status, song_mode, title, song_title, song_cover_art_ref, song_duration_ms,
         body, caption, visibility, lyrics, link_url, media_refs_json, song_artifact_bundle_id, source_language, translation_policy, rights_basis,
-        access_mode, asset_id, parent_post_id, upstream_asset_refs_json, analysis_state, analysis_result_ref, content_safety_state,
+        access_mode, asset_id, parent_post_id, crosspost_source_json, upstream_asset_refs_json, analysis_state, analysis_result_ref, content_safety_state,
         age_gate_policy, created_at, updated_at, idempotency_key, agent_handle_snapshot
       ) VALUES (
         ?1, ?2, ?3, ?4, ?5, ?6,
@@ -162,7 +170,7 @@ export async function insertPost(input: {
         ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22,
         ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32,
         ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42,
-        ?43, NULL, ?44, ?45, ?46, ?46, ?47, ?48
+        ?43, ?44, NULL, ?45, ?46, ?47, ?47, ?48, ?49
       )
     `,
     args: [
@@ -207,6 +215,7 @@ export async function insertPost(input: {
       input.body.access_mode ?? (postType === "song" ? "public" : null),
       input.body.asset_id ?? null,
       input.body.parent_post_id ?? null,
+      crosspostSourceJson,
       upstreamAssetRefsJson,
       analysisState,
       contentSafetyState,
@@ -553,6 +562,43 @@ export function assertPostCreateRequest(body: CreatePostRequest, _communityId: s
   }
   if (body.post_type === "link" && !body.link_url?.trim()) {
     throw badRequestError("link_url is required for link posts")
+  }
+  if (body.crosspost_source) {
+    throw badRequestError("crosspost_source must not be provided in the post body")
+  }
+  if (body.post_type === "crosspost") {
+    if (!body.title?.trim()) {
+      throw badRequestError("title is required for crossposts")
+    }
+    if (!body.source_post?.trim()) {
+      throw badRequestError("source_post is required for crossposts")
+    }
+    if (!body.source_community?.trim()) {
+      throw badRequestError("source_community is required for crossposts")
+    }
+    if (body.parent_post_id || (body as { parent_post?: string | null }).parent_post) {
+      throw badRequestError("crossposts cannot be replies")
+    }
+    if (body.body?.trim()) {
+      throw badRequestError("body is not supported for crossposts")
+    }
+    if (body.caption?.trim()) {
+      throw badRequestError("caption is not supported for crossposts")
+    }
+    if (body.link_url?.trim()) {
+      throw badRequestError("link_url is only allowed for link posts")
+    }
+    if (body.media_refs?.length) {
+      throw badRequestError("media_refs are not supported for crossposts")
+    }
+    if (body.song_artifact_bundle?.trim() || body.asset_id?.trim() || body.access_mode) {
+      throw badRequestError("asset fields are not supported for crossposts")
+    }
+    if (body.license_preset || body.commercial_rev_share_pct != null || body.lyrics?.trim()) {
+      throw badRequestError("song fields are not supported for crossposts")
+    }
+  } else if (body.source_post || body.source_community) {
+    throw badRequestError("source_post and source_community are only allowed for crossposts")
   }
   if (body.post_type === "image") {
     const primaryImage = body.media_refs?.[0]

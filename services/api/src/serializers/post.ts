@@ -78,6 +78,21 @@ export function serializePost(post: Post): CurrentPostResponse {
     song_artifact_bundle: post.song_artifact_bundle_id ? publicId(post.song_artifact_bundle_id, "sab") : null,
     song_title: post.song_title,
     parent_post: post.parent_post_id,
+    crosspost_source: post.crosspost_source
+      ? {
+          status: post.crosspost_source.status,
+          post: publicPostId(post.crosspost_source.post_id),
+          community: publicCommunityId(post.crosspost_source.community_id),
+          captured_at: post.crosspost_source.captured_at ?? null,
+          post_type: post.crosspost_source.post_type ?? null,
+          title: post.crosspost_source.title ?? null,
+          community_label: post.crosspost_source.community_label ?? null,
+          community_route_slug: post.crosspost_source.community_route_slug ?? null,
+          author_user: post.crosspost_source.author_user_id ? `usr_${post.crosspost_source.author_user_id}` : null,
+          author_label: post.crosspost_source.author_label ?? null,
+          thumbnail_ref: post.crosspost_source.thumbnail_ref ?? null,
+        }
+      : null,
     song_mode: post.song_mode,
     rights_basis: post.rights_basis,
     upstream_asset_refs: post.upstream_asset_refs,

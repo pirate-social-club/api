@@ -360,7 +360,7 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
   })
 
   communities.get("/:communityId/posts", async (c) => {
-    const { actor, communityId, communityRepository, userRepository } = await getResolvedCommunityRouteContext(c)
+    const { actor, communityId, communityRepository, userRepository, profileRepository } = await getResolvedCommunityRouteContext(c)
     const result = await listCommunityPosts({
       env: c.env,
       userId: actor.userId,
@@ -372,6 +372,7 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
       sort: c.req.query("sort") ?? null,
       communityRepository,
       userRepository,
+      profileRepository,
     })
     return c.json({
       ...result,

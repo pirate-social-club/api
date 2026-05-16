@@ -306,6 +306,22 @@ export type SongPresentation = {
   duration_ms: number | null
 }
 
+export type CrosspostSourceStatus = "available" | "deleted" | "removed" | "unavailable"
+
+export type CrosspostSource = {
+  status: CrosspostSourceStatus
+  post_id: string
+  community_id: string
+  captured_at?: string | null
+  post_type?: "text" | "image" | "video" | "link" | "song" | null
+  title?: string | null
+  community_label?: string | null
+  community_route_slug?: string | null
+  author_user_id?: string | null
+  author_label?: string | null
+  thumbnail_ref?: string | null
+}
+
 export type Post = {
   post_id: string
   community_id: string
@@ -322,7 +338,7 @@ export type Post = {
   agent_ownership_provider_snapshot?: string | null
   disclosed_qualifiers_json?: Array<DisclosedQualifierSnapshot> | null
   label_id?: string | null
-  post_type: "text" | "image" | "video" | "link" | "song"
+  post_type: "text" | "image" | "video" | "link" | "song" | "crosspost"
   status: "draft" | "published" | "hidden" | "removed" | "deleted"
   comments_locked?: boolean
   comments_locked_at?: string | null
@@ -352,6 +368,7 @@ export type Post = {
   song_cover_art_ref?: string | null
   song_duration_ms?: number | null
   parent_post_id?: string | null
+  crosspost_source?: CrosspostSource | null
   song_mode?: "original" | "remix" | null
   rights_basis?: "none" | "original" | "derivative" | "attribution_only" | null
   upstream_asset_refs?: Array<string> | null
@@ -404,6 +421,9 @@ type CreatePostRequestBase = {
   license_preset?: "non-commercial" | "commercial-use" | "commercial-remix" | null
   commercial_rev_share_pct?: number | null
   lyrics?: string | null
+  source_post?: string | null
+  source_community?: string | null
+  crosspost_source?: CrosspostSource | null
 }
 
 export type CreatePostRequest = CreatePostRequestBase & {
@@ -414,6 +434,7 @@ export type CreatePostRequest = CreatePostRequestBase & {
   | { post_type: "video"; media_refs: Array<MediaDescriptor> }
   | { post_type: "link"; link_url: string }
   | { post_type: "song"; identity_mode: "public"; media_refs?: Array<MediaDescriptor> }
+  | { post_type: "crosspost"; title: string; source_post: string; source_community: string }
 )
 
 export type LocalizedPostResponse = {

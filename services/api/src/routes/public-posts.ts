@@ -1,4 +1,5 @@
 import { Hono } from "hono"
+import { getProfileRepository } from "../lib/auth/repositories"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { openCommunityDb } from "../lib/communities/community-db-factory"
 import { isCommunityLive } from "../lib/communities/community-status"
@@ -129,6 +130,7 @@ publicPosts.get("/:postId/top-comments", async (c) => {
     postId: rawPostId,
     locale: c.req.query("locale") ?? null,
     communityRepository,
+    profileRepository: getProfileRepository(c.env),
   })
   const policy = await resolveEffectiveCommunityMachineAccessPolicy({
     env: c.env,
@@ -232,6 +234,8 @@ publicPosts.get("/:postId/thread", async (c) => {
     const post = await getPublicPostFromCommunityDb({
       client: db.client,
       communityId: projection.community_id,
+      communityRepository,
+      profileRepository: getProfileRepository(c.env),
       locale,
       postId: rawPostId,
     })
@@ -287,6 +291,7 @@ publicPosts.get("/:postId", async (c) => {
     postId: rawPostId,
     locale: c.req.query("locale") ?? null,
     communityRepository,
+    profileRepository: getProfileRepository(c.env),
   })
   const policy = await resolveEffectiveCommunityMachineAccessPolicy({
     env: c.env,

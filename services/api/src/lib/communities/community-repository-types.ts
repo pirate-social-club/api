@@ -57,7 +57,7 @@ export interface CommunityPostProjectionRepository {
     sourcePostId: string
     authorUserId: string | null
     identityMode: "public" | "anonymous"
-    postType: "text" | "image" | "video" | "link" | "song"
+    postType: "text" | "image" | "video" | "link" | "song" | "crosspost"
     status: "draft" | "published" | "hidden" | "removed" | "deleted"
     visibility: "public" | "members_only"
     sourceCreatedAt: string

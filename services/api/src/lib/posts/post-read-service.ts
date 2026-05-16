@@ -9,6 +9,7 @@ import {
   getPostById,
   getPostReadMetrics,
   listPublishedLocalizedPosts,
+  type PublishedLocalizedPostFeedItem,
 } from "./community-post-store"
 import { getLatestThreadSnapshotForRead } from "../comments/community-comment-store"
 import { buildLocalizedPostResponse } from "../localization/post-localization-service"
@@ -19,8 +20,9 @@ import {
   requireMemberAccess,
 } from "./post-access"
 import { enqueueEmbedHydrateOnReadIfNeeded, enqueuePostTranslationOnReadIfNeeded } from "./post-jobs"
-import { resolveAgeGateViewerState } from "./age-gate-viewer-state"
-import type { UserRepository } from "../auth/repositories"
+import { type AgeGateViewerState, resolveAgeGateViewerState } from "./age-gate-viewer-state"
+import { hydrateCrosspostSourcesForResponses } from "./crosspost-source-hydration"
+import type { ProfileRepository, UserRepository } from "../auth/repositories"
 import type { Client } from "../sql-client"
 import type { Env } from "../../env"
 import type { CommentThreadSnapshot, LocalizedPostResponse, Post } from "../../types"
@@ -36,6 +38,53 @@ type PostReadCommunityRepository =
   & CommunityReadRepository
   & CommunityDatabaseBindingRepository
   & Pick<CommunityPostProjectionRepository, "getCommunityPostProjectionByPostId">
+
+async function buildLocalizedPostFeedResponses(input: {
+  client: Client
+  feedItems: readonly PublishedLocalizedPostFeedItem[]
+  locale?: string | null
+  viewerUserId: string | null
+  ageGateState: AgeGateViewerState | null
+}): Promise<LocalizedPostResponse[]> {
+  return Promise.all(input.feedItems.map(async (item) => {
+    const ageGateViewerState = item.post.age_gate_policy === "18_plus" ? input.ageGateState : null
+    const threadSnapshot = await getLatestThreadSnapshotForRead(input.client, item.post.post_id)
+    return buildLocalizedPostResponse({
+      executor: input.client,
+      post: item.post,
+      locale: input.locale ?? undefined,
+      metrics: {
+        upvote_count: item.upvote_count,
+        downvote_count: item.downvote_count,
+        comment_count: item.comment_count,
+        like_count: item.like_count,
+        viewer_vote: item.viewer_vote,
+      },
+      threadSnapshot,
+      ageGateViewerState,
+      viewerUserId: input.viewerUserId,
+    })
+  }))
+}
+
+async function enqueuePostReadJobsForResponses(input: {
+  client: Client
+  communityId: string
+  responses: readonly LocalizedPostResponse[]
+}): Promise<void> {
+  for (const response of input.responses) {
+    await enqueuePostTranslationOnReadIfNeeded({
+      client: input.client,
+      communityId: input.communityId,
+      response,
+    })
+    await enqueueEmbedHydrateOnReadIfNeeded({
+      client: input.client,
+      communityId: input.communityId,
+      post: response.post,
+    })
+  }
+}
 
 function parseFeedLimit(limit: string | null | undefined): number {
   if (typeof limit !== "string" || limit.trim() === "") {
@@ -148,6 +197,7 @@ export async function getPost(input: {
   locale?: string | null
   communityRepository: PostReadCommunityRepository
   userRepository: UserRepository
+  profileRepository?: ProfileRepository | null
 }): Promise<LocalizedPostResponse> {
   const projection = await input.communityRepository.getCommunityPostProjectionByPostId(input.postId)
   if (!projection) {
@@ -187,15 +237,15 @@ export async function getPost(input: {
       ageGateViewerState,
       viewerUserId: input.userId,
     })
-    await enqueuePostTranslationOnReadIfNeeded({
-      client: db.client,
-      communityId: projection.community_id,
-      response,
+    await hydrateCrosspostSourcesForResponses({
+      responses: [response],
+      communityRepository: input.communityRepository,
+      profileRepository: input.profileRepository,
     })
-    await enqueueEmbedHydrateOnReadIfNeeded({
+    await enqueuePostReadJobsForResponses({
       client: db.client,
       communityId: projection.community_id,
-      post,
+      responses: [response],
     })
     return response
   } finally {
@@ -208,6 +258,7 @@ export async function getPublicPost(input: {
   postId: string
   locale?: string | null
   communityRepository: PostReadCommunityRepository
+  profileRepository?: ProfileRepository | null
 }): Promise<LocalizedPostResponse> {
   const projection = await input.communityRepository.getCommunityPostProjectionByPostId(input.postId)
   if (!projection) {
@@ -224,6 +275,8 @@ export async function getPublicPost(input: {
     return await getPublicPostFromCommunityDb({
       client: db.client,
       communityId: projection.community_id,
+      communityRepository: input.communityRepository,
+      profileRepository: input.profileRepository,
       locale: input.locale,
       postId: input.postId,
     })
@@ -235,6 +288,8 @@ export async function getPublicPost(input: {
 export async function getPublicPostFromCommunityDb(input: {
   client: Client
   communityId: string
+  communityRepository?: PostReadCommunityRepository
+  profileRepository?: ProfileRepository | null
   postId: string
   locale?: string | null
 }): Promise<LocalizedPostResponse> {
@@ -258,15 +313,17 @@ export async function getPublicPostFromCommunityDb(input: {
     ageGateViewerState,
     viewerUserId: null,
   })
-  await enqueuePostTranslationOnReadIfNeeded({
+  if (input.communityRepository) {
+    await hydrateCrosspostSourcesForResponses({
+      responses: [response],
+      communityRepository: input.communityRepository,
+      profileRepository: input.profileRepository,
+    })
+  }
+  await enqueuePostReadJobsForResponses({
     client: input.client,
     communityId: input.communityId,
-    response,
-  })
-  await enqueueEmbedHydrateOnReadIfNeeded({
-    client: input.client,
-    communityId: input.communityId,
-    post,
+    responses: [response],
   })
   return response
 }
@@ -282,6 +339,7 @@ export async function listCommunityPosts(input: {
   sort?: string | null
   communityRepository: PostReadCommunityRepository
   userRepository: UserRepository
+  profileRepository?: ProfileRepository | null
 }): Promise<CommunityFeedResponse> {
   const community = await input.communityRepository.getCommunityById(input.communityId)
   if (!isCommunityLive(community)) {
@@ -307,37 +365,23 @@ export async function listCommunityPosts(input: {
       userRepository: input.userRepository,
       postAgeGatePolicy: "18_plus",
     })
-    const items = await Promise.all(feed.items.map(async (item) => {
-      const ageGateViewerState = item.post.age_gate_policy === "18_plus" ? ageGateState : null
-      const threadSnapshot = await getLatestThreadSnapshotForRead(db.client, item.post.post_id)
-      return buildLocalizedPostResponse({
-        executor: db.client,
-        post: item.post,
-        locale: input.locale ?? undefined,
-        metrics: {
-          upvote_count: item.upvote_count,
-          downvote_count: item.downvote_count,
-          comment_count: item.comment_count,
-          like_count: item.like_count,
-          viewer_vote: item.viewer_vote,
-        },
-        threadSnapshot,
-        ageGateViewerState,
-        viewerUserId: input.userId,
-      })
-    }))
-    for (const item of items) {
-      await enqueuePostTranslationOnReadIfNeeded({
-        client: db.client,
-        communityId: input.communityId,
-        response: item,
-      })
-      await enqueueEmbedHydrateOnReadIfNeeded({
-        client: db.client,
-        communityId: input.communityId,
-        post: item.post,
-      })
-    }
+    const items = await buildLocalizedPostFeedResponses({
+      client: db.client,
+      feedItems: feed.items,
+      locale: input.locale,
+      viewerUserId: input.userId,
+      ageGateState,
+    })
+    await hydrateCrosspostSourcesForResponses({
+      responses: items,
+      communityRepository: input.communityRepository,
+      profileRepository: input.profileRepository,
+    })
+    await enqueuePostReadJobsForResponses({
+      client: db.client,
+      communityId: input.communityId,
+      responses: items,
+    })
 
     return {
       items,
@@ -357,6 +401,7 @@ export async function listPublicCommunityPosts(input: {
   flairId?: string | null
   sort?: string | null
   communityRepository: PostReadCommunityRepository
+  profileRepository?: ProfileRepository | null
 }): Promise<CommunityFeedResponse> {
   const community = await input.communityRepository.getCommunityById(input.communityId)
   if (!isCommunityLive(community)) {
@@ -376,37 +421,23 @@ export async function listPublicCommunityPosts(input: {
       visibility: "public",
     })
 
-    const items = await Promise.all(feed.items.map(async (item) => {
-      const ageGateViewerState = item.post.age_gate_policy === "18_plus" ? "proof_required" as const : null
-      const threadSnapshot = await getLatestThreadSnapshotForRead(db.client, item.post.post_id)
-      return buildLocalizedPostResponse({
-        executor: db.client,
-        post: item.post,
-        locale: input.locale ?? undefined,
-        metrics: {
-          upvote_count: item.upvote_count,
-          downvote_count: item.downvote_count,
-          comment_count: item.comment_count,
-          like_count: item.like_count,
-          viewer_vote: item.viewer_vote,
-        },
-        threadSnapshot,
-        ageGateViewerState,
-        viewerUserId: null,
-      })
-    }))
-    for (const item of items) {
-      await enqueuePostTranslationOnReadIfNeeded({
-        client: db.client,
-        communityId: input.communityId,
-        response: item,
-      })
-      await enqueueEmbedHydrateOnReadIfNeeded({
-        client: db.client,
-        communityId: input.communityId,
-        post: item.post,
-      })
-    }
+    const items = await buildLocalizedPostFeedResponses({
+      client: db.client,
+      feedItems: feed.items,
+      locale: input.locale,
+      viewerUserId: null,
+      ageGateState: "proof_required",
+    })
+    await hydrateCrosspostSourcesForResponses({
+      responses: items,
+      communityRepository: input.communityRepository,
+      profileRepository: input.profileRepository,
+    })
+    await enqueuePostReadJobsForResponses({
+      client: db.client,
+      communityId: input.communityId,
+      responses: items,
+    })
 
     return {
       items,

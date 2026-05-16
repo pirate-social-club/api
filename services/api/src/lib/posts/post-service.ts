@@ -8,6 +8,7 @@ import type {
   CommunityPostProjectionRepository,
   CommunityReadRepository,
 } from "../communities/db-community-repository"
+import { resolveCommunityIdentifier } from "../communities/community-identifier"
 import { loadCommunityProjection } from "../communities/create/repository"
 import { authorizeAgentWrite } from "../agents/agent-write-authorization"
 import {
@@ -54,7 +55,7 @@ import { makeId, nowIso } from "../helpers"
 import type { Env } from "../../env"
 import type { CreatePostRequest, Post } from "../../types"
 import type { AltchaProofInput } from "../verification/altcha-provider"
-import { decodePublicSongArtifactBundleId, publicPostId } from "../public-ids"
+import { decodePublicPostId, decodePublicSongArtifactBundleId, publicPostId } from "../public-ids"
 import {
   createModerationCase,
   createModerationSignal,
@@ -88,6 +89,60 @@ async function syncPostProjectionMetrics(input: {
     likeCount: metrics.likeCount,
     updatedAt: input.updatedAt,
   })
+}
+
+async function resolveCrosspostSource(input: {
+  env: Env
+  communityRepository: PostServiceCommunityRepository
+  sourcePostRef: string
+  sourceCommunityRef: string
+}): Promise<NonNullable<Post["crosspost_source"]>> {
+  const sourcePostId = decodePublicPostId(input.sourcePostRef)
+  const claimedCommunityId = await resolveCommunityIdentifier(
+    input.communityRepository,
+    input.sourceCommunityRef,
+  )
+  if (!claimedCommunityId) {
+    throw badRequestError("source_community was not found")
+  }
+
+  const projection = await input.communityRepository.getCommunityPostProjectionByPostId(sourcePostId)
+  if (!projection) {
+    throw notFoundError("Source post not found")
+  }
+  if (projection.community_id !== claimedCommunityId) {
+    throw badRequestError("source_community does not match source_post")
+  }
+
+  const communityRow = await input.communityRepository.getCommunityById(projection.community_id)
+  if (!isCommunityLive(communityRow)) {
+    throw notFoundError("Source post not found")
+  }
+
+  const sourceDb = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
+  try {
+    const sourcePost = await getPostById(sourceDb.client, sourcePostId)
+    if (!sourcePost || sourcePost.community_id !== projection.community_id) {
+      throw notFoundError("Source post not found")
+    }
+    if (sourcePost.post_type === "crosspost") {
+      throw badRequestError("Crossposting a crosspost is not supported")
+    }
+    if (sourcePost.parent_post_id) {
+      throw badRequestError("Crossposting a reply is not supported")
+    }
+    if (sourcePost.status !== "published" || sourcePost.visibility !== "public") {
+      throw eligibilityFailed("Source post is not available for crossposting")
+    }
+    return {
+      status: "unavailable",
+      post_id: sourcePost.post_id,
+      community_id: sourcePost.community_id,
+      captured_at: nowIso(),
+    }
+  } finally {
+    sourceDb.close()
+  }
 }
 
 function resolveAnonymousScope(input: {
@@ -245,7 +300,46 @@ export async function createPost(input: {
       }
     }
 
-    if (input.body.post_type === "song") {
+    if (input.body.post_type === "crosspost") {
+      const crosspostSource = await resolveCrosspostSource({
+        env: input.env,
+        communityRepository: input.communityRepository,
+        sourcePostRef: input.body.source_post,
+        sourceCommunityRef: input.body.source_community,
+      })
+      writeBody = {
+        ...input.body,
+        body: null,
+        caption: null,
+        crosspost_source: crosspostSource,
+        link_url: null,
+        media_refs: undefined,
+      }
+
+      const postAnalysis = await postAnalysisProvider.analyze({
+        env: input.env,
+        community,
+        body: {
+          ...writeBody,
+          body: null,
+          caption: null,
+          crosspost_source: null,
+          link_url: null,
+          media_refs: undefined,
+        },
+      })
+      analysisProviderResult = postAnalysis.providerResult
+      const mergedAnalysisState = postAnalysis.analysis_state
+      if (mergedAnalysisState === "blocked") {
+        throw analysisBlocked("Content analysis blocked publication")
+      }
+      analysisOverride = {
+        analysis_state: mergedAnalysisState,
+        content_safety_state: mergedAnalysisState === "review_required" && postAnalysis.content_safety_state !== "adult" ? "pending" : postAnalysis.content_safety_state,
+        age_gate_policy: community.default_age_gate_policy === "18_plus" || postAnalysis.age_gate_policy === "18_plus" ? "18_plus" : "none",
+        status: mergedAnalysisState === "review_required" ? "draft" : "published",
+      }
+    } else if (input.body.post_type === "song") {
       const accessMode = input.body.access_mode ?? "public"
       const resolvedBundle = await resolveSongPostBundle({
         env: input.env,

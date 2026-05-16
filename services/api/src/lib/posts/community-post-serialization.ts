@@ -60,7 +60,7 @@ export const POST_SELECT_COLUMNS = `
     FROM live_rooms
     WHERE live_rooms.anchor_post_id = posts.post_id
     LIMIT 1
-  ) AS anchor_live_room_id, parent_post_id, ${boundedJsonProjection("upstream_asset_refs_json")}, song_mode, rights_basis, analysis_state, analysis_result_ref,
+  ) AS anchor_live_room_id, parent_post_id, ${boundedJsonProjection("crosspost_source_json")}, ${boundedJsonProjection("upstream_asset_refs_json")}, song_mode, rights_basis, analysis_state, analysis_result_ref,
   content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
 `
 
@@ -115,6 +115,7 @@ export type PostRow = {
   asset_id: string | null
   anchor_live_room_id: string | null
   parent_post_id: string | null
+  crosspost_source_json: string | null
   upstream_asset_refs_json: string | null
   song_mode: Post["song_mode"]
   rights_basis: Post["rights_basis"]
@@ -186,6 +187,32 @@ function parseEmbeds(value: string | null): Post["embeds"] {
   return parsed ? (parsed as Post["embeds"]) : undefined
 }
 
+function parseCrosspostSource(value: string | null): Post["crosspost_source"] {
+  const parsed = parseObject(value)
+  if (!parsed) {
+    return null
+  }
+  const sourcePostId = typeof parsed.source_post_id === "string"
+    ? parsed.source_post_id
+    : typeof parsed.post_id === "string"
+      ? parsed.post_id
+      : ""
+  const sourceCommunityId = typeof parsed.source_community_id === "string"
+    ? parsed.source_community_id
+    : typeof parsed.community_id === "string"
+      ? parsed.community_id
+      : ""
+  if (!sourcePostId || !sourceCommunityId) {
+    return null
+  }
+  return {
+    status: "unavailable",
+    post_id: sourcePostId,
+    community_id: sourceCommunityId,
+    captured_at: typeof parsed.captured_at === "string" ? parsed.captured_at : null,
+  }
+}
+
 export function toPostRow(row: unknown): PostRow {
   return {
     post_id: requiredString(row, "post_id"),
@@ -238,6 +265,7 @@ export function toPostRow(row: unknown): PostRow {
     asset_id: stringOrNull(rowValue(row, "asset_id")),
     anchor_live_room_id: stringOrNull(rowValue(row, "anchor_live_room_id")),
     parent_post_id: stringOrNull(rowValue(row, "parent_post_id")),
+    crosspost_source_json: stringOrNull(rowValue(row, "crosspost_source_json")),
     upstream_asset_refs_json: stringOrNull(rowValue(row, "upstream_asset_refs_json")),
     song_mode: stringOrNull(rowValue(row, "song_mode")) as Post["song_mode"],
     rights_basis: stringOrNull(rowValue(row, "rights_basis")) as Post["rights_basis"],
@@ -303,6 +331,7 @@ export function serializePost(row: PostRow): Post {
     asset_id: row.asset_id,
     anchor_live_room_id: row.anchor_live_room_id,
     parent_post_id: row.parent_post_id,
+    crosspost_source: parseCrosspostSource(row.crosspost_source_json),
     upstream_asset_refs: parseJsonArray<string>(row.upstream_asset_refs_json) ?? undefined,
     song_mode: row.song_mode,
     rights_basis: row.rights_basis,

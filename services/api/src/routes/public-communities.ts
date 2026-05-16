@@ -1,6 +1,6 @@
 import { Hono } from "hono"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
-import { getUserRepository } from "../lib/auth/repositories"
+import { getProfileRepository, getUserRepository } from "../lib/auth/repositories"
 import { resolveCommunityIdentifier } from "../lib/communities/community-identifier"
 import { getPublicCommunityPreview } from "../lib/communities/community-preview-service"
 import {
@@ -485,6 +485,7 @@ publicCommunities.get("/:communityId/posts", async (c) => {
     env: c.env,
     communityId,
     communityRepository,
+    profileRepository: getProfileRepository(c.env),
     cursor: c.req.query("cursor"),
     flairId: c.req.query("flair_id"),
     limit: c.req.query("limit"),

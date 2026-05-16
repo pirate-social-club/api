@@ -1294,6 +1294,11 @@ export type CreatePostRequest = (((unknown & {
   title?: string | null;
   body?: string | null;
   link_url: string;
+} | {
+  post_type: "crosspost";
+  title: string;
+  source_post: string;
+  source_community: string;
 } | (unknown & {
   post_type: "song";
   identity_mode: "public";
@@ -1312,10 +1317,12 @@ export type CreatePostRequest = (((unknown & {
   disclosed_qualifier_ids?: Array<string> | null;
   parent_post?: string | null;
   label?: string | null;
-  post_type: "text" | "image" | "video" | "link" | "song";
+  post_type: "text" | "image" | "video" | "link" | "song" | "crosspost";
   body?: string | null;
   caption?: string | null;
   link_url?: string | null;
+  source_post?: string | null;
+  source_community?: string | null;
   media_refs?: Array<MediaDescriptor>;
   creator_relation?: PostCreatorRelation | null;
   promotion_disclosure?: PromotionDisclosureInput | null;
@@ -1481,6 +1488,22 @@ export type SongPreviewGeneratePayload = {
   preview_window?: SongPreviewWindow | null;
 };
 
+export type CrosspostSourceStatus = "available" | "deleted" | "removed" | "unavailable";
+
+export type CrosspostSource = {
+  status: CrosspostSourceStatus;
+  post: string;
+  community: string;
+  captured_at?: string | null;
+  post_type?: "text" | "image" | "video" | "link" | "song" | null;
+  title?: string | null;
+  community_label?: string | null;
+  community_route_slug?: string | null;
+  author_user?: string | null;
+  author_label?: string | null;
+  thumbnail_ref?: string | null;
+};
+
 export type Post = {
   id: string;
   object: "post";
@@ -1498,7 +1521,7 @@ export type Post = {
   agent_ownership_provider_snapshot?: string | null;
   disclosed_qualifiers_json?: Array<DisclosedQualifierSnapshot> | null;
   label?: string | null;
-  post_type: "text" | "image" | "video" | "link" | "song";
+  post_type: "text" | "image" | "video" | "link" | "song" | "crosspost";
   status: "draft" | "published" | "hidden" | "removed" | "deleted";
   comments_locked?: boolean;
   comments_locked_at?: number | null;
@@ -1524,6 +1547,7 @@ export type Post = {
   anchor_live_room?: string | null;
   song_title?: string | null;
   parent_post?: string | null;
+  crosspost_source?: CrosspostSource | null;
   song_mode?: "original" | "remix" | null;
   rights_basis?: "none" | "original" | "derivative" | "attribution_only" | null;
   upstream_asset_refs?: Array<string> | null;

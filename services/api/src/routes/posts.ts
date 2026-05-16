@@ -1,6 +1,6 @@
 import { Hono } from "hono"
 import { badRequestError, eligibilityFailed } from "../lib/errors"
-import { getUserRepository } from "../lib/auth/repositories"
+import { getProfileRepository, getUserRepository } from "../lib/auth/repositories"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { authenticateAdminOrUser, type AuthenticatedEnv } from "../lib/auth-middleware"
 import { trackApiEvent } from "../lib/analytics/track"
@@ -28,6 +28,7 @@ posts.get("/:postId", async (c) => {
     locale: c.req.query("locale") ?? null,
     communityRepository,
     userRepository: getUserRepository(c.env),
+    profileRepository: getProfileRepository(c.env),
   })
   return c.json(serializeLocalizedPostResponse(result), 200)
 })

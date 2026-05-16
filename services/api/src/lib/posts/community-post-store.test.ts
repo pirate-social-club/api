@@ -195,6 +195,7 @@ describe("getPostById", () => {
         access_mode TEXT,
         asset_id TEXT,
         parent_post_id TEXT,
+        crosspost_source_json TEXT,
         upstream_asset_refs_json TEXT,
         song_mode TEXT,
         rights_basis TEXT,
@@ -279,6 +280,48 @@ describe("assertPostCreateRequest", () => {
     } satisfies CreatePostRequest
 
     expect(() => assertPostCreateRequest(body, "cmt_test")).not.toThrow()
+  })
+
+  test("allows title-only crosspost requests with source references", () => {
+    const body = {
+      idempotency_key: "crosspost-ok",
+      post_type: "crosspost",
+      title: "Bringing this here",
+      source_post: "post_pst_source",
+      source_community: "com_cmt_music",
+    } satisfies CreatePostRequest
+
+    expect(() => assertPostCreateRequest(body, "cmt_test")).not.toThrow()
+  })
+
+  test("rejects crossposts with reply or body fields", () => {
+    expect(() =>
+      assertPostCreateRequest(
+        {
+          idempotency_key: "crosspost-reply",
+          post_type: "crosspost",
+          title: "Reply crosspost",
+          source_post: "post_pst_source",
+          source_community: "com_cmt_music",
+          parent_post_id: "pst_parent",
+        } as CreatePostRequest,
+        "cmt_test",
+      )
+    ).toThrow("crossposts cannot be replies")
+
+    expect(() =>
+      assertPostCreateRequest(
+        {
+          idempotency_key: "crosspost-body",
+          post_type: "crosspost",
+          title: "Body crosspost",
+          body: "commentary",
+          source_post: "post_pst_source",
+          source_community: "com_cmt_music",
+        } as CreatePostRequest,
+        "cmt_test",
+      )
+    ).toThrow("body is not supported for crossposts")
   })
 
   test("requires a license preset for original song posts", () => {
