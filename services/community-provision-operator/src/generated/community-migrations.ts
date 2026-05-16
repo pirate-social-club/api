@@ -3190,6 +3190,27 @@ CREATE INDEX idx_purchase_settlement_effects_purchase
     checksum: "4cac5c7f25c00aef27ba8d61068aa52413ea8a82807c8c5cd84bbad719e09016",
   },
   {
+    name: "1078_live_room_viewer_sessions.sql",
+    sql: `CREATE TABLE live_room_viewer_sessions (
+    community_id TEXT NOT NULL,
+    live_room_id TEXT NOT NULL,
+    viewer_user_id TEXT NOT NULL,
+    agora_uid INTEGER NOT NULL CHECK (agora_uid >= 0 AND agora_uid <= 4294967295),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (community_id, live_room_id, viewer_user_id),
+    FOREIGN KEY (live_room_id) REFERENCES live_rooms(live_room_id)
+);
+
+CREATE UNIQUE INDEX idx_live_room_viewer_sessions_uid
+    ON live_room_viewer_sessions(community_id, live_room_id, agora_uid);
+
+CREATE INDEX idx_live_room_viewer_sessions_viewer
+    ON live_room_viewer_sessions(community_id, viewer_user_id, updated_at DESC);
+`,
+    checksum: "e56e39e1529e9fcd282795a6df8cc05639529aa59b535ef0c84261336b3ec5bc",
+  },
+  {
     name: "1079_crosspost_posts.sql",
     sql: `PRAGMA foreign_keys = OFF;
 
