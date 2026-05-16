@@ -211,7 +211,8 @@ describe("getPostById", () => {
     await client.execute(`
       CREATE TABLE live_rooms (
         live_room_id TEXT PRIMARY KEY,
-        anchor_post_id TEXT
+        anchor_post_id TEXT,
+        visibility TEXT NOT NULL DEFAULT 'public'
       )
     `)
     await client.execute({
