@@ -308,6 +308,32 @@ describe("feed routes", () => {
       community_label: "Feed Source Club",
     })
     expect(crosspostItem?.post.post.crosspost_source?.author_user).toBe(`usr_${session.userId}`)
+
+    const deleteSource = await requestJson(
+      `http://pirate.test/communities/${sourceCommunityId}/posts/${sourcePostBody.id}/delete`,
+      {},
+      ctx.env,
+      session.accessToken,
+    )
+    expect(deleteSource.status).toBe(200)
+
+    const afterDeleteResponse = await app.request("http://pirate.test/feed/home?sort=new&time_range=all", {
+      headers: {
+        authorization: `Bearer ${session.accessToken}`,
+      },
+    }, ctx.env)
+    expect(afterDeleteResponse.status).toBe(200)
+    const afterDeleteBody = await json(afterDeleteResponse) as typeof body
+    const crosspostAfterDelete = afterDeleteBody.items.find((item) => item.post.post.id === crosspostBody.id)
+    expect(crosspostAfterDelete?.post.post.crosspost_source).toMatchObject({
+      status: "deleted",
+      post: sourcePostBody.id,
+      community: sourceCommunityBody.community.id,
+      post_type: null,
+      title: null,
+      community_label: null,
+      author_user: null,
+    })
   })
 
   test("GET /feed/home/public returns the public feed without auth variance", async () => {
