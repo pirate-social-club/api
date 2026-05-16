@@ -3365,4 +3365,21 @@ PRAGMA foreign_keys = ON;
 `,
     checksum: "7e952233d2a50b13dc1ed80c7df60e3e7ae40ccaf7b43c7f70ec6021ac4ad6ab",
   },
+  {
+    name: "1080_post_comment_locks.sql",
+    sql: `ALTER TABLE posts
+  ADD COLUMN comments_locked INTEGER NOT NULL DEFAULT 0
+  CHECK (comments_locked IN (0, 1));
+
+ALTER TABLE posts
+  ADD COLUMN comments_locked_at TEXT;
+
+ALTER TABLE posts
+  ADD COLUMN comments_locked_by_user_id TEXT;
+
+ALTER TABLE posts
+  ADD COLUMN comments_lock_reason TEXT;
+`,
+    checksum: "cc64b1844768fc2cd585bd76daab9e75a32c596ddbdfbe8d7ac060d38cc5d23f",
+  },
 ] as const;
