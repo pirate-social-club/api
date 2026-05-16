@@ -32,6 +32,27 @@ export {
   getCommunityVisibility,
 } from "./community-comment-policy"
 
+type CommentProjectionSchema = {
+  hasReplyLockColumns: boolean
+}
+
+async function resolveCommentProjectionSchema(executor: DbExecutor): Promise<CommentProjectionSchema> {
+  const result = await executor.execute("PRAGMA table_info(comments)")
+  const columnNames = new Set(result.rows.map((row) => String(row.name ?? "")))
+  return {
+    hasReplyLockColumns: columnNames.has("replies_locked")
+      && columnNames.has("replies_locked_at")
+      && columnNames.has("replies_locked_by_user_id")
+      && columnNames.has("replies_lock_reason"),
+  }
+}
+
+function replyLockSelectColumnsForSchema(schema: CommentProjectionSchema): string {
+  return schema.hasReplyLockColumns
+    ? "replies_locked, replies_locked_at, replies_locked_by_user_id, replies_lock_reason"
+    : "0 AS replies_locked, NULL AS replies_locked_at, NULL AS replies_locked_by_user_id, NULL AS replies_lock_reason"
+}
+
 export async function insertComment(input: {
   executor: DbExecutor
   communityId: string
@@ -114,6 +135,7 @@ export async function insertComment(input: {
 }
 
 export async function getCommentById(executor: DbExecutor, commentId: string): Promise<Comment | null> {
+  const projectionSchema = await resolveCommentProjectionSchema(executor)
   const row = await executeFirst(executor, {
     sql: `
       SELECT comment_id, community_id, thread_root_post_id, parent_comment_id, author_user_id,
@@ -122,7 +144,7 @@ export async function getCommentById(executor: DbExecutor, commentId: string): P
              body, media_refs_json, source_language, status, depth,
              direct_reply_count, descendant_count, upvote_count, downvote_count, score,
              last_reply_at, content_hash, swarm_body_ref, idempotency_key,
-             replies_locked, replies_locked_at, replies_locked_by_user_id, replies_lock_reason,
+             ${replyLockSelectColumnsForSchema(projectionSchema)},
              created_at, updated_at
       FROM comments
       WHERE comment_id = ?1

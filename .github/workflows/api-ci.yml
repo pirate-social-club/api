@@ -107,6 +107,10 @@ jobs:
           bun run generate:migrations
           git diff --exit-code -- src/generated/community-migrations.ts
 
+      - name: Check community schema guards
+        working-directory: services/api
+        run: bun run check:community-schema-guards
+
       - name: Typecheck community provision operator
         working-directory: services/community-provision-operator
         run: bun run check

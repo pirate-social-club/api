@@ -42,25 +42,29 @@ export function boundedPostJsonProjection(value: string | null | undefined, repl
 }
 
 export type PostProjectionSchema = {
+  hasCommentLockColumns: boolean
   hasCrosspostSourceJson: boolean
-}
-
-export const CURRENT_POST_PROJECTION_SCHEMA: PostProjectionSchema = {
-  hasCrosspostSourceJson: true,
 }
 
 export async function resolvePostProjectionSchema(executor: DbExecutor): Promise<PostProjectionSchema> {
   const result = await executor.execute("PRAGMA table_info(posts)")
   const columnNames = new Set(result.rows.map((row) => String(row.name ?? "")))
   return {
+    hasCommentLockColumns: columnNames.has("comments_locked")
+      && columnNames.has("comments_locked_at")
+      && columnNames.has("comments_locked_by_user_id")
+      && columnNames.has("comments_lock_reason"),
     hasCrosspostSourceJson: columnNames.has("crosspost_source_json"),
   }
 }
 
-export function postSelectColumnsForSchema(schema: PostProjectionSchema = CURRENT_POST_PROJECTION_SCHEMA): string {
+export function postSelectColumnsForSchema(schema: PostProjectionSchema): string {
   const crosspostSourceProjection = schema.hasCrosspostSourceJson
     ? boundedJsonProjection("crosspost_source_json")
     : "NULL AS crosspost_source_json"
+  const commentLockProjection = schema.hasCommentLockColumns
+    ? "comments_locked, comments_locked_at, comments_locked_by_user_id, comments_lock_reason"
+    : "0 AS comments_locked, NULL AS comments_locked_at, NULL AS comments_locked_by_user_id, NULL AS comments_lock_reason"
 
   return `
   post_id, community_id, author_user_id, authorship_mode, agent_id, agent_ownership_record_id,
@@ -68,7 +72,7 @@ export function postSelectColumnsForSchema(schema: PostProjectionSchema = CURREN
   agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot, disclosed_qualifiers_json,
   label_id, label_assignment_status, label_assigned_by, label_assigned_at, label_ai_confidence,
   label_assignment_error, label_assignment_model, ${boundedJsonProjection("label_assignment_result_json")},
-  post_type, status, comments_locked, comments_locked_at, comments_locked_by_user_id, comments_lock_reason,
+  post_type, status, ${commentLockProjection},
   visibility, title, body, caption, lyrics,
   link_url, link_og_image_url, link_og_title, ${boundedJsonProjection("link_enrichment_snapshot_json", sqlStringLiteral(OVERSIZED_LINK_ENRICHMENT_SNAPSHOT_JSON))}, link_enrichment_synced_at,
   ${boundedJsonProjection("embeds_json")}, ${boundedJsonProjection("media_refs_json")}, song_artifact_bundle_id, song_title,
@@ -88,5 +92,3 @@ export function postSelectColumnsForSchema(schema: PostProjectionSchema = CURREN
   content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
 `
 }
-
-export const POST_SELECT_COLUMNS = postSelectColumnsForSchema()
