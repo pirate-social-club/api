@@ -1,4 +1,5 @@
 import { isMissingRelationError } from "../db-helpers"
+import { getProfileRepository } from "../auth/repositories"
 import { getCommunityRepository } from "../communities/db-community-repository"
 import { getControlPlaneClient } from "../runtime-deps"
 import type { Client } from "../sql-client"
@@ -277,6 +278,7 @@ async function refreshMaterializedPublicHomeFeedOnce(input: {
       cursor: input.target.cursor,
       communityRepository,
       userRepository: null,
+      profileRepository: getProfileRepository(input.env),
     })
     await storeMaterializedPublicHomeFeed({
       client,

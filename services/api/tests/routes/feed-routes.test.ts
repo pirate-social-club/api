@@ -5,7 +5,11 @@ import {
   parseMaterializedPublicHomeFeedBody,
 } from "../../src/lib/feed/materialized-public-feed"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../helpers"
-import { exchangeJwt } from "./communities/community-routes-test-helpers"
+import {
+  completeUniqueHumanVerification,
+  exchangeJwt,
+  requestJson,
+} from "./communities/community-routes-test-helpers"
 
 let cleanup: (() => Promise<void>) | null = null
 const originalCachesDescriptor = Object.getOwnPropertyDescriptor(globalThis, "caches")
@@ -126,6 +130,184 @@ describe("feed routes", () => {
       route_slug: "feed-active",
       view_count: 0,
     })
+  })
+
+  test("GET /feed/home reads projected posts from community databases", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "feed-route-post-reader")
+    await completeUniqueHumanVerification(ctx.env, session.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Feed Reader Club",
+      membership_mode: "request",
+      handle_policy: {
+        policy_template: "standard",
+      },
+    }, ctx.env, session.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: {
+        id: string
+        display_name: string
+      }
+    }
+    const communityId = communityCreateBody.community.id.replace(/^com_/, "")
+
+    const createdPost = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Home feed projection",
+        body: "This post should be read through the home feed fanout path.",
+        idempotency_key: "feed-route-post-reader-post",
+      },
+      ctx.env,
+      session.accessToken,
+    )
+    expect(createdPost.status).toBe(201)
+    const createdPostBody = await json(createdPost) as {
+      id: string
+    }
+
+    const response = await app.request("http://pirate.test/feed/home?sort=new&time_range=all", {
+      headers: {
+        authorization: `Bearer ${session.accessToken}`,
+      },
+    }, ctx.env)
+    expect(response.status).toBe(200)
+    const body = await json(response) as {
+      items: Array<{
+        community: {
+          display_name: string
+        }
+        post: {
+          post: {
+            id: string
+            title: string | null
+          }
+        }
+      }>
+      top_communities: Array<{
+        display_name: string
+      }>
+      next_cursor: string | null
+    }
+
+    expect(body.items).toHaveLength(1)
+    expect(body.items[0]?.community.display_name).toBe("Feed Reader Club")
+    expect(body.items[0]?.post.post.id).toBe(createdPostBody.id)
+    expect(body.items[0]?.post.post.title).toBe("Home feed projection")
+    expect(body.top_communities.map((community) => community.display_name)).toContain("Feed Reader Club")
+    expect(body.next_cursor).toBeNull()
+  })
+
+  test("GET /feed/home hydrates crosspost source previews", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "feed-route-crosspost-reader")
+    await completeUniqueHumanVerification(ctx.env, session.accessToken)
+
+    const sourceCommunity = await requestJson("http://pirate.test/communities", {
+      display_name: "Feed Source Club",
+      membership_mode: "request",
+      handle_policy: {
+        policy_template: "standard",
+      },
+    }, ctx.env, session.accessToken)
+    expect(sourceCommunity.status).toBe(202)
+    const sourceCommunityBody = await json(sourceCommunity) as {
+      community: {
+        id: string
+      }
+    }
+    const sourceCommunityId = sourceCommunityBody.community.id.replace(/^com_/, "")
+
+    const targetCommunity = await requestJson("http://pirate.test/communities", {
+      display_name: "Feed Target Club",
+      membership_mode: "request",
+      handle_policy: {
+        policy_template: "standard",
+      },
+    }, ctx.env, session.accessToken)
+    expect(targetCommunity.status).toBe(202)
+    const targetCommunityBody = await json(targetCommunity) as {
+      community: {
+        id: string
+      }
+    }
+    const targetCommunityId = targetCommunityBody.community.id.replace(/^com_/, "")
+
+    const sourcePost = await requestJson(
+      `http://pirate.test/communities/${sourceCommunityId}/posts`,
+      {
+        post_type: "text",
+        title: "Original feed source",
+        body: "This source should hydrate inside a crosspost preview.",
+        idempotency_key: "feed-route-crosspost-source",
+      },
+      ctx.env,
+      session.accessToken,
+    )
+    expect(sourcePost.status).toBe(201)
+    const sourcePostBody = await json(sourcePost) as {
+      id: string
+    }
+
+    const crosspost = await requestJson(
+      `http://pirate.test/communities/${targetCommunityId}/posts`,
+      {
+        post_type: "crosspost",
+        title: "Sharing this into the target feed",
+        source_post: sourcePostBody.id,
+        source_community: sourceCommunityBody.community.id,
+        idempotency_key: "feed-route-crosspost-target",
+      },
+      ctx.env,
+      session.accessToken,
+    )
+    expect(crosspost.status).toBe(201)
+    const crosspostBody = await json(crosspost) as {
+      id: string
+    }
+
+    const response = await app.request("http://pirate.test/feed/home?sort=new&time_range=all", {
+      headers: {
+        authorization: `Bearer ${session.accessToken}`,
+      },
+    }, ctx.env)
+    expect(response.status).toBe(200)
+    const body = await json(response) as {
+      items: Array<{
+        post: {
+          post: {
+            id: string
+            post_type: string
+            crosspost_source?: {
+              status: string
+              post: string
+              community: string
+              post_type: string | null
+              title: string | null
+              community_label: string | null
+              author_user: string | null
+            } | null
+          }
+        }
+      }>
+    }
+
+    const crosspostItem = body.items.find((item) => item.post.post.id === crosspostBody.id)
+    expect(crosspostItem?.post.post.post_type).toBe("crosspost")
+    expect(crosspostItem?.post.post.crosspost_source).toMatchObject({
+      status: "available",
+      post: sourcePostBody.id,
+      community: sourceCommunityBody.community.id,
+      post_type: "text",
+      title: "Original feed source",
+      community_label: "Feed Source Club",
+    })
+    expect(crosspostItem?.post.post.crosspost_source?.author_user).toBe(`usr_${session.userId}`)
   })
 
   test("GET /feed/home/public returns the public feed without auth variance", async () => {
