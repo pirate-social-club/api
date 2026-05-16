@@ -658,6 +658,26 @@ describe("community live-room routes", () => {
     expect(accessBeforePurchaseBody.access.decision_reason).toBe("purchase_required")
     expect(accessBeforePurchaseBody.access.listing).toBe(listingBody.id)
 
+    const publicAccessBeforePurchase = await app.request(
+      `http://pirate.test/public-communities/${communityId}/live-rooms/${room.id}/access`,
+      {},
+      ctx.env,
+    )
+    expect(publicAccessBeforePurchase.status).toBe(200)
+    const publicAccessBeforePurchaseBody = await json(publicAccessBeforePurchase) as {
+      access: { allowed: boolean; decision_reason: string | null; listing: string | null }
+    }
+    expect(publicAccessBeforePurchaseBody.access.allowed).toBe(false)
+    expect(publicAccessBeforePurchaseBody.access.decision_reason).toBe("purchase_required")
+    expect(publicAccessBeforePurchaseBody.access.listing).toBe(listingBody.id)
+
+    const publicViewerAttachBeforePurchase = await app.request(
+      `http://pirate.test/public-communities/${communityId}/live-rooms/${room.id}/viewer_attach`,
+      { method: "POST" },
+      ctx.env,
+    )
+    expect(publicViewerAttachBeforePurchase.status).toBe(402)
+
     const viewerAttachBeforePurchase = await app.request(
       `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/viewer_attach`,
       {
@@ -791,6 +811,20 @@ describe("community live-room routes", () => {
     expect(accessBody.access.access_mode).toBe("free")
     expect(accessBody.access.listing).toBeNull()
 
+    const publicAccess = await app.request(
+      `http://pirate.test/public-communities/${communityId}/live-rooms/${room.id}/access`,
+      {},
+      ctx.env,
+    )
+    expect(publicAccess.status).toBe(200)
+    const publicAccessBody = await json(publicAccess) as {
+      access: { allowed: boolean; decision_reason: string | null; access_mode: string; listing: string | null }
+    }
+    expect(publicAccessBody.access.allowed).toBe(true)
+    expect(publicAccessBody.access.decision_reason).toBeNull()
+    expect(publicAccessBody.access.access_mode).toBe("free")
+    expect(publicAccessBody.access.listing).toBeNull()
+
     const viewerAttach = await app.request(
       `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/viewer_attach`,
       {
@@ -832,6 +866,50 @@ describe("community live-room routes", () => {
     expect(viewerRenewBody.agora.token).toMatch(/^007/)
     expect(viewerRenewBody.agora.token_expires_at ?? 0).toBeGreaterThanOrEqual(viewerAttachBody.agora.token_expires_at ?? 0)
 
+    const publicViewerAttach = await app.request(
+      `http://pirate.test/public-communities/${communityId}/live-rooms/${room.id}/viewer_attach`,
+      { method: "POST" },
+      ctx.env,
+    )
+    expect(publicViewerAttach.status).toBe(200)
+    const publicViewerAttachBody = await json(publicViewerAttach) as {
+      runtime: { seat: string }
+      agora: { app_id: string | null; channel: string; uid: number; token: string | null; token_expires_at: number | null; configured: boolean }
+    }
+    expect(publicViewerAttachBody.runtime.seat).toBe("viewer")
+    expect(publicViewerAttachBody.agora.app_id).toBe(ctx.env.AGORA_APP_ID)
+    expect(publicViewerAttachBody.agora.configured).toBe(true)
+    expect(publicViewerAttachBody.agora.token).toMatch(/^007/)
+    await expect(countLiveRoomViewerSessions({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      liveRoomId: room.id,
+    })).resolves.toBe(2)
+
+    const publicViewerRenew = await requestJson(
+      `http://pirate.test/public-communities/${communityId}/live-rooms/${room.id}/viewer_renew`,
+      { uid: publicViewerAttachBody.agora.uid },
+      ctx.env,
+    )
+    expect(publicViewerRenew.status).toBe(200)
+    const publicViewerRenewBody = await json(publicViewerRenew) as {
+      runtime: { seat: string }
+      agora: { channel: string; uid: number; token: string | null; configured: boolean }
+    }
+    expect(publicViewerRenewBody.runtime.seat).toBe("viewer")
+    expect(publicViewerRenewBody.agora.uid).toBe(publicViewerAttachBody.agora.uid)
+    expect(publicViewerRenewBody.agora.channel).toBe(publicViewerAttachBody.agora.channel)
+    expect(publicViewerRenewBody.agora.configured).toBe(true)
+    expect(publicViewerRenewBody.agora.token).toMatch(/^007/)
+
+    const publicWrongUid = publicViewerAttachBody.agora.uid === 0xffffffff ? 0 : publicViewerAttachBody.agora.uid + 1
+    const publicViewerRenewWrongUid = await requestJson(
+      `http://pirate.test/public-communities/${communityId}/live-rooms/${room.id}/viewer_renew`,
+      { uid: publicWrongUid },
+      ctx.env,
+    )
+    expect(publicViewerRenewWrongUid.status).toBe(404)
+
     const wrongUid = viewerAttachBody.agora.uid === 0xffffffff ? 0 : viewerAttachBody.agora.uid + 1
     const viewerRenewWrongUid = await requestJson(
       `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/viewer_renew`,
@@ -863,6 +941,93 @@ describe("community live-room routes", () => {
       communityId,
       liveRoomId: room.id,
     })).resolves.toBe(0)
+  })
+
+  test("public viewer attach rejects gated live rooms while members can watch", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    ctx.env.AGORA_APP_ID = "0123456789abcdef0123456789abcdef"
+    ctx.env.AGORA_APP_CERTIFICATE = "abcdef0123456789abcdef0123456789"
+
+    const owner = await exchangeJwt(ctx.env, "live-room-gated-public-owner")
+    await completeUniqueHumanVerification(ctx.env, owner.accessToken)
+    const viewer = await exchangeJwt(ctx.env, "live-room-gated-member-viewer")
+    await completeUniqueHumanVerification(ctx.env, viewer.accessToken)
+    const communityId = await createTestCommunity({ env: ctx.env, accessToken: owner.accessToken })
+    const joinViewer = await requestJson(
+      `http://pirate.test/communities/${communityId}/join`,
+      {},
+      ctx.env,
+      viewer.accessToken,
+    )
+    expect(joinViewer.status).toBe(200)
+    await addCommunityMember(String(ctx.env.LOCAL_COMMUNITY_DB_ROOT), communityId, viewer.userId)
+
+    const body = readySoloRoomBody()
+    body.access_mode = "gated"
+    body.performer_allocations[0].user = `usr_${owner.userId}`
+    const create = await postLiveRoom({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      communityId,
+      body,
+    })
+    expect(create.status).toBe(201)
+    const room = await json(create) as { id: string }
+
+    const hostAttach = await app.request(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/host_attach`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${owner.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(hostAttach.status).toBe(200)
+
+    const publicAccess = await app.request(
+      `http://pirate.test/public-communities/${communityId}/live-rooms/${room.id}/access`,
+      {},
+      ctx.env,
+    )
+    expect(publicAccess.status).toBe(200)
+    const publicAccessBody = await json(publicAccess) as {
+      access: { allowed: boolean; decision_reason: string | null; access_mode: string }
+    }
+    expect(publicAccessBody.access.allowed).toBe(false)
+    expect(publicAccessBody.access.decision_reason).toBe("membership_required")
+    expect(publicAccessBody.access.access_mode).toBe("gated")
+
+    const publicAttach = await app.request(
+      `http://pirate.test/public-communities/${communityId}/live-rooms/${room.id}/viewer_attach`,
+      { method: "POST" },
+      ctx.env,
+    )
+    expect(publicAttach.status).toBe(401)
+
+    const publicRenew = await requestJson(
+      `http://pirate.test/public-communities/${communityId}/live-rooms/${room.id}/viewer_renew`,
+      { uid: 1234 },
+      ctx.env,
+    )
+    expect(publicRenew.status).toBe(401)
+
+    const memberAttach = await app.request(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/viewer_attach`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${viewer.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(memberAttach.status).toBe(200)
+    const memberAttachBody = await json(memberAttach) as {
+      runtime: { seat: string }
+      agora: { configured: boolean; token: string | null }
+    }
+    expect(memberAttachBody.runtime.seat).toBe("viewer")
+    expect(memberAttachBody.agora.configured).toBe(true)
+    expect(memberAttachBody.agora.token).toMatch(/^007/)
   })
 
   test("unlisted live rooms are hidden from ordinary members", async () => {
@@ -922,6 +1087,13 @@ describe("community live-room routes", () => {
     )
     expect(viewerAccess.status).toBe(404)
 
+    const publicAccess = await app.request(
+      `http://pirate.test/public-communities/${communityId}/live-rooms/${room.id}/access`,
+      {},
+      ctx.env,
+    )
+    expect(publicAccess.status).toBe(404)
+
     const viewerAttach = await app.request(
       `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/viewer_attach`,
       {
@@ -931,6 +1103,13 @@ describe("community live-room routes", () => {
       ctx.env,
     )
     expect(viewerAttach.status).toBe(404)
+
+    const publicAttach = await app.request(
+      `http://pirate.test/public-communities/${communityId}/live-rooms/${room.id}/viewer_attach`,
+      { method: "POST" },
+      ctx.env,
+    )
+    expect(publicAttach.status).toBe(404)
   })
 
   test("cancel clears any viewer sessions for the room", async () => {

@@ -3,7 +3,7 @@ import type { Env } from "../../../env"
 import type { CommunityDatabaseBindingRepository, CommunityPostProjectionRepository, CommunityReadRepository } from "../db-community-repository"
 import type { UserRepository } from "../../auth/repositories"
 import { executeFirst } from "../../db-helpers"
-import { badRequestError, conflictError, notFoundError, paymentRequired } from "../../errors"
+import { authError, badRequestError, conflictError, notFoundError, paymentRequired } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
 import { openCommunityDb } from "../community-db-factory"
 import { enqueueCommunityJob } from "../jobs/store"
@@ -26,6 +26,7 @@ import {
 } from "./runtime"
 import {
   canReadUnlistedLiveRoom,
+  resolvePublicLiveRoomViewerAccess,
   resolveLiveRoomViewerAccess,
   serializeLiveRoomAccess,
   type LiveRoomAccessPayload,
@@ -43,6 +44,7 @@ import {
 import { createCommunityListingInTransaction } from "../commerce/listing-service"
 import {
   assertLiveRoomViewerSessionUid,
+  assertPublicLiveRoomViewerSessionUid,
   deleteLiveRoomViewerSessions,
   normalizeLiveRoomViewerUid,
   recordLiveRoomViewerSession,
@@ -607,6 +609,9 @@ export async function viewerAttachLiveRoom(input: {
       if (access.decisionReason === "purchase_required") {
         throw paymentRequired("Live room ticket required", { listing: serializedAccess.listing })
       }
+      if (access.decisionReason === "membership_required") {
+        throw authError("Authentication is required to join this live room")
+      }
       if (access.decisionReason === "unlisted") {
         throw notFoundError("Live room not found")
       }
@@ -666,6 +671,9 @@ export async function viewerRenewLiveRoom(input: {
       if (access.decisionReason === "purchase_required") {
         throw paymentRequired("Live room ticket required", { listing: serializedAccess.listing })
       }
+      if (access.decisionReason === "membership_required") {
+        throw authError("Authentication is required to join this live room")
+      }
       if (access.decisionReason === "unlisted") {
         throw notFoundError("Live room not found")
       }
@@ -675,6 +683,140 @@ export async function viewerRenewLiveRoom(input: {
       communityId: input.communityId,
       liveRoomId: input.liveRoomId,
       userId: input.userId,
+      uid,
+    })
+    const runtime = renewLiveRoomViewerRuntime({
+      env: input.env,
+      room: access.room,
+      uid,
+    })
+    return {
+      room: serializeLiveRoom(access.room),
+      access: serializedAccess,
+      runtime: runtime.runtime,
+      agora: runtime.agora,
+    }
+  } finally {
+    db.close()
+  }
+}
+
+export async function getPublicLiveRoomAccess(input: {
+  env: Env
+  communityId: string
+  liveRoomId: string
+  communityRepository: LiveRoomRepository
+}): Promise<LiveRoomAccessResponse> {
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  try {
+    const access = await resolvePublicLiveRoomViewerAccess({
+      client: db.client,
+      communityId: input.communityId,
+      liveRoomId: input.liveRoomId,
+      loadRoom: loadLiveRoomForAccess,
+    })
+    if (access.decisionReason === "unlisted") {
+      throw notFoundError("Live room not found")
+    }
+    return {
+      room: serializeLiveRoom(access.room),
+      access: serializeLiveRoomAccess(access),
+    }
+  } finally {
+    db.close()
+  }
+}
+
+export async function publicViewerAttachLiveRoom(input: {
+  env: Env
+  communityId: string
+  liveRoomId: string
+  communityRepository: LiveRoomRepository
+}): Promise<LiveRoomViewerAttachResponse> {
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  try {
+    const access = await resolvePublicLiveRoomViewerAccess({
+      client: db.client,
+      communityId: input.communityId,
+      liveRoomId: input.liveRoomId,
+      loadRoom: loadLiveRoomForAccess,
+    })
+    const serializedAccess = serializeLiveRoomAccess(access)
+    if (!access.allowed) {
+      if (access.decisionReason === "purchase_required") {
+        throw paymentRequired("Live room ticket required", { listing: serializedAccess.listing })
+      }
+      if (access.decisionReason === "membership_required") {
+        throw authError("Authentication is required to join this live room")
+      }
+      if (access.decisionReason === "unlisted") {
+        throw notFoundError("Live room not found")
+      }
+      throw conflictError("Live room is not available", { decision_reason: access.decisionReason })
+    }
+    let runtime: LiveRoomRuntimeViewerAttachResponse | null = null
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const nextRuntime = attachLiveRoomViewerRuntime({
+        env: input.env,
+        room: access.room,
+      })
+      const recorded = await recordLiveRoomViewerSession(db.client, {
+        communityId: input.communityId,
+        liveRoomId: input.liveRoomId,
+        userId: `anon:${crypto.randomUUID()}`,
+        uid: nextRuntime.agora.uid,
+      })
+      if (recorded) {
+        runtime = nextRuntime
+        break
+      }
+    }
+    if (!runtime) {
+      throw conflictError("Could not reserve live room viewer UID")
+    }
+    return {
+      room: serializeLiveRoom(access.room),
+      access: serializedAccess,
+      runtime: runtime.runtime,
+      agora: runtime.agora,
+    }
+  } finally {
+    db.close()
+  }
+}
+
+export async function publicViewerRenewLiveRoom(input: {
+  env: Env
+  communityId: string
+  liveRoomId: string
+  body: LiveRoomViewerRenewRequest
+  communityRepository: LiveRoomRepository
+}): Promise<LiveRoomViewerAttachResponse> {
+  const uid = normalizeLiveRoomViewerUid(input.body.uid)
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  try {
+    const access = await resolvePublicLiveRoomViewerAccess({
+      client: db.client,
+      communityId: input.communityId,
+      liveRoomId: input.liveRoomId,
+      loadRoom: loadLiveRoomForAccess,
+    })
+    const serializedAccess = serializeLiveRoomAccess(access)
+    if (!access.allowed) {
+      if (access.decisionReason === "purchase_required") {
+        throw paymentRequired("Live room ticket required", { listing: serializedAccess.listing })
+      }
+      if (access.decisionReason === "membership_required") {
+        throw authError("Authentication is required to join this live room")
+      }
+      if (access.decisionReason === "unlisted") {
+        throw notFoundError("Live room not found")
+      }
+      throw conflictError("Live room is not available", { decision_reason: access.decisionReason })
+    }
+    await assertPublicLiveRoomViewerSessionUid(db.client, {
+      communityId: input.communityId,
+      liveRoomId: input.liveRoomId,
       uid,
     })
     const runtime = renewLiveRoomViewerRuntime({

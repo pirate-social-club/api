@@ -16,6 +16,12 @@ import {
   type PublicWalletProof,
 } from "../lib/communities/commerce/public-wallet-proof"
 import {
+  getPublicLiveRoomAccess,
+  publicViewerAttachLiveRoom,
+  publicViewerRenewLiveRoom,
+  type LiveRoomViewerRenewRequest,
+} from "../lib/communities/live-rooms/service"
+import {
   omittedSurfacesForPolicy,
   omittedSurfaceForPolicy,
   resolveEffectiveCommunityMachineAccessPolicy,
@@ -307,6 +313,19 @@ function requirePublicPurchaseSettlementBody(value: unknown): PublicCommunityPur
   }
 }
 
+function requirePublicLiveRoomViewerRenewBody(value: unknown): LiveRoomViewerRenewRequest {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw badRequestError("Invalid live room viewer renew payload")
+  }
+  const body = value as Record<string, unknown>
+  if (typeof body.uid !== "number") {
+    throw badRequestError("uid is required")
+  }
+  return {
+    uid: body.uid,
+  }
+}
+
 publicCommunities.post("/:communityId/purchase-quotes", async (c) => {
   const communityRepository = getCommunityRepository(c.env)
   const communityId = await resolveCommunityId(communityRepository, c.req.param("communityId"))
@@ -369,6 +388,44 @@ publicCommunities.post("/:communityId/purchase-settlements", async (c) => {
     communityRepository,
   })
   return c.json(result.settlement, 201)
+})
+
+publicCommunities.get("/:communityId/live-rooms/:liveRoomId/access", async (c) => {
+  const communityRepository = getCommunityRepository(c.env)
+  const communityId = await resolveCommunityId(communityRepository, c.req.param("communityId"))
+  const access = await getPublicLiveRoomAccess({
+    env: c.env,
+    communityId,
+    liveRoomId: c.req.param("liveRoomId"),
+    communityRepository,
+  })
+  return c.json(access, 200)
+})
+
+publicCommunities.post("/:communityId/live-rooms/:liveRoomId/viewer_attach", async (c) => {
+  const communityRepository = getCommunityRepository(c.env)
+  const communityId = await resolveCommunityId(communityRepository, c.req.param("communityId"))
+  const attach = await publicViewerAttachLiveRoom({
+    env: c.env,
+    communityId,
+    liveRoomId: c.req.param("liveRoomId"),
+    communityRepository,
+  })
+  return c.json(attach, 200)
+})
+
+publicCommunities.post("/:communityId/live-rooms/:liveRoomId/viewer_renew", async (c) => {
+  const communityRepository = getCommunityRepository(c.env)
+  const communityId = await resolveCommunityId(communityRepository, c.req.param("communityId"))
+  const body = requirePublicLiveRoomViewerRenewBody(await c.req.json().catch(() => null))
+  const renew = await publicViewerRenewLiveRoom({
+    env: c.env,
+    communityId,
+    liveRoomId: c.req.param("liveRoomId"),
+    body,
+    communityRepository,
+  })
+  return c.json(renew, 200)
 })
 
 publicCommunities.get("/:communityId", async (c) => {

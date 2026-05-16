@@ -25,6 +25,7 @@ export type LiveRoomAccessDecisionReason =
   | "ended"
   | "canceled"
   | "unlisted"
+  | "membership_required"
   | "purchase_required"
   | "allowed"
 
@@ -123,6 +124,71 @@ export async function resolveLiveRoomViewerAccess(input: {
     listing: activeListing,
     entitlement,
     guestInviteStatus,
+    allowed: true,
+    decisionReason: null,
+  }
+}
+
+export async function resolvePublicLiveRoomViewerAccess(input: {
+  client: LiveRoomAccessExecutor
+  communityId: string
+  liveRoomId: string
+  loadRoom: (
+    client: LiveRoomAccessExecutor,
+    communityId: string,
+    liveRoomId: string,
+  ) => Promise<LiveRoom>
+}): Promise<LiveRoomViewerAccessResolution> {
+  const room = await input.loadRoom(input.client, input.communityId, input.liveRoomId)
+  if (room.visibility !== "public") {
+    return {
+      room,
+      listing: null,
+      entitlement: null,
+      guestInviteStatus: null,
+      allowed: false,
+      decisionReason: "unlisted",
+    }
+  }
+
+  const listing = room.access_mode === "paid"
+    ? await getListingRowByLiveRoomId(input.client, input.communityId, input.liveRoomId)
+    : null
+  const activeListing = listing?.status === "active" ? listing : null
+  if (room.access_mode === "paid") {
+    return {
+      room,
+      listing: activeListing,
+      entitlement: null,
+      guestInviteStatus: null,
+      allowed: false,
+      decisionReason: "purchase_required",
+    }
+  }
+  if (room.access_mode === "gated") {
+    return {
+      room,
+      listing: null,
+      entitlement: null,
+      guestInviteStatus: null,
+      allowed: false,
+      decisionReason: "membership_required",
+    }
+  }
+  if (room.status === "canceled") {
+    return { room, listing: activeListing, entitlement: null, guestInviteStatus: null, allowed: false, decisionReason: "canceled" }
+  }
+  if (room.status === "ended") {
+    return { room, listing: activeListing, entitlement: null, guestInviteStatus: null, allowed: false, decisionReason: "ended" }
+  }
+  if (room.status !== "live") {
+    return { room, listing: activeListing, entitlement: null, guestInviteStatus: null, allowed: false, decisionReason: "not_live" }
+  }
+  return {
+    room,
+    listing: activeListing,
+    entitlement: null,
+    guestInviteStatus: null,
     allowed: true,
     decisionReason: null,
   }

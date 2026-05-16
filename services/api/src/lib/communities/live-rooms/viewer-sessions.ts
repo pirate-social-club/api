@@ -76,6 +76,38 @@ export async function assertLiveRoomViewerSessionUid(client: LiveRoomViewerSessi
   })
 }
 
+export async function assertPublicLiveRoomViewerSessionUid(client: LiveRoomViewerSessionExecutor, input: {
+  communityId: string
+  liveRoomId: string
+  uid: number
+}): Promise<void> {
+  const row = await executeFirst(client, {
+    sql: `
+      SELECT viewer_user_id
+      FROM live_room_viewer_sessions
+      WHERE community_id = ?1
+        AND live_room_id = ?2
+        AND agora_uid = ?3
+      LIMIT 1
+    `,
+    args: [input.communityId, input.liveRoomId, input.uid],
+  }) as QueryResultRow | null
+  const viewerUserId = rowValue(row, "viewer_user_id")
+  if (typeof viewerUserId !== "string" || !viewerUserId) {
+    throw notFoundError("Live room viewer session not found")
+  }
+  await client.execute({
+    sql: `
+      UPDATE live_room_viewer_sessions
+      SET updated_at = ?4
+      WHERE community_id = ?1
+        AND live_room_id = ?2
+        AND agora_uid = ?3
+    `,
+    args: [input.communityId, input.liveRoomId, input.uid, nowIso()],
+  })
+}
+
 export async function deleteLiveRoomViewerSessions(client: LiveRoomViewerSessionExecutor, input: {
   communityId: string
   liveRoomId: string
