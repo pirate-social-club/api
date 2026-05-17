@@ -700,7 +700,11 @@ async function seedComment(
   const path = parentCommentId
     ? `/comments/${encodeURIComponent(parentCommentId)}/replies`
     : `/communities/${encodeURIComponent(communityId)}/posts/${encodeURIComponent(postId)}/comments`
-  const created = await requestJson<{ comment_id: string }>({
+  const created = await requestJson<{
+    comment_id?: string
+    id?: string
+    comment?: { comment_id?: string; id?: string }
+  }>({
     apiUrl: ctx.apiUrl,
     method: "POST",
     path,
@@ -711,11 +715,18 @@ async function seedComment(
     },
     ok: [201],
   })
-  ctx.comments.set(key, created.body.comment_id)
-  ctx.report.push(`created comment ${key} -> ${created.body.comment_id}${comment.seed_note ? ` (${comment.seed_note})` : ""}`)
-  await applyVotes(ctx, "comment", created.body.comment_id, comment.votes ?? [])
+  const createdCommentId = created.body.comment_id
+    ?? created.body.id?.replace(/^cmt_/, "")
+    ?? created.body.comment?.comment_id
+    ?? created.body.comment?.id?.replace(/^cmt_/, "")
+  if (!createdCommentId) {
+    throw new Error(`comment create response did not include comment_id or id for ${key}`)
+  }
+  ctx.comments.set(key, createdCommentId)
+  ctx.report.push(`created comment ${key} -> ${createdCommentId}${comment.seed_note ? ` (${comment.seed_note})` : ""}`)
+  await applyVotes(ctx, "comment", createdCommentId, comment.votes ?? [])
   for (const reply of comment.replies ?? []) {
-    await seedComment(ctx, community, communityId, postId, reply, `${key}.${reply.key}`, created.body.comment_id)
+    await seedComment(ctx, community, communityId, postId, reply, `${key}.${reply.key}`, createdCommentId)
   }
 }
 

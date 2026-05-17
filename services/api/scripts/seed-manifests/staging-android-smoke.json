@@ -1,0 +1,53 @@
+{
+  "name": "staging-android-smoke",
+  "description": "Pinned staging community for Android community, post, and comment smoke testing.",
+  "users": [
+    {
+      "key": "owner",
+      "subject": "android-staging-smoke-owner-20260517103926",
+      "synthetic": true,
+      "verify_unique_human": false
+    }
+  ],
+  "communities": [
+    {
+      "key": "functionality",
+      "community_id": "cmt_2a322e1b1c7f4028bd7cb8f8f19e5e2d",
+      "owner": "owner",
+      "create": {
+        "display_name": "Functionality Community",
+        "description": "Known-good staging board for Android community, post, and comment smoke testing.",
+        "governance_mode": "centralized",
+        "membership_mode": "request",
+        "default_age_gate_policy": "none",
+        "allow_anonymous_identity": false,
+        "handle_policy": {
+          "policy_template": "standard"
+        }
+      },
+      "members": [],
+      "followers": [],
+      "posts": [
+        {
+          "key": "welcome",
+          "author": "owner",
+          "body": {
+            "post_type": "text",
+            "title": "Android staging smoke post",
+            "body": "This post verifies Android can open a known-good staging community, post page, and comments.",
+            "idempotency_key": "android-staging-smoke-20260517103926-welcome",
+            "visibility": "public"
+          },
+          "comments": [
+            {
+              "key": "reply-note",
+              "author": "owner",
+              "idempotency_key": "android-staging-smoke-20260517103926-reply-note",
+              "body": "Android comment decode smoke."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
