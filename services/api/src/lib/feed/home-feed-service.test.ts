@@ -262,7 +262,7 @@ describe("sortHomeFeedProjectionRows", () => {
     ])
   })
 
-  test("sorts best by time-decayed engagement and pushes zero-engagement posts below engaged posts", () => {
+  test("sorts best by time-decayed engagement with a freshness floor", () => {
     const result = sortHomeFeedProjectionRows([
       row({ source_post_id: "pst_recent_zero", source_created_at: "2026-04-18T11:59:00.000Z" }),
       row({ source_post_id: "pst_old_upvoted", upvote_count: 2, source_created_at: "2026-04-18T00:00:00.000Z" }),
@@ -271,8 +271,20 @@ describe("sortHomeFeedProjectionRows", () => {
 
     expect(result.map((item) => item.source_post_id)).toEqual([
       "pst_recent_liked",
-      "pst_old_upvoted",
       "pst_recent_zero",
+      "pst_old_upvoted",
+    ])
+  })
+
+  test("lets fresh posts beat week-old posts with modest engagement in best", () => {
+    const result = sortHomeFeedProjectionRows([
+      row({ source_post_id: "pst_week_old_upvoted", upvote_count: 4, source_created_at: "2026-04-11T12:00:00.000Z" }),
+      row({ source_post_id: "pst_fresh_zero", source_created_at: "2026-04-18T11:55:00.000Z" }),
+    ], "best", now)
+
+    expect(result.map((item) => item.source_post_id)).toEqual([
+      "pst_fresh_zero",
+      "pst_week_old_upvoted",
     ])
   })
 

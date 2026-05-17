@@ -1,11 +1,35 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { createControlPlaneTestClient } from "./helpers"
+import { ensureSongArtifactBundleGeniusAnnotationsUrlColumn } from "../src/lib/song-artifacts/ensure-song-artifact-bundle-genius-annotations-url-column"
 import { ensureSongArtifactBundleTitleColumn } from "../src/lib/song-artifacts/ensure-song-artifact-bundle-title-column"
 
 const cleanupTasks: Array<() => Promise<void>> = []
 
 afterEach(async () => {
   await Promise.all(cleanupTasks.splice(0).map((cleanup) => cleanup()))
+})
+
+describe("ensureSongArtifactBundleGeniusAnnotationsUrlColumn", () => {
+  test("adds the Genius annotations URL column to a control-plane database missing the migration", async () => {
+    const setup = await createControlPlaneTestClient()
+    cleanupTasks.push(setup.cleanup)
+
+    await setup.client.execute("ALTER TABLE song_artifact_bundles DROP COLUMN genius_annotations_url")
+    expect(await listColumns(setup.client)).not.toContain("genius_annotations_url")
+
+    await ensureSongArtifactBundleGeniusAnnotationsUrlColumn(setup.client)
+    await ensureSongArtifactBundleGeniusAnnotationsUrlColumn(setup.client)
+
+    expect(await listColumns(setup.client)).toContain("genius_annotations_url")
+
+    const migration = await setup.client.execute({
+      sql: "SELECT checksum FROM schema_migrations WHERE migration_name = ?1 LIMIT 1",
+      args: ["0096_control_plane_song_artifact_bundle_genius_annotations_url.sql"],
+    })
+    expect(migration.rows[0]?.checksum).toBe(
+      "a2630c67b0c7dd722e925bd7162659feeb4d4c611521f46ade94e177eb5b5a6f",
+    )
+  })
 })
 
 async function listColumns(client: Awaited<ReturnType<typeof createControlPlaneTestClient>>["client"]): Promise<string[]> {

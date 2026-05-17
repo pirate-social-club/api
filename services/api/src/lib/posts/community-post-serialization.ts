@@ -53,6 +53,7 @@ export type PostRow = {
   media_refs_json: string | null
   song_artifact_bundle_id: string | null
   song_title: string | null
+  song_annotations_url: string | null
   song_cover_art_ref: string | null
   song_duration_ms: number | null
   source_language: string | null
@@ -119,6 +120,7 @@ export function toPostRow(row: unknown): PostRow {
     media_refs_json: stringOrNull(rowValue(row, "media_refs_json")),
     song_artifact_bundle_id: stringOrNull(rowValue(row, "song_artifact_bundle_id")),
     song_title: stringOrNull(rowValue(row, "song_title")),
+    song_annotations_url: stringOrNull(rowValue(row, "song_annotations_url")),
     song_cover_art_ref: stringOrNull(rowValue(row, "song_cover_art_ref")),
     song_duration_ms: numberOrNull(rowValue(row, "song_duration_ms")),
     source_language: stringOrNull(rowValue(row, "source_language")),
@@ -186,6 +188,7 @@ export function serializePost(row: PostRow): Post {
     media_refs: parseMediaRefs(row.media_refs_json),
     song_artifact_bundle_id: row.song_artifact_bundle_id,
     song_title: row.song_title,
+    song_annotations_url: row.song_annotations_url,
     song_cover_art_ref: row.song_cover_art_ref,
     song_duration_ms: row.song_duration_ms,
     source_language: row.source_language,

@@ -1266,6 +1266,7 @@ export type CreateSongArtifactBundleRequest = {
   primary_audio: SongArtifactUploadRef;
   title: string;
   lyrics: string;
+  genius_annotations_url?: string | null;
   cover_art?: SongArtifactUploadRef | null;
   preview_audio?: SongArtifactUploadRef | null;
   preview_window?: SongPreviewWindow | null;
@@ -1294,11 +1295,6 @@ export type CreatePostRequest = (((unknown & {
   title?: string | null;
   body?: string | null;
   link_url: string;
-} | {
-  post_type: "crosspost";
-  title: string;
-  source_post: string;
-  source_community: string;
 } | (unknown & {
   post_type: "song";
   identity_mode: "public";
@@ -1307,7 +1303,12 @@ export type CreatePostRequest = (((unknown & {
   commercial_rev_share_pct?: number | null;
   title?: string | null;
   media_refs?: Array<AudioMediaDescriptor>;
-})) & {
+}) | {
+  post_type: "crosspost";
+  title: string;
+  source_post: string;
+  source_community: string;
+}) & {
   idempotency_key: string;
   authorship_mode?: "human_direct" | "user_agent";
   agent?: string | null;
@@ -1454,6 +1455,7 @@ export type SongArtifactBundle = {
   media_refs: Array<MediaDescriptor>;
   lyrics: string;
   lyrics_sha256: string;
+  genius_annotations_url?: string | null;
   cover_art?: SongImageArtifactDescriptor | null;
   preview_audio?: SongAudioArtifactDescriptor | null;
   preview_window?: SongPreviewWindow | null;
@@ -1544,11 +1546,12 @@ export type Post = {
   access_mode?: "public" | "locked" | null;
   asset?: string | null;
   song_artifact_bundle?: string | null;
+  crosspost_source?: CrosspostSource | null;
   anchor_live_room?: string | null;
   anchor_live_room_status?: "scheduled" | "live" | "ended" | "canceled" | null;
   song_title?: string | null;
+  song_annotations_url?: string | null;
   parent_post?: string | null;
-  crosspost_source?: CrosspostSource | null;
   song_mode?: "original" | "remix" | null;
   rights_basis?: "none" | "original" | "derivative" | "attribution_only" | null;
   upstream_asset_refs?: Array<string> | null;

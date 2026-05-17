@@ -78,6 +78,7 @@ export function serializePost(post: Post): CurrentPostResponse {
     anchor_live_room_status: post.anchor_live_room_status ?? null,
     song_artifact_bundle: post.song_artifact_bundle_id ? publicId(post.song_artifact_bundle_id, "sab") : null,
     song_title: post.song_title,
+    song_annotations_url: post.song_annotations_url ?? null,
     parent_post: post.parent_post_id,
     crosspost_source: post.crosspost_source
       ? {

@@ -891,6 +891,7 @@ describe("openCommunityDb", () => {
       expect(beforePostColumns).not.toContain("song_title")
       expect(beforePostColumns).not.toContain("song_cover_art_ref")
       expect(beforePostColumns).not.toContain("song_duration_ms")
+      expect(beforePostColumns).not.toContain("song_annotations_url")
 
       await ensureRemotePostSongTitleColumn(client)
 
@@ -898,11 +899,14 @@ describe("openCommunityDb", () => {
       expect(afterPostColumns).toContain("song_title")
       expect(afterPostColumns).toContain("song_cover_art_ref")
       expect(afterPostColumns).toContain("song_duration_ms")
+      expect(afterPostColumns).toContain("song_annotations_url")
 
       const checksum = await getMigrationChecksum(databasePath, "1069_post_song_title.sql")
       expect(checksum).toBe("03a5f95f8fe4bec0492dd6d7a2c4c2d7d9e4df7e0af244dcd58cae869cb9e802")
       const presentationChecksum = await getMigrationChecksum(databasePath, "1075_post_song_presentation.sql")
       expect(presentationChecksum).toBe("46da9ddcae0b2c5328a943d36dbb819d476e84dc4a5b7ffc5cc1268835b06368")
+      const annotationsUrlChecksum = await getMigrationChecksum(databasePath, "1081_post_song_annotations_url.sql")
+      expect(annotationsUrlChecksum).toBe("4ffa5faa01551ecf40fdcdfdb8a4a892e359110b17d077c287fbc91584718b7b")
 
       await ensureRemotePostSongTitleColumn(client)
     } finally {

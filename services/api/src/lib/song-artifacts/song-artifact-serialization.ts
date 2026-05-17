@@ -34,6 +34,7 @@ export type SongArtifactBundleRow = {
   primary_audio_json: string
   lyrics_text: string
   lyrics_sha256: string
+  genius_annotations_url: string | null
   cover_art_json: string | null
   preview_audio_json: string | null
   preview_window_json: string | null
@@ -124,6 +125,7 @@ export function toSongArtifactBundleRow(row: unknown): SongArtifactBundleRow {
     primary_audio_json: requiredString(row, "primary_audio_json"),
     lyrics_text: requiredString(row, "lyrics_text"),
     lyrics_sha256: requiredString(row, "lyrics_sha256"),
+    genius_annotations_url: stringOrNull(rowValue(row, "genius_annotations_url")),
     cover_art_json: stringOrNull(rowValue(row, "cover_art_json")),
     preview_audio_json: stringOrNull(rowValue(row, "preview_audio_json")),
     preview_window_json: stringOrNull(rowValue(row, "preview_window_json")),
@@ -173,6 +175,7 @@ export function serializeSongArtifactBundle(row: SongArtifactBundleRow): SongArt
       : [],
     lyrics: row.lyrics_text,
     lyrics_sha256: row.lyrics_sha256,
+    genius_annotations_url: row.genius_annotations_url,
     cover_art: parseJsonValue(row.cover_art_json, null),
     preview_audio: parseJsonValue(row.preview_audio_json, null),
     preview_window: parseJsonValue(row.preview_window_json, null),

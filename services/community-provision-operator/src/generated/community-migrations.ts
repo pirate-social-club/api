@@ -3379,4 +3379,10 @@ SELECT 1;
 `,
     checksum: "1b72ebf9d27d7dbd047dd5f7d83bede1d80919ec15c3203080cd97825eeb899e",
   },
+  {
+    name: "1081_post_song_annotations_url.sql",
+    sql: `ALTER TABLE posts ADD COLUMN song_annotations_url TEXT;
+`,
+    checksum: "4ffa5faa01551ecf40fdcdfdb8a4a892e359110b17d077c287fbc91584718b7b",
+  },
 ] as const;

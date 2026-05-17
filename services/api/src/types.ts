@@ -366,6 +366,7 @@ export type Post = {
   anchor_live_room_status?: "scheduled" | "live" | "ended" | "canceled" | null
   song_artifact_bundle_id?: string | null
   song_title?: string | null
+  song_annotations_url?: string | null
   song_cover_art_ref?: string | null
   song_duration_ms?: number | null
   parent_post_id?: string | null

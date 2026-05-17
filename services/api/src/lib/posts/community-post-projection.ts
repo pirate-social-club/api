@@ -76,7 +76,7 @@ export function postSelectColumnsForSchema(schema: PostProjectionSchema): string
   visibility, title, body, caption, lyrics,
   link_url, link_og_image_url, link_og_title, ${boundedJsonProjection("link_enrichment_snapshot_json", sqlStringLiteral(OVERSIZED_LINK_ENRICHMENT_SNAPSHOT_JSON))}, link_enrichment_synced_at,
   ${boundedJsonProjection("embeds_json")}, ${boundedJsonProjection("media_refs_json")}, song_artifact_bundle_id, song_title,
-  song_cover_art_ref, song_duration_ms, source_language, translation_policy,
+  song_annotations_url, song_cover_art_ref, song_duration_ms, source_language, translation_policy,
   access_mode, asset_id, (
     SELECT live_room_id
     FROM live_rooms

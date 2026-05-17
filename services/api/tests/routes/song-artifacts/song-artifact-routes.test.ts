@@ -213,11 +213,62 @@ describe("song artifact routes", () => {
         },
         title: "Owner Song",
         lyrics: "Owner line",
+        genius_annotations_url: "https://www.genius.com/34172986",
       },
       ctx.env,
       owner.accessToken,
     )
     expect(bundleCreate.status).toBe(201)
+    const bundleCreateBody = await json(bundleCreate) as {
+      id: string
+      genius_annotations_url: string | null
+    }
+    expect(bundleCreateBody.genius_annotations_url).toBe("https://genius.com/34172986")
+
+    const bundleRead = await app.request(
+      `http://pirate.test/communities/${communityId}/song-artifacts/${bundleCreateBody.id}`,
+      {
+        headers: {
+          authorization: `Bearer ${owner.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(bundleRead.status).toBe(200)
+    const bundleReadBody = await json(bundleRead) as {
+      genius_annotations_url: string | null
+    }
+    expect(bundleReadBody.genius_annotations_url).toBe("https://genius.com/34172986")
+
+    const bundleList = await app.request(
+      `http://pirate.test/communities/${communityId}/song-artifacts?q=Owner&limit=10`,
+      {
+        headers: {
+          authorization: `Bearer ${owner.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(bundleList.status).toBe(200)
+    const bundleListBody = await json(bundleList) as {
+      items: Array<{ genius_annotations_url: string | null }>
+    }
+    expect(bundleListBody.items[0]?.genius_annotations_url).toBe("https://genius.com/34172986")
+
+    const invalidBundleCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifacts`,
+      {
+        primary_audio: {
+          song_artifact_upload: uploadIntentBody.id,
+        },
+        title: "Invalid Genius URL",
+        lyrics: "Owner line",
+        genius_annotations_url: "https://example.com/34172986",
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(invalidBundleCreate.status).toBe(400)
   })
 
   testWithTimeout("generates a server-side preview crop and uses it for locked song publication", async () => {
@@ -767,6 +818,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
         },
         title: "Published Song",
         lyrics: "Line one\nLine two",
+        genius_annotations_url: "https://www.genius.com/34172986",
       },
       ctx.env,
       author.accessToken,
@@ -831,11 +883,13 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
       post_type: string
       status: string
       song_artifact_bundle: string | null
+      song_annotations_url?: string | null
       media_refs?: Array<{ storage_ref: string }>
     }
     expect(postBody.post_type).toBe("song")
     expect(postBody.status).toBe("published")
     expect(postBody.song_artifact_bundle).toBe(bundleBody.id)
+    expect(postBody.song_annotations_url).toBe("https://genius.com/34172986")
     expect(postBody.media_refs?.[0]?.storage_ref).toBe(uploadIntentBody.storage_ref)
 
     const postRead = await app.request(
@@ -849,12 +903,16 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     )
     expect(postRead.status).toBe(200)
     const postReadBody = await json(postRead) as {
+      post?: {
+        song_annotations_url?: string | null
+      }
       song_presentation?: {
         title: string | null
         cover_art_ref: string | null
         duration_ms: number | null
       } | null
     }
+    expect(postReadBody.post?.song_annotations_url).toBe("https://genius.com/34172986")
     expect(postReadBody.song_presentation).toMatchObject({
       title: "Published Song",
       cover_art_ref: coverUploadIntentBody.storage_ref,

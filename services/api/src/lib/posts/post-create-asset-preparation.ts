@@ -57,6 +57,7 @@ export async function prepareSongPostAsset(input: {
       access_mode: accessMode,
       asset_id: input.body.asset_id ?? makeId("ast"),
       song_artifact_bundle: resolvedBundle.bundle.id,
+      song_annotations_url: resolvedBundle.bundle.genius_annotations_url ?? null,
       song_cover_art_ref: resolvedBundle.bundle.cover_art?.storage_ref ?? null,
       song_duration_ms: resolvedBundle.bundle.primary_audio.duration_ms ?? null,
       song_title: resolvedBundle.bundle.title,

@@ -131,6 +131,7 @@ async function createPostStoreTables(client: ReturnType<typeof createClient>, in
       media_refs_json TEXT,
       song_artifact_bundle_id TEXT,
       song_title TEXT,
+      song_annotations_url TEXT,
       song_cover_art_ref TEXT,
       song_duration_ms INTEGER,
       source_language TEXT,

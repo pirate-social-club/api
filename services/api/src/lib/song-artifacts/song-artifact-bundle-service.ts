@@ -39,6 +39,28 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+function normalizeGeniusAnnotationsUrl(input: string | null | undefined): string | null {
+  const value = input?.trim()
+  if (!value) {
+    return null
+  }
+
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    throw badRequestError("genius_annotations_url must be a Genius URL")
+  }
+
+  const hostname = url.hostname.toLowerCase()
+  if (url.protocol !== "https:" || (hostname !== "genius.com" && hostname !== "www.genius.com")) {
+    throw badRequestError("genius_annotations_url must be a Genius URL")
+  }
+
+  url.hostname = "genius.com"
+  return url.toString()
+}
+
 async function withSongBundleStep<T>(
   step: string,
   fields: Record<string, unknown>,
@@ -102,12 +124,14 @@ export async function createSongArtifactBundle(input: {
   if (input.body.preview_audio) {
     throw badRequestError("preview_audio uploads are not supported; use preview_window")
   }
+  const geniusAnnotationsUrl = normalizeGeniusAnnotationsUrl(input.body.genius_annotations_url)
   const previewWindow = parseSongPreviewWindow(input.body.preview_window)
   const requestStartedAt = Date.now()
   console.info("[song-artifacts] create bundle requested", {
     community_id: input.communityId,
     has_canvas_video: Boolean(input.body.canvas_video),
     has_cover_art: Boolean(input.body.cover_art),
+    has_genius_annotations_url: Boolean(geniusAnnotationsUrl),
     has_instrumental_audio: Boolean(input.body.instrumental_audio),
     has_preview_window: Boolean(previewWindow),
     has_vocal_audio: Boolean(input.body.vocal_audio),
@@ -229,6 +253,7 @@ export async function createSongArtifactBundle(input: {
       instrumentalAudio: instrumentalAudioUpload ? descriptorFromUpload(instrumentalAudioUpload) : null,
       vocalAudio: vocalAudioUpload ? descriptorFromUpload(vocalAudioUpload) : null,
       lyricsSha256,
+      geniusAnnotationsUrl,
       createdAt,
     }))
 

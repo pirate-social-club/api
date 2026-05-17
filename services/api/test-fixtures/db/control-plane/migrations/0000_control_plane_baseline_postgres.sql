@@ -895,6 +895,7 @@ CREATE TABLE song_artifact_bundles (
     primary_audio_json JSONB NOT NULL,
     lyrics_text TEXT NOT NULL,
     lyrics_sha256 TEXT NOT NULL,
+    genius_annotations_url TEXT,
     cover_art_json JSONB,
     preview_audio_json JSONB,
     canvas_video_json JSONB,

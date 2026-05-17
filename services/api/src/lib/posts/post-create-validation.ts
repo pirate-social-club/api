@@ -4,6 +4,7 @@ import type { CreatePostRequest } from "../../types"
 type StoryLicensePreset = NonNullable<CreatePostRequest["license_preset"]>
 
 export type PostWriteRequest = CreatePostRequest & {
+  song_annotations_url?: string | null
   song_cover_art_ref?: string | null
   song_duration_ms?: number | null
   song_title?: string | null

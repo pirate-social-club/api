@@ -5,6 +5,11 @@
         "migrationName": "0084_control_plane_altcha_used_challenges.sql",
         "oldChecksum": "5d0f0b7923b963c46ea2f8960497bf4b4b098a96e3a1bb93846f8e8564457f8c",
         "reason": "local ALTCHA migration drift before rate-limit table was added"
+      },
+      {
+        "migrationName": "0000_control_plane_baseline_postgres.sql",
+        "oldChecksum": "cedddc5f85541610502414b66cbad42d1678f298fbd92732cbc48cefbfa7e795",
+        "reason": "local song artifact bundle baseline drift before genius annotations URL was added"
       }
     ]
   }

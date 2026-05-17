@@ -8866,6 +8866,36 @@ const spec = {
               "altcha_required"
             ]
           },
+          "agent_posting_policy": {
+            "type": "string",
+            "enum": [
+              "disallow",
+              "review",
+              "allow_with_disclosure",
+              "allow"
+            ]
+          },
+          "agent_posting_scope": {
+            "type": "string",
+            "enum": [
+              "replies_only",
+              "top_level_and_replies"
+            ]
+          },
+          "agent_daily_post_cap": {
+            "type": "integer",
+            "nullable": true
+          },
+          "agent_daily_reply_cap": {
+            "type": "integer",
+            "nullable": true
+          },
+          "accepted_agent_ownership_providers": {
+            "type": "array",
+            "items": {
+              "$ref": "./agents.yaml#/AgentOwnershipProvider"
+            }
+          },
           "human_verification_lane": {
             "$ref": "./communities-core.yaml#/HumanVerificationLane"
           },
@@ -9385,10 +9415,9 @@ const spec = {
                 {
                   "allOf": [
                     {
-                      "required": [
-                        "song_artifact_bundle"
-                      ]
+                      "required": null
                     },
+                    "song_artifact_bundle",
                     {
                       "required": [
                         "lyrics"
@@ -9397,6 +9426,31 @@ const spec = {
                   ]
                 }
               ]
+            }
+          },
+          {
+            "required": [
+              "post_type",
+              "title",
+              "source_post",
+              "source_community"
+            ],
+            "properties": {
+              "post_type": {
+                "type": "string",
+                "enum": [
+                  "crosspost"
+                ]
+              },
+              "title": {
+                "type": "string"
+              },
+              "source_post": {
+                "type": "string"
+              },
+              "source_community": {
+                "type": "string"
+              }
             }
           }
         ],
@@ -9463,7 +9517,8 @@ const spec = {
               "image",
               "video",
               "link",
-              "song"
+              "song",
+              "crosspost"
             ]
           },
           "body": {
@@ -9477,6 +9532,14 @@ const spec = {
           "link_url": {
             "type": "string",
             "format": "uri",
+            "nullable": true
+          },
+          "source_post": {
+            "type": "string",
+            "nullable": true
+          },
+          "source_community": {
+            "type": "string",
             "nullable": true
           },
           "media_refs": {
@@ -9676,7 +9739,8 @@ const spec = {
               "image",
               "video",
               "link",
-              "song"
+              "song",
+              "crosspost"
             ]
           },
           "status": {
@@ -9794,6 +9858,10 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "crosspost_source": {
+            "$ref": "./posts.yaml#/CrosspostSource",
+            "nullable": true
+          },
           "anchor_live_room": {
             "type": "string",
             "nullable": true,
@@ -9811,6 +9879,11 @@ const spec = {
             "readOnly": true
           },
           "song_title": {
+            "type": "string",
+            "nullable": true,
+            "readOnly": true
+          },
+          "song_annotations_url": {
             "type": "string",
             "nullable": true,
             "readOnly": true
@@ -10513,6 +10586,10 @@ const spec = {
           "lyrics": {
             "type": "string"
           },
+          "genius_annotations_url": {
+            "type": "string",
+            "nullable": true
+          },
           "cover_art": {
             "$ref": "./song-artifacts.yaml#/SongArtifactUploadRef",
             "nullable": true
@@ -10604,6 +10681,10 @@ const spec = {
           },
           "lyrics_sha256": {
             "type": "string"
+          },
+          "genius_annotations_url": {
+            "type": "string",
+            "nullable": true
           },
           "cover_art": {
             "$ref": "./song-artifacts.yaml#/SongImageArtifactDescriptor",

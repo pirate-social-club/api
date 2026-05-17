@@ -154,6 +154,7 @@ export async function insertPost(input: {
   addValue("song_mode", input.body.song_mode ?? null)
   addValue("title", title)
   addValue("song_title", input.body.song_title ?? null)
+  addValue("song_annotations_url", input.body.song_annotations_url ?? null)
   addValue("song_cover_art_ref", input.body.song_cover_art_ref ?? null)
   addValue("song_duration_ms", input.body.song_duration_ms ?? null)
   addValue("body", input.body.body ?? null)

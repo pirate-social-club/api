@@ -136,6 +136,7 @@ export function buildDeletedPostStubResponse(input: {
     access_mode: null,
     asset_id: null,
     song_artifact_bundle_id: null,
+    song_annotations_url: null,
     parent_post_id: null,
     song_mode: null,
     rights_basis: null,

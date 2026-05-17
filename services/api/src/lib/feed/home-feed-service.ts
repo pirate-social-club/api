@@ -132,7 +132,7 @@ function getProjectionCreatedAtMs(row: HomeFeedProjectionRow): number {
 
 function getBestProjectionRank(row: HomeFeedProjectionRow, now: number): number {
   const ageHours = Math.max(0, (now - getProjectionCreatedAtMs(row)) / 3_600_000)
-  return getProjectionEngagementScore(row) / Math.pow(ageHours + 2, 1.5)
+  return (getProjectionEngagementScore(row) + 1) / Math.pow(ageHours + 2, 1.5)
 }
 
 function toHomeFeedProjectionRow(row: unknown): HomeFeedProjectionRow {
@@ -303,13 +303,13 @@ export function sortHomeFeedProjectionRows(
       return getProjectionCreatedAtMs(right) - getProjectionCreatedAtMs(left)
     }
 
-    const leftHasEngagement = getProjectionEngagementScore(left) > 0
-    const rightHasEngagement = getProjectionEngagementScore(right) > 0
-    if (leftHasEngagement !== rightHasEngagement) {
-      return rightHasEngagement ? 1 : -1
-    }
-
     if (sort === "top") {
+      const leftHasEngagement = getProjectionEngagementScore(left) > 0
+      const rightHasEngagement = getProjectionEngagementScore(right) > 0
+      if (leftHasEngagement !== rightHasEngagement) {
+        return rightHasEngagement ? 1 : -1
+      }
+
       const scoreDiff = getProjectionEngagementScore(right) - getProjectionEngagementScore(left)
       if (scoreDiff !== 0) {
         return scoreDiff

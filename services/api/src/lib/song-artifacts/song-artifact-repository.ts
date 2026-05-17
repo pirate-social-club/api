@@ -16,6 +16,7 @@ import {
   toSongArtifactBundleRow,
   toSongArtifactUploadRow,
 } from "./song-artifact-serialization"
+import { ensureSongArtifactBundleGeniusAnnotationsUrlColumn } from "./ensure-song-artifact-bundle-genius-annotations-url-column"
 import { ensureSongArtifactBundleTitleColumn } from "./ensure-song-artifact-bundle-title-column"
 import type { SongArtifactStorageProvider } from "./song-artifact-storage-provider"
 
@@ -46,10 +47,12 @@ async function getSongArtifactBundleRow(
   songArtifactBundleId: string,
 ): Promise<SongArtifactBundleRow | null> {
   await ensureSongArtifactBundleTitleColumn(client)
+  await ensureSongArtifactBundleGeniusAnnotationsUrlColumn(client)
   const row = await executeFirst(client, {
     sql: `
       SELECT song_artifact_bundle_id, community_id, creator_user_id, status, primary_audio_json,
-             title, lyrics_text, lyrics_sha256, cover_art_json, preview_audio_json, preview_window_json,
+             title, lyrics_text, lyrics_sha256, genius_annotations_url,
+             cover_art_json, preview_audio_json, preview_window_json,
              preview_status, preview_error, canvas_video_json,
              instrumental_audio_json, vocal_audio_json, translation_status, translation_error,
              translated_lyrics_ref, translated_lyrics_json, alignment_status, alignment_error,
@@ -222,9 +225,11 @@ export async function createSongArtifactBundleDraft(input: {
   instrumentalAudio: SongArtifactBundle["instrumental_audio"]
   vocalAudio: SongArtifactBundle["vocal_audio"]
   lyricsSha256: string
+  geniusAnnotationsUrl: string | null
   createdAt: string
 }): Promise<SongArtifactBundle> {
   await ensureSongArtifactBundleTitleColumn(input.client)
+  await ensureSongArtifactBundleGeniusAnnotationsUrlColumn(input.client)
   await input.client.execute({
     sql: `
       INSERT INTO song_artifact_bundles (
@@ -234,7 +239,7 @@ export async function createSongArtifactBundleDraft(input: {
         translation_error, translated_lyrics_ref, translated_lyrics_json, alignment_status,
         alignment_error, timed_lyrics_ref, timed_lyrics_json, moderation_status, moderation_error,
         moderation_result_ref, moderation_result_json, preview_window_json, preview_status,
-        preview_error, created_at, updated_at
+        preview_error, created_at, updated_at, genius_annotations_url
       ) VALUES (
         ?1, ?2, ?3, 'validating', ?4,
         ?5, ?6, ?7, ?8, ?9, ?10,
@@ -242,7 +247,7 @@ export async function createSongArtifactBundleDraft(input: {
         NULL, NULL, NULL, 'processing',
         NULL, NULL, NULL, 'processing', NULL,
         NULL, NULL, ?13, 'completed',
-        NULL, ?14, ?14
+        NULL, ?14, ?14, ?15
       )
     `,
     args: [
@@ -260,6 +265,7 @@ export async function createSongArtifactBundleDraft(input: {
       input.vocalAudio ? JSON.stringify(input.vocalAudio) : null,
       input.body.preview_window ? JSON.stringify(input.body.preview_window) : null,
       input.createdAt,
+      input.geniusAnnotationsUrl,
     ],
   })
 
@@ -399,12 +405,14 @@ export async function listSongArtifactBundles(input: {
   limit: number
 }): Promise<SongArtifactBundleListResponse> {
   await ensureSongArtifactBundleTitleColumn(input.client)
+  await ensureSongArtifactBundleGeniusAnnotationsUrlColumn(input.client)
   const query = input.query?.trim()
   const hasQuery = Boolean(query)
   const rows = await input.client.execute({
     sql: `
       SELECT song_artifact_bundle_id, community_id, creator_user_id, status, primary_audio_json,
-             title, lyrics_text, lyrics_sha256, cover_art_json, preview_audio_json, preview_window_json,
+             title, lyrics_text, lyrics_sha256, genius_annotations_url,
+             cover_art_json, preview_audio_json, preview_window_json,
              preview_status, preview_error, canvas_video_json,
              instrumental_audio_json, vocal_audio_json, translation_status, translation_error,
              translated_lyrics_ref, translated_lyrics_json, alignment_status, alignment_error,
