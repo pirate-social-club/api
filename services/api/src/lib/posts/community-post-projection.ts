@@ -44,6 +44,9 @@ export function boundedPostJsonProjection(value: string | null | undefined, repl
 export type PostProjectionSchema = {
   hasCommentLockColumns: boolean
   hasCrosspostSourceJson: boolean
+  hasSongAnnotationsUrl: boolean
+  hasSongCoverArtRef: boolean
+  hasSongDurationMs: boolean
 }
 
 export async function resolvePostProjectionSchema(executor: DbExecutor): Promise<PostProjectionSchema> {
@@ -55,6 +58,9 @@ export async function resolvePostProjectionSchema(executor: DbExecutor): Promise
       && columnNames.has("comments_locked_by_user_id")
       && columnNames.has("comments_lock_reason"),
     hasCrosspostSourceJson: columnNames.has("crosspost_source_json"),
+    hasSongAnnotationsUrl: columnNames.has("song_annotations_url"),
+    hasSongCoverArtRef: columnNames.has("song_cover_art_ref"),
+    hasSongDurationMs: columnNames.has("song_duration_ms"),
   }
 }
 
@@ -65,6 +71,15 @@ export function postSelectColumnsForSchema(schema: PostProjectionSchema): string
   const commentLockProjection = schema.hasCommentLockColumns
     ? "comments_locked, comments_locked_at, comments_locked_by_user_id, comments_lock_reason"
     : "0 AS comments_locked, NULL AS comments_locked_at, NULL AS comments_locked_by_user_id, NULL AS comments_lock_reason"
+  const songAnnotationsUrlProjection = schema.hasSongAnnotationsUrl
+    ? "song_annotations_url"
+    : "NULL AS song_annotations_url"
+  const songCoverArtRefProjection = schema.hasSongCoverArtRef
+    ? "song_cover_art_ref"
+    : "NULL AS song_cover_art_ref"
+  const songDurationMsProjection = schema.hasSongDurationMs
+    ? "song_duration_ms"
+    : "NULL AS song_duration_ms"
 
   return `
   post_id, community_id, author_user_id, authorship_mode, agent_id, agent_ownership_record_id,
@@ -76,7 +91,7 @@ export function postSelectColumnsForSchema(schema: PostProjectionSchema): string
   visibility, title, body, caption, lyrics,
   link_url, link_og_image_url, link_og_title, ${boundedJsonProjection("link_enrichment_snapshot_json", sqlStringLiteral(OVERSIZED_LINK_ENRICHMENT_SNAPSHOT_JSON))}, link_enrichment_synced_at,
   ${boundedJsonProjection("embeds_json")}, ${boundedJsonProjection("media_refs_json")}, song_artifact_bundle_id, song_title,
-  song_annotations_url, song_cover_art_ref, song_duration_ms, source_language, translation_policy,
+  ${songAnnotationsUrlProjection}, ${songCoverArtRefProjection}, ${songDurationMsProjection}, source_language, translation_policy,
   access_mode, asset_id, (
     SELECT live_room_id
     FROM live_rooms

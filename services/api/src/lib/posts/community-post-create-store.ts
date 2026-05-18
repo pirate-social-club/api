@@ -127,6 +127,17 @@ export async function insertPost(input: {
     columns.push(column)
     values.push(sql)
   }
+  const addOptionalMigratedValue = (column: string, value: unknown, hasColumn: boolean) => {
+    if (hasColumn) {
+      addValue(column, value)
+      return
+    }
+    if (value !== null && value !== undefined) {
+      throw providerUnavailable("Community database migration is still rolling out", {
+        missing_column: `posts.${column}`,
+      })
+    }
+  }
 
   addValue("post_id", postId)
   addValue("community_id", input.communityId)
@@ -154,9 +165,9 @@ export async function insertPost(input: {
   addValue("song_mode", input.body.song_mode ?? null)
   addValue("title", title)
   addValue("song_title", input.body.song_title ?? null)
-  addValue("song_annotations_url", input.body.song_annotations_url ?? null)
-  addValue("song_cover_art_ref", input.body.song_cover_art_ref ?? null)
-  addValue("song_duration_ms", input.body.song_duration_ms ?? null)
+  addOptionalMigratedValue("song_annotations_url", input.body.song_annotations_url ?? null, projectionSchema.hasSongAnnotationsUrl)
+  addOptionalMigratedValue("song_cover_art_ref", input.body.song_cover_art_ref ?? null, projectionSchema.hasSongCoverArtRef)
+  addOptionalMigratedValue("song_duration_ms", input.body.song_duration_ms ?? null, projectionSchema.hasSongDurationMs)
   addValue("body", input.body.body ?? null)
   addValue("caption", input.body.caption ?? null)
   addValue("visibility", visibility)
