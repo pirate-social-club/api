@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { createClient } from "@libsql/client"
 import { app } from "../../../src/index"
 import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
-import { solveTestAltchaPayload } from "../../altcha-test-helpers"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import {
   addCommunityMember,
@@ -746,21 +745,15 @@ membership_mode: "request",
 
 
 
-  test("post vote requires membership and proof-of-work but not hidden unique_human verification", async () => {
-    const ctx = await createRouteTestContext({
-      ALTCHA_HMAC_SECRET: "test-altcha-secret",
-      ALTCHA_HMAC_KEY_SECRET: "test-altcha-key-secret",
-      ALTCHA_POW_COST: "1",
-      ALTCHA_POW_COUNTER_MIN: "1",
-      ALTCHA_POW_COUNTER_MAX: "2",
-    })
+  test("post vote requires membership but not hidden unique_human verification or proof-of-work", async () => {
+    const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
 
     const creator = await exchangeJwt(ctx.env, "community-vote-creator")
     const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Pirate Voting Club",
-membership_mode: "request",
+      membership_mode: "request",
       namespace: {
         namespace_verification: namespaceVerificationId,
       },
@@ -786,16 +779,10 @@ membership_mode: "request",
 
     const unverifiedMember = await exchangeJwt(ctx.env, "community-unverified-voter")
     await addCommunityMember(ctx.communityDbRoot, communityCreateBody.community.id.replace(/^com_/, ""), unverifiedMember.userId)
-    const upvoteAltcha = await solveTestAltchaPayload({
-      env: ctx.env,
-      actorUserId: unverifiedMember.userId,
-      scope: "vote",
-      action: `post:${postBody.id}:1`,
-    })
 
     const allowedVote = await requestJson(
       `http://pirate.test/posts/${postBody.id}/vote`,
-      { value: 1, altcha: upvoteAltcha },
+      { value: 1 },
       ctx.env,
       unverifiedMember.accessToken,
     )
@@ -803,16 +790,10 @@ membership_mode: "request",
     const allowedBody = await json(allowedVote) as { post: string; value: number }
     expect(allowedBody.post).toBe(postBody.id)
     expect(allowedBody.value).toBe(1)
-    const downvoteAltcha = await solveTestAltchaPayload({
-      env: ctx.env,
-      actorUserId: unverifiedMember.userId,
-      scope: "vote",
-      action: `post:${postBody.id}:-1`,
-    })
 
     const updatedVote = await requestJson(
       `http://pirate.test/posts/${postBody.id}/vote`,
-      { value: -1, altcha: downvoteAltcha },
+      { value: -1 },
       ctx.env,
       unverifiedMember.accessToken,
     )
@@ -1021,15 +1002,7 @@ membership_mode: "request",
 
     const voteDeleted = await requestJson(
       `http://pirate.test/posts/${postBody.id}/vote`,
-      {
-        value: 1,
-        altcha: await solveTestAltchaPayload({
-          env: ctx.env,
-          actorUserId: member.userId,
-          scope: "vote",
-          action: `post:${postBody.id}:1`,
-        }),
-      },
+      { value: 1 },
       ctx.env,
       member.accessToken,
     )

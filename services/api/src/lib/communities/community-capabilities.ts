@@ -140,7 +140,7 @@ export function buildCommunityActionMatrix(preview: CommunityPreview): Community
         auth: "user_bearer",
       },
       user_vote: {
-        ...allowedDecision(["altcha"], "Use a normal Pirate user Bearer token and solve ALTCHA for the exact vote target and value."),
+        ...allowedDecision([], "Use a normal Pirate user Bearer token."),
         auth: "user_bearer",
       },
     },

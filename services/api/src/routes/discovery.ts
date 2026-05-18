@@ -209,7 +209,7 @@ function agentSkills(origin: string) {
       {
         id: "community-actions",
         title: "Interact with Pirate communities",
-        description: "Resolve communities, satisfy ALTCHA proof-of-work, join, post, reply, and vote through the API.",
+        description: "Resolve communities, join, post, reply, and vote through the API. Satisfy ALTCHA proof-of-work when required.",
         auth_required: true,
         links: [{ href: serviceDesc, rel: "service-desc", type: "application/vnd.oai.openapi+json" }],
       },

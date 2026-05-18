@@ -1,5 +1,5 @@
 import { Hono } from "hono"
-import { badRequestError, eligibilityFailed } from "../lib/errors"
+import { badRequestError } from "../lib/errors"
 import { getProfileRepository, getUserRepository } from "../lib/auth/repositories"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { authenticateAdminOrUser, type AuthenticatedEnv } from "../lib/auth-middleware"
@@ -8,11 +8,6 @@ import { castPostVote, getPost } from "../lib/posts/post-service"
 import { serializeLocalizedPostResponse } from "../serializers/post"
 import { decodePublicPostId } from "../lib/public-ids"
 import { writeAuditEventForEnv } from "../lib/audit"
-import {
-  ALTCHA_HEADER,
-  readAltchaProof,
-  verifyAndConsumeAltchaProof,
-} from "../lib/verification/altcha-provider"
 
 const posts = new Hono<AuthenticatedEnv>()
 
@@ -36,30 +31,12 @@ posts.get("/:postId", async (c) => {
 posts.post("/:postId/vote", async (c) => {
   const actor = c.get("actor")
   const communityRepository = getCommunityRepository(c.env)
-  const body = await c.req.json<{ value?: number; altcha?: string }>().catch(() => null)
+  const body = await c.req.json<{ value?: number }>().catch(() => null)
   if (!body || (body.value !== -1 && body.value !== 1)) {
     throw badRequestError("Vote value must be -1 or 1")
   }
 
   const postId = decodePublicPostId(c.req.param("postId"))
-  if (actor.authType !== "admin") {
-    const postRef = c.req.param("postId").startsWith("post_") ? c.req.param("postId") : `post_${c.req.param("postId")}`
-    const altchaProof = readAltchaProof({
-      headerValue: c.req.header(ALTCHA_HEADER),
-      body,
-      scope: "vote",
-      action: `post:${postRef}:${body.value}`,
-    })
-    const altchaResult = await verifyAndConsumeAltchaProof({
-      env: c.env,
-      actorUserId: actor.userId,
-      proof: altchaProof,
-    })
-    if (!altchaResult.verified) {
-      const reason = altchaResult.reason ?? "missing_proof"
-      throw eligibilityFailed(reason === "missing_proof" ? "ALTCHA proof is required for votes" : `ALTCHA verification failed: ${reason}`)
-    }
-  }
   const result = await castPostVote({
     env: c.env,
     userId: actor.userId,
