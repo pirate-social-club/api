@@ -69,12 +69,13 @@ export async function resolveLiveRoomViewerAccess(input: {
     liveRoomId: string,
   ) => Promise<LiveRoom>
 }): Promise<LiveRoomViewerAccessResolution> {
+  const room = await input.loadRoom(input.client, input.communityId, input.liveRoomId)
   const membership = await getCommunityMembershipState(input.client, input.communityId, input.userId)
-  if (!hasCommunityRole(membership, ["owner", "admin", "moderator"]) && membership.membership_status !== "member") {
+  const isProducer = room.host_user === input.userId || room.guest_user === input.userId
+  if (!isProducer && !hasCommunityRole(membership, ["owner", "admin", "moderator"]) && membership.membership_status !== "member") {
     throw notFoundError("Live room not found")
   }
 
-  const room = await input.loadRoom(input.client, input.communityId, input.liveRoomId)
   const guestInviteStatus = room.guest_user === input.userId
     ? await getLiveRoomGuestInviteStatus(input.client, {
       communityId: input.communityId,

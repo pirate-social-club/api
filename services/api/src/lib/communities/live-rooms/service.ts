@@ -538,11 +538,12 @@ export async function getLiveRoom(input: {
 }): Promise<LiveRoom> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
+    const room = await getHydratedLiveRoom(db.client, input.communityId, input.liveRoomId)
     const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
-    if (!hasCommunityRole(membership, ["owner", "admin", "moderator"]) && membership.membership_status !== "member") {
+    const isProducer = room.host_user === input.userId || room.guest_user === input.userId
+    if (!isProducer && !hasCommunityRole(membership, ["owner", "admin", "moderator"]) && membership.membership_status !== "member") {
       throw notFoundError("Live room not found")
     }
-    const room = await getHydratedLiveRoom(db.client, input.communityId, input.liveRoomId)
     if (room.visibility === "unlisted" && !canReadUnlistedLiveRoom({ membership, room, userId: input.userId })) {
       throw notFoundError("Live room not found")
     }

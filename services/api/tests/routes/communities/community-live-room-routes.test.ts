@@ -1619,7 +1619,7 @@ describe("community live-room routes", () => {
     expect(attachBody.agora.token_expires_at).toBeGreaterThan(Math.floor(Date.now() / 1000))
   })
 
-  test("guest attach requires accepted invite", async () => {
+  test("non-member guest can read and accept invite before attaching", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
 
@@ -1644,7 +1644,15 @@ describe("community live-room routes", () => {
     })
     expect(create.status).toBe(201)
     const room = await json(create) as { id: string }
-    await addCommunityMember(String(ctx.env.LOCAL_COMMUNITY_DB_ROOT), communityId, guest.userId)
+
+    const pendingGuestRoom = await app.request(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}`,
+      {
+        headers: { authorization: `Bearer ${guest.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(pendingGuestRoom.status).toBe(200)
 
     const pendingGuestAccess = await app.request(
       `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/access`,
