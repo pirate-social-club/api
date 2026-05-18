@@ -13,7 +13,7 @@ import type {
   VerificationSessionRow,
 } from "../auth/auth-db-rows"
 import type { VerySessionOutcome } from "./very-provider"
-import { assertVeryNativeOAuthConfigured, buildVerySessionBinding, getVeryProvider, VERY_UNIQUE_HUMAN_DOMAIN } from "./very-provider"
+import { assertVeryNativeConfigured, buildVerySessionBinding, getVeryProvider, VERY_UNIQUE_HUMAN_DOMAIN } from "./very-provider"
 import type { SelfSessionOutcome } from "./self-provider"
 import { canonicalizeRequestedCapabilities, getSelfProvider, normalizeVerificationRequirements } from "./self-provider"
 import { normalizeIdentityCountryCode } from "../identity/country-codes"
@@ -84,21 +84,20 @@ function readRecord(value: unknown): Record<string, unknown> | null {
     : null
 }
 
-function parseVeryNativeCompletionPayload(value: unknown): { code: string } | null {
+function parseVeryNativeCompletionPayload(value: unknown): { signedToken: string } | null {
   const record = readRecord(value)
   if (!record || record.mode !== "native_sdk") {
     return null
   }
-  const code = typeof record.code === "string" ? record.code.trim() : ""
-  if (!code) {
-    throw badRequestError("Very native SDK completion requires an authorization code")
+  const signedToken = typeof record.signed_token === "string"
+    ? record.signed_token.trim()
+    : typeof record.signedToken === "string"
+      ? record.signedToken.trim()
+      : ""
+  if (!signedToken) {
+    throw badRequestError("Very native SDK completion requires a signed token")
   }
-  return { code }
-}
-
-function nativeAuthCodeTtlMs(env: Env): number {
-  const raw = Number.parseInt(String(env.VERY_NATIVE_AUTH_CODE_TTL_SECONDS || "300"), 10)
-  return (Number.isInteger(raw) && raw > 0 ? raw : 300) * 1000
+  return { signedToken }
 }
 
 function resolveMinimumAgeToMint(
@@ -173,7 +172,7 @@ export async function startVerificationSession(
       }
     }
     if (providerMode === "native_sdk") {
-      assertVeryNativeOAuthConfigured(env)
+      assertVeryNativeConfigured(env)
       launch = { mode: "native_sdk" } as VerificationSessionLaunch
     } else {
       const provider = getVeryProvider(env)
@@ -535,7 +534,7 @@ async function completeVeryNativeSession(
   env: Env,
   row: VerificationSessionRow,
   input: VerificationCompletionInput,
-  nativePayload: { code: string } | null,
+  nativePayload: { signedToken: string } | null,
 ): Promise<VerificationSession> {
   if (!nativePayload) {
     throw badRequestError("Very native SDK completion requires a native SDK payload")
@@ -551,26 +550,21 @@ async function completeVeryNativeSession(
     return serializeVerificationSession({ row: updatedRow!, attestationRows: [] })
   }
 
-  const createdAtMs = Date.parse(row.created_at)
-  if (Number.isFinite(createdAtMs) && Date.now() - createdAtMs > nativeAuthCodeTtlMs(env)) {
-    throw eligibilityFailed("Very native SDK authorization code has expired")
-  }
-
   let outcome: VerySessionOutcome
   try {
     const provider = getVeryProvider(env)
     if (!provider.getNativeSessionOutcome) {
-      throw providerUnavailable("Very native SDK OAuth is not available")
+      throw providerUnavailable("Very native SDK completion is not available")
     }
     outcome = await provider.getNativeSessionOutcome({
-      authorizationCode: nativePayload.code,
+      signedToken: nativePayload.signedToken,
       verificationSessionId: input.verificationSessionId,
       userId: input.userId,
     })
   } catch (error) {
     const details = providerErrorDetails(error)
     throw providerUnavailable(
-      error instanceof Error ? error.message : "Very native SDK OAuth is unavailable",
+      error instanceof Error ? error.message : "Very native SDK completion is unavailable",
       details,
     )
   }

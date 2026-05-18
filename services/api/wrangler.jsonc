@@ -80,6 +80,7 @@
         "PIRATE_API_PUBLIC_ORIGIN": "https://api-staging.pirate.sc",
         "PIRATE_WEB_PUBLIC_ORIGIN": "https://staging.pirate.sc",
         "CORS_ALLOWED_ORIGINS": "https://staging.pirate.sc",
+        "VERY_APP_ID": "4d87383a-1f3e-486d-8df4-38a8ead86d10",
         "FILEBASE_MEDIA_BUCKET": "psc-media-bucket",
         "FILEBASE_S3_ENDPOINT": "https://s3.filebase.com",
         "FILEBASE_S3_REGION": "us-east-1",

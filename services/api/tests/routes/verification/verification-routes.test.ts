@@ -1096,12 +1096,9 @@ describe("verification routes", () => {
     })
   })
 
-  test("very native SDK sessions complete from a native authorization code", async () => {
+  test("very native SDK sessions complete from a native signed token", async () => {
     const ctx = await createRouteTestContext({
-      VERY_NATIVE_OAUTH_ENABLED: "true",
-      VERY_OAUTH_CLIENT_ID: "very-native-client",
-      VERY_OAUTH_CLIENT_SECRET: "very-native-secret",
-      VERY_OAUTH_REDIRECT_URI: "pirate://verification/callback",
+      VERY_APP_ID: "very-native-client",
     })
     cleanup = ctx.cleanup
 
@@ -1114,14 +1111,14 @@ describe("verification routes", () => {
       getSessionOutcome: async () => ({ status: "pending" }),
       getNativeSessionOutcome: async (input) => {
         nativeCompletionCalls += 1
-        expect(input.authorizationCode).toBe("native-code-1")
+        expect(input.signedToken).toBe("native-signed-token-1")
         return {
           status: "verified",
           attestationData: {
             external_user_id: "vu-native-user-1",
             nullifier_hash: nativeNullifierHash,
             proof_hash: "native-proof-hash-1",
-            provider_status: "native_oauth_verified",
+            provider_status: "native_signed_token_verified",
           },
         }
       },
@@ -1150,7 +1147,7 @@ describe("verification routes", () => {
       {
         provider_payload_ref: {
           mode: "native_sdk",
-          code: "native-code-1",
+          signed_token: "native-signed-token-1",
         },
       },
       ctx.env,
@@ -1174,57 +1171,6 @@ describe("verification routes", () => {
       args: [nativeNullifierHash],
     })
     expect(Number(nullifierRows.rows[0]?.count ?? 0)).toBe(1)
-  })
-
-  test("very native SDK completion rejects stale authorization codes before exchange", async () => {
-    const ctx = await createRouteTestContext({
-      VERY_NATIVE_AUTH_CODE_TTL_SECONDS: "1",
-      VERY_NATIVE_OAUTH_ENABLED: "true",
-      VERY_OAUTH_CLIENT_ID: "very-native-client",
-      VERY_OAUTH_CLIENT_SECRET: "very-native-secret",
-      VERY_OAUTH_REDIRECT_URI: "pirate://verification/callback",
-    })
-    cleanup = ctx.cleanup
-
-    setVeryProviderForTests({
-      startSession: async () => {
-        throw new Error("widget session should not start for native SDK mode")
-      },
-      getSessionOutcome: async () => ({ status: "pending" }),
-      getNativeSessionOutcome: async () => {
-        throw new Error("stale native auth code should be rejected before provider exchange")
-      },
-    } satisfies import("../../../src/lib/verification/very-provider").VeryProvider)
-
-    const session = await exchangeJwt(ctx.env, "verification-very-native-stale-user")
-    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
-      provider: "very",
-      provider_mode: "native_sdk",
-    }, ctx.env, session.accessToken)
-    expect(createdVerification.status).toBe(201)
-    const createdBody = await json(createdVerification) as { id: string }
-
-    await ctx.client.execute({
-      sql: "UPDATE verification_sessions SET created_at = ?2 WHERE verification_session_id = ?1",
-      args: [createdBody.id.replace(/^vs_/, ""), "2026-01-01T00:00:00.000Z"],
-    })
-
-    const completedVerification = await requestJson(
-      `http://pirate.test/verification-sessions/${createdBody.id}/complete`,
-      {
-        provider_payload_ref: {
-          mode: "native_sdk",
-          code: "stale-native-code",
-        },
-      },
-      ctx.env,
-      session.accessToken,
-    )
-    setVeryProviderForTests(null)
-
-    expect(completedVerification.status).toBe(403)
-    const completedBody = await json(completedVerification) as { message: string }
-    expect(completedBody.message).toBe("Very native SDK authorization code has expired")
   })
 
   test("self verification rejects native SDK provider mode", async () => {
@@ -1293,7 +1239,7 @@ describe("verification routes", () => {
       {
         provider_payload_ref: {
           mode: "native_sdk",
-          code: "native-code-for-widget-session",
+          signed_token: "native-signed-token-for-widget-session",
         },
       },
       ctx.env,
@@ -1307,10 +1253,7 @@ describe("verification routes", () => {
 
   test("very native SDK sessions require native SDK completion payloads", async () => {
     const ctx = await createRouteTestContext({
-      VERY_NATIVE_OAUTH_ENABLED: "true",
-      VERY_OAUTH_CLIENT_ID: "very-native-client",
-      VERY_OAUTH_CLIENT_SECRET: "very-native-secret",
-      VERY_OAUTH_REDIRECT_URI: "pirate://verification/callback",
+      VERY_APP_ID: "very-native-client",
     })
     cleanup = ctx.cleanup
 
