@@ -1,19 +1,16 @@
 import type { Client } from "../sql-client"
+import { hasReadableSongArtifactBundleColumn, isDuplicateColumnError } from "./song-artifact-schema-heal"
 
 const SONG_ARTIFACT_BUNDLE_TITLE_MIGRATION_NAME = "0080_control_plane_song_artifact_bundle_title.sql"
 const SONG_ARTIFACT_BUNDLE_TITLE_MIGRATION_CHECKSUM = "5051c88bdbf9d3278d5e23c049f88a5594b101d9de1e976744a76dcc51c6797e"
 
 const ensureTitleColumnPromises = new WeakMap<Client, Promise<void>>()
 
-function isDuplicateColumnError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error)
-  const normalized = message.toLowerCase()
-  return normalized.includes("duplicate column")
-    || normalized.includes("already exists")
-    || normalized.includes("42701")
-}
-
 async function ensureTitleColumnOnce(client: Client): Promise<void> {
+  if (await hasReadableSongArtifactBundleColumn(client, "title")) {
+    return
+  }
+
   try {
     await client.execute("ALTER TABLE song_artifact_bundles ADD COLUMN title TEXT")
   } catch (error) {

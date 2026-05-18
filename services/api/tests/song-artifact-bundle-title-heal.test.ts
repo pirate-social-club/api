@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { createControlPlaneTestClient } from "./helpers"
 import { ensureSongArtifactBundleGeniusAnnotationsUrlColumn } from "../src/lib/song-artifacts/ensure-song-artifact-bundle-genius-annotations-url-column"
 import { ensureSongArtifactBundleTitleColumn } from "../src/lib/song-artifacts/ensure-song-artifact-bundle-title-column"
+import type { Client, InStatement, QueryResult, Transaction } from "../src/lib/sql-client"
 
 const cleanupTasks: Array<() => Promise<void>> = []
 
@@ -10,6 +11,14 @@ afterEach(async () => {
 })
 
 describe("ensureSongArtifactBundleGeniusAnnotationsUrlColumn", () => {
+  test("does not run owner-only DDL when the Genius annotations URL column is already readable", async () => {
+    const client = createOwnerRestrictedReadableColumnClient("genius_annotations_url")
+
+    await ensureSongArtifactBundleGeniusAnnotationsUrlColumn(client)
+
+    expect(client.sql.some((sql) => sql.includes("ALTER TABLE"))).toBe(false)
+  })
+
   test("adds the Genius annotations URL column to a control-plane database missing the migration", async () => {
     const setup = await createControlPlaneTestClient()
     cleanupTasks.push(setup.cleanup)
@@ -38,6 +47,14 @@ async function listColumns(client: Awaited<ReturnType<typeof createControlPlaneT
 }
 
 describe("ensureSongArtifactBundleTitleColumn", () => {
+  test("does not run owner-only DDL when the title column is already readable", async () => {
+    const client = createOwnerRestrictedReadableColumnClient("title")
+
+    await ensureSongArtifactBundleTitleColumn(client)
+
+    expect(client.sql.some((sql) => sql.includes("ALTER TABLE"))).toBe(false)
+  })
+
   test("adds the title column to a baseline control-plane database", async () => {
     const setup = await createControlPlaneTestClient()
     cleanupTasks.push(setup.cleanup)
@@ -99,3 +116,32 @@ describe("ensureSongArtifactBundleTitleColumn", () => {
     )
   })
 })
+
+function sqlText(statement: InStatement | string): string {
+  return typeof statement === "string" ? statement : statement.sql
+}
+
+function createOwnerRestrictedReadableColumnClient(columnName: "genius_annotations_url" | "title"): Client & { sql: string[] } {
+  const sql: string[] = []
+  return {
+    sql,
+    async execute(statement: InStatement | string): Promise<QueryResult> {
+      const text = sqlText(statement)
+      sql.push(text)
+      if (text.includes("ALTER TABLE")) {
+        throw new Error("must be owner of table song_artifact_bundles")
+      }
+      if (text.includes(`SELECT ${columnName} FROM song_artifact_bundles LIMIT 0`)) {
+        return { rows: [] }
+      }
+      throw new Error(`unexpected SQL: ${text}`)
+    },
+    async batch(statements: InStatement[]): Promise<QueryResult[]> {
+      sql.push(...statements.map(sqlText))
+      return statements.map(() => ({ rows: [] }))
+    },
+    async transaction(): Promise<Transaction> {
+      throw new Error("unexpected transaction")
+    },
+  }
+}
