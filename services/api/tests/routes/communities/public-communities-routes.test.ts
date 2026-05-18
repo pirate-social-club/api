@@ -176,9 +176,9 @@ describe("public community routes", () => {
     expect(body.write.user_vote).toMatchObject({
       allowed: true,
       auth: "user_bearer",
-      requires: ["altcha"],
+      requires: [],
     })
-    expect(body.write.user_vote.hint).toContain("solve ALTCHA")
+    expect(body.write.user_vote.hint).toBe("Use a normal Pirate user Bearer token.")
     expect(body.raw_policy).toMatchObject({
       guest_comment_policy: "altcha_required",
       agent_posting_policy: "allow",
