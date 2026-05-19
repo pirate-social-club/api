@@ -19,6 +19,8 @@ export type PreparedLiveRoomCreate = {
   guestUserId: string | null
   eventStartAt: number | null
   coverRef: string | null
+  storeUrl: string | null
+  storeLabel: string | null
   allocations: Array<{ userId: string; role: "host" | "guest"; shareBps: number }>
   setlist: PreparedLiveRoomSetlist
 }
@@ -63,6 +65,8 @@ export function normalizeLiveRoomCreateRequest(input: {
     guestUserId,
     eventStartAt,
     coverRef: cleanString(input.body.cover_ref),
+    storeUrl: normalizeStoreUrl(input.body.store_url),
+    storeLabel: cleanString(input.body.store_label),
     allocations: normalizeAllocations({
       body: input.body,
       hostUserId: input.hostUserId,
@@ -147,6 +151,20 @@ function normalizeEventStartAt(value: unknown): number | null {
     throw badRequestError("event_start_at must be a Unix timestamp")
   }
   return parsed
+}
+
+function normalizeStoreUrl(value: unknown): string | null {
+  const storeUrl = cleanString(value)
+  if (!storeUrl) return null
+  try {
+    const url = new URL(storeUrl)
+    if (url.protocol === "http:" || url.protocol === "https:") {
+      return url.toString()
+    }
+  } catch {
+    // Fall through to the normalized validation error below.
+  }
+  throw badRequestError("store_url must be an HTTP(S) URL")
 }
 
 function normalizeUserId(value: unknown, field: string): string {

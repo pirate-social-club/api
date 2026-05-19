@@ -52,7 +52,10 @@ import {
 import type { CommunityListing } from "../../../types"
 import type {
   CreateLiveRoomRequest,
+  GuestAttachRequest,
+  HostAttachRequest,
   LiveRoom,
+  LiveRoomAttachClientKind,
   LiveRoomStatus,
   LiveRoomViewerRenewRequest,
   PublishLiveRoomRequest,
@@ -60,8 +63,11 @@ import type {
 
 export type {
   CreateLiveRoomRequest,
+  GuestAttachRequest,
+  HostAttachRequest,
   LiveRoom,
   LiveRoomAccessMode,
+  LiveRoomAttachClientKind,
   LiveRoomKind,
   LiveRoomRightsBasis,
   LiveRoomRightsStatus,
@@ -90,6 +96,35 @@ export type LiveRoomViewerAttachResponse = {
   access: LiveRoomAccessPayload
   runtime: LiveRoomRuntimeViewerAttachResponse["runtime"]
   agora: LiveRoomRuntimeViewerAttachResponse["agora"]
+}
+
+const LIVE_ROOM_ATTACH_CLIENT_KINDS = new Set<LiveRoomAttachClientKind>([
+  "web_host_console",
+  "desktop_native",
+  "android_native",
+])
+
+function normalizeLiveRoomAttachRequest(
+  body: HostAttachRequest | GuestAttachRequest | null,
+  message: string,
+): { clientKind: LiveRoomAttachClientKind | null; refresh: boolean } {
+  if (body == null) {
+    return { clientKind: null, refresh: false }
+  }
+  if (typeof body !== "object" || Array.isArray(body)) {
+    throw badRequestError(message)
+  }
+  const clientKind = body.client_kind ?? null
+  if (clientKind != null && !LIVE_ROOM_ATTACH_CLIENT_KINDS.has(clientKind)) {
+    throw badRequestError("client_kind must be web_host_console, desktop_native, or android_native")
+  }
+  if (body.refresh != null && typeof body.refresh !== "boolean") {
+    throw badRequestError("refresh must be a boolean")
+  }
+  return {
+    clientKind,
+    refresh: body.refresh ?? false,
+  }
 }
 
 export type PublishLiveRoomResponse = {
@@ -231,13 +266,13 @@ async function createLiveRoomInTransaction(input: {
       INSERT INTO live_rooms (
         live_room_id, community_id, anchor_post_id, host_user_id, guest_user_id,
         room_kind, status, access_mode, visibility, title, description, cover_ref,
-        event_start_at, live_started_at, ended_at, canceled_at, broadcast_ref,
-        replay_status, created_at, updated_at
+        store_url, store_label, event_start_at, live_started_at, ended_at, canceled_at,
+        broadcast_ref, replay_status, created_at, updated_at
       ) VALUES (
         ?1, ?2, ?3, ?4, ?5,
         ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-        ?13, NULL, NULL, NULL, NULL,
-        'none', ?14, ?14
+        ?13, ?14, ?15, NULL, NULL, NULL,
+        NULL, 'none', ?16, ?16
       )
     `,
     args: [
@@ -253,6 +288,8 @@ async function createLiveRoomInTransaction(input: {
       input.prepared.title,
       input.prepared.description,
       input.prepared.coverRef,
+      input.prepared.storeUrl,
+      input.prepared.storeLabel,
       input.prepared.eventStartAt,
       now,
     ],
@@ -841,8 +878,10 @@ export async function hostAttachLiveRoom(input: {
   userId: string
   communityId: string
   liveRoomId: string
+  body?: HostAttachRequest | null
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoomAttachResponse> {
+  normalizeLiveRoomAttachRequest(input.body ?? null, "Invalid live room host attach payload")
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
     const room = await getHydratedLiveRoom(db.client, input.communityId, input.liveRoomId)
@@ -886,8 +925,10 @@ export async function guestAttachLiveRoom(input: {
   userId: string
   communityId: string
   liveRoomId: string
+  body?: GuestAttachRequest | null
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoomAttachResponse> {
+  normalizeLiveRoomAttachRequest(input.body ?? null, "Invalid live room guest attach payload")
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
     const room = await getHydratedLiveRoom(db.client, input.communityId, input.liveRoomId)

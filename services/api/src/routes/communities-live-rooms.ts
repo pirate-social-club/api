@@ -16,10 +16,12 @@ import {
 } from "../lib/communities/live-rooms/service"
 import type {
   CreateLiveRoomRequest,
+  GuestAttachRequest,
+  HostAttachRequest,
   LiveRoomViewerRenewRequest,
   PublishLiveRoomRequest,
 } from "../lib/communities/live-rooms/types"
-import { getResolvedCommunityRouteContext, requireJsonBody } from "./communities-route-helpers"
+import { getResolvedCommunityRouteContext, optionalJsonBody, requireJsonBody } from "./communities-route-helpers"
 
 export function registerCommunityLiveRoomRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.post("/:communityId/live-rooms", async (c) => {
@@ -103,11 +105,13 @@ export function registerCommunityLiveRoomRoutes(communities: Hono<AuthenticatedE
   communities.post("/:communityId/live-rooms/:liveRoomId/host_attach", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     requireScope(actor, "live_room:attach")
+    const body = await optionalJsonBody<HostAttachRequest>(c, "Invalid live room host attach payload")
     const attach = await hostAttachLiveRoom({
       env: c.env,
       userId: actor.userId,
       communityId,
       liveRoomId: c.req.param("liveRoomId"),
+      body,
       communityRepository,
     })
     return c.json(attach, 200)
@@ -116,11 +120,13 @@ export function registerCommunityLiveRoomRoutes(communities: Hono<AuthenticatedE
   communities.post("/:communityId/live-rooms/:liveRoomId/guest_attach", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     requireScope(actor, "live_room:attach")
+    const body = await optionalJsonBody<GuestAttachRequest>(c, "Invalid live room guest attach payload")
     const attach = await guestAttachLiveRoom({
       env: c.env,
       userId: actor.userId,
       communityId,
       liveRoomId: c.req.param("liveRoomId"),
+      body,
       communityRepository,
     })
     return c.json(attach, 200)

@@ -388,6 +388,10 @@ describe("community live-room routes", () => {
     const body = readySoloRoomBody()
     body.performer_allocations[0].user = `usr_${owner.userId}`
     body.setlist.items[0]!.song_artifact_bundle = "sab_sab_livebundle"
+    Object.assign(body, {
+      store_url: " https://psc-zim-shop.fourthwall.com/ ",
+      store_label: " Event merch ",
+    })
 
     const response = await postLiveRoom({
       env: ctx.env,
@@ -402,6 +406,8 @@ describe("community live-room routes", () => {
       status: string
       anchor_post: string
       host_user: string
+      store_url: string | null
+      store_label: string | null
       performer_allocations: Array<{ user: string; share_bps: number }>
       setlist: { status: string; items: Array<{ title: string; rights_basis: string; song_artifact_bundle: string | null }> }
     }
@@ -410,6 +416,8 @@ describe("community live-room routes", () => {
     expect(room.status).toBe("scheduled")
     expect(room.anchor_post.startsWith("pst_")).toBe(true)
     expect(room.host_user).toBe(`usr_${owner.userId}`)
+    expect(room.store_url).toBe("https://psc-zim-shop.fourthwall.com/")
+    expect(room.store_label).toBe("Event merch")
     expect(room.performer_allocations[0]?.user).toBe(`usr_${owner.userId}`)
     expect(room.performer_allocations[0]?.share_bps).toBe(10000)
     expect(room.setlist.status).toBe("ready")
@@ -1242,7 +1250,11 @@ describe("community live-room routes", () => {
       `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/host_attach`,
       {
         method: "POST",
-        headers: { authorization: `Bearer ${owner.accessToken}` },
+        headers: {
+          authorization: `Bearer ${owner.accessToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ client_kind: "android_native", refresh: true }),
       },
       ctx.env,
     )
@@ -1617,6 +1629,20 @@ describe("community live-room routes", () => {
     expect(attachBody.agora.configured).toBe(true)
     expect(attachBody.agora.token).toMatch(/^007/)
     expect(attachBody.agora.token_expires_at).toBeGreaterThan(Math.floor(Date.now() / 1000))
+
+    const invalidAttach = await app.request(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/host_attach`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${owner.accessToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ client_kind: "ios_native" }),
+      },
+      ctx.env,
+    )
+    expect(invalidAttach.status).toBe(400)
   })
 
   test("non-member guest can read and accept invite before attaching", async () => {
@@ -1726,7 +1752,11 @@ describe("community live-room routes", () => {
       `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/guest_attach`,
       {
         method: "POST",
-        headers: { authorization: `Bearer ${guest.accessToken}` },
+        headers: {
+          authorization: `Bearer ${guest.accessToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ client_kind: "android_native", refresh: true }),
       },
       ctx.env,
     )

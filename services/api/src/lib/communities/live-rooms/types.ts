@@ -7,6 +7,7 @@ export type LiveRoomVisibility = "public" | "unlisted"
 export type LiveRoomSetlistStatus = "draft" | "ready" | "locked"
 export type LiveRoomRightsBasis = "original" | "licensed" | "cover" | "public_domain" | "unknown"
 export type LiveRoomRightsStatus = "pending" | "ready" | "blocked"
+export type LiveRoomAttachClientKind = "web_host_console" | "desktop_native" | "android_native"
 
 export type CreateLiveRoomRequest = {
   title?: string | null
@@ -17,6 +18,8 @@ export type CreateLiveRoomRequest = {
   guest_user?: string | null
   event_start_at?: number | null
   cover_ref?: string | null
+  store_url?: string | null
+  store_label?: string | null
   performer_allocations?: Array<{
     user?: string | null
     role?: "host" | "guest" | null
@@ -42,6 +45,16 @@ export type PublishLiveRoomRequest = {
   listing?: CreateCommunityListingRequest | null
 }
 
+export type HostAttachRequest = {
+  client_kind?: LiveRoomAttachClientKind | null
+  refresh?: boolean | null
+}
+
+export type GuestAttachRequest = {
+  client_kind?: LiveRoomAttachClientKind | null
+  refresh?: boolean | null
+}
+
 export type LiveRoom = {
   id: string
   object: "live_room"
@@ -56,6 +69,8 @@ export type LiveRoom = {
   title: string
   description: string | null
   cover_ref: string | null
+  store_url: string | null
+  store_label: string | null
   event_start_at: number | null
   live_started_at: number | null
   ended_at: number | null

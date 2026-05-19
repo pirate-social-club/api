@@ -29,6 +29,8 @@ export type LiveRoomRow = {
   title: string
   description: string | null
   cover_ref: string | null
+  store_url: string | null
+  store_label: string | null
   event_start_at: number | null
   live_started_at: number | null
   ended_at: number | null
@@ -73,8 +75,8 @@ export async function getLiveRoomRow(
     sql: `
       SELECT live_room_id, community_id, anchor_post_id, host_user_id, guest_user_id,
              room_kind, status, access_mode, visibility, title, description, cover_ref,
-             event_start_at, live_started_at, ended_at, canceled_at, broadcast_ref,
-             replay_status, created_at, updated_at
+             store_url, store_label, event_start_at, live_started_at, ended_at,
+             canceled_at, broadcast_ref, replay_status, created_at, updated_at
       FROM live_rooms
       WHERE community_id = ?1 AND live_room_id = ?2
       LIMIT 1
@@ -144,6 +146,8 @@ export async function hydrateLiveRoom(client: LiveRoomExecutor, room: LiveRoomRo
     title: room.title,
     description: room.description,
     cover_ref: room.cover_ref,
+    store_url: room.store_url,
+    store_label: room.store_label,
     event_start_at: room.event_start_at,
     live_started_at: room.live_started_at,
     ended_at: room.ended_at,
@@ -219,6 +223,8 @@ function rowToLiveRoom(row: QueryResultRow): LiveRoomRow {
     title: requiredString(row, "title"),
     description: stringOrNull(rowValue(row, "description")),
     cover_ref: stringOrNull(rowValue(row, "cover_ref")),
+    store_url: stringOrNull(rowValue(row, "store_url")),
+    store_label: stringOrNull(rowValue(row, "store_label")),
     event_start_at: numberOrNull(rowValue(row, "event_start_at")),
     live_started_at: numberOrNull(rowValue(row, "live_started_at")),
     ended_at: numberOrNull(rowValue(row, "ended_at")),

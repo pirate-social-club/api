@@ -3385,4 +3385,11 @@ SELECT 1;
 `,
     checksum: "4ffa5faa01551ecf40fdcdfdb8a4a892e359110b17d077c287fbc91584718b7b",
   },
+  {
+    name: "1082_live_room_store_links.sql",
+    sql: `ALTER TABLE live_rooms ADD COLUMN store_url TEXT;
+ALTER TABLE live_rooms ADD COLUMN store_label TEXT;
+`,
+    checksum: "d917df09668038021493e1c2bd453392287790eef0554205ffc339cf1d33148a",
+  },
 ] as const;
