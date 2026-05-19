@@ -510,6 +510,59 @@ membership_mode: "request",
     expect(metadata.owner_user_id).toBe(ownerSession.userId)
   })
 
+  test("admin token can update community song ACR policy", async () => {
+    const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
+    cleanup = ctx.cleanup
+
+    const ownerSession = await exchangeJwt(ctx.env, "admin-song-acr-owner")
+    await completeUniqueHumanVerification(ctx.env, ownerSession.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Admin Song ACR Club",
+      membership_mode: "request",
+      handle_policy: { policy_template: "standard" },
+    }, ctx.env, ownerSession.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: { id: string }
+    }
+    const communityId = communityCreateBody.community.id.replace(/^com_/, "")
+
+    const actingSession = await exchangeJwt(ctx.env, "admin-song-acr-actor")
+    const update = await app.request(
+      `http://pirate.test/communities/${communityId}/admin/song-acr-policy`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-admin-token": ADMIN_TOKEN,
+          "x-admin-as-user-id": actingSession.userId,
+        },
+        body: JSON.stringify({
+          song_acr_policy: "skip_for_trusted_uploaders",
+        }),
+      },
+      ctx.env,
+    )
+    expect(update.status).toBe(200)
+    const updateBody = await json(update) as { song_acr_policy: string }
+    expect(updateBody.song_acr_policy).toBe("skip_for_trusted_uploaders")
+
+    const read = await app.request(
+      `http://pirate.test/communities/${communityId}/admin/song-acr-policy`,
+      {
+        headers: {
+          "x-admin-token": ADMIN_TOKEN,
+          "x-admin-as-user-id": actingSession.userId,
+        },
+      },
+      ctx.env,
+    )
+    expect(read.status).toBe(200)
+    const readBody = await json(read) as { song_acr_policy: string }
+    expect(readBody.song_acr_policy).toBe("skip_for_trusted_uploaders")
+  })
+
   test("admin token can set gates on another users community", async () => {
     const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
     cleanup = ctx.cleanup

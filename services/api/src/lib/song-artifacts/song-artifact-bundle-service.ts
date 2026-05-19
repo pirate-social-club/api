@@ -1,5 +1,7 @@
 import type { UserRepository } from "../auth/repositories"
 import { openCommunityDb } from "../communities/community-db-factory"
+import { shouldSkipAcrForCommunitySettings } from "../communities/community-song-acr-policy-service"
+import { parseCommunitySettingsJson } from "../communities/create/shared"
 import {
   ANY_COMMUNITY_ROLE,
   hasCommunityRole,
@@ -159,6 +161,21 @@ export async function createSongArtifactBundle(input: {
     }, () => requireVerifiedHuman(input.userRepository, input.userId, {
       bypassForCommunityOwner: hasCommunityRole(membership, ANY_COMMUNITY_ROLE),
     }))
+    const skipAcrIdentification = await withSongBundleStep("resolve community song acr policy", {
+      community_id: input.communityId,
+    }, async () => {
+      const result = await db.client.execute({
+        sql: `
+          SELECT settings_json
+          FROM communities
+          WHERE community_id = ?1
+          LIMIT 1
+        `,
+        args: [input.communityId],
+      })
+      const settings = parseCommunitySettingsJson(result.rows[0]?.settings_json)
+      return shouldSkipAcrForCommunitySettings(settings)
+    })
     const client = getControlPlaneClient(input.env)
     const primaryAudioUpload = await withSongBundleStep("resolve primary audio upload", {
       community_id: input.communityId,
@@ -265,6 +282,7 @@ export async function createSongArtifactBundle(input: {
       env: input.env,
       lyrics,
       primaryAudioUpload,
+      skipAcrIdentification,
     }))
     const finalized = await withSongBundleStep("finalize bundle", {
       alignment_status: analysis.alignmentStatus,
