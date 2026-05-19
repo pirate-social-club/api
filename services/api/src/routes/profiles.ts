@@ -20,6 +20,7 @@ import {
   parseProfileActivityLimit,
   parseProfileActivityTab,
 } from "../lib/profile/profile-activity-read-service"
+import { getPostableCommunities } from "../lib/profile/postable-communities-service"
 import {
   serializeGlobalHandle,
   serializeHandleUpgradeQuote,
@@ -205,6 +206,16 @@ profiles.get("/me/activity", async (c) => {
     locale: c.req.query("locale") ?? null,
   })
   return c.json(serializeProfileActivityResponse(result), 200)
+})
+
+profiles.get("/me/postable-communities", async (c) => {
+  const actor = c.get("actor")
+  const result = await getPostableCommunities({
+    env: c.env,
+    repository: getCommunityRepository(c.env),
+    userId: actor.userId,
+  })
+  return c.json(result, 200)
 })
 
 profiles.post("/me", async (c) => {

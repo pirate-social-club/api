@@ -24,6 +24,7 @@ import type {
   NamespaceVerification,
 } from "../../../types"
 import { serializeCommunity, serializeJob } from "../community-serialization"
+import { syncCommunityAuthProjection } from "../community-auth-projection-service"
 import { serializeCommunityCreateAcceptedResponse } from "../../../serializers/community"
 import { openCommunityDb } from "../community-db-factory"
 import {
@@ -281,6 +282,16 @@ async function createNamespacelessCommunity(input: {
     })
     const localSnapshot = provisioned.localSnapshot
       ?? await loadCommunityLocalSnapshot(input.env, input.communityRepository, communityId)
+    if (localSnapshot) {
+      await syncCommunityAuthProjection({
+        env: input.env,
+        communityId,
+        displayName: localSnapshot.display_name,
+        avatarRef: localSnapshot.avatar_ref,
+        membershipGatePolicy: localSnapshot.gate_policy,
+        updatedAt: input.auth.createdAt,
+      })
+    }
     const resolvedBinding = await input.communityRepository.getPrimaryCommunityDatabaseBinding(communityId)
     const databaseUrl = resolvedBinding?.database_url ?? provisioned.binding.databaseUrl
 
@@ -380,6 +391,16 @@ async function finalizeExistingCommunity(input: {
     },
   })
   const local = await loadCommunityLocalSnapshot(input.env, input.communityRepository, input.existingCommunity.community_id)
+  if (local) {
+    await syncCommunityAuthProjection({
+      env: input.env,
+      communityId: input.existingCommunity.community_id,
+      displayName: local.display_name,
+      avatarRef: local.avatar_ref,
+      membershipGatePolicy: local.gate_policy,
+      updatedAt: nowIso(),
+    })
+  }
   return serializeCommunityCreateAcceptedResponse({
     community: serializeCommunity(input.env, finalized.community, local),
     job: serializeJob(finalized.job),
@@ -454,6 +475,16 @@ async function provisionNamespacedCommunity(input: {
       updatedAt: auth.createdAt,
     })
     localSnapshot = provisioned.localSnapshot ?? await loadCommunityLocalSnapshot(env, repo, communityId)
+    if (localSnapshot) {
+      await syncCommunityAuthProjection({
+        env,
+        communityId,
+        displayName: localSnapshot.display_name,
+        avatarRef: localSnapshot.avatar_ref,
+        membershipGatePolicy: localSnapshot.gate_policy,
+        updatedAt: auth.createdAt,
+      })
+    }
     const resolvedBinding = await repo.getPrimaryCommunityDatabaseBinding(communityId)
     const databaseUrl = resolvedBinding?.database_url ?? provisioned.binding.databaseUrl
 

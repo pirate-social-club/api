@@ -77,6 +77,8 @@ function buildCommunityRow(input: {
     status: "active",
     provisioning_state: "active",
     transfer_state: "none",
+    avatar_ref: null,
+    membership_has_altcha_pow: false,
     route_slug: null,
     namespace_verification_id: null,
     pending_namespace_verification_session_id: null,

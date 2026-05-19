@@ -72,24 +72,27 @@ export function buildDefaultCommunityAvatarRef(input: {
   communityId: string;
   displayName: string;
 }): string {
-  const hash = hashSeed(input.communityId.trim());
-  const hue = hash % 360;
-  const secondaryHue = (hue + 38) % 360;
-  const initials = escapeSvgText(buildInitials(input.displayName));
+  const seed = `${input.communityId.trim()}:${sanitizeLabel(input.displayName)}`;
+  const hash = hashSeed(seed);
+  const palette = [
+    { bg: "#243f46", fg: "#d9f0f2" },
+    { bg: "#314936", fg: "#e2f3de" },
+    { bg: "#3f3a5f", fg: "#ece8ff" },
+    { bg: "#4b4555", fg: "#f0eaf6" },
+    { bg: "#33465f", fg: "#e6eef8" },
+    { bg: "#4c4a37", fg: "#f4f0d9" },
+  ];
+  const colors = palette[hash % palette.length];
+  const initials = buildInitials(input.displayName);
+  const safeInitials = escapeSvgText(initials);
 
   return encodeSvg(
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="${initials}">
-      <defs>
-        <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stop-color="hsl(${hue} 78% 58%)" />
-          <stop offset="100%" stop-color="hsl(${secondaryHue} 82% 44%)" />
-        </linearGradient>
-      </defs>
-      <rect width="128" height="128" rx="64" fill="url(#g)" />
-      <circle cx="96" cy="32" r="18" fill="rgba(255,255,255,0.18)" />
+      <rect width="128" height="128" rx="64" fill="${colors.bg}" />
+      <path d="M24 92C38 74 53 65 68 65C83 65 95 72 104 86" fill="none" stroke="rgba(255,255,255,0.16)" stroke-width="10" stroke-linecap="round" />
       <text x="50%" y="55%" text-anchor="middle" dominant-baseline="middle"
-            fill="rgba(255,255,255,0.96)" font-family="Inter, Arial, sans-serif"
-            font-size="44" font-weight="700" letter-spacing="1">${initials}</text>
+            fill="${colors.fg}" font-family="system-ui, Arial, sans-serif"
+            font-size="44" font-weight="700">${safeInitials}</text>
     </svg>`,
   );
 }

@@ -228,6 +228,10 @@ CREATE TABLE communities (
     transfer_state TEXT NOT NULL CHECK (
         transfer_state IN ('none', 'pending', 'transferred', 'federated')
     ),
+    avatar_ref TEXT,
+    membership_has_altcha_pow INTEGER NOT NULL DEFAULT 0 CHECK (
+        membership_has_altcha_pow IN (0, 1)
+    ),
     route_slug TEXT,
     namespace_verification_id TEXT,
     pending_namespace_verification_session_id TEXT,

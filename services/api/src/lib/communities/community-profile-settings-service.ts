@@ -5,6 +5,7 @@ import type {
 import { notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import { openCommunityDb } from "./community-db-factory"
+import { syncCommunityAuthProjection } from "./community-auth-projection-service"
 import {
   assertUpdateCommunityRequest,
   communityMutationActorFromUserId,
@@ -94,6 +95,12 @@ export async function updateCommunity(input: {
         ? null
         : [...new Set(input.body.accepted_agent_ownership_providers)]
     }
+    if ("store_url" in input.body) {
+      nextSettings.store_url = input.body.store_url?.trim() || null
+    }
+    if ("store_label" in input.body) {
+      nextSettings.store_label = input.body.store_label?.trim() || null
+    }
 
     const now = nowIso()
     await db.client.execute({
@@ -116,6 +123,13 @@ export async function updateCommunity(input: {
         JSON.stringify(nextSettings),
         now,
       ],
+    })
+    await syncCommunityAuthProjection({
+      env: input.env,
+      communityId: input.communityId,
+      displayName: nextDisplayName,
+      avatarRef: nextAvatarRef,
+      updatedAt: now,
     })
   } finally {
     db.close()

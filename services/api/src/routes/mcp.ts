@@ -151,6 +151,8 @@ function mcpBoardProfile(c: McpContext, preview: CommunityPreview) {
     display_name: preview.display_name,
     description: preview.description ?? null,
     localized_text: preview.localized_text ?? null,
+    store_url: preview.store_url ?? null,
+    store_label: preview.store_label ?? null,
     namespace_verification: publicNamespaceVerificationId(preview.namespace_verification_id),
     route_slug: preview.route_slug ?? null,
     links: mcpCommunityLinks(c, preview),
@@ -465,6 +467,8 @@ async function callFindPirateBoardsTool(c: McpContext, rawArgs: unknown) {
           display_name: community.display_name,
           description: null,
           localized_text: null,
+          store_url: null,
+          store_label: null,
           namespace_verification: null,
           route_slug: community.route_slug,
           links: mcpCommunityLinks(c, {

@@ -22,7 +22,8 @@ import { firstRow } from "./auth-db-query-helpers"
 
 const COMMUNITY_ROW_COLUMNS = `
   community_id, creator_user_id, display_name, status, provisioning_state,
-  transfer_state, route_slug, namespace_verification_id, pending_namespace_verification_session_id,
+  transfer_state, avatar_ref, membership_has_altcha_pow, route_slug,
+  namespace_verification_id, pending_namespace_verification_session_id,
   primary_database_binding_id, follower_count, created_at, updated_at
 `
 

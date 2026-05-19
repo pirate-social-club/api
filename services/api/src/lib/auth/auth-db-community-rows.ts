@@ -13,6 +13,8 @@ export type CommunityRow = {
   status: "draft" | "active" | "frozen" | "archived" | "deleted" | "suspended"
   provisioning_state: "requested" | "provisioning" | "active" | "rotation_required" | "error"
   transfer_state: "none" | "pending" | "transferred" | "federated"
+  avatar_ref: string | null
+  membership_has_altcha_pow: boolean
   route_slug: string | null
   namespace_verification_id: string | null
   pending_namespace_verification_session_id: string | null
@@ -136,6 +138,8 @@ export function toCommunityRow(row: unknown): CommunityRow {
     status: requiredString(row, "status") as CommunityRow["status"],
     provisioning_state: requiredString(row, "provisioning_state") as CommunityRow["provisioning_state"],
     transfer_state: requiredString(row, "transfer_state") as CommunityRow["transfer_state"],
+    avatar_ref: stringOrNull(rowValue(row, "avatar_ref")),
+    membership_has_altcha_pow: requiredNumber(row, "membership_has_altcha_pow") === 1,
     route_slug: stringOrNull(rowValue(row, "route_slug")),
     namespace_verification_id: stringOrNull(rowValue(row, "namespace_verification_id")),
     pending_namespace_verification_session_id: stringOrNull(rowValue(row, "pending_namespace_verification_session_id")),

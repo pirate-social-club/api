@@ -7238,6 +7238,14 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "store_url": {
+            "type": "string",
+            "nullable": true
+          },
+          "store_label": {
+            "type": "string",
+            "nullable": true
+          },
           "namespace_verification": {
             "type": "string",
             "nullable": true
@@ -8825,6 +8833,14 @@ const spec = {
             "nullable": true
           },
           "banner_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "store_url": {
+            "type": "string",
+            "nullable": true
+          },
+          "store_label": {
             "type": "string",
             "nullable": true
           },

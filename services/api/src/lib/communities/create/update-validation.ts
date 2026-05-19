@@ -90,6 +90,8 @@ export type UpdateCommunityRequestBody = {
   description?: string | null
   avatar_ref?: string | null
   banner_ref?: string | null
+  store_url?: string | null
+  store_label?: string | null
   agent_posting_policy?: "disallow" | "review" | "allow_with_disclosure" | "allow" | null
   guest_comment_policy?: "disallow" | "altcha_required" | null
   agent_posting_scope?: "replies_only" | "top_level_and_replies" | null
@@ -393,6 +395,8 @@ export function assertUpdateCommunityRequest(
     || "description" in body
     || "avatar_ref" in body
     || "banner_ref" in body
+    || "store_url" in body
+    || "store_label" in body
     || "agent_posting_policy" in body
     || "guest_comment_policy" in body
     || "agent_posting_scope" in body
@@ -435,6 +439,34 @@ export function assertUpdateCommunityRequest(
     && typeof body.banner_ref !== "string"
   ) {
     throw badRequestError("Invalid banner_ref payload")
+  }
+
+  if (body.store_url !== undefined && body.store_url !== null) {
+    if (typeof body.store_url !== "string") {
+      throw badRequestError("Invalid store_url payload")
+    }
+    const trimmedStoreUrl = body.store_url.trim()
+    if (trimmedStoreUrl.length > 0) {
+      try {
+        const parsedStoreUrl = new URL(trimmedStoreUrl)
+        if (parsedStoreUrl.protocol !== "http:" && parsedStoreUrl.protocol !== "https:") {
+          throw badRequestError("Invalid store_url payload")
+        }
+      } catch (error) {
+        if (error && typeof error === "object" && "status" in error) {
+          throw error
+        }
+        throw badRequestError("Invalid store_url payload")
+      }
+    }
+  }
+
+  if (
+    body.store_label !== undefined
+    && body.store_label !== null
+    && typeof body.store_label !== "string"
+  ) {
+    throw badRequestError("Invalid store_label payload")
   }
 
   if (

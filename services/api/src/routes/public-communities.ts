@@ -150,6 +150,7 @@ function communityMarkdown(input: {
     "",
     `- JSON: ${input.links.self.href}`,
     `- Posts: ${input.links.posts?.href ?? ""}`,
+    ...(input.preview.store_url ? [`- Store: ${input.preview.store_url}`] : []),
     "",
     ...("member_count" in input.preview || "follower_count" in input.preview
       ? [

@@ -116,6 +116,42 @@ export function parseStoredReferenceLinks(
   }).sort((left, right) => left.position - right.position)
 }
 
+export function parseStoredCommunityStore(
+  storedSettings: Record<string, unknown>,
+): Pick<Community, "store_url" | "store_label"> {
+  const rawUrl = storedSettings.store_url
+  const rawLabel = storedSettings.store_label
+  const storeUrl = typeof rawUrl === "string" ? rawUrl.trim() : ""
+  const storeLabel = typeof rawLabel === "string" ? rawLabel.trim() : ""
+
+  if (!storeUrl) {
+    return {
+      store_url: null,
+      store_label: null,
+    }
+  }
+
+  try {
+    const parsedUrl = new URL(storeUrl)
+    if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+      return {
+        store_url: null,
+        store_label: null,
+      }
+    }
+  } catch {
+    return {
+      store_url: null,
+      store_label: null,
+    }
+  }
+
+  return {
+    store_url: storeUrl,
+    store_label: storeLabel || null,
+  }
+}
+
 export function parseStoredLabelPolicy(
   storedSettings: Record<string, unknown>,
 ): Community["label_policy"] {
@@ -295,6 +331,7 @@ function parseStoredAcceptedAgentOwnershipProvidersOrigin(
 export function serializeCommunity(env: Env, row: CommunityRow, local: LocalCommunitySnapshot | null): Community {
   const storedSettings = parseStoredCommunitySettings(local)
   const referenceLinks = parseStoredReferenceLinks(storedSettings)
+  const store = parseStoredCommunityStore(storedSettings)
   const labelPolicy = parseStoredLabelPolicy(storedSettings)
   const donationPartner = local?.donation_partner
     ? {
@@ -348,6 +385,8 @@ export function serializeCommunity(env: Env, row: CommunityRow, local: LocalComm
       displayName,
       bannerRef: local?.banner_ref,
     }),
+    store_url: store.store_url,
+    store_label: store.store_label,
     namespace_verification_id: row.namespace_verification_id,
     route_slug: row.route_slug,
     pending_namespace_verification_session_id: row.pending_namespace_verification_session_id,

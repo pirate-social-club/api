@@ -7,6 +7,7 @@ import { eligibilityFailed, internalError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import { writeAuditEventForEnv } from "../audit"
 import { openCommunityDb } from "./community-db-factory"
+import { syncCommunityAuthProjection } from "./community-auth-projection-service"
 import {
   assertPublicV0GateConfiguration,
   assertUpdateCommunityGatesRequest,
@@ -234,6 +235,12 @@ export async function updateCommunityGates(input: {
       previousGatePolicy,
       nextGatePolicy,
       createdAt: now,
+    })
+    await syncCommunityAuthProjection({
+      env: input.env,
+      communityId: input.communityId,
+      membershipGatePolicy: input.body.gate_policy ?? null,
+      updatedAt: now,
     })
   } finally {
     db.close()
