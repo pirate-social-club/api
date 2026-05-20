@@ -24,6 +24,11 @@ import {
 } from "./post-access"
 import { enforceCommunityActionGate } from "../communities/membership/eligibility-service"
 import {
+  canAccessCommunity,
+  getCommunityMembershipState,
+} from "../communities/membership/membership-state-store"
+import { getMembershipGatePolicy } from "../communities/membership/gate-policy-store"
+import {
   enqueueEmbedHydrateIfNeeded,
   enqueuePostLabelIfNeeded,
   enqueuePostTranslationPrewarmJobs,
@@ -82,16 +87,35 @@ export async function createPost(input: {
   try {
     const postAnalysisProvider = resolvePostAnalysisProvider(input.env)
     if (!input.bypassAuthorAccessChecks) {
-      await requireMemberAccess(db.client, input.communityId, input.userId)
-      await enforceCommunityActionGate({
-        env: input.env,
-        client: db.client,
-        userId: input.userId,
-        userRepository: input.userRepository,
-        communityId: input.communityId,
-        altchaScope: "post_create",
-        altchaProof: input.altchaProof,
-      })
+      const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
+      if (membership.membership_status === "banned") {
+        throw eligibilityFailed("You cannot post in this community")
+      }
+      if (canAccessCommunity(membership)) {
+        await enforceCommunityActionGate({
+          env: input.env,
+          client: db.client,
+          userId: input.userId,
+          userRepository: input.userRepository,
+          communityId: input.communityId,
+          altchaScope: "post_create",
+          altchaProof: input.altchaProof,
+        })
+      } else {
+        const membershipGatePolicy = await getMembershipGatePolicy(db.client, input.communityId)
+        if (!membershipGatePolicy) {
+          await requireMemberAccess(db.client, input.communityId, input.userId)
+        }
+        await enforceCommunityActionGate({
+          env: input.env,
+          client: db.client,
+          userId: input.userId,
+          userRepository: input.userRepository,
+          communityId: input.communityId,
+          altchaScope: "post_create",
+          altchaProof: input.altchaProof,
+        })
+      }
     }
 
     const idempotencyKey = input.body.idempotency_key?.trim() ?? ""
