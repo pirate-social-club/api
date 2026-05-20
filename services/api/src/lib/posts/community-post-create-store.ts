@@ -185,6 +185,9 @@ export async function insertPost(input: {
     addValue("crosspost_source_json", crosspostSourceJson)
   }
   addValue("upstream_asset_refs_json", upstreamAssetRefsJson)
+  addOptionalMigratedValue("source_start_ms", input.body.source_start_ms ?? null, projectionSchema.hasSourceTimingColumns)
+  addOptionalMigratedValue("source_duration_ms", input.body.source_duration_ms ?? null, projectionSchema.hasSourceTimingColumns)
+  addOptionalMigratedValue("sync_offset_ms", input.body.sync_offset_ms ?? null, projectionSchema.hasSourceTimingColumns)
   addValue("analysis_state", analysisState)
   addSql("analysis_result_ref", "NULL")
   addValue("content_safety_state", contentSafetyState)

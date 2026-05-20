@@ -33,6 +33,7 @@ import type {
   CommunityPurchaseSettlementRequest,
   CreateCommunityListingRequest,
   DerivativeSourceKind,
+  DerivativeSourceScope,
   UpdateCommunityListingRequest,
   UpdateCommunityMoneyPolicyRequest,
   UpdateCommunityPricingPolicyRequest,
@@ -69,6 +70,16 @@ function derivativeSourceKind(value: string | undefined): DerivativeSourceKind |
     return "song"
   }
   throw badRequestError("Invalid derivative source kind")
+}
+
+function derivativeSourceScope(value: string | undefined): DerivativeSourceScope {
+  if (value === undefined || value.trim() === "") {
+    return "community"
+  }
+  if (value === "community" || value === "global") {
+    return value
+  }
+  throw badRequestError("Invalid derivative source scope")
 }
 
 export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedEnv>): void {
@@ -135,6 +146,7 @@ export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedE
       userId: actor.userId,
       communityId,
       kind: derivativeSourceKind(c.req.query("kind")),
+      scope: derivativeSourceScope(c.req.query("scope")),
       query: c.req.query("q") ?? null,
       limit: commerceListLimit(c.req.query("limit")),
       communityRepository,

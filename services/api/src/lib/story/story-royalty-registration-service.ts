@@ -82,18 +82,9 @@ function resolveStoryRoyaltySpgNftContract(env: Pick<Env, "STORY_ROYALTY_SPG_NFT
   return /^0x[a-fA-F0-9]{40}$/.test(value) ? value as `0x${string}` : null
 }
 
-function resolveStoryRoyaltyCommercialRevSharePct(
-  env: Pick<Env, "STORY_ROYALTY_COMMERCIAL_REV_SHARE_PCT">,
-): number | null {
-  const raw = String(env.STORY_ROYALTY_COMMERCIAL_REV_SHARE_PCT || "").trim()
-  if (!raw) return null
-  const parsed = Number(raw)
-  return Number.isInteger(parsed) && parsed >= 0 && parsed <= 100 ? parsed : null
-}
-
 function validateCommercialRevSharePct(value: number | null | undefined): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 100) {
-    throw new Error("commercialRevSharePct must be an integer from 0 to 100")
+    throw new Error("commercialRevSharePct must be set per song as an integer from 0 to 100")
   }
   return value
 }
@@ -131,12 +122,9 @@ export function resolvePilTermsForLicense(input: {
 }
 
 export function isStoryRoyaltyRegistrationConfigured(
-  env: Pick<Env, "STORY_ROYALTY_SPG_NFT_CONTRACT" | "STORY_ROYALTY_COMMERCIAL_REV_SHARE_PCT">,
+  env: Pick<Env, "STORY_ROYALTY_SPG_NFT_CONTRACT">,
 ): boolean {
-  return Boolean(
-    resolveStoryRoyaltySpgNftContract(env)
-    && resolveStoryRoyaltyCommercialRevSharePct(env) !== null,
-  )
+  return Boolean(resolveStoryRoyaltySpgNftContract(env))
 }
 
 function resolveStoryRoyaltyDefaultMintingFee(
@@ -355,20 +343,6 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
 
   const royaltyPolicy = resolveStoryRoyaltyPolicyAddress(input.env)
   const defaultMintingFee = resolveStoryRoyaltyDefaultMintingFee(input.env)
-  const licenseTerms = rightsBasis === "original"
-    ? resolvePilTermsForLicense({
-      licensePreset: requireOriginalLicensePreset(input.licensePreset),
-      commercialRevSharePct: input.commercialRevSharePct,
-      defaultMintingFee,
-      currency: WIP_TOKEN_ADDRESS,
-      royaltyPolicy,
-    })
-    : PILFlavor.commercialRemix({
-      commercialRevShare: validateCommercialRevSharePct(resolveStoryRoyaltyCommercialRevSharePct(input.env)),
-      defaultMintingFee,
-      currency: WIP_TOKEN_ADDRESS,
-      royaltyPolicy,
-    })
   const maxLicenseTokens = resolveStoryRoyaltyMaxLicenseTokens(input.env)
 
   if (rightsBasis === "derivative") {
@@ -409,6 +383,14 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
       storyDerivativeRegisteredAt: nowIso(),
     }
   }
+
+  const licenseTerms = resolvePilTermsForLicense({
+    licensePreset: requireOriginalLicensePreset(input.licensePreset),
+    commercialRevSharePct: input.commercialRevSharePct,
+    defaultMintingFee,
+    currency: WIP_TOKEN_ADDRESS,
+    royaltyPolicy,
+  })
 
   const originalResponse = await client.ipAsset.registerIpAsset({
     nft: {

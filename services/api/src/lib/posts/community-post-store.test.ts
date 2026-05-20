@@ -141,6 +141,9 @@ async function createPostStoreTables(client: ReturnType<typeof createClient>, in
       parent_post_id TEXT,
       ${input.crosspostSourceJson === false ? "" : "crosspost_source_json TEXT,"}
       upstream_asset_refs_json TEXT,
+      source_start_ms INTEGER,
+      source_duration_ms INTEGER,
+      sync_offset_ms INTEGER,
       song_mode TEXT,
       rights_basis TEXT,
       analysis_state TEXT NOT NULL,
@@ -271,6 +274,43 @@ describe("getPostById", () => {
     expect(created.crosspost_source).toBeNull()
     expect(read?.title).toBe("Pre-migration post")
     expect(read?.crosspost_source).toBeNull()
+  })
+
+  test("persists source timing for licensed performance video posts", async () => {
+    const client = createClient({ url: "file::memory:" })
+    clients.push(client)
+    await createPostStoreTables(client)
+
+    const created = await insertPost({
+      client,
+      communityId: "cmt_test",
+      authorUserId: "usr_test",
+      body: {
+        idempotency_key: "licensed-performance-video",
+        post_type: "video",
+        title: "Dance take",
+        rights_basis: "licensed_performance",
+        upstream_asset_refs: ["story:asset:ast_source_song"],
+        source_start_ms: 12_000,
+        source_duration_ms: 15_000,
+        sync_offset_ms: -250,
+        media_refs: [{
+          storage_ref: "video_upload",
+          mime_type: "video/mp4",
+        }],
+      },
+      createdAt: "2026-05-06T00:00:00.000Z",
+    })
+    const read = await getPostById(client, created.post_id)
+
+    expect(created.rights_basis).toBe("licensed_performance")
+    expect(created.upstream_asset_refs).toEqual(["story:asset:ast_source_song"])
+    expect(created.source_start_ms).toBe(12_000)
+    expect(created.source_duration_ms).toBe(15_000)
+    expect(created.sync_offset_ms).toBe(-250)
+    expect(read?.source_start_ms).toBe(12_000)
+    expect(read?.source_duration_ms).toBe(15_000)
+    expect(read?.sync_offset_ms).toBe(-250)
   })
 })
 
@@ -442,6 +482,66 @@ describe("assertPostCreateRequest", () => {
         "cmt_test",
       )
     ).not.toThrow()
+  })
+
+  test("allows licensed performance video posts with source timing", () => {
+    expect(() =>
+      assertPostCreateRequest(
+        videoAssetRequest({
+          access_mode: undefined,
+          license_preset: undefined,
+          rights_basis: "licensed_performance",
+          upstream_asset_refs: ["story:asset:ast_source_song"],
+          source_start_ms: 12_000,
+          source_duration_ms: 15_000,
+          sync_offset_ms: -250,
+        }),
+        "cmt_test",
+      )
+    ).not.toThrow()
+  })
+
+  test("requires source metadata for licensed performance video posts", () => {
+    expect(() =>
+      assertPostCreateRequest(
+        videoAssetRequest({
+          access_mode: undefined,
+          license_preset: undefined,
+          rights_basis: "licensed_performance",
+          upstream_asset_refs: [],
+          source_start_ms: 12_000,
+          source_duration_ms: 15_000,
+        }),
+        "cmt_test",
+      )
+    ).toThrow("licensed performance video posts require upstream_asset_refs")
+
+    expect(() =>
+      assertPostCreateRequest(
+        videoAssetRequest({
+          access_mode: undefined,
+          license_preset: undefined,
+          rights_basis: "licensed_performance",
+          upstream_asset_refs: ["story:asset:ast_source_song"],
+          source_start_ms: 12_000,
+        }),
+        "cmt_test",
+      )
+    ).toThrow("licensed performance video posts require source_duration_ms")
+  })
+
+  test("keeps derivative video posts blocked", () => {
+    expect(() =>
+      assertPostCreateRequest(
+        videoAssetRequest({
+          access_mode: undefined,
+          license_preset: undefined,
+          rights_basis: "derivative",
+          upstream_asset_refs: ["story:asset:ast_source_song"],
+        }),
+        "cmt_test",
+      )
+    ).toThrow("derivative video posts are not supported yet")
   })
 
   test("rejects video license fields when no locked video asset is created", () => {

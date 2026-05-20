@@ -9,6 +9,9 @@ import type { Env } from "../../env"
 import type { CreatePostRequest } from "../../types"
 import type { PostWriteRequest } from "./post-create-validation"
 
+type SongPostCreateRequest = Extract<CreatePostRequest, { post_type: "song" }>
+type VideoPostCreateRequest = Extract<CreatePostRequest, { post_type: "video" }>
+
 export type PreparedSongPostAsset = {
   writeBody: PostWriteRequest
   resolvedSongBundleForAsset: Awaited<ReturnType<typeof resolveSongPostBundle>>
@@ -23,7 +26,7 @@ export async function prepareSongPostAsset(input: {
   env: Env
   userId: string
   communityId: string
-  body: CreatePostRequest
+  body: SongPostCreateRequest
 }): Promise<PreparedSongPostAsset> {
   const accessMode = input.body.access_mode ?? "public"
   const resolvedBundle = await resolveSongPostBundle({
@@ -71,9 +74,10 @@ export async function prepareVideoPostAsset(input: {
   requestUrl: string
   userId: string
   communityId: string
-  body: CreatePostRequest
+  body: VideoPostCreateRequest
 }): Promise<PreparedVideoPostAsset> {
   const accessMode = input.body.access_mode ?? "public"
+  const shouldCreateAsset = (input.body.identity_mode ?? "public") === "public"
   const resolvedVideo = await resolveVideoPostAsset({
     env: input.env,
     userId: input.userId,
@@ -113,10 +117,10 @@ export async function prepareVideoPostAsset(input: {
   return {
     writeBody: {
       ...input.body,
-      identity_mode: "public",
+      identity_mode: accessMode === "locked" ? "public" : input.body.identity_mode ?? "public",
       media_refs: accessMode === "locked" ? lockedPosterMediaRefs : publicVideoMediaRefs,
       access_mode: input.body.access_mode,
-      asset_id: input.body.access_mode ? input.body.asset_id ?? makeId("ast") : input.body.asset_id,
+      asset_id: shouldCreateAsset ? input.body.asset_id ?? makeId("ast") : null,
       rights_basis: input.body.rights_basis ?? (input.body.license_preset || accessMode === "locked" ? "original" : "none"),
     },
     resolvedVideoAsset: resolvedVideo,

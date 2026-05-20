@@ -65,6 +65,9 @@ export type PostRow = {
   parent_post_id: string | null
   crosspost_source_json: string | null
   upstream_asset_refs_json: string | null
+  source_start_ms: number | null
+  source_duration_ms: number | null
+  sync_offset_ms: number | null
   song_mode: Post["song_mode"]
   rights_basis: Post["rights_basis"]
   analysis_state: Post["analysis_state"]
@@ -132,6 +135,9 @@ export function toPostRow(row: unknown): PostRow {
     parent_post_id: stringOrNull(rowValue(row, "parent_post_id")),
     crosspost_source_json: stringOrNull(rowValue(row, "crosspost_source_json")),
     upstream_asset_refs_json: stringOrNull(rowValue(row, "upstream_asset_refs_json")),
+    source_start_ms: numberOrNull(rowValue(row, "source_start_ms")),
+    source_duration_ms: numberOrNull(rowValue(row, "source_duration_ms")),
+    sync_offset_ms: numberOrNull(rowValue(row, "sync_offset_ms")),
     song_mode: stringOrNull(rowValue(row, "song_mode")) as Post["song_mode"],
     rights_basis: stringOrNull(rowValue(row, "rights_basis")) as Post["rights_basis"],
     analysis_state: requiredString(row, "analysis_state") as Post["analysis_state"],
@@ -200,6 +206,9 @@ export function serializePost(row: PostRow): Post {
     parent_post_id: row.parent_post_id,
     crosspost_source: parseCrosspostSource(row.crosspost_source_json),
     upstream_asset_refs: parseStringArray(row.upstream_asset_refs_json),
+    source_start_ms: row.source_start_ms,
+    source_duration_ms: row.source_duration_ms,
+    sync_offset_ms: row.sync_offset_ms,
     song_mode: row.song_mode,
     rights_basis: row.rights_basis,
     analysis_state: row.analysis_state,

@@ -6,6 +6,8 @@ const POST_SONG_PRESENTATION_MIGRATION_NAME = "1075_post_song_presentation.sql"
 const POST_SONG_PRESENTATION_MIGRATION_CHECKSUM = "46da9ddcae0b2c5328a943d36dbb819d476e84dc4a5b7ffc5cc1268835b06368"
 const POST_SONG_ANNOTATIONS_URL_MIGRATION_NAME = "1081_post_song_annotations_url.sql"
 const POST_SONG_ANNOTATIONS_URL_MIGRATION_CHECKSUM = "4ffa5faa01551ecf40fdcdfdb8a4a892e359110b17d077c287fbc91584718b7b"
+const POST_SOURCE_TIMING_MIGRATION_NAME = "1083_post_source_timing.sql"
+const POST_SOURCE_TIMING_MIGRATION_CHECKSUM = "535cb795c2f3546642dc970ea7fa85bd4323c42c67dc8466c7d9f0f84e6de251"
 
 async function getPostColumnNames(client: Client): Promise<Set<string>> {
   const result = await client.execute("PRAGMA table_info(posts)")
@@ -54,6 +56,36 @@ export async function ensureRemotePostSongTitleColumn(client: Client): Promise<v
       }
     }
   }
+  if (!columnNames.has("source_start_ms")) {
+    try {
+      await client.execute("ALTER TABLE posts ADD COLUMN source_start_ms INTEGER")
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (!message.toLowerCase().includes("duplicate column")) {
+        throw error
+      }
+    }
+  }
+  if (!columnNames.has("source_duration_ms")) {
+    try {
+      await client.execute("ALTER TABLE posts ADD COLUMN source_duration_ms INTEGER")
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (!message.toLowerCase().includes("duplicate column")) {
+        throw error
+      }
+    }
+  }
+  if (!columnNames.has("sync_offset_ms")) {
+    try {
+      await client.execute("ALTER TABLE posts ADD COLUMN sync_offset_ms INTEGER")
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (!message.toLowerCase().includes("duplicate column")) {
+        throw error
+      }
+    }
+  }
 
   await client.batch([
     {
@@ -87,6 +119,13 @@ export async function ensureRemotePostSongTitleColumn(client: Client): Promise<v
         VALUES (?1, 'community-template', ?2)
       `,
       args: [POST_SONG_ANNOTATIONS_URL_MIGRATION_NAME, POST_SONG_ANNOTATIONS_URL_MIGRATION_CHECKSUM],
+    },
+    {
+      sql: `
+        INSERT OR IGNORE INTO schema_migrations (migration_name, migration_label, checksum)
+        VALUES (?1, 'community-template', ?2)
+      `,
+      args: [POST_SOURCE_TIMING_MIGRATION_NAME, POST_SOURCE_TIMING_MIGRATION_CHECKSUM],
     },
   ], "write")
 }

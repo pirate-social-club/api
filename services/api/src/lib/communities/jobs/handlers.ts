@@ -20,6 +20,7 @@ import {
 import { runEmbedHydrate } from "./embed-hydration-handler"
 import { runLiveRoomViewerSessionsPrune } from "./live-room-maintenance-handler"
 import { runSongPreviewGenerate } from "./song-preview-handler"
+import { runStoryPublication } from "./story-publication-handler"
 import type { CommunityJobHandlerInput } from "./handler-types"
 
 export async function runCommunityJob(input: CommunityJobHandlerInput): Promise<string | null> {
@@ -49,6 +50,8 @@ export async function runCommunityJob(input: CommunityJobHandlerInput): Promise<
       return runCommunityTextTranslationMaterialize(input)
     case "song_preview_generate":
       return runSongPreviewGenerate(input)
+    case "story_publication":
+      return runStoryPublication(input)
     case "live_room_viewer_sessions_prune":
       return runLiveRoomViewerSessionsPrune(input)
     default:

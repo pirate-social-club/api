@@ -2279,8 +2279,6 @@ CREATE INDEX IF NOT EXISTS idx_purchase_settlement_attempts_status_updated
     name: "1060_community_gate_policies.sql",
     sql: `PRAGMA foreign_keys = ON;
 
-DROP TABLE IF EXISTS community_gate_rules;
-
 CREATE TABLE community_gate_policies (
     community_id TEXT NOT NULL,
     scope TEXT NOT NULL CHECK (
@@ -2296,8 +2294,184 @@ CREATE TABLE community_gate_policies (
 
 CREATE INDEX idx_community_gate_policies_scope_updated
     ON community_gate_policies(scope, updated_at);
+
+CREATE TABLE IF NOT EXISTS community_gate_rules (
+    gate_rule_id TEXT PRIMARY KEY,
+    community_id TEXT NOT NULL,
+    scope TEXT NOT NULL CHECK (
+        scope IN ('membership', 'viewer', 'posting')
+    ),
+    gate_family TEXT NOT NULL CHECK (
+        gate_family IN ('identity_proof', 'token_holding')
+    ),
+    gate_type TEXT NOT NULL,
+    proof_requirements_json TEXT,
+    chain_namespace TEXT,
+    gate_config_json TEXT,
+    status TEXT NOT NULL CHECK (
+        status IN ('active', 'disabled')
+    ),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (community_id) REFERENCES communities(community_id)
+);
+
+INSERT INTO community_gate_policies (
+    community_id,
+    scope,
+    version,
+    expression_json,
+    created_at,
+    updated_at
+)
+WITH active_gate_atoms AS (
+    SELECT
+        community_id,
+        scope,
+        created_at,
+        updated_at,
+        CASE
+            WHEN gate_type = 'unique_human' THEN json_object(
+                'type', 'unique_human',
+                'provider', COALESCE(json_extract(proof_requirements_json, '\$[0].accepted_providers[0]'), 'very')
+            )
+            WHEN gate_type IN ('age_over_18', 'minimum_age') THEN json_object(
+                'type', 'minimum_age',
+                'provider', 'self',
+                'minimum_age', COALESCE(
+                    json_extract(proof_requirements_json, '\$[0].config.minimum_age'),
+                    json_extract(proof_requirements_json, '\$[0].config.required_minimum_age'),
+                    json_extract(gate_config_json, '\$.minimum_age'),
+                    json_extract(gate_config_json, '\$.required_minimum_age'),
+                    18
+                )
+            )
+            WHEN gate_type = 'nationality' THEN json_object(
+                'type', 'nationality',
+                'provider', 'self',
+                'allowed', json(CASE
+                    WHEN json_type(proof_requirements_json, '\$[0].config.required_values') = 'array' THEN json_extract(proof_requirements_json, '\$[0].config.required_values')
+                    WHEN json_type(gate_config_json, '\$.required_values') = 'array' THEN json_extract(gate_config_json, '\$.required_values')
+                    ELSE json_array(COALESCE(
+                        json_extract(proof_requirements_json, '\$[0].config.required_value'),
+                        json_extract(gate_config_json, '\$.required_value')
+                    ))
+                END)
+            )
+            WHEN gate_type = 'gender' THEN json_object(
+                'type', 'gender',
+                'provider', 'self',
+                'allowed', json(CASE
+                    WHEN json_type(proof_requirements_json, '\$[0].config.required_values') = 'array' THEN json_extract(proof_requirements_json, '\$[0].config.required_values')
+                    WHEN json_type(gate_config_json, '\$.required_values') = 'array' THEN json_extract(gate_config_json, '\$.required_values')
+                    ELSE json_array(COALESCE(
+                        json_extract(proof_requirements_json, '\$[0].config.required_value'),
+                        json_extract(gate_config_json, '\$.required_value')
+                    ))
+                END)
+            )
+            WHEN gate_type = 'wallet_score' THEN json_object(
+                'type', 'wallet_score',
+                'provider', 'passport',
+                'minimum_score', COALESCE(
+                    json_extract(proof_requirements_json, '\$[0].config.minimum_score'),
+                    json_extract(gate_config_json, '\$.minimum_score'),
+                    0
+                )
+            )
+            WHEN gate_type = 'erc721_holding' THEN json_object(
+                'type', 'erc721_holding',
+                'chain_namespace', COALESCE(chain_namespace, json_extract(gate_config_json, '\$.chain_namespace'), 'eip155:1'),
+                'contract_address', json_extract(gate_config_json, '\$.contract_address')
+            )
+            WHEN gate_type = 'erc721_inventory_match' THEN json_object(
+                'type', 'erc721_inventory_match',
+                'provider', 'courtyard',
+                'chain_namespace', COALESCE(chain_namespace, json_extract(gate_config_json, '\$.chain_namespace'), 'eip155:1'),
+                'contract_address', json_extract(gate_config_json, '\$.contract_address'),
+                'min_quantity', COALESCE(json_extract(gate_config_json, '\$.min_quantity'), 1),
+                'match', json(COALESCE(json_extract(gate_config_json, '\$.match'), '{}'))
+            )
+            ELSE NULL
+        END AS gate_atom_json
+    FROM community_gate_rules
+    WHERE status = 'active'
+),
+active_gate_expressions AS (
+    SELECT
+        community_id,
+        scope,
+        created_at,
+        updated_at,
+        json_object(
+            'op', 'gate',
+            'gate', json(gate_atom_json)
+        ) AS expression_node_json
+    FROM active_gate_atoms
+    WHERE gate_atom_json IS NOT NULL
+),
+scope_gate_expressions AS (
+    SELECT
+        community_id,
+        scope,
+        MIN(created_at) AS created_at,
+        MAX(updated_at) AS updated_at,
+        COUNT(*) AS gate_count,
+        MIN(expression_node_json) AS single_expression_json,
+        json_group_array(json(expression_node_json)) AS expression_children_json
+    FROM active_gate_expressions
+    GROUP BY community_id, scope
+)
+SELECT
+    community_id,
+    scope,
+    1,
+    json_object(
+        'version', 1,
+        'expression', json(CASE
+            WHEN gate_count = 1 THEN single_expression_json
+            ELSE json_object(
+                'op', 'and',
+                'children', json(expression_children_json)
+            )
+        END)
+    ),
+    created_at,
+    updated_at
+FROM scope_gate_expressions;
+
+DROP TABLE IF EXISTS community_gate_rules;
 `,
-    checksum: "50b40ee28ad443c6ed4cc9bbfc0ffcd2cb2fe2a9cba443b5944952ec1b6ed5c6",
+    checksum: "8bb9d45175bc3a3deb398776dd67d8f1b287a1843af9cb869ea9a7360bf7a548",
+  },
+  {
+    name: "1061_reference_links_resource_shape.sql",
+    sql: `UPDATE communities
+SET settings_json = json_set(
+    settings_json,
+    '\$.reference_links',
+    (
+        SELECT json_group_array(json(
+            CASE
+                WHEN json_type(value, '\$.id') IS NOT NULL THEN value
+                WHEN json_type(value, '\$.community_reference_link') IS NOT NULL THEN json_set(
+                    json_remove(value, '\$.community_reference_link'),
+                    '\$.id',
+                    json_extract(value, '\$.community_reference_link'),
+                    '\$.object',
+                    'community_reference_link'
+                )
+                ELSE value
+            END
+        ))
+        FROM json_each(settings_json, '\$.reference_links')
+    )
+)
+WHERE settings_json IS NOT NULL
+  AND json_valid(settings_json)
+  AND json_type(settings_json, '\$.reference_links') = 'array';
+`,
+    checksum: "27479e3c2e611b5841650c859c99e2a9fc252c9362a87ad691175db7d25612d6",
   },
   {
     name: "1062_link_enrichment_snapshots.sql",
@@ -3391,5 +3565,25 @@ SELECT 1;
 ALTER TABLE live_rooms ADD COLUMN store_label TEXT;
 `,
     checksum: "d917df09668038021493e1c2bd453392287790eef0554205ffc339cf1d33148a",
+  },
+  {
+    name: "1083_post_source_timing.sql",
+    sql: `ALTER TABLE posts ADD COLUMN source_start_ms INTEGER;
+ALTER TABLE posts ADD COLUMN source_duration_ms INTEGER;
+ALTER TABLE posts ADD COLUMN sync_offset_ms INTEGER;
+`,
+    checksum: "535cb795c2f3546642dc970ea7fa85bd4323c42c67dc8466c7d9f0f84e6de251",
+  },
+  {
+    name: "1084_licensed_performance_rights_basis.sql",
+    sql: `-- Compatibility migration.
+--
+-- Updating SQLite CHECK constraints for posts.rights_basis and assets.rights_basis
+-- requires rebuilding those tables. The posts table also has columns that are
+-- added by runtime preflight, so the rebuild runs there where the current table
+-- shape can be inspected and preserved safely.
+SELECT 1;
+`,
+    checksum: "cfe0bfa3e50685559ff4d2f9b0526ea8c1c7d675666ef98e5330d6c8366c40eb",
   },
 ] as const;

@@ -42,6 +42,27 @@ function validateOriginalAssetLicense(input: {
   }
 }
 
+function validateNullableIntegerField(value: unknown, fieldName: string): void {
+  if (value == null) return
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    throw badRequestError(`${fieldName} must be an integer`)
+  }
+}
+
+function validateNonNegativeIntegerField(value: unknown, fieldName: string): void {
+  validateNullableIntegerField(value, fieldName)
+  if (typeof value === "number" && value < 0) {
+    throw badRequestError(`${fieldName} must be greater than or equal to 0`)
+  }
+}
+
+function validatePositiveIntegerField(value: unknown, fieldName: string): void {
+  validateNullableIntegerField(value, fieldName)
+  if (typeof value === "number" && value <= 0) {
+    throw badRequestError(`${fieldName} must be greater than 0`)
+  }
+}
+
 export function assertPostCreateRequest(body: CreatePostRequest, _communityId: string): void {
   const authorshipMode = body.authorship_mode ?? "human_direct"
   if (Object.prototype.hasOwnProperty.call(body, "community_id")) {
@@ -149,11 +170,35 @@ export function assertPostCreateRequest(body: CreatePostRequest, _communityId: s
     if (body.rights_basis === "derivative") {
       throw badRequestError("derivative video posts are not supported yet")
     }
-    validateOriginalAssetLicense({
-      body,
-      contentLabel: "video",
-      requireLicense: body.access_mode === "locked",
-    })
+    if (body.rights_basis === "licensed_performance") {
+      if (!body.upstream_asset_refs?.length) {
+        throw badRequestError("licensed performance video posts require upstream_asset_refs")
+      }
+      if (body.access_mode === "locked") {
+        throw badRequestError("licensed performance video posts do not support locked access yet")
+      }
+      if (body.license_preset || body.commercial_rev_share_pct != null) {
+        throw badRequestError("license_preset is only supported for original video asset posts")
+      }
+      if (body.source_start_ms == null) {
+        throw badRequestError("licensed performance video posts require source_start_ms")
+      }
+      if (body.source_duration_ms == null) {
+        throw badRequestError("licensed performance video posts require source_duration_ms")
+      }
+      validateNonNegativeIntegerField(body.source_start_ms, "source_start_ms")
+      validatePositiveIntegerField(body.source_duration_ms, "source_duration_ms")
+      validateNullableIntegerField(body.sync_offset_ms, "sync_offset_ms")
+    } else {
+      if (body.source_start_ms != null || body.source_duration_ms != null || body.sync_offset_ms != null) {
+        throw badRequestError("source timing fields are only supported for licensed performance video posts")
+      }
+      validateOriginalAssetLicense({
+        body,
+        contentLabel: "video",
+        requireLicense: body.access_mode === "locked",
+      })
+    }
   }
   if (body.visibility && body.visibility !== "public" && body.visibility !== "members_only") {
     throw badRequestError("visibility must be public or members_only")

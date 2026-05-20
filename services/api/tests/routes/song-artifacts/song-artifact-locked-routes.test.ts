@@ -2094,7 +2094,7 @@ describe("song artifact locked routes", () => {
     expect(new Uint8Array(await contentResponse.arrayBuffer())).toEqual(videoBytes)
   })
 
-  test("publishes a free video post with public media delivery and no commerce asset", async () => {
+  test("publishes a free video post with public media delivery and a public asset", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
     installLockedSongFetchMocks({
       originalFetch,
@@ -2149,7 +2149,7 @@ describe("song artifact locked routes", () => {
       media_refs: Array<{ storage_ref: string }>
     }
     expect(postBody.access_mode).toBeNull()
-    expect(postBody.asset).toBeNull()
+    expect(postBody.asset).toMatch(/^asset_/)
     expect(postBody.media_refs[0]?.storage_ref).toContain(`/public-communities/${communityId}/song-artifact-uploads/`)
 
     const publicHeadResponse = await app.request(postBody.media_refs[0]?.storage_ref ?? "", {
@@ -2170,6 +2170,126 @@ describe("song artifact locked routes", () => {
     expect(publicRangeResponse.headers.get("accept-ranges")).toBe("bytes")
     expect(publicRangeResponse.headers.get("content-range")).toBe(`bytes 0-3/${videoBytes.byteLength}`)
     expect(new Uint8Array(await publicRangeResponse.arrayBuffer())).toEqual(videoBytes.slice(0, 4))
+
+    const assetResponse = await app.request(
+      `http://pirate.test/communities/${communityId}/assets/${postBody.asset}`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(assetResponse.status).toBe(200)
+    const assetBody = await json(assetResponse) as {
+      access_mode: string
+      asset_kind: string
+      primary_content_ref: string
+      rights_basis: string
+    }
+    expect(assetBody.asset_kind).toBe("video_file")
+    expect(assetBody.access_mode).toBe("public")
+    expect(assetBody.rights_basis).toBe("none")
+    expect(assetBody.primary_content_ref).toBe(videoUpload.storage_ref)
+  })
+
+  test("publishes a licensed performance video with source segment metadata", async () => {
+    const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
+    installLockedSongFetchMocks({
+      originalFetch,
+      storedObjects,
+    })
+
+    const ctx = await createRouteTestContext({
+      FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
+      FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
+      FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
+      FILEBASE_MEDIA_BUCKET: "pirate-media",
+      OPENAI_API_KEY: "test-openai-key",
+    })
+    cleanup = ctx.cleanup
+
+    const author = await exchangeJwt(ctx.env, "video-author-licensed-performance")
+    await completeUniqueHumanVerification(ctx.env, author.accessToken)
+    const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "Dance Video Club")
+    const videoBytes = new TextEncoder().encode("licensed-performance-video-bytes")
+    const videoUpload = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "primary_video",
+      mimeType: "video/mp4",
+      filename: "licensed-performance-video.mp4",
+      bytes: videoBytes,
+    })
+
+    const createdPost = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        idempotency_key: "licensed-performance-video-1",
+        post_type: "video",
+        title: "Dance to source song",
+        rights_basis: "licensed_performance",
+        upstream_asset_refs: ["story:asset:ast_source_song"],
+        source_start_ms: 12_000,
+        source_duration_ms: 15_000,
+        sync_offset_ms: -250,
+        media_refs: [{
+          storage_ref: videoUpload.storage_ref,
+          mime_type: "video/mp4",
+          size_bytes: videoBytes.byteLength,
+          poster_ref: "http://pirate.test/community-media/post_image/licensed-performance-cover.jpg",
+          poster_mime_type: "image/jpeg",
+          poster_size_bytes: 2345,
+          poster_width: 1280,
+          poster_height: 720,
+          poster_frame_ms: 2000,
+        }],
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(createdPost.status).toBe(201)
+    const postBody = await json(createdPost) as {
+      access_mode?: string | null
+      asset?: string | null
+      rights_basis?: string | null
+      source_start_ms?: number | null
+      source_duration_ms?: number | null
+      sync_offset_ms?: number | null
+      upstream_asset_refs?: string[] | null
+      media_refs: Array<{ storage_ref: string; poster_frame_ms?: number | null }>
+    }
+    expect(postBody.access_mode).toBeNull()
+    expect(postBody.asset).toMatch(/^asset_/)
+    expect(postBody.rights_basis).toBe("licensed_performance")
+    expect(postBody.upstream_asset_refs).toEqual(["story:asset:ast_source_song"])
+    expect(postBody.source_start_ms).toBe(12_000)
+    expect(postBody.source_duration_ms).toBe(15_000)
+    expect(postBody.sync_offset_ms).toBe(-250)
+    expect(postBody.media_refs[0]?.storage_ref).toContain(`/public-communities/${communityId}/song-artifact-uploads/`)
+    expect(postBody.media_refs[0]?.poster_frame_ms).toBe(2000)
+
+    const assetResponse = await app.request(
+      `http://pirate.test/communities/${communityId}/assets/${postBody.asset}`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(assetResponse.status).toBe(200)
+    const assetBody = await json(assetResponse) as {
+      access_mode: string
+      asset_kind: string
+      primary_content_ref: string
+      rights_basis: string
+    }
+    expect(assetBody.asset_kind).toBe("video_file")
+    expect(assetBody.access_mode).toBe("public")
+    expect(assetBody.rights_basis).toBe("licensed_performance")
+    expect(assetBody.primary_content_ref).toBe(videoUpload.storage_ref)
   })
 
   test("creates a members-only locked video commerce asset with Story CDR access", async () => {

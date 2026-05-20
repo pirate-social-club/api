@@ -116,12 +116,14 @@ export type {
 } from "@pirate/api-contracts"
 
 export type DerivativeSourceKind = "song" | "video"
+export type DerivativeSourceScope = "community" | "global"
 
 export type DerivativeSource = {
   id: string
   object: "derivative_source"
   community: string
   asset: string
+  source_ref: string
   title: string
   kind: DerivativeSourceKind
   story_ip: string
@@ -372,8 +374,11 @@ export type Post = {
   parent_post_id?: string | null
   crosspost_source?: CrosspostSource | null
   song_mode?: "original" | "remix" | null
-  rights_basis?: "none" | "original" | "derivative" | "attribution_only" | null
+  rights_basis?: "none" | "original" | "derivative" | "attribution_only" | "licensed_performance" | null
   upstream_asset_refs?: Array<string> | null
+  source_start_ms?: number | null
+  source_duration_ms?: number | null
+  sync_offset_ms?: number | null
   analysis_state: "pending" | "allow" | "allow_with_required_reference" | "review_required" | "blocked"
   analysis_result_ref?: string | null
   content_safety_state: "pending" | "safe" | "sensitive" | "adult"
@@ -418,8 +423,11 @@ type CreatePostRequestBase = {
   asset_id?: string | null
   song_artifact_bundle?: string | null
   song_mode?: "original" | "remix" | null
-  rights_basis?: "none" | "original" | "derivative" | "attribution_only" | null
+  rights_basis?: "none" | "original" | "derivative" | "attribution_only" | "licensed_performance" | null
   upstream_asset_refs?: Array<string> | null
+  source_start_ms?: number | null
+  source_duration_ms?: number | null
+  sync_offset_ms?: number | null
   license_preset?: "non-commercial" | "commercial-use" | "commercial-remix" | null
   commercial_rev_share_pct?: number | null
   lyrics?: string | null

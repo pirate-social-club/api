@@ -15,6 +15,7 @@ import { ensureRemoteCommunityMembershipStateIndexes } from "../src/lib/communit
 import { ensureRemoteThreadCommentLockColumns } from "../src/lib/communities/ensure-remote-thread-comment-lock-columns"
 import { ensureRemoteCommentGuestAuthorship } from "../src/lib/communities/ensure-remote-comment-guest-authorship"
 import { ensureRemoteLiveRoomTables } from "../src/lib/communities/ensure-remote-live-room-tables"
+import { ensureRemotePostLicensedPerformanceRightsBasis } from "../src/lib/communities/ensure-remote-post-licensed-performance-rights-basis"
 import { ensureRemotePostSongTitleColumn } from "../src/lib/communities/ensure-remote-post-song-title-column"
 
 const cleanupPaths: string[] = []
@@ -314,6 +315,7 @@ describe("openCommunityDb", () => {
     let ensureLiveRoomTableCalls = 0
     let ensureSongTitleColumnCalls = 0
     let ensureGuestAuthorshipCalls = 0
+    let ensureLicensedPerformanceRightsBasisCalls = 0
     const db = await openCommunityDb(
       {
         TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
@@ -325,6 +327,7 @@ describe("openCommunityDb", () => {
         ensureRemoteThreadCommentLockColumns: async () => { ensureLockColumnCalls += 1 },
         ensureRemoteCommentGuestAuthorship: async () => { ensureGuestAuthorshipCalls += 1 },
         ensureRemotePostSongTitleColumn: async () => { ensureSongTitleColumnCalls += 1 },
+        ensureRemotePostLicensedPerformanceRightsBasis: async () => { ensureLicensedPerformanceRightsBasisCalls += 1 },
         ensureRemoteLiveRoomTables: async () => { ensureLiveRoomTableCalls += 1 },
       },
     )
@@ -343,6 +346,7 @@ describe("openCommunityDb", () => {
         ensureRemoteThreadCommentLockColumns: async () => { ensureLockColumnCalls += 1 },
         ensureRemoteCommentGuestAuthorship: async () => { ensureGuestAuthorshipCalls += 1 },
         ensureRemotePostSongTitleColumn: async () => { ensureSongTitleColumnCalls += 1 },
+        ensureRemotePostLicensedPerformanceRightsBasis: async () => { ensureLicensedPerformanceRightsBasisCalls += 1 },
         ensureRemoteLiveRoomTables: async () => { ensureLiveRoomTableCalls += 1 },
       },
     )
@@ -353,6 +357,7 @@ describe("openCommunityDb", () => {
     expect(ensureLockColumnCalls).toBe(1)
     expect(ensureGuestAuthorshipCalls).toBe(1)
     expect(ensureSongTitleColumnCalls).toBe(1)
+    expect(ensureLicensedPerformanceRightsBasisCalls).toBe(1)
     expect(ensureLiveRoomTableCalls).toBe(1)
   })
 
@@ -407,6 +412,7 @@ describe("openCommunityDb", () => {
     let ensureLiveRoomTableCalls = 0
     let ensureSongTitleColumnCalls = 0
     let ensureGuestAuthorshipCalls = 0
+    let ensureLicensedPerformanceRightsBasisCalls = 0
     const db = await openCommunityDb(
       {
         TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
@@ -433,6 +439,7 @@ describe("openCommunityDb", () => {
             code: "SQLITE_NOMEM",
           })
         },
+        ensureRemotePostLicensedPerformanceRightsBasis: async () => { ensureLicensedPerformanceRightsBasisCalls += 1 },
         ensureRemoteLiveRoomTables: async () => {
           ensureLiveRoomTableCalls += 1
           throw Object.assign(new Error("SQLite error: out of memory"), {
@@ -456,6 +463,7 @@ describe("openCommunityDb", () => {
         ensureRemoteThreadCommentLockColumns: async () => { ensureLockColumnCalls += 1 },
         ensureRemoteCommentGuestAuthorship: async () => { ensureGuestAuthorshipCalls += 1 },
         ensureRemotePostSongTitleColumn: async () => { ensureSongTitleColumnCalls += 1 },
+        ensureRemotePostLicensedPerformanceRightsBasis: async () => { ensureLicensedPerformanceRightsBasisCalls += 1 },
         ensureRemoteLiveRoomTables: async () => { ensureLiveRoomTableCalls += 1 },
       },
     )
@@ -466,6 +474,7 @@ describe("openCommunityDb", () => {
     expect(ensureLockColumnCalls).toBe(1)
     expect(ensureGuestAuthorshipCalls).toBe(1)
     expect(ensureSongTitleColumnCalls).toBe(1)
+    expect(ensureLicensedPerformanceRightsBasisCalls).toBe(1)
     expect(ensureLiveRoomTableCalls).toBe(1)
   })
 
@@ -892,6 +901,7 @@ describe("openCommunityDb", () => {
       expect(beforePostColumns).not.toContain("song_cover_art_ref")
       expect(beforePostColumns).not.toContain("song_duration_ms")
       expect(beforePostColumns).not.toContain("song_annotations_url")
+      expect(beforePostColumns).not.toContain("source_start_ms")
 
       await ensureRemotePostSongTitleColumn(client)
 
@@ -900,6 +910,9 @@ describe("openCommunityDb", () => {
       expect(afterPostColumns).toContain("song_cover_art_ref")
       expect(afterPostColumns).toContain("song_duration_ms")
       expect(afterPostColumns).toContain("song_annotations_url")
+      expect(afterPostColumns).toContain("source_start_ms")
+      expect(afterPostColumns).toContain("source_duration_ms")
+      expect(afterPostColumns).toContain("sync_offset_ms")
 
       const checksum = await getMigrationChecksum(databasePath, "1069_post_song_title.sql")
       expect(checksum).toBe("03a5f95f8fe4bec0492dd6d7a2c4c2d7d9e4df7e0af244dcd58cae869cb9e802")
@@ -907,8 +920,89 @@ describe("openCommunityDb", () => {
       expect(presentationChecksum).toBe("46da9ddcae0b2c5328a943d36dbb819d476e84dc4a5b7ffc5cc1268835b06368")
       const annotationsUrlChecksum = await getMigrationChecksum(databasePath, "1081_post_song_annotations_url.sql")
       expect(annotationsUrlChecksum).toBe("4ffa5faa01551ecf40fdcdfdb8a4a892e359110b17d077c287fbc91584718b7b")
+      const sourceTimingChecksum = await getMigrationChecksum(databasePath, "1083_post_source_timing.sql")
+      expect(sourceTimingChecksum).toBe("535cb795c2f3546642dc970ea7fa85bd4323c42c67dc8466c7d9f0f84e6de251")
 
       await ensureRemotePostSongTitleColumn(client)
+    } finally {
+      client.close()
+    }
+  }, COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS)
+
+  testWithTimeout("enables licensed performance rights basis without dropping runtime post columns", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-remote-licensed-performance-"))
+    cleanupPaths.push(rootDir)
+
+    const databasePath = join(rootDir, `${randomUUID()}.db`)
+    await applyPartialCommunitySchema(databasePath, 1083)
+    await seedPostWithComment(databasePath)
+
+    const client = createClient({ url: `file:${databasePath}` })
+    try {
+      await ensureRemoteThreadCommentLockColumns(client)
+      await client.execute({
+        sql: `
+          UPDATE posts
+          SET comments_locked = 1,
+              comments_locked_at = ?1,
+              comments_locked_by_user_id = 'usr_moderator',
+              comments_lock_reason = 'moderation'
+          WHERE post_id = 'pst_seed'
+        `,
+        args: ["2026-05-20T00:00:00.000Z"],
+      })
+
+      const beforePostSql = await getTableCreateSql(databasePath, "posts")
+      const beforeAssetSql = await getTableCreateSql(databasePath, "assets")
+      expect(beforePostSql).not.toContain("licensed_performance")
+      expect(beforeAssetSql).not.toContain("licensed_performance")
+
+      await ensureRemotePostLicensedPerformanceRightsBasis(client)
+
+      const afterPostSql = await getTableCreateSql(databasePath, "posts")
+      const afterAssetSql = await getTableCreateSql(databasePath, "assets")
+      expect(afterPostSql).toContain("licensed_performance")
+      expect(afterAssetSql).toContain("licensed_performance")
+
+      const lockRow = await client.execute("SELECT comments_locked, comments_lock_reason FROM posts WHERE post_id = 'pst_seed'")
+      expect(Number(lockRow.rows[0]?.comments_locked ?? 0)).toBe(1)
+      expect(lockRow.rows[0]?.comments_lock_reason).toBe("moderation")
+
+      await client.execute({
+        sql: `
+          INSERT INTO posts (
+            post_id, community_id, author_user_id, identity_mode, post_type, status, title,
+            media_refs_json, rights_basis, upstream_asset_refs_json, source_start_ms,
+            source_duration_ms, sync_offset_ms, analysis_state, content_safety_state,
+            age_gate_policy, created_at, updated_at
+          ) VALUES (
+            'pst_licensed_performance', 'cmt_partial', 'usr_seed', 'public', 'video', 'published', 'Dance',
+            '[]', 'licensed_performance', '["story:asset:ast_source_song"]', 12000,
+            15000, -250, 'allow', 'safe',
+            'none', ?1, ?1
+          )
+        `,
+        args: ["2026-05-20T00:00:00.000Z"],
+      })
+      await client.execute({
+        sql: `
+          INSERT INTO assets (
+            asset_id, community_id, source_post_id, creator_user_id, asset_kind, rights_basis,
+            access_mode, primary_content_ref, publication_status, story_status,
+            locked_delivery_status, created_at, updated_at
+          ) VALUES (
+            'ast_licensed_performance', 'cmt_partial', 'pst_licensed_performance', 'usr_seed', 'video_file', 'licensed_performance',
+            'public', 'storage://video', 'draft', 'none',
+            'none', ?1, ?1
+          )
+        `,
+        args: ["2026-05-20T00:00:00.000Z"],
+      })
+
+      const checksum = await getMigrationChecksum(databasePath, "1084_licensed_performance_rights_basis.sql")
+      expect(checksum).toBe("cfe0bfa3e50685559ff4d2f9b0526ea8c1c7d675666ef98e5330d6c8366c40eb")
+
+      await ensureRemotePostLicensedPerformanceRightsBasis(client)
     } finally {
       client.close()
     }

@@ -9619,7 +9619,8 @@ const spec = {
               "none",
               "original",
               "derivative",
-              "attribution_only"
+              "attribution_only",
+              "licensed_performance"
             ],
             "nullable": true
           },
@@ -9628,6 +9629,20 @@ const spec = {
             "items": {
               "type": "string"
             },
+            "nullable": true
+          },
+          "source_start_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "nullable": true
+          },
+          "source_duration_ms": {
+            "type": "integer",
+            "minimum": 1,
+            "nullable": true
+          },
+          "sync_offset_ms": {
+            "type": "integer",
             "nullable": true
           },
           "license_preset": {
@@ -9922,7 +9937,8 @@ const spec = {
               "none",
               "original",
               "derivative",
-              "attribution_only"
+              "attribution_only",
+              "licensed_performance"
             ],
             "nullable": true
           },
@@ -9931,6 +9947,18 @@ const spec = {
             "items": {
               "type": "string"
             },
+            "nullable": true
+          },
+          "source_start_ms": {
+            "type": "integer",
+            "nullable": true
+          },
+          "source_duration_ms": {
+            "type": "integer",
+            "nullable": true
+          },
+          "sync_offset_ms": {
+            "type": "integer",
             "nullable": true
           },
           "analysis_state": {

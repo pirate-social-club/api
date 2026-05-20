@@ -47,6 +47,7 @@ export type PostProjectionSchema = {
   hasSongAnnotationsUrl: boolean
   hasSongCoverArtRef: boolean
   hasSongDurationMs: boolean
+  hasSourceTimingColumns: boolean
 }
 
 export async function resolvePostProjectionSchema(executor: DbExecutor): Promise<PostProjectionSchema> {
@@ -61,6 +62,9 @@ export async function resolvePostProjectionSchema(executor: DbExecutor): Promise
     hasSongAnnotationsUrl: columnNames.has("song_annotations_url"),
     hasSongCoverArtRef: columnNames.has("song_cover_art_ref"),
     hasSongDurationMs: columnNames.has("song_duration_ms"),
+    hasSourceTimingColumns: columnNames.has("source_start_ms")
+      && columnNames.has("source_duration_ms")
+      && columnNames.has("sync_offset_ms"),
   }
 }
 
@@ -80,6 +84,9 @@ export function postSelectColumnsForSchema(schema: PostProjectionSchema): string
   const songDurationMsProjection = schema.hasSongDurationMs
     ? "song_duration_ms"
     : "NULL AS song_duration_ms"
+  const sourceTimingProjection = schema.hasSourceTimingColumns
+    ? "source_start_ms, source_duration_ms, sync_offset_ms"
+    : "NULL AS source_start_ms, NULL AS source_duration_ms, NULL AS sync_offset_ms"
 
   return `
   post_id, community_id, author_user_id, authorship_mode, agent_id, agent_ownership_record_id,
@@ -103,7 +110,7 @@ export function postSelectColumnsForSchema(schema: PostProjectionSchema): string
     WHERE live_rooms.anchor_post_id = posts.post_id
       AND live_rooms.visibility = 'public'
     LIMIT 1
-  ) AS anchor_live_room_status, parent_post_id, ${crosspostSourceProjection}, ${boundedJsonProjection("upstream_asset_refs_json")}, song_mode, rights_basis, analysis_state, analysis_result_ref,
+  ) AS anchor_live_room_status, parent_post_id, ${crosspostSourceProjection}, ${boundedJsonProjection("upstream_asset_refs_json")}, ${sourceTimingProjection}, song_mode, rights_basis, analysis_state, analysis_result_ref,
   content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
 `
 }

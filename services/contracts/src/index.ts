@@ -187,18 +187,6 @@ export type ProfileActivityResponse = {
   next_cursor: string | null;
 };
 
-export type PostableCommunitySummary = {
-  community_id: string;
-  display_name: string;
-  avatar_ref?: string | null;
-  route_slug?: string | null;
-  action: "compose" | "unlock";
-};
-
-export type PostableCommunitiesResponse = {
-  communities: Array<PostableCommunitySummary>;
-};
-
 export type WalletIdentityPublicName = {
   id: string;
   label: string;
@@ -1347,8 +1335,11 @@ export type CreatePostRequest = (((unknown & {
   asset?: string | null;
   song_artifact_bundle?: string | null;
   song_mode?: "original" | "remix" | null;
-  rights_basis?: "none" | "original" | "derivative" | "attribution_only" | null;
+  rights_basis?: "none" | "original" | "derivative" | "attribution_only" | "licensed_performance" | null;
   upstream_asset_refs?: Array<string> | null;
+  source_start_ms?: number | null;
+  source_duration_ms?: number | null;
+  sync_offset_ms?: number | null;
   license_preset?: "non-commercial" | "commercial-use" | "commercial-remix" | null;
   commercial_rev_share_pct?: number | null;
   lyrics?: string | null;
@@ -1374,7 +1365,7 @@ export type Asset = {
   display_title?: string | null;
   creator_user: string;
   asset_kind: "song_audio" | "video_file";
-  rights_basis: "none" | "original" | "derivative" | "attribution_only";
+  rights_basis: "none" | "original" | "derivative" | "attribution_only" | "licensed_performance";
   access_mode: "public" | "locked";
   license_preset?: "non-commercial" | "commercial-use" | "commercial-remix" | null;
   commercial_rev_share_pct?: number | null;
@@ -1567,8 +1558,11 @@ export type Post = {
   song_annotations_url?: string | null;
   parent_post?: string | null;
   song_mode?: "original" | "remix" | null;
-  rights_basis?: "none" | "original" | "derivative" | "attribution_only" | null;
+  rights_basis?: "none" | "original" | "derivative" | "attribution_only" | "licensed_performance" | null;
   upstream_asset_refs?: Array<string> | null;
+  source_start_ms?: number | null;
+  source_duration_ms?: number | null;
+  sync_offset_ms?: number | null;
   analysis_state: "pending" | "allow" | "allow_with_required_reference" | "review_required" | "blocked";
   analysis_result_ref?: string | null;
   content_safety_state: "pending" | "safe" | "sensitive" | "adult";
@@ -3221,7 +3215,6 @@ export const apiRoutes = {
   authSessionExchange: "/auth/session/exchange",
   usersMe: "/users/me",
   profilesMe: "/profiles/me",
-  profilesMePostableCommunities: "/profiles/me/postable-communities",
   walletIdentity: (chainRef: string, walletAddress: string) => `/wallet-identities/${chainRef}/${walletAddress}`,
   publicNameQuotes: "/public-names/quotes",
   publicNameClaims: "/public-names/claims",

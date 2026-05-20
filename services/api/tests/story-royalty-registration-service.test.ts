@@ -6,15 +6,19 @@ import type { CommunityDatabaseBindingRepository } from "../src/lib/communities/
 import type { ProfileRepository, UserRepository } from "../src/lib/auth/repositories"
 import { openCommunityDb } from "../src/lib/communities/community-db-factory"
 import { setLockedAssetDeliveryPreparerForTests } from "../src/lib/communities/commerce/asset-delivery"
-import { createSongAssetForPost, listCommunityDerivativeSources } from "../src/lib/communities/commerce/service"
+import { createSongAssetForPost, listCommunityDerivativeSources, retryStoryRoyaltyRegistrationForAsset } from "../src/lib/communities/commerce/service"
+import { runStoryPublication } from "../src/lib/communities/jobs/story-publication-handler"
+import type { CommunityJobRow } from "../src/lib/communities/jobs/store"
 import { insertPost } from "../src/lib/posts/community-post-store"
 import {
+  isStoryRoyaltyRegistrationConfigured,
   resolvePilTermsForLicense,
   resolveStoryRoyaltyDerivativeParents,
   setStoryRoyaltyRegistrarForTests,
 } from "../src/lib/story/story-royalty-registration-service"
 import type { Env, Profile, SongArtifactBundle, User, WalletAttachmentSummary } from "../src/types"
 
+const testWithTimeout = test as unknown as (name: string, fn: () => Promise<void>, timeout: number) => void
 const cleanupPaths: string[] = []
 
 afterEach(async () => {
@@ -102,6 +106,28 @@ function buildStoryUserRepository(userId: string): UserRepository {
   }
 }
 
+function buildStoryPublicationJob(input: {
+  communityId: string
+  assetId: string
+}): CommunityJobRow {
+  const now = "2026-04-21T01:00:00.000Z"
+  return {
+    job_id: "cjb_story_publication_test",
+    community_id: input.communityId,
+    job_type: "story_publication",
+    subject_type: "asset",
+    subject_id: input.assetId,
+    status: "queued",
+    payload_json: null,
+    result_ref: null,
+    error_code: null,
+    attempt_count: 0,
+    available_at: null,
+    created_at: now,
+    updated_at: now,
+  }
+}
+
 async function seedStoryCommunity(input: {
   env: Env
   repo: CommunityDatabaseBindingRepository
@@ -186,14 +212,21 @@ describe("story royalty registration service", () => {
         licensePreset: "commercial-remix",
         commercialRevSharePct: null,
       })
-    ).toThrow("commercialRevSharePct must be an integer from 0 to 100")
+    ).toThrow("commercialRevSharePct must be set per song as an integer from 0 to 100")
     expect(() =>
       resolvePilTermsForLicense({
         ...base,
         licensePreset: "commercial-remix",
         commercialRevSharePct: 10.5,
       })
-    ).toThrow("commercialRevSharePct must be an integer from 0 to 100")
+    ).toThrow("commercialRevSharePct must be set per song as an integer from 0 to 100")
+  })
+
+  test("requires only the SPG collection as shared Story royalty registration config", () => {
+    expect(isStoryRoyaltyRegistrationConfigured({} as Env)).toBe(false)
+    expect(isStoryRoyaltyRegistrationConfigured({
+      STORY_ROYALTY_SPG_NFT_CONTRACT: "0x8888888888888888888888888888888888888888",
+    })).toBe(true)
   })
 
   test("resolves derivative parents from local story asset references", async () => {
@@ -291,7 +324,7 @@ describe("story royalty registration service", () => {
     }
   })
 
-  test("marks royalty-enabled assets failed instead of leaving pending when registration is unavailable", async () => {
+  testWithTimeout("marks royalty-enabled assets failed instead of leaving pending when registration is unavailable", async () => {
     async function createUnavailableAsset(input: {
       env: Env
       communityId: string
@@ -363,18 +396,36 @@ describe("story royalty registration service", () => {
     const configMissingEnv = { LOCAL_COMMUNITY_DB_ROOT: configMissingRootDir } as Env
     const configMissingCommunityId = "cmt_story_royalty_config_missing"
     const configMissingUserId = "usr_author_story_config_missing"
-    const configMissing = await createUnavailableAsset({
-      env: configMissingEnv,
-      communityId: configMissingCommunityId,
-      userId: configMissingUserId,
-      title: "Config missing song",
-      assetId: "ast_config_missing_song",
-    })
+    const pipelineErrors: unknown[][] = []
+    const originalConsoleError = console.error
+    console.error = (...args: unknown[]) => {
+      pipelineErrors.push(args)
+    }
+    let configMissing: Awaited<ReturnType<typeof createUnavailableAsset>>
+    try {
+      configMissing = await createUnavailableAsset({
+        env: configMissingEnv,
+        communityId: configMissingCommunityId,
+        userId: configMissingUserId,
+        title: "Config missing song",
+        assetId: "ast_config_missing_song",
+      })
+    } finally {
+      console.error = originalConsoleError
+    }
 
     expect(configMissing.asset.story_royalty_registration_status).toBe("failed")
     expect(configMissing.asset.publication_status).toBe("draft")
     expect(configMissing.asset.story_status).toBe("none")
     expect(configMissing.asset.story_error).toContain("story_royalty_config_missing")
+    expect(pipelineErrors.some(([message, fields]) => (
+      message === "[create-asset] story royalty registration failed"
+      && typeof fields === "object"
+      && fields != null
+      && (fields as Record<string, unknown>).community_id === configMissingCommunityId
+      && (fields as Record<string, unknown>).asset_id === "ast_config_missing_song"
+      && (fields as Record<string, unknown>).story_royalty_configured === false
+    ))).toBe(true)
 
     const configMissingSources = await listCommunityDerivativeSources({
       env: configMissingEnv,
@@ -388,28 +439,73 @@ describe("story royalty registration service", () => {
     })
     expect(configMissingSources.items).toEqual([])
 
+    setStoryRoyaltyRegistrarForTests(async () => ({
+      storyIpId: "0x1234567890123456789012345678901234567890",
+      storyIpNftContract: "0x8888888888888888888888888888888888888888",
+      storyIpNftTokenId: "101",
+      storyLicenseTermsId: "77",
+      storyLicenseTemplate: "pil",
+      storyRoyaltyPolicy: "0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E",
+      storyDerivativeParentIpIds: null,
+      storyRevenueToken: "0x1514000000000000000000000000000000000000",
+      storyRoyaltyRegistrationStatus: "registered",
+      storyDerivativeRegisteredAt: null,
+    }))
+    const retryEnv = {
+      ...configMissingEnv,
+      STORY_ROYALTY_SPG_NFT_CONTRACT: "0x8888888888888888888888888888888888888888",
+    } as Env
+    const handlerResult = await runStoryPublication({
+      env: retryEnv,
+      communityRepository: configMissing.repo as Parameters<typeof runStoryPublication>[0]["communityRepository"],
+      userRepository: buildStoryUserRepository(configMissingUserId),
+      job: buildStoryPublicationJob({
+        communityId: configMissingCommunityId,
+        assetId: "asset_ast_config_missing_song",
+      }),
+    })
+    expect(handlerResult).toBe("asset_ast_config_missing_song")
+
+    const retriedSources = await listCommunityDerivativeSources({
+      env: retryEnv,
+      userId: configMissingUserId,
+      communityId: configMissingCommunityId,
+      kind: "song",
+      query: "Config missing",
+      limit: 25,
+      communityRepository: configMissing.repo,
+      profileRepository: buildProfileRepository(),
+    })
+    expect(retriedSources.items.map((item) => item.asset)).toEqual(["asset_ast_config_missing_song"])
+    setStoryRoyaltyRegistrarForTests(null)
+
     const unavailableRootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-unavailable-"))
     cleanupPaths.push(unavailableRootDir)
     const unavailableEnv = {
       LOCAL_COMMUNITY_DB_ROOT: unavailableRootDir,
       STORY_ROYALTY_SPG_NFT_CONTRACT: "0x8888888888888888888888888888888888888888",
-      STORY_ROYALTY_COMMERCIAL_REV_SHARE_PCT: "10",
     } as Env
-    const unavailable = await createUnavailableAsset({
-      env: unavailableEnv,
-      communityId: "cmt_story_royalty_unavailable",
-      userId: "usr_author_story_unavailable",
-      title: "Unavailable registrar song",
-      assetId: "ast_unavailable_registrar_song",
-    })
+    console.error = () => undefined
+    let unavailable: Awaited<ReturnType<typeof createUnavailableAsset>>
+    try {
+      unavailable = await createUnavailableAsset({
+        env: unavailableEnv,
+        communityId: "cmt_story_royalty_unavailable",
+        userId: "usr_author_story_unavailable",
+        title: "Unavailable registrar song",
+        assetId: "ast_unavailable_registrar_song",
+      })
+    } finally {
+      console.error = originalConsoleError
+    }
 
     expect(unavailable.asset.story_royalty_registration_status).toBe("failed")
     expect(unavailable.asset.publication_status).toBe("draft")
     expect(unavailable.asset.story_status).toBe("none")
     expect(unavailable.asset.story_error).toContain("story_royalty_registration_unavailable")
-  })
+  }, 15_000)
 
-  test("skips duplicate royalty registration when locked delivery already registered the asset", async () => {
+  testWithTimeout("skips duplicate royalty registration when locked delivery already registered the asset", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-locked-"))
     cleanupPaths.push(rootDir)
 
@@ -491,7 +587,100 @@ describe("story royalty registration service", () => {
     } finally {
       db.close()
     }
-  })
+  }, 15_000)
+
+  testWithTimeout("preserves locked delivery state when Story royalty retry still fails", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-locked-retry-failed-"))
+    cleanupPaths.push(rootDir)
+
+    const env = { LOCAL_COMMUNITY_DB_ROOT: rootDir } as Env
+    const repo = buildRepository()
+    const communityId = "cmt_story_royalty_locked_retry_failed"
+    const userId = "usr_author_story_locked_retry_failed"
+    const now = "2026-04-21T00:00:00.000Z"
+    await seedStoryCommunity({ env, repo, communityId, userId })
+    setStoryRoyaltyRegistrarForTests(async () => {
+      throw new Error("registration still unavailable")
+    })
+    setLockedAssetDeliveryPreparerForTests(async (input) => ({
+      storyStatus: "published",
+      storyPublishTxRef: "0xpublish",
+      storyIpId: "0x9999999999999999999999999999999999999999",
+      storyRoyaltyPolicyId: "0x6666666666666666666666666666666666666666",
+      storyDerivativeParentIpIdsJson: null,
+      storyRoyaltyRegistrationStatus: null,
+      storyAssetVersionId: "0xassetversion",
+      storyCdrVaultUuid: 4242,
+      storyNamespace: "story-namespace",
+      storyEntitlementTokenId: "1",
+      storyReadCondition: "0x1111111111111111111111111111111111111111",
+      storyWriteCondition: "0x2222222222222222222222222222222222222222",
+      lockedDeliveryStatus: "ready",
+      lockedDeliveryRef: `/communities/${input.communityId}/assets/${input.assetId}/content`,
+      lockedDeliveryStorageRef: "locked-assets/payload.bin",
+      lockedDeliveryMetadataJson: "{}",
+    }))
+
+    const db = await openCommunityDb(env, repo, communityId)
+    try {
+      const post = await insertPost({
+        client: db.client,
+        communityId,
+        authorUserId: userId,
+        body: {
+          post_type: "song",
+          identity_mode: "public",
+          title: "Locked retry failed song",
+          idempotency_key: "locked-retry-failed-post",
+          song_mode: "original",
+          rights_basis: "original",
+          access_mode: "locked",
+        },
+        createdAt: now,
+      })
+      const originalConsoleError = console.error
+      console.error = () => undefined
+      let created: Awaited<ReturnType<typeof createSongAssetForPost>>
+      try {
+        created = await createSongAssetForPost({
+          env,
+          client: db.client,
+          communityId,
+          post: {
+            ...post,
+            asset_id: "ast_locked_retry_failed_song",
+          },
+          bundle: buildBundle({ id: "sab_locked_retry_failed", title: "Locked retry failed song" }),
+          licensePreset: "commercial-remix",
+          commercialRevSharePct: 10,
+          userRepository: buildStoryUserRepository(userId),
+        })
+      } finally {
+        console.error = originalConsoleError
+      }
+
+      expect(created.story_royalty_registration_status).toBe("failed")
+      expect(created.publication_status).toBe("story_published")
+      expect(created.story_status).toBe("published")
+      expect(created.story_ip).toBe("0x9999999999999999999999999999999999999999")
+
+      const retried = await retryStoryRoyaltyRegistrationForAsset({
+        env,
+        client: db.client,
+        communityId,
+        assetId: "asset_ast_locked_retry_failed_song",
+        userRepository: buildStoryUserRepository(userId),
+      })
+
+      expect(retried.story_royalty_registration_status).toBe("failed")
+      expect(retried.publication_status).toBe("story_published")
+      expect(retried.story_status).toBe("published")
+      expect(retried.story_ip).toBe("0x9999999999999999999999999999999999999999")
+      expect(retried.locked_delivery_status).toBe("ready")
+    } finally {
+      db.close()
+    }
+  }, 15_000)
 
   test("registered original song assets become derivative sources", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-registered-"))
@@ -608,7 +797,7 @@ describe("story royalty registration service", () => {
     })
   })
 
-  test("uses derivative source asset refs to register remix parents", async () => {
+  test("uses derivative source Story refs to register remix parents", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-remix-source-"))
     cleanupPaths.push(rootDir)
 
@@ -710,8 +899,8 @@ describe("story royalty registration service", () => {
         profileRepository: buildProfileRepository(),
       })
       expect(sources.items).toHaveLength(1)
-      const upstreamAssetRef = `story:asset:${sources.items[0].asset}`
-      expect(upstreamAssetRef).toBe("story:asset:asset_ast_palestine_dont_cry")
+      const upstreamAssetRef = sources.items[0].source_ref
+      expect(upstreamAssetRef).toBe("story:ip:0x9999999999999999999999999999999999999999#licenseTermsId=17")
 
       const remixPost = await insertPost({
         client: db.client,

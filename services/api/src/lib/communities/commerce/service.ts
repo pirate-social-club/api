@@ -1,6 +1,7 @@
 import type { Client } from "../../sql-client"
 import { badRequestError, notFoundError } from "../../errors"
 import { nowIso } from "../../helpers"
+import { enqueueCommunityJob } from "../jobs/store"
 import {
   ANY_COMMUNITY_ROLE,
   getCommunityMembershipState,
@@ -10,8 +11,12 @@ import { openCommunityDb } from "../community-db-factory"
 import type { CommunityDatabaseBindingRepository } from "../db-community-repository"
 import { getPostById } from "../../posts/community-post-query-store"
 import { isPubliclyReadablePost } from "../../posts/post-access"
+import { getControlPlaneClient } from "../../runtime-deps"
+import { logPipelineError, sanitizeLogText } from "../../observability/pipeline-log"
+import { getSongArtifactBundle } from "../../song-artifacts/song-artifact-repository"
 import { fetchSongArtifactBytes } from "../../song-artifacts/song-artifact-storage"
 import { sha256Hex } from "../../crypto"
+import { decodePublicAssetId, decodePublicSongArtifactBundleId } from "../../public-ids"
 import { getProfilePublicHandleLabel } from "../../auth/auth-serializers"
 import type { UserRepository } from "../../auth/repositories"
 import type { ProfileRepository } from "../../auth/repositories"
@@ -26,8 +31,11 @@ import {
   getActiveEntitlementForBuyer,
   getActiveEntitlementForBuyerIdentity,
   getAssetRow,
+  type DerivativeSourceRow,
+  escapeLikePattern,
   listDerivativeSourceRows,
   requireCommunityMember,
+  requiredString,
   resolvePrimaryWalletAddress,
   serializeAsset,
 } from "./shared"
@@ -43,6 +51,7 @@ import type {
   DerivativeSource,
   DerivativeSourceKind,
   DerivativeSourceListResponse,
+  DerivativeSourceScope,
   Env,
   Post,
   SongArtifactBundle,
@@ -55,6 +64,237 @@ function isStoryRoyaltyAssetKind(assetKind: Asset["asset_kind"]): assetKind is "
 
 function derivativeSourceKindFromAssetKind(assetKind: Asset["asset_kind"]): DerivativeSourceKind {
   return assetKind === "video_file" ? "video" : "song"
+}
+
+function derivativeSourceStoryRef(row: DerivativeSourceRow): string | null {
+  const storyIpId = row.story_ip_id?.trim()
+  const storyLicenseTermsId = row.story_license_terms_id?.trim()
+  if (!storyIpId || !storyLicenseTermsId) {
+    return null
+  }
+  return `story:ip:${storyIpId}#licenseTermsId=${storyLicenseTermsId}`
+}
+
+function serializeDerivativeSourceRow(
+  row: DerivativeSourceRow,
+  profile: Awaited<ReturnType<ProfileRepository["getProfileByUserId"]>> | null,
+): DerivativeSource {
+  const sourceRef = derivativeSourceStoryRef(row)
+  if (!sourceRef) {
+    throw new Error("Derivative source is missing Story registration fields")
+  }
+  const storyIpId = row.story_ip_id?.trim()
+  const storyLicenseTermsId = row.story_license_terms_id?.trim()
+  if (!storyIpId || !storyLicenseTermsId) {
+    throw new Error("Derivative source is missing Story registration fields")
+  }
+  return {
+    id: `asset_${row.asset_id}`,
+    object: "derivative_source",
+    community: `com_${row.community_id}`,
+    asset: `asset_${row.asset_id}`,
+    source_ref: sourceRef,
+    title: row.display_title?.trim() || "Untitled asset",
+    kind: derivativeSourceKindFromAssetKind(row.asset_kind),
+    story_ip: storyIpId,
+    story_license_terms: storyLicenseTermsId,
+    license_preset: row.license_preset,
+    commercial_rev_share_pct: row.commercial_rev_share_pct,
+    creator_user: `usr_${row.creator_user_id}`,
+    creator_handle: profile ? getProfilePublicHandleLabel(profile) : null,
+    creator_display_name: profile?.display_name ?? null,
+  }
+}
+
+type GlobalDerivativeSourceCandidate = {
+  communityId: string
+  assetId: string
+  sourcePostId: string
+  sourceCreatedAt: string
+}
+
+function postTypesForDerivativeSourceKind(kind: DerivativeSourceKind | null | undefined): Array<"song" | "video"> {
+  if (kind === "song") return ["song"]
+  if (kind === "video") return ["video"]
+  return ["song", "video"]
+}
+
+function parseProjectionAssetId(projectedPayload: unknown): string | null {
+  try {
+    const parsed = typeof projectedPayload === "string"
+      ? JSON.parse(projectedPayload)
+      : projectedPayload
+    if (!parsed || typeof parsed !== "object") {
+      return null
+    }
+    const record = parsed as { asset_id?: unknown; asset?: unknown }
+    const value = typeof record.asset_id === "string"
+      ? record.asset_id
+      : typeof record.asset === "string"
+        ? record.asset
+        : null
+    const assetId = value ? decodePublicAssetId(value) : null
+    return assetId?.trim() || null
+  } catch {
+    return null
+  }
+}
+
+function globalDerivativeSourceCandidateLimit(limit: number): number {
+  return Math.min(250, Math.max(limit * 10, 50))
+}
+
+async function listGlobalDerivativeSourceCandidates(input: {
+  env: Env
+  currentCommunityId: string
+  kind?: DerivativeSourceKind | null
+  query?: string | null
+  limit: number
+}): Promise<GlobalDerivativeSourceCandidate[]> {
+  if (!String(input.env.CONTROL_PLANE_DATABASE_URL || "").trim()) {
+    return []
+  }
+
+  const postTypes = postTypesForDerivativeSourceKind(input.kind)
+  const query = input.query?.trim()
+  const args: Array<string | number> = [input.currentCommunityId]
+  let nextArg = 2
+  const filters = [
+    "projection_version = 1",
+    "community_id != ?1",
+    "identity_mode = 'public'",
+    "status = 'published'",
+    "visibility = 'public'",
+  ]
+
+  if (postTypes.length === 1) {
+    filters.push(`post_type = ?${nextArg}`)
+    args.push(postTypes[0])
+    nextArg += 1
+  } else {
+    const placeholders = postTypes.map((_, index) => `?${nextArg + index}`).join(", ")
+    filters.push(`post_type IN (${placeholders})`)
+    args.push(...postTypes)
+    nextArg += postTypes.length
+  }
+  if (query) {
+    filters.push(`LOWER(CAST(projected_payload_json AS TEXT)) LIKE ?${nextArg} ESCAPE '\\'`)
+    args.push(`%${escapeLikePattern(query.toLowerCase())}%`)
+    nextArg += 1
+  }
+  args.push(globalDerivativeSourceCandidateLimit(input.limit))
+
+  const rows = await getControlPlaneClient(input.env).execute({
+    sql: `
+      SELECT community_id, source_post_id, source_created_at, projected_payload_json
+      FROM community_post_projections
+      WHERE ${filters.join("\n        AND ")}
+      ORDER BY source_created_at DESC, source_post_id DESC
+      LIMIT ?${nextArg}
+    `,
+    args,
+  })
+
+  const candidates: GlobalDerivativeSourceCandidate[] = []
+  const seen = new Set<string>()
+  for (const row of rows.rows) {
+    const communityId = requiredString(row, "community_id")
+    const assetId = parseProjectionAssetId((row as Record<string, unknown>).projected_payload_json)
+    if (!assetId) {
+      continue
+    }
+    const key = `${communityId}:${assetId}`
+    if (seen.has(key)) {
+      continue
+    }
+    seen.add(key)
+    candidates.push({
+      communityId,
+      assetId,
+      sourcePostId: requiredString(row, "source_post_id"),
+      sourceCreatedAt: requiredString(row, "source_created_at"),
+    })
+  }
+  return candidates
+}
+
+async function listGlobalDerivativeSourceRows(input: {
+  env: Env
+  communityRepository: CommunityDatabaseBindingRepository
+  currentCommunityId: string
+  kind?: DerivativeSourceKind | null
+  query?: string | null
+  limit: number
+  seenSourceRefs: Set<string>
+}): Promise<DerivativeSourceRow[]> {
+  if (input.limit <= 0) {
+    return []
+  }
+
+  const candidates = await listGlobalDerivativeSourceCandidates({
+    env: input.env,
+    currentCommunityId: input.currentCommunityId,
+    kind: input.kind,
+    query: input.query,
+    limit: input.limit,
+  })
+  const candidatesByCommunity = new Map<string, GlobalDerivativeSourceCandidate[]>()
+  for (const candidate of candidates) {
+    const existing = candidatesByCommunity.get(candidate.communityId)
+    if (existing) {
+      existing.push(candidate)
+    } else {
+      candidatesByCommunity.set(candidate.communityId, [candidate])
+    }
+  }
+
+  const rows: DerivativeSourceRow[] = []
+  const seenSourceRefs = new Set(input.seenSourceRefs)
+
+  for (const [communityId, communityCandidates] of candidatesByCommunity) {
+    if (rows.length >= input.limit) {
+      break
+    }
+
+    let db: Awaited<ReturnType<typeof openCommunityDb>> | null = null
+    try {
+      db = await openCommunityDb(input.env, input.communityRepository, communityId)
+      const communityRows = await listDerivativeSourceRows({
+        client: db.client,
+        communityId,
+        kind: input.kind,
+        query: input.query,
+        assetIds: communityCandidates.map((candidate) => candidate.assetId),
+        limit: Math.min(Math.max(communityCandidates.length, input.limit), 100),
+      })
+      const rowsByAssetId = new Map(communityRows.map((row) => [row.asset_id, row]))
+      for (const candidate of communityCandidates) {
+        const row = rowsByAssetId.get(candidate.assetId)
+        if (!row) {
+          continue
+        }
+        const sourceRef = derivativeSourceStoryRef(row)
+        if (!sourceRef || seenSourceRefs.has(sourceRef)) {
+          continue
+        }
+        seenSourceRefs.add(sourceRef)
+        rows.push(row)
+        if (rows.length >= input.limit) {
+          break
+        }
+      }
+    } catch (error) {
+      logPipelineError("[derivative-sources] global source community scan failed", {
+        community_id: communityId,
+        source_post_ids: communityCandidates.map((candidate) => candidate.sourcePostId).join(","),
+        error: sanitizeLogText(error),
+      })
+    } finally {
+      db?.close()
+    }
+  }
+
+  return rows
 }
 
 function shouldAttemptStoryRoyaltyRegistration(input: {
@@ -71,6 +311,25 @@ function shouldAttemptStoryRoyaltyRegistration(input: {
 
 function buildPublicAssetContentPath(communityId: string, assetId: string): string {
   return `/public-communities/${encodeURIComponent(`com_${communityId}`)}/assets/${encodeURIComponent(`asset_${assetId}`)}/content`
+}
+
+function normalizeAssetId(value: string): string {
+  return decodePublicAssetId(value.trim())
+}
+
+async function loadRetrySongArtifactBundle(input: {
+  env: Env
+  communityId: string
+  songArtifactBundleId: string | null
+}): Promise<SongArtifactBundle | null> {
+  if (!input.songArtifactBundleId || !String(input.env.CONTROL_PLANE_DATABASE_URL || "").trim()) {
+    return null
+  }
+  return await getSongArtifactBundle(
+    getControlPlaneClient(input.env),
+    input.communityId,
+    decodePublicSongArtifactBundleId(input.songArtifactBundleId),
+  )
 }
 
 type AuthorizedAssetAccess = {
@@ -291,6 +550,19 @@ export async function createAssetForPost(input: {
     storyError = storyError ? `${storyError};royalty_registration_failed:${registrationError}` : `royalty_registration_failed:${registrationError}`
   }
 
+  if (shouldRegisterRoyalty && storyRoyaltyRegistrationStatus === "failed") {
+    logPipelineError("[create-asset] story royalty registration failed", {
+      community_id: input.communityId,
+      asset_id: input.post.asset_id,
+      post_id: input.post.post_id,
+      asset_kind: input.assetKind,
+      rights_basis: input.post.rights_basis ?? "none",
+      license_preset: input.licensePreset ?? null,
+      story_royalty_configured: isStoryRoyaltyRegistrationConfigured(input.env),
+      error: sanitizeLogText(storyError),
+    })
+  }
+
   await input.client.execute({
     sql: `
       INSERT INTO assets (
@@ -364,6 +636,23 @@ export async function createAssetForPost(input: {
   if (!asset) {
     throw notFoundError("Asset not found")
   }
+  if (
+    shouldRegisterRoyalty
+    && storyRoyaltyRegistrationStatus === "failed"
+    && isStoryRoyaltyRegistrationConfigured(input.env)
+  ) {
+    // Config-missing failures are intentionally left for the manual retry script;
+    // queueing them before config exists would only burn through job attempts.
+    await enqueueCommunityJob({
+      client: input.client,
+      communityId: input.communityId,
+      jobType: "story_publication",
+      subjectType: "asset",
+      subjectId: input.post.asset_id,
+      payloadJson: JSON.stringify({ asset_id: input.post.asset_id }),
+      createdAt: nowIso(),
+    })
+  }
   return serializeAsset(asset)
 }
 
@@ -396,6 +685,171 @@ export async function createSongAssetForPost(input: {
   })
 }
 
+export async function retryStoryRoyaltyRegistrationForAsset(input: {
+  env: Env
+  client: Client
+  communityId: string
+  assetId: string
+  userRepository: UserRepository
+}): Promise<Asset> {
+  const assetId = normalizeAssetId(input.assetId)
+  const asset = await getAssetRow(input.client, input.communityId, assetId)
+  if (!asset) {
+    throw notFoundError("Asset not found")
+  }
+  if (asset.story_royalty_registration_status === "registered") {
+    return serializeAsset(asset)
+  }
+  if (!isStoryRoyaltyAssetKind(asset.asset_kind) || (asset.rights_basis !== "original" && asset.rights_basis !== "derivative")) {
+    throw badRequestError("Asset is not eligible for Story royalty registration")
+  }
+
+  const post = await getPostById(input.client, asset.source_post_id)
+  if (!post) {
+    throw notFoundError("Asset source post not found")
+  }
+
+  let storyError: string | null = null
+  let storyRoyaltyRegistrationStatus: AssetRow["story_royalty_registration_status"] = "pending"
+  const creatorWalletAddress = await resolvePrimaryWalletAddress({
+    env: input.env,
+    userRepository: input.userRepository,
+    userId: asset.creator_user_id,
+  })
+  const bundle = await loadRetrySongArtifactBundle({
+    env: input.env,
+    communityId: input.communityId,
+    songArtifactBundleId: asset.song_artifact_bundle_id,
+  })
+
+  try {
+    const registration = await maybeRegisterStoryRoyaltyForAsset({
+      env: input.env,
+      client: input.client,
+      communityId: input.communityId,
+      assetId: asset.asset_id,
+      creatorWalletAddress,
+      title: asset.display_title ?? post.title ?? null,
+      rightsBasis: asset.rights_basis,
+      licensePreset: asset.license_preset as StoryLicensePreset | null,
+      commercialRevSharePct: asset.commercial_rev_share_pct,
+      upstreamAssetRefs: post.upstream_asset_refs ?? null,
+      assetKind: asset.asset_kind,
+      bundle,
+      primaryContentHash: (asset.primary_content_hash?.trim() || `0x${await sha256Hex(asset.primary_content_ref)}`) as `0x${string}`,
+    })
+
+    if (registration) {
+      const updatedAt = nowIso()
+      await input.client.execute({
+        sql: `
+          UPDATE assets
+          SET publication_status = 'story_published',
+              story_status = 'published',
+              story_error = NULL,
+              story_ip_id = ?3,
+              story_ip_nft_contract = ?4,
+              story_ip_nft_token_id = ?5,
+              story_publish_model = 'story_ip_v1',
+              story_license_terms_id = ?6,
+              story_license_template = ?7,
+              story_royalty_policy = ?8,
+              story_royalty_policy_id = ?9,
+              story_derivative_parent_ip_ids_json = ?10,
+              story_derivative_registered_at = ?11,
+              story_revenue_token = ?12,
+              story_royalty_registration_status = ?13,
+              updated_at = ?14
+          WHERE community_id = ?1
+            AND asset_id = ?2
+        `,
+        args: [
+          input.communityId,
+          asset.asset_id,
+          registration.storyIpId,
+          registration.storyIpNftContract,
+          registration.storyIpNftTokenId,
+          registration.storyLicenseTermsId,
+          registration.storyLicenseTemplate,
+          registration.storyRoyaltyPolicy,
+          registration.storyRoyaltyPolicy,
+          registration.storyDerivativeParentIpIds ? JSON.stringify(registration.storyDerivativeParentIpIds) : null,
+          registration.storyDerivativeRegisteredAt,
+          registration.storyRevenueToken,
+          registration.storyRoyaltyRegistrationStatus,
+          updatedAt,
+        ],
+      })
+      const updated = await getAssetRow(input.client, input.communityId, asset.asset_id)
+      if (!updated) {
+        throw notFoundError("Asset not found")
+      }
+      return serializeAsset(updated)
+    }
+
+    const registrationError = isStoryRoyaltyRegistrationConfigured(input.env)
+      ? "story_royalty_registration_unavailable"
+      : "story_royalty_config_missing"
+    storyRoyaltyRegistrationStatus = "failed"
+    storyError = `royalty_registration_failed:${registrationError}`
+  } catch (error) {
+    const registrationError = error instanceof Error ? error.message : String(error)
+    storyRoyaltyRegistrationStatus = "failed"
+    storyError = `royalty_registration_failed:${registrationError}`
+  }
+
+  const updatedAt = nowIso()
+  const preserveLockedDelivery = asset.access_mode === "locked" && asset.locked_delivery_status === "ready"
+  const failedPublicationStatus = preserveLockedDelivery ? asset.publication_status : "draft"
+  const failedStoryStatus = preserveLockedDelivery ? asset.story_status : "none"
+  await input.client.execute({
+    sql: `
+      UPDATE assets
+      SET publication_status = ?3,
+          story_status = ?4,
+          story_error = ?5,
+          story_ip_id = ?6,
+          story_ip_nft_contract = ?7,
+          story_ip_nft_token_id = ?8,
+          story_license_terms_id = ?9,
+          story_license_template = ?10,
+          story_royalty_policy = ?11,
+          story_royalty_policy_id = ?12,
+          story_derivative_parent_ip_ids_json = ?13,
+          story_derivative_registered_at = ?14,
+          story_revenue_token = ?15,
+          story_royalty_registration_status = ?16,
+          updated_at = ?17
+      WHERE community_id = ?1
+        AND asset_id = ?2
+    `,
+    args: [
+      input.communityId,
+      asset.asset_id,
+      failedPublicationStatus,
+      failedStoryStatus,
+      storyError,
+      preserveLockedDelivery ? asset.story_ip_id : null,
+      preserveLockedDelivery ? asset.story_ip_nft_contract : null,
+      preserveLockedDelivery ? asset.story_ip_nft_token_id : null,
+      preserveLockedDelivery ? asset.story_license_terms_id : null,
+      preserveLockedDelivery ? asset.story_license_template : null,
+      preserveLockedDelivery ? asset.story_royalty_policy : null,
+      preserveLockedDelivery ? asset.story_royalty_policy_id : null,
+      preserveLockedDelivery ? asset.story_derivative_parent_ip_ids_json : null,
+      preserveLockedDelivery ? asset.story_derivative_registered_at : null,
+      preserveLockedDelivery ? asset.story_revenue_token : null,
+      storyRoyaltyRegistrationStatus,
+      updatedAt,
+    ],
+  })
+  const updated = await getAssetRow(input.client, input.communityId, asset.asset_id)
+  if (!updated) {
+    throw notFoundError("Asset not found")
+  }
+  return serializeAsset(updated)
+}
+
 export async function getCommunityAsset(input: {
   env: Env
   userId: string
@@ -424,6 +878,7 @@ export async function listCommunityDerivativeSources(input: {
   userId: string
   communityId: string
   kind?: DerivativeSourceKind | null
+  scope?: DerivativeSourceScope
   query?: string | null
   limit: number
   communityRepository: CommunityDatabaseBindingRepository
@@ -439,28 +894,27 @@ export async function listCommunityDerivativeSources(input: {
       query: input.query,
       limit: input.limit,
     })
+    const sourceRefs = new Set(rows.map((row) => derivativeSourceStoryRef(row)).filter((ref): ref is string => Boolean(ref)))
+    if ((input.scope ?? "community") === "global" && rows.length < input.limit) {
+      const globalRows = await listGlobalDerivativeSourceRows({
+        env: input.env,
+        communityRepository: input.communityRepository,
+        currentCommunityId: input.communityId,
+        kind: input.kind,
+        query: input.query,
+        limit: input.limit - rows.length,
+        seenSourceRefs: sourceRefs,
+      })
+      rows.push(...globalRows)
+    }
     const creatorUserIds = Array.from(new Set(rows.map((row) => row.creator_user_id)))
     const profilesByUserId = new Map(await Promise.all(creatorUserIds.map(async (userId) => [
       userId,
       await input.profileRepository.getProfileByUserId(userId).catch(() => null),
     ] as const)))
-    const items: DerivativeSource[] = rows.map((row) => {
+    const items: DerivativeSource[] = rows.slice(0, input.limit).map((row) => {
       const profile = profilesByUserId.get(row.creator_user_id) ?? null
-      return {
-        id: `asset_${row.asset_id}`,
-        object: "derivative_source",
-        community: `com_${row.community_id}`,
-        asset: `asset_${row.asset_id}`,
-        title: row.display_title?.trim() || "Untitled asset",
-        kind: derivativeSourceKindFromAssetKind(row.asset_kind),
-        story_ip: row.story_ip_id!,
-        story_license_terms: row.story_license_terms_id!,
-        license_preset: row.license_preset,
-        commercial_rev_share_pct: row.commercial_rev_share_pct,
-        creator_user: `usr_${row.creator_user_id}`,
-        creator_handle: profile ? getProfilePublicHandleLabel(profile) : null,
-        creator_display_name: profile?.display_name ?? null,
-      }
+      return serializeDerivativeSourceRow(row, profile)
     })
 
     return {

@@ -50,7 +50,7 @@ function buildInClause(values: string[], startIndex = 1): { placeholders: string
   }
 }
 
-function escapeLikePattern(value: string): string {
+export function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, (match) => `\\${match}`)
 }
 
@@ -202,6 +202,7 @@ export async function listDerivativeSourceRows(input: {
   communityId: string
   kind?: DerivativeSourceKind | null
   query?: string | null
+  assetIds?: string[] | null
   limit: number
 }): Promise<DerivativeSourceRow[]> {
   const assetKind = assetKindForDerivativeSourceKind(input.kind)
@@ -229,6 +230,15 @@ export async function listDerivativeSourceRows(input: {
     filters.push(`LOWER(COALESCE(display_title, asset_id)) LIKE ?${nextArg} ESCAPE '\\'`)
     args.push(`%${escapeLikePattern(query!.toLowerCase())}%`)
     nextArg += 1
+  }
+  if (input.assetIds) {
+    const assetIdClause = buildInClause(input.assetIds, nextArg)
+    if (!assetIdClause) {
+      return []
+    }
+    filters.push(`asset_id IN (${assetIdClause.placeholders})`)
+    args.push(...assetIdClause.args)
+    nextArg += assetIdClause.args.length
   }
   args.push(input.limit)
 

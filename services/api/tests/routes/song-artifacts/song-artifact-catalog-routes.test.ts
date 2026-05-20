@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { createClient } from "@libsql/client"
+import { createClient, type Client } from "@libsql/client"
 import { app } from "../../../src/index"
 import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
@@ -15,6 +15,8 @@ let originalFetch: typeof fetch
 type DerivativeSourceListBody = {
   items: Array<{
     asset: string
+    community: string
+    source_ref: string
     title: string
     kind: "song" | "video"
     story_ip: string
@@ -28,6 +30,7 @@ type DerivativeSourceListBody = {
 
 async function insertDerivativeSourceAsset(input: {
   communityDbRoot: string
+  controlPlaneClient?: Client
   communityId: string
   creatorUserId: string
   assetId: string
@@ -37,6 +40,7 @@ async function insertDerivativeSourceAsset(input: {
   publicationStatus: "story_published" | "withdrawn"
   storyIpId?: string
   storyLicenseTermsId?: string
+  projectionVisibility?: "public" | "members_only"
 }): Promise<void> {
   const client = createClient({
     url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
@@ -112,6 +116,47 @@ async function insertDerivativeSourceAsset(input: {
         now,
       ],
     })
+
+    if (input.controlPlaneClient) {
+      const postType = input.assetKind === "video_file" ? "video" : "song"
+      await input.controlPlaneClient.execute({
+        sql: `
+          INSERT INTO community_post_projections (
+            projection_id, community_id, source_post_id, author_user_id, identity_mode, post_type,
+            status, visibility, source_created_at, projected_payload_json,
+            upvote_count, downvote_count, comment_count, like_count,
+            projection_version, created_at, updated_at
+          ) VALUES (
+            ?1, ?2, ?3, ?4, 'public', ?5,
+            'published', ?6, ?7, ?8,
+            0, 0, 0, 0,
+            1, ?7, ?7
+          )
+        `,
+        args: [
+          `cpp_${input.assetId}`,
+          input.communityId,
+          postId,
+          input.creatorUserId,
+          postType,
+          input.projectionVisibility ?? "public",
+          now,
+          JSON.stringify({
+            post_id: postId,
+            community_id: input.communityId,
+            author_user_id: input.creatorUserId,
+            identity_mode: "public",
+            post_type: postType,
+            status: "published",
+            visibility: input.projectionVisibility ?? "public",
+            title: input.title,
+            song_title: input.assetKind === "song_audio" ? input.title : null,
+            asset_id: input.assetId,
+            rights_basis: input.rightsBasis,
+          }),
+        ],
+      })
+    }
   } finally {
     client.close()
   }
@@ -243,6 +288,8 @@ describe("song artifact catalog routes", () => {
     expect(songSourcesBody.items.every((item) => !item.creator_handle?.startsWith("usr_"))).toBe(true)
     expect(songSourcesBody.items.every((item) => item.creator_display_name === "Derivative Artist")).toBe(true)
     expect(songSourcesBody.items.find((item) => item.asset === "asset_ast_derivative_song")?.story_license_terms).toBe("18")
+    expect(songSourcesBody.items.find((item) => item.asset === "asset_ast_derivative_song")?.source_ref)
+      .toBe("story:ip:0x2222222222222222222222222222222222222222#licenseTermsId=18")
 
     const queriedSources = await app.request(
       `http://pirate.test/communities/${communityId}/derivative-sources?kind=song&q=Derivative`,
@@ -299,6 +346,100 @@ describe("song artifact catalog routes", () => {
       ctx.env,
     )
     expect(outsiderSources.status).toBe(404)
+  })
+
+  test("searches public Story-registered derivative sources across communities", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const owner = await exchangeJwt(ctx.env, "global-derivative-source-owner")
+    await completeUniqueHumanVerification(ctx.env, owner.accessToken)
+
+    async function createCommunity(displayName: string): Promise<string> {
+      const response = await requestJson(
+        "http://pirate.test/communities",
+        {
+          display_name: displayName,
+          membership_mode: "request",
+          handle_policy: {
+            policy_template: "standard",
+          },
+        },
+        ctx.env,
+        owner.accessToken,
+      )
+      expect(response.status === 201 || response.status === 202).toBe(true)
+      const body = await json(response) as {
+        community: {
+          id: string
+        }
+      }
+      return body.community.id.replace(/^com_/, "")
+    }
+
+    const destinationCommunityId = await createCommunity("Destination Remix Club")
+    const sourceCommunityId = await createCommunity("Remote Source Club")
+
+    await insertDerivativeSourceAsset({
+      communityDbRoot: ctx.communityDbRoot,
+      controlPlaneClient: ctx.client,
+      communityId: sourceCommunityId,
+      creatorUserId: owner.userId,
+      assetId: "ast_remote_story_song",
+      title: "Remote Blues Source",
+      assetKind: "song_audio",
+      rightsBasis: "original",
+      publicationStatus: "story_published",
+      storyIpId: "0x5555555555555555555555555555555555555555",
+      storyLicenseTermsId: "29",
+    })
+    await insertDerivativeSourceAsset({
+      communityDbRoot: ctx.communityDbRoot,
+      controlPlaneClient: ctx.client,
+      communityId: sourceCommunityId,
+      creatorUserId: owner.userId,
+      assetId: "ast_remote_hidden_song",
+      title: "Remote Hidden Source",
+      assetKind: "song_audio",
+      rightsBasis: "original",
+      publicationStatus: "story_published",
+      storyIpId: "0x6666666666666666666666666666666666666666",
+      storyLicenseTermsId: "30",
+      projectionVisibility: "members_only",
+    })
+
+    const communityScoped = await app.request(
+      `http://pirate.test/communities/${destinationCommunityId}/derivative-sources?kind=song&q=Remote`,
+      {
+        headers: {
+          authorization: `Bearer ${owner.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(communityScoped.status).toBe(200)
+    const communityScopedBody = await json(communityScoped) as DerivativeSourceListBody
+    expect(communityScopedBody.items).toEqual([])
+
+    const globalSources = await app.request(
+      `http://pirate.test/communities/${destinationCommunityId}/derivative-sources?kind=song&scope=global&q=Remote&limit=25`,
+      {
+        headers: {
+          authorization: `Bearer ${owner.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(globalSources.status).toBe(200)
+    const globalSourcesBody = await json(globalSources) as DerivativeSourceListBody
+    expect(globalSourcesBody.items.map((item) => item.asset)).toEqual(["asset_ast_remote_story_song"])
+    expect(globalSourcesBody.items[0]).toMatchObject({
+      community: `com_${sourceCommunityId}`,
+      source_ref: "story:ip:0x5555555555555555555555555555555555555555#licenseTermsId=29",
+      story_ip: "0x5555555555555555555555555555555555555555",
+      story_license_terms: "29",
+      title: "Remote Blues Source",
+    })
   })
 
   test("requires derivative references when ACRCloud custom bucket returns a match", async () => {
