@@ -21,6 +21,16 @@ import {
   type CommunityMachineAccessPolicyPatch,
 } from "../lib/communities/community-machine-access-service"
 import {
+  getCommunityAssistantPolicy,
+  listCommunityAssistantModels,
+  updateCommunityAssistantPolicy,
+  type CommunityAssistantPolicyPatch,
+} from "../lib/communities/assistant-policy/service"
+import {
+  revokeCommunityAssistantCredential,
+  saveCommunityAssistantCredential,
+} from "../lib/communities/assistant-policy/credential-service"
+import {
   getResolvedCommunityRouteContext,
   requireJsonBody,
 } from "./communities-route-helpers"
@@ -47,6 +57,65 @@ export function registerCommunitySettingsRoutes(communities: Hono<AuthenticatedE
       communityId,
       userId: actor.userId,
       body,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.get("/:communityId/assistant-policy", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await getCommunityAssistantPolicy({
+      env: c.env,
+      communityRepository,
+      communityId,
+      actor,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.post("/:communityId/assistant-policy", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const body = await requireJsonBody<CommunityAssistantPolicyPatch>(c, "Invalid community assistant policy payload")
+    const result = await updateCommunityAssistantPolicy({
+      env: c.env,
+      communityRepository,
+      communityId,
+      actor,
+      body,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.post("/:communityId/assistant-credential", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const body = await requireJsonBody<{ api_key?: unknown }>(c, "Invalid assistant credential payload")
+    const result = await saveCommunityAssistantCredential({
+      env: c.env,
+      communityRepository,
+      communityId,
+      actor,
+      apiKey: body.api_key,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.post("/:communityId/assistant-credential/revoke", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await revokeCommunityAssistantCredential({
+      env: c.env,
+      communityRepository,
+      communityId,
+      actor,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.get("/:communityId/assistant-models", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await listCommunityAssistantModels({
+      env: c.env,
+      communityRepository,
+      communityId,
+      actor,
     })
     return c.json(result, 200)
   })
