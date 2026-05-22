@@ -2300,6 +2300,35 @@ CREATE INDEX idx_community_gate_policies_scope_updated
     checksum: "50b40ee28ad443c6ed4cc9bbfc0ffcd2cb2fe2a9cba443b5944952ec1b6ed5c6",
   },
   {
+    name: "1061_reference_links_resource_shape.sql",
+    sql: `UPDATE communities
+SET settings_json = json_set(
+    settings_json,
+    '\$.reference_links',
+    (
+        SELECT json_group_array(json(
+            CASE
+                WHEN json_type(value, '\$.id') IS NOT NULL THEN value
+                WHEN json_type(value, '\$.community_reference_link') IS NOT NULL THEN json_set(
+                    json_remove(value, '\$.community_reference_link'),
+                    '\$.id',
+                    json_extract(value, '\$.community_reference_link'),
+                    '\$.object',
+                    'community_reference_link'
+                )
+                ELSE value
+            END
+        ))
+        FROM json_each(settings_json, '\$.reference_links')
+    )
+)
+WHERE settings_json IS NOT NULL
+  AND json_valid(settings_json)
+  AND json_type(settings_json, '\$.reference_links') = 'array';
+`,
+    checksum: "27479e3c2e611b5841650c859c99e2a9fc252c9362a87ad691175db7d25612d6",
+  },
+  {
     name: "1062_link_enrichment_snapshots.sql",
     sql: `ALTER TABLE posts
     ADD COLUMN link_enrichment_snapshot_json TEXT;
@@ -3391,6 +3420,26 @@ SELECT 1;
 ALTER TABLE live_rooms ADD COLUMN store_label TEXT;
 `,
     checksum: "d917df09668038021493e1c2bd453392287790eef0554205ffc339cf1d33148a",
+  },
+  {
+    name: "1083_post_source_timing.sql",
+    sql: `ALTER TABLE posts ADD COLUMN source_start_ms INTEGER;
+ALTER TABLE posts ADD COLUMN source_duration_ms INTEGER;
+ALTER TABLE posts ADD COLUMN sync_offset_ms INTEGER;
+`,
+    checksum: "535cb795c2f3546642dc970ea7fa85bd4323c42c67dc8466c7d9f0f84e6de251",
+  },
+  {
+    name: "1084_licensed_performance_rights_basis.sql",
+    sql: `-- Compatibility migration.
+--
+-- Updating SQLite CHECK constraints for posts.rights_basis and assets.rights_basis
+-- requires rebuilding those tables. The posts table also has columns that are
+-- added by runtime preflight, so the rebuild runs there where the current table
+-- shape can be inspected and preserved safely.
+SELECT 1;
+`,
+    checksum: "cfe0bfa3e50685559ff4d2f9b0526ea8c1c7d675666ef98e5330d6c8366c40eb",
   },
   {
     name: "1085_community_assistant_policy.sql",
