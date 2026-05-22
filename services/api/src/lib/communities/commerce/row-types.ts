@@ -60,6 +60,8 @@ export type ListingRow = {
   listing_mode: CommunityListing["listing_mode"]
   status: CommunityListing["status"]
   price_usd: number
+  // Historical column name: this JSON now stores general listing sidecars
+  // including regional pricing, donations, and post-purchase vinyl metadata.
   regional_pricing_policy_json: string | null
   created_by_user_id: string
   created_at: string
@@ -70,6 +72,8 @@ export type ListingPolicySnapshot = {
   regional_pricing_enabled?: boolean
   donation_partner_id?: string | null
   donation_share_pct?: number | null
+  vinyl_release_provider?: "elasticstage" | null
+  vinyl_release_url?: string | null
 }
 
 export type QuoteAllocationSnapshot = Omit<NonNullable<CommunityPurchaseQuote["allocation_snapshot"]>[number], "amount_cents"> & {
@@ -169,6 +173,7 @@ export type PurchaseRow = {
   donation_partner_id: string | null
   donation_share_pct: number | null
   donation_amount_usd: number | null
+  listing_policy_json: string | null
   created_at: string
 }
 

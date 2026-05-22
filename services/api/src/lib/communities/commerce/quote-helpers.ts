@@ -11,7 +11,7 @@ import {
 } from "./row-types"
 import { requireUserBuyerId } from "./buyer-identity"
 import { serializePurchaseAllocationLeg } from "./allocation"
-import { centsToUsd, pctToBps, usdToCents } from "./serialization"
+import { centsToUsd, parseListingPolicy, pctToBps, usdToCents } from "./serialization"
 import { unixSeconds } from "../../../serializers/time"
 import type {
   CommunityListing,
@@ -110,6 +110,7 @@ export function serializeSettlement(
   quote: PurchaseQuoteRow,
   allocations: PurchaseAllocationLegRow[],
 ): CommunityPurchaseSettlement {
+  const listingPolicy = parseListingPolicy({ regional_pricing_policy_json: purchase.listing_policy_json })
   const settlementChain = parseJsonValue<CommunityPurchaseSettlement["settlement_chain"]>(
     purchase.settlement_chain,
     { chain_namespace: "eip155", chain_id: 1315, display_name: "Story Aeneid" },
@@ -135,6 +136,8 @@ export function serializeSettlement(
     donation_partner: purchase.donation_partner_id,
     donation_share_bps: pctToBps(purchase.donation_share_pct),
     donation_amount_cents: usdToCents(purchase.donation_amount_usd),
+    vinyl_release_provider: listingPolicy.vinylReleaseProvider,
+    vinyl_release_url: listingPolicy.vinylReleaseUrl,
     entitlement_kind: toSettlementEntitlementKind(entitlement.entitlement_kind),
     entitlement_target_ref: purchase.asset_id ? `asset_${entitlement.target_ref}` : entitlement.target_ref,
     purchase_entitlement: entitlement.purchase_entitlement_id,

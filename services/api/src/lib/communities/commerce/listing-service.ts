@@ -51,8 +51,95 @@ type ListingDonationConfig = {
   donation_share_pct: number | null
 }
 
+type ListingVinylReleaseProvider = "elasticstage"
+
+type ListingVinylReleaseConfig = {
+  vinyl_release_provider: ListingVinylReleaseProvider | null
+  vinyl_release_url: string | null
+}
+
 type CommunityListingRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
 type ListingExecutor = Pick<Client, "execute">
+
+export function normalizeElasticStageReleaseUrl(value: string): string {
+  const trimmed = value.trim()
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  } catch {
+    throw badRequestError("vinyl_release_url must be a valid ElasticStage release URL")
+  }
+
+  const hostname = parsed.hostname.toLowerCase()
+  if (parsed.protocol !== "https:" || (hostname !== "elasticstage.com" && hostname !== "www.elasticstage.com")) {
+    throw badRequestError("vinyl_release_url must be an ElasticStage HTTPS URL")
+  }
+  if (!parsed.pathname.toLowerCase().includes("/releases/")) {
+    throw badRequestError("vinyl_release_url must be an ElasticStage release URL")
+  }
+  parsed.hash = ""
+  return parsed.toString()
+}
+
+function resolveListingVinylReleaseConfig(input: {
+  asset: { asset_kind: string } | null
+  current: ListingVinylReleaseConfig
+  requestedProvider?: ListingVinylReleaseProvider | null
+  requestedUrl?: string | null
+}): ListingVinylReleaseConfig {
+  if (input.requestedProvider === undefined && input.requestedUrl === undefined) {
+    return input.current
+  }
+
+  const requestedUrlTrimmed = typeof input.requestedUrl === "string"
+    ? input.requestedUrl.trim()
+    : null
+
+  if (input.requestedProvider === null && requestedUrlTrimmed) {
+    throw badRequestError("vinyl_release_provider must be elasticstage when vinyl_release_url is set")
+  }
+
+  if (
+    input.requestedProvider === null
+    || input.requestedUrl === null
+    || (typeof input.requestedUrl === "string" && !requestedUrlTrimmed)
+  ) {
+    return {
+      vinyl_release_provider: null,
+      vinyl_release_url: null,
+    }
+  }
+
+  const rawUrl = input.requestedUrl === undefined
+    ? input.current.vinyl_release_url
+    : input.requestedUrl
+  const normalizedUrl = rawUrl?.trim()
+    ? normalizeElasticStageReleaseUrl(rawUrl)
+    : null
+
+  if (!normalizedUrl) {
+    if (input.requestedProvider === "elasticstage") {
+      throw badRequestError("vinyl_release_url is required when vinyl_release_provider is set")
+    }
+    return {
+      vinyl_release_provider: null,
+      vinyl_release_url: null,
+    }
+  }
+
+  const provider = input.requestedProvider ?? input.current.vinyl_release_provider ?? "elasticstage"
+  if (provider !== "elasticstage") {
+    throw badRequestError("vinyl_release_provider must be elasticstage")
+  }
+  if (input.asset?.asset_kind !== "song_audio") {
+    throw badRequestError("vinyl_release_url is only supported for song listings")
+  }
+
+  return {
+    vinyl_release_provider: "elasticstage",
+    vinyl_release_url: normalizedUrl,
+  }
+}
 
 async function resolveListingDonationConfig(input: {
   env: Env
@@ -179,11 +266,13 @@ export async function createCommunityListingInTransaction(input: {
   await requireVerifiedHuman(input.userRepository, input.userId, {
     bypassForCommunityOwner: hasCommunityRole(membership, OWNER_OR_ADMIN_ROLE),
   })
+  let listingAsset: Awaited<ReturnType<typeof getAssetRow>> | null = null
   if (assetId) {
     const asset = await getAssetRow(input.client, input.communityId, assetId)
     if (!asset) {
       throw notFoundError("Asset not found")
     }
+    listingAsset = asset
     assertAssetReadyForStoryRoyaltyCommerce(asset, input.env)
     if (asset.creator_user_id !== input.userId && !hasCommunityRole(membership, OWNER_OR_ADMIN_ROLE)) {
       throw notFoundError("Asset not found")
@@ -219,6 +308,15 @@ export async function createCommunityListingInTransaction(input: {
     requestedPartnerId: input.body.donation_partner,
     requestedShareBps: input.body.donation_share_bps,
   })
+  const vinylReleaseConfig = resolveListingVinylReleaseConfig({
+    asset: listingAsset,
+    current: {
+      vinyl_release_provider: null,
+      vinyl_release_url: null,
+    },
+    requestedProvider: input.body.vinyl_release_provider,
+    requestedUrl: input.body.vinyl_release_url,
+  })
   const listingId = makeId("lst")
   const createdAt = nowIso()
   await input.client.execute({
@@ -242,6 +340,8 @@ export async function createCommunityListingInTransaction(input: {
         regional_pricing_enabled: input.body.regional_pricing_enabled,
         donation_partner_id: donationConfig.donation_partner_id,
         donation_share_pct: donationConfig.donation_share_pct,
+        vinyl_release_provider: vinylReleaseConfig.vinyl_release_provider,
+        vinyl_release_url: vinylReleaseConfig.vinyl_release_url,
       }),
       input.userId,
       createdAt,
@@ -294,12 +394,14 @@ export async function updateCommunityListing(input: {
         throw notFoundError("Listing not found")
       }
     }
+    const listingAsset = listing.asset_id?.trim()
+      ? await getAssetRow(db.client, input.communityId, listing.asset_id)
+      : null
     if (listing.asset_id?.trim() && (input.body.status ?? listing.status) === "active") {
-      const asset = await getAssetRow(db.client, input.communityId, listing.asset_id)
-      if (!asset) {
+      if (!listingAsset) {
         throw notFoundError("Asset not found")
       }
-      assertAssetReadyForStoryRoyaltyCommerce(asset, input.env)
+      assertAssetReadyForStoryRoyaltyCommerce(listingAsset, input.env)
     }
     const currentPolicy = parseListingPolicy(listing)
     const nextRegional = input.body.regional_pricing_enabled
@@ -314,6 +416,15 @@ export async function updateCommunityListing(input: {
       },
       requestedPartnerId: input.body.donation_partner,
       requestedShareBps: input.body.donation_share_bps,
+    })
+    const vinylReleaseConfig = resolveListingVinylReleaseConfig({
+      asset: listingAsset,
+      current: {
+        vinyl_release_provider: currentPolicy.vinylReleaseProvider,
+        vinyl_release_url: currentPolicy.vinylReleaseUrl,
+      },
+      requestedProvider: input.body.vinyl_release_provider,
+      requestedUrl: input.body.vinyl_release_url,
     })
     await assertRegionalPricingEnabledIfRequested({
       env: input.env,
@@ -339,6 +450,8 @@ export async function updateCommunityListing(input: {
           regional_pricing_enabled: nextRegional,
           donation_partner_id: donationConfig.donation_partner_id,
           donation_share_pct: donationConfig.donation_share_pct,
+          vinyl_release_provider: vinylReleaseConfig.vinyl_release_provider,
+          vinyl_release_url: vinylReleaseConfig.vinyl_release_url,
         }),
         nowIso(),
       ],

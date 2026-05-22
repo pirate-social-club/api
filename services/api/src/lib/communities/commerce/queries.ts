@@ -550,22 +550,25 @@ export async function listPurchaseRows(
   },
 ): Promise<PurchaseRow[]> {
   const cursorClause = input.after
-    ? "AND (created_at < ?3 OR (created_at = ?3 AND purchase_id < ?4))"
+    ? "AND (p.created_at < ?3 OR (p.created_at = ?3 AND p.purchase_id < ?4))"
     : ""
   const limitArgIndex = input.after ? 5 : 3
   const result = await client.execute({
     sql: `
-      SELECT purchase_id, community_id, listing_id, asset_id, live_room_id,
-             COALESCE(buyer_kind, 'user') AS buyer_kind, buyer_user_id,
-             buyer_wallet_address, buyer_wallet_address_normalized, buyer_chain_ref,
-             settlement_wallet_attachment_id, purchase_price_usd, pricing_tier, settlement_mode, settlement_chain,
-             settlement_token, settlement_tx_ref, donation_partner_id, donation_share_pct,
-             donation_amount_usd, created_at
-      FROM purchases
-      WHERE community_id = ?1
-        AND buyer_user_id = ?2
+      SELECT p.purchase_id, p.community_id, p.listing_id, p.asset_id, p.live_room_id,
+             COALESCE(p.buyer_kind, 'user') AS buyer_kind, p.buyer_user_id,
+             p.buyer_wallet_address, p.buyer_wallet_address_normalized, p.buyer_chain_ref,
+             p.settlement_wallet_attachment_id, p.purchase_price_usd, p.pricing_tier, p.settlement_mode, p.settlement_chain,
+             p.settlement_token, p.settlement_tx_ref, p.donation_partner_id, p.donation_share_pct,
+             p.donation_amount_usd, l.regional_pricing_policy_json AS listing_policy_json, p.created_at
+      FROM purchases p
+      LEFT JOIN listings l
+        ON l.community_id = p.community_id
+       AND l.listing_id = p.listing_id
+      WHERE p.community_id = ?1
+        AND p.buyer_user_id = ?2
         ${cursorClause}
-      ORDER BY created_at DESC, purchase_id DESC
+      ORDER BY p.created_at DESC, p.purchase_id DESC
       LIMIT ?${limitArgIndex}
     `,
     args: input.after
@@ -593,6 +596,7 @@ export async function listPurchaseRows(
     donation_partner_id: stringOrNull(row, "donation_partner_id"),
     donation_share_pct: numberOrNull(row, "donation_share_pct"),
     donation_amount_usd: numberOrNull(row, "donation_amount_usd"),
+    listing_policy_json: stringOrNull(row, "listing_policy_json"),
     created_at: requiredString(row, "created_at"),
   }))
 }
@@ -604,15 +608,18 @@ export async function getPurchaseRow(
 ): Promise<PurchaseRow | null> {
   const row = await executeFirst(client, {
     sql: `
-      SELECT purchase_id, community_id, listing_id, asset_id, live_room_id,
-             COALESCE(buyer_kind, 'user') AS buyer_kind, buyer_user_id,
-             buyer_wallet_address, buyer_wallet_address_normalized, buyer_chain_ref,
-             settlement_wallet_attachment_id, purchase_price_usd, pricing_tier, settlement_mode, settlement_chain,
-             settlement_token, settlement_tx_ref, donation_partner_id, donation_share_pct,
-             donation_amount_usd, created_at
-      FROM purchases
-      WHERE community_id = ?1
-        AND purchase_id = ?2
+      SELECT p.purchase_id, p.community_id, p.listing_id, p.asset_id, p.live_room_id,
+             COALESCE(p.buyer_kind, 'user') AS buyer_kind, p.buyer_user_id,
+             p.buyer_wallet_address, p.buyer_wallet_address_normalized, p.buyer_chain_ref,
+             p.settlement_wallet_attachment_id, p.purchase_price_usd, p.pricing_tier, p.settlement_mode, p.settlement_chain,
+             p.settlement_token, p.settlement_tx_ref, p.donation_partner_id, p.donation_share_pct,
+             p.donation_amount_usd, l.regional_pricing_policy_json AS listing_policy_json, p.created_at
+      FROM purchases p
+      LEFT JOIN listings l
+        ON l.community_id = p.community_id
+       AND l.listing_id = p.listing_id
+      WHERE p.community_id = ?1
+        AND p.purchase_id = ?2
       LIMIT 1
     `,
     args: [communityId, purchaseId],
@@ -638,6 +645,7 @@ export async function getPurchaseRow(
     donation_partner_id: stringOrNull(row, "donation_partner_id"),
     donation_share_pct: numberOrNull(row, "donation_share_pct"),
     donation_amount_usd: numberOrNull(row, "donation_amount_usd"),
+    listing_policy_json: stringOrNull(row, "listing_policy_json"),
     created_at: requiredString(row, "created_at"),
   } : null
 }

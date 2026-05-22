@@ -95,8 +95,16 @@ export function parseListingPolicy(row: Pick<ListingRow, "regional_pricing_polic
   regionalPricingEnabled: boolean
   donationPartnerId: string | null
   donationSharePct: number | null
+  vinylReleaseProvider: "elasticstage" | null
+  vinylReleaseUrl: string | null
 } {
   const parsed = parseJsonValue<ListingPolicySnapshot>(row.regional_pricing_policy_json, {})
+  const vinylReleaseProvider = parsed.vinyl_release_provider === "elasticstage"
+    ? parsed.vinyl_release_provider
+    : null
+  const vinylReleaseUrl = typeof parsed.vinyl_release_url === "string" && parsed.vinyl_release_url.trim()
+    ? parsed.vinyl_release_url.trim()
+    : null
   return {
     regionalPricingEnabled: parsed.regional_pricing_enabled === true,
     donationPartnerId: typeof parsed.donation_partner_id === "string" && parsed.donation_partner_id.trim()
@@ -105,11 +113,14 @@ export function parseListingPolicy(row: Pick<ListingRow, "regional_pricing_polic
     donationSharePct: typeof parsed.donation_share_pct === "number" && Number.isFinite(parsed.donation_share_pct)
       ? parsed.donation_share_pct
       : null,
+    vinylReleaseProvider: vinylReleaseProvider && vinylReleaseUrl ? vinylReleaseProvider : null,
+    vinylReleaseUrl: vinylReleaseProvider && vinylReleaseUrl ? vinylReleaseUrl : null,
   }
 }
 
 export function serializeListing(row: ListingRow): CommunityListing {
   const policy = parseListingPolicy(row)
+  const vinylReleaseAvailable = Boolean(policy.vinylReleaseProvider && policy.vinylReleaseUrl)
   return {
     id: `lst_${row.listing_id}`,
     object: "community_listing",
@@ -122,6 +133,8 @@ export function serializeListing(row: ListingRow): CommunityListing {
     regional_pricing_enabled: policy.regionalPricingEnabled,
     donation_partner: policy.donationPartnerId,
     donation_share_bps: pctToBps(policy.donationSharePct),
+    vinyl_release_available: vinylReleaseAvailable,
+    vinyl_release_provider: vinylReleaseAvailable ? policy.vinylReleaseProvider : null,
     created_by_user: `usr_${row.created_by_user_id}`,
     created: unixSeconds(row.created_at),
   }
@@ -180,6 +193,7 @@ export function serializePurchase(
   entitlement: PurchaseEntitlementRow,
   allocations: PurchaseAllocationLegRow[],
 ): CommunityPurchase {
+  const listingPolicy = parseListingPolicy({ regional_pricing_policy_json: row.listing_policy_json })
   const settlementChain = parseJsonValue<CommunityPurchase["settlement_chain"]>(
     row.settlement_chain,
     { chain_namespace: "eip155", chain_id: 1315, display_name: "Story Aeneid" },
@@ -203,6 +217,8 @@ export function serializePurchase(
     donation_partner: row.donation_partner_id,
     donation_share_bps: pctToBps(row.donation_share_pct),
     donation_amount_cents: usdToCents(row.donation_amount_usd),
+    vinyl_release_provider: listingPolicy.vinylReleaseProvider,
+    vinyl_release_url: listingPolicy.vinylReleaseUrl,
     purchase_entitlement: entitlement.purchase_entitlement_id,
     entitlement_kind: entitlement.entitlement_kind,
     entitlement_target_ref: row.asset_id ? `asset_${entitlement.target_ref}` : entitlement.target_ref,

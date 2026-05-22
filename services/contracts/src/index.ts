@@ -815,6 +815,8 @@ export type CommunityListing = {
   regional_pricing_enabled: boolean;
   donation_partner?: string | null;
   donation_share_bps?: number | null;
+  vinyl_release_available?: boolean;
+  vinyl_release_provider?: "elasticstage" | null;
   created_by_user: string;
   created: number;
 };
@@ -826,6 +828,8 @@ export type CreateCommunityListingRequest = {
   regional_pricing_enabled: boolean;
   donation_partner?: string | null;
   donation_share_bps?: number | null;
+  vinyl_release_provider?: "elasticstage" | null;
+  vinyl_release_url?: string | null;
   status: "draft" | "active" | "paused" | "archived";
 };
 
@@ -834,6 +838,8 @@ export type UpdateCommunityListingRequest = {
   regional_pricing_enabled?: boolean;
   donation_partner?: string | null;
   donation_share_bps?: number | null;
+  vinyl_release_provider?: "elasticstage" | null;
+  vinyl_release_url?: string | null;
   status?: "draft" | "active" | "paused" | "archived";
 };
 
@@ -861,6 +867,8 @@ export type CommunityPurchase = {
   donation_partner?: string | null;
   donation_share_bps?: number | null;
   donation_amount_cents?: number | null;
+  vinyl_release_provider?: "elasticstage" | null;
+  vinyl_release_url?: string | null;
   purchase_entitlement: string;
   entitlement_kind: "asset_access" | "live_room_access" | "replay_access" | "license";
   entitlement_target_ref: string;
@@ -982,6 +990,8 @@ export type CommunityPurchaseSettlement = {
   donation_partner?: string | null;
   donation_share_bps?: number | null;
   donation_amount_cents?: number | null;
+  vinyl_release_provider?: "elasticstage" | null;
+  vinyl_release_url?: string | null;
   entitlement_kind: "asset_access" | "live_room_access";
   entitlement_target_ref: string;
   purchase_entitlement: string;
