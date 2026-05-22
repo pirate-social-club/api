@@ -115,6 +115,24 @@ function buildLibsqlUrl(hostname: string | null): string | null {
   return `libsql://${hostname}`;
 }
 
+function summarizeErrorBody(body: unknown): string | null {
+  if (typeof body === "string") {
+    return body.slice(0, 500);
+  }
+  if (typeof body !== "object" || body === null) {
+    return null;
+  }
+
+  const source = body as Record<string, unknown>;
+  for (const key of ["error", "message", "code"]) {
+    if (typeof source[key] === "string" && source[key].length > 0) {
+      return source[key].slice(0, 500);
+    }
+  }
+
+  return null;
+}
+
 function normalizeDatabase(raw: unknown): TursoDatabase {
   const source = (raw ?? {}) as Record<string, unknown>;
   const hostname = readString(source, "hostname", "Hostname");
@@ -153,7 +171,9 @@ export class TursoPlatformClient {
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method,
       headers: {
+        accept: "application/json",
         authorization: `Bearer ${this.input.apiToken}`,
+        "user-agent": "pirate-community-provision-operator/1.0",
         ...(options.body === undefined ? {} : { "content-type": "application/json" }),
       },
       ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
@@ -170,10 +190,8 @@ export class TursoPlatformClient {
     }
 
     if (!response.ok) {
-      const message =
-        typeof body === "object" && body && "error" in body
-          ? String((body as Record<string, unknown>).error)
-          : `${method} ${path} failed`;
+      const summary = summarizeErrorBody(body);
+      const message = `${method} ${path} failed with ${response.status}${summary ? `: ${summary}` : ""}`;
       throw new TursoPlatformError(message, response.status, method, options.path, body);
     }
 
