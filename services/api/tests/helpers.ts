@@ -14,10 +14,15 @@ import { resetPassportWalletScoreRefreshLimitsForTests } from "../src/lib/verifi
 import { setEnsResolverForTests } from "../src/lib/auth/ens-linked-handle-service"
 import { setStoryAccessProofSignerForTests } from "../src/lib/story/story-access-proof-service"
 import { setStoryCdrUploaderForTests } from "../src/lib/story/story-cdr"
-import { setStoryAssetPublisherForTests } from "../src/lib/story/story-publish-service"
+import {
+  setStoryAssetPublishAdapterDepsForTests,
+  setStoryAssetPublisherForTests,
+} from "../src/lib/story/story-publish-service"
 import { setStoryRoyaltyRegistrarForTests } from "../src/lib/story/story-royalty-registration-service"
 import {
   setStoryParentRoyaltyVaultTransferExecutorForTests,
+  setStoryRoyaltyEntitlementMinterForTests,
+  setStoryRoyaltySettlementAdapterDepsForTests,
   setStoryRoyaltyPurchaseSettlementExecutorForTests,
 } from "../src/lib/story/story-royalty-settlement-service"
 import { setStoryRuntimeFundingAssertionForTests } from "../src/lib/story/story-runtime-funding"
@@ -147,8 +152,11 @@ export function resetRuntimeCaches(): void {
   setStoryAccessProofSignerForTests(null)
   setStoryCdrUploaderForTests(null)
   setStoryAssetPublisherForTests(null)
+  setStoryAssetPublishAdapterDepsForTests(null)
   setStoryRoyaltyRegistrarForTests(null)
   setStoryRoyaltyPurchaseSettlementExecutorForTests(null)
+  setStoryRoyaltyEntitlementMinterForTests(null)
+  setStoryRoyaltySettlementAdapterDepsForTests(null)
   setStoryParentRoyaltyVaultTransferExecutorForTests(null)
   setStoryRuntimeFundingAssertionForTests(null)
   setSwarmPublisherForTests(null)

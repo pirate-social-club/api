@@ -14,6 +14,7 @@ import {
 } from "../../../src/lib/story/story-royalty-registration-service"
 import {
   setStoryParentRoyaltyVaultTransferExecutorForTests,
+  setStoryRoyaltyEntitlementMinterForTests,
   setStoryRoyaltyPurchaseSettlementExecutorForTests,
 } from "../../../src/lib/story/story-royalty-settlement-service"
 import { setStoryCdrUploaderForTests } from "../../../src/lib/story/story-cdr"
@@ -157,6 +158,7 @@ describe("song artifact locked routes", () => {
         royaltyTxHash: "0xroyalty-paid-song",
         entitlementTxHash: "0xentitlement-paid-song",
         settlementTxHash: "0xroyalty-paid-song",
+        entitlementHandled: true,
       }
     })
     setCommunityCommerceCharityPayoutExecutorForTests(async (input) => {
@@ -1123,6 +1125,7 @@ describe("song artifact locked routes", () => {
         royaltyTxHash: "0xroyalty-derivative",
         entitlementTxHash: "0xentitlement-derivative",
         settlementTxHash: "0xroyalty-derivative",
+        entitlementHandled: true,
       }
     })
     setStoryParentRoyaltyVaultTransferExecutorForTests(async (input) => {
@@ -1629,6 +1632,7 @@ describe("song artifact locked routes", () => {
         royaltyTxHash: "0xroyalty-multi-parent",
         entitlementTxHash: "0xentitlement-multi-parent",
         settlementTxHash: "0xroyalty-multi-parent",
+        entitlementHandled: true,
       }
     })
     setStoryParentRoyaltyVaultTransferExecutorForTests(async (input) => {
@@ -2633,6 +2637,292 @@ describe("song artifact locked routes", () => {
     expect(encryptedBytes.byteLength).toBeGreaterThan(videoBytes.byteLength)
     expect(encryptedBytes).not.toEqual(videoBytes)
   })
+
+  testWithTimeout("settles a locked original with separate royalty payment and entitlement mint", async () => {
+    const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
+    const royaltySettlementCalls: Array<{
+      purchaseRef: string
+      buyerAddress: string
+      receiverIpId: string
+      entitlementTokenId: string | null
+      amount: string
+    }> = []
+    const entitlementMintCalls: Array<{
+      purchaseRef: string
+      buyerAddress: string
+      entitlementTokenId: string
+    }> = []
+
+    setStoryRuntimeFundingAssertionForTests(async () => {})
+    setStoryRoyaltyRegistrarForTests(async () => ({
+      storyIpId: "0xaaaa000000000000000000000000000000000000",
+      storyIpNftContract: "0x2020202020202020202020202020202020202020",
+      storyIpNftTokenId: "77",
+      storyLicenseTermsId: "5",
+      storyLicenseTemplate: null,
+      storyRoyaltyPolicy: "0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E",
+      storyDerivativeParentIpIds: null,
+      storyRevenueToken: "0x1514000000000000000000000000000000000000",
+      storyRoyaltyRegistrationStatus: "registered",
+      storyDerivativeRegisteredAt: null,
+    }))
+    setStoryRoyaltyPurchaseSettlementExecutorForTests(async (input) => {
+      royaltySettlementCalls.push({
+        purchaseRef: input.purchaseRef,
+        buyerAddress: input.buyerAddress,
+        receiverIpId: input.receiverIpId,
+        entitlementTokenId: input.entitlementTokenId == null ? null : String(input.entitlementTokenId),
+        amount: String(input.amount),
+      })
+      return {
+        royaltyTxHash: "0xroyalty-separate-entitlement",
+        entitlementTxHash: null,
+        settlementTxHash: "0xroyalty-separate-entitlement",
+      }
+    })
+    setStoryRoyaltyEntitlementMinterForTests(async (input) => {
+      entitlementMintCalls.push({
+        purchaseRef: input.purchaseRef,
+        buyerAddress: input.buyerAddress,
+        entitlementTokenId: String(input.entitlementTokenId),
+      })
+      return "0xentitlement-minted-separately"
+    })
+    setStoryCdrUploaderForTests(async () => ({
+      cdrVaultUuid: 7878,
+      writerAddress: "0x0000000000000000000000000000000000000cd3",
+      txHashes: {
+        allocate: "0xalloc-separate",
+        write: "0xwrite-separate",
+      },
+    }))
+    setStoryAssetPublisherForTests(async () => ({
+      entitlementConfiguredTxHash: "0xconfigure-separate",
+      publishTxHash: "0xpublish-separate",
+    }))
+    setStoryAccessProofSignerForTests(async (input) => ({
+      digest: "0xd1e57",
+      signature: `0x${"11".repeat(65)}` as `0x${string}`,
+      signerAddress: "0x0000000000000000000000000000000000000acc",
+      proof: {
+        vaultUuid: input.vaultUuid,
+        caller: input.callerAddress,
+        accessRef: input.accessRef,
+        scope: input.scope === "asset.owner"
+          ? "0xb8c1a2b531e7c9d996686b1cc6dcd49d2d7037be365b6d380ebaf489440d4f18"
+          : "0x2e3cf0f4f202b4d5d9581a50ca154fd30d982d3e5b85f49252f774117e2a1f7c",
+        expiry: input.expiry,
+        namespace: input.namespace,
+      },
+    }))
+
+    installLockedSongFetchMocks({
+      originalFetch,
+      storedObjects,
+    })
+
+    const ctx = await createRouteTestContext({
+      FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
+      FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
+      FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
+      FILEBASE_MEDIA_BUCKET: "pirate-media",
+      STORY_CONTRACT_OWNER_PRIVATE_KEY: "0x1000000000000000000000000000000000000000000000000000000000000001",
+      STORY_OPERATOR_PRIVATE_KEY: "0x2000000000000000000000000000000000000000000000000000000000000002",
+      STORY_CDR_WRITER_PRIVATE_KEY: "0x3000000000000000000000000000000000000000000000000000000000000003",
+      STORY_ACCESS_CONTROLLER_PRIVATE_KEY: "0x4000000000000000000000000000000000000000000000000000000000000004",
+      MUSIC_PURCHASE_STORY_SETTLEMENT_PRIVATE_KEY: "0x5000000000000000000000000000000000000000000000000000000000000005",
+      IPFS_GATEWAY_URL: "https://ipfs.test/ipfs",
+    })
+    cleanup = ctx.cleanup
+
+    const author = await exchangeJwt(ctx.env, "song-author-separate-ent")
+    const buyer = await exchangeJwt(ctx.env, "song-buyer-separate-ent")
+    await attachPrimaryWallet({
+      client: ctx.client,
+      userId: author.userId,
+      walletAttachmentId: "wal_author_sep",
+      walletAddress: "0xaaa0000000000000000000000000000000000000",
+    })
+    await attachPrimaryWallet({
+      client: ctx.client,
+      userId: buyer.userId,
+      walletAttachmentId: "wal_buyer_sep",
+      walletAddress: "0xbbb0000000000000000000000000000000000000",
+    })
+    await verifyForLockedCommerce(ctx.env, author.userId, author.accessToken)
+    await verifyForLockedCommerce(ctx.env, buyer.userId, buyer.accessToken)
+
+    const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "Separate Entitlement Club")
+    const joinBuyer = await requestJson(
+      `http://pirate.test/communities/${communityId}/join`,
+      {},
+      ctx.env,
+      buyer.accessToken,
+    )
+    expect(joinBuyer.status).toBe(200)
+    await addCommunityMember(String(ctx.env.LOCAL_COMMUNITY_DB_ROOT), communityId, buyer.userId)
+
+    const primaryBytes = new Uint8Array([41, 42, 43, 44])
+    const previewStorageRef = `http://pirate.test/generated-preview/${communityId}/separate-ent.mp3`
+
+    const primaryUploadIntentBody = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "primary_audio",
+      mimeType: "audio/mpeg",
+      filename: "separate-ent.mp3",
+      bytes: primaryBytes,
+    })
+
+    const bundleCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifacts`,
+      {
+        primary_audio: {
+          song_artifact_upload: primaryUploadIntentBody.id,
+        },
+        preview_window: { start_ms: 0, duration_ms: 30_000 },
+        title: "Separate Ent",
+        lyrics: "Separate entitlement mint",
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(bundleCreate.status).toBe(201)
+    const bundleBody = await json(bundleCreate) as { id: string }
+    await markGeneratedPreviewReady({
+      env: ctx.env,
+      communityId,
+      songArtifactBundleId: bundleBody.id.replace(/^sab_/, ""),
+      previewStorageRef,
+      previewSizeBytes: 4,
+    })
+
+    const postCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        idempotency_key: "song-post-separate-ent-1",
+        post_type: "song",
+        identity_mode: "public",
+        title: "Separate Ent",
+        access_mode: "locked",
+        song_mode: "original",
+        rights_basis: "original",
+        license_preset: "non-commercial",
+        song_artifact_bundle: bundleBody.id,
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(postCreate.status).toBe(201)
+    const postBody = await json(postCreate) as { asset?: string | null }
+    const assetId = postBody.asset as string
+
+    const listingCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/listings`,
+      {
+        asset: assetId,
+        price_cents: 299,
+        regional_pricing_enabled: false,
+        status: "active",
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(listingCreate.status).toBe(201)
+    const listingBody = await json(listingCreate) as { id: string }
+
+    const quoteCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/purchase-quotes`,
+      {
+        listing: listingBody.id,
+        ...routedCheckoutQuoteFields,
+      },
+      ctx.env,
+      buyer.accessToken,
+    )
+    expect(quoteCreate.status).toBe(201)
+    const quoteBody = await json(quoteCreate) as {
+      id: string
+      settlement_mode: string
+    }
+    expect(quoteBody.settlement_mode).toBe("royalty_native_story_payment")
+
+    const purchaseSettle = await requestJson(
+      `http://pirate.test/communities/${communityId}/purchase-settlements`,
+      {
+        quote: quoteBody.id,
+        settlement_wallet_attachment: "wal_buyer_sep",
+        funding_tx_ref: "0xfunding-separate-ent-1",
+        settlement_tx_ref: "tx-separate-ent-1",
+      },
+      ctx.env,
+      buyer.accessToken,
+    )
+    expect(purchaseSettle.status).toBe(201)
+    const purchaseBody = await json(purchaseSettle) as {
+      id: string
+      settlement_mode: string
+      settlement_tx_ref: string
+    }
+    expect(purchaseBody.settlement_mode).toBe("royalty_native_story_payment")
+    expect(purchaseBody.settlement_tx_ref).toBe("0xroyalty-separate-entitlement")
+
+    expect(royaltySettlementCalls).toHaveLength(1)
+    expect(entitlementMintCalls).toHaveLength(1)
+    expect(entitlementMintCalls[0]?.buyerAddress).toBe("0xbbb0000000000000000000000000000000000000")
+    expect(entitlementMintCalls[0]?.entitlementTokenId).toBeTruthy()
+
+    const rawQuoteId = quoteBody.id.replace(/^pq_/, "")
+    const communityDb = createClient({
+      url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
+    })
+    try {
+      const royaltyEffects = await communityDb.execute({
+        sql: `
+          SELECT effect_kind, status, settlement_ref, provider_receipt_ref
+          FROM purchase_settlement_effects
+          WHERE quote_id = ?1 AND effect_kind = 'story_royalty_payment'
+        `,
+        args: [rawQuoteId],
+      })
+      expect(royaltyEffects.rows).toHaveLength(1)
+      expect(royaltyEffects.rows[0]?.status).toBe("confirmed")
+      expect(royaltyEffects.rows[0]?.settlement_ref).toBe("0xroyalty-separate-entitlement")
+      expect(royaltyEffects.rows[0]?.provider_receipt_ref).toBe("0xroyalty-separate-entitlement")
+
+      const entitlementEffects = await communityDb.execute({
+        sql: `
+          SELECT effect_kind, status, settlement_ref
+          FROM purchase_settlement_effects
+          WHERE quote_id = ?1 AND effect_kind = 'story_entitlement_mint'
+        `,
+        args: [rawQuoteId],
+      })
+      expect(entitlementEffects.rows).toHaveLength(1)
+      expect(entitlementEffects.rows[0]?.status).toBe("confirmed")
+      expect(entitlementEffects.rows[0]?.settlement_ref).toBe("0xentitlement-minted-separately")
+    } finally {
+      communityDb.close()
+    }
+
+    const purchaseRetry = await requestJson(
+      `http://pirate.test/communities/${communityId}/purchase-settlements`,
+      {
+        quote: quoteBody.id,
+        settlement_wallet_attachment: "wal_buyer_sep",
+        funding_tx_ref: "0xfunding-separate-ent-1",
+        settlement_tx_ref: "tx-separate-ent-1",
+      },
+      ctx.env,
+      buyer.accessToken,
+    )
+    expect(purchaseRetry.status).toBe(201)
+    const retryBody = await json(purchaseRetry) as { id: string }
+    expect(retryBody.id).toBe(purchaseBody.id)
+    expect(royaltySettlementCalls).toHaveLength(1)
+    expect(entitlementMintCalls).toHaveLength(1)
+  }, 15000)
 
 
 })

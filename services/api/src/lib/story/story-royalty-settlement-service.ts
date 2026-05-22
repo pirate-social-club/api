@@ -38,17 +38,44 @@ export type StoryRoyaltyPaymentResult = StoryRoyaltyPurchaseSettlementResult & {
   entitlementHandled: boolean
 }
 
+type StoryRoyaltyPurchaseSettlementTestResult =
+  StoryRoyaltyPurchaseSettlementResult & { entitlementHandled?: boolean }
+
 let testRoyaltySettlementExecutor:
-  | ((input: StoryRoyaltyPurchaseSettlementInput) => Promise<StoryRoyaltyPurchaseSettlementResult>)
+  | ((input: StoryRoyaltyPurchaseSettlementInput) => Promise<StoryRoyaltyPurchaseSettlementTestResult>)
   | null = null
 let testParentRoyaltyVaultTransferExecutor:
   | ((input: StoryParentRoyaltyVaultTransferInput) => Promise<StoryParentRoyaltyVaultTransferResult>)
   | null = null
 
+export type StoryRoyaltySettlementAdapterDeps = {
+  newStoryClient: typeof StoryClient.newClient
+  createJsonRpcProvider: (rpcUrl: string, chainId: number) => JsonRpcProvider
+  createWallet: (privateKey: string, provider: JsonRpcProvider) => Wallet
+  sendContractTxWithPolicy: typeof sendContractTxWithPolicy
+  ensureStoryEntitlementMinterAuthorized: typeof ensureStoryEntitlementMinterAuthorized
+}
+
+const defaultStoryRoyaltySettlementAdapterDeps: StoryRoyaltySettlementAdapterDeps = {
+  newStoryClient: StoryClient.newClient,
+  createJsonRpcProvider: (rpcUrl, chainId) => new JsonRpcProvider(rpcUrl, chainId),
+  createWallet: (privateKey, provider) => new Wallet(privateKey, provider),
+  sendContractTxWithPolicy,
+  ensureStoryEntitlementMinterAuthorized,
+}
+
+let testStoryRoyaltySettlementAdapterDeps: StoryRoyaltySettlementAdapterDeps | null = null
+
 export function setStoryRoyaltyPurchaseSettlementExecutorForTests(
-  executor: ((input: StoryRoyaltyPurchaseSettlementInput) => Promise<StoryRoyaltyPurchaseSettlementResult>) | null,
+  executor: ((input: StoryRoyaltyPurchaseSettlementInput) => Promise<StoryRoyaltyPurchaseSettlementTestResult>) | null,
 ): void {
   testRoyaltySettlementExecutor = executor
+}
+
+export function setStoryRoyaltySettlementAdapterDepsForTests(
+  deps: StoryRoyaltySettlementAdapterDeps | null,
+): void {
+  testStoryRoyaltySettlementAdapterDeps = deps
 }
 
 export type StoryParentRoyaltyVaultTransferInput = {
@@ -68,6 +95,23 @@ export function setStoryParentRoyaltyVaultTransferExecutorForTests(
   testParentRoyaltyVaultTransferExecutor = executor
 }
 
+export type StoryRoyaltyPurchaseEntitlementMintInput = {
+  env: Env
+  purchaseRef: `0x${string}`
+  buyerAddress: string
+  entitlementTokenId: bigint
+}
+
+let testRoyaltyEntitlementMinter:
+  | ((input: StoryRoyaltyPurchaseEntitlementMintInput) => Promise<string>)
+  | null = null
+
+export function setStoryRoyaltyEntitlementMinterForTests(
+  minter: ((input: StoryRoyaltyPurchaseEntitlementMintInput) => Promise<string>) | null,
+): void {
+  testRoyaltyEntitlementMinter = minter
+}
+
 function resolveStoryChainName(env: Pick<Env, "STORY_CHAIN_ID">): "aeneid" | "mainnet" {
   return resolveStoryChainId(env) === 1514 ? "mainnet" : "aeneid"
 }
@@ -79,9 +123,10 @@ function resolveRoyaltyPolicyInput(value: string | null | undefined): string | N
 
 export async function payStoryRoyaltyOnBehalfForPurchase(input: StoryRoyaltyPurchaseSettlementInput): Promise<StoryRoyaltyPaymentResult> {
   if (testRoyaltySettlementExecutor) {
+    const result = await testRoyaltySettlementExecutor(input)
     return {
-      ...await testRoyaltySettlementExecutor(input),
-      entitlementHandled: true,
+      ...result,
+      entitlementHandled: result.entitlementHandled ?? false,
     }
   }
 
@@ -98,7 +143,8 @@ export async function payStoryRoyaltyOnBehalfForPurchase(input: StoryRoyaltyPurc
   const payerIpId = parseExpectedEvmAddress(input.payerIpId) ?? zeroAddress
   if (input.amount <= 0n) throw new Error("royalty settlement amount must be positive")
 
-  const storyClient = StoryClient.newClient({
+  const deps = testStoryRoyaltySettlementAdapterDeps ?? defaultStoryRoyaltySettlementAdapterDeps
+  const storyClient = deps.newStoryClient({
     account: privateKeyToAccount(settlementConfig.value.privateKey as `0x${string}`),
     transport: http(resolveStoryRpcUrl(input.env)),
     chainId: resolveStoryChainName(input.env),
@@ -144,7 +190,8 @@ export async function transferStoryRoyaltyToParentVault(input: StoryParentRoyalt
   const parentIpId = parseExpectedEvmAddress(input.parentIpId)
   if (!parentIpId) throw new Error("parentIpId missing/invalid")
 
-  const storyClient = StoryClient.newClient({
+  const deps = testStoryRoyaltySettlementAdapterDeps ?? defaultStoryRoyaltySettlementAdapterDeps
+  const storyClient = deps.newStoryClient({
     account: privateKeyToAccount(settlementConfig.value.privateKey as `0x${string}`),
     transport: http(resolveStoryRpcUrl(input.env)),
     chainId: resolveStoryChainName(input.env),
@@ -168,6 +215,9 @@ export async function mintStoryRoyaltyPurchaseEntitlement(input: {
   buyerAddress: string
   entitlementTokenId: bigint
 }): Promise<string> {
+  if (testRoyaltyEntitlementMinter) {
+    return await testRoyaltyEntitlementMinter(input)
+  }
   const settlementConfig = resolveStorySettlementDirectSigner(input.env)
   if (!settlementConfig.ok) throw new Error(settlementConfig.error)
   if (!settlementConfig.value) {
@@ -180,9 +230,10 @@ export async function mintStoryRoyaltyPurchaseEntitlement(input: {
     throw new Error("entitlementTokenId missing/invalid")
   }
 
-  const provider = new JsonRpcProvider(resolveStoryRpcUrl(input.env), resolveStoryChainId(input.env))
-  const settlementSigner = new Wallet(settlementConfig.value.privateKey, provider)
-  await ensureStoryEntitlementMinterAuthorized({
+  const deps = testStoryRoyaltySettlementAdapterDeps ?? defaultStoryRoyaltySettlementAdapterDeps
+  const provider = deps.createJsonRpcProvider(resolveStoryRpcUrl(input.env), resolveStoryChainId(input.env))
+  const settlementSigner = deps.createWallet(settlementConfig.value.privateKey, provider)
+  await deps.ensureStoryEntitlementMinterAuthorized({
     env: input.env,
     provider,
     minterAddress: settlementSigner.address,
@@ -199,7 +250,7 @@ export async function mintStoryRoyaltyPurchaseEntitlement(input: {
   })
   if (!gasPolicy.ok) throw new Error(gasPolicy.error)
 
-  const entitlementTx = await sendContractTxWithPolicy({
+  const entitlementTx = await deps.sendContractTxWithPolicy({
     provider,
     signer: settlementSigner,
     contractAddress: STORY_DELIVERY_CONTRACTS.purchaseEntitlementToken,
@@ -225,27 +276,4 @@ export async function mintStoryRoyaltyPurchaseEntitlement(input: {
     throw new Error("story_royalty_entitlement_missing_tx_hash")
   }
   return entitlementTxHash
-}
-
-export async function settlePurchaseViaStoryRoyalty(input: StoryRoyaltyPurchaseSettlementInput): Promise<StoryRoyaltyPurchaseSettlementResult> {
-  const royalty = await payStoryRoyaltyOnBehalfForPurchase(input)
-  if (input.entitlementTokenId == null || royalty.entitlementHandled) {
-    return {
-      royaltyTxHash: royalty.royaltyTxHash,
-      entitlementTxHash: royalty.entitlementTxHash,
-      settlementTxHash: royalty.settlementTxHash,
-    }
-  }
-
-  const entitlementTxHash = await mintStoryRoyaltyPurchaseEntitlement({
-    env: input.env,
-    purchaseRef: input.purchaseRef,
-    buyerAddress: input.buyerAddress,
-    entitlementTokenId: input.entitlementTokenId,
-  })
-  return {
-    royaltyTxHash: royalty.royaltyTxHash,
-    entitlementTxHash,
-    settlementTxHash: royalty.settlementTxHash,
-  }
 }

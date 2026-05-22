@@ -33,7 +33,8 @@ The main Story/CDR route tests install explicit test doubles through:
 - `setStoryAccessProofSignerForTests`
 - `setStoryRoyaltyRegistrarForTests`
 - `setStoryRoyaltyPurchaseSettlementExecutorForTests`
-- `setStoryPurchaseSettlementExecutorForTests`
+- `setStoryRoyaltyEntitlementMinterForTests`
+- `setStoryParentRoyaltyVaultTransferExecutorForTests`
 - `setStoryRuntimeFundingAssertionForTests`
 
 These doubles make route tests deterministic while preserving the service call graph. They do not prove live chain integration.

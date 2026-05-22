@@ -44,6 +44,22 @@ let testPublisher: ((input: {
   upstreamAssetRefs: string[] | null
 }) => Promise<StoryAssetPublishResult>) | null = null
 
+export type StoryAssetPublishAdapterDeps = {
+  createJsonRpcProvider: (rpcUrl: string, chainId: number) => JsonRpcProvider
+  createWallet: (privateKey: string, provider: JsonRpcProvider) => Wallet
+  sendContractTxWithPolicy: typeof sendContractTxWithPolicy
+  ensureStoryPublishOperatorAuthorized: typeof ensureStoryPublishOperatorAuthorized
+}
+
+const defaultStoryAssetPublishAdapterDeps: StoryAssetPublishAdapterDeps = {
+  createJsonRpcProvider: (rpcUrl, chainId) => new JsonRpcProvider(rpcUrl, chainId),
+  createWallet: (privateKey, provider) => new Wallet(privateKey, provider),
+  sendContractTxWithPolicy,
+  ensureStoryPublishOperatorAuthorized,
+}
+
+let testStoryAssetPublishAdapterDeps: StoryAssetPublishAdapterDeps | null = null
+
 export function setStoryAssetPublisherForTests(
   publisher: ((input: {
     env: Env
@@ -61,6 +77,12 @@ export function setStoryAssetPublisherForTests(
   }) => Promise<StoryAssetPublishResult>) | null,
 ): void {
   testPublisher = publisher
+}
+
+export function setStoryAssetPublishAdapterDepsForTests(
+  deps: StoryAssetPublishAdapterDeps | null,
+): void {
+  testStoryAssetPublishAdapterDeps = deps
 }
 
 function normalizePrivateKey(raw: string | null | undefined): string | null {
@@ -125,11 +147,12 @@ export async function publishLockedAssetVersionToStory(input: {
   })
   if (!gasPolicy.ok) throw new Error(gasPolicy.error)
 
-  const provider = new JsonRpcProvider(rpcUrl, chainId)
-  const ownerSigner = new Wallet(ownerPrivateKey, provider)
-  const operatorSigner = new Wallet(operatorConfig.value.privateKey, provider)
+  const deps = testStoryAssetPublishAdapterDeps ?? defaultStoryAssetPublishAdapterDeps
+  const provider = deps.createJsonRpcProvider(rpcUrl, chainId)
+  const ownerSigner = deps.createWallet(ownerPrivateKey, provider)
+  const operatorSigner = deps.createWallet(operatorConfig.value.privateKey, provider)
 
-  const configureTx = await sendContractTxWithPolicy({
+  const configureTx = await deps.sendContractTxWithPolicy({
     provider,
     signer: ownerSigner,
     contractAddress: STORY_DELIVERY_CONTRACTS.purchaseEntitlementToken,
@@ -148,13 +171,13 @@ export async function publishLockedAssetVersionToStory(input: {
     throw new Error("story_entitlement_class_configure_failed")
   }
 
-  await ensureStoryPublishOperatorAuthorized({
+  await deps.ensureStoryPublishOperatorAuthorized({
     env: input.env,
     provider,
     operatorAddress: operatorSigner.address,
   })
 
-  const publishTx = await sendContractTxWithPolicy({
+  const publishTx = await deps.sendContractTxWithPolicy({
     provider,
     contractAddress: STORY_DELIVERY_CONTRACTS.assetPublishCoordinatorV1,
     abi: ASSET_PUBLISH_COORDINATOR_ABI,
