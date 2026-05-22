@@ -4,6 +4,7 @@ import {
   type AuthenticatedEnv,
 } from "../lib/auth-middleware"
 import { registerCommunityAdminRoutes } from "./communities-admin-routes"
+import { registerCommunityAssistantRoutes } from "./communities-assistant-routes"
 import { registerCommunityCommerceRoutes } from "./communities-commerce"
 import { registerCommunityContentRoutes } from "./communities-content-routes"
 import { registerCommunityCreateRoutes } from "./communities-create-routes"
@@ -71,6 +72,7 @@ communities.use("*", async (c, next) => {
 registerCommunityAdminRoutes(communities)
 registerCommunityCreateRoutes(communities)
 registerCommunitySettingsRoutes(communities)
+registerCommunityAssistantRoutes(communities)
 registerCommunityMembershipRoutes(communities)
 registerCommunityHandleRoutes(communities)
 registerCommunityContentRoutes(communities)

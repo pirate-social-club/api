@@ -3385,4 +3385,132 @@ SELECT 1;
 `,
     checksum: "4ffa5faa01551ecf40fdcdfdb8a4a892e359110b17d077c287fbc91584718b7b",
   },
+  {
+    name: "1085_community_assistant_policy.sql",
+    sql: `PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS community_assistant_policy (
+    id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+    community_id TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+    display_name TEXT NOT NULL,
+    short_bio TEXT NOT NULL DEFAULT '',
+    avatar_ref TEXT,
+    system_prompt TEXT NOT NULL DEFAULT '',
+    default_prompt TEXT NOT NULL DEFAULT '',
+    starter_prompts TEXT NOT NULL DEFAULT '[]',
+    selected_model_id TEXT NOT NULL DEFAULT '',
+    context_mode TEXT NOT NULL DEFAULT 'live_sql' CHECK (
+        context_mode IN ('live_sql', 'summary_cache', 'hybrid_vector')
+    ),
+    context_sources TEXT NOT NULL DEFAULT '{}',
+    max_context_threads INTEGER NOT NULL DEFAULT 8 CHECK (
+        max_context_threads BETWEEN 1 AND 50
+    ),
+    max_lookback_days INTEGER CHECK (
+        max_lookback_days IS NULL OR max_lookback_days BETWEEN 1 AND 365
+    ),
+    memory_enabled INTEGER NOT NULL DEFAULT 1 CHECK (memory_enabled IN (0, 1)),
+    retention_mode TEXT NOT NULL DEFAULT 'per_user_private' CHECK (
+        retention_mode IN ('per_user_private', 'community_visible_to_mods', 'ephemeral')
+    ),
+    retention_days INTEGER NOT NULL DEFAULT 180 CHECK (
+        retention_days BETWEEN 1 AND 3650
+    ),
+    save_chats_to_community_db INTEGER NOT NULL DEFAULT 1 CHECK (
+        save_chats_to_community_db IN (0, 1)
+    ),
+    action_mode TEXT NOT NULL DEFAULT 'answer_only' CHECK (
+        action_mode IN ('answer_only', 'draft_only', 'confirmed_writes')
+    ),
+    require_moderator_approval_for_writes INTEGER NOT NULL DEFAULT 1 CHECK (
+        require_moderator_approval_for_writes IN (0, 1)
+    ),
+    per_user_daily_message_cap INTEGER CHECK (
+        per_user_daily_message_cap IS NULL OR per_user_daily_message_cap BETWEEN 1 AND 10000
+    ),
+    voice_mode TEXT NOT NULL DEFAULT 'off' CHECK (
+        voice_mode IN ('off', 'transcription_only', 'voice_replies')
+    ),
+    stt_provider TEXT NOT NULL DEFAULT 'mistral' CHECK (
+        stt_provider IN ('mistral', 'openai', 'none')
+    ),
+    stt_model TEXT NOT NULL DEFAULT '',
+    tts_voice TEXT NOT NULL DEFAULT '',
+    include_in_sovereign_export INTEGER NOT NULL DEFAULT 1 CHECK (
+        include_in_sovereign_export IN (0, 1)
+    ),
+    policy_origin TEXT NOT NULL DEFAULT 'default' CHECK (
+        policy_origin IN ('default', 'explicit')
+    ),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (community_id),
+    FOREIGN KEY (community_id) REFERENCES communities(community_id)
+);
+
+CREATE TABLE IF NOT EXISTS community_assistant_prompt_revisions (
+    id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+    community_id TEXT NOT NULL,
+    system_prompt TEXT NOT NULL,
+    default_prompt TEXT NOT NULL,
+    starter_prompts TEXT NOT NULL DEFAULT '[]',
+    actor_user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (community_id) REFERENCES communities(community_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_assistant_prompt_revisions_community
+    ON community_assistant_prompt_revisions(community_id, created_at DESC);
+`,
+    checksum: "887fc4edc772e1c8c6a23b8a6bd4c74b2a02d4876a612488c2826385c1d39aad",
+  },
+  {
+    name: "1086_community_assistant_chats.sql",
+    sql: `PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS community_assistant_chats (
+    chat_id TEXT PRIMARY KEY,
+    community_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    title TEXT,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (
+        status IN ('active', 'archived', 'deleted')
+    ),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (community_id) REFERENCES communities(community_id)
+);
+
+CREATE TABLE IF NOT EXISTS community_assistant_messages (
+    message_id TEXT PRIMARY KEY,
+    chat_id TEXT NOT NULL,
+    community_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (
+        role IN ('user', 'assistant', 'system')
+    ),
+    content TEXT NOT NULL,
+    model_id TEXT,
+    provider_message_id TEXT,
+    prompt_tokens INTEGER,
+    completion_tokens INTEGER,
+    total_tokens INTEGER,
+    metadata_json TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (chat_id) REFERENCES community_assistant_chats(chat_id),
+    FOREIGN KEY (community_id) REFERENCES communities(community_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_assistant_chats_user
+    ON community_assistant_chats(community_id, user_id, updated_at DESC, chat_id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_assistant_messages_chat
+    ON community_assistant_messages(chat_id, created_at ASC, message_id ASC);
+
+CREATE INDEX IF NOT EXISTS idx_assistant_messages_user_daily
+    ON community_assistant_messages(community_id, user_id, role, created_at DESC);
+`,
+    checksum: "85ba240c4075cc1ff744e0e221e31e75b4c889188e924bec17a5c384a1f9c836",
+  },
 ] as const;
