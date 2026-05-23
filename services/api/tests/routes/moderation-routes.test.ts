@@ -85,6 +85,46 @@ async function addCommunityMember(communityDbRoot: string, communityId: string, 
   }
 }
 
+async function grantCommunityRole(input: {
+  communityDbRoot: string
+  communityId: string
+  userId: string
+  role: "admin" | "moderator"
+}): Promise<void> {
+  const client = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+
+  try {
+    const now = new Date().toISOString()
+    await client.execute({
+      sql: `
+        INSERT INTO community_roles (
+          role_assignment_id, community_id, user_id, role, status,
+          granted_by_user_id, granted_at, revoked_at, created_at, updated_at
+        ) VALUES (
+          ?1, ?2, ?3, ?4, 'active',
+          ?3, ?5, NULL, ?5, ?5
+        )
+        ON CONFLICT(role_assignment_id) DO UPDATE SET
+          status = excluded.status,
+          granted_at = excluded.granted_at,
+          revoked_at = excluded.revoked_at,
+          updated_at = excluded.updated_at
+      `,
+      args: [
+        `rol_${input.communityId}_${input.userId}_${input.role}`,
+        input.communityId,
+        input.userId,
+        input.role,
+        now,
+      ],
+    })
+  } finally {
+    client.close()
+  }
+}
+
 afterEach(async () => {
   resetRuntimeCaches()
   if (cleanup) {
@@ -161,6 +201,162 @@ describe("moderation routes", () => {
       ctx.env,
     )
     expect(denied.status).toBe(403)
+  })
+
+  test("child safety post reports create high-priority cases visible to moderators", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const owner = await exchangeJwt(ctx.env, "moderation-routes-child-safety-owner")
+    const community = await createCommunity(ctx.env, owner.accessToken, "Child Safety Moderation Club")
+
+    const reporter = await exchangeJwt(ctx.env, "moderation-routes-child-safety-reporter")
+    await completeUniqueHumanVerification(ctx.env, reporter.accessToken)
+    await addCommunityMember(ctx.communityDbRoot, community.communityId, reporter.userId)
+
+    const moderator = await exchangeJwt(ctx.env, "moderation-routes-child-safety-moderator")
+    await addCommunityMember(ctx.communityDbRoot, community.communityId, moderator.userId)
+    await grantCommunityRole({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: community.communityId,
+      userId: moderator.userId,
+      role: "moderator",
+    })
+
+    const ordinaryMember = await exchangeJwt(ctx.env, "moderation-routes-child-safety-member")
+    await addCommunityMember(ctx.communityDbRoot, community.communityId, ordinaryMember.userId)
+
+    const createdPost = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Needs child safety review",
+        body: "This post should be visible to moderators after a child safety report.",
+        idempotency_key: "moderation-child-safety-post",
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(createdPost.status).toBe(201)
+    const postBody = await json(createdPost) as { id: string }
+    const rawPostId = postBody.id.replace(/^post_/, "")
+    const reportNote = "Child safety concern: suspected grooming behavior"
+
+    const report = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/reports`,
+      {
+        reason_code: "sexual_content",
+        note: reportNote,
+      },
+      ctx.env,
+      reporter.accessToken,
+    )
+    expect(report.status).toBe(201)
+    const reportBody = await json(report) as {
+      post_id: string | null
+      comment_id: string | null
+      reason_code: string
+      note: string | null
+    }
+    expect(reportBody.post_id).toBe(rawPostId)
+    expect(reportBody.comment_id).toBeNull()
+    expect(reportBody.reason_code).toBe("sexual_content")
+    expect(reportBody.note).toBe(reportNote)
+
+    const cases = await app.request(
+      `http://pirate.test/communities/${community.communityId}/moderation/cases`,
+      {
+        headers: {
+          authorization: `Bearer ${moderator.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(cases.status).toBe(200)
+    const casesBody = await json(cases) as {
+      items: Array<{
+        moderation_case_id: string
+        post_id: string | null
+        comment_id: string | null
+        status: string
+        priority: string
+        opened_by: string
+      }>
+    }
+    expect(casesBody.items).toHaveLength(1)
+    const moderationCaseId = casesBody.items[0]?.moderation_case_id
+    expect(typeof moderationCaseId).toBe("string")
+    expect(casesBody.items[0]?.post_id).toBe(rawPostId)
+    expect(casesBody.items[0]?.comment_id).toBeNull()
+    expect(casesBody.items[0]?.status).toBe("open")
+    expect(casesBody.items[0]?.priority).toBe("high")
+    expect(casesBody.items[0]?.opened_by).toBe("user_report")
+
+    const denied = await app.request(
+      `http://pirate.test/communities/${community.communityId}/moderation/cases`,
+      {
+        headers: {
+          authorization: `Bearer ${ordinaryMember.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(denied.status).toBe(403)
+
+    const detail = await app.request(
+      `http://pirate.test/communities/${community.communityId}/moderation/cases/${moderationCaseId}`,
+      {
+        headers: {
+          authorization: `Bearer ${moderator.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(detail.status).toBe(200)
+    const detailBody = await json(detail) as {
+      case: { status: string; priority: string; opened_by: string }
+      post: { post_id: string; status: string } | null
+      reports: Array<{
+        post_id: string | null
+        comment_id: string | null
+        reason_code: string
+        note: string | null
+      }>
+    }
+    expect(detailBody.case.status).toBe("open")
+    expect(detailBody.case.priority).toBe("high")
+    expect(detailBody.case.opened_by).toBe("user_report")
+    expect(detailBody.post?.post_id).toBe(rawPostId)
+    expect(detailBody.reports).toHaveLength(1)
+    expect(detailBody.reports[0]?.post_id).toBe(rawPostId)
+    expect(detailBody.reports[0]?.comment_id).toBeNull()
+    expect(detailBody.reports[0]?.reason_code).toBe("sexual_content")
+    expect(detailBody.reports[0]?.note).toBe(reportNote)
+
+    const action = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/moderation/cases/${moderationCaseId}/actions`,
+      {
+        action_type: "remove",
+        note: "Removed by moderator after child safety report",
+      },
+      ctx.env,
+      moderator.accessToken,
+    )
+    expect(action.status).toBe(200)
+    const actionBody = await json(action) as {
+      case: { status: string; resolved_at: string | null }
+      post: { post_id: string; status: string } | null
+      reports: Array<{ reason_code: string; note: string | null }>
+      actions: Array<{ action_type: string }>
+    }
+    expect(actionBody.case.status).toBe("resolved")
+    expect(typeof actionBody.case.resolved_at).toBe("string")
+    expect(actionBody.post?.post_id).toBe(rawPostId)
+    expect(actionBody.post?.status).toBe("removed")
+    expect(actionBody.reports[0]?.reason_code).toBe("sexual_content")
+    expect(actionBody.reports[0]?.note).toBe(reportNote)
+    expect(actionBody.actions).toHaveLength(1)
+    expect(actionBody.actions[0]?.action_type).toBe("remove")
   })
 
   test("members can report comments and owners can resolve cases with comment actions", async () => {
