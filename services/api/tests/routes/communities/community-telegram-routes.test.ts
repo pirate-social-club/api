@@ -1675,8 +1675,23 @@ describe("community Telegram routes", () => {
     })
     expect(reply.status).toBe(200)
 
-    expect(mock.openRouterCalls).toHaveLength(2)
-    expect(mock.telegramRequests).toHaveLength(2)
+    const spacedMention = await telegramWebhook({
+      env: ctx.env,
+      secret: "webhook-secret",
+      body: {
+        update_id: 14,
+        message: {
+          message_id: 104,
+          text: "/ask @PirateTestBot what changed?",
+          from: { id: 777007 },
+          chat: { id: -1009002, type: "supergroup" },
+        },
+      },
+    })
+    expect(spacedMention.status).toBe(200)
+
+    expect(mock.openRouterCalls).toHaveLength(3)
+    expect(mock.telegramRequests).toHaveLength(3)
     expect(await getTelegramAssistantEvent({
       client: ctx.client,
       telegramChatId: "-1009002",
@@ -1694,6 +1709,15 @@ describe("community Telegram routes", () => {
       status: "answered",
       trigger_type: "reply_to_bot",
       prompt: "follow up from a reply",
+    })
+    expect(await getTelegramAssistantEvent({
+      client: ctx.client,
+      telegramChatId: "-1009002",
+      telegramMessageId: 104,
+    })).toEqual({
+      status: "answered",
+      trigger_type: "ask_command_mention",
+      prompt: "what changed?",
     })
   })
 

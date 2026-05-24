@@ -69,6 +69,11 @@ export function normalizeOpenRouterMessageContent(content: unknown): string {
     .join("")
 }
 
+function responseBodyPreview(value: string): string {
+  const trimmed = value.trim()
+  return trimmed ? trimmed.slice(0, 500) : "<empty>"
+}
+
 export async function requestOpenRouterChatCompletion(input: {
   apiKey: string
   baseUrl?: string | null
@@ -102,9 +107,19 @@ export async function requestOpenRouterChatCompletion(input: {
       throw new Error(`OpenRouter ${input.errorLabel} request failed with http_${response.status}${suffix}`)
     }
 
-    const body = await response.json().catch(() => null) as OpenRouterChatCompletionResponse | null
+    const responseText = await response.text().catch(() => "")
+    let body: OpenRouterChatCompletionResponse | null = null
+    try {
+      body = JSON.parse(responseText) as OpenRouterChatCompletionResponse | null
+    } catch {
+      const contentType = response.headers.get("content-type") || "unknown"
+      throw new Error(
+        `OpenRouter ${input.errorLabel} response was not valid JSON `
+          + `(http_${response.status}, content-type ${contentType}, body ${responseBodyPreview(responseText)})`,
+      )
+    }
     if (!body || typeof body !== "object" || Array.isArray(body)) {
-      throw new Error(`OpenRouter ${input.errorLabel} response was not valid JSON`)
+      throw new Error(`OpenRouter ${input.errorLabel} response JSON had an unexpected shape`)
     }
 
     const content = normalizeOpenRouterMessageContent(body.choices?.[0]?.message?.content)

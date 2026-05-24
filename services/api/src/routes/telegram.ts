@@ -161,13 +161,21 @@ function parseGroupAssistantTrigger(bot: Env | TelegramBotCredential, message: T
     if (mentionedUsername && !sameTelegramUsername(telegramBotUsername(bot), mentionedUsername)) {
       return null
     }
-    const prompt = commandMatch[2]?.trim()
+    let prompt = commandMatch[2]?.trim()
+    let triggerType: TelegramAssistantTriggerType = mentionedUsername ? "ask_command_mention" : "ask_command"
+    if (!mentionedUsername && prompt) {
+      const leadingMention = prompt.match(/^@([A-Za-z0-9_]{5,32})(?:\s+([\s\S]+))?$/u)
+      if (leadingMention && sameTelegramUsername(telegramBotUsername(bot), leadingMention[1])) {
+        prompt = leadingMention[2]?.trim()
+        triggerType = "ask_command_mention"
+      }
+    }
     if (!prompt) {
       return null
     }
     return {
       prompt,
-      triggerType: mentionedUsername ? "ask_command_mention" : "ask_command",
+      triggerType,
     }
   }
   if (!text.startsWith("/") && isReplyToThisBot(bot, message)) {
