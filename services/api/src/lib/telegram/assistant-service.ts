@@ -154,6 +154,9 @@ function groupFailureMessage(error: unknown): string {
   if (error instanceof HttpError && error.status === 429) {
     return "Community assistant is rate limited right now. Try again later."
   }
+  if (error instanceof HttpError && error.status === 502) {
+    return "The assistant model provider failed to respond. Try again, or choose a different model in Pirate under Mod > Assistant."
+  }
   return "Community assistant is unavailable right now. Try again later."
 }
 

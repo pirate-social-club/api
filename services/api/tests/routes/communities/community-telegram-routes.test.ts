@@ -1721,6 +1721,79 @@ describe("community Telegram routes", () => {
     })
   })
 
+  test("webhook group assistant reports model provider failures clearly", async () => {
+    const ctx = await createRouteTestContext({
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      OPENROUTER_TIMEOUT_MS: "1000",
+      TELEGRAM_BOT_USERNAME: "PirateTestBot",
+      TELEGRAM_BOT_TOKEN: "987654:bot-token",
+      TELEGRAM_BOT_INTEGRATION_SECRET: "test-telegram-secret",
+      TELEGRAM_WEBHOOK_SECRET: "webhook-secret",
+      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
+      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "1",
+    })
+    cleanup = ctx.cleanup
+    const owner = await exchangeJwt(ctx.env, "telegram-group-assistant-provider-owner")
+    const communityId = await createCommunity({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      displayName: "Telegram Group Provider Club",
+    })
+    await setupEnabledAssistant({
+      env: ctx.env,
+      communityId,
+      ownerToken: owner.accessToken,
+    })
+    await linkTelegramChatForCommunity({
+      env: ctx.env,
+      communityId,
+      accessToken: owner.accessToken,
+      telegramChatId: "-1009005",
+      title: "Telegram Group Provider Club",
+    })
+
+    const telegramRequests: Request[] = []
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      if (request.url === "https://openrouter.test/api/v1/chat/completions") {
+        return new Response("<html>timeout</html>", {
+          headers: { "content-type": "text/html" },
+          status: 200,
+        })
+      }
+      telegramRequests.push(request)
+      return Response.json({ ok: true, result: { message_id: 700 } })
+    }
+
+    const response = await telegramWebhook({
+      env: ctx.env,
+      secret: "webhook-secret",
+      body: {
+        update_id: 15,
+        message: {
+          message_id: 105,
+          text: "/ask what is new?",
+          from: { id: 777010 },
+          chat: { id: -1009005, type: "supergroup" },
+        },
+      },
+    })
+
+    expect(response.status).toBe(200)
+    expect(telegramRequests).toHaveLength(1)
+    const sendBody = await telegramRequests[0]!.json() as { text: string }
+    expect(sendBody.text).toContain("assistant model provider failed to respond")
+    expect(await getTelegramAssistantEvent({
+      client: ctx.client,
+      telegramChatId: "-1009005",
+      telegramMessageId: 105,
+    })).toEqual({
+      status: "failed",
+      trigger_type: "ask_command",
+      prompt: "what is new?",
+    })
+  })
+
   test("webhook ignores non-trigger group messages without persistence or provider calls", async () => {
     const ctx = await createRouteTestContext({
       OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
