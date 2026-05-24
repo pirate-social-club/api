@@ -19,7 +19,19 @@ type OpenRouterCall = {
   authorization: string | null
   body: {
     model?: string
-    messages?: Array<{ role?: string; content?: string }>
+    messages?: Array<{
+      content?: string | null
+      role?: string
+      tool_call_id?: string
+      tool_calls?: Array<{
+        id?: string
+        function?: { name?: string; arguments?: string }
+        type?: string
+      }>
+    }>
+    parallel_tool_calls?: boolean
+    tool_choice?: unknown
+    tools?: Array<{ function?: { name?: string } }>
   }
   url: string
 }
@@ -264,6 +276,39 @@ async function withMockedOpenRouter<T>(
   }
 }
 
+async function withMockedOpenRouterResponses<T>(
+  responses: Array<Record<string, unknown>>,
+  run: (calls: OpenRouterCall[]) => Promise<T>,
+): Promise<T> {
+  const originalFetch = globalThis.fetch
+  const calls: OpenRouterCall[] = []
+  globalThis.fetch = (async (requestInput, init) => {
+    const request = new Request(requestInput, init)
+    if (request.url !== "https://openrouter.test/api/v1/chat/completions") {
+      return originalFetch(request)
+    }
+    calls.push({
+      authorization: request.headers.get("authorization"),
+      body: await request.json() as OpenRouterCall["body"],
+      url: request.url,
+    })
+    const body = responses[Math.min(calls.length - 1, responses.length - 1)] ?? {
+      id: `chatcmpl_${calls.length}`,
+      choices: [{ message: { content: "Fallback answer." } }],
+    }
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })
+  }) as typeof fetch
+
+  try {
+    return await run(calls)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+}
+
 describe("community assistant chat routes", () => {
   test("members can chat with the enabled assistant and context is sent to OpenRouter", async () => {
     const ctx = await createAssistantChatRouteContext()
@@ -375,6 +420,208 @@ describe("community assistant chat routes", () => {
       expect(list.status).toBe(200)
       const listBody = await json(list) as { data: Array<{ id: string }> }
       expect(listBody.data.map((chat) => chat.id)).toContain(firstBody.chat.id)
+    })
+  })
+
+  test("assistant tool calls execute board reads and stay out of stored chat history", async () => {
+    const ctx = await createAssistantChatRouteContext()
+    const owner = await exchangeJwt(ctx.env, "assistant-tools-owner")
+    const member = await exchangeJwt(ctx.env, "assistant-tools-member")
+    const communityId = await createTestCommunity({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      subject: "Tools",
+    })
+    await addCommunityMember(ctx.communityDbRoot, communityId, member.userId)
+    await seedContextRows({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      userId: owner.userId,
+    })
+    await setupEnabledAssistant({
+      env: ctx.env,
+      communityId,
+      ownerToken: owner.accessToken,
+    })
+
+    await withMockedOpenRouterResponses([
+      {
+        id: "chatcmpl_tool_request",
+        choices: [{
+          finish_reason: "tool_calls",
+          message: {
+            content: null,
+            tool_calls: [{
+              id: "call_search_board",
+              type: "function",
+              function: {
+                name: "search_board",
+                arguments: JSON.stringify({ query: "community-owned AI assistants" }),
+              },
+            }],
+          },
+        }],
+        usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 },
+      },
+      {
+        id: "chatcmpl_tool_final",
+        choices: [{ message: { content: "The board is about community-owned AI assistants." } }],
+        usage: { prompt_tokens: 30, completion_tokens: 8, total_tokens: 38 },
+      },
+    ], async (calls) => {
+      const response = await sendAssistantChat({
+        env: ctx.env,
+        communityId,
+        accessToken: member.accessToken,
+        body: { message: "Search the board for what this is about." },
+      })
+      expect(response.status).toBe(200)
+      const body = await json(response) as {
+        chat: { id: string }
+        assistant_message: { content: string; provider_message_id: string; total_tokens: number }
+      }
+      expect(body.assistant_message.content).toBe("The board is about community-owned AI assistants.")
+      expect(body.assistant_message.provider_message_id).toBe("chatcmpl_tool_final")
+      expect(body.assistant_message.total_tokens).toBe(38)
+
+      expect(calls).toHaveLength(2)
+      expect(calls[0]?.body.tools?.map((tool) => tool.function?.name)).toEqual([
+        "search_board",
+        "get_thread",
+        "get_my_activity",
+      ])
+      expect(calls[0]?.body.parallel_tool_calls).toBe(false)
+      const secondMessages = calls[1]?.body.messages ?? []
+      expect(secondMessages.some((message) => message.role === "assistant" && message.tool_calls?.[0]?.id === "call_search_board")).toBe(true)
+      const toolMessage = secondMessages.find((message) => message.role === "tool")
+      expect(toolMessage?.tool_call_id).toBe("call_search_board")
+      expect(toolMessage?.content).toContain("Welcome thread")
+      expect(toolMessage?.content).toContain("community-owned AI assistants")
+
+      const detail = await getAssistantChat({
+        env: ctx.env,
+        communityId,
+        accessToken: member.accessToken,
+        chatId: body.chat.id,
+      })
+      expect(detail.status).toBe(200)
+      const detailBody = await json(detail) as { messages: Array<{ role: string; content: string }> }
+      expect(detailBody.messages.map((message) => message.role)).toEqual(["user", "assistant"])
+      expect(detailBody.messages.map((message) => message.role)).not.toContain("tool")
+    })
+  })
+
+  test("assistant get_my_activity tool returns private user activity", async () => {
+    const ctx = await createAssistantChatRouteContext()
+    const owner = await exchangeJwt(ctx.env, "assistant-activity-owner")
+    const member = await exchangeJwt(ctx.env, "assistant-activity-member")
+    const communityId = await createTestCommunity({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      subject: "Activity",
+    })
+    await addCommunityMember(ctx.communityDbRoot, communityId, member.userId)
+    await seedContextRows({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      userId: member.userId,
+    })
+    await setupEnabledAssistant({
+      env: ctx.env,
+      communityId,
+      ownerToken: owner.accessToken,
+    })
+
+    await withMockedOpenRouterResponses([
+      {
+        id: "chatcmpl_activity_tool",
+        choices: [{
+          finish_reason: "tool_calls",
+          message: {
+            content: null,
+            tool_calls: [{
+              id: "call_my_activity",
+              type: "function",
+              function: {
+                name: "get_my_activity",
+                arguments: "{}",
+              },
+            }],
+          },
+        }],
+      },
+      {
+        id: "chatcmpl_activity_final",
+        choices: [{ message: { content: "Your recent activity includes the Welcome thread." } }],
+      },
+    ], async (calls) => {
+      const response = await sendAssistantChat({
+        env: ctx.env,
+        communityId,
+        accessToken: member.accessToken,
+        body: { message: "What have I posted here?" },
+      })
+      expect(response.status).toBe(200)
+      expect(calls).toHaveLength(2)
+      const toolMessage = calls[1]?.body.messages?.find((message) => message.role === "tool")
+      expect(toolMessage?.tool_call_id).toBe("call_my_activity")
+      expect(toolMessage?.content).toContain("Welcome thread")
+      expect(toolMessage?.content).toContain("Top comment says moderators should own prompts and keys.")
+    })
+  })
+
+  test("assistant tool loop caps rounds and forces a final answer", async () => {
+    const ctx = await createAssistantChatRouteContext()
+    const owner = await exchangeJwt(ctx.env, "assistant-tool-cap-owner")
+    const member = await exchangeJwt(ctx.env, "assistant-tool-cap-member")
+    const communityId = await createTestCommunity({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      subject: "ToolCap",
+    })
+    await addCommunityMember(ctx.communityDbRoot, communityId, member.userId)
+    await seedContextRows({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      userId: owner.userId,
+    })
+    await setupEnabledAssistant({
+      env: ctx.env,
+      communityId,
+      ownerToken: owner.accessToken,
+    })
+
+    await withMockedOpenRouterResponses([
+      {
+        id: "chatcmpl_cap_1",
+        choices: [{ message: { content: null, tool_calls: [{ id: "call_1", type: "function", function: { name: "search_board", arguments: JSON.stringify({ query: "assistant" }) } }] } }],
+      },
+      {
+        id: "chatcmpl_cap_2",
+        choices: [{ message: { content: null, tool_calls: [{ id: "call_2", type: "function", function: { name: "search_board", arguments: JSON.stringify({ query: "assistant" }) } }] } }],
+      },
+      {
+        id: "chatcmpl_cap_3",
+        choices: [{ message: { content: null, tool_calls: [{ id: "call_3", type: "function", function: { name: "search_board", arguments: JSON.stringify({ query: "assistant" }) } }] } }],
+      },
+      {
+        id: "chatcmpl_cap_final",
+        choices: [{ message: { content: "Answering with the available tool results." } }],
+      },
+    ], async (calls) => {
+      const response = await sendAssistantChat({
+        env: ctx.env,
+        communityId,
+        accessToken: member.accessToken,
+        body: { message: "Keep searching forever?" },
+      })
+      expect(response.status).toBe(200)
+      const body = await json(response) as { assistant_message: { content: string; provider_message_id: string } }
+      expect(body.assistant_message.content).toBe("Answering with the available tool results.")
+      expect(body.assistant_message.provider_message_id).toBe("chatcmpl_cap_final")
+      expect(calls).toHaveLength(5)
+      expect(calls[4]?.body.tool_choice).toBe("none")
+      expect(calls[4]?.body.messages?.at(-1)?.content).toContain("Tool-call limit reached")
     })
   })
 

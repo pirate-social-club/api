@@ -20,6 +20,11 @@ import { getCommentById } from "../lib/comments/community-comment-store"
 import type { CreateCommentRequest } from "../lib/comments/comment-types"
 import { authError, badRequestError, eligibilityFailed, HttpError } from "../lib/errors"
 import { nowIso } from "../lib/helpers"
+import {
+  callGetMyActivityTool,
+  callGetThreadTool,
+  callSearchBoardTool,
+} from "../lib/mcp/board-read-tools"
 import { COMMUNITY_MCP_TOOLS, MCP_PROTOCOL_VERSION } from "../lib/mcp/community-tools"
 import { resolveOrCreateGuestUser } from "../lib/mcp/guest-identity"
 import { getPostById } from "../lib/posts/community-post-query-store"
@@ -769,6 +774,15 @@ mcp.post("/", async (c) => {
       }
       if (params.name === "get_pirate_board_capabilities") {
         return jsonRpcResult(request.id, await callGetPirateBoardCapabilitiesTool(c, params.arguments))
+      }
+      if (params.name === "search_board") {
+        return jsonRpcResult(request.id, await callSearchBoardTool(c, params.arguments))
+      }
+      if (params.name === "get_thread") {
+        return jsonRpcResult(request.id, await callGetThreadTool(c, params.arguments))
+      }
+      if (params.name === "get_my_activity") {
+        return jsonRpcResult(request.id, await callGetMyActivityTool(c, params.arguments))
       }
       if (params.name === "create_post") {
         return jsonRpcResult(request.id, await callCreatePostTool(c, params.arguments))

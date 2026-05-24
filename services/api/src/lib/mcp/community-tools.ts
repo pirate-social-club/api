@@ -51,6 +51,71 @@ export const COMMUNITY_MCP_TOOLS = [
     },
   },
   {
+    name: "search_board",
+    description: "Search public posts on a Pirate community board and return lightweight thread summaries with canonical links. No API key or bearer token is required.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        community_id: {
+          type: "string",
+          description: "Community id, public community id, /c/slug, route slug, or display name.",
+        },
+        query: {
+          type: "string",
+          description: "Optional keyword query to score matching public posts.",
+        },
+        limit: {
+          type: "number",
+          description: "Optional max number of posts to return. Defaults to 10, maximum 25.",
+        },
+      },
+      required: ["community_id"],
+    },
+  },
+  {
+    name: "get_thread",
+    description: "Read one public Pirate board thread with a bounded set of published comments and canonical links. No API key or bearer token is required.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        community_id: {
+          type: "string",
+          description: "Community id, public community id, /c/slug, route slug, or display name.",
+        },
+        post_id: {
+          type: "string",
+          description: "Post id returned by search_board, or a canonical public post id.",
+        },
+        comment_limit: {
+          type: "number",
+          description: "Optional max number of comments to return. Defaults to 10, maximum 25.",
+        },
+      },
+      required: ["community_id", "post_id"],
+    },
+  },
+  {
+    name: "get_my_activity",
+    description: "Return the authenticated caller's recent published posts and comments in a Pirate community. Requires a Pirate session or delegated agent bearer token.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        community_id: {
+          type: "string",
+          description: "Community id, public community id, /c/slug, route slug, or display name.",
+        },
+        limit: {
+          type: "number",
+          description: "Optional max number of posts and comments to return. Defaults to 10, maximum 25.",
+        },
+      },
+      required: ["community_id"],
+    },
+  },
+  {
     name: "prepare_guest_comment",
     description: "Prepare an unauthenticated guest comment by resolving the guest identity and returning an ALTCHA challenge. No API key is required.",
     inputSchema: {
