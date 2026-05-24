@@ -11,6 +11,7 @@ const LOCAL_CONTROL_PLANE_BUSY_TIMEOUT_MS = 5000
 const LOCAL_FOLLOWER_COUNT_RENAME_MIGRATIONS = new Set([
   "0064_control_plane_communities_follower_count_column.sql",
 ])
+const LOCAL_TELEGRAM_COMMUNITY_CHATS_MIGRATION = "0099_control_plane_telegram_community_chats.sql"
 
 type LocalControlPlaneMigrationDriftPolicy = {
   controlPlane?: {
@@ -319,6 +320,9 @@ async function repairCompatibleLocalControlPlaneMigration(input: {
     return false
   }
 
+  if (input.migrationName === LOCAL_TELEGRAM_COMMUNITY_CHATS_MIGRATION) {
+    await ensureTelegramCommunityChatsRequestColumns(input.client)
+  }
   await applySqlFile(input.client, input.migrationPath)
   await updateAppliedMigrationChecksum(input.client, input.migrationName, input.migrationChecksum)
   return true
@@ -362,6 +366,28 @@ async function ensureRenamedColumn(
   }
 
   await client.execute(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`)
+}
+
+async function ensureColumn(
+  client: Client,
+  tableName: string,
+  columnName: string,
+  columnDefinition: string,
+): Promise<void> {
+  const columns = await listTableColumns(client, tableName)
+  if (columns.has(columnName)) {
+    return
+  }
+
+  await client.execute(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`)
+}
+
+async function ensureTelegramCommunityChatsRequestColumns(client: Client): Promise<void> {
+  await ensureColumn(client, "telegram_setup_intents", "request_id", "INTEGER")
+  await ensureColumn(client, "telegram_setup_intents", "request_owner_telegram_user_id", "TEXT")
+  await ensureColumn(client, "telegram_setup_intents", "request_private_chat_id", "TEXT")
+  await ensureColumn(client, "telegram_setup_intents", "request_message_id", "INTEGER")
+  await ensureColumn(client, "telegram_setup_intents", "request_sent_at", "TIMESTAMPTZ")
 }
 
 export async function applyLocalControlPlaneMigrations(storage: LocalDevStorage): Promise<void> {

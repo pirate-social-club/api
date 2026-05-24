@@ -332,6 +332,58 @@ describe("applyLocalControlPlaneMigrations", () => {
       .toBe(currentChecksum)
   })
 
+  test("repairs compatible local control-plane checksum drift for Telegram community chats request columns", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-local-dev-storage-telegram-drift-"))
+    cleanupPaths.push(rootDir)
+
+    const databasePath = join(rootDir, "control-plane.db")
+    const storage = buildStorage(rootDir, databasePath)
+    await applyLocalControlPlaneMigrations(storage)
+
+    const client = createClient({
+      url: `file:${databasePath}`,
+    })
+
+    try {
+      await client.execute("DROP INDEX IF EXISTS idx_telegram_setup_intents_request")
+      await client.execute("ALTER TABLE telegram_setup_intents DROP COLUMN request_id")
+      await client.execute("ALTER TABLE telegram_setup_intents DROP COLUMN request_owner_telegram_user_id")
+      await client.execute("ALTER TABLE telegram_setup_intents DROP COLUMN request_private_chat_id")
+      await client.execute("ALTER TABLE telegram_setup_intents DROP COLUMN request_message_id")
+      await client.execute("ALTER TABLE telegram_setup_intents DROP COLUMN request_sent_at")
+      await client.execute({
+        sql: `
+          UPDATE schema_migrations
+          SET checksum = ?2
+          WHERE migration_name = ?1
+        `,
+        args: [
+          "0099_control_plane_telegram_community_chats.sql",
+          "748c3c5c9de86482bc6eba767140cc2db903b7d324d5544bcaa56d2fa8faee0d",
+        ],
+      })
+    } finally {
+      client.close()
+    }
+
+    await applyLocalControlPlaneMigrations(storage)
+
+    const columns = await listTableColumns(databasePath, "telegram_setup_intents")
+    expect(columns).toContain("request_id")
+    expect(columns).toContain("request_owner_telegram_user_id")
+    expect(columns).toContain("request_private_chat_id")
+    expect(columns).toContain("request_message_id")
+    expect(columns).toContain("request_sent_at")
+
+    const migrationSql = await readFile(
+      join(storage.coreRepoRoot, "db/control-plane/migrations/0099_control_plane_telegram_community_chats.sql"),
+      "utf8",
+    )
+    const currentChecksum = createHash("sha256").update(migrationSql).digest("hex")
+    expect(await getMigrationChecksum(databasePath, "0099_control_plane_telegram_community_chats.sql"))
+      .toBe(currentChecksum)
+  })
+
   test("does not rehome configured local control-plane database paths outside the current service .local", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-local-dev-storage-rehome-"))
     cleanupPaths.push(rootDir)
