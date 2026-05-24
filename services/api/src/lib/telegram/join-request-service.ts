@@ -1,0 +1,384 @@
+import type { Env } from "../../env"
+import { getUserRepository } from "../auth/repositories"
+import { getJoinEligibility } from "../communities/membership/eligibility-service"
+import type { CommunityMembershipRepository } from "../communities/membership/types"
+import { badRequestError } from "../errors"
+import { makeId, nowIso } from "../helpers"
+import { publicCommunityId } from "../public-ids"
+import { getControlPlaneClient } from "../runtime-deps"
+import { rowValue, stringOrNull } from "../sql-row"
+import { getTelegramLinkedChatBotContext } from "./community-chat-service"
+
+const JOIN_GRANT_TTL_MS = 24 * 60 * 60 * 1000
+
+export type TelegramJoinRequestDecision =
+  | {
+      action: "approve"
+      grantId: string
+      telegramChatId: string
+      telegramUserId: string
+    }
+  | {
+      action: "prompt"
+      grantId: string
+      telegramUserChatId: string
+      text: string
+    }
+  | {
+      action: "ignore"
+      grantId?: string
+    }
+
+type ResolvedTelegramAccount = {
+  userId: string
+}
+
+function webOrigin(env: Env): string {
+  const origin = env.PIRATE_WEB_PUBLIC_ORIGIN?.trim()
+  if (!origin) {
+    throw badRequestError("PIRATE_WEB_PUBLIC_ORIGIN is required for Telegram join prompts")
+  }
+  return origin.replace(/\/+$/u, "")
+}
+
+function communityJoinUrl(env: Env, communityId: string): string {
+  return `${webOrigin(env)}/tg/c/${publicCommunityId(communityId)}`
+}
+
+function joinRequestDateFromSeconds(value: number | null): string {
+  if (value && Number.isFinite(value) && value > 0) {
+    return new Date(value * 1000).toISOString()
+  }
+  return nowIso()
+}
+
+async function resolveTelegramAccount(input: {
+  env: Env
+  telegramUserId: string
+}): Promise<ResolvedTelegramAccount | null> {
+  const client = getControlPlaneClient(input.env)
+  const account = await client.execute({
+    sql: `
+      SELECT user_id
+      FROM telegram_accounts
+      WHERE telegram_user_id = ?1
+      LIMIT 1
+    `,
+    args: [input.telegramUserId],
+  })
+  const accountUserId = stringOrNull(rowValue(account.rows[0], "user_id"))
+  if (accountUserId) {
+    return { userId: accountUserId }
+  }
+
+  const link = await client.execute({
+    sql: `
+      SELECT user_id
+      FROM auth_provider_links
+      WHERE provider = 'telegram'
+        AND provider_subject = ?1
+        AND status = 'active'
+      LIMIT 1
+    `,
+    args: [input.telegramUserId],
+  })
+  const linkedUserId = stringOrNull(rowValue(link.rows[0], "user_id"))
+  return linkedUserId ? { userId: linkedUserId } : null
+}
+
+async function insertJoinGrant(input: {
+  env: Env
+  communityId: string
+  telegramChatId: string
+  telegramUserId: string
+  telegramUserChatId: string | null
+  userId: string | null
+  linkMode: "invite_link" | "join_request"
+  missingCapabilitiesJson: string | null
+  joinRequestDate: string
+  now: string
+}): Promise<string> {
+  const grantId = makeId("tjg")
+  const expiresAt = new Date(Date.parse(input.joinRequestDate) + JOIN_GRANT_TTL_MS).toISOString()
+  const existing = await getControlPlaneClient(input.env).execute({
+    sql: `
+      SELECT grant_id
+      FROM telegram_join_grants
+      WHERE telegram_chat_id = ?1
+        AND telegram_user_id = ?2
+        AND status = 'pending'
+      ORDER BY created_at DESC, grant_id DESC
+      LIMIT 1
+    `,
+    args: [input.telegramChatId, input.telegramUserId],
+  })
+  const existingGrantId = stringOrNull(rowValue(existing.rows[0], "grant_id"))
+  if (existingGrantId) {
+    await getControlPlaneClient(input.env).execute({
+      sql: `
+        UPDATE telegram_join_grants
+        SET community_id = ?2,
+            telegram_user_chat_id = ?3,
+            user_id = ?4,
+            link_mode = ?5,
+            missing_capabilities_json = ?6,
+            join_request_date = ?7,
+            expires_at = ?8,
+            error_message = NULL,
+            updated_at = ?9
+        WHERE grant_id = ?1
+      `,
+      args: [
+        existingGrantId,
+        input.communityId,
+        input.telegramUserChatId,
+        input.userId,
+        input.linkMode,
+        input.missingCapabilitiesJson,
+        input.joinRequestDate,
+        expiresAt,
+        input.now,
+      ],
+    })
+    return existingGrantId
+  }
+  await getControlPlaneClient(input.env).execute({
+    sql: `
+      INSERT INTO telegram_join_grants (
+        grant_id, community_id, telegram_chat_id, telegram_user_id, telegram_user_chat_id,
+        user_id, link_mode, status, missing_capabilities_json, join_request_date,
+        prompted_at, approved_at, expires_at, error_message, created_at, updated_at
+      ) VALUES (
+        ?1, ?2, ?3, ?4, ?5,
+        ?6, ?7, 'pending', ?8, ?9,
+        NULL, NULL, ?10, NULL, ?11, ?11
+      )
+    `,
+    args: [
+      grantId,
+      input.communityId,
+      input.telegramChatId,
+      input.telegramUserId,
+      input.telegramUserChatId,
+      input.userId,
+      input.linkMode,
+      input.missingCapabilitiesJson,
+      input.joinRequestDate,
+      expiresAt,
+      input.now,
+    ],
+  })
+  return grantId
+}
+
+async function updateJoinGrant(input: {
+  env: Env
+  grantId: string
+  status: "pending" | "approved" | "denied" | "failed"
+  promptedAt?: string | null
+  approvedAt?: string | null
+  errorMessage?: string | null
+}): Promise<void> {
+  await getControlPlaneClient(input.env).execute({
+    sql: `
+      UPDATE telegram_join_grants
+      SET status = ?2,
+          prompted_at = COALESCE(?3, prompted_at),
+          approved_at = COALESCE(?4, approved_at),
+          error_message = ?5,
+          updated_at = ?6
+      WHERE grant_id = ?1
+    `,
+    args: [
+      input.grantId,
+      input.status,
+      input.promptedAt ?? null,
+      input.approvedAt ?? null,
+      input.errorMessage ?? null,
+      nowIso(),
+    ],
+  })
+}
+
+function promptText(input: {
+  env: Env
+  communityId: string
+  reason: "unmapped" | "verification_required" | "not_joinable"
+}): string {
+  const url = communityJoinUrl(input.env, input.communityId)
+  if (input.reason === "unmapped") {
+    return `Open Pirate to verify and join this community:\n${url}\n\nIf this link expires, message this bot with /start and try joining the group again.`
+  }
+  if (input.reason === "verification_required") {
+    return `This community requires verification before Telegram access can be approved:\n${url}\n\nAfter verification, try joining the group again.`
+  }
+  return `Pirate cannot approve this Telegram join request yet:\n${url}`
+}
+
+async function promptDecision(input: {
+  env: Env
+  grantId: string
+  telegramUserChatId: string
+  communityId: string
+  reason: "unmapped" | "verification_required" | "not_joinable"
+}): Promise<TelegramJoinRequestDecision> {
+  try {
+    return {
+      action: "prompt",
+      grantId: input.grantId,
+      telegramUserChatId: input.telegramUserChatId,
+      text: promptText({
+        env: input.env,
+        communityId: input.communityId,
+        reason: input.reason,
+      }),
+    }
+  } catch (error) {
+    await updateJoinGrant({
+      env: input.env,
+      grantId: input.grantId,
+      status: "failed",
+      errorMessage: error instanceof Error ? error.message : String(error),
+    })
+    return { action: "ignore", grantId: input.grantId }
+  }
+}
+
+export async function evaluateTelegramChatJoinRequest(input: {
+  env: Env
+  communityRepository: CommunityMembershipRepository
+  telegramChatId: string
+  telegramUserId: string
+  telegramUserChatId: string | null
+  joinRequestDate: number | null
+}): Promise<TelegramJoinRequestDecision | null> {
+  const linkedChat = await getTelegramLinkedChatBotContext({
+    env: input.env,
+    telegramChatId: input.telegramChatId,
+  })
+  if (!linkedChat) {
+    return null
+  }
+
+  const now = nowIso()
+  const joinRequestDate = joinRequestDateFromSeconds(input.joinRequestDate)
+  const account = await resolveTelegramAccount({
+    env: input.env,
+    telegramUserId: input.telegramUserId,
+  })
+
+  if (!account) {
+    const grantId = await insertJoinGrant({
+      env: input.env,
+      communityId: linkedChat.communityId,
+      telegramChatId: input.telegramChatId,
+      telegramUserId: input.telegramUserId,
+      telegramUserChatId: input.telegramUserChatId,
+      userId: null,
+      linkMode: linkedChat.linkMode,
+      missingCapabilitiesJson: JSON.stringify(["telegram_account"]),
+      joinRequestDate,
+      now,
+    })
+    if (!input.telegramUserChatId) {
+      return { action: "ignore", grantId }
+    }
+    return promptDecision({
+      env: input.env,
+      grantId,
+      telegramUserChatId: input.telegramUserChatId,
+      communityId: linkedChat.communityId,
+      reason: "unmapped",
+    })
+  }
+
+  const eligibility = await getJoinEligibility({
+    env: input.env,
+    userId: account.userId,
+    communityId: linkedChat.communityId,
+    userRepository: getUserRepository(input.env),
+    communityRepository: input.communityRepository,
+  })
+  const missingCapabilitiesJson = eligibility.missing_capabilities
+    ? JSON.stringify(eligibility.missing_capabilities)
+    : null
+  const grantId = await insertJoinGrant({
+    env: input.env,
+    communityId: linkedChat.communityId,
+    telegramChatId: input.telegramChatId,
+    telegramUserId: input.telegramUserId,
+    telegramUserChatId: input.telegramUserChatId,
+    userId: account.userId,
+    linkMode: linkedChat.linkMode,
+    missingCapabilitiesJson,
+    joinRequestDate,
+    now,
+  })
+
+  if (eligibility.status === "already_joined" || eligibility.joinable_now) {
+    return {
+      action: "approve",
+      grantId,
+      telegramChatId: input.telegramChatId,
+      telegramUserId: input.telegramUserId,
+    }
+  }
+
+  if (eligibility.status === "banned") {
+    await updateJoinGrant({
+      env: input.env,
+      grantId,
+      status: "denied",
+      errorMessage: "Pirate user is banned from this community",
+    })
+    return { action: "ignore", grantId }
+  }
+
+  if (!input.telegramUserChatId) {
+    return { action: "ignore", grantId }
+  }
+  return promptDecision({
+    env: input.env,
+    grantId,
+    telegramUserChatId: input.telegramUserChatId,
+    communityId: linkedChat.communityId,
+    reason: eligibility.status === "verification_required" ? "verification_required" : "not_joinable",
+  })
+}
+
+export async function markTelegramJoinGrantPrompted(input: {
+  env: Env
+  grantId: string
+}): Promise<void> {
+  await updateJoinGrant({
+    env: input.env,
+    grantId: input.grantId,
+    status: "pending",
+    promptedAt: nowIso(),
+  })
+}
+
+export async function markTelegramJoinGrantApproved(input: {
+  env: Env
+  grantId: string
+}): Promise<void> {
+  await updateJoinGrant({
+    env: input.env,
+    grantId: input.grantId,
+    status: "approved",
+    approvedAt: nowIso(),
+  })
+}
+
+export async function markTelegramJoinGrantFailed(input: {
+  env: Env
+  grantId: string
+  errorMessage: string
+}): Promise<void> {
+  await updateJoinGrant({
+    env: input.env,
+    grantId: input.grantId,
+    status: "failed",
+    errorMessage: input.errorMessage,
+  })
+}

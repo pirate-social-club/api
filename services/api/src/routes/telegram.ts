@@ -1,0 +1,556 @@
+import { createHash, timingSafeEqual } from "node:crypto"
+import { Hono } from "hono"
+import type { Env } from "../env"
+import {
+  completeTelegramSetupIntentByRequest,
+  completeTelegramSetupIntent,
+  prepareTelegramSetupChatRequest,
+  type TelegramBotAdminStatus,
+  type TelegramChatType,
+  type CompleteTelegramSetupIntentInput,
+} from "../lib/telegram/community-chat-service"
+import {
+  approveTelegramChatJoinRequest,
+  getTelegramChat,
+  getTelegramChatMember,
+  sendTelegramMessage,
+  telegramBotUserId,
+  telegramBotUsername,
+  type TelegramBotCredential,
+  type TelegramChatMember,
+} from "../lib/telegram/bot-api"
+import {
+  decryptCommunityTelegramBotByWebhookId,
+  type TelegramCommunityBotCredential,
+} from "../lib/telegram/community-bot-service"
+import {
+  answerTelegramGroupAssistantPrompt,
+  type TelegramAssistantTriggerType,
+} from "../lib/telegram/assistant-service"
+import {
+  evaluateTelegramChatJoinRequest,
+  markTelegramJoinGrantApproved,
+  markTelegramJoinGrantFailed,
+  markTelegramJoinGrantPrompted,
+} from "../lib/telegram/join-request-service"
+import { getCommunityRepository } from "../lib/communities/db-community-repository"
+import { authError, badRequestError, HttpError } from "../lib/errors"
+
+const telegram = new Hono<{ Bindings: Env }>()
+
+function timingSafeSecretEqual(left: string, right: string): boolean {
+  const leftDigest = createHash("sha256").update(left).digest()
+  const rightDigest = createHash("sha256").update(right).digest()
+  return timingSafeEqual(leftDigest, rightDigest)
+}
+
+function requireBotIntegrationSecret(c: {
+  env: Env
+  req: { header(name: string): string | undefined }
+}): void {
+  const configuredSecret = c.env.TELEGRAM_BOT_INTEGRATION_SECRET?.trim()
+  if (!configuredSecret) {
+    throw authError("Telegram bot integration is not configured")
+  }
+  const providedSecret = c.req.header("x-telegram-bot-secret")?.trim()
+  if (!providedSecret || !timingSafeSecretEqual(providedSecret, configuredSecret)) {
+    throw authError("Authentication failed")
+  }
+}
+
+function requireTelegramWebhookSecret(c: {
+  env: Env
+  req: { header(name: string): string | undefined }
+}): void {
+  const configuredSecret = c.env.TELEGRAM_WEBHOOK_SECRET?.trim()
+  if (!configuredSecret) {
+    throw authError("Telegram webhook is not configured")
+  }
+  const providedSecret = c.req.header("x-telegram-bot-api-secret-token")?.trim()
+  if (!providedSecret || !timingSafeSecretEqual(providedSecret, configuredSecret)) {
+    throw authError("Authentication failed")
+  }
+}
+
+type TelegramWebhookUpdate = {
+  message?: TelegramWebhookMessage
+  chat_join_request?: TelegramWebhookChatJoinRequest
+}
+
+type TelegramWebhookMessage = {
+  message_id?: number
+  message_thread_id?: number
+  text?: string
+  from?: { id?: number | string; is_bot?: boolean; username?: string }
+  chat?: { id?: number | string; type?: string }
+  reply_to_message?: {
+    message_id?: number
+    from?: { id?: number | string; is_bot?: boolean; username?: string }
+  }
+  chat_shared?: {
+    request_id?: number
+    chat_id?: number | string
+    title?: string
+    username?: string
+  }
+}
+
+type TelegramWebhookChatJoinRequest = {
+  chat?: { id?: number | string; type?: string; title?: string; username?: string }
+  from?: { id?: number | string; is_bot?: boolean; username?: string }
+  user_chat_id?: number | string
+  date?: number
+  bio?: string
+}
+
+function telegramIdentifier(value: unknown): string | null {
+  if (typeof value === "number" && Number.isSafeInteger(value)) {
+    return String(value)
+  }
+  if (typeof value === "string" && value.trim()) {
+    return value.trim()
+  }
+  return null
+}
+
+function parseStartToken(text: string | undefined): string | null {
+  const match = text?.trim().match(/^\/start(?:@[A-Za-z0-9_]{5,32})?(?:\s+(\S+))?$/u)
+  return match?.[1] ?? null
+}
+
+type TelegramGroupAssistantTrigger = {
+  prompt: string
+  triggerType: TelegramAssistantTriggerType
+}
+
+function isTelegramGroupChat(type: string | undefined): boolean {
+  return type === "group" || type === "supergroup"
+}
+
+function sameTelegramUsername(left: string | null, right: string | undefined): boolean {
+  return Boolean(left && right && left.toLowerCase() === right.replace(/^@/, "").toLowerCase())
+}
+
+function isReplyToThisBot(bot: Env | TelegramBotCredential, message: TelegramWebhookMessage): boolean {
+  const replyFrom = message.reply_to_message?.from
+  if (!replyFrom?.is_bot) {
+    return false
+  }
+  const replyFromId = telegramIdentifier(replyFrom.id)
+  if (replyFromId) {
+    try {
+      return replyFromId === String(telegramBotUserId(bot))
+    } catch {
+      return false
+    }
+  }
+  return sameTelegramUsername(telegramBotUsername(bot), replyFrom.username)
+}
+
+function parseGroupAssistantTrigger(bot: Env | TelegramBotCredential, message: TelegramWebhookMessage): TelegramGroupAssistantTrigger | null {
+  if (!isTelegramGroupChat(message.chat?.type)) {
+    return null
+  }
+  const text = message.text?.trim()
+  if (!text) {
+    return null
+  }
+  const commandMatch = text.match(/^\/ask(?:@([A-Za-z0-9_]{5,32}))?(?:\s+([\s\S]+))?$/u)
+  if (commandMatch) {
+    const mentionedUsername = commandMatch[1]
+    if (mentionedUsername && !sameTelegramUsername(telegramBotUsername(bot), mentionedUsername)) {
+      return null
+    }
+    const prompt = commandMatch[2]?.trim()
+    if (!prompt) {
+      return null
+    }
+    return {
+      prompt,
+      triggerType: mentionedUsername ? "ask_command_mention" : "ask_command",
+    }
+  }
+  if (!text.startsWith("/") && isReplyToThisBot(bot, message)) {
+    return {
+      prompt: text,
+      triggerType: "reply_to_bot",
+    }
+  }
+  return null
+}
+
+function chatPickerAdminRights() {
+  return {
+    is_anonymous: false,
+    can_manage_chat: true,
+    can_delete_messages: false,
+    can_manage_video_chats: false,
+    can_restrict_members: false,
+    can_promote_members: false,
+    can_change_info: false,
+    can_invite_users: true,
+    can_post_stories: false,
+    can_edit_stories: false,
+    can_delete_stories: false,
+  }
+}
+
+function chatPickerMarkup(requestId: number) {
+  return {
+    keyboard: [[{
+      text: "Select group",
+      request_chat: {
+        request_id: requestId,
+        chat_is_channel: false,
+        bot_is_member: true,
+        user_administrator_rights: chatPickerAdminRights(),
+        bot_administrator_rights: chatPickerAdminRights(),
+        request_title: true,
+        request_username: true,
+      },
+    }]],
+    resize_keyboard: true,
+    one_time_keyboard: true,
+  }
+}
+
+function setupInstructions(bot: Env | TelegramBotCredential): string {
+  const username = telegramBotUsername(bot)
+  return username
+    ? `Add @${username} to the group as an admin with invite-user permission, then tap Select group.`
+    : "Add this bot to the group as an admin with invite-user permission, then tap Select group."
+}
+
+function botPrivateChatInstructions(bot: Env | TelegramBotCredential): string {
+  const username = telegramBotUsername(bot)
+  return username
+    ? `Open a private chat with @${username} from Pirate's Connect Telegram flow.`
+    : "Open a private chat with this bot from Pirate's Connect Telegram flow."
+}
+
+function setupErrorMessage(error: unknown): string {
+  if (error instanceof HttpError && error.status === 409) {
+    return error.message
+  }
+  if (error instanceof HttpError && error.status === 404) {
+    return "Telegram setup link was not found. Start again from Pirate."
+  }
+  return "Could not start Telegram setup. Start again from Pirate."
+}
+
+function completionErrorMessage(error: unknown): string {
+  if (error instanceof HttpError && error.status === 409) {
+    return error.message
+  }
+  if (error instanceof HttpError && error.status === 404) {
+    return "Telegram setup request was not found. Start again from Pirate."
+  }
+  return "Could not connect this Telegram chat. Start again from Pirate."
+}
+
+async function safeSendTelegramMessage(
+  bot: Env | TelegramBotCredential,
+  body: Parameters<typeof sendTelegramMessage>[1],
+): Promise<boolean> {
+  try {
+    await sendTelegramMessage(bot, body)
+    return true
+  } catch (error) {
+    console.warn("[telegram-webhook] sendMessage failed", {
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return false
+  }
+}
+
+async function safeApproveTelegramChatJoinRequest(
+  bot: Env | TelegramBotCredential,
+  body: Parameters<typeof approveTelegramChatJoinRequest>[1],
+): Promise<boolean> {
+  try {
+    await approveTelegramChatJoinRequest(bot, body)
+    return true
+  } catch (error) {
+    console.warn("[telegram-webhook] approveChatJoinRequest failed", {
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return false
+  }
+}
+
+function mapTelegramChatType(type: string | undefined): TelegramChatType | null {
+  if (type === "group" || type === "supergroup") {
+    return type
+  }
+  return null
+}
+
+function mapBotAdminStatus(member: TelegramChatMember): TelegramBotAdminStatus {
+  if (member.status === "administrator" || member.status === "creator") {
+    return member.can_invite_users === false ? "insufficient_permissions" : "ready"
+  }
+  if (member.status === "left" || member.status === "kicked") {
+    return "left_chat"
+  }
+  return "insufficient_permissions"
+}
+
+async function getBotAdminStatus(bot: Env | TelegramBotCredential, chatId: number | string): Promise<TelegramBotAdminStatus> {
+  try {
+    const member = await getTelegramChatMember(bot, chatId, telegramBotUserId(bot))
+    return mapBotAdminStatus(member)
+  } catch {
+    return "missing"
+  }
+}
+
+async function handleStartMessage(env: Env, message: TelegramWebhookMessage, bot: Env | TelegramCommunityBotCredential = env): Promise<void> {
+  const chatId = telegramIdentifier(message.chat?.id)
+  const telegramUserId = telegramIdentifier(message.from?.id)
+  if (!chatId) {
+    return
+  }
+  if (message.chat?.type !== "private") {
+    await safeSendTelegramMessage(bot, {
+      chat_id: chatId,
+      text: botPrivateChatInstructions(bot),
+    })
+    return
+  }
+  const setupToken = parseStartToken(message.text)
+  if (!setupToken || !telegramUserId) {
+    await safeSendTelegramMessage(bot, {
+      chat_id: chatId,
+      text: "Start Telegram setup from Pirate first.",
+    })
+    return
+  }
+
+  try {
+    const setupRequest = await prepareTelegramSetupChatRequest({
+      env,
+      setupToken,
+      telegramCommunityBotId: "id" in bot ? bot.id : null,
+      telegramUserId,
+      privateChatId: chatId,
+      requestMessageId: message.message_id ?? null,
+    })
+    await safeSendTelegramMessage(bot, {
+      chat_id: chatId,
+      text: setupInstructions(bot),
+      reply_markup: chatPickerMarkup(setupRequest.request_id),
+    })
+  } catch (error) {
+    await safeSendTelegramMessage(bot, {
+      chat_id: chatId,
+      text: setupErrorMessage(error),
+    })
+  }
+}
+
+async function handleChatSharedMessage(env: Env, message: TelegramWebhookMessage, bot: Env | TelegramCommunityBotCredential = env): Promise<void> {
+  const chatId = telegramIdentifier(message.chat?.id)
+  const telegramUserId = telegramIdentifier(message.from?.id)
+  const shared = message.chat_shared
+  if (!chatId || !telegramUserId || message.chat?.type !== "private" || !shared) {
+    return
+  }
+  if (typeof shared.request_id !== "number" || !Number.isInteger(shared.request_id)) {
+    return
+  }
+  const sharedChatId = telegramIdentifier(shared.chat_id)
+  if (!sharedChatId) {
+    return
+  }
+
+  try {
+    const telegramChat = await getTelegramChat(bot, sharedChatId)
+    const chatType = mapTelegramChatType(telegramChat.type)
+    if (!chatType) {
+      throw badRequestError("telegram_chat.type must be group or supergroup")
+    }
+    const botAdminStatus = await getBotAdminStatus(bot, sharedChatId)
+    await completeTelegramSetupIntentByRequest({
+      env,
+      telegramCommunityBotId: "id" in bot ? bot.id : null,
+      requestId: shared.request_id,
+      telegramUserId,
+      privateChatId: chatId,
+      telegramChatId: sharedChatId,
+      chatTitle: telegramChat.title ?? shared.title ?? "Telegram chat",
+      chatUsername: telegramChat.username ?? shared.username ?? null,
+      chatType,
+      botAdminStatus,
+    })
+    await safeSendTelegramMessage(bot, {
+      chat_id: chatId,
+      text: "Telegram chat connected. Return to Pirate to manage settings.",
+    })
+  } catch (error) {
+    await safeSendTelegramMessage(bot, {
+      chat_id: chatId,
+      text: completionErrorMessage(error),
+    })
+  }
+}
+
+async function handleGroupAssistantMessage(env: Env, message: TelegramWebhookMessage, bot: Env | TelegramCommunityBotCredential = env): Promise<void> {
+  const chatId = telegramIdentifier(message.chat?.id)
+  const telegramUserId = telegramIdentifier(message.from?.id)
+  const trigger = parseGroupAssistantTrigger(bot, message)
+  if (!chatId || !trigger || typeof message.message_id !== "number") {
+    return
+  }
+
+  const answer = await answerTelegramGroupAssistantPrompt({
+    env,
+    communityRepository: getCommunityRepository(env),
+    telegramChatId: chatId,
+    telegramMessageId: message.message_id,
+    telegramUserId,
+    triggerType: trigger.triggerType,
+    prompt: trigger.prompt,
+  })
+  if (!answer) {
+    return
+  }
+  await safeSendTelegramMessage(bot, {
+    chat_id: chatId,
+    ...(typeof message.message_thread_id === "number" ? { message_thread_id: message.message_thread_id } : {}),
+    text: answer.text,
+    reply_parameters: {
+      message_id: message.message_id,
+    },
+  })
+}
+
+async function handleChatJoinRequest(env: Env, joinRequest: TelegramWebhookChatJoinRequest, bot: Env | TelegramCommunityBotCredential = env): Promise<void> {
+  const telegramChatId = telegramIdentifier(joinRequest.chat?.id)
+  const telegramUserId = telegramIdentifier(joinRequest.from?.id)
+  if (!telegramChatId || !telegramUserId) {
+    return
+  }
+  const decision = await evaluateTelegramChatJoinRequest({
+    env,
+    communityRepository: getCommunityRepository(env),
+    telegramChatId,
+    telegramUserId,
+    telegramUserChatId: telegramIdentifier(joinRequest.user_chat_id),
+    joinRequestDate: typeof joinRequest.date === "number" ? joinRequest.date : null,
+  })
+  if (!decision || decision.action === "ignore") {
+    return
+  }
+  if (decision.action === "approve") {
+    const approved = await safeApproveTelegramChatJoinRequest(bot, {
+      chat_id: decision.telegramChatId,
+      user_id: decision.telegramUserId,
+    })
+    if (approved) {
+      await markTelegramJoinGrantApproved({ env, grantId: decision.grantId })
+    } else {
+      await markTelegramJoinGrantFailed({
+        env,
+        grantId: decision.grantId,
+        errorMessage: "Telegram approveChatJoinRequest failed",
+      })
+    }
+    return
+  }
+  const prompted = await safeSendTelegramMessage(bot, {
+    chat_id: decision.telegramUserChatId,
+    text: decision.text,
+  })
+  if (prompted) {
+    await markTelegramJoinGrantPrompted({ env, grantId: decision.grantId })
+  } else {
+    await markTelegramJoinGrantFailed({
+      env,
+      grantId: decision.grantId,
+      errorMessage: "Telegram join verification prompt failed",
+    })
+  }
+}
+
+async function handleTelegramWebhookUpdate(env: Env, update: TelegramWebhookUpdate, bot: Env | TelegramCommunityBotCredential = env): Promise<void> {
+  if (update.chat_join_request) {
+    await handleChatJoinRequest(env, update.chat_join_request, bot)
+    return
+  }
+  const message = update.message
+  if (!message) {
+    return
+  }
+  if (message.chat_shared) {
+    await handleChatSharedMessage(env, message, bot)
+    return
+  }
+  if (message.text?.trim().startsWith("/start")) {
+    await handleStartMessage(env, message, bot)
+    return
+  }
+  await handleGroupAssistantMessage(env, message, bot)
+}
+
+telegram.post("/setup-intents/complete", async (c) => {
+  requireBotIntegrationSecret(c)
+  const body = await c.req.json<CompleteTelegramSetupIntentInput>().catch(() => null)
+  if (!body) {
+    throw badRequestError("Invalid Telegram setup completion payload")
+  }
+  const linkedChat = await completeTelegramSetupIntent({
+    env: c.env,
+    body,
+  })
+  return c.json({ linked_chat: linkedChat }, 200)
+})
+
+telegram.post("/webhook", async (c) => {
+  requireTelegramWebhookSecret(c)
+  const body = await c.req.json<TelegramWebhookUpdate>().catch(() => null)
+  if (!body || typeof body !== "object") {
+    console.warn("[telegram-webhook] invalid payload")
+    return c.json({ ok: true }, 200)
+  }
+  try {
+    await handleTelegramWebhookUpdate(c.env, body)
+  } catch (error) {
+    console.warn("[telegram-webhook] update handling failed", {
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+  return c.json({ ok: true }, 200)
+})
+
+telegram.post("/community-bots/:webhookId/webhook", async (c) => {
+  const webhookId = c.req.param("webhookId")?.trim()
+  if (!webhookId) {
+    throw authError("Authentication failed")
+  }
+  const bot = await decryptCommunityTelegramBotByWebhookId({
+    env: c.env,
+    webhookId,
+  })
+  if (!bot) {
+    throw authError("Authentication failed")
+  }
+  const providedSecret = c.req.header("x-telegram-bot-api-secret-token")?.trim()
+  if (!providedSecret || !timingSafeSecretEqual(providedSecret, bot.webhookSecret)) {
+    throw authError("Authentication failed")
+  }
+  const body = await c.req.json<TelegramWebhookUpdate>().catch(() => null)
+  if (!body || typeof body !== "object") {
+    console.warn("[telegram-community-webhook] invalid payload")
+    return c.json({ ok: true }, 200)
+  }
+  try {
+    await handleTelegramWebhookUpdate(c.env, body, bot)
+  } catch (error) {
+    console.warn("[telegram-community-webhook] update handling failed", {
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+  return c.json({ ok: true }, 200)
+})
+
+export default telegram

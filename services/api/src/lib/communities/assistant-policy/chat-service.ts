@@ -21,6 +21,7 @@ import { buildCommunityContext } from "./context-builder"
 import { decryptActiveCommunityOpenRouterKey } from "./credential-service"
 import {
   getCommunityAssistantRuntimePolicy,
+  getCommunityAssistantRuntimePolicyForCommunity,
   type CommunityAssistantPolicy,
 } from "./service"
 import type { Client } from "../../sql-client"
@@ -123,6 +124,15 @@ type AssistantCompletionResult = {
   toolRounds: number
   toolsUsed: string[]
   totalTokens: number | null
+}
+
+export type CommunityAssistantGroupMessageResponse = {
+  content: string
+  model_id: string
+  provider_message_id: string | null
+  prompt_tokens: number | null
+  completion_tokens: number | null
+  total_tokens: number | null
 }
 
 function normalizeChatMessage(value: unknown): string {
@@ -767,6 +777,71 @@ export async function sendCommunityAssistantMessage(input: {
       }),
       user_message: serializeMessageRow(userMessage),
       assistant_message: serializeMessageRow(assistantMessage),
+    }
+  } finally {
+    db.close()
+  }
+}
+
+export async function sendCommunityAssistantGroupMessage(input: {
+  env: Env
+  communityRepository: CommunityAssistantRepository
+  communityId: string
+  message: string
+}): Promise<CommunityAssistantGroupMessageResponse> {
+  const message = normalizeChatMessage(input.message)
+  const policy = await getCommunityAssistantRuntimePolicyForCommunity({
+    env: input.env,
+    communityRepository: input.communityRepository,
+    communityId: input.communityId,
+  })
+  const groupPolicy: CommunityAssistantPolicy = {
+    ...policy,
+    actionMode: "answer_only",
+  }
+  const openRouterKey = await decryptActiveCommunityOpenRouterKey({
+    env: input.env,
+    communityId: input.communityId,
+  })
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  try {
+    const context = await buildCommunityContext({
+      client: db.client,
+      communityId: input.communityId,
+      message,
+      userId: null,
+      policy: groupPolicy,
+      audience: "public_group",
+    })
+    const completion = await requestOpenRouterChatCompletion({
+      apiKey: openRouterKey,
+      baseUrl: input.env.OPENROUTER_BASE_URL,
+      timeoutMs: openRouterTimeoutMs(input.env),
+      errorLabel: "community assistant",
+      body: {
+        model: groupPolicy.selectedModelId,
+        messages: [
+          {
+            role: "system",
+            content: `${groupPolicy.systemPrompt}\n\n${context}`,
+          },
+          {
+            role: "user",
+            content: message,
+          },
+        ],
+      },
+    }).catch((error) => {
+      throw providerUnavailable(error instanceof Error ? error.message : "OpenRouter community assistant request failed")
+    })
+
+    return {
+      content: completion.content,
+      model_id: groupPolicy.selectedModelId,
+      provider_message_id: providerMessageId(completion.body),
+      prompt_tokens: usageValue(completion.body, "prompt_tokens"),
+      completion_tokens: usageValue(completion.body, "completion_tokens"),
+      total_tokens: usageValue(completion.body, "total_tokens"),
     }
   } finally {
     db.close()
