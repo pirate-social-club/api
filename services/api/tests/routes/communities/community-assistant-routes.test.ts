@@ -460,12 +460,78 @@ describe("community assistant routes", () => {
 
     const missing = await getAssistantModels({ env: ctx.env, communityId, accessToken: owner.accessToken })
     expect(missing.status).toBe(400)
-    await saveOpenRouterKey({ env: ctx.env, communityId, accessToken: owner.accessToken })
-    const connected = await getAssistantModels({ env: ctx.env, communityId, accessToken: owner.accessToken })
-    expect(connected.status).toBe(200)
-    const body = await json(connected) as { object: string; data: Array<{ id: string }> }
-    expect(body.object).toBe("list")
-    expect(body.data.map((model) => model.id)).toContain("mistralai/mistral-small-3.2-24b-instruct")
+    const originalFetch = globalThis.fetch
+    const openRouterRequests: Array<{ authorization: string | null; url: string }> = []
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      openRouterRequests.push({
+        authorization: request.headers.get("authorization"),
+        url: request.url,
+      })
+      expect(request.url).toBe("https://openrouter.test/api/v1/models/user")
+      return Response.json({
+        data: [{
+          architecture: {
+            input_modalities: ["text"],
+            modality: "text->text",
+            output_modalities: ["text"],
+          },
+          context_length: 1_000_000,
+          created: 1_780_000_000,
+          description: "Newest model from OpenRouter.",
+          id: "provider/new-model",
+          name: "Provider New Model",
+          pricing: {
+            completion: "0.0000008",
+            prompt: "0.0000002",
+          },
+        }, {
+          architecture: {
+            input_modalities: ["image"],
+            modality: "image->image",
+            output_modalities: ["image"],
+          },
+          id: "provider/image-only",
+          name: "Image Only",
+        }],
+      })
+    }
+    try {
+      await saveOpenRouterKey({ env: ctx.env, communityId, accessToken: owner.accessToken })
+      const connected = await getAssistantModels({ env: {
+        ...ctx.env,
+        OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      }, communityId, accessToken: owner.accessToken })
+      expect(connected.status).toBe(200)
+      const body = await json(connected) as {
+        object: string
+        data: Array<{
+          contextLength?: number
+          createdAt?: string
+          description?: string
+          id: string
+          inputCostUsdPerMillionTokens?: number
+          label: string
+          outputCostUsdPerMillionTokens?: number
+        }>
+      }
+      expect(body.object).toBe("list")
+      expect(body.data).toEqual([{
+        contextLength: 1_000_000,
+        description: "Newest model from OpenRouter.",
+        id: "provider/new-model",
+        inputCostUsdPerMillionTokens: 0.2,
+        label: "Provider New Model",
+        outputCostUsdPerMillionTokens: 0.8,
+        createdAt: new Date(1_780_000_000 * 1000).toISOString(),
+      }])
+      expect(openRouterRequests).toEqual([{
+        authorization: "Bearer sk-or-test-route-key-1234",
+        url: "https://openrouter.test/api/v1/models/user",
+      }])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 
   test("assistant policy validation rejects oversized system prompts", async () => {
