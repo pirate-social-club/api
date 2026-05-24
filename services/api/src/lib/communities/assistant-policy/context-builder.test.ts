@@ -4,7 +4,7 @@ import {
   buildCommunityContext,
   packCommunityContextSections,
 } from "./context-builder"
-import type { CommunityAssistantPolicy } from "./service"
+import type { AssistantContextSources, CommunityAssistantPolicy } from "./service"
 
 let client: LibsqlClient | null = null
 
@@ -101,7 +101,11 @@ async function createTestClient(): Promise<LibsqlClient> {
   return client
 }
 
-function policy(overrides: Partial<CommunityAssistantPolicy> = {}): CommunityAssistantPolicy {
+type PolicyOverrides = Partial<Omit<CommunityAssistantPolicy, "contextSources">> & {
+  contextSources?: Partial<AssistantContextSources>
+}
+
+function policy(overrides: PolicyOverrides = {}): CommunityAssistantPolicy {
   const base: CommunityAssistantPolicy = {
     object: "community_assistant_policy",
     community: "com_test",
@@ -153,22 +157,6 @@ function policy(overrides: Partial<CommunityAssistantPolicy> = {}): CommunityAss
       ...overrides.contextSources,
     },
   }
-}
-
-async function insertRule(input: {
-  body?: string
-  position?: number
-  ruleId: string
-  title: string
-}) {
-  if (!client) throw new Error("missing test client")
-  await client.execute({
-    sql: `
-      INSERT INTO community_rules (rule_id, community_id, title, body, position, status, created_at)
-      VALUES (?1, 'com_test', ?2, ?3, ?4, 'active', '2026-01-01T00:00:00.000Z')
-    `,
-    args: [input.ruleId, input.title, input.body ?? "", input.position ?? 0],
-  })
 }
 
 async function insertMembership() {
