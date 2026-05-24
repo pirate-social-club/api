@@ -9,6 +9,14 @@ import {
 import { numberOrNull, rowValue, stringOrNull } from "../../sql-row"
 import { openCommunityDb } from "../community-db-factory"
 import { requireAssistantCommunityAccess, type CommunityAssistantRepository } from "./access"
+import {
+  COMMUNITY_ASSISTANT_TOOLS,
+  MAX_TOOL_ROUNDS,
+  MAX_TOTAL_TOOL_RESULT_CHARS,
+  executeCommunityAssistantTool,
+  isCommunityAssistantToolCall,
+  type CommunityAssistantToolCall,
+} from "./assistant-tools"
 import { buildCommunityContext } from "./context-builder"
 import { decryptActiveCommunityOpenRouterKey } from "./credential-service"
 import {
@@ -17,6 +25,7 @@ import {
 } from "./service"
 import type { Client } from "../../sql-client"
 import type { Env } from "../../../env"
+import type { CommunityAssistantAudience } from "./context-builder"
 
 const MAX_USER_MESSAGE_LENGTH = 4000
 const MAX_HISTORY_MESSAGES = 12
@@ -95,6 +104,25 @@ type StoredMessageRow = {
   completion_tokens: number | null
   total_tokens: number | null
   created_at: string
+}
+
+type OpenRouterChatMessage = {
+  role: "system" | "user" | "assistant" | "tool"
+  content?: string | null
+  tool_calls?: CommunityAssistantToolCall[]
+  tool_call_id?: string
+}
+
+type AssistantCompletionResult = {
+  body: Record<string, unknown>
+  completionTokens: number | null
+  content: string
+  promptTokens: number | null
+  providerMessageId: string | null
+  toolCallCount: number
+  toolRounds: number
+  toolsUsed: string[]
+  totalTokens: number | null
 }
 
 function normalizeChatMessage(value: unknown): string {
@@ -391,8 +419,188 @@ function providerMessageId(body: Record<string, unknown>): string | null {
   return typeof id === "string" && id.trim() ? id : null
 }
 
+function responseToolCalls(body: Record<string, unknown>): CommunityAssistantToolCall[] {
+  const choices = Array.isArray(body.choices) ? body.choices : []
+  const first = choices[0]
+  if (!first || typeof first !== "object" || Array.isArray(first)) {
+    return []
+  }
+  const message = (first as { message?: unknown }).message
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return []
+  }
+  const toolCalls = (message as { tool_calls?: unknown }).tool_calls
+  return Array.isArray(toolCalls)
+    ? toolCalls.filter(isCommunityAssistantToolCall)
+    : []
+}
+
+function toolUnsupportedError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false
+  }
+  return /http_400/i.test(error.message) && /tool|function|unsupported|parameter|provider|model/i.test(error.message)
+}
+
 function openRouterTimeoutMs(env: Env): number {
   return parsePositiveIntegerEnv(env.OPENROUTER_TIMEOUT_MS) ?? DEFAULT_ASSISTANT_TIMEOUT_MS
+}
+
+async function requestAssistantCompletion(input: {
+  apiKey: string
+  baseUrl?: string | null
+  messages: OpenRouterChatMessage[]
+  model: string
+  timeoutMs: number
+  toolChoice?: "auto" | "none"
+  toolsEnabled: boolean
+}) {
+  return requestOpenRouterChatCompletion({
+    apiKey: input.apiKey,
+    baseUrl: input.baseUrl,
+    timeoutMs: input.timeoutMs,
+    errorLabel: "community assistant",
+    body: {
+      model: input.model,
+      messages: input.messages,
+      ...(input.toolsEnabled ? {
+        tools: COMMUNITY_ASSISTANT_TOOLS,
+        tool_choice: input.toolChoice ?? "auto",
+        parallel_tool_calls: false,
+      } : {}),
+    },
+  })
+}
+
+async function runCommunityAssistantCompletion(input: {
+  apiKey: string
+  audience: CommunityAssistantAudience
+  baseUrl?: string | null
+  client: Client
+  communityId: string
+  messages: OpenRouterChatMessage[]
+  model: string
+  policy: CommunityAssistantPolicy
+  timeoutMs: number
+  userId: string | null
+}): Promise<AssistantCompletionResult> {
+  const messages = [...input.messages]
+  let toolRounds = 0
+  let toolCallCount = 0
+  let totalToolResultChars = 0
+  const toolsUsed = new Set<string>()
+
+  let completion = await requestAssistantCompletion({
+    apiKey: input.apiKey,
+    baseUrl: input.baseUrl,
+    messages,
+    model: input.model,
+    timeoutMs: input.timeoutMs,
+    toolsEnabled: true,
+  }).catch(async (error) => {
+    if (!toolUnsupportedError(error)) {
+      throw error
+    }
+    return requestAssistantCompletion({
+      apiKey: input.apiKey,
+      baseUrl: input.baseUrl,
+      messages,
+      model: input.model,
+      timeoutMs: input.timeoutMs,
+      toolChoice: "none",
+      toolsEnabled: false,
+    })
+  })
+
+  while (toolRounds < MAX_TOOL_ROUNDS) {
+    const toolCall = responseToolCalls(completion.body)[0]
+    if (!toolCall) {
+      return {
+        body: completion.body,
+        completionTokens: usageValue(completion.body, "completion_tokens"),
+        content: completion.content,
+        promptTokens: usageValue(completion.body, "prompt_tokens"),
+        providerMessageId: providerMessageId(completion.body),
+        toolCallCount,
+        toolRounds,
+        toolsUsed: [...toolsUsed],
+        totalTokens: usageValue(completion.body, "total_tokens"),
+      }
+    }
+
+    toolRounds += 1
+    toolCallCount += 1
+    toolsUsed.add(toolCall.function.name)
+    messages.push({
+      role: "assistant",
+      content: null,
+      tool_calls: [toolCall],
+    })
+
+    const toolResult = totalToolResultChars >= MAX_TOTAL_TOOL_RESULT_CHARS
+      ? {
+        name: toolCall.function.name,
+        content: JSON.stringify({
+          error: "tool_budget_exhausted",
+          message: "Tool result budget exhausted for this turn.",
+        }),
+      }
+      : await executeCommunityAssistantTool({
+        audience: input.audience,
+        client: input.client,
+        communityId: input.communityId,
+        policy: input.policy,
+        toolCall,
+        userId: input.userId,
+      })
+    const remaining = Math.max(0, MAX_TOTAL_TOOL_RESULT_CHARS - totalToolResultChars)
+    const content = toolResult.content.length <= remaining
+      ? toolResult.content
+      : `${toolResult.content.slice(0, Math.max(0, remaining - 24)).trimEnd()}... [tool budget truncated]`
+    totalToolResultChars += content.length
+    messages.push({
+      role: "tool",
+      tool_call_id: toolCall.id,
+      content,
+    })
+
+    completion = await requestAssistantCompletion({
+      apiKey: input.apiKey,
+      baseUrl: input.baseUrl,
+      messages,
+      model: input.model,
+      timeoutMs: input.timeoutMs,
+      toolsEnabled: true,
+    })
+  }
+
+  completion = await requestAssistantCompletion({
+    apiKey: input.apiKey,
+    baseUrl: input.baseUrl,
+    messages: [
+      ...messages,
+      {
+        role: "system",
+        content: "Tool-call limit reached for this turn. Answer the user using the available conversation and tool results without calling more tools.",
+      },
+    ],
+    model: input.model,
+    timeoutMs: input.timeoutMs,
+    toolChoice: "none",
+    toolsEnabled: true,
+  })
+
+  return {
+    body: completion.body,
+    completionTokens: usageValue(completion.body, "completion_tokens"),
+    content: completion.content,
+    promptTokens: usageValue(completion.body, "prompt_tokens"),
+    providerMessageId: providerMessageId(completion.body),
+    toolCallCount,
+    toolRounds,
+    toolsUsed: [...toolsUsed],
+    totalTokens: usageValue(completion.body, "total_tokens"),
+  }
 }
 
 export async function sendCommunityAssistantMessage(input: {
@@ -483,13 +691,13 @@ export async function sendCommunityAssistantMessage(input: {
         created_at: now,
       }
 
-    const openRouterMessages = [
+    const openRouterMessages: OpenRouterChatMessage[] = [
       {
         role: "system",
         content: `${policy.systemPrompt}\n\n${context}`,
       },
       ...history.map((item) => ({
-        role: item.role,
+        role: item.role as "user" | "assistant",
         content: item.content,
       })),
       {
@@ -498,15 +706,17 @@ export async function sendCommunityAssistantMessage(input: {
       },
     ]
 
-    const completion = await requestOpenRouterChatCompletion({
+    const completion = await runCommunityAssistantCompletion({
       apiKey: openRouterKey,
+      audience: "private_user",
       baseUrl: input.env.OPENROUTER_BASE_URL,
+      client: db.client,
+      communityId: input.communityId,
+      messages: openRouterMessages,
+      model: policy.selectedModelId,
+      policy,
       timeoutMs: openRouterTimeoutMs(input.env),
-      errorLabel: "community assistant",
-      body: {
-        model: policy.selectedModelId,
-        messages: openRouterMessages,
-      },
+      userId: input.actor.userId,
     }).catch((error) => {
       throw providerUnavailable(error instanceof Error ? error.message : "OpenRouter community assistant request failed")
     })
@@ -521,13 +731,16 @@ export async function sendCommunityAssistantMessage(input: {
         role: "assistant",
         content: completion.content,
         modelId: policy.selectedModelId,
-        providerMessageId: providerMessageId(completion.body),
-        promptTokens: usageValue(completion.body, "prompt_tokens"),
-        completionTokens: usageValue(completion.body, "completion_tokens"),
-        totalTokens: usageValue(completion.body, "total_tokens"),
+        providerMessageId: completion.providerMessageId,
+        promptTokens: completion.promptTokens,
+        completionTokens: completion.completionTokens,
+        totalTokens: completion.totalTokens,
         metadata: {
           provider: "openrouter",
           action_mode: policy.actionMode,
+          tool_rounds: completion.toolRounds,
+          tool_call_count: completion.toolCallCount,
+          tools_used: completion.toolsUsed,
         },
         now: assistantNow,
       })
@@ -539,10 +752,10 @@ export async function sendCommunityAssistantMessage(input: {
         role: "assistant" as const,
         content: completion.content,
         model_id: policy.selectedModelId,
-        provider_message_id: providerMessageId(completion.body),
-        prompt_tokens: usageValue(completion.body, "prompt_tokens"),
-        completion_tokens: usageValue(completion.body, "completion_tokens"),
-        total_tokens: usageValue(completion.body, "total_tokens"),
+        provider_message_id: completion.providerMessageId,
+        prompt_tokens: completion.promptTokens,
+        completion_tokens: completion.completionTokens,
+        total_tokens: completion.totalTokens,
         created_at: assistantNow,
       }
 

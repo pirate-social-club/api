@@ -2,8 +2,10 @@ const DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 export type OpenRouterChatCompletionResponse = Record<string, unknown> & {
   choices?: Array<{
+    finish_reason?: unknown
     message?: {
       content?: unknown
+      tool_calls?: unknown
     }
   }>
 }
@@ -95,7 +97,9 @@ export async function requestOpenRouterChatCompletion(input: {
     })
 
     if (!response.ok) {
-      throw new Error(`OpenRouter ${input.errorLabel} request failed with http_${response.status}`)
+      const errorBody = await response.text().catch(() => "")
+      const suffix = errorBody.trim() ? `: ${errorBody.trim().slice(0, 500)}` : ""
+      throw new Error(`OpenRouter ${input.errorLabel} request failed with http_${response.status}${suffix}`)
     }
 
     const body = await response.json().catch(() => null) as OpenRouterChatCompletionResponse | null
@@ -104,7 +108,8 @@ export async function requestOpenRouterChatCompletion(input: {
     }
 
     const content = normalizeOpenRouterMessageContent(body.choices?.[0]?.message?.content)
-    if (!content.trim()) {
+    const toolCalls = body.choices?.[0]?.message?.tool_calls
+    if (!content.trim() && !Array.isArray(toolCalls)) {
       throw new Error(`OpenRouter ${input.errorLabel} response was empty`)
     }
 
