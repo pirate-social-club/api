@@ -7,10 +7,12 @@ import { openCommunityDb } from "../community-db-factory"
 import {
   canManageAssistantPolicy,
   requireAssistantCommunityAccess,
+  requireLiveAssistantCommunity,
   requireAssistantModeratorAccess,
   type CommunityAssistantRepository,
 } from "./access"
 import {
+  decryptActiveCommunityOpenRouterKey,
   getCommunityOpenRouterKeyStatus,
 } from "./credential-service"
 import {
@@ -23,6 +25,11 @@ import {
   type CommunityAssistantPolicySettingsInput,
 } from "./validation"
 import type { Env } from "../../../env"
+import {
+  parsePositiveIntegerEnv,
+  requestOpenRouterModels,
+  type OpenRouterModel,
+} from "../../openrouter-client"
 
 export type AssistantRetentionMode = "per_user_private" | "community_visible_to_mods" | "ephemeral"
 
@@ -39,9 +46,13 @@ export type AssistantContextSources = {
 }
 
 export type AssistantModelOption = {
+  contextLength?: number
+  createdAt?: string
   id: string
   label: string
   description?: string
+  inputCostUsdPerMillionTokens?: number
+  outputCostUsdPerMillionTokens?: number
 }
 
 export type CommunityAssistantPolicy = CommunityAssistantPolicySettingsInput & {
@@ -223,6 +234,88 @@ function normalizeString(value: unknown, field: string, maxLength: number): stri
     throw badRequestError(`${field} must be at most ${maxLength} characters`)
   }
   return value
+}
+
+function unknownArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : []
+}
+
+function numberFromUnknown(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
+function usdPerMillionTokens(value: unknown): number | undefined {
+  const perToken = numberFromUnknown(value)
+  if (perToken == null || perToken < 0) return undefined
+  return Math.round(perToken * 1_000_000 * 1_000_000) / 1_000_000
+}
+
+function createdAtFromUnixSeconds(value: unknown): string | undefined {
+  const seconds = numberFromUnknown(value)
+  if (seconds == null || seconds <= 0) return undefined
+  const createdAt = new Date(seconds * 1000)
+  return Number.isFinite(createdAt.getTime()) ? createdAt.toISOString() : undefined
+}
+
+function isTextChatModel(model: OpenRouterModel): boolean {
+  const architecture = model.architecture
+  if (!architecture || typeof architecture !== "object") {
+    return true
+  }
+  const inputModalities = unknownArray(architecture.input_modalities)
+  const outputModalities = unknownArray(architecture.output_modalities)
+  const modality = typeof architecture.modality === "string" ? architecture.modality : ""
+  const acceptsText = inputModalities.length === 0
+    || inputModalities.includes("text")
+    || modality.includes("text->")
+  const returnsText = outputModalities.length === 0
+    || outputModalities.includes("text")
+    || modality.endsWith("->text")
+  return acceptsText && returnsText
+}
+
+function openRouterModelToOption(model: OpenRouterModel): AssistantModelOption | null {
+  if (typeof model.id !== "string" || !model.id.trim()) {
+    return null
+  }
+  if (!isTextChatModel(model)) {
+    return null
+  }
+
+  const contextLength =
+    numberFromUnknown(model.context_length)
+    ?? numberFromUnknown(model.top_provider?.context_length)
+    ?? undefined
+  const inputCost = usdPerMillionTokens(model.pricing?.prompt)
+  const outputCost = usdPerMillionTokens(model.pricing?.completion)
+  const option: AssistantModelOption = {
+    id: model.id.trim(),
+    label: typeof model.name === "string" && model.name.trim() ? model.name.trim() : model.id.trim(),
+    ...(typeof model.description === "string" && model.description.trim()
+      ? { description: model.description.trim() }
+      : {}),
+    ...(contextLength ? { contextLength } : {}),
+    ...(model.created ? { createdAt: createdAtFromUnixSeconds(model.created) } : {}),
+    ...(inputCost !== undefined ? { inputCostUsdPerMillionTokens: inputCost } : {}),
+    ...(outputCost !== undefined ? { outputCostUsdPerMillionTokens: outputCost } : {}),
+  }
+  return option
+}
+
+function sortModelOptions(options: AssistantModelOption[]): AssistantModelOption[] {
+  return [...options].sort((left, right) => {
+    const leftCreated = left.createdAt ? Date.parse(left.createdAt) : 0
+    const rightCreated = right.createdAt ? Date.parse(right.createdAt) : 0
+    if (leftCreated !== rightCreated) return rightCreated - leftCreated
+    return left.label.localeCompare(right.label)
+  })
 }
 
 function defaultCommunityAssistantPolicy(input: {
@@ -670,6 +763,29 @@ export async function getCommunityAssistantRuntimePolicy(input: {
   return policy
 }
 
+export async function getCommunityAssistantRuntimePolicyForCommunity(input: {
+  env: Env
+  communityRepository: CommunityAssistantRepository
+  communityId: string
+}): Promise<CommunityAssistantPolicy> {
+  const community = await requireLiveAssistantCommunity({
+    communityRepository: input.communityRepository,
+    communityId: input.communityId,
+  })
+  const policy = await readStoredPolicy({
+    env: input.env,
+    communityRepository: input.communityRepository,
+    community,
+  })
+  if (!policy.enabled) {
+    throw notFoundError("Community assistant not found")
+  }
+  if (policy.openRouterKeyStatus.kind !== "connected") {
+    throw badRequestError("OpenRouter API key is required before chatting with the community assistant")
+  }
+  return policy
+}
+
 export async function listCommunityAssistantModels(input: {
   env: Env
   communityRepository: CommunityAssistantRepository
@@ -684,9 +800,24 @@ export async function listCommunityAssistantModels(input: {
   if (keyStatus.kind !== "connected") {
     throw badRequestError("OpenRouter API key is required before listing assistant models")
   }
+  const apiKey = await decryptActiveCommunityOpenRouterKey({
+    env: input.env,
+    communityId: access.community.community_id,
+  })
+  const timeoutMs = parsePositiveIntegerEnv(input.env.OPENROUTER_TIMEOUT_MS) ?? 10_000
+  const models = await requestOpenRouterModels({
+    apiKey,
+    baseUrl: input.env.OPENROUTER_BASE_URL,
+    timeoutMs,
+  })
+  const options = sortModelOptions(
+    models
+      .map(openRouterModelToOption)
+      .filter((model): model is AssistantModelOption => model !== null),
+  )
 
   return {
     object: "list",
-    data: [...DEFAULT_OPENROUTER_MODELS],
+    data: options,
   }
 }

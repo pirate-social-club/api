@@ -8,6 +8,31 @@ export type OpenRouterChatCompletionResponse = Record<string, unknown> & {
   }>
 }
 
+export type OpenRouterModel = {
+  architecture?: {
+    input_modalities?: unknown
+    modality?: unknown
+    output_modalities?: unknown
+  } | null
+  context_length?: unknown
+  created?: unknown
+  description?: unknown
+  id?: unknown
+  name?: unknown
+  pricing?: {
+    completion?: unknown
+    prompt?: unknown
+  } | null
+  top_provider?: {
+    context_length?: unknown
+    max_completion_tokens?: unknown
+  } | null
+}
+
+export type OpenRouterModelsResponse = {
+  data?: OpenRouterModel[]
+}
+
 export function trimEnv(value: string | null | undefined): string {
   return String(value || "").trim()
 }
@@ -84,6 +109,47 @@ export async function requestOpenRouterChatCompletion(input: {
     }
 
     return { body, content }
+  } finally {
+    if (timer) {
+      clearTimeout(timer)
+    }
+  }
+}
+
+export async function requestOpenRouterModels(input: {
+  apiKey: string
+  baseUrl?: string | null
+  fetcher?: typeof fetch
+  timeoutMs?: number | null
+}): Promise<OpenRouterModel[]> {
+  const controller = new AbortController()
+  const timer = input.timeoutMs && input.timeoutMs > 0
+    ? setTimeout(() => controller.abort(), input.timeoutMs)
+    : null
+
+  try {
+    const response = await (input.fetcher ?? fetch)(
+      `${resolveOpenRouterBaseUrl(input.baseUrl).replace(/\/+$/, "")}/models/user`,
+      {
+        method: "GET",
+        headers: {
+          authorization: `Bearer ${input.apiKey}`,
+          accept: "application/json",
+        },
+        signal: controller.signal,
+      },
+    )
+
+    if (!response.ok) {
+      throw new Error(`OpenRouter models request failed with http_${response.status}`)
+    }
+
+    const body = await response.json().catch(() => null) as OpenRouterModelsResponse | null
+    if (!body || typeof body !== "object" || !Array.isArray(body.data)) {
+      throw new Error("OpenRouter models response was not valid JSON")
+    }
+
+    return body.data
   } finally {
     if (timer) {
       clearTimeout(timer)
