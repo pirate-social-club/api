@@ -15,6 +15,7 @@ import { registerCommunityModerationRoutes } from "./communities-moderation-rout
 import { registerCommunityRoleRoutes } from "./communities-role-routes"
 import { registerCommunitySettingsRoutes } from "./communities-settings-routes"
 import { registerCommunitySongArtifactRoutes } from "./communities-song-artifacts"
+import { registerCommunityTelegramRoutes } from "./communities-telegram-routes"
 
 const communities = new Hono<AuthenticatedEnv>()
 const communityAuthPolicy = new Hono()
@@ -81,5 +82,6 @@ registerCommunityRoleRoutes(communities)
 registerCommunityCommerceRoutes(communities)
 registerCommunitySongArtifactRoutes(communities)
 registerCommunityLiveRoomRoutes(communities)
+registerCommunityTelegramRoutes(communities)
 
 export default communities

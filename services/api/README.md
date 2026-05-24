@@ -173,10 +173,11 @@ Control-plane DB mode:
 5. For community avatar and banner uploads, set `FILEBASE_S3_ACCESS_KEY`, `FILEBASE_S3_SECRET_KEY`, and `FILEBASE_MEDIA_BUCKET`. Optional: `FILEBASE_S3_ENDPOINT` and `FILEBASE_S3_REGION`.
 6. For OpenAI visual moderation, set `OPENAI_API_KEY`. Optional overrides: `OPENAI_MODERATION_MODEL`, `OPENAI_MODERATION_BASE_URL`, `OPENAI_MODERATION_SEXUAL_MINORS_BLOCK_THRESHOLD`, and `OPENAI_MODERATION_TIMEOUT_MS`.
 7. For the real song pipeline and machine translations, set `OPENROUTER_API_KEY`, `ACRCLOUD_ACCESS_KEY`, `ACRCLOUD_ACCESS_SECRET`, `ACRCLOUD_HOST`, and `ELEVENLABS_API_KEY`. Optional overrides: `OPENROUTER_BASE_URL`, `OPENROUTER_MODEL`, `ACRCLOUD_IDENTIFY_PATH`, and `ELEVENLABS_FORCE_ALIGNMENT_URL`.
-8. Fill in `AUTH_UPSTREAM_JWT_SHARED_SECRET`, `AUTH_UPSTREAM_JWT_ISSUER`, and `AUTH_UPSTREAM_JWT_AUDIENCE`.
-9. Fill in `PIRATE_APP_JWT_PRIVATE_KEY` and `PIRATE_APP_JWT_PUBLIC_KEY`.
-10. Start `rtk bun run dev:local` for the API only, or `rtk bun run dev:local:full` to run the API, web dev server, public API tunnel, assistant worker, and community job worker together. These scripts inject dev secrets from Infisical path `/services/api` using the workspace `core/.infisical.json` project config; use `dev:local:raw` or `dev:local:full:raw` only when intentionally running without Infisical. The local server bootstraps the control-plane migrations automatically for local file-backed DBs.
-11. Post and comment translations, OpenAI moderation, plus Bedsheet replies require provider keys from Infisical.
+8. For Telegram community chat setup, community owners normally paste their own BotFather token in the moderation UI. The legacy shared `/telegram/webhook` fallback still requires `TELEGRAM_BOT_USERNAME`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, and a public API origin before registering the webhook.
+9. Fill in `AUTH_UPSTREAM_JWT_SHARED_SECRET`, `AUTH_UPSTREAM_JWT_ISSUER`, and `AUTH_UPSTREAM_JWT_AUDIENCE`.
+10. Fill in `PIRATE_APP_JWT_PRIVATE_KEY` and `PIRATE_APP_JWT_PUBLIC_KEY`.
+11. Start `rtk bun run dev:local` for the API only, or `rtk bun run dev:local:full` to run the API, web dev server, public API tunnel, assistant worker, and community job worker together. These scripts inject dev secrets from Infisical path `/services/api` using the workspace `core/.infisical.json` project config; use `dev:local:raw` or `dev:local:full:raw` only when intentionally running without Infisical. The local server bootstraps the control-plane migrations automatically for local file-backed DBs.
+12. Post and comment translations, OpenAI moderation, plus Bedsheet replies require provider keys from Infisical.
 
 If local startup fails with a migration checksum mismatch, reset only the local file-backed dev DBs:
 

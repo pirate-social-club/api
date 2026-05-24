@@ -6,6 +6,14 @@ import { readWranglerVars } from "../scripts/_lib/dev-vars"
 const wranglerConfigPath = fileURLToPath(new URL("../wrangler.jsonc", import.meta.url))
 
 describe("verification endpoint environment config", () => {
+  test("configures community credential encryption version for development, staging, and production", () => {
+    for (const environment of ["development", "staging", "production"]) {
+      const vars = readWranglerVars(wranglerConfigPath, environment)
+
+      expect(vars.TURSO_COMMUNITY_DB_WRAP_KEY_VERSION).toBe("2")
+    }
+  })
+
   test("pins staging API verification callbacks and browser CORS to staging origins", () => {
     const vars = readWranglerVars(wranglerConfigPath, "staging")
 

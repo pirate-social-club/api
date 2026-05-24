@@ -27,6 +27,7 @@ import publicPosts from "./routes/public-posts"
 import publicProfiles from "./routes/public-profiles"
 import profileMedia from "./routes/profile-media"
 import profiles from "./routes/profiles"
+import telegram from "./routes/telegram"
 import users from "./routes/users"
 import verification from "./routes/verification"
 import walletIdentities from "./routes/wallet-identities"
@@ -180,6 +181,7 @@ app.route("/profile-media", profileMedia)
 app.route("/users", users)
 app.route("/onboarding", onboarding)
 app.route("/profiles", profiles)
+app.route("/telegram", telegram)
 app.route("/wallet-identities", walletIdentities)
 app.route("/", verification)
 
