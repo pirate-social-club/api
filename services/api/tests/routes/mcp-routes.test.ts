@@ -1,8 +1,10 @@
 import { sign as signWithPrivateKey } from "node:crypto"
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { createClient } from "@libsql/client"
 import { solveChallenge, type Challenge, type Payload } from "altcha-lib"
 import { deriveKey } from "altcha-lib/algorithms/pbkdf2"
 import { app } from "../../src/index"
+import { buildLocalCommunityDbUrl } from "../../src/lib/communities/community-local-db"
 import {
   canonicalizeAgentActionProofSignaturePayload,
   computeAgentActionProofHash,
@@ -49,6 +51,25 @@ async function mcpCall(env: Record<string, unknown>, body: unknown, accessToken?
     },
     env,
   )
+}
+
+async function setPostVisibility(input: {
+  communityDbRoot: string
+  communityId: string
+  postId: string
+  visibility: "public" | "members_only"
+}): Promise<void> {
+  const client = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+  try {
+    await client.execute({
+      sql: "UPDATE posts SET visibility = ?1 WHERE post_id = ?2",
+      args: [input.visibility, input.postId.replace(/^post_/, "")],
+    })
+  } finally {
+    client.close()
+  }
 }
 
 describe("mcp routes", () => {
@@ -200,6 +221,254 @@ describe("mcp routes", () => {
     expect(body.result.structuredContent.boards[0]?.membership_gate_summaries).toContainEqual({
       gate_type: "altcha_pow",
     })
+  })
+
+  test("search_board and get_thread expose public board reads without auth", async () => {
+    const ctx = await createRouteTestContext({
+      PIRATE_WEB_PUBLIC_ORIGIN: "https://pirate.test",
+    })
+    cleanup = ctx.cleanup
+    const creator = await exchangeJwt(ctx.env, "mcp-public-board-read-owner")
+    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+
+    const communityCreate = await requestJson(
+      "http://pirate.test/communities",
+      {
+        display_name: "MCP Public Board Read",
+        membership_mode: "request",
+        namespace: {
+          namespace_verification: namespaceVerificationId,
+        },
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(communityCreate.status).toBe(202)
+    const communityBody = await json(communityCreate) as {
+      community: { id: string }
+    }
+    const rawCommunityId = communityBody.community.id.replace(/^com_/, "")
+    await addCommunityMember(ctx.communityDbRoot, rawCommunityId, creator.userId)
+
+    const publicPostResponse = await mcpCall(ctx.env, {
+      jsonrpc: "2.0",
+      id: "mcp-public-read-post",
+      method: "tools/call",
+      params: {
+        name: "create_post",
+        arguments: {
+          community_id: communityBody.community.id,
+          title: "Retrieval context public thread",
+          body: "Agents should be able to search this public retrieval context from MCP.",
+          idempotency_key: "mcp-public-read-post",
+        },
+      },
+    }, creator.accessToken)
+    const publicPostBody = await json(publicPostResponse) as {
+      result?: { structuredContent?: { post?: { id?: string } } }
+    }
+    const publicPostId = publicPostBody.result?.structuredContent?.post?.id
+    expect(publicPostId).toMatch(/^post_/)
+
+    const privatePostResponse = await mcpCall(ctx.env, {
+      jsonrpc: "2.0",
+      id: "mcp-private-read-post",
+      method: "tools/call",
+      params: {
+        name: "create_post",
+        arguments: {
+          community_id: communityBody.community.id,
+          title: "Retrieval context members-only thread",
+          body: "This members-only retrieval context should not be exposed to unauthenticated MCP reads.",
+          idempotency_key: "mcp-private-read-post",
+        },
+      },
+    }, creator.accessToken)
+    const privatePostBody = await json(privatePostResponse) as {
+      result?: { structuredContent?: { post?: { id?: string } } }
+    }
+    const privatePostId = privatePostBody.result?.structuredContent?.post?.id
+    expect(privatePostId).toMatch(/^post_/)
+    await setPostVisibility({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: rawCommunityId,
+      postId: privatePostId!,
+      visibility: "members_only",
+    })
+
+    const replyResponse = await mcpCall(ctx.env, {
+      jsonrpc: "2.0",
+      id: "mcp-public-read-reply",
+      method: "tools/call",
+      params: {
+        name: "reply",
+        arguments: {
+          community_id: communityBody.community.id,
+          post_id: publicPostId,
+          body: "Top public comment says search_board and get_thread should share board-read primitives.",
+          idempotency_key: "mcp-public-read-reply",
+        },
+      },
+    }, creator.accessToken)
+    expect(replyResponse.status).toBe(200)
+
+    const searchResponse = await mcpCall(ctx.env, {
+      jsonrpc: "2.0",
+      id: "mcp-search-board",
+      method: "tools/call",
+      params: {
+        name: "search_board",
+        arguments: {
+          community_id: communityBody.community.id,
+          query: "retrieval context",
+          limit: 5,
+        },
+      },
+    })
+    expect(searchResponse.status).toBe(200)
+    const searchBody = await json(searchResponse) as {
+      result?: {
+        structuredContent?: {
+          posts?: Array<{ id?: string; title?: string; links?: { canonical?: { href?: string } } }>
+        }
+      }
+    }
+    const titles = searchBody.result?.structuredContent?.posts?.map((post) => post.title)
+    expect(titles).toContain("Retrieval context public thread")
+    expect(titles).not.toContain("Retrieval context members-only thread")
+    expect(searchBody.result?.structuredContent?.posts?.[0]?.links?.canonical?.href).toContain("/p/post_")
+
+    const threadResponse = await mcpCall(ctx.env, {
+      jsonrpc: "2.0",
+      id: "mcp-get-thread",
+      method: "tools/call",
+      params: {
+        name: "get_thread",
+        arguments: {
+          community_id: communityBody.community.id,
+          post_id: publicPostId,
+          comment_limit: 5,
+        },
+      },
+    })
+    expect(threadResponse.status).toBe(200)
+    const threadBody = await json(threadResponse) as {
+      result?: {
+        structuredContent?: {
+          thread?: {
+            post?: { id?: string; title?: string }
+            comments?: Array<{ body_excerpt?: string; links?: { canonical?: { href?: string } } }>
+          }
+        }
+      }
+    }
+    expect(threadBody.result?.structuredContent?.thread?.post?.id).toBe(publicPostId)
+    expect(threadBody.result?.structuredContent?.thread?.post?.title).toBe("Retrieval context public thread")
+    expect(threadBody.result?.structuredContent?.thread?.comments?.[0]?.body_excerpt).toContain("Top public comment")
+    expect(threadBody.result?.structuredContent?.thread?.comments?.[0]?.links?.canonical?.href).toContain("comment=cmt_")
+  })
+
+  test("get_my_activity requires auth and returns the caller's board activity", async () => {
+    const ctx = await createRouteTestContext({
+      PIRATE_WEB_PUBLIC_ORIGIN: "https://pirate.test",
+    })
+    cleanup = ctx.cleanup
+    const creator = await exchangeJwt(ctx.env, "mcp-my-activity-owner")
+    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+
+    const communityCreate = await requestJson(
+      "http://pirate.test/communities",
+      {
+        display_name: "MCP My Activity",
+        membership_mode: "request",
+        namespace: {
+          namespace_verification: namespaceVerificationId,
+        },
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(communityCreate.status).toBe(202)
+    const communityBody = await json(communityCreate) as {
+      community: { id: string }
+    }
+    await addCommunityMember(ctx.communityDbRoot, communityBody.community.id.replace(/^com_/, ""), creator.userId)
+
+    const createPostResponse = await mcpCall(ctx.env, {
+      jsonrpc: "2.0",
+      id: "mcp-my-activity-post",
+      method: "tools/call",
+      params: {
+        name: "create_post",
+        arguments: {
+          community_id: communityBody.community.id,
+          title: "My activity thread",
+          body: "This post should appear in get_my_activity.",
+          idempotency_key: "mcp-my-activity-post",
+        },
+      },
+    }, creator.accessToken)
+    const createPostBody = await json(createPostResponse) as {
+      result?: { structuredContent?: { post?: { id?: string } } }
+    }
+    const postId = createPostBody.result?.structuredContent?.post?.id
+    expect(postId).toMatch(/^post_/)
+
+    const replyResponse = await mcpCall(ctx.env, {
+      jsonrpc: "2.0",
+      id: "mcp-my-activity-reply",
+      method: "tools/call",
+      params: {
+        name: "reply",
+        arguments: {
+          community_id: communityBody.community.id,
+          post_id: postId,
+          body: "This comment should appear in get_my_activity.",
+          idempotency_key: "mcp-my-activity-reply",
+        },
+      },
+    }, creator.accessToken)
+    expect(replyResponse.status).toBe(200)
+
+    const unauthenticatedResponse = await mcpCall(ctx.env, {
+      jsonrpc: "2.0",
+      id: "mcp-my-activity-no-auth",
+      method: "tools/call",
+      params: {
+        name: "get_my_activity",
+        arguments: {
+          community_id: communityBody.community.id,
+        },
+      },
+    })
+    const unauthenticatedBody = await json(unauthenticatedResponse) as {
+      error?: { message?: string }
+    }
+    expect(unauthenticatedBody.error?.message).toContain("Authentication required")
+
+    const activityResponse = await mcpCall(ctx.env, {
+      jsonrpc: "2.0",
+      id: "mcp-my-activity",
+      method: "tools/call",
+      params: {
+        name: "get_my_activity",
+        arguments: {
+          community_id: communityBody.community.id,
+          limit: 5,
+        },
+      },
+    }, creator.accessToken)
+    expect(activityResponse.status).toBe(200)
+    const activityBody = await json(activityResponse) as {
+      result?: {
+        structuredContent?: {
+          posts?: Array<{ title?: string }>
+          comments?: Array<{ body_excerpt?: string }>
+        }
+      }
+    }
+    expect(activityBody.result?.structuredContent?.posts?.map((post) => post.title)).toContain("My activity thread")
+    expect(activityBody.result?.structuredContent?.comments?.[0]?.body_excerpt).toContain("This comment should appear")
   })
 
   test("delegated agent tokens can create posts through MCP and reject nonce replay", async () => {
