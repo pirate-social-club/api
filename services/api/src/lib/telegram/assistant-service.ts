@@ -146,10 +146,10 @@ async function enforceTelegramGroupAssistantRateLimit(input: {
 
 function groupFailureMessage(error: unknown): string {
   if (error instanceof HttpError && error.status === 404) {
-    return "Community assistant is not enabled for this Telegram chat."
+    return "Community assistant is not enabled. In Pirate, open Mod > Assistant, turn it on, and save settings before using /ask in Telegram."
   }
   if (error instanceof HttpError && error.status === 400) {
-    return "Community assistant is not configured yet."
+    return "Community assistant is missing required setup. In Pirate, check Mod > Assistant for the OpenRouter key, model, and saved assistant settings."
   }
   if (error instanceof HttpError && error.status === 429) {
     return "Community assistant is rate limited right now. Try again later."
