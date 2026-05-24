@@ -187,6 +187,19 @@ rtk bun run dev:local:full
 
 The reset command refuses to touch paths outside `services/api/.local`.
 
+For diagnosis before resetting, run:
+
+```bash
+rtk bun run scripts/doctor-local-dev-storage.ts
+```
+
+A checksum mismatch means the local `schema_migrations` row was recorded from a
+different version of the migration file. The guard is expected to fail closed.
+Do not edit already-shared migration files to make local startup pass; add a
+follow-up migration instead. Only add a compatible local drift repair when the
+older checksum is known, the drift is local-file-backed development state, and
+the repair can bring the existing SQLite schema to the current shape.
+
 ## Full Local Setup
 
 This is the shortest path to a real local worker.
