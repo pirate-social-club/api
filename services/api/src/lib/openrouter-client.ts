@@ -74,7 +74,14 @@ function responseBodyPreview(value: string): string {
   return trimmed ? trimmed.slice(0, 500) : "<empty>"
 }
 
-export async function requestOpenRouterChatCompletion(input: {
+function isRetryableOpenRouterResponseError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  return error.message.includes("response was not valid JSON")
+    || error.message.includes("response was empty")
+    || error.message.includes("response JSON had an unexpected shape")
+}
+
+async function requestOpenRouterChatCompletionOnce(input: {
   apiKey: string
   baseUrl?: string | null
   body: Record<string, unknown>
@@ -134,6 +141,32 @@ export async function requestOpenRouterChatCompletion(input: {
       clearTimeout(timer)
     }
   }
+}
+
+export async function requestOpenRouterChatCompletion(input: {
+  apiKey: string
+  baseUrl?: string | null
+  body: Record<string, unknown>
+  errorLabel: string
+  fetcher?: typeof fetch
+  timeoutMs?: number | null
+}): Promise<{
+  body: OpenRouterChatCompletionResponse
+  content: string
+}> {
+  const maxAttempts = 2
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await requestOpenRouterChatCompletionOnce(input)
+    } catch (error) {
+      if (attempt < maxAttempts && isRetryableOpenRouterResponseError(error)) {
+        continue
+      }
+      throw error
+    }
+  }
+
+  return requestOpenRouterChatCompletionOnce(input)
 }
 
 export async function requestOpenRouterModels(input: {
