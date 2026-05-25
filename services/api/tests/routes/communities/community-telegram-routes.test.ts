@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { createClient, type Client } from "@libsql/client"
 import { app } from "../../../src/index"
 import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
+import { resolveTelegramAccount } from "../../../src/lib/telegram/join-request-service"
 import { buildDefaultVerificationCapabilities } from "../../../src/lib/verification/verification-capabilities"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import {
@@ -562,6 +563,28 @@ async function linkTelegramAccount(input: {
     `,
     args: [input.telegramUserId, input.userId, now],
   })
+}
+
+async function getTelegramAccount(input: {
+  client: Client
+  telegramUserId: string
+}): Promise<{ telegram_user_id: string; user_id: string } | null> {
+  const result = await input.client.execute({
+    sql: `
+      SELECT telegram_user_id, user_id
+      FROM telegram_accounts
+      WHERE telegram_user_id = ?1
+      LIMIT 1
+    `,
+    args: [input.telegramUserId],
+  })
+  const row = result.rows[0]
+  return row
+    ? {
+        telegram_user_id: String(row.telegram_user_id ?? ""),
+        user_id: String(row.user_id ?? ""),
+      }
+    : null
 }
 
 async function markCommunityMember(input: {
@@ -1239,6 +1262,13 @@ describe("community Telegram routes", () => {
     expect(storedRequest.request_owner_telegram_user_id).toBe("777000")
     expect(storedRequest.request_private_chat_id).toBe("777000")
     expect(storedRequest.request_message_id).toBe(41)
+    expect(await getTelegramAccount({
+      client: ctx.client,
+      telegramUserId: "777000",
+    })).toEqual({
+      telegram_user_id: "777000",
+      user_id: owner.userId,
+    })
   })
 
   test("webhook start in a group does not arm setup intent", async () => {
@@ -1387,6 +1417,13 @@ describe("community Telegram routes", () => {
     expect(getMemberBody.user_id).toBe(987654)
     const successBody = await requests[3]!.json() as { text: string }
     expect(successBody.text).toContain("connected")
+    expect(await getTelegramAccount({
+      client: ctx.client,
+      telegramUserId: "777002",
+    })).toEqual({
+      telegram_user_id: "777002",
+      user_id: owner.userId,
+    })
 
     const getResponse = await app.request(
       `http://pirate.test/communities/${communityId}/telegram-chat`,
@@ -1403,6 +1440,22 @@ describe("community Telegram routes", () => {
     expect(body.linked_chat?.title).toBe("Telegram Webhook Shared Club")
     expect(body.linked_chat?.username).toBe("telegramwebhookshared")
     expect(body.linked_chat?.bot_admin_status).toBe("ready")
+
+    await ctx.client.execute({
+      sql: "DELETE FROM telegram_accounts WHERE telegram_user_id = ?1",
+      args: ["777002"],
+    })
+    expect(await resolveTelegramAccount({
+      env: ctx.env,
+      telegramUserId: "777002",
+    })).toEqual({ userId: owner.userId })
+    expect(await getTelegramAccount({
+      client: ctx.client,
+      telegramUserId: "777002",
+    })).toEqual({
+      telegram_user_id: "777002",
+      user_id: owner.userId,
+    })
   })
 
   test("webhook chat_shared with the wrong request id is acknowledged without linking", async () => {

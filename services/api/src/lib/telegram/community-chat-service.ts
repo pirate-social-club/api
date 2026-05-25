@@ -532,6 +532,34 @@ async function requireLiveCommunityForSetupIntent(
   }
 }
 
+async function upsertTelegramSetupOwnerAccount(input: {
+  tx: Transaction
+  telegramUserId: string
+  userId: string
+  now: string
+}): Promise<void> {
+  await input.tx.execute({
+    sql: `
+      DELETE FROM telegram_accounts
+      WHERE telegram_user_id = ?1
+         OR user_id = ?2
+    `,
+    args: [input.telegramUserId, input.userId],
+  })
+  await input.tx.execute({
+    sql: `
+      INSERT INTO telegram_accounts (
+        telegram_user_id, user_id, username, first_name, last_name, photo_url,
+        first_seen_at, last_seen_at, updated_at
+      ) VALUES (
+        ?1, ?2, NULL, NULL, NULL, NULL,
+        ?3, ?3, ?3
+      )
+    `,
+    args: [input.telegramUserId, input.userId, input.now],
+  })
+}
+
 async function completePendingTelegramSetupIntent(input: {
   tx: Transaction
   intent: TelegramSetupIntentRow
@@ -602,6 +630,15 @@ async function completePendingTelegramSetupIntent(input: {
       input.payload.telegramChatId,
     ],
   })
+
+  if (input.payload.telegramUserId) {
+    await upsertTelegramSetupOwnerAccount({
+      tx: input.tx,
+      telegramUserId: input.payload.telegramUserId,
+      userId: input.intent.owner_user_id,
+      now: input.now,
+    })
+  }
 
   const linkedChat = await getActiveLinkedChat(input.tx, input.intent.community_id)
   if (!linkedChat) {
@@ -804,6 +841,12 @@ export async function prepareTelegramSetupChatRequest(input: {
     await requireLiveCommunityForSetupIntent(tx, intent.community_id)
 
     const requestId = makeTelegramRequestId()
+    await upsertTelegramSetupOwnerAccount({
+      tx,
+      telegramUserId: input.telegramUserId,
+      userId: intent.owner_user_id,
+      now,
+    })
     await tx.execute({
       sql: `
         UPDATE telegram_setup_intents

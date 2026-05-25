@@ -6,6 +6,7 @@ import { badRequestError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { publicCommunityId } from "../public-ids"
 import { getControlPlaneClient } from "../runtime-deps"
+import type { Client } from "../sql-client"
 import { rowValue, stringOrNull } from "../sql-row"
 import { getTelegramLinkedChatBotContext } from "./community-chat-service"
 
@@ -62,6 +63,34 @@ function joinRequestDateFromSeconds(value: number | null): string {
   return nowIso()
 }
 
+async function upsertResolvedTelegramAccount(input: {
+  client: Client
+  telegramUserId: string
+  userId: string
+}): Promise<void> {
+  const now = nowIso()
+  await input.client.execute({
+    sql: `
+      DELETE FROM telegram_accounts
+      WHERE telegram_user_id = ?1
+         OR user_id = ?2
+    `,
+    args: [input.telegramUserId, input.userId],
+  })
+  await input.client.execute({
+    sql: `
+      INSERT INTO telegram_accounts (
+        telegram_user_id, user_id, username, first_name, last_name, photo_url,
+        first_seen_at, last_seen_at, updated_at
+      ) VALUES (
+        ?1, ?2, NULL, NULL, NULL, NULL,
+        ?3, ?3, ?3
+      )
+    `,
+    args: [input.telegramUserId, input.userId, now],
+  })
+}
+
 export async function resolveTelegramAccount(input: {
   env: Env
   telegramUserId: string
@@ -93,7 +122,35 @@ export async function resolveTelegramAccount(input: {
     args: [input.telegramUserId],
   })
   const linkedUserId = stringOrNull(rowValue(link.rows[0], "user_id"))
-  return linkedUserId ? { userId: linkedUserId } : null
+  if (linkedUserId) {
+    return { userId: linkedUserId }
+  }
+
+  const setupOwner = await client.execute({
+    sql: `
+      SELECT owner_user_id
+      FROM telegram_setup_intents
+      WHERE status = 'completed'
+        AND (
+          telegram_user_id = ?1
+          OR request_owner_telegram_user_id = ?1
+        )
+      ORDER BY COALESCE(completed_at, updated_at) DESC, telegram_setup_intent_id DESC
+      LIMIT 1
+    `,
+    args: [input.telegramUserId],
+  })
+  const setupOwnerUserId = stringOrNull(rowValue(setupOwner.rows[0], "owner_user_id"))
+  if (!setupOwnerUserId) {
+    return null
+  }
+
+  await upsertResolvedTelegramAccount({
+    client,
+    telegramUserId: input.telegramUserId,
+    userId: setupOwnerUserId,
+  })
+  return { userId: setupOwnerUserId }
 }
 
 async function insertJoinGrant(input: {
