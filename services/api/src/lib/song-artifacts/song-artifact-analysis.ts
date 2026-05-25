@@ -269,6 +269,24 @@ async function evaluateLyricsModeration(input: {
   env: Env
   lyrics: string
 }): Promise<LyricsModerationOutcome> {
+  if (!input.lyrics.trim()) {
+    return {
+      analysisState: "allow",
+      contentSafetyState: "safe",
+      ageGatePolicy: "none",
+      moderationStatus: "completed",
+      moderationError: null,
+      moderationResult: {
+        provider: "openrouter",
+        skipped: true,
+        skip_reason: "empty_lyrics",
+        analysis_state: "allow",
+        content_safety_state: "safe",
+        age_gate_policy: "none",
+      },
+    }
+  }
+
   const providerResult = await classifyLyricsAgeGate(input)
   const providerFailed = Boolean(providerResult && typeof providerResult.error === "string")
   const providerOutcome = providerFailed
@@ -581,6 +599,14 @@ async function evaluateAlignment(input: {
   lyrics: string
   primaryAudioUpload: SongArtifactUpload
 }): Promise<AlignmentOutcome> {
+  if (!input.lyrics.trim()) {
+    return {
+      alignmentStatus: "completed",
+      alignmentError: null,
+      timedLyrics: null,
+    }
+  }
+
   const providerResult = await alignLyricsWithElevenLabs(input)
   if (providerResult && typeof providerResult.error === "string") {
     return {

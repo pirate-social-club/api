@@ -114,9 +114,6 @@ export async function createSongArtifactBundle(input: {
   communityRepository: SongArtifactCommunityRepository
 }): Promise<SongArtifactBundle> {
   const lyrics = input.body.lyrics?.trim() || ""
-  if (!lyrics) {
-    throw badRequestError("lyrics is required")
-  }
   const title = input.body.title?.trim() || ""
   if (!title) {
     throw badRequestError("title is required")
