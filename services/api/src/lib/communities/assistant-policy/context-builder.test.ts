@@ -386,4 +386,35 @@ describe("assistant context builder", () => {
     expect(context).toContain("needle")
     expect(context).not.toContain(longBody)
   })
+
+  test("buildCommunityContext tells Telegram answers not to mirror thread formatting", async () => {
+    const db = await createTestClient()
+    await insertPost({
+      body: "This is a recent community update that should be summarized naturally.",
+      createdAt: isoDaysAgo(1),
+      postId: "pst_telegram_format",
+      title: "Telegram formatting update",
+    })
+
+    const context = await buildCommunityContext({
+      audience: "public_group",
+      client: db,
+      communityId: "com_test",
+      message: "What is the most recent post?",
+      policy: policy({
+        contextSources: {
+          referenceLinks: false,
+          rules: false,
+          threadBodies: true,
+          topComments: false,
+        },
+      }),
+      userId: null,
+    })
+
+    expect(context).toContain("Telegram group response rules:")
+    expect(context).toContain("Format answers as plain conversational text.")
+    expect(context).toContain("Do not use markdown headings")
+    expect(context).toContain("natural sentences")
+  })
 })

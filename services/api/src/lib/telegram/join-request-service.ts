@@ -33,6 +33,16 @@ type ResolvedTelegramAccount = {
   userId: string
 }
 
+type TelegramJoinMissingCapability =
+  | "telegram_account"
+  | "unique_human"
+  | "age_over_18"
+  | "minimum_age"
+  | "nationality"
+  | "gender"
+  | "wallet_score"
+  | "altcha_pow"
+
 function webOrigin(env: Env): string {
   const origin = env.PIRATE_WEB_PUBLIC_ORIGIN?.trim()
   if (!origin) {
@@ -204,15 +214,53 @@ function promptText(input: {
   env: Env
   communityId: string
   reason: "unmapped" | "verification_required" | "not_joinable"
+  missingCapabilities?: TelegramJoinMissingCapability[]
 }): string {
   const url = communityJoinUrl(input.env, input.communityId)
   if (input.reason === "unmapped") {
     return `Open Pirate to verify and join this community:\n${url}\n\nIf this link expires, message this bot with /start and try joining the group again.`
   }
   if (input.reason === "verification_required") {
-    return `This community requires verification before Telegram access can be approved:\n${url}\n\nAfter verification, try joining the group again.`
+    return `This community requires ${verificationPromptRequirement(input.missingCapabilities ?? [])} before Telegram access can be approved:\n${url}\n\nAfter verification, try joining the group again.`
   }
   return `Pirate cannot approve this Telegram join request yet:\n${url}`
+}
+
+function verificationPromptRequirement(missingCapabilities: TelegramJoinMissingCapability[]): string {
+  const labels = missingCapabilities
+    .map((capability) => {
+      switch (capability) {
+        case "nationality":
+          return "verified nationality"
+        case "minimum_age":
+        case "age_over_18":
+          return "age verification"
+        case "gender":
+          return "verified gender"
+        case "wallet_score":
+          return "a Passport wallet score"
+        case "unique_human":
+          return "human verification"
+        case "altcha_pow":
+          return "proof-of-work"
+        case "telegram_account":
+          return "a linked Telegram account"
+        default:
+          return null
+      }
+    })
+    .filter((label, index, all): label is string => typeof label === "string" && all.indexOf(label) === index)
+
+  if (labels.length === 0) {
+    return "verification"
+  }
+  if (labels.length === 1) {
+    return labels[0]!
+  }
+  if (labels.length === 2) {
+    return `${labels[0]} and ${labels[1]}`
+  }
+  return `${labels.slice(0, -1).join(", ")}, and ${labels[labels.length - 1]}`
 }
 
 async function promptDecision(input: {
@@ -221,6 +269,7 @@ async function promptDecision(input: {
   telegramUserChatId: string
   communityId: string
   reason: "unmapped" | "verification_required" | "not_joinable"
+  missingCapabilities?: TelegramJoinMissingCapability[]
 }): Promise<TelegramJoinRequestDecision> {
   try {
     return {
@@ -231,6 +280,7 @@ async function promptDecision(input: {
         env: input.env,
         communityId: input.communityId,
         reason: input.reason,
+        missingCapabilities: input.missingCapabilities,
       }),
     }
   } catch (error) {
@@ -302,6 +352,9 @@ export async function evaluateTelegramChatJoinRequest(input: {
   const missingCapabilitiesJson = eligibility.missing_capabilities
     ? JSON.stringify(eligibility.missing_capabilities)
     : null
+  const missingCapabilities = Array.isArray(eligibility.missing_capabilities)
+    ? eligibility.missing_capabilities as TelegramJoinMissingCapability[]
+    : []
   const grantId = await insertJoinGrant({
     env: input.env,
     communityId: linkedChat.communityId,
@@ -343,6 +396,7 @@ export async function evaluateTelegramChatJoinRequest(input: {
     telegramUserChatId: input.telegramUserChatId,
     communityId: linkedChat.communityId,
     reason: eligibility.status === "verification_required" ? "verification_required" : "not_joinable",
+    missingCapabilities,
   })
 }
 

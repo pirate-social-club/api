@@ -360,7 +360,14 @@ export async function buildCommunityContext(input: {
   if (input.audience === "public_group") {
     sections.push({
       key: "safety",
-      content: "Telegram group response rules: answer only with community-safe information. Do not reveal private membership, wallet, verification, purchase, or moderation state. If private state is needed, tell the user to open Pirate.",
+      content: [
+        "Telegram group response rules: answer only with community-safe information.",
+        "Do not reveal private membership, wallet, verification, purchase, or moderation state.",
+        "If private state is needed, tell the user to open Pirate.",
+        "Format answers as plain conversational text.",
+        "Do not use markdown headings, bullet lists with Title or Body labels, or the thread listing format from the context.",
+        "When describing posts, use natural sentences instead of copying the context structure.",
+      ].join(" "),
     })
   }
 

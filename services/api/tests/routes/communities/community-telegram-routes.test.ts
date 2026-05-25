@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { createClient, type Client } from "@libsql/client"
 import { app } from "../../../src/index"
 import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
+import { buildDefaultVerificationCapabilities } from "../../../src/lib/verification/verification-capabilities"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import {
   exchangeJwt,
@@ -342,6 +343,73 @@ async function seedAssistantContextRows(input: {
   } finally {
     client.close()
   }
+}
+
+async function setCommunityGatePolicy(input: {
+  communityDbRoot: string
+  communityId: string
+  expression: Record<string, unknown>
+}): Promise<void> {
+  const client = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+  const now = new Date().toISOString()
+  try {
+    await client.batch([
+      {
+        sql: `
+          UPDATE communities
+          SET membership_mode = 'gated',
+              updated_at = ?2
+          WHERE community_id = ?1
+        `,
+        args: [input.communityId, now],
+      },
+      {
+        sql: `
+          INSERT INTO community_gate_policies (
+            community_id, scope, version, expression_json, created_at, updated_at
+          ) VALUES (
+            ?1, 'membership', 1, ?2, ?3, ?3
+          )
+          ON CONFLICT(community_id, scope) DO UPDATE SET
+            expression_json = excluded.expression_json,
+            updated_at = excluded.updated_at
+        `,
+        args: [
+          input.communityId,
+          JSON.stringify({ version: 1, expression: input.expression }),
+          now,
+        ],
+      },
+    ], "write")
+  } finally {
+    client.close()
+  }
+}
+
+async function setUserNationality(input: {
+  client: Client
+  userId: string
+  countryCode: string
+}): Promise<void> {
+  const capabilities = buildDefaultVerificationCapabilities()
+  capabilities.nationality = {
+    ...capabilities.nationality,
+    state: "verified",
+    provider: "self",
+    value: input.countryCode,
+    verified_at: new Date().toISOString(),
+  }
+  await input.client.execute({
+    sql: `
+      UPDATE users
+      SET verification_capabilities_json = ?2,
+          updated_at = ?3
+      WHERE user_id = ?1
+    `,
+    args: [input.userId, JSON.stringify(capabilities), new Date().toISOString()],
+  })
 }
 
 async function getTelegramAssistantEvent(input: {
@@ -2254,6 +2322,86 @@ describe("community Telegram routes", () => {
     expect(grant?.user_id).toBe(joiner.userId)
     expect(grant?.prompted_at).toBeTruthy()
     expect(grant?.approved_at).toBeNull()
+  })
+
+  test("webhook chat_join_request names missing nationality gates", async () => {
+    const ctx = await createRouteTestContext({
+      TELEGRAM_BOT_USERNAME: "PirateTestBot",
+      TELEGRAM_BOT_TOKEN: "987654:bot-token",
+      TELEGRAM_BOT_INTEGRATION_SECRET: "test-telegram-secret",
+      TELEGRAM_WEBHOOK_SECRET: "webhook-secret",
+      PIRATE_WEB_PUBLIC_ORIGIN: "https://staging.pirate.test",
+    })
+    cleanup = ctx.cleanup
+    const owner = await exchangeJwt(ctx.env, "telegram-join-nationality-owner")
+    const joiner = await exchangeJwt(ctx.env, "telegram-join-nationality-user")
+    const communityId = await createCommunity({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      displayName: "Telegram Join Nationality Club",
+    })
+    await setCommunityGatePolicy({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      expression: {
+        op: "gate",
+        gate: {
+          type: "nationality",
+          provider: "self",
+          allowed: ["PS"],
+        },
+      },
+    })
+    await setUserNationality({
+      client: ctx.client,
+      userId: joiner.userId,
+      countryCode: "US",
+    })
+    await linkTelegramAccount({
+      client: ctx.client,
+      telegramUserId: "779108",
+      userId: joiner.userId,
+    })
+    await linkTelegramChatForCommunity({
+      env: ctx.env,
+      communityId,
+      accessToken: owner.accessToken,
+      telegramChatId: "-1009108",
+      title: "Telegram Join Nationality Club",
+    })
+    const requests = installTelegramApiMock(() => ({
+      ok: true,
+      result: { message_id: 808 },
+    }))
+
+    const response = await telegramWebhook({
+      env: ctx.env,
+      secret: "webhook-secret",
+      body: {
+        update_id: 39,
+        chat_join_request: {
+          chat: { id: -1009108, type: "supergroup", title: "Telegram Join Nationality Club" },
+          from: { id: 779108, username: "joiner" },
+          user_chat_id: 889108,
+          date: 1_779_000_008,
+        },
+      },
+    })
+
+    expect(response.status).toBe(200)
+    expect(requests).toHaveLength(1)
+    const sendBody = await requests[0]!.json() as { chat_id: string; text: string }
+    expect(sendBody.chat_id).toBe("889108")
+    expect(sendBody.text).toContain("verified nationality")
+    expect(sendBody.text).toContain(`https://staging.pirate.test/tg/c/com_${communityId}`)
+    const grant = await getTelegramJoinGrant({
+      client: ctx.client,
+      telegramChatId: "-1009108",
+      telegramUserId: "779108",
+    })
+    expect(grant?.status).toBe("pending")
+    expect(grant?.user_id).toBe(joiner.userId)
+    expect(JSON.parse(grant?.missing_capabilities_json ?? "[]")).toContain("nationality")
   })
 
   test("webhook chat_join_request marks prompt failures without retrying the webhook", async () => {
