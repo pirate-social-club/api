@@ -26,8 +26,8 @@ import type { Env } from "../../../env"
 
 export type CommunityAssistantCredentialProvider = "openrouter" | "elevenlabs"
 
-const OPENROUTER_PROVIDER: CommunityAssistantCredentialProvider = "openrouter"
-const ELEVENLABS_PROVIDER: CommunityAssistantCredentialProvider = "elevenlabs"
+const OPENROUTER_PROVIDER = "openrouter" as const
+const ELEVENLABS_PROVIDER = "elevenlabs" as const
 
 export type CommunityAssistantCredentialResponse =
   | {
