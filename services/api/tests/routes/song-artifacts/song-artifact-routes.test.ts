@@ -461,13 +461,14 @@ describe("song artifact routes", () => {
           song_artifact_upload: uploadIntentBody.id,
         },
         title: "ALTCHA Song",
-        lyrics: "Instrumental line",
+        lyrics: "",
       },
       ctx.env,
       member.accessToken,
     )
     expect(bundleCreate.status).toBe(201)
-    const bundleCreateBody = await json(bundleCreate) as { id: string }
+    const bundleCreateBody = await json(bundleCreate) as { id: string; lyrics: string }
+    expect(bundleCreateBody.lyrics).toBe("")
 
     const postProof = await solveAltchaProofFromRoute({
       env: ctx.env,

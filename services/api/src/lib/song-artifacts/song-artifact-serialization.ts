@@ -123,7 +123,7 @@ export function toSongArtifactBundleRow(row: unknown): SongArtifactBundleRow {
     status: requiredString(row, "status") as SongArtifactBundle["status"],
     title: stringOrNull(rowValue(row, "title")),
     primary_audio_json: requiredString(row, "primary_audio_json"),
-    lyrics_text: requiredString(row, "lyrics_text"),
+    lyrics_text: stringOrNull(rowValue(row, "lyrics_text")) ?? "",
     lyrics_sha256: requiredString(row, "lyrics_sha256"),
     genius_annotations_url: stringOrNull(rowValue(row, "genius_annotations_url")),
     cover_art_json: stringOrNull(rowValue(row, "cover_art_json")),
