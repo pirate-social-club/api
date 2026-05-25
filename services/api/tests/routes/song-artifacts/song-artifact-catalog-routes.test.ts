@@ -497,6 +497,8 @@ describe("song artifact catalog routes", () => {
         title: "Matched song derivative",
         song_mode: "remix",
         rights_basis: "derivative",
+        license_preset: "commercial-remix",
+        commercial_rev_share_pct: 10,
         upstream_asset_refs: ["acr:custom-file:acr_match_1"],
         song_artifact_bundle: bundleBody.id,
       },
