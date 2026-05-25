@@ -2266,9 +2266,24 @@ describe("community Telegram routes", () => {
 
     expect(response.status).toBe(200)
     expect(mock.openRouterCalls).toHaveLength(0)
+    const repeatResponse = await telegramCommunityBotWebhook({
+      env: ctx.env,
+      webhookId: bot.webhookId,
+      secret: bot.webhookSecret,
+      body: {
+        update_id: 520,
+        message: {
+          message_id: 2030,
+          text: "hello again",
+          from: { id: 777202 },
+          chat: { id: 887202, type: "private" },
+        },
+      },
+    })
+    expect(repeatResponse.status).toBe(200)
     const sendMessageRequests = mock.telegramRequests.filter((request) => request.url.endsWith("/sendMessage"))
-    expect(sendMessageRequests).toHaveLength(1)
-    const sendBody = await sendMessageRequests[0]!.json() as { text: string; reply_markup: unknown }
+    expect(sendMessageRequests).toHaveLength(2)
+    const sendBody = await sendMessageRequests[1]!.json() as { text: string; reply_markup: unknown }
     expect(sendBody.text).toContain("link this Telegram account")
     const webAppUrl = telegramWebAppUrlFromReplyMarkup(sendBody.reply_markup)
     expect(webAppUrl).toContain(`https://staging.pirate.test/tg/exchange?community=com_${communityId}`)
@@ -2303,6 +2318,19 @@ describe("community Telegram routes", () => {
     })).toEqual({
       telegram_user_id: "777202",
       user_id: exchangeBody.user.id.replace(/^usr_/, ""),
+    })
+    const intentStatuses = await ctx.client.execute({
+      sql: `
+        SELECT status, COUNT(*) AS count
+        FROM telegram_onboarding_intents
+        WHERE telegram_user_id = ?1
+        GROUP BY status
+      `,
+      args: ["777202"],
+    })
+    expect(Object.fromEntries(intentStatuses.rows.map((row) => [String(row.status), Number(row.count)]))).toEqual({
+      canceled: 1,
+      completed: 1,
     })
   })
 

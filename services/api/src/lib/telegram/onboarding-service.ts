@@ -160,6 +160,54 @@ export function telegramOnboardingWebAppReplyMarkup(url: string, label = "Open P
   }
 }
 
+async function expirePendingOnboardingIntents(client: Pick<Client, "execute">, now: string): Promise<void> {
+  await client.execute({
+    sql: `
+      UPDATE telegram_onboarding_intents
+      SET status = 'expired',
+          updated_at = ?1
+      WHERE status = 'pending'
+        AND expires_at <= ?1
+    `,
+    args: [now],
+  })
+}
+
+async function cancelSupersededOnboardingIntents(input: {
+  client: Pick<Client, "execute">
+  communityId: string
+  telegramCommunityBotId: string
+  telegramUserId: string | null
+  privateChatId: string | null
+  joinGrantId: string | null
+  source: TelegramOnboardingSource
+  now: string
+}): Promise<void> {
+  await input.client.execute({
+    sql: `
+      UPDATE telegram_onboarding_intents
+      SET status = 'canceled',
+          updated_at = ?7
+      WHERE community_id = ?1
+        AND telegram_community_bot_id = ?2
+        AND source = ?3
+        AND status = 'pending'
+        AND COALESCE(telegram_user_id, '') = COALESCE(?4, '')
+        AND COALESCE(telegram_private_chat_id, '') = COALESCE(?5, '')
+        AND COALESCE(join_grant_id, '') = COALESCE(?6, '')
+    `,
+    args: [
+      input.communityId,
+      input.telegramCommunityBotId,
+      input.source,
+      input.telegramUserId,
+      input.privateChatId,
+      input.joinGrantId,
+      input.now,
+    ],
+  })
+}
+
 export async function createTelegramOnboardingIntent(input: {
   env: Env
   communityId: string
@@ -174,31 +222,52 @@ export async function createTelegramOnboardingIntent(input: {
   const now = nowIso()
   const expiresAt = new Date(Date.now() + TELEGRAM_ONBOARDING_TTL_MS).toISOString()
   const intentId = makeId("toi")
-  await getControlPlaneClient(input.env).execute({
-    sql: `
-      INSERT INTO telegram_onboarding_intents (
-        telegram_onboarding_intent_id, community_id, telegram_community_bot_id,
-        onboarding_token_hash, telegram_user_id, telegram_private_chat_id, join_grant_id,
-        source, status, expires_at, completed_at, created_at, updated_at
-      ) VALUES (
-        ?1, ?2, ?3,
-        ?4, ?5, ?6, ?7,
-        ?8, 'pending', ?9, NULL, ?10, ?10
-      )
-    `,
-    args: [
-      intentId,
-      input.communityId,
-      input.telegramCommunityBotId,
-      tokenHash,
-      input.telegramUserId,
-      input.privateChatId ?? null,
-      input.joinGrantId ?? null,
-      input.source,
-      expiresAt,
+  const client = getControlPlaneClient(input.env)
+  const tx = await client.transaction("write")
+  try {
+    await expirePendingOnboardingIntents(tx, now)
+    await cancelSupersededOnboardingIntents({
+      client: tx,
+      communityId: input.communityId,
+      telegramCommunityBotId: input.telegramCommunityBotId,
+      telegramUserId: input.telegramUserId,
+      privateChatId: input.privateChatId ?? null,
+      joinGrantId: input.joinGrantId ?? null,
+      source: input.source,
       now,
-    ],
-  })
+    })
+    await tx.execute({
+      sql: `
+        INSERT INTO telegram_onboarding_intents (
+          telegram_onboarding_intent_id, community_id, telegram_community_bot_id,
+          onboarding_token_hash, telegram_user_id, telegram_private_chat_id, join_grant_id,
+          source, status, expires_at, completed_at, created_at, updated_at
+        ) VALUES (
+          ?1, ?2, ?3,
+          ?4, ?5, ?6, ?7,
+          ?8, 'pending', ?9, NULL, ?10, ?10
+        )
+      `,
+      args: [
+        intentId,
+        input.communityId,
+        input.telegramCommunityBotId,
+        tokenHash,
+        input.telegramUserId,
+        input.privateChatId ?? null,
+        input.joinGrantId ?? null,
+        input.source,
+        expiresAt,
+        now,
+      ],
+    })
+    await tx.commit()
+  } catch (error) {
+    await tx.rollback().catch(() => undefined)
+    throw error
+  } finally {
+    tx.close()
+  }
 
   return serializeIntentResource({
     env: input.env,
@@ -306,34 +375,43 @@ async function upsertTelegramAccount(input: {
   userId: string
 }): Promise<void> {
   const now = nowIso()
-  await input.client.execute({
-    sql: `
-      DELETE FROM telegram_accounts
-      WHERE telegram_user_id = ?1
-         OR user_id = ?2
-    `,
-    args: [input.telegramUser.id, input.userId],
-  })
-  await input.client.execute({
-    sql: `
-      INSERT INTO telegram_accounts (
-        telegram_user_id, user_id, username, first_name, last_name, photo_url,
-        first_seen_at, last_seen_at, updated_at
-      ) VALUES (
-        ?1, ?2, ?3, ?4, ?5, ?6,
-        ?7, ?7, ?7
-      )
-    `,
-    args: [
-      input.telegramUser.id,
-      input.userId,
-      input.telegramUser.username,
-      input.telegramUser.first_name,
-      input.telegramUser.last_name,
-      input.telegramUser.photo_url,
-      now,
-    ],
-  })
+  const tx = await input.client.transaction("write")
+  try {
+    await tx.execute({
+      sql: `
+        DELETE FROM telegram_accounts
+        WHERE telegram_user_id = ?1
+           OR user_id = ?2
+      `,
+      args: [input.telegramUser.id, input.userId],
+    })
+    await tx.execute({
+      sql: `
+        INSERT INTO telegram_accounts (
+          telegram_user_id, user_id, username, first_name, last_name, photo_url,
+          first_seen_at, last_seen_at, updated_at
+        ) VALUES (
+          ?1, ?2, ?3, ?4, ?5, ?6,
+          ?7, ?7, ?7
+        )
+      `,
+      args: [
+        input.telegramUser.id,
+        input.userId,
+        input.telegramUser.username,
+        input.telegramUser.first_name,
+        input.telegramUser.last_name,
+        input.telegramUser.photo_url,
+        now,
+      ],
+    })
+    await tx.commit()
+  } catch (error) {
+    await tx.rollback().catch(() => undefined)
+    throw error
+  } finally {
+    tx.close()
+  }
 }
 
 async function readJoinGrant(input: {
