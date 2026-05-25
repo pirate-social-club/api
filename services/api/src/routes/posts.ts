@@ -8,6 +8,7 @@ import { castPostVote, getPost } from "../lib/posts/post-service"
 import { serializeLocalizedPostResponse } from "../serializers/post"
 import { decodePublicPostId } from "../lib/public-ids"
 import { writeAuditEventForEnv } from "../lib/audit"
+import { ALTCHA_HEADER, readAltchaProof } from "../lib/verification/altcha-provider"
 
 const posts = new Hono<AuthenticatedEnv>()
 
@@ -36,13 +37,21 @@ posts.post("/:postId/vote", async (c) => {
     throw badRequestError("Vote value must be -1 or 1")
   }
 
-  const postId = decodePublicPostId(c.req.param("postId"))
+  const rawPostId = c.req.param("postId")
+  const postId = decodePublicPostId(rawPostId)
   const result = await castPostVote({
     env: c.env,
     userId: actor.userId,
     postId,
     value: body.value,
     bypassVoterAccessChecks: actor.authType === "admin",
+    altchaProof: readAltchaProof({
+      headerValue: c.req.header(ALTCHA_HEADER),
+      body,
+      scope: "vote",
+      action: `post:${rawPostId}:vote:${body.value}`,
+    }),
+    userRepository: getUserRepository(c.env),
     communityRepository,
   })
   await trackApiEvent(c.env, c.req, {

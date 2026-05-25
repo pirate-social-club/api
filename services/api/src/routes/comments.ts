@@ -128,13 +128,20 @@ comments.post("/:commentId/vote", async (c) => {
     throw badRequestError("Vote value must be -1 or 1")
   }
 
-  const commentId = decodePublicCommentId(c.req.param("commentId"))
+  const rawCommentId = c.req.param("commentId")
+  const commentId = decodePublicCommentId(rawCommentId)
   const result = await castCommentVote({
     env: c.env,
     userId: actor.userId,
     commentId,
     value: body.value,
     bypassVoterAccessChecks: actor.authType === "admin",
+    altchaProof: readAltchaProof({
+      headerValue: c.req.header(ALTCHA_HEADER),
+      body,
+      scope: "vote",
+      action: `comment:${rawCommentId}:vote:${body.value}`,
+    }),
     userRepository: getUserRepository(c.env),
     communityRepository,
   })

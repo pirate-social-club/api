@@ -4,10 +4,13 @@ import type {
   CommunityPostProjectionRepository,
   CommunityReadRepository,
 } from "../communities/db-community-repository"
+import { enforceCommunityActionGate } from "../communities/membership/eligibility-service"
 import { badRequestError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import type { Env } from "../../env"
+import type { UserRepository } from "../auth/repositories"
 import { publicPostId } from "../public-ids"
+import type { AltchaProofInput } from "../verification/altcha-provider"
 import { getPostById } from "./community-post-query-store"
 import { upsertPostVote } from "./community-post-vote-store"
 import { requireMemberAccess } from "./post-access"
@@ -27,6 +30,8 @@ export async function castPostVote(input: {
   postId: string
   value: -1 | 1
   bypassVoterAccessChecks?: boolean
+  altchaProof?: AltchaProofInput
+  userRepository: UserRepository
   communityRepository: PostVoteCommunityRepository
 }): Promise<{ post: string; value: -1 | 1 }> {
   const projection = await input.communityRepository.getCommunityPostProjectionByPostId(input.postId)
@@ -45,6 +50,17 @@ export async function castPostVote(input: {
     }
     if (post.status !== "published") {
       throw badRequestError("Cannot vote on a post that is not published")
+    }
+    if (!input.bypassVoterAccessChecks) {
+      await enforceCommunityActionGate({
+        env: input.env,
+        client: db.client,
+        userId: input.userId,
+        userRepository: input.userRepository,
+        communityId: projection.community_id,
+        altchaScope: "vote",
+        altchaProof: input.altchaProof,
+      })
     }
 
     const now = nowIso()

@@ -501,6 +501,7 @@ export async function castCommentVote(input: {
   commentId: string
   value: -1 | 1
   bypassVoterAccessChecks?: boolean
+  altchaProof?: AltchaProofInput
   userRepository: UserRepository
   communityRepository: CommentServiceCommunityRepository
 }): Promise<{ comment_id: string; value: -1 | 1 }> {
@@ -517,6 +518,17 @@ export async function castCommentVote(input: {
     const comment = await getCommentById(db.client, input.commentId)
     if (!comment || comment.status !== "published") {
       throw notFoundError("Comment not found")
+    }
+    if (!input.bypassVoterAccessChecks) {
+      await enforceCommunityActionGate({
+        env: input.env,
+        client: db.client,
+        userId: input.userId,
+        userRepository: input.userRepository,
+        communityId: projection.community_id,
+        altchaScope: "vote",
+        altchaProof: input.altchaProof,
+      })
     }
 
     const tx = await db.client.transaction("write")
