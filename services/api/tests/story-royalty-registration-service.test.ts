@@ -548,7 +548,6 @@ describe("story royalty registration service", () => {
         bundle: buildBundle({ id: "sab_registered", title: "Registered source song" }),
         licensePreset: "commercial-remix",
         commercialRevSharePct: 15,
-        requireStoryRoyaltyRegistration: true,
         userRepository: {
           async getUserById(requestedUserId) {
             return requestedUserId === userId ? buildUser(userId) : null
