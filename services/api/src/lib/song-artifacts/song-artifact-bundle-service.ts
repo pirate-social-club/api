@@ -1,9 +1,4 @@
-import type { UserRepository } from "../auth/repositories"
 import { openCommunityDb } from "../communities/community-db-factory"
-import {
-  ANY_COMMUNITY_ROLE,
-  hasCommunityRole,
-} from "../communities/membership/membership-state-store"
 import { enqueueCommunityJob } from "../communities/jobs/store"
 import { analysisBlocked, badRequestError, notFoundError } from "../errors"
 import { makeId, nowIso } from "../helpers"
@@ -26,7 +21,6 @@ import {
   requireActiveCommunity,
   requireMemberAccess,
   requireResolvedUpload,
-  requireVerifiedHuman,
 } from "./song-artifact-access"
 import type { Env } from "../../env"
 import type { CreateSongArtifactBundleRequest, SongArtifactBundle, SongArtifactBundleListResponse } from "../../types"
@@ -110,7 +104,6 @@ export async function createSongArtifactBundle(input: {
   userId: string
   communityId: string
   body: CreateSongArtifactBundleRequest
-  userRepository: UserRepository
   communityRepository: SongArtifactCommunityRepository
 }): Promise<SongArtifactBundle> {
   const lyrics = input.body.lyrics?.trim() || ""
@@ -145,17 +138,10 @@ export async function createSongArtifactBundle(input: {
     community_id: input.communityId,
   }, () => openCommunityDb(input.env, input.communityRepository, input.communityId))
   try {
-    const membership = await withSongBundleStep("require member access", {
+    await withSongBundleStep("require member access", {
       community_id: input.communityId,
       user_id: input.userId,
     }, () => requireMemberAccess(db.client, input.communityId, input.userId))
-    await withSongBundleStep("require verified human", {
-      bypass_for_community_owner: hasCommunityRole(membership, ANY_COMMUNITY_ROLE),
-      community_id: input.communityId,
-      user_id: input.userId,
-    }, () => requireVerifiedHuman(input.userRepository, input.userId, {
-      bypassForCommunityOwner: hasCommunityRole(membership, ANY_COMMUNITY_ROLE),
-    }))
     const client = getControlPlaneClient(input.env)
     const primaryAudioUpload = await withSongBundleStep("resolve primary audio upload", {
       community_id: input.communityId,

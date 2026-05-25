@@ -1,9 +1,4 @@
-import type { UserRepository } from "../auth/repositories"
 import { openCommunityDb } from "../communities/community-db-factory"
-import {
-  ANY_COMMUNITY_ROLE,
-  hasCommunityRole,
-} from "../communities/membership/membership-state-store"
 import { badRequestError, notFoundError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
@@ -26,7 +21,6 @@ import {
 import {
   requireActiveCommunity,
   requireMemberAccess,
-  requireVerifiedHuman,
 } from "./song-artifact-access"
 import type { Env } from "../../env"
 import type { CreateSongArtifactUploadRequest, SongArtifactUpload } from "../../types"
@@ -64,7 +58,6 @@ export async function createSongArtifactUpload(input: {
   userId: string
   communityId: string
   body: CreateSongArtifactUploadRequest
-  userRepository: UserRepository
   communityRepository: SongArtifactCommunityRepository
   origin: string
 }): Promise<SongArtifactUpload> {
@@ -73,10 +66,7 @@ export async function createSongArtifactUpload(input: {
 
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
-    const membership = await requireMemberAccess(db.client, input.communityId, input.userId)
-    await requireVerifiedHuman(input.userRepository, input.userId, {
-      bypassForCommunityOwner: hasCommunityRole(membership, ANY_COMMUNITY_ROLE),
-    })
+    await requireMemberAccess(db.client, input.communityId, input.userId)
 
     const client = getControlPlaneClient(input.env)
     const songArtifactUploadId = makeId("sau")
@@ -100,7 +90,6 @@ export async function uploadSongArtifactContent(input: {
   communityId: string
   songArtifactUploadId: string
   content: ArrayBuffer | Uint8Array
-  userRepository: UserRepository
   communityRepository: SongArtifactCommunityRepository
   origin: string
 }): Promise<SongArtifactUpload> {
@@ -108,10 +97,7 @@ export async function uploadSongArtifactContent(input: {
 
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
-    const membership = await requireMemberAccess(db.client, input.communityId, input.userId)
-    await requireVerifiedHuman(input.userRepository, input.userId, {
-      bypassForCommunityOwner: hasCommunityRole(membership, ANY_COMMUNITY_ROLE),
-    })
+    await requireMemberAccess(db.client, input.communityId, input.userId)
 
     const client = getControlPlaneClient(input.env)
     const upload = await requireSongArtifactUpload(client, input.communityId, input.songArtifactUploadId)

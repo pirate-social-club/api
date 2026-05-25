@@ -1,9 +1,8 @@
 import type { Client } from "../sql-client"
-import type { UserRepository } from "../auth/repositories"
 import type { CommunityReadRepository } from "../communities/db-community-repository"
 import { isCommunityLive } from "../communities/community-status"
 import { canAccessCommunity, getCommunityMembershipState } from "../communities/membership/membership-state-store"
-import { eligibilityFailed, badRequestError, notFoundError, verificationRequired } from "../errors"
+import { eligibilityFailed, badRequestError, notFoundError } from "../errors"
 import { requireSongArtifactUpload } from "./song-artifact-repository"
 import type { SongArtifactUpload } from "../../types"
 
@@ -19,23 +18,6 @@ export async function requireMemberAccess(
     throw notFoundError("Community not found")
   }
   return membership
-}
-
-export async function requireVerifiedHuman(
-  userRepository: UserRepository,
-  userId: string,
-  options: { bypassForCommunityOwner?: boolean } = {},
-): Promise<void> {
-  if (options.bypassForCommunityOwner) {
-    return
-  }
-  const user = await userRepository.getUserById(userId)
-  if (!user) {
-    throw notFoundError("User not found")
-  }
-  if (user.verification_capabilities.unique_human.state !== "verified") {
-    throw verificationRequired("unique_human verification is required")
-  }
 }
 
 export async function requireActiveCommunity(

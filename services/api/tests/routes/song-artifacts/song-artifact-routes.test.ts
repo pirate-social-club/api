@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { solveChallenge, type Challenge, type Payload } from "altcha-lib"
+import { deriveKey } from "altcha-lib/algorithms/pbkdf2"
 import { app } from "../../../src/index"
+import type { AltchaScope } from "../../../src/lib/verification/altcha-provider"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { getCommunityRepository } from "../../../src/lib/communities/db-community-repository"
 import { processCommunityJobsForCommunity } from "../../../src/lib/communities/jobs/runner"
@@ -48,6 +51,28 @@ function makeSilentWavBytes(durationSeconds = 2): Uint8Array {
   view.setUint32(40, dataSize, true)
 
   return new Uint8Array(buffer)
+}
+
+async function solveAltchaProofFromRoute(input: {
+  env: Awaited<ReturnType<typeof createRouteTestContext>>["env"]
+  accessToken: string
+  scope: AltchaScope
+  action: string
+}): Promise<string> {
+  const response = await app.request(
+    `http://pirate.test/verification/altcha/challenge?scope=${input.scope}&action=${encodeURIComponent(input.action)}`,
+    {
+      headers: { authorization: `Bearer ${input.accessToken}` },
+    },
+    input.env,
+  )
+  expect(response.status).toBe(200)
+  const challenge = await json(response) as Challenge
+  const solution = await solveChallenge({ challenge, deriveKey })
+  if (!solution) {
+    throw new Error("ALTCHA challenge did not solve")
+  }
+  return btoa(JSON.stringify({ challenge, solution } satisfies Payload))
 }
 
 beforeEach(() => {
@@ -269,6 +294,211 @@ describe("song artifact routes", () => {
       owner.accessToken,
     )
     expect(invalidBundleCreate.status).toBe(400)
+  })
+
+  test("allows an unverified member to publish a song with ALTCHA when the gate policy is OR", async () => {
+    const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
+
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      if (request.url === "https://openrouter.test/api/v1/chat/completions") {
+        return Response.json({
+          choices: [{
+            message: {
+              content: JSON.stringify({
+                age_gate_rating: "safe",
+                reason: "instrumental",
+              }),
+            },
+          }],
+        })
+      }
+
+      if (request.url === "https://acrcloud.test/v1/identify") {
+        return Response.json({
+          status: { code: 0, msg: "Success" },
+          metadata: { music: [] },
+        })
+      }
+
+      if (request.url === "https://console-v2.acrcloud.test/api/buckets/30358/files") {
+        return Response.json({
+          data: {
+            id: 53,
+            acr_id: "acr_altcha_member_upload",
+            state: 0,
+          },
+        })
+      }
+
+      if (!request.url.startsWith("https://s3.filebase.test/")) {
+        return await originalFetch(request)
+      }
+
+      if (request.method === "PUT") {
+        storedObjects.set(request.url, {
+          body: new Uint8Array(await request.arrayBuffer()),
+          contentType: request.headers.get("content-type") || "application/octet-stream",
+        })
+        return new Response(null, { status: 200 })
+      }
+
+      if (request.method === "GET") {
+        const stored = storedObjects.get(request.url)
+        if (!stored) {
+          return new Response("missing", { status: 404 })
+        }
+        return new Response(stored.body.slice().buffer, {
+          status: 200,
+          headers: {
+            "content-type": stored.contentType,
+            "content-length": String(stored.body.byteLength),
+          },
+        })
+      }
+
+      return new Response("unexpected method", { status: 500 })
+    }
+
+    const ctx = await createRouteTestContext({
+      ALTCHA_HMAC_SECRET: "test-altcha-secret",
+      ALTCHA_HMAC_KEY_SECRET: "test-altcha-key-secret",
+      ALTCHA_POW_COST: "1",
+      ALTCHA_POW_COUNTER_MIN: "1",
+      ALTCHA_POW_COUNTER_MAX: "2",
+      FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
+      FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
+      FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
+      FILEBASE_MEDIA_BUCKET: "pirate-media",
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      OPENROUTER_MODEL: "google/gemini-3.1-flash-lite-preview",
+      ACRCLOUD_ACCESS_KEY: "test-acrcloud-access",
+      ACRCLOUD_ACCESS_SECRET: "test-acrcloud-secret",
+      ACRCLOUD_HOST: "acrcloud.test",
+      ACRCLOUD_PERSONAL_ACCESS_TOKEN: "test-acrcloud-pat",
+      ACRCLOUD_BUCKET_ID: "30358",
+      ACRCLOUD_CONSOLE_BASE_URL: "https://console-v2.acrcloud.test/api",
+      SONG_PREVIEW_FFMPEG_BIN: "__test_passthrough__",
+    })
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "song-artifact-altcha-or-creator")
+    await completeUniqueHumanVerification(ctx.env, creator.accessToken)
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "ALTCHA OR Songs",
+      membership_mode: "gated",
+      gate_policy: {
+        version: 1,
+        expression: {
+          op: "or",
+          children: [
+            { op: "gate", gate: { type: "unique_human", provider: "very" } },
+            { op: "gate", gate: { type: "altcha_pow" } },
+          ],
+        },
+      },
+    }, ctx.env, creator.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: { id: string }
+    }
+    const communityId = communityCreateBody.community.id
+
+    const member = await exchangeJwt(ctx.env, "song-artifact-altcha-or-member")
+    const joinProof = await solveAltchaProofFromRoute({
+      env: ctx.env,
+      accessToken: member.accessToken,
+      scope: "community_join",
+      action: `community:${communityId}`,
+    })
+    const joined = await app.request(
+      `http://pirate.test/communities/${communityId}/join`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${member.accessToken}`,
+          "x-pirate-altcha": joinProof,
+        },
+      },
+      ctx.env,
+    )
+    expect(joined.status).toBe(200)
+
+    const primaryBytes = makeSilentWavBytes()
+    const uploadIntent = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
+      {
+        artifact_kind: "primary_audio",
+        mime_type: "audio/wav",
+        filename: "altcha-song.wav",
+        size_bytes: primaryBytes.byteLength,
+      },
+      ctx.env,
+      member.accessToken,
+    )
+    expect(uploadIntent.status).toBe(201)
+    const uploadIntentBody = await json(uploadIntent) as { id: string }
+
+    const uploadContent = await app.request(
+      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${uploadIntentBody.id}/content`,
+      {
+        method: "PUT",
+        headers: {
+          authorization: `Bearer ${member.accessToken}`,
+          "content-type": "application/octet-stream",
+        },
+        body: Buffer.from(primaryBytes),
+      },
+      ctx.env,
+    )
+    expect(uploadContent.status).toBe(200)
+
+    const bundleCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifacts`,
+      {
+        primary_audio: {
+          song_artifact_upload: uploadIntentBody.id,
+        },
+        title: "ALTCHA Song",
+        lyrics: "Instrumental line",
+      },
+      ctx.env,
+      member.accessToken,
+    )
+    expect(bundleCreate.status).toBe(201)
+    const bundleCreateBody = await json(bundleCreate) as { id: string }
+
+    const postProof = await solveAltchaProofFromRoute({
+      env: ctx.env,
+      accessToken: member.accessToken,
+      scope: "post_create",
+      action: `community:${communityId}`,
+    })
+    const postCreate = await app.request(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${member.accessToken}`,
+          "content-type": "application/json",
+          "x-pirate-altcha": postProof,
+        },
+        body: JSON.stringify({
+          idempotency_key: "altcha-or-song-post",
+          post_type: "song",
+          identity_mode: "public",
+          title: "ALTCHA Song",
+          access_mode: "public",
+          song_mode: "original",
+          rights_basis: "original",
+          license_preset: "non-commercial",
+          song_artifact_bundle: bundleCreateBody.id,
+        }),
+      },
+      ctx.env,
+    )
+    expect(postCreate.status).toBe(201)
   })
 
   testWithTimeout("generates a server-side preview crop and uses it for locked song publication", async () => {
