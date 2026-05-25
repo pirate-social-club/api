@@ -6,11 +6,16 @@ import { getControlPlaneClient } from "../../runtime-deps"
 import { numberOrNull, rowValue, stringOrNull } from "../../sql-row"
 import { resolveCommunityDbWrapKey, resolveCommunityDbWrapKeyVersion } from "../create/repository"
 import type {
+  AssistantElevenLabsKeyStatus,
   AssistantOpenRouterKeyStatus,
+  AssistantProviderKeyStatus,
 } from "./validation"
 import {
+  decryptElevenLabsKey,
   decryptOpenRouterKey,
+  encryptElevenLabsKey,
   encryptOpenRouterKey,
+  normalizeElevenLabsKey,
   normalizeOpenRouterKey,
 } from "./credential-crypto"
 import {
@@ -19,18 +24,29 @@ import {
 } from "./access"
 import type { Env } from "../../../env"
 
-const OPENROUTER_PROVIDER = "openrouter"
+export type CommunityAssistantCredentialProvider = "openrouter" | "elevenlabs"
 
-export type CommunityAssistantCredentialResponse = {
-  object: "community_assistant_credential"
-  provider: "openrouter"
-  openRouterKeyStatus: AssistantOpenRouterKeyStatus
-}
+const OPENROUTER_PROVIDER: CommunityAssistantCredentialProvider = "openrouter"
+const ELEVENLABS_PROVIDER: CommunityAssistantCredentialProvider = "elevenlabs"
+
+export type CommunityAssistantCredentialResponse =
+  | {
+    object: "community_assistant_credential"
+    provider: "openrouter"
+    keyStatus: AssistantOpenRouterKeyStatus
+    openRouterKeyStatus: AssistantOpenRouterKeyStatus
+  }
+  | {
+    object: "community_assistant_credential"
+    provider: "elevenlabs"
+    keyStatus: AssistantElevenLabsKeyStatus
+    elevenLabsKeyStatus: AssistantElevenLabsKeyStatus
+  }
 
 type CommunityAssistantCredentialRow = {
   community_assistant_credential_id: string
   community_id: string
-  provider: "openrouter"
+  provider: CommunityAssistantCredentialProvider
   encrypted_secret: string
   key_last4: string
   encryption_key_version: number
@@ -47,7 +63,10 @@ function serializeCredentialRow(row: unknown): CommunityAssistantCredentialRow |
   }
   const provider = stringOrNull(rowValue(row, "provider"))
   const status = stringOrNull(rowValue(row, "status"))
-  if (provider !== OPENROUTER_PROVIDER || !["active", "revoked", "invalid"].includes(String(status))) {
+  if (
+    (provider !== OPENROUTER_PROVIDER && provider !== ELEVENLABS_PROVIDER)
+    || !["active", "revoked", "invalid"].includes(String(status))
+  ) {
     return null
   }
 
@@ -66,9 +85,79 @@ function serializeCredentialRow(row: unknown): CommunityAssistantCredentialRow |
   }
 }
 
-async function readOpenRouterCredential(input: {
+function normalizeProvider(value: unknown): CommunityAssistantCredentialProvider {
+  if (value == null || value === "") {
+    return OPENROUTER_PROVIDER
+  }
+  if (value === OPENROUTER_PROVIDER || value === ELEVENLABS_PROVIDER) {
+    return value
+  }
+  throw badRequestError("assistant credential provider must be openrouter or elevenlabs")
+}
+
+function normalizeCredentialKey(provider: CommunityAssistantCredentialProvider, apiKey: unknown): string {
+  if (typeof apiKey !== "string") {
+    throw badRequestError(provider === OPENROUTER_PROVIDER
+      ? "OpenRouter API key is required"
+      : "ElevenLabs API key is required")
+  }
+  return provider === OPENROUTER_PROVIDER
+    ? normalizeOpenRouterKey(apiKey)
+    : normalizeElevenLabsKey(apiKey)
+}
+
+function encryptCredentialKey(input: {
+  plaintextKey: string
+  provider: CommunityAssistantCredentialProvider
+  wrapKey: string
+}): string {
+  return input.provider === OPENROUTER_PROVIDER
+    ? encryptOpenRouterKey({ plaintextKey: input.plaintextKey, wrapKey: input.wrapKey })
+    : encryptElevenLabsKey({ plaintextKey: input.plaintextKey, wrapKey: input.wrapKey })
+}
+
+function decryptCredentialKey(input: {
+  encryptedSecret: string
+  encryptionKeyVersion: number
+  provider: CommunityAssistantCredentialProvider
+  wrapKey: string
+}): string {
+  return input.provider === OPENROUTER_PROVIDER
+    ? decryptOpenRouterKey({
+      encryptedSecret: input.encryptedSecret,
+      encryptionKeyVersion: input.encryptionKeyVersion,
+      wrapKey: input.wrapKey,
+    })
+    : decryptElevenLabsKey({
+      encryptedSecret: input.encryptedSecret,
+      encryptionKeyVersion: input.encryptionKeyVersion,
+      wrapKey: input.wrapKey,
+    })
+}
+
+function credentialResponse(
+  provider: CommunityAssistantCredentialProvider,
+  keyStatus: AssistantProviderKeyStatus,
+): CommunityAssistantCredentialResponse {
+  return provider === OPENROUTER_PROVIDER
+    ? {
+      object: "community_assistant_credential",
+      provider,
+      keyStatus,
+      openRouterKeyStatus: keyStatus,
+    }
+    : {
+      object: "community_assistant_credential",
+      provider,
+      keyStatus,
+      elevenLabsKeyStatus: keyStatus,
+    }
+}
+
+async function readCredential(input: {
   env: Env
   communityId: string
+  provider: CommunityAssistantCredentialProvider
   status: "active" | "invalid"
 }): Promise<CommunityAssistantCredentialRow | null> {
   const client = getControlPlaneClient(input.env)
@@ -83,18 +172,20 @@ async function readOpenRouterCredential(input: {
       ORDER BY created_at DESC, community_assistant_credential_id DESC
       LIMIT 1
     `,
-    args: [input.communityId, OPENROUTER_PROVIDER, input.status],
+    args: [input.communityId, input.provider, input.status],
   })
   return serializeCredentialRow(row)
 }
 
-export async function getCommunityOpenRouterKeyStatus(input: {
+export async function getCommunityAssistantCredentialStatus(input: {
   env: Env
   communityId: string
-}): Promise<AssistantOpenRouterKeyStatus> {
-  const active = await readOpenRouterCredential({
+  provider: CommunityAssistantCredentialProvider
+}): Promise<AssistantProviderKeyStatus> {
+  const active = await readCredential({
     env: input.env,
     communityId: input.communityId,
+    provider: input.provider,
     status: "active",
   })
   if (active) {
@@ -105,20 +196,43 @@ export async function getCommunityOpenRouterKeyStatus(input: {
     }
   }
 
-  const invalid = await readOpenRouterCredential({
+  const invalid = await readCredential({
     env: input.env,
     communityId: input.communityId,
+    provider: input.provider,
     status: "invalid",
   })
   if (invalid) {
     return {
       kind: "invalid",
       last4: invalid.key_last4,
-      message: "OpenRouter rejected this key.",
+      message: input.provider === OPENROUTER_PROVIDER
+        ? "OpenRouter rejected this key."
+        : "ElevenLabs rejected this key.",
     }
   }
 
   return { kind: "missing" }
+}
+
+export async function getCommunityOpenRouterKeyStatus(input: {
+  env: Env
+  communityId: string
+}): Promise<AssistantOpenRouterKeyStatus> {
+  return getCommunityAssistantCredentialStatus({
+    ...input,
+    provider: OPENROUTER_PROVIDER,
+  })
+}
+
+export async function getCommunityElevenLabsKeyStatus(input: {
+  env: Env
+  communityId: string
+}): Promise<AssistantElevenLabsKeyStatus> {
+  return getCommunityAssistantCredentialStatus({
+    ...input,
+    provider: ELEVENLABS_PROVIDER,
+  })
 }
 
 export async function saveCommunityAssistantCredential(input: {
@@ -127,6 +241,7 @@ export async function saveCommunityAssistantCredential(input: {
   communityId: string
   actor: ActorContext | AdminActorContext
   apiKey: unknown
+  provider?: unknown
 }): Promise<CommunityAssistantCredentialResponse> {
   await requireAssistantOwnerOrAdminAccess({
     env: input.env,
@@ -134,14 +249,17 @@ export async function saveCommunityAssistantCredential(input: {
     communityId: input.communityId,
     actor: input.actor,
   })
-  if (typeof input.apiKey !== "string") {
-    throw badRequestError("OpenRouter API key is required")
-  }
-  const plaintextKey = normalizeOpenRouterKey(input.apiKey)
+  const provider = normalizeProvider(input.provider)
+  const plaintextKey = normalizeCredentialKey(provider, input.apiKey)
+  console.info("[community-assistant-credential] save:start", {
+    communityId: input.communityId,
+    provider,
+    actorUserId: input.actor.userId,
+  })
 
   const wrapKey = resolveCommunityDbWrapKey(input.env)
   const encryptionKeyVersion = resolveCommunityDbWrapKeyVersion(input.env)
-  const encryptedSecret = encryptOpenRouterKey({ plaintextKey, wrapKey })
+  const encryptedSecret = encryptCredentialKey({ plaintextKey, provider, wrapKey })
   const keyLast4 = plaintextKey.slice(-4)
   const now = nowIso()
   const client = getControlPlaneClient(input.env)
@@ -157,7 +275,7 @@ export async function saveCommunityAssistantCredential(input: {
           AND status = 'active'
         LIMIT 1
       `,
-      args: [input.communityId, OPENROUTER_PROVIDER],
+      args: [input.communityId, provider],
     }))
 
     if (existing) {
@@ -170,7 +288,7 @@ export async function saveCommunityAssistantCredential(input: {
             AND provider = ?2
             AND status = 'active'
         `,
-        args: [input.communityId, OPENROUTER_PROVIDER, now],
+        args: [input.communityId, provider, now],
       })
     }
 
@@ -187,7 +305,7 @@ export async function saveCommunityAssistantCredential(input: {
       args: [
         makeId("cac"),
         input.communityId,
-        OPENROUTER_PROVIDER,
+        provider,
         encryptedSecret,
         keyLast4,
         encryptionKeyVersion,
@@ -207,34 +325,62 @@ export async function saveCommunityAssistantCredential(input: {
     tx.close()
   }
 
-  return {
-    object: "community_assistant_credential",
-    provider: OPENROUTER_PROVIDER,
-    openRouterKeyStatus: {
-      kind: "connected",
-      last4: keyLast4,
-      connectedAt: now,
-    },
+  console.info("[community-assistant-credential] save:success", {
+    communityId: input.communityId,
+    provider,
+    actorUserId: input.actor.userId,
+    last4: keyLast4,
+  })
+
+  return credentialResponse(provider, {
+    kind: "connected",
+    last4: keyLast4,
+    connectedAt: now,
+  })
+}
+
+export async function decryptActiveCommunityAssistantCredential(input: {
+  env: Env
+  communityId: string
+  provider: CommunityAssistantCredentialProvider
+}): Promise<string> {
+  const active = await readCredential({
+    env: input.env,
+    communityId: input.communityId,
+    provider: input.provider,
+    status: "active",
+  })
+  if (!active) {
+    throw badRequestError(input.provider === OPENROUTER_PROVIDER
+      ? "OpenRouter API key is required before chatting with the community assistant"
+      : "ElevenLabs API key is required before using assistant voice")
   }
+
+  return decryptCredentialKey({
+    encryptedSecret: active.encrypted_secret,
+    encryptionKeyVersion: active.encryption_key_version,
+    provider: input.provider,
+    wrapKey: resolveCommunityDbWrapKey(input.env),
+  })
 }
 
 export async function decryptActiveCommunityOpenRouterKey(input: {
   env: Env
   communityId: string
 }): Promise<string> {
-  const active = await readOpenRouterCredential({
-    env: input.env,
-    communityId: input.communityId,
-    status: "active",
+  return decryptActiveCommunityAssistantCredential({
+    ...input,
+    provider: OPENROUTER_PROVIDER,
   })
-  if (!active) {
-    throw badRequestError("OpenRouter API key is required before chatting with the community assistant")
-  }
+}
 
-  return decryptOpenRouterKey({
-    encryptedSecret: active.encrypted_secret,
-    encryptionKeyVersion: active.encryption_key_version,
-    wrapKey: resolveCommunityDbWrapKey(input.env),
+export async function decryptActiveCommunityElevenLabsKey(input: {
+  env: Env
+  communityId: string
+}): Promise<string> {
+  return decryptActiveCommunityAssistantCredential({
+    ...input,
+    provider: ELEVENLABS_PROVIDER,
   })
 }
 
@@ -243,6 +389,7 @@ export async function revokeCommunityAssistantCredential(input: {
   communityRepository: CommunityAssistantRepository
   communityId: string
   actor: ActorContext | AdminActorContext
+  provider?: unknown
 }): Promise<CommunityAssistantCredentialResponse> {
   await requireAssistantOwnerOrAdminAccess({
     env: input.env,
@@ -251,6 +398,12 @@ export async function revokeCommunityAssistantCredential(input: {
     actor: input.actor,
   })
 
+  const provider = normalizeProvider(input.provider)
+  console.info("[community-assistant-credential] revoke:start", {
+    communityId: input.communityId,
+    provider,
+    actorUserId: input.actor.userId,
+  })
   const client = getControlPlaneClient(input.env)
   await client.execute({
     sql: `
@@ -261,12 +414,14 @@ export async function revokeCommunityAssistantCredential(input: {
         AND provider = ?2
         AND status = 'active'
     `,
-    args: [input.communityId, OPENROUTER_PROVIDER, nowIso()],
+    args: [input.communityId, provider, nowIso()],
   })
 
-  return {
-    object: "community_assistant_credential",
-    provider: OPENROUTER_PROVIDER,
-    openRouterKeyStatus: { kind: "missing" },
-  }
+  console.info("[community-assistant-credential] revoke:success", {
+    communityId: input.communityId,
+    provider,
+    actorUserId: input.actor.userId,
+  })
+
+  return credentialResponse(provider, { kind: "missing" })
 }

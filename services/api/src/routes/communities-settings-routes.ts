@@ -87,24 +87,53 @@ export function registerCommunitySettingsRoutes(communities: Hono<AuthenticatedE
 
   communities.post("/:communityId/assistant-credential", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
-    const body = await requireJsonBody<{ api_key?: unknown }>(c, "Invalid assistant credential payload")
+    const body = await requireJsonBody<{ api_key?: unknown; provider?: unknown }>(c, "Invalid assistant credential payload")
     const result = await saveCommunityAssistantCredential({
       env: c.env,
       communityRepository,
       communityId,
       actor,
       apiKey: body.api_key,
+      provider: body.provider,
     })
     return c.json(result, 200)
   })
 
   communities.post("/:communityId/assistant-credential/revoke", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const body = await c.req.json().catch(() => ({})) as { provider?: unknown } | null
     const result = await revokeCommunityAssistantCredential({
       env: c.env,
       communityRepository,
       communityId,
       actor,
+      provider: body?.provider,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.post("/:communityId/assistant-credential/:provider", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const body = await requireJsonBody<{ api_key?: unknown; provider?: unknown }>(c, "Invalid assistant credential payload")
+    const result = await saveCommunityAssistantCredential({
+      env: c.env,
+      communityRepository,
+      communityId,
+      actor,
+      apiKey: body.api_key,
+      provider: c.req.param("provider"),
+    })
+    return c.json(result, 200)
+  })
+
+  communities.post("/:communityId/assistant-credential/:provider/revoke", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await revokeCommunityAssistantCredential({
+      env: c.env,
+      communityRepository,
+      communityId,
+      actor,
+      provider: c.req.param("provider"),
     })
     return c.json(result, 200)
   })

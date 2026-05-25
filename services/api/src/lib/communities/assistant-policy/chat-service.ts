@@ -40,6 +40,21 @@ export type CommunityAssistantChatBody = {
   chat_id?: unknown
 }
 
+export type CommunityAssistantVoiceMessageSource = {
+  kind: "voice"
+  provider: "elevenlabs"
+  model: string
+  confidence: number | null
+  language_code: string | null
+  language_probability: number | null
+  duration_seconds: number | null
+  audio_mime_type: string | null
+  audio_size_bytes: number | null
+  audio_retention: "not_stored"
+}
+
+export type CommunityAssistantMessageSource = CommunityAssistantVoiceMessageSource
+
 export type CommunityAssistantChat = {
   id: string
   object: "community_assistant_chat"
@@ -64,6 +79,7 @@ export type CommunityAssistantMessage = {
   prompt_tokens: number | null
   completion_tokens: number | null
   total_tokens: number | null
+  source: CommunityAssistantMessageSource | null
   created_at: string
 }
 
@@ -107,6 +123,7 @@ type StoredMessageRow = {
   prompt_tokens: number | null
   completion_tokens: number | null
   total_tokens: number | null
+  metadata_json: string | null
   created_at: string
 }
 
@@ -196,7 +213,57 @@ function serializeMessageRow(row: StoredMessageRow): CommunityAssistantMessage {
     prompt_tokens: row.prompt_tokens,
     completion_tokens: row.completion_tokens,
     total_tokens: row.total_tokens,
+    source: sourceFromMetadataJson(row.metadata_json),
     created_at: row.created_at,
+  }
+}
+
+function objectOrNull(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function metadataFromJson(value: string | null): Record<string, unknown> | null {
+  if (!value) {
+    return null
+  }
+  try {
+    return objectOrNull(JSON.parse(value))
+  } catch {
+    return null
+  }
+}
+
+function nullableNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null
+}
+
+function nullableString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null
+}
+
+function sourceFromMetadataJson(value: string | null): CommunityAssistantMessageSource | null {
+  const metadata = metadataFromJson(value)
+  const source = objectOrNull(metadata?.source)
+  if (!source || source.kind !== "voice" || source.provider !== "elevenlabs") {
+    return null
+  }
+  const model = nullableString(source.model)
+  if (!model || source.audio_retention !== "not_stored") {
+    return null
+  }
+  return {
+    kind: "voice",
+    provider: "elevenlabs",
+    model,
+    confidence: nullableNumber(source.confidence),
+    language_code: nullableString(source.language_code),
+    language_probability: nullableNumber(source.language_probability),
+    duration_seconds: nullableNumber(source.duration_seconds),
+    audio_mime_type: nullableString(source.audio_mime_type),
+    audio_size_bytes: nullableNumber(source.audio_size_bytes),
+    audio_retention: "not_stored",
   }
 }
 
@@ -239,6 +306,7 @@ function messageRow(row: unknown): StoredMessageRow | null {
     prompt_tokens: numberOrNull(rowValue(row, "prompt_tokens")),
     completion_tokens: numberOrNull(rowValue(row, "completion_tokens")),
     total_tokens: numberOrNull(rowValue(row, "total_tokens")),
+    metadata_json: stringOrNull(rowValue(row, "metadata_json")),
     created_at: String(rowValue(row, "created_at") || ""),
   }
 }
@@ -333,7 +401,7 @@ async function listRecentMessages(input: {
   const result = await input.client.execute({
     sql: `
       SELECT message_id, chat_id, community_id, user_id, role, content, model_id, provider_message_id,
-             prompt_tokens, completion_tokens, total_tokens, created_at
+             prompt_tokens, completion_tokens, total_tokens, metadata_json, created_at
       FROM community_assistant_messages
       WHERE chat_id = ?1
         AND role IN ('user', 'assistant')
@@ -372,6 +440,7 @@ async function insertMessage(input: {
     prompt_tokens: input.promptTokens ?? null,
     completion_tokens: input.completionTokens ?? null,
     total_tokens: input.totalTokens ?? null,
+    metadata_json: input.metadata ? JSON.stringify(input.metadata) : null,
     created_at: input.now,
   }
   await input.client.execute({
@@ -396,7 +465,7 @@ async function insertMessage(input: {
       row.prompt_tokens,
       row.completion_tokens,
       row.total_tokens,
-      input.metadata ? JSON.stringify(input.metadata) : null,
+      row.metadata_json,
       row.created_at,
     ],
   })
@@ -646,6 +715,7 @@ async function sendCommunityAssistantUserMessage(input: {
   accessMode: "already_checked" | "member_required"
   delivery: "web" | "telegram_dm"
   reuseLatestActiveChat?: boolean
+  userMessageMetadata?: Record<string, unknown> | null
 }): Promise<CommunityAssistantChatResponse> {
   const policy = await getCommunityAssistantRuntimePolicyForCommunity({
     env: input.env,
@@ -730,6 +800,7 @@ async function sendCommunityAssistantUserMessage(input: {
         userId: input.userId,
         role: "user",
         content: input.message,
+        metadata: input.userMessageMetadata ?? null,
         now,
       })
       : {
@@ -744,6 +815,7 @@ async function sendCommunityAssistantUserMessage(input: {
         prompt_tokens: null,
         completion_tokens: null,
         total_tokens: null,
+        metadata_json: input.userMessageMetadata ? JSON.stringify(input.userMessageMetadata) : null,
         created_at: now,
       }
 
@@ -813,6 +885,14 @@ async function sendCommunityAssistantUserMessage(input: {
         prompt_tokens: completion.promptTokens,
         completion_tokens: completion.completionTokens,
         total_tokens: completion.totalTokens,
+        metadata_json: JSON.stringify({
+          provider: "openrouter",
+          action_mode: policy.actionMode,
+          tool_rounds: completion.toolRounds,
+          tool_call_count: completion.toolCallCount,
+          tools_used: completion.toolsUsed,
+          delivery: input.delivery,
+        }),
         created_at: assistantNow,
       }
 
@@ -836,6 +916,7 @@ export async function sendCommunityAssistantMessage(input: {
   communityId: string
   actor: ActorContext | AdminActorContext
   body: CommunityAssistantChatBody | null
+  userMessageMetadata?: Record<string, unknown> | null
 }): Promise<CommunityAssistantChatResponse> {
   await requireAssistantCommunityAccess(input)
   const message = normalizeChatMessage(input.body?.message)
@@ -849,6 +930,7 @@ export async function sendCommunityAssistantMessage(input: {
     chatId: requestedChatId,
     accessMode: "already_checked",
     delivery: "web",
+    userMessageMetadata: input.userMessageMetadata ?? null,
   })
 }
 
@@ -1004,7 +1086,7 @@ export async function getCommunityAssistantChat(input: {
     const result = await db.client.execute({
       sql: `
         SELECT message_id, chat_id, community_id, user_id, role, content, model_id, provider_message_id,
-               prompt_tokens, completion_tokens, total_tokens, created_at
+               prompt_tokens, completion_tokens, total_tokens, metadata_json, created_at
         FROM community_assistant_messages
         WHERE chat_id = ?1
         ORDER BY created_at ASC, message_id ASC

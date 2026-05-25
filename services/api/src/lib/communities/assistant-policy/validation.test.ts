@@ -23,6 +23,11 @@ function validPolicy(
       kind: "connected",
       last4: "9abc",
     },
+    elevenLabsKeyStatus: {
+      connectedAt: "2026-05-22T00:00:00.000Z",
+      kind: "connected",
+      last4: "labs",
+    },
     contextMode: "live_sql",
     actionMode: "answer_only",
     requireModeratorApprovalForWrites: true,
@@ -31,7 +36,10 @@ function validPolicy(
     maxLookbackDays: 30,
     perUserDailyMessageCap: 40,
     voiceMode: "off",
-    sttProvider: "mistral",
+    sttProvider: "elevenlabs",
+    sttModel: "scribe_v2",
+    ttsProvider: "elevenlabs",
+    ttsVoice: "voice_123",
     ...overrides,
   }
 }
@@ -251,6 +259,7 @@ describe("validateCommunityAssistantPolicySettings", () => {
   })
 
   test("accepts all STT providers", () => {
+    expectValid(validPolicy({ sttProvider: "elevenlabs" }))
     expectValid(validPolicy({ sttProvider: "mistral" }))
     expectValid(validPolicy({ sttProvider: "openai" }))
     expectValid(validPolicy({ sttProvider: "none" }))
@@ -258,5 +267,55 @@ describe("validateCommunityAssistantPolicySettings", () => {
 
   test("rejects invalid STT provider", () => {
     expectInvalid({ ...validPolicy(), sttProvider: "deepgram" }, "sttProvider must be one of")
+  })
+
+  test("accepts all TTS providers", () => {
+    expectValid(validPolicy({ ttsProvider: "elevenlabs" }))
+    expectValid(validPolicy({ ttsProvider: "none" }))
+  })
+
+  test("rejects invalid TTS provider", () => {
+    expectInvalid({ ...validPolicy(), ttsProvider: "google" }, "ttsProvider must be one of")
+  })
+
+  test("accepts sttModel up to 128 characters", () => {
+    expectValid(validPolicy({ sttModel: "a".repeat(128) }))
+  })
+
+  test("rejects sttModel over 128 characters", () => {
+    expectInvalid(validPolicy({ sttModel: "a".repeat(129) }), "sttModel must be at most 128 characters")
+  })
+
+  test("accepts ttsVoice up to 128 characters", () => {
+    expectValid(validPolicy({ ttsVoice: "a".repeat(128) }))
+  })
+
+  test("rejects ttsVoice over 128 characters", () => {
+    expectInvalid(validPolicy({ ttsVoice: "a".repeat(129) }), "ttsVoice must be at most 128 characters")
+  })
+
+  test("requires STT when voice input is enabled", () => {
+    expectInvalid(validPolicy({
+      voiceMode: "transcription_only",
+      sttProvider: "none",
+    }), "enabled voice requires a speech-to-text provider")
+  })
+
+  test("requires an ElevenLabs key when voice is enabled", () => {
+    expectInvalid(validPolicy({
+      elevenLabsKeyStatus: { kind: "missing" },
+      voiceMode: "transcription_only",
+    }), "enabled voice requires a connected ElevenLabs key")
+  })
+
+  test("requires TTS provider and voice for voice replies", () => {
+    expectInvalid(validPolicy({
+      voiceMode: "voice_replies",
+      ttsProvider: "none",
+    }), "voice replies require a text-to-speech provider")
+    expectInvalid(validPolicy({
+      voiceMode: "voice_replies",
+      ttsVoice: " ",
+    }), "voice replies require a text-to-speech voice")
   })
 })

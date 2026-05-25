@@ -13,14 +13,17 @@ import {
 } from "./access"
 import {
   decryptActiveCommunityOpenRouterKey,
+  getCommunityElevenLabsKeyStatus,
   getCommunityOpenRouterKeyStatus,
 } from "./credential-service"
 import {
   validateCommunityAssistantPolicySettings,
   type AssistantActionMode,
   type AssistantContextMode,
+  type AssistantElevenLabsKeyStatus,
   type AssistantOpenRouterKeyStatus,
   type AssistantSttProvider,
+  type AssistantTtsProvider,
   type AssistantVoiceMode,
   type CommunityAssistantPolicySettingsInput,
 } from "./validation"
@@ -68,6 +71,7 @@ export type CommunityAssistantPolicy = CommunityAssistantPolicySettingsInput & {
   retentionMode: AssistantRetentionMode
   saveChatsToCommunityDb: boolean
   sttModel: string
+  ttsProvider: AssistantTtsProvider
   ttsVoice: string
   includeInSovereignExport: boolean
   createdAt: string
@@ -83,6 +87,13 @@ export type CommunityAssistantPublicPolicy = {
   avatarRef: string | null
   defaultPrompt: string
   starterPrompts: string[]
+  voiceMode: AssistantVoiceMode
+  sttProvider: AssistantSttProvider
+  ttsProvider: AssistantTtsProvider
+  ttsVoiceConfigured: boolean
+  elevenLabsKeyConfigured: boolean
+  voiceTranscriptionConfigured: boolean
+  voiceRepliesConfigured: boolean
 }
 
 export type CommunityAssistantPolicyResponse = CommunityAssistantPolicy | CommunityAssistantPublicPolicy
@@ -320,6 +331,7 @@ function sortModelOptions(options: AssistantModelOption[]): AssistantModelOption
 
 function defaultCommunityAssistantPolicy(input: {
   community: CommunityRow
+  elevenLabsKeyStatus: AssistantElevenLabsKeyStatus
   openRouterKeyStatus: AssistantOpenRouterKeyStatus
   now: string
 }): CommunityAssistantPolicy {
@@ -344,6 +356,7 @@ function defaultCommunityAssistantPolicy(input: {
       "Where should I post this question?",
     ],
     openRouterKeyStatus: input.openRouterKeyStatus,
+    elevenLabsKeyStatus: input.elevenLabsKeyStatus,
     selectedModelId: "mistralai/mistral-small-3.2-24b-instruct",
     availableModels: [...DEFAULT_OPENROUTER_MODELS],
     contextMode: "live_sql",
@@ -358,8 +371,9 @@ function defaultCommunityAssistantPolicy(input: {
     requireModeratorApprovalForWrites: true,
     perUserDailyMessageCap: 40,
     voiceMode: "off",
-    sttProvider: "mistral",
-    sttModel: "voxtral-mini-latest",
+    sttProvider: "elevenlabs",
+    sttModel: "scribe_v2",
+    ttsProvider: "elevenlabs",
     ttsVoice: "",
     includeInSovereignExport: true,
     createdAt: input.community.created_at || input.now,
@@ -370,6 +384,7 @@ function defaultCommunityAssistantPolicy(input: {
 function policyFromRow(input: {
   row: Record<string, unknown>
   community: CommunityRow
+  elevenLabsKeyStatus: AssistantElevenLabsKeyStatus
   openRouterKeyStatus: AssistantOpenRouterKeyStatus
   now: string
 }): CommunityAssistantPolicy {
@@ -402,6 +417,7 @@ function policyFromRow(input: {
     voiceMode: (stringOrNull(input.row.voice_mode) ?? base.voiceMode) as AssistantVoiceMode,
     sttProvider: (stringOrNull(input.row.stt_provider) ?? base.sttProvider) as AssistantSttProvider,
     sttModel: stringOrNull(input.row.stt_model) ?? base.sttModel,
+    ttsProvider: (stringOrNull(input.row.tts_provider) ?? base.ttsProvider) as AssistantTtsProvider,
     ttsVoice: stringOrNull(input.row.tts_voice) ?? base.ttsVoice,
     includeInSovereignExport: sqliteBool(input.row.include_in_sovereign_export, base.includeInSovereignExport),
     createdAt: stringOrNull(input.row.created_at) ?? base.createdAt,
@@ -419,6 +435,7 @@ function validationInput(policy: CommunityAssistantPolicy): CommunityAssistantPo
     starterPrompts: policy.starterPrompts,
     selectedModelId: policy.selectedModelId,
     openRouterKeyStatus: policy.openRouterKeyStatus,
+    elevenLabsKeyStatus: policy.elevenLabsKeyStatus,
     contextMode: policy.contextMode,
     actionMode: policy.actionMode,
     requireModeratorApprovalForWrites: policy.requireModeratorApprovalForWrites,
@@ -428,6 +445,9 @@ function validationInput(policy: CommunityAssistantPolicy): CommunityAssistantPo
     perUserDailyMessageCap: policy.perUserDailyMessageCap,
     voiceMode: policy.voiceMode,
     sttProvider: policy.sttProvider,
+    sttModel: policy.sttModel,
+    ttsProvider: policy.ttsProvider,
+    ttsVoice: policy.ttsVoice,
   }
 }
 
@@ -451,6 +471,10 @@ async function readStoredPolicy(input: {
     env: input.env,
     communityId: input.community.community_id,
   })
+  const elevenLabsKeyStatus = await getCommunityElevenLabsKeyStatus({
+    env: input.env,
+    communityId: input.community.community_id,
+  })
   const db = await openCommunityDb(input.env, input.communityRepository, input.community.community_id)
   try {
     const result = await db.client.execute({
@@ -459,8 +483,8 @@ async function readStoredPolicy(input: {
                default_prompt, starter_prompts, selected_model_id, context_mode, context_sources,
                max_context_threads, max_lookback_days, memory_enabled, retention_mode, retention_days,
                save_chats_to_community_db, action_mode, require_moderator_approval_for_writes,
-               per_user_daily_message_cap, voice_mode, stt_provider, stt_model,
-               tts_voice, include_in_sovereign_export, policy_origin, created_at, updated_at
+                per_user_daily_message_cap, voice_mode, stt_provider, stt_model,
+                tts_provider, tts_voice, include_in_sovereign_export, policy_origin, created_at, updated_at
         FROM community_assistant_policy
         WHERE community_id = ?1
         LIMIT 1
@@ -471,6 +495,7 @@ async function readStoredPolicy(input: {
     if (!row) {
       return defaultCommunityAssistantPolicy({
         community: input.community,
+        elevenLabsKeyStatus,
         openRouterKeyStatus,
         now: nowIso(),
       })
@@ -478,6 +503,7 @@ async function readStoredPolicy(input: {
     return policyFromRow({
       row,
       community: input.community,
+      elevenLabsKeyStatus,
       openRouterKeyStatus,
       now: nowIso(),
     })
@@ -487,6 +513,8 @@ async function readStoredPolicy(input: {
 }
 
 function publicPolicy(policy: CommunityAssistantPolicy): CommunityAssistantPublicPolicy {
+  const elevenLabsKeyConfigured = policy.elevenLabsKeyStatus.kind === "connected"
+  const ttsVoiceConfigured = Boolean(policy.ttsVoice.trim())
   return {
     object: "community_assistant_policy_public",
     community: policy.community,
@@ -496,18 +524,32 @@ function publicPolicy(policy: CommunityAssistantPolicy): CommunityAssistantPubli
     avatarRef: policy.avatarRef,
     defaultPrompt: policy.defaultPrompt,
     starterPrompts: policy.starterPrompts,
+    voiceMode: policy.voiceMode,
+    sttProvider: policy.sttProvider,
+    ttsProvider: policy.ttsProvider,
+    ttsVoiceConfigured,
+    elevenLabsKeyConfigured,
+    voiceTranscriptionConfigured: policy.voiceMode !== "off"
+      && policy.sttProvider === "elevenlabs"
+      && elevenLabsKeyConfigured,
+    voiceRepliesConfigured: policy.voiceMode === "voice_replies"
+      && policy.ttsProvider === "elevenlabs"
+      && ttsVoiceConfigured
+      && elevenLabsKeyConfigured,
   }
 }
 
 function applyPolicyPatch(input: {
   existing: CommunityAssistantPolicy
   body: CommunityAssistantPolicyPatch
+  elevenLabsKeyStatus: AssistantElevenLabsKeyStatus
   openRouterKeyStatus: AssistantOpenRouterKeyStatus
   now: string
 }): CommunityAssistantPolicy {
   const candidate: CommunityAssistantPolicy = {
     ...input.existing,
     policyOrigin: "explicit",
+    elevenLabsKeyStatus: input.elevenLabsKeyStatus,
     openRouterKeyStatus: input.openRouterKeyStatus,
     updatedAt: input.now,
   }
@@ -541,6 +583,7 @@ function applyPolicyPatch(input: {
   if ("voiceMode" in body) candidate.voiceMode = body.voiceMode as AssistantVoiceMode
   if ("sttProvider" in body) candidate.sttProvider = body.sttProvider as AssistantSttProvider
   if ("sttModel" in body) candidate.sttModel = normalizeString(body.sttModel, "sttModel", 128)
+  if ("ttsProvider" in body) candidate.ttsProvider = body.ttsProvider as AssistantTtsProvider
   if ("ttsVoice" in body) candidate.ttsVoice = normalizeString(body.ttsVoice, "ttsVoice", 128)
   if ("includeInSovereignExport" in body) {
     candidate.includeInSovereignExport = normalizeBoolean(body.includeInSovereignExport, "includeInSovereignExport")
@@ -576,14 +619,14 @@ async function persistPolicy(input: {
             max_context_threads, max_lookback_days, memory_enabled, retention_mode, retention_days,
             save_chats_to_community_db, action_mode, require_moderator_approval_for_writes,
             per_user_daily_message_cap, voice_mode, stt_provider, stt_model,
-            tts_voice, include_in_sovereign_export, policy_origin, created_at, updated_at
+            tts_provider, tts_voice, include_in_sovereign_export, policy_origin, created_at, updated_at
           ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7,
             ?8, ?9, ?10, ?11, ?12,
             ?13, ?14, ?15, ?16, ?17,
             ?18, ?19, ?20,
             ?21, ?22, ?23, ?24,
-            ?25, ?26, 'explicit', ?27, ?27
+            ?25, ?26, ?27, 'explicit', ?28, ?28
           )
           ON CONFLICT(community_id) DO UPDATE SET
             enabled = excluded.enabled,
@@ -608,6 +651,7 @@ async function persistPolicy(input: {
             voice_mode = excluded.voice_mode,
             stt_provider = excluded.stt_provider,
             stt_model = excluded.stt_model,
+            tts_provider = excluded.tts_provider,
             tts_voice = excluded.tts_voice,
             include_in_sovereign_export = excluded.include_in_sovereign_export,
             policy_origin = 'explicit',
@@ -638,6 +682,7 @@ async function persistPolicy(input: {
           input.nextPolicy.voiceMode,
           input.nextPolicy.sttProvider,
           input.nextPolicy.sttModel,
+          input.nextPolicy.ttsProvider,
           input.nextPolicy.ttsVoice,
           input.nextPolicy.includeInSovereignExport ? 1 : 0,
           input.now,
@@ -691,8 +736,23 @@ export async function getCommunityAssistantPolicy(input: {
     communityRepository: input.communityRepository,
     community: access.community,
   })
+  const manageable = canManageAssistantPolicy({ actor: input.actor, access })
+  console.info("[community-assistant-policy] get", {
+    communityId: access.community.community_id,
+    requestedCommunityId: input.communityId,
+    actorUserId: input.actor.userId,
+    manageable,
+    enabled: policy.enabled,
+    openRouterKeyStatus: policy.openRouterKeyStatus.kind,
+    elevenLabsKeyStatus: policy.elevenLabsKeyStatus.kind,
+    selectedModelId: policy.selectedModelId,
+    voiceMode: policy.voiceMode,
+    sttProvider: policy.sttProvider,
+    ttsProvider: policy.ttsProvider,
+    ttsVoiceConfigured: Boolean(policy.ttsVoice.trim()),
+  })
 
-  if (canManageAssistantPolicy({ actor: input.actor, access })) {
+  if (manageable) {
     return policy
   }
   if (!policy.enabled) {
@@ -721,12 +781,30 @@ export async function updateCommunityAssistantPolicy(input: {
     env: input.env,
     communityId: access.community.community_id,
   })
+  const elevenLabsKeyStatus = await getCommunityElevenLabsKeyStatus({
+    env: input.env,
+    communityId: access.community.community_id,
+  })
   const now = nowIso()
   const nextPolicy = applyPolicyPatch({
     existing: previousPolicy,
     body: input.body,
+    elevenLabsKeyStatus,
     openRouterKeyStatus,
     now,
+  })
+  console.info("[community-assistant-policy] update", {
+    communityId: access.community.community_id,
+    requestedCommunityId: input.communityId,
+    actorUserId: input.actor.userId,
+    enabled: nextPolicy.enabled,
+    openRouterKeyStatus: nextPolicy.openRouterKeyStatus.kind,
+    elevenLabsKeyStatus: nextPolicy.elevenLabsKeyStatus.kind,
+    selectedModelId: nextPolicy.selectedModelId,
+    voiceMode: nextPolicy.voiceMode,
+    sttProvider: nextPolicy.sttProvider,
+    ttsProvider: nextPolicy.ttsProvider,
+    ttsVoiceConfigured: Boolean(nextPolicy.ttsVoice.trim()),
   })
 
   await persistPolicy({
@@ -797,6 +875,12 @@ export async function listCommunityAssistantModels(input: {
     env: input.env,
     communityId: access.community.community_id,
   })
+  console.info("[community-assistant-policy] models:list:start", {
+    communityId: access.community.community_id,
+    requestedCommunityId: input.communityId,
+    actorUserId: input.actor.userId,
+    openRouterKeyStatus: keyStatus.kind,
+  })
   if (keyStatus.kind !== "connected") {
     throw badRequestError("OpenRouter API key is required before listing assistant models")
   }
@@ -805,16 +889,29 @@ export async function listCommunityAssistantModels(input: {
     communityId: access.community.community_id,
   })
   const timeoutMs = parsePositiveIntegerEnv(input.env.OPENROUTER_TIMEOUT_MS) ?? 10_000
-  const models = await requestOpenRouterModels({
-    apiKey,
-    baseUrl: input.env.OPENROUTER_BASE_URL,
-    timeoutMs,
-  })
+  let models: OpenRouterModel[]
+  try {
+    models = await requestOpenRouterModels({
+      apiKey,
+      baseUrl: input.env.OPENROUTER_BASE_URL,
+      timeoutMs,
+    })
+  } catch (error) {
+    console.warn("[community-assistant-policy] models:list:failed", {
+      communityId: access.community.community_id,
+      message: error instanceof Error ? error.message : String(error),
+    })
+    throw error
+  }
   const options = sortModelOptions(
     models
       .map(openRouterModelToOption)
       .filter((model): model is AssistantModelOption => model !== null),
   )
+  console.info("[community-assistant-policy] models:list:success", {
+    communityId: access.community.community_id,
+    modelCount: options.length,
+  })
 
   return {
     object: "list",

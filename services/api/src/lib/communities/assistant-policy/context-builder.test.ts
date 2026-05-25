@@ -4,7 +4,7 @@ import {
   buildCommunityContext,
   packCommunityContextSections,
 } from "./context-builder"
-import type { AssistantContextSources, CommunityAssistantPolicy } from "./service"
+import type { CommunityAssistantPolicy } from "./service"
 
 let client: LibsqlClient | null = null
 
@@ -102,7 +102,7 @@ async function createTestClient(): Promise<LibsqlClient> {
 }
 
 type PolicyOverrides = Partial<Omit<CommunityAssistantPolicy, "contextSources">> & {
-  contextSources?: Partial<AssistantContextSources>
+  contextSources?: Partial<CommunityAssistantPolicy["contextSources"]>
 }
 
 function policy(overrides: PolicyOverrides = {}): CommunityAssistantPolicy {
@@ -117,6 +117,7 @@ function policy(overrides: PolicyOverrides = {}): CommunityAssistantPolicy {
     defaultPrompt: "Ask a question.",
     starterPrompts: [],
     openRouterKeyStatus: { kind: "connected", last4: "abcd" },
+    elevenLabsKeyStatus: { kind: "connected", last4: "labs" },
     selectedModelId: "openrouter/free",
     availableModels: [],
     contextMode: "live_sql",
@@ -141,8 +142,9 @@ function policy(overrides: PolicyOverrides = {}): CommunityAssistantPolicy {
     requireModeratorApprovalForWrites: true,
     perUserDailyMessageCap: 40,
     voiceMode: "off",
-    sttProvider: "mistral",
-    sttModel: "voxtral-mini-latest",
+    sttProvider: "elevenlabs",
+    sttModel: "scribe_v2",
+    ttsProvider: "elevenlabs",
     ttsVoice: "",
     includeInSovereignExport: true,
     policyOrigin: "explicit",
@@ -308,6 +310,28 @@ describe("assistant context builder", () => {
     expect(publicContext).not.toContain("My introduction")
   })
 
+  test("buildCommunityContext tells Telegram answers not to mirror thread formatting", async () => {
+    const db = await createTestClient()
+    const publicContext = await buildCommunityContext({
+      audience: "public_group",
+      client: db,
+      communityId: "com_test",
+      policy: policy({
+        contextSources: {
+          recentThreads: false,
+          threadBodies: false,
+          topComments: false,
+        },
+      }),
+      userId: null,
+    })
+
+    expect(publicContext).toContain("Telegram group response rules:")
+    expect(publicContext).toContain("Format answers as plain conversational text.")
+    expect(publicContext).toContain("Do not use markdown headings")
+    expect(publicContext).toContain("natural sentences")
+  })
+
   test("buildCommunityContext ranks relevant threads above newer weak matches", async () => {
     const db = await createTestClient()
     await insertPost({
@@ -385,36 +409,5 @@ describe("assistant context builder", () => {
     expect(context).toContain("Long user post")
     expect(context).toContain("needle")
     expect(context).not.toContain(longBody)
-  })
-
-  test("buildCommunityContext tells Telegram answers not to mirror thread formatting", async () => {
-    const db = await createTestClient()
-    await insertPost({
-      body: "This is a recent community update that should be summarized naturally.",
-      createdAt: isoDaysAgo(1),
-      postId: "pst_telegram_format",
-      title: "Telegram formatting update",
-    })
-
-    const context = await buildCommunityContext({
-      audience: "public_group",
-      client: db,
-      communityId: "com_test",
-      message: "What is the most recent post?",
-      policy: policy({
-        contextSources: {
-          referenceLinks: false,
-          rules: false,
-          threadBodies: true,
-          topComments: false,
-        },
-      }),
-      userId: null,
-    })
-
-    expect(context).toContain("Telegram group response rules:")
-    expect(context).toContain("Format answers as plain conversational text.")
-    expect(context).toContain("Do not use markdown headings")
-    expect(context).toContain("natural sentences")
   })
 })

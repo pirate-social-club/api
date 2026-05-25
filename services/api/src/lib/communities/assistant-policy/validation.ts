@@ -1,12 +1,16 @@
 export type AssistantContextMode = "live_sql" | "summary_cache" | "hybrid_vector"
 export type AssistantActionMode = "answer_only" | "draft_only" | "confirmed_writes"
 export type AssistantVoiceMode = "off" | "transcription_only" | "voice_replies"
-export type AssistantSttProvider = "mistral" | "openai" | "none"
+export type AssistantSttProvider = "elevenlabs" | "mistral" | "openai" | "none"
+export type AssistantTtsProvider = "elevenlabs" | "none"
 
-export type AssistantOpenRouterKeyStatus =
+export type AssistantProviderKeyStatus =
   | { kind: "missing" }
   | { kind: "connected"; last4: string; connectedAt?: string }
   | { kind: "invalid"; last4: string; message: string }
+
+export type AssistantOpenRouterKeyStatus = AssistantProviderKeyStatus
+export type AssistantElevenLabsKeyStatus = AssistantProviderKeyStatus
 
 export type CommunityAssistantPolicySettingsInput = {
   enabled: boolean
@@ -17,6 +21,7 @@ export type CommunityAssistantPolicySettingsInput = {
   starterPrompts: string[]
   selectedModelId: string
   openRouterKeyStatus: AssistantOpenRouterKeyStatus
+  elevenLabsKeyStatus: AssistantElevenLabsKeyStatus
   contextMode: AssistantContextMode
   actionMode: AssistantActionMode
   requireModeratorApprovalForWrites: boolean
@@ -26,6 +31,9 @@ export type CommunityAssistantPolicySettingsInput = {
   perUserDailyMessageCap: number | null
   voiceMode: AssistantVoiceMode
   sttProvider: AssistantSttProvider
+  sttModel: string
+  ttsProvider: AssistantTtsProvider
+  ttsVoice: string
 }
 
 export type CommunityAssistantPolicyValidationResult =
@@ -35,7 +43,8 @@ export type CommunityAssistantPolicyValidationResult =
 const CONTEXT_MODES: readonly AssistantContextMode[] = ["live_sql", "summary_cache", "hybrid_vector"]
 const ACTION_MODES: readonly AssistantActionMode[] = ["answer_only", "draft_only", "confirmed_writes"]
 const VOICE_MODES: readonly AssistantVoiceMode[] = ["off", "transcription_only", "voice_replies"]
-const STT_PROVIDERS: readonly AssistantSttProvider[] = ["mistral", "openai", "none"]
+const STT_PROVIDERS: readonly AssistantSttProvider[] = ["elevenlabs", "mistral", "openai", "none"]
+const TTS_PROVIDERS: readonly AssistantTtsProvider[] = ["elevenlabs", "none"]
 
 function isRecord(input: unknown): input is Record<string, unknown> {
   return Boolean(input) && typeof input === "object" && !Array.isArray(input)
@@ -113,12 +122,13 @@ function nullableIntegerInRange(
   return value
 }
 
-function validateOpenRouterKeyStatus(
+function validateProviderKeyStatus(
   input: unknown,
+  field: string,
   errors: string[],
-): AssistantOpenRouterKeyStatus {
+): AssistantProviderKeyStatus {
   if (!isRecord(input)) {
-    errors.push("openRouterKeyStatus must be an object")
+    errors.push(`${field} must be an object`)
     return { kind: "missing" }
   }
 
@@ -129,7 +139,7 @@ function validateOpenRouterKeyStatus(
   if (input.kind === "connected") {
     const last4 = typeof input.last4 === "string" ? input.last4.trim() : ""
     if (!last4) {
-      errors.push("openRouterKeyStatus.last4 is required for connected keys")
+      errors.push(`${field}.last4 is required for connected keys`)
     }
     return {
       kind: "connected",
@@ -142,15 +152,15 @@ function validateOpenRouterKeyStatus(
     const last4 = typeof input.last4 === "string" ? input.last4.trim() : ""
     const message = typeof input.message === "string" ? input.message.trim() : ""
     if (!last4) {
-      errors.push("openRouterKeyStatus.last4 is required for invalid keys")
+      errors.push(`${field}.last4 is required for invalid keys`)
     }
     if (!message) {
-      errors.push("openRouterKeyStatus.message is required for invalid keys")
+      errors.push(`${field}.message is required for invalid keys`)
     }
     return { kind: "invalid", last4, message }
   }
 
-  errors.push("openRouterKeyStatus.kind must be missing, connected, or invalid")
+  errors.push(`${field}.kind must be missing, connected, or invalid`)
   return { kind: "missing" }
 }
 
@@ -202,7 +212,8 @@ export function validateCommunityAssistantPolicySettings(
     required: true,
     trim: true,
   })
-  const openRouterKeyStatus = validateOpenRouterKeyStatus(input.openRouterKeyStatus, errors)
+  const openRouterKeyStatus = validateProviderKeyStatus(input.openRouterKeyStatus, "openRouterKeyStatus", errors)
+  const elevenLabsKeyStatus = validateProviderKeyStatus(input.elevenLabsKeyStatus, "elevenLabsKeyStatus", errors)
   if (enabledValue && openRouterKeyStatus.kind !== "connected") {
     errors.push("enabled assistant requires a connected OpenRouter key")
   }
@@ -215,6 +226,23 @@ export function validateCommunityAssistantPolicySettings(
   const perUserDailyMessageCap = nullableIntegerInRange(input, "perUserDailyMessageCap", 1, 10000, errors)
   const voiceMode = enumValue(input, "voiceMode", VOICE_MODES, errors)
   const sttProvider = enumValue(input, "sttProvider", STT_PROVIDERS, errors)
+  const sttModel = requiredString(input, "sttModel", errors, { maxLength: 128 })
+  const ttsProvider = enumValue(input, "ttsProvider", TTS_PROVIDERS, errors)
+  const ttsVoice = requiredString(input, "ttsVoice", errors, { maxLength: 128 })
+  if (voiceMode !== "off" && sttProvider === "none") {
+    errors.push("enabled voice requires a speech-to-text provider")
+  }
+  if (voiceMode !== "off" && elevenLabsKeyStatus.kind !== "connected") {
+    errors.push("enabled voice requires a connected ElevenLabs key")
+  }
+  if (voiceMode === "voice_replies") {
+    if (ttsProvider === "none") {
+      errors.push("voice replies require a text-to-speech provider")
+    }
+    if (!ttsVoice.trim()) {
+      errors.push("voice replies require a text-to-speech voice")
+    }
+  }
 
   const requireModeratorApprovalForWrites = input.requireModeratorApprovalForWrites
   if (typeof requireModeratorApprovalForWrites !== "boolean") {
@@ -242,6 +270,7 @@ export function validateCommunityAssistantPolicySettings(
       starterPrompts,
       selectedModelId,
       openRouterKeyStatus,
+      elevenLabsKeyStatus,
       contextMode,
       actionMode,
       requireModeratorApprovalForWrites: requireModeratorApprovalForWritesValue,
@@ -251,6 +280,9 @@ export function validateCommunityAssistantPolicySettings(
       perUserDailyMessageCap,
       voiceMode,
       sttProvider,
+      sttModel,
+      ttsProvider,
+      ttsVoice,
     },
   }
 }

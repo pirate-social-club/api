@@ -2,6 +2,7 @@ import type { Env } from "../../env"
 import { providerUnavailable } from "../errors"
 
 const TELEGRAM_API_TIMEOUT_MS = 5_000
+const TELEGRAM_FILE_TIMEOUT_MS = 30_000
 
 type TelegramApiResponse<T> =
   | { ok: true; result: T }
@@ -30,6 +31,13 @@ export type TelegramBotProfile = {
 export type TelegramChatMember = {
   status: string
   can_invite_users?: boolean
+}
+
+export type TelegramFile = {
+  file_id: string
+  file_unique_id?: string
+  file_size?: number
+  file_path?: string
 }
 
 function isTelegramBotCredential(input: Env | TelegramBotCredential): input is TelegramBotCredential {
@@ -91,6 +99,45 @@ async function callTelegramBotApi<T>(
   return payload.result
 }
 
+async function callTelegramBotApiMultipart<T>(
+  bot: Env | TelegramBotCredential,
+  method: string,
+  body: FormData,
+): Promise<T> {
+  const token = telegramBotToken(bot)
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), TELEGRAM_API_TIMEOUT_MS)
+  let response: Response
+  try {
+    response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+      method: "POST",
+      body,
+      signal: controller.signal,
+    })
+  } catch (error) {
+    throw providerUnavailable(error instanceof Error && error.name === "AbortError"
+      ? `Telegram ${method} timed out`
+      : `Telegram ${method} failed`)
+  } finally {
+    clearTimeout(timeout)
+  }
+  const payload = await response.json().catch(() => null) as TelegramApiResponse<T> | null
+  if (!response.ok || !payload?.ok) {
+    const description = payload && "description" in payload ? payload.description : null
+    throw providerUnavailable(description || `Telegram ${method} failed`)
+  }
+  return payload.result
+}
+
+function encodeTelegramFilePath(filePath: string): string {
+  const trimmed = filePath.trim().replace(/^\/+/, "")
+  if (!trimmed) {
+    throw providerUnavailable("Telegram file path is missing")
+  }
+  return trimmed.split("/").map(encodeURIComponent).join("/")
+}
+
 export function sendTelegramMessage(
   bot: Env | TelegramBotCredential,
   body: {
@@ -106,8 +153,68 @@ export function sendTelegramMessage(
   return callTelegramBotApi(bot, "sendMessage", body)
 }
 
+export function sendTelegramVoice(
+  bot: Env | TelegramBotCredential,
+  body: {
+    chat_id: number | string
+    message_thread_id?: number
+    voice: File
+    caption?: string
+    reply_parameters?: {
+      message_id: number
+    }
+  },
+): Promise<{ message_id: number }> {
+  const form = new FormData()
+  form.set("chat_id", String(body.chat_id))
+  form.set("voice", body.voice)
+  if (typeof body.message_thread_id === "number") {
+    form.set("message_thread_id", String(body.message_thread_id))
+  }
+  if (body.caption?.trim()) {
+    form.set("caption", body.caption.trim())
+  }
+  if (body.reply_parameters) {
+    form.set("reply_parameters", JSON.stringify(body.reply_parameters))
+  }
+  return callTelegramBotApiMultipart(bot, "sendVoice", form)
+}
+
 export function getTelegramBotProfile(bot: Env | TelegramBotCredential): Promise<TelegramBotProfile> {
   return callTelegramBotApi<TelegramBotProfile>(bot, "getMe", {})
+}
+
+export function getTelegramFile(bot: Env | TelegramBotCredential, fileId: string): Promise<TelegramFile> {
+  return callTelegramBotApi<TelegramFile>(bot, "getFile", { file_id: fileId })
+}
+
+export async function downloadTelegramFile(
+  bot: Env | TelegramBotCredential,
+  filePath: string,
+): Promise<{ bytes: ArrayBuffer; contentType: string | null }> {
+  const token = telegramBotToken(bot)
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), TELEGRAM_FILE_TIMEOUT_MS)
+  let response: Response
+  try {
+    response = await fetch(`https://api.telegram.org/file/bot${token}/${encodeTelegramFilePath(filePath)}`, {
+      method: "GET",
+      signal: controller.signal,
+    })
+  } catch (error) {
+    throw providerUnavailable(error instanceof Error && error.name === "AbortError"
+      ? "Telegram file download timed out"
+      : "Telegram file download failed")
+  } finally {
+    clearTimeout(timeout)
+  }
+  if (!response.ok) {
+    throw providerUnavailable(`Telegram file download failed with http_${response.status}`)
+  }
+  return {
+    bytes: await response.arrayBuffer(),
+    contentType: response.headers.get("content-type"),
+  }
 }
 
 export function getTelegramChatMember(
