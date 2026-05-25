@@ -155,10 +155,12 @@ export async function requestOpenRouterChatCompletion(input: {
   content: string
 }> {
   const maxAttempts = 2
+  let lastError: unknown = null
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       return await requestOpenRouterChatCompletionOnce(input)
     } catch (error) {
+      lastError = error
       if (attempt < maxAttempts && isRetryableOpenRouterResponseError(error)) {
         continue
       }
@@ -166,7 +168,9 @@ export async function requestOpenRouterChatCompletion(input: {
     }
   }
 
-  return requestOpenRouterChatCompletionOnce(input)
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`OpenRouter ${input.errorLabel} request failed`)
 }
 
 export async function requestOpenRouterModels(input: {

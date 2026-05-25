@@ -20,6 +20,7 @@ export function resolveCoreRepoRoot(input?: {
     resolve(serviceRoot, "../../../core"),
     resolve(workspaceRoot, "core"),
     resolve(workspaceRoot, "../core"),
+    resolve(serviceRoot, "test-fixtures"),
   ].filter((value): value is string => Boolean(value))
 
   for (const candidate of new Set(candidates)) {
