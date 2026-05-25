@@ -311,7 +311,8 @@ function verificationPromptRequirement(missingCapabilities: TelegramJoinMissingC
           return null
       }
     })
-    .filter((label, index, all): label is string => typeof label === "string" && all.indexOf(label) === index)
+    .filter((label): label is NonNullable<typeof label> => label !== null)
+    .filter((label, index, all) => all.indexOf(label) === index)
 
   if (labels.length === 0) {
     return "verification"

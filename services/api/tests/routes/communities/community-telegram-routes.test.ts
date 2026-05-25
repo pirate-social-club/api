@@ -504,7 +504,7 @@ async function setUserNationality(input: {
     state: "verified",
     provider: "self",
     value: input.countryCode,
-    verified_at: new Date().toISOString(),
+    verified_at: Math.floor(Date.now() / 1000),
   }
   await input.client.execute({
     sql: `

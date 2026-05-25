@@ -12,7 +12,8 @@ import { publicCommunityId } from "../public-ids"
 import { getControlPlaneClient } from "../runtime-deps"
 import { rowValue, stringOrNull } from "../sql-row"
 import type { Client } from "../sql-client"
-import type { Env, JoinEligibility, MembershipResult, SessionExchangeResponse, UpstreamIdentity } from "../../types"
+import type { Env, JoinEligibility, SessionExchangeResponse, UpstreamIdentity } from "../../types"
+import type { MembershipResult } from "../communities/membership/types"
 import { approveTelegramChatJoinRequest } from "./bot-api"
 import {
   decryptCommunityTelegramBotById,
