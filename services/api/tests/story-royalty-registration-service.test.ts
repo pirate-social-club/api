@@ -505,6 +505,76 @@ describe("story royalty registration service", () => {
     expect(unavailable.asset.story_error).toContain("story_royalty_registration_unavailable")
   }, 15_000)
 
+  test("rolls back post transaction when required Story royalty registration fails", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-required-"))
+    cleanupPaths.push(rootDir)
+
+    const env = { LOCAL_COMMUNITY_DB_ROOT: rootDir } as Env
+    const repo = buildRepository()
+    const communityId = "cmt_story_royalty_required"
+    const userId = "usr_author_story_required"
+    const assetId = "ast_required_story_song"
+    const now = "2026-04-21T00:00:00.000Z"
+
+    await seedStoryCommunity({ env, repo, communityId, userId })
+
+    const db = await openCommunityDb(env, repo, communityId)
+    try {
+      const tx = await db.client.transaction("write")
+      let insertedPostId: string | null = null
+      try {
+        const post = await insertPost({
+          client: tx,
+          communityId,
+          authorUserId: userId,
+          body: {
+            post_type: "song",
+            identity_mode: "public",
+            title: "Required Story song",
+            idempotency_key: "required-story-post",
+            song_mode: "original",
+            rights_basis: "original",
+            access_mode: "public",
+            license_preset: "non-commercial",
+            song_artifact_bundle: "sab_required_story",
+            asset_id: assetId,
+          },
+          createdAt: now,
+        })
+        insertedPostId = post.post_id
+
+        await expect(createSongAssetForPost({
+          env,
+          client: tx,
+          communityId,
+          post,
+          bundle: buildBundle({ id: "sab_required_story", title: "Required Story song" }),
+          licensePreset: "non-commercial",
+          commercialRevSharePct: null,
+          requireStoryRoyaltyRegistration: true,
+          userRepository: buildStoryUserRepository(userId),
+        })).rejects.toThrow("Story registration is required before publishing this asset")
+      } finally {
+        await tx.rollback().catch(() => undefined)
+        tx.close()
+      }
+
+      const postRows = await db.client.execute({
+        sql: "SELECT COUNT(*) AS count FROM posts WHERE post_id = ?1",
+        args: [insertedPostId],
+      })
+      const assetRows = await db.client.execute({
+        sql: "SELECT COUNT(*) AS count FROM assets WHERE asset_id = ?1",
+        args: [assetId],
+      })
+
+      expect(Number(postRows.rows[0]?.count ?? 0)).toBe(0)
+      expect(Number(assetRows.rows[0]?.count ?? 0)).toBe(0)
+    } finally {
+      db.close()
+    }
+  })
+
   testWithTimeout("skips duplicate royalty registration when locked delivery already registered the asset", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-locked-"))
     cleanupPaths.push(rootDir)
@@ -737,6 +807,7 @@ describe("story royalty registration service", () => {
         bundle: buildBundle({ id: "sab_registered", title: "Registered source song" }),
         licensePreset: "commercial-remix",
         commercialRevSharePct: 15,
+        requireStoryRoyaltyRegistration: true,
         userRepository: {
           async getUserById(requestedUserId) {
             return requestedUserId === userId ? buildUser(userId) : null
@@ -953,5 +1024,201 @@ describe("story royalty registration service", () => {
       profileRepository: buildProfileRepository(),
     })
     expect(derivativeSources.items.map((source) => source.asset)).toContain(derivativeAssetId)
+  })
+
+  test("uses a remix source Story ref when registering a remix of a remix", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-remix-chain-"))
+    cleanupPaths.push(rootDir)
+
+    const env = { LOCAL_COMMUNITY_DB_ROOT: rootDir } as Env
+    const repo = buildRepository()
+    const communityId = "cmt_story_royalty_remix_chain"
+    const userId = "usr_author_story_remix_chain"
+    const now = "2026-04-21T00:00:00.000Z"
+    const originalIpId = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    const firstRemixIpId = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    const secondRemixIpId = "0xcccccccccccccccccccccccccccccccccccccccc"
+    await seedStoryCommunity({ env, repo, communityId, userId })
+
+    setStoryRoyaltyRegistrarForTests(async (input) => {
+      if (input.assetId === "ast_chain_first_remix") {
+        const parents = await resolveStoryRoyaltyDerivativeParents({
+          client: input.client,
+          communityId: input.communityId,
+          upstreamAssetRefs: input.upstreamAssetRefs,
+        })
+        expect(parents).toEqual([{ ipId: originalIpId, licenseTermsId: 17n }])
+        return {
+          storyIpId: firstRemixIpId,
+          storyIpNftContract: "0x8888888888888888888888888888888888888888",
+          storyIpNftTokenId: "456",
+          storyLicenseTermsId: "23",
+          storyLicenseTemplate: "0x7777777777777777777777777777777777777777",
+          storyRoyaltyPolicy: "0x6666666666666666666666666666666666666666",
+          storyDerivativeParentIpIds: parents?.map((parent) => parent.ipId) ?? null,
+          storyRevenueToken: "0x1514000000000000000000000000000000000000",
+          storyRoyaltyRegistrationStatus: "registered",
+          storyDerivativeRegisteredAt: now,
+        }
+      }
+      if (input.assetId === "ast_chain_second_remix") {
+        const parents = await resolveStoryRoyaltyDerivativeParents({
+          client: input.client,
+          communityId: input.communityId,
+          upstreamAssetRefs: input.upstreamAssetRefs,
+        })
+        expect(parents).toEqual([{ ipId: firstRemixIpId, licenseTermsId: 23n }])
+        return {
+          storyIpId: secondRemixIpId,
+          storyIpNftContract: "0x8888888888888888888888888888888888888888",
+          storyIpNftTokenId: "789",
+          storyLicenseTermsId: "31",
+          storyLicenseTemplate: "0x7777777777777777777777777777777777777777",
+          storyRoyaltyPolicy: "0x6666666666666666666666666666666666666666",
+          storyDerivativeParentIpIds: parents?.map((parent) => parent.ipId) ?? null,
+          storyRevenueToken: "0x1514000000000000000000000000000000000000",
+          storyRoyaltyRegistrationStatus: "registered",
+          storyDerivativeRegisteredAt: now,
+        }
+      }
+
+      return {
+        storyIpId: originalIpId,
+        storyIpNftContract: "0x8888888888888888888888888888888888888888",
+        storyIpNftTokenId: "123",
+        storyLicenseTermsId: "17",
+        storyLicenseTemplate: "0x7777777777777777777777777777777777777777",
+        storyRoyaltyPolicy: "0x6666666666666666666666666666666666666666",
+        storyDerivativeParentIpIds: null,
+        storyRevenueToken: "0x1514000000000000000000000000000000000000",
+        storyRoyaltyRegistrationStatus: "registered",
+        storyDerivativeRegisteredAt: null,
+      }
+    })
+
+    const userRepository = buildStoryUserRepository(userId)
+    const db = await openCommunityDb(env, repo, communityId)
+    try {
+      const originalPost = await insertPost({
+        client: db.client,
+        communityId,
+        authorUserId: userId,
+        body: {
+          post_type: "song",
+          identity_mode: "public",
+          title: "Chain Original",
+          idempotency_key: "story-remix-chain-original-post",
+          song_mode: "original",
+          rights_basis: "original",
+          access_mode: "public",
+        },
+        createdAt: now,
+      })
+      await createSongAssetForPost({
+        env,
+        client: db.client,
+        communityId,
+        post: {
+          ...originalPost,
+          asset_id: "ast_chain_original",
+        },
+        bundle: buildBundle({ id: "sab_chain_original", title: "Chain Original" }),
+        licensePreset: "commercial-remix",
+        commercialRevSharePct: 10,
+        userRepository,
+      })
+
+      const originalSources = await listCommunityDerivativeSources({
+        env,
+        userId,
+        communityId,
+        kind: "song",
+        query: "Original",
+        limit: 25,
+        communityRepository: repo,
+        profileRepository: buildProfileRepository(),
+      })
+      const originalRef = originalSources.items[0]?.source_ref
+      expect(originalRef).toBe(`story:ip:${originalIpId}#licenseTermsId=17`)
+
+      const firstRemixPost = await insertPost({
+        client: db.client,
+        communityId,
+        authorUserId: userId,
+        body: {
+          post_type: "song",
+          identity_mode: "public",
+          title: "Chain First Remix",
+          idempotency_key: "story-remix-chain-first-post",
+          song_mode: "remix",
+          rights_basis: "derivative",
+          access_mode: "public",
+          upstream_asset_refs: [originalRef],
+        },
+        createdAt: now,
+      })
+      const firstRemix = await createSongAssetForPost({
+        env,
+        client: db.client,
+        communityId,
+        post: {
+          ...firstRemixPost,
+          asset_id: "ast_chain_first_remix",
+        },
+        bundle: buildBundle({ id: "sab_chain_first_remix", title: "Chain First Remix" }),
+        licensePreset: "commercial-remix",
+        commercialRevSharePct: 15,
+        userRepository,
+      })
+      expect(firstRemix.story_derivative_parent_ip_ids).toEqual([originalIpId])
+
+      const remixSources = await listCommunityDerivativeSources({
+        env,
+        userId,
+        communityId,
+        kind: "song",
+        query: "First Remix",
+        limit: 25,
+        communityRepository: repo,
+        profileRepository: buildProfileRepository(),
+      })
+      const firstRemixRef = remixSources.items[0]?.source_ref
+      expect(firstRemixRef).toBe(`story:ip:${firstRemixIpId}#licenseTermsId=23`)
+
+      const secondRemixPost = await insertPost({
+        client: db.client,
+        communityId,
+        authorUserId: userId,
+        body: {
+          post_type: "song",
+          identity_mode: "public",
+          title: "Chain Second Remix",
+          idempotency_key: "story-remix-chain-second-post",
+          song_mode: "remix",
+          rights_basis: "derivative",
+          access_mode: "public",
+          upstream_asset_refs: [firstRemixRef],
+        },
+        createdAt: now,
+      })
+      const secondRemix = await createSongAssetForPost({
+        env,
+        client: db.client,
+        communityId,
+        post: {
+          ...secondRemixPost,
+          asset_id: "ast_chain_second_remix",
+        },
+        bundle: buildBundle({ id: "sab_chain_second_remix", title: "Chain Second Remix" }),
+        licensePreset: "commercial-remix",
+        commercialRevSharePct: 20,
+        userRepository,
+      })
+
+      expect(secondRemix.story_ip).toBe(secondRemixIpId)
+      expect(secondRemix.story_derivative_parent_ip_ids).toEqual([firstRemixIpId])
+    } finally {
+      db.close()
+    }
   })
 })
