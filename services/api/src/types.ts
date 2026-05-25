@@ -122,6 +122,7 @@ export type DerivativeSource = {
   object: "derivative_source"
   community: string
   asset: string
+  source_ref: string
   title: string
   kind: DerivativeSourceKind
   story_ip: string

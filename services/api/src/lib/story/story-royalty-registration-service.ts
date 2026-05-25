@@ -11,6 +11,7 @@ import { getAssetRow } from "../communities/commerce/queries"
 import { decodePublicAssetId } from "../public-ids"
 import { publishStoryJsonMetadata } from "./story-metadata-publisher"
 
+type StoryRoyaltyClient = Pick<Client, "execute">
 type StoryRoyaltyRightsBasis = "none" | "original" | "derivative"
 export type StoryLicensePreset = "non-commercial" | "commercial-use" | "commercial-remix"
 type StoryRoyaltyAssetKind = "song_audio" | "video_file"
@@ -33,9 +34,72 @@ type ResolvedDerivativeParent = {
   licenseTermsId: bigint
 }
 
+type StoryLicenseClient = {
+  registerPilTermsAndAttach: (request: {
+    ipId: `0x${string}`
+    licenseTermsData: Array<{
+      terms: ReturnType<typeof resolvePilTermsForLicense>
+      maxLicenseTokens?: bigint
+    }>
+  }) => Promise<{ licenseTermsId?: bigint | number | string | null }>
+}
+
+type StoryIpAssetClient = {
+  registerDerivativeIpAsset: (request: {
+    nft: {
+      type: "mint"
+      spgNftContract: `0x${string}`
+      recipient: `0x${string}`
+    }
+    derivData: {
+      parentIpIds: `0x${string}`[]
+      licenseTermsIds: bigint[]
+    }
+    royaltyShares: Array<{
+      recipient: `0x${string}`
+      percentage: number
+    }>
+    ipMetadata: {
+      ipMetadataURI: string
+      ipMetadataHash: `0x${string}`
+      nftMetadataURI: string
+      nftMetadataHash: `0x${string}`
+    }
+  }) => Promise<{
+    ipId?: `0x${string}`
+    tokenId?: bigint | number | string
+  }>
+  registerIpAsset: (request: {
+    nft: {
+      type: "mint"
+      spgNftContract: `0x${string}`
+      recipient: `0x${string}`
+    }
+    licenseTermsData: Array<{
+      terms: ReturnType<typeof resolvePilTermsForLicense>
+      maxLicenseTokens?: bigint
+    }>
+    ipMetadata: {
+      ipMetadataURI: string
+      ipMetadataHash: `0x${string}`
+      nftMetadataURI: string
+      nftMetadataHash: `0x${string}`
+    }
+  }) => Promise<{
+    ipId?: `0x${string}`
+    tokenId?: bigint | number | string
+    licenseTermsIds?: Array<bigint | number | string>
+  }>
+}
+
+type StoryRoyaltySdkClient = {
+  ipAsset: StoryIpAssetClient
+  license: StoryLicenseClient
+}
+
 let testRoyaltyRegistrar: ((input: {
   env: Env
-  client: Client
+  client: StoryRoyaltyClient
   communityId: string
   assetId: string
   creatorWalletAddress: string
@@ -52,7 +116,7 @@ let testRoyaltyRegistrar: ((input: {
 export function setStoryRoyaltyRegistrarForTests(
   registrar: ((input: {
     env: Env
-    client: Client
+    client: StoryRoyaltyClient
     communityId: string
     assetId: string
     creatorWalletAddress: string
@@ -103,6 +167,21 @@ function requireOriginalLicensePreset(value: StoryLicensePreset | null): StoryLi
     throw new Error("licensePreset is required for original Story registration")
   }
   return value
+}
+
+function requireAssetLicensePreset(value: StoryLicensePreset | null, context: string): StoryLicensePreset {
+  if (!value) {
+    throw new Error(`licensePreset is required for ${context}`)
+  }
+  return value
+}
+
+function resolveAttachedLicenseTermsId(value: bigint | number | string | null | undefined): string {
+  const normalized = String(value ?? "").trim()
+  if (!/^\d+$/.test(normalized)) {
+    throw new Error("Story license terms attachment did not return a licenseTermsId")
+  }
+  return normalized
 }
 
 export function resolvePilTermsForLicense(input: {
@@ -186,7 +265,7 @@ function parseDirectStoryParentRef(ref: string): ResolvedDerivativeParent | null
 }
 
 export async function resolveStoryRoyaltyDerivativeParents(input: {
-  client: Client
+  client: StoryRoyaltyClient
   communityId: string
   upstreamAssetRefs: string[] | null
 }): Promise<ResolvedDerivativeParent[] | null> {
@@ -288,7 +367,7 @@ async function buildStoryRoyaltyMetadata(input: {
 
 export async function maybeRegisterStoryRoyaltyForAsset(input: {
   env: Env
-  client: Client
+  client: StoryRoyaltyClient
   communityId: string
   assetId: string
   creatorWalletAddress: string
@@ -347,11 +426,11 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
     derivativeParentIpIds: derivativeParents?.map((parent) => parent.ipId) ?? null,
   })
 
-  const client = StoryClient.newClient({
+  const storyClient = StoryClient.newClient({
     account: privateKeyToAccount(operator.value.privateKey as `0x${string}`),
     transport: http(resolveStoryRpcUrl(input.env)),
     chainId: resolveStoryChainName(input.env),
-  })
+  }) as StoryRoyaltySdkClient
 
   const royaltyPolicy = resolveStoryRoyaltyPolicyAddress(input.env)
   const defaultMintingFee = resolveStoryRoyaltyDefaultMintingFee(input.env)
@@ -372,7 +451,14 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
   const maxLicenseTokens = resolveStoryRoyaltyMaxLicenseTokens(input.env)
 
   if (rightsBasis === "derivative") {
-    const derivativeResponse = await client.ipAsset.registerDerivativeIpAsset({
+    const outboundLicenseTerms = resolvePilTermsForLicense({
+      licensePreset: requireAssetLicensePreset(input.licensePreset, "derivative Story registration"),
+      commercialRevSharePct: input.commercialRevSharePct,
+      defaultMintingFee,
+      currency: WIP_TOKEN_ADDRESS,
+      royaltyPolicy,
+    })
+    const derivativeResponse = await storyClient.ipAsset.registerDerivativeIpAsset({
       nft: {
         type: "mint",
         spgNftContract,
@@ -395,12 +481,22 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
         nftMetadataHash: metadata.nftMetadataHash,
       },
     })
+    const derivativeIpId = derivativeResponse.ipId!
+    const attachedLicense = await storyClient.license.registerPilTermsAndAttach({
+      ipId: derivativeIpId,
+      licenseTermsData: [
+        {
+          terms: outboundLicenseTerms,
+          maxLicenseTokens,
+        },
+      ],
+    })
 
     return {
-      storyIpId: derivativeResponse.ipId!,
+      storyIpId: derivativeIpId,
       storyIpNftContract: spgNftContract,
       storyIpNftTokenId: derivativeResponse.tokenId!.toString(),
-      storyLicenseTermsId: null,
+      storyLicenseTermsId: resolveAttachedLicenseTermsId(attachedLicense.licenseTermsId),
       storyLicenseTemplate: null,
       storyRoyaltyPolicy: royaltyPolicy,
       storyDerivativeParentIpIds: derivativeParents!.map((parent) => parent.ipId),
@@ -410,7 +506,7 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
     }
   }
 
-  const originalResponse = await client.ipAsset.registerIpAsset({
+  const originalResponse = await storyClient.ipAsset.registerIpAsset({
     nft: {
       type: "mint",
       spgNftContract,

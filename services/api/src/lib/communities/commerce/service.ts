@@ -30,6 +30,7 @@ import {
   requireCommunityMember,
   resolvePrimaryWalletAddress,
   serializeAsset,
+  type DerivativeSourceRow,
 } from "./shared"
 import type { BuyerIdentity } from "./buyer-identity"
 import {
@@ -55,6 +56,15 @@ function isStoryRoyaltyAssetKind(assetKind: Asset["asset_kind"]): assetKind is "
 
 function derivativeSourceKindFromAssetKind(assetKind: Asset["asset_kind"]): DerivativeSourceKind {
   return assetKind === "video_file" ? "video" : "song"
+}
+
+function derivativeSourceStoryRef(row: DerivativeSourceRow): string | null {
+  const storyIpId = row.story_ip_id?.trim()
+  const storyLicenseTermsId = row.story_license_terms_id?.trim()
+  if (!storyIpId || !storyLicenseTermsId) {
+    return null
+  }
+  return `story:ip:${storyIpId}#licenseTermsId=${storyLicenseTermsId}`
 }
 
 function shouldAttemptStoryRoyaltyRegistration(input: {
@@ -446,11 +456,16 @@ export async function listCommunityDerivativeSources(input: {
     ] as const)))
     const items: DerivativeSource[] = rows.map((row) => {
       const profile = profilesByUserId.get(row.creator_user_id) ?? null
+      const sourceRef = derivativeSourceStoryRef(row)
+      if (!sourceRef) {
+        throw new Error("Derivative source is missing Story registration fields")
+      }
       return {
         id: `asset_${row.asset_id}`,
         object: "derivative_source",
         community: `com_${row.community_id}`,
         asset: `asset_${row.asset_id}`,
+        source_ref: sourceRef,
         title: row.display_title?.trim() || "Untitled asset",
         kind: derivativeSourceKindFromAssetKind(row.asset_kind),
         story_ip: row.story_ip_id!,

@@ -14,17 +14,17 @@ function isStoryLicensePreset(value: unknown): value is StoryLicensePreset {
   return value === "non-commercial" || value === "commercial-use" || value === "commercial-remix"
 }
 
-function validateOriginalAssetLicense(input: {
+function validateAssetLicense(input: {
   body: PostWriteRequest
   contentLabel: string
   requireLicense: boolean
 }): void {
   if (input.requireLicense && !isStoryLicensePreset(input.body.license_preset)) {
-    throw badRequestError(`license_preset is required for original ${input.contentLabel} posts`)
+    throw badRequestError(`license_preset is required for ${input.contentLabel} posts`)
   }
 
   if (input.body.license_preset != null && !isStoryLicensePreset(input.body.license_preset)) {
-    throw badRequestError(`license_preset is required for original ${input.contentLabel} posts`)
+    throw badRequestError(`license_preset is required for ${input.contentLabel} posts`)
   }
 
   if (input.body.license_preset === "commercial-remix") {
@@ -149,9 +149,9 @@ export function assertPostCreateRequest(body: CreatePostRequest, _communityId: s
     if (body.rights_basis === "derivative") {
       throw badRequestError("derivative video posts are not supported yet")
     }
-    validateOriginalAssetLicense({
+    validateAssetLicense({
       body,
-      contentLabel: "video",
+      contentLabel: "original video",
       requireLicense: body.access_mode === "locked",
     })
   }
@@ -206,20 +206,12 @@ export function assertPostCreateRequest(body: CreatePostRequest, _communityId: s
     if (body.access_mode && body.access_mode !== "public" && body.access_mode !== "locked") {
       throw badRequestError("song access_mode must be public or locked")
     }
-    const isDerivative = body.song_mode === "remix" || body.rights_basis === "derivative"
-    if (isDerivative) {
-      if (body.license_preset) {
-        throw badRequestError("license_preset is not supported for remix song posts")
-      }
-      if (body.commercial_rev_share_pct != null) {
-        throw badRequestError("commercial_rev_share_pct is not supported for remix song posts")
-      }
-    } else {
-      validateOriginalAssetLicense({
-        body,
-        contentLabel: "song",
-        requireLicense: true,
-      })
-    }
+    validateAssetLicense({
+      body,
+      contentLabel: body.song_mode === "remix" || body.rights_basis === "derivative"
+        ? "song"
+        : "original song",
+      requireLicense: true,
+    })
   }
 }

@@ -413,18 +413,33 @@ describe("assertPostCreateRequest", () => {
     ).not.toThrow()
   })
 
-  test("rejects outbound license fields on remix song posts", () => {
+  test("requires a license preset for remix song posts", () => {
     expect(() =>
       assertPostCreateRequest(
         originalSongRequest({
           song_mode: "remix",
           rights_basis: "derivative",
+          upstream_asset_refs: ["story:asset:ast_source_song"],
+          license_preset: null,
+        }),
+        "cmt_test",
+      )
+    ).toThrow("license_preset is required for song posts")
+  })
+
+  test("allows outbound license fields on remix song posts", () => {
+    expect(() =>
+      assertPostCreateRequest(
+        originalSongRequest({
+          song_mode: "remix",
+          rights_basis: "derivative",
+          upstream_asset_refs: ["story:asset:ast_source_song"],
           license_preset: "commercial-remix",
           commercial_rev_share_pct: 10,
         }),
         "cmt_test",
       )
-    ).toThrow("license_preset is not supported for remix song posts")
+    ).not.toThrow()
   })
 
   test("requires a license preset for locked video asset posts", () => {
