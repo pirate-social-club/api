@@ -188,6 +188,52 @@ describe("community membership gate routes", () => {
     expect(replayedPostBody.code).toBe("gate_failed")
     expect(replayedPostBody.details?.gate_evaluation?.trace?.reason).toBe("replayed")
 
+    const deniedPostVote = await app.request(
+      `http://pirate.test/posts/${postBody.id}/vote`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${member.accessToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ value: 1 }),
+      },
+      ctx.env,
+    )
+    expect(deniedPostVote.status).toBe(403)
+    const deniedPostVoteBody = await json(deniedPostVote) as {
+      code: string
+      message: string
+      details?: { missing_capabilities?: string[] }
+    }
+    expect(deniedPostVoteBody.code).toBe("gate_failed")
+    expect(deniedPostVoteBody.message).toBe("Proof-of-work is required to vote in this community")
+    expect(deniedPostVoteBody.details?.missing_capabilities).toContain("altcha_pow")
+
+    const postVoteProof = await solveAltchaProofFromRoute({
+      env: ctx.env,
+      accessToken: member.accessToken,
+      scope: "vote",
+      action: `post:${postBody.id}:vote:1`,
+    })
+    const postVote = await app.request(
+      `http://pirate.test/posts/${postBody.id}/vote`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${member.accessToken}`,
+          "content-type": "application/json",
+          "x-pirate-altcha": postVoteProof,
+        },
+        body: JSON.stringify({ value: 1 }),
+      },
+      ctx.env,
+    )
+    expect(postVote.status).toBe(200)
+    const postVoteBody = await json(postVote) as { post: string; value: number }
+    expect(postVoteBody.post).toBe(postBody.id)
+    expect(postVoteBody.value).toBe(1)
+
     const commentProof = await solveAltchaProofFromRoute({
       env: ctx.env,
       accessToken: member.accessToken,
@@ -210,6 +256,30 @@ describe("community membership gate routes", () => {
     expect(topLevelComment.status).toBe(201)
     const topLevelBody = await json(topLevelComment) as { id: string; depth: number }
     expect(topLevelBody.depth).toBe(0)
+
+    const commentVoteProof = await solveAltchaProofFromRoute({
+      env: ctx.env,
+      accessToken: member.accessToken,
+      scope: "vote",
+      action: `comment:${topLevelBody.id}:vote:-1`,
+    })
+    const commentVote = await app.request(
+      `http://pirate.test/comments/${topLevelBody.id}/vote`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${member.accessToken}`,
+          "content-type": "application/json",
+          "x-pirate-altcha": commentVoteProof,
+        },
+        body: JSON.stringify({ value: -1 }),
+      },
+      ctx.env,
+    )
+    expect(commentVote.status).toBe(200)
+    const commentVoteBody = await json(commentVote) as { comment_id: string; value: number }
+    expect(`cmt_${commentVoteBody.comment_id}`).toBe(topLevelBody.id)
+    expect(commentVoteBody.value).toBe(-1)
 
     const replyProof = await solveAltchaProofFromRoute({
       env: ctx.env,

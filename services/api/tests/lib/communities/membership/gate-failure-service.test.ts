@@ -104,6 +104,26 @@ describe("throwUnsatisfiedMembershipGate", () => {
     expect(result.message).toBe("Proof-of-work is required to comment in this community")
   })
 
+  test("uses proof-of-work message for ALTCHA-only vote failures", () => {
+    const result = catchGateFailure({
+      evaluation: {
+        satisfied: false,
+        trace: { kind: "op", op: "and", passed: false, children: [] },
+        requiredActionSet: {
+          kind: "set",
+          mode: "all",
+          items: [
+            { kind: "action", provider: "altcha", capability: "altcha_pow", scope: "vote" },
+          ],
+        },
+      },
+      gateSummaries: [{ gate_type: "altcha_pow" }],
+      walletScoreStatus: null,
+      altchaScope: "vote",
+    })
+    expect(result.message).toBe("Proof-of-work is required to vote in this community")
+  })
+
   test("uses join message for community_join failures regardless of capabilities", () => {
     const result = catchGateFailure({
       evaluation: {
