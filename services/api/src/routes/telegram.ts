@@ -24,6 +24,11 @@ import {
   type TelegramCommunityBotCredential,
 } from "../lib/telegram/community-bot-service"
 import {
+  createTelegramOnboardingIntent,
+  exchangeTelegramOnboardingSession,
+  telegramOnboardingWebAppReplyMarkup,
+} from "../lib/telegram/onboarding-service"
+import {
   answerTelegramGroupAssistantPrompt,
   telegramText,
   type TelegramAssistantTriggerType,
@@ -316,6 +321,41 @@ function directAssistantLinkText(input: {
   return url ? `${body}\n${url}` : body
 }
 
+async function sendDirectAssistantOnboardingPrompt(input: {
+  env: Env
+  bot: TelegramCommunityBotCredential
+  chatId: string
+  telegramUserId: string
+  reason: "unlinked" | "not_member"
+}): Promise<void> {
+  try {
+    const intent = await createTelegramOnboardingIntent({
+      env: input.env,
+      communityId: input.bot.communityId,
+      telegramCommunityBotId: input.bot.id,
+      telegramUserId: input.telegramUserId,
+      privateChatId: input.chatId,
+      source: "dm",
+    })
+    await safeSendTelegramMessage(input.bot, {
+      chat_id: input.chatId,
+      text: input.reason === "unlinked"
+        ? "Open Pirate to link this Telegram account before messaging the community assistant."
+        : "Open Pirate to join or verify for this community before messaging the assistant.",
+      reply_markup: telegramOnboardingWebAppReplyMarkup(intent.web_app_url),
+    })
+  } catch {
+    await safeSendTelegramMessage(input.bot, {
+      chat_id: input.chatId,
+      text: directAssistantLinkText({
+        env: input.env,
+        communityId: input.bot.communityId,
+        reason: input.reason,
+      }),
+    })
+  }
+}
+
 function directAssistantFailureMessage(error: unknown): string {
   if (error instanceof HttpError && error.status === 404) {
     return "Community assistant is not enabled. In Pirate, open Mod > Assistant, turn it on, and save settings before messaging this bot."
@@ -514,13 +554,12 @@ async function handleDirectAssistantMessage(env: Env, message: TelegramWebhookMe
     telegramUserId,
   })
   if (!account) {
-    await safeSendTelegramMessage(bot, {
-      chat_id: chatId,
-      text: directAssistantLinkText({
-        env,
-        communityId: bot.communityId,
-        reason: "unlinked",
-      }),
+    await sendDirectAssistantOnboardingPrompt({
+      env,
+      bot,
+      chatId,
+      telegramUserId,
+      reason: "unlinked",
     })
     return
   }
@@ -531,13 +570,12 @@ async function handleDirectAssistantMessage(env: Env, message: TelegramWebhookMe
     userId: account.userId,
   })
   if (!canAccess) {
-    await safeSendTelegramMessage(bot, {
-      chat_id: chatId,
-      text: directAssistantLinkText({
-        env,
-        communityId: bot.communityId,
-        reason: "not_member",
-      }),
+    await sendDirectAssistantOnboardingPrompt({
+      env,
+      bot,
+      chatId,
+      telegramUserId,
+      reason: "not_member",
     })
     return
   }
@@ -605,6 +643,7 @@ async function handleChatJoinRequest(env: Env, joinRequest: TelegramWebhookChatJ
     telegramUserId,
     telegramUserChatId: telegramIdentifier(joinRequest.user_chat_id),
     joinRequestDate: typeof joinRequest.date === "number" ? joinRequest.date : null,
+    telegramCommunityBotIdForOnboarding: isCommunityBot(bot) ? bot.id : null,
   })
   if (!decision || decision.action === "ignore") {
     return
@@ -628,6 +667,7 @@ async function handleChatJoinRequest(env: Env, joinRequest: TelegramWebhookChatJ
   const prompted = await safeSendTelegramMessage(bot, {
     chat_id: decision.telegramUserChatId,
     text: decision.text,
+    ...(decision.replyMarkup ? { reply_markup: decision.replyMarkup } : {}),
   })
   if (prompted) {
     await markTelegramJoinGrantPrompted({ env, grantId: decision.grantId })
@@ -679,6 +719,14 @@ telegram.post("/setup-intents/complete", async (c) => {
     body,
   })
   return c.json({ linked_chat: linkedChat }, 200)
+})
+
+telegram.post("/session/exchange", async (c) => {
+  const body = await c.req.json<{ token?: unknown; init_data?: unknown }>().catch(() => null)
+  return c.json(await exchangeTelegramOnboardingSession({
+    env: c.env,
+    body,
+  }), 200)
 })
 
 telegram.post("/webhook", async (c) => {

@@ -665,7 +665,7 @@ export type UpstreamWalletIdentity = {
 }
 
 export type UpstreamIdentity = {
-  provider: "jwt" | "privy"
+  provider: "jwt" | "privy" | "telegram"
   providerSubject: string
   providerUserRef: string | null
   walletAddresses: string[]

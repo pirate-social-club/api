@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { createClient, type Client } from "@libsql/client"
+import { createHmac } from "node:crypto"
 import { app } from "../../../src/index"
 import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
 import { resolveTelegramAccount } from "../../../src/lib/telegram/join-request-service"
@@ -185,6 +186,57 @@ function completionBody(input: {
     },
     bot_admin_status: "ready",
   }
+}
+
+function signedTelegramInitData(input: {
+  botToken: string
+  user: Record<string, unknown>
+  authDate?: number
+}): string {
+  const params = new URLSearchParams()
+  params.set("auth_date", String(input.authDate ?? Math.floor(Date.now() / 1000)))
+  params.set("query_id", "telegram-onboarding-test")
+  params.set("user", JSON.stringify(input.user))
+  const dataCheckString = [...params.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}=${value}`)
+    .join("\n")
+  const secretKey = createHmac("sha256", "WebAppData").update(input.botToken).digest()
+  const hash = createHmac("sha256", secretKey).update(dataCheckString).digest("hex")
+  params.set("hash", hash)
+  return params.toString()
+}
+
+function telegramWebAppUrlFromReplyMarkup(replyMarkup: unknown): string {
+  const markup = replyMarkup as {
+    inline_keyboard?: Array<Array<{ web_app?: { url?: string } }>>
+  }
+  const url = markup.inline_keyboard?.[0]?.[0]?.web_app?.url
+  expect(typeof url).toBe("string")
+  return url!
+}
+
+function onboardingTokenFromWebAppUrl(url: string): string {
+  return new URL(url).searchParams.get("token") ?? ""
+}
+
+async function exchangeTelegramOnboarding(input: {
+  env: Env
+  token: string
+  initData: string
+}): Promise<Response> {
+  return app.request(
+    "http://pirate.test/telegram/session/exchange",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        token: input.token,
+        init_data: input.initData,
+      }),
+    },
+    input.env,
+  )
 }
 
 async function createSetupIntent(input: {
@@ -2216,9 +2268,42 @@ describe("community Telegram routes", () => {
     expect(mock.openRouterCalls).toHaveLength(0)
     const sendMessageRequests = mock.telegramRequests.filter((request) => request.url.endsWith("/sendMessage"))
     expect(sendMessageRequests).toHaveLength(1)
-    const sendBody = await sendMessageRequests[0]!.json() as { text: string }
+    const sendBody = await sendMessageRequests[0]!.json() as { text: string; reply_markup: unknown }
     expect(sendBody.text).toContain("link this Telegram account")
-    expect(sendBody.text).toContain(`https://staging.pirate.test/tg/c/com_${communityId}`)
+    const webAppUrl = telegramWebAppUrlFromReplyMarkup(sendBody.reply_markup)
+    expect(webAppUrl).toContain(`https://staging.pirate.test/tg/exchange?community=com_${communityId}`)
+
+    const exchangeResponse = await exchangeTelegramOnboarding({
+      env: ctx.env,
+      token: onboardingTokenFromWebAppUrl(webAppUrl),
+      initData: signedTelegramInitData({
+        botToken: bot.token,
+        user: {
+          id: 777202,
+          username: "telegramjoiner",
+          first_name: "Telegram",
+        },
+      }),
+    })
+    expect(exchangeResponse.status).toBe(200)
+    const exchangeBody = await json(exchangeResponse) as {
+      access_token: string
+      telegram_user_id: string
+      eligibility: { status: string }
+      telegram_join_request: { status: string }
+      user: { id: string }
+    }
+    expect(exchangeBody.access_token).toBeTruthy()
+    expect(exchangeBody.telegram_user_id).toBe("777202")
+    expect(exchangeBody.eligibility.status).toBe("requestable")
+    expect(exchangeBody.telegram_join_request.status).toBe("not_applicable")
+    expect(await getTelegramAccount({
+      client: ctx.client,
+      telegramUserId: "777202",
+    })).toEqual({
+      telegram_user_id: "777202",
+      user_id: exchangeBody.user.id.replace(/^usr_/, ""),
+    })
   })
 
   test("community bot private DM prompts non-members without provider calls", async () => {
@@ -2268,9 +2353,10 @@ describe("community Telegram routes", () => {
     expect(mock.openRouterCalls).toHaveLength(0)
     const sendMessageRequests = mock.telegramRequests.filter((request) => request.url.endsWith("/sendMessage"))
     expect(sendMessageRequests).toHaveLength(1)
-    const sendBody = await sendMessageRequests[0]!.json() as { text: string }
+    const sendBody = await sendMessageRequests[0]!.json() as { text: string; reply_markup: unknown }
     expect(sendBody.text).toContain("join or verify")
-    expect(sendBody.text).toContain(`https://staging.pirate.test/tg/c/com_${communityId}`)
+    const webAppUrl = telegramWebAppUrlFromReplyMarkup(sendBody.reply_markup)
+    expect(webAppUrl).toContain(`https://staging.pirate.test/tg/exchange?community=com_${communityId}`)
   })
 
   test("community bot private DM reports disabled assistant without provider calls", async () => {
@@ -2471,10 +2557,11 @@ describe("community Telegram routes", () => {
     expect(response.status).toBe(200)
     expect(requests).toHaveLength(1)
     expect(requests[0]!.url).toBe("https://api.telegram.org/bot987654:bot-token/sendMessage")
-    const sendBody = await requests[0]!.json() as { chat_id: string; text: string }
+    const sendBody = await requests[0]!.json() as { chat_id: string; text: string; reply_markup?: unknown }
     expect(sendBody.chat_id).toBe("889101")
     expect(sendBody.text).toContain(`https://staging.pirate.test/tg/c/com_${communityId}`)
     expect(sendBody.text).toContain("verify and join")
+    expect(sendBody.reply_markup).toBeUndefined()
     const grant = await getTelegramJoinGrant({
       client: ctx.client,
       telegramChatId: "-1009101",
@@ -2485,6 +2572,69 @@ describe("community Telegram routes", () => {
     expect(grant?.prompted_at).toBeTruthy()
     expect(grant?.approved_at).toBeNull()
     expect(grant?.expires_at).toBeTruthy()
+    expect(JSON.parse(grant?.missing_capabilities_json ?? "[]")).toContain("telegram_account")
+  })
+
+  test("community bot chat_join_request prompts unmapped Telegram users with a Mini App button", async () => {
+    const ctx = await createRouteTestContext({
+      TELEGRAM_BOT_INTEGRATION_SECRET: "test-telegram-secret",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
+      PIRATE_WEB_PUBLIC_ORIGIN: "https://staging.pirate.test",
+      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
+      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "1",
+    })
+    cleanup = ctx.cleanup
+    const mock = installTelegramAndOpenRouterMock("Should not be used.")
+    const owner = await exchangeJwt(ctx.env, "telegram-community-bot-join-unmapped-owner")
+    const communityId = await createCommunity({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      displayName: "Telegram Community Bot Join Club",
+    })
+    const bot = await saveCommunityBotForWebhook({
+      env: ctx.env,
+      communityId,
+      accessToken: owner.accessToken,
+    })
+    await linkTelegramChatForCommunity({
+      env: ctx.env,
+      communityId,
+      accessToken: owner.accessToken,
+      telegramChatId: "-1009121",
+      title: "Telegram Community Bot Join Club",
+    })
+
+    const response = await telegramCommunityBotWebhook({
+      env: ctx.env,
+      webhookId: bot.webhookId,
+      secret: bot.webhookSecret,
+      body: {
+        update_id: 37,
+        chat_join_request: {
+          chat: { id: -1009121, type: "supergroup", title: "Telegram Community Bot Join Club" },
+          from: { id: 779121, username: "joiner" },
+          user_chat_id: 889121,
+          date: 1_779_000_121,
+        },
+      },
+    })
+
+    expect(response.status).toBe(200)
+    const sendMessageRequests = mock.telegramRequests.filter((request) => request.url.endsWith("/sendMessage"))
+    expect(sendMessageRequests).toHaveLength(1)
+    const sendBody = await sendMessageRequests[0]!.json() as { chat_id: string; text: string; reply_markup: unknown }
+    expect(sendBody.chat_id).toBe("889121")
+    expect(sendBody.text).toContain("verify and join")
+    const webAppUrl = telegramWebAppUrlFromReplyMarkup(sendBody.reply_markup)
+    expect(webAppUrl).toContain(`https://staging.pirate.test/tg/exchange?community=com_${communityId}`)
+    expect(onboardingTokenFromWebAppUrl(webAppUrl)).toMatch(/^tgonboard_/u)
+    const grant = await getTelegramJoinGrant({
+      client: ctx.client,
+      telegramChatId: "-1009121",
+      telegramUserId: "779121",
+    })
+    expect(grant?.status).toBe("pending")
     expect(JSON.parse(grant?.missing_capabilities_json ?? "[]")).toContain("telegram_account")
   })
 

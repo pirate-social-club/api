@@ -111,6 +111,7 @@ export type TelegramSetupChatRequestResource = {
 
 export type TelegramLinkedChatBotContext = {
   communityId: string
+  telegramCommunityBotId: string | null
   telegramChatId: string
   title: string
   username: string | null
@@ -734,6 +735,7 @@ export async function getTelegramLinkedChatBotContext(input: {
   return linkedChat
     ? {
         communityId: linkedChat.community_id,
+        telegramCommunityBotId: linkedChat.telegram_community_bot_id,
         telegramChatId: linkedChat.telegram_chat_id,
         title: linkedChat.chat_title,
         username: linkedChat.chat_username,

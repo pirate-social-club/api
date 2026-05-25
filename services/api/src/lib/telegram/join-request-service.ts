@@ -9,6 +9,10 @@ import { getControlPlaneClient } from "../runtime-deps"
 import type { Client } from "../sql-client"
 import { rowValue, stringOrNull } from "../sql-row"
 import { getTelegramLinkedChatBotContext } from "./community-chat-service"
+import {
+  createTelegramOnboardingIntent,
+  telegramOnboardingWebAppReplyMarkup,
+} from "./onboarding-service"
 
 const JOIN_GRANT_TTL_MS = 24 * 60 * 60 * 1000
 
@@ -24,6 +28,7 @@ export type TelegramJoinRequestDecision =
       grantId: string
       telegramUserChatId: string
       text: string
+      replyMarkup?: unknown
     }
   | {
       action: "ignore"
@@ -327,6 +332,7 @@ async function promptDecision(input: {
   communityId: string
   reason: "unmapped" | "verification_required" | "not_joinable"
   missingCapabilities?: TelegramJoinMissingCapability[]
+  onboardingWebAppUrl?: string | null
 }): Promise<TelegramJoinRequestDecision> {
   try {
     return {
@@ -339,6 +345,9 @@ async function promptDecision(input: {
         reason: input.reason,
         missingCapabilities: input.missingCapabilities,
       }),
+      ...(input.onboardingWebAppUrl
+        ? { replyMarkup: telegramOnboardingWebAppReplyMarkup(input.onboardingWebAppUrl, "Open Pirate") }
+        : {}),
     }
   } catch (error) {
     await updateJoinGrant({
@@ -351,6 +360,30 @@ async function promptDecision(input: {
   }
 }
 
+async function createJoinRequestOnboardingUrl(input: {
+  env: Env
+  communityId: string
+  telegramCommunityBotId: string | null
+  telegramUserId: string
+  telegramUserChatId: string | null
+  grantId: string
+}): Promise<string | null> {
+  if (!input.telegramCommunityBotId) {
+    return null
+  }
+  return await createTelegramOnboardingIntent({
+    env: input.env,
+    communityId: input.communityId,
+    telegramCommunityBotId: input.telegramCommunityBotId,
+    telegramUserId: input.telegramUserId,
+    privateChatId: input.telegramUserChatId,
+    joinGrantId: input.grantId,
+    source: "join_request",
+  })
+    .then((intent) => intent.web_app_url)
+    .catch(() => null)
+}
+
 export async function evaluateTelegramChatJoinRequest(input: {
   env: Env
   communityRepository: CommunityMembershipRepository
@@ -358,6 +391,7 @@ export async function evaluateTelegramChatJoinRequest(input: {
   telegramUserId: string
   telegramUserChatId: string | null
   joinRequestDate: number | null
+  telegramCommunityBotIdForOnboarding?: string | null
 }): Promise<TelegramJoinRequestDecision | null> {
   const linkedChat = await getTelegramLinkedChatBotContext({
     env: input.env,
@@ -366,6 +400,10 @@ export async function evaluateTelegramChatJoinRequest(input: {
   if (!linkedChat) {
     return null
   }
+  const onboardingBotId = input.telegramCommunityBotIdForOnboarding
+    && input.telegramCommunityBotIdForOnboarding === linkedChat.telegramCommunityBotId
+    ? input.telegramCommunityBotIdForOnboarding
+    : null
 
   const now = nowIso()
   const joinRequestDate = joinRequestDateFromSeconds(input.joinRequestDate)
@@ -390,12 +428,21 @@ export async function evaluateTelegramChatJoinRequest(input: {
     if (!input.telegramUserChatId) {
       return { action: "ignore", grantId }
     }
+    const onboardingWebAppUrl = await createJoinRequestOnboardingUrl({
+      env: input.env,
+      communityId: linkedChat.communityId,
+      telegramCommunityBotId: onboardingBotId,
+      telegramUserId: input.telegramUserId,
+      telegramUserChatId: input.telegramUserChatId,
+      grantId,
+    })
     return promptDecision({
       env: input.env,
       grantId,
       telegramUserChatId: input.telegramUserChatId,
       communityId: linkedChat.communityId,
       reason: "unmapped",
+      onboardingWebAppUrl,
     })
   }
 
@@ -447,6 +494,14 @@ export async function evaluateTelegramChatJoinRequest(input: {
   if (!input.telegramUserChatId) {
     return { action: "ignore", grantId }
   }
+  const onboardingWebAppUrl = await createJoinRequestOnboardingUrl({
+    env: input.env,
+    communityId: linkedChat.communityId,
+    telegramCommunityBotId: onboardingBotId,
+    telegramUserId: input.telegramUserId,
+    telegramUserChatId: input.telegramUserChatId,
+    grantId,
+  })
   return promptDecision({
     env: input.env,
     grantId,
@@ -454,6 +509,7 @@ export async function evaluateTelegramChatJoinRequest(input: {
     communityId: linkedChat.communityId,
     reason: eligibility.status === "verification_required" ? "verification_required" : "not_joinable",
     missingCapabilities,
+    onboardingWebAppUrl,
   })
 }
 

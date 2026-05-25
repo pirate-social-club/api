@@ -140,6 +140,7 @@ function serializeBotResource(row: TelegramCommunityBotRow | null): TelegramComm
 
 async function readTelegramCommunityBot(input: {
   env: Env
+  botId?: string
   communityId?: string
   webhookId?: string
   status?: TelegramCommunityBotStatus
@@ -147,6 +148,10 @@ async function readTelegramCommunityBot(input: {
   const client = getControlPlaneClient(input.env)
   const clauses = ["1 = 1"]
   const args: unknown[] = []
+  if (input.botId) {
+    args.push(input.botId)
+    clauses.push(`telegram_community_bot_id = ?${args.length}`)
+  }
   if (input.communityId) {
     args.push(input.communityId)
     clauses.push(`community_id = ?${args.length}`)
@@ -418,6 +423,31 @@ export async function decryptActiveCommunityTelegramBot(input: {
   if (!row) {
     throw providerUnavailable("Telegram bot token is required before connecting Telegram")
   }
+  return {
+    id: row.telegram_community_bot_id,
+    communityId: row.community_id,
+    token: decryptTelegramBotToken({
+      encryptedToken: row.encrypted_bot_token,
+      encryptionKeyVersion: row.encryption_key_version,
+      wrapKey: resolveCommunityDbWrapKey(input.env),
+    }),
+    userId: row.telegram_bot_user_id,
+    username: row.bot_username,
+    webhookId: row.webhook_id,
+    webhookSecret: row.webhook_secret,
+  }
+}
+
+export async function decryptCommunityTelegramBotById(input: {
+  env: Env
+  botId: string
+}): Promise<TelegramCommunityBotCredential | null> {
+  const row = await readTelegramCommunityBot({
+    env: input.env,
+    botId: input.botId,
+    status: "active",
+  })
+  if (!row) return null
   return {
     id: row.telegram_community_bot_id,
     communityId: row.community_id,
