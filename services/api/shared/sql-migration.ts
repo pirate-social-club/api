@@ -141,6 +141,12 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
   }
 
   let sqliteCompat = statement
+  if (normalized.startsWith("CREATE TABLE IF NOT EXISTS COMMUNITY_ASSISTANT_CREDENTIALS")) {
+    sqliteCompat = sqliteCompat.replace(
+      /provider\s+IN\s+\('openrouter'\)/i,
+      "provider IN ('openrouter', 'elevenlabs')",
+    )
+  }
   sqliteCompat = sqliteCompat.replace(/\bJSONB\b/gi, "TEXT")
   sqliteCompat = sqliteCompat.replace(/\bTIMESTAMPTZ\b/gi, "TEXT")
   sqliteCompat = sqliteCompat.replace(/\bTIMESTAMP\b/gi, "TEXT")

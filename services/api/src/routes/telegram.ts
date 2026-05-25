@@ -159,7 +159,7 @@ type TelegramGroupAssistantTrigger = {
   triggerType: TelegramAssistantTriggerType
 }
 
-type TelegramGroupAssistantVoiceTrigger = {
+type TelegramAssistantVoiceTrigger = {
   fileId: string
   fileName: string
   fileSize: number | null
@@ -259,10 +259,7 @@ function inferTelegramAudioMimeType(input: {
   return input.fallback
 }
 
-function parseGroupAssistantVoiceTrigger(bot: Env | TelegramBotCredential, message: TelegramWebhookMessage): TelegramGroupAssistantVoiceTrigger | null {
-  if (!isTelegramGroupChat(message.chat?.type) || !isReplyToThisBot(bot, message)) {
-    return null
-  }
+function parseTelegramAssistantVoiceAttachment(message: TelegramWebhookMessage): TelegramAssistantVoiceTrigger | null {
   const voiceFileId = telegramAttachmentFileId(message.voice)
   if (voiceFileId) {
     return {
@@ -295,6 +292,20 @@ function parseGroupAssistantVoiceTrigger(bot: Env | TelegramBotCredential, messa
     }),
     triggerType: "reply_to_bot",
   }
+}
+
+function parseGroupAssistantVoiceTrigger(bot: Env | TelegramBotCredential, message: TelegramWebhookMessage): TelegramAssistantVoiceTrigger | null {
+  if (!isTelegramGroupChat(message.chat?.type) || !isReplyToThisBot(bot, message)) {
+    return null
+  }
+  return parseTelegramAssistantVoiceAttachment(message)
+}
+
+function parseDirectAssistantVoiceTrigger(message: TelegramWebhookMessage): TelegramAssistantVoiceTrigger | null {
+  if (!isPrivateChat(message.chat?.type)) {
+    return null
+  }
+  return parseTelegramAssistantVoiceAttachment(message)
 }
 
 function isPrivateChat(type: string | undefined): boolean {
@@ -516,7 +527,7 @@ async function transcribeTelegramGroupAssistantVoice(input: {
   env: Env
   bot: Env | TelegramCommunityBotCredential
   telegramChatId: string
-  trigger: TelegramGroupAssistantVoiceTrigger
+  trigger: TelegramAssistantVoiceTrigger
 }): Promise<string | null> {
   const linkedChat = await getTelegramLinkedChatBotContext({
     env: input.env,
@@ -526,6 +537,20 @@ async function transcribeTelegramGroupAssistantVoice(input: {
     return null
   }
 
+  return transcribeTelegramAssistantVoiceForCommunity({
+    env: input.env,
+    bot: input.bot,
+    communityId: linkedChat.communityId,
+    trigger: input.trigger,
+  })
+}
+
+async function transcribeTelegramAssistantVoiceForCommunity(input: {
+  env: Env
+  bot: Env | TelegramCommunityBotCredential
+  communityId: string
+  trigger: TelegramAssistantVoiceTrigger
+}): Promise<string | null> {
   if (
     input.trigger.fileSize !== null
     && input.trigger.fileSize > COMMUNITY_ASSISTANT_MAX_TRANSCRIPTION_AUDIO_BYTES
@@ -556,34 +581,29 @@ async function transcribeTelegramGroupAssistantVoice(input: {
   const transcript = await transcribeCommunityAssistantAudioForCommunity({
     env: input.env,
     communityRepository: getCommunityRepository(input.env),
-    communityId: linkedChat.communityId,
+    communityId: input.communityId,
     file: new File([download.bytes], fileName, { type: mimeType }),
   })
   const prompt = transcript.text.trim()
   return prompt || null
 }
 
-async function maybeSendTelegramAssistantVoiceReply(input: {
+async function maybeSendTelegramAssistantVoiceReplyForCommunity(input: {
   answerText: string
   bot: Env | TelegramCommunityBotCredential
+  chatId: string
+  communityId: string
   env: Env
   message: TelegramWebhookMessage
-  telegramChatId: string
+  messageThreadId?: number
 }): Promise<boolean> {
-  const linkedChat = await getTelegramLinkedChatBotContext({
-    env: input.env,
-    telegramChatId: input.telegramChatId,
-  })
-  if (!linkedChat) {
-    return false
-  }
   const communityRepository = getCommunityRepository(input.env)
   let policy
   try {
     policy = await getCommunityAssistantRuntimePolicyForCommunity({
       env: input.env,
       communityRepository,
-      communityId: linkedChat.communityId,
+      communityId: input.communityId,
     })
   } catch (error) {
     if (error instanceof HttpError && error.status === 404) {
@@ -604,7 +624,7 @@ async function maybeSendTelegramAssistantVoiceReply(input: {
     speech = await synthesizeCommunityAssistantSpeechForCommunity({
       env: input.env,
       communityRepository,
-      communityId: linkedChat.communityId,
+      communityId: input.communityId,
       outputFormat: TELEGRAM_ELEVENLABS_TTS_OUTPUT_FORMAT,
       text: input.answerText,
     })
@@ -616,14 +636,39 @@ async function maybeSendTelegramAssistantVoiceReply(input: {
   }
 
   return safeSendTelegramVoice(input.bot, {
-    chat_id: input.telegramChatId,
-    ...(typeof input.message.message_thread_id === "number" ? { message_thread_id: input.message.message_thread_id } : {}),
+    chat_id: input.chatId,
+    ...(typeof input.messageThreadId === "number" ? { message_thread_id: input.messageThreadId } : {}),
     voice: new File([speech.audio], "assistant-reply.ogg", {
       type: speech.contentType || "audio/ogg",
     }),
     reply_parameters: {
       message_id: input.message.message_id!,
     },
+  })
+}
+
+async function maybeSendTelegramAssistantVoiceReply(input: {
+  answerText: string
+  bot: Env | TelegramCommunityBotCredential
+  env: Env
+  message: TelegramWebhookMessage
+  telegramChatId: string
+}): Promise<boolean> {
+  const linkedChat = await getTelegramLinkedChatBotContext({
+    env: input.env,
+    telegramChatId: input.telegramChatId,
+  })
+  if (!linkedChat) {
+    return false
+  }
+  return maybeSendTelegramAssistantVoiceReplyForCommunity({
+    answerText: input.answerText,
+    bot: input.bot,
+    chatId: input.telegramChatId,
+    communityId: linkedChat.communityId,
+    env: input.env,
+    message: input.message,
+    messageThreadId: input.message.message_thread_id,
   })
 }
 
@@ -780,8 +825,9 @@ async function handleDirectAssistantMessage(env: Env, message: TelegramWebhookMe
     return
   }
 
-  const prompt = parseDirectAssistantPrompt(bot, message)
-  if (!prompt) {
+  const textPrompt = parseDirectAssistantPrompt(bot, message)
+  const voiceTrigger = textPrompt ? null : parseDirectAssistantVoiceTrigger(message)
+  if (!textPrompt && !voiceTrigger) {
     await safeSendTelegramMessage(bot, {
       chat_id: chatId,
       text: "Send a text question to talk to this community assistant.",
@@ -821,6 +867,19 @@ async function handleDirectAssistantMessage(env: Env, message: TelegramWebhookMe
   }
 
   try {
+    const prompt = textPrompt ?? await transcribeTelegramAssistantVoiceForCommunity({
+      env,
+      bot,
+      communityId: bot.communityId,
+      trigger: voiceTrigger!,
+    })
+    if (!prompt) {
+      await safeSendTelegramMessage(bot, {
+        chat_id: chatId,
+        text: "I couldn't transcribe that voice message. Try again or send a text question.",
+      })
+      return
+    }
     const answer = await sendCommunityAssistantTelegramDirectMessage({
       env,
       communityRepository: getCommunityRepository(env),
@@ -828,15 +887,28 @@ async function handleDirectAssistantMessage(env: Env, message: TelegramWebhookMe
       userId: account.userId,
       message: prompt,
     })
+    const answerText = telegramText(answer.assistant_message.content)
+    const sentVoiceReply = await maybeSendTelegramAssistantVoiceReplyForCommunity({
+      answerText,
+      bot,
+      chatId,
+      communityId: bot.communityId,
+      env,
+      message,
+    })
+    if (sentVoiceReply) {
+      return
+    }
     await safeSendTelegramMessage(bot, {
       chat_id: chatId,
-      text: telegramText(answer.assistant_message.content),
+      text: answerText,
     })
   } catch (error) {
     console.warn("[telegram-assistant] direct prompt failed", {
       ...telegramRouteErrorLogFields(error),
       communityId: bot.communityId,
-      promptLength: prompt.length,
+      promptLength: textPrompt?.length ?? null,
+      voiceFileId: voiceTrigger?.fileId ?? null,
       telegramChatId: chatId,
       telegramCommunityBotId: bot.id,
       telegramUserId,

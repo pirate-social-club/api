@@ -13,6 +13,7 @@ import {
 import type { Env } from "../../../src/env"
 
 const VALID_WRAP_KEY = "0".repeat(64)
+const ELEVENLABS_COMMUNITY_API_KEY = "elevenlabs-community-telegram-key-1234"
 
 let cleanup: (() => Promise<void>) | null = null
 const originalFetch = globalThis.fetch
@@ -367,6 +368,22 @@ async function saveOpenRouterKey(input: {
   )
 }
 
+async function saveElevenLabsKey(input: {
+  env: Env
+  communityId: string
+  accessToken: string
+}): Promise<Response> {
+  return requestJson(
+    `http://pirate.test/communities/${input.communityId}/assistant-credential`,
+    {
+      provider: "elevenlabs",
+      api_key: ELEVENLABS_COMMUNITY_API_KEY,
+    },
+    input.env,
+    input.accessToken,
+  )
+}
+
 async function updateAssistantPolicy(input: {
   env: Env
   communityId: string
@@ -393,6 +410,14 @@ async function setupEnabledAssistant(input: {
     accessToken: input.ownerToken,
   })
   expect(credential.status).toBe(200)
+  if (input.policy?.voiceMode && input.policy.voiceMode !== "off") {
+    const elevenLabsCredential = await saveElevenLabsKey({
+      env: input.env,
+      communityId: input.communityId,
+      accessToken: input.ownerToken,
+    })
+    expect(elevenLabsCredential.status).toBe(200)
+  }
   const policy = await updateAssistantPolicy({
     env: input.env,
     communityId: input.communityId,
@@ -2225,6 +2250,171 @@ describe("community Telegram routes", () => {
     const firstSendBody = await sendMessageRequests[0]!.json() as { chat_id: string; text: string }
     expect(firstSendBody.chat_id).toBe("887201")
     expect(firstSendBody.text).toBe("Direct answer.")
+  })
+
+  test("community bot private DM transcribes voice and sends voice replies when enabled", async () => {
+    const ctx = await createRouteTestContext({
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      OPENROUTER_TIMEOUT_MS: "1000",
+      PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
+      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
+      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "1",
+    })
+    cleanup = ctx.cleanup
+    const openRouterCalls: Array<{ authorization: string | null; body: { messages?: Array<{ role?: string; content?: string }> } }> = []
+    const elevenLabsSttCalls: Request[] = []
+    const elevenLabsTtsCalls: Request[] = []
+    const telegramRequests: Request[] = []
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      if (request.url === "https://openrouter.test/api/v1/chat/completions") {
+        openRouterCalls.push({
+          authorization: request.headers.get("authorization"),
+          body: await request.json() as { messages?: Array<{ role?: string; content?: string }> },
+        })
+        return Response.json({
+          id: "chatcmpl_telegram_direct_voice",
+          choices: [{ message: { content: "Voice DM answer." } }],
+          usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+        })
+      }
+      if (request.url === "https://api.elevenlabs.io/v1/speech-to-text") {
+        elevenLabsSttCalls.push(request)
+        expect(request.headers.get("xi-api-key")).toBe(ELEVENLABS_COMMUNITY_API_KEY)
+        const form = await request.formData()
+        expect(form.get("model_id")).toBe("scribe_v2")
+        expect(form.get("file")).toBeInstanceOf(File)
+        return Response.json({
+          text: "voice direct question",
+          confidence: 0.97,
+          language_code: "en",
+        })
+      }
+      if (request.url.startsWith("https://api.elevenlabs.io/v1/text-to-speech/voice_direct_dm")) {
+        elevenLabsTtsCalls.push(request)
+        expect(request.headers.get("xi-api-key")).toBe(ELEVENLABS_COMMUNITY_API_KEY)
+        expect(new URL(request.url).searchParams.get("output_format")).toBe("opus_48000_32")
+        const body = await request.json() as { text?: string; model_id?: string }
+        expect(body.text).toBe("Voice DM answer.")
+        expect(body.model_id).toBe("eleven_flash_v2_5")
+        return new Response(new Uint8Array([1, 2, 3, 4]), {
+          headers: {
+            "content-type": "audio/ogg",
+            "request-id": "elevenlabs_direct_voice_request",
+          },
+        })
+      }
+      if (request.url.includes("/getFile")) {
+        telegramRequests.push(request)
+        return Response.json({
+          ok: true,
+          result: {
+            file_id: "voice_file_123",
+            file_unique_id: "voice_unique_123",
+            file_size: 128,
+            file_path: "voice/file_123.oga",
+          },
+        })
+      }
+      if (request.url.includes("/file/bot") && request.url.endsWith("/voice/file_123.oga")) {
+        return new Response(new Uint8Array([9, 8, 7, 6]), {
+          headers: { "content-type": "audio/ogg" },
+        })
+      }
+      telegramRequests.push(request)
+      const method = request.url.split("/").at(-1)
+      if (method === "getMe") {
+        return Response.json({
+          ok: true,
+          result: {
+            id: 987654,
+            is_bot: true,
+            first_name: "Pirate Test Bot",
+            username: "PirateTestBot",
+          },
+        })
+      }
+      if (method === "setWebhook" || method === "deleteWebhook") {
+        return Response.json({ ok: true, result: true })
+      }
+      return Response.json({
+        ok: true,
+        result: { message_id: 701 + telegramRequests.length },
+      })
+    }
+
+    const owner = await exchangeJwt(ctx.env, "telegram-direct-voice-owner")
+    const member = await exchangeJwt(ctx.env, "telegram-direct-voice-member")
+    const communityId = await createCommunity({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      displayName: "Telegram Direct Voice Club",
+    })
+    await setupEnabledAssistant({
+      env: ctx.env,
+      communityId,
+      ownerToken: owner.accessToken,
+      policy: {
+        voiceMode: "voice_replies",
+        sttProvider: "elevenlabs",
+        sttModel: "scribe_v2",
+        ttsProvider: "elevenlabs",
+        ttsVoice: "voice_direct_dm",
+      },
+    })
+    await markCommunityMember({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      userId: member.userId,
+    })
+    await linkTelegramAccount({
+      client: ctx.client,
+      telegramUserId: "777211",
+      userId: member.userId,
+    })
+    const bot = await saveCommunityBotForWebhook({
+      env: ctx.env,
+      communityId,
+      accessToken: owner.accessToken,
+    })
+
+    const response = await telegramCommunityBotWebhook({
+      env: ctx.env,
+      webhookId: bot.webhookId,
+      secret: bot.webhookSecret,
+      body: {
+        update_id: 52,
+        message: {
+          message_id: 211,
+          from: { id: 777211 },
+          chat: { id: 887211, type: "private" },
+          voice: {
+            file_id: "voice_file_123",
+            file_unique_id: "voice_unique_123",
+            duration: 2,
+            mime_type: "audio/ogg",
+            file_size: 128,
+          },
+        },
+      },
+    })
+
+    expect(response.status).toBe(200)
+    expect(elevenLabsSttCalls).toHaveLength(1)
+    expect(openRouterCalls).toHaveLength(1)
+    expect(openRouterCalls[0]?.authorization).toBe("Bearer sk-or-telegram-assistant-key-1234")
+    expect(openRouterCalls[0]?.body.messages?.at(-1)?.content).toBe("voice direct question")
+    expect(elevenLabsTtsCalls).toHaveLength(1)
+    const sendVoiceRequests = telegramRequests.filter((request) => request.url.endsWith("/sendVoice"))
+    const sendMessageRequests = telegramRequests.filter((request) => request.url.endsWith("/sendMessage"))
+    expect(sendVoiceRequests).toHaveLength(1)
+    expect(sendMessageRequests).toHaveLength(0)
+    const form = await sendVoiceRequests[0]!.formData()
+    expect(form.get("chat_id")).toBe("887211")
+    expect(form.get("reply_parameters")).toBe(JSON.stringify({ message_id: 211 }))
+    const voice = form.get("voice")
+    expect(voice).toBeInstanceOf(File)
+    expect((voice as File).name).toBe("assistant-reply.ogg")
   })
 
   test("community bot private DM prompts unlinked Telegram users without provider calls", async () => {
