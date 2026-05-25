@@ -468,6 +468,15 @@ function directAssistantFailureMessage(error: unknown): string {
   return "Community assistant is unavailable right now. Try again later."
 }
 
+function telegramRouteErrorLogFields(error: unknown): Record<string, unknown> {
+  return {
+    error: error instanceof Error ? error.message : String(error),
+    errorName: error instanceof Error ? error.name : null,
+    httpStatus: error instanceof HttpError ? error.status : null,
+    httpCode: error instanceof HttpError ? error.code : null,
+  }
+}
+
 async function safeSendTelegramMessage(
   bot: Env | TelegramBotCredential,
   body: Parameters<typeof sendTelegramMessage>[1],
@@ -824,6 +833,15 @@ async function handleDirectAssistantMessage(env: Env, message: TelegramWebhookMe
       text: telegramText(answer.assistant_message.content),
     })
   } catch (error) {
+    console.warn("[telegram-assistant] direct prompt failed", {
+      ...telegramRouteErrorLogFields(error),
+      communityId: bot.communityId,
+      promptLength: prompt.length,
+      telegramChatId: chatId,
+      telegramCommunityBotId: bot.id,
+      telegramUserId,
+      userId: account.userId,
+    })
     await safeSendTelegramMessage(bot, {
       chat_id: chatId,
       text: directAssistantFailureMessage(error),

@@ -160,6 +160,15 @@ function groupFailureMessage(error: unknown): string {
   return "Community assistant is unavailable right now. Try again later."
 }
 
+function assistantErrorLogFields(error: unknown): Record<string, unknown> {
+  return {
+    error: error instanceof Error ? error.message : String(error),
+    errorName: error instanceof Error ? error.name : null,
+    httpStatus: error instanceof HttpError ? error.status : null,
+    httpCode: error instanceof HttpError ? error.code : null,
+  }
+}
+
 export async function answerTelegramGroupAssistantPrompt(input: {
   env: Env
   communityRepository: CommunityAssistantRepository
@@ -213,6 +222,17 @@ export async function answerTelegramGroupAssistantPrompt(input: {
     return { text: telegramText(answer.content) }
   } catch (error) {
     const status = error instanceof HttpError && error.status === 429 ? "rate_limited" : "failed"
+    console.warn("[telegram-assistant] group prompt failed", {
+      ...assistantErrorLogFields(error),
+      communityId: linkedChat.communityId,
+      eventId,
+      promptLength: input.prompt.length,
+      status,
+      telegramChatId: input.telegramChatId,
+      telegramMessageId: input.telegramMessageId,
+      telegramUserId: input.telegramUserId,
+      triggerType: input.triggerType,
+    })
     await updateTelegramAssistantEvent({
       env: input.env,
       eventId,
