@@ -25,6 +25,7 @@ import {
 } from "../lib/telegram/community-bot-service"
 import {
   answerTelegramGroupAssistantPrompt,
+  telegramText,
   type TelegramAssistantTriggerType,
 } from "../lib/telegram/assistant-service"
 import {
@@ -32,9 +33,17 @@ import {
   markTelegramJoinGrantApproved,
   markTelegramJoinGrantFailed,
   markTelegramJoinGrantPrompted,
+  resolveTelegramAccount,
 } from "../lib/telegram/join-request-service"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
+import { openCommunityDb } from "../lib/communities/community-db-factory"
+import {
+  canAccessCommunity,
+  getCommunityMembershipState,
+} from "../lib/communities/membership/membership-state-store"
+import { sendCommunityAssistantTelegramDirectMessage } from "../lib/communities/assistant-policy/chat-service"
 import { authError, badRequestError, HttpError } from "../lib/errors"
+import { publicCommunityId } from "../lib/public-ids"
 
 const telegram = new Hono<{ Bindings: Env }>()
 
@@ -187,6 +196,40 @@ function parseGroupAssistantTrigger(bot: Env | TelegramBotCredential, message: T
   return null
 }
 
+function isPrivateChat(type: string | undefined): boolean {
+  return type === "private"
+}
+
+function isCommunityBot(bot: Env | TelegramCommunityBotCredential): bot is TelegramCommunityBotCredential {
+  return "id" in bot
+}
+
+function parseDirectAssistantPrompt(bot: TelegramCommunityBotCredential, message: TelegramWebhookMessage): string | null {
+  const text = message.text?.trim()
+  if (!text) {
+    return null
+  }
+  const commandMatch = text.match(/^\/ask(?:@([A-Za-z0-9_]{5,32}))?(?:\s+([\s\S]+))?$/u)
+  if (commandMatch) {
+    const mentionedUsername = commandMatch[1]
+    if (mentionedUsername && !sameTelegramUsername(telegramBotUsername(bot), mentionedUsername)) {
+      return null
+    }
+    let prompt = commandMatch[2]?.trim()
+    if (!mentionedUsername && prompt) {
+      const leadingMention = prompt.match(/^@([A-Za-z0-9_]{5,32})(?:\s+([\s\S]+))?$/u)
+      if (leadingMention && sameTelegramUsername(telegramBotUsername(bot), leadingMention[1])) {
+        prompt = leadingMention[2]?.trim()
+      }
+    }
+    return prompt || null
+  }
+  if (text.startsWith("/")) {
+    return null
+  }
+  return text
+}
+
 function chatPickerAdminRights() {
   return {
     is_anonymous: false,
@@ -256,6 +299,39 @@ function completionErrorMessage(error: unknown): string {
   return "Could not connect this Telegram chat. Start again from Pirate."
 }
 
+function communityTelegramJoinUrl(env: Env, communityId: string): string | null {
+  const origin = env.PIRATE_WEB_PUBLIC_ORIGIN?.trim().replace(/\/+$/u, "")
+  return origin ? `${origin}/tg/c/${publicCommunityId(communityId)}` : null
+}
+
+function directAssistantLinkText(input: {
+  env: Env
+  communityId: string
+  reason: "unlinked" | "not_member"
+}): string {
+  const url = communityTelegramJoinUrl(input.env, input.communityId)
+  const body = input.reason === "unlinked"
+    ? "Open Pirate to link this Telegram account before messaging the community assistant."
+    : "Open Pirate to join or verify for this community before messaging the assistant."
+  return url ? `${body}\n${url}` : body
+}
+
+function directAssistantFailureMessage(error: unknown): string {
+  if (error instanceof HttpError && error.status === 404) {
+    return "Community assistant is not enabled. In Pirate, open Mod > Assistant, turn it on, and save settings before messaging this bot."
+  }
+  if (error instanceof HttpError && error.status === 400) {
+    return "Community assistant is missing required setup. In Pirate, check Mod > Assistant for the OpenRouter key, model, and saved assistant settings."
+  }
+  if (error instanceof HttpError && error.status === 429) {
+    return "Community assistant is rate limited right now. Try again later."
+  }
+  if (error instanceof HttpError && error.status === 502) {
+    return "The assistant model provider failed to respond. Try again, or choose a different model in Pirate under Mod > Assistant."
+  }
+  return "Community assistant is unavailable right now. Try again later."
+}
+
 async function safeSendTelegramMessage(
   bot: Env | TelegramBotCredential,
   body: Parameters<typeof sendTelegramMessage>[1],
@@ -268,6 +344,21 @@ async function safeSendTelegramMessage(
       error: error instanceof Error ? error.message : String(error),
     })
     return false
+  }
+}
+
+async function telegramUserCanAccessCommunity(input: {
+  env: Env
+  communityId: string
+  userId: string
+}): Promise<boolean> {
+  const communityRepository = getCommunityRepository(input.env)
+  const db = await openCommunityDb(input.env, communityRepository, input.communityId)
+  try {
+    const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
+    return canAccessCommunity(membership)
+  } finally {
+    db.close()
   }
 }
 
@@ -402,6 +493,75 @@ async function handleChatSharedMessage(env: Env, message: TelegramWebhookMessage
   }
 }
 
+async function handleDirectAssistantMessage(env: Env, message: TelegramWebhookMessage, bot: TelegramCommunityBotCredential): Promise<void> {
+  const chatId = telegramIdentifier(message.chat?.id)
+  const telegramUserId = telegramIdentifier(message.from?.id)
+  if (!chatId || !telegramUserId || !isPrivateChat(message.chat?.type) || message.from?.is_bot) {
+    return
+  }
+
+  const prompt = parseDirectAssistantPrompt(bot, message)
+  if (!prompt) {
+    await safeSendTelegramMessage(bot, {
+      chat_id: chatId,
+      text: "Send a text question to talk to this community assistant.",
+    })
+    return
+  }
+
+  const account = await resolveTelegramAccount({
+    env,
+    telegramUserId,
+  })
+  if (!account) {
+    await safeSendTelegramMessage(bot, {
+      chat_id: chatId,
+      text: directAssistantLinkText({
+        env,
+        communityId: bot.communityId,
+        reason: "unlinked",
+      }),
+    })
+    return
+  }
+
+  const canAccess = await telegramUserCanAccessCommunity({
+    env,
+    communityId: bot.communityId,
+    userId: account.userId,
+  })
+  if (!canAccess) {
+    await safeSendTelegramMessage(bot, {
+      chat_id: chatId,
+      text: directAssistantLinkText({
+        env,
+        communityId: bot.communityId,
+        reason: "not_member",
+      }),
+    })
+    return
+  }
+
+  try {
+    const answer = await sendCommunityAssistantTelegramDirectMessage({
+      env,
+      communityRepository: getCommunityRepository(env),
+      communityId: bot.communityId,
+      userId: account.userId,
+      message: prompt,
+    })
+    await safeSendTelegramMessage(bot, {
+      chat_id: chatId,
+      text: telegramText(answer.assistant_message.content),
+    })
+  } catch (error) {
+    await safeSendTelegramMessage(bot, {
+      chat_id: chatId,
+      text: directAssistantFailureMessage(error),
+    })
+  }
+}
+
 async function handleGroupAssistantMessage(env: Env, message: TelegramWebhookMessage, bot: Env | TelegramCommunityBotCredential = env): Promise<void> {
   const chatId = telegramIdentifier(message.chat?.id)
   const telegramUserId = telegramIdentifier(message.from?.id)
@@ -495,6 +655,14 @@ async function handleTelegramWebhookUpdate(env: Env, update: TelegramWebhookUpda
   }
   if (message.text?.trim().startsWith("/start")) {
     await handleStartMessage(env, message, bot)
+    return
+  }
+  if (isPrivateChat(message.chat?.type)) {
+    if (isCommunityBot(bot)) {
+      await handleDirectAssistantMessage(env, message, bot)
+    } else {
+      await handleStartMessage(env, message, bot)
+    }
     return
   }
   await handleGroupAssistantMessage(env, message, bot)

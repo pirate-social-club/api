@@ -22,7 +22,7 @@ export type TelegramAssistantGroupAnswer = {
   text: string
 }
 
-function telegramText(value: string): string {
+export function telegramText(value: string): string {
   if (value.length <= TELEGRAM_MESSAGE_LIMIT) {
     return value
   }

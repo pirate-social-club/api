@@ -10,6 +10,10 @@ import { numberOrNull, rowValue, stringOrNull } from "../../sql-row"
 import { openCommunityDb } from "../community-db-factory"
 import { requireAssistantCommunityAccess, type CommunityAssistantRepository } from "./access"
 import {
+  canAccessCommunity,
+  getCommunityMembershipState,
+} from "../membership/membership-state-store"
+import {
   COMMUNITY_ASSISTANT_TOOLS,
   MAX_TOOL_ROUNDS,
   MAX_TOTAL_TOOL_RESULT_CHARS,
@@ -20,7 +24,6 @@ import {
 import { buildCommunityContext } from "./context-builder"
 import { decryptActiveCommunityOpenRouterKey } from "./credential-service"
 import {
-  getCommunityAssistantRuntimePolicy,
   getCommunityAssistantRuntimePolicyForCommunity,
   type CommunityAssistantPolicy,
 } from "./service"
@@ -297,6 +300,26 @@ async function getOrCreateChat(input: {
     created_at: input.now,
     updated_at: input.now,
   }
+}
+
+async function getLatestActiveChatId(input: {
+  client: Client
+  communityId: string
+  userId: string
+}): Promise<string | null> {
+  const row = await executeFirst(input.client, {
+    sql: `
+      SELECT chat_id
+      FROM community_assistant_chats
+      WHERE community_id = ?1
+        AND user_id = ?2
+        AND status = 'active'
+      ORDER BY updated_at DESC, chat_id DESC
+      LIMIT 1
+    `,
+    args: [input.communityId, input.userId],
+  })
+  return stringOrNull(rowValue(row, "chat_id"))
 }
 
 async function listRecentMessages(input: {
@@ -613,17 +636,22 @@ async function runCommunityAssistantCompletion(input: {
   }
 }
 
-export async function sendCommunityAssistantMessage(input: {
+async function sendCommunityAssistantUserMessage(input: {
   env: Env
   communityRepository: CommunityAssistantRepository
   communityId: string
-  actor: ActorContext | AdminActorContext
-  body: CommunityAssistantChatBody | null
+  userId: string
+  message: string
+  chatId: string | null
+  accessMode: "already_checked" | "member_required"
+  delivery: "web" | "telegram_dm"
+  reuseLatestActiveChat?: boolean
 }): Promise<CommunityAssistantChatResponse> {
-  await requireAssistantCommunityAccess(input)
-  const message = normalizeChatMessage(input.body?.message)
-  const requestedChatId = normalizeChatId(input.body?.chat_id)
-  const policy = await getCommunityAssistantRuntimePolicy(input)
+  const policy = await getCommunityAssistantRuntimePolicyForCommunity({
+    env: input.env,
+    communityRepository: input.communityRepository,
+    communityId: input.communityId,
+  })
   const openRouterKey = await decryptActiveCommunityOpenRouterKey({
     env: input.env,
     communityId: input.communityId,
@@ -633,30 +661,45 @@ export async function sendCommunityAssistantMessage(input: {
   const persist = shouldPersistChats(policy)
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
+    if (input.accessMode === "member_required") {
+      const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
+      if (!canAccessCommunity(membership)) {
+        throw notFoundError("Community not found")
+      }
+    }
+
     if (persist) {
       await enforceRuntimeLimits({
         client: db.client,
         communityId: input.communityId,
-        userId: input.actor.userId,
+        userId: input.userId,
         policy,
         now: nowDate,
       })
     }
 
+    const requestedChatId = input.chatId
+      ?? (persist && input.reuseLatestActiveChat
+        ? await getLatestActiveChatId({
+          client: db.client,
+          communityId: input.communityId,
+          userId: input.userId,
+        })
+        : null)
     const chat = persist
       ? await getOrCreateChat({
         client: db.client,
         communityId: input.communityId,
-        userId: input.actor.userId,
+        userId: input.userId,
         chatId: requestedChatId,
-        message,
+        message: input.message,
         now,
       })
       : {
         chat_id: makeId("asc"),
         community_id: input.communityId,
-        user_id: input.actor.userId,
-        title: titleFromMessage(message),
+        user_id: input.userId,
+        title: titleFromMessage(input.message),
         status: "active" as const,
         created_at: now,
         updated_at: now,
@@ -671,28 +714,31 @@ export async function sendCommunityAssistantMessage(input: {
     const context = await buildCommunityContext({
       client: db.client,
       communityId: input.communityId,
-      message,
-      userId: input.actor.userId,
+      message: input.message,
+      userId: input.userId,
       policy,
       audience: "private_user",
     })
+    const telegramInstruction = input.delivery === "telegram_dm"
+      ? "\n\nTelegram private chat response rules: format answers as concise plain conversational text. Do not use markdown headings or copy raw context labels unless the user asks for structured output."
+      : ""
     const userMessage = persist
       ? await insertMessage({
         client: db.client,
         chatId: chat.chat_id,
         communityId: input.communityId,
-        userId: input.actor.userId,
+        userId: input.userId,
         role: "user",
-        content: message,
+        content: input.message,
         now,
       })
       : {
         message_id: makeId("asm"),
         chat_id: chat.chat_id,
         community_id: input.communityId,
-        user_id: input.actor.userId,
+        user_id: input.userId,
         role: "user" as const,
-        content: message,
+        content: input.message,
         model_id: null,
         provider_message_id: null,
         prompt_tokens: null,
@@ -704,7 +750,7 @@ export async function sendCommunityAssistantMessage(input: {
     const openRouterMessages: OpenRouterChatMessage[] = [
       {
         role: "system",
-        content: `${policy.systemPrompt}\n\n${context}`,
+        content: `${policy.systemPrompt}\n\n${context}${telegramInstruction}`,
       },
       ...history.map((item) => ({
         role: item.role as "user" | "assistant",
@@ -712,7 +758,7 @@ export async function sendCommunityAssistantMessage(input: {
       })),
       {
         role: "user",
-        content: message,
+        content: input.message,
       },
     ]
 
@@ -726,7 +772,7 @@ export async function sendCommunityAssistantMessage(input: {
       model: policy.selectedModelId,
       policy,
       timeoutMs: openRouterTimeoutMs(input.env),
-      userId: input.actor.userId,
+      userId: input.userId,
     }).catch((error) => {
       throw providerUnavailable(error instanceof Error ? error.message : "OpenRouter community assistant request failed")
     })
@@ -737,7 +783,7 @@ export async function sendCommunityAssistantMessage(input: {
         client: db.client,
         chatId: chat.chat_id,
         communityId: input.communityId,
-        userId: input.actor.userId,
+        userId: input.userId,
         role: "assistant",
         content: completion.content,
         modelId: policy.selectedModelId,
@@ -751,6 +797,7 @@ export async function sendCommunityAssistantMessage(input: {
           tool_rounds: completion.toolRounds,
           tool_call_count: completion.toolCallCount,
           tools_used: completion.toolsUsed,
+          delivery: input.delivery,
         },
         now: assistantNow,
       })
@@ -758,7 +805,7 @@ export async function sendCommunityAssistantMessage(input: {
         message_id: makeId("asm"),
         chat_id: chat.chat_id,
         community_id: input.communityId,
-        user_id: input.actor.userId,
+        user_id: input.userId,
         role: "assistant" as const,
         content: completion.content,
         model_id: policy.selectedModelId,
@@ -781,6 +828,49 @@ export async function sendCommunityAssistantMessage(input: {
   } finally {
     db.close()
   }
+}
+
+export async function sendCommunityAssistantMessage(input: {
+  env: Env
+  communityRepository: CommunityAssistantRepository
+  communityId: string
+  actor: ActorContext | AdminActorContext
+  body: CommunityAssistantChatBody | null
+}): Promise<CommunityAssistantChatResponse> {
+  await requireAssistantCommunityAccess(input)
+  const message = normalizeChatMessage(input.body?.message)
+  const requestedChatId = normalizeChatId(input.body?.chat_id)
+  return sendCommunityAssistantUserMessage({
+    env: input.env,
+    communityRepository: input.communityRepository,
+    communityId: input.communityId,
+    userId: input.actor.userId,
+    message,
+    chatId: requestedChatId,
+    accessMode: "already_checked",
+    delivery: "web",
+  })
+}
+
+export async function sendCommunityAssistantTelegramDirectMessage(input: {
+  env: Env
+  communityRepository: CommunityAssistantRepository
+  communityId: string
+  userId: string
+  message: unknown
+}): Promise<CommunityAssistantChatResponse> {
+  const message = normalizeChatMessage(input.message)
+  return sendCommunityAssistantUserMessage({
+    env: input.env,
+    communityRepository: input.communityRepository,
+    communityId: input.communityId,
+    userId: input.userId,
+    message,
+    chatId: null,
+    accessMode: "member_required",
+    delivery: "telegram_dm",
+    reuseLatestActiveChat: true,
+  })
 }
 
 export async function sendCommunityAssistantGroupMessage(input: {

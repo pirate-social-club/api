@@ -29,7 +29,7 @@ export type TelegramJoinRequestDecision =
       grantId?: string
     }
 
-type ResolvedTelegramAccount = {
+export type ResolvedTelegramAccount = {
   userId: string
 }
 
@@ -62,7 +62,7 @@ function joinRequestDateFromSeconds(value: number | null): string {
   return nowIso()
 }
 
-async function resolveTelegramAccount(input: {
+export async function resolveTelegramAccount(input: {
   env: Env
   telegramUserId: string
 }): Promise<ResolvedTelegramAccount | null> {
