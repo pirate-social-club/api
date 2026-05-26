@@ -532,7 +532,10 @@ function publicPolicy(policy: CommunityAssistantPolicy): CommunityAssistantPubli
     voiceTranscriptionConfigured: policy.voiceMode !== "off"
       && policy.sttProvider === "elevenlabs"
       && elevenLabsKeyConfigured,
-    voiceRepliesConfigured: policy.voiceMode === "voice_replies"
+    voiceRepliesConfigured: (
+      policy.voiceMode === "voice_replies"
+      || policy.voiceMode === "text_and_voice_replies"
+    )
       && policy.ttsProvider === "elevenlabs"
       && ttsVoiceConfigured
       && elevenLabsKeyConfigured,

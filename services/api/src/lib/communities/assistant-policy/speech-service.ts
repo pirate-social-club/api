@@ -79,7 +79,7 @@ function assertTranscriptionPolicy(policy: CommunityAssistantPolicy): void {
 }
 
 function assertSpeechPolicy(policy: CommunityAssistantPolicy): void {
-  if (policy.voiceMode !== "voice_replies") {
+  if (policy.voiceMode !== "voice_replies" && policy.voiceMode !== "text_and_voice_replies") {
     throw badRequestError("Assistant voice replies are disabled for this community")
   }
   if (policy.ttsProvider !== "elevenlabs") {

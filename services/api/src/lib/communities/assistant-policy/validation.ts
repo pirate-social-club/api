@@ -1,6 +1,6 @@
 export type AssistantContextMode = "live_sql" | "summary_cache" | "hybrid_vector"
 export type AssistantActionMode = "answer_only" | "draft_only" | "confirmed_writes"
-export type AssistantVoiceMode = "off" | "transcription_only" | "voice_replies"
+export type AssistantVoiceMode = "off" | "transcription_only" | "voice_replies" | "text_and_voice_replies"
 export type AssistantSttProvider = "elevenlabs" | "mistral" | "openai" | "none"
 export type AssistantTtsProvider = "elevenlabs" | "none"
 
@@ -42,7 +42,7 @@ export type CommunityAssistantPolicyValidationResult =
 
 const CONTEXT_MODES: readonly AssistantContextMode[] = ["live_sql", "summary_cache", "hybrid_vector"]
 const ACTION_MODES: readonly AssistantActionMode[] = ["answer_only", "draft_only", "confirmed_writes"]
-const VOICE_MODES: readonly AssistantVoiceMode[] = ["off", "transcription_only", "voice_replies"]
+const VOICE_MODES: readonly AssistantVoiceMode[] = ["off", "transcription_only", "voice_replies", "text_and_voice_replies"]
 const STT_PROVIDERS: readonly AssistantSttProvider[] = ["elevenlabs", "mistral", "openai", "none"]
 const TTS_PROVIDERS: readonly AssistantTtsProvider[] = ["elevenlabs", "none"]
 
@@ -235,7 +235,7 @@ export function validateCommunityAssistantPolicySettings(
   if (voiceMode !== "off" && elevenLabsKeyStatus.kind !== "connected") {
     errors.push("enabled voice requires a connected ElevenLabs key")
   }
-  if (voiceMode === "voice_replies") {
+  if (voiceMode === "voice_replies" || voiceMode === "text_and_voice_replies") {
     if (ttsProvider === "none") {
       errors.push("voice replies require a text-to-speech provider")
     }

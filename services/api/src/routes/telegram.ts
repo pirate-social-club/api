@@ -624,6 +624,7 @@ async function maybeSendTelegramAssistantVoiceReplyForCommunity(input: {
   env: Env
   message: TelegramWebhookMessage
   messageThreadId?: number
+  sendTextBeforeVoice?: () => Promise<boolean>
 }): Promise<boolean> {
   const communityRepository = getCommunityRepository(input.env)
   let policy
@@ -641,6 +642,7 @@ async function maybeSendTelegramAssistantVoiceReplyForCommunity(input: {
   }
   if (
     policy.voiceMode !== "voice_replies"
+    && policy.voiceMode !== "text_and_voice_replies"
     || policy.ttsProvider !== "elevenlabs"
     || !policy.ttsVoice.trim()
   ) {
@@ -655,7 +657,11 @@ async function maybeSendTelegramAssistantVoiceReplyForCommunity(input: {
     textLength: input.answerText.length,
     ttsProvider: policy.ttsProvider,
     ttsVoice: policy.ttsVoice,
+    voiceMode: policy.voiceMode,
   }
+  const textSent = policy.voiceMode === "text_and_voice_replies" && input.sendTextBeforeVoice
+    ? await input.sendTextBeforeVoice()
+    : false
   let speech
   try {
     console.info("[telegram-assistant] voice TTS start", logContext)
@@ -680,7 +686,7 @@ async function maybeSendTelegramAssistantVoiceReplyForCommunity(input: {
       ...logContext,
       ...telegramRouteErrorLogFields(error),
     })
-    return false
+    return textSent
   }
 
   const sent = await safeSendTelegramVoice(input.bot, {
@@ -696,8 +702,9 @@ async function maybeSendTelegramAssistantVoiceReplyForCommunity(input: {
   console.info("[telegram-assistant] voice reply send result", {
     ...logContext,
     sent,
+    textSent,
   })
-  return sent
+  return sent || textSent
 }
 
 async function maybeSendTelegramAssistantVoiceReply(input: {
@@ -705,6 +712,7 @@ async function maybeSendTelegramAssistantVoiceReply(input: {
   bot: Env | TelegramCommunityBotCredential
   env: Env
   message: TelegramWebhookMessage
+  sendTextBeforeVoice?: () => Promise<boolean>
   telegramChatId: string
 }): Promise<boolean> {
   const linkedChat = await getTelegramLinkedChatBotContext({
@@ -722,6 +730,7 @@ async function maybeSendTelegramAssistantVoiceReply(input: {
     env: input.env,
     message: input.message,
     messageThreadId: input.message.message_thread_id,
+    sendTextBeforeVoice: input.sendTextBeforeVoice,
   })
 }
 
@@ -948,6 +957,20 @@ async function handleDirectAssistantMessage(env: Env, message: TelegramWebhookMe
       communityId: bot.communityId,
       env,
       message,
+      sendTextBeforeVoice: async () => {
+        console.info("[telegram-assistant] direct text before voice", {
+          answerLength: answerText.length,
+          communityId: bot.communityId,
+          telegramChatId: chatId,
+          telegramCommunityBotId: bot.id,
+          telegramUserId,
+          triggerType: textPrompt ? "dm_text" : "dm_voice",
+        })
+        return safeSendTelegramMessage(bot, {
+          chat_id: chatId,
+          text: answerText,
+        })
+      },
     })
     if (sentVoiceReply) {
       return
@@ -990,6 +1013,7 @@ async function handleGroupAssistantMessage(env: Env, message: TelegramWebhookMes
   if (!chatId || (!textTrigger && !voiceTrigger) || typeof message.message_id !== "number") {
     return
   }
+  const telegramMessageId = message.message_id
 
   const prompt = textTrigger?.prompt ?? await transcribeTelegramGroupAssistantVoice({
     env,
@@ -1005,7 +1029,7 @@ async function handleGroupAssistantMessage(env: Env, message: TelegramWebhookMes
     env,
     communityRepository: getCommunityRepository(env),
     telegramChatId: chatId,
-    telegramMessageId: message.message_id,
+    telegramMessageId,
     telegramUserId,
     triggerType: textTrigger?.triggerType ?? voiceTrigger!.triggerType,
     prompt,
@@ -1019,6 +1043,24 @@ async function handleGroupAssistantMessage(env: Env, message: TelegramWebhookMes
     env,
     message,
     telegramChatId: chatId,
+    sendTextBeforeVoice: async () => {
+      console.info("[telegram-assistant] group text before voice", {
+        answerLength: answer.text.length,
+        communityId: isCommunityBot(bot) ? bot.communityId : null,
+        telegramChatId: chatId,
+        telegramMessageId,
+        telegramUserId,
+        triggerType: textTrigger?.triggerType ?? voiceTrigger!.triggerType,
+      })
+      return safeSendTelegramMessage(bot, {
+        chat_id: chatId,
+        ...(typeof message.message_thread_id === "number" ? { message_thread_id: message.message_thread_id } : {}),
+        text: answer.text,
+        reply_parameters: {
+          message_id: telegramMessageId,
+        },
+      })
+    },
   })
   if (sentVoiceReply) {
     return
@@ -1027,7 +1069,7 @@ async function handleGroupAssistantMessage(env: Env, message: TelegramWebhookMes
     answerLength: answer.text.length,
     communityId: isCommunityBot(bot) ? bot.communityId : null,
     telegramChatId: chatId,
-    telegramMessageId: message.message_id,
+    telegramMessageId,
     telegramUserId,
     triggerType: textTrigger?.triggerType ?? voiceTrigger!.triggerType,
   })
@@ -1036,7 +1078,7 @@ async function handleGroupAssistantMessage(env: Env, message: TelegramWebhookMes
     ...(typeof message.message_thread_id === "number" ? { message_thread_id: message.message_thread_id } : {}),
     text: answer.text,
     reply_parameters: {
-      message_id: message.message_id,
+      message_id: telegramMessageId,
     },
   })
 }

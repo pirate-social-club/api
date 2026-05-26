@@ -252,6 +252,7 @@ describe("validateCommunityAssistantPolicySettings", () => {
     expectValid(validPolicy({ voiceMode: "off" }))
     expectValid(validPolicy({ voiceMode: "transcription_only" }))
     expectValid(validPolicy({ voiceMode: "voice_replies" }))
+    expectValid(validPolicy({ voiceMode: "text_and_voice_replies" }))
   })
 
   test("rejects invalid voice mode", () => {
@@ -325,6 +326,14 @@ describe("validateCommunityAssistantPolicySettings", () => {
     }), "voice replies require a text-to-speech provider")
     expectInvalid(validPolicy({
       voiceMode: "voice_replies",
+      ttsVoice: " ",
+    }), "voice replies require a text-to-speech voice")
+    expectInvalid(validPolicy({
+      voiceMode: "text_and_voice_replies",
+      ttsProvider: "none",
+    }), "voice replies require a text-to-speech provider")
+    expectInvalid(validPolicy({
+      voiceMode: "text_and_voice_replies",
       ttsVoice: " ",
     }), "voice replies require a text-to-speech voice")
   })
