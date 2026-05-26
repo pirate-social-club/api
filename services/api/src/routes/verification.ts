@@ -292,15 +292,15 @@ authenticatedVerification.get("/verification/altcha/challenge", async (c) => {
 authenticatedVerification.post("/verification-sessions", async (c) => {
   const actor = c.get("actor")
   const body = await c.req.json<{
-    provider?: "self" | "very"
-    provider_mode?: "qr_deeplink" | "widget" | "native_sdk" | null
+    provider?: "self" | "very" | "zkpassport"
+    provider_mode?: "qr_deeplink" | "widget" | "native_sdk" | "web_sdk" | null
     requested_capabilities?: RequestedVerificationCapability[] | null
     verification_requirements?: VerificationRequirement[] | null
     wallet_attachment_id?: string | null
     verification_intent?: string | null
     policy_id?: string | null
   }>().catch(() => null)
-  if (!body?.provider || (body.provider !== "self" && body.provider !== "very")) {
+  if (!body?.provider || (body.provider !== "self" && body.provider !== "very" && body.provider !== "zkpassport")) {
     throw badRequestError("Invalid verification session payload")
   }
 

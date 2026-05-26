@@ -225,9 +225,38 @@ cd api/services/api
 rtk bun run dev:local:full
 ```
 
-`dev:local:full` loads dev secrets from Infisical, keeps the SQLite files in `services/api/.local/` by default, reapplies pending control-plane migrations on startup, starts local HNS and Spaces verifiers, prefers a managed `cloudflared` origin or configured `PIRATE_API_PUBLIC_ORIGIN` for the API public origin, runs the assistant worker on port `8791`, routes local Bedsheet model calls through a Bun-side OpenRouter proxy on port `8792`, and runs the translation worker with the same environment as the API process. If no public origin is available, it falls back to `http://127.0.0.1:8787` for local-only API work. If web port `5173`, assistant worker port `8791`, or OpenRouter proxy port `8792` is already in use, the script leaves that existing server alone. Set `PIRATE_DEV_TUNNEL=required` to require a `cloudflared` quick tunnel, `PIRATE_DEV_TUNNEL=auto` to use a tunnel when available, `PIRATE_DEV_USE_REMOTE_CONTROL_PLANE=true` to use the Infisical control-plane database instead of local SQLite, `PIRATE_DEV_USE_REMOTE_VERIFIERS=true` to use verifier URLs from `.dev.vars`, `PIRATE_DEV_START_WEB=false` to leave web startup to a separate terminal, `PIRATE_DEV_START_ASSISTANT=false` to leave Bedsheet startup to a separate terminal, `PIRATE_DEV_OPENROUTER_PROXY_PORT=8793` to move the local OpenRouter proxy, or `PIRATE_DEV_ASSISTANT_INSPECTOR_PORT=9249` to move the assistant worker inspector port search.
+`dev:local:full` loads dev secrets from Infisical, keeps the SQLite files in `services/api/.local/` by default, reapplies pending control-plane migrations on startup, starts local HNS, Spaces, and ZKPassport verifiers, prefers a managed `cloudflared` origin or configured `PIRATE_API_PUBLIC_ORIGIN` for the API public origin, runs the assistant worker on port `8791`, routes local Bedsheet model calls through a Bun-side OpenRouter proxy on port `8792`, and runs the translation worker with the same environment as the API process. If no public origin is available, it falls back to `http://127.0.0.1:8787` for local-only API work. If web port `5173`, assistant worker port `8791`, or OpenRouter proxy port `8792` is already in use, the script leaves that existing server alone. Set `PIRATE_DEV_TUNNEL=required` to require a `cloudflared` quick tunnel, `PIRATE_DEV_TUNNEL=auto` to use a tunnel when available, `PIRATE_DEV_USE_REMOTE_CONTROL_PLANE=true` to use the Infisical control-plane database instead of local SQLite, `PIRATE_DEV_USE_REMOTE_VERIFIERS=true` to use verifier URLs from `.dev.vars`, `PIRATE_DEV_START_WEB=false` to leave web startup to a separate terminal, `PIRATE_DEV_START_ASSISTANT=false` to leave Bedsheet startup to a separate terminal, `PIRATE_DEV_OPENROUTER_PROXY_PORT=8793` to move the local OpenRouter proxy, or `PIRATE_DEV_ASSISTANT_INSPECTOR_PORT=9249` to move the assistant worker inspector port search.
 
 Live Self callback testing requires an HTTPS public API origin. Use a live `PIRATE_API_PUBLIC_ORIGIN` or `PIRATE_DEV_TUNNEL=required`; otherwise Self session startup fails instead of generating a QR code that cannot complete.
+
+### ZKPassport Verifier
+
+ZKPassport proof verification must not run inside the Cloudflare Worker API. The SDK initializes Barretenberg through dynamic WebAssembly compilation, which Cloudflare Workers rejects at runtime. The API rebuilds and binds the query in the Worker, then sends the proof bundle to a Node/Bun verifier service.
+
+Local full-dev starts the verifier on `http://127.0.0.1:8794/verify` and sets `ZKPASSPORT_VERIFIER_URL` for the local API process. To run it by itself:
+
+```bash
+rtk bun run zkpassport:verifier
+```
+
+Production/staging requirements:
+
+- Deploy `scripts/zkpassport-verifier-service.ts` to a Node/Bun runtime, not to a Cloudflare Worker. The preferred Cloudflare-native option is the wrapper service in `../zkpassport-verifier-container`, which runs this verifier inside a Cloudflare Container behind a small Worker and container-enabled Durable Object.
+- Set API Worker `ZKPASSPORT_VERIFIER_URL` to the verifier `/verify` endpoint.
+- Set `ZKPASSPORT_VERIFIER_SHARED_SECRET` on both the API Worker and verifier service.
+- Keep `ZKPASSPORT_LOCAL_VERIFY_ENABLED` unset in Worker environments; it exists only for explicit local/runtime experiments in a Node/Bun process. When enabled, `ZKPASSPORT_LOCAL_VERIFY_WRITING_DIRECTORY` defaults to `/tmp`.
+- Verifier logs intentionally include request id, domain, scope, proof count, verification result, and latency, but never raw proofs, raw query results, unique identifiers, nationality, age, or gender values.
+
+Cloudflare Container staging deployment shape:
+
+```bash
+cd api/services/zkpassport-verifier-container
+rtk bun install
+rtk bunx wrangler secret put ZKPASSPORT_VERIFIER_SHARED_SECRET --env staging
+rtk bun run deploy:staging
+```
+
+After deploy, set the API Worker verifier URL to the Container Worker `/verify` endpoint and use the same shared secret on the API Worker.
 
 ## Mint A Dev JWT
 

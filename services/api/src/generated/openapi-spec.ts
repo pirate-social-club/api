@@ -5199,7 +5199,8 @@ const spec = {
             "type": "string",
             "enum": [
               "self",
-              "very"
+              "very",
+              "zkpassport"
             ]
           },
           "provider_mode": {
@@ -5207,7 +5208,8 @@ const spec = {
             "enum": [
               "qr_deeplink",
               "widget",
-              "native_sdk"
+              "native_sdk",
+              "web_sdk"
             ],
             "nullable": true
           },
@@ -5270,7 +5272,8 @@ const spec = {
             "type": "string",
             "enum": [
               "self",
-              "very"
+              "very",
+              "zkpassport"
             ]
           },
           "provider_mode": {
@@ -5278,7 +5281,8 @@ const spec = {
             "enum": [
               "qr_deeplink",
               "widget",
-              "native_sdk"
+              "native_sdk",
+              "web_sdk"
             ],
             "nullable": true
           },
@@ -9041,6 +9045,7 @@ const spec = {
             "type": "string",
             "enum": [
               "self",
+              "zkpassport",
               "very",
               "passport"
             ],

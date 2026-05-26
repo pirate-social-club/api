@@ -72,7 +72,7 @@ export function applyLazyCapabilityExpiry(
   for (const capability of [next.age_over_18, next.minimum_age, next.nationality, next.gender] as const) {
     if (
       capability.state === "verified"
-      && capability.provider === "self"
+      && (capability.provider === "self" || capability.provider === "zkpassport")
       && isOlderThanTtl(capability.verified_at, INTERACTIVE_VERIFICATION_TTL_MS, nowMs)
     ) {
       capability.state = "expired"

@@ -7,6 +7,7 @@ import { mintUpstreamJwt } from "../../helpers"
 import { setSelfProviderForTests } from "../../../src/lib/verification/self-provider"
 import { setVeryProviderForTests } from "../../../src/lib/verification/very-provider"
 import { setPassportProviderForTests } from "../../../src/lib/verification/passport-provider"
+import { setZkPassportProviderForTests } from "../../../src/lib/verification/zkpassport-provider"
 import {
   createAltchaChallenge,
   verifyAndConsumeAltchaProof,
@@ -28,6 +29,7 @@ afterEach(async () => {
   setSelfProviderForTests(null)
   setVeryProviderForTests(null)
   setPassportProviderForTests(null)
+  setZkPassportProviderForTests(null)
 
   if (cleanup) {
     await cleanup()
@@ -197,6 +199,172 @@ describe("verification routes", () => {
     expect(body.status).toBe("pending")
     expect(body.requested_capabilities).toEqual(["unique_human", "gender"])
     expect(body.launch?.self_app?.disclosures?.gender).toBe(true)
+  })
+
+  test("verification session start accepts zkpassport document capability requests", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-zkpassport-start-user")
+    setZkPassportProviderForTests({
+      startSession: async (input) => {
+        expect(input.requestedCapabilities).toEqual(["nationality"])
+        expect(input.verificationRequirements).toEqual([{ proof_type: "nationality", required_values: ["USA"] }])
+        return {
+          upstreamSessionRef: `zkpassport-test-ref:${input.verificationSessionId}`,
+          launch: {
+            domain: "pirate.test",
+            name: "Pirate",
+            logo: null,
+            purpose: "Verify document attributes for Pirate community access",
+            scope: "pirate-document-proof-test",
+            binding: "{\"sid\":\"ver_test\"}",
+            validity_seconds: 3600,
+            dev_mode: true,
+            requested_capabilities: ["nationality"],
+            verification_requirements: input.verificationRequirements ?? [],
+          },
+        }
+      },
+      getSessionOutcome: async () => ({ status: "failed", failureReason: "unused" }),
+    } satisfies import("../../../src/lib/verification/zkpassport-provider").ZkPassportProvider)
+
+    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "zkpassport",
+      requested_capabilities: ["nationality"],
+      verification_requirements: [{ proof_type: "nationality", required_values: ["USA"] }],
+      verification_intent: "community_join",
+    }, ctx.env, session.accessToken)
+    expect(createdVerification.status).toBe(201)
+    const body = await json(createdVerification) as {
+      provider: string
+      provider_mode: string | null
+      status: string
+      requested_capabilities: string[]
+      launch?: { mode?: string; zkpassport?: { scope?: string; requested_capabilities?: string[] } }
+    }
+    expect(body.provider).toBe("zkpassport")
+    expect(body.provider_mode).toBe("web_sdk")
+    expect(body.status).toBe("pending")
+    expect(body.requested_capabilities).toEqual(["nationality"])
+    expect(body.launch?.mode).toBe("web_sdk")
+    expect(body.launch?.zkpassport?.scope).toBe("pirate-document-proof-test")
+    expect(body.launch?.zkpassport?.requested_capabilities).toEqual(["nationality"])
+  })
+
+  test("zkpassport verification sessions reject unique human capability requests", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-zkpassport-unique-human-user")
+    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "zkpassport",
+      requested_capabilities: ["unique_human"],
+    }, ctx.env, session.accessToken)
+
+    expect(createdVerification.status).toBe(400)
+    const body = await json(createdVerification) as { message: string }
+    expect(body.message).toBe("ZKPassport verification sessions only support minimum_age, nationality, and gender")
+  })
+
+  test("zkpassport verification completion mints document capabilities without unique human", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-zkpassport-complete-user")
+    let outcomeCalls = 0
+    setZkPassportProviderForTests({
+      startSession: async (input) => ({
+        upstreamSessionRef: `zkpassport-test-ref:${input.verificationSessionId}`,
+        launch: {
+          domain: "pirate.test",
+          name: "Pirate",
+          logo: null,
+          purpose: "Verify document attributes for Pirate community access",
+          scope: "pirate-document-proof-test",
+          binding: "{\"sid\":\"ver_test\"}",
+          validity_seconds: 3600,
+          dev_mode: true,
+          requested_capabilities: ["nationality"],
+          verification_requirements: input.verificationRequirements ?? [],
+        },
+      }),
+      getSessionOutcome: async (input) => {
+        outcomeCalls += 1
+        expect(input.upstreamSessionRef).toContain("zkpassport-test-ref:")
+        expect(input.providerPayloadRef).toEqual({ proofs: [], queryResult: { ok: true } })
+        return {
+          status: "verified",
+          claims: {
+            uniqueIdentifier: "zkpassport-unique-identifier-1",
+            proofHash: "zkpassport-proof-hash-1",
+            nationality: "US",
+            minimumAge: null,
+            gender: null,
+          },
+        }
+      },
+    } satisfies import("../../../src/lib/verification/zkpassport-provider").ZkPassportProvider)
+
+    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "zkpassport",
+      requested_capabilities: ["nationality"],
+      verification_requirements: [{ proof_type: "nationality", required_values: ["US"] }],
+    }, ctx.env, session.accessToken)
+    expect(createdVerification.status).toBe(201)
+    const createdBody = await json(createdVerification) as { id: string }
+
+    const completedVerification = await requestJson(
+      `http://pirate.test/verification-sessions/${createdBody.id}/complete`,
+      {
+        provider_payload_ref: { proofs: [], queryResult: { ok: true } },
+      },
+      ctx.env,
+      session.accessToken,
+    )
+    expect(completedVerification.status).toBe(200)
+    const completedBody = await json(completedVerification) as {
+      status: string
+      provider: string
+      proof_hash: string | null
+    }
+    expect(completedBody.status).toBe("verified")
+    expect(completedBody.provider).toBe("zkpassport")
+    expect(completedBody.proof_hash).toBe("zkpassport-proof-hash-1")
+    expect(outcomeCalls).toBe(1)
+
+    const userRows = await ctx.client.execute({
+      sql: "SELECT verification_state, capability_provider, verification_capabilities_json FROM users WHERE user_id = ?1",
+      args: [session.userId],
+    })
+    const userRow = userRows.rows[0] as {
+      verification_state?: string
+      capability_provider?: string | null
+      verification_capabilities_json?: string
+    }
+    const capabilities = JSON.parse(String(userRow.verification_capabilities_json)) as {
+      unique_human: { state: string; provider?: string | null }
+      nationality: { state: string; provider?: string | null; value?: string | null; mechanism?: string | null }
+    }
+    expect(userRow.verification_state).toBe("unverified")
+    expect(userRow.capability_provider).toBe(null)
+    expect(capabilities.unique_human.state).toBe("unverified")
+    expect(capabilities.unique_human.provider).toBe(null)
+    expect(capabilities.nationality).toMatchObject({
+      state: "verified",
+      provider: "zkpassport",
+      value: "US",
+      mechanism: "zkpassport_disclosure",
+    })
+
+    const nullifierRows = await ctx.client.execute({
+      sql: "SELECT provider, mechanism, source_user_attestation_id FROM identity_nullifiers WHERE user_id = ?1",
+      args: [session.userId],
+    })
+    expect(nullifierRows.rows).toHaveLength(1)
+    expect(nullifierRows.rows[0]?.provider).toBe("zkpassport")
+    expect(nullifierRows.rows[0]?.mechanism).toBe("zkpassport-unique-identifier")
+    expect(typeof nullifierRows.rows[0]?.source_user_attestation_id).toBe("string")
   })
 
   test("self launch callback uses the live dev tunnel origin instead of a stale configured origin", async () => {

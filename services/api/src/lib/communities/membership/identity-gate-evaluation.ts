@@ -91,6 +91,7 @@ export function evaluateIdentityGateRule(input: {
         if (capability.state !== "verified") {
           missingCapabilities.push("nationality")
           if (includesAcceptedProvider(requirement.accepted_providers, "self")) suggestedProvider = "self"
+          else if (includesAcceptedProvider(requirement.accepted_providers, "zkpassport")) suggestedProvider = "zkpassport"
         } else if (!includesAcceptedProvider(requirement.accepted_providers, capability.provider)) {
           mismatchReasons.push("provider_not_accepted")
         } else {
@@ -121,6 +122,7 @@ export function evaluateIdentityGateRule(input: {
         if (!satisfiesMinimumAgeRequirement(input.user, requirement.accepted_providers, 18)) {
           missingCapabilities.push("age_over_18")
           if (includesAcceptedProvider(requirement.accepted_providers, "self")) suggestedProvider = "self"
+          else if (includesAcceptedProvider(requirement.accepted_providers, "zkpassport")) suggestedProvider = "zkpassport"
         }
         break
       }
@@ -136,6 +138,7 @@ export function evaluateIdentityGateRule(input: {
           } else {
             missingCapabilities.push("minimum_age")
             if (includesAcceptedProvider(requirement.accepted_providers, "self")) suggestedProvider = "self"
+            else if (includesAcceptedProvider(requirement.accepted_providers, "zkpassport")) suggestedProvider = "zkpassport"
           }
         }
         break
@@ -145,6 +148,7 @@ export function evaluateIdentityGateRule(input: {
         if (capability.state !== "verified") {
           missingCapabilities.push("gender")
           if (includesAcceptedProvider(requirement.accepted_providers, "self")) suggestedProvider = "self"
+          else if (includesAcceptedProvider(requirement.accepted_providers, "zkpassport")) suggestedProvider = "zkpassport"
         } else if (!includesAcceptedProvider(requirement.accepted_providers, capability.provider)) {
           mismatchReasons.push("provider_not_accepted")
         } else if (typeof config.required_value === "string" && capability.value !== config.required_value) {

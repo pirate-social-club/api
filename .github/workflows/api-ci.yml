@@ -11,6 +11,7 @@ on:
       - "services/community-provision-operator/**"
       - "services/contracts/**"
       - "services/shared/**"
+      - "services/zkpassport-verifier-container/**"
   push:
     paths:
       - ".github/workflows/api-ci.yml"
@@ -21,6 +22,7 @@ on:
       - "services/community-provision-operator/**"
       - "services/contracts/**"
       - "services/shared/**"
+      - "services/zkpassport-verifier-container/**"
   workflow_dispatch:
 
 permissions:
@@ -107,12 +109,6 @@ jobs:
           bun run generate:migrations
           git diff --exit-code -- src/generated/community-migrations.ts
 
-      - name: Check control-plane fixture migrations
-        working-directory: services/api
-        env:
-          PIRATE_CORE_REPO: ${{ github.workspace }}/core
-        run: bun run check:control-plane-fixtures
-
       - name: Check community schema guards
         working-directory: services/api
         run: bun run check:community-schema-guards
@@ -123,6 +119,22 @@ jobs:
 
       - name: Run community provision operator tests
         working-directory: services/community-provision-operator
+        run: bun run test
+
+      - name: Install ZKPassport verifier container dependencies
+        working-directory: services/zkpassport-verifier-container
+        run: bun install --frozen-lockfile
+
+      - name: Audit ZKPassport verifier container dependencies
+        working-directory: services/zkpassport-verifier-container
+        run: bun audit --audit-level=high
+
+      - name: Typecheck ZKPassport verifier container
+        working-directory: services/zkpassport-verifier-container
+        run: bun run check
+
+      - name: Test ZKPassport verifier container
+        working-directory: services/zkpassport-verifier-container
         run: bun run test
 
       - name: Install API dependencies

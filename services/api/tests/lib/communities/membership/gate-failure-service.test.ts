@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test"
-import { throwUnsatisfiedMembershipGate } from "../../../../src/lib/communities/membership/gate-failure-service"
+import {
+  gateFailureReasonFromPolicyEvaluation,
+  throwUnsatisfiedMembershipGate,
+} from "../../../../src/lib/communities/membership/gate-failure-service"
 
 describe("throwUnsatisfiedMembershipGate", () => {
   function catchGateFailure(input: Parameters<typeof throwUnsatisfiedMembershipGate>[0]): {
@@ -119,5 +122,29 @@ describe("throwUnsatisfiedMembershipGate", () => {
       altchaScope: "community_join",
     })
     expect(result.message).toBe("Verification is required to join this community")
+  })
+
+  test("maps provider_not_accepted trace reason to provider failure details", () => {
+    const evaluation = {
+      satisfied: false,
+      trace: {
+        kind: "gate",
+        gate_type: "nationality",
+        provider: "self",
+        passed: false,
+        reason: "provider_not_accepted",
+      },
+      requiredActionSet: null,
+    } as const
+
+    const result = catchGateFailure({
+      evaluation,
+      gateSummaries: [{ gate_type: "nationality", accepted_providers: ["self"] }],
+      walletScoreStatus: null,
+    })
+
+    expect(gateFailureReasonFromPolicyEvaluation(evaluation)).toBe("provider_not_accepted")
+    expect(result.message).toBe("Your verification method does not satisfy this community requirement")
+    expect(result.details.failure_reason).toBe("provider_not_accepted")
   })
 })

@@ -24,7 +24,8 @@ import type {
   VerificationSession,
 } from "../../types"
 
-type VerificationProviderMode = "qr_deeplink" | "widget" | "native_sdk"
+type VerificationProvider = "self" | "very" | "zkpassport"
+type VerificationProviderMode = "qr_deeplink" | "widget" | "native_sdk" | "web_sdk"
 
 export * from "./verification-shared"
 export * from "./verification-session-service"
@@ -33,7 +34,7 @@ export * from "./namespace-verification-service"
 export interface VerificationRepository {
   startVerificationSession(input: {
     userId: string
-    provider: "self" | "very"
+    provider: VerificationProvider
     providerMode?: VerificationProviderMode | null
     requestedCapabilities?: RequestedVerificationCapability[] | null
     verificationRequirements?: VerificationRequirement[] | null
@@ -85,7 +86,7 @@ export class ControlPlaneVerificationRepository implements VerificationRepositor
 
   async startVerificationSession(input: {
     userId: string
-    provider: "self" | "very"
+    provider: VerificationProvider
     providerMode?: VerificationProviderMode | null
     requestedCapabilities?: RequestedVerificationCapability[] | null
     verificationRequirements?: VerificationRequirement[] | null

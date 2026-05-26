@@ -4,6 +4,7 @@ import { createHmac } from "node:crypto"
 import { app } from "../../../src/index"
 import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
 import { resolveTelegramAccount } from "../../../src/lib/telegram/join-request-service"
+import { approvePendingTelegramJoinGrantsForUser } from "../../../src/lib/telegram/onboarding-service"
 import { buildDefaultVerificationCapabilities } from "../../../src/lib/verification/verification-capabilities"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import {
@@ -3248,6 +3249,101 @@ describe("community Telegram routes", () => {
     expect(grant?.status).toBe("pending")
     expect(grant?.user_id).toBe(joiner.userId)
     expect(JSON.parse(grant?.missing_capabilities_json ?? "[]")).toContain("nationality")
+  })
+
+  test("post-verification approval approves pending nationality-gated Telegram join requests", async () => {
+    const ctx = await createRouteTestContext({
+      TELEGRAM_BOT_USERNAME: "PirateTestBot",
+      TELEGRAM_BOT_TOKEN: "987654:bot-token",
+      TELEGRAM_BOT_INTEGRATION_SECRET: "test-telegram-secret",
+      TELEGRAM_WEBHOOK_SECRET: "webhook-secret",
+      PIRATE_WEB_PUBLIC_ORIGIN: "https://staging.pirate.test",
+    })
+    cleanup = ctx.cleanup
+    const owner = await exchangeJwt(ctx.env, "telegram-join-verified-owner")
+    const joiner = await exchangeJwt(ctx.env, "telegram-join-verified-user")
+    const communityId = await createCommunity({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      displayName: "Telegram Join Verified Club",
+    })
+    await setCommunityGatePolicy({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      expression: {
+        op: "gate",
+        gate: {
+          type: "nationality",
+          provider: "self",
+          allowed: ["PS"],
+        },
+      },
+    })
+    await linkTelegramAccount({
+      client: ctx.client,
+      telegramUserId: "779111",
+      userId: joiner.userId,
+    })
+    await linkTelegramChatForCommunity({
+      env: ctx.env,
+      communityId,
+      accessToken: owner.accessToken,
+      telegramChatId: "-1009111",
+      title: "Telegram Join Verified Club",
+    })
+    await ctx.client.execute({
+      sql: `
+        UPDATE telegram_linked_chats
+        SET telegram_community_bot_id = NULL
+        WHERE community_id = ?1
+          AND telegram_chat_id = ?2
+      `,
+      args: [communityId, "-1009111"],
+    })
+    const requests = installTelegramApiMock((request) => request.url.endsWith("/approveChatJoinRequest")
+      ? { ok: true, result: true }
+      : { ok: true, result: { message_id: 811 } })
+
+    const response = await telegramWebhook({
+      env: ctx.env,
+      secret: "webhook-secret",
+      body: {
+        update_id: 41,
+        chat_join_request: {
+          chat: { id: -1009111, type: "supergroup", title: "Telegram Join Verified Club" },
+          from: { id: 779111, username: "joiner" },
+          user_chat_id: 889111,
+          date: Math.floor(Date.now() / 1000),
+        },
+      },
+    })
+
+    expect(response.status).toBe(200)
+    expect(requests).toHaveLength(1)
+    await setUserNationality({
+      client: ctx.client,
+      userId: joiner.userId,
+      countryCode: "PS",
+    })
+
+    const approvalResults = await approvePendingTelegramJoinGrantsForUser({
+      env: ctx.env,
+      userId: joiner.userId,
+    })
+
+    expect(approvalResults).toEqual([{ grantId: expect.any(String), status: "approved" }])
+    expect(requests).toHaveLength(2)
+    expect(requests[1]!.url).toBe("https://api.telegram.org/bot987654:bot-token/approveChatJoinRequest")
+    const approveBody = await requests[1]!.json() as { chat_id: string; user_id: string }
+    expect(approveBody.chat_id).toBe("-1009111")
+    expect(approveBody.user_id).toBe("779111")
+    const grant = await getTelegramJoinGrant({
+      client: ctx.client,
+      telegramChatId: "-1009111",
+      telegramUserId: "779111",
+    })
+    expect(grant?.status).toBe("approved")
+    expect(grant?.approved_at).toBeTruthy()
   })
 
   test("webhook chat_join_request marks prompt failures without retrying the webhook", async () => {

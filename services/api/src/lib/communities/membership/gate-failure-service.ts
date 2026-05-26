@@ -24,7 +24,7 @@ export function gateFailureReasonFromPolicyEvaluation(
           ? "minimum_age_mismatch"
           : reasons.includes("wallet_score_too_low")
             ? "wallet_score_too_low"
-            : reasons.includes("mechanism_not_accepted")
+            : reasons.includes("provider_not_accepted")
               ? "provider_not_accepted"
               : null
 }
@@ -104,7 +104,7 @@ export function throwUnsatisfiedMembershipGate(input: {
       failure_reason: "gender_mismatch",
     })
   }
-  if (reasons.includes("mechanism_not_accepted")) {
+  if (reasons.includes("provider_not_accepted")) {
     throw gateFailedWithDetails("Your verification method does not satisfy this community requirement", {
       membership_gate_summaries: input.gateSummaries,
       gate_evaluation: gateEvaluation,

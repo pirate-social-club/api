@@ -7,10 +7,11 @@ import {
   normalizeAssetMatch,
   normalizeInventoryText,
 } from "../community-token-inventory-gates"
-import type { GateAtom, GateExpression, GatePolicy } from "./gate-types"
+import type { DocumentProofProvider, GateAtom, GateExpression, GatePolicy } from "./gate-types"
 
 const MAX_GATE_POLICY_DEPTH = 4
 const MAX_GATE_POLICY_ATOMS = 20
+const DOCUMENT_PROOF_PROVIDERS: DocumentProofProvider[] = ["self", "zkpassport"]
 
 export function validateGatePolicy(input: unknown): GatePolicy {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
@@ -79,7 +80,13 @@ function validateGateAtom(input: unknown): GateAtom {
       if (!Number.isInteger(atom.minimum_age) || (atom.minimum_age as number) < 18 || (atom.minimum_age as number) > 125) {
         throw eligibilityFailed("minimum_age gate minimum_age must be an integer from 18 to 125")
       }
-      return { type: "minimum_age", provider: "self", minimum_age: atom.minimum_age as number }
+      const acceptedProviders = validateDocumentAcceptedProviders(atom.accepted_providers, "minimum_age")
+      return {
+        type: "minimum_age",
+        provider: "self",
+        ...(acceptedProviders ? { accepted_providers: acceptedProviders } : {}),
+        minimum_age: atom.minimum_age as number,
+      }
     }
     case "nationality": {
       if (atom.provider !== "self") {
@@ -93,7 +100,13 @@ function validateGateAtom(input: unknown): GateAtom {
       if (allowed.some((value) => value == null)) {
         throw eligibilityFailed("nationality gate allowed values must be valid ISO-2 or ISO-3 country codes")
       }
-      return { type: "nationality", provider: "self", allowed: Array.from(new Set(allowed as string[])) }
+      const acceptedProviders = validateDocumentAcceptedProviders(atom.accepted_providers, "nationality")
+      return {
+        type: "nationality",
+        provider: "self",
+        ...(acceptedProviders ? { accepted_providers: acceptedProviders } : {}),
+        allowed: Array.from(new Set(allowed as string[])),
+      }
     }
     case "gender": {
       if (atom.provider !== "self") {
@@ -106,7 +119,13 @@ function validateGateAtom(input: unknown): GateAtom {
       if (allowed.length !== atom.allowed.length) {
         throw eligibilityFailed("gender gate allowed values must be M or F")
       }
-      return { type: "gender", provider: "self", allowed: Array.from(new Set(allowed)) }
+      const acceptedProviders = validateDocumentAcceptedProviders(atom.accepted_providers, "gender")
+      return {
+        type: "gender",
+        provider: "self",
+        ...(acceptedProviders ? { accepted_providers: acceptedProviders } : {}),
+        allowed: Array.from(new Set(allowed)),
+      }
     }
     case "wallet_score": {
       if (atom.provider !== "passport") {
@@ -171,4 +190,21 @@ function validateGateAtom(input: unknown): GateAtom {
     default:
       throw eligibilityFailed("Unsupported gate atom type")
   }
+}
+
+function validateDocumentAcceptedProviders(input: unknown, gateType: string): DocumentProofProvider[] | null {
+  if (input == null) {
+    return null
+  }
+  if (!Array.isArray(input) || input.length === 0) {
+    throw eligibilityFailed(`${gateType} gate accepted_providers must be a non-empty array`)
+  }
+  const providers: DocumentProofProvider[] = []
+  for (const value of input) {
+    if (!DOCUMENT_PROOF_PROVIDERS.includes(value as DocumentProofProvider)) {
+      throw eligibilityFailed(`${gateType} gate accepted_providers must only include self or zkpassport`)
+    }
+    providers.push(value as DocumentProofProvider)
+  }
+  return DOCUMENT_PROOF_PROVIDERS.filter((provider) => providers.includes(provider))
 }

@@ -16,10 +16,13 @@ import type { VerySessionOutcome } from "./very-provider"
 import { assertVeryNativeOAuthConfigured, buildVerySessionBinding, getVeryProvider, VERY_UNIQUE_HUMAN_DOMAIN } from "./very-provider"
 import type { SelfSessionOutcome } from "./self-provider"
 import { canonicalizeRequestedCapabilities, getSelfProvider, normalizeVerificationRequirements } from "./self-provider"
+import type { ZkPassportSessionOutcome, ZkPassportVerifiedClaims } from "./zkpassport-provider"
+import { getZkPassportProvider } from "./zkpassport-provider"
 import { normalizeIdentityCountryCode } from "../identity/country-codes"
 import { logVerificationDebug } from "./verification-logging"
 import { unixSeconds } from "../../serializers/time"
 import { parseJsonField } from "../json"
+import { approvePendingTelegramJoinGrantsForUser } from "../telegram/onboarding-service"
 import type {
   Env,
   RequestedVerificationCapability,
@@ -53,14 +56,33 @@ function parseVerificationRequirements(raw: string | null | undefined): Verifica
   })
 }
 
-type VerificationProviderMode = "qr_deeplink" | "widget" | "native_sdk"
+type VerificationProvider = "self" | "very" | "zkpassport"
+type VerificationProviderMode = "qr_deeplink" | "widget" | "native_sdk" | "web_sdk"
 
-function resolveProviderMode(provider: "self" | "very", providerMode: VerificationProviderMode | null | undefined): VerificationProviderMode {
+async function approvePendingTelegramJoinGrantsAfterVerification(input: {
+  env: Env
+  userId: string
+}): Promise<void> {
+  try {
+    await approvePendingTelegramJoinGrantsForUser({
+      env: input.env,
+      userId: input.userId,
+    })
+  } catch (error) {
+    console.warn("[verification] Telegram join grant approval after verification failed", {
+      userId: input.userId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+function resolveProviderMode(provider: VerificationProvider, providerMode: VerificationProviderMode | null | undefined): VerificationProviderMode {
   if (
     providerMode
     && providerMode !== "qr_deeplink"
     && providerMode !== "widget"
     && providerMode !== "native_sdk"
+    && providerMode !== "web_sdk"
   ) {
     throw badRequestError("Unsupported verification provider_mode")
   }
@@ -72,8 +94,18 @@ function resolveProviderMode(provider: "self" | "very", providerMode: Verificati
     return "qr_deeplink"
   }
 
+  if (provider === "zkpassport") {
+    if (providerMode && providerMode !== "web_sdk") {
+      throw badRequestError("ZKPassport verification sessions only support web_sdk provider_mode")
+    }
+    return "web_sdk"
+  }
+
   if (providerMode === "qr_deeplink") {
     throw badRequestError("Very verification sessions do not support qr_deeplink provider_mode")
+  }
+  if (providerMode === "web_sdk") {
+    throw badRequestError("Very verification sessions do not support web_sdk provider_mode")
   }
   return providerMode ?? "widget"
 }
@@ -133,7 +165,7 @@ export async function startVerificationSession(
   env: Env,
   input: {
     userId: string
-    provider: "self" | "very"
+    provider: VerificationProvider
     providerMode?: VerificationProviderMode | null
     requestedCapabilities?: RequestedVerificationCapability[] | null
     verificationRequirements?: VerificationRequirement[] | null
@@ -143,8 +175,12 @@ export async function startVerificationSession(
     publicOrigin?: string | null
   },
 ): Promise<VerificationSession> {
-  const requestedCapabilities = canonicalizeRequestedCapabilities(input.provider, (input.requestedCapabilities?.length ? input.requestedCapabilities : ["unique_human"]) as RequestedVerificationCapability[])
-  const verificationRequirements = normalizeVerificationRequirements(input.provider, input.verificationRequirements)
+  let requestedCapabilities = input.provider === "zkpassport"
+    ? [...(input.requestedCapabilities ?? [])]
+    : canonicalizeRequestedCapabilities(input.provider, (input.requestedCapabilities?.length ? input.requestedCapabilities : ["unique_human"]) as RequestedVerificationCapability[])
+  const verificationRequirements = input.provider === "zkpassport"
+    ? normalizeVerificationRequirements("self", input.verificationRequirements)
+    : normalizeVerificationRequirements(input.provider, input.verificationRequirements)
   const providerMode = resolveProviderMode(input.provider, input.providerMode ?? null)
   const now = new Date()
   const createdAt = now.toISOString()
@@ -207,6 +243,23 @@ export async function startVerificationSession(
     launch = { mode: "qr_deeplink", self_app: result.launch }
   }
 
+  if (input.provider === "zkpassport") {
+    const provider = getZkPassportProvider(env)
+    const result = await provider.startSession({
+      verificationSessionId,
+      userId: input.userId,
+      publicOrigin: input.publicOrigin ?? null,
+      requestedCapabilities,
+      verificationRequirements,
+      verificationIntent: input.verificationIntent ?? null,
+      policyId: input.policyId ?? null,
+      challengeExpiresAt: expiresAt,
+    })
+    requestedCapabilities = [...result.launch.requested_capabilities]
+    upstreamSessionRef = result.upstreamSessionRef
+    launch = { mode: "web_sdk", zkpassport: result.launch }
+  }
+
   await client.execute({
     sql: `
       INSERT INTO verification_sessions (
@@ -247,6 +300,8 @@ export async function startVerificationSession(
     selfDisclosures: launch?.self_app?.disclosures ?? null,
     selfEndpointType: launch?.self_app?.endpoint_type ?? null,
     selfScope: launch?.self_app?.scope ?? null,
+    zkpassportScope: launch?.zkpassport?.scope ?? null,
+    zkpassportRequestedCapabilities: launch?.zkpassport?.requested_capabilities ?? null,
   })
   return serializeVerificationSession({ row, attestationRows: [], launch })
 }
@@ -330,12 +385,16 @@ export async function completeVerificationSession(
     return completeSelfSession(client, env, row, input)
   }
 
+  if (row.provider === "zkpassport") {
+    return completeZkPassportSession(client, env, row, input)
+  }
+
   const sessionExpiresAt = row.expires_at
   if (sessionExpiresAt && new Date(sessionExpiresAt) < new Date()) {
     throw eligibilityFailed("Verification session has expired")
   }
 
-  return finalizeVerification(client, row, input)
+  return finalizeVerification(client, env, row, input)
 }
 
 export async function completeSelfVerificationCallback(
@@ -487,7 +546,7 @@ async function completeVerySession(
       verificationSessionId: input.verificationSessionId,
       outcome: outcome.status,
     })
-    return finalizeVerification(client, row, input, null, null, null, outcome.attestationData)
+    return finalizeVerification(client, env, row, input, null, null, null, outcome.attestationData)
   }
 
   if (outcome.status === "pending") {
@@ -580,7 +639,7 @@ async function completeVeryNativeSession(
       verificationSessionId: input.verificationSessionId,
       outcome: outcome.status,
     })
-    return finalizeVerification(client, row, input, null, null, null, outcome.attestationData)
+    return finalizeVerification(client, env, row, input, null, null, null, outcome.attestationData)
   }
 
   if (outcome.status === "pending") {
@@ -710,7 +769,7 @@ async function completeSelfSession(
       ageOver18: outcome.claims.age_over_18,
       minimumAge: outcome.claims.minimum_age ?? null,
     })
-    return finalizeVerification(client, row, input, requestedCapabilities, verificationRequirements, outcome.claims)
+    return finalizeVerification(client, env, row, input, requestedCapabilities, verificationRequirements, outcome.claims)
   }
 
   if (outcome.status === "pending") {
@@ -742,6 +801,82 @@ async function completeSelfSession(
       outcome: outcome.status,
       failureReason: "provider_expired",
     })
+    const updatedAt = new Date().toISOString()
+    await client.execute({
+      sql: `UPDATE verification_sessions SET status = 'expired', failure_code = 'provider_expired', updated_at = ?2 WHERE verification_session_id = ?1`,
+      args: [input.verificationSessionId, updatedAt],
+    })
+    const updatedRow = await getVerificationSessionRowForUser(client, input.verificationSessionId, input.userId)
+    return serializeVerificationSession({ row: updatedRow!, attestationRows: [] })
+  }
+
+  return serializeVerificationSession({ row, attestationRows: [] })
+}
+
+async function completeZkPassportSession(
+  client: Client,
+  env: Env,
+  row: VerificationSessionRow,
+  input: VerificationCompletionInput,
+): Promise<VerificationSession> {
+  if (!row.upstream_session_ref) {
+    throw internalError("ZKPassport session has no upstream reference")
+  }
+
+  const sessionExpiresAt = row.expires_at
+  if (sessionExpiresAt && new Date(sessionExpiresAt) < new Date()) {
+    const updatedAt = new Date().toISOString()
+    await client.execute({
+      sql: `UPDATE verification_sessions SET status = 'expired', failure_code = 'provider_expired', updated_at = ?2 WHERE verification_session_id = ?1`,
+      args: [input.verificationSessionId, updatedAt],
+    })
+    const updatedRow = await getVerificationSessionRowForUser(client, input.verificationSessionId, input.userId)
+    return serializeVerificationSession({ row: updatedRow!, attestationRows: [] })
+  }
+
+  let outcome: ZkPassportSessionOutcome
+  try {
+    const provider = getZkPassportProvider(env)
+    outcome = await provider.getSessionOutcome({
+      upstreamSessionRef: row.upstream_session_ref,
+      providerPayloadRef: input.providerPayloadRef ?? input.proof ?? null,
+    })
+  } catch (error) {
+    const details = providerErrorDetails(error)
+    throw providerUnavailable(
+      error instanceof Error ? error.message : "ZKPassport provider is unavailable",
+      details,
+    )
+  }
+
+  if (outcome.status === "verified") {
+    logVerificationDebug(env, "[zkpassport-provider] completion outcome", {
+      verificationSessionId: input.verificationSessionId,
+      outcome: outcome.status,
+      hasNationality: Boolean(outcome.claims.nationality),
+      hasMinimumAge: outcome.claims.minimumAge != null,
+      hasGender: Boolean(outcome.claims.gender),
+      hasUniqueIdentifier: Boolean(outcome.claims.uniqueIdentifier),
+    })
+    return finalizeZkPassportDocumentVerification(client, env, row, input, outcome.claims)
+  }
+
+  if (outcome.status === "failed") {
+    console.warn("[zkpassport-provider] completion outcome", {
+      verificationSessionId: input.verificationSessionId,
+      outcome: outcome.status,
+      failureReason: outcome.failureReason,
+    })
+    const updatedAt = new Date().toISOString()
+    await client.execute({
+      sql: `UPDATE verification_sessions SET status = 'failed', failure_code = ?2, updated_at = ?3 WHERE verification_session_id = ?1`,
+      args: [input.verificationSessionId, outcome.failureReason, updatedAt],
+    })
+    const updatedRow = await getVerificationSessionRowForUser(client, input.verificationSessionId, input.userId)
+    return serializeVerificationSession({ row: updatedRow!, attestationRows: [] })
+  }
+
+  if (outcome.status === "expired") {
     const updatedAt = new Date().toISOString()
     await client.execute({
       sql: `UPDATE verification_sessions SET status = 'expired', failure_code = 'provider_expired', updated_at = ?2 WHERE verification_session_id = ?1`,
@@ -808,8 +943,190 @@ async function resolveIdentityNullifier(input: {
   throw internalError("Unsupported identity nullifier provider")
 }
 
+async function finalizeZkPassportDocumentVerification(
+  client: Client,
+  env: Env,
+  row: VerificationSessionRow,
+  input: VerificationCompletionInput,
+  claims: ZkPassportVerifiedClaims,
+): Promise<VerificationSession> {
+  const existingAttestations = await getAttestationsBySourceSessionId(client, input.verificationSessionId, input.userId)
+  if (existingAttestations.some((a) => a.status === "accepted")) {
+    await approvePendingTelegramJoinGrantsAfterVerification({
+      env,
+      userId: input.userId,
+    })
+    return getVerificationSession(client, input.verificationSessionId, input.userId) as Promise<VerificationSession>
+  }
+
+  const now = new Date()
+  const updatedAt = now.toISOString()
+  const expiresAt = row.expires_at ?? new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
+  const userRow = await getUserRow(client, input.userId)
+  if (!userRow) {
+    throw internalError("User row missing while completing ZKPassport verification session")
+  }
+
+  const capabilities = parseVerificationCapabilities(userRow.verification_capabilities_json)
+  const identityNullifier = {
+    provider: "zkpassport" as const,
+    mechanism: "zkpassport-unique-identifier" as const,
+    nullifierHash: normalizeHashLike(claims.uniqueIdentifier)
+      ?? await sha256Hex(`zkpassport:unique-identifier:${claims.uniqueIdentifier}`),
+  }
+  const activeNullifier = await client.execute({
+    sql: `
+      SELECT user_id
+      FROM identity_nullifiers
+      WHERE provider = ?1
+        AND mechanism = ?2
+        AND nullifier_hash = ?3
+        AND status = 'active'
+      LIMIT 1
+    `,
+    args: [identityNullifier.provider, identityNullifier.mechanism, identityNullifier.nullifierHash],
+  })
+  const activeNullifierUserId = typeof activeNullifier.rows[0]?.user_id === "string"
+    ? activeNullifier.rows[0].user_id
+    : null
+  if (activeNullifierUserId && activeNullifierUserId !== input.userId) {
+    throw eligibilityFailed("Identity proof is already linked to another user")
+  }
+
+  const attestationInserts: InStatement[] = []
+  let firstDocumentAttestationId: string | null = null
+  const pushDocumentAttestation = (attestation: {
+    capabilityKey: "minimum_age" | "nationality" | "gender"
+    valueJson: Record<string, unknown>
+  }): void => {
+    const attestationId = makeId("att")
+    firstDocumentAttestationId ??= attestationId
+    attestationInserts.push({
+      sql: `
+        INSERT INTO user_attestations (
+          user_attestation_id, user_id, source_verification_session_id, provider, attestation_type,
+          capability_key, status, value_json, verified_at, expires_at, revoked_at, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, 'zkpassport', ?4, ?4, 'accepted', ?5, ?6, ?7, NULL, ?6, ?6)
+      `,
+      args: [
+        attestationId,
+        input.userId,
+        row.verification_session_id,
+        attestation.capabilityKey,
+        JSON.stringify({ state: "verified", ...attestation.valueJson }),
+        updatedAt,
+        expiresAt,
+      ],
+    })
+  }
+
+  if (claims.minimumAge != null) {
+    capabilities.minimum_age = {
+      state: "verified",
+      value: claims.minimumAge,
+      provider: "zkpassport",
+      proof_type: "minimum_age",
+      mechanism: "zkpassport_disclosure",
+      verified_at: unixSeconds(updatedAt),
+    }
+    pushDocumentAttestation({
+      capabilityKey: "minimum_age",
+      valueJson: { minimum_age: claims.minimumAge },
+    })
+  }
+
+  if (claims.nationality) {
+    capabilities.nationality = {
+      state: "verified",
+      value: claims.nationality,
+      provider: "zkpassport",
+      proof_type: "nationality",
+      mechanism: "zkpassport_disclosure",
+      verified_at: unixSeconds(updatedAt),
+    }
+    pushDocumentAttestation({
+      capabilityKey: "nationality",
+      valueJson: { nationality: claims.nationality },
+    })
+  }
+
+  if (claims.gender) {
+    capabilities.gender = {
+      state: "verified",
+      value: claims.gender,
+      provider: "zkpassport",
+      proof_type: "gender",
+      mechanism: "zkpassport_disclosure",
+      verified_at: unixSeconds(updatedAt),
+    }
+    pushDocumentAttestation({
+      capabilityKey: "gender",
+      valueJson: { gender: claims.gender },
+    })
+  }
+
+  if (!firstDocumentAttestationId) {
+    throw providerUnavailable("ZKPassport verification did not return a requested document capability")
+  }
+
+  const resultRef = claims.proofHash ?? input.proofHash ?? null
+  if (!activeNullifierUserId) {
+    attestationInserts.push({
+      sql: `
+        INSERT INTO identity_nullifiers (
+          identity_nullifier_id, user_id, provider, mechanism, nullifier_hash,
+          source_verification_session_id, source_user_attestation_id, status,
+          first_seen_at, revoked_at, created_at, updated_at
+        ) VALUES (?1, ?2, 'zkpassport', 'zkpassport-unique-identifier', ?3, ?4, ?5, 'active', ?6, NULL, ?6, ?6)
+      `,
+      args: [
+        makeId("nul"),
+        input.userId,
+        identityNullifier.nullifierHash,
+        input.verificationSessionId,
+        firstDocumentAttestationId,
+        updatedAt,
+      ],
+    })
+  }
+
+  await client.batch([
+    {
+      sql: `
+        UPDATE verification_sessions
+        SET status = 'verified',
+            result_ref = ?2,
+            failure_code = NULL,
+            completed_at = ?3,
+            updated_at = ?3
+        WHERE verification_session_id = ?1
+      `,
+      args: [input.verificationSessionId, resultRef, updatedAt],
+    },
+    ...attestationInserts,
+    {
+      sql: `
+        UPDATE users
+        SET verification_capabilities_json = ?2,
+            current_verification_session_id = ?1,
+            updated_at = ?3
+        WHERE user_id = ?4
+      `,
+      args: [input.verificationSessionId, JSON.stringify(capabilities), updatedAt, input.userId],
+    },
+  ], "write")
+
+  await approvePendingTelegramJoinGrantsAfterVerification({
+    env,
+    userId: input.userId,
+  })
+
+  return getVerificationSession(client, input.verificationSessionId, input.userId) as Promise<VerificationSession>
+}
+
 async function finalizeVerification(
   client: Client,
+  env: Env,
   row: VerificationSessionRow,
   input: {
     verificationSessionId: string
@@ -825,6 +1142,10 @@ async function finalizeVerification(
 ): Promise<VerificationSession> {
   const existingAttestations = await getAttestationsBySourceSessionId(client, input.verificationSessionId, input.userId)
   if (existingAttestations.some((a) => a.status === "accepted")) {
+    await approvePendingTelegramJoinGrantsAfterVerification({
+      env,
+      userId: input.userId,
+    })
     return getVerificationSession(client, input.verificationSessionId, input.userId) as Promise<VerificationSession>
   }
 
@@ -1014,6 +1335,11 @@ async function finalizeVerification(
   ]
 
   await client.batch(batchStatements, "write")
+
+  await approvePendingTelegramJoinGrantsAfterVerification({
+    env,
+    userId: input.userId,
+  })
 
   return getVerificationSession(client, input.verificationSessionId, input.userId) as Promise<VerificationSession>
 }

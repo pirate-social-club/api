@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { evaluateMembershipGatePolicy } from "../src/lib/communities/membership/gate-policy-evaluation"
+import { validateGatePolicy } from "../src/lib/communities/membership/gate-policy-validation"
 import { buildDefaultVerificationCapabilities } from "../src/lib/verification/verification-capabilities"
 import type { GateAtom, GatePolicy } from "../src/lib/communities/membership/gate-types"
 import type { User } from "../src/types"
@@ -7,9 +8,9 @@ import type { User } from "../src/types"
 function makeUser(overrides: {
   uniqueHuman?: { state: "unverified" | "verified"; provider?: "self" | "very" }
   walletScore?: { state: "unverified" | "verified"; score?: number; passing?: boolean }
-  minimumAge?: { state: "unverified" | "verified"; value?: number }
-  nationality?: { state: "unverified" | "verified"; value?: string }
-  gender?: { state: "unverified" | "verified"; value?: "M" | "F" }
+  minimumAge?: { state: "unverified" | "verified"; provider?: "self" | "zkpassport"; value?: number }
+  nationality?: { state: "unverified" | "verified"; provider?: "self" | "zkpassport"; value?: string }
+  gender?: { state: "unverified" | "verified"; provider?: "self" | "zkpassport"; value?: "M" | "F" }
 }): User {
   const caps = buildDefaultVerificationCapabilities()
   return {
@@ -30,13 +31,13 @@ function makeUser(overrides: {
         }
         : caps.wallet_score,
       minimum_age: overrides.minimumAge?.state === "verified"
-        ? { ...caps.minimum_age, state: "verified", provider: "self", value: overrides.minimumAge.value ?? 30 }
+        ? { ...caps.minimum_age, state: "verified", provider: overrides.minimumAge.provider ?? "self", value: overrides.minimumAge.value ?? 30 }
         : caps.minimum_age,
       nationality: overrides.nationality?.state === "verified"
-        ? { ...caps.nationality, state: "verified", provider: "self", value: overrides.nationality.value ?? "US" }
+        ? { ...caps.nationality, state: "verified", provider: overrides.nationality.provider ?? "self", value: overrides.nationality.value ?? "US" }
         : caps.nationality,
       gender: overrides.gender?.state === "verified"
-        ? { ...caps.gender, state: "verified", provider: "self", value: overrides.gender.value ?? "M" }
+        ? { ...caps.gender, state: "verified", provider: overrides.gender.provider ?? "self", value: overrides.gender.value ?? "M" }
         : caps.gender,
     },
     created_at: new Date().toISOString(),
@@ -93,6 +94,26 @@ describe("evaluateMembershipGatePolicy", () => {
   })
 
   describe("single gate", () => {
+    test("validates document accepted providers additively while preserving self provider", () => {
+      expect(validateGatePolicy(atomGate({
+        type: "nationality",
+        provider: "self",
+        accepted_providers: ["zkpassport", "self"],
+        allowed: ["US"],
+      }))).toEqual(atomGate({
+        type: "nationality",
+        provider: "self",
+        accepted_providers: ["self", "zkpassport"],
+        allowed: ["USA"],
+      }))
+      expect(() => validateGatePolicy(atomGate({
+        type: "nationality",
+        provider: "self",
+        accepted_providers: ["passport" as "self"],
+        allowed: ["US"],
+      }))).toThrow("nationality gate accepted_providers must only include self or zkpassport")
+    })
+
     test("passes when wallet score meets threshold", async () => {
       const result = await evaluateMembershipGatePolicy({
         env: {},
@@ -127,6 +148,42 @@ describe("evaluateMembershipGatePolicy", () => {
       })
       expect(result.satisfied).toBe(false)
       expect(result.requiredActionSet).not.toBeNull()
+    })
+
+    test("passes nationality gate with accepted ZKPassport capability", async () => {
+      const result = await evaluateMembershipGatePolicy({
+        env: {},
+        policy: atomGate({
+          type: "nationality",
+          provider: "self",
+          accepted_providers: ["self", "zkpassport"],
+          allowed: ["US"],
+        }),
+        user: makeUser({ nationality: { state: "verified", provider: "zkpassport", value: "USA" } }),
+        walletAttachments: [],
+      })
+      expect(result.satisfied).toBe(true)
+      expect(result.requiredActionSet).toBeNull()
+    })
+
+    test("rejects ZKPassport nationality capability when gate is Self-only", async () => {
+      const result = await evaluateMembershipGatePolicy({
+        env: {},
+        policy: atomGate({
+          type: "nationality",
+          provider: "self",
+          accepted_providers: ["self"],
+          allowed: ["US"],
+        }),
+        user: makeUser({ nationality: { state: "verified", provider: "zkpassport", value: "USA" } }),
+        walletAttachments: [],
+      })
+      expect(result.satisfied).toBe(false)
+      expect(result.trace).toMatchObject({
+        kind: "gate",
+        gate_type: "nationality",
+        reason: "provider_not_accepted",
+      })
     })
   })
 

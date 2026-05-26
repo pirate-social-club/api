@@ -256,8 +256,15 @@ export function serializeVerificationSession(input: {
     id: `vs_${input.row.verification_session_id}`,
     object: "verification_session",
     user: `usr_${input.row.user_id}`,
-    provider: input.row.provider === "self" || input.row.provider === "very" ? input.row.provider : "self",
-    provider_mode: input.row.provider_mode ?? (input.row.provider === "very" && input.row.upstream_session_ref ? "widget" : null),
+    provider: input.row.provider === "self" || input.row.provider === "very" || input.row.provider === "zkpassport"
+      ? input.row.provider
+      : "self",
+    provider_mode: input.row.provider_mode
+      ?? (input.row.provider === "very" && input.row.upstream_session_ref
+        ? "widget"
+        : input.row.provider === "zkpassport"
+          ? "web_sdk"
+          : null),
     wallet_attachment: input.row.wallet_attachment_id,
     requested_capabilities: requestedCapabilities,
     verification_requirements: verificationRequirements,

@@ -1,0 +1,106 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pirate-zkpassport-verifier-container",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-09",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "observability": {
+    "enabled": true
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "ZKPASSPORT_VERIFIER_CONTAINER",
+        "class_name": "ZkPassportVerifierContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1_zkpassport_verifier_container",
+      "new_sqlite_classes": ["ZkPassportVerifierContainer"]
+    }
+  ],
+  "containers": [
+    {
+      "class_name": "ZkPassportVerifierContainer",
+      "image": "../api/Dockerfile.zkpassport-verifier",
+      "image_build_context": "..",
+      "instance_type": "standard-1",
+      "max_instances": 2
+    }
+  ],
+  "vars": {
+    "ENVIRONMENT": "development",
+    "ZKPASSPORT_VERIFIER_CONTAINER_INSTANCES": "1",
+    "ZKPASSPORT_VERIFIER_MAX_BODY_BYTES": "10485760",
+    "ZKPASSPORT_VERIFIER_WRITING_DIRECTORY": "/tmp"
+  },
+  "env": {
+    "staging": {
+      "name": "pirate-zkpassport-verifier-container-staging",
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "ZKPASSPORT_VERIFIER_CONTAINER",
+            "class_name": "ZkPassportVerifierContainer"
+          }
+        ]
+      },
+      "migrations": [
+        {
+          "tag": "v1_zkpassport_verifier_container",
+          "new_sqlite_classes": ["ZkPassportVerifierContainer"]
+        }
+      ],
+      "containers": [
+        {
+          "class_name": "ZkPassportVerifierContainer",
+          "image": "../api/Dockerfile.zkpassport-verifier",
+          "image_build_context": "..",
+          "instance_type": "standard-1",
+          "max_instances": 2
+        }
+      ],
+      "vars": {
+        "ENVIRONMENT": "staging",
+        "ZKPASSPORT_VERIFIER_CONTAINER_INSTANCES": "2",
+        "ZKPASSPORT_VERIFIER_MAX_BODY_BYTES": "10485760",
+        "ZKPASSPORT_VERIFIER_WRITING_DIRECTORY": "/tmp"
+      }
+    },
+    "production": {
+      "name": "zkpassport-verifier-container",
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "ZKPASSPORT_VERIFIER_CONTAINER",
+            "class_name": "ZkPassportVerifierContainer"
+          }
+        ]
+      },
+      "migrations": [
+        {
+          "tag": "v1_zkpassport_verifier_container",
+          "new_sqlite_classes": ["ZkPassportVerifierContainer"]
+        }
+      ],
+      "containers": [
+        {
+          "class_name": "ZkPassportVerifierContainer",
+          "image": "../api/Dockerfile.zkpassport-verifier",
+          "image_build_context": "..",
+          "instance_type": "standard-1",
+          "max_instances": 4
+        }
+      ],
+      "vars": {
+        "ENVIRONMENT": "production",
+        "ZKPASSPORT_VERIFIER_CONTAINER_INSTANCES": "4",
+        "ZKPASSPORT_VERIFIER_MAX_BODY_BYTES": "10485760",
+        "ZKPASSPORT_VERIFIER_WRITING_DIRECTORY": "/tmp"
+      }
+    }
+  }
+}

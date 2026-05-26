@@ -35,9 +35,10 @@ export function suggestedProviderFromRequiredActionSet(
 ): JoinEligibility["suggested_verification_provider"] {
   const action = flattenRequiredActions(actionSet).find((item) => (
     item.kind === "action"
-    && (item.provider === "self" || item.provider === "very" || item.provider === "passport")
+    && (item.provider === "self" || item.provider === "very" || item.provider === "passport" || item.provider === "zkpassport")
   ))
-  return action?.kind === "action" && (action.provider === "self" || action.provider === "very" || action.provider === "passport")
+  return action?.kind === "action"
+    && (action.provider === "self" || action.provider === "very" || action.provider === "passport" || action.provider === "zkpassport")
     ? action.provider
     : null
 }

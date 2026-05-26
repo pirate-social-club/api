@@ -365,8 +365,8 @@ export type VerificationSession = {
   id: string;
   object: "verification_session";
   user: string;
-  provider: "self" | "very";
-  provider_mode?: "qr_deeplink" | "widget" | "native_sdk" | null;
+  provider: "self" | "very" | "zkpassport";
+  provider_mode?: "qr_deeplink" | "widget" | "native_sdk" | "web_sdk" | null;
   wallet_attachment?: string | null;
   requested_capabilities: Array<RequestedVerificationCapability>;
   verification_requirements?: Array<VerificationRequirement>;
@@ -387,9 +387,10 @@ export type VerificationSession = {
 };
 
 export type VerificationSessionLaunch = {
-  mode: "qr_deeplink" | "widget" | "native_sdk" | "none";
+  mode: "qr_deeplink" | "widget" | "native_sdk" | "web_sdk" | "none";
   self_app?: SelfVerificationLaunch;
   very_widget?: VeryWidgetLaunch;
+  zkpassport?: ZkPassportVerificationLaunch;
 };
 
 export type VeryWidgetLaunch = {
@@ -1177,7 +1178,8 @@ export type GateExpression = {
 
 export type GateAtom = {
   type: "unique_human" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "altcha_pow" | "erc721_holding" | "erc721_inventory_match";
-  provider?: "self" | "very" | "passport" | "courtyard" | "altcha" | null;
+  provider?: "self" | "zkpassport" | "very" | "passport" | "courtyard" | "altcha" | null;
+  accepted_providers?: Array<"self" | "zkpassport"> | null;
   minimum_age?: number;
   allowed?: Array<string>;
   minimum_score?: number;
@@ -1213,8 +1215,8 @@ export type UpdateCommunityPricingPolicyRequest = {
 };
 
 export type StartVerificationSessionRequest = {
-  provider: "self" | "very";
-  provider_mode?: "qr_deeplink" | "widget" | "native_sdk" | null;
+  provider: "self" | "very" | "zkpassport";
+  provider_mode?: "qr_deeplink" | "widget" | "native_sdk" | "web_sdk" | null;
   requested_capabilities?: Array<RequestedVerificationCapability>;
   verification_requirements?: Array<VerificationRequirement> | null;
   wallet_attachment?: string | null;
@@ -1797,7 +1799,7 @@ export type LocalizedPostEmbedTranslation = {
 
 export type MembershipGateSummary = {
   gate_type: "nationality" | "gender" | "unique_human" | "age_over_18" | "minimum_age" | "wallet_score" | "altcha_pow" | "erc721_holding" | "erc721_inventory_match";
-  accepted_providers?: Array<"self" | "very" | "passport"> | null;
+  accepted_providers?: Array<"self" | "zkpassport" | "very" | "passport"> | null;
   required_value?: string | null;
   required_values?: Array<string> | null;
   excluded_values?: Array<string> | null;
@@ -1856,7 +1858,7 @@ export type JoinEligibility = {
   status: "joinable" | "requestable" | "pending_request" | "verification_required" | "gate_failed" | "already_joined" | "banned";
   membership_gate_summaries: Array<MembershipGateSummary>;
   missing_capabilities?: Array<"unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "altcha_pow">;
-  suggested_verification_provider?: "self" | "very" | "passport" | null;
+  suggested_verification_provider?: "self" | "zkpassport" | "very" | "passport" | null;
   suggested_verification_intent?: "community_join" | "post_create" | "comment_create" | null;
   failure_reason?: "missing_verification" | "provider_not_accepted" | "nationality_mismatch" | "gender_mismatch" | "minimum_age_mismatch" | "erc721_holding_required" | "erc721_inventory_match_required" | "token_inventory_unavailable" | "wallet_score_too_low" | "unsupported" | "banned" | null;
   wallet_score_status?: ({
@@ -1891,7 +1893,7 @@ export type GateFailureDetails = {
   human_verification_lane?: HumanVerificationLane;
   membership_gate_summaries?: Array<MembershipGateSummary> | null;
   missing_capabilities?: Array<string> | null;
-  suggested_verification_provider?: "self" | "very" | "passport" | null;
+  suggested_verification_provider?: "self" | "zkpassport" | "very" | "passport" | null;
   suggested_verification_intent?: "community_join" | "post_create" | "comment_create" | null;
   failure_reason?: "missing_verification" | "provider_not_accepted" | "nationality_mismatch" | "gender_mismatch" | "minimum_age_mismatch" | "erc721_holding_required" | "erc721_inventory_match_required" | "token_inventory_unavailable" | "wallet_score_too_low" | "unsupported" | "banned" | null;
   wallet_score_status?: ({
@@ -3007,7 +3009,7 @@ type PromotionDisclosureInput = {
 
 type ProofRequirement = {
   proof_type: "unique_human" | "biometric_liveness" | "wallet_score" | "sanctions_clear" | "gov_id" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "phone";
-  accepted_providers?: Array<"self" | "very" | "passport"> | null;
+  accepted_providers?: Array<"self" | "zkpassport" | "very" | "passport"> | null;
   accepted_mechanisms?: Array<string> | null;
   config?: (Record<string, unknown>) | null;
 };
@@ -3030,7 +3032,8 @@ type RequiredActionNode = {
   kind: "action" | "set";
   mode?: "all" | "any";
   items?: Array<Record<string, unknown>>;
-  provider?: "self" | "very" | "passport" | "wallet" | "altcha";
+  provider?: "self" | "zkpassport" | "very" | "passport" | "wallet" | "altcha";
+  accepted_providers?: Array<"self" | "zkpassport"> | null;
   capability?: "minimum_age" | "nationality" | "gender" | "unique_human" | "wallet_score" | "altcha_pow" | "erc721_holding" | "erc721_inventory_match";
   scope?: string;
   required_age?: number;
@@ -3113,7 +3116,7 @@ type VerificationCapabilityState = {
 
 type VerifiedCapabilityState = {
   state: "unverified" | "verified" | "expired";
-  provider?: "self" | null;
+  provider?: "self" | "zkpassport" | null;
   proof_type?: "age_over_18" | "minimum_age" | "nationality" | "gender" | null;
   mechanism?: string | null;
   verified_at?: number | null;
@@ -3199,6 +3202,19 @@ type YouTubeVideoEmbed = {
   oembed_cache_age?: number | null;
   unavailable_reason?: "deleted" | "withheld" | "private" | "unsupported" | "unknown" | null;
   last_checked_at?: number | null;
+};
+
+type ZkPassportVerificationLaunch = {
+  domain: string;
+  name: string;
+  logo?: string | null;
+  purpose: string;
+  scope: string;
+  binding: string;
+  validity_seconds?: number | null;
+  dev_mode?: boolean | null;
+  requested_capabilities: Array<RequestedVerificationCapability>;
+  verification_requirements: Array<VerificationRequirement>;
 };
 
 export const apiRoutes = {

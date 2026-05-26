@@ -17,12 +17,14 @@ export type GateExpression =
   | { op: "or"; children: GateExpression[] }
   | { op: "gate"; gate: GateAtom }
 
+export type DocumentProofProvider = "self" | "zkpassport"
+
 export type GateAtom =
   | { type: "unique_human"; provider: "very" | "self" }
   | { type: "altcha_pow" }
-  | { type: "minimum_age"; provider: "self"; minimum_age: number }
-  | { type: "nationality"; provider: "self"; allowed: string[] }
-  | { type: "gender"; provider: "self"; allowed: Array<"M" | "F"> }
+  | { type: "minimum_age"; provider: "self"; accepted_providers?: DocumentProofProvider[]; minimum_age: number }
+  | { type: "nationality"; provider: "self"; accepted_providers?: DocumentProofProvider[]; allowed: string[] }
+  | { type: "gender"; provider: "self"; accepted_providers?: DocumentProofProvider[]; allowed: Array<"M" | "F"> }
   | { type: "wallet_score"; provider: "passport"; minimum_score: number }
   | { type: "erc721_holding"; chain_namespace: "eip155:1"; contract_address: string }
   | {
@@ -56,9 +58,9 @@ export type RequiredActionSet = {
 }
 
 export type RequiredAction =
-  | { kind: "action"; provider: "self"; capability: "minimum_age"; required_age: number }
-  | { kind: "action"; provider: "self"; capability: "nationality"; allowed_countries: string[] }
-  | { kind: "action"; provider: "self"; capability: "gender"; allowed_markers: Array<"M" | "F"> }
+  | { kind: "action"; provider: DocumentProofProvider; accepted_providers?: DocumentProofProvider[]; capability: "minimum_age"; required_age: number }
+  | { kind: "action"; provider: DocumentProofProvider; accepted_providers?: DocumentProofProvider[]; capability: "nationality"; allowed_countries: string[] }
+  | { kind: "action"; provider: DocumentProofProvider; accepted_providers?: DocumentProofProvider[]; capability: "gender"; allowed_markers: Array<"M" | "F"> }
   | { kind: "action"; provider: "self"; capability: "unique_human" }
   | { kind: "action"; provider: "very"; capability: "unique_human" }
   | { kind: "action"; provider: "altcha"; capability: "altcha_pow"; scope: string }
@@ -98,7 +100,7 @@ export type ProofRequirement = {
 }
 
 export type MissingMembershipCapability = "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "altcha_pow"
-export type SuggestedVerificationProvider = "self" | "very" | "passport"
+export type SuggestedVerificationProvider = "self" | "very" | "passport" | "zkpassport"
 
 export type MembershipGateEvaluation = {
   satisfied: boolean

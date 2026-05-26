@@ -19,6 +19,7 @@ import {
   decryptCommunityTelegramBotById,
   type TelegramCommunityBotCredential,
 } from "./community-bot-service"
+import { getTelegramLinkedChatBotContext } from "./community-chat-service"
 
 const TELEGRAM_ONBOARDING_TOKEN_PREFIX = "tgonboard"
 const TELEGRAM_ONBOARDING_TTL_MS = 30 * 60 * 1000
@@ -48,6 +49,8 @@ type TelegramJoinGrantRow = {
   community_id: string
   telegram_chat_id: string
   telegram_user_id: string
+  join_request_date?: string | null
+  expires_at?: string | null
   status: string
 }
 
@@ -415,13 +418,30 @@ async function upsertTelegramAccount(input: {
   }
 }
 
+async function updateJoinGrantUser(input: {
+  env: Env
+  grantId: string
+  userId: string
+}): Promise<void> {
+  await getControlPlaneClient(input.env).execute({
+    sql: `
+      UPDATE telegram_join_grants
+      SET user_id = ?2,
+          updated_at = ?3
+      WHERE grant_id = ?1
+        AND status = 'pending'
+    `,
+    args: [input.grantId, input.userId, nowIso()],
+  })
+}
+
 async function readJoinGrant(input: {
   env: Env
   grantId: string
 }): Promise<TelegramJoinGrantRow | null> {
   const row = await executeFirst(getControlPlaneClient(input.env), {
     sql: `
-      SELECT grant_id, community_id, telegram_chat_id, telegram_user_id, status
+      SELECT grant_id, community_id, telegram_chat_id, telegram_user_id, join_request_date, expires_at, status
       FROM telegram_join_grants
       WHERE grant_id = ?1
       LIMIT 1
@@ -434,9 +454,43 @@ async function readJoinGrant(input: {
         community_id: String(rowValue(row, "community_id") ?? ""),
         telegram_chat_id: String(rowValue(row, "telegram_chat_id") ?? ""),
         telegram_user_id: String(rowValue(row, "telegram_user_id") ?? ""),
+        join_request_date: stringOrNull(rowValue(row, "join_request_date")),
+        expires_at: stringOrNull(rowValue(row, "expires_at")),
         status: String(rowValue(row, "status") ?? ""),
       }
     : null
+}
+
+async function listPendingJoinGrantsForUser(input: {
+  env: Env
+  userId: string
+}): Promise<TelegramJoinGrantRow[]> {
+  const result = await getControlPlaneClient(input.env).execute({
+    sql: `
+      SELECT grant_id, community_id, telegram_chat_id, telegram_user_id, join_request_date, expires_at, status
+      FROM telegram_join_grants
+      WHERE user_id = ?1
+        AND status = 'pending'
+        AND expires_at > ?2
+      ORDER BY created_at DESC, grant_id DESC
+      LIMIT 20
+    `,
+    args: [input.userId, nowIso()],
+  })
+  return result.rows.flatMap((row) => {
+    const grant = row
+      ? {
+          grant_id: String(rowValue(row, "grant_id") ?? ""),
+          community_id: String(rowValue(row, "community_id") ?? ""),
+          telegram_chat_id: String(rowValue(row, "telegram_chat_id") ?? ""),
+          telegram_user_id: String(rowValue(row, "telegram_user_id") ?? ""),
+          join_request_date: stringOrNull(rowValue(row, "join_request_date")),
+          expires_at: stringOrNull(rowValue(row, "expires_at")),
+          status: String(rowValue(row, "status") ?? ""),
+        }
+      : null
+    return grant ? [grant] : []
+  })
 }
 
 async function updateJoinGrantStatus(input: {
@@ -502,6 +556,83 @@ async function maybeApproveJoinRequest(input: {
   }
 }
 
+export async function approvePendingTelegramJoinGrantsForUser(input: {
+  env: Env
+  userId: string
+}): Promise<Array<{ grantId: string; status: "approved" | "failed" | "ignored" | "pending" }>> {
+  const grants = await listPendingJoinGrantsForUser({
+    env: input.env,
+    userId: input.userId,
+  })
+  const communityRepository = getCommunityRepository(input.env)
+  const userRepository = getUserRepository(input.env)
+  const results: Array<{ grantId: string; status: "approved" | "failed" | "ignored" | "pending" }> = []
+
+  for (const grant of grants) {
+    const linkedChat = await getTelegramLinkedChatBotContext({
+      env: input.env,
+      telegramChatId: grant.telegram_chat_id,
+    })
+    if (!linkedChat || linkedChat.communityId !== grant.community_id) {
+      results.push({ grantId: grant.grant_id, status: "ignored" })
+      continue
+    }
+
+    const eligibility = await getJoinEligibility({
+      env: input.env,
+      userId: input.userId,
+      communityId: grant.community_id,
+      userRepository,
+      communityRepository,
+    })
+    let membershipResult: MembershipResult | null = null
+    if (eligibility.joinable_now) {
+      membershipResult = await joinCommunity({
+        env: input.env,
+        userId: input.userId,
+        communityId: grant.community_id,
+        userRepository,
+        communityRepository,
+      })
+    }
+    const canApprove = eligibility.status === "already_joined" || membershipResult?.status === "joined"
+    if (!canApprove) {
+      results.push({ grantId: grant.grant_id, status: "pending" })
+      continue
+    }
+
+    const bot = linkedChat.telegramCommunityBotId
+      ? await decryptCommunityTelegramBotById({
+          env: input.env,
+          botId: linkedChat.telegramCommunityBotId,
+        })
+      : null
+    const approvalBot = bot ?? input.env
+    try {
+      await approveTelegramChatJoinRequest(approvalBot, {
+        chat_id: grant.telegram_chat_id,
+        user_id: grant.telegram_user_id,
+      })
+      await updateJoinGrantStatus({
+        env: input.env,
+        grantId: grant.grant_id,
+        status: "approved",
+      })
+      results.push({ grantId: grant.grant_id, status: "approved" })
+    } catch (error) {
+      await updateJoinGrantStatus({
+        env: input.env,
+        grantId: grant.grant_id,
+        status: "failed",
+        errorMessage: error instanceof Error ? error.message : String(error),
+      })
+      results.push({ grantId: grant.grant_id, status: "failed" })
+    }
+  }
+
+  return results
+}
+
 export async function exchangeTelegramOnboardingSession(input: {
   env: Env
   body: { token?: unknown; init_data?: unknown } | null
@@ -563,6 +694,13 @@ export async function exchangeTelegramOnboardingSession(input: {
     telegramUser,
     userId,
   })
+  if (intent.join_grant_id) {
+    await updateJoinGrantUser({
+      env: input.env,
+      grantId: intent.join_grant_id,
+      userId,
+    })
+  }
 
   const communityRepository = getCommunityRepository(input.env)
   const userRepository = getUserRepository(input.env)

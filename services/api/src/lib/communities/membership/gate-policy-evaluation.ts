@@ -1,6 +1,6 @@
 import type { Env } from "../../../env"
 import type { User, WalletAttachmentSummary } from "../../../types"
-import type { CommunityGateRuleRow, GateAtom, GateExpression, GatePolicy, GatePolicyEvaluation, GateTraceNode, RequiredAction, RequiredActionNode, RequiredActionSet } from "./gate-types"
+import type { CommunityGateRuleRow, DocumentProofProvider, GateAtom, GateExpression, GatePolicy, GatePolicyEvaluation, GateTraceNode, RequiredAction, RequiredActionNode, RequiredActionSet } from "./gate-types"
 import { evaluateIdentityGateRule } from "./identity-gate-evaluation"
 import { evaluateTokenGateRule } from "./token-gate-evaluation"
 import { verifyAndConsumeAltchaProof, type AltchaProofInput, type AltchaScope, type VerifiedAltchaProof } from "../../verification/altcha-provider"
@@ -12,6 +12,16 @@ type AtomEvaluation = {
 }
 
 export type EvaluationMode = "preview" | "enforce"
+
+function getDocumentAcceptedProviders(
+  atom: Extract<GateAtom, { type: "minimum_age" | "nationality" | "gender" }>,
+): DocumentProofProvider[] {
+  return atom.accepted_providers?.length ? atom.accepted_providers : [atom.provider]
+}
+
+function getPreferredDocumentProvider(providers: readonly DocumentProofProvider[]): DocumentProofProvider {
+  return providers.includes("self") ? "self" : providers[0] ?? "self"
+}
 
 export async function evaluateMembershipGatePolicy(input: {
   env: Env
@@ -161,27 +171,37 @@ async function evaluateAtom(input: {
         capability: "unique_human",
       })
     case "minimum_age":
-      return evaluateIdentityAtom(input, [{
-        proof_type: "minimum_age",
-        accepted_providers: ["self"],
-        config: { minimum_age: input.atom.minimum_age },
-      }], {
-        kind: "action",
-        provider: "self",
-        capability: "minimum_age",
-        required_age: input.atom.minimum_age,
-      }, { required_age: input.atom.minimum_age })
+      {
+        const acceptedProviders = getDocumentAcceptedProviders(input.atom)
+        const preferredProvider = getPreferredDocumentProvider(acceptedProviders)
+        return evaluateIdentityAtom(input, [{
+          proof_type: "minimum_age",
+          accepted_providers: acceptedProviders,
+          config: { minimum_age: input.atom.minimum_age },
+        }], {
+          kind: "action",
+          provider: preferredProvider,
+          accepted_providers: acceptedProviders,
+          capability: "minimum_age",
+          required_age: input.atom.minimum_age,
+        }, { required_age: input.atom.minimum_age })
+      }
     case "nationality":
-      return evaluateIdentityAtom(input, [{
-        proof_type: "nationality",
-        accepted_providers: ["self"],
-        config: { required_values: input.atom.allowed },
-      }], {
-        kind: "action",
-        provider: "self",
-        capability: "nationality",
-        allowed_countries: input.atom.allowed,
-      })
+      {
+        const acceptedProviders = getDocumentAcceptedProviders(input.atom)
+        const preferredProvider = getPreferredDocumentProvider(acceptedProviders)
+        return evaluateIdentityAtom(input, [{
+          proof_type: "nationality",
+          accepted_providers: acceptedProviders,
+          config: { required_values: input.atom.allowed },
+        }], {
+          kind: "action",
+          provider: preferredProvider,
+          accepted_providers: acceptedProviders,
+          capability: "nationality",
+          allowed_countries: input.atom.allowed,
+        })
+      }
     case "gender":
       return evaluateGenderAtom({ atom: input.atom, user: input.user })
     case "wallet_score":
@@ -308,7 +328,10 @@ function evaluateGenderAtom(input: {
   user: User
 }): AtomEvaluation {
   const capability = input.user.verification_capabilities.gender
-  const providerAccepted = capability.state === "verified" && capability.provider === "self"
+  const acceptedProviders = getDocumentAcceptedProviders(input.atom)
+  const preferredProvider = getPreferredDocumentProvider(acceptedProviders)
+  const providerAccepted = capability.state === "verified"
+    && acceptedProviders.some((provider) => provider === capability.provider)
   const normalizedValue = capability.value === "M" || capability.value === "F" ? capability.value : null
   const passed = providerAccepted && normalizedValue != null && input.atom.allowed.includes(normalizedValue)
   const missing = capability.state !== "verified"
@@ -317,13 +340,14 @@ function evaluateGenderAtom(input: {
     trace: {
       kind: "gate",
       gate_type: "gender",
-      provider: "self",
+      provider: input.atom.provider,
       passed,
       reason: passed ? undefined : missing ? "gender" : "gender_mismatch",
     },
     requiredAction: passed ? null : {
       kind: "action",
-      provider: "self",
+      provider: preferredProvider,
+      accepted_providers: acceptedProviders,
       capability: "gender",
       allowed_markers: input.atom.allowed,
     },

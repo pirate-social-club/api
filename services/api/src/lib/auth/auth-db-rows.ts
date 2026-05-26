@@ -115,8 +115,8 @@ export type WalletAttachmentRow = {
 export type VerificationSessionRow = {
   verification_session_id: string
   user_id: string
-  provider: "self" | "very" | "passport"
-  provider_mode: "qr_deeplink" | "widget" | "native_sdk" | null
+  provider: "self" | "very" | "passport" | "zkpassport"
+  provider_mode: "qr_deeplink" | "widget" | "native_sdk" | "web_sdk" | null
   requested_capabilities_json: string
   verification_requirements_json: string | null
   status: "pending" | "verified" | "failed" | "expired" | "canceled"

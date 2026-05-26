@@ -1,0 +1,16 @@
+**/node_modules
+**/.wrangler
+**/.local
+**/.local*
+**/dist
+**/build
+**/coverage
+**/*.tsbuildinfo
+
+**/.env
+**/.env.local
+**/.env.*.local
+**/.dev.vars
+**/*.log
+**/*.tmp
+**/*.temp

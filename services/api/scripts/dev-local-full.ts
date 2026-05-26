@@ -187,6 +187,12 @@ async function main(): Promise<void> {
   const hnsVerifierBaseUrl = useRemoteVerifiers
     ? process.env.HNS_VERIFIER_BASE_URL || devVars.HNS_VERIFIER_BASE_URL || "http://127.0.0.1:8798"
     : "http://127.0.0.1:8798"
+  const zkPassportVerifierUrl = useRemoteVerifiers
+    ? process.env.ZKPASSPORT_VERIFIER_URL || devVars.ZKPASSPORT_VERIFIER_URL || "http://127.0.0.1:8794/verify"
+    : "http://127.0.0.1:8794/verify"
+  const zkPassportVerifierSecret = process.env.ZKPASSPORT_VERIFIER_SHARED_SECRET
+    || devVars.ZKPASSPORT_VERIFIER_SHARED_SECRET
+    || ""
   const localApiOrigin = apiLocalOrigin()
   const tunnel = await startPublicTunnel(localApiOrigin)
   const configuredPublicApiOrigin = process.env.PIRATE_API_PUBLIC_ORIGIN || devVars.PIRATE_API_PUBLIC_ORIGIN
@@ -217,6 +223,8 @@ async function main(): Promise<void> {
     SPACES_VERIFIER_AUTH_TOKEN: useRemoteVerifiers ? process.env.SPACES_VERIFIER_AUTH_TOKEN || devVars.SPACES_VERIFIER_AUTH_TOKEN || "" : "",
     HNS_VERIFIER_BASE_URL: hnsVerifierBaseUrl,
     HNS_VERIFIER_AUTH_TOKEN: useRemoteVerifiers ? process.env.HNS_VERIFIER_AUTH_TOKEN || devVars.HNS_VERIFIER_AUTH_TOKEN || "" : "",
+    ZKPASSPORT_VERIFIER_URL: zkPassportVerifierUrl,
+    ZKPASSPORT_VERIFIER_SHARED_SECRET: zkPassportVerifierSecret,
     NO_PROXY: localNoProxy(),
     no_proxy: localNoProxy(),
     ...(publicApiOrigin ? { PIRATE_API_PUBLIC_ORIGIN: publicApiOrigin } : {}),
@@ -263,6 +271,9 @@ async function main(): Promise<void> {
     ...(useRemoteVerifiers
       ? []
       : [spawnManagedChild("hns-verifier", ["run", "scripts/serve-local-hns-verifier.ts"], { env: localEnv })]),
+    ...(useRemoteVerifiers
+      ? []
+      : [spawnManagedChild("zkpassport-verifier", ["run", "scripts/zkpassport-verifier-service.ts"], { env: localEnv })]),
     spawnManagedChild("api", ["run", "scripts/serve-local.ts"], { env: localEnv }),
     ...(shouldStartAssistant && !openRouterProxyPortInUse
       ? [spawnManagedChild("openrouter-proxy", ["run", "scripts/serve-local-openrouter-proxy.ts"], { env: localEnv })]
@@ -289,6 +300,7 @@ async function main(): Promise<void> {
   }
   console.log(`HNS verifier: ${hnsVerifierBaseUrl}`)
   console.log(`Spaces verifier: ${spacesVerifierBaseUrl}`)
+  console.log(`ZKPassport verifier: ${zkPassportVerifierUrl}`)
   if (shouldStartWeb && publicApiOrigin) {
     console.log(`web dev VITE_PIRATE_API_BASE_URL: ${publicApiOrigin}`)
   }
