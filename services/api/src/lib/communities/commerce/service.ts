@@ -129,7 +129,7 @@ async function authorizeAssetAccess(input: {
 
 export async function createAssetForPost(input: {
   env: Env
-  client: Client
+  client: Pick<Client, "execute">
   communityId: string
   post: Post
   assetKind: Asset["asset_kind"]
@@ -142,6 +142,7 @@ export async function createAssetForPost(input: {
   displayTitle?: string | null
   licensePreset?: StoryLicensePreset | null
   commercialRevSharePct?: number | null
+  requireStoryRoyaltyRegistration?: boolean
   userRepository: UserRepository
 }): Promise<Asset> {
   if (!input.post.asset_id?.trim()) {
@@ -383,12 +384,13 @@ export async function createAssetForPost(input: {
 
 export async function createSongAssetForPost(input: {
   env: Env
-  client: Client
+  client: Pick<Client, "execute">
   communityId: string
   post: Post
   bundle: SongArtifactBundle
   licensePreset: StoryLicensePreset | null
   commercialRevSharePct: number | null
+  requireStoryRoyaltyRegistration?: boolean
   userRepository: UserRepository
 }): Promise<Asset> {
   return await createAssetForPost({
@@ -406,6 +408,7 @@ export async function createSongAssetForPost(input: {
     displayTitle: input.bundle.title,
     licensePreset: input.licensePreset,
     commercialRevSharePct: input.commercialRevSharePct,
+    requireStoryRoyaltyRegistration: input.requireStoryRoyaltyRegistration,
     userRepository: input.userRepository,
   })
 }
