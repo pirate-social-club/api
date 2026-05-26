@@ -409,6 +409,81 @@ describe("story royalty registration service", () => {
     expect(unavailable.asset.story_error).toContain("story_royalty_registration_unavailable")
   })
 
+  test("rolls back the post transaction when required royalty registration fails", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-required-"))
+    cleanupPaths.push(rootDir)
+
+    const env = { LOCAL_COMMUNITY_DB_ROOT: rootDir } as Env
+    const repo = buildRepository()
+    const communityId = "cmt_story_royalty_required"
+    const userId = "usr_author_story_required"
+    const now = "2026-04-21T00:00:00.000Z"
+    const assetId = "ast_required_story_registration"
+    let postId: string | null = null
+
+    await seedStoryCommunity({ env, repo, communityId, userId })
+    const db = await openCommunityDb(env, repo, communityId)
+    try {
+      const tx = await db.client.transaction("write")
+      let caughtError: unknown
+      try {
+        const post = await insertPost({
+          client: tx,
+          communityId,
+          authorUserId: userId,
+          body: {
+            post_type: "song",
+            identity_mode: "public",
+            title: "Required Story song",
+            idempotency_key: "required-story-registration-post",
+            song_mode: "original",
+            rights_basis: "original",
+            access_mode: "public",
+          },
+          createdAt: now,
+        })
+        postId = post.post_id
+
+        await createSongAssetForPost({
+          env,
+          client: tx,
+          communityId,
+          post: {
+            ...post,
+            asset_id: assetId,
+          },
+          bundle: buildBundle({ id: "sab_required_story_registration", title: "Required Story song" }),
+          licensePreset: "commercial-remix",
+          commercialRevSharePct: 10,
+          requireStoryRoyaltyRegistration: true,
+          userRepository: buildStoryUserRepository(userId),
+        })
+      } catch (error) {
+        caughtError = error
+        await tx.rollback()
+      } finally {
+        tx.close()
+      }
+
+      expect(caughtError).toBeInstanceOf(Error)
+      expect((caughtError as Error).message).toContain("Story registration is required before publishing this asset")
+
+      const posts = await db.client.execute({
+        sql: "SELECT post_id FROM posts WHERE post_id = ?1",
+        args: [postId],
+      })
+      expect(posts.rows).toHaveLength(0)
+
+      const assets = await db.client.execute({
+        sql: "SELECT asset_id FROM assets WHERE asset_id = ?1",
+        args: [assetId],
+      })
+      expect(assets.rows).toHaveLength(0)
+    } finally {
+      db.close()
+    }
+  })
+
   test("skips duplicate royalty registration when locked delivery already registered the asset", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-locked-"))
     cleanupPaths.push(rootDir)
