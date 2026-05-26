@@ -73,4 +73,28 @@ describe("sql migration helpers", () => {
     expect(statements[0]).toContain("BEFORE INSERT ON namespace_verifications")
     expect(statements[1]).toContain("BEFORE UPDATE OF family, normalized_root_label ON namespace_verifications")
   })
+
+  test("keeps sqlite-compatible evolving verification checks at their latest accepted values", () => {
+    expect(toSqliteCompatibleStatement(`
+      ALTER TABLE verification_sessions
+        ADD COLUMN IF NOT EXISTS provider_mode TEXT CHECK (
+          provider_mode IS NULL OR provider_mode IN ('qr_deeplink', 'widget', 'native_sdk')
+        );
+    `)).toContain("provider_mode IN ('qr_deeplink', 'widget', 'native_sdk', 'web_sdk')")
+
+    const identityNullifiers = toSqliteCompatibleStatement(`
+      CREATE TABLE identity_nullifiers (
+        identity_nullifier_id TEXT PRIMARY KEY,
+        provider TEXT NOT NULL CHECK (
+          provider IN ('self', 'very')
+        ),
+        mechanism TEXT NOT NULL CHECK (
+          mechanism IN ('zk-nullifier', 'palm-nullifier')
+        )
+      );
+    `)
+
+    expect(identityNullifiers).toContain("provider IN ('self', 'very', 'zkpassport')")
+    expect(identityNullifiers).toContain("mechanism IN ('zk-nullifier', 'palm-nullifier', 'zkpassport-unique-identifier')")
+  })
 })

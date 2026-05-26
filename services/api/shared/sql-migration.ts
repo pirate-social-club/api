@@ -147,6 +147,20 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
       "provider IN ('openrouter', 'elevenlabs')",
     )
   }
+  if (normalized.startsWith("ALTER TABLE VERIFICATION_SESSIONS") && normalized.includes(" ADD COLUMN ") && normalized.includes("PROVIDER_MODE")) {
+    sqliteCompat = sqliteCompat.replace(
+      /provider_mode\s+IN\s+\('qr_deeplink',\s*'widget',\s*'native_sdk'\)/i,
+      "provider_mode IN ('qr_deeplink', 'widget', 'native_sdk', 'web_sdk')",
+    )
+  }
+  if (normalized.startsWith("CREATE TABLE IDENTITY_NULLIFIERS")) {
+    sqliteCompat = sqliteCompat
+      .replace(/provider\s+IN\s+\('self',\s*'very'\)/i, "provider IN ('self', 'very', 'zkpassport')")
+      .replace(
+        /mechanism\s+IN\s+\('zk-nullifier',\s*'palm-nullifier'\)/i,
+        "mechanism IN ('zk-nullifier', 'palm-nullifier', 'zkpassport-unique-identifier')",
+      )
+  }
   sqliteCompat = sqliteCompat.replace(/\bJSONB\b/gi, "TEXT")
   sqliteCompat = sqliteCompat.replace(/\bTIMESTAMPTZ\b/gi, "TEXT")
   sqliteCompat = sqliteCompat.replace(/\bTIMESTAMP\b/gi, "TEXT")
