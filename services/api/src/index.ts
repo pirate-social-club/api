@@ -56,6 +56,10 @@ import type { Env } from "./env"
 
 export { LiveRoomRuntimeDO }
 
+declare const __PIRATE_BUILD_GIT_REF__: string | undefined
+declare const __PIRATE_BUILD_GIT_SHA__: string | undefined
+declare const __PIRATE_BUILD_TIMESTAMP__: string | undefined
+
 const app = new Hono<{ Bindings: Env }>()
 const PUBLIC_READ_WORKER_CACHE_CREATED_HEADER = "x-pirate-cache-created-at"
 const PUBLIC_READ_WORKER_CACHE_TTL_HEADER = "x-pirate-cache-ttl"
@@ -75,13 +79,37 @@ type PublicReadCacheFillResult = {
   statusText: string
 }
 
+type BuildVersionMetadata = {
+  git_ref: string | null
+  git_sha: string | null
+  build_timestamp: string | null
+}
+
+const COMPILED_BUILD_VERSION_METADATA: BuildVersionMetadata = {
+  git_ref: typeof __PIRATE_BUILD_GIT_REF__ === "string" ? __PIRATE_BUILD_GIT_REF__ : null,
+  git_sha: typeof __PIRATE_BUILD_GIT_SHA__ === "string" ? __PIRATE_BUILD_GIT_SHA__ : null,
+  build_timestamp: typeof __PIRATE_BUILD_TIMESTAMP__ === "string" ? __PIRATE_BUILD_TIMESTAMP__ : null,
+}
+
+export function buildVersionMetadata(
+  env: Pick<Env, "BUILD_GIT_REF" | "BUILD_GIT_SHA" | "BUILD_TIMESTAMP">,
+  compiled: BuildVersionMetadata = COMPILED_BUILD_VERSION_METADATA,
+): BuildVersionMetadata {
+  return {
+    git_ref: env.BUILD_GIT_REF ?? compiled.git_ref,
+    git_sha: env.BUILD_GIT_SHA ?? compiled.git_sha,
+    build_timestamp: env.BUILD_TIMESTAMP ?? compiled.build_timestamp,
+  }
+}
+
 async function buildVersionPayload(env: Env) {
+  const buildVersion = buildVersionMetadata(env)
   return {
     service: "api",
     environment: env.ENVIRONMENT ?? null,
-    git_sha: env.BUILD_GIT_SHA ?? null,
-    git_ref: env.BUILD_GIT_REF ?? null,
-    build_timestamp: env.BUILD_TIMESTAMP ?? null,
+    git_sha: buildVersion.git_sha,
+    git_ref: buildVersion.git_ref,
+    build_timestamp: buildVersion.build_timestamp,
     api_origin: env.PIRATE_API_PUBLIC_ORIGIN ?? null,
     operator: await getCommunityProvisionOperatorVersion(env),
   }
