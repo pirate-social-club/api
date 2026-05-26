@@ -294,11 +294,21 @@ describe("validateCommunityAssistantPolicySettings", () => {
     expectInvalid(validPolicy({ ttsVoice: "a".repeat(129) }), "ttsVoice must be at most 128 characters")
   })
 
-  test("requires STT when voice input is enabled", () => {
+  test("requires ElevenLabs STT when voice input is enabled", () => {
     expectInvalid(validPolicy({
       voiceMode: "transcription_only",
       sttProvider: "none",
-    }), "enabled voice requires a speech-to-text provider")
+    }), "enabled voice requires ElevenLabs speech-to-text")
+    expectInvalid(validPolicy({
+      voiceMode: "transcription_only",
+      sttProvider: "mistral",
+      sttModel: "voxtral-mini-latest",
+    }), "enabled voice requires ElevenLabs speech-to-text")
+    expectInvalid(validPolicy({
+      voiceMode: "transcription_only",
+      sttProvider: "openai",
+      sttModel: "whisper-1",
+    }), "enabled voice requires ElevenLabs speech-to-text")
   })
 
   test("requires an ElevenLabs key when voice is enabled", () => {

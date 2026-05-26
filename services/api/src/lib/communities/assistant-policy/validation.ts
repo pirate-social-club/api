@@ -229,8 +229,8 @@ export function validateCommunityAssistantPolicySettings(
   const sttModel = requiredString(input, "sttModel", errors, { maxLength: 128 })
   const ttsProvider = enumValue(input, "ttsProvider", TTS_PROVIDERS, errors)
   const ttsVoice = requiredString(input, "ttsVoice", errors, { maxLength: 128 })
-  if (voiceMode !== "off" && sttProvider === "none") {
-    errors.push("enabled voice requires a speech-to-text provider")
+  if (voiceMode !== "off" && sttProvider !== "elevenlabs") {
+    errors.push("enabled voice requires ElevenLabs speech-to-text")
   }
   if (voiceMode !== "off" && elevenLabsKeyStatus.kind !== "connected") {
     errors.push("enabled voice requires a connected ElevenLabs key")
