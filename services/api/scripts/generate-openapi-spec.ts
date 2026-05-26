@@ -1,17 +1,34 @@
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import YAML from "yaml"
 
 const scriptDir = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(scriptDir, "..", "..", "..", "..")
-const fullYamlPath = resolve(repoRoot, "core", "specs", "api", "openapi.yaml")
-const implementedYamlPath = resolve(repoRoot, "core", "specs", "api", "openapi-implemented.yaml")
-const sourceComponentsDir = resolve(repoRoot, "core", "specs", "api", "src", "components")
+const coreRepoRoot = resolveCoreRepoRoot()
+const fullYamlPath = resolve(coreRepoRoot, "specs", "api", "openapi.yaml")
+const implementedYamlPath = resolve(coreRepoRoot, "specs", "api", "openapi-implemented.yaml")
+const sourceComponentsDir = resolve(coreRepoRoot, "specs", "api", "src", "components")
 const outDir = resolve(scriptDir, "..", "src", "generated")
 const outPath = resolve(outDir, "openapi-spec.ts")
 
 type OpenApiRecord = Record<string, any>
+
+function resolveCoreRepoRoot(): string {
+  const candidates = [
+    process.env.PIRATE_CORE_REPO?.trim(),
+    resolve(repoRoot, "core"),
+    resolve(repoRoot, "../core"),
+  ].filter((value): value is string => Boolean(value))
+
+  for (const candidate of new Set(candidates)) {
+    if (existsSync(resolve(candidate, "specs/api/openapi.yaml"))) {
+      return candidate
+    }
+  }
+
+  throw new Error("Could not locate Pirate core repo. Set PIRATE_CORE_REPO.")
+}
 
 function readYaml(path: string): OpenApiRecord {
   return YAML.parse(readFileSync(path, "utf-8")) ?? {}
