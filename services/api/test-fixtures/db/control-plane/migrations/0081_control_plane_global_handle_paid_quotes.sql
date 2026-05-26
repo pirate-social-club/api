@@ -27,7 +27,6 @@ CREATE TABLE IF NOT EXISTS global_handle_paid_quotes (
     settlement_wallet_attachment_id TEXT,
     funding_tx_ref TEXT,
     settlement_tx_ref TEXT,
-    -- Reserved for deterministic policy/debug snapshots when paid-handle pricing gains more inputs.
     settings_snapshot_json TEXT,
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL,

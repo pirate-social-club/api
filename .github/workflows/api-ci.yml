@@ -107,6 +107,12 @@ jobs:
           bun run generate:migrations
           git diff --exit-code -- src/generated/community-migrations.ts
 
+      - name: Check control-plane fixture migrations
+        working-directory: services/api
+        env:
+          PIRATE_CORE_REPO: ${{ github.workspace }}/core
+        run: bun run check:control-plane-fixtures
+
       - name: Check community schema guards
         working-directory: services/api
         run: bun run check:community-schema-guards

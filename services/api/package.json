@@ -17,6 +17,8 @@
     "deploy": "wrangler deploy",
     "smoke:public-feed-cache": "bun run scripts/smoke-public-feed-cache.ts",
     "check:community-schema-guards": "bun run scripts/check-community-schema-guards.ts",
+    "check:control-plane-fixtures": "bun run scripts/check-control-plane-fixtures.ts",
+    "sync:control-plane-fixtures": "bun run scripts/check-control-plane-fixtures.ts --write",
     "generate:agent-tools": "bun run scripts/generate-agent-tools.ts",
     "generate:agent-skill": "bun run scripts/generate-agent-skill.ts",
     "check:agent-skill": "bun run scripts/generate-agent-skill.ts --check",

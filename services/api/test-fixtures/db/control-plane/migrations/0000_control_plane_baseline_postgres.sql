@@ -79,9 +79,6 @@ CREATE TABLE verification_sessions (
     verification_session_id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
     provider TEXT NOT NULL,
-    provider_mode TEXT CHECK (
-        provider_mode IS NULL OR provider_mode IN ('qr_deeplink', 'widget', 'native_sdk')
-    ),
     session_kind TEXT NOT NULL,
     requested_capabilities_json JSONB NOT NULL,
     verification_requirements_json JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -564,6 +561,7 @@ CREATE TABLE namespace_verification_sessions (
         status IN (
             'draft',
             'inspecting',
+            'dns_setup_required',
             'challenge_required',
             'challenge_pending',
             'verifying',
@@ -814,7 +812,7 @@ CREATE TABLE reddit_verification_sessions (
     ),
     verification_hint TEXT,
     failure_code TEXT CHECK (
-        failure_code IS NULL OR failure_code IN ('code_not_found', 'different_code_found', 'username_not_found', 'rate_limited', 'source_error')
+        failure_code IS NULL OR failure_code IN ('code_not_found', 'username_not_found', 'rate_limited', 'source_error')
     ),
     checked_count INTEGER NOT NULL DEFAULT 0,
     last_checked_at TIMESTAMPTZ,
@@ -942,7 +940,7 @@ CREATE TABLE song_artifact_uploads (
     community_id TEXT NOT NULL,
     uploader_user_id TEXT NOT NULL,
     artifact_kind TEXT NOT NULL CHECK (
-        artifact_kind IN ('primary_audio', 'cover_art', 'preview_audio', 'preview_video', 'canvas_video', 'instrumental_audio', 'vocal_audio')
+        artifact_kind IN ('primary_audio', 'cover_art', 'preview_audio', 'canvas_video', 'instrumental_audio', 'vocal_audio')
     ),
     status TEXT NOT NULL CHECK (
         status IN ('pending_upload', 'uploaded', 'failed')
@@ -1016,29 +1014,21 @@ CREATE INDEX idx_community_registry_table_refs_namespace_table
     ON community_registry_table_refs(club_namespace_table_name)
     WHERE club_namespace_table_name IS NOT NULL;
 
-CREATE TABLE community_gate_rules (
-    gate_rule_id TEXT PRIMARY KEY,
+CREATE TABLE community_gate_policies (
     community_id TEXT NOT NULL,
     scope TEXT NOT NULL CHECK (
         scope IN ('membership', 'viewer', 'posting')
     ),
-    gate_family TEXT NOT NULL CHECK (
-        gate_family IN ('identity_proof', 'token_holding')
-    ),
-    gate_type TEXT NOT NULL,
-    proof_requirements_json JSONB,
-    chain_namespace TEXT,
-    gate_config_json JSONB,
-    status TEXT NOT NULL CHECK (
-        status IN ('active', 'disabled')
-    ),
+    version INTEGER NOT NULL DEFAULT 1 CHECK (version = 1),
+    expression_json JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (community_id, scope),
     FOREIGN KEY (community_id) REFERENCES communities(community_id)
 );
 
-CREATE INDEX idx_community_gate_rules_community_scope_status
-    ON community_gate_rules(community_id, scope, status, created_at DESC);
+CREATE INDEX idx_community_gate_policies_scope_updated
+    ON community_gate_policies(scope, updated_at DESC);
 
 CREATE TABLE dvpn_feature_entitlements (
     dvpn_feature_entitlement_id TEXT PRIMARY KEY,
