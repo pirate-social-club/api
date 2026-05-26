@@ -8,13 +8,14 @@ import { getCommunityRepository } from "../src/lib/communities/db-community-repo
 import { validateGatePolicy } from "../src/lib/communities/membership/gate-policy-validation"
 import type { CommunityRepository } from "../src/lib/communities/community-repository-types"
 import type { CommunityRow } from "../src/lib/auth/auth-db-rows"
-import type { DocumentProofProvider, GateExpression, GatePolicy } from "../src/lib/communities/membership/gate-types"
+import type { DocumentProofProvider, GateAtom, GateExpression, GatePolicy } from "../src/lib/communities/membership/gate-types"
 import type { Env } from "../src/env"
 
 const DOCUMENT_GATE_TYPES = ["nationality", "minimum_age", "gender"] as const
 const DEFAULT_ACCEPTED_PROVIDERS: DocumentProofProvider[] = ["self", "zkpassport"]
 
 type DocumentGateType = typeof DOCUMENT_GATE_TYPES[number]
+type DocumentGateAtom = Extract<GateAtom, { type: DocumentGateType }>
 
 type Mode = "dry-run" | "apply" | "rollback"
 
@@ -231,13 +232,14 @@ function transformExpression(
     && shouldAddAcceptedProviders(gate, includeSelfOnly)
   ) {
     gateTypes.add(gate.type)
+    const nextGate: DocumentGateAtom = {
+      ...(expression.gate as DocumentGateAtom),
+      accepted_providers: DEFAULT_ACCEPTED_PROVIDERS,
+    }
     return {
       expression: {
         op: "gate",
-        gate: {
-          ...expression.gate,
-          accepted_providers: DEFAULT_ACCEPTED_PROVIDERS,
-        },
+        gate: nextGate,
       },
       changed: true,
     }
