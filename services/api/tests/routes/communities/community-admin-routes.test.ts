@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { app } from "../../../src/index"
+import { app, buildVersionMetadata } from "../../../src/index"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import {
   completeUniqueHumanVerification,
@@ -28,6 +28,32 @@ afterEach(async () => {
 })
 
 describe("admin auth middleware", () => {
+  test("build version metadata falls back to compiled deploy metadata", () => {
+    expect(buildVersionMetadata({}, {
+      git_sha: "compiled-api123",
+      git_ref: "compiled-main",
+      build_timestamp: "2026-05-26T17:50:00Z",
+    })).toEqual({
+      git_sha: "compiled-api123",
+      git_ref: "compiled-main",
+      build_timestamp: "2026-05-26T17:50:00Z",
+    })
+
+    expect(buildVersionMetadata({
+      BUILD_GIT_SHA: "runtime-api123",
+      BUILD_GIT_REF: "runtime-main",
+      BUILD_TIMESTAMP: "2026-05-26T17:51:00Z",
+    }, {
+      git_sha: "compiled-api123",
+      git_ref: "compiled-main",
+      build_timestamp: "2026-05-26T17:50:00Z",
+    })).toEqual({
+      git_sha: "runtime-api123",
+      git_ref: "runtime-main",
+      build_timestamp: "2026-05-26T17:51:00Z",
+    })
+  })
+
   test("__version reports community provision operator version when bound", async () => {
     const operator = {
       fetch: (request: Request | string) => {
