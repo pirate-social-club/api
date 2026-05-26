@@ -3,6 +3,7 @@ import { app } from "../../../src/index"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { getCommunityRepository } from "../../../src/lib/communities/db-community-repository"
 import { processCommunityJobsForCommunity } from "../../../src/lib/communities/jobs/runner"
+import { setStoryRoyaltyRegistrarForTests } from "../../../src/lib/story/story-royalty-registration-service"
 import {
   exchangeJwt,
   requestJson,
@@ -95,6 +96,18 @@ describe("song artifact local fallback routes", () => {
       walletAttachmentId: "wal_song_author_local_story_fallback",
       walletAddress: "0xccc0000000000000000000000000000000000000",
     })
+    setStoryRoyaltyRegistrarForTests(async () => ({
+      storyIpId: "0x9999999999999999999999999999999999999999",
+      storyIpNftContract: "0x8888888888888888888888888888888888888888",
+      storyIpNftTokenId: "17",
+      storyLicenseTermsId: "17",
+      storyLicenseTemplate: null,
+      storyRoyaltyPolicy: "0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E",
+      storyDerivativeParentIpIds: null,
+      storyRevenueToken: "0x1514000000000000000000000000000000000000",
+      storyRoyaltyRegistrationStatus: "registered",
+      storyDerivativeRegisteredAt: null,
+    }))
 
     const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "Local Story Fallback Club")
 

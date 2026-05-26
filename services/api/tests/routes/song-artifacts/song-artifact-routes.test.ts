@@ -10,6 +10,7 @@ import { setStoryAccessProofSignerForTests } from "../../../src/lib/story/story-
 import { setStoryAssetPublisherForTests } from "../../../src/lib/story/story-publish-service"
 import { setStoryCdrUploaderForTests } from "../../../src/lib/story/story-cdr"
 import { setStoryRuntimeFundingAssertionForTests } from "../../../src/lib/story/story-runtime-funding"
+import { setStoryRoyaltyRegistrarForTests } from "../../../src/lib/story/story-royalty-registration-service"
 import {
   completeUniqueHumanVerification,
   exchangeJwt,
@@ -21,6 +22,21 @@ const testWithTimeout = test as unknown as (name: string, fn: () => Promise<void
 
 let cleanup: (() => Promise<void>) | null = null
 let originalFetch: typeof fetch
+
+function installSuccessfulStoryRoyaltyRegistrarForTests(): void {
+  setStoryRoyaltyRegistrarForTests(async (input) => ({
+    storyIpId: "0x9999999999999999999999999999999999999999",
+    storyIpNftContract: "0x8888888888888888888888888888888888888888",
+    storyIpNftTokenId: input.assetId.replace(/\D/g, "").slice(0, 12) || "1",
+    storyLicenseTermsId: "17",
+    storyLicenseTemplate: null,
+    storyRoyaltyPolicy: "0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E",
+    storyDerivativeParentIpIds: input.rightsBasis === "derivative" ? [] : null,
+    storyRevenueToken: "0x1514000000000000000000000000000000000000",
+    storyRoyaltyRegistrationStatus: "registered",
+    storyDerivativeRegisteredAt: input.rightsBasis === "derivative" ? "2026-04-21T00:00:00.000Z" : null,
+  }))
+}
 
 function makeSilentWavBytes(durationSeconds = 2): Uint8Array {
   const sampleRate = 8000
@@ -424,6 +440,13 @@ describe("song artifact routes", () => {
       ctx.env,
     )
     expect(joined.status).toBe(200)
+    await attachPrimaryWallet({
+      client: ctx.client,
+      userId: member.userId,
+      walletAttachmentId: "wal_song_altcha_member",
+      walletAddress: "0xaaa0000000000000000000000000000000000007",
+    })
+    installSuccessfulStoryRoyaltyRegistrarForTests()
 
     const primaryBytes = makeSilentWavBytes()
     const uploadIntent = await requestJson(
@@ -641,6 +664,7 @@ describe("song artifact routes", () => {
       walletAttachmentId: "wal_song_preview_crop_author",
       walletAddress: "0xaaa0000000000000000000000000000000000001",
     })
+    installSuccessfulStoryRoyaltyRegistrarForTests()
     await completeUniqueHumanVerification(ctx.env, author.accessToken)
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
@@ -918,6 +942,13 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     cleanup = ctx.cleanup
 
     const author = await exchangeJwt(ctx.env, "song-author")
+    await attachPrimaryWallet({
+      client: ctx.client,
+      userId: author.userId,
+      walletAttachmentId: "wal_song_author",
+      walletAddress: "0xaaa0000000000000000000000000000000000002",
+    })
+    installSuccessfulStoryRoyaltyRegistrarForTests()
     await completeUniqueHumanVerification(ctx.env, author.accessToken)
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
@@ -1271,6 +1302,13 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     cleanup = ctx.cleanup
 
     const author = await exchangeJwt(ctx.env, "song-author-no-acr")
+    await attachPrimaryWallet({
+      client: ctx.client,
+      userId: author.userId,
+      walletAttachmentId: "wal_song_author_no_acr",
+      walletAddress: "0xaaa0000000000000000000000000000000000003",
+    })
+    installSuccessfulStoryRoyaltyRegistrarForTests()
     await completeUniqueHumanVerification(ctx.env, author.accessToken)
 
     const communityCreate = await requestJson("http://pirate.test/communities", {

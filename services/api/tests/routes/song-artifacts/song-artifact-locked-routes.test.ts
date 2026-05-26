@@ -925,7 +925,7 @@ describe("song artifact locked routes", () => {
 
 
 
-  test("rejects activating commerce for an asset before Story royalty registration is ready", async () => {
+  test("rejects song publishing when Story royalty registration is unavailable", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
 
     installLockedSongFetchMocks({
@@ -1011,6 +1011,7 @@ describe("song artifact locked routes", () => {
         identity_mode: "public",
         title: "Derivative commerce song",
         access_mode: "public",
+        asset_id: "ast_story_failed_derivative_route",
         song_mode: "remix",
         rights_basis: "derivative",
         license_preset: "commercial-remix",
@@ -1021,47 +1022,35 @@ describe("song artifact locked routes", () => {
       ctx.env,
       author.accessToken,
     )
-    expect(derivativePostCreate.status).toBe(201)
-    const derivativePostBody = await json(derivativePostCreate) as {
-      asset?: string | null
+    expect(derivativePostCreate.status).toBe(502)
+    const failedPostBody = await json(derivativePostCreate) as {
+      code?: string
+      message?: string
+      retryable?: boolean
     }
-    const assetId = derivativePostBody.asset as string
+    expect(failedPostBody).toMatchObject({
+      code: "provider_unavailable",
+      message: "Story registration is required before publishing this asset",
+      retryable: true,
+    })
 
-    const assetRead = await app.request(
-      `http://pirate.test/communities/${communityId}/assets/${assetId}`,
-      {
-        headers: {
-          authorization: `Bearer ${author.accessToken}`,
-        },
-      },
-      ctx.env,
-    )
-    expect(assetRead.status).toBe(200)
-    const assetBody = await json(assetRead) as {
-      story_royalty_policy: string | null
-      story_derivative_parent_ip_ids: string[] | null
-      story_royalty_registration_status: string | null
-      story_error: string | null
+    const communityDb = createClient({
+      url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
+    })
+    try {
+      const postRows = await communityDb.execute({
+        sql: "SELECT COUNT(*) AS count FROM posts WHERE idempotency_key = ?1",
+        args: ["song-post-derivative-commerce-1"],
+      })
+      const assetRows = await communityDb.execute({
+        sql: "SELECT COUNT(*) AS count FROM assets WHERE asset_id = ?1",
+        args: ["ast_story_failed_derivative_route"],
+      })
+      expect(Number(postRows.rows[0]?.count ?? 0)).toBe(0)
+      expect(Number(assetRows.rows[0]?.count ?? 0)).toBe(0)
+    } finally {
+      communityDb.close()
     }
-    expect(assetBody.story_royalty_policy).toBeNull()
-    expect(assetBody.story_derivative_parent_ip_ids).toBeNull()
-    expect(assetBody.story_royalty_registration_status).toBe("failed")
-    expect(assetBody.story_error).toContain("story_royalty_config_missing")
-
-    const listingCreate = await requestJson(
-      `http://pirate.test/communities/${communityId}/listings`,
-      {
-        asset: assetId,
-        price_cents: 499,
-        regional_pricing_enabled: false,
-        status: "active",
-      },
-      ctx.env,
-      author.accessToken,
-    )
-    expect(listingCreate.status).toBe(400)
-    const listingBody = await json(listingCreate) as { message?: string }
-    expect(listingBody.message).toBe("Asset is not ready for Story royalty commerce")
   })
 
   testWithTimeout("allows commerce for a locked derivative asset once Story royalty registration metadata is present", async () => {
