@@ -1,5 +1,5 @@
 import type { Client } from "../../sql-client"
-import { badRequestError, notFoundError } from "../../errors"
+import { badRequestError, notFoundError, providerUnavailable } from "../../errors"
 import { nowIso } from "../../helpers"
 import {
   ANY_COMMUNITY_ROLE,
@@ -299,6 +299,10 @@ export async function createAssetForPost(input: {
     const registrationError = error instanceof Error ? error.message : String(error)
     storyRoyaltyRegistrationStatus = "failed"
     storyError = storyError ? `${storyError};royalty_registration_failed:${registrationError}` : `royalty_registration_failed:${registrationError}`
+  }
+
+  if (shouldRegisterRoyalty && storyRoyaltyRegistrationStatus === "failed" && input.requireStoryRoyaltyRegistration) {
+    throw providerUnavailable("Story registration is required before publishing this asset")
   }
 
   await input.client.execute({
