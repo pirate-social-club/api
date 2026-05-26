@@ -506,12 +506,14 @@ async function safeSendTelegramMessage(
 async function safeSendTelegramVoice(
   bot: Env | TelegramBotCredential,
   body: Parameters<typeof sendTelegramVoice>[1],
+  logContext: Record<string, unknown> = {},
 ): Promise<boolean> {
   try {
     await sendTelegramVoice(bot, body)
     return true
   } catch (error) {
     console.warn("[telegram-webhook] sendVoice failed", {
+      ...logContext,
       error: error instanceof Error ? error.message : String(error),
     })
     return false
@@ -551,41 +553,67 @@ async function transcribeTelegramAssistantVoiceForCommunity(input: {
   communityId: string
   trigger: TelegramAssistantVoiceTrigger
 }): Promise<string | null> {
-  if (
-    input.trigger.fileSize !== null
-    && input.trigger.fileSize > COMMUNITY_ASSISTANT_MAX_TRANSCRIPTION_AUDIO_BYTES
-  ) {
-    throw badRequestError("audio file must be at most 20MB")
-  }
-
-  const telegramFile = await getTelegramFile(input.bot, input.trigger.fileId)
-  const fileSize = typeof telegramFile.file_size === "number" && Number.isFinite(telegramFile.file_size)
-    ? telegramFile.file_size
-    : input.trigger.fileSize
-  if (fileSize !== null && fileSize > COMMUNITY_ASSISTANT_MAX_TRANSCRIPTION_AUDIO_BYTES) {
-    throw badRequestError("audio file must be at most 20MB")
-  }
-  if (!telegramFile.file_path?.trim()) {
-    throw badRequestError("Telegram audio file is not available")
-  }
-
-  const download = await downloadTelegramFile(input.bot, telegramFile.file_path)
-  const fileName = telegramFileNameFromPath(telegramFile.file_path, input.trigger.fileName)
-  const mimeType = inferTelegramAudioMimeType({
-    explicitMimeType: input.trigger.mimeType === "application/octet-stream"
-      ? download.contentType ?? undefined
-      : input.trigger.mimeType,
-    fallback: download.contentType ?? input.trigger.mimeType,
-    fileName,
-  })
-  const transcript = await transcribeCommunityAssistantAudioForCommunity({
-    env: input.env,
-    communityRepository: getCommunityRepository(input.env),
+  const logContext = {
     communityId: input.communityId,
-    file: new File([download.bytes], fileName, { type: mimeType }),
-  })
-  const prompt = transcript.text.trim()
-  return prompt || null
+    fileId: input.trigger.fileId,
+    initialFileSize: input.trigger.fileSize,
+    initialMimeType: input.trigger.mimeType,
+    triggerType: input.trigger.triggerType,
+  }
+  console.info("[telegram-assistant] voice STT start", logContext)
+  try {
+    if (
+      input.trigger.fileSize !== null
+      && input.trigger.fileSize > COMMUNITY_ASSISTANT_MAX_TRANSCRIPTION_AUDIO_BYTES
+    ) {
+      throw badRequestError("audio file must be at most 20MB")
+    }
+
+    const telegramFile = await getTelegramFile(input.bot, input.trigger.fileId)
+    const fileSize = typeof telegramFile.file_size === "number" && Number.isFinite(telegramFile.file_size)
+      ? telegramFile.file_size
+      : input.trigger.fileSize
+    if (fileSize !== null && fileSize > COMMUNITY_ASSISTANT_MAX_TRANSCRIPTION_AUDIO_BYTES) {
+      throw badRequestError("audio file must be at most 20MB")
+    }
+    if (!telegramFile.file_path?.trim()) {
+      throw badRequestError("Telegram audio file is not available")
+    }
+
+    const download = await downloadTelegramFile(input.bot, telegramFile.file_path)
+    const fileName = telegramFileNameFromPath(telegramFile.file_path, input.trigger.fileName)
+    const mimeType = inferTelegramAudioMimeType({
+      explicitMimeType: input.trigger.mimeType === "application/octet-stream"
+        ? download.contentType ?? undefined
+        : input.trigger.mimeType,
+      fallback: download.contentType ?? input.trigger.mimeType,
+      fileName,
+    })
+    const transcript = await transcribeCommunityAssistantAudioForCommunity({
+      env: input.env,
+      communityRepository: getCommunityRepository(input.env),
+      communityId: input.communityId,
+      file: new File([download.bytes], fileName, { type: mimeType }),
+    })
+    const prompt = transcript.text.trim()
+    console.info("[telegram-assistant] voice STT success", {
+      ...logContext,
+      durationSeconds: transcript.duration_seconds,
+      fileSize,
+      languageCode: transcript.language_code,
+      languageProbability: transcript.language_probability,
+      model: transcript.model,
+      promptLength: prompt.length,
+      resolvedMimeType: mimeType,
+    })
+    return prompt || null
+  } catch (error) {
+    console.warn("[telegram-assistant] voice STT failed", {
+      ...logContext,
+      ...telegramRouteErrorLogFields(error),
+    })
+    throw error
+  }
 }
 
 async function maybeSendTelegramAssistantVoiceReplyForCommunity(input: {
@@ -619,8 +647,18 @@ async function maybeSendTelegramAssistantVoiceReplyForCommunity(input: {
     return false
   }
 
+  const logContext = {
+    communityId: input.communityId,
+    messageId: input.message.message_id ?? null,
+    outputFormat: TELEGRAM_ELEVENLABS_TTS_OUTPUT_FORMAT,
+    telegramChatId: input.chatId,
+    textLength: input.answerText.length,
+    ttsProvider: policy.ttsProvider,
+    ttsVoice: policy.ttsVoice,
+  }
   let speech
   try {
+    console.info("[telegram-assistant] voice TTS start", logContext)
     speech = await synthesizeCommunityAssistantSpeechForCommunity({
       env: input.env,
       communityRepository,
@@ -628,14 +666,24 @@ async function maybeSendTelegramAssistantVoiceReplyForCommunity(input: {
       outputFormat: TELEGRAM_ELEVENLABS_TTS_OUTPUT_FORMAT,
       text: input.answerText,
     })
+    console.info("[telegram-assistant] voice TTS success", {
+      ...logContext,
+      audioBytes: speech.audio.byteLength,
+      characterCount: speech.characterCount,
+      contentType: speech.contentType,
+      model: speech.model,
+      requestId: speech.requestId,
+      voiceId: speech.voiceId,
+    })
   } catch (error) {
     console.warn("[telegram-webhook] assistant TTS failed", {
-      error: error instanceof Error ? error.message : String(error),
+      ...logContext,
+      ...telegramRouteErrorLogFields(error),
     })
     return false
   }
 
-  return safeSendTelegramVoice(input.bot, {
+  const sent = await safeSendTelegramVoice(input.bot, {
     chat_id: input.chatId,
     ...(typeof input.messageThreadId === "number" ? { message_thread_id: input.messageThreadId } : {}),
     voice: new File([speech.audio], "assistant-reply.ogg", {
@@ -644,7 +692,12 @@ async function maybeSendTelegramAssistantVoiceReplyForCommunity(input: {
     reply_parameters: {
       message_id: input.message.message_id!,
     },
+  }, logContext)
+  console.info("[telegram-assistant] voice reply send result", {
+    ...logContext,
+    sent,
   })
+  return sent
 }
 
 async function maybeSendTelegramAssistantVoiceReply(input: {
@@ -899,6 +952,14 @@ async function handleDirectAssistantMessage(env: Env, message: TelegramWebhookMe
     if (sentVoiceReply) {
       return
     }
+    console.info("[telegram-assistant] direct text fallback", {
+      answerLength: answerText.length,
+      communityId: bot.communityId,
+      telegramChatId: chatId,
+      telegramCommunityBotId: bot.id,
+      telegramUserId,
+      triggerType: textPrompt ? "dm_text" : "dm_voice",
+    })
     await safeSendTelegramMessage(bot, {
       chat_id: chatId,
       text: answerText,
@@ -962,6 +1023,14 @@ async function handleGroupAssistantMessage(env: Env, message: TelegramWebhookMes
   if (sentVoiceReply) {
     return
   }
+  console.info("[telegram-assistant] group text fallback", {
+    answerLength: answer.text.length,
+    communityId: isCommunityBot(bot) ? bot.communityId : null,
+    telegramChatId: chatId,
+    telegramMessageId: message.message_id,
+    telegramUserId,
+    triggerType: textTrigger?.triggerType ?? voiceTrigger!.triggerType,
+  })
   await safeSendTelegramMessage(bot, {
     chat_id: chatId,
     ...(typeof message.message_thread_id === "number" ? { message_thread_id: message.message_thread_id } : {}),
