@@ -314,6 +314,10 @@ export async function uploadCdrEncryptedDataKey(params: {
 }
 
 export async function estimateStoryCdrLockedPublishMinimumBalanceWei(env: Env): Promise<bigint> {
+  if (testUploader) {
+    return 0n
+  }
+
   const chainIdRaw = String(env.STORY_CHAIN_ID || "").trim()
   const chainId = chainIdRaw ? Number(chainIdRaw) : DEFAULT_STORY_CHAIN_ID
   if (!Number.isInteger(chainId) || chainId <= 0) {

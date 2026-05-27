@@ -364,11 +364,6 @@ export async function prepareLockedAssetDelivery(input: {
     ? input.rightsBasis
     : "none"
   try {
-    const cdrWriterMinimumBalanceWei = await estimateStoryCdrLockedPublishMinimumBalanceWei(input.env)
-    await assertStoryRuntimeSignerFunding(input.env, [
-      { name: "story-cdr-writer", minBalanceWei: cdrWriterMinimumBalanceWei },
-      "story-operator",
-    ])
     const writerConfig = resolveStoryCdrWriterDirectSigner(input.env)
     if (!writerConfig.ok) {
       throw badRequestError(writerConfig.error)
@@ -376,6 +371,11 @@ export async function prepareLockedAssetDelivery(input: {
     if (!writerConfig.value) {
       throw badRequestError("STORY_CDR_WRITER_PRIVATE_KEY missing/invalid")
     }
+    const cdrWriterMinimumBalanceWei = await estimateStoryCdrLockedPublishMinimumBalanceWei(input.env)
+    await assertStoryRuntimeSignerFunding(input.env, [
+      { name: "story-cdr-writer", minBalanceWei: cdrWriterMinimumBalanceWei },
+      "story-operator",
+    ])
     const readConditionData = encodeTokenGateConditionData({
       entitlementTokenAddress: STORY_DELIVERY_CONTRACTS.purchaseEntitlementToken,
       tokenId: entitlementTokenId,

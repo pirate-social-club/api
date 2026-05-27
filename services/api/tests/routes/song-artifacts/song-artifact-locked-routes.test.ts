@@ -927,7 +927,7 @@ describe("song artifact locked routes", () => {
 
 
 
-  test("rejects activating commerce for an asset before Story royalty registration is ready", async () => {
+  test("rejects publishing a derivative asset before Story royalty registration is ready", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
 
     installLockedSongFetchMocks({
@@ -1015,53 +1015,16 @@ describe("song artifact locked routes", () => {
         access_mode: "public",
         song_mode: "remix",
         rights_basis: "derivative",
+        license_preset: "non-commercial",
         upstream_asset_refs: ["acr:custom-file:source-track"],
         song_artifact_bundle: bundleBody.id,
       },
       ctx.env,
       author.accessToken,
     )
-    expect(derivativePostCreate.status).toBe(201)
-    const derivativePostBody = await json(derivativePostCreate) as {
-      asset?: string | null
-    }
-    const assetId = derivativePostBody.asset as string
-
-    const assetRead = await app.request(
-      `http://pirate.test/communities/${communityId}/assets/${assetId}`,
-      {
-        headers: {
-          authorization: `Bearer ${author.accessToken}`,
-        },
-      },
-      ctx.env,
-    )
-    expect(assetRead.status).toBe(200)
-    const assetBody = await json(assetRead) as {
-      story_royalty_policy: string | null
-      story_derivative_parent_ip_ids: string[] | null
-      story_royalty_registration_status: string | null
-      story_error: string | null
-    }
-    expect(assetBody.story_royalty_policy).toBeNull()
-    expect(assetBody.story_derivative_parent_ip_ids).toBeNull()
-    expect(assetBody.story_royalty_registration_status).toBe("failed")
-    expect(assetBody.story_error).toContain("story_royalty_config_missing")
-
-    const listingCreate = await requestJson(
-      `http://pirate.test/communities/${communityId}/listings`,
-      {
-        asset: assetId,
-        price_cents: 499,
-        regional_pricing_enabled: false,
-        status: "active",
-      },
-      ctx.env,
-      author.accessToken,
-    )
-    expect(listingCreate.status).toBe(400)
-    const listingBody = await json(listingCreate) as { message?: string }
-    expect(listingBody.message).toBe("Asset is not ready for Story royalty commerce")
+    expect(derivativePostCreate.status).toBe(502)
+    const derivativePostBody = await json(derivativePostCreate) as { message?: string }
+    expect(derivativePostBody.message).toBe("Story registration is required before publishing this asset")
   })
 
   testWithTimeout("allows commerce for a locked derivative asset once Story royalty registration metadata is present", async () => {
@@ -1270,6 +1233,7 @@ describe("song artifact locked routes", () => {
         access_mode: "locked",
         song_mode: "remix",
         rights_basis: "derivative",
+        license_preset: "non-commercial",
         upstream_asset_refs: ["story:ip:parent-track-1"],
         song_artifact_bundle: bundleBody.id,
       },
@@ -1732,7 +1696,7 @@ describe("song artifact locked routes", () => {
           access_mode: input.accessMode,
           song_mode: input.songMode,
           rights_basis: input.songMode === "remix" ? "derivative" : "original",
-          license_preset: input.songMode === "original" ? "commercial-remix" : undefined,
+          license_preset: input.songMode === "original" ? "commercial-remix" : "non-commercial",
           commercial_rev_share_pct: input.songMode === "original" ? 10 : undefined,
           upstream_asset_refs: input.upstreamAssetRefs,
           song_artifact_bundle: bundleBody.id,

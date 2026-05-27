@@ -1,14 +1,31 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { app } from "../../../src/index"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
+import { setStoryRoyaltyRegistrarForTests } from "../../../src/lib/story/story-royalty-registration-service"
 import {
   completeUniqueHumanVerification,
   exchangeJwt,
   requestJson,
 } from "./song-artifact-test-helpers"
+import { attachPrimaryWallet } from "./song-artifact-locked-test-helpers"
 
 let cleanup: (() => Promise<void>) | null = null
 let originalFetch: typeof fetch
+
+function installSuccessfulStoryRoyaltyRegistrarForTests(): void {
+  setStoryRoyaltyRegistrarForTests(async (input) => ({
+    storyIpId: `0x${input.assetId.replace(/\D/g, "").padEnd(40, "0").slice(0, 40) || "1".padEnd(40, "0")}`,
+    storyIpNftContract: "0x8888888888888888888888888888888888888888",
+    storyIpNftTokenId: input.assetId.replace(/\D/g, "").slice(0, 12) || "1",
+    storyLicenseTermsId: "17",
+    storyLicenseTemplate: null,
+    storyRoyaltyPolicy: "0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E",
+    storyDerivativeParentIpIds: input.rightsBasis === "derivative" ? [] : null,
+    storyRevenueToken: "0x1514000000000000000000000000000000000000",
+    storyRoyaltyRegistrationStatus: "registered",
+    storyDerivativeRegisteredAt: input.rightsBasis === "derivative" ? "2026-04-21T00:00:00.000Z" : null,
+  }))
+}
 
 beforeEach(() => {
   resetRuntimeCaches()
@@ -129,6 +146,13 @@ describe("song artifact catalog sync routes", () => {
 
     const author = await exchangeJwt(ctx.env, "song-author-missing-bucket")
     await completeUniqueHumanVerification(ctx.env, author.accessToken)
+    await attachPrimaryWallet({
+      client: ctx.client,
+      userId: author.userId,
+      walletAttachmentId: "wal_song_author_missing_bucket",
+      walletAddress: "0xaaa0000000000000000000000000000000000001",
+    })
+    installSuccessfulStoryRoyaltyRegistrarForTests()
 
     const communityCreate = await requestJson(
       "http://pirate.test/communities",
@@ -335,6 +359,13 @@ describe("song artifact catalog sync routes", () => {
 
     const author = await exchangeJwt(ctx.env, "song-author-republish")
     await completeUniqueHumanVerification(ctx.env, author.accessToken)
+    await attachPrimaryWallet({
+      client: ctx.client,
+      userId: author.userId,
+      walletAttachmentId: "wal_song_author_republish",
+      walletAddress: "0xaaa0000000000000000000000000000000000002",
+    })
+    installSuccessfulStoryRoyaltyRegistrarForTests()
 
     const communityCreate = await requestJson(
       "http://pirate.test/communities",
