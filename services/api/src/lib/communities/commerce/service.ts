@@ -1,5 +1,5 @@
 import type { Client } from "../../sql-client"
-import { badRequestError, conflictError, notFoundError, providerUnavailable } from "../../errors"
+import { badRequestError, notFoundError, providerUnavailable } from "../../errors"
 import { nowIso } from "../../helpers"
 import {
   ANY_COMMUNITY_ROLE,
@@ -25,7 +25,6 @@ import {
   buildAssetContentPath,
   getActiveEntitlementForBuyer,
   getActiveEntitlementForBuyerIdentity,
-  findRegisteredOriginalStoryAssetByContent,
   findReusableRegisteredOriginalStoryAssetByContent,
   getAssetRow,
   listDerivativeSourceRows,
@@ -194,28 +193,6 @@ export async function createAssetForPost(input: {
   const resolvedPrimaryContentHash = (input.contentHash?.trim() || `0x${await sha256Hex(input.storageRef)}`) as `0x${string}`
   let effectiveLicensePreset = input.licensePreset ?? null
   let effectiveCommercialRevSharePct = input.commercialRevSharePct ?? null
-
-  if (shouldRegisterRoyalty && (input.post.rights_basis ?? "none") === "derivative") {
-    const registeredOriginal = await findRegisteredOriginalStoryAssetByContent({
-      client: input.client,
-      communityId: input.communityId,
-      creatorUserId: input.post.author_user_id ?? "",
-      assetKind: input.assetKind,
-      primaryContentHash: resolvedPrimaryContentHash,
-    })
-    if (registeredOriginal) {
-      throw conflictError(
-        "This exact file was already registered on Story as an original. Story registrations cannot be changed into remixes; upload the remixed audio file, or publish these same bytes as an original to reuse the existing Story registration.",
-        {
-          reason: "story_original_content_already_registered",
-          existing_asset_id: registeredOriginal.asset_id,
-          existing_source_post_id: registeredOriginal.source_post_id,
-          existing_story_ip_id: registeredOriginal.story_ip_id,
-          primary_content_hash: resolvedPrimaryContentHash,
-        },
-      )
-    }
-  }
 
   if ((input.post.access_mode ?? "public") === "locked") {
     try {

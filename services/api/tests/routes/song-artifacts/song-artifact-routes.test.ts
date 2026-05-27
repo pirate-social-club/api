@@ -1402,7 +1402,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     expect(conflictingPreviewCreate.status).toBe(400)
   })
 
-  test("rejects a remix submit when the same bytes were already registered as an original", async () => {
+  test("allows a remix submit when the same bytes were already registered as an original", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
 
     globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -1580,7 +1580,18 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
 
     setStoryRoyaltyRegistrarForTests(async () => {
       registrarCallsAfterOriginal += 1
-      throw new Error("derivative registration should be blocked before Story")
+      return {
+        storyIpId: "0x3333333333333333333333333333333333333333",
+        storyIpNftContract: "0x8888888888888888888888888888888888888888",
+        storyIpNftTokenId: "456",
+        storyLicenseTermsId: "23",
+        storyLicenseTemplate: null,
+        storyRoyaltyPolicy: "0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E",
+        storyDerivativeParentIpIds: [originalStoryIp],
+        storyRevenueToken: "0x1514000000000000000000000000000000000000",
+        storyRoyaltyRegistrationStatus: "registered",
+        storyDerivativeRegisteredAt: "2026-04-21T00:00:00.000Z",
+      }
     })
 
     const derivativeUpload = await uploadSongArtifact({
@@ -1624,18 +1635,9 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
       ctx.env,
       author.accessToken,
     )
-    expect(derivativePostCreate.status).toBe(409)
-    const derivativePostBody = await json(derivativePostCreate) as {
-      code?: string
-      message?: string
-      retryable?: boolean
-      details?: { reason?: string }
-    }
-    expect(derivativePostBody.code).toBe("conflict")
-    expect(derivativePostBody.retryable).toBe(false)
-    expect(derivativePostBody.message).toContain("This exact file was already registered on Story as an original")
-    expect(derivativePostBody.details?.reason).toBe("story_original_content_already_registered")
-    expect(registrarCallsAfterOriginal).toBe(0)
+    expect(derivativePostCreate.status).toBe(201)
+    await json(derivativePostCreate)
+    expect(registrarCallsAfterOriginal).toBe(1)
 
     const communityDb = createClient({
       url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
@@ -1646,11 +1648,18 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
         args: ["song-post-story-original-collision-derivative"],
       })
       const assetRows = await communityDb.execute({
-        sql: "SELECT COUNT(*) AS count FROM assets WHERE asset_id = ?1",
+        sql: `
+          SELECT rights_basis, primary_content_hash, story_ip_id, story_royalty_registration_status
+          FROM assets
+          WHERE asset_id = ?1
+        `,
         args: ["ast_story_original_collision_derivative_route"],
       })
-      expect(Number(postRows.rows[0]?.count ?? 0)).toBe(0)
-      expect(Number(assetRows.rows[0]?.count ?? 0)).toBe(0)
+      expect(Number(postRows.rows[0]?.count ?? 0)).toBe(1)
+      expect(assetRows.rows).toHaveLength(1)
+      expect(assetRows.rows[0]?.rights_basis).toBe("derivative")
+      expect(assetRows.rows[0]?.story_ip_id).toBe("0x3333333333333333333333333333333333333333")
+      expect(assetRows.rows[0]?.story_royalty_registration_status).toBe("registered")
     } finally {
       communityDb.close()
     }

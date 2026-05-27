@@ -484,7 +484,7 @@ describe("story royalty registration service", () => {
     }
   })
 
-  test("rejects derivative publishing when the same content was already registered as an original", async () => {
+  test("allows derivative publishing when the same content was already registered as an original", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-original-collision-"))
     cleanupPaths.push(rootDir)
 
@@ -494,8 +494,10 @@ describe("story royalty registration service", () => {
     const userId = "usr_author_story_original_collision"
     const now = "2026-04-21T00:00:00.000Z"
     const originalIpId = "0x9999999999999999999999999999999999999999"
+    const derivativeIpId = "0x3333333333333333333333333333333333333333"
     const userRepository = buildStoryUserRepository(userId)
     let derivativePostId: string | null = null
+    let derivativeAssetId: string | null = null
     let derivativeRegistrarCalls = 0
 
     await seedStoryCommunity({ env, repo, communityId, userId })
@@ -552,11 +554,21 @@ describe("story royalty registration service", () => {
 
       setStoryRoyaltyRegistrarForTests(async () => {
         derivativeRegistrarCalls += 1
-        throw new Error("derivative registration should be blocked before Story")
+        return {
+          storyIpId: derivativeIpId,
+          storyIpNftContract: "0x8888888888888888888888888888888888888888",
+          storyIpNftTokenId: "456",
+          storyLicenseTermsId: "23",
+          storyLicenseTemplate: "0x7777777777777777777777777777777777777777",
+          storyRoyaltyPolicy: "0x6666666666666666666666666666666666666666",
+          storyDerivativeParentIpIds: [originalIpId],
+          storyRevenueToken: "0x1514000000000000000000000000000000000000",
+          storyRoyaltyRegistrationStatus: "registered",
+          storyDerivativeRegisteredAt: now,
+        }
       })
 
       const tx = await db.client.transaction("write")
-      let caughtError: unknown
       try {
         const derivativePost = await insertPost({
           client: tx,
@@ -576,7 +588,7 @@ describe("story royalty registration service", () => {
         })
         derivativePostId = derivativePost.post_id
 
-        await createSongAssetForPost({
+        const derivative = await createSongAssetForPost({
           env,
           client: tx,
           communityId,
@@ -590,31 +602,37 @@ describe("story royalty registration service", () => {
           requireStoryRoyaltyRegistration: true,
           userRepository,
         })
+        derivativeAssetId = derivative.id
         await tx.commit()
       } catch (error) {
-        caughtError = error
         await tx.rollback()
+        throw error
       } finally {
         tx.close()
       }
 
-      expect(derivativeRegistrarCalls).toBe(0)
-      expect(caughtError).toBeInstanceOf(Error)
-      expect((caughtError as Error).message).toContain("This exact file was already registered on Story as an original")
-      expect((caughtError as { status?: number }).status).toBe(409)
-      expect((caughtError as { code?: string }).code).toBe("conflict")
+      expect(derivativeRegistrarCalls).toBe(1)
+      expect(derivativeAssetId).toBe("asset_ast_original_collision_derivative")
 
       const derivativePosts = await db.client.execute({
         sql: "SELECT post_id FROM posts WHERE post_id = ?1",
         args: [derivativePostId],
       })
-      expect(derivativePosts.rows).toHaveLength(0)
+      expect(derivativePosts.rows).toHaveLength(1)
 
       const derivativeAssets = await db.client.execute({
-        sql: "SELECT asset_id FROM assets WHERE asset_id = ?1",
+        sql: `
+          SELECT asset_id, rights_basis, primary_content_hash, story_ip_id, story_royalty_registration_status
+          FROM assets
+          WHERE asset_id = ?1
+        `,
         args: ["ast_original_collision_derivative"],
       })
-      expect(derivativeAssets.rows).toHaveLength(0)
+      expect(derivativeAssets.rows).toHaveLength(1)
+      expect(derivativeAssets.rows[0]?.rights_basis).toBe("derivative")
+      expect(derivativeAssets.rows[0]?.primary_content_hash).toBe(original.primary_content_hash)
+      expect(derivativeAssets.rows[0]?.story_ip_id).toBe(derivativeIpId)
+      expect(derivativeAssets.rows[0]?.story_royalty_registration_status).toBe("registered")
     } finally {
       db.close()
     }
