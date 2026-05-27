@@ -1,5 +1,5 @@
 import type { Client } from "../../sql-client"
-import { badRequestError, notFoundError } from "../../errors"
+import { badRequestError, notFoundError, providerUnavailable } from "../../errors"
 import { nowIso } from "../../helpers"
 import { enqueueCommunityJob } from "../jobs/store"
 import {
@@ -28,6 +28,7 @@ import {
 import type { AssetRow } from "./row-types"
 import {
   buildAssetContentPath,
+  findReusableRegisteredOriginalStoryAssetByContent,
   getActiveEntitlementForBuyer,
   getActiveEntitlementForBuyerIdentity,
   getAssetRow,
@@ -378,7 +379,7 @@ async function authorizeAssetAccess(input: {
 
 export async function createAssetForPost(input: {
   env: Env
-  client: Client
+  client: Pick<Client, "execute">
   communityId: string
   post: Post
   assetKind: Asset["asset_kind"]
@@ -391,6 +392,7 @@ export async function createAssetForPost(input: {
   displayTitle?: string | null
   licensePreset?: StoryLicensePreset | null
   commercialRevSharePct?: number | null
+  requireStoryRoyaltyRegistration?: boolean
   userRepository: UserRepository
 }): Promise<Asset> {
   if (!input.post.asset_id?.trim()) {
@@ -437,6 +439,9 @@ export async function createAssetForPost(input: {
   let storyReadCondition: string | null = null
   let storyWriteCondition: string | null = null
   let creatorWalletAddress: string | null = null
+  const primaryContentHash = (input.contentHash?.trim() || `0x${await sha256Hex(input.storageRef)}`) as `0x${string}`
+  let effectiveLicensePreset = input.licensePreset ?? null
+  let effectiveCommercialRevSharePct = input.commercialRevSharePct ?? null
 
   if ((input.post.access_mode ?? "public") === "locked") {
     try {
@@ -500,7 +505,16 @@ export async function createAssetForPost(input: {
         userId: input.post.author_user_id ?? "",
       })
     }
-    const royaltyRegistration = shouldRunRoyaltyRegistration
+    const reusableOriginalStoryAsset = shouldRunRoyaltyRegistration && (input.post.rights_basis ?? "none") === "original"
+      ? await findReusableRegisteredOriginalStoryAssetByContent({
+          client: input.client,
+          communityId: input.communityId,
+          creatorUserId: input.post.author_user_id ?? "",
+          assetKind: input.assetKind,
+          primaryContentHash,
+        })
+      : null
+    const royaltyRegistration = shouldRunRoyaltyRegistration && !reusableOriginalStoryAsset
       ? await maybeRegisterStoryRoyaltyForAsset({
           env: input.env,
           client: input.client,
@@ -509,16 +523,40 @@ export async function createAssetForPost(input: {
           creatorWalletAddress: creatorWalletAddress ?? "",
           title: input.post.title ?? null,
           rightsBasis: input.post.rights_basis ?? "none",
-          licensePreset: input.licensePreset ?? null,
-          commercialRevSharePct: input.commercialRevSharePct ?? null,
+          licensePreset: effectiveLicensePreset,
+          commercialRevSharePct: effectiveCommercialRevSharePct,
           upstreamAssetRefs: input.post.upstream_asset_refs ?? null,
           assetKind: input.assetKind,
           bundle: input.bundle ?? null,
-          primaryContentHash:
-            (input.contentHash?.trim() || `0x${await sha256Hex(input.storageRef)}`) as `0x${string}`,
+          primaryContentHash,
         })
       : null
-    if (royaltyRegistration) {
+    if (reusableOriginalStoryAsset) {
+      storyIpId = reusableOriginalStoryAsset.story_ip_id
+      storyIpNftContract = reusableOriginalStoryAsset.story_ip_nft_contract
+      storyIpNftTokenId = reusableOriginalStoryAsset.story_ip_nft_token_id
+      storyPublishModel = reusableOriginalStoryAsset.story_publish_model
+      storyLicenseTermsId = reusableOriginalStoryAsset.story_license_terms_id
+      storyLicenseTemplate = reusableOriginalStoryAsset.story_license_template
+      storyRoyaltyPolicy = reusableOriginalStoryAsset.story_royalty_policy
+      storyRoyaltyPolicyId = reusableOriginalStoryAsset.story_royalty_policy_id
+      storyDerivativeParentIpIdsJson = reusableOriginalStoryAsset.story_derivative_parent_ip_ids_json
+      storyDerivativeRegisteredAt = reusableOriginalStoryAsset.story_derivative_registered_at
+      storyRevenueToken = reusableOriginalStoryAsset.story_revenue_token
+      storyRoyaltyRegistrationStatus = "registered"
+      storyStatus = "published"
+      publicationStatus = "story_published"
+      storyError = null
+      storyPublishTxRef = reusableOriginalStoryAsset.story_publish_tx_ref
+      storyAssetVersionId = reusableOriginalStoryAsset.story_asset_version_id
+      storyCdrVaultUuid = reusableOriginalStoryAsset.story_cdr_vault_uuid
+      storyNamespace = reusableOriginalStoryAsset.story_namespace
+      storyEntitlementTokenId = reusableOriginalStoryAsset.story_entitlement_token_id
+      storyReadCondition = reusableOriginalStoryAsset.story_read_condition
+      storyWriteCondition = reusableOriginalStoryAsset.story_write_condition
+      effectiveLicensePreset = reusableOriginalStoryAsset.license_preset as StoryLicensePreset | null
+      effectiveCommercialRevSharePct = reusableOriginalStoryAsset.commercial_rev_share_pct
+    } else if (royaltyRegistration) {
       storyIpId = royaltyRegistration.storyIpId
       storyIpNftContract = royaltyRegistration.storyIpNftContract
       storyIpNftTokenId = royaltyRegistration.storyIpNftTokenId
@@ -557,10 +595,13 @@ export async function createAssetForPost(input: {
       post_id: input.post.post_id,
       asset_kind: input.assetKind,
       rights_basis: input.post.rights_basis ?? "none",
-      license_preset: input.licensePreset ?? null,
+      license_preset: effectiveLicensePreset,
       story_royalty_configured: isStoryRoyaltyRegistrationConfigured(input.env),
       error: sanitizeLogText(storyError),
     })
+    if (input.requireStoryRoyaltyRegistration) {
+      throw providerUnavailable("Story registration is required before publishing this asset")
+    }
   }
 
   await input.client.execute({
@@ -598,10 +639,10 @@ export async function createAssetForPost(input: {
       input.assetKind,
       input.post.rights_basis ?? "none",
       input.post.access_mode ?? "public",
-      input.licensePreset ?? null,
-      input.commercialRevSharePct ?? null,
+      effectiveLicensePreset,
+      effectiveCommercialRevSharePct,
       input.storageRef,
-      input.contentHash ?? `0x${await sha256Hex(input.storageRef)}`,
+      primaryContentHash,
       publicationStatus,
       storyStatus,
       storyError,
@@ -658,12 +699,13 @@ export async function createAssetForPost(input: {
 
 export async function createSongAssetForPost(input: {
   env: Env
-  client: Client
+  client: Pick<Client, "execute">
   communityId: string
   post: Post
   bundle: SongArtifactBundle
   licensePreset: StoryLicensePreset | null
   commercialRevSharePct: number | null
+  requireStoryRoyaltyRegistration?: boolean
   userRepository: UserRepository
 }): Promise<Asset> {
   return await createAssetForPost({
@@ -681,6 +723,7 @@ export async function createSongAssetForPost(input: {
     displayTitle: input.bundle.title,
     licensePreset: input.licensePreset,
     commercialRevSharePct: input.commercialRevSharePct,
+    requireStoryRoyaltyRegistration: input.requireStoryRoyaltyRegistration,
     userRepository: input.userRepository,
   })
 }

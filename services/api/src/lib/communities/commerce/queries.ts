@@ -191,6 +191,47 @@ export async function getAssetRow(
   }
 }
 
+export async function findReusableRegisteredOriginalStoryAssetByContent(input: {
+  client: CommerceExecutor
+  communityId: string
+  creatorUserId: string
+  assetKind: Asset["asset_kind"]
+  primaryContentHash: string | null | undefined
+}): Promise<AssetRow | null> {
+  const primaryContentHash = input.primaryContentHash?.trim()
+  if (!primaryContentHash) {
+    return null
+  }
+
+  const row = await executeFirst(input.client, {
+    sql: `
+      SELECT a.asset_id
+      FROM assets a
+      JOIN posts p
+        ON p.community_id = a.community_id
+       AND p.post_id = a.source_post_id
+      WHERE a.community_id = ?1
+        AND a.creator_user_id = ?2
+        AND a.asset_kind = ?3
+        AND a.rights_basis = 'original'
+        AND a.primary_content_hash = ?4
+        AND a.publication_status = 'story_published'
+        AND a.story_status = 'published'
+        AND a.story_royalty_registration_status = 'registered'
+        AND a.story_ip_id IS NOT NULL
+        AND a.story_ip_id != ''
+        AND p.status != 'published'
+      ORDER BY a.updated_at DESC, a.asset_id DESC
+      LIMIT 1
+    `,
+    args: [input.communityId, input.creatorUserId, input.assetKind, primaryContentHash],
+  })
+  if (!row) {
+    return null
+  }
+  return await getAssetRow(input.client, input.communityId, requiredString(row, "asset_id"))
+}
+
 function assetKindForDerivativeSourceKind(kind: DerivativeSourceKind | null | undefined): Asset["asset_kind"] | null {
   if (kind === "song") return "song_audio"
   if (kind === "video") return "video_file"
@@ -211,23 +252,24 @@ export async function listDerivativeSourceRows(input: {
   const args: Array<string | number> = [input.communityId]
   let nextArg = 2
   const filters = [
-    "community_id = ?1",
-    "publication_status = 'story_published'",
-    "story_status = 'published'",
-    "story_royalty_registration_status = 'registered'",
-    "story_ip_id IS NOT NULL",
-    "story_ip_id != ''",
-    "story_license_terms_id IS NOT NULL",
-    "story_license_terms_id != ''",
+    "a.community_id = ?1",
+    "a.publication_status = 'story_published'",
+    "a.story_status = 'published'",
+    "a.story_royalty_registration_status = 'registered'",
+    "a.story_ip_id IS NOT NULL",
+    "a.story_ip_id != ''",
+    "a.story_license_terms_id IS NOT NULL",
+    "a.story_license_terms_id != ''",
+    "p.status = 'published'",
   ]
 
   if (assetKind) {
-    filters.push(`asset_kind = ?${nextArg}`)
+    filters.push(`a.asset_kind = ?${nextArg}`)
     args.push(assetKind)
     nextArg += 1
   }
   if (hasQuery) {
-    filters.push(`LOWER(COALESCE(display_title, asset_id)) LIKE ?${nextArg} ESCAPE '\\'`)
+    filters.push(`LOWER(COALESCE(a.display_title, a.asset_id)) LIKE ?${nextArg} ESCAPE '\\'`)
     args.push(`%${escapeLikePattern(query!.toLowerCase())}%`)
     nextArg += 1
   }
@@ -236,7 +278,7 @@ export async function listDerivativeSourceRows(input: {
     if (!assetIdClause) {
       return []
     }
-    filters.push(`asset_id IN (${assetIdClause.placeholders})`)
+    filters.push(`a.asset_id IN (${assetIdClause.placeholders})`)
     args.push(...assetIdClause.args)
     nextArg += assetIdClause.args.length
   }
@@ -244,12 +286,15 @@ export async function listDerivativeSourceRows(input: {
 
   const rows = await input.client.execute({
     sql: `
-      SELECT asset_id, community_id, display_title, creator_user_id, asset_kind,
-             license_preset, commercial_rev_share_pct, story_ip_id, story_license_terms_id,
-             updated_at
-      FROM assets
+      SELECT a.asset_id, a.community_id, a.display_title, a.creator_user_id, a.asset_kind,
+             a.license_preset, a.commercial_rev_share_pct, a.story_ip_id, a.story_license_terms_id,
+             a.updated_at
+      FROM assets a
+      JOIN posts p
+        ON p.community_id = a.community_id
+       AND p.post_id = a.source_post_id
       WHERE ${filters.join("\n        AND ")}
-      ORDER BY updated_at DESC, asset_id DESC
+      ORDER BY a.updated_at DESC, a.asset_id DESC
       LIMIT ?${nextArg}
     `,
     args,

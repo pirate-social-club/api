@@ -161,6 +161,7 @@ export async function createPost(input: {
     const createdAt = nowIso()
     const tx = await db.client.transaction("write")
     let post: Post
+    const requireStoryRoyaltyRegistration = true
     try {
       post = await insertPost({
         client: tx,
@@ -204,6 +205,40 @@ export async function createPost(input: {
         })
       }
 
+      if (post.post_type === "song" && post.song_artifact_bundle_id && resolvedSongBundleForAsset) {
+        await createSongAssetForPost({
+          env: input.env,
+          client: tx,
+          communityId: input.communityId,
+          post,
+          bundle: resolvedSongBundleForAsset.bundle,
+          licensePreset: input.body.license_preset ?? null,
+          commercialRevSharePct: input.body.commercial_rev_share_pct ?? null,
+          requireStoryRoyaltyRegistration,
+          userRepository: input.userRepository,
+        })
+      }
+      // Video asset creation is intentionally keyed by asset_id, not access_mode:
+      // free public videos may keep post.access_mode null while still publishing a public asset.
+      if (post.post_type === "video" && post.asset_id && resolvedVideoAsset) {
+        await createAssetForPost({
+          env: input.env,
+          client: tx,
+          communityId: input.communityId,
+          post,
+          assetKind: "video_file",
+          storageRef: resolvedVideoAsset.upload.gateway_url || resolvedVideoAsset.upload.storage_ref,
+          mimeType: resolvedVideoAsset.upload.mime_type,
+          contentHash: resolvedVideoAsset.upload.content_hash ?? null,
+          artifactKind: "primary_video",
+          bundleId: null,
+          licensePreset: input.body.license_preset ?? null,
+          commercialRevSharePct: input.body.commercial_rev_share_pct ?? null,
+          requireStoryRoyaltyRegistration,
+          userRepository: input.userRepository,
+        })
+      }
+
       await tx.commit()
     } catch (error) {
       await safeRollback(tx, "[posts] rollback failed while creating post")
@@ -227,41 +262,10 @@ export async function createPost(input: {
     })
 
     if (post.post_type === "song" && post.song_artifact_bundle_id) {
-      if (resolvedSongBundleForAsset) {
-        await createSongAssetForPost({
-          env: input.env,
-          client: db.client,
-          communityId: input.communityId,
-          post,
-          bundle: resolvedSongBundleForAsset.bundle,
-          licensePreset: input.body.license_preset ?? null,
-          commercialRevSharePct: input.body.commercial_rev_share_pct ?? null,
-          userRepository: input.userRepository,
-        })
-      }
       await consumeSongPostBundle({
         env: input.env,
         communityId: input.communityId,
         songArtifactBundleId: post.song_artifact_bundle_id,
-      })
-    }
-    // Video asset creation is intentionally keyed by asset_id, not access_mode:
-    // free public videos may keep post.access_mode null while still publishing a public asset.
-    if (post.post_type === "video" && post.asset_id && resolvedVideoAsset) {
-      await createAssetForPost({
-        env: input.env,
-        client: db.client,
-        communityId: input.communityId,
-        post,
-        assetKind: "video_file",
-        storageRef: resolvedVideoAsset.upload.gateway_url || resolvedVideoAsset.upload.storage_ref,
-        mimeType: resolvedVideoAsset.upload.mime_type,
-        contentHash: resolvedVideoAsset.upload.content_hash ?? null,
-        artifactKind: "primary_video",
-        bundleId: null,
-        licensePreset: input.body.license_preset ?? null,
-        commercialRevSharePct: input.body.commercial_rev_share_pct ?? null,
-        userRepository: input.userRepository,
       })
     }
 

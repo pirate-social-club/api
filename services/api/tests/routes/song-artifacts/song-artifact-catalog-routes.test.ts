@@ -8,9 +8,26 @@ import {
   exchangeJwt,
   requestJson,
 } from "./song-artifact-test-helpers"
+import { attachPrimaryWallet } from "./song-artifact-locked-test-helpers"
+import { setStoryRoyaltyRegistrarForTests } from "../../../src/lib/story/story-royalty-registration-service"
 
 let cleanup: (() => Promise<void>) | null = null
 let originalFetch: typeof fetch
+
+function installSuccessfulStoryRoyaltyRegistrarForTests(): void {
+  setStoryRoyaltyRegistrarForTests(async () => ({
+    storyIpId: "0x9999999999999999999999999999999999999999",
+    storyIpNftContract: "0x8888888888888888888888888888888888888888",
+    storyIpNftTokenId: "17",
+    storyLicenseTermsId: "17",
+    storyLicenseTemplate: null,
+    storyRoyaltyPolicy: "0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E",
+    storyDerivativeParentIpIds: [],
+    storyRevenueToken: "0x1514000000000000000000000000000000000000",
+    storyRoyaltyRegistrationStatus: "registered",
+    storyDerivativeRegisteredAt: "2026-04-21T00:00:00.000Z",
+  }))
+}
 
 type DerivativeSourceListBody = {
   items: Array<{
@@ -539,6 +556,13 @@ describe("song artifact catalog routes", () => {
     cleanup = ctx.cleanup
 
     const author = await exchangeJwt(ctx.env, "song-author-custom-match")
+    await attachPrimaryWallet({
+      client: ctx.client,
+      userId: author.userId,
+      walletAttachmentId: "wal_song_author_custom_match",
+      walletAddress: "0xaaa0000000000000000000000000000000000004",
+    })
+    installSuccessfulStoryRoyaltyRegistrarForTests()
     await completeUniqueHumanVerification(ctx.env, author.accessToken)
 
     const communityCreate = await requestJson(
@@ -638,6 +662,8 @@ describe("song artifact catalog routes", () => {
         title: "Matched song derivative",
         song_mode: "remix",
         rights_basis: "derivative",
+        license_preset: "commercial-remix",
+        commercial_rev_share_pct: 10,
         upstream_asset_refs: ["acr:custom-file:acr_match_1"],
         song_artifact_bundle: bundleBody.id,
       },

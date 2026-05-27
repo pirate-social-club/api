@@ -7,12 +7,17 @@ import { setStoryAccessProofSignerForTests } from "../../../src/lib/story/story-
 import { setStoryAssetPublisherForTests } from "../../../src/lib/story/story-publish-service"
 import { setStoryCdrUploaderForTests } from "../../../src/lib/story/story-cdr"
 import { setStoryRuntimeFundingAssertionForTests } from "../../../src/lib/story/story-runtime-funding"
+import { setStoryRoyaltyRegistrarForTests } from "../../../src/lib/story/story-royalty-registration-service"
 import {
   completeUniqueHumanVerification,
   exchangeJwt,
   requestJson,
 } from "./song-artifact-test-helpers"
-import { attachPrimaryWallet } from "./song-artifact-locked-test-helpers"
+import {
+  attachPrimaryWallet,
+  createOpenSongCommunity,
+  uploadSongArtifact,
+} from "./song-artifact-locked-test-helpers"
 
 const testWithTimeout = test as unknown as (name: string, fn: () => Promise<void>, timeout: number) => void
 
@@ -48,6 +53,21 @@ function makeSilentWavBytes(durationSeconds = 2): Uint8Array {
   view.setUint32(40, dataSize, true)
 
   return new Uint8Array(buffer)
+}
+
+function installSuccessfulStoryRoyaltyRegistrarForTests(): void {
+  setStoryRoyaltyRegistrarForTests(async (input) => ({
+    storyIpId: "0x9999999999999999999999999999999999999999",
+    storyIpNftContract: "0x8888888888888888888888888888888888888888",
+    storyIpNftTokenId: input.assetId.replace(/\D/g, "").slice(0, 12) || "1",
+    storyLicenseTermsId: "17",
+    storyLicenseTemplate: null,
+    storyRoyaltyPolicy: "0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E",
+    storyDerivativeParentIpIds: input.rightsBasis === "derivative" ? [] : null,
+    storyRevenueToken: "0x1514000000000000000000000000000000000000",
+    storyRoyaltyRegistrationStatus: "registered",
+    storyDerivativeRegisteredAt: input.rightsBasis === "derivative" ? "2026-04-21T00:00:00.000Z" : null,
+  }))
 }
 
 beforeEach(() => {
@@ -368,6 +388,7 @@ describe("song artifact routes", () => {
       entitlementConfiguredTxHash: "0xconfigure",
       publishTxHash: "0xpublish",
     }))
+    installSuccessfulStoryRoyaltyRegistrarForTests()
     setStoryAccessProofSignerForTests(async (input) => ({
       digest: "0xd1e57",
       signature: `0x${"11".repeat(65)}` as `0x${string}`,
@@ -687,6 +708,13 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     cleanup = ctx.cleanup
 
     const author = await exchangeJwt(ctx.env, "song-author")
+    await attachPrimaryWallet({
+      client: ctx.client,
+      userId: author.userId,
+      walletAttachmentId: "wal_song_author",
+      walletAddress: "0xaaa0000000000000000000000000000000000002",
+    })
+    installSuccessfulStoryRoyaltyRegistrarForTests()
     await completeUniqueHumanVerification(ctx.env, author.accessToken)
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
@@ -996,6 +1024,387 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     expect(conflictingPreviewCreate.status).toBe(400)
   })
 
+  test("requires Story royalty registration before publishing non-test song posts and allows retry", async () => {
+    const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
+
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const request = input instanceof Request ? input : new Request(input, init)
+
+      if (!request.url.startsWith("https://s3.filebase.test/")) {
+        return await originalFetch(request)
+      }
+
+      if (request.method === "PUT") {
+        storedObjects.set(request.url, {
+          body: new Uint8Array(await request.arrayBuffer()),
+          contentType: request.headers.get("content-type") || "application/octet-stream",
+        })
+        return new Response(null, { status: 200 })
+      }
+
+      if (request.method === "GET") {
+        const stored = storedObjects.get(request.url)
+        if (!stored) {
+          return new Response("missing", { status: 404 })
+        }
+        return new Response(stored.body.slice().buffer, {
+          status: 200,
+          headers: {
+            "content-type": stored.contentType,
+            "content-length": String(stored.body.byteLength),
+          },
+        })
+      }
+
+      return new Response("unexpected method", { status: 500 })
+    }
+
+    const ctx = await createRouteTestContext({
+      ENVIRONMENT: "development",
+      FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
+      FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
+      FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
+      FILEBASE_MEDIA_BUCKET: "pirate-media",
+      PIRATE_API_PUBLIC_ORIGIN: "https://pirate.test",
+    })
+    cleanup = ctx.cleanup
+
+    const author = await exchangeJwt(ctx.env, "story-required-song-author")
+    await attachPrimaryWallet({
+      client: ctx.client,
+      userId: author.userId,
+      walletAttachmentId: "wal_story_required_song_author",
+      walletAddress: "0xaaa0000000000000000000000000000000000002",
+    })
+    await completeUniqueHumanVerification(ctx.env, author.accessToken)
+
+    const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "Story Required Songs")
+    const upload = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "primary_audio",
+      mimeType: "audio/mpeg",
+      filename: "story-required.mp3",
+      bytes: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]),
+    })
+
+    const bundleCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifacts`,
+      {
+        primary_audio: {
+          song_artifact_upload: upload.id,
+        },
+        title: "Story Required Song",
+        lyrics: "Line one\nLine two",
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(bundleCreate.status).toBe(201)
+    const bundleBody = await json(bundleCreate) as {
+      id: string
+      status: string
+    }
+    expect(bundleBody.status).toBe("ready")
+
+    const postPayload = {
+      idempotency_key: "story-required-song-post",
+      post_type: "song",
+      identity_mode: "public",
+      title: "Story Required Song",
+      song_mode: "original",
+      rights_basis: "original",
+      license_preset: "non-commercial",
+      song_artifact_bundle: bundleBody.id,
+    }
+
+    const failedPostCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      postPayload,
+      ctx.env,
+      author.accessToken,
+    )
+    expect(failedPostCreate.status).toBe(502)
+    const failedBody = await json(failedPostCreate) as {
+      code: string
+      message: string
+      retryable?: boolean
+    }
+    expect(failedBody).toMatchObject({
+      code: "provider_unavailable",
+      message: "Story registration is required before publishing this asset",
+      retryable: true,
+    })
+
+    const bundleAfterFailure = await app.request(
+      `http://pirate.test/communities/${communityId}/song-artifacts/${bundleBody.id}`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(bundleAfterFailure.status).toBe(200)
+    const bundleAfterFailureBody = await json(bundleAfterFailure) as {
+      status: string
+    }
+    expect(bundleAfterFailureBody.status).toBe("ready")
+
+    ctx.env.STORY_ROYALTY_SPG_NFT_CONTRACT = "0x8888888888888888888888888888888888888888"
+    let registrarCalls = 0
+    setStoryRoyaltyRegistrarForTests(async (input) => {
+      registrarCalls += 1
+      expect(input.rightsBasis).toBe("original")
+      expect(input.assetKind).toBe("song_audio")
+      expect(input.title).toBe("Story Required Song")
+      return {
+        storyIpId: "0x9999999999999999999999999999999999999999",
+        storyIpNftContract: "0x8888888888888888888888888888888888888888",
+        storyIpNftTokenId: "123",
+        storyLicenseTermsId: "17",
+        storyLicenseTemplate: "0x7777777777777777777777777777777777777777",
+        storyRoyaltyPolicy: "0x6666666666666666666666666666666666666666",
+        storyDerivativeParentIpIds: null,
+        storyRevenueToken: "0x1514000000000000000000000000000000000000",
+        storyRoyaltyRegistrationStatus: "registered",
+        storyDerivativeRegisteredAt: null,
+      }
+    })
+
+    const retryPostCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      postPayload,
+      ctx.env,
+      author.accessToken,
+    )
+    expect(retryPostCreate.status).toBe(201)
+    const retryBody = await json(retryPostCreate) as {
+      id: string
+      post_type: string
+      status: string
+      song_artifact_bundle: string | null
+    }
+    expect(retryBody.post_type).toBe("song")
+    expect(retryBody.status).toBe("published")
+    expect(retryBody.song_artifact_bundle).toBe(bundleBody.id)
+    expect(registrarCalls).toBe(1)
+
+    const bundleAfterRetry = await app.request(
+      `http://pirate.test/communities/${communityId}/song-artifacts/${bundleBody.id}`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(bundleAfterRetry.status).toBe(200)
+    const bundleAfterRetryBody = await json(bundleAfterRetry) as {
+      status: string
+    }
+    expect(bundleAfterRetryBody.status).toBe("consumed")
+  })
+
+  test("reuses non-published original Story registrations for the same creator and audio hash", async () => {
+    const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
+
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const request = input instanceof Request ? input : new Request(input, init)
+
+      if (!request.url.startsWith("https://s3.filebase.test/")) {
+        return await originalFetch(request)
+      }
+
+      if (request.method === "PUT") {
+        storedObjects.set(request.url, {
+          body: new Uint8Array(await request.arrayBuffer()),
+          contentType: request.headers.get("content-type") || "application/octet-stream",
+        })
+        return new Response(null, { status: 200 })
+      }
+
+      if (request.method === "GET") {
+        const stored = storedObjects.get(request.url)
+        if (!stored) {
+          return new Response("missing", { status: 404 })
+        }
+        return new Response(stored.body.slice().buffer, {
+          status: 200,
+          headers: {
+            "content-type": stored.contentType,
+            "content-length": String(stored.body.byteLength),
+          },
+        })
+      }
+
+      return new Response("unexpected method", { status: 500 })
+    }
+
+    const ctx = await createRouteTestContext({
+      ENVIRONMENT: "development",
+      FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
+      FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
+      FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
+      FILEBASE_MEDIA_BUCKET: "pirate-media",
+      PIRATE_API_PUBLIC_ORIGIN: "https://pirate.test",
+      STORY_ROYALTY_SPG_NFT_CONTRACT: "0x8888888888888888888888888888888888888888",
+    })
+    cleanup = ctx.cleanup
+
+    const author = await exchangeJwt(ctx.env, "story-reuse-song-author")
+    await attachPrimaryWallet({
+      client: ctx.client,
+      userId: author.userId,
+      walletAttachmentId: "wal_story_reuse_song_author",
+      walletAddress: "0xaaa0000000000000000000000000000000000003",
+    })
+    await completeUniqueHumanVerification(ctx.env, author.accessToken)
+
+    let registrarCalls = 0
+    setStoryRoyaltyRegistrarForTests(async () => {
+      registrarCalls += 1
+      return {
+        storyIpId: "0x9999999999999999999999999999999999999999",
+        storyIpNftContract: "0x8888888888888888888888888888888888888888",
+        storyIpNftTokenId: "123",
+        storyLicenseTermsId: "17",
+        storyLicenseTemplate: "0x7777777777777777777777777777777777777777",
+        storyRoyaltyPolicy: "0x6666666666666666666666666666666666666666",
+        storyDerivativeParentIpIds: null,
+        storyRevenueToken: "0x1514000000000000000000000000000000000000",
+        storyRoyaltyRegistrationStatus: "registered",
+        storyDerivativeRegisteredAt: null,
+      }
+    })
+
+    const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "Story Reuse Songs")
+    const bytes = new Uint8Array([9, 8, 7, 6, 5, 4, 3, 2])
+
+    const firstUpload = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "primary_audio",
+      mimeType: "audio/mpeg",
+      filename: "story-reuse-first.mp3",
+      bytes,
+    })
+    const firstBundleCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifacts`,
+      {
+        primary_audio: {
+          song_artifact_upload: firstUpload.id,
+        },
+        title: "Story Reuse Song",
+        lyrics: "Reuse line one",
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(firstBundleCreate.status).toBe(201)
+    const firstBundle = await json(firstBundleCreate) as { id: string }
+
+    const firstPostCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        idempotency_key: "story-reuse-first-post",
+        post_type: "song",
+        identity_mode: "public",
+        title: "Story Reuse Song",
+        song_mode: "original",
+        rights_basis: "original",
+        license_preset: "commercial-remix",
+        commercial_rev_share_pct: 10,
+        song_artifact_bundle: firstBundle.id,
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(firstPostCreate.status).toBe(201)
+    const firstPost = await json(firstPostCreate) as { id: string }
+    expect(registrarCalls).toBe(1)
+
+    const deleted = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts/${firstPost.id}/delete`,
+      {},
+      ctx.env,
+      author.accessToken,
+    )
+    expect(deleted.status).toBe(200)
+
+    setStoryRoyaltyRegistrarForTests(async () => {
+      throw new Error("unexpected Story re-registration")
+    })
+
+    const secondUpload = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "primary_audio",
+      mimeType: "audio/mpeg",
+      filename: "story-reuse-second.mp3",
+      bytes,
+    })
+    const secondBundleCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifacts`,
+      {
+        primary_audio: {
+          song_artifact_upload: secondUpload.id,
+        },
+        title: "Story Reuse Song Again",
+        lyrics: "Reuse line one",
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(secondBundleCreate.status).toBe(201)
+    const secondBundle = await json(secondBundleCreate) as { id: string }
+
+    const secondPostCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        idempotency_key: "story-reuse-second-post",
+        post_type: "song",
+        identity_mode: "public",
+        title: "Story Reuse Song Again",
+        song_mode: "original",
+        rights_basis: "original",
+        license_preset: "non-commercial",
+        song_artifact_bundle: secondBundle.id,
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(secondPostCreate.status).toBe(201)
+    const secondPost = await json(secondPostCreate) as {
+      asset: string
+    }
+
+    const assetRead = await app.request(
+      `http://pirate.test/communities/${communityId}/assets/${secondPost.asset}`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(assetRead.status).toBe(200)
+    const assetBody = await json(assetRead) as {
+      story_ip: string | null
+      story_royalty_registration_status: string | null
+      license_preset: string | null
+      commercial_rev_share_pct: number | null
+    }
+    expect(assetBody.story_ip).toBe("0x9999999999999999999999999999999999999999")
+    expect(assetBody.story_royalty_registration_status).toBe("registered")
+    expect(assetBody.license_preset).toBe("commercial-remix")
+    expect(assetBody.commercial_rev_share_pct).toBe(10)
+    expect(registrarCalls).toBe(1)
+  })
+
   test("allows song publication when ACRCloud is not configured in local dev", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
 
@@ -1040,6 +1449,13 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     cleanup = ctx.cleanup
 
     const author = await exchangeJwt(ctx.env, "song-author-no-acr")
+    await attachPrimaryWallet({
+      client: ctx.client,
+      userId: author.userId,
+      walletAttachmentId: "wal_song_author_no_acr",
+      walletAddress: "0xaaa0000000000000000000000000000000000003",
+    })
+    installSuccessfulStoryRoyaltyRegistrarForTests()
     await completeUniqueHumanVerification(ctx.env, author.accessToken)
 
     const communityCreate = await requestJson("http://pirate.test/communities", {
