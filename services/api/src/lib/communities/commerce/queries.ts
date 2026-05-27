@@ -210,23 +210,24 @@ export async function listDerivativeSourceRows(input: {
   const args: Array<string | number> = [input.communityId]
   let nextArg = 2
   const filters = [
-    "community_id = ?1",
-    "publication_status = 'story_published'",
-    "story_status = 'published'",
-    "story_royalty_registration_status = 'registered'",
-    "story_ip_id IS NOT NULL",
-    "story_ip_id != ''",
-    "story_license_terms_id IS NOT NULL",
-    "story_license_terms_id != ''",
+    "a.community_id = ?1",
+    "a.publication_status = 'story_published'",
+    "a.story_status = 'published'",
+    "a.story_royalty_registration_status = 'registered'",
+    "a.story_ip_id IS NOT NULL",
+    "a.story_ip_id != ''",
+    "a.story_license_terms_id IS NOT NULL",
+    "a.story_license_terms_id != ''",
+    "p.status = 'published'",
   ]
 
   if (assetKind) {
-    filters.push(`asset_kind = ?${nextArg}`)
+    filters.push(`a.asset_kind = ?${nextArg}`)
     args.push(assetKind)
     nextArg += 1
   }
   if (hasQuery) {
-    filters.push(`LOWER(COALESCE(display_title, asset_id)) LIKE ?${nextArg} ESCAPE '\\'`)
+    filters.push(`LOWER(COALESCE(a.display_title, a.asset_id)) LIKE ?${nextArg} ESCAPE '\\'`)
     args.push(`%${escapeLikePattern(query!.toLowerCase())}%`)
     nextArg += 1
   }
@@ -234,12 +235,15 @@ export async function listDerivativeSourceRows(input: {
 
   const rows = await input.client.execute({
     sql: `
-      SELECT asset_id, community_id, display_title, creator_user_id, asset_kind,
-             license_preset, commercial_rev_share_pct, story_ip_id, story_license_terms_id,
-             updated_at
-      FROM assets
+      SELECT a.asset_id, a.community_id, a.display_title, a.creator_user_id, a.asset_kind,
+             a.license_preset, a.commercial_rev_share_pct, a.story_ip_id, a.story_license_terms_id,
+             a.updated_at
+      FROM assets a
+      INNER JOIN posts p
+        ON p.community_id = a.community_id
+       AND p.post_id = a.source_post_id
       WHERE ${filters.join("\n        AND ")}
-      ORDER BY updated_at DESC, asset_id DESC
+      ORDER BY a.updated_at DESC, a.asset_id DESC
       LIMIT ?${nextArg}
     `,
     args,

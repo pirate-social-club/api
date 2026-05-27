@@ -54,6 +54,7 @@ async function insertDerivativeSourceAsset(input: {
   publicationStatus: "story_published" | "withdrawn"
   storyIpId?: string
   storyLicenseTermsId?: string
+  postStatus?: "published" | "deleted" | "hidden" | "removed"
 }): Promise<void> {
   const client = createClient({
     url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
@@ -69,9 +70,9 @@ async function insertDerivativeSourceAsset(input: {
           song_mode, title, rights_basis, asset_id, analysis_state, content_safety_state,
           age_gate_policy, created_at, updated_at
         ) VALUES (
-          ?1, ?2, ?3, 'public', ?4, 'published',
-          ?5, ?6, ?7, ?8, 'allow', 'safe',
-          'none', ?9, ?9
+          ?1, ?2, ?3, 'public', ?4, ?5,
+          ?6, ?7, ?8, ?9, 'allow', 'safe',
+          'none', ?10, ?10
         )
       `,
       args: [
@@ -79,6 +80,7 @@ async function insertDerivativeSourceAsset(input: {
         input.communityId,
         input.creatorUserId,
         input.assetKind === "video_file" ? "video" : "song",
+        input.postStatus ?? "published",
         input.assetKind === "song_audio" ? input.rightsBasis === "derivative" ? "remix" : "original" : null,
         input.title,
         input.rightsBasis,
@@ -221,6 +223,19 @@ describe("song artifact catalog routes", () => {
       publicationStatus: "withdrawn",
       storyIpId: "0x3333333333333333333333333333333333333333",
       storyLicenseTermsId: "19",
+    })
+    await insertDerivativeSourceAsset({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      creatorUserId: owner.userId,
+      assetId: "ast_deleted_song",
+      title: "Deleted Source",
+      assetKind: "song_audio",
+      rightsBasis: "original",
+      publicationStatus: "story_published",
+      storyIpId: "0x7777777777777777777777777777777777777777",
+      storyLicenseTermsId: "21",
+      postStatus: "deleted",
     })
     await insertDerivativeSourceAsset({
       communityDbRoot: ctx.communityDbRoot,
