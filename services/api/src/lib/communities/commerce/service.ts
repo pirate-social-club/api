@@ -191,6 +191,8 @@ export async function createAssetForPost(input: {
   let storyWriteCondition: string | null = null
   let creatorWalletAddress: string | null = null
   const resolvedPrimaryContentHash = (input.contentHash?.trim() || `0x${await sha256Hex(input.storageRef)}`) as `0x${string}`
+  let effectiveLicensePreset = input.licensePreset ?? null
+  let effectiveCommercialRevSharePct = input.commercialRevSharePct ?? null
 
   if ((input.post.access_mode ?? "public") === "locked") {
     try {
@@ -254,8 +256,6 @@ export async function createAssetForPost(input: {
           creatorUserId: input.post.author_user_id ?? "",
           assetKind: input.assetKind,
           primaryContentHash: resolvedPrimaryContentHash,
-          licensePreset: input.licensePreset ?? null,
-          commercialRevSharePct: input.commercialRevSharePct ?? null,
         })
       : null
 
@@ -271,9 +271,19 @@ export async function createAssetForPost(input: {
       storyDerivativeParentIpIdsJson = reusableOriginalRegistration.story_derivative_parent_ip_ids_json
       storyDerivativeRegisteredAt = reusableOriginalRegistration.story_derivative_registered_at
       storyRevenueToken = reusableOriginalRegistration.story_revenue_token
-      storyRoyaltyRegistrationStatus = reusableOriginalRegistration.story_royalty_registration_status
+      storyRoyaltyRegistrationStatus = "registered"
       storyStatus = "published"
       publicationStatus = "story_published"
+      storyError = null
+      storyPublishTxRef = reusableOriginalRegistration.story_publish_tx_ref
+      storyAssetVersionId = reusableOriginalRegistration.story_asset_version_id
+      storyCdrVaultUuid = reusableOriginalRegistration.story_cdr_vault_uuid
+      storyNamespace = reusableOriginalRegistration.story_namespace
+      storyEntitlementTokenId = reusableOriginalRegistration.story_entitlement_token_id
+      storyReadCondition = reusableOriginalRegistration.story_read_condition
+      storyWriteCondition = reusableOriginalRegistration.story_write_condition
+      effectiveLicensePreset = reusableOriginalRegistration.license_preset as StoryLicensePreset | null
+      effectiveCommercialRevSharePct = reusableOriginalRegistration.commercial_rev_share_pct
     }
 
     if (shouldRunRoyaltyRegistration && !reusableOriginalRegistration && !creatorWalletAddress) {
@@ -292,8 +302,8 @@ export async function createAssetForPost(input: {
           creatorWalletAddress: creatorWalletAddress ?? "",
           title: input.post.title ?? null,
           rightsBasis: input.post.rights_basis ?? "none",
-          licensePreset: input.licensePreset ?? null,
-          commercialRevSharePct: input.commercialRevSharePct ?? null,
+          licensePreset: effectiveLicensePreset,
+          commercialRevSharePct: effectiveCommercialRevSharePct,
           upstreamAssetRefs: input.post.upstream_asset_refs ?? null,
           assetKind: input.assetKind,
           bundle: input.bundle ?? null,
@@ -371,8 +381,8 @@ export async function createAssetForPost(input: {
       input.assetKind,
       input.post.rights_basis ?? "none",
       input.post.access_mode ?? "public",
-      input.licensePreset ?? null,
-      input.commercialRevSharePct ?? null,
+      effectiveLicensePreset,
+      effectiveCommercialRevSharePct,
       input.storageRef,
       resolvedPrimaryContentHash,
       publicationStatus,

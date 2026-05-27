@@ -1133,7 +1133,8 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
         title: "My first song",
         song_mode: "original",
         rights_basis: "original",
-        license_preset: "non-commercial",
+        license_preset: "commercial-remix",
+        commercial_rev_share_pct: 10,
         song_artifact_bundle: bundleBody.id,
       },
       ctx.env,
@@ -1340,9 +1341,13 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     const retryAssetBody = await json(retryAssetRead) as {
       story_ip: string | null
       story_royalty_registration_status: string
+      license_preset: string | null
+      commercial_rev_share_pct: number | null
     }
     expect(retryAssetBody.story_royalty_registration_status).toBe("registered")
     expect(retryAssetBody.story_ip).toBe(originalAssetBody.story_ip)
+    expect(retryAssetBody.license_preset).toBe("commercial-remix")
+    expect(retryAssetBody.commercial_rev_share_pct).toBe(10)
 
     const previewWindowBundleCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifacts`,
