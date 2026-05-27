@@ -88,7 +88,7 @@ function installAdapterDeps(): void {
       }
       throw new Error(`unexpected functionName ${String(params.functionName)}`)
     },
-    ensureStoryPublishOperatorAuthorized: async (params: never) => {
+    ensureStoryPublishOperatorAuthorized: async (params: unknown) => {
       captured.events.push("authorize")
       captured.ensureStoryPublishOperatorAuthorized = params
     },
