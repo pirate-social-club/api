@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { createClient } from "@libsql/client"
 import { solveChallenge, type Challenge, type Payload } from "altcha-lib"
 import { deriveKey } from "altcha-lib/algorithms/pbkdf2"
 import { app } from "../../../src/index"
 import type { AltchaScope } from "../../../src/lib/verification/altcha-provider"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
+import { buildLocalCommunityDbPath } from "../../../src/lib/communities/community-local-db"
 import { getCommunityRepository } from "../../../src/lib/communities/db-community-repository"
 import { processCommunityJobsForCommunity } from "../../../src/lib/communities/jobs/runner"
 import { setStoryAccessProofSignerForTests } from "../../../src/lib/story/story-access-proof-service"
@@ -16,7 +18,7 @@ import {
   exchangeJwt,
   requestJson,
 } from "./song-artifact-test-helpers"
-import { attachPrimaryWallet } from "./song-artifact-locked-test-helpers"
+import { attachPrimaryWallet, createOpenSongCommunity, uploadSongArtifact } from "./song-artifact-locked-test-helpers"
 
 const testWithTimeout = test as unknown as (name: string, fn: () => Promise<void>, timeout: number) => void
 
@@ -1398,6 +1400,260 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
       author.accessToken,
     )
     expect(conflictingPreviewCreate.status).toBe(400)
+  })
+
+  test("rejects a remix submit when the same bytes were already registered as an original", async () => {
+    const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
+
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      if (request.url === "https://openrouter.test/api/v1/chat/completions") {
+        return Response.json({
+          id: "chatcmpl_test_story_original_collision",
+          model: "google/gemini-3.1-flash-lite-preview",
+          choices: [{
+            message: {
+              content: JSON.stringify({
+                age_gate_rating: "safe",
+                reason: "clean lyrics",
+              }),
+            },
+          }],
+        })
+      }
+
+      if (request.url === "https://acrcloud.test/v1/identify") {
+        return Response.json({
+          status: { code: 0, msg: "Success" },
+          metadata: { music: [] },
+        })
+      }
+
+      if (request.url === "https://console-v2.acrcloud.test/api/buckets/30358/files") {
+        return Response.json({
+          data: {
+            id: 64,
+            acr_id: "acr_story_original_collision",
+            state: 0,
+          },
+        })
+      }
+
+      if (request.url === "https://elevenlabs.test/forced-alignment") {
+        return Response.json({
+          provider: "elevenlabs",
+          segments: [{
+            start_ms: 0,
+            end_ms: 900,
+            text: "Collision line",
+          }],
+        })
+      }
+
+      if (!request.url.startsWith("https://s3.filebase.test/")) {
+        return await originalFetch(request)
+      }
+
+      if (request.method === "PUT") {
+        storedObjects.set(request.url, {
+          body: new Uint8Array(await request.arrayBuffer()),
+          contentType: request.headers.get("content-type") || "application/octet-stream",
+        })
+        return new Response(null, { status: 200 })
+      }
+
+      if (request.method === "GET") {
+        const stored = storedObjects.get(request.url)
+        if (!stored) {
+          return new Response("missing", { status: 404 })
+        }
+        return new Response(stored.body.slice().buffer, {
+          status: 200,
+          headers: {
+            "content-type": stored.contentType,
+            "content-length": String(stored.body.byteLength),
+          },
+        })
+      }
+
+      return new Response("unexpected method", { status: 500 })
+    }
+
+    const ctx = await createRouteTestContext({
+      FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
+      FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
+      FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
+      FILEBASE_MEDIA_BUCKET: "pirate-media",
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      OPENROUTER_MODEL: "google/gemini-3.1-flash-lite-preview",
+      ACRCLOUD_ACCESS_KEY: "test-acrcloud-access",
+      ACRCLOUD_ACCESS_SECRET: "test-acrcloud-secret",
+      ACRCLOUD_HOST: "acrcloud.test",
+      ACRCLOUD_PERSONAL_ACCESS_TOKEN: "test-acrcloud-pat",
+      ACRCLOUD_BUCKET_ID: "30358",
+      ACRCLOUD_CONSOLE_BASE_URL: "https://console-v2.acrcloud.test/api",
+      ELEVENLABS_API_KEY: "test-elevenlabs-key",
+      ELEVENLABS_FORCE_ALIGNMENT_URL: "https://elevenlabs.test/forced-alignment",
+    })
+    cleanup = ctx.cleanup
+
+    const author = await exchangeJwt(ctx.env, "song-author-story-original-collision")
+    await attachPrimaryWallet({
+      client: ctx.client,
+      userId: author.userId,
+      walletAttachmentId: "wal_song_author_story_original_collision",
+      walletAddress: "0xaaa0000000000000000000000000000000000004",
+    })
+    await completeUniqueHumanVerification(ctx.env, author.accessToken)
+
+    const originalStoryIp = "0x9999999999999999999999999999999999999999"
+    let registrarCallsAfterOriginal = 0
+    setStoryRoyaltyRegistrarForTests(async () => ({
+      storyIpId: originalStoryIp,
+      storyIpNftContract: "0x8888888888888888888888888888888888888888",
+      storyIpNftTokenId: "123",
+      storyLicenseTermsId: "17",
+      storyLicenseTemplate: null,
+      storyRoyaltyPolicy: "0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E",
+      storyDerivativeParentIpIds: null,
+      storyRevenueToken: "0x1514000000000000000000000000000000000000",
+      storyRoyaltyRegistrationStatus: "registered",
+      storyDerivativeRegisteredAt: null,
+    }))
+
+    const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "Story Collision Club")
+    const primaryBytes = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])
+    const originalUpload = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "primary_audio",
+      mimeType: "audio/mpeg",
+      filename: "collision-original.mp3",
+      bytes: primaryBytes,
+    })
+    const originalBundleCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifacts`,
+      {
+        primary_audio: {
+          song_artifact_upload: originalUpload.id,
+        },
+        title: "Collision Original",
+        lyrics: "Collision line",
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(originalBundleCreate.status).toBe(201)
+    const originalBundle = await json(originalBundleCreate) as { id: string }
+    const originalPostCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        idempotency_key: "song-post-story-original-collision-original",
+        post_type: "song",
+        identity_mode: "public",
+        title: "Collision original",
+        song_mode: "original",
+        rights_basis: "original",
+        license_preset: "commercial-remix",
+        commercial_rev_share_pct: 10,
+        song_artifact_bundle: originalBundle.id,
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(originalPostCreate.status).toBe(201)
+    const originalPost = await json(originalPostCreate) as {
+      asset?: string | null
+      id: string
+    }
+    expect(originalPost.asset).toBeTruthy()
+
+    const deleteOriginalPost = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts/${originalPost.id}/delete`,
+      {},
+      ctx.env,
+      author.accessToken,
+    )
+    expect(deleteOriginalPost.status).toBe(200)
+
+    setStoryRoyaltyRegistrarForTests(async () => {
+      registrarCallsAfterOriginal += 1
+      throw new Error("derivative registration should be blocked before Story")
+    })
+
+    const derivativeUpload = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "primary_audio",
+      mimeType: "audio/mpeg",
+      filename: "collision-remix.mp3",
+      bytes: primaryBytes,
+    })
+    const derivativeBundleCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifacts`,
+      {
+        primary_audio: {
+          song_artifact_upload: derivativeUpload.id,
+        },
+        title: "Collision Remix",
+        lyrics: "Collision line remix",
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(derivativeBundleCreate.status).toBe(201)
+    const derivativeBundle = await json(derivativeBundleCreate) as { id: string }
+    const derivativePostCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        idempotency_key: "song-post-story-original-collision-derivative",
+        post_type: "song",
+        identity_mode: "public",
+        title: "Collision remix",
+        asset_id: "ast_story_original_collision_derivative_route",
+        song_mode: "remix",
+        rights_basis: "derivative",
+        license_preset: "commercial-remix",
+        commercial_rev_share_pct: 10,
+        upstream_asset_refs: [`story:ip:${originalStoryIp}#licenseTermsId=17`],
+        song_artifact_bundle: derivativeBundle.id,
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(derivativePostCreate.status).toBe(409)
+    const derivativePostBody = await json(derivativePostCreate) as {
+      code?: string
+      message?: string
+      retryable?: boolean
+      details?: { reason?: string }
+    }
+    expect(derivativePostBody.code).toBe("conflict")
+    expect(derivativePostBody.retryable).toBe(false)
+    expect(derivativePostBody.message).toContain("This exact file was already registered on Story as an original")
+    expect(derivativePostBody.details?.reason).toBe("story_original_content_already_registered")
+    expect(registrarCallsAfterOriginal).toBe(0)
+
+    const communityDb = createClient({
+      url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
+    })
+    try {
+      const postRows = await communityDb.execute({
+        sql: "SELECT COUNT(*) AS count FROM posts WHERE idempotency_key = ?1",
+        args: ["song-post-story-original-collision-derivative"],
+      })
+      const assetRows = await communityDb.execute({
+        sql: "SELECT COUNT(*) AS count FROM assets WHERE asset_id = ?1",
+        args: ["ast_story_original_collision_derivative_route"],
+      })
+      expect(Number(postRows.rows[0]?.count ?? 0)).toBe(0)
+      expect(Number(assetRows.rows[0]?.count ?? 0)).toBe(0)
+    } finally {
+      communityDb.close()
+    }
   })
 
   test("allows song publication when ACRCloud is not configured in local dev", async () => {

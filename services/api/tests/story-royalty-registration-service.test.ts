@@ -63,7 +63,7 @@ function buildWalletAttachment(): WalletAttachmentSummary {
   }
 }
 
-function buildBundle(input: { id: string; title: string }): SongArtifactBundle {
+function buildBundle(input: { id: string; title: string; contentHash?: string }): SongArtifactBundle {
   return {
     id: input.id,
     title: input.title,
@@ -72,7 +72,7 @@ function buildBundle(input: { id: string; title: string }): SongArtifactBundle {
       artifact_kind: "primary_audio",
       storage_ref: "filebase://songs/primary.wav",
       mime_type: "audio/wav",
-      content_hash: "0xabc123",
+      content_hash: input.contentHash ?? "0xabc123",
     },
   } as unknown as SongArtifactBundle
 }
@@ -484,6 +484,142 @@ describe("story royalty registration service", () => {
     }
   })
 
+  test("rejects derivative publishing when the same content was already registered as an original", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-original-collision-"))
+    cleanupPaths.push(rootDir)
+
+    const env = { LOCAL_COMMUNITY_DB_ROOT: rootDir } as Env
+    const repo = buildRepository()
+    const communityId = "cmt_story_royalty_original_collision"
+    const userId = "usr_author_story_original_collision"
+    const now = "2026-04-21T00:00:00.000Z"
+    const originalIpId = "0x9999999999999999999999999999999999999999"
+    const userRepository = buildStoryUserRepository(userId)
+    let derivativePostId: string | null = null
+    let derivativeRegistrarCalls = 0
+
+    await seedStoryCommunity({ env, repo, communityId, userId })
+    setStoryRoyaltyRegistrarForTests(async () => ({
+      storyIpId: originalIpId,
+      storyIpNftContract: "0x8888888888888888888888888888888888888888",
+      storyIpNftTokenId: "123",
+      storyLicenseTermsId: "17",
+      storyLicenseTemplate: "0x7777777777777777777777777777777777777777",
+      storyRoyaltyPolicy: "0x6666666666666666666666666666666666666666",
+      storyDerivativeParentIpIds: null,
+      storyRevenueToken: "0x1514000000000000000000000000000000000000",
+      storyRoyaltyRegistrationStatus: "registered",
+      storyDerivativeRegisteredAt: null,
+    }))
+
+    const db = await openCommunityDb(env, repo, communityId)
+    try {
+      const originalPost = await insertPost({
+        client: db.client,
+        communityId,
+        authorUserId: userId,
+        body: {
+          post_type: "song",
+          identity_mode: "public",
+          title: "Accidentally original mix",
+          idempotency_key: "story-original-collision-original-post",
+          song_mode: "original",
+          rights_basis: "original",
+          access_mode: "public",
+        },
+        createdAt: now,
+      })
+      const original = await createSongAssetForPost({
+        env,
+        client: db.client,
+        communityId,
+        post: {
+          ...originalPost,
+          asset_id: "ast_original_collision_registered",
+        },
+        bundle: buildBundle({ id: "sab_original_collision_registered", title: "Accidentally original mix" }),
+        licensePreset: "commercial-remix",
+        commercialRevSharePct: 10,
+        userRepository,
+      })
+      expect(original.story_royalty_registration_status).toBe("registered")
+      expect(original.story_ip).toBe(originalIpId)
+
+      await db.client.execute({
+        sql: "UPDATE posts SET status = 'deleted' WHERE community_id = ?1 AND post_id = ?2",
+        args: [communityId, originalPost.post_id],
+      })
+
+      setStoryRoyaltyRegistrarForTests(async () => {
+        derivativeRegistrarCalls += 1
+        throw new Error("derivative registration should be blocked before Story")
+      })
+
+      const tx = await db.client.transaction("write")
+      let caughtError: unknown
+      try {
+        const derivativePost = await insertPost({
+          client: tx,
+          communityId,
+          authorUserId: userId,
+          body: {
+            post_type: "song",
+            identity_mode: "public",
+            title: "Same bytes remix",
+            idempotency_key: "story-original-collision-derivative-post",
+            song_mode: "remix",
+            rights_basis: "derivative",
+            access_mode: "public",
+            upstream_asset_refs: [`story:ip:${originalIpId}#licenseTermsId=17`],
+          },
+          createdAt: now,
+        })
+        derivativePostId = derivativePost.post_id
+
+        await createSongAssetForPost({
+          env,
+          client: tx,
+          communityId,
+          post: {
+            ...derivativePost,
+            asset_id: "ast_original_collision_derivative",
+          },
+          bundle: buildBundle({ id: "sab_original_collision_derivative", title: "Same bytes remix" }),
+          licensePreset: null,
+          commercialRevSharePct: null,
+          requireStoryRoyaltyRegistration: true,
+          userRepository,
+        })
+        await tx.commit()
+      } catch (error) {
+        caughtError = error
+        await tx.rollback()
+      } finally {
+        tx.close()
+      }
+
+      expect(derivativeRegistrarCalls).toBe(0)
+      expect(caughtError).toBeInstanceOf(Error)
+      expect((caughtError as Error).message).toContain("This exact file was already registered on Story as an original")
+      expect((caughtError as { status?: number }).status).toBe(409)
+      expect((caughtError as { code?: string }).code).toBe("conflict")
+
+      const derivativePosts = await db.client.execute({
+        sql: "SELECT post_id FROM posts WHERE post_id = ?1",
+        args: [derivativePostId],
+      })
+      expect(derivativePosts.rows).toHaveLength(0)
+
+      const derivativeAssets = await db.client.execute({
+        sql: "SELECT asset_id FROM assets WHERE asset_id = ?1",
+        args: ["ast_original_collision_derivative"],
+      })
+      expect(derivativeAssets.rows).toHaveLength(0)
+    } finally {
+      db.close()
+    }
+  })
+
   test("skips duplicate royalty registration when locked delivery already registered the asset", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-locked-"))
     cleanupPaths.push(rootDir)
@@ -812,7 +948,11 @@ describe("story royalty registration service", () => {
           ...remixPost,
           asset_id: "ast_palestine_dont_cry_remix",
         },
-        bundle: buildBundle({ id: "sab_palestine_dont_cry_remix", title: "Palestine, Don't Cry Remix" }),
+        bundle: buildBundle({
+          id: "sab_palestine_dont_cry_remix",
+          title: "Palestine, Don't Cry Remix",
+          contentHash: "0xdef456",
+        }),
         licensePreset: null,
         commercialRevSharePct: null,
         userRepository,
@@ -980,7 +1120,11 @@ describe("story royalty registration service", () => {
           ...firstRemixPost,
           asset_id: "ast_chain_first_remix",
         },
-        bundle: buildBundle({ id: "sab_chain_first_remix", title: "Chain First Remix" }),
+        bundle: buildBundle({
+          id: "sab_chain_first_remix",
+          title: "Chain First Remix",
+          contentHash: "0xdef456",
+        }),
         licensePreset: "commercial-remix",
         commercialRevSharePct: 15,
         userRepository,
@@ -1024,7 +1168,11 @@ describe("story royalty registration service", () => {
           ...secondRemixPost,
           asset_id: "ast_chain_second_remix",
         },
-        bundle: buildBundle({ id: "sab_chain_second_remix", title: "Chain Second Remix" }),
+        bundle: buildBundle({
+          id: "sab_chain_second_remix",
+          title: "Chain Second Remix",
+          contentHash: "0xfedcba",
+        }),
         licensePreset: "commercial-remix",
         commercialRevSharePct: 20,
         userRepository,

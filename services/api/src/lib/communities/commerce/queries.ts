@@ -230,6 +230,41 @@ export async function findReusableRegisteredOriginalStoryAssetByContent(input: {
   return assetId ? await getAssetRow(input.client, input.communityId, assetId) : null
 }
 
+export async function findRegisteredOriginalStoryAssetByContent(input: {
+  client: CommerceExecutor
+  communityId: string
+  creatorUserId: string
+  assetKind: Asset["asset_kind"]
+  primaryContentHash: string | null | undefined
+}): Promise<AssetRow | null> {
+  const primaryContentHash = input.primaryContentHash?.trim()
+  if (!primaryContentHash) return null
+
+  const row = await executeFirst(input.client, {
+    sql: `
+      SELECT asset_id
+      FROM assets
+      WHERE community_id = ?1
+        AND creator_user_id = ?2
+        AND asset_kind = ?3
+        AND rights_basis = 'original'
+        AND primary_content_hash = ?4
+        AND story_status = 'published'
+        AND publication_status = 'story_published'
+        AND story_royalty_registration_status = 'registered'
+        AND story_ip_id IS NOT NULL
+        AND story_ip_id != ''
+        AND story_license_terms_id IS NOT NULL
+        AND story_license_terms_id != ''
+      ORDER BY updated_at DESC, asset_id DESC
+      LIMIT 1
+    `,
+    args: [input.communityId, input.creatorUserId, input.assetKind, primaryContentHash],
+  })
+  const assetId = stringOrNull(row, "asset_id")
+  return assetId ? await getAssetRow(input.client, input.communityId, assetId) : null
+}
+
 function assetKindForDerivativeSourceKind(kind: DerivativeSourceKind | null | undefined): Asset["asset_kind"] | null {
   if (kind === "song") return "song_audio"
   if (kind === "video") return "video_file"
