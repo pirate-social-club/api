@@ -1141,6 +1141,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     )
     expect(postCreate.status).toBe(201)
     const postBody = await json(postCreate) as {
+      asset?: string | null
       id: string
       post_type: string
       status: string
@@ -1204,8 +1205,144 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     expect(bundleReadBody.status).toBe("consumed")
     expect(bundleReadBody.moderation_result?.catalog_sync?.synced).toBe(true)
     expect(bundleReadBody.moderation_result?.catalog_sync?.file_id).toBe(42)
-  expect(bundleReadBody.moderation_result?.catalog_sync?.acr_id).toBe("acr_test_song_42")
-  expect(acrCloudCatalogCallCount).toBe(1)
+    expect(bundleReadBody.moderation_result?.catalog_sync?.acr_id).toBe("acr_test_song_42")
+    expect(acrCloudCatalogCallCount).toBe(1)
+
+    expect(postBody.asset).toBeTruthy()
+    const originalAssetRead = await app.request(
+      `http://pirate.test/communities/${communityId}/assets/${postBody.asset}`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(originalAssetRead.status).toBe(200)
+    const originalAssetBody = await json(originalAssetRead) as {
+      story_ip: string | null
+      story_royalty_registration_status: string
+    }
+    expect(originalAssetBody.story_royalty_registration_status).toBe("registered")
+    expect(originalAssetBody.story_ip).toBeTruthy()
+
+    const deleteOriginalPost = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts/${postBody.id}/delete`,
+      {},
+      ctx.env,
+      author.accessToken,
+    )
+    expect(deleteOriginalPost.status).toBe(200)
+
+    const retryUploadIntent = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
+      {
+        artifact_kind: "primary_audio",
+        mime_type: "audio/mpeg",
+        filename: "anthem-retry.mp3",
+        size_bytes: 8,
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(retryUploadIntent.status).toBe(201)
+    const retryUploadIntentBody = await json(retryUploadIntent) as {
+      id: string
+      storage_ref: string
+    }
+    const retryUploadContent = await app.request(
+      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${retryUploadIntentBody.id}/content`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+          "content-type": "application/octet-stream",
+        },
+        body: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]).buffer,
+      },
+      ctx.env,
+    )
+    expect(retryUploadContent.status).toBe(200)
+
+    const retryBundleCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifacts`,
+      {
+        primary_audio: {
+          song_artifact_upload: retryUploadIntentBody.id,
+        },
+        title: "Republished Song",
+        lyrics: "Line one\nLine two",
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(retryBundleCreate.status).toBe(201)
+    const retryBundleBody = await json(retryBundleCreate) as {
+      id: string
+      status: string
+    }
+    expect(retryBundleBody.status).toBe("ready")
+
+    await ctx.client.execute({
+      sql: `
+        UPDATE song_artifact_bundles
+        SET primary_audio_json = ?1
+        WHERE song_artifact_bundle_id = ?2
+      `,
+      args: [
+        JSON.stringify({
+          storage_ref: retryUploadIntentBody.storage_ref,
+          mime_type: "audio/mpeg",
+          size_bytes: 8,
+          content_hash: uploaded.content_hash,
+          duration_ms: 123_456,
+        }),
+        retryBundleBody.id.replace(/^sab_/, ""),
+      ],
+    })
+
+    setStoryRoyaltyRegistrarForTests(async () => {
+      throw new Error("duplicate original should reuse the previous Story registration")
+    })
+    const retryPostCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        idempotency_key: "song-post-republish-same-content",
+        post_type: "song",
+        identity_mode: "public",
+        title: "My republished song",
+        song_mode: "original",
+        rights_basis: "original",
+        license_preset: "non-commercial",
+        song_artifact_bundle: retryBundleBody.id,
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(retryPostCreate.status).toBe(201)
+    const retryPostBody = await json(retryPostCreate) as {
+      asset?: string | null
+      status: string
+    }
+    expect(retryPostBody.status).toBe("published")
+    expect(retryPostBody.asset).toBeTruthy()
+
+    const retryAssetRead = await app.request(
+      `http://pirate.test/communities/${communityId}/assets/${retryPostBody.asset}`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(retryAssetRead.status).toBe(200)
+    const retryAssetBody = await json(retryAssetRead) as {
+      story_ip: string | null
+      story_royalty_registration_status: string
+    }
+    expect(retryAssetBody.story_royalty_registration_status).toBe("registered")
+    expect(retryAssetBody.story_ip).toBe(originalAssetBody.story_ip)
 
     const previewWindowBundleCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifacts`,

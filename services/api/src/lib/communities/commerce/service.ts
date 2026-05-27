@@ -25,6 +25,7 @@ import {
   buildAssetContentPath,
   getActiveEntitlementForBuyer,
   getActiveEntitlementForBuyerIdentity,
+  findReusableRegisteredOriginalStoryAssetByContent,
   getAssetRow,
   listDerivativeSourceRows,
   requireCommunityMember,
@@ -189,6 +190,7 @@ export async function createAssetForPost(input: {
   let storyReadCondition: string | null = null
   let storyWriteCondition: string | null = null
   let creatorWalletAddress: string | null = null
+  const resolvedPrimaryContentHash = (input.contentHash?.trim() || `0x${await sha256Hex(input.storageRef)}`) as `0x${string}`
 
   if ((input.post.access_mode ?? "public") === "locked") {
     try {
@@ -245,14 +247,43 @@ export async function createAssetForPost(input: {
 
   try {
     const shouldRunRoyaltyRegistration = shouldRegisterRoyalty && storyRoyaltyRegistrationStatus !== "registered"
-    if (shouldRunRoyaltyRegistration && !creatorWalletAddress) {
+    const reusableOriginalRegistration = shouldRunRoyaltyRegistration && (input.post.rights_basis ?? "none") === "original"
+      ? await findReusableRegisteredOriginalStoryAssetByContent({
+          client: input.client,
+          communityId: input.communityId,
+          creatorUserId: input.post.author_user_id ?? "",
+          assetKind: input.assetKind,
+          primaryContentHash: resolvedPrimaryContentHash,
+          licensePreset: input.licensePreset ?? null,
+          commercialRevSharePct: input.commercialRevSharePct ?? null,
+        })
+      : null
+
+    if (reusableOriginalRegistration) {
+      storyIpId = reusableOriginalRegistration.story_ip_id
+      storyIpNftContract = reusableOriginalRegistration.story_ip_nft_contract
+      storyIpNftTokenId = reusableOriginalRegistration.story_ip_nft_token_id
+      storyPublishModel = reusableOriginalRegistration.story_publish_model
+      storyLicenseTermsId = reusableOriginalRegistration.story_license_terms_id
+      storyLicenseTemplate = reusableOriginalRegistration.story_license_template
+      storyRoyaltyPolicy = reusableOriginalRegistration.story_royalty_policy
+      storyRoyaltyPolicyId = reusableOriginalRegistration.story_royalty_policy_id
+      storyDerivativeParentIpIdsJson = reusableOriginalRegistration.story_derivative_parent_ip_ids_json
+      storyDerivativeRegisteredAt = reusableOriginalRegistration.story_derivative_registered_at
+      storyRevenueToken = reusableOriginalRegistration.story_revenue_token
+      storyRoyaltyRegistrationStatus = reusableOriginalRegistration.story_royalty_registration_status
+      storyStatus = "published"
+      publicationStatus = "story_published"
+    }
+
+    if (shouldRunRoyaltyRegistration && !reusableOriginalRegistration && !creatorWalletAddress) {
       creatorWalletAddress = await resolvePrimaryWalletAddress({
         env: input.env,
         userRepository: input.userRepository,
         userId: input.post.author_user_id ?? "",
       })
     }
-    const royaltyRegistration = shouldRunRoyaltyRegistration
+    const royaltyRegistration = shouldRunRoyaltyRegistration && !reusableOriginalRegistration
       ? await maybeRegisterStoryRoyaltyForAsset({
           env: input.env,
           client: input.client,
@@ -266,8 +297,7 @@ export async function createAssetForPost(input: {
           upstreamAssetRefs: input.post.upstream_asset_refs ?? null,
           assetKind: input.assetKind,
           bundle: input.bundle ?? null,
-          primaryContentHash:
-            (input.contentHash?.trim() || `0x${await sha256Hex(input.storageRef)}`) as `0x${string}`,
+          primaryContentHash: resolvedPrimaryContentHash,
         })
       : null
     if (royaltyRegistration) {
@@ -344,7 +374,7 @@ export async function createAssetForPost(input: {
       input.licensePreset ?? null,
       input.commercialRevSharePct ?? null,
       input.storageRef,
-      input.contentHash ?? `0x${await sha256Hex(input.storageRef)}`,
+      resolvedPrimaryContentHash,
       publicationStatus,
       storyStatus,
       storyError,

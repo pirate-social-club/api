@@ -191,6 +191,62 @@ export async function getAssetRow(
   }
 }
 
+export async function findReusableRegisteredOriginalStoryAssetByContent(input: {
+  client: CommerceExecutor
+  communityId: string
+  creatorUserId: string
+  assetKind: Asset["asset_kind"]
+  primaryContentHash: string | null
+  licensePreset: Asset["license_preset"] | null
+  commercialRevSharePct: number | null
+}): Promise<AssetRow | null> {
+  const primaryContentHash = input.primaryContentHash?.trim()
+  if (!primaryContentHash) return null
+
+  const row = await executeFirst(input.client, {
+    sql: `
+      SELECT a.asset_id
+      FROM assets a
+      INNER JOIN posts p
+        ON p.community_id = a.community_id
+       AND p.post_id = a.source_post_id
+      WHERE a.community_id = ?1
+        AND a.creator_user_id = ?2
+        AND a.asset_kind = ?3
+        AND a.rights_basis = 'original'
+        AND a.primary_content_hash = ?4
+        AND a.story_status = 'published'
+        AND a.publication_status = 'story_published'
+        AND a.story_royalty_registration_status = 'registered'
+        AND a.story_ip_id IS NOT NULL
+        AND a.story_ip_id != ''
+        AND a.story_license_terms_id IS NOT NULL
+        AND a.story_license_terms_id != ''
+        AND p.status = 'deleted'
+        AND (
+          (a.license_preset IS NULL AND ?5 IS NULL)
+          OR a.license_preset = ?5
+        )
+        AND (
+          (a.commercial_rev_share_pct IS NULL AND ?6 IS NULL)
+          OR a.commercial_rev_share_pct = ?6
+        )
+      ORDER BY a.updated_at DESC, a.asset_id DESC
+      LIMIT 1
+    `,
+    args: [
+      input.communityId,
+      input.creatorUserId,
+      input.assetKind,
+      primaryContentHash,
+      input.licensePreset,
+      input.commercialRevSharePct,
+    ],
+  })
+  const assetId = stringOrNull(row, "asset_id")
+  return assetId ? await getAssetRow(input.client, input.communityId, assetId) : null
+}
+
 function assetKindForDerivativeSourceKind(kind: DerivativeSourceKind | null | undefined): Asset["asset_kind"] | null {
   if (kind === "song") return "song_audio"
   if (kind === "video") return "video_file"
