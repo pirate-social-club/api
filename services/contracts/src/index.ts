@@ -1783,6 +1783,10 @@ export type LocalizedPostResponse = {
   market_context?: MarketContextSummary | null;
   label?: PostLabel | null;
   song_presentation?: SongPresentation | null;
+  asset_story?: {
+    story_ip: string | null;
+    story_royalty_registration_status: "none" | "pending" | "registered" | "failed";
+  } | null;
   upvote_count: number;
   downvote_count: number;
   like_count: number;

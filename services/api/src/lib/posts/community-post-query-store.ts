@@ -1,6 +1,7 @@
 import { executeFirst } from "../db-helpers"
 import type { DbExecutor } from "../db-helpers"
 import {
+  postAssetStoryJoinForSchema,
   postSelectColumnsForSchema,
   resolvePostProjectionSchema,
 } from "./community-post-projection"
@@ -16,6 +17,7 @@ export async function getPostById(client: DbExecutor, postId: string): Promise<P
     sql: `
       SELECT ${postSelectColumnsForSchema(projectionSchema)}
       FROM posts
+      ${postAssetStoryJoinForSchema(projectionSchema)}
       WHERE post_id = ?1
       LIMIT 1
     `,

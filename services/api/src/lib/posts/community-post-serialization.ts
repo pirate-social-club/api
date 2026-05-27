@@ -74,6 +74,8 @@ export type PostRow = {
   analysis_result_ref: string | null
   content_safety_state: Post["content_safety_state"]
   age_gate_policy: Post["age_gate_policy"]
+  asset_story_ip_id: string | null
+  asset_story_royalty_registration_status: "none" | "pending" | "registered" | "failed" | null
   idempotency_key: string
   created_at: string
   updated_at: string
@@ -144,6 +146,8 @@ export function toPostRow(row: unknown): PostRow {
     analysis_result_ref: stringOrNull(rowValue(row, "analysis_result_ref")),
     content_safety_state: requiredString(row, "content_safety_state") as Post["content_safety_state"],
     age_gate_policy: requiredString(row, "age_gate_policy") as Post["age_gate_policy"],
+    asset_story_ip_id: stringOrNull(rowValue(row, "asset_story_ip_id")),
+    asset_story_royalty_registration_status: stringOrNull(rowValue(row, "asset_story_royalty_registration_status")) as PostRow["asset_story_royalty_registration_status"],
     idempotency_key: stringOrNull(rowValue(row, "idempotency_key")) ?? "",
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
@@ -215,6 +219,12 @@ export function serializePost(row: PostRow): Post {
     analysis_result_ref: row.analysis_result_ref,
     content_safety_state: row.content_safety_state,
     age_gate_policy: row.age_gate_policy,
+    asset_story: row.asset_story_royalty_registration_status
+      ? {
+          story_ip: row.asset_story_ip_id,
+          story_royalty_registration_status: row.asset_story_royalty_registration_status,
+        }
+      : null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   }

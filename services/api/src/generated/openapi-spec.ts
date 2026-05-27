@@ -10882,6 +10882,25 @@ const spec = {
             "$ref": "#/components/schemas/SongPresentation",
             "nullable": true
           },
+          "asset_story": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "story_ip": {
+                "type": "string",
+                "nullable": true
+              },
+              "story_royalty_registration_status": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "pending",
+                  "registered",
+                  "failed"
+                ]
+              }
+            }
+          },
           "upvote_count": {
             "type": "integer",
             "minimum": 0

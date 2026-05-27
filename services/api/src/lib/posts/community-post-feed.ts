@@ -2,6 +2,7 @@ import type { Client } from "../sql-client"
 import { numberOrNull, requiredNumber, rowValue } from "../sql-row"
 import type { Post } from "../../types"
 import {
+  postAssetStoryJoinForSchema,
   postSelectColumnsForSchema,
   resolvePostProjectionSchema,
 } from "./community-post-projection"
@@ -109,6 +110,7 @@ export async function listPublishedLocalizedPosts(input: {
                LIMIT 1
              ) AS viewer_vote
       FROM posts
+      ${postAssetStoryJoinForSchema(projectionSchema)}
       WHERE community_id = ?1
         AND status = 'published'
         AND (?3 IS NULL OR label_id = ?3)

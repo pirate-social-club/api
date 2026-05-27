@@ -8,6 +8,7 @@ import { withRequestControlPlaneClients } from "../runtime-deps"
 import { numberOrNull, requiredString, rowValue } from "../sql-row"
 import { serializeLocalizedPostResponse } from "../../serializers/post"
 import {
+  postAssetStoryJoinForSchema,
   postSelectColumnsForSchema,
   resolvePostProjectionSchema,
 } from "../posts/community-post-projection"
@@ -85,6 +86,7 @@ async function listPostsById(client: Client, postIds: string[]): Promise<Map<str
     sql: `
       SELECT ${postSelectColumnsForSchema(projectionSchema)}
       FROM posts
+      ${postAssetStoryJoinForSchema(projectionSchema)}
       WHERE post_id IN (${placeholders(postIds.length)})
     `,
     args: postIds,
