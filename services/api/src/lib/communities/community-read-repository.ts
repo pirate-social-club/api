@@ -2,6 +2,7 @@ import type { Client } from "../sql-client"
 import {
   getActiveCommunityDbCredentialRow,
   getCommunityRowById,
+  getCommunityRowByIdentifierCandidates,
   getCommunityRowByRouteSlug,
   getCommunityRowByNamespaceVerificationId,
   getJobRowById,
@@ -23,6 +24,13 @@ export async function getCommunityById(client: Client, communityId: string): Pro
 
 export async function getCommunityByRouteSlug(client: Client, routeSlug: string): Promise<CommunityRow | null> {
   return getCommunityRowByRouteSlug(client, routeSlug)
+}
+
+export async function getCommunityByIdentifierCandidates(
+  client: Client,
+  candidates: string[],
+): Promise<CommunityRow | null> {
+  return getCommunityRowByIdentifierCandidates(client, candidates)
 }
 
 export async function getCommunityByNamespaceVerificationId(

@@ -57,4 +57,39 @@ describe("community identifier resolution", () => {
     expect(await resolveCommunityIdentifier(repository, "@%F0%9F%87%B5%F0%9F%87%B8")).toBe("cmt_palestine")
     expect(await resolveCommunityIdentifier(repository, "@xn--t77hga")).toBe("cmt_palestine")
   })
+
+  test("uses the batched repository lookup when available", async () => {
+    const community = communityRow({
+      communityId: "cmt_palestine",
+      routeSlug: "@xn--t77hga",
+      displayName: "🇵🇸",
+    })
+    const calls = {
+      batched: 0,
+      byId: 0,
+      byRouteSlug: 0,
+    }
+    const repository = {
+      async getCommunityByIdentifierCandidates(candidates: string[]) {
+        calls.batched += 1
+        expect(candidates).toContain("@xn--t77hga")
+        return community
+      },
+      async getCommunityById() {
+        calls.byId += 1
+        return null
+      },
+      async getCommunityByRouteSlug() {
+        calls.byRouteSlug += 1
+        return null
+      },
+    }
+
+    expect(await resolveCommunityIdentifier(repository, "@🇵🇸")).toBe("cmt_palestine")
+    expect(calls).toEqual({
+      batched: 1,
+      byId: 0,
+      byRouteSlug: 0,
+    })
+  })
 })

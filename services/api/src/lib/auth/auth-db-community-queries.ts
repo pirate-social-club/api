@@ -82,6 +82,42 @@ export async function getCommunityRowByRouteSlug(
   return row ? toCommunityRow(row) : null
 }
 
+export async function getCommunityRowByIdentifierCandidates(
+  executor: DbExecutor,
+  candidates: string[],
+): Promise<CommunityRow | null> {
+  const normalizedCandidates = Array.from(new Set(candidates.map((candidate) => candidate.trim()).filter(Boolean)))
+  if (normalizedCandidates.length === 0) {
+    return null
+  }
+
+  const placeholders = normalizedCandidates.map((_, index) => `?${index + 1}`).join(", ")
+  const result = await executor.execute({
+    sql: `
+      SELECT ${COMMUNITY_ROW_COLUMNS}
+      FROM communities
+      WHERE community_id IN (${placeholders})
+         OR route_slug IN (${placeholders})
+    `,
+    args: normalizedCandidates,
+  })
+  const rows = result.rows.map((row) => toCommunityRow(row))
+
+  for (const candidate of normalizedCandidates) {
+    const byId = rows.find((row) => row.community_id === candidate)
+    if (byId) {
+      return byId
+    }
+
+    const byRouteSlug = rows.find((row) => row.route_slug === candidate)
+    if (byRouteSlug) {
+      return byRouteSlug
+    }
+  }
+
+  return null
+}
+
 export async function getCommunityRowByNamespaceVerificationId(
   executor: DbExecutor,
   namespaceVerificationId: string,

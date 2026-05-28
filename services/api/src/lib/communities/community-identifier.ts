@@ -1,7 +1,10 @@
 import type { CommunityReadRepository } from "./db-community-repository"
+import type { CommunityRow } from "../auth/auth-db-rows"
 import { decodePublicCommunityId } from "../public-ids"
 
-type CommunityIdentifierRepository = Pick<CommunityReadRepository, "getCommunityById" | "getCommunityByRouteSlug">
+type CommunityIdentifierRepository = Pick<CommunityReadRepository, "getCommunityById" | "getCommunityByRouteSlug"> & {
+  getCommunityByIdentifierCandidates?: (candidates: string[]) => Promise<CommunityRow | null>
+}
 
 function safeDecodeURIComponent(value: string): string {
   try {
@@ -59,7 +62,13 @@ export async function resolveCommunityIdentifier(
   communityRepository: CommunityIdentifierRepository,
   communityIdentifier: string,
 ): Promise<string | null> {
-  for (const candidate of communityIdentifierCandidates(communityIdentifier)) {
+  const candidates = communityIdentifierCandidates(communityIdentifier)
+  const byCandidates = await communityRepository.getCommunityByIdentifierCandidates?.(candidates)
+  if (byCandidates) {
+    return byCandidates.community_id
+  }
+
+  for (const candidate of candidates) {
     const byId = await communityRepository.getCommunityById(candidate)
     if (byId) {
       return byId.community_id

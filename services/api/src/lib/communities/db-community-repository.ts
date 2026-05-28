@@ -37,6 +37,7 @@ export type {
 
 export {
   getCommunityById,
+  getCommunityByIdentifierCandidates,
   getCommunityByRouteSlug,
   getCommunityByNamespaceVerificationId,
   listActiveCommunities,
@@ -75,6 +76,7 @@ export {
 
 import {
   getCommunityById,
+  getCommunityByIdentifierCandidates,
   getCommunityByRouteSlug,
   getCommunityByNamespaceVerificationId,
   listActiveCommunities,
@@ -149,6 +151,10 @@ export class DatabaseCommunityRepository implements CommunityRepository {
 
   async getCommunityByRouteSlug(routeSlug: string): Promise<CommunityRow | null> {
     return getCommunityByRouteSlug(this.client, routeSlug)
+  }
+
+  async getCommunityByIdentifierCandidates(candidates: string[]): Promise<CommunityRow | null> {
+    return getCommunityByIdentifierCandidates(this.client, candidates)
   }
 
   async updateCommunitySeoProjection(input: {

@@ -933,6 +933,77 @@ describe("community routes", () => {
     expect(disabledTopCommentsBody.details?.reason).toBe("community_opt_out")
   })
 
+  test("public community SEO preview returns control-plane projection without community database access", async () => {
+    const ctx = await createRouteTestContext({
+      PIRATE_WEB_PUBLIC_ORIGIN: "https://staging.pirate.sc",
+    })
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "community-public-seo-preview-user")
+    await completeUniqueHumanVerification(ctx.env, session.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "SEO Preview Club",
+      description: "Projected description for crawlers.",
+      avatar_ref: "https://media.example/avatar.jpg",
+      banner_ref: "https://media.example/banner.jpg",
+      membership_mode: "request",
+      handle_policy: {
+        policy_template: "standard",
+      },
+    }, ctx.env, session.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: {
+        id: string
+        route_slug: string | null
+      }
+    }
+    const communityId = communityCreateBody.community.id.replace(/^com_/, "")
+
+    await ctx.client.execute({
+      sql: `
+        UPDATE community_database_bindings
+        SET database_url = 'libsql://unreachable-seo-preview.invalid',
+            updated_at = CURRENT_TIMESTAMP
+        WHERE community_id = ?1
+      `,
+      args: [communityId],
+    })
+
+    const preview = await app.request(
+      `http://pirate.test/public-communities/${communityCreateBody.community.id}?preview=seo`,
+      {},
+      ctx.env,
+    )
+    expect(preview.status).toBe(200)
+    const previewBody = await json(preview) as {
+      id: string
+      display_name: string
+      description: string | null
+      avatar_ref: string | null
+      banner_ref: string | null
+      localized_text: unknown
+      omitted_surfaces: unknown[]
+      links: {
+        canonical: { href: string }
+        self: { href: string }
+      }
+    }
+
+    expect(previewBody.id).toBe(communityCreateBody.community.id)
+    expect(previewBody.display_name).toBe("SEO Preview Club")
+    expect(previewBody.description).toBe("Projected description for crawlers.")
+    expect(previewBody.avatar_ref).toBe("https://media.example/avatar.jpg")
+    expect(previewBody.banner_ref).toBe("https://media.example/banner.jpg")
+    expect(previewBody.localized_text).toBeNull()
+    expect(previewBody.omitted_surfaces).toEqual([])
+    expect(previewBody.links.self.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.id}`)
+    expect(previewBody.links.canonical.href).toBe(`https://staging.pirate.sc/c/${communityCreateBody.community.id}`)
+    expect(preview.headers.get("cdn-cache-control")).toBe("public, s-maxage=60, stale-while-revalidate=300")
+    expect(preview.headers.get("cache-control")).toBe("public, max-age=0, s-maxage=60, stale-while-revalidate=300")
+  })
+
   test("community reads expose localized text overlays and enqueue one batch translation job per locale", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
