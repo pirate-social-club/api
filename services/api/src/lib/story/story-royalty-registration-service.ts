@@ -36,13 +36,7 @@ type ResolvedDerivativeParent = {
 }
 
 type StoryLicenseClient = {
-  registerPilTermsAndAttach: (request: {
-    ipId: `0x${string}`
-    licenseTermsData: Array<{
-      terms: ReturnType<typeof resolvePilTermsForLicense>
-      maxLicenseTokens?: bigint
-    }>
-  }) => Promise<{ licenseTermsId?: bigint | number | string | null }>
+  registerPilTermsAndAttach: (request: unknown) => Promise<{ licenseTermsId?: bigint | number | string | null }>
 }
 
 type StoryIpAssetClient = {
@@ -93,7 +87,7 @@ type StoryIpAssetClient = {
 
 type StoryRoyaltySdkClient = {
   ipAsset: StoryIpAssetClient
-  license: StoryLicenseClient
+  license?: StoryLicenseClient
 }
 
 let testRoyaltyRegistrar: ((input: {
@@ -111,6 +105,11 @@ let testRoyaltyRegistrar: ((input: {
   bundle: SongArtifactBundle | null
   primaryContentHash: `0x${string}`
 }) => Promise<StoryRoyaltyRegistrationResult | null>) | null = null
+
+let testStoryRoyaltySdkClientFactory: ((input: {
+  env: Env
+  operatorPrivateKey: `0x${string}`
+}) => StoryRoyaltySdkClient) | null = null
 
 export function setStoryRoyaltyRegistrarForTests(
   registrar: ((input: {
@@ -130,6 +129,30 @@ export function setStoryRoyaltyRegistrarForTests(
   }) => Promise<StoryRoyaltyRegistrationResult | null>) | null,
 ): void {
   testRoyaltyRegistrar = registrar
+}
+
+export function setStoryRoyaltySdkClientFactoryForTests(
+  factory: ((input: {
+    env: Env
+    operatorPrivateKey: `0x${string}`
+  }) => StoryRoyaltySdkClient) | null,
+): void {
+  testStoryRoyaltySdkClientFactory = factory
+}
+
+function createStoryRoyaltySdkClient(input: {
+  env: Env
+  operatorPrivateKey: `0x${string}`
+}): StoryRoyaltySdkClient {
+  if (testStoryRoyaltySdkClientFactory) {
+    return testStoryRoyaltySdkClientFactory(input)
+  }
+
+  return StoryClient.newClient({
+    account: privateKeyToAccount(input.operatorPrivateKey),
+    transport: http(resolveStoryRpcUrl(input.env)),
+    chainId: resolveStoryChainName(input.env),
+  }) as StoryRoyaltySdkClient
 }
 
 function normalizeStoryRoyaltyRightsBasis(
@@ -157,21 +180,6 @@ function requireOriginalLicensePreset(value: StoryLicensePreset | null): StoryLi
     throw new Error("licensePreset is required for original Story registration")
   }
   return value
-}
-
-function requireAssetLicensePreset(value: StoryLicensePreset | null, context: string): StoryLicensePreset {
-  if (!value) {
-    throw new Error(`licensePreset is required for ${context}`)
-  }
-  return value
-}
-
-function resolveAttachedLicenseTermsId(value: bigint | number | string | null | undefined): string {
-  const normalized = String(value ?? "").trim()
-  if (!/^\d+$/.test(normalized)) {
-    throw new Error("Story license terms attachment did not return a licenseTermsId")
-  }
-  return normalized
 }
 
 export function resolvePilTermsForLicense(input: {
@@ -418,24 +426,16 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
     derivativeParentIpIds: derivativeParents?.map((parent) => parent.ipId) ?? null,
   })
 
-  const storyClient = StoryClient.newClient({
-    account: privateKeyToAccount(operator.value.privateKey as `0x${string}`),
-    transport: http(resolveStoryRpcUrl(input.env)),
-    chainId: resolveStoryChainName(input.env),
-  }) as StoryRoyaltySdkClient
+  const storyClient = createStoryRoyaltySdkClient({
+    env: input.env,
+    operatorPrivateKey: operator.value.privateKey as `0x${string}`,
+  })
 
   const royaltyPolicy = resolveStoryRoyaltyPolicyAddress(input.env)
   const defaultMintingFee = resolveStoryRoyaltyDefaultMintingFee(input.env)
   const maxLicenseTokens = resolveStoryRoyaltyMaxLicenseTokens(input.env)
 
   if (rightsBasis === "derivative") {
-    const outboundLicenseTerms = resolvePilTermsForLicense({
-      licensePreset: requireAssetLicensePreset(input.licensePreset, "derivative Story registration"),
-      commercialRevSharePct: input.commercialRevSharePct,
-      defaultMintingFee,
-      currency: WIP_TOKEN_ADDRESS,
-      royaltyPolicy,
-    })
     const derivativeResponse = await storyClient.ipAsset.registerDerivativeIpAsset({
       nft: {
         type: "mint",
@@ -455,21 +455,12 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
       },
     })
     const derivativeIpId = derivativeResponse.ipId!
-    const attachedLicense = await storyClient.license.registerPilTermsAndAttach({
-      ipId: derivativeIpId,
-      licenseTermsData: [
-        {
-          terms: outboundLicenseTerms,
-          maxLicenseTokens,
-        },
-      ],
-    })
 
     return {
       storyIpId: derivativeIpId,
       storyIpNftContract: spgNftContract,
       storyIpNftTokenId: derivativeResponse.tokenId!.toString(),
-      storyLicenseTermsId: resolveAttachedLicenseTermsId(attachedLicense.licenseTermsId),
+      storyLicenseTermsId: null,
       storyLicenseTemplate: null,
       storyRoyaltyPolicy: royaltyPolicy,
       storyDerivativeParentIpIds: derivativeParents!.map((parent) => parent.ipId),

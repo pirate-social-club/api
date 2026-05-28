@@ -16,6 +16,14 @@ export type StoryMetadataPublishResult = {
   hash: `0x${string}`
 }
 
+let testStoryJsonMetadataPublisher: ((input: StoryMetadataPublishInput) => Promise<StoryMetadataPublishResult>) | null = null
+
+export function setStoryJsonMetadataPublisherForTests(
+  publisher: ((input: StoryMetadataPublishInput) => Promise<StoryMetadataPublishResult>) | null,
+): void {
+  testStoryJsonMetadataPublisher = publisher
+}
+
 function hasSwarmPublishConfig(env: Env): boolean {
   return Boolean(String(env.SWARM_BEE_API_URL || "").trim() && String(env.SWARM_POSTAGE_BATCH_ID || "").trim())
 }
@@ -66,6 +74,10 @@ async function publishJsonToFilebase(input: {
 }
 
 export async function publishStoryJsonMetadata(input: StoryMetadataPublishInput): Promise<StoryMetadataPublishResult> {
+  if (testStoryJsonMetadataPublisher) {
+    return await testStoryJsonMetadataPublisher(input)
+  }
+
   const body = JSON.stringify(input.payload)
   const payloadHash = await sha256Hex(body)
 

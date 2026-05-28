@@ -347,6 +347,10 @@ export async function createAssetForPost(input: {
       storyRoyaltyRegistrationStatus = royaltyRegistration.storyRoyaltyRegistrationStatus
       storyStatus = "published"
       publicationStatus = "story_published"
+      if ((input.post.rights_basis ?? "none") === "derivative" && !royaltyRegistration.storyLicenseTermsId) {
+        effectiveLicensePreset = null
+        effectiveCommercialRevSharePct = null
+      }
     } else if (shouldRegisterRoyalty && storyRoyaltyRegistrationStatus === "pending") {
       const registrationError = isStoryRoyaltyRegistrationConfigured(input.env)
         ? "story_royalty_registration_unavailable"

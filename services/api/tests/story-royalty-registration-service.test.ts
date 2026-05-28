@@ -10,10 +10,13 @@ import { createSongAssetForPost, listCommunityDerivativeSources } from "../src/l
 import { insertPost } from "../src/lib/posts/community-post-store"
 import {
   isStoryRoyaltyRegistrationConfigured,
+  maybeRegisterStoryRoyaltyForAsset,
   resolvePilTermsForLicense,
   resolveStoryRoyaltyDerivativeParents,
   setStoryRoyaltyRegistrarForTests,
+  setStoryRoyaltySdkClientFactoryForTests,
 } from "../src/lib/story/story-royalty-registration-service"
+import { setStoryJsonMetadataPublisherForTests } from "../src/lib/story/story-metadata-publisher"
 import { setStoryRuntimeFundingAssertionForTests } from "../src/lib/story/story-runtime-funding"
 import type { Env, Profile, SongArtifactBundle, User, WalletAttachmentSummary } from "../src/types"
 
@@ -22,6 +25,8 @@ const cleanupPaths: string[] = []
 afterEach(async () => {
   setLockedAssetDeliveryPreparerForTests(null)
   setStoryRoyaltyRegistrarForTests(null)
+  setStoryRoyaltySdkClientFactoryForTests(null)
+  setStoryJsonMetadataPublisherForTests(null)
   setStoryRuntimeFundingAssertionForTests(null)
   await Promise.all(cleanupPaths.splice(0).map((path) => rm(path, { recursive: true, force: true })))
 })
@@ -298,6 +303,147 @@ describe("story royalty registration service", () => {
           licenseTermsId: 17n,
         },
       ])
+    } finally {
+      db.close()
+    }
+  })
+
+  test("derivative registration does not attach outbound PIL terms after minting", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-derivative-onchain-"))
+    cleanupPaths.push(rootDir)
+
+    const env = {
+      LOCAL_COMMUNITY_DB_ROOT: rootDir,
+      STORY_ROYALTY_SPG_NFT_CONTRACT: "0x8888888888888888888888888888888888888888",
+      STORY_OPERATOR_PRIVATE_KEY: "0x0000000000000000000000000000000000000000000000000000000000000001",
+    } as Env
+    const repo = buildRepository()
+    const communityId = "cmt_story_royalty_derivative_onchain"
+    const userId = "usr_author_story_derivative_onchain"
+    const now = "2026-04-21T00:00:00.000Z"
+    const parentIpId = "0x9999999999999999999999999999999999999999"
+    const derivativeIpId = "0x3333333333333333333333333333333333333333"
+    const derivativeRequests: Array<{
+      nft: { recipient: string }
+      derivData: { parentIpIds: string[]; licenseTermsIds: bigint[] }
+    }> = []
+    let attachCalls = 0
+
+    await seedStoryCommunity({ env, repo, communityId, userId })
+    setStoryRuntimeFundingAssertionForTests(async () => {})
+    setStoryJsonMetadataPublisherForTests(async (input) => ({
+      uri: `ipfs://metadata/${input.path}`,
+      hash: "0x1111111111111111111111111111111111111111111111111111111111111111",
+    }))
+    setStoryRoyaltySdkClientFactoryForTests(() => ({
+      ipAsset: {
+        async registerDerivativeIpAsset(request) {
+          derivativeRequests.push(request)
+          return {
+            ipId: derivativeIpId,
+            tokenId: 456n,
+          }
+        },
+        async registerIpAsset() {
+          throw new Error("original registration should not run")
+        },
+      },
+      license: {
+        async registerPilTermsAndAttach() {
+          attachCalls += 1
+          throw new Error("derivative outbound license attachment should not run")
+        },
+      },
+    }))
+
+    const db = await openCommunityDb(env, repo, communityId)
+    try {
+      const parentPost = await insertPost({
+        client: db.client,
+        communityId,
+        authorUserId: userId,
+        body: {
+          post_type: "song",
+          identity_mode: "public",
+          title: "Parent song",
+          idempotency_key: "story-derivative-onchain-parent",
+          song_mode: "original",
+          rights_basis: "original",
+          access_mode: "public",
+        },
+        createdAt: now,
+      })
+      await db.client.execute({
+        sql: `
+          INSERT INTO assets (
+            asset_id, community_id, source_post_id, song_artifact_bundle_id, creator_user_id, asset_kind,
+            rights_basis, access_mode, license_preset, commercial_rev_share_pct,
+            primary_content_ref, primary_content_hash, publication_status,
+            story_status, story_error, story_ip_id, story_ip_nft_contract, story_ip_nft_token_id,
+            story_publish_model, story_license_terms_id, story_license_template, story_royalty_policy,
+            story_royalty_policy_id, story_derivative_parent_ip_ids_json, story_derivative_registered_at,
+            story_revenue_token, story_royalty_registration_status, locked_delivery_status, locked_delivery_ref,
+            locked_delivery_error, created_at, updated_at
+          ) VALUES (
+            ?1, ?2, ?3, NULL, ?4, 'song_audio',
+            'original', 'public', 'commercial-remix', 10,
+            ?5, ?6, 'story_published',
+            'published', NULL, ?7, ?8, ?9,
+            'story_ip_v1', ?10, NULL, ?11,
+            ?11, NULL, NULL,
+            ?12, 'registered', 'none', NULL,
+            NULL, ?13, ?13
+          )
+        `,
+        args: [
+          "ast_derivative_onchain_parent",
+          communityId,
+          parentPost.post_id,
+          userId,
+          "filebase://songs/parent.wav",
+          "0xabc123",
+          parentIpId,
+          "0x8888888888888888888888888888888888888888",
+          "123",
+          "17",
+          "0x6666666666666666666666666666666666666666",
+          "0x1514000000000000000000000000000000000000",
+          now,
+        ],
+      })
+
+      const result = await maybeRegisterStoryRoyaltyForAsset({
+        env,
+        client: db.client,
+        communityId,
+        assetId: "ast_derivative_onchain_child",
+        creatorWalletAddress: testWallet,
+        title: "Derivative child",
+        rightsBasis: "derivative",
+        licensePreset: "commercial-remix",
+        commercialRevSharePct: 15,
+        upstreamAssetRefs: ["story:asset:ast_derivative_onchain_parent"],
+        assetKind: "song_audio",
+        bundle: buildBundle({
+          id: "sab_derivative_onchain_child",
+          title: "Derivative child",
+          contentHash: "0xdef456",
+        }),
+        primaryContentHash: "0xdef456",
+      })
+
+      expect(derivativeRequests).toHaveLength(1)
+      expect(derivativeRequests[0]?.nft.recipient).toBe(testWallet)
+      expect(derivativeRequests[0]?.derivData.parentIpIds).toEqual([parentIpId])
+      expect(derivativeRequests[0]?.derivData.licenseTermsIds).toEqual([17n])
+      expect(attachCalls).toBe(0)
+      expect(result).toMatchObject({
+        storyIpId: derivativeIpId,
+        storyIpNftTokenId: "456",
+        storyLicenseTermsId: null,
+        storyDerivativeParentIpIds: [parentIpId],
+        storyRoyaltyRegistrationStatus: "registered",
+      })
     } finally {
       db.close()
     }
@@ -939,7 +1085,7 @@ describe("story royalty registration service", () => {
     })
   })
 
-  test("uses derivative source asset refs to register remix parents", async () => {
+  test("uses derivative source asset refs to register remix parents without listing unattached derivatives as sources", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-remix-source-"))
     cleanupPaths.push(rootDir)
 
@@ -972,8 +1118,8 @@ describe("story royalty registration service", () => {
           storyIpId: derivativeIpId,
           storyIpNftContract: "0x8888888888888888888888888888888888888888",
           storyIpNftTokenId: "456",
-          storyLicenseTermsId: "23",
-          storyLicenseTemplate: "0x7777777777777777777777777777777777777777",
+          storyLicenseTermsId: null,
+          storyLicenseTemplate: null,
           storyRoyaltyPolicy: "0x6666666666666666666666666666666666666666",
           storyDerivativeParentIpIds: parents.map((parent) => parent.ipId),
           storyRevenueToken: "0x1514000000000000000000000000000000000000",
@@ -1073,8 +1219,8 @@ describe("story royalty registration service", () => {
           title: "Palestine, Don't Cry Remix",
           contentHash: "0xdef456",
         }),
-        licensePreset: null,
-        commercialRevSharePct: null,
+        licensePreset: "commercial-remix",
+        commercialRevSharePct: 15,
         userRepository,
       })
       derivativeAssetId = derivative.id
@@ -1083,6 +1229,9 @@ describe("story royalty registration service", () => {
       expect(derivative.story_status).toBe("published")
       expect(derivative.story_royalty_registration_status).toBe("registered")
       expect(derivative.story_ip).toBe(derivativeIpId)
+      expect(derivative.story_license_terms).toBeNull()
+      expect(derivative.license_preset).toBeNull()
+      expect(derivative.commercial_rev_share_pct).toBeNull()
       expect(derivative.story_derivative_parent_ip_ids).toEqual([parentIpId])
     } finally {
       db.close()
@@ -1098,7 +1247,7 @@ describe("story royalty registration service", () => {
       communityRepository: repo,
       profileRepository: buildProfileRepository(),
     })
-    expect(derivativeSources.items.map((source) => source.asset)).toContain(derivativeAssetId)
+    expect(derivativeSources.items.map((source) => source.asset)).not.toContain(derivativeAssetId)
   })
 
   test("uses a remix source Story ref when registering a remix of a remix", async () => {
