@@ -52,8 +52,9 @@ async function main(): Promise<void> {
   const dryRun = !hasFlag("--execute")
   const communityArg = readArg("--community-id")
   const repository = getCommunityRepository(env)
-  const communities = communityArg
-    ? [{ community_id: decodePublicCommunityId(communityArg) }]
+  const communityId = communityArg ? decodePublicCommunityId(communityArg) : null
+  const communities = communityId
+    ? [await repository.getCommunityById(communityId)].filter((community): community is NonNullable<typeof community> => community !== null)
     : await repository.listActiveCommunities()
   const stats: BackfillStats = {
     communities: 0,
