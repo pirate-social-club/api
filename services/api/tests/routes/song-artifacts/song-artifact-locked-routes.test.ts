@@ -1027,11 +1027,18 @@ describe("song artifact locked routes", () => {
       code?: string
       message?: string
       retryable?: boolean
+      details?: Record<string, unknown>
     }
     expect(failedPostBody).toMatchObject({
       code: "provider_unavailable",
-      message: "Story registration is required before publishing this asset",
+      message: "Story registration failed before publishing this asset: Story royalty configuration is missing",
       retryable: true,
+      details: {
+        reason: "story_royalty_registration_failed",
+        rights_basis: "derivative",
+        upstream_asset_ref_count: 1,
+        story_error: "royalty_registration_failed:story_royalty_config_missing",
+      },
     })
 
     const communityDb = createClient({

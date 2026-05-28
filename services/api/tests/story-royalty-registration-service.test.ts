@@ -9,6 +9,7 @@ import { setLockedAssetDeliveryPreparerForTests } from "../src/lib/communities/c
 import { createSongAssetForPost, listCommunityDerivativeSources } from "../src/lib/communities/commerce/service"
 import { insertPost } from "../src/lib/posts/community-post-store"
 import {
+  isStoryRoyaltyRegistrationConfigured,
   resolvePilTermsForLicense,
   resolveStoryRoyaltyDerivativeParents,
   setStoryRoyaltyRegistrarForTests,
@@ -143,6 +144,15 @@ async function seedStoryCommunity(input: {
 }
 
 describe("story royalty registration service", () => {
+  test("Story royalty configuration only requires the SPG NFT contract", () => {
+    expect(isStoryRoyaltyRegistrationConfigured({
+      STORY_ROYALTY_SPG_NFT_CONTRACT: "0x8888888888888888888888888888888888888888",
+    })).toBe(true)
+    expect(isStoryRoyaltyRegistrationConfigured({
+      STORY_ROYALTY_SPG_NFT_CONTRACT: "",
+    })).toBe(false)
+  })
+
   test("resolves creator-selected PIL terms by license preset", () => {
     const base = {
       defaultMintingFee: 0n,
@@ -466,7 +476,8 @@ describe("story royalty registration service", () => {
       }
 
       expect(caughtError).toBeInstanceOf(Error)
-      expect((caughtError as Error).message).toContain("Story registration is required before publishing this asset")
+      expect((caughtError as Error).message).toContain("Story registration failed before publishing this asset")
+      expect((caughtError as Error).message).toContain("Story royalty configuration is missing")
 
       const posts = await db.client.execute({
         sql: "SELECT post_id FROM posts WHERE post_id = ?1",
