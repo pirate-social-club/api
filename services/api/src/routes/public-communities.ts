@@ -65,7 +65,7 @@ import type { CommunityPreview, CommunityPurchaseQuoteRequest } from "../types"
 import { setPublicReadCacheHeaders } from "./cache-headers"
 
 const publicCommunities = new Hono<{ Bindings: Env }>()
-const PUBLIC_COMMUNITY_PREVIEW_TIMEOUT_MS = 1200
+const PUBLIC_COMMUNITY_PREVIEW_TIMEOUT_MS = 3000
 
 async function resolveCommunityId(
   repository: CommunityRouteRepository,
@@ -515,6 +515,7 @@ publicCommunities.get("/:communityId", async (c) => {
       communityRepository,
     }), PUBLIC_COMMUNITY_PREVIEW_TIMEOUT_MS),
   ])
+  const isDegradedPreview = policy === null || result === null
   const effectivePolicy = policy ?? defaultCommunityMachineAccessPolicy({
     communityId,
     updatedAt: community.updated_at,
@@ -529,14 +530,24 @@ publicCommunities.get("/:communityId", async (c) => {
     links,
   }
   if (wantsMarkdown(c.req.raw, c.req.query("format"))) {
-    setPublicReadCacheHeaders(c, { vary: ["Accept"] })
+    if (isDegradedPreview) {
+      c.header("Cache-Control", "no-store")
+      c.header("CDN-Cache-Control", "no-store")
+    } else {
+      setPublicReadCacheHeaders(c, { vary: ["Accept"] })
+    }
     return markdownResponse(communityMarkdown({
       preview: responseBody,
       links,
       omittedSurfaces,
     }), links)
   }
-  setPublicReadCacheHeaders(c, { vary: ["Accept"] })
+  if (isDegradedPreview) {
+    c.header("Cache-Control", "no-store")
+    c.header("CDN-Cache-Control", "no-store")
+  } else {
+    setPublicReadCacheHeaders(c, { vary: ["Accept"] })
+  }
   c.header("Link", serializeLinkHeader(links))
   return c.json(responseBody, 200)
 })
