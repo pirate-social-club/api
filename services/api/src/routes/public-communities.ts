@@ -22,11 +22,13 @@ import {
   type LiveRoomViewerRenewRequest,
 } from "../lib/communities/live-rooms/service"
 import {
+  defaultCommunityMachineAccessPolicy,
   omittedSurfacesForPolicy,
   omittedSurfaceForPolicy,
   resolveEffectiveCommunityMachineAccessPolicy,
   type OmittedStructuredSurface,
 } from "../lib/communities/community-machine-access-service"
+import type { CommunityRow } from "../lib/auth/auth-db-rows"
 import { buildCommunityActionMatrix } from "../lib/communities/community-capabilities"
 import { listPublicCommunityPosts } from "../lib/posts/post-service"
 import { fetchPublishedPublicSongArtifactContent } from "../lib/song-artifacts/song-artifact-upload-service"
@@ -63,6 +65,7 @@ import type { CommunityPreview, CommunityPurchaseQuoteRequest } from "../types"
 import { setPublicReadCacheHeaders } from "./cache-headers"
 
 const publicCommunities = new Hono<{ Bindings: Env }>()
+const PUBLIC_COMMUNITY_PREVIEW_TIMEOUT_MS = 1200
 
 async function resolveCommunityId(
   repository: CommunityRouteRepository,
@@ -74,6 +77,73 @@ async function resolveCommunityId(
   }
 
   throw notFoundError("Community not found")
+}
+
+async function resolveCommunityRow(
+  repository: CommunityRouteRepository,
+  communityIdentifier: string,
+): Promise<CommunityRow> {
+  const communityId = await resolveCommunityId(repository, communityIdentifier)
+  const community = await repository.getCommunityById(communityId)
+  if (!community || community.status !== "active") {
+    throw notFoundError("Community not found")
+  }
+  return community
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<null>((resolve) => {
+        timeout = setTimeout(() => resolve(null), timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout)
+    }
+  }
+}
+
+function fallbackCommunityPreview(community: CommunityRow): CommunityPreview {
+  return {
+    community_id: community.community_id,
+    namespace_verification_id: community.namespace_verification_id,
+    route_slug: community.route_slug,
+    display_name: community.display_name,
+    description: null,
+    localized_text: null,
+    avatar_ref: null,
+    banner_ref: null,
+    membership_mode: "gated",
+    allow_anonymous_identity: false,
+    anonymous_identity_scope: null,
+    guest_comment_policy: "disallow",
+    agent_posting_policy: "disallow",
+    agent_posting_scope: "replies_only",
+    agent_daily_post_cap: null,
+    agent_daily_reply_cap: null,
+    accepted_agent_ownership_providers: [],
+    allowed_disclosed_qualifiers: null,
+    allow_qualifiers_on_anonymous_posts: null,
+    human_verification_lane: "very",
+    member_count: null,
+    follower_count: community.follower_count,
+    donation_policy_mode: "none",
+    donation_partner_id: null,
+    donation_partner: null,
+    owner: null,
+    moderators: [],
+    reference_links: [],
+    membership_gate_summaries: [],
+    rules: [],
+    viewer_membership_status: "not_member",
+    viewer_community_role: null,
+    viewer_following: false,
+    created_at: community.created_at,
+  }
 }
 
 function communityLinks(
@@ -430,18 +500,22 @@ publicCommunities.post("/:communityId/live-rooms/:liveRoomId/viewer_renew", asyn
 
 publicCommunities.get("/:communityId", async (c) => {
   const communityRepository = getCommunityRepository(c.env)
-  const communityId = await resolveCommunityId(communityRepository, c.req.param("communityId"))
-  const policy = await resolveEffectiveCommunityMachineAccessPolicy({
+  const community = await resolveCommunityRow(communityRepository, c.req.param("communityId"))
+  const communityId = community.community_id
+  const policy = await withTimeout(resolveEffectiveCommunityMachineAccessPolicy({
     env: c.env,
     communityRepository,
     communityId,
+  }), PUBLIC_COMMUNITY_PREVIEW_TIMEOUT_MS) ?? defaultCommunityMachineAccessPolicy({
+    communityId,
+    updatedAt: community.updated_at,
   })
-  const result = await getPublicCommunityPreview({
+  const result = await withTimeout(getPublicCommunityPreview({
     env: c.env,
     communityId,
     locale: c.req.query("locale") ?? null,
     communityRepository,
-  })
+  }), PUBLIC_COMMUNITY_PREVIEW_TIMEOUT_MS) ?? fallbackCommunityPreview(community)
   const omittedSurfaces = omittedSurfacesForPolicy(policy, ["community_stats"])
   const links = communityLinks(configuredApiOrigin(c.env, c.req.url), configuredWebOrigin(c.env, c.req.url), communityId, result.route_slug)
   const serializedPreview = serializeCommunityPreview(result)
