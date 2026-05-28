@@ -502,25 +502,29 @@ publicCommunities.get("/:communityId", async (c) => {
   const communityRepository = getCommunityRepository(c.env)
   const community = await resolveCommunityRow(communityRepository, c.req.param("communityId"))
   const communityId = community.community_id
-  const policy = await withTimeout(resolveEffectiveCommunityMachineAccessPolicy({
-    env: c.env,
-    communityRepository,
-    communityId,
-  }), PUBLIC_COMMUNITY_PREVIEW_TIMEOUT_MS) ?? defaultCommunityMachineAccessPolicy({
+  const [policy, result] = await Promise.all([
+    withTimeout(resolveEffectiveCommunityMachineAccessPolicy({
+      env: c.env,
+      communityRepository,
+      communityId,
+    }), PUBLIC_COMMUNITY_PREVIEW_TIMEOUT_MS),
+    withTimeout(getPublicCommunityPreview({
+      env: c.env,
+      communityId,
+      locale: c.req.query("locale") ?? null,
+      communityRepository,
+    }), PUBLIC_COMMUNITY_PREVIEW_TIMEOUT_MS),
+  ])
+  const effectivePolicy = policy ?? defaultCommunityMachineAccessPolicy({
     communityId,
     updatedAt: community.updated_at,
   })
-  const result = await withTimeout(getPublicCommunityPreview({
-    env: c.env,
-    communityId,
-    locale: c.req.query("locale") ?? null,
-    communityRepository,
-  }), PUBLIC_COMMUNITY_PREVIEW_TIMEOUT_MS) ?? fallbackCommunityPreview(community)
-  const omittedSurfaces = omittedSurfacesForPolicy(policy, ["community_stats"])
-  const links = communityLinks(configuredApiOrigin(c.env, c.req.url), configuredWebOrigin(c.env, c.req.url), communityId, result.route_slug)
-  const serializedPreview = serializeCommunityPreview(result)
+  const preview = result ?? fallbackCommunityPreview(community)
+  const omittedSurfaces = omittedSurfacesForPolicy(effectivePolicy, ["community_stats"])
+  const links = communityLinks(configuredApiOrigin(c.env, c.req.url), configuredWebOrigin(c.env, c.req.url), communityId, preview.route_slug)
+  const serializedPreview = serializeCommunityPreview(preview)
   const responseBody = {
-    ...(policy.included_surfaces.community_stats ? serializedPreview : omitCommunityStats(serializedPreview)),
+    ...(effectivePolicy.included_surfaces.community_stats ? serializedPreview : omitCommunityStats(serializedPreview)),
     omitted_surfaces: omittedSurfaces,
     links,
   }
