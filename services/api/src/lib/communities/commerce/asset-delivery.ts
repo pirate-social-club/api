@@ -32,6 +32,7 @@ import { assertStoryRuntimeSignerFunding } from "../../story/story-runtime-fundi
 import {
   resolveStoryChainId,
   resolveStoryRpcUrl,
+  resolveStoryRuntimeSignerTargetBalanceWei,
   STORY_DELIVERY_CONTRACTS,
 } from "../../story/story-runtime-config"
 import {
@@ -365,9 +366,10 @@ export async function prepareLockedAssetDelivery(input: {
     : "none"
   try {
     const cdrWriterMinimumBalanceWei = await estimateStoryCdrLockedPublishMinimumBalanceWei(input.env)
+    const storyOperatorMinimumBalanceWei = resolveStoryRuntimeSignerTargetBalanceWei(input.env)
     await assertStoryRuntimeSignerFunding(input.env, [
       { name: "story-cdr-writer", minBalanceWei: cdrWriterMinimumBalanceWei },
-      "story-operator",
+      { name: "story-operator", minBalanceWei: storyOperatorMinimumBalanceWei },
     ])
     const writerConfig = resolveStoryCdrWriterDirectSigner(input.env)
     if (!writerConfig.ok) {

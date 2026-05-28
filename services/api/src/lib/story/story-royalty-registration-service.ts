@@ -6,10 +6,11 @@ import type { Env } from "../../env"
 import type { Post, SongArtifactBundle } from "../../types"
 import { nowIso } from "../helpers"
 import { resolveStoryOperatorDirectSigner } from "./story-direct-signer"
-import { resolveStoryChainId, resolveStoryRpcUrl } from "./story-runtime-config"
+import { resolveStoryChainId, resolveStoryRpcUrl, resolveStoryRuntimeSignerTargetBalanceWei } from "./story-runtime-config"
 import { getAssetRow } from "../communities/commerce/queries"
 import { decodePublicAssetId } from "../public-ids"
 import { publishStoryJsonMetadata } from "./story-metadata-publisher"
+import { assertStoryRuntimeSignerFunding } from "./story-runtime-funding"
 
 type StoryRoyaltyClient = Pick<Client, "execute">
 type StoryRoyaltyRightsBasis = "none" | "original" | "derivative"
@@ -398,6 +399,11 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
   if (rightsBasis === "derivative" && !derivativeParents) {
     return null
   }
+
+  const storyOperatorMinimumBalanceWei = resolveStoryRuntimeSignerTargetBalanceWei(input.env)
+  await assertStoryRuntimeSignerFunding(input.env, [
+    { name: "story-operator", minBalanceWei: storyOperatorMinimumBalanceWei },
+  ])
 
   const metadata = await buildStoryRoyaltyMetadata({
     env: input.env,
