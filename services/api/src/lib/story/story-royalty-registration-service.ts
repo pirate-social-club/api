@@ -56,10 +56,6 @@ type StoryIpAssetClient = {
       parentIpIds: `0x${string}`[]
       licenseTermsIds: bigint[]
     }
-    royaltyShares: Array<{
-      recipient: `0x${string}`
-      percentage: number
-    }>
     ipMetadata: {
       ipMetadataURI: string
       ipMetadataHash: `0x${string}`
@@ -445,12 +441,6 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
         parentIpIds: derivativeParents!.map((parent) => parent.ipId),
         licenseTermsIds: derivativeParents!.map((parent) => parent.licenseTermsId),
       },
-      royaltyShares: [
-        {
-          recipient: input.creatorWalletAddress as `0x${string}`,
-          percentage: 100,
-        },
-      ],
       ipMetadata: {
         ipMetadataURI: metadata.ipMetadataUri,
         ipMetadataHash: metadata.ipMetadataHash,
