@@ -1,5 +1,6 @@
 import type {
   CommunityDatabaseBindingRepository,
+  CommunityMutationRepository,
   CommunityReadRepository,
 } from "./db-community-repository"
 import { notFoundError } from "../errors"
@@ -19,7 +20,7 @@ import type {
   Env,
 } from "../../types"
 
-type CommunitySettingsRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
+type CommunitySettingsRepository = CommunityReadRepository & CommunityDatabaseBindingRepository & CommunityMutationRepository
 
 export async function updateCommunity(input: {
   env: Env
@@ -116,6 +117,13 @@ export async function updateCommunity(input: {
         JSON.stringify(nextSettings),
         now,
       ],
+    })
+    await input.communityRepository.updateCommunitySeoProjection({
+      communityId: input.communityId,
+      description: nextDescription,
+      avatarRef: nextAvatarRef,
+      bannerRef: nextBannerRef,
+      updatedAt: now,
     })
   } finally {
     db.close()

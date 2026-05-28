@@ -213,6 +213,9 @@ CREATE TABLE communities (
     community_id TEXT PRIMARY KEY,
     creator_user_id TEXT NOT NULL,
     display_name TEXT NOT NULL,
+    description TEXT,
+    avatar_ref TEXT,
+    banner_ref TEXT,
     membership_mode TEXT NOT NULL CHECK (
         membership_mode IN ('open', 'request', 'gated')
     ),

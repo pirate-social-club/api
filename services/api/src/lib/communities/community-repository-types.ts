@@ -132,6 +132,9 @@ export interface CommunityProvisioningRepository {
     jobId: string
     creatorUserId: string
     displayName: string
+    description?: string | null
+    avatarRef?: string | null
+    bannerRef?: string | null
     membershipMode: "open" | "request" | "gated"
     namespaceVerificationId: string | null
     routeSlug?: string | null
@@ -161,6 +164,9 @@ export interface CommunityProvisioningRepository {
     jobId: string
     actorUserId: string
     resultRef: string | null
+    description?: string | null
+    avatarRef?: string | null
+    bannerRef?: string | null
     createdAt: string
     metadata: Record<string, unknown>
   }): Promise<{
@@ -195,6 +201,13 @@ export interface CommunityProvisioningRepository {
 }
 
 export interface CommunityMutationRepository {
+  updateCommunitySeoProjection(input: {
+    communityId: string
+    description: string | null
+    avatarRef: string | null
+    bannerRef: string | null
+    updatedAt: string
+  }): Promise<void>
   attachNamespaceToCommunity(input: {
     communityId: string
     namespaceVerificationId: string

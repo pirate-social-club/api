@@ -158,44 +158,46 @@ export async function openCommunityDb(
     await ensureRemotePostSongTitleColumn(client)
   } else {
     const ensureIndexes = options?.ensureRemoteMembershipStateIndexes ?? ensureRemoteCommunityMembershipStateIndexes
-    await runRemoteCommunityDbPreflight({
-      databaseUrl: binding.database_url,
-      label: "membership_state_indexes",
-      complete: remoteMembershipIndexPreflightComplete,
-      inFlight: remoteMembershipIndexPreflightInFlight,
-      run: () => ensureIndexes(client),
-    })
     const ensureLockColumns = options?.ensureRemoteThreadCommentLockColumns ?? ensureRemoteThreadCommentLockColumns
-    await runRemoteCommunityDbPreflight({
-      databaseUrl: binding.database_url,
-      label: "thread_comment_lock_columns",
-      complete: remoteThreadCommentLockColumnPreflightComplete,
-      inFlight: remoteThreadCommentLockColumnPreflightInFlight,
-      run: () => ensureLockColumns(client),
-    })
     const ensureGuestAuthorship = options?.ensureRemoteCommentGuestAuthorship ?? ensureRemoteCommentGuestAuthorship
-    await runRequiredRemoteCommunityDbPreflight({
-      databaseUrl: binding.database_url,
-      complete: remoteCommentGuestAuthorshipPreflightComplete,
-      inFlight: remoteCommentGuestAuthorshipPreflightInFlight,
-      run: () => ensureGuestAuthorship(client),
-    })
     const ensureSongTitleColumn = options?.ensureRemotePostSongTitleColumn ?? ensureRemotePostSongTitleColumn
-    await runRemoteCommunityDbPreflight({
-      databaseUrl: binding.database_url,
-      label: "post_song_title_column",
-      complete: remotePostSongTitleColumnPreflightComplete,
-      inFlight: remotePostSongTitleColumnPreflightInFlight,
-      run: () => ensureSongTitleColumn(client),
-    })
     const ensureLiveRoomTables = options?.ensureRemoteLiveRoomTables ?? ensureRemoteLiveRoomTables
-    await runRemoteCommunityDbPreflight({
-      databaseUrl: binding.database_url,
-      label: "live_room_tables",
-      complete: remoteLiveRoomTablePreflightComplete,
-      inFlight: remoteLiveRoomTablePreflightInFlight,
-      run: () => ensureLiveRoomTables(client),
-    })
+    await Promise.all([
+      runRemoteCommunityDbPreflight({
+        databaseUrl: binding.database_url,
+        label: "membership_state_indexes",
+        complete: remoteMembershipIndexPreflightComplete,
+        inFlight: remoteMembershipIndexPreflightInFlight,
+        run: () => ensureIndexes(client),
+      }),
+      runRemoteCommunityDbPreflight({
+        databaseUrl: binding.database_url,
+        label: "thread_comment_lock_columns",
+        complete: remoteThreadCommentLockColumnPreflightComplete,
+        inFlight: remoteThreadCommentLockColumnPreflightInFlight,
+        run: () => ensureLockColumns(client),
+      }),
+      runRequiredRemoteCommunityDbPreflight({
+        databaseUrl: binding.database_url,
+        complete: remoteCommentGuestAuthorshipPreflightComplete,
+        inFlight: remoteCommentGuestAuthorshipPreflightInFlight,
+        run: () => ensureGuestAuthorship(client),
+      }),
+      runRemoteCommunityDbPreflight({
+        databaseUrl: binding.database_url,
+        label: "post_song_title_column",
+        complete: remotePostSongTitleColumnPreflightComplete,
+        inFlight: remotePostSongTitleColumnPreflightInFlight,
+        run: () => ensureSongTitleColumn(client),
+      }),
+      runRemoteCommunityDbPreflight({
+        databaseUrl: binding.database_url,
+        label: "live_room_tables",
+        complete: remoteLiveRoomTablePreflightComplete,
+        inFlight: remoteLiveRoomTablePreflightInFlight,
+        run: () => ensureLiveRoomTables(client),
+      }),
+    ])
   }
   return {
     client,

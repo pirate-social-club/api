@@ -1002,6 +1002,14 @@ membership_mode: "request",
     expect(fetchedBody.description).toBe("New description")
     expect(fetchedBody.avatar_ref).toBe("media://community-avatar")
     expect(fetchedBody.banner_ref).toBe("media://community-banner")
+
+    const projection = await ctx.client.execute({
+      sql: "SELECT description, avatar_ref, banner_ref FROM communities WHERE community_id = ?1",
+      args: [communityCreateBody.community.id.replace(/^com_/, "")],
+    })
+    expect(projection.rows[0]?.description).toBe("New description")
+    expect(projection.rows[0]?.avatar_ref).toBe("media://community-avatar")
+    expect(projection.rows[0]?.banner_ref).toBe("media://community-banner")
   })
 
   test("community owner can update agent settings without clobbering existing profile fields", async () => {

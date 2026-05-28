@@ -1,4 +1,5 @@
 import { encryptCommunityDbCredential } from "../community-db-credential-crypto"
+import { normalizeCommunityMediaRef } from "../community-identity-media"
 import {
   type ProvisionedCommunityCredential,
   resolveCommunityProvisioningBackend,
@@ -255,6 +256,9 @@ async function createNamespacelessCommunity(input: {
     jobId,
     creatorUserId: input.auth.userId,
     displayName: input.auth.communityDisplayName,
+    description: input.body.description?.trim() || null,
+    avatarRef: normalizeCommunityMediaRef(input.body.avatar_ref),
+    bannerRef: normalizeCommunityMediaRef(input.body.banner_ref),
     membershipMode: input.body.membership_mode ?? "gated",
     namespaceVerificationId: null,
     routeSlug: null,
@@ -290,6 +294,9 @@ async function createNamespacelessCommunity(input: {
       jobId: prepared.job.job_id,
       actorUserId: input.auth.userId,
       resultRef: databaseUrl,
+      description: localSnapshot?.description ?? input.body.description?.trim() ?? null,
+      avatarRef: localSnapshot?.avatar_ref ?? normalizeCommunityMediaRef(input.body.avatar_ref),
+      bannerRef: localSnapshot?.banner_ref ?? normalizeCommunityMediaRef(input.body.banner_ref),
       createdAt: input.auth.createdAt,
       metadata: {
         binding_id: prepared.binding.community_database_binding_id,
@@ -424,6 +431,9 @@ async function provisionNamespacedCommunity(input: {
           jobId,
           creatorUserId: auth.userId,
           displayName: auth.communityDisplayName,
+          description: body.description?.trim() || null,
+          avatarRef: normalizeCommunityMediaRef(body.avatar_ref),
+          bannerRef: normalizeCommunityMediaRef(body.banner_ref),
           membershipMode: body.membership_mode ?? "gated",
           namespaceVerificationId,
           routeSlug,
@@ -463,6 +473,9 @@ async function provisionNamespacedCommunity(input: {
       jobId: prepared.job.job_id,
       actorUserId: auth.userId,
       resultRef: databaseUrl,
+      description: localSnapshot?.description ?? body.description?.trim() ?? null,
+      avatarRef: localSnapshot?.avatar_ref ?? normalizeCommunityMediaRef(body.avatar_ref),
+      bannerRef: localSnapshot?.banner_ref ?? normalizeCommunityMediaRef(body.banner_ref),
       createdAt: auth.createdAt,
       metadata: {
         binding_id: prepared.binding.community_database_binding_id,

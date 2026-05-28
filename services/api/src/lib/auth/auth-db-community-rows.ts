@@ -10,6 +10,9 @@ export type CommunityRow = {
   community_id: string
   creator_user_id: string
   display_name: string
+  description: string | null
+  avatar_ref: string | null
+  banner_ref: string | null
   status: "draft" | "active" | "frozen" | "archived" | "deleted" | "suspended"
   provisioning_state: "requested" | "provisioning" | "active" | "rotation_required" | "error"
   transfer_state: "none" | "pending" | "transferred" | "federated"
@@ -133,6 +136,9 @@ export function toCommunityRow(row: unknown): CommunityRow {
     community_id: requiredString(row, "community_id"),
     creator_user_id: requiredString(row, "creator_user_id"),
     display_name: requiredString(row, "display_name"),
+    description: stringOrNull(rowValue(row, "description")),
+    avatar_ref: stringOrNull(rowValue(row, "avatar_ref")),
+    banner_ref: stringOrNull(rowValue(row, "banner_ref")),
     status: requiredString(row, "status") as CommunityRow["status"],
     provisioning_state: requiredString(row, "provisioning_state") as CommunityRow["provisioning_state"],
     transfer_state: requiredString(row, "transfer_state") as CommunityRow["transfer_state"],

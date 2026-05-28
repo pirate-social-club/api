@@ -151,6 +151,26 @@ export class DatabaseCommunityRepository implements CommunityRepository {
     return getCommunityByRouteSlug(this.client, routeSlug)
   }
 
+  async updateCommunitySeoProjection(input: {
+    communityId: string
+    description: string | null
+    avatarRef: string | null
+    bannerRef: string | null
+    updatedAt: string
+  }): Promise<void> {
+    await this.client.execute({
+      sql: `
+        UPDATE communities
+        SET description = ?2,
+            avatar_ref = ?3,
+            banner_ref = ?4,
+            updated_at = ?5
+        WHERE community_id = ?1
+      `,
+      args: [input.communityId, input.description, input.avatarRef, input.bannerRef, input.updatedAt],
+    })
+  }
+
   async getCommunityByNamespaceVerificationId(namespaceVerificationId: string): Promise<CommunityRow | null> {
     return getCommunityByNamespaceVerificationId(this.client, namespaceVerificationId)
   }
@@ -292,6 +312,9 @@ export class DatabaseCommunityRepository implements CommunityRepository {
     jobId: string
     creatorUserId: string
     displayName: string
+    description?: string | null
+    avatarRef?: string | null
+    bannerRef?: string | null
     membershipMode: "open" | "request" | "gated"
     namespaceVerificationId: string | null
     routeSlug?: string | null
@@ -327,6 +350,9 @@ export class DatabaseCommunityRepository implements CommunityRepository {
     jobId: string
     actorUserId: string
     resultRef: string | null
+    description?: string | null
+    avatarRef?: string | null
+    bannerRef?: string | null
     createdAt: string
     metadata: Record<string, unknown>
   }): Promise<{

@@ -23,6 +23,9 @@ export async function createCommunityProvisioningRequest(
     jobId: string
     creatorUserId: string
     displayName: string
+    description?: string | null
+    avatarRef?: string | null
+    bannerRef?: string | null
     membershipMode: "open" | "request" | "gated"
     namespaceVerificationId: string | null
     routeSlug?: string | null
@@ -40,17 +43,20 @@ export async function createCommunityProvisioningRequest(
     await tx.execute({
       sql: `
         INSERT INTO communities (
-          community_id, creator_user_id, display_name, membership_mode, status, provisioning_state, transfer_state,
+          community_id, creator_user_id, display_name, description, avatar_ref, banner_ref, membership_mode, status, provisioning_state, transfer_state,
           route_slug, namespace_verification_id, pending_namespace_verification_session_id,
           primary_database_binding_id, created_at, updated_at
         ) VALUES (
-          ?1, ?2, ?3, ?4, 'active', 'provisioning', 'none', ?5, ?6, NULL, NULL, ?7, ?7
+          ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'active', 'provisioning', 'none', ?8, ?9, NULL, NULL, ?10, ?10
         )
       `,
       args: [
         input.communityId,
         input.creatorUserId,
         input.displayName,
+        input.description ?? null,
+        input.avatarRef ?? null,
+        input.bannerRef ?? null,
         input.membershipMode,
         input.routeSlug,
         input.namespaceVerificationId,
@@ -268,6 +274,9 @@ export async function markCommunityProvisioningSucceeded(
     jobId: string
     actorUserId: string
     resultRef: string | null
+    description?: string | null
+    avatarRef?: string | null
+    bannerRef?: string | null
     createdAt: string
     metadata: Record<string, unknown>
   },
@@ -285,10 +294,20 @@ export async function markCommunityProvisioningSucceeded(
           SET status = 'active',
               provisioning_state = 'active',
               primary_database_binding_id = ?2,
-              updated_at = ?3
+              description = ?3,
+              avatar_ref = ?4,
+              banner_ref = ?5,
+              updated_at = ?6
           WHERE community_id = ?1
         `,
-        args: [input.communityId, input.communityDatabaseBindingId, input.createdAt],
+        args: [
+          input.communityId,
+          input.communityDatabaseBindingId,
+          input.description ?? null,
+          input.avatarRef ?? null,
+          input.bannerRef ?? null,
+          input.createdAt,
+        ],
       },
       {
         sql: `
