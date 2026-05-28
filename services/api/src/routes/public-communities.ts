@@ -502,6 +502,19 @@ publicCommunities.get("/:communityId", async (c) => {
   const communityRepository = getCommunityRepository(c.env)
   const community = await resolveCommunityRow(communityRepository, c.req.param("communityId"))
   const communityId = community.community_id
+  const wantsSeoPreview = c.req.query("preview") === "seo"
+  if (wantsSeoPreview && !wantsMarkdown(c.req.raw, c.req.query("format"))) {
+    const preview = fallbackCommunityPreview(community)
+    const links = communityLinks(configuredApiOrigin(c.env, c.req.url), configuredWebOrigin(c.env, c.req.url), communityId, preview.route_slug)
+    const responseBody = {
+      ...serializeCommunityPreview(preview),
+      omitted_surfaces: [],
+      links,
+    }
+    setPublicReadCacheHeaders(c, { vary: ["Accept"] })
+    c.header("Link", serializeLinkHeader(links))
+    return c.json(responseBody, 200)
+  }
   const [policy, result] = await Promise.all([
     withTimeout(resolveEffectiveCommunityMachineAccessPolicy({
       env: c.env,
