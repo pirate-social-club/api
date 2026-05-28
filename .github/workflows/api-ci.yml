@@ -39,6 +39,7 @@ jobs:
       - name: Start iron-proxy egress audit
         uses: ironsh/iron-proxy-action@fa1fd82ec32396d044deba7040a6db576bec927a
         with:
+          version: 0.41.0
           egress-rules: egress-rules.yaml
           warn: true
 
@@ -175,6 +176,7 @@ jobs:
       - name: Start iron-proxy egress audit
         uses: ironsh/iron-proxy-action@fa1fd82ec32396d044deba7040a6db576bec927a
         with:
+          version: 0.41.0
           egress-rules: egress-rules.yaml
           warn: true
 
@@ -221,6 +223,7 @@ jobs:
       - name: Start iron-proxy egress audit
         uses: ironsh/iron-proxy-action@fa1fd82ec32396d044deba7040a6db576bec927a
         with:
+          version: 0.41.0
           egress-rules: egress-rules.yaml
           warn: true
 
@@ -259,6 +262,7 @@ jobs:
       - name: Start iron-proxy egress audit
         uses: ironsh/iron-proxy-action@fa1fd82ec32396d044deba7040a6db576bec927a
         with:
+          version: 0.41.0
           egress-rules: egress-rules.yaml
           warn: true
 
