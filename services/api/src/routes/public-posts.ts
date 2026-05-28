@@ -3,7 +3,10 @@ import { getProfileRepository } from "../lib/auth/repositories"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { openCommunityDb } from "../lib/communities/community-db-factory"
 import { isCommunityLive } from "../lib/communities/community-status"
-import { getPublicCommunityPreviewFromCommunityDb } from "../lib/communities/community-preview-service"
+import {
+  getPublicCommunityPreview,
+  getPublicCommunityPreviewFromCommunityDb,
+} from "../lib/communities/community-preview-service"
 import {
   omittedSurfacesForPolicy,
   omittedSurfaceForPolicy,
@@ -314,12 +317,22 @@ publicPosts.get("/:postId", async (c) => {
     communityId: publicCommunityId(result.post.community_id),
     includeTopComments: policy.included_surfaces.top_comments,
   })
-  const omittedSurfaces = omittedSurfacesForPolicy(policy, ["thread_bodies", "top_comments"])
+  const omittedSurfaces = omittedSurfacesForPolicy(policy, ["community_stats", "thread_bodies", "top_comments"])
   const markdownBody = policy.included_surfaces.thread_bodies ? result : omitThreadBody(result)
+  const community = await getPublicCommunityPreview({
+    env: c.env,
+    communityId: result.post.community_id,
+    locale: c.req.query("locale") ?? null,
+    communityRepository,
+  })
+  const serializedCommunity = serializeCommunityPreview(community)
   const responseBody = {
     ...(policy.included_surfaces.thread_bodies
       ? serializeLocalizedPostResponse(result)
       : serializeLocalizedPostResponse(omitThreadBody(result))),
+    community: policy.included_surfaces.community_stats
+      ? serializedCommunity
+      : omitCommunityStats(serializedCommunity),
     omitted_surfaces: omittedSurfaces,
     links,
   }

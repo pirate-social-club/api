@@ -689,6 +689,13 @@ describe("community routes", () => {
     expect(publicPost.headers.get("cache-control")).toBe("public, max-age=0, s-maxage=60, stale-while-revalidate=300")
     const publicPostBody = await json(publicPost) as {
       post: { id: string; title: string | null }
+      community: {
+        id: string
+        display_name: string
+        description?: string | null
+        avatar_ref?: string | null
+        banner_ref?: string | null
+      }
       resolved_locale: string
       translation_state: string
       omitted_surfaces: unknown[]
@@ -702,6 +709,9 @@ describe("community routes", () => {
     }
     expect(publicPostBody.post.id).toBe(createdPostBody.id)
     expect(publicPostBody.post.title).toBe("Public route post")
+    expect(publicPostBody.community.id).toBe(communityCreateBody.community.id)
+    expect(publicPostBody.community.display_name).toBe("Public Community Club")
+    expect(publicPostBody.community.description).toBe("Readable without reconnecting.")
     expect(publicPostBody.resolved_locale).toBe("zh-Hans")
     expect(publicPostBody.translation_state).toBe("policy_blocked")
     expect(publicPost.headers.get("link")).toContain("/public-posts/")
@@ -903,6 +913,7 @@ describe("community routes", () => {
     expect("body" in disabledPublicPostBody.post).toBe(false)
     expect("top_comments" in disabledPublicPostBody.links).toBe(false)
     expect(disabledPublicPostBody.omitted_surfaces).toEqual([
+      { surface: "community_stats", reason: "community_opt_out" },
       { surface: "thread_bodies", reason: "community_opt_out" },
       { surface: "top_comments", reason: "community_opt_out" },
     ])

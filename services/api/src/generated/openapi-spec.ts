@@ -10819,6 +10819,10 @@ const spec = {
           "post": {
             "$ref": "./posts.yaml#/Post"
           },
+          "community": {
+            "$ref": "./communities-core.yaml#/CommunityPreview",
+            "nullable": true
+          },
           "author_community_role": {
             "type": "string",
             "enum": [
