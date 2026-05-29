@@ -86,6 +86,7 @@ function createFeedItem(input: {
 
 async function createPostStoreTables(client: ReturnType<typeof createClient>, input: {
   crosspostSourceJson?: boolean
+  postEvents?: boolean
 } = {}) {
   await client.execute(`
     CREATE TABLE posts (
@@ -160,6 +161,25 @@ async function createPostStoreTables(client: ReturnType<typeof createClient>, in
       visibility TEXT NOT NULL DEFAULT 'public'
     )
   `)
+  if (input.postEvents === true) {
+    await client.execute(`
+      CREATE TABLE post_events (
+        post_id TEXT PRIMARY KEY,
+        community_id TEXT NOT NULL,
+        event_start_at INTEGER NOT NULL,
+        event_end_at INTEGER,
+        event_timezone TEXT NOT NULL,
+        location_name TEXT,
+        address TEXT,
+        is_online INTEGER NOT NULL DEFAULT 0 CHECK (is_online IN (0, 1)),
+        event_url TEXT,
+        status TEXT NOT NULL CHECK (status IN ('scheduled', 'canceled', 'postponed', 'ended')),
+        place_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `)
+  }
 }
 
 describe("sortPublishedLocalizedPostFeedItems", () => {
@@ -272,6 +292,93 @@ describe("getPostById", () => {
     expect(read?.title).toBe("Pre-migration post")
     expect(read?.crosspost_source).toBeNull()
   })
+  test("persists event metadata in the post_events side table", async () => {
+    const client = createClient({ url: "file::memory:" })
+    clients.push(client)
+    await createPostStoreTables(client, { postEvents: true })
+
+    const created = await insertPost({
+      client,
+      communityId: "cmt_test",
+      authorUserId: "usr_test",
+      body: {
+        idempotency_key: "event-post",
+        post_type: "link",
+        title: "Night market afterparty",
+        link_url: "https://ra.co/events/test",
+        event: {
+          starts_at: 1_781_287_200,
+          ends_at: 1_781_299_800,
+          timezone: "Asia/Tbilisi",
+          location_name: "Left Bank",
+          address: "Dedaena Park, Tbilisi",
+          event_url: "https://ra.co/events/test",
+          is_online: false,
+          status: "scheduled",
+          place: {
+            label: "Left Bank, Tbilisi",
+            address: "Dedaena Park, Tbilisi",
+            lat: 41.7033,
+            lon: 44.8024,
+            source: "geoapify",
+            providerPlaceId: "left-bank-test",
+            countryCode: "ge",
+            city: "Tbilisi",
+          },
+        },
+      },
+      createdAt: "2026-05-06T00:00:00.000Z",
+    })
+    const read = await getPostById(client, created.post_id)
+
+    expect(created.event).toEqual({
+      starts_at: 1_781_287_200,
+      ends_at: 1_781_299_800,
+      timezone: "Asia/Tbilisi",
+      location_name: "Left Bank",
+      address: "Dedaena Park, Tbilisi",
+      is_online: false,
+      event_url: "https://ra.co/events/test",
+      status: "scheduled",
+      place: {
+        label: "Left Bank, Tbilisi",
+        address: "Dedaena Park, Tbilisi",
+        lat: 41.7033,
+        lon: 44.8024,
+        source: "geoapify",
+        providerPlaceId: "left-bank-test",
+        countryCode: "ge",
+        city: "Tbilisi",
+      },
+    })
+    expect(read?.event?.place?.providerPlaceId).toBe("left-bank-test")
+  })
+
+  test("rejects event writes before the post_events migration is available", async () => {
+    const client = createClient({ url: "file::memory:" })
+    clients.push(client)
+    await createPostStoreTables(client)
+
+    await expect(insertPost({
+      client,
+      communityId: "cmt_test",
+      authorUserId: "usr_test",
+      body: {
+        idempotency_key: "event-pre-migration",
+        post_type: "text",
+        title: "Event",
+        event: {
+          starts_at: 1_781_287_200,
+          timezone: "Asia/Tbilisi",
+          location_name: "Left Bank",
+        },
+      },
+      createdAt: "2026-05-06T00:00:00.000Z",
+    })).rejects.toThrow("Community database migration is still rolling out")
+
+    const rows = await client.execute("SELECT COUNT(*) AS count FROM posts")
+    expect(rows.rows[0]?.count).toBe(0)
+  })
 })
 
 describe("assertPostCreateRequest", () => {
@@ -325,6 +432,79 @@ describe("assertPostCreateRequest", () => {
     } satisfies CreatePostRequest
 
     expect(() => assertPostCreateRequest(body, "cmt_test")).not.toThrow()
+  })
+
+  test("allows structured event metadata on regular posts", () => {
+    const body = {
+      idempotency_key: "event-ok",
+      post_type: "text",
+      title: "Night market afterparty",
+      event: {
+        starts_at: 1_781_287_200,
+        ends_at: 1_781_299_800,
+        timezone: "Asia/Tbilisi",
+        location_name: "Left Bank",
+        event_url: "https://ra.co/events/test",
+        place: {
+          label: "Left Bank",
+          lat: 41.7033,
+          lon: 44.8024,
+          source: "geoapify",
+        },
+      },
+    } satisfies CreatePostRequest
+
+    expect(() => assertPostCreateRequest(body, "cmt_test")).not.toThrow()
+  })
+
+  test("rejects invalid event metadata", () => {
+    expect(() =>
+      assertPostCreateRequest(
+        {
+          idempotency_key: "event-no-location",
+          post_type: "text",
+          title: "No location",
+          event: {
+            starts_at: 1_781_287_200,
+            timezone: "Asia/Tbilisi",
+          },
+        } as CreatePostRequest,
+        "cmt_test",
+      )
+    ).toThrow("event location is required for in-person events")
+
+    expect(() =>
+      assertPostCreateRequest(
+        {
+          idempotency_key: "event-invalid-zone",
+          post_type: "text",
+          title: "Bad zone",
+          event: {
+            starts_at: 1_781_287_200,
+            timezone: "Asia/Tblisi",
+            is_online: true,
+          },
+        } as CreatePostRequest,
+        "cmt_test",
+      )
+    ).toThrow("event.timezone must be a valid IANA timezone")
+
+    expect(() =>
+      assertPostCreateRequest(
+        {
+          idempotency_key: "event-invalid-url",
+          post_type: "text",
+          title: "Bad URL",
+          event: {
+            starts_at: 1_781_287_200,
+            timezone: "Asia/Tbilisi",
+            is_online: true,
+            event_url: "ftp://example.com/tickets",
+          },
+        } as CreatePostRequest,
+        "cmt_test",
+      )
+    ).toThrow("event.event_url must be a valid http or https URL")
   })
 
   test("rejects crossposts with reply or body fields", () => {

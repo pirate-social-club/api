@@ -10,8 +10,10 @@ import {
   type LinkPreviewOverrideRequest,
 } from "../lib/posts/admin-link-preview-override"
 import {
+  cancelPostEvent,
   createPost,
   deletePost,
+  listCommunityEvents,
   listCommunityPosts,
   removePostAsModerator,
   setPostCommentLock,
@@ -145,6 +147,35 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
     return c.json(serializePost(result.post))
   })
 
+  communities.post("/:communityId/posts/:postId/event-status", async (c) => {
+    const { actor, communityId, communityRepository, userRepository } = await getResolvedCommunityRouteContext(c)
+    const body = await requireJsonBody<{ status?: string | null }>(c, "Invalid event status payload")
+    if (body.status !== "canceled") {
+      throw badRequestError("status must be canceled")
+    }
+    const postId = decodePublicPostId(c.req.param("postId"))
+    const result = await cancelPostEvent({
+      env: c.env,
+      userId: actor.userId,
+      userRepository,
+      communityId,
+      postId,
+      communityRepository,
+    })
+    await writeAuditEventForEnv(c.env, {
+      action: "community.post_event_canceled",
+      actorId: actor.userId,
+      actorType: "user",
+      communityId,
+      targetId: postId,
+      targetType: "post",
+      metadata: {
+        status: "canceled",
+      },
+    })
+    return c.json(serializeLocalizedPostResponse(result), 200)
+  })
+
   communities.post("/:communityId/posts/:postId/delete", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const postId = decodePublicPostId(c.req.param("postId"))
@@ -269,7 +300,29 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
       limit: c.req.query("limit") ?? null,
       cursor: c.req.query("cursor") ?? null,
       flairId: c.req.query("flair_id") ?? null,
+      hasEvent: c.req.query("has_event") ?? null,
       sort: c.req.query("sort") ?? null,
+      communityRepository,
+      userRepository,
+      profileRepository,
+    })
+    return c.json({
+      ...result,
+      items: result.items.map((item) => serializeLocalizedPostResponse(item)),
+    }, 200)
+  })
+
+  communities.get("/:communityId/events", async (c) => {
+    const { actor, communityId, communityRepository, userRepository, profileRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await listCommunityEvents({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      locale: c.req.query("locale") ?? null,
+      from: c.req.query("from") ?? null,
+      to: c.req.query("to") ?? null,
+      limit: c.req.query("limit") ?? null,
+      status: c.req.query("status") ?? null,
       communityRepository,
       userRepository,
       profileRepository,

@@ -1277,6 +1277,31 @@ export type CreateSongArtifactBundleRequest = {
   vocal_audio?: SongArtifactUploadRef | null;
 };
 
+export type PostEventStatus = "scheduled" | "canceled" | "postponed" | "ended";
+
+export type PostEventPlace = {
+  label: string;
+  address?: string | null;
+  lat: number;
+  lon: number;
+  source: "geoapify" | "manual";
+  providerPlaceId?: string | null;
+  countryCode?: string | null;
+  city?: string | null;
+};
+
+export type PostEvent = {
+  starts_at: number;
+  ends_at?: number | null;
+  timezone: string;
+  location_name?: string | null;
+  address?: string | null;
+  is_online?: boolean | null;
+  event_url?: string | null;
+  status?: PostEventStatus | null;
+  place?: PostEventPlace | null;
+};
+
 export type CreatePostRequest = (((unknown & {
   post_type: "text";
   title?: string;
@@ -1340,6 +1365,7 @@ export type CreatePostRequest = (((unknown & {
   license_preset?: "non-commercial" | "commercial-use" | "commercial-remix" | null;
   commercial_rev_share_pct?: number | null;
   lyrics?: string | null;
+  event?: PostEvent | null;
 });
 
 export type CreateCommentRequest = {
@@ -1539,6 +1565,7 @@ export type Post = {
   link_og_image_url?: string | null;
   link_og_title?: string | null;
   link_enrichment?: (Record<string, unknown>) | null;
+  event?: PostEvent | null;
   embeds?: Array<PostEmbed> | null;
   media_refs?: Array<MediaDescriptor>;
   creator_relation?: PostCreatorRelation | null;

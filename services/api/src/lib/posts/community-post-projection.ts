@@ -44,6 +44,7 @@ export function boundedPostJsonProjection(value: string | null | undefined, repl
 export type PostProjectionSchema = {
   hasCommentLockColumns: boolean
   hasCrosspostSourceJson: boolean
+  hasPostEvents: boolean
   hasSongAnnotationsUrl: boolean
   hasSongCoverArtRef: boolean
   hasSongDurationMs: boolean
@@ -52,12 +53,14 @@ export type PostProjectionSchema = {
 export async function resolvePostProjectionSchema(executor: DbExecutor): Promise<PostProjectionSchema> {
   const result = await executor.execute("PRAGMA table_info(posts)")
   const columnNames = new Set(result.rows.map((row) => String(row.name ?? "")))
+  const postEventsResult = await executor.execute("PRAGMA table_info(post_events)")
   return {
     hasCommentLockColumns: columnNames.has("comments_locked")
       && columnNames.has("comments_locked_at")
       && columnNames.has("comments_locked_by_user_id")
       && columnNames.has("comments_lock_reason"),
     hasCrosspostSourceJson: columnNames.has("crosspost_source_json"),
+    hasPostEvents: postEventsResult.rows.length > 0,
     hasSongAnnotationsUrl: columnNames.has("song_annotations_url"),
     hasSongCoverArtRef: columnNames.has("song_cover_art_ref"),
     hasSongDurationMs: columnNames.has("song_duration_ms"),
@@ -80,6 +83,61 @@ export function postSelectColumnsForSchema(schema: PostProjectionSchema): string
   const songDurationMsProjection = schema.hasSongDurationMs
     ? "song_duration_ms"
     : "NULL AS song_duration_ms"
+  const eventProjection = schema.hasPostEvents
+    ? `
+  (
+    SELECT event_start_at
+    FROM post_events
+    WHERE post_events.post_id = posts.post_id
+    LIMIT 1
+  ) AS event_start_at, (
+    SELECT event_end_at
+    FROM post_events
+    WHERE post_events.post_id = posts.post_id
+    LIMIT 1
+  ) AS event_end_at, (
+    SELECT event_timezone
+    FROM post_events
+    WHERE post_events.post_id = posts.post_id
+    LIMIT 1
+  ) AS event_timezone, (
+    SELECT location_name
+    FROM post_events
+    WHERE post_events.post_id = posts.post_id
+    LIMIT 1
+  ) AS event_location_name, (
+    SELECT address
+    FROM post_events
+    WHERE post_events.post_id = posts.post_id
+    LIMIT 1
+  ) AS event_address, (
+    SELECT is_online
+    FROM post_events
+    WHERE post_events.post_id = posts.post_id
+    LIMIT 1
+  ) AS event_is_online, (
+    SELECT event_url
+    FROM post_events
+    WHERE post_events.post_id = posts.post_id
+    LIMIT 1
+  ) AS event_url, (
+    SELECT status
+    FROM post_events
+    WHERE post_events.post_id = posts.post_id
+    LIMIT 1
+  ) AS event_status, (
+    SELECT CASE
+      WHEN place_json IS NOT NULL AND length(place_json) > ${MAX_POST_JSON_PROJECTION_LENGTH} THEN NULL
+      ELSE place_json
+    END
+    FROM post_events
+    WHERE post_events.post_id = posts.post_id
+    LIMIT 1
+  ) AS event_place_json`
+    : `
+  NULL AS event_start_at, NULL AS event_end_at, NULL AS event_timezone,
+  NULL AS event_location_name, NULL AS event_address, NULL AS event_is_online,
+  NULL AS event_url, NULL AS event_status, NULL AS event_place_json`
 
   return `
   post_id, community_id, author_user_id, authorship_mode, agent_id, agent_ownership_record_id,
@@ -90,6 +148,7 @@ export function postSelectColumnsForSchema(schema: PostProjectionSchema): string
   post_type, status, ${commentLockProjection},
   visibility, title, body, caption, lyrics,
   link_url, link_og_image_url, link_og_title, ${boundedJsonProjection("link_enrichment_snapshot_json", sqlStringLiteral(OVERSIZED_LINK_ENRICHMENT_SNAPSHOT_JSON))}, link_enrichment_synced_at,
+  ${eventProjection},
   ${boundedJsonProjection("embeds_json")}, ${boundedJsonProjection("media_refs_json")}, song_artifact_bundle_id, song_title,
   ${songAnnotationsUrlProjection}, ${songCoverArtRefProjection}, ${songDurationMsProjection}, source_language, translation_policy,
   access_mode, asset_id, (

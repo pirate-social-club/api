@@ -647,6 +647,7 @@ publicCommunities.get("/:communityId/posts", async (c) => {
     profileRepository: getProfileRepository(c.env),
     cursor: c.req.query("cursor"),
     flairId: c.req.query("flair_id"),
+    hasEvent: c.req.query("has_event"),
     limit: c.req.query("limit"),
     locale: c.req.query("locale"),
     sort: c.req.query("sort"),

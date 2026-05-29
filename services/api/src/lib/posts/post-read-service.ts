@@ -1,9 +1,11 @@
 import {
+  listPublishedLocalizedEventPosts,
   listPublishedLocalizedPosts,
+  type PublishedEventPostStatus,
 } from "./community-post-feed"
 import { getPostById } from "./community-post-query-store"
 import { getLatestThreadSnapshotForRead } from "../comments/community-comment-store"
-import { notFoundError } from "../errors"
+import { badRequestError, notFoundError } from "../errors"
 import {
   canReadNonPublishedPost,
   isPubliclyReadablePost,
@@ -55,6 +57,43 @@ function formatFeedCursor(cursor: string | null): string | null {
 
 function parsePostFeedSort(sort: string | null | undefined): PostFeedSort {
   return sort === "new" || sort === "top" ? sort : "best"
+}
+
+function parseHasEventFilter(value: string | null | undefined): boolean {
+  return value === "true" || value === "1"
+}
+
+function parseEventLimit(limit: string | null | undefined): number {
+  if (typeof limit !== "string" || limit.trim() === "") {
+    return 20
+  }
+
+  const parsed = Number(limit)
+  if (!Number.isFinite(parsed)) {
+    return 20
+  }
+  return Math.min(50, Math.max(1, Math.trunc(parsed)))
+}
+
+function parseEventUnixSeconds(value: string | null | undefined, fieldName: string): number | null {
+  if (typeof value !== "string" || value.trim() === "") {
+    return null
+  }
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 0) {
+    throw badRequestError(`${fieldName} must be a Unix timestamp`)
+  }
+  return parsed
+}
+
+function parseEventStatus(status: string | null | undefined): PublishedEventPostStatus {
+  if (status == null || status.trim() === "") {
+    return "scheduled"
+  }
+  if (status === "scheduled" || status === "canceled" || status === "postponed" || status === "ended" || status === "all") {
+    return status
+  }
+  throw badRequestError("status must be scheduled, canceled, postponed, ended, or all")
 }
 
 export async function getPost(input: {
@@ -174,6 +213,7 @@ export async function listCommunityPosts(input: {
   limit?: string | null
   cursor?: string | null
   flairId?: string | null
+  hasEvent?: string | null
   sort?: string | null
   communityRepository: PostReadCommunityRepository
   userRepository: UserRepository
@@ -192,6 +232,7 @@ export async function listCommunityPosts(input: {
       viewerUserId: input.userId,
       limit: parseFeedLimit(input.limit),
       flairId: input.flairId ?? null,
+      hasEvent: parseHasEventFilter(input.hasEvent),
       sort: parsePostFeedSort(input.sort),
       cursor: parseFeedCursor(input.cursor),
       visibility: null,
@@ -226,6 +267,71 @@ export async function listCommunityPosts(input: {
   }
 }
 
+export async function listCommunityEvents(input: {
+  env: Env
+  userId: string
+  communityId: string
+  locale?: string | null
+  from?: string | null
+  to?: string | null
+  limit?: string | null
+  status?: string | null
+  communityRepository: PostReadCommunityRepository
+  userRepository: UserRepository
+  profileRepository?: ProfileRepository | null
+}): Promise<CommunityFeedResponse> {
+  const db = await openLiveCommunityDbForPostRead({
+    env: input.env,
+    communityRepository: input.communityRepository,
+    communityId: input.communityId,
+  })
+  try {
+    await requireMemberAccess(db.client, input.communityId, input.userId)
+    const from = parseEventUnixSeconds(input.from, "from") ?? Math.floor(Date.now() / 1000)
+    const to = parseEventUnixSeconds(input.to, "to")
+    if (to != null && to < from) {
+      throw badRequestError("to must be greater than or equal to from")
+    }
+
+    const feedItems = await listPublishedLocalizedEventPosts({
+      client: db.client,
+      communityId: input.communityId,
+      viewerUserId: input.userId,
+      from,
+      to,
+      limit: parseEventLimit(input.limit),
+      status: parseEventStatus(input.status),
+    })
+
+    const ageGateState = await resolveAgeGateViewerState({
+      userId: input.userId,
+      userRepository: input.userRepository,
+      postAgeGatePolicy: "18_plus",
+    })
+    const items = await buildLocalizedPostFeedResponses({
+      client: db.client,
+      feedItems,
+      locale: input.locale,
+      viewerUserId: input.userId,
+      ageGateState,
+    })
+    await hydrateAndEnqueuePostReadResponses({
+      client: db.client,
+      communityId: input.communityId,
+      responses: items,
+      communityRepository: input.communityRepository,
+      profileRepository: input.profileRepository,
+    })
+
+    return {
+      items,
+      next_cursor: null,
+    }
+  } finally {
+    db.close()
+  }
+}
+
 export async function listPublicCommunityPosts(input: {
   env: Env
   communityId: string
@@ -233,6 +339,7 @@ export async function listPublicCommunityPosts(input: {
   limit?: string | null
   cursor?: string | null
   flairId?: string | null
+  hasEvent?: string | null
   sort?: string | null
   communityRepository: PostReadCommunityRepository
   profileRepository?: ProfileRepository | null
@@ -249,6 +356,7 @@ export async function listPublicCommunityPosts(input: {
       viewerUserId: "",
       limit: parseFeedLimit(input.limit),
       flairId: input.flairId ?? null,
+      hasEvent: parseHasEventFilter(input.hasEvent),
       sort: parsePostFeedSort(input.sort),
       cursor: parseFeedCursor(input.cursor),
       visibility: "public",

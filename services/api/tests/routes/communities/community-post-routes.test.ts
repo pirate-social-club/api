@@ -444,6 +444,288 @@ membership_mode: "request",
     expect(feedBody.items.find((item) => item.post.title === "Owner post")?.author_community_role).toBe("owner")
   })
 
+  test("community events endpoint returns scheduled event posts ordered by start time", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "community-events-creator")
+    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Pirate Events Club",
+membership_mode: "request",
+      namespace: {
+        namespace_verification: namespaceVerificationId,
+      },
+    }, ctx.env, creator.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: { id: string }
+    }
+    const communityId = communityCreateBody.community.id.replace(/^com_/, "")
+
+    const laterEvent = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        post_type: "link",
+        title: "Later afterparty",
+        body: "Late event.",
+        link_url: "https://ra.co/events/later",
+        idempotency_key: "post-key-event-later",
+        event: {
+          starts_at: 1_781_290_000,
+          timezone: "Asia/Tbilisi",
+          location_name: "Left Bank",
+          status: "scheduled",
+        },
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(laterEvent.status).toBe(201)
+
+    const earlierEvent = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Earlier market meetup",
+        body: "Meet before the market closes.",
+        idempotency_key: "post-key-event-earlier",
+        event: {
+          starts_at: 1_781_280_000,
+          ends_at: 1_781_285_400,
+          timezone: "Asia/Tbilisi",
+          location_name: "Dedaena Park",
+          address: "Dedaena Park, Tbilisi",
+          status: "scheduled",
+          place: {
+            label: "Dedaena Park",
+            address: "Dedaena Park, Tbilisi",
+            lat: 41.7033,
+            lon: 44.8024,
+            source: "geoapify",
+          },
+        },
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(earlierEvent.status).toBe(201)
+
+    const canceledEvent = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Canceled meetup",
+        idempotency_key: "post-key-event-canceled",
+        event: {
+          starts_at: 1_781_281_000,
+          timezone: "Asia/Tbilisi",
+          location_name: "Fabrika",
+          status: "canceled",
+        },
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(canceledEvent.status).toBe(201)
+
+    const regularPost = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Regular discussion",
+        body: "This is not an event.",
+        idempotency_key: "post-key-not-event",
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(regularPost.status).toBe(201)
+
+    const scheduled = await app.request(
+      `http://pirate.test/communities/${communityId}/events?from=1781279000&to=1781300000`,
+      { headers: { authorization: `Bearer ${creator.accessToken}` } },
+      ctx.env,
+    )
+    expect(scheduled.status).toBe(200)
+    const scheduledBody = await json(scheduled) as {
+      items: Array<{ post: { title: string | null; event?: { starts_at: number; status?: string | null; place?: { label: string } | null } | null } }>
+      next_cursor: string | null
+    }
+    expect(scheduledBody.next_cursor).toBeNull()
+    expect(scheduledBody.items.map((item) => item.post.title)).toEqual([
+      "Earlier market meetup",
+      "Later afterparty",
+    ])
+    expect(scheduledBody.items[0]?.post.event?.starts_at).toBe(1_781_280_000)
+    expect(scheduledBody.items[0]?.post.event?.place?.label).toBe("Dedaena Park")
+
+    const all = await app.request(
+      `http://pirate.test/communities/${communityId}/events?from=1781279000&to=1781300000&status=all`,
+      { headers: { authorization: `Bearer ${creator.accessToken}` } },
+      ctx.env,
+    )
+    expect(all.status).toBe(200)
+    const allBody = await json(all) as {
+      items: Array<{ post: { title: string | null } }>
+    }
+    expect(allBody.items.map((item) => item.post.title)).toEqual([
+      "Earlier market meetup",
+      "Canceled meetup",
+      "Later afterparty",
+    ])
+
+    const eventPosts = await app.request(
+      `http://pirate.test/communities/${communityId}/posts?has_event=true&sort=new&limit=10`,
+      { headers: { authorization: `Bearer ${creator.accessToken}` } },
+      ctx.env,
+    )
+    expect(eventPosts.status).toBe(200)
+    const eventPostsBody = await json(eventPosts) as {
+      items: Array<{ post: { title: string | null; event?: unknown } }>
+    }
+    expect(eventPostsBody.items.map((item) => item.post.title).sort()).toEqual([
+      "Canceled meetup",
+      "Earlier market meetup",
+      "Later afterparty",
+    ])
+    expect(eventPostsBody.items.every((item) => item.post.event)).toBe(true)
+  })
+
+  test("event status endpoint only allows authors and moderators to cancel events", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "community-event-status-creator")
+    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Pirate Event Status Club",
+membership_mode: "request",
+      namespace: {
+        namespace_verification: namespaceVerificationId,
+      },
+    }, ctx.env, creator.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: { id: string }
+    }
+    const communityId = communityCreateBody.community.id.replace(/^com_/, "")
+
+    const authorEvent = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Author event",
+        idempotency_key: "post-key-author-event-cancel",
+        event: {
+          starts_at: 1_781_280_000,
+          timezone: "Asia/Tbilisi",
+          location_name: "Dedaena Park",
+        },
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(authorEvent.status).toBe(201)
+    const authorEventBody = await json(authorEvent) as { id: string }
+
+    const invalidStatus = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts/${authorEventBody.id}/event-status`,
+      { status: "ended" },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(invalidStatus.status).toBe(400)
+    const invalidStatusBody = await json(invalidStatus) as { message: string }
+    expect(invalidStatusBody.message).toBe("status must be canceled")
+
+    const canceledByAuthor = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts/${authorEventBody.id}/event-status`,
+      { status: "canceled" },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(canceledByAuthor.status).toBe(200)
+    const canceledByAuthorBody = await json(canceledByAuthor) as {
+      post: { event?: { status?: string | null } | null }
+    }
+    expect(canceledByAuthorBody.post.event?.status).toBe("canceled")
+
+    const regularPost = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Not an event",
+        idempotency_key: "post-key-event-status-not-event",
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(regularPost.status).toBe(201)
+    const regularPostBody = await json(regularPost) as { id: string }
+
+    const missingEvent = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts/${regularPostBody.id}/event-status`,
+      { status: "canceled" },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(missingEvent.status).toBe(404)
+    const missingEventBody = await json(missingEvent) as { message: string }
+    expect(missingEventBody.message).toBe("Event not found")
+
+    const otherMember = await exchangeJwt(ctx.env, "community-event-status-member")
+    await addCommunityMember(ctx.communityDbRoot, communityId, otherMember.userId)
+    const moderator = await exchangeJwt(ctx.env, "community-event-status-moderator")
+    await addCommunityMember(ctx.communityDbRoot, communityId, moderator.userId)
+    await grantCommunityRole({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      userId: moderator.userId,
+      role: "moderator",
+    })
+
+    const secondEvent = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Moderator cancelable event",
+        idempotency_key: "post-key-moderator-event-cancel",
+        event: {
+          starts_at: 1_781_290_000,
+          timezone: "Asia/Tbilisi",
+          location_name: "Left Bank",
+        },
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(secondEvent.status).toBe(201)
+    const secondEventBody = await json(secondEvent) as { id: string }
+
+    const denied = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts/${secondEventBody.id}/event-status`,
+      { status: "canceled" },
+      ctx.env,
+      otherMember.accessToken,
+    )
+    expect(denied.status).toBe(403)
+
+    const canceledByModerator = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts/${secondEventBody.id}/event-status`,
+      { status: "canceled" },
+      ctx.env,
+      moderator.accessToken,
+    )
+    expect(canceledByModerator.status).toBe(200)
+    const canceledByModeratorBody = await json(canceledByModerator) as {
+      post: { event?: { status?: string | null } | null }
+    }
+    expect(canceledByModeratorBody.post.event?.status).toBe("canceled")
+  })
+
   test("post create returns 404 for a verified non-member", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup

@@ -2,6 +2,7 @@ import { badRequestError } from "../errors"
 import type { CreatePostRequest } from "../../types"
 
 type StoryLicensePreset = NonNullable<CreatePostRequest["license_preset"]>
+type PostEventStatus = NonNullable<NonNullable<CreatePostRequest["event"]>["status"]>
 
 export type PostWriteRequest = CreatePostRequest & {
   song_annotations_url?: string | null
@@ -42,6 +43,79 @@ function validateAssetLicense(input: {
   }
 }
 
+function validateNullableIntegerField(value: unknown, fieldName: string): void {
+  if (value == null) return
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    throw badRequestError(`${fieldName} must be an integer`)
+  }
+}
+
+function validateNonNegativeIntegerField(value: unknown, fieldName: string): void {
+  validateNullableIntegerField(value, fieldName)
+  if (typeof value === "number" && value < 0) {
+    throw badRequestError(`${fieldName} must be greater than or equal to 0`)
+  }
+}
+
+function validatePositiveIntegerField(value: unknown, fieldName: string): void {
+  validateNullableIntegerField(value, fieldName)
+  if (typeof value === "number" && value <= 0) {
+    throw badRequestError(`${fieldName} must be greater than 0`)
+  }
+}
+
+function isPostEventStatus(value: unknown): value is PostEventStatus {
+  return value === "scheduled" || value === "canceled" || value === "postponed" || value === "ended"
+}
+
+function validatePostEvent(body: CreatePostRequest): void {
+  const event = body.event
+  if (event == null) return
+  validatePositiveIntegerField(event.starts_at, "event.starts_at")
+  validateNullableIntegerField(event.ends_at, "event.ends_at")
+  if (typeof event.ends_at === "number" && event.ends_at < event.starts_at) {
+    throw badRequestError("event.ends_at must be after event.starts_at")
+  }
+  if (!event.timezone?.trim()) {
+    throw badRequestError("event.timezone is required")
+  }
+  try {
+    new Intl.DateTimeFormat(undefined, { timeZone: event.timezone.trim() }).format(new Date())
+  } catch {
+    throw badRequestError("event.timezone must be a valid IANA timezone")
+  }
+  if (event.status != null && !isPostEventStatus(event.status)) {
+    throw badRequestError("event.status is invalid")
+  }
+  if (event.is_online !== true && !event.location_name?.trim() && !event.address?.trim()) {
+    throw badRequestError("event location is required for in-person events")
+  }
+  if (event.event_url != null) {
+    try {
+      const parsed = new URL(event.event_url)
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        throw new Error("unsupported protocol")
+      }
+    } catch {
+      throw badRequestError("event.event_url must be a valid http or https URL")
+    }
+  }
+  if (event.place) {
+    if (!event.place.label?.trim()) {
+      throw badRequestError("event.place.label is required")
+    }
+    if (typeof event.place.lat !== "number" || !Number.isFinite(event.place.lat)) {
+      throw badRequestError("event.place.lat must be a number")
+    }
+    if (typeof event.place.lon !== "number" || !Number.isFinite(event.place.lon)) {
+      throw badRequestError("event.place.lon must be a number")
+    }
+    if (event.place.source !== "geoapify" && event.place.source !== "manual") {
+      throw badRequestError("event.place.source is invalid")
+    }
+  }
+}
+
 export function assertPostCreateRequest(body: CreatePostRequest, _communityId: string): void {
   const authorshipMode = body.authorship_mode ?? "human_direct"
   if (Object.prototype.hasOwnProperty.call(body, "community_id")) {
@@ -56,6 +130,7 @@ export function assertPostCreateRequest(body: CreatePostRequest, _communityId: s
   if (body.crosspost_source) {
     throw badRequestError("crosspost_source must not be provided in the post body")
   }
+  validatePostEvent(body)
   if (body.post_type === "crosspost") {
     if (!body.title?.trim()) {
       throw badRequestError("title is required for crossposts")

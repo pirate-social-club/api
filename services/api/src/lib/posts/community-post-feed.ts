@@ -19,6 +19,8 @@ export type PublishedLocalizedPostFeedItem = {
   viewer_vote: -1 | 1 | null
 }
 
+export type PublishedEventPostStatus = "scheduled" | "canceled" | "postponed" | "ended" | "all"
+
 function getFeedItemScore(item: {
   upvote_count: number
   downvote_count: number
@@ -63,6 +65,7 @@ export async function listPublishedLocalizedPosts(input: {
   viewerUserId: string
   limit: number
   flairId?: string | null
+  hasEvent?: boolean
   sort: "best" | "new" | "top"
   cursor?: string | null
   visibility?: Post["visibility"] | null
@@ -74,6 +77,21 @@ export async function listPublishedLocalizedPosts(input: {
   const createdAtCursor = newCursorParts?.[0] ?? null
   const postIdCursor = newCursorParts?.[1] ?? null
   const projectionSchema = await resolvePostProjectionSchema(input.client)
+  if (input.hasEvent === true && !projectionSchema.hasPostEvents) {
+    return {
+      items: [],
+      nextCursor: null,
+    }
+  }
+  const eventFilterSql = input.hasEvent === true
+    ? `
+        AND EXISTS (
+          SELECT 1
+          FROM post_events
+          WHERE post_events.post_id = posts.post_id
+          LIMIT 1
+        )`
+    : ""
   const buildFeedQuery = (postColumns: string) => ({
     sql: `
       SELECT ${postColumns},
@@ -113,6 +131,7 @@ export async function listPublishedLocalizedPosts(input: {
         AND status = 'published'
         AND (?3 IS NULL OR label_id = ?3)
         AND (?4 IS NULL OR visibility = ?4)
+        ${eventFilterSql}
         AND (
           ?5 = 0
           OR ?6 IS NULL
@@ -162,6 +181,92 @@ export async function listPublishedLocalizedPosts(input: {
   const nextCursor = offset + input.limit < sortedItems.length ? `o:${offset + input.limit}` : null
 
   return { items: pageItems, nextCursor }
+}
+
+export async function listPublishedLocalizedEventPosts(input: {
+  client: Client
+  communityId: string
+  viewerUserId: string
+  from: number
+  to?: number | null
+  limit: number
+  status: PublishedEventPostStatus
+}): Promise<PublishedLocalizedPostFeedItem[]> {
+  const projectionSchema = await resolvePostProjectionSchema(input.client)
+  if (!projectionSchema.hasPostEvents) {
+    return []
+  }
+
+  const result = await input.client.execute({
+    sql: `
+      SELECT ${postSelectColumnsForSchema(projectionSchema)},
+             (
+               SELECT COUNT(*)
+               FROM post_votes
+               WHERE post_id = posts.post_id
+                 AND vote_value = 1
+             ) AS upvote_count,
+             (
+               SELECT COUNT(*)
+               FROM post_votes
+               WHERE post_id = posts.post_id
+                 AND vote_value = -1
+             ) AS downvote_count,
+             (
+               SELECT COUNT(*)
+               FROM post_reactions
+               WHERE post_id = posts.post_id
+                 AND reaction_key = 'like'
+             ) AS like_count,
+             (
+               SELECT COUNT(*)
+               FROM comments
+               WHERE thread_root_post_id = posts.post_id
+                 AND status = 'published'
+             ) AS comment_count,
+             (
+               SELECT vote_value
+               FROM post_votes
+               WHERE post_id = posts.post_id
+                 AND user_id = ?2
+               LIMIT 1
+             ) AS viewer_vote
+      FROM (
+        SELECT post_id AS event_post_id,
+               event_start_at AS event_sort_start
+        FROM post_events
+        WHERE community_id = ?1
+          AND event_start_at >= ?3
+          AND (?4 IS NULL OR event_start_at <= ?4)
+          AND (?5 = 'all' OR status = ?5)
+        ORDER BY event_start_at ASC, post_id ASC
+        LIMIT ?6
+      ) AS event_posts
+      JOIN posts ON posts.post_id = event_posts.event_post_id
+      WHERE posts.status = 'published'
+      ORDER BY event_posts.event_sort_start ASC, event_posts.event_post_id ASC
+      LIMIT ?6
+    `,
+    args: [
+      input.communityId,
+      input.viewerUserId,
+      input.from,
+      input.to ?? null,
+      input.status,
+      input.limit,
+    ],
+  })
+
+  return result.rows.map((row) => {
+    return {
+      post: serializePost(toPostRow(row)),
+      upvote_count: requiredNumber(row, "upvote_count"),
+      downvote_count: requiredNumber(row, "downvote_count"),
+      comment_count: requiredNumber(row, "comment_count"),
+      like_count: requiredNumber(row, "like_count"),
+      viewer_vote: numberOrNull(rowValue(row, "viewer_vote")) as -1 | 1 | null,
+    }
+  })
 }
 
 export function sortPublishedLocalizedPostFeedItems(

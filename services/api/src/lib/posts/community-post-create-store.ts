@@ -24,6 +24,48 @@ import type { PostWriteRequest } from "./post-create-validation"
 
 export { assertPostCreateRequest, type PostWriteRequest } from "./post-create-validation"
 
+async function insertPostEvent(input: {
+  client: DbExecutor
+  communityId: string
+  postId: string
+  body: PostWriteRequest
+  createdAt: string
+  hasPostEvents: boolean
+}): Promise<void> {
+  const event = input.body.event
+  if (!event) return
+  if (!input.hasPostEvents) {
+    throw providerUnavailable("Community database migration is still rolling out", {
+      missing_table: "post_events",
+    })
+  }
+
+  await input.client.execute({
+    sql: `
+      INSERT INTO post_events (
+        post_id, community_id, event_start_at, event_end_at, event_timezone,
+        location_name, address, is_online, event_url, status, place_json,
+        created_at, updated_at
+      )
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)
+    `,
+    args: [
+      input.postId,
+      input.communityId,
+      event.starts_at,
+      event.ends_at ?? null,
+      event.timezone.trim(),
+      event.is_online === true ? null : event.location_name?.trim() || null,
+      event.is_online === true ? null : event.address?.trim() || null,
+      event.is_online === true ? 1 : 0,
+      event.event_url?.trim() || null,
+      event.status ?? "scheduled",
+      event.place ? boundedPostJsonProjection(JSON.stringify(event.place)) : null,
+      input.createdAt,
+    ],
+  })
+}
+
 export async function findPostByIdempotencyKey(input: {
   client: Client
   communityId: string
@@ -106,6 +148,11 @@ export async function insertPost(input: {
   if (crosspostSourceJson !== null && !projectionSchema.hasCrosspostSourceJson) {
     throw providerUnavailable("Community database migration is still rolling out", {
       missing_column: "posts.crosspost_source_json",
+    })
+  }
+  if (input.body.event && !projectionSchema.hasPostEvents) {
+    throw providerUnavailable("Community database migration is still rolling out", {
+      missing_table: "post_events",
     })
   }
   const sourceLanguage = detectSourceLanguageFromText([
@@ -200,6 +247,15 @@ export async function insertPost(input: {
       VALUES (${values.join(", ")})
     `,
     args,
+  })
+
+  await insertPostEvent({
+    client: input.client,
+    communityId: input.communityId,
+    postId,
+    body: input.body,
+    createdAt: input.createdAt,
+    hasPostEvents: projectionSchema.hasPostEvents,
   })
 
   const created = await getPostById(input.client, postId)

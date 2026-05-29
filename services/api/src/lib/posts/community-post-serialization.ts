@@ -1,5 +1,5 @@
 import { numberOrNull, requiredNumber, requiredString, rowValue, stringOrNull } from "../sql-row"
-import type { Post } from "../../types"
+import type { Post, PostEventPlace, PostEventStatus } from "../../types"
 import {
   parseCrosspostSource,
   parseDisclosedQualifiers,
@@ -49,6 +49,15 @@ export type PostRow = {
   link_og_title: string | null
   link_enrichment_snapshot_json: string | null
   link_enrichment_synced_at: string | null
+  event_start_at: number | null
+  event_end_at: number | null
+  event_timezone: string | null
+  event_location_name: string | null
+  event_address: string | null
+  event_is_online: number | null
+  event_url: string | null
+  event_status: PostEventStatus | null
+  event_place_json: string | null
   embeds_json: string | null
   media_refs_json: string | null
   song_artifact_bundle_id: string | null
@@ -116,6 +125,15 @@ export function toPostRow(row: unknown): PostRow {
     link_og_title: stringOrNull(rowValue(row, "link_og_title")),
     link_enrichment_snapshot_json: stringOrNull(rowValue(row, "link_enrichment_snapshot_json")),
     link_enrichment_synced_at: stringOrNull(rowValue(row, "link_enrichment_synced_at")),
+    event_start_at: numberOrNull(rowValue(row, "event_start_at")),
+    event_end_at: numberOrNull(rowValue(row, "event_end_at")),
+    event_timezone: stringOrNull(rowValue(row, "event_timezone")),
+    event_location_name: stringOrNull(rowValue(row, "event_location_name")),
+    event_address: stringOrNull(rowValue(row, "event_address")),
+    event_is_online: numberOrNull(rowValue(row, "event_is_online")),
+    event_url: stringOrNull(rowValue(row, "event_url")),
+    event_status: stringOrNull(rowValue(row, "event_status")) as PostRow["event_status"],
+    event_place_json: stringOrNull(rowValue(row, "event_place_json")),
     embeds_json: stringOrNull(rowValue(row, "embeds_json")),
     media_refs_json: stringOrNull(rowValue(row, "media_refs_json")),
     song_artifact_bundle_id: stringOrNull(rowValue(row, "song_artifact_bundle_id")),
@@ -184,6 +202,19 @@ export function serializePost(row: PostRow): Post {
     link_og_title: row.link_og_title,
     link_enrichment_snapshot_json: parseObject(row.link_enrichment_snapshot_json),
     link_enrichment_synced_at: row.link_enrichment_synced_at,
+    event: row.event_start_at != null && row.event_timezone
+      ? {
+          starts_at: row.event_start_at,
+          ends_at: row.event_end_at,
+          timezone: row.event_timezone,
+          location_name: row.event_location_name,
+          address: row.event_address,
+          is_online: row.event_is_online === 1,
+          event_url: row.event_url,
+          status: row.event_status ?? "scheduled",
+          place: parseObject(row.event_place_json) as PostEventPlace | null,
+        }
+      : null,
     embeds: parseEmbeds(row.embeds_json),
     media_refs: parseMediaRefs(row.media_refs_json),
     song_artifact_bundle_id: row.song_artifact_bundle_id,

@@ -11,6 +11,7 @@ import comments from "./routes/comments"
 import communities from "./routes/communities"
 import discovery from "./routes/discovery"
 import feed from "./routes/feed"
+import geo from "./routes/geo"
 import jobs from "./routes/jobs"
 import mcp from "./routes/mcp"
 import notifications from "./routes/notifications"
@@ -192,6 +193,7 @@ app.route("/community-media", communityMedia)
 app.route("/comments", comments)
 app.route("/communities", communities)
 app.route("/feed", feed)
+app.route("/geo", geo)
 app.route("/jobs", jobs)
 app.route("/mcp", mcp)
 app.route("/notifications", notifications)

@@ -11,6 +11,7 @@ import { publicCommunityId, publicId, publicPostId } from "../lib/public-ids"
 type CurrentPostResponse = ContractPost & Pick<
   Post,
   | "lyrics"
+  | "event"
   | "label_assignment_status"
   | "label_assigned_by"
   | "label_assigned_at"
@@ -66,6 +67,7 @@ export function serializePost(post: Post): CurrentPostResponse {
     link_og_image_url: post.link_og_image_url,
     link_og_title: post.link_og_title,
     link_enrichment: post.link_enrichment_snapshot_json,
+    event: post.event ?? null,
     embeds: post.embeds,
     media_refs: post.media_refs,
     creator_relation: post.creator_relation,
