@@ -981,4 +981,83 @@ describe("community membership gate routes", () => {
     expect(allowedBody.status).toBe("joined")
   })
 
+  test("nationality-gated member can vote without ALTCHA proof", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "nat-vote-no-altcha-creator")
+    const created = await createMembershipGatedCommunity({
+      env: ctx.env,
+      creatorAccessToken: creator.accessToken,
+      displayName: "Nationality Vote Club",
+      gate: {
+        type: "nationality",
+        provider: "self",
+        allowed: ["US"],
+      },
+    })
+    const createdPost = await requestJson(
+      `http://pirate.test/communities/${created.communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Vote target",
+        body: "Members who satisfy the nationality gate should vote without PoW.",
+        idempotency_key: "nat-vote-no-altcha-target",
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(createdPost.status).toBe(201)
+    const postBody = await json(createdPost) as { id: string }
+
+    const joiner = await exchangeJwt(ctx.env, "nat-vote-no-altcha-joiner")
+    setSelfProviderForTests({
+      startSession: async () => ({
+        upstreamSessionRef: "self-test-ref",
+        launch: {
+          app_name: "Pirate",
+          endpoint: "https://self.xyz",
+          endpoint_type: "https",
+          scope: "community_join",
+          session_id: "self-test-ref",
+          user_id: "test",
+          user_id_type: "uuid",
+          disclosures: { nationality: true },
+        },
+      }),
+      getSessionOutcome: async () => ({
+        status: "verified",
+        claims: { age_over_18: true, nationality: "US", gender: null, nullifier: "self-test-ref:us-vote" },
+      }),
+    } satisfies SelfProvider)
+    await completeNationalityVerification(ctx.env, joiner.accessToken)
+
+    const joined = await app.request(
+      `http://pirate.test/communities/${created.communityId}/join`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${joiner.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(joined.status).toBe(200)
+
+    const vote = await app.request(
+      `http://pirate.test/posts/${postBody.id}/vote`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${joiner.accessToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ value: 1 }),
+      },
+      ctx.env,
+    )
+    expect(vote.status).toBe(200)
+    const voteBody = await json(vote) as { post: string; value: number }
+    expect(voteBody.post).toBe(postBody.id)
+    expect(voteBody.value).toBe(1)
+  })
+
 })
