@@ -155,4 +155,43 @@ describe("geo routes", () => {
       console.error = originalConsoleError
     }
   })
+
+  test("live Geoapify autocomplete smoke", async () => {
+    if (process.env.GEOAPIFY_LIVE_TEST !== "1") {
+      return
+    }
+
+    const apiKey = process.env.GEOAPIFY_API_KEY?.trim()
+    if (!apiKey) {
+      throw new Error("GEOAPIFY_API_KEY is required when GEOAPIFY_LIVE_TEST=1")
+    }
+
+    const env = buildTestEnv({
+      DEV_MEMORY_STORE_ENABLED: "true",
+      ENVIRONMENT: "local",
+      GEOAPIFY_API_KEY: apiKey,
+    })
+    const token = await exchangeJwt(env, "geo-live-smoke-user")
+    const response = await app.request(
+      "http://pirate.test/geo/search?text=Left%20Bank&limit=5&country=ge&biasLat=41.7&biasLon=44.8",
+      { headers: { authorization: `Bearer ${token}` } },
+      env,
+    )
+
+    expect(response.status).toBe(200)
+    const body = await json(response) as {
+      places?: Array<{
+        label?: string
+        lat?: number
+        lon?: number
+        source?: string
+      }>
+    }
+    expect(Array.isArray(body.places)).toBe(true)
+    expect(body.places?.length).toBeGreaterThan(0)
+    expect(body.places?.[0]?.source).toBe("geoapify")
+    expect(typeof body.places?.[0]?.label).toBe("string")
+    expect(typeof body.places?.[0]?.lat).toBe("number")
+    expect(typeof body.places?.[0]?.lon).toBe("number")
+  })
 })
