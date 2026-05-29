@@ -3749,7 +3749,7 @@ SELECT
     max_context_threads, max_lookback_days, memory_enabled, retention_mode, retention_days,
     save_chats_to_community_db, action_mode, require_moderator_approval_for_writes,
     per_user_daily_message_cap, voice_mode, 'elevenlabs', 'scribe_v2',
-    CASE WHEN tts_provider IN ('elevenlabs', 'none') THEN tts_provider ELSE 'elevenlabs' END,
+    'elevenlabs',
     tts_voice, include_in_sovereign_export, policy_origin, created_at, CURRENT_TIMESTAMP
 FROM community_assistant_policy;
 
@@ -3759,7 +3759,7 @@ ALTER TABLE community_assistant_policy_next RENAME TO community_assistant_policy
 
 PRAGMA foreign_keys = ON;
 `,
-    checksum: "01f22966d812643e78408d1c0b4835568a6dd928569f33c00dac5d791ff1150d",
+    checksum: "e5e341d1e39fc18c3b794cce4ad3579afc9caf6f2b5cc2cf9ff5b14a2bbb71b8",
   },
   {
     name: "1089_community_assistant_text_and_voice_mode.sql",
@@ -3851,5 +3851,31 @@ ALTER TABLE community_assistant_policy_next RENAME TO community_assistant_policy
 PRAGMA foreign_keys = ON;
 `,
     checksum: "8b18bb1daf04a34f8350a1e9a3ec8d9ac098e78caad3d63ed57a7432e98dfe31",
+  },
+  {
+    name: "1089_post_events.sql",
+    sql: `CREATE TABLE post_events (
+    post_id TEXT PRIMARY KEY,
+    community_id TEXT NOT NULL,
+    event_start_at INTEGER NOT NULL,
+    event_end_at INTEGER,
+    event_timezone TEXT NOT NULL,
+    location_name TEXT,
+    address TEXT,
+    is_online INTEGER NOT NULL DEFAULT 0 CHECK (is_online IN (0, 1)),
+    event_url TEXT,
+    status TEXT NOT NULL CHECK (status IN ('scheduled', 'canceled', 'postponed', 'ended')),
+    place_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (post_id) REFERENCES posts(post_id),
+    FOREIGN KEY (community_id) REFERENCES communities(community_id)
+);
+
+CREATE INDEX idx_post_events_community_start
+    ON post_events(community_id, event_start_at, post_id);
+
+`,
+    checksum: "782bcec7005c69cefd501b9512066c450b481cc39c3c062a71a9e580f99ff2c0",
   },
 ] as const;
