@@ -6,6 +6,7 @@ import type {
 import { notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import { openCommunityDb } from "./community-db-factory"
+import { normalizeCommunityCountryCode } from "./country-code"
 import {
   assertUpdateCommunityRequest,
   communityMutationActorFromUserId,
@@ -94,6 +95,15 @@ export async function updateCommunity(input: {
       nextSettings.accepted_agent_ownership_providers = input.body.accepted_agent_ownership_providers == null
         ? null
         : [...new Set(input.body.accepted_agent_ownership_providers)]
+    }
+    if ("store_url" in input.body) {
+      nextSettings.store_url = input.body.store_url?.trim() || null
+    }
+    if ("store_label" in input.body) {
+      nextSettings.store_label = input.body.store_label?.trim() || null
+    }
+    if ("country_code" in input.body) {
+      nextSettings.country_code = normalizeCommunityCountryCode(input.body.country_code)
     }
 
     const now = nowIso()

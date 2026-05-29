@@ -538,6 +538,9 @@ export type Community = {
   description?: string | null
   avatar_ref?: string | null
   banner_ref?: string | null
+  store_url?: string | null
+  store_label?: string | null
+  country_code?: string | null
   namespace_verification_id?: string | null
   route_slug?: string | null
   pending_namespace_verification_session_id?: string | null
@@ -620,6 +623,9 @@ export type CommunityPreview = {
   localized_text?: CommunityTextLocalization | null
   avatar_ref?: string | null
   banner_ref?: string | null
+  store_url?: string | null
+  store_label?: string | null
+  country_code?: string | null
   membership_mode: "open" | "request" | "gated"
   allow_anonymous_identity?: boolean
   anonymous_identity_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null

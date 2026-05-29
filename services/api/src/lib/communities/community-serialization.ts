@@ -27,6 +27,7 @@ import { decodePublicId } from "../public-ids"
 import { unixSeconds } from "../../serializers/time"
 import type { GateAtom, GateExpression } from "./membership/gate-types"
 import { parseJsonField } from "../json"
+import { normalizeCommunityCountryCode } from "./country-code"
 
 type HumanVerificationLane = NonNullable<Community["human_verification_lane"]>
 
@@ -114,6 +115,46 @@ export function parseStoredReferenceLinks(
       position: typeof link.position === "number" ? link.position : index,
     } satisfies NonNullable<Community["reference_links"]>[number]]
   }).sort((left, right) => left.position - right.position)
+}
+
+export function parseStoredCommunityStore(
+  storedSettings: Record<string, unknown>,
+): Pick<Community, "store_url" | "store_label"> {
+  const rawUrl = storedSettings.store_url
+  const rawLabel = storedSettings.store_label
+  const storeUrl = typeof rawUrl === "string" ? rawUrl.trim() : ""
+  const storeLabel = typeof rawLabel === "string" ? rawLabel.trim() : ""
+
+  if (!storeUrl) {
+    return {
+      store_url: null,
+      store_label: null,
+    }
+  }
+
+  try {
+    const parsedUrl = new URL(storeUrl)
+    if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+      return {
+        store_url: null,
+        store_label: null,
+      }
+    }
+  } catch {
+    return {
+      store_url: null,
+      store_label: null,
+    }
+  }
+
+  return {
+    store_url: storeUrl,
+    store_label: storeLabel || null,
+  }
+}
+
+export function parseStoredCountryCode(storedSettings: Record<string, unknown>): string | null {
+  return normalizeCommunityCountryCode(storedSettings.country_code)
 }
 
 export function parseStoredLabelPolicy(
@@ -318,6 +359,8 @@ export function serializeCommunity(env: Env, row: CommunityRow, local: LocalComm
   const agentDailyReplyCap = parseStoredPositiveInteger(storedSettings, "agent_daily_reply_cap")
   const acceptedAgentOwnershipProviders = parseStoredAcceptedAgentOwnershipProviders(storedSettings)
   const acceptedAgentOwnershipProvidersOrigin = parseStoredAcceptedAgentOwnershipProvidersOrigin(storedSettings)
+  const store = parseStoredCommunityStore(storedSettings)
+  const countryCode = parseStoredCountryCode(storedSettings)
   const policyUpdatedAt = local?.updated_at ?? row.created_at
   const donationPartnerStatus: Community["donation_partner_status"] =
     local?.donation_partner_status === "inactive" ? "paused" : (local?.donation_partner_status ?? "unconfigured")
@@ -348,6 +391,9 @@ export function serializeCommunity(env: Env, row: CommunityRow, local: LocalComm
       displayName,
       bannerRef: local?.banner_ref,
     }),
+    store_url: store.store_url,
+    store_label: store.store_label,
+    country_code: countryCode,
     namespace_verification_id: row.namespace_verification_id,
     route_slug: row.route_slug,
     pending_namespace_verification_session_id: row.pending_namespace_verification_session_id,

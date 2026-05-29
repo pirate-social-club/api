@@ -966,6 +966,9 @@ membership_mode: "request",
           description: "New description",
           avatar_ref: "media://community-avatar",
           banner_ref: "media://community-banner",
+          store_url: "https://store.example.test/community",
+          store_label: "Community Store",
+          country_code: "ge",
         }),
       },
       ctx.env,
@@ -976,11 +979,17 @@ membership_mode: "request",
       description: string | null
       avatar_ref: string | null
       banner_ref: string | null
+      store_url: string | null
+      store_label: string | null
+      country_code: string | null
     }
     expect(updatedCommunity.display_name).toBe("New Name")
     expect(updatedCommunity.description).toBe("New description")
     expect(updatedCommunity.avatar_ref).toBe("media://community-avatar")
     expect(updatedCommunity.banner_ref).toBe("media://community-banner")
+    expect(updatedCommunity.store_url).toBe("https://store.example.test/community")
+    expect(updatedCommunity.store_label).toBe("Community Store")
+    expect(updatedCommunity.country_code).toBe("ge")
 
     const fetchedCommunity = await app.request(
       `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}`,
@@ -997,11 +1006,17 @@ membership_mode: "request",
       description: string | null
       avatar_ref: string | null
       banner_ref: string | null
+      store_url: string | null
+      store_label: string | null
+      country_code: string | null
     }
     expect(fetchedBody.display_name).toBe("New Name")
     expect(fetchedBody.description).toBe("New description")
     expect(fetchedBody.avatar_ref).toBe("media://community-avatar")
     expect(fetchedBody.banner_ref).toBe("media://community-banner")
+    expect(fetchedBody.store_url).toBe("https://store.example.test/community")
+    expect(fetchedBody.store_label).toBe("Community Store")
+    expect(fetchedBody.country_code).toBe("ge")
 
     const projection = await ctx.client.execute({
       sql: "SELECT description, avatar_ref, banner_ref FROM communities WHERE community_id = ?1",
