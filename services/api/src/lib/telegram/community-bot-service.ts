@@ -415,13 +415,36 @@ export async function decryptActiveCommunityTelegramBot(input: {
   env: Env
   communityId: string
 }): Promise<TelegramCommunityBotCredential> {
+  const credential = await decryptActiveCommunityTelegramBotOrNull(input)
+  if (!credential) {
+    throw providerUnavailable("Telegram bot token is required before connecting Telegram")
+  }
+  return credential
+}
+
+export async function getActiveCommunityTelegramBotUsername(input: {
+  env: Env
+  communityId: string
+}): Promise<string | null> {
+  const row = await readTelegramCommunityBot({
+    env: input.env,
+    communityId: input.communityId,
+    status: "active",
+  })
+  return row?.bot_username ?? null
+}
+
+export async function decryptActiveCommunityTelegramBotOrNull(input: {
+  env: Env
+  communityId: string
+}): Promise<TelegramCommunityBotCredential | null> {
   const row = await readTelegramCommunityBot({
     env: input.env,
     communityId: input.communityId,
     status: "active",
   })
   if (!row) {
-    throw providerUnavailable("Telegram bot token is required before connecting Telegram")
+    return null
   }
   return {
     id: row.telegram_community_bot_id,
