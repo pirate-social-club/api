@@ -181,6 +181,7 @@ describe("geo routes", () => {
     expect(response.status).toBe(200)
     const body = await json(response) as {
       places?: Array<{
+        countryCode?: string
         label?: string
         lat?: number
         lon?: number
@@ -190,6 +191,7 @@ describe("geo routes", () => {
     expect(Array.isArray(body.places)).toBe(true)
     expect(body.places?.length).toBeGreaterThan(0)
     expect(body.places?.[0]?.source).toBe("geoapify")
+    expect(body.places?.[0]?.countryCode).toBe("ge")
     expect(typeof body.places?.[0]?.label).toBe("string")
     expect(typeof body.places?.[0]?.lat).toBe("number")
     expect(typeof body.places?.[0]?.lon).toBe("number")
