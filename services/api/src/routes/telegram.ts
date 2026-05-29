@@ -25,6 +25,7 @@ import {
   type TelegramChatMember,
 } from "../lib/telegram/bot-api"
 import {
+  decryptActiveCommunityTelegramBotOrNull,
   decryptCommunityTelegramBotByWebhookId,
   type TelegramCommunityBotCredential,
 } from "../lib/telegram/community-bot-service"
@@ -169,7 +170,7 @@ function parseStartToken(text: string | undefined): string | null {
 
 function parseCommunityStartPayload(payload: string | null): string | null {
   const trimmed = payload?.trim()
-  if (!trimmed || trimmed.startsWith("tgsetup_")) {
+  if (!trimmed || trimmed.startsWith("tgsetup_") || trimmed.startsWith("join_")) {
     return null
   }
   const encodedCommunityId = trimmed.startsWith("c_")
@@ -193,9 +194,37 @@ function parseCommunityStartPayload(payload: string | null): string | null {
   }
 }
 
+function parseCommunityJoinPayload(payload: string | null): string | null {
+  const trimmed = payload?.trim()
+  const prefix = "join_"
+  if (!trimmed?.startsWith(prefix)) {
+    return null
+  }
+  const encodedCommunityId = trimmed.slice(prefix.length)
+  if (!encodedCommunityId) {
+    return null
+  }
+  try {
+    return decodePublicCommunityId(decodeURIComponent(encodedCommunityId))
+  } catch {
+    return null
+  }
+}
+
 function telegramPlatformMiniAppVerificationTokens(env: Env): string[] {
   const token = env.TELEGRAM_BOT_TOKEN?.trim()
   return token ? [token] : []
+}
+
+async function telegramAutoExchangeMiniAppVerificationTokens(env: Env, communityId: string): Promise<string[]> {
+  const communityBot = await decryptActiveCommunityTelegramBotOrNull({
+    env,
+    communityId,
+  })
+  if (communityBot) {
+    return [communityBot.token]
+  }
+  return telegramPlatformMiniAppVerificationTokens(env)
 }
 
 function summarizeTelegramJoinGrantApprovalResults(
@@ -902,6 +931,71 @@ async function getBotAdminStatus(bot: Env | TelegramBotCredential, chatId: numbe
   }
 }
 
+async function handleCommunityBotStartMessage(env: Env, input: {
+  bot: TelegramCommunityBotCredential
+  chatId: string
+  message: TelegramWebhookMessage
+  telegramUserId: string | null
+}): Promise<void> {
+  const startPayload = parseStartToken(input.message.text)
+  const isSetupToken = startPayload?.startsWith("tgsetup_") === true
+  if (isSetupToken) {
+    if (!input.telegramUserId || !startPayload) {
+      await safeSendTelegramMessage(input.bot, {
+        chat_id: input.chatId,
+        text: "Open this setup link from your own Telegram account.",
+      })
+      return
+    }
+    try {
+      const setupRequest = await prepareTelegramSetupChatRequest({
+        env,
+        setupToken: startPayload,
+        telegramCommunityBotId: input.bot.id,
+        telegramUserId: input.telegramUserId,
+        privateChatId: input.chatId,
+        requestMessageId: input.message.message_id ?? null,
+      })
+      await safeSendTelegramMessage(input.bot, {
+        chat_id: input.chatId,
+        text: setupInstructions(input.bot),
+        reply_markup: chatPickerMarkup(setupRequest.request_id),
+      })
+    } catch (error) {
+      await safeSendTelegramMessage(input.bot, {
+        chat_id: input.chatId,
+        text: setupErrorMessage(error),
+      })
+    }
+    return
+  }
+
+  const joinCommunityId = parseCommunityJoinPayload(startPayload)
+  const legacyCommunityId = joinCommunityId ? null : parseCommunityStartPayload(startPayload)
+  const requestedCommunityId = joinCommunityId ?? legacyCommunityId
+  if (requestedCommunityId && requestedCommunityId !== input.bot.communityId) {
+    await safeSendTelegramMessage(input.bot, {
+      chat_id: input.chatId,
+      text: "This link is for a different community.",
+    })
+    return
+  }
+  if (startPayload && !requestedCommunityId) {
+    await safeSendTelegramMessage(input.bot, {
+      chat_id: input.chatId,
+      text: "This Telegram link is not valid for this community.",
+    })
+    return
+  }
+
+  await handleCommunityStartMessage(env, {
+    bot: input.bot,
+    chatId: input.chatId,
+    communityId: input.bot.communityId,
+    telegramUserId: input.telegramUserId,
+  })
+}
+
 async function handleStartMessage(env: Env, message: TelegramWebhookMessage, bot: Env | TelegramCommunityBotCredential = env): Promise<void> {
   const chatId = telegramIdentifier(message.chat?.id)
   const telegramUserId = telegramIdentifier(message.from?.id)
@@ -912,6 +1006,15 @@ async function handleStartMessage(env: Env, message: TelegramWebhookMessage, bot
     await safeSendTelegramMessage(bot, {
       chat_id: chatId,
       text: botPrivateChatInstructions(bot),
+    })
+    return
+  }
+  if (isCommunityBot(bot)) {
+    await handleCommunityBotStartMessage(env, {
+      bot,
+      chatId,
+      message,
+      telegramUserId,
     })
     return
   }
@@ -930,7 +1033,7 @@ async function handleStartMessage(env: Env, message: TelegramWebhookMessage, bot
   }
 
   if (!isSetupToken || !telegramUserId) {
-    const communityId = "communityId" in bot ? bot.communityId : null
+    const communityId = isCommunityBot(bot) ? bot.communityId : null
     const url = communityId ? telegramCommunityParticipationUrl(env, communityId) : null
     if (url) {
       await safeSetTelegramChatMenuButton(bot, {
@@ -959,7 +1062,7 @@ async function handleStartMessage(env: Env, message: TelegramWebhookMessage, bot
     const setupRequest = await prepareTelegramSetupChatRequest({
       env,
       setupToken,
-      telegramCommunityBotId: "id" in bot ? bot.id : null,
+      telegramCommunityBotId: isCommunityBot(bot) ? bot.id : null,
       telegramUserId,
       privateChatId: chatId,
       requestMessageId: message.message_id ?? null,
@@ -1510,7 +1613,7 @@ telegram.post("/session/auto-exchange", async (c) => {
   }
 
   const telegramUser = verifyTelegramMiniAppInitData({
-    botTokens: telegramPlatformMiniAppVerificationTokens(c.env),
+    botTokens: await telegramAutoExchangeMiniAppVerificationTokens(c.env, communityId),
     initData,
     maxAgeSeconds: configuredTelegramInitDataMaxAgeSeconds(c.env),
   })

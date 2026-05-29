@@ -241,6 +241,21 @@ async function exchangeTelegramOnboarding(input: {
   )
 }
 
+function telegramSessionAutoExchange(input: {
+  body: Record<string, unknown>
+  env: Env
+}): Promise<Response> {
+  return Promise.resolve(app.request(
+    "http://pirate.test/telegram/session/auto-exchange",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input.body),
+    },
+    input.env,
+  ))
+}
+
 async function createSetupIntent(input: {
   env: Env
   communityId: string
@@ -933,6 +948,199 @@ describe("community Telegram routes", () => {
     const sendMessageRequests = telegramRequests.filter((request) => request.url.endsWith("/sendMessage"))
     expect(sendMessageRequests).toHaveLength(1)
     expect(sendMessageRequests[0]?.url).toBe(`https://api.telegram.org/bot${token}/sendMessage`)
+  })
+
+  test("public bot username endpoint exposes only the active bot username", async () => {
+    const token = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXsecretLAST4"
+    installTelegramApiMock(async (request) => {
+      const method = request.url.split("/").at(-1)
+      if (method === "getMe") {
+        return {
+          ok: true,
+          result: {
+            id: 123456789,
+            is_bot: true,
+            first_name: "Community Test Bot",
+            username: "CommunityOwnedBot",
+          },
+        }
+      }
+      if (method === "setWebhook") {
+        return { ok: true, result: true }
+      }
+      return { ok: true, result: true }
+    })
+    const ctx = await createRouteTestContext({
+      PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
+      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
+      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "2",
+    })
+    cleanup = ctx.cleanup
+    const owner = await exchangeJwt(ctx.env, "telegram-bot-username-owner")
+    const communityId = await createCommunity({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      displayName: "Community Bot Username Club",
+    })
+
+    const missingResponse = await app.request(
+      `http://pirate.test/communities/com_${communityId}/telegram-bot-username`,
+      {},
+      ctx.env,
+    )
+    expect(missingResponse.status).toBe(200)
+    const missingBody = await json(missingResponse) as { active_telegram_bot_username?: string | null }
+    expect(missingBody.active_telegram_bot_username).toBeNull()
+
+    await saveCommunityBotForWebhook({
+      accessToken: owner.accessToken,
+      communityId,
+      env: ctx.env,
+      token,
+    })
+
+    const activeResponse = await app.request(
+      `http://pirate.test/communities/com_${communityId}/telegram-bot-username`,
+      {},
+      ctx.env,
+    )
+    expect(activeResponse.status).toBe(200)
+    const activeBody = await json(activeResponse) as {
+      active_telegram_bot_username?: string | null
+      encrypted_bot_token?: string
+      webhook_id?: string
+    }
+    expect(activeBody).toEqual({ active_telegram_bot_username: "CommunityOwnedBot" })
+    expect(activeBody.encrypted_bot_token).toBeUndefined()
+    expect(activeBody.webhook_id).toBeUndefined()
+  })
+
+  test("community bot start with matching join payload resolves from bot identity", async () => {
+    const token = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXsecretLAST4"
+    const telegramRequests = installTelegramApiMock(async (request) => {
+      const method = request.url.split("/").at(-1)
+      if (method === "getMe") {
+        return {
+          ok: true,
+          result: {
+            id: 123456789,
+            is_bot: true,
+            first_name: "Community Test Bot",
+            username: "CommunityOwnedBot",
+          },
+        }
+      }
+      if (method === "setWebhook" || method === "setChatMenuButton") {
+        return { ok: true, result: true }
+      }
+      return { ok: true, result: { message_id: 702 } }
+    })
+    const ctx = await createRouteTestContext({
+      PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
+      PIRATE_WEB_PUBLIC_ORIGIN: "https://staging.pirate.test",
+      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
+      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "2",
+    })
+    cleanup = ctx.cleanup
+    const owner = await exchangeJwt(ctx.env, "telegram-bot-join-owner")
+    const communityId = await createCommunity({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      displayName: "Community Join Payload Club",
+    })
+    const { webhookId, webhookSecret } = await saveCommunityBotForWebhook({
+      accessToken: owner.accessToken,
+      communityId,
+      env: ctx.env,
+      token,
+    })
+
+    const accepted = await telegramCommunityBotWebhook({
+      env: ctx.env,
+      webhookId,
+      secret: webhookSecret,
+      body: {
+        update_id: 3,
+        message: {
+          message_id: 3,
+          chat: { id: 9001, type: "private" },
+          from: { id: 5001 },
+          text: `/start join_com_${communityId}`,
+        },
+      },
+    })
+    expect(accepted.status).toBe(200)
+    const sendMessageRequests = telegramRequests.filter((request) => request.url.endsWith("/sendMessage"))
+    expect(sendMessageRequests).toHaveLength(1)
+    const sendBody = await sendMessageRequests[0]!.json() as { text?: string; reply_markup?: { inline_keyboard?: Array<Array<{ web_app?: { url?: string } }>> } }
+    expect(sendBody.text).toContain("Community Join Payload Club")
+    expect(sendBody.reply_markup?.inline_keyboard?.[0]?.[0]?.web_app?.url).toBe(`https://staging.pirate.test/tg/verify/com_${communityId}`)
+  })
+
+  test("community bot start rejects a join payload for another community", async () => {
+    const token = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXsecretLAST4"
+    const telegramRequests = installTelegramApiMock(async (request) => {
+      const method = request.url.split("/").at(-1)
+      if (method === "getMe") {
+        return {
+          ok: true,
+          result: {
+            id: 123456789,
+            is_bot: true,
+            first_name: "Community Test Bot",
+            username: "CommunityOwnedBot",
+          },
+        }
+      }
+      if (method === "setWebhook") {
+        return { ok: true, result: true }
+      }
+      return { ok: true, result: { message_id: 703 } }
+    })
+    const ctx = await createRouteTestContext({
+      PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
+      PIRATE_WEB_PUBLIC_ORIGIN: "https://staging.pirate.test",
+      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
+      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "2",
+    })
+    cleanup = ctx.cleanup
+    const owner = await exchangeJwt(ctx.env, "telegram-bot-join-mismatch-owner")
+    const communityId = await createCommunity({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      displayName: "Community Join Mismatch Club",
+    })
+    const otherCommunityId = await createCommunity({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      displayName: "Other Community Join Club",
+    })
+    const { webhookId, webhookSecret } = await saveCommunityBotForWebhook({
+      accessToken: owner.accessToken,
+      communityId,
+      env: ctx.env,
+      token,
+    })
+
+    const accepted = await telegramCommunityBotWebhook({
+      env: ctx.env,
+      webhookId,
+      secret: webhookSecret,
+      body: {
+        update_id: 4,
+        message: {
+          message_id: 4,
+          chat: { id: 9001, type: "private" },
+          from: { id: 5001 },
+          text: `/start join_com_${otherCommunityId}`,
+        },
+      },
+    })
+    expect(accepted.status).toBe(200)
+    const sendMessageRequests = telegramRequests.filter((request) => request.url.endsWith("/sendMessage"))
+    expect(sendMessageRequests).toHaveLength(1)
+    const sendBody = await sendMessageRequests[0]!.json() as { text?: string }
+    expect(sendBody.text).toBe("This link is for a different community.")
   })
 
   test("owner can create setup intent, complete linked chat, update settings, and unlink", async () => {
@@ -2646,6 +2854,115 @@ describe("community Telegram routes", () => {
       canceled: 1,
       completed: 1,
     })
+  })
+
+  test("telegram auto-exchange accepts active community bot init data and rejects platform init data", async () => {
+    const communityBotToken = "123456789:ACTIVE_COMMUNITY_BOT_TOKEN_LAST4"
+    installTelegramApiMock(async (request) => {
+      const method = request.url.split("/").at(-1)
+      if (method === "getMe") {
+        return {
+          ok: true,
+          result: {
+            id: 123456789,
+            is_bot: true,
+            first_name: "Community Auto Exchange Bot",
+            username: "CommunityAutoExchangeBot",
+          },
+        }
+      }
+      if (method === "setWebhook") {
+        return { ok: true, result: true }
+      }
+      return { ok: true, result: true }
+    })
+    const ctx = await createRouteTestContext({
+      TELEGRAM_BOT_USERNAME: "PirateTestBot",
+      TELEGRAM_BOT_TOKEN: "987654:platform-token",
+      PIRATE_WEB_PUBLIC_ORIGIN: "https://staging.pirate.test",
+      PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
+      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
+      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "2",
+    })
+    cleanup = ctx.cleanup
+    const owner = await exchangeJwt(ctx.env, "telegram-auto-exchange-active-bot-owner")
+    const communityId = await createCommunity({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      displayName: "Telegram Auto Exchange Active Bot Club",
+    })
+    await saveCommunityBotForWebhook({
+      accessToken: owner.accessToken,
+      communityId,
+      env: ctx.env,
+      token: communityBotToken,
+    })
+
+    const accepted = await telegramSessionAutoExchange({
+      env: ctx.env,
+      body: {
+        community_id: `com_${communityId}`,
+        init_data: signedTelegramInitData({
+          botToken: communityBotToken,
+          user: {
+            id: 779121,
+            username: "communityaccepted",
+          },
+        }),
+      },
+    })
+    expect(accepted.status).toBe(200)
+
+    const rejected = await telegramSessionAutoExchange({
+      env: ctx.env,
+      body: {
+        community_id: `com_${communityId}`,
+        init_data: signedTelegramInitData({
+          botToken: "987654:platform-token",
+          user: {
+            id: 779122,
+            username: "platformrejected",
+          },
+        }),
+      },
+    })
+    expect(rejected.status).toBe(401)
+    const account = await ctx.client.execute({
+      sql: "SELECT user_id FROM telegram_accounts WHERE telegram_user_id = ?1 LIMIT 1",
+      args: ["779122"],
+    })
+    expect(account.rows).toHaveLength(0)
+  })
+
+  test("telegram auto-exchange falls back to platform init data when no community bot exists", async () => {
+    const ctx = await createRouteTestContext({
+      TELEGRAM_BOT_USERNAME: "PirateTestBot",
+      TELEGRAM_BOT_TOKEN: "987654:platform-token",
+      PIRATE_WEB_PUBLIC_ORIGIN: "https://staging.pirate.test",
+      PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
+    })
+    cleanup = ctx.cleanup
+    const owner = await exchangeJwt(ctx.env, "telegram-auto-exchange-platform-fallback-owner")
+    const communityId = await createCommunity({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      displayName: "Telegram Auto Exchange Platform Fallback Club",
+    })
+
+    const exchangeResponse = await telegramSessionAutoExchange({
+      env: ctx.env,
+      body: {
+        community_id: `com_${communityId}`,
+        init_data: signedTelegramInitData({
+          botToken: "987654:platform-token",
+          user: {
+            id: 779123,
+            username: "platformfallback",
+          },
+        }),
+      },
+    })
+    expect(exchangeResponse.status).toBe(200)
   })
 
   test("community bot private DM prompts non-members without provider calls", async () => {
