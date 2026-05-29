@@ -153,6 +153,22 @@ export function sendTelegramMessage(
   return callTelegramBotApi(bot, "sendMessage", body)
 }
 
+export function setTelegramChatMenuButton(
+  bot: Env | TelegramBotCredential,
+  body: {
+    chat_id?: number | string
+    menu_button: {
+      type: "commands" | "default" | "web_app"
+      text?: string
+      web_app?: {
+        url: string
+      }
+    }
+  },
+): Promise<boolean> {
+  return callTelegramBotApi<boolean>(bot, "setChatMenuButton", body)
+}
+
 export function sendTelegramVoice(
   bot: Env | TelegramBotCredential,
   body: {
