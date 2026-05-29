@@ -223,6 +223,20 @@ export function buildTestCommunityRepository(input: {
     async getCommunityPostProjectionByPostId(postId: string) {
       return repo.postProjections.get(postId) ?? null
     },
+    async updateCommunityPostProjectionPayload(input: {
+      postId: string
+      projectedPayloadJson: string
+      updatedAt: string
+    }) {
+      const existing = repo.postProjections.get(input.postId)
+      if (existing) {
+        repo.postProjections.set(input.postId, {
+          ...existing,
+          projected_payload_json: input.projectedPayloadJson,
+          updated_at: input.updatedAt,
+        })
+      }
+    },
     async recordCommunityCommentProjection(input: {
       communityId: string
       threadRootPostId: string

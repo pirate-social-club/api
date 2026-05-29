@@ -40,8 +40,8 @@ describe("geo routes", () => {
       cleanup = () => {
         globalThis.fetch = originalFetch
       }
-      return (async (input) => {
-        const url = typeof input === "string" ? input : input.url
+      return (async (input, init) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
         if (url.startsWith("https://api.geoapify.com/v1/geocode/autocomplete")) {
           requestedUrls.push(url)
           return new Response(JSON.stringify({
@@ -73,13 +73,13 @@ describe("geo routes", () => {
             status: 200,
           })
         }
-        return originalFetch(input)
+        return originalFetch(input, init)
       }) as typeof fetch
-    }, () => app.request(
-      "http://pirate.test/geo/search?text=Left&limit=5&country=ge&biasLat=41.7&biasLon=44.8",
-      { headers: { authorization: `Bearer ${token}` } },
-      env,
-    ))
+    }, async () => await app.request(
+        "http://pirate.test/geo/search?text=Left&limit=5&country=ge&biasLat=41.7&biasLon=44.8",
+        { headers: { authorization: `Bearer ${token}` } },
+        env,
+      ))
 
     expect(response.status).toBe(200)
     expect(requestedUrls).toHaveLength(1)
