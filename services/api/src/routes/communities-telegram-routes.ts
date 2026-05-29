@@ -8,6 +8,7 @@ import {
   type UpdateTelegramChatSettingsInput,
 } from "../lib/telegram/community-chat-service"
 import {
+  getActiveCommunityTelegramBotUsername,
   getCommunityTelegramBot,
   revokeCommunityTelegramBot,
   saveCommunityTelegramBot,
@@ -16,8 +17,31 @@ import {
   getResolvedCommunityRouteContext,
   optionalJsonBody,
 } from "./communities-route-helpers"
+import { getCommunityRepository } from "../lib/communities/db-community-repository"
+import { resolveCommunityIdentifier } from "../lib/communities/community-identifier"
+import { notFoundError } from "../lib/errors"
 
 export function registerCommunityTelegramRoutes(communities: Hono<AuthenticatedEnv>): void {
+  communities.get("/:communityId/telegram-bot-username", async (c) => {
+    const communityIdentifier = c.req.param("communityId")?.trim()
+    const communityRepository = getCommunityRepository(c.env)
+    const communityId = communityIdentifier
+      ? await resolveCommunityIdentifier(communityRepository, communityIdentifier)
+      : null
+    if (!communityId) {
+      throw notFoundError("Community not found")
+    }
+    const community = await communityRepository.getCommunityById(communityId)
+    if (!community || community.status !== "active") {
+      throw notFoundError("Community not found")
+    }
+    const username = await getActiveCommunityTelegramBotUsername({
+      env: c.env,
+      communityId: community.community_id,
+    })
+    return c.json({ active_telegram_bot_username: username }, 200)
+  })
+
   communities.get("/:communityId/telegram-bot", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const result = await getCommunityTelegramBot({
