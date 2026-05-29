@@ -181,6 +181,21 @@ export function buildTestCommunityRepository(input: {
         })
       }
     },
+    async updateCommunityPostProjectionPayload(input: {
+      postId: string
+      projectedPayloadJson: string
+      updatedAt: string
+    }) {
+      const existing = repo.postProjections.get(input.postId)
+      if (existing) {
+        repo.postProjections.set(input.postId, {
+          ...existing,
+          projected_payload_json: input.projectedPayloadJson,
+          projection_version: existing.projection_version + 1,
+          updated_at: input.updatedAt,
+        })
+      }
+    },
     async recordCommunityPostProjection(input: {
       communityId: string
       sourcePostId: string

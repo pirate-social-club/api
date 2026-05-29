@@ -2,13 +2,14 @@ import type { Env } from "../../env"
 import { getUserRepository } from "../auth/repositories"
 import { getJoinEligibility } from "../communities/membership/eligibility-service"
 import type { CommunityMembershipRepository } from "../communities/membership/types"
-import { badRequestError } from "../errors"
+import { badRequestError, conflictError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { publicCommunityId } from "../public-ids"
 import { getControlPlaneClient } from "../runtime-deps"
 import type { Client } from "../sql-client"
 import { rowValue, stringOrNull } from "../sql-row"
 import { getTelegramLinkedChatBotContext } from "./community-chat-service"
+import type { TelegramMiniAppUser } from "./mini-app-auth"
 import {
   createTelegramOnboardingIntent,
   telegramOnboardingWebAppReplyMarkup,
@@ -156,6 +157,89 @@ export async function resolveTelegramAccount(input: {
     userId: setupOwnerUserId,
   })
   return { userId: setupOwnerUserId }
+}
+
+export async function syncTelegramAccountForUser(input: {
+  env: Env
+  telegramUser: TelegramMiniAppUser
+  userId: string
+}): Promise<void> {
+  const client = getControlPlaneClient(input.env)
+  const existingByTelegram = await client.execute({
+    sql: `
+      SELECT user_id
+      FROM telegram_accounts
+      WHERE telegram_user_id = ?1
+      LIMIT 1
+    `,
+    args: [input.telegramUser.id],
+  })
+  const existingTelegramUserId = stringOrNull(rowValue(existingByTelegram.rows[0], "user_id"))
+  if (existingTelegramUserId && existingTelegramUserId !== input.userId) {
+    throw conflictError("Telegram account is linked to another Pirate user")
+  }
+
+  const existingByUser = await client.execute({
+    sql: `
+      SELECT telegram_user_id
+      FROM telegram_accounts
+      WHERE user_id = ?1
+      LIMIT 1
+    `,
+    args: [input.userId],
+  })
+  const existingUserTelegramId = stringOrNull(rowValue(existingByUser.rows[0], "telegram_user_id"))
+  if (existingUserTelegramId && existingUserTelegramId !== input.telegramUser.id) {
+    throw conflictError("Pirate user is linked to another Telegram account")
+  }
+
+  const now = nowIso()
+  await client.execute({
+    sql: `
+      INSERT INTO telegram_accounts (
+        telegram_user_id, user_id, username, first_name, last_name, photo_url,
+        first_seen_at, last_seen_at, updated_at
+      ) VALUES (
+        ?1, ?2, ?3, ?4, ?5, ?6,
+        ?7, ?7, ?7
+      )
+      ON CONFLICT(telegram_user_id) DO UPDATE SET
+        username = excluded.username,
+        first_name = excluded.first_name,
+        last_name = excluded.last_name,
+        photo_url = excluded.photo_url,
+        last_seen_at = excluded.last_seen_at,
+        updated_at = excluded.updated_at
+    `,
+    args: [
+      input.telegramUser.id,
+      input.userId,
+      input.telegramUser.username,
+      input.telegramUser.firstName,
+      input.telegramUser.lastName,
+      input.telegramUser.photoUrl,
+      now,
+    ],
+  })
+}
+
+export async function linkPendingTelegramJoinGrantsForTelegramUser(input: {
+  env: Env
+  telegramUserId: string
+  userId: string
+}): Promise<void> {
+  await getControlPlaneClient(input.env).execute({
+    sql: `
+      UPDATE telegram_join_grants
+      SET user_id = ?2,
+          updated_at = ?3
+      WHERE telegram_user_id = ?1
+        AND user_id IS NULL
+        AND status = 'pending'
+        AND expires_at > ?3
+    `,
+    args: [input.telegramUserId, input.userId, nowIso()],
+  })
 }
 
 async function insertJoinGrant(input: {
