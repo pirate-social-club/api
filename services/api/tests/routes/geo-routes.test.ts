@@ -41,7 +41,11 @@ describe("geo routes", () => {
         globalThis.fetch = originalFetch
       }
       return (async (input) => {
-        const url = typeof input === "string" ? input : input.url
+        const url = input instanceof URL
+          ? input.toString()
+          : typeof input === "string"
+            ? input
+            : input.url
         if (url.startsWith("https://api.geoapify.com/v1/geocode/autocomplete")) {
           requestedUrls.push(url)
           return new Response(JSON.stringify({
@@ -75,7 +79,7 @@ describe("geo routes", () => {
         }
         return originalFetch(input)
       }) as typeof fetch
-    }, () => app.request(
+    }, async () => app.request(
       "http://pirate.test/geo/search?text=Left&limit=5&country=ge&biasLat=41.7&biasLon=44.8",
       { headers: { authorization: `Bearer ${token}` } },
       env,

@@ -22,6 +22,7 @@ Mounted in `services/api/src/index.ts`:
 - `/comments`
 - `/communities`
 - `/feed`
+- `/geo`
 - `/jobs`
 - `/notifications`
 - `/royalties`
@@ -68,6 +69,7 @@ Mounted in `services/api/src/index.ts`:
 | `/comments/*` | `src/routes/comments.ts` | `tests/routes/comments/comments-routes.test.ts`, `tests/routes/comments/comments-read-routes.test.ts`, `tests/comment-service*.test.ts` | direct | Covers create/read/replies/context/vote/delete through route and service tests. |
 | `/public-comments/*` | `src/routes/public-comments.ts` | `tests/routes/comments/comments-read-routes.test.ts` | direct | Covers public post comments and public replies. |
 | `/feed/home` | `src/routes/feed.ts` | `tests/routes/feed-routes.test.ts`, `src/lib/feed/home-feed-service.test.ts`, broader public-post tests | direct | Route coverage includes the empty-feed/community-summary path; service tests cover ranking helpers. |
+| `/geo/search` | `src/routes/geo.ts` | `tests/routes/geo-routes.test.ts` | direct | Covers authentication, Geoapify autocomplete normalization, input validation, missing API key handling, and optional live smoke gating. |
 | `/jobs/:jobId` | `src/routes/jobs.ts` | `tests/routes/jobs-posts-routes.test.ts`, `tests/routes/communities/community-routes.test.ts` | direct | Dedicated jobs coverage now exists, with broader assertions still present in community flows. |
 | `/notifications/*` | `src/routes/notifications.ts` | `tests/routes/notifications-routes.test.ts` | direct | Covers auth requirement, summary, tasks, feed, mark-read, and dismiss-task. |
 | `/royalties/*` | `src/routes/royalties.ts` | `tests/routes/royalties-routes.test.ts` | direct | Covers claimable royalties, activity, claims listing, and claim recording. |

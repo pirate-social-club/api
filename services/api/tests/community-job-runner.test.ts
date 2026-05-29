@@ -338,6 +338,10 @@ describe("community-job-runner", () => {
         await alphaRepo.updateCommunityPostProjectionStatus(input)
         await betaRepo.updateCommunityPostProjectionStatus(input)
       },
+      async updateCommunityPostProjectionPayload(input: Parameters<TestCommunityRepository["updateCommunityPostProjectionPayload"]>[0]) {
+        await alphaRepo.updateCommunityPostProjectionPayload(input)
+        await betaRepo.updateCommunityPostProjectionPayload(input)
+      },
       async updateCommunityPostProjectionMetrics(input: Parameters<TestCommunityRepository["updateCommunityPostProjectionMetrics"]>[0]) {
         await alphaRepo.updateCommunityPostProjectionMetrics(input)
         await betaRepo.updateCommunityPostProjectionMetrics(input)

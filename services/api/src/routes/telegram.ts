@@ -18,16 +18,19 @@ import {
   getTelegramChatMember,
   sendTelegramMessage,
   sendTelegramVoice,
+  setTelegramChatMenuButton,
   telegramBotUserId,
   telegramBotUsername,
   type TelegramBotCredential,
   type TelegramChatMember,
 } from "../lib/telegram/bot-api"
 import {
+  decryptActiveCommunityTelegramBotOrNull,
   decryptCommunityTelegramBotByWebhookId,
   type TelegramCommunityBotCredential,
 } from "../lib/telegram/community-bot-service"
 import {
+  approvePendingTelegramJoinGrantsForUser,
   createTelegramOnboardingIntent,
   exchangeTelegramOnboardingSession,
   telegramOnboardingWebAppReplyMarkup,
@@ -50,16 +53,27 @@ import {
   markTelegramJoinGrantFailed,
   markTelegramJoinGrantPrompted,
   resolveTelegramAccount,
+  linkPendingTelegramJoinGrantsForTelegramUser,
+  syncTelegramAccountForUser,
 } from "../lib/telegram/join-request-service"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
+import { resolveCommunityIdentifier } from "../lib/communities/community-identifier"
+import { getJoinEligibility } from "../lib/communities/membership/eligibility-service"
 import { openCommunityDb } from "../lib/communities/community-db-factory"
 import {
   canAccessCommunity,
   getCommunityMembershipState,
 } from "../lib/communities/membership/membership-state-store"
 import { sendCommunityAssistantTelegramDirectMessage } from "../lib/communities/assistant-policy/chat-service"
+import { getProfileRepository, getSessionRepository, getUserRepository } from "../lib/auth/repositories"
+import { mintPirateAccessToken } from "../lib/auth/pirate-session-token"
+import {
+  configuredTelegramInitDataMaxAgeSeconds,
+  verifyTelegramMiniAppInitData,
+} from "../lib/telegram/mini-app-auth"
+import { trackApiEvent } from "../lib/analytics/track"
 import { authError, badRequestError, HttpError } from "../lib/errors"
-import { publicCommunityId } from "../lib/public-ids"
+import { decodePublicCommunityId, publicCommunityId } from "../lib/public-ids"
 
 const telegram = new Hono<{ Bindings: Env }>()
 
@@ -152,6 +166,83 @@ function telegramIdentifier(value: unknown): string | null {
 function parseStartToken(text: string | undefined): string | null {
   const match = text?.trim().match(/^\/start(?:@[A-Za-z0-9_]{5,32})?(?:\s+(\S+))?$/u)
   return match?.[1] ?? null
+}
+
+function parseCommunityStartPayload(payload: string | null): string | null {
+  const trimmed = payload?.trim()
+  if (!trimmed || trimmed.startsWith("tgsetup_") || trimmed.startsWith("join_")) {
+    return null
+  }
+  const encodedCommunityId = trimmed.startsWith("c_")
+    ? trimmed.slice(2)
+    : trimmed
+  if (!encodedCommunityId) {
+    return null
+  }
+  try {
+    const decoded = decodeURIComponent(encodedCommunityId)
+    if (
+      !decoded.startsWith("com_")
+      && !decoded.startsWith("cmt_")
+      && !decoded.startsWith("@")
+    ) {
+      return null
+    }
+    return decodePublicCommunityId(decoded)
+  } catch {
+    return null
+  }
+}
+
+function parseCommunityJoinPayload(payload: string | null): string | null {
+  const trimmed = payload?.trim()
+  const prefix = "join_"
+  if (!trimmed?.startsWith(prefix)) {
+    return null
+  }
+  const encodedCommunityId = trimmed.slice(prefix.length)
+  if (!encodedCommunityId) {
+    return null
+  }
+  try {
+    return decodePublicCommunityId(decodeURIComponent(encodedCommunityId))
+  } catch {
+    return null
+  }
+}
+
+function telegramPlatformMiniAppVerificationTokens(env: Env): string[] {
+  const token = env.TELEGRAM_BOT_TOKEN?.trim()
+  return token ? [token] : []
+}
+
+async function telegramAutoExchangeMiniAppVerificationTokens(env: Env, communityId: string): Promise<string[]> {
+  const communityBot = await decryptActiveCommunityTelegramBotOrNull({
+    env,
+    communityId,
+  })
+  if (communityBot) {
+    return [communityBot.token]
+  }
+  return telegramPlatformMiniAppVerificationTokens(env)
+}
+
+function summarizeTelegramJoinGrantApprovalResults(
+  results: Array<{ status: "approved" | "failed" | "ignored" | "pending" }>,
+): "approved" | "failed" | "ignored" | "none" | "pending" {
+  if (results.length === 0) {
+    return "none"
+  }
+  if (results.some((result) => result.status === "approved")) {
+    return "approved"
+  }
+  if (results.some((result) => result.status === "pending")) {
+    return "pending"
+  }
+  if (results.some((result) => result.status === "failed")) {
+    return "failed"
+  }
+  return "ignored"
 }
 
 type TelegramGroupAssistantTrigger = {
@@ -411,9 +502,44 @@ function completionErrorMessage(error: unknown): string {
   return "Could not connect this Telegram chat. Start again from Pirate."
 }
 
-function communityTelegramJoinUrl(env: Env, communityId: string): string | null {
+function telegramWebPublicOrigin(env: Env): string | null {
   const origin = env.PIRATE_WEB_PUBLIC_ORIGIN?.trim().replace(/\/+$/u, "")
-  return origin ? `${origin}/tg/c/${publicCommunityId(communityId)}` : null
+  return origin || null
+}
+
+function telegramCommunityParticipationUrl(env: Env, communityId: string): string | null {
+  const origin = telegramWebPublicOrigin(env)
+  return origin ? `${origin}/tg/c/${encodeURIComponent(publicCommunityId(communityId))}` : null
+}
+
+function telegramCommunityVerificationUrl(env: Env, communityId: string): string | null {
+  const origin = telegramWebPublicOrigin(env)
+  return origin ? `${origin}/tg/verify/${encodeURIComponent(publicCommunityId(communityId))}` : null
+}
+
+function communityTelegramJoinUrl(env: Env, communityId: string): string | null {
+  return telegramCommunityParticipationUrl(env, communityId)
+}
+
+function telegramMiniAppLauncherMarkup(url: string): unknown {
+  return {
+    inline_keyboard: [[{
+      text: "Open Pirate",
+      web_app: { url },
+    }]],
+  }
+}
+
+function telegramCommunityStartMarkup(input: {
+  text: string
+  url: string
+}): unknown {
+  return {
+    inline_keyboard: [[{
+      text: input.text,
+      web_app: { url: input.url },
+    }]],
+  }
 }
 
 function directAssistantLinkText(input: {
@@ -497,6 +623,21 @@ async function safeSendTelegramMessage(
     return true
   } catch (error) {
     console.warn("[telegram-webhook] sendMessage failed", {
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return false
+  }
+}
+
+async function safeSetTelegramChatMenuButton(
+  bot: Env | TelegramBotCredential,
+  body: Parameters<typeof setTelegramChatMenuButton>[1],
+): Promise<boolean> {
+  try {
+    await setTelegramChatMenuButton(bot, body)
+    return true
+  } catch (error) {
+    console.warn("[telegram-webhook] setChatMenuButton failed", {
       error: error instanceof Error ? error.message : String(error),
     })
     return false
@@ -790,6 +931,71 @@ async function getBotAdminStatus(bot: Env | TelegramBotCredential, chatId: numbe
   }
 }
 
+async function handleCommunityBotStartMessage(env: Env, input: {
+  bot: TelegramCommunityBotCredential
+  chatId: string
+  message: TelegramWebhookMessage
+  telegramUserId: string | null
+}): Promise<void> {
+  const startPayload = parseStartToken(input.message.text)
+  const isSetupToken = startPayload?.startsWith("tgsetup_") === true
+  if (isSetupToken) {
+    if (!input.telegramUserId || !startPayload) {
+      await safeSendTelegramMessage(input.bot, {
+        chat_id: input.chatId,
+        text: "Open this setup link from your own Telegram account.",
+      })
+      return
+    }
+    try {
+      const setupRequest = await prepareTelegramSetupChatRequest({
+        env,
+        setupToken: startPayload,
+        telegramCommunityBotId: input.bot.id,
+        telegramUserId: input.telegramUserId,
+        privateChatId: input.chatId,
+        requestMessageId: input.message.message_id ?? null,
+      })
+      await safeSendTelegramMessage(input.bot, {
+        chat_id: input.chatId,
+        text: setupInstructions(input.bot),
+        reply_markup: chatPickerMarkup(setupRequest.request_id),
+      })
+    } catch (error) {
+      await safeSendTelegramMessage(input.bot, {
+        chat_id: input.chatId,
+        text: setupErrorMessage(error),
+      })
+    }
+    return
+  }
+
+  const joinCommunityId = parseCommunityJoinPayload(startPayload)
+  const legacyCommunityId = joinCommunityId ? null : parseCommunityStartPayload(startPayload)
+  const requestedCommunityId = joinCommunityId ?? legacyCommunityId
+  if (requestedCommunityId && requestedCommunityId !== input.bot.communityId) {
+    await safeSendTelegramMessage(input.bot, {
+      chat_id: input.chatId,
+      text: "This link is for a different community.",
+    })
+    return
+  }
+  if (startPayload && !requestedCommunityId) {
+    await safeSendTelegramMessage(input.bot, {
+      chat_id: input.chatId,
+      text: "This Telegram link is not valid for this community.",
+    })
+    return
+  }
+
+  await handleCommunityStartMessage(env, {
+    bot: input.bot,
+    chatId: input.chatId,
+    communityId: input.bot.communityId,
+    telegramUserId: input.telegramUserId,
+  })
+}
+
 async function handleStartMessage(env: Env, message: TelegramWebhookMessage, bot: Env | TelegramCommunityBotCredential = env): Promise<void> {
   const chatId = telegramIdentifier(message.chat?.id)
   const telegramUserId = telegramIdentifier(message.from?.id)
@@ -803,11 +1009,51 @@ async function handleStartMessage(env: Env, message: TelegramWebhookMessage, bot
     })
     return
   }
+  if (isCommunityBot(bot)) {
+    await handleCommunityBotStartMessage(env, {
+      bot,
+      chatId,
+      message,
+      telegramUserId,
+    })
+    return
+  }
   const setupToken = parseStartToken(message.text)
-  if (!setupToken || !telegramUserId) {
+  const communityStartId = parseCommunityStartPayload(setupToken)
+  const isSetupToken = setupToken?.startsWith("tgsetup_") === true
+
+  if (communityStartId || (setupToken && !isSetupToken)) {
+    await handleCommunityStartMessage(env, {
+      bot,
+      chatId,
+      communityId: communityStartId ?? setupToken ?? "",
+      telegramUserId,
+    })
+    return
+  }
+
+  if (!isSetupToken || !telegramUserId) {
+    const communityId = isCommunityBot(bot) ? bot.communityId : null
+    const url = communityId ? telegramCommunityParticipationUrl(env, communityId) : null
+    if (url) {
+      await safeSetTelegramChatMenuButton(bot, {
+        chat_id: chatId,
+        menu_button: {
+          type: "web_app",
+          text: "Open Pirate",
+          web_app: { url },
+        },
+      })
+      await safeSendTelegramMessage(bot, {
+        chat_id: chatId,
+        text: "Open this community in Pirate.",
+        reply_markup: telegramMiniAppLauncherMarkup(url),
+      })
+      return
+    }
     await safeSendTelegramMessage(bot, {
       chat_id: chatId,
-      text: "Start Telegram setup from Pirate first.",
+      text: "Open a Pirate community invite link to get started.",
     })
     return
   }
@@ -816,7 +1062,7 @@ async function handleStartMessage(env: Env, message: TelegramWebhookMessage, bot
     const setupRequest = await prepareTelegramSetupChatRequest({
       env,
       setupToken,
-      telegramCommunityBotId: "id" in bot ? bot.id : null,
+      telegramCommunityBotId: isCommunityBot(bot) ? bot.id : null,
       telegramUserId,
       privateChatId: chatId,
       requestMessageId: message.message_id ?? null,
@@ -831,6 +1077,176 @@ async function handleStartMessage(env: Env, message: TelegramWebhookMessage, bot
       chat_id: chatId,
       text: setupErrorMessage(error),
     })
+  }
+}
+
+async function handleCommunityStartMessage(env: Env, input: {
+  bot: Env | TelegramCommunityBotCredential
+  chatId: string
+  communityId: string
+  telegramUserId: string | null
+}): Promise<void> {
+  const communityRepository = getCommunityRepository(env)
+  const communityId = await resolveCommunityIdentifier(communityRepository, input.communityId) ?? input.communityId
+  const community = await communityRepository.getCommunityById(communityId)
+  if (!community || community.status !== "active") {
+    await safeSendTelegramMessage(input.bot, {
+      chat_id: input.chatId,
+      text: "This Pirate community is not available.",
+    })
+    return
+  }
+
+  const boardUrl = telegramCommunityParticipationUrl(env, community.community_id)
+  const verifyUrl = telegramCommunityVerificationUrl(env, community.community_id)
+  if (!boardUrl || !verifyUrl) {
+    await safeSendTelegramMessage(input.bot, {
+      chat_id: input.chatId,
+      text: "Pirate links are not configured for this bot.",
+    })
+    return
+  }
+
+  const presentation = await telegramCommunityStartPresentation({
+    boardUrl,
+    communityId: community.community_id,
+    communityRepository,
+    env,
+    telegramUserId: input.telegramUserId,
+    verifyUrl,
+  })
+  await safeSetTelegramChatMenuButton(input.bot, {
+    chat_id: input.chatId,
+    menu_button: {
+      type: "web_app",
+      text: "Open Pirate",
+      web_app: { url: boardUrl },
+    },
+  })
+  await safeSendTelegramMessage(input.bot, {
+    chat_id: input.chatId,
+    text: [
+      community.display_name,
+      "",
+      presentation.statusText,
+      "",
+      presentation.helpText,
+    ].join("\n"),
+    reply_markup: telegramCommunityStartMarkup({
+      text: presentation.actionText,
+      url: presentation.actionUrl,
+    }),
+  })
+}
+
+type TelegramCommunityStartPresentation = {
+  actionText: string
+  actionUrl: string
+  helpText: string
+  statusText: string
+}
+
+async function telegramCommunityStartPresentation(input: {
+  boardUrl: string
+  communityId: string
+  communityRepository: ReturnType<typeof getCommunityRepository>
+  env: Env
+  telegramUserId: string | null
+  verifyUrl: string
+}): Promise<TelegramCommunityStartPresentation> {
+  if (!input.telegramUserId) {
+    return {
+      actionText: "Open Pirate",
+      actionUrl: input.boardUrl,
+      helpText: "Open Pirate to sign in and continue.",
+      statusText: "Status: open the board to sign in.",
+    }
+  }
+
+  try {
+    const account = await resolveTelegramAccount({
+      env: input.env,
+      telegramUserId: input.telegramUserId,
+    })
+    if (!account) {
+      return {
+        actionText: "Verify to join",
+        actionUrl: input.verifyUrl,
+        helpText: "Open Telegram to link your Pirate account and continue.",
+        statusText: "Status: not linked yet. Open the board to sign in with Telegram.",
+      }
+    }
+
+    const eligibility = await getJoinEligibility({
+      env: input.env,
+      userId: account.userId,
+      communityId: input.communityId,
+      userRepository: getUserRepository(input.env),
+      communityRepository: input.communityRepository,
+    })
+    switch (eligibility.status) {
+      case "already_joined":
+        return {
+          actionText: "Open board",
+          actionUrl: input.boardUrl,
+          helpText: "Open the board in Pirate.",
+          statusText: "Status: already joined.",
+        }
+      case "joinable":
+        return {
+          actionText: "Join community",
+          actionUrl: input.verifyUrl,
+          helpText: "Join in Telegram with your verified Pirate account.",
+          statusText: "Status: ready to join.",
+        }
+      case "requestable":
+        return {
+          actionText: "Request access",
+          actionUrl: input.verifyUrl,
+          helpText: "Request access in Telegram.",
+          statusText: "Status: eligible to request access.",
+        }
+      case "pending_request":
+        return {
+          actionText: "Open board",
+          actionUrl: input.boardUrl,
+          helpText: "Open the board to check for updates.",
+          statusText: "Status: join request pending.",
+        }
+      case "verification_required":
+        return {
+          actionText: "Verify to join",
+          actionUrl: input.verifyUrl,
+          helpText: "Verify in Telegram to join.",
+          statusText: "Status: verification required.",
+        }
+      case "gate_failed":
+        return {
+          actionText: "Check status",
+          actionUrl: input.verifyUrl,
+          helpText: "Open Telegram to review the remaining requirements.",
+          statusText: "Status: not eligible yet.",
+        }
+      default:
+        return {
+          actionText: "Open Pirate",
+          actionUrl: input.boardUrl,
+          helpText: "Open Pirate to continue.",
+          statusText: "Status: open the board to continue.",
+        }
+    }
+  } catch (error) {
+    console.warn("[telegram-webhook] community start status failed", {
+      communityId: input.communityId,
+      error: error instanceof Error ? error.message : String(error),
+      telegramUserId: input.telegramUserId,
+    })
+    return {
+      actionText: "Open Pirate",
+      actionUrl: input.boardUrl,
+      helpText: "Open Pirate to continue.",
+      statusText: "Status: open the board to continue.",
+    }
   }
 }
 
@@ -1180,6 +1596,84 @@ telegram.post("/session/exchange", async (c) => {
     env: c.env,
     body,
   }), 200)
+})
+
+telegram.post("/session/auto-exchange", async (c) => {
+  const body = await c.req.json<{ community_id?: unknown; init_data?: unknown }>().catch(() => null)
+  const communityIdentifier = typeof body?.community_id === "string" ? body.community_id.trim() : ""
+  const initData = typeof body?.init_data === "string" ? body.init_data.trim() : ""
+  if (!communityIdentifier || !initData) {
+    throw badRequestError("community_id and init_data are required")
+  }
+
+  const communityRepository = getCommunityRepository(c.env)
+  const communityId = await resolveCommunityIdentifier(communityRepository, communityIdentifier)
+  if (!communityId) {
+    throw badRequestError("Community was not found")
+  }
+
+  const telegramUser = verifyTelegramMiniAppInitData({
+    botTokens: await telegramAutoExchangeMiniAppVerificationTokens(c.env, communityId),
+    initData,
+    maxAgeSeconds: configuredTelegramInitDataMaxAgeSeconds(c.env),
+  })
+  const session = await getSessionRepository(c.env).exchangeIdentity({
+    provider: "telegram",
+    providerSubject: telegramUser.id,
+    providerUserRef: telegramUser.username ?? telegramUser.id,
+    selectedWalletAddress: null,
+    walletAddresses: [],
+    selectedWallet: null,
+    wallets: [],
+  })
+  const userId = session.user.id.replace(/^usr_/, "")
+
+  await syncTelegramAccountForUser({
+    env: c.env,
+    telegramUser,
+    userId,
+  })
+  await linkPendingTelegramJoinGrantsForTelegramUser({
+    env: c.env,
+    telegramUserId: telegramUser.id,
+    userId,
+  })
+
+  const joinGrantApprovals = await approvePendingTelegramJoinGrantsForUser({
+    env: c.env,
+    userId,
+  })
+  const eligibility = await getJoinEligibility({
+    env: c.env,
+    userId,
+    communityId,
+    userRepository: getUserRepository(c.env),
+    communityRepository,
+  })
+  const accessToken = await mintPirateAccessToken({
+    env: c.env,
+    userId,
+  })
+  const syncedProfile = await getProfileRepository(c.env)
+    .syncLinkedHandles(userId)
+    .catch(() => null)
+  await trackApiEvent(c.env, c.req, {
+    eventName: "auth_session_exchanged",
+    userId,
+    properties: { provider: "telegram", mode: "mini_app_auto" },
+  })
+
+  return c.json({
+    access_token: accessToken,
+    ...session,
+    profile: syncedProfile ?? session.profile,
+    community: publicCommunityId(communityId),
+    eligibility,
+    membership_result: null,
+    telegram_join_request: {
+      status: summarizeTelegramJoinGrantApprovalResults(joinGrantApprovals),
+    },
+  }, 200)
 })
 
 telegram.post("/webhook", async (c) => {

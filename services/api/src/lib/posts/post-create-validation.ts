@@ -50,13 +50,6 @@ function validateNullableIntegerField(value: unknown, fieldName: string): void {
   }
 }
 
-function validateNonNegativeIntegerField(value: unknown, fieldName: string): void {
-  validateNullableIntegerField(value, fieldName)
-  if (typeof value === "number" && value < 0) {
-    throw badRequestError(`${fieldName} must be greater than or equal to 0`)
-  }
-}
-
 function validatePositiveIntegerField(value: unknown, fieldName: string): void {
   validateNullableIntegerField(value, fieldName)
   if (typeof value === "number" && value <= 0) {
