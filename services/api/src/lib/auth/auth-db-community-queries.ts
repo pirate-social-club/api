@@ -507,6 +507,24 @@ export async function updateCommunityPostProjectionStatusRow(input: {
   })
 }
 
+export async function updateCommunityPostProjectionPayloadRow(input: {
+  executor: DbExecutor
+  postId: string
+  projectedPayloadJson: string
+  updatedAt: string
+}): Promise<void> {
+  await input.executor.execute({
+    sql: `
+      UPDATE community_post_projections
+      SET projected_payload_json = ?2,
+          updated_at = ?3
+      WHERE source_post_id = ?1
+        AND projection_version = 1
+    `,
+    args: [input.postId, input.projectedPayloadJson, input.updatedAt],
+  })
+}
+
 export async function updateCommunityPostProjectionMetricsRow(input: {
   executor: DbExecutor
   postId: string

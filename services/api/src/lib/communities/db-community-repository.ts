@@ -59,6 +59,7 @@ export {
 export { recordCommunityPostProjection } from "./community-post-projection-repository"
 export {
   updateCommunityPostProjectionMetrics,
+  updateCommunityPostProjectionPayload,
   updateCommunityPostProjectionStatus,
 } from "./community-post-projection-repository"
 export { recordCommunityCommentProjection } from "./community-comment-projection-repository"
@@ -96,6 +97,7 @@ import {
 import {
   recordCommunityPostProjection,
   updateCommunityPostProjectionMetrics,
+  updateCommunityPostProjectionPayload,
   updateCommunityPostProjectionStatus,
 } from "./community-post-projection-repository"
 import { recordCommunityCommentProjection } from "./community-comment-projection-repository"
@@ -299,6 +301,14 @@ export class DatabaseCommunityRepository implements CommunityRepository {
     updatedAt: string
   }): Promise<void> {
     return updateCommunityPostProjectionStatus(this.client, input)
+  }
+
+  async updateCommunityPostProjectionPayload(input: {
+    postId: string
+    projectedPayloadJson: string
+    updatedAt: string
+  }): Promise<void> {
+    return updateCommunityPostProjectionPayload(this.client, input)
   }
 
   async updateCommunityPostProjectionMetrics(input: {

@@ -70,6 +70,11 @@ export interface CommunityPostProjectionRepository {
     status: CommunityPostProjectionRow["status"]
     updatedAt: string
   }): Promise<void>
+  updateCommunityPostProjectionPayload(input: {
+    postId: string
+    projectedPayloadJson: string
+    updatedAt: string
+  }): Promise<void>
   updateCommunityPostProjectionMetrics(input: {
     postId: string
     upvoteCount: number

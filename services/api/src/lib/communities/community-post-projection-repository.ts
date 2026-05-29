@@ -5,6 +5,7 @@ import { auditEventInsert } from "../audit"
 import {
   getCommunityPostProjectionRowByPostId,
   updateCommunityPostProjectionMetricsRow,
+  updateCommunityPostProjectionPayloadRow,
   updateCommunityPostProjectionStatusRow,
 } from "../auth/auth-db-community-queries"
 import type { CommunityPostProjectionRow } from "../auth/auth-db-rows"
@@ -101,6 +102,22 @@ export async function updateCommunityPostProjectionStatus(
     executor: client,
     postId: input.postId,
     status: input.status,
+    updatedAt: input.updatedAt,
+  })
+}
+
+export async function updateCommunityPostProjectionPayload(
+  client: Client,
+  input: {
+    postId: string
+    projectedPayloadJson: string
+    updatedAt: string
+  },
+): Promise<void> {
+  await updateCommunityPostProjectionPayloadRow({
+    executor: client,
+    postId: input.postId,
+    projectedPayloadJson: input.projectedPayloadJson,
     updatedAt: input.updatedAt,
   })
 }
