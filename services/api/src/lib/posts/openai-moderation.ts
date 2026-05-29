@@ -1,6 +1,7 @@
 import type { Env } from "../../env"
 import type { Community, CreatePostRequest, Post } from "../../types"
 import { buildDefaultAdultContentPolicy } from "../communities/community-policy-defaults"
+import { HttpError, providerUnavailable } from "../errors"
 import {
   resolveVisualPolicyProviderResult,
   type VisualPolicyProviderResult,
@@ -255,7 +256,8 @@ function normalizeModerationResults(body: unknown): OpenAIModerationResult[] | n
   if (!Array.isArray(results)) {
     return null
   }
-  return results.filter((result): result is OpenAIModerationResult => Boolean(result && typeof result === "object"))
+  const normalized = results.filter((result): result is OpenAIModerationResult => Boolean(result && typeof result === "object"))
+  return normalized.length ? normalized : null
 }
 
 export async function resolveOpenAIModerationOutcome(input: {
@@ -288,11 +290,10 @@ export async function resolveOpenAIModerationOutcome(input: {
 
   const apiKey = trimEnv(input.env.OPENAI_API_KEY)
   if (!apiKey) {
-    console.warn("[moderation] review required — missing OPENAI_API_KEY")
-    return outcomeFromDecision(combineModerationDecision("review", visualPolicyDecision), {
+    console.warn("[moderation] image moderation failed — missing OPENAI_API_KEY")
+    throw providerUnavailable("OpenAI moderation is not configured", {
       provider: "openai",
-      error: "missing_configuration",
-      visual_policy: visualPolicyEvidence,
+      missing: "OPENAI_API_KEY",
     })
   }
 
@@ -319,23 +320,20 @@ export async function resolveOpenAIModerationOutcome(input: {
       signal: controller.signal,
     })
     if (!response.ok) {
-      return outcomeFromDecision(combineModerationDecision("review", visualPolicyDecision), {
+      throw providerUnavailable("OpenAI moderation is unavailable", {
         provider: "openai",
         model,
-        error: `http_${response.status}`,
-        visual_policy: visualPolicyEvidence,
+        status: response.status,
       })
     }
 
     const parsed = await response.json().catch(() => null)
     const results = normalizeModerationResults(parsed)
     if (!results) {
-      return outcomeFromDecision(combineModerationDecision("review", visualPolicyDecision), {
+      throw providerUnavailable("OpenAI moderation returned an invalid response", {
         provider: "openai",
         model,
         error: "invalid_response",
-        provider_result: parsed,
-        visual_policy: visualPolicyEvidence,
       })
     }
 
@@ -379,11 +377,13 @@ export async function resolveOpenAIModerationOutcome(input: {
       decision,
     })
   } catch (error) {
-    return outcomeFromDecision(combineModerationDecision("review", visualPolicyDecision), {
+    if (error instanceof HttpError) {
+      throw error
+    }
+    throw providerUnavailable("OpenAI moderation request failed", {
       provider: "openai",
       model,
       error: error instanceof Error ? error.message : String(error),
-      visual_policy: visualPolicyEvidence,
     })
   } finally {
     if (timer) {

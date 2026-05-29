@@ -336,6 +336,32 @@ describe("resolveOpenAIModerationOutcome", () => {
     }) as typeof fetch
   }
 
+  function installOpenAIUnavailableFetchMock() {
+    globalThis.fetch = (async (url: RequestInfo | URL) => {
+      const href = String(url)
+      if (href.includes("openrouter.test")) {
+        throw new Error("OpenRouter should not be called")
+      }
+      return new Response(JSON.stringify({ error: "temporarily unavailable" }), {
+        status: 503,
+        headers: { "content-type": "application/json" },
+      })
+    }) as typeof fetch
+  }
+
+  function installInvalidOpenAIFetchMock() {
+    globalThis.fetch = (async (url: RequestInfo | URL) => {
+      const href = String(url)
+      if (href.includes("openrouter.test")) {
+        throw new Error("OpenRouter should not be called")
+      }
+      return new Response(JSON.stringify({ results: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }) as typeof fetch
+  }
+
   function installFailingVisualPolicyFetchMock(openAiCategories: Record<string, boolean> = {}, openAiScores: Record<string, number> = {}) {
     globalThis.fetch = (async (url: RequestInfo | URL) => {
       const href = String(url)
@@ -361,8 +387,8 @@ describe("resolveOpenAIModerationOutcome", () => {
     globalThis.fetch = originalFetch
   }
 
-  test("visual posts that need scanning require review when OPENAI_API_KEY is missing", async () => {
-    const outcome = await resolveOpenAIModerationOutcome({
+  test("visual posts fail creation when OPENAI_API_KEY is missing", async () => {
+    await expect(resolveOpenAIModerationOutcome({
       env: {},
       community: {
         community_id: "com_missing_openai_key",
@@ -377,13 +403,83 @@ describe("resolveOpenAIModerationOutcome", () => {
           size_bytes: 12,
         }],
       },
+    })).rejects.toMatchObject({
+      code: "provider_unavailable",
+      details: {
+        missing: "OPENAI_API_KEY",
+        provider: "openai",
+      },
+      retryable: true,
+      status: 502,
     })
+  })
 
-    expect(outcome.analysis_state).toBe("review_required")
-    expect(outcome.content_safety_state).toBe("pending")
-    expect(outcome.status).toBe("draft")
-    expect(outcome.age_gate_policy).toBe("none")
-    expect(outcome.providerResult?.error).toBe("missing_configuration")
+  test("visual posts fail creation when OpenAI moderation is unavailable", async () => {
+    installOpenAIUnavailableFetchMock()
+    try {
+      await expect(resolveOpenAIModerationOutcome({
+        env: {
+          OPENAI_API_KEY: "test-openai-key",
+        },
+        community: {
+          community_id: "com_openai_unavailable",
+          default_age_gate_policy: "none",
+        } as Community,
+        body: {
+          idempotency_key: "idem_openai_unavailable",
+          post_type: "image",
+          media_refs: [{
+            storage_ref: "https://example.test/image.jpg",
+            mime_type: "image/jpeg",
+            size_bytes: 12,
+          }],
+        },
+      })).rejects.toMatchObject({
+        code: "provider_unavailable",
+        details: {
+          provider: "openai",
+          status: 503,
+        },
+        retryable: true,
+        status: 502,
+      })
+    } finally {
+      restoreFetch()
+    }
+  })
+
+  test("visual posts fail creation when OpenAI moderation returns invalid results", async () => {
+    installInvalidOpenAIFetchMock()
+    try {
+      await expect(resolveOpenAIModerationOutcome({
+        env: {
+          OPENAI_API_KEY: "test-openai-key",
+        },
+        community: {
+          community_id: "com_openai_invalid",
+          default_age_gate_policy: "none",
+        } as Community,
+        body: {
+          idempotency_key: "idem_openai_invalid",
+          post_type: "image",
+          media_refs: [{
+            storage_ref: "https://example.test/image.jpg",
+            mime_type: "image/jpeg",
+            size_bytes: 12,
+          }],
+        },
+      })).rejects.toMatchObject({
+        code: "provider_unavailable",
+        details: {
+          error: "invalid_response",
+          provider: "openai",
+        },
+        retryable: true,
+        status: 502,
+      })
+    } finally {
+      restoreFetch()
+    }
   })
 
   test("Grok visual policy rejection blocks even when OpenAI moderation allows", async () => {
