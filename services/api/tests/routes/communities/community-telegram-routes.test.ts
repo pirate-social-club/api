@@ -705,6 +705,32 @@ async function markCommunityMember(input: {
   }
 }
 
+async function getCommunityMembershipStatus(input: {
+  communityDbRoot: string
+  communityId: string
+  userId: string
+}): Promise<string | null> {
+  const client = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+  try {
+    const result = await client.execute({
+      sql: `
+        SELECT status
+        FROM community_memberships
+        WHERE community_id = ?1
+          AND user_id = ?2
+        LIMIT 1
+      `,
+      args: [input.communityId, input.userId],
+    })
+    const status = result.rows[0]?.status
+    return typeof status === "string" ? status : null
+  } finally {
+    client.close()
+  }
+}
+
 async function linkTelegramChatForCommunity(input: {
   env: Env
   communityId: string
@@ -1075,6 +1101,103 @@ describe("community Telegram routes", () => {
     const sendBody = await sendMessageRequests[0]!.json() as { text?: string; reply_markup?: { inline_keyboard?: Array<Array<{ web_app?: { url?: string } }>> } }
     expect(sendBody.text).toContain("Community Join Payload Club")
     expect(sendBody.reply_markup?.inline_keyboard?.[0]?.[0]?.web_app?.url).toBe(`https://staging.pirate.test/tg/verify/com_${communityId}`)
+  })
+
+  test("community bot start joins linked users who are eligible", async () => {
+    const token = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXsecretLAST4"
+    const telegramRequests = installTelegramApiMock(async (request) => {
+      const method = request.url.split("/").at(-1)
+      if (method === "getMe") {
+        return {
+          ok: true,
+          result: {
+            id: 123456789,
+            is_bot: true,
+            first_name: "Community Test Bot",
+            username: "CommunityOwnedBot",
+          },
+        }
+      }
+      if (method === "setWebhook" || method === "setChatMenuButton") {
+        return { ok: true, result: true }
+      }
+      return { ok: true, result: { message_id: 704 } }
+    })
+    const ctx = await createRouteTestContext({
+      PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
+      PIRATE_WEB_PUBLIC_ORIGIN: "https://staging.pirate.test",
+      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
+      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "2",
+    })
+    cleanup = ctx.cleanup
+    const owner = await exchangeJwt(ctx.env, "telegram-bot-auto-join-owner")
+    const member = await exchangeJwt(ctx.env, "telegram-bot-auto-join-member")
+    const communityId = await createCommunity({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      displayName: "Community Auto Join Club",
+    })
+    await setCommunityGatePolicy({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      expression: {
+        op: "gate",
+        gate: {
+          type: "nationality",
+          provider: "self",
+          allowed: ["US"],
+        },
+      },
+    })
+    await setUserNationality({
+      client: ctx.client,
+      userId: member.userId,
+      countryCode: "US",
+    })
+    await linkTelegramAccount({
+      client: ctx.client,
+      telegramUserId: "5002",
+      userId: member.userId,
+    })
+    const { webhookId, webhookSecret } = await saveCommunityBotForWebhook({
+      accessToken: owner.accessToken,
+      communityId,
+      env: ctx.env,
+      token,
+    })
+
+    const accepted = await telegramCommunityBotWebhook({
+      env: ctx.env,
+      webhookId,
+      secret: webhookSecret,
+      body: {
+        update_id: 5,
+        message: {
+          message_id: 5,
+          chat: { id: 9002, type: "private" },
+          from: { id: 5002 },
+          text: `/start join_com_${communityId}`,
+        },
+      },
+    })
+
+    expect(accepted.status).toBe(200)
+    expect(await getCommunityMembershipStatus({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      userId: member.userId,
+    })).toBe("member")
+    const sendMessageRequests = telegramRequests.filter((request) => request.url.endsWith("/sendMessage"))
+    expect(sendMessageRequests).toHaveLength(1)
+    const sendBody = await sendMessageRequests[0]!.json() as {
+      reply_markup?: { inline_keyboard?: Array<Array<{ text?: string; web_app?: { url?: string } }>> }
+      text?: string
+    }
+    expect(sendBody.text).toContain("Community Auto Join Club")
+    expect(sendBody.text).toContain("You're in Community Auto Join Club.")
+    expect(sendBody.text).toContain("Open the community in Pirate.")
+    expect(sendBody.reply_markup?.inline_keyboard?.[0]?.[0]?.text).toBe("Open community")
+    expect(sendBody.reply_markup?.inline_keyboard?.[0]?.[0]?.web_app?.url).toBe(`https://staging.pirate.test/tg/c/com_${communityId}`)
   })
 
   test("community bot start rejects a join payload for another community", async () => {
