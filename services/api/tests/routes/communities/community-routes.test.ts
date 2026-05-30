@@ -409,6 +409,7 @@ describe("community routes", () => {
     const communityCreate = await requestJson("http://pirate.test/communities", {
       display_name: "Public Community Club",
       description: "Readable without reconnecting.",
+      country_code: "GE",
       membership_mode: "request",
       namespace: {
         namespace_verification: namespaceVerificationId,
@@ -419,8 +420,10 @@ describe("community routes", () => {
       community: {
         id: string
         route_slug: string | null
+        country_code: string | null
       }
     }
+    expect(communityCreateBody.community.country_code).toBe("ge")
 
     const rulesResponse = await app.request(
       `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/rules`,
@@ -537,6 +540,7 @@ describe("community routes", () => {
       id: string
       display_name: string
       description: string | null
+      country_code: string | null
       donation_policy_mode?: "none" | "optional_creator_sidecar" | null
       donation_partner_id?: string | null
       donation_partner?: {
@@ -586,6 +590,7 @@ describe("community routes", () => {
     expect(previewBody.id).toBe(communityCreateBody.community.id)
     expect(previewBody.display_name).toBe("Public Community Club")
     expect(previewBody.description).toBe("Readable without reconnecting.")
+    expect(previewBody.country_code).toBe("ge")
     expect(previewBody.donation_policy_mode).toBe("optional_creator_sidecar")
     expect(previewBody.donation_partner?.donation_partner).toBe("org_charity_water")
     expect(previewBody.donation_partner?.display_name).toBe("charity: water")
