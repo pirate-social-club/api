@@ -59,6 +59,7 @@ import {
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { resolveCommunityIdentifier } from "../lib/communities/community-identifier"
 import { getJoinEligibility } from "../lib/communities/membership/eligibility-service"
+import { joinCommunity } from "../lib/communities/membership/request-service"
 import { openCommunityDb } from "../lib/communities/community-db-factory"
 import {
   canAccessCommunity,
@@ -1109,6 +1110,7 @@ async function handleCommunityStartMessage(env: Env, input: {
 
   const presentation = await telegramCommunityStartPresentation({
     boardUrl,
+    communityDisplayName: community.display_name,
     communityId: community.community_id,
     communityRepository,
     env,
@@ -1148,6 +1150,7 @@ type TelegramCommunityStartPresentation = {
 
 async function telegramCommunityStartPresentation(input: {
   boardUrl: string
+  communityDisplayName: string
   communityId: string
   communityRepository: ReturnType<typeof getCommunityRepository>
   env: Env
@@ -1191,20 +1194,45 @@ async function telegramCommunityStartPresentation(input: {
           actionUrl: input.boardUrl,
           helpText: "Open the board in Pirate.",
           statusText: "Status: already joined.",
-        }
+      }
       case "joinable":
-        return {
-          actionText: "Join community",
-          actionUrl: input.verifyUrl,
-          helpText: "Join in Telegram with your verified Pirate account.",
-          statusText: "Status: ready to join.",
+        {
+          const joinResult = await joinCommunity({
+            env: input.env,
+            userId: account.userId,
+            communityId: input.communityId,
+            userRepository: getUserRepository(input.env),
+            communityRepository: input.communityRepository,
+          })
+          if (joinResult.status === "joined") {
+            return {
+              actionText: "Open community",
+              actionUrl: input.boardUrl,
+              helpText: "Open the community in Pirate.",
+              statusText: `You're in ${input.communityDisplayName}.`,
+            }
+          }
+          if (joinResult.status === "requested") {
+            return {
+              actionText: "Open community",
+              actionUrl: input.boardUrl,
+              helpText: "Your request will be reviewed shortly.",
+              statusText: "Request sent.",
+            }
+          }
+          return {
+            actionText: "Open Pirate",
+            actionUrl: input.boardUrl,
+            helpText: "Open Pirate to continue.",
+            statusText: "Open the community to continue.",
+          }
         }
       case "requestable":
         return {
           actionText: "Request access",
           actionUrl: input.verifyUrl,
-          helpText: "Request access in Telegram.",
-          statusText: "Status: eligible to request access.",
+          helpText: "Open Pirate to send your access request.",
+          statusText: "This community reviews new members.",
         }
       case "pending_request":
         return {
@@ -1232,7 +1260,7 @@ async function telegramCommunityStartPresentation(input: {
           actionText: "Open Pirate",
           actionUrl: input.boardUrl,
           helpText: "Open Pirate to continue.",
-          statusText: "Status: open the board to continue.",
+          statusText: "Open the community to continue.",
         }
     }
   } catch (error) {
@@ -1245,7 +1273,7 @@ async function telegramCommunityStartPresentation(input: {
       actionText: "Open Pirate",
       actionUrl: input.boardUrl,
       helpText: "Open Pirate to continue.",
-      statusText: "Status: open the board to continue.",
+      statusText: "Open the community to continue.",
     }
   }
 }
