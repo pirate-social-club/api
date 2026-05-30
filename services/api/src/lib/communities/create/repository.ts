@@ -18,6 +18,7 @@ import type { Env } from "../../../env"
 import type { Community } from "../../../types"
 import { serializeCommunity } from "../community-serialization"
 import { openCommunityDb } from "../community-db-factory"
+import { normalizeCommunityCountryCode } from "../country-code"
 import type { GateAtom, GateExpression, GatePolicy } from "../membership/gate-types"
 import type {
   CreateCommunityAuth,
@@ -365,6 +366,10 @@ export function buildBootstrapRules(body: CreateCommunityRequestBody) {
 
 export function buildBootstrapInitialSettings(body: CreateCommunityRequestBody): Record<string, unknown> | null {
   const settings: Record<string, unknown> = {}
+  const countryCode = normalizeCommunityCountryCode(body.country_code)
+  if (countryCode) {
+    settings.country_code = countryCode
+  }
   if (body.agent_posting_policy) {
     settings.agent_posting_policy = body.agent_posting_policy
   }

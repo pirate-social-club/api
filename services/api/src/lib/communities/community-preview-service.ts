@@ -21,7 +21,7 @@ import {
   resolveCommunityBannerRef,
 } from "./community-identity-media"
 import { serializeDonationPartnerRow } from "./community-donation-partner-serialization"
-import { parseStoredReferenceLinks } from "./community-serialization"
+import { parseStoredCountryCode, parseStoredReferenceLinks } from "./community-serialization"
 import { isCommunityLive } from "./community-status"
 import { getControlPlaneClient } from "../runtime-deps"
 import { dedupeStrings, splitCsv } from "../helpers"
@@ -432,6 +432,7 @@ async function buildCommunityPreview(input: {
   })
   const localRow = localResult.rows[0]
   const settings = parsePreviewSettingsJson(localRow?.settings_json)
+  const countryCode = parseStoredCountryCode(settings)
   const referenceLinks = parseStoredReferenceLinks(settings)
     .filter((link) => link.link_status === "active")
 
@@ -525,6 +526,7 @@ async function buildCommunityPreview(input: {
       displayName,
       bannerRef: localRow?.banner_ref == null ? null : String(localRow.banner_ref),
     }),
+    country_code: countryCode,
     membership_mode: membershipMode,
     allow_anonymous_identity: Number(localRow?.allow_anonymous_identity ?? 0) === 1,
     anonymous_identity_scope: anonymousIdentityScope,
