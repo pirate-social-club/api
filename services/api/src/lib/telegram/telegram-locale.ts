@@ -1,4 +1,4 @@
-export const RUNTIME_UI_LOCALES = ["en", "ar", "zh"] as const
+export const RUNTIME_UI_LOCALES = ["en", "ar", "zh", "ka"] as const
 
 export type RuntimeUiLocaleCode = (typeof RUNTIME_UI_LOCALES)[number]
 
@@ -15,6 +15,9 @@ export function resolveRuntimeUiLocale(value: string | null | undefined): Runtim
   }
   if (normalized === "zh" || normalized.startsWith("zh-")) {
     return "zh"
+  }
+  if (normalized === "ka" || normalized.startsWith("ka-")) {
+    return "ka"
   }
   return null
 }

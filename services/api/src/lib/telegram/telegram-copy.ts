@@ -100,6 +100,30 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       verifyRequired: ({ community }) => `欢迎来到 ${community}。验证你的 Pirate 账号以加入。`,
     },
   },
+  ka: {
+    buttons: {
+      checkRequest: "მოთხოვნის შემოწმება",
+      checkStatus: "სტატუსის ნახვა",
+      openCommunity: "საზოგადოების გახსნა",
+      openPirate: "Pirate-ის გახსნა",
+      requestAccess: "გაწევრიანების მოთხოვნა",
+      verifyToJoin: "გაიარეთ ვერიფიკაცია",
+    },
+    start: {
+      alreadyJoined: ({ community }) => `თქვენ უკვე ხართ ${community}-ში.`,
+      fallback: ({ community }) => `გასაგრძელებლად გახსენით ${community} Pirate-ში.`,
+      gateFailed: ({ community }) =>
+        `თქვენი Pirate ანგარიში ჯერ არ აკმაყოფილებს ${community}-ის მოთხოვნებს. გახსენით Pirate და ნახეთ, რა არის დასასრულებელი.`,
+      joined: ({ community }) => `თქვენ ახლა ხართ ${community}-ში.`,
+      linkRequired: ({ community }) => `მოგესალმებით ${community}-ში. გაწევრიანებისთვის დააკავშირეთ თქვენი Pirate ანგარიში.`,
+      pendingRequest: ({ community }) =>
+        `${community}-ში გაწევრიანების მოთხოვნა განხილვაშია. განახლებებისთვის გახსენით Pirate.`,
+      requestable: ({ community }) => `${community} ახალ წევრებს ამოწმებს. მოთხოვნის გასაგზავნად გახსენით Pirate.`,
+      requestSent: ({ community }) => `${community}-ში გაწევრიანების მოთხოვნა გაგზავნილია. დამტკიცების შემდეგ შეძლებთ შესვლას.`,
+      signIn: ({ community }) => `გასაგრძელებლად შედით Pirate-ში და გახსენით ${community}.`,
+      verifyRequired: ({ community }) => `მოგესალმებით ${community}-ში. გაწევრიანებისთვის გაიარეთ თქვენი Pirate ანგარიშის ვერიფიკაცია.`,
+    },
+  },
 }
 
 export function getTelegramCopy(locale: RuntimeUiLocaleCode): TelegramCopy {

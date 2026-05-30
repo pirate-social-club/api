@@ -1201,8 +1201,8 @@ describe("community Telegram routes", () => {
       reply_markup?: { inline_keyboard?: Array<Array<{ text?: string; web_app?: { url?: string } }>> }
       text?: string
     }
-    expect(sendBody.text).toBe("你已加入 Community Auto Join Club。在 Pirate 中打开这个社区。")
-    expect(sendBody.reply_markup?.inline_keyboard?.[0]?.[0]?.text).toBe("打开社区")
+    expect(sendBody.text).toBe("თქვენ ახლა ხართ Community Auto Join Club-ში.")
+    expect(sendBody.reply_markup?.inline_keyboard?.[0]?.[0]?.text).toBe("საზოგადოების გახსნა")
     expect(sendBody.reply_markup?.inline_keyboard?.[0]?.[0]?.web_app?.url).toBe(`https://staging.pirate.test/tg/c/com_${communityId}`)
   })
 

@@ -10,10 +10,11 @@ describe("telegram locale helpers", () => {
     expect(resolveRuntimeUiLocale("en-US")).toBe("en")
     expect(resolveRuntimeUiLocale("ar")).toBe("ar")
     expect(resolveRuntimeUiLocale("zh-CN")).toBe("zh")
+    expect(resolveRuntimeUiLocale("ka-GE")).toBe("ka")
   })
 
   test("ignores unsupported and pseudo locales at runtime", () => {
-    expect(resolveRuntimeUiLocale("ka")).toBeNull()
+    expect(resolveRuntimeUiLocale("fr")).toBeNull()
     expect(resolveRuntimeUiLocale("pseudo")).toBeNull()
     expect(resolveRuntimeUiLocale(null)).toBeNull()
   })
@@ -26,9 +27,9 @@ describe("telegram locale helpers", () => {
     expect(resolveTelegramStartLocale({
       telegramLanguageCode: "ka",
       profilePreferredLocale: "zh-CN",
-    })).toBe("zh")
+    })).toBe("ka")
     expect(resolveTelegramStartLocale({
-      telegramLanguageCode: "ka",
+      telegramLanguageCode: "fr",
       profilePreferredLocale: null,
     })).toBe("en")
   })

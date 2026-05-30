@@ -17,5 +17,8 @@ describe("telegram copy catalog", () => {
     expect(getTelegramCopy("ar").buttons.verifyToJoin).toBe("تحقق للانضمام")
     expect(getTelegramCopy("zh").start.linkRequired({ community: "Americans only 2" }))
       .toContain("关联你的 Pirate 账号")
+    expect(getTelegramCopy("ka").buttons.verifyToJoin).toBe("გაიარეთ ვერიფიკაცია")
+    expect(getTelegramCopy("ka").start.linkRequired({ community: "🇬🇪" }))
+      .toContain("დააკავშირეთ თქვენი Pirate ანგარიში")
   })
 })
