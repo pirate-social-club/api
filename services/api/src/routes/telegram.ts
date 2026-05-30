@@ -75,6 +75,11 @@ import {
 import { trackApiEvent } from "../lib/analytics/track"
 import { authError, badRequestError, HttpError } from "../lib/errors"
 import { decodePublicCommunityId, publicCommunityId } from "../lib/public-ids"
+import { getTelegramCopy } from "../lib/telegram/telegram-copy"
+import {
+  resolveTelegramStartLocale,
+  type RuntimeUiLocaleCode,
+} from "../lib/telegram/telegram-locale"
 
 const telegram = new Hono<{ Bindings: Env }>()
 
@@ -121,13 +126,13 @@ type TelegramWebhookMessage = {
   message_id?: number
   message_thread_id?: number
   text?: string
-  from?: { id?: number | string; is_bot?: boolean; username?: string }
+  from?: { id?: number | string; is_bot?: boolean; username?: string; language_code?: string }
   chat?: { id?: number | string; type?: string }
   voice?: TelegramWebhookAudioAttachment
   audio?: TelegramWebhookAudioAttachment
   reply_to_message?: {
     message_id?: number
-    from?: { id?: number | string; is_bot?: boolean; username?: string }
+    from?: { id?: number | string; is_bot?: boolean; username?: string; language_code?: string }
   }
   chat_shared?: {
     request_id?: number
@@ -148,7 +153,7 @@ type TelegramWebhookAudioAttachment = {
 
 type TelegramWebhookChatJoinRequest = {
   chat?: { id?: number | string; type?: string; title?: string; username?: string }
-  from?: { id?: number | string; is_bot?: boolean; username?: string }
+  from?: { id?: number | string; is_bot?: boolean; username?: string; language_code?: string }
   user_chat_id?: number | string
   date?: number
   bio?: string
@@ -162,6 +167,14 @@ function telegramIdentifier(value: unknown): string | null {
     return value.trim()
   }
   return null
+}
+
+function telegramLanguageCode(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null
+  }
+  const trimmed = value.trim()
+  return trimmed ? trimmed : null
 }
 
 function parseStartToken(text: string | undefined): string | null {
@@ -936,6 +949,7 @@ async function handleCommunityBotStartMessage(env: Env, input: {
   bot: TelegramCommunityBotCredential
   chatId: string
   message: TelegramWebhookMessage
+  telegramLanguageCode: string | null
   telegramUserId: string | null
 }): Promise<void> {
   const startPayload = parseStartToken(input.message.text)
@@ -993,6 +1007,7 @@ async function handleCommunityBotStartMessage(env: Env, input: {
     bot: input.bot,
     chatId: input.chatId,
     communityId: input.bot.communityId,
+    telegramLanguageCode: input.telegramLanguageCode,
     telegramUserId: input.telegramUserId,
   })
 }
@@ -1000,6 +1015,7 @@ async function handleCommunityBotStartMessage(env: Env, input: {
 async function handleStartMessage(env: Env, message: TelegramWebhookMessage, bot: Env | TelegramCommunityBotCredential = env): Promise<void> {
   const chatId = telegramIdentifier(message.chat?.id)
   const telegramUserId = telegramIdentifier(message.from?.id)
+  const telegramLanguage = telegramLanguageCode(message.from?.language_code)
   if (!chatId) {
     return
   }
@@ -1015,6 +1031,7 @@ async function handleStartMessage(env: Env, message: TelegramWebhookMessage, bot
       bot,
       chatId,
       message,
+      telegramLanguageCode: telegramLanguage,
       telegramUserId,
     })
     return
@@ -1028,6 +1045,7 @@ async function handleStartMessage(env: Env, message: TelegramWebhookMessage, bot
       bot,
       chatId,
       communityId: communityStartId ?? setupToken ?? "",
+      telegramLanguageCode: telegramLanguage,
       telegramUserId,
     })
     return
@@ -1085,6 +1103,7 @@ async function handleCommunityStartMessage(env: Env, input: {
   bot: Env | TelegramCommunityBotCredential
   chatId: string
   communityId: string
+  telegramLanguageCode: string | null
   telegramUserId: string | null
 }): Promise<void> {
   const communityRepository = getCommunityRepository(env)
@@ -1108,12 +1127,28 @@ async function handleCommunityStartMessage(env: Env, input: {
     return
   }
 
+  const account = input.telegramUserId
+    ? await resolveTelegramAccount({
+        env,
+        telegramUserId: input.telegramUserId,
+      })
+    : null
+  const profile = account
+    ? await getProfileRepository(env).getProfileByUserId(account.userId).catch(() => null)
+    : null
+  const locale = resolveTelegramStartLocale({
+    telegramLanguageCode: input.telegramLanguageCode,
+    profilePreferredLocale: profile?.preferred_locale,
+  })
+  const copy = getTelegramCopy(locale)
   const presentation = await telegramCommunityStartPresentation({
+    accountUserId: account?.userId ?? null,
     boardUrl,
     communityDisplayName: community.display_name,
     communityId: community.community_id,
     communityRepository,
     env,
+    locale,
     telegramUserId: input.telegramUserId,
     verifyUrl,
   })
@@ -1121,7 +1156,7 @@ async function handleCommunityStartMessage(env: Env, input: {
     chat_id: input.chatId,
     menu_button: {
       type: "web_app",
-      text: "Open Pirate",
+      text: copy.buttons.openPirate,
       web_app: { url: boardUrl },
     },
   })
@@ -1142,38 +1177,39 @@ type TelegramCommunityStartPresentation = {
 }
 
 async function telegramCommunityStartPresentation(input: {
+  accountUserId: string | null
   boardUrl: string
   communityDisplayName: string
   communityId: string
   communityRepository: ReturnType<typeof getCommunityRepository>
   env: Env
+  locale: RuntimeUiLocaleCode
   telegramUserId: string | null
   verifyUrl: string
 }): Promise<TelegramCommunityStartPresentation> {
+  const copy = getTelegramCopy(input.locale)
+  const community = input.communityDisplayName
   if (!input.telegramUserId) {
     return {
-      actionText: "Open Pirate",
+      actionText: copy.buttons.openPirate,
       actionUrl: input.boardUrl,
-      messageText: `Open ${input.communityDisplayName} in Pirate to sign in and continue.`,
+      messageText: copy.start.signIn({ community }),
     }
   }
 
   try {
-    const account = await resolveTelegramAccount({
-      env: input.env,
-      telegramUserId: input.telegramUserId,
-    })
-    if (!account) {
+    if (!input.accountUserId) {
       return {
-        actionText: "Verify to join",
+        actionText: copy.buttons.verifyToJoin,
         actionUrl: input.verifyUrl,
-        messageText: `Welcome to ${input.communityDisplayName}. Link your Pirate account to verify and join.`,
+        messageText: copy.start.linkRequired({ community }),
       }
     }
 
+    const userId = input.accountUserId
     const eligibility = await getJoinEligibility({
       env: input.env,
-      userId: account.userId,
+      userId,
       communityId: input.communityId,
       userRepository: getUserRepository(input.env),
       communityRepository: input.communityRepository,
@@ -1181,68 +1217,69 @@ async function telegramCommunityStartPresentation(input: {
     switch (eligibility.status) {
       case "already_joined":
         return {
-          actionText: "Open community",
+          actionText: copy.buttons.openCommunity,
           actionUrl: input.boardUrl,
-          messageText: `You're already in ${input.communityDisplayName}. Open the community in Pirate.`,
+          messageText: copy.start.alreadyJoined({ community }),
       }
       case "joinable":
         {
           const joinResult = await joinCommunity({
             env: input.env,
-            userId: account.userId,
+            userId,
             communityId: input.communityId,
             userRepository: getUserRepository(input.env),
+            profileRepository: getProfileRepository(input.env),
             communityRepository: input.communityRepository,
           })
           if (joinResult.status === "joined") {
             return {
-              actionText: "Open community",
+              actionText: copy.buttons.openCommunity,
               actionUrl: input.boardUrl,
-              messageText: `You're in ${input.communityDisplayName}. Open the community in Pirate.`,
+              messageText: copy.start.joined({ community }),
             }
           }
           if (joinResult.status === "requested") {
             return {
-              actionText: "Check request",
+              actionText: copy.buttons.checkRequest,
               actionUrl: input.boardUrl,
-              messageText: `Request sent for ${input.communityDisplayName}. You'll be able to enter once it's approved.`,
+              messageText: copy.start.requestSent({ community }),
             }
           }
           return {
-            actionText: "Open Pirate",
+            actionText: copy.buttons.openPirate,
             actionUrl: input.boardUrl,
-            messageText: `Open ${input.communityDisplayName} in Pirate to continue.`,
+            messageText: copy.start.fallback({ community }),
           }
         }
       case "requestable":
         return {
-          actionText: "Request access",
+          actionText: copy.buttons.requestAccess,
           actionUrl: input.verifyUrl,
-          messageText: `${input.communityDisplayName} reviews new members. Open Pirate to send your access request.`,
+          messageText: copy.start.requestable({ community }),
         }
       case "pending_request":
         return {
-          actionText: "Check request",
+          actionText: copy.buttons.checkRequest,
           actionUrl: input.boardUrl,
-          messageText: `Your request to join ${input.communityDisplayName} is pending. Open Pirate to check for updates.`,
+          messageText: copy.start.pendingRequest({ community }),
         }
       case "verification_required":
         return {
-          actionText: "Verify to join",
+          actionText: copy.buttons.verifyToJoin,
           actionUrl: input.verifyUrl,
-          messageText: `Welcome to ${input.communityDisplayName}. Verify your Pirate account to join.`,
+          messageText: copy.start.verifyRequired({ community }),
         }
       case "gate_failed":
         return {
-          actionText: "Check status",
+          actionText: copy.buttons.checkStatus,
           actionUrl: input.verifyUrl,
-          messageText: `Your Pirate account does not meet ${input.communityDisplayName}'s requirements yet. Open Pirate to review what is missing.`,
+          messageText: copy.start.gateFailed({ community }),
         }
       default:
         return {
-          actionText: "Open Pirate",
+          actionText: copy.buttons.openPirate,
           actionUrl: input.boardUrl,
-          messageText: `Open ${input.communityDisplayName} in Pirate to continue.`,
+          messageText: copy.start.fallback({ community }),
         }
     }
   } catch (error) {
@@ -1252,9 +1289,9 @@ async function telegramCommunityStartPresentation(input: {
       telegramUserId: input.telegramUserId,
     })
     return {
-      actionText: "Open Pirate",
+      actionText: copy.buttons.openPirate,
       actionUrl: input.boardUrl,
-      messageText: `Open ${input.communityDisplayName} in Pirate to continue.`,
+      messageText: copy.start.fallback({ community }),
     }
   }
 }
