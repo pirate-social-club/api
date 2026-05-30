@@ -1127,13 +1127,7 @@ async function handleCommunityStartMessage(env: Env, input: {
   })
   await safeSendTelegramMessage(input.bot, {
     chat_id: input.chatId,
-    text: [
-      community.display_name,
-      "",
-      presentation.statusText,
-      "",
-      presentation.helpText,
-    ].join("\n"),
+    text: presentation.messageText,
     reply_markup: telegramCommunityStartMarkup({
       text: presentation.actionText,
       url: presentation.actionUrl,
@@ -1144,8 +1138,7 @@ async function handleCommunityStartMessage(env: Env, input: {
 type TelegramCommunityStartPresentation = {
   actionText: string
   actionUrl: string
-  helpText: string
-  statusText: string
+  messageText: string
 }
 
 async function telegramCommunityStartPresentation(input: {
@@ -1161,8 +1154,7 @@ async function telegramCommunityStartPresentation(input: {
     return {
       actionText: "Open Pirate",
       actionUrl: input.boardUrl,
-      helpText: "Open Pirate to sign in and continue.",
-      statusText: "Status: open the board to sign in.",
+      messageText: `Open ${input.communityDisplayName} in Pirate to sign in and continue.`,
     }
   }
 
@@ -1175,8 +1167,7 @@ async function telegramCommunityStartPresentation(input: {
       return {
         actionText: "Verify to join",
         actionUrl: input.verifyUrl,
-        helpText: "Open Telegram to link your Pirate account and continue.",
-        statusText: "Status: not linked yet. Open the board to sign in with Telegram.",
+        messageText: `Welcome to ${input.communityDisplayName}. Link your Pirate account to verify and join.`,
       }
     }
 
@@ -1190,10 +1181,9 @@ async function telegramCommunityStartPresentation(input: {
     switch (eligibility.status) {
       case "already_joined":
         return {
-          actionText: "Open board",
+          actionText: "Open community",
           actionUrl: input.boardUrl,
-          helpText: "Open the board in Pirate.",
-          statusText: "Status: already joined.",
+          messageText: `You're already in ${input.communityDisplayName}. Open the community in Pirate.`,
       }
       case "joinable":
         {
@@ -1208,59 +1198,51 @@ async function telegramCommunityStartPresentation(input: {
             return {
               actionText: "Open community",
               actionUrl: input.boardUrl,
-              helpText: "Open the community in Pirate.",
-              statusText: `You're in ${input.communityDisplayName}.`,
+              messageText: `You're in ${input.communityDisplayName}. Open the community in Pirate.`,
             }
           }
           if (joinResult.status === "requested") {
             return {
-              actionText: "Open community",
+              actionText: "Check request",
               actionUrl: input.boardUrl,
-              helpText: "Your request will be reviewed shortly.",
-              statusText: "Request sent.",
+              messageText: `Request sent for ${input.communityDisplayName}. You'll be able to enter once it's approved.`,
             }
           }
           return {
             actionText: "Open Pirate",
             actionUrl: input.boardUrl,
-            helpText: "Open Pirate to continue.",
-            statusText: "Open the community to continue.",
+            messageText: `Open ${input.communityDisplayName} in Pirate to continue.`,
           }
         }
       case "requestable":
         return {
           actionText: "Request access",
           actionUrl: input.verifyUrl,
-          helpText: "Open Pirate to send your access request.",
-          statusText: "This community reviews new members.",
+          messageText: `${input.communityDisplayName} reviews new members. Open Pirate to send your access request.`,
         }
       case "pending_request":
         return {
-          actionText: "Open board",
+          actionText: "Check request",
           actionUrl: input.boardUrl,
-          helpText: "Open the board to check for updates.",
-          statusText: "Status: join request pending.",
+          messageText: `Your request to join ${input.communityDisplayName} is pending. Open Pirate to check for updates.`,
         }
       case "verification_required":
         return {
           actionText: "Verify to join",
           actionUrl: input.verifyUrl,
-          helpText: "Verify in Telegram to join.",
-          statusText: "Status: verification required.",
+          messageText: `Welcome to ${input.communityDisplayName}. Verify your Pirate account to join.`,
         }
       case "gate_failed":
         return {
           actionText: "Check status",
           actionUrl: input.verifyUrl,
-          helpText: "Open Telegram to review the remaining requirements.",
-          statusText: "Status: not eligible yet.",
+          messageText: `Your Pirate account does not meet ${input.communityDisplayName}'s requirements yet. Open Pirate to review what is missing.`,
         }
       default:
         return {
           actionText: "Open Pirate",
           actionUrl: input.boardUrl,
-          helpText: "Open Pirate to continue.",
-          statusText: "Open the community to continue.",
+          messageText: `Open ${input.communityDisplayName} in Pirate to continue.`,
         }
     }
   } catch (error) {
@@ -1272,8 +1254,7 @@ async function telegramCommunityStartPresentation(input: {
     return {
       actionText: "Open Pirate",
       actionUrl: input.boardUrl,
-      helpText: "Open Pirate to continue.",
-      statusText: "Open the community to continue.",
+      messageText: `Open ${input.communityDisplayName} in Pirate to continue.`,
     }
   }
 }
