@@ -60,6 +60,20 @@
   "env": {
     "staging": {
       "name": "pirate-api-staging",
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "LIVE_ROOM_RUNTIME",
+            "class_name": "LiveRoomRuntimeDO"
+          }
+        ]
+      },
+      "migrations": [
+        {
+          "tag": "v1_live_room_runtime",
+          "new_sqlite_classes": ["LiveRoomRuntimeDO"]
+        }
+      ],
       "services": [
         {
           "binding": "COMMUNITY_PROVISION_OPERATOR",
