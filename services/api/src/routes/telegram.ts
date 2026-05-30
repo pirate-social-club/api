@@ -65,7 +65,10 @@ import {
   canAccessCommunity,
   getCommunityMembershipState,
 } from "../lib/communities/membership/membership-state-store"
-import { sendCommunityAssistantTelegramDirectMessage } from "../lib/communities/assistant-policy/chat-service"
+import {
+  sendCommunityAssistantGroupMessage,
+  sendCommunityAssistantTelegramDirectMessage,
+} from "../lib/communities/assistant-policy/chat-service"
 import { getProfileRepository, getSessionRepository, getUserRepository } from "../lib/auth/repositories"
 import { mintPirateAccessToken } from "../lib/auth/pirate-session-token"
 import {
@@ -74,7 +77,9 @@ import {
 } from "../lib/telegram/mini-app-auth"
 import { trackApiEvent } from "../lib/analytics/track"
 import { authError, badRequestError, HttpError } from "../lib/errors"
+import { makeId, nowIso } from "../lib/helpers"
 import { decodePublicCommunityId, publicCommunityId } from "../lib/public-ids"
+import { getControlPlaneClient } from "../lib/runtime-deps"
 import { getTelegramCopy } from "../lib/telegram/telegram-copy"
 import {
   resolveTelegramStartLocale,
@@ -82,6 +87,9 @@ import {
 } from "../lib/telegram/telegram-locale"
 
 const telegram = new Hono<{ Bindings: Env }>()
+
+const TELEGRAM_DIRECT_PREVIEW_DAILY_LIMIT = 10
+const TELEGRAM_DIRECT_PREVIEW_WINDOW_MS = 24 * 60 * 60 * 1000
 
 function timingSafeSecretEqual(left: string, right: string): boolean {
   const leftDigest = createHash("sha256").update(left).digest()
@@ -553,6 +561,241 @@ function telegramCommunityStartMarkup(input: {
       text: input.text,
       web_app: { url: input.url },
     }]],
+  }
+}
+
+function directAssistantVerifyReplyMarkup(input: {
+  env: Env
+  communityId: string
+  locale: RuntimeUiLocaleCode
+}): unknown | undefined {
+  const verifyUrl = telegramCommunityVerificationUrl(input.env, input.communityId)
+  if (!verifyUrl) {
+    return undefined
+  }
+  return telegramCommunityStartMarkup({
+    text: getTelegramCopy(input.locale).buttons.verifyToJoin,
+    url: verifyUrl,
+  })
+}
+
+function directAssistantPreviewText(input: {
+  content: string
+  hasVerifyUrl: boolean
+  locale: RuntimeUiLocaleCode
+}): string {
+  const copy = getTelegramCopy(input.locale).privateAssistant
+  const cta = input.hasVerifyUrl ? copy.previewCta : copy.previewCtaFallback
+  return telegramText(`${input.content.trim()}\n\n${cta}`)
+}
+
+function directAssistantPreviewLimitText(input: {
+  hasVerifyUrl: boolean
+  locale: RuntimeUiLocaleCode
+}): string {
+  const copy = getTelegramCopy(input.locale).privateAssistant
+  return input.hasVerifyUrl ? copy.previewUserCapReached : copy.previewUserCapReachedFallback
+}
+
+function directAssistantPreviewUnavailableText(input: {
+  hasVerifyUrl: boolean
+  locale: RuntimeUiLocaleCode
+}): string {
+  const copy = getTelegramCopy(input.locale).privateAssistant
+  return input.hasVerifyUrl ? copy.previewUnavailable : copy.previewUnavailableFallback
+}
+
+async function insertDirectAssistantPreviewEvent(input: {
+  env: Env
+  communityId: string
+  telegramChatId: string
+  telegramMessageId: number
+  telegramUserId: string
+  prompt: string
+  now: string
+}): Promise<string> {
+  const eventId = makeId("tae")
+  await getControlPlaneClient(input.env).execute({
+    sql: `
+      INSERT INTO telegram_assistant_events (
+        event_id, community_id, telegram_chat_id, telegram_message_id, telegram_user_id,
+        user_id, trigger_type, prompt, assistant_message_ref, status, error_message,
+        created_at, completed_at
+      ) VALUES (
+        ?1, ?2, ?3, ?4, ?5,
+        NULL, 'reply_to_bot', ?6, NULL, 'received', NULL,
+        ?7, NULL
+      )
+    `,
+    args: [
+      eventId,
+      input.communityId,
+      input.telegramChatId,
+      input.telegramMessageId,
+      input.telegramUserId,
+      input.prompt,
+      input.now,
+    ],
+  })
+  return eventId
+}
+
+async function updateDirectAssistantPreviewEvent(input: {
+  env: Env
+  eventId: string
+  status: "answered" | "failed" | "rate_limited"
+  assistantMessageRef?: string | null
+  errorMessage?: string | null
+}): Promise<void> {
+  await getControlPlaneClient(input.env).execute({
+    sql: `
+      UPDATE telegram_assistant_events
+      SET status = ?2,
+          assistant_message_ref = ?3,
+          error_message = ?4,
+          completed_at = ?5
+      WHERE event_id = ?1
+    `,
+    args: [
+      input.eventId,
+      input.status,
+      input.assistantMessageRef ?? null,
+      input.errorMessage ?? null,
+      nowIso(),
+    ],
+  })
+}
+
+async function directAssistantPreviewLimitReached(input: {
+  env: Env
+  communityId: string
+  eventId: string
+  telegramUserId: string
+  now: string
+}): Promise<boolean> {
+  const parsedNow = Date.parse(input.now)
+  const since = new Date(
+    Number.isFinite(parsedNow)
+      ? parsedNow - TELEGRAM_DIRECT_PREVIEW_WINDOW_MS
+      : Date.now() - TELEGRAM_DIRECT_PREVIEW_WINDOW_MS,
+  ).toISOString()
+  const result = await getControlPlaneClient(input.env).execute({
+    sql: `
+      SELECT COUNT(*) AS count
+      FROM telegram_assistant_events
+      WHERE community_id = ?2
+        AND telegram_user_id = ?3
+        AND user_id IS NULL
+        AND trigger_type = 'reply_to_bot'
+        AND created_at >= ?4
+        AND event_id <> ?1
+    `,
+    args: [
+      input.eventId,
+      input.communityId,
+      input.telegramUserId,
+      since,
+    ],
+  })
+  return Number(result.rows[0]?.count ?? 0) >= TELEGRAM_DIRECT_PREVIEW_DAILY_LIMIT
+}
+
+async function sendDirectAssistantPreviewResponse(input: {
+  env: Env
+  bot: TelegramCommunityBotCredential
+  chatId: string
+  telegramMessageId: number
+  telegramUserId: string
+  locale: RuntimeUiLocaleCode
+  prompt: string
+}): Promise<void> {
+  const replyMarkup = directAssistantVerifyReplyMarkup({
+    env: input.env,
+    communityId: input.bot.communityId,
+    locale: input.locale,
+  })
+  const hasVerifyUrl = Boolean(replyMarkup)
+  const now = nowIso()
+  const eventId = await insertDirectAssistantPreviewEvent({
+    env: input.env,
+    communityId: input.bot.communityId,
+    telegramChatId: input.chatId,
+    telegramMessageId: input.telegramMessageId,
+    telegramUserId: input.telegramUserId,
+    prompt: input.prompt,
+    now,
+  })
+
+  try {
+    if (await directAssistantPreviewLimitReached({
+      env: input.env,
+      communityId: input.bot.communityId,
+      eventId,
+      telegramUserId: input.telegramUserId,
+      now,
+    })) {
+      await updateDirectAssistantPreviewEvent({
+        env: input.env,
+        eventId,
+        status: "rate_limited",
+        errorMessage: "Telegram direct preview daily limit reached",
+      })
+      await safeSendTelegramMessage(input.bot, {
+        chat_id: input.chatId,
+        text: directAssistantPreviewLimitText({
+          hasVerifyUrl,
+          locale: input.locale,
+        }),
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+      })
+      return
+    }
+
+    const answer = await sendCommunityAssistantGroupMessage({
+      env: input.env,
+      communityRepository: getCommunityRepository(input.env),
+      communityId: input.bot.communityId,
+      message: input.prompt,
+    })
+    await updateDirectAssistantPreviewEvent({
+      env: input.env,
+      eventId,
+      status: "answered",
+      assistantMessageRef: answer.provider_message_id,
+    })
+    await safeSendTelegramMessage(input.bot, {
+      chat_id: input.chatId,
+      text: directAssistantPreviewText({
+        content: answer.content,
+        hasVerifyUrl,
+        locale: input.locale,
+      }),
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+    })
+  } catch (error) {
+    console.warn("[telegram-assistant] direct preview failed", {
+      ...telegramRouteErrorLogFields(error),
+      communityId: input.bot.communityId,
+      eventId,
+      promptLength: input.prompt.length,
+      telegramChatId: input.chatId,
+      telegramCommunityBotId: input.bot.id,
+      telegramUserId: input.telegramUserId,
+    })
+    await updateDirectAssistantPreviewEvent({
+      env: input.env,
+      eventId,
+      status: "failed",
+      errorMessage: error instanceof Error ? error.message : String(error),
+    }).catch(() => undefined)
+    await safeSendTelegramMessage(input.bot, {
+      chat_id: input.chatId,
+      text: directAssistantPreviewUnavailableText({
+        hasVerifyUrl,
+        locale: input.locale,
+      }),
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+    })
   }
 }
 
@@ -1349,6 +1592,9 @@ async function handleDirectAssistantMessage(env: Env, message: TelegramWebhookMe
     return
   }
 
+  const locale = resolveTelegramStartLocale({
+    telegramLanguageCode: telegramLanguageCode(message.from?.language_code),
+  })
   const textPrompt = parseDirectAssistantPrompt(bot, message)
   const voiceTrigger = textPrompt ? null : parseDirectAssistantVoiceTrigger(message)
   if (!textPrompt && !voiceTrigger) {
@@ -1364,12 +1610,24 @@ async function handleDirectAssistantMessage(env: Env, message: TelegramWebhookMe
     telegramUserId,
   })
   if (!account) {
-    await sendDirectAssistantOnboardingPrompt({
+    if (!textPrompt) {
+      await sendDirectAssistantOnboardingPrompt({
+        env,
+        bot,
+        chatId,
+        telegramUserId,
+        reason: "unlinked",
+      })
+      return
+    }
+    await sendDirectAssistantPreviewResponse({
       env,
       bot,
       chatId,
+      telegramMessageId: message.message_id ?? 0,
       telegramUserId,
-      reason: "unlinked",
+      locale,
+      prompt: textPrompt,
     })
     return
   }
@@ -1380,12 +1638,24 @@ async function handleDirectAssistantMessage(env: Env, message: TelegramWebhookMe
     userId: account.userId,
   })
   if (!canAccess) {
-    await sendDirectAssistantOnboardingPrompt({
+    if (!textPrompt) {
+      await sendDirectAssistantOnboardingPrompt({
+        env,
+        bot,
+        chatId,
+        telegramUserId,
+        reason: "not_member",
+      })
+      return
+    }
+    await sendDirectAssistantPreviewResponse({
       env,
       bot,
       chatId,
+      telegramMessageId: message.message_id ?? 0,
       telegramUserId,
-      reason: "not_member",
+      locale,
+      prompt: textPrompt,
     })
     return
   }

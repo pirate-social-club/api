@@ -2878,7 +2878,7 @@ describe("community Telegram routes", () => {
     expect((voice as File).name).toBe("assistant-reply.ogg")
   })
 
-  test("community bot private DM prompts unlinked Telegram users without provider calls", async () => {
+  test("community bot private DM answers unlinked Telegram users with preview and verify button", async () => {
     const ctx = await createRouteTestContext({
       OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
       PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
@@ -2887,12 +2887,17 @@ describe("community Telegram routes", () => {
       TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "1",
     })
     cleanup = ctx.cleanup
-    const mock = installTelegramAndOpenRouterMock("Should not be used.")
+    const mock = installTelegramAndOpenRouterMock("Preview answer.")
     const owner = await exchangeJwt(ctx.env, "telegram-direct-unlinked-owner")
     const communityId = await createCommunity({
       env: ctx.env,
       accessToken: owner.accessToken,
       displayName: "Telegram Direct Unlinked Club",
+    })
+    await setupEnabledAssistant({
+      env: ctx.env,
+      communityId,
+      ownerToken: owner.accessToken,
     })
     const bot = await saveCommunityBotForWebhook({
       env: ctx.env,
@@ -2916,72 +2921,124 @@ describe("community Telegram routes", () => {
     })
 
     expect(response.status).toBe(200)
-    expect(mock.openRouterCalls).toHaveLength(0)
-    const repeatResponse = await telegramCommunityBotWebhook({
+    expect(mock.openRouterCalls).toHaveLength(1)
+    const systemContent = mock.openRouterCalls[0]?.body.messages?.find((item) => item.role === "system")?.content ?? ""
+    expect(systemContent).toContain("Assistant audience: public_group")
+    expect(systemContent).not.toContain("Viewer membership")
+    const sendMessageRequests = mock.telegramRequests.filter((request) => request.url.endsWith("/sendMessage"))
+    expect(sendMessageRequests).toHaveLength(1)
+    const sendBody = await sendMessageRequests[0]!.json() as {
+      text: string
+      reply_markup?: { inline_keyboard?: Array<Array<{ text?: string; web_app?: { url?: string } }>> }
+    }
+    expect(sendBody.text).toBe("Preview answer.\n\nVerify to unlock the full assistant.")
+    expect(sendBody.reply_markup?.inline_keyboard?.[0]?.[0]).toEqual({
+      text: "Verify to join",
+      web_app: { url: `https://staging.pirate.test/tg/verify/com_${communityId}` },
+    })
+    expect(await getTelegramAccount({
+      client: ctx.client,
+      telegramUserId: "777202",
+    })).toBeNull()
+    expect(await getTelegramAssistantEvent({
+      client: ctx.client,
+      telegramChatId: "887202",
+      telegramMessageId: 203,
+    })).toEqual({
+      status: "answered",
+      trigger_type: "reply_to_bot",
+      prompt: "hello",
+    })
+  })
+
+  test("community bot private DM preview limit encourages verification", async () => {
+    const ctx = await createRouteTestContext({
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
+      PIRATE_WEB_PUBLIC_ORIGIN: "https://staging.pirate.test",
+      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
+      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "1",
+    })
+    cleanup = ctx.cleanup
+    const mock = installTelegramAndOpenRouterMock("Should not be used.")
+    const owner = await exchangeJwt(ctx.env, "telegram-direct-preview-limit-owner")
+    const communityId = await createCommunity({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      displayName: "Telegram Direct Preview Limit Club",
+    })
+    await setupEnabledAssistant({
+      env: ctx.env,
+      communityId,
+      ownerToken: owner.accessToken,
+    })
+    const bot = await saveCommunityBotForWebhook({
+      env: ctx.env,
+      communityId,
+      accessToken: owner.accessToken,
+    })
+    const now = new Date().toISOString()
+    for (let index = 0; index < 10; index += 1) {
+      await ctx.client.execute({
+        sql: `
+          INSERT INTO telegram_assistant_events (
+            event_id, community_id, telegram_chat_id, telegram_message_id, telegram_user_id,
+            user_id, trigger_type, prompt, assistant_message_ref, status, error_message,
+            created_at, completed_at
+          ) VALUES (
+            ?1, ?2, ?3, ?4, ?5,
+            NULL, 'reply_to_bot', 'previous preview', NULL, 'answered', NULL,
+            ?6, ?6
+          )
+        `,
+        args: [
+          `tae_preview_limit_${index}`,
+          communityId,
+          "887203",
+          9000 + index,
+          "777203",
+          now,
+        ],
+      })
+    }
+
+    const response = await telegramCommunityBotWebhook({
       env: ctx.env,
       webhookId: bot.webhookId,
       secret: bot.webhookSecret,
       body: {
-        update_id: 520,
+        update_id: 53,
         message: {
-          message_id: 2030,
-          text: "hello again",
-          from: { id: 777202 },
-          chat: { id: 887202, type: "private" },
+          message_id: 204,
+          text: "hello over limit",
+          from: { id: 777203, language_code: "ka" },
+          chat: { id: 887203, type: "private" },
         },
       },
     })
-    expect(repeatResponse.status).toBe(200)
-    const sendMessageRequests = mock.telegramRequests.filter((request) => request.url.endsWith("/sendMessage"))
-    expect(sendMessageRequests).toHaveLength(2)
-    const sendBody = await sendMessageRequests[1]!.json() as { text: string; reply_markup: unknown }
-    expect(sendBody.text).toContain("link this Telegram account")
-    const webAppUrl = telegramWebAppUrlFromReplyMarkup(sendBody.reply_markup)
-    expect(webAppUrl).toContain(`https://staging.pirate.test/tg/exchange?community=com_${communityId}`)
 
-    const exchangeResponse = await exchangeTelegramOnboarding({
-      env: ctx.env,
-      token: onboardingTokenFromWebAppUrl(webAppUrl),
-      initData: signedTelegramInitData({
-        botToken: bot.token,
-        user: {
-          id: 777202,
-          username: "telegramjoiner",
-          first_name: "Telegram",
-        },
-      }),
-    })
-    expect(exchangeResponse.status).toBe(200)
-    const exchangeBody = await json(exchangeResponse) as {
-      access_token: string
-      telegram_user_id: string
-      eligibility: { status: string }
-      telegram_join_request: { status: string }
-      user: { id: string }
+    expect(response.status).toBe(200)
+    expect(mock.openRouterCalls).toHaveLength(0)
+    const sendMessageRequests = mock.telegramRequests.filter((request) => request.url.endsWith("/sendMessage"))
+    expect(sendMessageRequests).toHaveLength(1)
+    const sendBody = await sendMessageRequests[0]!.json() as {
+      text: string
+      reply_markup?: { inline_keyboard?: Array<Array<{ text?: string; web_app?: { url?: string } }>> }
     }
-    expect(exchangeBody.access_token).toBeTruthy()
-    expect(exchangeBody.telegram_user_id).toBe("777202")
-    expect(exchangeBody.eligibility.status).toBe("requestable")
-    expect(exchangeBody.telegram_join_request.status).toBe("not_applicable")
-    expect(await getTelegramAccount({
+    expect(sendBody.text).toContain("დღევანდელი საცდელი შეტყობინებები ამოიწურა")
+    expect(sendBody.text).not.toContain("/start")
+    expect(sendBody.reply_markup?.inline_keyboard?.[0]?.[0]).toEqual({
+      text: "გაიარეთ ვერიფიკაცია",
+      web_app: { url: `https://staging.pirate.test/tg/verify/com_${communityId}` },
+    })
+    expect(await getTelegramAssistantEvent({
       client: ctx.client,
-      telegramUserId: "777202",
+      telegramChatId: "887203",
+      telegramMessageId: 204,
     })).toEqual({
-      telegram_user_id: "777202",
-      user_id: exchangeBody.user.id.replace(/^usr_/, ""),
-    })
-    const intentStatuses = await ctx.client.execute({
-      sql: `
-        SELECT status, COUNT(*) AS count
-        FROM telegram_onboarding_intents
-        WHERE telegram_user_id = ?1
-        GROUP BY status
-      `,
-      args: ["777202"],
-    })
-    expect(Object.fromEntries(intentStatuses.rows.map((row) => [String(row.status), Number(row.count)]))).toEqual({
-      canceled: 1,
-      completed: 1,
+      status: "rate_limited",
+      trigger_type: "reply_to_bot",
+      prompt: "hello over limit",
     })
   })
 
@@ -3094,7 +3151,7 @@ describe("community Telegram routes", () => {
     expect(exchangeResponse.status).toBe(200)
   })
 
-  test("community bot private DM prompts non-members without provider calls", async () => {
+  test("community bot private DM prompts non-members to verify when preview is unavailable", async () => {
     const ctx = await createRouteTestContext({
       OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
       PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
@@ -3141,10 +3198,15 @@ describe("community Telegram routes", () => {
     expect(mock.openRouterCalls).toHaveLength(0)
     const sendMessageRequests = mock.telegramRequests.filter((request) => request.url.endsWith("/sendMessage"))
     expect(sendMessageRequests).toHaveLength(1)
-    const sendBody = await sendMessageRequests[0]!.json() as { text: string; reply_markup: unknown }
-    expect(sendBody.text).toContain("join or verify")
-    const webAppUrl = telegramWebAppUrlFromReplyMarkup(sendBody.reply_markup)
-    expect(webAppUrl).toContain(`https://staging.pirate.test/tg/exchange?community=com_${communityId}`)
+    const sendBody = await sendMessageRequests[0]!.json() as {
+      text: string
+      reply_markup?: { inline_keyboard?: Array<Array<{ text?: string; web_app?: { url?: string } }>> }
+    }
+    expect(sendBody.text).toBe("Verify and join this community to use the full assistant.")
+    expect(sendBody.reply_markup?.inline_keyboard?.[0]?.[0]).toEqual({
+      text: "Verify to join",
+      web_app: { url: `https://staging.pirate.test/tg/verify/com_${communityId}` },
+    })
   })
 
   test("community bot private DM reports disabled assistant without provider calls", async () => {

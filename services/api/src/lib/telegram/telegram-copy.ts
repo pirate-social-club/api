@@ -25,6 +25,14 @@ type TelegramCopy = {
     signIn(input: TelegramStartCopyArgs): string
     verifyRequired(input: TelegramStartCopyArgs): string
   }
+  privateAssistant: {
+    previewCta: string
+    previewCtaFallback: string
+    previewUnavailable: string
+    previewUnavailableFallback: string
+    previewUserCapReached: string
+    previewUserCapReachedFallback: string
+  }
 }
 
 const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
@@ -51,6 +59,14 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       signIn: ({ community }) => `Open ${community} in Pirate to sign in and continue.`,
       verifyRequired: ({ community }) => `Welcome to ${community}. Verify your Pirate account to join.`,
     },
+    privateAssistant: {
+      previewCta: "Verify to unlock the full assistant.",
+      previewCtaFallback: "Send /start to verify and unlock the full assistant.",
+      previewUnavailable: "Verify and join this community to use the full assistant.",
+      previewUnavailableFallback: "Verify and join this community to use the full assistant. Send /start to continue.",
+      previewUserCapReached: "You have used today's preview messages. Verify to join and keep chatting with the full assistant.",
+      previewUserCapReachedFallback: "You have used today's preview messages. Send /start to verify and unlock the full assistant.",
+    },
   },
   ar: {
     buttons: {
@@ -74,6 +90,14 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       requestSent: ({ community }) => `تم إرسال طلبك إلى ${community}. ستتمكن من الدخول بعد الموافقة عليه.`,
       signIn: ({ community }) => `افتح ${community} في Pirate لتسجيل الدخول والمتابعة.`,
       verifyRequired: ({ community }) => `مرحباً بك في ${community}. تحقق من حسابك في Pirate للانضمام.`,
+    },
+    privateAssistant: {
+      previewCta: "تحقق لفتح المساعد الكامل.",
+      previewCtaFallback: "أرسل /start للتحقق وفتح المساعد الكامل.",
+      previewUnavailable: "تحقق وانضم إلى هذا المجتمع لاستخدام المساعد الكامل.",
+      previewUnavailableFallback: "تحقق وانضم إلى هذا المجتمع لاستخدام المساعد الكامل. أرسل /start للمتابعة.",
+      previewUserCapReached: "لقد استخدمت رسائل المعاينة المتاحة اليوم. تحقق للانضمام ومتابعة الدردشة مع المساعد الكامل.",
+      previewUserCapReachedFallback: "لقد استخدمت رسائل المعاينة المتاحة اليوم. أرسل /start للتحقق وفتح المساعد الكامل.",
     },
   },
   zh: {
@@ -99,6 +123,14 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       signIn: ({ community }) => `在 Pirate 中打开 ${community}，登录后继续。`,
       verifyRequired: ({ community }) => `欢迎来到 ${community}。验证你的 Pirate 账号以加入。`,
     },
+    privateAssistant: {
+      previewCta: "完成验证即可解锁完整助手。",
+      previewCtaFallback: "发送 /start 完成验证并解锁完整助手。",
+      previewUnavailable: "完成验证并加入此社区后即可使用完整助手。",
+      previewUnavailableFallback: "完成验证并加入此社区后即可使用完整助手。发送 /start 继续。",
+      previewUserCapReached: "你今天的预览消息已用完。完成验证并加入后即可继续使用完整助手聊天。",
+      previewUserCapReachedFallback: "你今天的预览消息已用完。发送 /start 完成验证并解锁完整助手。",
+    },
   },
   ka: {
     buttons: {
@@ -122,6 +154,14 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       requestSent: ({ community }) => `${community}-ში გაწევრიანების მოთხოვნა გაგზავნილია. დამტკიცების შემდეგ შეძლებთ შესვლას.`,
       signIn: ({ community }) => `გასაგრძელებლად შედით Pirate-ში და გახსენით ${community}.`,
       verifyRequired: ({ community }) => `მოგესალმებით ${community}-ში. გაწევრიანებისთვის გაიარეთ თქვენი Pirate ანგარიშის ვერიფიკაცია.`,
+    },
+    privateAssistant: {
+      previewCta: "სრული ასისტენტის გასახსნელად გაიარეთ ვერიფიკაცია.",
+      previewCtaFallback: "სრული ასისტენტის გასახსნელად გაგზავნეთ /start და გაიარეთ ვერიფიკაცია.",
+      previewUnavailable: "სრული ასისტენტის გამოსაყენებლად გაიარეთ ვერიფიკაცია და გაწევრიანდით ამ საზოგადოებაში.",
+      previewUnavailableFallback: "სრული ასისტენტის გამოსაყენებლად გაიარეთ ვერიფიკაცია და გაწევრიანდით ამ საზოგადოებაში. გასაგრძელებლად გაგზავნეთ /start.",
+      previewUserCapReached: "დღევანდელი საცდელი შეტყობინებები ამოიწურა. გასაგრძელებლად გაიარეთ ვერიფიკაცია და გაწევრიანდით.",
+      previewUserCapReachedFallback: "დღევანდელი საცდელი შეტყობინებები ამოიწურა. სრული ასისტენტის გასახსნელად გაგზავნეთ /start.",
     },
   },
 }
