@@ -1090,7 +1090,7 @@ describe("community Telegram routes", () => {
         message: {
           message_id: 3,
           chat: { id: 9001, type: "private" },
-          from: { id: 5001 },
+          from: { id: 5001, language_code: "ar" },
           text: `/start join_com_${communityId}`,
         },
       },
@@ -1098,8 +1098,12 @@ describe("community Telegram routes", () => {
     expect(accepted.status).toBe(200)
     const sendMessageRequests = telegramRequests.filter((request) => request.url.endsWith("/sendMessage"))
     expect(sendMessageRequests).toHaveLength(1)
-    const sendBody = await sendMessageRequests[0]!.json() as { text?: string; reply_markup?: { inline_keyboard?: Array<Array<{ web_app?: { url?: string } }>> } }
-    expect(sendBody.text).toContain("Community Join Payload Club")
+    const sendBody = await sendMessageRequests[0]!.json() as {
+      text?: string
+      reply_markup?: { inline_keyboard?: Array<Array<{ text?: string; web_app?: { url?: string } }>> }
+    }
+    expect(sendBody.text).toBe("مرحباً بك في Community Join Payload Club. اربط حسابك في Pirate للتحقق والانضمام.")
+    expect(sendBody.reply_markup?.inline_keyboard?.[0]?.[0]?.text).toBe("تحقق للانضمام")
     expect(sendBody.reply_markup?.inline_keyboard?.[0]?.[0]?.web_app?.url).toBe(`https://staging.pirate.test/tg/verify/com_${communityId}`)
   })
 
@@ -1154,6 +1158,10 @@ describe("community Telegram routes", () => {
       userId: member.userId,
       countryCode: "US",
     })
+    await ctx.client.execute({
+      sql: `UPDATE profiles SET preferred_locale = 'zh' WHERE user_id = ?1`,
+      args: [member.userId],
+    })
     await linkTelegramAccount({
       client: ctx.client,
       telegramUserId: "5002",
@@ -1175,7 +1183,7 @@ describe("community Telegram routes", () => {
         message: {
           message_id: 5,
           chat: { id: 9002, type: "private" },
-          from: { id: 5002 },
+          from: { id: 5002, language_code: "ka" },
           text: `/start join_com_${communityId}`,
         },
       },
@@ -1193,10 +1201,8 @@ describe("community Telegram routes", () => {
       reply_markup?: { inline_keyboard?: Array<Array<{ text?: string; web_app?: { url?: string } }>> }
       text?: string
     }
-    expect(sendBody.text).toContain("Community Auto Join Club")
-    expect(sendBody.text).toContain("You're in Community Auto Join Club.")
-    expect(sendBody.text).toContain("Open the community in Pirate.")
-    expect(sendBody.reply_markup?.inline_keyboard?.[0]?.[0]?.text).toBe("Open community")
+    expect(sendBody.text).toBe("你已加入 Community Auto Join Club。在 Pirate 中打开这个社区。")
+    expect(sendBody.reply_markup?.inline_keyboard?.[0]?.[0]?.text).toBe("打开社区")
     expect(sendBody.reply_markup?.inline_keyboard?.[0]?.[0]?.web_app?.url).toBe(`https://staging.pirate.test/tg/c/com_${communityId}`)
   })
 
