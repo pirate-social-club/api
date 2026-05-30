@@ -38,11 +38,11 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       verifyToJoin: "Verify to join",
     },
     start: {
-      alreadyJoined: ({ community }) => `You're already in ${community}. Open the community in Pirate.`,
+      alreadyJoined: ({ community }) => `You're in ${community}.`,
       fallback: ({ community }) => `Open ${community} in Pirate to continue.`,
       gateFailed: ({ community }) =>
         `Your Pirate account does not meet ${community}'s requirements yet. Open Pirate to review what is missing.`,
-      joined: ({ community }) => `You're in ${community}. Open the community in Pirate.`,
+      joined: ({ community }) => `You're in ${community}.`,
       linkRequired: ({ community }) => `Welcome to ${community}. Link your Pirate account to verify and join.`,
       pendingRequest: ({ community }) =>
         `Your request to join ${community} is pending. Open Pirate to check for updates.`,
@@ -62,11 +62,11 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       verifyToJoin: "تحقق للانضمام",
     },
     start: {
-      alreadyJoined: ({ community }) => `أنت بالفعل في ${community}. افتح المجتمع في Pirate.`,
+      alreadyJoined: ({ community }) => `أنت في ${community}.`,
       fallback: ({ community }) => `افتح ${community} في Pirate للمتابعة.`,
       gateFailed: ({ community }) =>
         `حسابك في Pirate لا يستوفي متطلبات ${community} بعد. افتح Pirate لمعرفة ما ينقصك.`,
-      joined: ({ community }) => `أصبحت الآن في ${community}. افتح المجتمع في Pirate.`,
+      joined: ({ community }) => `أنت في ${community}.`,
       linkRequired: ({ community }) => `مرحباً بك في ${community}. اربط حسابك في Pirate للتحقق والانضمام.`,
       pendingRequest: ({ community }) =>
         `طلبك للانضمام إلى ${community} قيد المراجعة. افتح Pirate للتحقق من التحديثات.`,
@@ -86,11 +86,11 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       verifyToJoin: "验证并加入",
     },
     start: {
-      alreadyJoined: ({ community }) => `你已加入 ${community}。在 Pirate 中打开这个社区。`,
+      alreadyJoined: ({ community }) => `你已加入 ${community}。`,
       fallback: ({ community }) => `在 Pirate 中打开 ${community} 以继续。`,
       gateFailed: ({ community }) =>
         `你的 Pirate 账号暂未满足 ${community} 的要求。打开 Pirate 查看还需要完成什么。`,
-      joined: ({ community }) => `你已加入 ${community}。在 Pirate 中打开这个社区。`,
+      joined: ({ community }) => `你已加入 ${community}。`,
       linkRequired: ({ community }) => `欢迎来到 ${community}。关联你的 Pirate 账号以验证并加入。`,
       pendingRequest: ({ community }) =>
         `你加入 ${community} 的申请正在审核中。打开 Pirate 查看更新。`,

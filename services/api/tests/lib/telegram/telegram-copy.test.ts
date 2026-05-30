@@ -7,7 +7,9 @@ describe("telegram copy catalog", () => {
     const copy = getTelegramCopy("en")
 
     expect(copy.start.alreadyJoined({ community: "Americans only 2" }))
-      .toBe("You're already in Americans only 2. Open the community in Pirate.")
+      .toBe("You're in Americans only 2.")
+    expect(copy.start.joined({ community: "Americans only 2" }))
+      .toBe("You're in Americans only 2.")
     expect(copy.buttons.openCommunity).toBe("Open community")
   })
 
