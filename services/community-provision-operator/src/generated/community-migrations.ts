@@ -3878,4 +3878,20 @@ CREATE INDEX idx_post_events_community_start
 `,
     checksum: "782bcec7005c69cefd501b9512066c450b481cc39c3c062a71a9e580f99ff2c0",
   },
+  {
+    name: "1090_community_assistant_telegram_private_policy.sql",
+    sql: `ALTER TABLE community_assistant_policy
+    ADD COLUMN telegram_private_assistant_enabled INTEGER NOT NULL DEFAULT 0
+        CHECK (telegram_private_assistant_enabled IN (0, 1));
+
+ALTER TABLE community_assistant_policy
+    ADD COLUMN telegram_preview_enabled INTEGER NOT NULL DEFAULT 1
+        CHECK (telegram_preview_enabled IN (0, 1));
+
+ALTER TABLE community_assistant_policy
+    ADD COLUMN telegram_preview_daily_cap INTEGER NOT NULL DEFAULT 5
+        CHECK (telegram_preview_daily_cap BETWEEN 0 AND 50);
+`,
+    checksum: "aa1afa65af9f4845eff8c1d4d138725ef4eb85e1991a6ba0b8327ee62ccb72a7",
+  },
 ] as const;
