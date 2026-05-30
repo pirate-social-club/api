@@ -12,6 +12,7 @@ import { assertPublicV0GateConfiguration } from "../community-gate-validation"
 import type { GatePolicy } from "../membership/gate-types"
 
 export type CreateCommunityRequestBody = Omit<CreateCommunityRequest, "gate_policy"> & {
+  country_code?: string | null
   gate_policy?: unknown
 }
 

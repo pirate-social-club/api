@@ -222,25 +222,6 @@ function onboardingTokenFromWebAppUrl(url: string): string {
   return new URL(url).searchParams.get("token") ?? ""
 }
 
-async function exchangeTelegramOnboarding(input: {
-  env: Env
-  token: string
-  initData: string
-}): Promise<Response> {
-  return app.request(
-    "http://pirate.test/telegram/session/exchange",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        token: input.token,
-        init_data: input.initData,
-      }),
-    },
-    input.env,
-  )
-}
-
 function telegramSessionAutoExchange(input: {
   body: Record<string, unknown>
   env: Env

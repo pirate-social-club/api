@@ -548,7 +548,6 @@ export type Community = {
   provisioning_state: "requested" | "provisioning" | "active" | "rotation_required" | "error"
   artist_identity_id?: string | null
   community_agent_user_id?: string | null
-  country_code?: string | null
   membership_mode: "open" | "request" | "gated"
   allow_anonymous_identity: boolean
   anonymous_identity_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null
