@@ -38,11 +38,11 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       verifyToJoin: "Verify to join",
     },
     start: {
-      alreadyJoined: ({ community }) => `You're in ${community}.`,
+      alreadyJoined: ({ community }) => `You've already joined "${community}".`,
       fallback: ({ community }) => `Open ${community} in Pirate to continue.`,
       gateFailed: ({ community }) =>
         `Your Pirate account does not meet ${community}'s requirements yet. Open Pirate to review what is missing.`,
-      joined: ({ community }) => `You're in ${community}.`,
+      joined: ({ community }) => `You've joined "${community}".`,
       linkRequired: ({ community }) => `Welcome to ${community}. Link your Pirate account to verify and join.`,
       pendingRequest: ({ community }) =>
         `Your request to join ${community} is pending. Open Pirate to check for updates.`,
