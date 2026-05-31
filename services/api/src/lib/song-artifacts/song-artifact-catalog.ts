@@ -99,9 +99,7 @@ export async function syncSongBundleToAcrCloudCatalog(input: {
     const audioBytes = await audioResponse.arrayBuffer()
     const mimeType = String(input.bundle.primary_audio?.mime_type || "application/octet-stream")
     const contentHash = String(input.bundle.primary_audio?.content_hash || "").trim()
-    const title = contentHash
-      ? `pirate-${contentHash.replace(/^0x/, "")}`
-      : `pirate-${input.songArtifactBundleId}`
+    const title = String(input.bundle.title || "").trim() || `Pirate song ${input.songArtifactBundleId}`
 
     const body = new FormData()
     body.set(
