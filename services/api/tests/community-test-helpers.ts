@@ -8,7 +8,7 @@ import type {
   CommunityPostProjectionRepository,
   CommunityReadRepository,
 } from "../src/lib/communities/db-community-repository"
-import { insertPost } from "../src/lib/posts/community-post-store"
+import { insertPost } from "../src/lib/posts/community-post-create-store"
 import { buildDefaultVerificationCapabilities } from "../src/lib/verification/verification-capabilities"
 import type {
   CommunityCommentProjectionRow,
