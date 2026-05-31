@@ -370,6 +370,9 @@ function defaultCommunityAssistantPolicy(input: {
     actionMode: "answer_only",
     requireModeratorApprovalForWrites: true,
     perUserDailyMessageCap: 40,
+    telegramPrivateAssistantEnabled: false,
+    telegramPreviewEnabled: true,
+    telegramPreviewDailyCap: 5,
     voiceMode: "off",
     sttProvider: "elevenlabs",
     sttModel: "scribe_v2",
@@ -414,6 +417,12 @@ function policyFromRow(input: {
       base.requireModeratorApprovalForWrites,
     ),
     perUserDailyMessageCap: numberOrNull(input.row.per_user_daily_message_cap),
+    telegramPrivateAssistantEnabled: sqliteBool(
+      input.row.telegram_private_assistant_enabled,
+      base.telegramPrivateAssistantEnabled,
+    ),
+    telegramPreviewEnabled: sqliteBool(input.row.telegram_preview_enabled, base.telegramPreviewEnabled),
+    telegramPreviewDailyCap: numberOrNull(input.row.telegram_preview_daily_cap) ?? base.telegramPreviewDailyCap,
     voiceMode: (stringOrNull(input.row.voice_mode) ?? base.voiceMode) as AssistantVoiceMode,
     sttProvider: (stringOrNull(input.row.stt_provider) ?? base.sttProvider) as AssistantSttProvider,
     sttModel: stringOrNull(input.row.stt_model) ?? base.sttModel,
@@ -443,6 +452,9 @@ function validationInput(policy: CommunityAssistantPolicy): CommunityAssistantPo
     maxContextThreads: policy.maxContextThreads,
     maxLookbackDays: policy.maxLookbackDays,
     perUserDailyMessageCap: policy.perUserDailyMessageCap,
+    telegramPrivateAssistantEnabled: policy.telegramPrivateAssistantEnabled,
+    telegramPreviewEnabled: policy.telegramPreviewEnabled,
+    telegramPreviewDailyCap: policy.telegramPreviewDailyCap,
     voiceMode: policy.voiceMode,
     sttProvider: policy.sttProvider,
     sttModel: policy.sttModel,
@@ -483,7 +495,8 @@ async function readStoredPolicy(input: {
                default_prompt, starter_prompts, selected_model_id, context_mode, context_sources,
                max_context_threads, max_lookback_days, memory_enabled, retention_mode, retention_days,
                save_chats_to_community_db, action_mode, require_moderator_approval_for_writes,
-                per_user_daily_message_cap, voice_mode, stt_provider, stt_model,
+                per_user_daily_message_cap, telegram_private_assistant_enabled,
+                telegram_preview_enabled, telegram_preview_daily_cap, voice_mode, stt_provider, stt_model,
                 tts_provider, tts_voice, include_in_sovereign_export, policy_origin, created_at, updated_at
         FROM community_assistant_policy
         WHERE community_id = ?1
@@ -583,6 +596,18 @@ function applyPolicyPatch(input: {
   if ("perUserDailyMessageCap" in body) {
     candidate.perUserDailyMessageCap = body.perUserDailyMessageCap as number | null
   }
+  if ("telegramPrivateAssistantEnabled" in body) {
+    candidate.telegramPrivateAssistantEnabled = normalizeBoolean(
+      body.telegramPrivateAssistantEnabled,
+      "telegramPrivateAssistantEnabled",
+    )
+  }
+  if ("telegramPreviewEnabled" in body) {
+    candidate.telegramPreviewEnabled = normalizeBoolean(body.telegramPreviewEnabled, "telegramPreviewEnabled")
+  }
+  if ("telegramPreviewDailyCap" in body) {
+    candidate.telegramPreviewDailyCap = body.telegramPreviewDailyCap as number
+  }
   if ("voiceMode" in body) candidate.voiceMode = body.voiceMode as AssistantVoiceMode
   if ("sttProvider" in body) candidate.sttProvider = body.sttProvider as AssistantSttProvider
   if ("sttModel" in body) candidate.sttModel = normalizeString(body.sttModel, "sttModel", 128)
@@ -621,7 +646,8 @@ async function persistPolicy(input: {
             default_prompt, starter_prompts, selected_model_id, context_mode, context_sources,
             max_context_threads, max_lookback_days, memory_enabled, retention_mode, retention_days,
             save_chats_to_community_db, action_mode, require_moderator_approval_for_writes,
-            per_user_daily_message_cap, voice_mode, stt_provider, stt_model,
+            per_user_daily_message_cap, telegram_private_assistant_enabled,
+            telegram_preview_enabled, telegram_preview_daily_cap, voice_mode, stt_provider, stt_model,
             tts_provider, tts_voice, include_in_sovereign_export, policy_origin, created_at, updated_at
           ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7,
@@ -629,7 +655,8 @@ async function persistPolicy(input: {
             ?13, ?14, ?15, ?16, ?17,
             ?18, ?19, ?20,
             ?21, ?22, ?23, ?24,
-            ?25, ?26, ?27, 'explicit', ?28, ?28
+            ?25, ?26, ?27, ?28,
+            ?29, ?30, 'explicit', ?31, ?31
           )
           ON CONFLICT(community_id) DO UPDATE SET
             enabled = excluded.enabled,
@@ -651,6 +678,9 @@ async function persistPolicy(input: {
             action_mode = excluded.action_mode,
             require_moderator_approval_for_writes = excluded.require_moderator_approval_for_writes,
             per_user_daily_message_cap = excluded.per_user_daily_message_cap,
+            telegram_private_assistant_enabled = excluded.telegram_private_assistant_enabled,
+            telegram_preview_enabled = excluded.telegram_preview_enabled,
+            telegram_preview_daily_cap = excluded.telegram_preview_daily_cap,
             voice_mode = excluded.voice_mode,
             stt_provider = excluded.stt_provider,
             stt_model = excluded.stt_model,
@@ -682,6 +712,9 @@ async function persistPolicy(input: {
           input.nextPolicy.actionMode,
           input.nextPolicy.requireModeratorApprovalForWrites ? 1 : 0,
           input.nextPolicy.perUserDailyMessageCap,
+          input.nextPolicy.telegramPrivateAssistantEnabled ? 1 : 0,
+          input.nextPolicy.telegramPreviewEnabled ? 1 : 0,
+          input.nextPolicy.telegramPreviewDailyCap,
           input.nextPolicy.voiceMode,
           input.nextPolicy.sttProvider,
           input.nextPolicy.sttModel,

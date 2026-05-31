@@ -940,6 +940,7 @@ export async function sendCommunityAssistantTelegramDirectMessage(input: {
   communityId: string
   userId: string
   message: unknown
+  userMessageMetadata?: Record<string, unknown> | null
 }): Promise<CommunityAssistantChatResponse> {
   const message = normalizeChatMessage(input.message)
   return sendCommunityAssistantUserMessage({
@@ -952,6 +953,7 @@ export async function sendCommunityAssistantTelegramDirectMessage(input: {
     accessMode: "member_required",
     delivery: "telegram_dm",
     reuseLatestActiveChat: true,
+    userMessageMetadata: input.userMessageMetadata ?? null,
   })
 }
 

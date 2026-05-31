@@ -44,11 +44,11 @@ async function insertTelegramAssistantEvent(input: {
     sql: `
       INSERT INTO telegram_assistant_events (
         event_id, community_id, telegram_chat_id, telegram_message_id, telegram_user_id,
-        user_id, trigger_type, prompt, assistant_message_ref, status, error_message,
+        user_id, channel, trigger_type, prompt, assistant_message_ref, status, error_message,
         created_at, completed_at
       ) VALUES (
         ?1, ?2, ?3, ?4, ?5,
-        NULL, ?6, ?7, NULL, 'received', NULL,
+        NULL, 'group', ?6, ?7, NULL, 'received', NULL,
         ?8, NULL
       )
     `,
@@ -115,6 +115,7 @@ async function enforceTelegramGroupAssistantRateLimit(input: {
       FROM telegram_assistant_events
       WHERE created_at >= ?5
         AND event_id <> ?1
+        AND channel = 'group'
         AND (
           community_id = ?2
           OR telegram_chat_id = ?3

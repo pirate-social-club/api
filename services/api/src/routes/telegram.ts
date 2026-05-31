@@ -46,7 +46,10 @@ import {
   TELEGRAM_ELEVENLABS_TTS_OUTPUT_FORMAT,
   transcribeCommunityAssistantAudioForCommunity,
 } from "../lib/communities/assistant-policy/speech-service"
-import { getCommunityAssistantRuntimePolicyForCommunity } from "../lib/communities/assistant-policy/service"
+import {
+  getCommunityAssistantRuntimePolicyForCommunity,
+  type CommunityAssistantPolicy,
+} from "../lib/communities/assistant-policy/service"
 import {
   evaluateTelegramChatJoinRequest,
   markTelegramJoinGrantApproved,
@@ -76,7 +79,7 @@ import {
   verifyTelegramMiniAppInitData,
 } from "../lib/telegram/mini-app-auth"
 import { trackApiEvent } from "../lib/analytics/track"
-import { authError, badRequestError, HttpError } from "../lib/errors"
+import { authError, badRequestError, HttpError, notFoundError } from "../lib/errors"
 import { makeId, nowIso } from "../lib/helpers"
 import { decodePublicCommunityId, publicCommunityId } from "../lib/public-ids"
 import { getControlPlaneClient } from "../lib/runtime-deps"
@@ -88,7 +91,7 @@ import {
 
 const telegram = new Hono<{ Bindings: Env }>()
 
-const TELEGRAM_DIRECT_PREVIEW_DAILY_LIMIT = 10
+const TELEGRAM_DIRECT_PREVIEW_COMMUNITY_DAILY_LIMIT = 1000
 const TELEGRAM_DIRECT_PREVIEW_WINDOW_MS = 24 * 60 * 60 * 1000
 
 function timingSafeSecretEqual(left: string, right: string): boolean {
@@ -619,11 +622,11 @@ async function insertDirectAssistantPreviewEvent(input: {
     sql: `
       INSERT INTO telegram_assistant_events (
         event_id, community_id, telegram_chat_id, telegram_message_id, telegram_user_id,
-        user_id, trigger_type, prompt, assistant_message_ref, status, error_message,
+        user_id, channel, trigger_type, prompt, assistant_message_ref, status, error_message,
         created_at, completed_at
       ) VALUES (
         ?1, ?2, ?3, ?4, ?5,
-        NULL, 'reply_to_bot', ?6, NULL, 'received', NULL,
+        NULL, 'private_preview', 'reply_to_bot', ?6, NULL, 'received', NULL,
         ?7, NULL
       )
     `,
@@ -672,7 +675,8 @@ async function directAssistantPreviewLimitReached(input: {
   eventId: string
   telegramUserId: string
   now: string
-}): Promise<boolean> {
+  userDailyLimit: number
+}): Promise<"community" | "user" | null> {
   const parsedNow = Date.parse(input.now)
   const since = new Date(
     Number.isFinite(parsedNow)
@@ -681,12 +685,12 @@ async function directAssistantPreviewLimitReached(input: {
   ).toISOString()
   const result = await getControlPlaneClient(input.env).execute({
     sql: `
-      SELECT COUNT(*) AS count
+      SELECT
+        COALESCE(SUM(CASE WHEN telegram_user_id = ?3 THEN 1 ELSE 0 END), 0) AS user_count,
+        COUNT(*) AS community_count
       FROM telegram_assistant_events
       WHERE community_id = ?2
-        AND telegram_user_id = ?3
-        AND user_id IS NULL
-        AND trigger_type = 'reply_to_bot'
+        AND channel = 'private_preview'
         AND created_at >= ?4
         AND event_id <> ?1
     `,
@@ -697,7 +701,16 @@ async function directAssistantPreviewLimitReached(input: {
       since,
     ],
   })
-  return Number(result.rows[0]?.count ?? 0) >= TELEGRAM_DIRECT_PREVIEW_DAILY_LIMIT
+  const row = result.rows[0]
+  const userCount = Number(row?.user_count ?? 0)
+  const communityCount = Number(row?.community_count ?? 0)
+  if (userCount >= input.userDailyLimit) {
+    return "user"
+  }
+  if (communityCount >= TELEGRAM_DIRECT_PREVIEW_COMMUNITY_DAILY_LIMIT) {
+    return "community"
+  }
+  return null
 }
 
 async function sendDirectAssistantPreviewResponse(input: {
@@ -707,6 +720,7 @@ async function sendDirectAssistantPreviewResponse(input: {
   telegramMessageId: number
   telegramUserId: string
   locale: RuntimeUiLocaleCode
+  policy: CommunityAssistantPolicy
   prompt: string
 }): Promise<void> {
   const replyMarkup = directAssistantVerifyReplyMarkup({
@@ -727,18 +741,22 @@ async function sendDirectAssistantPreviewResponse(input: {
   })
 
   try {
-    if (await directAssistantPreviewLimitReached({
+    const limitScope = await directAssistantPreviewLimitReached({
       env: input.env,
       communityId: input.bot.communityId,
       eventId,
       telegramUserId: input.telegramUserId,
       now,
-    })) {
+      userDailyLimit: input.policy.telegramPreviewDailyCap,
+    })
+    if (limitScope) {
       await updateDirectAssistantPreviewEvent({
         env: input.env,
         eventId,
         status: "rate_limited",
-        errorMessage: "Telegram direct preview daily limit reached",
+        errorMessage: limitScope === "user"
+          ? "Telegram direct preview daily limit reached"
+          : "Telegram direct preview community daily limit reached",
       })
       await safeSendTelegramMessage(input.bot, {
         chat_id: input.chatId,
@@ -805,10 +823,14 @@ function directAssistantLinkText(input: {
   reason: "unlinked" | "not_member"
 }): string {
   const url = communityTelegramJoinUrl(input.env, input.communityId)
-  const body = input.reason === "unlinked"
-    ? "Open Pirate to link this Telegram account before messaging the community assistant."
-    : "Open Pirate to join or verify for this community before messaging the assistant."
+  const body = directAssistantLinkBody(input.reason)
   return url ? `${body}\n${url}` : body
+}
+
+function directAssistantLinkBody(reason: "unlinked" | "not_member"): string {
+  return reason === "unlinked"
+    ? "Open Pirate to link this Telegram account before messaging the community assistant."
+    : "Verify and join this community to use the full assistant."
 }
 
 async function sendDirectAssistantOnboardingPrompt(input: {
@@ -829,9 +851,7 @@ async function sendDirectAssistantOnboardingPrompt(input: {
     })
     await safeSendTelegramMessage(input.bot, {
       chat_id: input.chatId,
-      text: input.reason === "unlinked"
-        ? "Open Pirate to link this Telegram account before messaging the community assistant."
-        : "Open Pirate to join or verify for this community before messaging the assistant.",
+      text: directAssistantLinkBody(input.reason),
       reply_markup: telegramOnboardingWebAppReplyMarkup(intent.web_app_url),
     })
   } catch {
@@ -844,6 +864,21 @@ async function sendDirectAssistantOnboardingPrompt(input: {
       }),
     })
   }
+}
+
+async function getTelegramDirectAssistantPolicy(input: {
+  env: Env
+  communityId: string
+}): Promise<CommunityAssistantPolicy> {
+  const policy = await getCommunityAssistantRuntimePolicyForCommunity({
+    env: input.env,
+    communityRepository: getCommunityRepository(input.env),
+    communityId: input.communityId,
+  })
+  if (!policy.telegramPrivateAssistantEnabled) {
+    throw notFoundError("Telegram private assistant is not enabled")
+  }
+  return policy
 }
 
 function directAssistantFailureMessage(error: unknown): string {
@@ -1610,7 +1645,14 @@ async function handleDirectAssistantMessage(env: Env, message: TelegramWebhookMe
     telegramUserId,
   })
   if (!account) {
-    if (!textPrompt) {
+    const previewPolicy = textPrompt
+      ? await getTelegramDirectAssistantPolicy({ env, communityId: bot.communityId }).catch(() => null)
+      : null
+    if (
+      !textPrompt
+      || !previewPolicy?.telegramPreviewEnabled
+      || previewPolicy.telegramPreviewDailyCap <= 0
+    ) {
       await sendDirectAssistantOnboardingPrompt({
         env,
         bot,
@@ -1627,6 +1669,7 @@ async function handleDirectAssistantMessage(env: Env, message: TelegramWebhookMe
       telegramMessageId: message.message_id ?? 0,
       telegramUserId,
       locale,
+      policy: previewPolicy,
       prompt: textPrompt,
     })
     return
@@ -1638,7 +1681,14 @@ async function handleDirectAssistantMessage(env: Env, message: TelegramWebhookMe
     userId: account.userId,
   })
   if (!canAccess) {
-    if (!textPrompt) {
+    const previewPolicy = textPrompt
+      ? await getTelegramDirectAssistantPolicy({ env, communityId: bot.communityId }).catch(() => null)
+      : null
+    if (
+      !textPrompt
+      || !previewPolicy?.telegramPreviewEnabled
+      || previewPolicy.telegramPreviewDailyCap <= 0
+    ) {
       await sendDirectAssistantOnboardingPrompt({
         env,
         bot,
@@ -1655,12 +1705,17 @@ async function handleDirectAssistantMessage(env: Env, message: TelegramWebhookMe
       telegramMessageId: message.message_id ?? 0,
       telegramUserId,
       locale,
+      policy: previewPolicy,
       prompt: textPrompt,
     })
     return
   }
 
   try {
+    await getTelegramDirectAssistantPolicy({
+      env,
+      communityId: bot.communityId,
+    })
     const prompt = textPrompt ?? await transcribeTelegramAssistantVoiceForCommunity({
       env,
       bot,
@@ -1680,6 +1735,13 @@ async function handleDirectAssistantMessage(env: Env, message: TelegramWebhookMe
       communityId: bot.communityId,
       userId: account.userId,
       message: prompt,
+      userMessageMetadata: {
+        source: "telegram_dm",
+        telegram_chat_id: chatId,
+        telegram_community_bot_id: bot.id,
+        telegram_message_id: message.message_id ?? null,
+        telegram_user_id: telegramUserId,
+      },
     })
     const answerText = telegramText(answer.assistant_message.content)
     const sentVoiceReply = await maybeSendTelegramAssistantVoiceReplyForCommunity({

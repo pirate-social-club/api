@@ -29,6 +29,9 @@ export type CommunityAssistantPolicySettingsInput = {
   maxContextThreads: number
   maxLookbackDays: number | null
   perUserDailyMessageCap: number | null
+  telegramPrivateAssistantEnabled: boolean
+  telegramPreviewEnabled: boolean
+  telegramPreviewDailyCap: number
   voiceMode: AssistantVoiceMode
   sttProvider: AssistantSttProvider
   sttModel: string
@@ -224,6 +227,27 @@ export function validateCommunityAssistantPolicySettings(
   const maxContextThreads = requiredIntegerInRange(input, "maxContextThreads", 1, 50, errors)
   const maxLookbackDays = nullableIntegerInRange(input, "maxLookbackDays", 1, 365, errors)
   const perUserDailyMessageCap = nullableIntegerInRange(input, "perUserDailyMessageCap", 1, 10000, errors)
+  const telegramPrivateAssistantEnabled = input.telegramPrivateAssistantEnabled
+  if (typeof telegramPrivateAssistantEnabled !== "boolean") {
+    errors.push("telegramPrivateAssistantEnabled must be a boolean")
+  }
+  const telegramPrivateAssistantEnabledValue = typeof telegramPrivateAssistantEnabled === "boolean"
+    ? telegramPrivateAssistantEnabled
+    : false
+  const telegramPreviewEnabled = input.telegramPreviewEnabled
+  if (typeof telegramPreviewEnabled !== "boolean") {
+    errors.push("telegramPreviewEnabled must be a boolean")
+  }
+  const telegramPreviewEnabledValue = typeof telegramPreviewEnabled === "boolean"
+    ? telegramPreviewEnabled
+    : true
+  const telegramPreviewDailyCap = requiredIntegerInRange(input, "telegramPreviewDailyCap", 0, 50, errors)
+  if (telegramPrivateAssistantEnabledValue && !enabledValue) {
+    errors.push("private Telegram assistant requires the assistant to be enabled")
+  }
+  if (telegramPrivateAssistantEnabledValue && openRouterKeyStatus.kind !== "connected") {
+    errors.push("private Telegram assistant requires a connected OpenRouter key")
+  }
   const voiceMode = enumValue(input, "voiceMode", VOICE_MODES, errors)
   const sttProvider = enumValue(input, "sttProvider", STT_PROVIDERS, errors)
   const sttModel = requiredString(input, "sttModel", errors, { maxLength: 128 })
@@ -278,6 +302,9 @@ export function validateCommunityAssistantPolicySettings(
       maxContextThreads,
       maxLookbackDays,
       perUserDailyMessageCap,
+      telegramPrivateAssistantEnabled: telegramPrivateAssistantEnabledValue,
+      telegramPreviewEnabled: telegramPreviewEnabledValue,
+      telegramPreviewDailyCap,
       voiceMode,
       sttProvider,
       sttModel,

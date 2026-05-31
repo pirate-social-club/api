@@ -426,6 +426,7 @@ async function setupEnabledAssistant(input: {
       maxContextThreads: 5,
       maxLookbackDays: 365,
       perUserDailyMessageCap: null,
+      telegramPrivateAssistantEnabled: true,
       ...input.policy,
     },
   })
@@ -562,6 +563,25 @@ async function getTelegramAssistantEvent(input: {
         prompt: String(row.prompt ?? ""),
       }
     : null
+}
+
+async function getTelegramAssistantEventChannel(input: {
+  client: Client
+  telegramChatId: string
+  telegramMessageId: number
+}): Promise<string | null> {
+  const result = await input.client.execute({
+    sql: `
+      SELECT channel
+      FROM telegram_assistant_events
+      WHERE telegram_chat_id = ?1
+        AND telegram_message_id = ?2
+      LIMIT 1
+    `,
+    args: [input.telegramChatId, input.telegramMessageId],
+  })
+  const channel = result.rows[0]?.channel
+  return typeof channel === "string" ? channel : null
 }
 
 async function getTelegramJoinGrant(input: {
@@ -707,6 +727,38 @@ async function getCommunityMembershipStatus(input: {
     })
     const status = result.rows[0]?.status
     return typeof status === "string" ? status : null
+  } finally {
+    client.close()
+  }
+}
+
+async function getAssistantUserMessageMetadata(input: {
+  communityDbRoot: string
+  communityId: string
+  content: string
+  userId: string
+}): Promise<Record<string, unknown> | null> {
+  const client = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+  try {
+    const result = await client.execute({
+      sql: `
+        SELECT metadata_json
+        FROM community_assistant_messages
+        WHERE community_id = ?1
+          AND user_id = ?2
+          AND role = 'user'
+          AND content = ?3
+        ORDER BY created_at DESC
+        LIMIT 1
+      `,
+      args: [input.communityId, input.userId, input.content],
+    })
+    const metadataJson = result.rows[0]?.metadata_json
+    return typeof metadataJson === "string" && metadataJson
+      ? JSON.parse(metadataJson) as Record<string, unknown>
+      : null
   } finally {
     client.close()
   }
@@ -2176,6 +2228,11 @@ describe("community Telegram routes", () => {
       trigger_type: "ask_command",
       prompt: "what are the rules?",
     })
+    expect(await getTelegramAssistantEventChannel({
+      client: ctx.client,
+      telegramChatId: "-1009001",
+      telegramMessageId: 101,
+    })).toBe("group")
   })
 
   test("webhook group assistant supports bot-qualified ask and reply-to-bot triggers", async () => {
@@ -2569,6 +2626,18 @@ describe("community Telegram routes", () => {
     const firstSendBody = await sendMessageRequests[0]!.json() as { chat_id: string; text: string }
     expect(firstSendBody.chat_id).toBe("887201")
     expect(firstSendBody.text).toBe("Direct answer.")
+    expect(await getAssistantUserMessageMetadata({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      content: "what are the rules?",
+      userId: member.userId,
+    })).toMatchObject({
+      source: "telegram_dm",
+      telegram_chat_id: "887201",
+      telegram_community_bot_id: expect.any(String),
+      telegram_message_id: 201,
+      telegram_user_id: "777201",
+    })
   })
 
   test("community bot private DM sends text before voice when text and voice replies are enabled", async () => {
@@ -2930,6 +2999,11 @@ describe("community Telegram routes", () => {
       trigger_type: "reply_to_bot",
       prompt: "hello",
     })
+    expect(await getTelegramAssistantEventChannel({
+      client: ctx.client,
+      telegramChatId: "887202",
+      telegramMessageId: 203,
+    })).toBe("private_preview")
   })
 
   test("community bot private DM preview limit encourages verification", async () => {
@@ -2964,11 +3038,11 @@ describe("community Telegram routes", () => {
         sql: `
           INSERT INTO telegram_assistant_events (
             event_id, community_id, telegram_chat_id, telegram_message_id, telegram_user_id,
-            user_id, trigger_type, prompt, assistant_message_ref, status, error_message,
+            user_id, channel, trigger_type, prompt, assistant_message_ref, status, error_message,
             created_at, completed_at
           ) VALUES (
             ?1, ?2, ?3, ?4, ?5,
-            NULL, 'reply_to_bot', 'previous preview', NULL, 'answered', NULL,
+            NULL, 'private_preview', 'reply_to_bot', 'previous preview', NULL, 'answered', NULL,
             ?6, ?6
           )
         `,
@@ -3021,6 +3095,104 @@ describe("community Telegram routes", () => {
       trigger_type: "reply_to_bot",
       prompt: "hello over limit",
     })
+    expect(await getTelegramAssistantEventChannel({
+      client: ctx.client,
+      telegramChatId: "887203",
+      telegramMessageId: 204,
+    })).toBe("private_preview")
+  })
+
+  test("community bot private DM preview aggregate cap encourages verification", async () => {
+    const ctx = await createRouteTestContext({
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
+      PIRATE_WEB_PUBLIC_ORIGIN: "https://staging.pirate.test",
+      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
+      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "1",
+    })
+    cleanup = ctx.cleanup
+    const mock = installTelegramAndOpenRouterMock("Should not be used.")
+    const owner = await exchangeJwt(ctx.env, "telegram-direct-preview-aggregate-limit-owner")
+    const communityId = await createCommunity({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      displayName: "Telegram Direct Preview Aggregate Limit Club",
+    })
+    await setupEnabledAssistant({
+      env: ctx.env,
+      communityId,
+      ownerToken: owner.accessToken,
+    })
+    const bot = await saveCommunityBotForWebhook({
+      env: ctx.env,
+      communityId,
+      accessToken: owner.accessToken,
+    })
+    const now = new Date().toISOString()
+    await ctx.client.execute({
+      sql: `
+        WITH RECURSIVE preview_rows(row_index) AS (
+          SELECT 0
+          UNION ALL
+          SELECT row_index + 1 FROM preview_rows WHERE row_index < 999
+        )
+        INSERT INTO telegram_assistant_events (
+          event_id, community_id, telegram_chat_id, telegram_message_id, telegram_user_id,
+          user_id, channel, trigger_type, prompt, assistant_message_ref, status, error_message,
+          created_at, completed_at
+        )
+        SELECT
+          'tae_preview_aggregate_limit_' || row_index, ?1, CAST(888000 + row_index AS TEXT), 10000 + row_index,
+          'preview_aggregate_user_' || row_index,
+          NULL, 'private_preview', 'reply_to_bot', 'previous preview', NULL, 'answered', NULL,
+          ?2, ?2
+        FROM preview_rows
+      `,
+      args: [communityId, now],
+    })
+
+    const response = await telegramCommunityBotWebhook({
+      env: ctx.env,
+      webhookId: bot.webhookId,
+      secret: bot.webhookSecret,
+      body: {
+        update_id: 54,
+        message: {
+          message_id: 205,
+          text: "hello over aggregate limit",
+          from: { id: 777205 },
+          chat: { id: 887205, type: "private" },
+        },
+      },
+    })
+
+    expect(response.status).toBe(200)
+    expect(mock.openRouterCalls).toHaveLength(0)
+    const sendMessageRequests = mock.telegramRequests.filter((request) => request.url.endsWith("/sendMessage"))
+    expect(sendMessageRequests).toHaveLength(1)
+    const sendBody = await sendMessageRequests[0]!.json() as {
+      text: string
+      reply_markup?: { inline_keyboard?: Array<Array<{ text?: string; web_app?: { url?: string } }>> }
+    }
+    expect(sendBody.text).toContain("You have used today's preview messages.")
+    expect(sendBody.reply_markup?.inline_keyboard?.[0]?.[0]).toEqual({
+      text: "Verify to join",
+      web_app: { url: `https://staging.pirate.test/tg/verify/com_${communityId}` },
+    })
+    expect(await getTelegramAssistantEvent({
+      client: ctx.client,
+      telegramChatId: "887205",
+      telegramMessageId: 205,
+    })).toEqual({
+      status: "rate_limited",
+      trigger_type: "reply_to_bot",
+      prompt: "hello over aggregate limit",
+    })
+    expect(await getTelegramAssistantEventChannel({
+      client: ctx.client,
+      telegramChatId: "887205",
+      telegramMessageId: 205,
+    })).toBe("private_preview")
   })
 
   test("telegram auto-exchange accepts active community bot init data and rejects platform init data", async () => {
@@ -3184,10 +3356,10 @@ describe("community Telegram routes", () => {
       reply_markup?: { inline_keyboard?: Array<Array<{ text?: string; web_app?: { url?: string } }>> }
     }
     expect(sendBody.text).toBe("Verify and join this community to use the full assistant.")
-    expect(sendBody.reply_markup?.inline_keyboard?.[0]?.[0]).toEqual({
-      text: "Verify to join",
-      web_app: { url: `https://staging.pirate.test/tg/verify/com_${communityId}` },
-    })
+    expect(sendBody.reply_markup?.inline_keyboard?.[0]?.[0]?.text).toBe("Open Pirate")
+    const webAppUrl = telegramWebAppUrlFromReplyMarkup(sendBody.reply_markup)
+    expect(webAppUrl).toContain(`https://staging.pirate.test/tg/exchange?community=com_${communityId}`)
+    expect(onboardingTokenFromWebAppUrl(webAppUrl)).toMatch(/^tgonboard_/u)
   })
 
   test("community bot private DM reports disabled assistant without provider calls", async () => {

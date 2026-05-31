@@ -35,6 +35,9 @@ function validPolicy(
     maxContextThreads: 8,
     maxLookbackDays: 30,
     perUserDailyMessageCap: 40,
+    telegramPrivateAssistantEnabled: false,
+    telegramPreviewEnabled: true,
+    telegramPreviewDailyCap: 5,
     voiceMode: "off",
     sttProvider: "elevenlabs",
     sttModel: "scribe_v2",
@@ -228,6 +231,28 @@ describe("validateCommunityAssistantPolicySettings", () => {
   test("rejects per-user daily message cap outside 1 to 10000", () => {
     expectInvalid(validPolicy({ perUserDailyMessageCap: 0 }), "perUserDailyMessageCap must be null or an integer from 1 to 10000")
     expectInvalid(validPolicy({ perUserDailyMessageCap: 10001 }), "perUserDailyMessageCap must be null or an integer from 1 to 10000")
+  })
+
+  test("validates Telegram private assistant controls", () => {
+    expectValid(validPolicy({
+      telegramPrivateAssistantEnabled: true,
+      telegramPreviewEnabled: true,
+      telegramPreviewDailyCap: 0,
+    }))
+    expectValid(validPolicy({
+      telegramPrivateAssistantEnabled: true,
+      telegramPreviewEnabled: false,
+      telegramPreviewDailyCap: 50,
+    }))
+
+    expectInvalid(
+      validPolicy({ enabled: false, telegramPrivateAssistantEnabled: true }),
+      "private Telegram assistant requires the assistant to be enabled",
+    )
+    expectInvalid(
+      validPolicy({ telegramPreviewDailyCap: 51 }),
+      "telegramPreviewDailyCap must be an integer from 0 to 50",
+    )
   })
 
   test("requires moderator approval for confirmed writes", () => {
