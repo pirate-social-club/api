@@ -25,8 +25,8 @@ All routes require bearer auth (`COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN`).
 ## Development
 
 ```bash
-bun install
-bun run dev
+rtk bun install
+rtk bun run dev
 ```
 
 ## Generate SQL Migrations
@@ -34,7 +34,7 @@ bun run dev
 Migrations are bundled as TS constants. Regenerate after changing `core/db/community-template/migrations/`:
 
 ```bash
-bun run generate:migrations
+rtk bun run generate:migrations
 ```
 
 **Note:** The generation script reads from `../../../../core/db/community-template/migrations` relative to this package by default. Set `PIRATE_CORE_REPO` to point at a different core checkout.
@@ -42,22 +42,22 @@ bun run generate:migrations
 ## Type Check
 
 ```bash
-bun run check
+rtk bun run check
 ```
 
 ## Deploy
 
 ```bash
 # Set secrets first:
-wrangler secret put CONTROL_PLANE_DATABASE_URL
-wrangler secret put TURSO_CONTROL_PLANE_AUTH_TOKEN
-wrangler secret put TURSO_PLATFORM_API_TOKEN
-wrangler secret put TURSO_ORGANIZATION_SLUG
-wrangler secret put COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN
+rtk bunx wrangler secret put CONTROL_PLANE_DATABASE_URL
+rtk bunx wrangler secret put TURSO_CONTROL_PLANE_AUTH_TOKEN
+rtk bunx wrangler secret put TURSO_PLATFORM_API_TOKEN
+rtk bunx wrangler secret put TURSO_ORGANIZATION_SLUG
+rtk bunx wrangler secret put COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN
 
 # Deploy per environment:
-wrangler deploy --env staging
-wrangler deploy --env production
+rtk bunx wrangler deploy --env staging
+rtk bunx wrangler deploy --env production
 ```
 
 ## Security

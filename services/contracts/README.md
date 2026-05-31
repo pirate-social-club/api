@@ -4,7 +4,7 @@ Generated TypeScript contracts for API request/response bodies and route helpers
 
 ## Source Of Truth
 
-Do not edit `src/index.ts` by hand. It is generated from the sibling `specs/api` repo.
+Do not edit `src/index.ts` by hand. It is generated from `core/specs/api`.
 
 ```bash
 rtk bun run generate
@@ -18,13 +18,14 @@ rtk bun run check
 
 This typechecks the generated package and compiles a small consumer fixture that imports `@pirate/api-contracts` through the package export.
 
-When the sibling specs checkout is available, also run:
+When the core specs checkout is available, also run:
 
 ```bash
 rtk bun run check:fresh
 ```
 
 That regenerates contracts to a temporary path and compares them with `src/index.ts`.
+The scripts locate the core checkout through `PIRATE_CORE_REPO` or common sibling workspace paths such as `/home/t42/Documents/pirate-workspace/core`.
 
 ## Consumers
 
@@ -39,4 +40,4 @@ The package exports TypeScript source directly:
 import { apiRoutes, type CreatePostRequest } from "@pirate/api-contracts"
 ```
 
-If API spec inputs change, regenerate this package and commit the updated `src/index.ts`.
+If API spec inputs under `core/specs/api` change, regenerate this package and commit the updated `src/index.ts`.

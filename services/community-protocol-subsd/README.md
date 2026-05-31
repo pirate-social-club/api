@@ -43,7 +43,7 @@ The image defaults to `CARGO_BUILD_JOBS=2` to keep workstation memory use bounde
 rtk docker build --platform linux/amd64 --build-arg CARGO_BUILD_JOBS=8 -t pirate/community-protocol-subsd:staging services/community-protocol-subsd
 ```
 
-Current staging image:
+Last recorded staging image:
 
 ```text
 t3333333k/community-protocol-subsd@sha256:be9ac7cff697a576d7926707531e9b0c580c5368dfe7b06e59dd12c80cbf5618
@@ -57,7 +57,7 @@ Single host example:
 rtk docker run --detach --name pirate-subsd --restart unless-stopped --network host --volume pirate-subsd-data:/var/lib/pirate/subsd --env SUBSD_RPC_URL=http://127.0.0.1:7226 --env SUBSD_WALLET=default t3333333k/community-protocol-subsd@sha256:be9ac7cff697a576d7926707531e9b0c580c5368dfe7b06e59dd12c80cbf5618
 ```
 
-For staging/prod, bind `subsd` only on private networking or localhost behind an SSH tunnel. The upstream service has no product auth layer.
+For staging/prod, verify the intended registry digest before deploy and bind `subsd` only on private networking or localhost behind an SSH tunnel. The upstream service has no product auth layer.
 
 ## One-Time Space Operation
 

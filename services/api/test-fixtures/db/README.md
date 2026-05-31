@@ -2,16 +2,16 @@
 
 Pirate has two relational migration roots:
 
-- `db/control-plane/migrations/`
-  Central Pirate-owned control-plane schema for identity, auth links, verification, community routing, encrypted community credentials, global scrobble and track anchor state, projections, jobs, and audit.
-- `db/community-template/migrations/`
+- `core/db/control-plane/migrations/`
+  Central Pirate-owned control-plane schema for identity, auth links, verification, community routing, encrypted community credentials, projections, jobs, and audit.
+- `core/db/community-template/migrations/`
   Baseline per-community schema applied to each new community `main` database at provisioning time.
 
 Runtime note:
 
-- `db/` is the canonical migration source for operational docs and bootstrap commands.
-- The API test suite (`api/services/api/tests/helpers.ts`) uses a SQLite-compatible baseline snapshot (`api/services/api/tests/fixtures/control-plane-baseline-sqlite.sql`) derived from the canonical Postgres schema. The historical migration chain in `db/control-plane/migrations/` is PostgreSQL-first and cannot be replayed against SQLite/libSQL. When the canonical schema changes, the test fixture must be regenerated.
-- Keep the community-template trees in sync.
+- `core/db/` is the canonical migration source for operational docs and bootstrap commands.
+- The API test suite uses the mirrored migration fixtures under `api/services/api/test-fixtures/db/`. The control-plane fixture tree is SQLite-compatible and derived from the canonical Postgres-first schema. When the canonical schema changes, regenerate or sync the fixture tree before trusting route tests.
+- Keep the community-template tree in `core/db/community-template/migrations/` and the mirrored API fixture tree in sync.
 
 Related docs:
 
@@ -48,10 +48,10 @@ Prefix rule:
 
 Use the directories themselves as the authoritative source:
 
-- `db/control-plane/migrations/`
+- `core/db/control-plane/migrations/`
   Fresh Postgres targets start from `0000_control_plane_baseline_postgres.sql`.
   Historical control-plane sequence then continues through the latest checked-in migration.
-- `db/community-template/migrations/`
+- `core/db/community-template/migrations/`
   Current community-template sequence starts at `1001_...` and continues through the latest checked-in migration.
 
 For Postgres control-plane runs, the migration runner treats `0000_control_plane_baseline_postgres.sql`
@@ -66,7 +66,7 @@ Keep this README descriptive rather than maintaining a duplicated file-by-file i
 
 ## Local Apply
 
-Until a runtime repo grows its own migration command, this repo provides:
+Run these from the `core` repo root. Until a runtime repo grows its own migration command, `core` provides:
 
 - a local SQLite/libSQL migration runner for community workflows
 - a Postgres migration runner for the Neon-backed control plane
@@ -75,7 +75,7 @@ Postgres / Neon:
 
 ```bash
 rtk infisical run --env dev --path /services/control-plane -- \
-  bun scripts/control-plane/apply-postgres-migrations.ts \
+  rtk bun scripts/control-plane/apply-postgres-migrations.ts \
     --database-url-env CONTROL_PLANE_MIGRATOR_DATABASE_URL \
     --migrations db/control-plane/migrations \
     --label control-plane
@@ -124,7 +124,7 @@ Staging and production templates live in `scripts/seed-manifests/`:
 ## Notes
 
 - The community migration files target SQLite-compatible Turso/libSQL DDL.
-- The control-plane migration files are PostgreSQL-first and apply directly to Neon from `db/control-plane/migrations/`.
+- The control-plane migration files are PostgreSQL-first and apply directly to Neon from `core/db/control-plane/migrations/`.
 - Post visibility is part of the mainline schema now. New environments should include both the community `posts.visibility` column and the control-plane `community_post_projections.visibility` column from the checked-in migrations and baseline snapshot.
 - Community databases intentionally do not define a `users` table. They reference central Pirate `user_id` values as foreign identifiers, not local user rows.
 - Local smoke seeding is intentionally API-driven so route auth, verification, membership, posting, comments, voting, and public read projections are exercised together.

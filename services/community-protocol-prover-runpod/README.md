@@ -187,7 +187,7 @@ The script writes:
   RUNPOD_PROVER_ENDPOINT_ID
 ```
 
-Current staging resources:
+Last recorded staging resources:
 
 ```text
 RunPod template: a0nqg0h3ge
@@ -196,7 +196,7 @@ Worker image: t3333333k/community-protocol-prover-runpod:staging
 Image digest: sha256:fc8f56292fd749f6c305ba7483510cc8747376acf3ab778e3a751f4dbfd4380e
 ```
 
-Smoke result:
+Last recorded smoke result:
 
 ```text
 POST /v2/kifqe786lpj2ne/run accepted a queue job.

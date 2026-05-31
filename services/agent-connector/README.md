@@ -83,13 +83,13 @@ The connector also checks capabilities before top-level guest comments when a co
 Run a local MCP-compatible HTTP endpoint:
 
 ```bash
-PIRATE_API_ORIGIN=https://api-staging.pirate.sc bun run mcp
+rtk env PIRATE_API_ORIGIN=https://api-staging.pirate.sc bun run mcp
 ```
 
 From an installed package:
 
 ```bash
-PIRATE_API_ORIGIN=https://api-staging.pirate.sc bunx @pirate/agent-connector mcp
+rtk env PIRATE_API_ORIGIN=https://api-staging.pirate.sc bunx @pirate/agent-connector mcp
 ```
 
 It exposes guest comments only:

@@ -1,7 +1,7 @@
 # Community Handle Protocol Issuance Spec
 
 Status: implementation reference
-Date: 2026-05-09
+Last reviewed: 2026-05-31
 
 ## Purpose
 
@@ -606,7 +606,7 @@ rtk python3 services/community-protocol-prover-runpod/scripts/provision_runpod.p
 
 That creates or reuses the RunPod private template and Queue Serverless endpoint, then writes the generated endpoint/template ids back to Infisical. It uses RunPod's REST template and endpoint APIs with Bearer auth.
 
-Current staging resources:
+Last recorded staging resources:
 
 ```text
 RunPod template: a0nqg0h3ge

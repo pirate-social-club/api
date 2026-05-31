@@ -7,8 +7,12 @@ Command-line client for the first executable Pirate API slice.
 Implemented commands:
 
 - `pirate auth login --jwt <token> [--base-url <url>]`
+- `pirate auth admin-login --admin-token <token> --as-user <usr_...> [--base-url <url>]`
 - `pirate auth me`
 - `pirate auth logout`
+- `pirate bot-user provision --dir <path> [--admin-token <token>] [--base-url <url>]`
+- `pirate bot-user token --handle <handle.pirate> [--admin-token <token>] [--base-url <url>]`
+- `pirate bot-user derive-wallet --handle <handle.pirate>`
 - `pirate onboarding status`
 - `pirate verify human start [--provider self|very]`
 - `pirate verify human status --session-id <id>`
@@ -17,25 +21,29 @@ Implemented commands:
 - `pirate verify namespace complete <session_id> [--restart-challenge]`
 - `pirate verify namespace status <session_id|verification_id> [--kind session|verification|auto]`
 - `pirate community create --display-name <name> --namespace-verification-id <id> [--description <text>]`
-- `pirate community launch-spaces <@root> --display-name <name> [--description <text>] [--very-gate] [--publish] [--publisher-dir <path>] [--no-wait]`
-- `pirate community finalize-spaces <session_id> --display-name <name> [--description <text>] [--very-gate] [--no-wait]`
+- `pirate community attach-namespace <community_id> --namespace-verification-id <id>`
+- `pirate community launch-spaces <@root> --display-name <name> [--description <text>] [--very-gate] [--allow-agents] [--publish] [--publisher-dir <path>] [--no-wait]`
+- `pirate community finalize-spaces <session_id> --display-name <name> [--description <text>] [--very-gate] [--allow-agents] [--no-wait]`
 - `pirate community get <community_id>`
 - `pirate community lookup <community_id|@slug>`
-- `pirate community update <community_id> [--display-name <name>] [--description <text>] [--clear-description]`
-- `pirate community preview <community_id> [--locale <locale>]`
+- `pirate community update <community_id|@slug> [--display-name <name>] [--description <text>] [--clear-description]`
+- `pirate community preview <community_id|@slug> [--locale <locale>]`
+- `pirate community members <community_id|@slug> [--locale <locale>]`
+- `pirate community accounts ensure --alias <name> --subject <jwt-subject> [--display-name <name>] [--handle <label>] [--base-url <url>]`
+- `pirate community accounts provision-batch --file <accounts.json> [--accounts-file <path>] [--admin-token <token>] [--base-url <url>]`
+- `pirate community roles <grant|revoke> <community_id|@slug> --role <admin|moderator> (--user-id <usr_...>|--account <alias>)`
+- `pirate community apply <folder|manifest.json> [--community-id <id>] [--dry-run] [--allow-vote-seed]`
 - `pirate community rules set <community_id|@slug> --file <rules.txt|rules.json>`
 - `pirate community gates set <community_id|@slug> (--file <gates.json>|--self-nationality <ISO2|ISO3>)`
 - `pirate community links set <community_id|@slug> --file <links.json>`
 - `pirate community labels set <community_id|@slug> --file <labels.json>`
 - `pirate community safety set <community_id|@slug> --file <safety.json>`
+- `pirate community settings set <community_id|@slug> (--file <settings.json>|--agent-posting-policy <policy> [--agent-posting-scope <scope>] [--human-verification-lane <lane>] [--accepted-agent-ownership-providers <provider,...>])`
 - `pirate community donation-policy set <community_id|@slug> --file <donation.json>`
-- `pirate community seed-post <community_id|@slug> (--as <alias>|--as-user-id <usr_...>) --idempotency-key <key> (--body <text>|--body-file <file>) [--title <title>] [--title-file <file>] [--visibility public|members_only] [--accounts-file <path>]`
-- `pirate community seed-comment <community_id|@slug> <post_id> (--as <alias>|--as-user-id <usr_...>) --idempotency-key <key> (--body <text>|--body-file <file>) [--accounts-file <path>]`
+- `pirate community seed-post <community_id|@slug> (--as <alias>|--as-user-id <usr_...>) --idempotency-key <key> [--post-type text|link|image|video|song] [--body <text>|--body-file <file>] [--link-url <url>] [--media-ref <ref> --mime-type <type>|--media-refs-file <file>] [--song-artifact-bundle-id <id>]`
+- `pirate community seed-comment <community_id|@slug> <post_id> (--as <alias>|--as-user-id <usr_...>) --idempotency-key <key> (--body <text>|--body-file <file>)`
 - `pirate community join <community_id|@slug> [--as <alias>|--as-user-id <usr_...>] [--note <text>]`
 - `pirate community follow <community_id|@slug> [--as <alias>|--as-user-id <usr_...>]`
-- `pirate community members <community_id|@slug> [--locale <locale>]`
-- `pirate community accounts provision-batch --file <accounts.json> [--accounts-file <path>] [--admin-token <token>] [--base-url <url>]`
-- `pirate community apply <folder|manifest.json> [--community-id <id>] [--dry-run] [--allow-vote-seed]`
 - `pirate job get <job_id>`
 - `pirate post create <community_id> --title <title> --body <body> [--idempotency-key <key>]`
 - `pirate post get <post_id> [--locale <locale>]`

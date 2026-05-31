@@ -12,15 +12,15 @@ The issuer reads pending protocol issuance work from the API/control-plane data 
 ## Development
 
 ```bash
-bun install
-bun run check
-bun run test
+rtk bun install
+rtk bun run check
+rtk bun run test
 ```
 
 Run one local issuer pass with the required environment configured:
 
 ```bash
-bun run run:once
+rtk bun run run:once
 ```
 
 ## Runtime Shape
@@ -40,7 +40,7 @@ Important modules:
 Tests are colocated with the implementation under `src/lib/*.test.ts` and run with `bun:test`.
 
 ```bash
-bun run test
+rtk bun run test
 ```
 
 The package is included in API CI.

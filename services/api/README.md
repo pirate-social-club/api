@@ -7,8 +7,11 @@ Local Worker for the current Pirate API surface.
 Current route surface:
 
 - `GET /health`
+- `GET /__version`
+- non-production `GET /__debug/sentry-error`
 - discovery routes mounted at `/`
   `GET /.well-known/jwks.json`, `GET /.well-known/oauth-protected-resource`
+- OAuth device-code routes under `/oauth`
 - `POST /auth/session/exchange`
 - `GET /users/me`
 - onboarding routes
@@ -30,7 +33,7 @@ Current route surface:
 - agents
   ownership pairing/session, user-agent handle, delegated credential, and public resolution endpoints
 - communities
-  create/read/preview, join eligibility, join, namespace attach, pending namespace session, rules, gates, safety, role/admin endpoints, namespace handle policy/quote/claim/admin, posts, moderation cases, money policy, pricing policy, asset access/content, listings, purchases, purchase quotes/settlements, live rooms, song artifact uploads, and song artifact bundles under `/communities/{community_id}/*`
+  create/read/preview, join eligibility, join/follow, namespace attach, pending namespace session, rules, gates, safety, role/admin endpoints, assistant policy/runtime, Telegram setup, namespace handle policy/quote/claim/admin, posts, anonymous posts, moderation cases, money policy, pricing policy, asset access/content, listings, purchases, purchase quotes/settlements, live rooms, song artifact uploads, and song artifact bundles under `/communities/{community_id}/*`
 
 Current auth support:
 
@@ -72,6 +75,7 @@ Route registration now lives under `src/routes/`. The community router is intent
 - `communities-membership-routes.ts`
 - `communities-settings-routes.ts`
 - `communities-admin-routes.ts`
+- `communities-assistant-routes.ts`
 - `communities-role-routes.ts`
 - `communities-handles-routes.ts`
 - `communities-content-routes.ts`
@@ -79,6 +83,7 @@ Route registration now lives under `src/routes/`. The community router is intent
 - `communities-commerce.ts`
 - `communities-live-rooms.ts`
 - `communities-song-artifacts.ts`
+- `communities-telegram-routes.ts`
 
 with shared request helpers in `communities-route-helpers.ts`.
 
@@ -162,7 +167,7 @@ Memory mode:
 1. Set `DEV_MEMORY_STORE_ENABLED=true`.
 2. Fill in `AUTH_UPSTREAM_JWT_SHARED_SECRET` or `JWT_BASED_AUTH_SHARED_SECRET`.
 3. Fill in `PIRATE_APP_JWT_PRIVATE_KEY` and `PIRATE_APP_JWT_PUBLIC_KEY`.
-4. Run `bun run dev`.
+4. Run `rtk bun run dev`.
 
 Control-plane DB mode:
 
@@ -358,7 +363,7 @@ This writes `src/generated/pirate-agent-protocol-skill.ts`, which is imported by
 ## Example Exchange
 
 ```bash
-curl -X POST http://127.0.0.1:8787/auth/session/exchange \
+rtk curl -X POST http://127.0.0.1:8787/auth/session/exchange \
   -H 'content-type: application/json' \
   -d '{
     "proof": {
