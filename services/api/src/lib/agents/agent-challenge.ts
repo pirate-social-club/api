@@ -5,7 +5,7 @@ import type { AgentChallenge } from "./types"
 const AGENT_CHALLENGE_FRESHNESS_MS = 15 * 60 * 1000
 const AGENT_CHALLENGE_MAX_FUTURE_SKEW_MS = 30 * 1000
 
-export function decodeBase64Like(value: string): Buffer {
+function decodeBase64Like(value: string): Buffer {
   const normalized = value.trim().replace(/-/g, "+").replace(/_/g, "/")
   const paddingLength = (4 - (normalized.length % 4)) % 4
   return Buffer.from(`${normalized}${"=".repeat(paddingLength)}`, "base64")

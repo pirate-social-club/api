@@ -3,7 +3,7 @@ import { join } from "node:path"
 import { openCommunityDb } from "../src/lib/communities/community-db-factory"
 import { processNextCommunityJob } from "../src/lib/communities/jobs/runner"
 import { buildLocalizedPostResponse } from "../src/lib/localization/post-localization-service"
-import { getPostById } from "../src/lib/posts/community-post-store"
+import { getPostById } from "../src/lib/posts/community-post-query-store"
 import type { Env } from "../src/types"
 import {
   buildCommunityRepository,

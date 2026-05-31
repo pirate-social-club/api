@@ -4,17 +4,15 @@ import {
   createCommunityDbThroughMigration,
   getMigrationBeforeCommunityMigration,
   getNMinusOneCommunityMigrationName,
-} from "../src/lib/community-db-test-harness"
+} from "./community-db-test-harness"
 import { REQUIRED_COMMUNITY_DB_MIGRATION } from "../src/lib/community-db-schema-requirement"
 import { HttpError } from "../src/lib/errors"
 import { insertComment, listTopLevelComments } from "../src/lib/comments/community-comment-store"
 import { getCommunityMembershipState } from "../src/lib/communities/membership/membership-state-store"
-import {
-  getPostById,
-  insertPost,
-  listPublishedLocalizedPosts,
-  upsertPostVote,
-} from "../src/lib/posts/community-post-store"
+import { insertPost } from "../src/lib/posts/community-post-create-store"
+import { listPublishedLocalizedPosts } from "../src/lib/posts/community-post-feed"
+import { getPostById } from "../src/lib/posts/community-post-query-store"
+import { upsertPostVote } from "../src/lib/posts/community-post-vote-store"
 
 const communityId = "cmt_schema_n1"
 const userId = "usr_schema_n1"

@@ -201,6 +201,6 @@ export async function startNamespaceVerificationSession(
   return serializeNamespaceVerificationSession(row)
 }
 
-export function namespaceFamilyForRootInput(rootLabel: string): "hns" | "spaces" {
+function namespaceFamilyForRootInput(rootLabel: string): "hns" | "spaces" {
   return rootLabel.trim().startsWith("@") ? "spaces" : "hns"
 }

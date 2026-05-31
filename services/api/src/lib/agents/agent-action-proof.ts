@@ -142,10 +142,6 @@ export function canonicalizeAgentActionProofSignaturePayload(input: {
   ].join("\n")
 }
 
-export function getAgentActionProofSignatureVersion(): string {
-  return SIGNATURE_VERSION
-}
-
 export function verifyAgentActionProofSignature(input: {
   publicKey: string
   proof: AgentActionProof

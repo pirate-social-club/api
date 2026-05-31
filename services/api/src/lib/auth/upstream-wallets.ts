@@ -1,12 +1,12 @@
 import type { UpstreamIdentity, UpstreamWalletIdentity } from "../../types"
 
-export const ETHEREUM_MAINNET_NAMESPACE = "eip155:1"
+const ETHEREUM_MAINNET_NAMESPACE = "eip155:1"
 
 function walletKey(wallet: Pick<UpstreamWalletIdentity, "chainNamespace" | "walletAddressNormalized">): string {
   return `${wallet.chainNamespace}:${wallet.walletAddressNormalized}`
 }
 
-export function makeEthereumWalletIdentity(walletAddress: string): UpstreamWalletIdentity {
+function makeEthereumWalletIdentity(walletAddress: string): UpstreamWalletIdentity {
   return {
     chainNamespace: ETHEREUM_MAINNET_NAMESPACE,
     walletAddress,

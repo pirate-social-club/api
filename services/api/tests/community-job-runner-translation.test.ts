@@ -6,7 +6,7 @@ import { getCommentById } from "../src/lib/comments/community-comment-store"
 import { buildLocalizedPostResponse } from "../src/lib/localization/post-localization-service"
 import { computeCommentSourceHash, computePostSourceHash, computeTextSourceHash } from "../src/lib/localization/content-source-hash"
 import { getContentTranslation } from "../src/lib/localization/content-translation-store"
-import { getPostById } from "../src/lib/posts/community-post-store"
+import { getPostById } from "../src/lib/posts/community-post-query-store"
 import type { Env } from "../src/types"
 import {
   buildCommunityRepository,

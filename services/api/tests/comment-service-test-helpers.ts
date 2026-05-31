@@ -16,7 +16,7 @@ import {
 export { buildUserRepository, buildVerifiedUser }
 export type { TestCommunityRepository }
 
-export const cleanupPaths: string[] = []
+const cleanupPaths: string[] = []
 
 export async function cleanupCommentServiceArtifacts(): Promise<void> {
   await cleanupCommunityTestArtifacts(cleanupPaths)

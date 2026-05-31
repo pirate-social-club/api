@@ -24,6 +24,8 @@
     "generate:agent-skill": "bun run scripts/generate-agent-skill.ts",
     "check:agent-skill": "bun run scripts/generate-agent-skill.ts --check",
     "generate:openapi-spec": "bun run scripts/generate-openapi-spec.ts",
+    "deadcode:audit": "knip --no-progress",
+    "deps:audit": "knip --dependencies --no-progress",
     "check": "bun run generate:agent-tools && tsgo --noEmit",
     "lint": "biome check .",
     "test": "bun test",
@@ -75,6 +77,8 @@
     "@types/bun": "^1.3.13",
     "@types/node": "24.5.2",
     "@typescript/native-preview": "^7.0.0-dev.20260421.2",
+    "bun-types": "^1.3.14",
+    "knip": "^6.14.2",
     "typescript": "^5.8.3",
     "wrangler": "^4.13.2",
     "yaml": "^2.8.1"

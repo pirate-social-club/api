@@ -119,7 +119,7 @@ function requestHeader(req: AnalyticsRequest, name: string): string | null {
   return optionalString(req.header(name))
 }
 
-export function analyticsRequestContext(req: AnalyticsRequest, input: RequestContextInput = {}) {
+function analyticsRequestContext(req: AnalyticsRequest, input: RequestContextInput = {}) {
   return {
     sessionId: optionalString(input.sessionId) ?? requestHeader(req, "x-pirate-session-id"),
     anonymousId: optionalString(input.anonymousId) ?? requestHeader(req, "x-pirate-anonymous-id"),
@@ -163,7 +163,7 @@ function sanitizeProperties(eventName: AnalyticsEventName, properties: Record<st
   return sanitized
 }
 
-export async function optionalAnalyticsUserId(env: Env, req: AnalyticsRequest): Promise<string | null> {
+async function optionalAnalyticsUserId(env: Env, req: AnalyticsRequest): Promise<string | null> {
   const authorization = req.header("authorization")
   if (!authorization?.trim()) {
     return null

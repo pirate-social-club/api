@@ -46,24 +46,6 @@ export async function completeUniqueHumanVerification(env: Env, accessToken: str
   )
 }
 
-export async function prepareVerifiedNamespace(env: Env, accessToken: string): Promise<string> {
-  await completeUniqueHumanVerification(env, accessToken)
-
-  const namespaceSession = await requestJson("http://pirate.test/namespace-verification-sessions", {
-    family: "hns",
-    root_label: "CommentRoutesCoverageRoot",
-  }, env, accessToken)
-  const namespaceBody = await json(namespaceSession) as { id: string }
-  const completed = await requestJson(
-    `http://pirate.test/namespace-verification-sessions/${namespaceBody.id}/complete`,
-    {},
-    env,
-    accessToken,
-  )
-  const completedBody = await json(completed) as { namespace_verification: string }
-  return completedBody.namespace_verification
-}
-
 export async function createCommunity(
   env: Env,
   accessToken: string,

@@ -2,8 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { createClient } from "@libsql/client"
 
 import type { CreatePostRequest, Post } from "../../types"
-import { assertPostCreateRequest, getPostById, insertPost, sortPublishedLocalizedPostFeedItems } from "./community-post-store"
+import { assertPostCreateRequest, insertPost } from "./community-post-create-store"
+import { sortPublishedLocalizedPostFeedItems } from "./community-post-feed"
 import { MAX_POST_JSON_PROJECTION_LENGTH } from "./community-post-projection"
+import { getPostById } from "./community-post-query-store"
 
 const clients: Array<{ close: () => void }> = []
 

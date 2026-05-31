@@ -7,7 +7,7 @@ import {
   removeCommentAsModerator,
   setCommentReplyLock,
 } from "../src/lib/comments/comment-service"
-import { setPostCommentsLocked } from "../src/lib/posts/community-post-store"
+import { setPostCommentsLocked } from "../src/lib/posts/community-post-mutation-store"
 import type { Env } from "../src/types"
 import {
   buildCommunityRepository,

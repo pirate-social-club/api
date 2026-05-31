@@ -4,11 +4,6 @@ export function normalizeRootLabel(value: string): string {
   return toAsciiRootLabel(unprefixed) ?? unprefixed;
 }
 
-export function ensureAtPrefix(value: string): string {
-  const trimmed = normalizeRootLabel(value);
-  return trimmed.startsWith("@") ? trimmed : `@${trimmed}`;
-}
-
 function toAsciiRootLabel(value: string): string | null {
   if (!value || value.includes(".")) {
     return value;

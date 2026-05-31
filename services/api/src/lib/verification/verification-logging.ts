@@ -1,7 +1,7 @@
 import { envFlag } from "../helpers"
 import type { Env } from "../../env"
 
-export function shouldLogVerificationDebug(env: Env): boolean {
+function shouldLogVerificationDebug(env: Env): boolean {
   return envFlag(env.VERIFICATION_DEBUG_LOGS, false)
 }
 

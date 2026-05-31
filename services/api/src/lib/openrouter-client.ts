@@ -35,7 +35,7 @@ export type OpenRouterModelsResponse = {
   data?: OpenRouterModel[]
 }
 
-export function trimEnv(value: string | null | undefined): string {
+function trimEnv(value: string | null | undefined): string {
   return String(value || "").trim()
 }
 
@@ -52,11 +52,11 @@ export function parsePositiveIntegerEnv(value: string | null | undefined): numbe
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null
 }
 
-export function resolveOpenRouterBaseUrl(value: string | null | undefined): string {
+function resolveOpenRouterBaseUrl(value: string | null | undefined): string {
   return trimEnv(value) || DEFAULT_OPENROUTER_BASE_URL
 }
 
-export function normalizeOpenRouterMessageContent(content: unknown): string {
+function normalizeOpenRouterMessageContent(content: unknown): string {
   if (typeof content === "string") {
     return content
   }

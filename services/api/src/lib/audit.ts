@@ -42,7 +42,7 @@ export function auditEventInsert(input: AuditEventInput): {
   }
 }
 
-export async function writeAuditEvent(client: DbExecutor, input: AuditEventInput): Promise<void> {
+async function writeAuditEvent(client: DbExecutor, input: AuditEventInput): Promise<void> {
   await client.execute(auditEventInsert(input))
 }
 

@@ -2,10 +2,10 @@ import { createHash } from "node:crypto"
 import { readdir, readFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import type { Client } from "./sql-client"
-import { splitSqlStatements, toSqliteCompatibleStatements } from "../../shared/sql-migration"
+import { splitSqlStatements, toSqliteCompatibleStatements } from "../shared/sql-migration"
+import type { Client } from "../src/lib/sql-client"
 
-export type CommunityMigrationFixture = {
+type CommunityMigrationFixture = {
   name: string
   path: string
   checksum: string
@@ -13,10 +13,10 @@ export type CommunityMigrationFixture = {
 }
 
 function communityMigrationFixtureDir(): string {
-  return resolve(fileURLToPath(new URL("../..", import.meta.url)), "test-fixtures/db/community-template/migrations")
+  return resolve(fileURLToPath(new URL("..", import.meta.url)), "test-fixtures/db/community-template/migrations")
 }
 
-export async function listCommunityMigrationFixtures(): Promise<CommunityMigrationFixture[]> {
+async function listCommunityMigrationFixtures(): Promise<CommunityMigrationFixture[]> {
   const fixtureDir = communityMigrationFixtureDir()
   const entries = (await readdir(fixtureDir))
     .filter((entry) => entry.endsWith(".sql"))

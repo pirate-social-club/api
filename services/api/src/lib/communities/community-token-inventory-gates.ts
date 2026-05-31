@@ -110,7 +110,7 @@ export function normalizeInventoryText(value: unknown): string | null {
   return normalized.length > 0 ? normalized : null
 }
 
-export function listAttachedWalletAddressesForChain(
+function listAttachedWalletAddressesForChain(
   walletAttachments: WalletAttachmentSummary[],
   chainNamespace: Erc721InventoryMatchConfig["chainNamespace"],
 ): string[] {
@@ -132,7 +132,7 @@ export function listAttachedWalletAddressesForChain(
   return addresses
 }
 
-export function listAttachedPolygonWalletAddresses(walletAttachments: WalletAttachmentSummary[]): string[] {
+function listAttachedPolygonWalletAddresses(walletAttachments: WalletAttachmentSummary[]): string[] {
   return listAttachedWalletAddressesForChain(walletAttachments, "eip155:137")
 }
 
@@ -232,8 +232,6 @@ export function normalizeAssetMatch(value: unknown): Erc721InventoryAssetMatch |
 
   return filter
 }
-
-export const normalizeAssetFilter = normalizeAssetMatch
 
 export function formatAssetFilterLabel(filter: Erc721InventoryAssetMatch): string {
   const values = INVENTORY_MATCH_KEYS

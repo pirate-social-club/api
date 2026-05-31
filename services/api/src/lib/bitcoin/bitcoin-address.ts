@@ -3,7 +3,7 @@ import { bytesToHex } from "@noble/hashes/utils"
 
 export const BITCOIN_MAINNET_NAMESPACE = "bip122:000000000019d6689c085ae165831e93"
 export const BITCOIN_TESTNET_NAMESPACE = "bip122:000000000933ea01ad0ee984209779ba"
-export const BITCOIN_REGTEST_NAMESPACE = "bip122:0f9188f13cb7b2c71f2a335e3a4fc328"
+const BITCOIN_REGTEST_NAMESPACE = "bip122:0f9188f13cb7b2c71f2a335e3a4fc328"
 
 type BitcoinNetwork = "mainnet" | "testnet" | "regtest"
 type BitcoinAddressKind = "p2pkh" | "p2sh" | "p2wpkh" | "p2wsh" | "p2tr"

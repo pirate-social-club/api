@@ -80,7 +80,7 @@ function clampExcerptChars(value: number | null | undefined): number {
   return Math.min(2_000, Math.max(40, Math.trunc(value as number)))
 }
 
-export function excerptText(value: unknown, maxChars = DEFAULT_EXCERPT_CHARS): string {
+function excerptText(value: unknown, maxChars = DEFAULT_EXCERPT_CHARS): string {
   const text = String(value ?? "").replace(/\s+/g, " ").trim()
   if (text.length <= maxChars) return text
   return `${text.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`

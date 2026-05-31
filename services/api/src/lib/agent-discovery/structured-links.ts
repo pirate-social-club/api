@@ -8,7 +8,7 @@ export type StructuredAccessLink = {
 
 export type StructuredAccessLinks = Record<string, StructuredAccessLink>
 
-export function requestOrigin(url: string): string {
+function requestOrigin(url: string): string {
   return new URL(url).origin
 }
 
@@ -64,7 +64,7 @@ export function serializeLinkHeader(links: StructuredAccessLinks): string {
     .join(", ")
 }
 
-export function addLinkHeader(headers: Headers, links: StructuredAccessLinks): void {
+function addLinkHeader(headers: Headers, links: StructuredAccessLinks): void {
   const value = serializeLinkHeader(links)
   if (value) {
     headers.set("Link", value)
