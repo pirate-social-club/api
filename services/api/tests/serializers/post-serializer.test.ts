@@ -147,6 +147,21 @@ describe("serializeLocalizedPostResponse feed pruning", () => {
     expect(result.anchor_live_room_status).toBe("live")
   })
 
+  test("localized post serializer exposes asset Story summary", () => {
+    const response = makeLocalizedResponse(makeLinkPost(), "en")
+    response.asset_story = {
+      story_ip: "0xbB0a33bd07e7c813963b569f1202047a92b38d48",
+      story_royalty_registration_status: "registered",
+    }
+
+    const result = serializeLocalizedPostResponse(response)
+
+    expect(result.asset_story).toEqual({
+      story_ip: "0xbB0a33bd07e7c813963b569f1202047a92b38d48",
+      story_royalty_registration_status: "registered",
+    })
+  })
+
   test("home_feed surface keeps only resolved locale and source language translations", () => {
     const response = makeLocalizedResponse(makeLinkPost(), "es")
     const result = serializeLocalizedPostResponse(response, { surface: "home_feed" })

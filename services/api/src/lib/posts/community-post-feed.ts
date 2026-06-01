@@ -2,6 +2,7 @@ import type { Client } from "../sql-client"
 import { numberOrNull, requiredNumber, rowValue } from "../sql-row"
 import type { Post } from "../../types"
 import {
+  postAssetStoryJoinForSchema,
   postSelectColumnsForSchema,
   resolvePostProjectionSchema,
 } from "./community-post-projection"
@@ -125,8 +126,9 @@ export async function listPublishedLocalizedPosts(input: {
                WHERE post_id = posts.post_id
                  AND user_id = ?2
                LIMIT 1
-             ) AS viewer_vote
+              ) AS viewer_vote
       FROM posts
+      ${postAssetStoryJoinForSchema(projectionSchema)}
       WHERE community_id = ?1
         AND status = 'published'
         AND (?3 IS NULL OR label_id = ?3)
@@ -243,6 +245,7 @@ export async function listPublishedLocalizedEventPosts(input: {
         LIMIT ?6
       ) AS event_posts
       JOIN posts ON posts.post_id = event_posts.event_post_id
+      ${postAssetStoryJoinForSchema(projectionSchema)}
       WHERE posts.status = 'published'
       ORDER BY event_posts.event_sort_start ASC, event_posts.event_post_id ASC
       LIMIT ?6

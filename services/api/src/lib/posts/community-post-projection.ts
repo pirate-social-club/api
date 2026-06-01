@@ -42,6 +42,7 @@ export function boundedPostJsonProjection(value: string | null | undefined, repl
 }
 
 export type PostProjectionSchema = {
+  hasAssetStoryColumns: boolean
   hasCommentLockColumns: boolean
   hasCrosspostSourceJson: boolean
   hasPostEvents: boolean
@@ -53,8 +54,14 @@ export type PostProjectionSchema = {
 export async function resolvePostProjectionSchema(executor: DbExecutor): Promise<PostProjectionSchema> {
   const result = await executor.execute("PRAGMA table_info(posts)")
   const columnNames = new Set(result.rows.map((row) => String(row.name ?? "")))
+  const assetResult = await executor.execute("PRAGMA table_info(assets)")
+  const assetColumnNames = new Set(assetResult.rows.map((row) => String(row.name ?? "")))
   const postEventsResult = await executor.execute("PRAGMA table_info(post_events)")
   return {
+    hasAssetStoryColumns: assetColumnNames.has("asset_id")
+      && assetColumnNames.has("community_id")
+      && assetColumnNames.has("story_ip_id")
+      && assetColumnNames.has("story_royalty_registration_status"),
     hasCommentLockColumns: columnNames.has("comments_locked")
       && columnNames.has("comments_locked_at")
       && columnNames.has("comments_locked_by_user_id")
@@ -68,6 +75,9 @@ export async function resolvePostProjectionSchema(executor: DbExecutor): Promise
 }
 
 export function postSelectColumnsForSchema(schema: PostProjectionSchema): string {
+  const assetStoryProjection = schema.hasAssetStoryColumns
+    ? "post_asset_story.asset_story_ip_id, post_asset_story.asset_story_royalty_registration_status"
+    : "NULL AS asset_story_ip_id, NULL AS asset_story_royalty_registration_status"
   const crosspostSourceProjection = schema.hasCrosspostSourceJson
     ? boundedJsonProjection("crosspost_source_json")
     : "NULL AS crosspost_source_json"
@@ -163,6 +173,24 @@ export function postSelectColumnsForSchema(schema: PostProjectionSchema): string
       AND live_rooms.visibility = 'public'
     LIMIT 1
   ) AS anchor_live_room_status, parent_post_id, ${crosspostSourceProjection}, ${boundedJsonProjection("upstream_asset_refs_json")}, song_mode, rights_basis, analysis_state, analysis_result_ref,
-  content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
+  content_safety_state, age_gate_policy, ${assetStoryProjection}, idempotency_key, created_at, updated_at
 `
+}
+
+export function postAssetStoryJoinForSchema(schema: PostProjectionSchema): string {
+  if (!schema.hasAssetStoryColumns) {
+    return ""
+  }
+
+  return `
+      LEFT JOIN (
+        SELECT community_id AS asset_story_community_id,
+               asset_id AS asset_story_asset_id,
+               story_ip_id AS asset_story_ip_id,
+               story_royalty_registration_status AS asset_story_royalty_registration_status
+        FROM assets
+      ) AS post_asset_story
+        ON post_asset_story.asset_story_community_id = posts.community_id
+       AND post_asset_story.asset_story_asset_id = posts.asset_id
+  `
 }

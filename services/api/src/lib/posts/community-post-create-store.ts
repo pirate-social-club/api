@@ -10,6 +10,7 @@ import {
 import { detectSourceLanguageFromText } from "../localization/content-locale"
 import {
   boundedPostJsonProjection,
+  postAssetStoryJoinForSchema,
   postSelectColumnsForSchema,
   resolvePostProjectionSchema,
 } from "./community-post-projection"
@@ -77,6 +78,7 @@ export async function findPostByIdempotencyKey(input: {
     sql: `
       SELECT ${postSelectColumnsForSchema(projectionSchema)}
       FROM posts
+      ${postAssetStoryJoinForSchema(projectionSchema)}
       WHERE community_id = ?1
         AND author_user_id = ?2
         AND idempotency_key = ?3
