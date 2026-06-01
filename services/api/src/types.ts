@@ -139,6 +139,23 @@ export type DerivativeSourceListResponse = {
   next_cursor: string | null
 }
 
+export type PostDerivativeSource = {
+  source_ref: string
+  title: string
+  kind: DerivativeSourceKind
+  relationship_type: "remix_of" | "references_song" | "references_video" | "inspired_by" | "samples"
+  community?: string | null
+  asset?: string | null
+  source_post?: string | null
+  story_ip?: string | null
+  story_license_terms?: string | null
+  license_preset?: Asset["license_preset"] | null
+  commercial_rev_share_pct?: number | null
+  creator_user?: string | null
+  creator_handle?: string | null
+  creator_display_name?: string | null
+}
+
 import type {
   Asset,
   Community as ContractCommunity,
@@ -482,6 +499,7 @@ export type LocalizedPostResponse = {
     story_ip: string | null
     story_royalty_registration_status: "none" | "pending" | "registered" | "failed"
   } | null
+  derivative_sources?: PostDerivativeSource[] | null
   upvote_count: number
   downvote_count: number
   like_count: number

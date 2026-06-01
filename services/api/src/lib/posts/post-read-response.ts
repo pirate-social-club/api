@@ -9,6 +9,7 @@ import { buildLocalizedPostResponse } from "../localization/post-localization-se
 import type { AgeGateViewerState } from "./age-gate-viewer-state"
 import { hydrateCrosspostSourcesForResponses } from "./crosspost-source-hydration"
 import { enqueueEmbedHydrateOnReadIfNeeded, enqueuePostTranslationOnReadIfNeeded } from "./post-jobs"
+import { hydrateDerivativeSourcesForResponses } from "./upstream-source-hydration"
 import { getPostReadMetrics } from "./community-post-metrics-store"
 import type { CommentThreadSnapshot, LocalizedPostResponse, Post } from "../../types"
 import type { PublishedLocalizedPostFeedItem } from "./community-post-feed"
@@ -83,6 +84,13 @@ export async function hydrateAndEnqueuePostReadResponses(input: {
       profileRepository: input.profileRepository,
     })
   }
+
+  await hydrateDerivativeSourcesForResponses({
+    client: input.client,
+    communityId: input.communityId,
+    responses: input.responses,
+    profileRepository: input.profileRepository,
+  })
 
   for (const response of input.responses) {
     await enqueuePostTranslationOnReadIfNeeded({
@@ -175,6 +183,7 @@ export function buildDeletedPostStubResponse(input: {
     translated_caption: null,
     translated_embeds: null,
     song_presentation: null,
+    derivative_sources: null,
     source_hash: "",
   }
 }

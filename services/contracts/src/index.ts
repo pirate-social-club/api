@@ -1790,6 +1790,23 @@ export type SongPresentation = {
   duration_ms: number | null;
 };
 
+export type PostDerivativeSource = {
+  source_ref: string;
+  title: string;
+  kind: "song" | "video";
+  relationship_type: "remix_of" | "references_song" | "references_video" | "inspired_by" | "samples";
+  community?: string | null;
+  asset?: string | null;
+  source_post?: string | null;
+  story_ip?: string | null;
+  story_license_terms?: string | null;
+  license_preset?: "non-commercial" | "commercial-use" | "commercial-remix" | null;
+  commercial_rev_share_pct?: number | null;
+  creator_user?: string | null;
+  creator_handle?: string | null;
+  creator_display_name?: string | null;
+};
+
 export type LocalizedPostResponse = {
   post: Post;
   community?: CommunityPreview | null;
@@ -1802,6 +1819,7 @@ export type LocalizedPostResponse = {
     story_ip: string | null;
     story_royalty_registration_status: "none" | "pending" | "registered" | "failed";
   } | null;
+  derivative_sources?: Array<PostDerivativeSource> | null;
   upvote_count: number;
   downvote_count: number;
   like_count: number;
