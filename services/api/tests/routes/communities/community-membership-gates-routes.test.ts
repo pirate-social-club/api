@@ -14,6 +14,7 @@ import {
   prepareVerifiedNamespace,
   requestJson,
   setPassportWalletScore,
+  setUniqueHumanVerificationProvider,
 } from "./community-routes-test-helpers"
 import { createMembershipGatedCommunity } from "./community-membership-gate-test-helpers"
 
@@ -26,6 +27,41 @@ function gatePolicy(gate: Record<string, unknown>): Record<string, unknown> {
       op: "gate",
       gate,
     },
+  }
+}
+
+function orGatePolicy(gates: Record<string, unknown>[]): Record<string, unknown> {
+  return {
+    version: 1,
+    expression: {
+      op: "or",
+      children: gates.map((gate) => ({
+        op: "gate",
+        gate,
+      })),
+    },
+  }
+}
+
+async function createMembershipGatedCommunityWithPolicy(input: {
+  env: Env
+  creatorAccessToken: string
+  displayName: string
+  gatePolicy: Record<string, unknown>
+}): Promise<{ communityId: string; membershipMode: string }> {
+  await completeUniqueHumanVerification(input.env, input.creatorAccessToken)
+  const communityCreate = await requestJson("http://pirate.test/communities", {
+    display_name: input.displayName,
+    membership_mode: "gated",
+    gate_policy: input.gatePolicy,
+  }, input.env, input.creatorAccessToken)
+  expect(communityCreate.status).toBe(202)
+  const communityCreateBody = await json(communityCreate) as {
+    community: { id: string; membership_mode: string }
+  }
+  return {
+    communityId: communityCreateBody.community.id,
+    membershipMode: communityCreateBody.community.membership_mode,
   }
 }
 
@@ -234,6 +270,167 @@ describe("community membership gate routes", () => {
     const replyBody = await json(reply) as { parent_comment: string | null; depth: number }
     expect(replyBody.parent_comment).toBe(topLevelBody.id)
     expect(replyBody.depth).toBe(1)
+  })
+
+  test("Very-verified members can vote in Very OR proof-of-work communities without ALTCHA", async () => {
+    const ctx = await createRouteTestContext({
+      ALTCHA_HMAC_SECRET: "test-altcha-secret",
+      ALTCHA_HMAC_KEY_SECRET: "test-altcha-key-secret",
+      ALTCHA_POW_COST: "1",
+      ALTCHA_POW_COUNTER_MIN: "1",
+      ALTCHA_POW_COUNTER_MAX: "2",
+    })
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "very-or-pow-vote-creator")
+    const created = await createMembershipGatedCommunityWithPolicy({
+      env: ctx.env,
+      creatorAccessToken: creator.accessToken,
+      displayName: "Very Or PoW Vote Club",
+      gatePolicy: orGatePolicy([
+        { type: "unique_human", provider: "very" },
+        { type: "altcha_pow" },
+      ]),
+    })
+
+    const createdPost = await requestJson(
+      `http://pirate.test/communities/${created.communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Vote without fallback proof",
+        body: "A Very-verified member should not need the PoW fallback.",
+        idempotency_key: "very-or-pow-vote-post",
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(createdPost.status).toBe(201)
+    const postBody = await json(createdPost) as { id: string }
+
+    const member = await exchangeJwt(ctx.env, "very-or-pow-vote-member")
+    await setUniqueHumanVerificationProvider(ctx.env, member.userId, "very")
+    const joined = await app.request(
+      `http://pirate.test/communities/${created.communityId}/join`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${member.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(joined.status).toBe(200)
+
+    const vote = await app.request(
+      `http://pirate.test/posts/${postBody.id}/vote`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${member.accessToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ value: 1 }),
+      },
+      ctx.env,
+    )
+    expect(vote.status).toBe(200)
+    const voteBody = await json(vote) as { post: string; value: number }
+    expect(voteBody.post).toBe(postBody.id)
+    expect(voteBody.value).toBe(1)
+  })
+
+  test("unverified members can still use proof-of-work fallback to vote in Very OR communities", async () => {
+    const ctx = await createRouteTestContext({
+      ALTCHA_HMAC_SECRET: "test-altcha-secret",
+      ALTCHA_HMAC_KEY_SECRET: "test-altcha-key-secret",
+      ALTCHA_POW_COST: "1",
+      ALTCHA_POW_COUNTER_MIN: "1",
+      ALTCHA_POW_COUNTER_MAX: "2",
+    })
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "very-or-pow-fallback-vote-creator")
+    const created = await createMembershipGatedCommunityWithPolicy({
+      env: ctx.env,
+      creatorAccessToken: creator.accessToken,
+      displayName: "Very Or PoW Fallback Vote Club",
+      gatePolicy: orGatePolicy([
+        { type: "unique_human", provider: "very" },
+        { type: "altcha_pow" },
+      ]),
+    })
+
+    const createdPost = await requestJson(
+      `http://pirate.test/communities/${created.communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Vote with fallback proof",
+        body: "An unverified member should still be able to use the PoW fallback.",
+        idempotency_key: "very-or-pow-fallback-vote-post",
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(createdPost.status).toBe(201)
+    const postBody = await json(createdPost) as { id: string }
+
+    const member = await exchangeJwt(ctx.env, "very-or-pow-fallback-vote-member")
+    const joinProof = await solveAltchaProofFromRoute({
+      env: ctx.env,
+      accessToken: member.accessToken,
+      scope: "community_join",
+      action: `community:${created.communityId}`,
+    })
+    const joined = await app.request(
+      `http://pirate.test/communities/${created.communityId}/join`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${member.accessToken}`,
+          "x-pirate-altcha": joinProof,
+        },
+      },
+      ctx.env,
+    )
+    expect(joined.status).toBe(200)
+
+    const deniedVote = await app.request(
+      `http://pirate.test/posts/${postBody.id}/vote`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${member.accessToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ value: 1 }),
+      },
+      ctx.env,
+    )
+    expect(deniedVote.status).toBe(403)
+
+    const voteProof = await solveAltchaProofFromRoute({
+      env: ctx.env,
+      accessToken: member.accessToken,
+      scope: "vote",
+      action: `post:${postBody.id}:1`,
+    })
+    const vote = await app.request(
+      `http://pirate.test/posts/${postBody.id}/vote`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${member.accessToken}`,
+          "content-type": "application/json",
+          "x-pirate-altcha": voteProof,
+        },
+        body: JSON.stringify({ value: 1 }),
+      },
+      ctx.env,
+    )
+    expect(vote.status).toBe(200)
+    const voteBody = await json(vote) as { post: string; value: number }
+    expect(voteBody.post).toBe(postBody.id)
+    expect(voteBody.value).toBe(1)
   })
 
   test("ALTCHA-gated community creator can post without proof-of-work", async () => {
