@@ -26,6 +26,7 @@ import { enforceCommunityActionGate } from "../communities/membership/eligibilit
 import {
   enqueueEmbedHydrateIfNeeded,
   enqueuePostLabelIfNeeded,
+  enqueuePostSourceLanguageDetectionJob,
   enqueuePostTranslationPrewarmJobs,
 } from "./post-jobs"
 import { eligibilityFailed } from "../errors"
@@ -152,6 +153,13 @@ export async function createPost(input: {
         createdAt,
         analysisOverride,
         agentWriteAuthorization: agentWriteAuthorization ?? undefined,
+      })
+
+      await enqueuePostSourceLanguageDetectionJob({
+        client: tx,
+        communityId: input.communityId,
+        post,
+        createdAt,
       })
 
       await enqueuePostTranslationPrewarmJobs({

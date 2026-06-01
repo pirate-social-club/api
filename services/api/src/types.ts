@@ -139,6 +139,23 @@ export type DerivativeSourceListResponse = {
   next_cursor: string | null
 }
 
+export type PostDerivativeSource = {
+  source_ref: string
+  title: string
+  kind: DerivativeSourceKind
+  relationship_type: "remix_of" | "references_song" | "references_video" | "inspired_by" | "samples"
+  community?: string | null
+  asset?: string | null
+  source_post?: string | null
+  story_ip?: string | null
+  story_license_terms?: string | null
+  license_preset?: Asset["license_preset"] | null
+  commercial_rev_share_pct?: number | null
+  creator_user?: string | null
+  creator_handle?: string | null
+  creator_display_name?: string | null
+}
+
 import type {
   Asset,
   Community as ContractCommunity,
@@ -227,6 +244,12 @@ export type Comment = {
   body: string | null
   media_refs?: Array<MediaDescriptor>
   status: "published" | "hidden" | "removed" | "deleted"
+  source_language?: string | null
+  source_language_confidence?: number | null
+  source_language_reliable?: boolean
+  source_language_detector?: string | null
+  source_language_detected_at?: string | null
+  source_language_source_hash?: string | null
   replies_locked?: boolean
   replies_locked_at?: string | null
   replies_locked_by_user_id?: string | null
@@ -386,6 +409,11 @@ export type Post = {
   creator_relation?: PostCreatorRelation | null
   promotion_disclosure?: PromotionDisclosure | null
   source_language?: string | null
+  source_language_confidence?: number | null
+  source_language_reliable?: boolean
+  source_language_detector?: string | null
+  source_language_detected_at?: string | null
+  source_language_source_hash?: string | null
   translation_policy?: "none" | "machine_allowed" | "human_only" | "hybrid" | null
   access_mode?: "public" | "locked" | null
   asset_id?: string | null
@@ -405,6 +433,10 @@ export type Post = {
   analysis_result_ref?: string | null
   content_safety_state: "pending" | "safe" | "sensitive" | "adult"
   age_gate_policy: "none" | "18_plus"
+  asset_story?: {
+    story_ip: string | null
+    story_royalty_registration_status: "none" | "pending" | "registered" | "failed"
+  } | null
   created_at: string
   updated_at: string
   label_assignment_status?: PostLabelAssignmentStatus | null
@@ -474,6 +506,11 @@ export type LocalizedPostResponse = {
   market_context?: MarketContextSummary | null
   label?: PostLabel | null
   song_presentation?: SongPresentation | null
+  derivative_sources?: PostDerivativeSource[] | null
+  asset_story?: {
+    story_ip: string | null
+    story_royalty_registration_status: "none" | "pending" | "registered" | "failed"
+  } | null
   upvote_count: number
   downvote_count: number
   like_count: number

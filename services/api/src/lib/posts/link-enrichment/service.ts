@@ -3,7 +3,6 @@ import type { Client } from "../../sql-client"
 import { fetchLinkPreviewMetadata } from "../link-preview-fetcher"
 import { updatePostLinkPreviewMetadata } from "../community-post-link-preview-store"
 import type { DbExecutor } from "../../db-helpers"
-import { detectSourceLanguageFromText } from "../../localization/content-locale"
 import { logPipelineInfo, sanitizeLogText, summarizeUrl } from "../../observability/pipeline-log"
 import { fetchFirecrawlLinkEnrichment } from "./firecrawl-provider"
 import {
@@ -14,13 +13,6 @@ import { normalizeLinkUrl } from "./url-normalization"
 import {
   materializeLinkEnrichmentForPost,
 } from "./post-materialization"
-
-function detectLinkMetadataSourceLanguage(input: {
-  title?: string | null
-  description?: string | null
-}): string | null {
-  return detectSourceLanguageFromText([input.title, input.description])
-}
 
 export async function hydrateGenericLinkEnrichment(input: {
   env?: Env
@@ -92,10 +84,7 @@ export async function hydrateGenericLinkEnrichment(input: {
         status: "ready",
         title: firecrawl.title,
         description: firecrawl.description,
-        sourceLanguage: detectLinkMetadataSourceLanguage({
-          title: firecrawl.title,
-          description: firecrawl.description,
-        }),
+        sourceLanguage: null,
         publisher: firecrawl.publisher,
         publishedAt: firecrawl.publishedAt,
         imageUrl: firecrawl.imageUrl,
@@ -179,10 +168,7 @@ export async function hydrateGenericLinkEnrichment(input: {
       status: "ready",
       title: metadata.title,
       description: null,
-      sourceLanguage: detectLinkMetadataSourceLanguage({
-        title: metadata.title,
-        description: null,
-      }),
+      sourceLanguage: null,
       publisher: null,
       publishedAt: null,
       imageUrl: metadata.imageUrl,

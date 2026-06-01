@@ -1,4 +1,4 @@
-import { numberOrNull, requiredNumber, requiredString, rowValue, stringOrNull } from "../sql-row"
+import { boolOrNull, numberOrNull, requiredNumber, requiredString, rowValue, stringOrNull } from "../sql-row"
 import type {
   Comment,
   CommentAnonymousScope,
@@ -26,6 +26,11 @@ export type CommentRow = {
   body: string | null
   media_refs_json: string | null
   source_language: string | null
+  source_language_confidence: number | null
+  source_language_reliable: number | null
+  source_language_detector: string | null
+  source_language_detected_at: string | null
+  source_language_source_hash: string | null
   status: CommentStatus
   replies_locked: number | null
   replies_locked_at: string | null
@@ -77,6 +82,11 @@ export function toCommentRow(row: unknown): CommentRow {
     body: stringOrNull(rowValue(row, "body")),
     media_refs_json: stringOrNull(rowValue(row, "media_refs_json")),
     source_language: stringOrNull(rowValue(row, "source_language")),
+    source_language_confidence: numberOrNull(rowValue(row, "source_language_confidence")),
+    source_language_reliable: numberOrNull(rowValue(row, "source_language_reliable")),
+    source_language_detector: stringOrNull(rowValue(row, "source_language_detector")),
+    source_language_detected_at: stringOrNull(rowValue(row, "source_language_detected_at")),
+    source_language_source_hash: stringOrNull(rowValue(row, "source_language_source_hash")),
     status: requiredString(row, "status") as CommentStatus,
     replies_locked: numberOrNull(rowValue(row, "replies_locked")),
     replies_locked_at: stringOrNull(rowValue(row, "replies_locked_at")),
@@ -129,6 +139,11 @@ export function serializeComment(row: CommentRow): Comment {
     body: row.body,
     media_refs: parseMediaRefs(row.media_refs_json),
     source_language: row.source_language,
+    source_language_confidence: row.source_language_confidence,
+    source_language_reliable: boolOrNull(row.source_language_reliable) ?? false,
+    source_language_detector: row.source_language_detector,
+    source_language_detected_at: row.source_language_detected_at,
+    source_language_source_hash: row.source_language_source_hash,
     status: row.status,
     replies_locked: row.replies_locked === 1,
     replies_locked_at: row.replies_locked_at,

@@ -34,6 +34,7 @@ export {
 
 type CommentProjectionSchema = {
   hasReplyLockColumns: boolean
+  hasSourceLanguageDetectionColumns: boolean
 }
 
 async function resolveCommentProjectionSchema(executor: DbExecutor): Promise<CommentProjectionSchema> {
@@ -44,6 +45,11 @@ async function resolveCommentProjectionSchema(executor: DbExecutor): Promise<Com
       && columnNames.has("replies_locked_at")
       && columnNames.has("replies_locked_by_user_id")
       && columnNames.has("replies_lock_reason"),
+    hasSourceLanguageDetectionColumns: columnNames.has("source_language_confidence")
+      && columnNames.has("source_language_reliable")
+      && columnNames.has("source_language_detector")
+      && columnNames.has("source_language_detected_at")
+      && columnNames.has("source_language_source_hash"),
   }
 }
 
@@ -51,6 +57,12 @@ function replyLockSelectColumnsForSchema(schema: CommentProjectionSchema): strin
   return schema.hasReplyLockColumns
     ? "replies_locked, replies_locked_at, replies_locked_by_user_id, replies_lock_reason"
     : "0 AS replies_locked, NULL AS replies_locked_at, NULL AS replies_locked_by_user_id, NULL AS replies_lock_reason"
+}
+
+function sourceLanguageDetectionSelectColumnsForSchema(schema: CommentProjectionSchema, tableAlias = "comments"): string {
+  return schema.hasSourceLanguageDetectionColumns
+    ? `${tableAlias}.source_language_confidence, ${tableAlias}.source_language_reliable, ${tableAlias}.source_language_detector, ${tableAlias}.source_language_detected_at, ${tableAlias}.source_language_source_hash`
+    : "NULL AS source_language_confidence, 0 AS source_language_reliable, NULL AS source_language_detector, NULL AS source_language_detected_at, NULL AS source_language_source_hash"
 }
 
 export async function insertComment(input: {
@@ -141,7 +153,7 @@ export async function getCommentById(executor: DbExecutor, commentId: string): P
       SELECT comment_id, community_id, thread_root_post_id, parent_comment_id, author_user_id,
              authorship_mode, agent_id, agent_ownership_record_id, identity_mode, anonymous_scope,
              anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot,
-             body, media_refs_json, source_language, status, depth,
+             body, media_refs_json, source_language, ${sourceLanguageDetectionSelectColumnsForSchema(projectionSchema)}, status, depth,
              direct_reply_count, descendant_count, upvote_count, downvote_count, score,
              last_reply_at, content_hash, swarm_body_ref, idempotency_key,
              ${replyLockSelectColumnsForSchema(projectionSchema)},
@@ -271,13 +283,14 @@ export async function listTopLevelComments(input: {
   const sort = input.sort ?? "best"
   const cursor = input.cursor ? decodeCommentCursor(input.cursor, sort) : null
   const cursorClause = cursor ? buildCursorClause(sort, cursor) : { sql: "", args: [] }
+  const projectionSchema = await resolveCommentProjectionSchema(input.executor)
   return listCommentsForQuery({
     executor: input.executor,
     sql: `
       SELECT comment_id, community_id, thread_root_post_id, parent_comment_id, author_user_id,
              authorship_mode, agent_id, agent_ownership_record_id, identity_mode, anonymous_scope,
              anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot,
-             body, media_refs_json, source_language, status, depth,
+             body, media_refs_json, source_language, ${sourceLanguageDetectionSelectColumnsForSchema(projectionSchema)}, status, depth,
              direct_reply_count, descendant_count, upvote_count, downvote_count, score,
              last_reply_at, content_hash, swarm_body_ref, idempotency_key, created_at, updated_at,
              (
@@ -313,13 +326,14 @@ export async function listReplies(input: {
   const sort = input.sort ?? "best"
   const cursor = input.cursor ? decodeCommentCursor(input.cursor, sort) : null
   const cursorClause = cursor ? buildCursorClause(sort, cursor) : { sql: "", args: [] }
+  const projectionSchema = await resolveCommentProjectionSchema(input.executor)
   return listCommentsForQuery({
     executor: input.executor,
     sql: `
       SELECT comment_id, community_id, thread_root_post_id, parent_comment_id, author_user_id,
              authorship_mode, agent_id, agent_ownership_record_id, identity_mode, anonymous_scope,
              anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot,
-             body, media_refs_json, source_language, status, depth,
+             body, media_refs_json, source_language, ${sourceLanguageDetectionSelectColumnsForSchema(projectionSchema)}, status, depth,
              direct_reply_count, descendant_count, upvote_count, downvote_count, score,
              last_reply_at, content_hash, swarm_body_ref, idempotency_key, created_at, updated_at,
              (
@@ -355,12 +369,13 @@ export async function getCommentContext(input: {
     return null
   }
 
+  const projectionSchema = await resolveCommentProjectionSchema(input.executor)
   const ancestorResult = await input.executor.execute({
     sql: `
       SELECT c.comment_id, c.community_id, c.thread_root_post_id, c.parent_comment_id, c.author_user_id,
              c.authorship_mode, c.agent_id, c.agent_ownership_record_id, c.identity_mode, c.anonymous_scope,
              c.anonymous_label, c.agent_display_name_snapshot, c.agent_owner_handle_snapshot,
-             c.agent_ownership_provider_snapshot, c.agent_handle_snapshot, c.body, c.media_refs_json, c.source_language, c.status, c.depth,
+             c.agent_ownership_provider_snapshot, c.agent_handle_snapshot, c.body, c.media_refs_json, c.source_language, ${sourceLanguageDetectionSelectColumnsForSchema(projectionSchema, "c")}, c.status, c.depth,
              c.direct_reply_count, c.descendant_count, c.upvote_count, c.downvote_count, c.score,
              c.last_reply_at, c.content_hash, c.swarm_body_ref, c.created_at, c.updated_at,
              (
@@ -388,7 +403,7 @@ export async function getCommentContext(input: {
       SELECT comment_id, community_id, thread_root_post_id, parent_comment_id, author_user_id,
              authorship_mode, agent_id, agent_ownership_record_id, identity_mode, anonymous_scope,
              anonymous_label, agent_display_name_snapshot, agent_owner_handle_snapshot, agent_ownership_provider_snapshot, agent_handle_snapshot,
-             body, media_refs_json, source_language, status, depth,
+             body, media_refs_json, source_language, ${sourceLanguageDetectionSelectColumnsForSchema(projectionSchema)}, status, depth,
              direct_reply_count, descendant_count, upvote_count, downvote_count, score,
              last_reply_at, content_hash, swarm_body_ref, idempotency_key, created_at, updated_at,
              (

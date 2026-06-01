@@ -45,6 +45,7 @@ export type PostProjectionSchema = {
   hasCommentLockColumns: boolean
   hasCrosspostSourceJson: boolean
   hasPostEvents: boolean
+  hasSourceLanguageDetectionColumns: boolean
   hasSongAnnotationsUrl: boolean
   hasSongCoverArtRef: boolean
   hasSongDurationMs: boolean
@@ -61,6 +62,11 @@ export async function resolvePostProjectionSchema(executor: DbExecutor): Promise
       && columnNames.has("comments_lock_reason"),
     hasCrosspostSourceJson: columnNames.has("crosspost_source_json"),
     hasPostEvents: postEventsResult.rows.length > 0,
+    hasSourceLanguageDetectionColumns: columnNames.has("source_language_confidence")
+      && columnNames.has("source_language_reliable")
+      && columnNames.has("source_language_detector")
+      && columnNames.has("source_language_detected_at")
+      && columnNames.has("source_language_source_hash"),
     hasSongAnnotationsUrl: columnNames.has("song_annotations_url"),
     hasSongCoverArtRef: columnNames.has("song_cover_art_ref"),
     hasSongDurationMs: columnNames.has("song_duration_ms"),
@@ -83,6 +89,9 @@ export function postSelectColumnsForSchema(schema: PostProjectionSchema): string
   const songDurationMsProjection = schema.hasSongDurationMs
     ? "song_duration_ms"
     : "NULL AS song_duration_ms"
+  const sourceLanguageDetectionProjection = schema.hasSourceLanguageDetectionColumns
+    ? "source_language_confidence, source_language_reliable, source_language_detector, source_language_detected_at, source_language_source_hash"
+    : "NULL AS source_language_confidence, 0 AS source_language_reliable, NULL AS source_language_detector, NULL AS source_language_detected_at, NULL AS source_language_source_hash"
   const eventProjection = schema.hasPostEvents
     ? `
   (
@@ -150,7 +159,7 @@ export function postSelectColumnsForSchema(schema: PostProjectionSchema): string
   link_url, link_og_image_url, link_og_title, ${boundedJsonProjection("link_enrichment_snapshot_json", sqlStringLiteral(OVERSIZED_LINK_ENRICHMENT_SNAPSHOT_JSON))}, link_enrichment_synced_at,
   ${eventProjection},
   ${boundedJsonProjection("embeds_json")}, ${boundedJsonProjection("media_refs_json")}, song_artifact_bundle_id, song_title,
-  ${songAnnotationsUrlProjection}, ${songCoverArtRefProjection}, ${songDurationMsProjection}, source_language, translation_policy,
+  ${songAnnotationsUrlProjection}, ${songCoverArtRefProjection}, ${songDurationMsProjection}, source_language, ${sourceLanguageDetectionProjection}, translation_policy,
   access_mode, asset_id, (
     SELECT live_room_id
     FROM live_rooms

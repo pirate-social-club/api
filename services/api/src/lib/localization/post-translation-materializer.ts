@@ -6,9 +6,14 @@ import { computePostSourceHash, computeTextSourceHash } from "./content-source-h
 import { DEFAULT_CONTENT_LOCALE, normalizeContentLocale, sameLanguageLocale } from "./content-locale"
 import { requestContentTranslation } from "./content-translation-provider"
 import { getContentTranslation, upsertContentTranslation, type ContentTranslationRecord } from "./content-translation-store"
+import { updatePostSourceLanguageFromProvider } from "./source-language-canonical"
 
 function hasTranslatablePostContent(post: Post): boolean {
   return Boolean(String(post.title ?? "").trim() || String(post.body ?? "").trim() || String(post.caption ?? "").trim())
+}
+
+function reliableSourceLanguage(post: Post): string | null {
+  return post.source_language_reliable ? post.source_language ?? null : null
 }
 
 type PredictionMarketEmbed = NonNullable<Post["embeds"]>[number] & {
@@ -146,7 +151,7 @@ export async function materializePostTranslation(input: {
     return `skipped:no_content:${resolvedLocale}`
   }
 
-  if (sameLanguageLocale(input.post.source_language, resolvedLocale)) {
+  if (sameLanguageLocale(reliableSourceLanguage(input.post), resolvedLocale)) {
     await upsertContentTranslation({
       executor: input.executor,
       contentType: "post",
@@ -175,6 +180,18 @@ export async function materializePostTranslation(input: {
     })
     : null
   if (hasPostContent && existing && !translationNeedsRefresh(input.post, existing) && marketEmbeds.length === 0) {
+    await updatePostSourceLanguageFromProvider({
+      executor: input.executor,
+      postId: input.post.post_id,
+      detection: {
+        sourceLanguage: existing.source_language,
+        sourceLanguageConfidence: null,
+        sourceLanguageReliable: false,
+        detector: existing.provider ? `${existing.provider}:${existing.provider_model ?? "unknown"}` : "content_translation_cache",
+        detectedAt: nowIso(),
+        sourceHash,
+      },
+    })
     return `cached:${resolvedLocale}:${existing.outcome}`
   }
 
@@ -206,6 +223,18 @@ export async function materializePostTranslation(input: {
       providerModel: translation.model,
       providerResultJson: translation.providerResult ? JSON.stringify(translation.providerResult) : null,
       now: nowIso(),
+    })
+    await updatePostSourceLanguageFromProvider({
+      executor: input.executor,
+      postId: input.post.post_id,
+      detection: {
+        sourceLanguage: translation.sourceLanguage,
+        sourceLanguageConfidence: translation.sourceLanguageConfidence,
+        sourceLanguageReliable: translation.sourceLanguageReliable,
+        detector: `${translation.provider}:${translation.model}`,
+        detectedAt: nowIso(),
+        sourceHash,
+      },
     })
     outcome = translation.outcome
   }

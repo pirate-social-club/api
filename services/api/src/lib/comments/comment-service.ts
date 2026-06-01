@@ -6,7 +6,6 @@ import { isCommunityLive } from "../communities/community-status"
 import { safeRollback } from "../transactions"
 import { enqueueCommunityJob } from "../communities/jobs/store"
 import { loadCommunityProjection } from "../communities/create/repository"
-import { detectSourceLanguageFromText } from "../localization/content-locale"
 import { emitCommentReply, emitPostCommented } from "../notifications/notification-emitters"
 import {
   ANY_COMMUNITY_ROLE,
@@ -41,7 +40,10 @@ import {
   upsertCommentVote,
 } from "./community-comment-store"
 import { incrementAncestorCommentCounters, incrementThreadPostCommentCounters, insertCommentClosureRows } from "./comment-closure-store"
-import { enqueueCommentTranslationPrewarmJobs } from "./comment-translation-jobs"
+import {
+  enqueueCommentSourceLanguageDetectionJob,
+  enqueueCommentTranslationPrewarmJobs,
+} from "./comment-translation-jobs"
 import type { Comment, CommentAnonymousScope, CreateCommentRequest } from "./comment-types"
 import type { Env } from "../../env"
 import type { CreatePostRequest } from "../../types"
@@ -350,7 +352,7 @@ export async function createComment(input: {
         parentCommentId: input.parentCommentId ?? null,
         authorUserId: input.userId,
         body: writeBody,
-        sourceLanguage: detectSourceLanguageFromText([writeBody.body ?? ""]),
+        sourceLanguage: null,
         depth,
         createdAt,
         contentHash: `0x${await sha256Hex(JSON.stringify({
@@ -401,6 +403,13 @@ export async function createComment(input: {
         payloadJson: JSON.stringify({
           thread_root_post_id: input.threadRootPostId,
         }),
+        createdAt,
+      })
+
+      await enqueueCommentSourceLanguageDetectionJob({
+        client: tx,
+        communityId: input.communityId,
+        comment: createdComment,
         createdAt,
       })
 
@@ -501,6 +510,7 @@ export async function castCommentVote(input: {
   commentId: string
   value: -1 | 1
   bypassVoterAccessChecks?: boolean
+  altchaProof?: AltchaProofInput
   userRepository: UserRepository
   communityRepository: CommentServiceCommunityRepository
 }): Promise<{ comment_id: string; value: -1 | 1 }> {
@@ -513,6 +523,15 @@ export async function castCommentVote(input: {
   try {
     if (!input.bypassVoterAccessChecks) {
       await requireMemberAccess(db.client, projection.community_id, input.userId)
+      await enforceCommunityActionGate({
+        env: input.env,
+        client: db.client,
+        userId: input.userId,
+        userRepository: input.userRepository,
+        communityId: projection.community_id,
+        altchaScope: "vote",
+        altchaProof: input.altchaProof,
+      })
     }
     const comment = await getCommentById(db.client, input.commentId)
     if (!comment || comment.status !== "published") {

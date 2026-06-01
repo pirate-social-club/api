@@ -66,9 +66,6 @@ const spec = {
       "name": "Tracks"
     },
     {
-      "name": "Scrobbles"
-    },
-    {
       "name": "Moderation"
     },
     {
@@ -9837,6 +9834,29 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "source_language_confidence": {
+            "type": "number",
+            "format": "double",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 1
+          },
+          "source_language_reliable": {
+            "type": "boolean"
+          },
+          "source_language_detector": {
+            "type": "string",
+            "nullable": true
+          },
+          "source_language_detected_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "source_language_source_hash": {
+            "type": "string",
+            "nullable": true
+          },
           "translation_policy": {
             "type": "string",
             "enum": [
@@ -10175,6 +10195,33 @@ const spec = {
             "items": {
               "$ref": "./posts.yaml#/MediaDescriptor"
             }
+          },
+          "source_language": {
+            "type": "string",
+            "nullable": true
+          },
+          "source_language_confidence": {
+            "type": "number",
+            "format": "double",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 1
+          },
+          "source_language_reliable": {
+            "type": "boolean"
+          },
+          "source_language_detector": {
+            "type": "string",
+            "nullable": true
+          },
+          "source_language_detected_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "source_language_source_hash": {
+            "type": "string",
+            "nullable": true
           },
           "status": {
             "type": "string",

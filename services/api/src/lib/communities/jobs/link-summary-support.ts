@@ -104,7 +104,7 @@ export async function enqueueSummaryTranslations(input: {
   try {
     const record = await getLinkEnrichmentByNormalizedUrl(input.controlPlaneClient, input.normalizedUrl)
     for (const locale of CONTENT_TRANSLATION_PREWARM_LOCALES) {
-      if (sameLanguageLocale("en", locale) && sameLanguageLocale(record?.source_language ?? "en", "en")) {
+      if (sameLanguageLocale("en", locale) && sameLanguageLocale(record?.source_language, "en")) {
         continue
       }
       await enqueueCommunityJob({

@@ -3878,4 +3878,45 @@ CREATE INDEX idx_post_events_community_start
 `,
     checksum: "782bcec7005c69cefd501b9512066c450b481cc39c3c062a71a9e580f99ff2c0",
   },
+  {
+    name: "1090_community_assistant_telegram_private_policy.sql",
+    sql: `ALTER TABLE community_assistant_policy
+    ADD COLUMN telegram_private_assistant_enabled INTEGER NOT NULL DEFAULT 0
+        CHECK (telegram_private_assistant_enabled IN (0, 1));
+
+ALTER TABLE community_assistant_policy
+    ADD COLUMN telegram_preview_enabled INTEGER NOT NULL DEFAULT 1
+        CHECK (telegram_preview_enabled IN (0, 1));
+
+ALTER TABLE community_assistant_policy
+    ADD COLUMN telegram_preview_daily_cap INTEGER NOT NULL DEFAULT 5
+        CHECK (telegram_preview_daily_cap BETWEEN 0 AND 50);
+`,
+    checksum: "aa1afa65af9f4845eff8c1d4d138725ef4eb85e1991a6ba0b8327ee62ccb72a7",
+  },
+  {
+    name: "1091_source_language_detection_metadata.sql",
+    sql: `ALTER TABLE posts ADD COLUMN source_language_confidence REAL;
+ALTER TABLE posts ADD COLUMN source_language_reliable INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE posts ADD COLUMN source_language_detector TEXT;
+ALTER TABLE posts ADD COLUMN source_language_detected_at TEXT;
+ALTER TABLE posts ADD COLUMN source_language_source_hash TEXT;
+
+ALTER TABLE comments ADD COLUMN source_language_confidence REAL;
+ALTER TABLE comments ADD COLUMN source_language_reliable INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE comments ADD COLUMN source_language_detector TEXT;
+ALTER TABLE comments ADD COLUMN source_language_detected_at TEXT;
+ALTER TABLE comments ADD COLUMN source_language_source_hash TEXT;
+`,
+    checksum: "097efb5dc33531c123a937af4ecfa25e02063ad95866698a2363661f2528654f",
+  },
+  {
+    name: "1092_community_localization_language_detection_metadata.sql",
+    sql: `ALTER TABLE community_localization_meta ADD COLUMN source_language_confidence REAL;
+ALTER TABLE community_localization_meta ADD COLUMN source_language_reliable INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE community_localization_meta ADD COLUMN source_language_detector TEXT;
+ALTER TABLE community_localization_meta ADD COLUMN source_language_detected_at TEXT;
+`,
+    checksum: "92aa83967f665a82a118edd869589fc06ca3fc786322075c43c5a6a0c879f9e5",
+  },
 ] as const;

@@ -39,8 +39,11 @@ export async function enqueuePostTranslationPrewarmJobs(input: {
     return
   }
 
+  const reliableSourceLanguage = input.post.source_language_reliable
+    ? input.post.source_language ?? null
+    : null
   for (const locale of CONTENT_TRANSLATION_PREWARM_LOCALES) {
-    if (sameLanguageLocale(input.post.source_language, locale)) {
+    if (sameLanguageLocale(reliableSourceLanguage, locale)) {
       continue
     }
     await enqueuePostTranslationJob({
@@ -51,6 +54,29 @@ export async function enqueuePostTranslationPrewarmJobs(input: {
       createdAt: input.createdAt,
     })
   }
+}
+
+export async function enqueuePostSourceLanguageDetectionJob(input: {
+  client: DbExecutor
+  communityId: string
+  post: Post
+  createdAt: string
+}): Promise<void> {
+  if (!String(input.post.title ?? "").trim() && !String(input.post.body ?? "").trim() && !String(input.post.caption ?? "").trim()) {
+    return
+  }
+
+  await enqueueCommunityJob({
+    client: input.client,
+    communityId: input.communityId,
+    jobType: "post_language_detection_materialize",
+    subjectType: "post_language_detection",
+    subjectId: input.post.post_id,
+    payloadJson: JSON.stringify({
+      post_id: input.post.post_id,
+    }),
+    createdAt: input.createdAt,
+  })
 }
 
 export async function enqueuePostTranslationOnReadIfNeeded(input: {

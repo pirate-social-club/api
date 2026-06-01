@@ -37,8 +37,11 @@ export async function enqueueCommentTranslationPrewarmJobs(input: {
     return
   }
 
+  const reliableSourceLanguage = input.comment.source_language_reliable
+    ? input.comment.source_language ?? null
+    : null
   for (const locale of CONTENT_TRANSLATION_PREWARM_LOCALES) {
-    if (sameLanguageLocale(input.comment.source_language, locale)) {
+    if (sameLanguageLocale(reliableSourceLanguage, locale)) {
       continue
     }
     await enqueueCommentTranslationJob({
@@ -49,6 +52,29 @@ export async function enqueueCommentTranslationPrewarmJobs(input: {
       createdAt: input.createdAt,
     })
   }
+}
+
+export async function enqueueCommentSourceLanguageDetectionJob(input: {
+  client: DbExecutor
+  communityId: string
+  comment: Comment
+  createdAt: string
+}): Promise<void> {
+  if (input.comment.status !== "published" || !String(input.comment.body ?? "").trim()) {
+    return
+  }
+
+  await enqueueCommunityJob({
+    client: input.client,
+    communityId: input.communityId,
+    jobType: "comment_language_detection_materialize",
+    subjectType: "comment_language_detection",
+    subjectId: input.comment.comment_id,
+    payloadJson: JSON.stringify({
+      comment_id: input.comment.comment_id,
+    }),
+    createdAt: input.createdAt,
+  })
 }
 
 export async function enqueueCommentTranslationOnReadIfNeeded(input: {

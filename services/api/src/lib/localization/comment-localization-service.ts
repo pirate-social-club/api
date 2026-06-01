@@ -6,6 +6,7 @@ import type { Comment as ApiComment, CommentListItem as ApiCommentListItem } fro
 
 type Comment = ApiComment & {
   source_language?: string | null
+  source_language_reliable?: boolean
 }
 
 type CommentListItem = Omit<ApiCommentListItem, "comment"> & {
@@ -42,7 +43,10 @@ export async function buildLocalizedCommentListItem(input: {
     return response
   }
 
-  if (sameLanguageLocale(input.item.comment.source_language, resolvedLocale)) {
+  const reliableSourceLanguage = input.item.comment.source_language_reliable
+    ? input.item.comment.source_language ?? null
+    : null
+  if (sameLanguageLocale(reliableSourceLanguage, resolvedLocale)) {
     return response
   }
 

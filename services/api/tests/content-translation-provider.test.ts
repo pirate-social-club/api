@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test"
-import { requestContentTranslation } from "../src/lib/localization/content-translation-provider"
+import {
+  requestContentTranslation,
+  requestSourceLanguageDetection,
+} from "../src/lib/localization/content-translation-provider"
 import type { Env } from "../src/types"
 import { withMockedFetch } from "./helpers"
 
@@ -23,6 +26,45 @@ async function withMockedOpenRouterContent<T>(content: unknown, run: () => Promi
 }
 
 describe("requestContentTranslation", () => {
+  test("detects source language without requesting a translation target", async () => {
+    let requestPayload: Record<string, unknown> | null = null
+    await withMockedFetch(() => (async (_input, init) => {
+      requestPayload = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>
+      return new Response(JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                source_language: "en",
+                source_language_confidence: 0.98,
+                source_language_reliable: true,
+                detected_languages: [
+                  { language: "en", confidence: 0.98, text_coverage: 0.99 },
+                  { language: "ru", confidence: 0.2, text_coverage: 0.01 },
+                ],
+              }),
+            },
+          },
+        ],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }) as typeof fetch, async () => {
+      const result = await requestSourceLanguageDetection({
+        env,
+        sourceText: {
+          body: "Mostly English text with one Russian word привет.",
+        },
+      })
+
+      expect(result.sourceLanguage).toBe("en")
+      expect(result.sourceLanguageConfidence).toBe(0.98)
+      expect(result.sourceLanguageReliable).toBe(true)
+      expect(JSON.stringify(requestPayload)).not.toContain("target_locale")
+    })
+  })
+
   test("returns validated translation provider output", async () => {
     await withMockedOpenRouterContent({
       source_language: "ja",

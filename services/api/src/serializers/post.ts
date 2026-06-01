@@ -73,6 +73,11 @@ export function serializePost(post: Post): CurrentPostResponse {
     creator_relation: post.creator_relation,
     promotion_disclosure: post.promotion_disclosure,
     source_language: post.source_language,
+    source_language_confidence: post.source_language_confidence,
+    source_language_reliable: post.source_language_reliable ?? false,
+    source_language_detector: post.source_language_detector,
+    source_language_detected_at: post.source_language_detected_at,
+    source_language_source_hash: post.source_language_source_hash,
     translation_policy: post.translation_policy,
     access_mode: post.access_mode,
     asset: post.asset_id ? publicId(post.asset_id, "asset") : null,
@@ -126,7 +131,7 @@ export function serializeDeletedPostResponse(post: Pick<Post, "post_id">): Contr
 function pruneLinkEnrichmentTranslations(
   enrichment: Record<string, unknown> | null | undefined,
   resolvedLocale: string | null | undefined,
-  postSourceLanguage: string | null | undefined,
+  reliablePostSourceLanguage: string | null | undefined,
 ): Record<string, unknown> | null | undefined {
   if (!enrichment || typeof enrichment !== "object") return enrichment
   const translations = enrichment.translations
@@ -135,11 +140,9 @@ function pruneLinkEnrichmentTranslations(
   if (keys.length <= 1) return enrichment
 
   const kept: Record<string, unknown> = {}
-  const sourceLanguage = typeof enrichment.source_language === "string"
-    ? enrichment.source_language.split("-")[0]
-    : typeof postSourceLanguage === "string"
-      ? postSourceLanguage.split("-")[0]
-      : null
+  const sourceLanguage = typeof reliablePostSourceLanguage === "string"
+    ? reliablePostSourceLanguage.split("-")[0]
+    : null
   const resolvedBase = resolvedLocale?.split("-")[0] ?? null
 
   for (const key of keys) {
@@ -163,7 +166,7 @@ export function serializeLocalizedPostResponse(response: LocalizedPostResponse, 
     serializedPost.link_enrichment = pruneLinkEnrichmentTranslations(
       serializedPost.link_enrichment as Record<string, unknown> | null | undefined,
       response.resolved_locale,
-      response.post.source_language,
+      response.post.source_language_reliable ? response.post.source_language : null,
     )
   }
   return {
@@ -173,6 +176,8 @@ export function serializeLocalizedPostResponse(response: LocalizedPostResponse, 
     market_context: response.market_context,
     label: serializePostLabel(response.label),
     song_presentation: response.song_presentation ?? null,
+    derivative_sources: response.derivative_sources ?? null,
+    asset_story: response.post.asset_story ?? response.asset_story ?? null,
     upvote_count: response.upvote_count,
     downvote_count: response.downvote_count,
     like_count: response.like_count,

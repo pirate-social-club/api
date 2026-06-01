@@ -15,7 +15,15 @@ import type {
 import { nullableUnixSeconds, unixSeconds } from "./time"
 import { publicCommentId, publicCommunityId, publicPostId } from "../lib/public-ids"
 
-type CurrentCommentResponse = ContractComment & Pick<Comment, "source_language">
+type CurrentCommentResponse = ContractComment & Pick<
+  Comment,
+  | "source_language"
+  | "source_language_confidence"
+  | "source_language_reliable"
+  | "source_language_detector"
+  | "source_language_detected_at"
+  | "source_language_source_hash"
+>
 
 export function serializeComment(comment: Comment): CurrentCommentResponse {
   return {
@@ -38,6 +46,11 @@ export function serializeComment(comment: Comment): CurrentCommentResponse {
     body: comment.body,
     media_refs: comment.media_refs,
     source_language: comment.source_language,
+    source_language_confidence: comment.source_language_confidence,
+    source_language_reliable: comment.source_language_reliable ?? false,
+    source_language_detector: comment.source_language_detector,
+    source_language_detected_at: comment.source_language_detected_at,
+    source_language_source_hash: comment.source_language_source_hash,
     status: comment.status,
     replies_locked: comment.replies_locked ?? false,
     replies_locked_at: nullableUnixSeconds(comment.replies_locked_at ?? null),

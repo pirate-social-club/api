@@ -14,6 +14,8 @@ import {
 import {
   runCommentTranslationMaterialize,
   runCommunityTextTranslationMaterialize,
+  runCommentLanguageDetectionMaterialize,
+  runPostLanguageDetectionMaterialize,
   runPostLabelMaterialize,
   runPostTranslationMaterialize,
 } from "./content-materialization-handlers"
@@ -37,6 +39,8 @@ export async function runCommunityJob(input: CommunityJobHandlerInput): Promise<
       return runEmbedHydrate(input)
     case "post_label_materialize":
       return runPostLabelMaterialize(input)
+    case "post_language_detection_materialize":
+      return runPostLanguageDetectionMaterialize(input)
     case "post_translation_materialize":
       return runPostTranslationMaterialize(input)
     case "link_summary_materialize":
@@ -45,6 +49,8 @@ export async function runCommunityJob(input: CommunityJobHandlerInput): Promise<
       return runLinkSummaryTranslationMaterialize(input)
     case "comment_translation_materialize":
       return runCommentTranslationMaterialize(input)
+    case "comment_language_detection_materialize":
+      return runCommentLanguageDetectionMaterialize(input)
     case "community_text_translation_materialize":
       return runCommunityTextTranslationMaterialize(input)
     case "song_preview_generate":

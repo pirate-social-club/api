@@ -2,7 +2,6 @@ import { openCommunityDb } from "../communities/community-db-factory"
 import type { CommunityDatabaseBindingRepository } from "../communities/db-community-repository"
 import { badRequestError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
-import { detectSourceLanguageFromText } from "../localization/content-locale"
 import { getControlPlaneClient } from "../runtime-deps"
 import type { Env } from "../../env"
 import type { Post } from "../../types"
@@ -89,7 +88,7 @@ export async function applyAdminLinkPreviewOverride(input: {
   const title = requirePreviewTitle(input.body.title)
   const imageUrl = requireHttpsImageUrl(input.body.image_url)
   const updatedAt = nowIso()
-  const sourceLanguage = detectSourceLanguageFromText([title])
+  const sourceLanguage = null
 
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {

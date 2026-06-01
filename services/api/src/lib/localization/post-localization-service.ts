@@ -113,6 +113,10 @@ function hasTranslatablePostContent(post: Post): boolean {
   )
 }
 
+function reliableSourceLanguage(post: Post): string | null {
+  return post.source_language_reliable ? post.source_language ?? null : null
+}
+
 async function getLocalizedMarketEmbedTranslations(input: {
   executor: DbExecutor
   post: Post
@@ -238,7 +242,7 @@ export async function buildLocalizedPostResponse(input: {
     return response
   }
 
-  if (sameLanguageLocale(input.post.source_language, resolvedLocale)) {
+  if (sameLanguageLocale(reliableSourceLanguage(input.post), resolvedLocale)) {
     return response
   }
 

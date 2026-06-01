@@ -6,9 +6,11 @@ import { computeCommentSourceHash } from "./content-source-hash"
 import { DEFAULT_CONTENT_LOCALE, normalizeContentLocale, sameLanguageLocale } from "./content-locale"
 import { requestContentTranslation } from "./content-translation-provider"
 import { getContentTranslation, upsertContentTranslation } from "./content-translation-store"
+import { updateCommentSourceLanguageFromProvider } from "./source-language-canonical"
 
 type Comment = ApiComment & {
   source_language?: string | null
+  source_language_reliable?: boolean
 }
 
 function hasTranslatableCommentContent(comment: Comment): boolean {
@@ -28,7 +30,10 @@ export async function materializeCommentTranslation(input: {
     return `skipped:no_content:${resolvedLocale}`
   }
 
-  if (sameLanguageLocale(input.comment.source_language, resolvedLocale)) {
+  const reliableSourceLanguage = input.comment.source_language_reliable
+    ? input.comment.source_language ?? null
+    : null
+  if (sameLanguageLocale(reliableSourceLanguage, resolvedLocale)) {
     await upsertContentTranslation({
       executor: input.executor,
       contentType: "comment",
@@ -50,6 +55,18 @@ export async function materializeCommentTranslation(input: {
     sourceHash,
   })
   if (existing) {
+    await updateCommentSourceLanguageFromProvider({
+      executor: input.executor,
+      commentId: input.comment.comment_id,
+      detection: {
+        sourceLanguage: existing.source_language,
+        sourceLanguageConfidence: null,
+        sourceLanguageReliable: false,
+        detector: existing.provider ? `${existing.provider}:${existing.provider_model ?? "unknown"}` : "content_translation_cache",
+        detectedAt: nowIso(),
+        sourceHash,
+      },
+    })
     return `cached:${resolvedLocale}:${existing.outcome}`
   }
 
@@ -77,6 +94,18 @@ export async function materializeCommentTranslation(input: {
     providerModel: translation.model,
     providerResultJson: translation.providerResult ? JSON.stringify(translation.providerResult) : null,
     now: nowIso(),
+  })
+  await updateCommentSourceLanguageFromProvider({
+    executor: input.executor,
+    commentId: input.comment.comment_id,
+    detection: {
+      sourceLanguage: translation.sourceLanguage,
+      sourceLanguageConfidence: translation.sourceLanguageConfidence,
+      sourceLanguageReliable: translation.sourceLanguageReliable,
+      detector: `${translation.provider}:${translation.model}`,
+      detectedAt: nowIso(),
+      sourceHash,
+    },
   })
 
   return `${resolvedLocale}:${translation.outcome}`

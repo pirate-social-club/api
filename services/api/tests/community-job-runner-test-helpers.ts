@@ -1,10 +1,8 @@
 import type { Client } from "@libsql/client"
-import { expect } from "bun:test"
 import { openCommunityDb } from "../src/lib/communities/community-db-factory"
 import { enqueueCommunityJob } from "../src/lib/communities/jobs/store"
 import type { CommunityDatabaseBindingRepository } from "../src/lib/communities/db-community-repository"
 import { createComment } from "../src/lib/comments/comment-service"
-import { getCommentById } from "../src/lib/comments/community-comment-store"
 import type { Env } from "../src/types"
 import {
   buildTestCommunityRepository,
@@ -19,7 +17,7 @@ import {
 export { buildUserRepository, buildVerifiedUser }
 export type { TestCommunityRepository }
 
-export const cleanupPaths: string[] = []
+const cleanupPaths: string[] = []
 
 export async function cleanupCommunityJobRunnerArtifacts(): Promise<void> {
   await cleanupCommunityTestArtifacts(cleanupPaths)
@@ -217,6 +215,33 @@ export async function enqueuePostTranslationJob(input: {
   }
 }
 
+export async function enqueuePostLanguageDetectionJob(input: {
+  env: Env
+  repo: CommunityDatabaseBindingRepository
+  communityId: string
+  postId: string
+  createdAt?: string
+}): Promise<string> {
+  const db = await openCommunityDb(input.env, input.repo, input.communityId)
+  try {
+    await enqueueCommunityJob({
+      client: db.client,
+      communityId: input.communityId,
+      jobType: "post_language_detection_materialize",
+      subjectType: "post_language_detection",
+      subjectId: input.postId,
+      payloadJson: JSON.stringify({
+        post_id: input.postId,
+      }),
+      createdAt: input.createdAt ?? new Date().toISOString(),
+    })
+    const jobs = await fetchCommunityJobs(db.client)
+    return jobs.find((job) => job.job_type === "post_language_detection_materialize" && job.subject_id === input.postId)?.job_id ?? ""
+  } finally {
+    db.close()
+  }
+}
+
 export async function enqueuePostLabelJob(input: {
   env: Env
   repo: CommunityDatabaseBindingRepository
@@ -268,6 +293,33 @@ export async function enqueueCommentTranslationJob(input: {
     })
     const jobs = await fetchCommunityJobs(db.client)
     return jobs.find((job) => job.subject_id === `${input.commentId}:${input.locale}`)?.job_id ?? ""
+  } finally {
+    db.close()
+  }
+}
+
+export async function enqueueCommentLanguageDetectionJob(input: {
+  env: Env
+  repo: CommunityDatabaseBindingRepository
+  communityId: string
+  commentId: string
+  createdAt?: string
+}): Promise<string> {
+  const db = await openCommunityDb(input.env, input.repo, input.communityId)
+  try {
+    await enqueueCommunityJob({
+      client: db.client,
+      communityId: input.communityId,
+      jobType: "comment_language_detection_materialize",
+      subjectType: "comment_language_detection",
+      subjectId: input.commentId,
+      payloadJson: JSON.stringify({
+        comment_id: input.commentId,
+      }),
+      createdAt: input.createdAt ?? new Date().toISOString(),
+    })
+    const jobs = await fetchCommunityJobs(db.client)
+    return jobs.find((job) => job.job_type === "comment_language_detection_materialize" && job.subject_id === input.commentId)?.job_id ?? ""
   } finally {
     db.close()
   }
@@ -336,22 +388,6 @@ export async function updatePostTranslationPolicy(input: {
       `,
       args: [input.postId],
     })
-  } finally {
-    db.close()
-  }
-}
-
-export async function getStoredCommentOrThrow(input: {
-  env: Env
-  repo: CommunityDatabaseBindingRepository
-  communityId: string
-  commentId: string
-}) {
-  const db = await openCommunityDb(input.env, input.repo, input.communityId)
-  try {
-    const comment = await getCommentById(db.client, input.commentId)
-    expect(comment).not.toBeNull()
-    return comment!
   } finally {
     db.close()
   }

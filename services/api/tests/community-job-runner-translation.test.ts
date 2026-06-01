@@ -3,18 +3,21 @@ import { join } from "node:path"
 import { openCommunityDb } from "../src/lib/communities/community-db-factory"
 import { processCommunityJobById, processNextCommunityJob } from "../src/lib/communities/jobs/runner"
 import { getCommentById } from "../src/lib/comments/community-comment-store"
+import { getCommunityLocalizationMeta } from "../src/lib/localization/community-localization-meta-store"
 import { buildLocalizedPostResponse } from "../src/lib/localization/post-localization-service"
 import { computeCommentSourceHash, computePostSourceHash, computeTextSourceHash } from "../src/lib/localization/content-source-hash"
 import { getContentTranslation } from "../src/lib/localization/content-translation-store"
-import { getPostById } from "../src/lib/posts/community-post-store"
+import { getPostById } from "../src/lib/posts/community-post-query-store"
 import type { Env } from "../src/types"
 import {
   buildCommunityRepository,
   cleanupCommunityJobRunnerArtifacts,
   createCommunityJobRunnerRoot,
   createOwnedComment,
+  enqueueCommentLanguageDetectionJob,
   enqueueCommentTranslationJob,
   enqueueCommunityTextTranslationJob,
+  enqueuePostLanguageDetectionJob,
   enqueuePostTranslationJob,
   fetchCommunityJobs,
   seedCommunityState,
@@ -27,6 +30,145 @@ afterEach(async () => {
 })
 
 describe("community-job-runner translation", () => {
+  test("materializes post source language detection through the community job worker", async () => {
+    const rootDir = await createCommunityJobRunnerRoot("pirate-community-job-language-detection-")
+    const databasePath = join(rootDir, "community.db")
+    const communityId = "cmt_job_language_detection"
+    const env: Env = {
+      LOCAL_COMMUNITY_DB_ROOT: rootDir,
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_TRANSLATION_MODEL: "google/gemini-2.5-flash-lite-preview-09-2025",
+    }
+    const repo = buildCommunityRepository(databasePath, communityId)
+    const { postId } = await seedCommunityState({
+      env,
+      repo,
+      communityId,
+      memberUserIds: ["usr_owner"],
+    })
+
+    await withMockedFetch(() => (async () => {
+      return new Response(JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                source_language: "en",
+                source_language_confidence: 0.97,
+                source_language_reliable: true,
+                detected_languages: [
+                  { language: "en", confidence: 0.97, text_coverage: 1 },
+                ],
+              }),
+            },
+          },
+        ],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }) as typeof fetch, async () => {
+      const jobId = await enqueuePostLanguageDetectionJob({ env, repo, communityId, postId })
+
+      const processed = await processCommunityJobById({
+        env,
+        communityId,
+        communityRepository: repo,
+        jobId,
+      })
+      expect(processed?.job_type).toBe("post_language_detection_materialize")
+      expect(processed?.status).toBe("succeeded")
+      expect(processed?.result_ref).toBe("detected:en:reliable")
+    })
+
+    const verifyDb = await openCommunityDb(env, repo, communityId)
+    try {
+      const post = await getPostById(verifyDb.client, postId)
+      expect(post?.source_language).toBe("en")
+      expect(post?.source_language_confidence).toBe(0.97)
+      expect(post?.source_language_reliable).toBe(true)
+      expect(post?.source_language_detector).toBe("openrouter:google/gemini-2.5-flash-lite-preview-09-2025")
+      expect(post?.source_language_source_hash).toBe(await computePostSourceHash(post!))
+    } finally {
+      verifyDb.close()
+    }
+  })
+
+  test("materializes comment source language detection through the community job worker", async () => {
+    const rootDir = await createCommunityJobRunnerRoot("pirate-community-job-comment-language-detection-")
+    const databasePath = join(rootDir, "community.db")
+    const communityId = "cmt_job_comment_language_detection"
+    const env: Env = {
+      LOCAL_COMMUNITY_DB_ROOT: rootDir,
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_TRANSLATION_MODEL: "google/gemini-2.5-flash-lite-preview-09-2025",
+    }
+    const repo = buildCommunityRepository(databasePath, communityId)
+    const { postId } = await seedCommunityState({
+      env,
+      repo,
+      communityId,
+      memberUserIds: ["usr_owner"],
+    })
+    const comment = await createOwnedComment({
+      env,
+      repo,
+      communityId,
+      postId,
+      userId: "usr_owner",
+    })
+
+    await withMockedFetch(() => (async () => {
+      return new Response(JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                source_language: "en",
+                source_language_confidence: 0.94,
+                source_language_reliable: true,
+                detected_languages: [
+                  { language: "en", confidence: 0.94, text_coverage: 1 },
+                ],
+              }),
+            },
+          },
+        ],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }) as typeof fetch, async () => {
+      const jobId = await enqueueCommentLanguageDetectionJob({
+        env,
+        repo,
+        communityId,
+        commentId: comment.comment_id,
+      })
+
+      const processed = await processCommunityJobById({
+        env,
+        communityId,
+        communityRepository: repo,
+        jobId,
+      })
+      expect(processed?.job_type).toBe("comment_language_detection_materialize")
+      expect(processed?.status).toBe("succeeded")
+      expect(processed?.result_ref).toBe("detected:en:reliable")
+    })
+
+    const verifyDb = await openCommunityDb(env, repo, communityId)
+    try {
+      const storedComment = await getCommentById(verifyDb.client, comment.comment_id)
+      expect(storedComment?.source_language).toBe("en")
+      expect(storedComment?.source_language_confidence).toBe(0.94)
+      expect(storedComment?.source_language_reliable).toBe(true)
+      expect(storedComment?.source_language_source_hash).toBe(await computeCommentSourceHash(storedComment!))
+    } finally {
+      verifyDb.close()
+    }
+  })
+
   test("materializes cached post translations through the community job worker", async () => {
     const rootDir = await createCommunityJobRunnerRoot("pirate-community-job-translation-")
     const databasePath = join(rootDir, "community.db")
@@ -556,6 +698,11 @@ describe("community-job-runner translation", () => {
             message: {
               content: JSON.stringify({
                 source_language: "en",
+                source_language_confidence: 0.96,
+                source_language_reliable: true,
+                detected_languages: [
+                  { language: "en", confidence: 0.96, text_coverage: 1 },
+                ],
                 target_locale: source.target_locale ?? "es",
                 outcome: "translated",
                 translated_title: null,
@@ -599,6 +746,15 @@ describe("community-job-runner translation", () => {
         sourceHash: descriptionSourceHash,
       })
       expect(descriptionTranslation?.translated_body).toBe("es:Welcome to the community.")
+      const descriptionMeta = await getCommunityLocalizationMeta({
+        executor: verifyDb.client,
+        communityId,
+        fieldKey: "community.description",
+      })
+      expect(descriptionMeta?.source_language).toBe("en")
+      expect(descriptionMeta?.source_language_confidence).toBe(0.96)
+      expect(descriptionMeta?.source_language_reliable).toBe(true)
+      expect(descriptionMeta?.source_language_detector).toBe("openrouter:google/gemini-2.5-flash-lite-preview-09-2025")
 
       const ruleTitleSourceHash = await computeTextSourceHash("Be kind")
       const ruleBodySourceHash = await computeTextSourceHash("Keep the conversation civil.")

@@ -76,7 +76,7 @@ export async function enqueueLinkSummaryTranslationsIfNeeded(input: {
     return
   }
   for (const locale of CONTENT_TRANSLATION_PREWARM_LOCALES) {
-    if (sameLanguageLocale("en", locale) && sameLanguageLocale(input.record.source_language ?? "en", "en")) {
+    if (sameLanguageLocale("en", locale) && sameLanguageLocale(input.record.source_language, "en")) {
       continue
     }
     await enqueueCommunityJob({

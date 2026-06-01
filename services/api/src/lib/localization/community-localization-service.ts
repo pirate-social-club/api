@@ -10,10 +10,11 @@ import type { DbExecutor } from "../db-helpers"
 import { nowIso } from "../helpers"
 import {
   type CommunityLocalizationMetaRecord,
+  updateCommunityLocalizationMetaSourceLanguage,
   upsertCommunityLocalizationMeta,
   listCommunityLocalizationMeta,
 } from "./community-localization-meta-store"
-import { DEFAULT_CONTENT_LOCALE, detectSourceLanguageFromText, normalizeContentLocale, sameLanguageLocale } from "./content-locale"
+import { DEFAULT_CONTENT_LOCALE, normalizeContentLocale, sameLanguageLocale } from "./content-locale"
 import { requestContentTranslation } from "./content-translation-provider"
 import { computeTextSourceHash } from "./content-source-hash"
 import { getContentTranslation, upsertContentTranslation, type ContentTranslationRecord } from "./content-translation-store"
@@ -32,6 +33,10 @@ function hasTranslatedBody(record: ContentTranslationRecord | null): boolean {
     return false
   }
   return Boolean(String(record.translated_body ?? "").trim())
+}
+
+function reliableSourceLanguage(meta: CommunityLocalizationMetaRecord): string | null {
+  return meta.source_language_reliable ? meta.source_language : null
 }
 
 function collectCommunityFields(community: Community): CommunityTextField[] {
@@ -151,14 +156,17 @@ async function ensureCommunityLocalizationMeta(input: {
       continue
     }
 
-    const sourceLanguage = detectSourceLanguageFromText([field.source_text])
     const translationPolicy = current?.translation_policy ?? "machine_allowed"
     await upsertCommunityLocalizationMeta({
       executor: input.executor,
       communityId: input.communityId,
       fieldKey: field.field_key,
       sourceHash,
-      sourceLanguage,
+      sourceLanguage: null,
+      sourceLanguageConfidence: null,
+      sourceLanguageReliable: false,
+      sourceLanguageDetector: null,
+      sourceLanguageDetectedAt: null,
       translationPolicy,
       now,
     })
@@ -168,7 +176,11 @@ async function ensureCommunityLocalizationMeta(input: {
       community_id: input.communityId,
       field_key: field.field_key,
       source_hash: sourceHash,
-      source_language: sourceLanguage,
+      source_language: null,
+      source_language_confidence: null,
+      source_language_reliable: false,
+      source_language_detector: null,
+      source_language_detected_at: null,
       translation_policy: translationPolicy,
       created_at: current?.created_at ?? now,
       updated_at: now,
@@ -206,7 +218,7 @@ async function buildCommunityTextLocalizationInternal(input: {
       translated_value: null,
     }
 
-    if (sameLanguageLocale(meta.source_language, resolvedLocale)) {
+    if (sameLanguageLocale(reliableSourceLanguage(meta), resolvedLocale)) {
       items.push(item)
       continue
     }
@@ -351,7 +363,7 @@ export async function materializeCommunityTextTranslations(input: {
       continue
     }
 
-    if (sameLanguageLocale(meta.source_language, resolvedLocale)) {
+    if (sameLanguageLocale(reliableSourceLanguage(meta), resolvedLocale)) {
       await upsertContentTranslation({
         executor: input.executor,
         contentType: "community_text",
@@ -385,12 +397,13 @@ export async function materializeCommunityTextTranslations(input: {
 
     const translation = await requestContentTranslation({
       env: input.env,
-      sourceLanguage: meta.source_language ?? null,
+      sourceLanguage: reliableSourceLanguage(meta),
       targetLocale: resolvedLocale,
       sourceText: {
         body: field.source_text,
       },
     })
+    const detectedAt = nowIso()
 
     await upsertContentTranslation({
       executor: input.executor,
@@ -406,6 +419,17 @@ export async function materializeCommunityTextTranslations(input: {
       providerModel: translation.model,
       providerResultJson: translation.providerResult ? JSON.stringify(translation.providerResult) : null,
       now: nowIso(),
+    })
+    await updateCommunityLocalizationMetaSourceLanguage({
+      executor: input.executor,
+      communityId: input.community.community_id,
+      fieldKey: field.field_key,
+      sourceHash: meta.source_hash,
+      sourceLanguage: translation.sourceLanguage,
+      sourceLanguageConfidence: translation.sourceLanguageConfidence,
+      sourceLanguageReliable: translation.sourceLanguageReliable,
+      detector: `${translation.provider}:${translation.model}`,
+      detectedAt,
     })
 
     if (translation.outcome === "translated") {

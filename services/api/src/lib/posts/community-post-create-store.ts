@@ -7,7 +7,6 @@ import {
   buildAnonymousLabel,
   buildDisclosedQualifierSnapshots,
 } from "../identity/anonymous-identity"
-import { detectSourceLanguageFromText } from "../localization/content-locale"
 import {
   boundedPostJsonProjection,
   postSelectColumnsForSchema,
@@ -155,13 +154,6 @@ export async function insertPost(input: {
       missing_table: "post_events",
     })
   }
-  const sourceLanguage = detectSourceLanguageFromText([
-    title,
-    input.body.body,
-    input.body.caption,
-    input.body.lyrics,
-  ])
-
   const columns: string[] = []
   const values: string[] = []
   const args: unknown[] = []
@@ -222,7 +214,7 @@ export async function insertPost(input: {
   addValue("link_url", input.body.link_url ?? null)
   addValue("media_refs_json", mediaRefsJson)
   addValue("song_artifact_bundle_id", input.body.song_artifact_bundle ? decodePublicSongArtifactBundleId(input.body.song_artifact_bundle) : null)
-  addValue("source_language", sourceLanguage)
+  addValue("source_language", null)
   addValue("translation_policy", translationPolicy)
   addValue("rights_basis", input.body.rights_basis ?? "none")
   addValue("access_mode", input.body.access_mode ?? (postType === "song" ? "public" : null))

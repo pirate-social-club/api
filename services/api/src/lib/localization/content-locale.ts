@@ -35,14 +35,25 @@ export const CONTENT_TRANSLATION_PREWARM_LOCALES = [
   "tr",
 ] as const
 
-const ARABIC_CHAR_RE = /[\u0600-\u06FF]/
-const CYRILLIC_CHAR_RE = /[\u0400-\u04FF]/
-const DEVANAGARI_CHAR_RE = /[\u0900-\u097F]/
-const HANGUL_CHAR_RE = /[\uAC00-\uD7AF]/
-const HIRAGANA_KATAKANA_RE = /[\u3040-\u30FF]/
-const HAN_CHAR_RE = /[\u3400-\u9FFF]/
+const ARABIC_CHAR_COUNT_RE = /[\u0600-\u06FF]/gu
+const CYRILLIC_CHAR_COUNT_RE = /[\u0400-\u04FF]/gu
+const DEVANAGARI_CHAR_COUNT_RE = /[\u0900-\u097F]/gu
+const HANGUL_CHAR_COUNT_RE = /[\uAC00-\uD7AF]/gu
+const HIRAGANA_KATAKANA_COUNT_RE = /[\u3040-\u30FF]/gu
+const HAN_CHAR_COUNT_RE = /[\u3400-\u9FFF]/gu
 const TRADITIONAL_HAN_HINT_RE = /[體國臺萬與專業樂網說歡龍後這個們]/u
 const LATIN_LETTER_RE = /[A-Za-zÀ-ÿ]/
+const LETTER_RE = /\p{L}/gu
+const WORD_RE = /[\p{L}\p{M}]+/gu
+const URL_RE = /\b(?:https?:\/\/|www\.)\S+|\b[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?:\/\S*)?/gu
+const MARKDOWN_IMAGE_RE = /!\[[^\]]*\]\([^)]*\)/gu
+const MARKDOWN_LINK_RE = /\[([^\]]+)\]\([^)]*\)/gu
+const SOCIAL_TOKEN_RE = /(^|\s)[@#][\p{L}\p{M}\p{N}_-]+/gu
+
+const MIN_SCRIPT_LETTER_RATIO = 0.2
+const MIN_LATIN_RULE_MATCHES = 3
+const MIN_LATIN_RULE_MATCH_WORD_RATIO = 0.05
+const NORMALIZED_LANGUAGE_TAG_RE = /^[a-z]{2,3}(?:-[A-Za-z]{4})?(?:-[A-Z]{2})?$/
 
 const DETECTION_RULES: Array<{ locale: string; pattern: RegExp }> = [
   { locale: "es", pattern: /\b(hola|gracias|que|para|con|una|las|los|del|est[aá])\b/giu },
@@ -108,9 +119,56 @@ export function sameLanguageLocale(sourceLanguage: string | null | undefined, ta
   return normalizedSource.split("-")[0] === normalizedTarget.split("-")[0]
 }
 
+export function normalizeDetectedSourceLanguage(sourceLanguage: string | null | undefined): string | null {
+  const normalized = normalizeContentLocale(sourceLanguage)
+  if (!normalized || !NORMALIZED_LANGUAGE_TAG_RE.test(normalized)) {
+    return null
+  }
+  return normalized
+}
+
 function countMatches(text: string, pattern: RegExp): number {
   const matches = text.match(pattern)
   return matches ? matches.length : 0
+}
+
+function sanitizeLanguageDetectionText(text: string): string {
+  return text
+    .replace(MARKDOWN_IMAGE_RE, " ")
+    .replace(MARKDOWN_LINK_RE, "$1")
+    .replace(URL_RE, " ")
+    .replace(SOCIAL_TOKEN_RE, " ")
+}
+
+function countLetters(text: string): number {
+  return countMatches(text, LETTER_RE)
+}
+
+function countWords(text: string): number {
+  return countMatches(text, WORD_RE)
+}
+
+function dominantScriptLocale(text: string, totalLetters: number): string | null {
+  const candidates: Array<{ locale: string; pattern: RegExp }> = [
+    { locale: "ar", pattern: ARABIC_CHAR_COUNT_RE },
+    { locale: "ru", pattern: CYRILLIC_CHAR_COUNT_RE },
+    { locale: "hi", pattern: DEVANAGARI_CHAR_COUNT_RE },
+    { locale: "ko", pattern: HANGUL_CHAR_COUNT_RE },
+    { locale: "ja", pattern: HIRAGANA_KATAKANA_COUNT_RE },
+    { locale: "zh-Hans", pattern: HAN_CHAR_COUNT_RE },
+  ]
+
+  for (const candidate of candidates) {
+    const scriptLetters = countMatches(text, candidate.pattern)
+    if (scriptLetters > 0 && scriptLetters / totalLetters >= MIN_SCRIPT_LETTER_RATIO) {
+      if (candidate.locale === "zh-Hans") {
+        return TRADITIONAL_HAN_HINT_RE.test(text) ? "zh-Hant" : "zh-Hans"
+      }
+      return candidate.locale
+    }
+  }
+
+  return null
 }
 
 export function detectSourceLanguageFromText(parts: Array<string | null | undefined>): string | null {
@@ -123,20 +181,23 @@ export function detectSourceLanguageFromText(parts: Array<string | null | undefi
     return null
   }
 
-  if (ARABIC_CHAR_RE.test(text)) return "ar"
-  if (CYRILLIC_CHAR_RE.test(text)) return "ru"
-  if (DEVANAGARI_CHAR_RE.test(text)) return "hi"
-  if (HANGUL_CHAR_RE.test(text)) return "ko"
-  if (HIRAGANA_KATAKANA_RE.test(text)) return "ja"
-  if (HAN_CHAR_RE.test(text)) {
-    return TRADITIONAL_HAN_HINT_RE.test(text) ? "zh-Hant" : "zh-Hans"
-  }
-
-  if (!LATIN_LETTER_RE.test(text)) {
+  const sanitized = sanitizeLanguageDetectionText(text)
+  const totalLetters = countLetters(sanitized)
+  if (totalLetters === 0) {
     return null
   }
 
-  const lowered = toLowerTrimmed(text)
+  const scriptLocale = dominantScriptLocale(sanitized, totalLetters)
+  if (scriptLocale) {
+    return scriptLocale
+  }
+
+  if (!LATIN_LETTER_RE.test(sanitized)) {
+    return null
+  }
+
+  const lowered = toLowerTrimmed(sanitized)
+  const totalWords = Math.max(countWords(lowered), 1)
   let bestLocale: string | null = null
   let bestScore = 0
 
@@ -148,7 +209,10 @@ export function detectSourceLanguageFromText(parts: Array<string | null | undefi
     }
   }
 
-  if (bestScore >= 2) {
+  if (
+    bestScore >= MIN_LATIN_RULE_MATCHES
+    && bestScore / totalWords > MIN_LATIN_RULE_MATCH_WORD_RATIO
+  ) {
     return bestLocale
   }
 

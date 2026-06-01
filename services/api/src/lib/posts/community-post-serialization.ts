@@ -1,4 +1,4 @@
-import { numberOrNull, requiredNumber, requiredString, rowValue, stringOrNull } from "../sql-row"
+import { boolOrNull, numberOrNull, requiredNumber, requiredString, rowValue, stringOrNull } from "../sql-row"
 import type { Post, PostEventPlace, PostEventStatus } from "../../types"
 import {
   parseCrosspostSource,
@@ -66,6 +66,11 @@ export type PostRow = {
   song_cover_art_ref: string | null
   song_duration_ms: number | null
   source_language: string | null
+  source_language_confidence: number | null
+  source_language_reliable: number | null
+  source_language_detector: string | null
+  source_language_detected_at: string | null
+  source_language_source_hash: string | null
   translation_policy: Post["translation_policy"]
   access_mode: Post["access_mode"]
   asset_id: string | null
@@ -80,6 +85,8 @@ export type PostRow = {
   analysis_result_ref: string | null
   content_safety_state: Post["content_safety_state"]
   age_gate_policy: Post["age_gate_policy"]
+  asset_story_ip_id: string | null
+  asset_story_royalty_registration_status: "none" | "pending" | "registered" | "failed" | null
   idempotency_key: string
   created_at: string
   updated_at: string
@@ -142,6 +149,11 @@ export function toPostRow(row: unknown): PostRow {
     song_cover_art_ref: stringOrNull(rowValue(row, "song_cover_art_ref")),
     song_duration_ms: numberOrNull(rowValue(row, "song_duration_ms")),
     source_language: stringOrNull(rowValue(row, "source_language")),
+    source_language_confidence: numberOrNull(rowValue(row, "source_language_confidence")),
+    source_language_reliable: numberOrNull(rowValue(row, "source_language_reliable")),
+    source_language_detector: stringOrNull(rowValue(row, "source_language_detector")),
+    source_language_detected_at: stringOrNull(rowValue(row, "source_language_detected_at")),
+    source_language_source_hash: stringOrNull(rowValue(row, "source_language_source_hash")),
     translation_policy: stringOrNull(rowValue(row, "translation_policy")) as Post["translation_policy"],
     access_mode: stringOrNull(rowValue(row, "access_mode")) as Post["access_mode"],
     asset_id: stringOrNull(rowValue(row, "asset_id")),
@@ -156,6 +168,8 @@ export function toPostRow(row: unknown): PostRow {
     analysis_result_ref: stringOrNull(rowValue(row, "analysis_result_ref")),
     content_safety_state: requiredString(row, "content_safety_state") as Post["content_safety_state"],
     age_gate_policy: requiredString(row, "age_gate_policy") as Post["age_gate_policy"],
+    asset_story_ip_id: stringOrNull(rowValue(row, "asset_story_ip_id")),
+    asset_story_royalty_registration_status: stringOrNull(rowValue(row, "asset_story_royalty_registration_status")) as PostRow["asset_story_royalty_registration_status"],
     idempotency_key: stringOrNull(rowValue(row, "idempotency_key")) ?? "",
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
@@ -223,6 +237,11 @@ export function serializePost(row: PostRow): Post {
     song_cover_art_ref: row.song_cover_art_ref,
     song_duration_ms: row.song_duration_ms,
     source_language: row.source_language,
+    source_language_confidence: row.source_language_confidence,
+    source_language_reliable: boolOrNull(row.source_language_reliable) ?? false,
+    source_language_detector: row.source_language_detector,
+    source_language_detected_at: row.source_language_detected_at,
+    source_language_source_hash: row.source_language_source_hash,
     translation_policy: row.translation_policy,
     access_mode: row.access_mode,
     asset_id: row.asset_id,
@@ -237,6 +256,12 @@ export function serializePost(row: PostRow): Post {
     analysis_result_ref: row.analysis_result_ref,
     content_safety_state: row.content_safety_state,
     age_gate_policy: row.age_gate_policy,
+    asset_story: row.asset_story_royalty_registration_status
+      ? {
+          story_ip: row.asset_story_ip_id,
+          story_royalty_registration_status: row.asset_story_royalty_registration_status,
+        }
+      : null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   }

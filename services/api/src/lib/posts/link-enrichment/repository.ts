@@ -84,7 +84,7 @@ export async function upsertLinkEnrichment(input: {
         status = excluded.status,
         title = excluded.title,
         description = excluded.description,
-        source_language = COALESCE(excluded.source_language, link_enrichments.source_language),
+        source_language = excluded.source_language,
         publisher = excluded.publisher,
         published_at = excluded.published_at,
         image_url = excluded.image_url,

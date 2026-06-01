@@ -2,8 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { createClient } from "@libsql/client"
 
 import type { CreatePostRequest, Post } from "../../types"
-import { assertPostCreateRequest, getPostById, insertPost, sortPublishedLocalizedPostFeedItems } from "./community-post-store"
+import { assertPostCreateRequest, insertPost } from "./community-post-create-store"
+import { sortPublishedLocalizedPostFeedItems } from "./community-post-feed"
 import { MAX_POST_JSON_PROJECTION_LENGTH } from "./community-post-projection"
+import { getPostById } from "./community-post-query-store"
 
 const clients: Array<{ close: () => void }> = []
 
@@ -85,6 +87,7 @@ function createFeedItem(input: {
 }
 
 async function createPostStoreTables(client: ReturnType<typeof createClient>, input: {
+  assets?: boolean
   crosspostSourceJson?: boolean
   postEvents?: boolean
 } = {}) {
@@ -161,6 +164,16 @@ async function createPostStoreTables(client: ReturnType<typeof createClient>, in
       visibility TEXT NOT NULL DEFAULT 'public'
     )
   `)
+  if (input.assets === true) {
+    await client.execute(`
+      CREATE TABLE assets (
+        asset_id TEXT PRIMARY KEY,
+        community_id TEXT NOT NULL,
+        story_ip_id TEXT,
+        story_royalty_registration_status TEXT NOT NULL DEFAULT 'none'
+      )
+    `)
+  }
   if (input.postEvents === true) {
     await client.execute(`
       CREATE TABLE post_events (
@@ -292,6 +305,44 @@ describe("getPostById", () => {
     expect(read?.title).toBe("Pre-migration post")
     expect(read?.crosspost_source).toBeNull()
   })
+
+  test("hydrates Story registration summary from the post asset", async () => {
+    const client = createClient({ url: "file::memory:" })
+    clients.push(client)
+    await createPostStoreTables(client, { assets: true })
+    await client.execute({
+      sql: `
+        INSERT INTO assets (
+          asset_id, community_id, story_ip_id, story_royalty_registration_status
+        ) VALUES (
+          'asset_ast_story', 'cmt_test', '0xbB0a33bd07e7c813963b569f1202047a92b38d48', 'registered'
+        )
+      `,
+    })
+    await client.execute({
+      sql: `
+        INSERT INTO posts (
+          post_id, community_id, author_user_id, authorship_mode, identity_mode,
+          label_assignment_status, post_type, status, visibility, title, body, asset_id,
+          source_language, translation_policy, rights_basis, analysis_state, content_safety_state,
+          age_gate_policy, idempotency_key, created_at, updated_at
+        ) VALUES (
+          'pst_story_asset', 'cmt_test', 'usr_test', 'human_direct', 'public',
+          'pending', 'song', 'published', 'public', 'Story song', '', 'asset_ast_story',
+          'en', 'none', 'original', 'allow', 'safe',
+          'none', 'story-asset', '2026-05-06T00:00:00.000Z', '2026-05-06T00:00:00.000Z'
+        )
+      `,
+    })
+
+    const post = await getPostById(client, "pst_story_asset")
+
+    expect(post?.asset_story).toEqual({
+      story_ip: "0xbB0a33bd07e7c813963b569f1202047a92b38d48",
+      story_royalty_registration_status: "registered",
+    })
+  })
+
   test("persists event metadata in the post_events side table", async () => {
     const client = createClient({ url: "file::memory:" })
     clients.push(client)

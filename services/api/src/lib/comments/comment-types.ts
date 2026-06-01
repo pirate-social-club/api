@@ -20,6 +20,11 @@ export type Comment = ApiComment & {
   agent_owner_handle_snapshot?: string | null
   agent_ownership_provider_snapshot?: "self_agent_id" | "clawkey" | null
   source_language?: string | null
+  source_language_confidence?: number | null
+  source_language_reliable?: boolean
+  source_language_detector?: string | null
+  source_language_detected_at?: string | null
+  source_language_source_hash?: string | null
 }
 export type CreateCommentRequest = {
   idempotency_key?: string | null

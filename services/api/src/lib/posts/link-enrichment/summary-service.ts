@@ -1,5 +1,5 @@
 import type { Env } from "../../../env"
-import { detectSourceLanguageFromText, normalizeContentLocale, sameLanguageLocale } from "../../localization/content-locale"
+import { normalizeContentLocale, sameLanguageLocale } from "../../localization/content-locale"
 import type { Client } from "../../sql-client"
 import {
   getLinkEnrichmentByNormalizedUrl,
@@ -131,9 +131,7 @@ export async function translateAndStoreLinkSummary(input: {
     return { resultRef: "skipped:invalid_locale", snapshotJson: null }
   }
   const record = await getLinkEnrichmentByNormalizedUrl(input.controlPlaneClient, input.normalizedUrl)
-  const sourceLanguage = record
-    ? record.source_language ?? detectSourceLanguageFromText([record.title, record.description]) ?? "en"
-    : "en"
+  const sourceLanguage = record?.source_language ?? null
   if (sameLanguageLocale("en", locale) && sameLanguageLocale(sourceLanguage, "en")) {
     return {
       resultRef: `skipped:canonical_locale:${sourceLanguage}`,
