@@ -218,6 +218,58 @@ export async function completeUniqueHumanVerification(
   )
 }
 
+export async function setUniqueHumanVerificationProvider(
+  env: Env,
+  userId: string,
+  provider: "self" | "very",
+): Promise<void> {
+  const client = createClient({
+    url: String(env.CONTROL_PLANE_DATABASE_URL),
+  })
+
+  try {
+    const userResult = await client.execute({
+      sql: `SELECT verification_capabilities_json FROM users WHERE user_id = ?1 LIMIT 1`,
+      args: [userId],
+    })
+    const currentCapabilities = typeof userResult.rows[0]?.verification_capabilities_json === "string"
+      ? JSON.parse(String(userResult.rows[0]?.verification_capabilities_json)) as ReturnType<typeof buildDefaultVerificationCapabilities>
+      : buildDefaultVerificationCapabilities()
+    const capabilities = {
+      ...buildDefaultVerificationCapabilities(),
+      ...currentCapabilities,
+    }
+    capabilities.unique_human = {
+      state: "verified",
+      provider,
+      mechanism: "route-test",
+      proof_type: "unique_human",
+      verified_at: Math.floor(Date.now() / 1000),
+    }
+
+    await client.execute({
+      sql: `
+        UPDATE users
+        SET verification_state = 'verified',
+            capability_provider = ?2,
+            verification_capabilities_json = ?3,
+            verified_at = ?4,
+            updated_at = ?5
+        WHERE user_id = ?1
+      `,
+      args: [
+        userId,
+        provider,
+        JSON.stringify(capabilities),
+        Math.floor(Date.now() / 1000),
+        new Date().toISOString(),
+      ],
+    })
+  } finally {
+    client.close()
+  }
+}
+
 export async function completeNationalityVerification(
   env: Env,
   accessToken: string,
