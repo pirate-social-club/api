@@ -5,6 +5,10 @@ import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { setStoryRoyaltyRegistrarForTests } from "../../../src/lib/story/story-royalty-registration-service"
 import {
+  MAX_DERIVATIVE_SOURCE_FANOUT_COMMUNITIES,
+  resolveDerivativeSourceFanoutCommunityIds,
+} from "../../../src/lib/communities/commerce/service"
+import {
   completeUniqueHumanVerification,
   exchangeJwt,
   requestJson,
@@ -206,6 +210,30 @@ afterEach(async () => {
 })
 
 describe("song artifact catalog routes", () => {
+  test("caps global derivative source fan-out to member communities only", () => {
+    const memberships = Array.from({ length: 30 }, (_, index) => ({
+      projection_id: `cmp_${index}`,
+      community_id: `cmt_fanout_${index.toString().padStart(2, "0")}`,
+      user_id: "usr_fanout",
+      membership_state: index === 3 ? "banned" : index === 7 ? "pending_request" : "member",
+      role_summary_json: null,
+      source_updated_at: "2026-01-01T00:00:00.000Z",
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    } as const))
+
+    const communityIds = resolveDerivativeSourceFanoutCommunityIds(memberships)
+    expect(communityIds).toHaveLength(MAX_DERIVATIVE_SOURCE_FANOUT_COMMUNITIES)
+    expect(communityIds).not.toContain("cmt_fanout_03")
+    expect(communityIds).not.toContain("cmt_fanout_07")
+    expect(communityIds).toEqual(
+      memberships
+        .filter((membership) => membership.membership_state === "member")
+        .slice(0, MAX_DERIVATIVE_SOURCE_FANOUT_COMMUNITIES)
+        .map((membership) => membership.community_id),
+    )
+  })
+
   test("lists Story-registered derivative sources for community members", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
@@ -456,6 +484,32 @@ describe("song artifact catalog routes", () => {
       "asset_ast_global_source",
       "asset_ast_local_source",
     ])
+  })
+
+  test("global derivative sources require membership in the composer community", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const viewer = await exchangeJwt(ctx.env, "global-composer-outsider")
+    const communityOwner = await exchangeJwt(ctx.env, "global-composer-owner")
+    await completeUniqueHumanVerification(ctx.env, communityOwner.accessToken)
+
+    const composerCommunityId = await createCommunityForTest({
+      env: ctx.env,
+      accessToken: communityOwner.accessToken,
+      displayName: "Global Composer Gate Club",
+    })
+
+    const response = await app.request(
+      `http://pirate.test/communities/${composerCommunityId}/derivative-sources?scope=global&kind=song`,
+      {
+        headers: {
+          authorization: `Bearer ${viewer.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(response.status).toBe(404)
   })
 
   test("keeps community scope as the default derivative source behavior", async () => {

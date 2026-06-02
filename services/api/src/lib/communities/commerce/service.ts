@@ -14,6 +14,7 @@ import { fetchSongArtifactBytes } from "../../song-artifacts/song-artifact-stora
 import { sha256Hex } from "../../crypto"
 import { getProfilePublicHandleLabel } from "../../auth/auth-serializers"
 import { listCommunityMembershipProjectionRowsByUserId } from "../../auth/auth-db-community-queries"
+import type { CommunityMembershipProjectionRow } from "../../auth/auth-db-community-rows"
 import type { UserRepository } from "../../auth/repositories"
 import type { ProfileRepository } from "../../auth/repositories"
 import { getControlPlaneClient } from "../../runtime-deps"
@@ -74,6 +75,15 @@ export type DerivativeSourceScope = "community" | "global"
 
 export const MAX_DERIVATIVE_SOURCE_FANOUT_COMMUNITIES = 25
 
+export function resolveDerivativeSourceFanoutCommunityIds(
+  memberships: CommunityMembershipProjectionRow[],
+): string[] {
+  return memberships
+    .filter((membership) => membership.membership_state === "member")
+    .map((membership) => membership.community_id)
+    .slice(0, MAX_DERIVATIVE_SOURCE_FANOUT_COMMUNITIES)
+}
+
 function sortDerivativeSourceRows(rows: DerivativeSourceRow[]): DerivativeSourceRow[] {
   return rows.sort((a, b) => {
     const updatedCompare = b.updated_at.localeCompare(a.updated_at)
@@ -129,9 +139,7 @@ async function listGlobalDerivativeSourceRows(input: {
   const controlPlane = getControlPlaneClient(input.env)
   const memberships = await listCommunityMembershipProjectionRowsByUserId(controlPlane, input.userId)
   const memberMemberships = memberships.filter((membership) => membership.membership_state === "member")
-  const memberCommunityIds = memberMemberships
-    .map((membership) => membership.community_id)
-    .slice(0, MAX_DERIVATIVE_SOURCE_FANOUT_COMMUNITIES)
+  const memberCommunityIds = resolveDerivativeSourceFanoutCommunityIds(memberships)
 
   if (memberMemberships.length > MAX_DERIVATIVE_SOURCE_FANOUT_COMMUNITIES) {
     console.warn("[communities-commerce] derivative source global fan-out capped", {
