@@ -439,9 +439,19 @@ membership_mode: "request",
     )
     expect(feed.status).toBe(200)
     const feedBody = await json(feed) as {
-      items: Array<{ author_community_role?: "owner" | "moderator" | null; post: { title: string | null } }>
+      items: Array<{
+        author_community_role?: "owner" | "moderator" | null
+        post: { title: string | null }
+        community?: {
+          viewer_community_role?: "owner" | "admin" | "moderator" | null
+          viewer_membership_status?: "member" | "not_member" | "banned" | null
+        } | null
+      }>
     }
-    expect(feedBody.items.find((item) => item.post.title === "Owner post")?.author_community_role).toBe("owner")
+    const ownerFeedItem = feedBody.items.find((item) => item.post.title === "Owner post")
+    expect(ownerFeedItem?.author_community_role).toBe("owner")
+    expect(ownerFeedItem?.community?.viewer_community_role).toBe("owner")
+    expect(ownerFeedItem?.community?.viewer_membership_status).toBe("member")
   })
 
   test("community events endpoint returns scheduled event posts ordered by start time", async () => {
@@ -1115,7 +1125,13 @@ membership_mode: "request",
     expect(listedPosts.status).toBe(200)
     const listedPostsBody = await json(listedPosts) as {
       items: Array<{
-        post: { id: string }
+        post: {
+          id: string
+          community?: {
+            viewer_community_role?: "owner" | "admin" | "moderator" | null
+            viewer_membership_status?: "member" | "not_member" | "banned" | null
+          } | null
+        }
         upvote_count: number
         downvote_count: number
         like_count: number

@@ -318,6 +318,7 @@ async function hydratePostRows(input: {
           ageGateViewerState: post.age_gate_policy === "18_plus" ? "proof_required" : null,
           viewerUserId: input.viewerUserId,
         })
+        response.community = preview
         items.push({
           kind: "post",
           post: response,
@@ -398,6 +399,7 @@ async function hydrateCommentRows(input: {
         if (!rootPost) {
           continue
         }
+        rootPost.community = preview
         const viewerVote = await getViewerCommentVote({
           client: db.client,
           commentId: comment.comment_id,

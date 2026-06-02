@@ -210,6 +210,8 @@ describe("getProfileActivity", () => {
       limit: 10,
     })
     expect(posts.posts.map((item) => item.post.post.title)).toEqual(["Public profile post"])
+    expect(posts.posts[0]?.community.community_id).toBe(communityId)
+    expect(posts.posts[0]?.post.community?.community_id).toBe(communityId)
 
     const comments = await getProfileActivity({
       env,
@@ -220,6 +222,8 @@ describe("getProfileActivity", () => {
       limit: 10,
     })
     expect(comments.comments.map((item) => item.comment.comment.body)).toEqual(["Public comment"])
+    expect(comments.comments[0]?.community.community_id).toBe(communityId)
+    expect(comments.comments[0]?.thread_root_post.community?.community_id).toBe(communityId)
 
     const overview = await getProfileActivity({
       env,

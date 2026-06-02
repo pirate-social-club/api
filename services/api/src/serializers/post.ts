@@ -5,6 +5,7 @@ import type {
 } from "@pirate/api-contracts"
 import type { LocalizedPostResponse, Post } from "../types"
 import { serializeCommentThreadSnapshot } from "./comment"
+import { serializeCommunityPreview } from "./community"
 import { unixSeconds } from "./time"
 import { publicCommunityId, publicId, publicPostId } from "../lib/public-ids"
 
@@ -168,6 +169,7 @@ export function serializeLocalizedPostResponse(response: LocalizedPostResponse, 
   }
   return {
     post: serializedPost,
+    community: response.community ? serializeCommunityPreview(response.community) : null,
     author_community_role: response.author_community_role,
     thread_snapshot: response.thread_snapshot ? serializeCommentThreadSnapshot(response.thread_snapshot) : null,
     market_context: response.market_context,

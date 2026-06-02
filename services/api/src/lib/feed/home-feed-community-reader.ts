@@ -1,5 +1,6 @@
 import type { DbExecutor } from "../db-helpers"
 import { openCommunityDb } from "../communities/community-db-factory"
+import { getCommunityPreview } from "../communities/community-preview-service"
 import type { Client } from "../sql-client"
 import { buildLocalizedPostResponse } from "../localization/post-localization-service"
 import { hydrateCrosspostSourcesForResponses } from "../posts/crosspost-source-hydration"
@@ -315,8 +316,17 @@ export async function readHomeFeedCommunityItems(input: {
     const identityStartedAt = performance.now()
     const identity = await getHomeFeedCommunityIdentity(db.client, input.communityId)
     const identityMs = elapsedMs(identityStartedAt)
-    const community = input.baseCommunity
+    const communitySummary = input.baseCommunity
       ? withHomeFeedCommunityIdentity(input.baseCommunity, identity)
+      : null
+    const communityPreview = input.userId
+      ? await getCommunityPreview({
+          env: input.env,
+          userId: input.userId,
+          communityId: input.communityId,
+          locale: input.locale ?? null,
+          communityRepository: input.communityRepository,
+        })
       : null
     const communityItems: HomeFeedItem[] = []
     const postsStartedAt = performance.now()
@@ -375,12 +385,15 @@ export async function readHomeFeedCommunityItems(input: {
       communityRepository: input.communityRepository,
       profileRepository: input.profileRepository,
     })
-    if (community) {
-      const communitySummary = serializeHomeFeedCommunitySummary(community)
+    if (communitySummary) {
+      const serializedCommunitySummary = serializeHomeFeedCommunitySummary(communitySummary)
       for (const job of postReadJobs) {
         communityItems.push({
-          community: communitySummary,
-          post: serializeLocalizedPostResponse(job.response, { surface: "home_feed" }),
+          community: serializedCommunitySummary,
+          post: serializeLocalizedPostResponse({
+            ...job.response,
+            community: communityPreview,
+          }, { surface: "home_feed" }),
         })
       }
     }

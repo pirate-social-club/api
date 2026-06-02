@@ -5,6 +5,7 @@ import {
 } from "./community-post-feed"
 import { getPostById } from "./community-post-query-store"
 import { getLatestThreadSnapshotForRead } from "../comments/community-comment-store"
+import { getCommunityPreview } from "../communities/community-preview-service"
 import { badRequestError, notFoundError } from "../errors"
 import {
   canReadNonPublishedPost,
@@ -135,6 +136,13 @@ export async function getPost(input: {
       ageGateViewerState,
       viewerUserId: input.userId,
     })
+    response.community = await getCommunityPreview({
+      env: input.env,
+      userId: input.userId,
+      communityId: db.communityId,
+      locale: input.locale ?? null,
+      communityRepository: input.communityRepository,
+    })
     await hydrateAndEnqueuePostReadResponses({
       client: db.client,
       communityId: db.communityId,
@@ -250,6 +258,16 @@ export async function listCommunityPosts(input: {
       viewerUserId: input.userId,
       ageGateState,
     })
+    const communityPreview = await getCommunityPreview({
+      env: input.env,
+      userId: input.userId,
+      communityId: input.communityId,
+      locale: input.locale ?? null,
+      communityRepository: input.communityRepository,
+    })
+    for (const item of items) {
+      item.community = communityPreview
+    }
     await hydrateAndEnqueuePostReadResponses({
       client: db.client,
       communityId: input.communityId,

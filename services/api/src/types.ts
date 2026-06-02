@@ -490,6 +490,7 @@ export type CreatePostRequest = CreatePostRequestBase & {
 
 export type LocalizedPostResponse = {
   post: Post
+  community?: CommunityPreview | null
   author_community_role?: "owner" | "moderator" | null
   thread_snapshot: CommentThreadSnapshot | null
   market_context?: MarketContextSummary | null
