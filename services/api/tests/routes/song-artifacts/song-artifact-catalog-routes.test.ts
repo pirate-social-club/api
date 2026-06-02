@@ -43,6 +43,62 @@ type DerivativeSourceListBody = {
   next_cursor: string | null
 }
 
+async function createCommunityForTest(input: {
+  env: Parameters<typeof requestJson>[2]
+  accessToken: string
+  displayName: string
+}): Promise<string> {
+  const response = await requestJson(
+    "http://pirate.test/communities",
+    {
+      display_name: input.displayName,
+      membership_mode: "request",
+      handle_policy: {
+        policy_template: "standard",
+      },
+    },
+    input.env,
+    input.accessToken,
+  )
+  expect(response.status === 201 || response.status === 202).toBe(true)
+  const body = await json(response) as {
+    community: {
+      id: string
+    }
+  }
+  return body.community.id.replace(/^com_/, "")
+}
+
+async function setMembershipProjection(input: {
+  client: { execute: (query: { sql: string; args: unknown[] }) => Promise<unknown> }
+  communityId: string
+  userId: string
+  state: "not_member" | "pending_request" | "member" | "banned"
+  ordinal?: number
+}): Promise<void> {
+  const now = new Date(Date.UTC(2026, 0, 1, 0, input.ordinal ?? 0, 0)).toISOString()
+  await input.client.execute({
+    sql: `
+      INSERT INTO community_membership_projections (
+        projection_id, community_id, user_id, membership_state, role_summary_json, source_updated_at, created_at, updated_at
+      ) VALUES (
+        ?1, ?2, ?3, ?4, NULL, ?5, ?5, ?5
+      )
+      ON CONFLICT(community_id, user_id) DO UPDATE SET
+        membership_state = excluded.membership_state,
+        source_updated_at = excluded.source_updated_at,
+        updated_at = excluded.updated_at
+    `,
+    args: [
+      `cmp_derivative_${input.communityId}_${input.userId}`,
+      input.communityId,
+      input.userId,
+      input.state,
+      now,
+    ],
+  })
+}
+
 async function insertDerivativeSourceAsset(input: {
   communityDbRoot: string
   communityId: string
@@ -331,6 +387,279 @@ describe("song artifact catalog routes", () => {
       ctx.env,
     )
     expect(outsiderSources.status).toBe(404)
+  })
+
+  test("lists global derivative sources across member communities", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const viewer = await exchangeJwt(ctx.env, "global-derivative-viewer")
+    await completeUniqueHumanVerification(ctx.env, viewer.accessToken)
+    const sourceOwner = await exchangeJwt(ctx.env, "global-derivative-source-owner")
+    await completeUniqueHumanVerification(ctx.env, sourceOwner.accessToken)
+
+    const sourceCommunityId = await createCommunityForTest({
+      env: ctx.env,
+      accessToken: sourceOwner.accessToken,
+      displayName: "Global Source Club",
+    })
+    const composerCommunityId = await createCommunityForTest({
+      env: ctx.env,
+      accessToken: viewer.accessToken,
+      displayName: "Global Composer Club",
+    })
+    await setMembershipProjection({
+      client: ctx.client,
+      communityId: sourceCommunityId,
+      userId: viewer.userId,
+      state: "member",
+      ordinal: 1,
+    })
+
+    await insertDerivativeSourceAsset({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: sourceCommunityId,
+      creatorUserId: sourceOwner.userId,
+      assetId: "ast_global_source",
+      title: "Across the Water",
+      assetKind: "song_audio",
+      rightsBasis: "original",
+      publicationStatus: "story_published",
+      storyIpId: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      storyLicenseTermsId: "21",
+    })
+    await insertDerivativeSourceAsset({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: composerCommunityId,
+      creatorUserId: viewer.userId,
+      assetId: "ast_local_source",
+      title: "Local Harbor",
+      assetKind: "song_audio",
+      rightsBasis: "original",
+      publicationStatus: "story_published",
+      storyIpId: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      storyLicenseTermsId: "22",
+    })
+
+    const response = await app.request(
+      `http://pirate.test/communities/${composerCommunityId}/derivative-sources?scope=global&kind=song`,
+      {
+        headers: {
+          authorization: `Bearer ${viewer.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(response.status).toBe(200)
+    const body = await json(response) as DerivativeSourceListBody
+    expect(body.items.map((item) => item.asset).sort()).toEqual([
+      "asset_ast_global_source",
+      "asset_ast_local_source",
+    ])
+  })
+
+  test("keeps community scope as the default derivative source behavior", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const viewer = await exchangeJwt(ctx.env, "community-scope-derivative-viewer")
+    await completeUniqueHumanVerification(ctx.env, viewer.accessToken)
+    const sourceOwner = await exchangeJwt(ctx.env, "community-scope-source-owner")
+    await completeUniqueHumanVerification(ctx.env, sourceOwner.accessToken)
+
+    const sourceCommunityId = await createCommunityForTest({
+      env: ctx.env,
+      accessToken: sourceOwner.accessToken,
+      displayName: "Community Scope Source Club",
+    })
+    const composerCommunityId = await createCommunityForTest({
+      env: ctx.env,
+      accessToken: viewer.accessToken,
+      displayName: "Community Scope Composer Club",
+    })
+    await setMembershipProjection({
+      client: ctx.client,
+      communityId: sourceCommunityId,
+      userId: viewer.userId,
+      state: "member",
+    })
+
+    await insertDerivativeSourceAsset({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: sourceCommunityId,
+      creatorUserId: sourceOwner.userId,
+      assetId: "ast_other_community_source",
+      title: "Other Community Source",
+      assetKind: "song_audio",
+      rightsBasis: "original",
+      publicationStatus: "story_published",
+    })
+    await insertDerivativeSourceAsset({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: composerCommunityId,
+      creatorUserId: viewer.userId,
+      assetId: "ast_composer_community_source",
+      title: "Composer Community Source",
+      assetKind: "song_audio",
+      rightsBasis: "original",
+      publicationStatus: "story_published",
+    })
+
+    for (const scopeQuery of ["scope=community&", ""]) {
+      const response = await app.request(
+        `http://pirate.test/communities/${composerCommunityId}/derivative-sources?${scopeQuery}kind=song`,
+        {
+          headers: {
+            authorization: `Bearer ${viewer.accessToken}`,
+          },
+        },
+        ctx.env,
+      )
+      expect(response.status).toBe(200)
+      const body = await json(response) as DerivativeSourceListBody
+      expect(body.items.map((item) => item.asset)).toEqual(["asset_ast_composer_community_source"])
+    }
+  })
+
+  test("global derivative sources do not leak banned or non-member communities", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const viewer = await exchangeJwt(ctx.env, "global-access-derivative-viewer")
+    await completeUniqueHumanVerification(ctx.env, viewer.accessToken)
+    const sourceOwner = await exchangeJwt(ctx.env, "global-access-source-owner")
+    await completeUniqueHumanVerification(ctx.env, sourceOwner.accessToken)
+
+    const bannedCommunityId = await createCommunityForTest({
+      env: ctx.env,
+      accessToken: sourceOwner.accessToken,
+      displayName: "Banned Source Club",
+    })
+    const nonMemberCommunityId = await createCommunityForTest({
+      env: ctx.env,
+      accessToken: sourceOwner.accessToken,
+      displayName: "Non Member Source Club",
+    })
+    const composerCommunityId = await createCommunityForTest({
+      env: ctx.env,
+      accessToken: viewer.accessToken,
+      displayName: "Access Composer Club",
+    })
+    await setMembershipProjection({
+      client: ctx.client,
+      communityId: bannedCommunityId,
+      userId: viewer.userId,
+      state: "banned",
+    })
+
+    await insertDerivativeSourceAsset({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: bannedCommunityId,
+      creatorUserId: sourceOwner.userId,
+      assetId: "ast_banned_source",
+      title: "Banned Source",
+      assetKind: "song_audio",
+      rightsBasis: "original",
+      publicationStatus: "story_published",
+    })
+    await insertDerivativeSourceAsset({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: nonMemberCommunityId,
+      creatorUserId: sourceOwner.userId,
+      assetId: "ast_non_member_source",
+      title: "Non Member Source",
+      assetKind: "song_audio",
+      rightsBasis: "original",
+      publicationStatus: "story_published",
+    })
+
+    const response = await app.request(
+      `http://pirate.test/communities/${composerCommunityId}/derivative-sources?scope=global&kind=song`,
+      {
+        headers: {
+          authorization: `Bearer ${viewer.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(response.status).toBe(200)
+    const body = await json(response) as DerivativeSourceListBody
+    expect(body.items.map((item) => item.asset)).not.toContain("asset_ast_banned_source")
+    expect(body.items.map((item) => item.asset)).not.toContain("asset_ast_non_member_source")
+  })
+
+  test("global derivative source kind and query filters still apply", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const viewer = await exchangeJwt(ctx.env, "global-filter-derivative-viewer")
+    await completeUniqueHumanVerification(ctx.env, viewer.accessToken)
+    const sourceOwner = await exchangeJwt(ctx.env, "global-filter-source-owner")
+    await completeUniqueHumanVerification(ctx.env, sourceOwner.accessToken)
+
+    const sourceCommunityId = await createCommunityForTest({
+      env: ctx.env,
+      accessToken: sourceOwner.accessToken,
+      displayName: "Global Filter Source Club",
+    })
+    const composerCommunityId = await createCommunityForTest({
+      env: ctx.env,
+      accessToken: viewer.accessToken,
+      displayName: "Global Filter Composer Club",
+    })
+    await setMembershipProjection({
+      client: ctx.client,
+      communityId: sourceCommunityId,
+      userId: viewer.userId,
+      state: "member",
+    })
+
+    await insertDerivativeSourceAsset({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: sourceCommunityId,
+      creatorUserId: sourceOwner.userId,
+      assetId: "ast_filter_song",
+      title: "Needle Song",
+      assetKind: "song_audio",
+      rightsBasis: "original",
+      publicationStatus: "story_published",
+    })
+    await insertDerivativeSourceAsset({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: sourceCommunityId,
+      creatorUserId: sourceOwner.userId,
+      assetId: "ast_filter_video",
+      title: "Needle Video",
+      assetKind: "video_file",
+      rightsBasis: "original",
+      publicationStatus: "story_published",
+    })
+
+    const videoResponse = await app.request(
+      `http://pirate.test/communities/${composerCommunityId}/derivative-sources?scope=global&kind=video&q=Needle`,
+      {
+        headers: {
+          authorization: `Bearer ${viewer.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(videoResponse.status).toBe(200)
+    const videoBody = await json(videoResponse) as DerivativeSourceListBody
+    expect(videoBody.items.map((item) => item.asset)).toEqual(["asset_ast_filter_video"])
+
+    const missingResponse = await app.request(
+      `http://pirate.test/communities/${composerCommunityId}/derivative-sources?scope=global&kind=song&q=Missing`,
+      {
+        headers: {
+          authorization: `Bearer ${viewer.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(missingResponse.status).toBe(200)
+    const missingBody = await json(missingResponse) as DerivativeSourceListBody
+    expect(missingBody.items).toEqual([])
   })
 
   test("requires derivative references when ACRCloud custom bucket returns a match", async () => {
