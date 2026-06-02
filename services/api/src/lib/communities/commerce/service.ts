@@ -150,6 +150,8 @@ async function listGlobalDerivativeSourceRows(input: {
 
   const perCommunityFetch = Math.max(input.limit * 2, 50)
   const rows: DerivativeSourceRow[] = []
+  // Keep this sequential until metrics show picker p95 >1.5s for users with >=10 memberships.
+  // If parallelized, use bounded concurrency to avoid burst-opening too many community DB clients.
   for (const communityId of memberCommunityIds) {
     try {
       const communityRows = await listCommunityDerivativeSourceRows({
