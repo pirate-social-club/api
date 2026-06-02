@@ -4,6 +4,7 @@ import { createClient } from "@libsql/client"
 import type { CreatePostRequest, Post } from "../../types"
 import { assertPostCreateRequest, insertPost } from "./community-post-create-store"
 import { sortPublishedLocalizedPostFeedItems } from "./community-post-feed"
+import { getPostReadMetrics } from "./community-post-metrics-store"
 import { MAX_POST_JSON_PROJECTION_LENGTH } from "./community-post-projection"
 import { getPostById } from "./community-post-query-store"
 
@@ -248,6 +249,69 @@ describe("sortPublishedLocalizedPostFeedItems", () => {
       "pst_recent",
       "pst_engaged",
     ])
+  })
+
+  test("sorts best engagement above stale long-form richness", () => {
+    const staleLongPost = createFeedItem({
+      body: "x".repeat(12_251),
+      createdAt: "2026-04-14T00:00:00.000Z",
+      id: "pst_stale_long",
+      title: "Long",
+    })
+    const activePost = createFeedItem({
+      commentCount: 4,
+      createdAt: "2026-04-19T00:00:00.000Z",
+      id: "pst_active",
+      title: "Active",
+      upvotes: 1,
+    })
+
+    const sorted = sortPublishedLocalizedPostFeedItems([staleLongPost, activePost], "best", now)
+
+    expect(sorted.map((item) => item.post.post_id)).toEqual([
+      "pst_active",
+      "pst_stale_long",
+    ])
+  })
+})
+
+describe("getPostReadMetrics", () => {
+  test("counts published comments for direct post reads without a thread snapshot", async () => {
+    const client = createClient({ url: "file::memory:" })
+    clients.push(client)
+    await client.batch([
+      "CREATE TABLE post_votes (post_id TEXT NOT NULL, user_id TEXT NOT NULL, vote_value INTEGER NOT NULL)",
+      "CREATE TABLE comments (thread_root_post_id TEXT NOT NULL, status TEXT NOT NULL)",
+      "CREATE TABLE post_reactions (post_id TEXT NOT NULL, reaction_key TEXT NOT NULL)",
+    ])
+    await client.batch([
+      {
+        sql: "INSERT INTO post_votes (post_id, user_id, vote_value) VALUES (?1, ?2, ?3), (?1, ?4, ?5)",
+        args: ["pst_metrics", "usr_viewer", 1, "usr_other", -1],
+      },
+      {
+        sql: "INSERT INTO comments (thread_root_post_id, status) VALUES (?1, 'published'), (?1, 'published'), (?1, 'deleted')",
+        args: ["pst_metrics"],
+      },
+      {
+        sql: "INSERT INTO post_reactions (post_id, reaction_key) VALUES (?1, 'like'), (?1, 'bookmark')",
+        args: ["pst_metrics"],
+      },
+    ])
+
+    const metrics = await getPostReadMetrics({
+      executor: client,
+      postId: "pst_metrics",
+      viewerUserId: "usr_viewer",
+    })
+
+    expect(metrics).toEqual({
+      upvote_count: 1,
+      downvote_count: 1,
+      comment_count: 2,
+      like_count: 1,
+      viewer_vote: 1,
+    })
   })
 })
 

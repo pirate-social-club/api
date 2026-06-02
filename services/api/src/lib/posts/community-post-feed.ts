@@ -47,9 +47,13 @@ function getFeedItemRichnessScore(item: Pick<PublishedLocalizedPostFeedItem, "po
     + (item.post.media_refs?.length ?? 0) * 120
 }
 
+function getBestFeedRichnessBonus(item: Pick<PublishedLocalizedPostFeedItem, "post">): number {
+  return Math.min(getFeedItemRichnessScore(item) * 0.05, 6)
+}
+
 function getBestFeedRank(item: PublishedLocalizedPostFeedItem, now: number): number {
   const ageHours = Math.max(0, (now - getFeedItemCreatedAtMs(item)) / 3_600_000)
-  return (getFeedItemEngagementScore(item) + getFeedItemRichnessScore(item) * 0.05) / Math.pow(ageHours + 2, 1.5)
+  return (getFeedItemEngagementScore(item) + getBestFeedRichnessBonus(item)) / Math.pow(ageHours + 2, 1.5)
 }
 
 function parseOffsetCursor(cursor: string | null | undefined): number {

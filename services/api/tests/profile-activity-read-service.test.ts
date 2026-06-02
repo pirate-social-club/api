@@ -141,6 +141,15 @@ describe("getProfileActivity", () => {
       userRepository: users,
       communityRepository: repo,
     })
+    await createComment({
+      env,
+      userId: "usr_owner",
+      communityId,
+      threadRootPostId: publicPostId,
+      body: { body: "Comment on profile post" },
+      userRepository: users,
+      communityRepository: repo,
+    })
     const anonymousComment = await createComment({
       env,
       userId: "usr_alice",
@@ -212,6 +221,7 @@ describe("getProfileActivity", () => {
     expect(posts.posts.map((item) => item.post.post.title)).toEqual(["Public profile post"])
     expect(posts.posts[0]?.community.community_id).toBe(communityId)
     expect(posts.posts[0]?.post.community?.community_id).toBe(communityId)
+    expect(posts.posts[0]?.post.comment_count).toBe(1)
 
     const comments = await getProfileActivity({
       env,
@@ -224,6 +234,7 @@ describe("getProfileActivity", () => {
     expect(comments.comments.map((item) => item.comment.comment.body)).toEqual(["Public comment"])
     expect(comments.comments[0]?.community.community_id).toBe(communityId)
     expect(comments.comments[0]?.thread_root_post.community?.community_id).toBe(communityId)
+    expect(comments.comments[0]?.thread_root_post.comment_count).toBe(2)
 
     const overview = await getProfileActivity({
       env,

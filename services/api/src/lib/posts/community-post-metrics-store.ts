@@ -57,6 +57,7 @@ export async function getPostReadMetrics(input: {
 }): Promise<{
   upvote_count: number
   downvote_count: number
+  comment_count: number
   like_count: number
   viewer_vote: -1 | 1 | null
 }> {
@@ -77,6 +78,12 @@ export async function getPostReadMetrics(input: {
         ) AS downvote_count,
         (
           SELECT COUNT(*)
+          FROM comments
+          WHERE thread_root_post_id = ?1
+            AND status = 'published'
+        ) AS comment_count,
+        (
+          SELECT COUNT(*)
           FROM post_reactions
           WHERE post_id = ?1
             AND reaction_key = 'like'
@@ -95,6 +102,7 @@ export async function getPostReadMetrics(input: {
   return {
     upvote_count: requiredNumber(row, "upvote_count"),
     downvote_count: requiredNumber(row, "downvote_count"),
+    comment_count: requiredNumber(row, "comment_count"),
     like_count: requiredNumber(row, "like_count"),
     viewer_vote: numberOrNull(rowValue(row, "viewer_vote")) as -1 | 1 | null,
   }

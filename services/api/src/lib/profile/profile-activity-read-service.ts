@@ -343,10 +343,16 @@ async function buildThreadRootPost(input: {
   if (!post || !isPubliclyReadablePost(post)) {
     return null
   }
+  const metrics = await getPostReadMetrics({
+    executor: input.client,
+    postId: post.post_id,
+    viewerUserId: input.viewerUserId,
+  })
   return await buildLocalizedPostResponse({
     executor: input.client,
     post,
     locale: input.locale,
+    metrics,
     threadSnapshot: null,
     ageGateViewerState: post.age_gate_policy === "18_plus" ? "proof_required" : null,
     viewerUserId: input.viewerUserId,
