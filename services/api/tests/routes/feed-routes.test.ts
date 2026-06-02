@@ -182,10 +182,14 @@ describe("feed routes", () => {
           display_name: string
         }
         post: {
-          community: {
+          community: null
+          viewer_gate_state: {
+            community_id: string
+            community_display_name: string
             viewer_community_role: string | null
             viewer_membership_status: string | null
             membership_gate_summaries: unknown[]
+            gate_match_mode: "all" | "any" | null
           } | null
           post: {
             id: string
@@ -203,9 +207,12 @@ describe("feed routes", () => {
     expect(body.items[0]?.community.display_name).toBe("Feed Reader Club")
     expect(body.items[0]?.post.post.id).toBe(createdPostBody.id)
     expect(body.items[0]?.post.post.title).toBe("Home feed projection")
-    expect(body.items[0]?.post.community?.viewer_community_role).toBe("owner")
-    expect(body.items[0]?.post.community?.viewer_membership_status).toBe("member")
-    expect(Array.isArray(body.items[0]?.post.community?.membership_gate_summaries)).toBe(true)
+    expect(body.items[0]?.post.community).toBeNull()
+    expect(body.items[0]?.post.viewer_gate_state?.community_id).toBe(`com_${communityId}`)
+    expect(body.items[0]?.post.viewer_gate_state?.community_display_name).toBe("Feed Reader Club")
+    expect(body.items[0]?.post.viewer_gate_state?.viewer_community_role).toBe("owner")
+    expect(body.items[0]?.post.viewer_gate_state?.viewer_membership_status).toBe("member")
+    expect(Array.isArray(body.items[0]?.post.viewer_gate_state?.membership_gate_summaries)).toBe(true)
     expect(body.top_communities.map((community) => community.display_name)).toContain("Feed Reader Club")
     expect(body.next_cursor).toBeNull()
   })

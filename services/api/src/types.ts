@@ -192,6 +192,7 @@ type DisclosedQualifierSnapshot = NonNullable<ContractPost["disclosed_qualifiers
 type DonationPartnerSummary = NonNullable<ContractCommunity["donation_partner"]>
 type HumanVerificationLane = ContractCommunity["human_verification_lane"]
 type MarketContextSummary = NonNullable<ContractLocalizedPostResponse["market_context"]>
+type PostViewerGateState = NonNullable<ContractLocalizedPostResponse["viewer_gate_state"]>
 type MediaDescriptor = NonNullable<ContractPost["media_refs"]>[number]
 type PostCreatorRelation = NonNullable<ContractPost["creator_relation"]>
 type PostEmbed = NonNullable<ContractPost["embeds"]>[number]
@@ -491,6 +492,7 @@ export type CreatePostRequest = CreatePostRequestBase & {
 export type LocalizedPostResponse = {
   post: Post
   community?: CommunityPreview | null
+  viewer_gate_state?: PostViewerGateState | null
   author_community_role?: "owner" | "moderator" | null
   thread_snapshot: CommentThreadSnapshot | null
   market_context?: MarketContextSummary | null

@@ -1,13 +1,22 @@
 import type { DbExecutor } from "../db-helpers"
 import { openCommunityDb } from "../communities/community-db-factory"
-import { getCommunityPreview } from "../communities/community-preview-service"
 import type { Client } from "../sql-client"
+import {
+  buildMembershipGateSummariesFromPolicy,
+  getGatePolicyMatchMode,
+} from "../communities/membership/gates"
+import {
+  canAccessCommunity,
+  getCommunityMembershipState,
+} from "../communities/membership/membership-state-store"
+import { getMembershipGatePolicy } from "../communities/membership/gate-policy-store"
 import { buildLocalizedPostResponse } from "../localization/post-localization-service"
 import { hydrateCrosspostSourcesForResponses } from "../posts/crosspost-source-hydration"
 import { enqueueEmbedHydrateOnReadIfNeeded, enqueuePostTranslationOnReadIfNeeded } from "../posts/post-jobs"
 import { withRequestControlPlaneClients } from "../runtime-deps"
 import { numberOrNull, requiredString, rowValue } from "../sql-row"
 import { serializeLocalizedPostResponse } from "../../serializers/post"
+import { publicCommunityId } from "../public-ids"
 import {
   postAssetStoryJoinForSchema,
   postSelectColumnsForSchema,
@@ -34,6 +43,7 @@ import type {
   Env,
   HomeFeedCommunitySummary,
   HomeFeedItem,
+  LocalizedPostResponse,
   Post,
 } from "../../types"
 
@@ -48,6 +58,8 @@ export type HomeFeedCommunityIdentity = {
   displayName: string
   avatarRef: string | null
 }
+
+type PostViewerGateState = NonNullable<LocalizedPostResponse["viewer_gate_state"]>
 
 export type HomeFeedCommunityTiming = {
   community_id: string
@@ -269,6 +281,36 @@ export function withHomeFeedCommunityIdentity(
   }
 }
 
+async function getHomeFeedViewerGateState(input: {
+  client: Client
+  communityId: string
+  displayName: string
+  userId: string | null
+}): Promise<PostViewerGateState | null> {
+  if (!input.userId) {
+    return null
+  }
+
+  const [gatePolicy, membership] = await Promise.all([
+    getMembershipGatePolicy(input.client, input.communityId),
+    getCommunityMembershipState(input.client, input.communityId, input.userId),
+  ])
+
+  return {
+    community_id: publicCommunityId(input.communityId),
+    community_display_name: input.displayName,
+    viewer_community_role: membership.role_status === "active" ? membership.role : null,
+    viewer_membership_status:
+      membership.membership_status === "banned"
+        ? "banned"
+        : canAccessCommunity(membership)
+          ? "member"
+          : "not_member",
+    membership_gate_summaries: buildMembershipGateSummariesFromPolicy(gatePolicy),
+    gate_match_mode: gatePolicy ? getGatePolicyMatchMode(gatePolicy) : null,
+  }
+}
+
 export async function resolveTopCommunitiesIdentity(input: {
   env: Env
   communityRepository: HomeFeedCommunityRepository
@@ -319,15 +361,12 @@ export async function readHomeFeedCommunityItems(input: {
     const communitySummary = input.baseCommunity
       ? withHomeFeedCommunityIdentity(input.baseCommunity, identity)
       : null
-    const communityPreview = input.userId
-      ? await getCommunityPreview({
-          env: input.env,
-          userId: input.userId,
-          communityId: input.communityId,
-          locale: input.locale ?? null,
-          communityRepository: input.communityRepository,
-        })
-      : null
+    const viewerGateState = await getHomeFeedViewerGateState({
+      client: db.client,
+      communityId: input.communityId,
+      displayName: communitySummary?.display_name ?? identity?.displayName ?? input.communityId,
+      userId: input.userId,
+    })
     const communityItems: HomeFeedItem[] = []
     const postsStartedAt = performance.now()
     const postsById = await listPostsById(db.client, input.rows.map((row) => row.source_post_id))
@@ -392,7 +431,7 @@ export async function readHomeFeedCommunityItems(input: {
           community: serializedCommunitySummary,
           post: serializeLocalizedPostResponse({
             ...job.response,
-            community: communityPreview,
+            viewer_gate_state: viewerGateState,
           }, { surface: "home_feed" }),
         })
       }

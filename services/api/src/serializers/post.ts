@@ -170,6 +170,7 @@ export function serializeLocalizedPostResponse(response: LocalizedPostResponse, 
   return {
     post: serializedPost,
     community: response.community ? serializeCommunityPreview(response.community) : null,
+    viewer_gate_state: response.viewer_gate_state ?? null,
     author_community_role: response.author_community_role,
     thread_snapshot: response.thread_snapshot ? serializeCommentThreadSnapshot(response.thread_snapshot) : null,
     market_context: response.market_context,

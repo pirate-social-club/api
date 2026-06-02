@@ -1810,6 +1810,7 @@ export type PostDerivativeSource = {
 export type LocalizedPostResponse = {
   post: Post;
   community?: CommunityPreview | null;
+  viewer_gate_state?: PostViewerGateState | null;
   author_community_role?: "owner" | "moderator" | null;
   thread_snapshot: CommentThreadSnapshot | null;
   market_context?: MarketContextSummary | null;
@@ -1836,6 +1837,15 @@ export type LocalizedPostResponse = {
   translated_caption?: string | null;
   translated_embeds?: Array<LocalizedPostEmbedTranslation> | null;
   source_hash: string;
+};
+
+export type PostViewerGateState = {
+  community_id: string;
+  community_display_name: string;
+  viewer_community_role: "owner" | "admin" | "moderator" | null;
+  viewer_membership_status: "member" | "not_member" | "banned" | null;
+  membership_gate_summaries: Array<MembershipGateSummary>;
+  gate_match_mode?: "all" | "any" | null;
 };
 
 export type LocalizedPostEmbedTranslation = {
