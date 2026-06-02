@@ -9,7 +9,7 @@ import {
   getCommunityPricingPolicy,
   getCommunityListing,
   getCommunityPurchase,
-  listCommunityDerivativeSources,
+  listDerivativeSources,
   listCommunityListings,
   listCommunityPurchases,
   preflightCommunityPurchaseQuote,
@@ -18,6 +18,7 @@ import {
   updateCommunityMoneyPolicy,
   updateCommunityPricingPolicy,
   updateCommunityListing,
+  type DerivativeSourceScope,
 } from "../lib/communities/commerce/service"
 import { getCommunity } from "../lib/communities/membership/community-read-service"
 import { badRequestError } from "../lib/errors"
@@ -69,6 +70,16 @@ function derivativeSourceKind(value: string | undefined): DerivativeSourceKind |
     return "song"
   }
   throw badRequestError("Invalid derivative source kind")
+}
+
+function derivativeSourceScope(value: string | undefined): DerivativeSourceScope {
+  if (value === undefined || value.trim() === "") {
+    return "community"
+  }
+  if (value === "community" || value === "global") {
+    return value
+  }
+  throw badRequestError("Invalid derivative source scope")
 }
 
 export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedEnv>): void {
@@ -130,9 +141,12 @@ export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedE
 
   communities.get("/:communityId/derivative-sources", async (c) => {
     const { actor, communityId, communityRepository, profileRepository } = await getResolvedCommunityRouteContext(c)
-    const result = await listCommunityDerivativeSources({
+    const scope = derivativeSourceScope(c.req.query("scope"))
+    // TODO: Replace global fan-out with a control-plane Story-registered asset projection.
+    const result = await listDerivativeSources({
       env: c.env,
       userId: actor.userId,
+      scope,
       communityId,
       kind: derivativeSourceKind(c.req.query("kind")),
       query: c.req.query("q") ?? null,

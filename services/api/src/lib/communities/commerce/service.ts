@@ -13,8 +13,10 @@ import { isPubliclyReadablePost } from "../../posts/post-access"
 import { fetchSongArtifactBytes } from "../../song-artifacts/song-artifact-storage"
 import { sha256Hex } from "../../crypto"
 import { getProfilePublicHandleLabel } from "../../auth/auth-serializers"
+import { listCommunityMembershipProjectionRowsByUserId } from "../../auth/auth-db-community-queries"
 import type { UserRepository } from "../../auth/repositories"
 import type { ProfileRepository } from "../../auth/repositories"
+import { getControlPlaneClient } from "../../runtime-deps"
 import {
   isStoryRoyaltyRegistrationConfigured,
   maybeRegisterStoryRoyaltyForAsset,
@@ -66,6 +68,139 @@ function derivativeSourceStoryRef(row: DerivativeSourceRow): string | null {
     return null
   }
   return `story:ip:${storyIpId}#licenseTermsId=${storyLicenseTermsId}`
+}
+
+export type DerivativeSourceScope = "community" | "global"
+
+export const MAX_DERIVATIVE_SOURCE_FANOUT_COMMUNITIES = 25
+
+function sortDerivativeSourceRows(rows: DerivativeSourceRow[]): DerivativeSourceRow[] {
+  return rows.sort((a, b) => {
+    const updatedCompare = b.updated_at.localeCompare(a.updated_at)
+    if (updatedCompare !== 0) return updatedCompare
+    return b.asset_id.localeCompare(a.asset_id)
+  })
+}
+
+async function requireDerivativeSourceComposerCommunity(input: {
+  env: Env
+  userId: string
+  communityId: string
+  communityRepository: CommunityDatabaseBindingRepository
+}): Promise<void> {
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  try {
+    await requireCommunityMember(db.client, input.communityId, input.userId)
+  } finally {
+    db.close()
+  }
+}
+
+async function listCommunityDerivativeSourceRows(input: {
+  env: Env
+  communityId: string
+  kind?: DerivativeSourceKind | null
+  query?: string | null
+  limit: number
+  communityRepository: CommunityDatabaseBindingRepository
+}): Promise<DerivativeSourceRow[]> {
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  try {
+    return await listDerivativeSourceRows({
+      client: db.client,
+      communityId: input.communityId,
+      kind: input.kind,
+      query: input.query,
+      limit: input.limit,
+    })
+  } finally {
+    db.close()
+  }
+}
+
+async function listGlobalDerivativeSourceRows(input: {
+  env: Env
+  userId: string
+  kind?: DerivativeSourceKind | null
+  query?: string | null
+  limit: number
+  communityRepository: CommunityDatabaseBindingRepository
+}): Promise<DerivativeSourceRow[]> {
+  const controlPlane = getControlPlaneClient(input.env)
+  const memberships = await listCommunityMembershipProjectionRowsByUserId(controlPlane, input.userId)
+  const memberMemberships = memberships.filter((membership) => membership.membership_state === "member")
+  const memberCommunityIds = memberMemberships
+    .map((membership) => membership.community_id)
+    .slice(0, MAX_DERIVATIVE_SOURCE_FANOUT_COMMUNITIES)
+
+  if (memberMemberships.length > MAX_DERIVATIVE_SOURCE_FANOUT_COMMUNITIES) {
+    console.warn("[communities-commerce] derivative source global fan-out capped", {
+      userId: input.userId,
+      selectedCommunities: MAX_DERIVATIVE_SOURCE_FANOUT_COMMUNITIES,
+    })
+  }
+
+  const perCommunityFetch = Math.max(input.limit * 2, 50)
+  const rows: DerivativeSourceRow[] = []
+  for (const communityId of memberCommunityIds) {
+    try {
+      const communityRows = await listCommunityDerivativeSourceRows({
+        env: input.env,
+        communityId,
+        kind: input.kind,
+        query: input.query,
+        limit: perCommunityFetch,
+        communityRepository: input.communityRepository,
+      })
+      rows.push(...communityRows)
+    } catch (error) {
+      console.warn("[communities-commerce] derivative source global fan-out community skipped", {
+        communityId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  return sortDerivativeSourceRows(rows).slice(0, input.limit)
+}
+
+async function derivativeSourceRowsToResponse(input: {
+  rows: DerivativeSourceRow[]
+  profileRepository: ProfileRepository
+}): Promise<DerivativeSourceListResponse> {
+  const creatorUserIds = Array.from(new Set(input.rows.map((row) => row.creator_user_id)))
+  const profilesByUserId = new Map(await Promise.all(creatorUserIds.map(async (userId) => [
+    userId,
+    await input.profileRepository.getProfileByUserId(userId).catch(() => null),
+  ] as const)))
+  const items: DerivativeSource[] = input.rows.map((row) => {
+    const profile = profilesByUserId.get(row.creator_user_id) ?? null
+    const sourceRef = derivativeSourceStoryRef(row)
+    if (!sourceRef) {
+      throw new Error("Derivative source is missing Story registration fields")
+    }
+    return {
+      id: `asset_${row.asset_id}`,
+      object: "derivative_source",
+      community: `com_${row.community_id}`,
+      asset: `asset_${row.asset_id}`,
+      source_ref: sourceRef,
+      title: row.display_title?.trim() || "Untitled asset",
+      kind: derivativeSourceKindFromAssetKind(row.asset_kind),
+      story_ip: row.story_ip_id!,
+      story_license_terms: row.story_license_terms_id!,
+      license_preset: row.license_preset,
+      commercial_rev_share_pct: row.commercial_rev_share_pct,
+      creator_user: `usr_${row.creator_user_id}`,
+      creator_handle: profile ? getProfilePublicHandleLabel(profile) : null,
+      creator_display_name: profile?.display_name ?? null,
+    }
+  })
+
+  return {
+    items,
+    next_cursor: null,
+  }
 }
 
 function sanitizeStoryRegistrationFailure(value: string | null): string | null {
@@ -531,52 +666,59 @@ export async function listCommunityDerivativeSources(input: {
   communityRepository: CommunityDatabaseBindingRepository
   profileRepository: ProfileRepository
 }): Promise<DerivativeSourceListResponse> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
-  try {
-    await requireCommunityMember(db.client, input.communityId, input.userId)
-    const rows = await listDerivativeSourceRows({
-      client: db.client,
+  return await listDerivativeSources({
+    ...input,
+    scope: "community",
+  })
+}
+
+export async function listDerivativeSources(input: {
+  env: Env
+  userId: string
+  scope: DerivativeSourceScope
+  communityId: string
+  kind?: DerivativeSourceKind | null
+  query?: string | null
+  limit: number
+  communityRepository: CommunityDatabaseBindingRepository
+  profileRepository: ProfileRepository
+}): Promise<DerivativeSourceListResponse> {
+  let rows: DerivativeSourceRow[]
+  if (input.scope === "global") {
+    await requireDerivativeSourceComposerCommunity({
+      env: input.env,
+      userId: input.userId,
       communityId: input.communityId,
+      communityRepository: input.communityRepository,
+    })
+    rows = await listGlobalDerivativeSourceRows({
+      env: input.env,
+      userId: input.userId,
       kind: input.kind,
       query: input.query,
       limit: input.limit,
+      communityRepository: input.communityRepository,
     })
-    const creatorUserIds = Array.from(new Set(rows.map((row) => row.creator_user_id)))
-    const profilesByUserId = new Map(await Promise.all(creatorUserIds.map(async (userId) => [
-      userId,
-      await input.profileRepository.getProfileByUserId(userId).catch(() => null),
-    ] as const)))
-    const items: DerivativeSource[] = rows.map((row) => {
-      const profile = profilesByUserId.get(row.creator_user_id) ?? null
-      const sourceRef = derivativeSourceStoryRef(row)
-      if (!sourceRef) {
-        throw new Error("Derivative source is missing Story registration fields")
-      }
-      return {
-        id: `asset_${row.asset_id}`,
-        object: "derivative_source",
-        community: `com_${row.community_id}`,
-        asset: `asset_${row.asset_id}`,
-        source_ref: sourceRef,
-        title: row.display_title?.trim() || "Untitled asset",
-        kind: derivativeSourceKindFromAssetKind(row.asset_kind),
-        story_ip: row.story_ip_id!,
-        story_license_terms: row.story_license_terms_id!,
-        license_preset: row.license_preset,
-        commercial_rev_share_pct: row.commercial_rev_share_pct,
-        creator_user: `usr_${row.creator_user_id}`,
-        creator_handle: profile ? getProfilePublicHandleLabel(profile) : null,
-        creator_display_name: profile?.display_name ?? null,
-      }
-    })
-
-    return {
-      items,
-      next_cursor: null,
+  } else {
+    const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+    try {
+      await requireCommunityMember(db.client, input.communityId, input.userId)
+      rows = await listDerivativeSourceRows({
+        client: db.client,
+        communityId: input.communityId,
+        kind: input.kind,
+        query: input.query,
+        limit: input.limit,
+      })
+    } finally {
+      db.close()
     }
-  } finally {
-    db.close()
   }
+
+  return await derivativeSourceRowsToResponse({
+    rows,
+    profileRepository: input.profileRepository,
+  })
 }
 
 export async function resolveCommunityAssetAccess(input: {
