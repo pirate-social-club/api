@@ -1899,6 +1899,7 @@ export type CommunityPreview = {
   moderators: Array<CommunityRoleSummary>;
   reference_links?: Array<CommunityReferenceLinkPublic> | null;
   membership_gate_summaries: Array<MembershipGateSummary>;
+  gate_match_mode?: "all" | "any" | null;
   rules: Array<CommunityRule>;
   viewer_membership_status?: "member" | "not_member" | "banned" | null;
   viewer_community_role?: "owner" | "admin" | "moderator" | null;

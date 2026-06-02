@@ -127,6 +127,7 @@ export function serializeCommunityPreview(preview: CommunityPreview): CurrentCom
     moderators: preview.moderators,
     reference_links: preview.reference_links,
     membership_gate_summaries: preview.membership_gate_summaries,
+    gate_match_mode: preview.gate_match_mode ?? null,
     rules: preview.rules,
     viewer_membership_status: preview.viewer_membership_status,
     viewer_community_role: preview.viewer_community_role,

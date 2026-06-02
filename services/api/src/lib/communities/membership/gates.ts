@@ -14,6 +14,7 @@ export {
   buildMembershipGateSummariesFromPolicy,
   buildMembershipGateSummary,
   flattenGatePolicyAtoms,
+  getGatePolicyMatchMode,
 } from "./gate-summary"
 export { toCommunityGateRuleRow } from "./gate-row"
 export { evaluateMembershipGatePolicy }

@@ -1,5 +1,6 @@
 import {
   buildMembershipGateSummariesFromPolicy,
+  getGatePolicyMatchMode,
 } from "./membership/gates"
 import {
   canAccessCommunity,
@@ -552,6 +553,7 @@ async function buildCommunityPreview(input: {
     moderators: moderators.filter((summary): summary is CommunityRoleSummary => summary !== null),
     reference_links: referenceLinks,
     membership_gate_summaries: membershipGateSummaries,
+    gate_match_mode: membershipMode === "gated" ? getGatePolicyMatchMode(input.gatePolicy) : null,
     viewer_membership_status: input.viewerMembershipStatus,
     viewer_community_role: input.viewerCommunityRole,
     viewer_following: input.viewerFollowing,
