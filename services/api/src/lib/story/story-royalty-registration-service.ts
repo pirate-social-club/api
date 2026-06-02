@@ -313,6 +313,7 @@ async function buildStoryRoyaltyMetadata(input: {
   nftMetadataUri: string
   nftMetadataHash: `0x${string}`
 }> {
+  const coverArtRef = input.bundle?.cover_art?.storage_ref?.trim() || null
   const ipPayload = {
     version: 1,
     kind: "pirate_story_ip_metadata",
@@ -323,6 +324,7 @@ async function buildStoryRoyaltyMetadata(input: {
     rights_basis: input.rightsBasis,
     creator_wallet_address: input.creatorWalletAddress,
     song_artifact_bundle_id: input.bundle?.id.replace(/^sab_/, "") ?? null,
+    cover_art_ref: coverArtRef,
     primary_content_hash: input.primaryContentHash,
     derivative_parent_ip_ids: input.derivativeParentIpIds,
     created_at: nowIso(),
@@ -332,6 +334,7 @@ async function buildStoryRoyaltyMetadata(input: {
     description: input.rightsBasis === "derivative"
       ? "Derivative Story-native Pirate commerce asset"
       : "Original Story-native Pirate commerce asset",
+    ...(coverArtRef ? { image: coverArtRef } : {}),
     external_url: `pirate://communities/${input.communityId}/assets/${input.assetId}`,
     attributes: [
       { trait_type: "asset_id", value: input.assetId },

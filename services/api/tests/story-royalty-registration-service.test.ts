@@ -71,7 +71,7 @@ function buildWalletAttachment(): WalletAttachmentSummary {
   }
 }
 
-function buildBundle(input: { id: string; title: string; contentHash?: string }): SongArtifactBundle {
+function buildBundle(input: { id: string; title: string; contentHash?: string; coverArtRef?: string }): SongArtifactBundle {
   return {
     id: input.id,
     title: input.title,
@@ -82,6 +82,14 @@ function buildBundle(input: { id: string; title: string; contentHash?: string })
       mime_type: "audio/wav",
       content_hash: input.contentHash ?? "0xabc123",
     },
+    cover_art: input.coverArtRef
+      ? {
+          id: "sau_cover",
+          artifact_kind: "cover_art",
+          storage_ref: input.coverArtRef,
+          mime_type: "image/jpeg",
+        }
+      : null,
   } as unknown as SongArtifactBundle
 }
 
@@ -323,18 +331,23 @@ describe("story royalty registration service", () => {
     const now = "2026-04-21T00:00:00.000Z"
     const parentIpId = "0x9999999999999999999999999999999999999999"
     const derivativeIpId = "0x3333333333333333333333333333333333333333"
+    const coverArtRef = "https://media.test/derivative-cover.jpg"
     const derivativeRequests: Array<{
       nft: { recipient: string }
       derivData: { parentIpIds: string[]; licenseTermsIds: bigint[] }
     }> = []
+    const metadataPayloads: Array<{ path: string; payload: unknown }> = []
     let attachCalls = 0
 
     await seedStoryCommunity({ env, repo, communityId, userId })
     setStoryRuntimeFundingAssertionForTests(async () => {})
-    setStoryJsonMetadataPublisherForTests(async (input) => ({
-      uri: `ipfs://metadata/${input.path}`,
-      hash: "0x1111111111111111111111111111111111111111111111111111111111111111",
-    }))
+    setStoryJsonMetadataPublisherForTests(async (input) => {
+      metadataPayloads.push({ path: input.path, payload: input.payload })
+      return {
+        uri: `ipfs://metadata/${input.path}`,
+        hash: "0x1111111111111111111111111111111111111111111111111111111111111111",
+      }
+    })
     setStoryRoyaltySdkClientFactoryForTests(() => ({
       ipAsset: {
         async registerDerivativeIpAsset(request) {
@@ -428,6 +441,7 @@ describe("story royalty registration service", () => {
           id: "sab_derivative_onchain_child",
           title: "Derivative child",
           contentHash: "0xdef456",
+          coverArtRef,
         }),
         primaryContentHash: "0xdef456",
       })
@@ -437,6 +451,12 @@ describe("story royalty registration service", () => {
       expect(derivativeRequests[0]?.derivData.parentIpIds).toEqual([parentIpId])
       expect(derivativeRequests[0]?.derivData.licenseTermsIds).toEqual([17n])
       expect(attachCalls).toBe(0)
+      expect(metadataPayloads.find((entry) => entry.path.endsWith("/ip.json"))?.payload).toMatchObject({
+        cover_art_ref: coverArtRef,
+      })
+      expect(metadataPayloads.find((entry) => entry.path.endsWith("/nft.json"))?.payload).toMatchObject({
+        image: coverArtRef,
+      })
       expect(result).toMatchObject({
         storyIpId: derivativeIpId,
         storyIpNftTokenId: "456",
