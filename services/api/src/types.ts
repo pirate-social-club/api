@@ -319,10 +319,20 @@ export type PostLabel = {
 
 export type PostLabelAssignmentStatus = "pending" | "assigned" | "failed" | "skipped"
 
+export type SongPresentationDownloadableAudio = {
+  kind: "original" | "instrumental" | "vocals"
+  storage_ref: string
+  mime_type: string
+  size_bytes?: number | null
+  duration_ms?: number | null
+  filename?: string | null
+}
+
 export type SongPresentation = {
   title: string | null
   cover_art_ref: string | null
   duration_ms: number | null
+  downloadable_audio?: SongPresentationDownloadableAudio[] | null
 }
 
 export type CrosspostSourceStatus = "available" | "deleted" | "removed" | "unavailable"

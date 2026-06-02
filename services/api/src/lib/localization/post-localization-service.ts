@@ -1,9 +1,9 @@
-import type { DbExecutor } from "../db-helpers"
+import { executeFirst, type DbExecutor } from "../db-helpers"
 import { getCommunityLabelById, serializeCommunityPostLabel } from "../communities/community-label-store"
 import { computePostSourceHash, computeTextSourceHash } from "./content-source-hash"
 import { DEFAULT_CONTENT_LOCALE, normalizeContentLocale, sameLanguageLocale } from "./content-locale"
 import { getContentTranslation } from "./content-translation-store"
-import type { CommentThreadSnapshot, LocalizedPostResponse, Post } from "../../types"
+import type { CommentThreadSnapshot, LocalizedPostResponse, Post, SongPresentationDownloadableAudio } from "../../types"
 
 function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null
@@ -13,7 +13,88 @@ function numberValue(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null
 }
 
+function parseAudioDescriptor(value: unknown): Omit<SongPresentationDownloadableAudio, "kind"> | null {
+  if (!value || typeof value !== "object") {
+    return null
+  }
+
+  const record = value as Record<string, unknown>
+  const storageRef = stringValue(record.storage_ref)
+  const mimeType = stringValue(record.mime_type)
+  if (!storageRef || !mimeType) {
+    return null
+  }
+
+  return {
+    storage_ref: storageRef,
+    mime_type: mimeType,
+    size_bytes: numberValue(record.size_bytes),
+    duration_ms: numberValue(record.duration_ms),
+    filename: stringValue(record.filename),
+  }
+}
+
+function parseJsonAudioDescriptor(value: unknown): Omit<SongPresentationDownloadableAudio, "kind"> | null {
+  if (typeof value !== "string" || !value.trim()) {
+    return null
+  }
+
+  try {
+    return parseAudioDescriptor(JSON.parse(value))
+  } catch {
+    return null
+  }
+}
+
+async function getPublicDownloadableAudio(input: {
+  executor: DbExecutor
+  post: Post
+}): Promise<SongPresentationDownloadableAudio[] | null> {
+  const accessMode = input.post.access_mode ?? "public"
+  if (
+    input.post.post_type !== "song"
+    || accessMode !== "public"
+    || !input.post.song_artifact_bundle_id
+  ) {
+    return null
+  }
+
+  const row = await executeFirst(input.executor, {
+    sql: `
+      SELECT primary_audio_json, instrumental_audio_json, vocal_audio_json
+      FROM song_artifact_bundles
+      WHERE community_id = ?1
+        AND song_artifact_bundle_id = ?2
+      LIMIT 1
+    `,
+    args: [input.post.community_id, input.post.song_artifact_bundle_id],
+  }) as Record<string, unknown> | null
+
+  if (!row) {
+    return null
+  }
+
+  const entries: SongPresentationDownloadableAudio[] = []
+  const original = parseJsonAudioDescriptor(row.primary_audio_json)
+  if (original) {
+    entries.push({ kind: "original", ...original })
+  }
+
+  const instrumental = parseJsonAudioDescriptor(row.instrumental_audio_json)
+  if (instrumental) {
+    entries.push({ kind: "instrumental", ...instrumental })
+  }
+
+  const vocals = parseJsonAudioDescriptor(row.vocal_audio_json)
+  if (vocals) {
+    entries.push({ kind: "vocals", ...vocals })
+  }
+
+  return entries.length ? entries : null
+}
+
 async function buildSongPresentation(input: {
+  songArtifactExecutor?: DbExecutor | null
   post: Post
 }): Promise<LocalizedPostResponse["song_presentation"]> {
   if (input.post.post_type !== "song") {
@@ -23,8 +104,19 @@ async function buildSongPresentation(input: {
   const postTitle = stringValue(input.post.song_title)
   const postCoverArtRef = stringValue(input.post.song_cover_art_ref)
   const postDurationMs = numberValue(input.post.song_duration_ms)
-  return postTitle || postCoverArtRef || postDurationMs !== null
-    ? { title: postTitle, cover_art_ref: postCoverArtRef, duration_ms: postDurationMs }
+  const downloadableAudio = input.songArtifactExecutor
+    ? await getPublicDownloadableAudio({
+        executor: input.songArtifactExecutor,
+        post: input.post,
+      })
+    : null
+  return postTitle || postCoverArtRef || postDurationMs !== null || downloadableAudio
+    ? {
+        title: postTitle,
+        cover_art_ref: postCoverArtRef,
+        duration_ms: postDurationMs,
+        downloadable_audio: downloadableAudio,
+      }
     : null
 }
 
@@ -181,6 +273,7 @@ async function getLocalizedMarketEmbedTranslations(input: {
 
 export async function buildLocalizedPostResponse(input: {
   executor: DbExecutor
+  songArtifactExecutor?: DbExecutor | null
   post: Post
   locale?: string | null
   metrics?: Partial<PostReadMetrics>
@@ -201,6 +294,7 @@ export async function buildLocalizedPostResponse(input: {
   const response: LocalizedPostResponse = {
     post: input.post,
     song_presentation: await buildSongPresentation({
+      songArtifactExecutor: input.songArtifactExecutor,
       post: input.post,
     }),
     author_community_role: await getAuthorCommunityRole({

@@ -1784,10 +1784,20 @@ export type CreateModerationActionRequest = {
   note?: string | null;
 };
 
+export type SongPresentationDownloadableAudio = {
+  kind: "original" | "instrumental" | "vocals";
+  storage_ref: string;
+  mime_type: string;
+  size_bytes?: number | null;
+  duration_ms?: number | null;
+  filename?: string | null;
+};
+
 export type SongPresentation = {
   title: string | null;
   cover_art_ref: string | null;
   duration_ms: number | null;
+  downloadable_audio?: Array<SongPresentationDownloadableAudio> | null;
 };
 
 export type PostDerivativeSource = {
