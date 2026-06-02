@@ -132,10 +132,6 @@ function listAttachedWalletAddressesForChain(
   return addresses
 }
 
-function listAttachedPolygonWalletAddresses(walletAttachments: WalletAttachmentSummary[]): string[] {
-  return listAttachedWalletAddressesForChain(walletAttachments, "eip155:137")
-}
-
 export function isAllowedCourtyardRegistry(input: {
   chainNamespace: string | null | undefined
   contractAddress: unknown

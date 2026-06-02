@@ -63,10 +63,3 @@ export function serializeLinkHeader(links: StructuredAccessLinks): string {
     })
     .join(", ")
 }
-
-function addLinkHeader(headers: Headers, links: StructuredAccessLinks): void {
-  const value = serializeLinkHeader(links)
-  if (value) {
-    headers.set("Link", value)
-  }
-}
