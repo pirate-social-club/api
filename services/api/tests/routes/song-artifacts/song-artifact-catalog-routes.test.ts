@@ -5,7 +5,9 @@ import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { setStoryRoyaltyRegistrarForTests } from "../../../src/lib/story/story-royalty-registration-service"
 import {
+  DERIVATIVE_SOURCE_FANOUT_CONCURRENCY,
   MAX_DERIVATIVE_SOURCE_FANOUT_COMMUNITIES,
+  mapDerivativeSourceFanoutWithConcurrency,
   resolveDerivativeSourceFanoutCommunityIds,
 } from "../../../src/lib/communities/commerce/service"
 import {
@@ -210,6 +212,26 @@ afterEach(async () => {
 })
 
 describe("song artifact catalog routes", () => {
+  test("runs derivative source fan-out with bounded concurrency", async () => {
+    let active = 0
+    let maxActive = 0
+
+    const results = await mapDerivativeSourceFanoutWithConcurrency(
+      Array.from({ length: DERIVATIVE_SOURCE_FANOUT_CONCURRENCY + 3 }, (_, index) => index),
+      DERIVATIVE_SOURCE_FANOUT_CONCURRENCY,
+      async (index) => {
+        active += 1
+        maxActive = Math.max(maxActive, active)
+        await new Promise((resolve) => setTimeout(resolve, 1))
+        active -= 1
+        return index
+      },
+    )
+
+    expect(results).toHaveLength(DERIVATIVE_SOURCE_FANOUT_CONCURRENCY + 3)
+    expect(maxActive).toBe(DERIVATIVE_SOURCE_FANOUT_CONCURRENCY)
+  })
+
   test("caps global derivative source fan-out to member communities only", () => {
     const memberships = Array.from({ length: 30 }, (_, index) => ({
       projection_id: `cmp_${index}`,

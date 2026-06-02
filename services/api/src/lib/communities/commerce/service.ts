@@ -74,6 +74,7 @@ function derivativeSourceStoryRef(row: DerivativeSourceRow): string | null {
 export type DerivativeSourceScope = "community" | "global"
 
 export const MAX_DERIVATIVE_SOURCE_FANOUT_COMMUNITIES = 25
+export const DERIVATIVE_SOURCE_FANOUT_CONCURRENCY = 5
 
 export function resolveDerivativeSourceFanoutCommunityIds(
   memberships: CommunityMembershipProjectionRow[],
@@ -90,6 +91,26 @@ function sortDerivativeSourceRows(rows: DerivativeSourceRow[]): DerivativeSource
     if (updatedCompare !== 0) return updatedCompare
     return b.asset_id.localeCompare(a.asset_id)
   })
+}
+
+export async function mapDerivativeSourceFanoutWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = []
+  let nextIndex = 0
+  const workerCount = Math.min(concurrency, items.length)
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const item = items[nextIndex]!
+      nextIndex += 1
+      results.push(await mapper(item))
+    }
+  }))
+
+  return results
 }
 
 async function requireDerivativeSourceComposerCommunity(input: {
@@ -149,27 +170,29 @@ async function listGlobalDerivativeSourceRows(input: {
   }
 
   const perCommunityFetch = Math.max(input.limit * 2, 50)
-  const rows: DerivativeSourceRow[] = []
-  // Keep this sequential until metrics show picker p95 >1.5s for users with >=10 memberships.
-  // If parallelized, use bounded concurrency to avoid burst-opening too many community DB clients.
-  for (const communityId of memberCommunityIds) {
-    try {
-      const communityRows = await listCommunityDerivativeSourceRows({
-        env: input.env,
-        communityId,
-        kind: input.kind,
-        query: input.query,
-        limit: perCommunityFetch,
-        communityRepository: input.communityRepository,
-      })
-      rows.push(...communityRows)
-    } catch (error) {
-      console.warn("[communities-commerce] derivative source global fan-out community skipped", {
-        communityId,
-        error: error instanceof Error ? error.message : String(error),
-      })
-    }
-  }
+  const rowsByCommunity = await mapDerivativeSourceFanoutWithConcurrency(
+    memberCommunityIds,
+    DERIVATIVE_SOURCE_FANOUT_CONCURRENCY,
+    async (communityId) => {
+      try {
+        return await listCommunityDerivativeSourceRows({
+          env: input.env,
+          communityId,
+          kind: input.kind,
+          query: input.query,
+          limit: perCommunityFetch,
+          communityRepository: input.communityRepository,
+        })
+      } catch (error) {
+        console.warn("[communities-commerce] derivative source global fan-out community skipped", {
+          communityId,
+          error: error instanceof Error ? error.message : String(error),
+        })
+        return []
+      }
+    },
+  )
+  const rows = rowsByCommunity.flat()
 
   return sortDerivativeSourceRows(rows).slice(0, input.limit)
 }
