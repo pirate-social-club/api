@@ -1054,6 +1054,66 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     )
     expect(coverUploadContent.status).toBe(200)
 
+    const instrumentalUploadIntent = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
+      {
+        artifact_kind: "instrumental_audio",
+        mime_type: "audio/mpeg",
+        filename: "instrumental.mp3",
+        size_bytes: 4,
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(instrumentalUploadIntent.status).toBe(201)
+    const instrumentalUploadIntentBody = await json(instrumentalUploadIntent) as {
+      id: string
+      storage_ref: string
+    }
+    const instrumentalUploadContent = await app.request(
+      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${instrumentalUploadIntentBody.id}/content`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+          "content-type": "audio/mpeg",
+        },
+        body: new Uint8Array([1, 3, 3, 7]).buffer,
+      },
+      ctx.env,
+    )
+    expect(instrumentalUploadContent.status).toBe(200)
+
+    const vocalUploadIntent = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
+      {
+        artifact_kind: "vocal_audio",
+        mime_type: "audio/mpeg",
+        filename: "vocals.mp3",
+        size_bytes: 4,
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(vocalUploadIntent.status).toBe(201)
+    const vocalUploadIntentBody = await json(vocalUploadIntent) as {
+      id: string
+      storage_ref: string
+    }
+    const vocalUploadContent = await app.request(
+      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${vocalUploadIntentBody.id}/content`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+          "content-type": "audio/mpeg",
+        },
+        body: new Uint8Array([4, 4, 4, 4]).buffer,
+      },
+      ctx.env,
+    )
+    expect(vocalUploadContent.status).toBe(200)
+
     const readContent = await app.request(
       `http://pirate.test/communities/${communityId}/song-artifact-uploads/${uploadIntentBody.id}/content`,
       {},
@@ -1079,6 +1139,12 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
         },
         cover_art: {
           song_artifact_upload: coverUploadIntentBody.id,
+        },
+        instrumental_audio: {
+          song_artifact_upload: instrumentalUploadIntentBody.id,
+        },
+        vocal_audio: {
+          song_artifact_upload: vocalUploadIntentBody.id,
         },
         title: "Published Song",
         lyrics: "Line one\nLine two",
@@ -1176,6 +1242,11 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
         title: string | null
         cover_art_ref: string | null
         duration_ms: number | null
+        downloadable_audio?: Array<{
+          kind: string
+          storage_ref: string
+          mime_type: string
+        }> | null
       } | null
     }
     expect(postReadBody.post?.song_annotations_url).toBe("https://genius.com/34172986")
@@ -1184,6 +1255,27 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
       cover_art_ref: coverUploadIntentBody.storage_ref,
       duration_ms: 123_456,
     })
+    expect(postReadBody.song_presentation?.downloadable_audio?.map((item) => ({
+      kind: item.kind,
+      storage_ref: item.storage_ref,
+      mime_type: item.mime_type,
+    }))).toEqual([
+      {
+        kind: "original",
+        storage_ref: uploadIntentBody.storage_ref,
+        mime_type: "audio/mpeg",
+      },
+      {
+        kind: "instrumental",
+        storage_ref: instrumentalUploadIntentBody.storage_ref,
+        mime_type: "audio/mpeg",
+      },
+      {
+        kind: "vocals",
+        storage_ref: vocalUploadIntentBody.storage_ref,
+        mime_type: "audio/mpeg",
+      },
+    ])
 
     const bundleRead = await app.request(
       `http://pirate.test/communities/${communityId}/song-artifacts/${bundleBody.id}`,

@@ -24,6 +24,7 @@ import {
   openProjectedPostCommunityDb,
   type PostReadCommunityRepository,
 } from "./post-read-context"
+import { getControlPlaneClient } from "../runtime-deps"
 import type { ProfileRepository, UserRepository } from "../auth/repositories"
 import type { Client } from "../sql-client"
 import type { Env } from "../../env"
@@ -131,6 +132,7 @@ export async function getPost(input: {
     })
     const response = await buildLocalizedPostReadResponse({
       client: db.client,
+      songArtifactExecutor: getControlPlaneClient(input.env),
       post,
       locale: input.locale ?? undefined,
       ageGateViewerState,
@@ -172,6 +174,7 @@ export async function getPublicPost(input: {
   try {
     return await getPublicPostFromCommunityDb({
       client: db.client,
+      songArtifactExecutor: getControlPlaneClient(input.env),
       communityId: db.communityId,
       communityRepository: input.communityRepository,
       profileRepository: input.profileRepository,
@@ -185,6 +188,7 @@ export async function getPublicPost(input: {
 
 export async function getPublicPostFromCommunityDb(input: {
   client: Client
+  songArtifactExecutor?: Client | null
   communityId: string
   communityRepository?: PostReadCommunityRepository
   profileRepository?: ProfileRepository | null
@@ -198,6 +202,7 @@ export async function getPublicPostFromCommunityDb(input: {
   const ageGateViewerState = post.age_gate_policy === "18_plus" ? "proof_required" as const : null
   const response = await buildLocalizedPostReadResponse({
     client: input.client,
+    songArtifactExecutor: input.songArtifactExecutor,
     post,
     locale: input.locale ?? undefined,
     ageGateViewerState,
@@ -253,6 +258,7 @@ export async function listCommunityPosts(input: {
     })
     const items = await buildLocalizedPostFeedResponses({
       client: db.client,
+      songArtifactExecutor: getControlPlaneClient(input.env),
       feedItems: feed.items,
       locale: input.locale,
       viewerUserId: input.userId,
@@ -328,6 +334,7 @@ export async function listCommunityEvents(input: {
     })
     const items = await buildLocalizedPostFeedResponses({
       client: db.client,
+      songArtifactExecutor: getControlPlaneClient(input.env),
       feedItems,
       locale: input.locale,
       viewerUserId: input.userId,
@@ -382,6 +389,7 @@ export async function listPublicCommunityPosts(input: {
 
     const items = await buildLocalizedPostFeedResponses({
       client: db.client,
+      songArtifactExecutor: getControlPlaneClient(input.env),
       feedItems: feed.items,
       locale: input.locale,
       viewerUserId: null,

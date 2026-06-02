@@ -20,6 +20,7 @@ type PostReadResponseCommunityRepository =
 
 export async function buildLocalizedPostFeedResponses(input: {
   client: Client
+  songArtifactExecutor?: Client | null
   feedItems: readonly PublishedLocalizedPostFeedItem[]
   locale?: string | null
   viewerUserId: string | null
@@ -30,6 +31,7 @@ export async function buildLocalizedPostFeedResponses(input: {
     const threadSnapshot = await getLatestThreadSnapshotForRead(input.client, item.post.post_id)
     return buildLocalizedPostResponse({
       executor: input.client,
+      songArtifactExecutor: input.songArtifactExecutor,
       post: item.post,
       locale: input.locale ?? undefined,
       metrics: {
@@ -48,6 +50,7 @@ export async function buildLocalizedPostFeedResponses(input: {
 
 export async function buildLocalizedPostReadResponse(input: {
   client: Client
+  songArtifactExecutor?: Client | null
   post: Post
   locale?: string | null
   viewerUserId: string | null
@@ -61,6 +64,7 @@ export async function buildLocalizedPostReadResponse(input: {
   })
   return buildLocalizedPostResponse({
     executor: input.client,
+    songArtifactExecutor: input.songArtifactExecutor,
     post: input.post,
     locale: input.locale ?? undefined,
     metrics,

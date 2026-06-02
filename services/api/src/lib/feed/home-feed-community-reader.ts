@@ -13,7 +13,7 @@ import { getMembershipGatePolicy } from "../communities/membership/gate-policy-s
 import { buildLocalizedPostResponse } from "../localization/post-localization-service"
 import { hydrateCrosspostSourcesForResponses } from "../posts/crosspost-source-hydration"
 import { enqueueEmbedHydrateOnReadIfNeeded, enqueuePostTranslationOnReadIfNeeded } from "../posts/post-jobs"
-import { withRequestControlPlaneClients } from "../runtime-deps"
+import { getControlPlaneClient, withRequestControlPlaneClients } from "../runtime-deps"
 import { numberOrNull, requiredString, rowValue } from "../sql-row"
 import { serializeLocalizedPostResponse } from "../../serializers/post"
 import { publicCommunityId } from "../public-ids"
@@ -403,6 +403,7 @@ export async function readHomeFeedCommunityItems(input: {
       const localizeStartedAt = performance.now()
       const response = await buildLocalizedPostResponse({
         executor: db.client,
+        songArtifactExecutor: getControlPlaneClient(input.env),
         post,
         locale: input.locale ?? undefined,
         threadSnapshot,
