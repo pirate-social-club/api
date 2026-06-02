@@ -74,7 +74,7 @@ async function createCommunityForTest(input: {
 }
 
 async function setMembershipProjection(input: {
-  client: { execute: (query: { sql: string; args: unknown[] }) => Promise<unknown> }
+  client: Pick<ReturnType<typeof createClient>, "execute">
   communityId: string
   userId: string
   state: "not_member" | "pending_request" | "member" | "banned"
