@@ -50,6 +50,10 @@ function actionSpecificMessage(
       return isOnlyAltchaPow
         ? "Proof-of-work is required to comment in this community"
         : "Verification is required to comment in this community"
+    case "vote":
+      return isOnlyAltchaPow
+        ? "Proof-of-work is required to vote in this community"
+        : "Verification is required to vote in this community"
     default:
       return "Verification is required to join this community"
   }

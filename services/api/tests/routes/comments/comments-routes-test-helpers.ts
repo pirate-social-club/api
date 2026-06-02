@@ -50,10 +50,15 @@ export async function createCommunity(
   env: Env,
   accessToken: string,
   displayName: string,
+  gatePolicy?: Record<string, unknown>,
 ): Promise<{ communityId: string }> {
+  if (gatePolicy) {
+    await completeUniqueHumanVerification(env, accessToken)
+  }
   const response = await requestJson("http://pirate.test/communities", {
     display_name: displayName,
-    membership_mode: "request",
+    membership_mode: gatePolicy ? "gated" : "request",
+    ...(gatePolicy ? { gate_policy: gatePolicy } : {}),
   }, env, accessToken)
   const body = await json(response) as { community: { id: string } }
   return { communityId: body.community.id.replace(/^com_/, "") }

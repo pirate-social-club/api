@@ -1027,7 +1027,13 @@ describe("comments routes", () => {
     cleanup = ctx.cleanup
 
     const creator = await exchangeJwt(ctx.env, "comments-routes-vote-creator")
-    const community = await createCommunity(ctx.env, creator.accessToken, "Comment Vote Club")
+    const community = await createCommunity(ctx.env, creator.accessToken, "Comment Vote Club", {
+      version: 1,
+      expression: {
+        op: "gate",
+        gate: { type: "altcha_pow" },
+      },
+    })
 
     const createdPost = await requestJson(
       `http://pirate.test/communities/${community.communityId}/posts`,
@@ -1065,8 +1071,8 @@ describe("comments routes", () => {
     )
     expect(missingProofVote.status).toBe(403)
     const missingProofBody = await json(missingProofVote) as { code: string; message: string }
-    expect(missingProofBody.code).toBe("eligibility_failed")
-    expect(missingProofBody.message).toBe("ALTCHA proof is required for votes")
+    expect(missingProofBody.code).toBe("gate_failed")
+    expect(missingProofBody.message).toBe("Proof-of-work is required to vote in this community")
 
     const altcha = await solveTestAltchaPayload({
       env: ctx.env,

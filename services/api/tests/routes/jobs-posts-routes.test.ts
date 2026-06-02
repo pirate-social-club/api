@@ -37,13 +37,30 @@ async function exchangeJwt(env: Env, sub: string): Promise<{ accessToken: string
   return { accessToken: body.access_token, userId: body.user.id.replace(/^usr_/, "") }
 }
 
-async function createCommunity(env: Env, accessToken: string, displayName: string): Promise<{
+async function completeUniqueHumanVerification(env: Env, accessToken: string): Promise<void> {
+  const verificationSession = await requestJson("http://pirate.test/verification-sessions", {
+    provider: "self",
+  }, env, accessToken)
+  const verificationBody = await json(verificationSession) as { id: string }
+  await requestJson(
+    `http://pirate.test/verification-sessions/${verificationBody.id}/complete`,
+    {},
+    env,
+    accessToken,
+  )
+}
+
+async function createCommunity(env: Env, accessToken: string, displayName: string, gatePolicy?: Record<string, unknown>): Promise<{
   communityId: string
   createJobId: string
 }> {
+  if (gatePolicy) {
+    await completeUniqueHumanVerification(env, accessToken)
+  }
   const response = await requestJson("http://pirate.test/communities", {
     display_name: displayName,
-    membership_mode: "request",
+    membership_mode: gatePolicy ? "gated" : "request",
+    ...(gatePolicy ? { gate_policy: gatePolicy } : {}),
   }, env, accessToken)
 
   expect(response.status).toBe(202)
@@ -380,7 +397,13 @@ describe("posts routes", () => {
     cleanup = ctx.cleanup
 
     const creator = await exchangeJwt(ctx.env, "posts-routes-vote-creator")
-    const community = await createCommunity(ctx.env, creator.accessToken, "Vote Route Club")
+    const community = await createCommunity(ctx.env, creator.accessToken, "Vote Route Club", {
+      version: 1,
+      expression: {
+        op: "gate",
+        gate: { type: "altcha_pow" },
+      },
+    })
 
     const createdPost = await requestJson(
       `http://pirate.test/communities/${community.communityId}/posts`,
@@ -407,8 +430,8 @@ describe("posts routes", () => {
     )
     expect(missingProofVote.status).toBe(403)
     const missingProofBody = await json(missingProofVote) as { code: string; message: string }
-    expect(missingProofBody.code).toBe("eligibility_failed")
-    expect(missingProofBody.message).toBe("ALTCHA proof is required for votes")
+    expect(missingProofBody.code).toBe("gate_failed")
+    expect(missingProofBody.message).toBe("Proof-of-work is required to vote in this community")
 
     const altcha = await solveTestAltchaPayload({
       env: ctx.env,
