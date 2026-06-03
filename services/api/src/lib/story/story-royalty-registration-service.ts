@@ -118,6 +118,24 @@ function storySdkErrorDiagnostics(error: unknown): Record<string, unknown> {
   }
 }
 
+function storySdkErrorMessage(error: unknown): string {
+  const diagnostics = storySdkErrorDiagnostics(error)
+  return JSON.stringify({
+    name: diagnostics.error_name,
+    message: diagnostics.error_message,
+    code: diagnostics.error_code,
+    status: diagnostics.error_status,
+    responseStatus: diagnostics.response_status,
+    responseStatusText: diagnostics.response_status_text,
+    responseBody: diagnostics.response_body,
+    requestMethod: diagnostics.request_method,
+    requestUrl: diagnostics.request_url,
+    causeName: diagnostics.cause_name,
+    causeMessage: diagnostics.cause_message,
+    keys: diagnostics.own_keys,
+  })
+}
+
 let testRoyaltyRegistrar: ((input: {
   env: Env
   client: StoryRoyaltyClient
@@ -505,6 +523,7 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
     try {
       derivativeResponse = await storyClient.ipAsset.registerDerivativeIpAsset(derivativeRequest)
     } catch (error) {
+      const diagnosticsMessage = storySdkErrorMessage(error)
       logPipelineError("[story-royalty] registerDerivativeIpAsset failed", {
         community_id: input.communityId,
         asset_id: input.assetId,
@@ -520,7 +539,7 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
         ...summarizeReference("nft_metadata_uri", metadata.nftMetadataUri),
         ...storySdkErrorDiagnostics(error),
       })
-      throw error
+      throw new Error(`registerDerivativeIpAsset_failed:${diagnosticsMessage}`)
     }
     const derivativeIpId = derivativeResponse.ipId!
 
