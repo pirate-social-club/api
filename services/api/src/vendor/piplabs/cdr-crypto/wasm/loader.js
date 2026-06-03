@@ -303,8 +303,15 @@ let wasmInstance = null;
 export async function initWasm() {
     if (wasmInstance)
         return;
+    const wasmBinary = getCbMpcTdh2WasmBinary();
     const Module = await createCbMpcModule({
-        wasmBinary: getCbMpcTdh2WasmBinary(),
+        wasmBinary,
+        instantiateWasm(imports, receiveInstance) {
+            const wasmModule = new WebAssembly.Module(wasmBinary);
+            const instance = new WebAssembly.Instance(wasmModule, imports);
+            receiveInstance(instance, wasmModule);
+            return instance.exports;
+        },
     });
     const ptrSize = Module._wasm_ptr_size();
     if (ptrSize !== 4) {
