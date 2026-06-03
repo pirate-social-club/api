@@ -82,6 +82,8 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
       userRepository,
       profileRepository,
       communityRepository,
+    }).catch((error) => {
+      throw new Error(`post_route_create_post_failed:${error instanceof Error ? error.message : String(error)}`)
     })
     await trackApiEvent(c.env, c.req, {
       eventName: "post_created",
