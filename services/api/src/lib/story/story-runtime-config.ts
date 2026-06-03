@@ -72,5 +72,8 @@ export function resolveStoryRuntimeSignerTargetBalanceWei(
 ): bigint {
   const minBalance = resolveStoryRuntimeSignerMinBalanceWei(env)
   const target = parsePositiveBigInt(env.STORY_RUNTIME_SIGNER_TARGET_BALANCE_WEI) ?? DEFAULT_STORY_RUNTIME_SIGNER_TARGET_BALANCE_WEI
-  return target >= minBalance ? target : minBalance
+  const cappedTarget = target > DEFAULT_STORY_RUNTIME_SIGNER_TARGET_BALANCE_WEI
+    ? DEFAULT_STORY_RUNTIME_SIGNER_TARGET_BALANCE_WEI
+    : target
+  return cappedTarget >= minBalance ? cappedTarget : minBalance
 }
