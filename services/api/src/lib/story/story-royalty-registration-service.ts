@@ -458,27 +458,41 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
   }
 
   const storyOperatorMinimumBalanceWei = resolveStoryRuntimeSignerTargetBalanceWei(input.env)
-  await assertStoryRuntimeSignerFunding(input.env, [
-    { name: "story-operator", minBalanceWei: storyOperatorMinimumBalanceWei },
-  ])
+  try {
+    await assertStoryRuntimeSignerFunding(input.env, [
+      { name: "story-operator", minBalanceWei: storyOperatorMinimumBalanceWei },
+    ])
+  } catch (error) {
+    throw new Error(`story_operator_funding_check_failed:${storySdkErrorMessage(error)}`)
+  }
 
-  const metadata = await buildStoryRoyaltyMetadata({
-    env: input.env,
-    communityId: input.communityId,
-    assetId: input.assetId,
-    title: input.title,
-    rightsBasis,
-    assetKind: input.assetKind,
-    creatorWalletAddress: input.creatorWalletAddress,
-    bundle: input.bundle,
-    primaryContentHash: input.primaryContentHash,
-    derivativeParentIpIds: derivativeParents?.map((parent) => parent.ipId) ?? null,
-  })
+  let metadata: Awaited<ReturnType<typeof buildStoryRoyaltyMetadata>>
+  try {
+    metadata = await buildStoryRoyaltyMetadata({
+      env: input.env,
+      communityId: input.communityId,
+      assetId: input.assetId,
+      title: input.title,
+      rightsBasis,
+      assetKind: input.assetKind,
+      creatorWalletAddress: input.creatorWalletAddress,
+      bundle: input.bundle,
+      primaryContentHash: input.primaryContentHash,
+      derivativeParentIpIds: derivativeParents?.map((parent) => parent.ipId) ?? null,
+    })
+  } catch (error) {
+    throw new Error(`story_metadata_publish_failed:${storySdkErrorMessage(error)}`)
+  }
 
-  const storyClient = createStoryRoyaltySdkClient({
-    env: input.env,
-    operatorPrivateKey: operator.value.privateKey as `0x${string}`,
-  })
+  let storyClient: StoryRoyaltySdkClient
+  try {
+    storyClient = createStoryRoyaltySdkClient({
+      env: input.env,
+      operatorPrivateKey: operator.value.privateKey as `0x${string}`,
+    })
+  } catch (error) {
+    throw new Error(`story_sdk_client_create_failed:${storySdkErrorMessage(error)}`)
+  }
 
   const royaltyPolicy = resolveStoryRoyaltyPolicyAddress(input.env)
   const defaultMintingFee = resolveStoryRoyaltyDefaultMintingFee(input.env)
