@@ -531,7 +531,9 @@ export async function createAssetForPost(input: {
   } catch (error) {
     const registrationError = error instanceof Error ? error.message : String(error)
     storyRoyaltyRegistrationStatus = "failed"
-    storyError = storyError ? `${storyError};royalty_registration_failed:${registrationError}` : `royalty_registration_failed:${registrationError}`
+    storyError = storyError
+      ? `${storyError};royalty_registration_failed:commerce_registration_catch:${registrationError}`
+      : `royalty_registration_failed:commerce_registration_catch:${registrationError}`
   }
 
   if (shouldRegisterRoyalty && storyRoyaltyRegistrationStatus === "failed" && input.requireStoryRoyaltyRegistration) {
