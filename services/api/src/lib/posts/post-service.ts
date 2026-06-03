@@ -226,19 +226,23 @@ export async function createPost(input: {
       tx.close()
     }
 
-    await input.communityRepository.recordCommunityPostProjection({
-      communityId: input.communityId,
-      sourcePostId: post.post_id,
-      authorUserId: post.author_user_id ?? null,
-      identityMode: post.identity_mode,
-      postType: post.post_type,
-      status: post.status,
-      visibility: post.visibility,
-      sourceCreatedAt: post.created_at,
-      projectedPayloadJson: JSON.stringify(post),
-      actorUserId: input.userId,
-      createdAt,
-    })
+    try {
+      await input.communityRepository.recordCommunityPostProjection({
+        communityId: input.communityId,
+        sourcePostId: post.post_id,
+        authorUserId: post.author_user_id ?? null,
+        identityMode: post.identity_mode,
+        postType: post.post_type,
+        status: post.status,
+        visibility: post.visibility,
+        sourceCreatedAt: post.created_at,
+        projectedPayloadJson: JSON.stringify(post),
+        actorUserId: input.userId,
+        createdAt,
+      })
+    } catch (error) {
+      throw new Error(`post_projection_record_failed:${error instanceof Error ? error.message : String(error)}`)
+    }
 
     if (post.post_type === "song" && post.song_artifact_bundle_id) {
       await consumeSongPostBundle({
