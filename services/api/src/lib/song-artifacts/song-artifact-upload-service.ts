@@ -140,6 +140,7 @@ export async function uploadSongArtifactContent(input: {
       storageObjectKey: storage.storageObjectKey,
       storageEndpoint: storage.storageEndpoint,
       gatewayUrl: storage.gatewayUrl,
+      ipfsCid: storage.ipfsCid,
       updatedAt: nowIso(),
     })
   } finally {

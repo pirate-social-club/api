@@ -5,12 +5,36 @@ import { DEFAULT_CONTENT_LOCALE, normalizeContentLocale, sameLanguageLocale } fr
 import { getContentTranslation } from "./content-translation-store"
 import type { CommentThreadSnapshot, LocalizedPostResponse, Post, SongPresentationDownloadableAudio } from "../../types"
 
+type DecentralizedStorageProof = NonNullable<SongPresentationDownloadableAudio["decentralized_storage"]>
+
+const DEFAULT_IPFS_GATEWAY_URL = "https://dweb.link/ipfs"
+
 function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null
 }
 
 function numberValue(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null
+}
+
+function parseDecentralizedStorageProof(value: unknown): SongPresentationDownloadableAudio["decentralized_storage"] {
+  if (!value || typeof value !== "object") {
+    return null
+  }
+
+  const record = value as Record<string, unknown>
+  const cid = stringValue(record.cid)
+  const gatewayUrl = stringValue(record.gateway_url)
+  if (record.provider !== "filebase_ipfs" || !cid || !gatewayUrl) {
+    return null
+  }
+
+  return {
+    provider: "filebase_ipfs",
+    cid,
+    gateway_url: gatewayUrl,
+    ...(record.encrypted === true ? { encrypted: true } : {}),
+  }
 }
 
 function parseAudioDescriptor(value: unknown): Omit<SongPresentationDownloadableAudio, "kind"> | null {
@@ -31,6 +55,7 @@ function parseAudioDescriptor(value: unknown): Omit<SongPresentationDownloadable
     size_bytes: numberValue(record.size_bytes),
     duration_ms: numberValue(record.duration_ms),
     filename: stringValue(record.filename),
+    decentralized_storage: parseDecentralizedStorageProof(record.decentralized_storage),
   }
 }
 
@@ -48,6 +73,78 @@ function parseJsonAudioDescriptor(value: unknown): Omit<SongPresentationDownload
   } catch {
     return null
   }
+}
+
+function buildDefaultIpfsGatewayUrl(cid: string): string {
+  return `${DEFAULT_IPFS_GATEWAY_URL}/${encodeURIComponent(cid)}`
+}
+
+function parseSongArtifactUploadIdFromStorageRef(storageRef: string): string | null {
+  try {
+    const url = new URL(storageRef, "https://pirate.local")
+    const segments = url.pathname.split("/").map((segment) => decodeURIComponent(segment))
+    const uploadSegmentIndex = segments.indexOf("song-artifact-uploads")
+    if (uploadSegmentIndex === -1) {
+      return null
+    }
+    return stringValue(segments[uploadSegmentIndex + 1])
+  } catch {
+    return null
+  }
+}
+
+async function enrichDownloadableAudioWithUploadProofs(input: {
+  executor: DbExecutor
+  post: Post
+  entries: SongPresentationDownloadableAudio[]
+}): Promise<SongPresentationDownloadableAudio[]> {
+  const uploadIds = [...new Set(input.entries
+    .filter((entry) => !entry.decentralized_storage)
+    .map((entry) => parseSongArtifactUploadIdFromStorageRef(entry.storage_ref))
+    .filter((value): value is string => Boolean(value)))]
+
+  if (!uploadIds.length) {
+    return input.entries
+  }
+
+  const placeholders = uploadIds.map((_, index) => `?${index + 2}`).join(", ")
+  const result = await input.executor.execute({
+    sql: `
+      SELECT song_artifact_upload_id, ipfs_cid
+      FROM song_artifact_uploads
+      WHERE community_id = ?1
+        AND song_artifact_upload_id IN (${placeholders})
+        AND ipfs_cid IS NOT NULL
+        AND ipfs_cid <> ''
+    `,
+    args: [input.post.community_id, ...uploadIds],
+  })
+  const proofByUploadId = new Map<string, DecentralizedStorageProof>()
+  for (const row of result.rows) {
+    const uploadId = stringValue(row.song_artifact_upload_id)
+    const cid = stringValue(row.ipfs_cid)
+    if (!uploadId || !cid) {
+      continue
+    }
+    proofByUploadId.set(uploadId, {
+      provider: "filebase_ipfs",
+      cid,
+      gateway_url: buildDefaultIpfsGatewayUrl(cid),
+    })
+  }
+
+  if (!proofByUploadId.size) {
+    return input.entries
+  }
+
+  return input.entries.map((entry) => {
+    if (entry.decentralized_storage) {
+      return entry
+    }
+    const uploadId = parseSongArtifactUploadIdFromStorageRef(entry.storage_ref)
+    const proof = uploadId ? proofByUploadId.get(uploadId) : null
+    return proof ? { ...entry, decentralized_storage: proof } : entry
+  })
 }
 
 async function getPublicDownloadableAudio(input: {
@@ -94,7 +191,13 @@ async function getPublicDownloadableAudio(input: {
     entries.push({ kind: "vocals", ...vocals })
   }
 
-  return entries.length ? entries : null
+  return entries.length
+    ? await enrichDownloadableAudioWithUploadProofs({
+        executor: input.executor,
+        post: input.post,
+        entries,
+      })
+    : null
 }
 
 async function buildSongPresentation(input: {
@@ -122,6 +225,37 @@ async function buildSongPresentation(input: {
         downloadable_audio: downloadableAudio,
       }
     : null
+}
+
+function enrichSongPostMediaRefs(input: {
+  post: Post
+  songPresentation: LocalizedPostResponse["song_presentation"]
+}): Post {
+  if (input.post.post_type !== "song" || !input.post.media_refs?.length) {
+    return input.post
+  }
+
+  const originalAudio = input.songPresentation?.downloadable_audio?.find((item) => item.kind === "original")
+  const proof = originalAudio?.decentralized_storage
+  if (!proof) {
+    return input.post
+  }
+
+  const targetIndex = input.post.media_refs.findIndex((ref) => ref.storage_ref === originalAudio.storage_ref)
+  const mediaRefIndex = targetIndex === -1 ? 0 : targetIndex
+  const currentRef = input.post.media_refs[mediaRefIndex]
+  if (!currentRef || currentRef.decentralized_storage) {
+    return input.post
+  }
+
+  return {
+    ...input.post,
+    media_refs: input.post.media_refs.map((ref, index) => (
+      index === mediaRefIndex
+        ? { ...ref, decentralized_storage: proof }
+        : ref
+    )),
+  }
 }
 
 export type PostReadMetrics = {
@@ -287,6 +421,14 @@ export async function buildLocalizedPostResponse(input: {
 }): Promise<LocalizedPostResponse> {
   const resolvedLocale = normalizeContentLocale(input.locale) ?? DEFAULT_CONTENT_LOCALE
   const sourceHash = await computePostSourceHash(input.post)
+  const songPresentation = await buildSongPresentation({
+    songArtifactExecutor: input.songArtifactExecutor,
+    post: input.post,
+  })
+  const post = enrichSongPostMediaRefs({
+    post: input.post,
+    songPresentation,
+  })
   const label = input.post.label_id
     ? await getCommunityLabelById({
         executor: input.executor,
@@ -296,11 +438,8 @@ export async function buildLocalizedPostResponse(input: {
     : null
 
   const response: LocalizedPostResponse = {
-    post: input.post,
-    song_presentation: await buildSongPresentation({
-      songArtifactExecutor: input.songArtifactExecutor,
-      post: input.post,
-    }),
+    post,
+    song_presentation: songPresentation,
     author_community_role: await getAuthorCommunityRole({
       executor: input.executor,
       post: input.post,

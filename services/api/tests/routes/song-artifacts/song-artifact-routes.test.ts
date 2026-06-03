@@ -162,7 +162,10 @@ describe("song artifact routes", () => {
           body: new Uint8Array(await request.arrayBuffer()),
           contentType: request.headers.get("content-type") || "application/octet-stream",
         })
-        return new Response(null, { status: 200 })
+        return new Response(null, {
+          status: 200,
+          headers: { "x-amz-meta-cid": "bafysongartifactcid" },
+        })
       }
 
       if (request.method === "GET") {
@@ -358,7 +361,10 @@ describe("song artifact routes", () => {
           body: new Uint8Array(await request.arrayBuffer()),
           contentType: request.headers.get("content-type") || "application/octet-stream",
         })
-        return new Response(null, { status: 200 })
+        return new Response(null, {
+          status: 200,
+          headers: { "x-amz-meta-cid": "bafysongartifactcid" },
+        })
       }
 
       if (request.method === "GET") {
@@ -591,7 +597,10 @@ describe("song artifact routes", () => {
           body: new Uint8Array(await request.arrayBuffer()),
           contentType: request.headers.get("content-type") || "application/octet-stream",
         })
-        return new Response(null, { status: 200 })
+        return new Response(null, {
+          status: 200,
+          headers: { "x-amz-meta-cid": "bafysongartifactcid" },
+        })
       }
 
       if (request.method === "GET") {
@@ -904,7 +913,10 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
           body: new Uint8Array(await request.arrayBuffer()),
           contentType: request.headers.get("content-type") || "application/octet-stream",
         })
-        return new Response(null, { status: 200 })
+        return new Response(null, {
+          status: 200,
+          headers: { "x-amz-meta-cid": "bafysongartifactcid" },
+        })
       }
 
       if (request.method === "GET") {
@@ -1019,10 +1031,12 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
       id: string
       status: string
       content_hash: string
+      ipfs_cid?: string | null
     }
     expect(uploaded.id).toBe(uploadIntentBody.id)
     expect(uploaded.status).toBe("uploaded")
     expect(uploaded.content_hash).toMatch(/^0x[0-9a-f]{64}$/)
+    expect(uploaded.ipfs_cid).toBe("bafysongartifactcid")
 
     const coverUploadIntent = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
@@ -1157,7 +1171,22 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     const bundleBody = await json(bundleCreate) as {
       id: string
       status: string
-      media_refs: Array<{ storage_ref: string; mime_type: string }>
+      media_refs: Array<{
+        storage_ref: string
+        mime_type: string
+        decentralized_storage?: {
+          provider?: string
+          cid?: string
+          gateway_url?: string
+        } | null
+      }>
+      primary_audio: {
+        decentralized_storage?: {
+          provider?: string
+          cid?: string
+          gateway_url?: string
+        } | null
+      }
       cover_art: { storage_ref: string; mime_type: string } | null
       moderation_status: string
       alignment_status: string
@@ -1166,6 +1195,16 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     expect(bundleBody.status).toBe("ready")
     expect(bundleBody.media_refs).toHaveLength(1)
     expect(bundleBody.media_refs[0]?.storage_ref).toBe(uploadIntentBody.storage_ref)
+    expect(bundleBody.media_refs[0]?.decentralized_storage).toEqual({
+      provider: "filebase_ipfs",
+      cid: "bafysongartifactcid",
+      gateway_url: "https://dweb.link/ipfs/bafysongartifactcid",
+    })
+    expect(bundleBody.primary_audio.decentralized_storage).toEqual({
+      provider: "filebase_ipfs",
+      cid: "bafysongartifactcid",
+      gateway_url: "https://dweb.link/ipfs/bafysongartifactcid",
+    })
     expect(bundleBody.cover_art?.storage_ref).toBe(coverUploadIntentBody.storage_ref)
     expect(bundleBody.moderation_status).toBe("completed")
     expect(bundleBody.alignment_status).toBe("completed")
@@ -1187,6 +1226,11 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
           size_bytes: 8,
           content_hash: uploaded.content_hash,
           duration_ms: 123_456,
+          decentralized_storage: {
+            provider: "filebase_ipfs",
+            cid: "bafysongartifactcid",
+            gateway_url: "https://dweb.link/ipfs/bafysongartifactcid",
+          },
         }),
         bundleBody.id.replace(/^sab_/, ""),
       ],
@@ -1216,13 +1260,25 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
       status: string
       song_artifact_bundle: string | null
       song_annotations_url?: string | null
-      media_refs?: Array<{ storage_ref: string }>
+      media_refs?: Array<{
+        storage_ref: string
+        decentralized_storage?: {
+          provider?: string
+          cid?: string
+          gateway_url?: string
+        } | null
+      }>
     }
     expect(postBody.post_type).toBe("song")
     expect(postBody.status).toBe("published")
     expect(postBody.song_artifact_bundle).toBe(bundleBody.id)
     expect(postBody.song_annotations_url).toBe("https://genius.com/34172986")
     expect(postBody.media_refs?.[0]?.storage_ref).toBe(uploadIntentBody.storage_ref)
+    expect(postBody.media_refs?.[0]?.decentralized_storage).toEqual({
+      provider: "filebase_ipfs",
+      cid: "bafysongartifactcid",
+      gateway_url: "https://dweb.link/ipfs/bafysongartifactcid",
+    })
 
     const postRead = await app.request(
       `http://pirate.test/posts/${postBody.id}`,
@@ -1237,6 +1293,13 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     const postReadBody = await json(postRead) as {
       post?: {
         song_annotations_url?: string | null
+        media_refs?: Array<{
+          decentralized_storage?: {
+            provider?: string
+            cid?: string
+            gateway_url?: string
+          } | null
+        }>
       }
       song_presentation?: {
         title: string | null
@@ -1246,6 +1309,11 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
           kind: string
           storage_ref: string
           mime_type: string
+          decentralized_storage?: {
+            provider?: string
+            cid?: string
+            gateway_url?: string
+          } | null
         }> | null
       } | null
     }
@@ -1254,6 +1322,16 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
       title: "Published Song",
       cover_art_ref: coverUploadIntentBody.storage_ref,
       duration_ms: 123_456,
+    })
+    expect(postReadBody.post?.media_refs?.[0]?.decentralized_storage).toEqual({
+      provider: "filebase_ipfs",
+      cid: "bafysongartifactcid",
+      gateway_url: "https://dweb.link/ipfs/bafysongartifactcid",
+    })
+    expect(postReadBody.song_presentation?.downloadable_audio?.[0]?.decentralized_storage).toEqual({
+      provider: "filebase_ipfs",
+      cid: "bafysongartifactcid",
+      gateway_url: "https://dweb.link/ipfs/bafysongartifactcid",
     })
     expect(postReadBody.song_presentation?.downloadable_audio?.map((item) => ({
       kind: item.kind,
@@ -1290,6 +1368,11 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
             kind: string
             storage_ref: string
             mime_type: string
+            decentralized_storage?: {
+              provider?: string
+              cid?: string
+              gateway_url?: string
+            } | null
           }> | null
         } | null
       }
@@ -1315,6 +1398,11 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
         mime_type: "audio/mpeg",
       },
     ])
+    expect(publicThreadBody.post?.song_presentation?.downloadable_audio?.[0]?.decentralized_storage).toEqual({
+      provider: "filebase_ipfs",
+      cid: "bafysongartifactcid",
+      gateway_url: "https://dweb.link/ipfs/bafysongartifactcid",
+    })
 
     const bundleRead = await app.request(
       `http://pirate.test/communities/${communityId}/song-artifacts/${bundleBody.id}`,
@@ -1590,7 +1678,10 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
           body: new Uint8Array(await request.arrayBuffer()),
           contentType: request.headers.get("content-type") || "application/octet-stream",
         })
-        return new Response(null, { status: 200 })
+        return new Response(null, {
+          status: 200,
+          headers: { "x-amz-meta-cid": "bafysongartifactcid" },
+        })
       }
 
       if (request.method === "GET") {
@@ -1811,7 +1902,10 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
           body: new Uint8Array(await request.arrayBuffer()),
           contentType: request.headers.get("content-type") || "application/octet-stream",
         })
-        return new Response(null, { status: 200 })
+        return new Response(null, {
+          status: 200,
+          headers: { "x-amz-meta-cid": "bafysongartifactcid" },
+        })
       }
 
       if (request.method === "GET") {

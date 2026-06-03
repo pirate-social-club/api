@@ -71,7 +71,10 @@ export function installLockedSongFetchMocks(input: {
         body: new Uint8Array(await request.arrayBuffer()),
         contentType: request.headers.get("content-type") || "application/octet-stream",
       })
-      return new Response(null, { status: 200 })
+      return new Response(null, {
+        status: 200,
+        headers: { "x-amz-meta-cid": "bafysongartifactcid" },
+      })
     }
 
     if (request.method === "GET") {

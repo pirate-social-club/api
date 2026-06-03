@@ -21,7 +21,7 @@ async function getSongArtifactUploadRow(
     sql: `
       SELECT song_artifact_upload_id, community_id, uploader_user_id, artifact_kind, status, storage_ref,
              mime_type, filename, size_bytes, content_hash, storage_provider, storage_bucket,
-             storage_object_key, storage_endpoint, gateway_url, created_at, updated_at
+             storage_object_key, storage_endpoint, gateway_url, ipfs_cid, created_at, updated_at
       FROM song_artifact_uploads
       WHERE community_id = ?1
         AND song_artifact_upload_id = ?2
@@ -47,11 +47,11 @@ export async function createSongArtifactUploadIntent(input: {
       INSERT INTO song_artifact_uploads (
         song_artifact_upload_id, community_id, uploader_user_id, artifact_kind, status, storage_ref,
         mime_type, filename, size_bytes, content_hash, storage_provider, storage_bucket,
-        storage_object_key, storage_endpoint, gateway_url, created_at, updated_at
+        storage_object_key, storage_endpoint, gateway_url, ipfs_cid, created_at, updated_at
       ) VALUES (
         ?1, ?2, ?3, ?4, 'pending_upload', ?5,
         ?6, ?7, ?8, ?9, NULL, NULL,
-        NULL, NULL, NULL, ?10, ?10
+        NULL, NULL, NULL, NULL, ?10, ?10
       )
     `,
     args: [
@@ -107,7 +107,7 @@ export async function findUploadedSongArtifactByStorageRef(input: {
     sql: `
       SELECT song_artifact_upload_id, community_id, uploader_user_id, artifact_kind, status, storage_ref,
              mime_type, filename, size_bytes, content_hash, storage_provider, storage_bucket,
-             storage_object_key, storage_endpoint, gateway_url, created_at, updated_at
+             storage_object_key, storage_endpoint, gateway_url, ipfs_cid, created_at, updated_at
       FROM song_artifact_uploads
       WHERE community_id = ?1
         AND status = 'uploaded'
@@ -136,6 +136,7 @@ export async function markSongArtifactUploadUploaded(input: {
   storageObjectKey: string
   storageEndpoint: string
   gatewayUrl: string
+  ipfsCid: string | null
   updatedAt: string
 }): Promise<SongArtifactUpload> {
   await input.client.execute({
@@ -150,7 +151,8 @@ export async function markSongArtifactUploadUploaded(input: {
           storage_object_key = ?8,
           storage_endpoint = ?9,
           gateway_url = ?10,
-          updated_at = ?11
+          ipfs_cid = ?11,
+          updated_at = ?12
       WHERE community_id = ?1
         AND song_artifact_upload_id = ?2
     `,
@@ -165,6 +167,7 @@ export async function markSongArtifactUploadUploaded(input: {
       input.storageObjectKey,
       input.storageEndpoint,
       input.gatewayUrl,
+      input.ipfsCid,
       input.updatedAt,
     ],
   })

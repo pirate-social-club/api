@@ -11,6 +11,7 @@ import {
 } from "./song-artifact-repository"
 import { cropAudioPreviewWithFfmpeg } from "./song-artifact-preview"
 import {
+  buildIpfsGatewayUrl,
   buildSongArtifactContentUrl,
   fetchSongArtifactBytes,
   uploadSongArtifactBytes,
@@ -107,6 +108,7 @@ export async function generateSongPreviewForBundle(input: {
       storageObjectKey: storage.storageObjectKey,
       storageEndpoint: storage.storageEndpoint,
       gatewayUrl: storage.gatewayUrl,
+      ipfsCid: storage.ipfsCid,
       updatedAt: nowIso(),
     })
     const updated = await updateSongArtifactBundlePreview({
@@ -119,6 +121,13 @@ export async function generateSongPreviewForBundle(input: {
         size_bytes: uploaded.size_bytes,
         content_hash: uploaded.content_hash,
         duration_ms: preview.durationMs,
+        decentralized_storage: uploaded.ipfs_cid
+          ? {
+              provider: "filebase_ipfs",
+              cid: uploaded.ipfs_cid,
+              gateway_url: buildIpfsGatewayUrl(input.env, uploaded.ipfs_cid),
+            }
+          : null,
       },
       previewStatus: "completed",
       previewError: null,

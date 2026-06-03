@@ -44,6 +44,7 @@ export async function prepareSongPostAsset(input: {
           size_bytes: resolvedBundle.bundle.preview_audio.size_bytes ?? null,
           content_hash: resolvedBundle.bundle.preview_audio.content_hash ?? null,
           duration_ms: resolvedBundle.bundle.preview_audio.duration_ms ?? null,
+          decentralized_storage: resolvedBundle.bundle.preview_audio.decentralized_storage ?? null,
         }]
       : []
     : resolvedBundle.mediaRefs

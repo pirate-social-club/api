@@ -1,18 +1,37 @@
+import type { Env } from "../../env"
 import type { Post, SongArtifactBundle, SongArtifactUpload } from "../../types"
+import { buildIpfsGatewayUrl } from "./song-artifact-storage"
 
-export function descriptorFromUpload(upload: SongArtifactUpload): {
+function decentralizedStorageProof(env: Env, upload: SongArtifactUpload) {
+  return upload.ipfs_cid
+    ? {
+        provider: "filebase_ipfs" as const,
+        cid: upload.ipfs_cid,
+        gateway_url: buildIpfsGatewayUrl(env, upload.ipfs_cid),
+      }
+    : null
+}
+
+export function descriptorFromUpload(env: Env, upload: SongArtifactUpload): {
   storage_ref: string
   mime_type: string
   size_bytes?: number | null
   content_hash?: string | null
   duration_ms?: number | null
+  decentralized_storage?: {
+    provider: "filebase_ipfs"
+    cid: string
+    gateway_url: string
+  } | null
 } {
+  const proof = decentralizedStorageProof(env, upload)
   return {
     storage_ref: upload.gateway_url || upload.storage_ref,
     mime_type: upload.mime_type,
     size_bytes: upload.size_bytes ?? null,
     content_hash: upload.content_hash ?? null,
     duration_ms: null,
+    ...(proof ? { decentralized_storage: proof } : {}),
   }
 }
 

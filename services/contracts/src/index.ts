@@ -1479,6 +1479,7 @@ export type SongArtifactUpload = {
   storage_object_key?: string | null;
   storage_endpoint?: string | null;
   gateway_url?: string | null;
+  ipfs_cid?: string | null;
   upload_url: string;
   created: number;
 };
@@ -1799,6 +1800,7 @@ export type SongPresentationDownloadableAudio = {
   size_bytes?: number | null;
   duration_ms?: number | null;
   filename?: string | null;
+  decentralized_storage?: DecentralizedStorageProof | null;
 };
 
 export type SongPresentation = {
@@ -2193,6 +2195,7 @@ type AudioMediaDescriptor = {
   size_bytes?: number | null;
   content_hash?: string | null;
   duration_ms?: number | null;
+  decentralized_storage?: DecentralizedStorageProof | null;
 };
 
 type CentralizedGovernanceBackend = {
@@ -2969,6 +2972,7 @@ type MediaDescriptor = {
   poster_height?: number | null;
   poster_frame_ms?: number | null;
   preview_video?: SongVideoArtifactDescriptor | null;
+  decentralized_storage?: DecentralizedStorageProof | null;
 };
 
 type ModerationCaseOpenedBy = "platform_analysis" | "user_report" | "mixed";
@@ -3155,6 +3159,13 @@ type SongArtifactUploadRef = {
   song_artifact_upload: string;
 };
 
+type DecentralizedStorageProof = {
+  provider: "filebase_ipfs";
+  cid: string;
+  gateway_url: string;
+  encrypted?: boolean;
+};
+
 type SongAudioArtifactDescriptor = {
   storage_ref: string;
   mime_type: string;
@@ -3163,6 +3174,7 @@ type SongAudioArtifactDescriptor = {
   duration_ms?: number | null;
   clip_start_ms?: number | null;
   clip_duration_ms?: number | null;
+  decentralized_storage?: DecentralizedStorageProof | null;
 };
 
 type SongImageArtifactDescriptor = {

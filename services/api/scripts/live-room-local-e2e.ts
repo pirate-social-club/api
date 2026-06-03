@@ -250,7 +250,7 @@ async function createFastLocalSongArtifactBundle(input: {
         title: input.title,
         lyrics: input.lyrics,
       },
-      primaryAudio: descriptorFromUpload(upload),
+      primaryAudio: descriptorFromUpload(env, upload),
       coverArt: null,
       previewAudio: null,
       canvasVideo: null,
@@ -323,6 +323,7 @@ async function markFastLocalSongArtifactUploadUploaded(input: {
       storageObjectKey: `song-artifacts/${input.communityId}/${rawUploadId}`,
       storageEndpoint: "local-dev://song-artifacts",
       gatewayUrl: `${input.apiUrl}/communities/${encodeURIComponent(input.communityId)}/song-artifact-uploads/${encodeURIComponent(rawUploadId)}/content`,
+      ipfsCid: null,
       updatedAt: nowIso(),
     })
   } finally {

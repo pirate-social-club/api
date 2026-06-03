@@ -41,7 +41,7 @@ async function buildSigningKey(secretKey: string, dateStamp: string, region: str
 }
 
 export async function buildS3SignedRequest(input: {
-  method: "GET" | "PUT"
+  method: "GET" | "HEAD" | "PUT"
   config: S3SigningConfig
   objectKey: string
   payloadHash: string

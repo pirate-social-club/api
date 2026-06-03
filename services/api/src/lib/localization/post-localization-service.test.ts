@@ -41,6 +41,35 @@ function songArtifactExecutor(): DbExecutor {
   } as DbExecutor
 }
 
+function legacySongArtifactExecutor(): DbExecutor {
+  return {
+    async execute(query) {
+      const sql = typeof query === "string" ? query : query.sql
+      if (String(sql).includes("FROM song_artifact_uploads")) {
+        return {
+          rows: [{
+            song_artifact_upload_id: "sau_original",
+            ipfs_cid: "bafylegacysongcid",
+          }],
+        }
+      }
+      return {
+        rows: [{
+          primary_audio_json: {
+            storage_ref: "https://api.pirate.sc/communities/cmt_music/song-artifact-uploads/sau_original/content",
+            mime_type: "audio/mpeg",
+            size_bytes: 1000,
+            duration_ms: 123000,
+            filename: "original.mp3",
+          },
+          instrumental_audio_json: null,
+          vocal_audio_json: null,
+        }],
+      }
+    },
+  } as DbExecutor
+}
+
 function makeSongPost(): Post {
   return {
     post_id: "pst_song",
@@ -105,5 +134,31 @@ describe("buildLocalizedPostResponse", () => {
         duration_ms: 120000,
       },
     ])
+  })
+
+  test("enriches legacy song audio descriptors from upload IPFS CIDs", async () => {
+    const storageRef = "https://api.pirate.sc/communities/cmt_music/song-artifact-uploads/sau_original/content"
+    const response = await buildLocalizedPostResponse({
+      executor: emptyExecutor(),
+      songArtifactExecutor: legacySongArtifactExecutor(),
+      post: {
+        ...makeSongPost(),
+        media_refs: [{
+          storage_ref: storageRef,
+          mime_type: "audio/mpeg",
+        }],
+      },
+    })
+
+    expect(response.song_presentation?.downloadable_audio?.[0]?.decentralized_storage).toEqual({
+      provider: "filebase_ipfs",
+      cid: "bafylegacysongcid",
+      gateway_url: "https://dweb.link/ipfs/bafylegacysongcid",
+    })
+    expect(response.post.media_refs?.[0]?.decentralized_storage).toEqual({
+      provider: "filebase_ipfs",
+      cid: "bafylegacysongcid",
+      gateway_url: "https://dweb.link/ipfs/bafylegacysongcid",
+    })
   })
 })

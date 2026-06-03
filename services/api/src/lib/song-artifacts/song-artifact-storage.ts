@@ -201,6 +201,19 @@ export function buildFilebaseObjectUrl(origin: string, path: string): string {
   return new URL(path, origin).toString()
 }
 
+export function buildIpfsGatewayUrl(env: Env, cid: string): string {
+  const gateway = String(env.IPFS_GATEWAY_URL || "https://dweb.link/ipfs").trim()
+  return `${gateway.replace(/\/+$/, "")}/${encodeURIComponent(cid)}`
+}
+
+function requireFilebaseCid(response: Response): string {
+  const cid = response.headers.get("x-amz-meta-cid")?.trim()
+  if (!cid) {
+    throw providerUnavailable("Filebase upload did not return an IPFS CID")
+  }
+  return cid
+}
+
 export async function uploadFilebaseObject(input: {
   env: Env
   objectKey: string
@@ -211,6 +224,7 @@ export async function uploadFilebaseObject(input: {
   storageObjectKey: string
   storageEndpoint: string
   contentHash: string
+  ipfsCid: string
 }> {
   const normalizedMimeType = input.mimeType.trim().toLowerCase()
   const payloadHash = await sha256Hex(input.bytes)
@@ -232,12 +246,14 @@ export async function uploadFilebaseObject(input: {
     )
   }
 
+  const ipfsCid = requireFilebaseCid(response)
   const config = resolveFilebaseConfig(input.env)
   return {
     storageBucket: config.bucket,
     storageObjectKey: input.objectKey,
     storageEndpoint: config.endpoint.toString(),
     contentHash: `0x${payloadHash}`,
+    ipfsCid,
   }
 }
 
@@ -257,6 +273,7 @@ export async function uploadSongArtifactBytes(input: {
   storageEndpoint: string
   gatewayUrl: string
   contentHash: string
+  ipfsCid: string
 }> {
   const normalizedMimeType = input.mimeType.trim().toLowerCase()
   assertSongArtifactMimeType(input.artifactKind, normalizedMimeType)
@@ -287,6 +304,7 @@ export async function uploadSongArtifactBytes(input: {
     )
   }
 
+  const ipfsCid = requireFilebaseCid(response)
   const config = resolveFilebaseConfig(input.env)
   const storageRef = buildSongArtifactContentUrl(input.origin, input.communityId, input.songArtifactUploadId)
   return {
@@ -297,6 +315,7 @@ export async function uploadSongArtifactBytes(input: {
     storageEndpoint: config.endpoint.toString(),
     gatewayUrl: storageRef,
     contentHash: `0x${payloadHash}`,
+    ipfsCid,
   }
 }
 

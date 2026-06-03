@@ -326,6 +326,12 @@ export type SongPresentationDownloadableAudio = {
   size_bytes?: number | null
   duration_ms?: number | null
   filename?: string | null
+  decentralized_storage?: {
+    provider: "filebase_ipfs"
+    cid: string
+    gateway_url: string
+    encrypted?: boolean
+  } | null
 }
 
 export type SongPresentation = {
