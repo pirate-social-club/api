@@ -209,26 +209,6 @@ export async function createPost(input: {
           userRepository: input.userRepository,
         })
       }
-      if (post.post_type === "video" && shouldCreateVideoAssetForPost(post) && resolvedVideoAsset) {
-        txPhase = "create_video_asset"
-        await createAssetForPost({
-          env: input.env,
-          client: tx,
-          communityId: input.communityId,
-          post,
-          assetKind: "video_file",
-          storageRef: resolvedVideoAsset.upload.gateway_url || resolvedVideoAsset.upload.storage_ref,
-          mimeType: resolvedVideoAsset.upload.mime_type,
-          contentHash: resolvedVideoAsset.upload.content_hash ?? null,
-          artifactKind: "primary_video",
-          bundleId: null,
-          licensePreset: input.body.license_preset ?? null,
-          commercialRevSharePct: input.body.commercial_rev_share_pct ?? null,
-          requireStoryRoyaltyRegistration,
-          userRepository: input.userRepository,
-        })
-      }
-
       txPhase = "commit"
       await tx.commit()
     } catch (error) {
@@ -236,6 +216,27 @@ export async function createPost(input: {
       throw new Error(`post_transaction_phase:${txPhase}:${error instanceof Error ? error.message : String(error)}`)
     } finally {
       tx.close()
+    }
+
+    if (post.post_type === "video" && shouldCreateVideoAssetForPost(post) && resolvedVideoAsset) {
+      await createAssetForPost({
+        env: input.env,
+        client: db.client,
+        communityId: input.communityId,
+        post,
+        assetKind: "video_file",
+        storageRef: resolvedVideoAsset.upload.gateway_url || resolvedVideoAsset.upload.storage_ref,
+        mimeType: resolvedVideoAsset.upload.mime_type,
+        contentHash: resolvedVideoAsset.upload.content_hash ?? null,
+        artifactKind: "primary_video",
+        bundleId: null,
+        licensePreset: input.body.license_preset ?? null,
+        commercialRevSharePct: input.body.commercial_rev_share_pct ?? null,
+        requireStoryRoyaltyRegistration,
+        userRepository: input.userRepository,
+      }).catch((error) => {
+        throw new Error(`post_video_asset_create_after_commit_failed:${error instanceof Error ? error.message : String(error)}`)
+      })
     }
 
     try {
