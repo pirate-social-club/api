@@ -446,13 +446,18 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
     return null
   }
 
-  const derivativeParents = rightsBasis === "derivative"
-    ? await resolveStoryRoyaltyDerivativeParents({
+  let derivativeParents: ResolvedDerivativeParent[] | null = null
+  if (rightsBasis === "derivative") {
+    try {
+      derivativeParents = await resolveStoryRoyaltyDerivativeParents({
         client: input.client,
         communityId: input.communityId,
         upstreamAssetRefs: input.upstreamAssetRefs,
       })
-    : null
+    } catch (error) {
+      throw new Error(`story_derivative_parent_resolution_failed:${storySdkErrorMessage(error)}`)
+    }
+  }
   if (rightsBasis === "derivative" && !derivativeParents) {
     return null
   }
