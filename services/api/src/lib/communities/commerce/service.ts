@@ -569,6 +569,51 @@ export async function createAssetForPost(input: {
     })
   }
 
+  const createdAssetRow: AssetRow = {
+    asset_id: input.post.asset_id,
+    community_id: input.communityId,
+    source_post_id: input.post.post_id,
+    display_title: input.displayTitle?.trim() || input.post.title?.trim() || null,
+    song_artifact_bundle_id: input.bundleId,
+    creator_user_id: input.post.author_user_id ?? "",
+    asset_kind: input.assetKind,
+    rights_basis: input.post.rights_basis ?? "none",
+    access_mode: input.post.access_mode ?? "public",
+    license_preset: effectiveLicensePreset,
+    commercial_rev_share_pct: effectiveCommercialRevSharePct,
+    primary_content_ref: input.storageRef,
+    primary_content_hash: resolvedPrimaryContentHash,
+    publication_status: publicationStatus,
+    story_status: storyStatus,
+    story_error: storyError,
+    story_ip_id: storyIpId,
+    story_ip_nft_contract: storyIpNftContract,
+    story_ip_nft_token_id: storyIpNftTokenId,
+    story_publish_model: storyPublishModel,
+    story_license_terms_id: storyLicenseTermsId,
+    story_license_template: storyLicenseTemplate,
+    story_royalty_policy: storyRoyaltyPolicy,
+    story_royalty_policy_id: storyRoyaltyPolicyId,
+    story_derivative_parent_ip_ids_json: storyDerivativeParentIpIdsJson,
+    story_derivative_registered_at: storyDerivativeRegisteredAt,
+    story_revenue_token: storyRevenueToken,
+    story_royalty_registration_status: storyRoyaltyRegistrationStatus,
+    story_publish_tx_ref: storyPublishTxRef,
+    story_asset_version_id: storyAssetVersionId,
+    story_cdr_vault_uuid: storyCdrVaultUuid,
+    story_namespace: storyNamespace,
+    story_entitlement_token_id: storyEntitlementTokenId,
+    story_read_condition: storyReadCondition,
+    story_write_condition: storyWriteCondition,
+    locked_delivery_status: lockedDeliveryStatus,
+    locked_delivery_ref: lockedDeliveryRef,
+    locked_delivery_error: lockedDeliveryError,
+    locked_delivery_storage_ref: lockedDeliveryStorageRef,
+    locked_delivery_secret_json: lockedDeliveryMetadataJson,
+    created_at: createdAt,
+    updated_at: createdAt,
+  }
+
   await input.client.execute({
     sql: `
       INSERT INTO assets (
@@ -638,11 +683,7 @@ export async function createAssetForPost(input: {
       lockedDeliveryMetadataJson,
     ],
   })
-  const asset = await getAssetRow(input.client, input.communityId, input.post.asset_id)
-  if (!asset) {
-    throw notFoundError("Asset not found")
-  }
-  return serializeAsset(asset)
+  return serializeAsset(createdAssetRow)
 }
 
 export async function createSongAssetForPost(input: {
