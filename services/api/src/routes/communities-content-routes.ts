@@ -93,6 +93,13 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
         post_type: result.post_type,
         status: result.status,
       },
+    }).catch((error) => {
+      console.warn("[posts] post_created analytics failed", {
+        community_id: communityId,
+        post_id: result.post_id,
+        error_name: error instanceof Error ? error.name : typeof error,
+        error_message: error instanceof Error ? error.message : String(error),
+      })
     })
     if (actor.authType === "admin") {
       const operationClass = c.req.header("x-admin-operation-class")?.trim() || "admin_post"
