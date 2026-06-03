@@ -5,6 +5,7 @@ import type { Client } from "../sql-client"
 import type { Env } from "../../env"
 import type { Post, SongArtifactBundle } from "../../types"
 import { nowIso } from "../helpers"
+import { logPipelineError, logPipelineInfo, sanitizeLogText, summarizeReference } from "../observability/pipeline-log"
 import { resolveStoryOperatorDirectSigner } from "./story-direct-signer"
 import { resolveStoryChainId, resolveStoryRpcUrl, resolveStoryRuntimeSignerTargetBalanceWei } from "./story-runtime-config"
 import { getAssetRow } from "../communities/commerce/queries"
@@ -88,6 +89,33 @@ type StoryIpAssetClient = {
 type StoryRoyaltySdkClient = {
   ipAsset: StoryIpAssetClient
   license?: StoryLicenseClient
+}
+
+function errorRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? value as Record<string, unknown> : null
+}
+
+function storySdkErrorDiagnostics(error: unknown): Record<string, unknown> {
+  const record = errorRecord(error)
+  const cause = record ? errorRecord(record.cause) : null
+  const response = record ? errorRecord(record.response) : null
+  const request = record ? errorRecord(record.request) : null
+  const data = response ? response.data : null
+
+  return {
+    error_name: error instanceof Error ? error.name : typeof error,
+    error_message: sanitizeLogText(error instanceof Error ? error.message : String(error)),
+    error_code: record?.code ?? null,
+    error_status: record?.status ?? response?.status ?? null,
+    response_status: response?.status ?? null,
+    response_status_text: sanitizeLogText(response?.statusText),
+    response_body: sanitizeLogText(typeof data === "string" ? data : data ? JSON.stringify(data) : null),
+    request_method: sanitizeLogText(request?.method),
+    request_url: summarizeReference("request_url", typeof request?.url === "string" ? request.url : null),
+    cause_name: cause?.name ?? null,
+    cause_message: sanitizeLogText(cause?.message),
+    own_keys: record ? Object.keys(record).slice(0, 20) : [],
+  }
 }
 
 let testRoyaltyRegistrar: ((input: {
@@ -439,16 +467,18 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
   const maxLicenseTokens = resolveStoryRoyaltyMaxLicenseTokens(input.env)
 
   if (rightsBasis === "derivative") {
-    const derivativeResponse = await storyClient.ipAsset.registerDerivativeIpAsset({
+    const derivativeParentIpIds = derivativeParents!.map((parent) => parent.ipId)
+    const derivativeLicenseTermsIds = derivativeParents!.map((parent) => parent.licenseTermsId)
+    const derivativeRequest = {
       nft: {
-        type: "mint",
+        type: "mint" as const,
         spgNftContract,
         recipient: input.creatorWalletAddress as `0x${string}`,
         allowDuplicates: true,
       },
       derivData: {
-        parentIpIds: derivativeParents!.map((parent) => parent.ipId),
-        licenseTermsIds: derivativeParents!.map((parent) => parent.licenseTermsId),
+        parentIpIds: derivativeParentIpIds,
+        licenseTermsIds: derivativeLicenseTermsIds,
       },
       ipMetadata: {
         ipMetadataURI: metadata.ipMetadataUri,
@@ -456,7 +486,42 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
         nftMetadataURI: metadata.nftMetadataUri,
         nftMetadataHash: metadata.nftMetadataHash,
       },
+    }
+    logPipelineInfo("[story-royalty] registerDerivativeIpAsset request", {
+      community_id: input.communityId,
+      asset_id: input.assetId,
+      asset_kind: input.assetKind,
+      rights_basis: rightsBasis,
+      spg_nft_contract: spgNftContract,
+      recipient: input.creatorWalletAddress,
+      parent_ip_ids: derivativeParentIpIds,
+      license_terms_ids: derivativeLicenseTermsIds.map((value) => value.toString()),
+      ip_metadata_hash: metadata.ipMetadataHash,
+      nft_metadata_hash: metadata.nftMetadataHash,
+      ...summarizeReference("ip_metadata_uri", metadata.ipMetadataUri),
+      ...summarizeReference("nft_metadata_uri", metadata.nftMetadataUri),
     })
+    let derivativeResponse: Awaited<ReturnType<StoryIpAssetClient["registerDerivativeIpAsset"]>>
+    try {
+      derivativeResponse = await storyClient.ipAsset.registerDerivativeIpAsset(derivativeRequest)
+    } catch (error) {
+      logPipelineError("[story-royalty] registerDerivativeIpAsset failed", {
+        community_id: input.communityId,
+        asset_id: input.assetId,
+        asset_kind: input.assetKind,
+        rights_basis: rightsBasis,
+        spg_nft_contract: spgNftContract,
+        recipient: input.creatorWalletAddress,
+        parent_ip_ids: derivativeParentIpIds,
+        license_terms_ids: derivativeLicenseTermsIds.map((value) => value.toString()),
+        ip_metadata_hash: metadata.ipMetadataHash,
+        nft_metadata_hash: metadata.nftMetadataHash,
+        ...summarizeReference("ip_metadata_uri", metadata.ipMetadataUri),
+        ...summarizeReference("nft_metadata_uri", metadata.nftMetadataUri),
+        ...storySdkErrorDiagnostics(error),
+      })
+      throw error
+    }
     const derivativeIpId = derivativeResponse.ipId!
 
     return {
