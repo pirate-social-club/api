@@ -4,13 +4,6 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-04-09",
   "compatibility_flags": ["nodejs_compat"],
-  "rules": [
-    {
-      "type": "CompiledWasm",
-      "globs": ["src/vendor/piplabs/cdr-crypto/wasm/*.wasm"],
-      "fallthrough": true
-    }
-  ],
   "triggers": {
     "crons": ["*/1 * * * *"]
   },
