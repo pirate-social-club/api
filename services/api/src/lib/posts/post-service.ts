@@ -37,6 +37,19 @@ import { preparePostCreate } from "./post-create-preparation"
 import { recordReviewRequiredPostModeration } from "./post-moderation-recording"
 import { assertPostCreateRequest } from "./post-create-validation"
 
+type PostAssetCreator = typeof createAssetForPost
+type SongPostAssetCreator = typeof createSongAssetForPost
+let postAssetCreatorForRuntime: PostAssetCreator = createAssetForPost
+let songPostAssetCreatorForRuntime: SongPostAssetCreator = createSongAssetForPost
+
+export function setPostAssetCreatorsForTests(input: {
+  createAssetForPost?: PostAssetCreator | null
+  createSongAssetForPost?: SongPostAssetCreator | null
+} | null): void {
+  postAssetCreatorForRuntime = input?.createAssetForPost ?? createAssetForPost
+  songPostAssetCreatorForRuntime = input?.createSongAssetForPost ?? createSongAssetForPost
+}
+
 export { moderationSeverityFromProviderResult } from "./post-moderation-recording"
 export {
   deletePost,
@@ -142,6 +155,7 @@ export async function createPost(input: {
     const createdAt = nowIso()
     const tx = await db.client.transaction("write")
     let post: Post
+    const postCommitAssetTasks: Array<() => Promise<void>> = []
     const requireStoryRoyaltyRegistration = true
     try {
       post = await insertPost({
@@ -187,34 +201,38 @@ export async function createPost(input: {
       }
 
       if (post.post_type === "song" && post.song_artifact_bundle_id && resolvedSongBundleForAsset) {
-        await createSongAssetForPost({
-          env: input.env,
-          client: tx,
-          communityId: input.communityId,
-          post,
-          bundle: resolvedSongBundleForAsset.bundle,
-          licensePreset: input.body.license_preset ?? null,
-          commercialRevSharePct: input.body.commercial_rev_share_pct ?? null,
-          requireStoryRoyaltyRegistration,
-          userRepository: input.userRepository,
+        postCommitAssetTasks.push(async () => {
+          await songPostAssetCreatorForRuntime({
+            env: input.env,
+            client: db.client,
+            communityId: input.communityId,
+            post,
+            bundle: resolvedSongBundleForAsset.bundle,
+            licensePreset: input.body.license_preset ?? null,
+            commercialRevSharePct: input.body.commercial_rev_share_pct ?? null,
+            requireStoryRoyaltyRegistration,
+            userRepository: input.userRepository,
+          })
         })
       }
       if (post.post_type === "video" && post.access_mode && resolvedVideoAsset) {
-        await createAssetForPost({
-          env: input.env,
-          client: tx,
-          communityId: input.communityId,
-          post,
-          assetKind: "video_file",
-          storageRef: resolvedVideoAsset.upload.gateway_url || resolvedVideoAsset.upload.storage_ref,
-          mimeType: resolvedVideoAsset.upload.mime_type,
-          contentHash: resolvedVideoAsset.upload.content_hash ?? null,
-          artifactKind: "primary_video",
-          bundleId: null,
-          licensePreset: input.body.license_preset ?? null,
-          commercialRevSharePct: input.body.commercial_rev_share_pct ?? null,
-          requireStoryRoyaltyRegistration,
-          userRepository: input.userRepository,
+        postCommitAssetTasks.push(async () => {
+          await postAssetCreatorForRuntime({
+            env: input.env,
+            client: db.client,
+            communityId: input.communityId,
+            post,
+            assetKind: "video_file",
+            storageRef: resolvedVideoAsset.upload.gateway_url || resolvedVideoAsset.upload.storage_ref,
+            mimeType: resolvedVideoAsset.upload.mime_type,
+            contentHash: resolvedVideoAsset.upload.content_hash ?? null,
+            artifactKind: "primary_video",
+            bundleId: null,
+            licensePreset: input.body.license_preset ?? null,
+            commercialRevSharePct: input.body.commercial_rev_share_pct ?? null,
+            requireStoryRoyaltyRegistration,
+            userRepository: input.userRepository,
+          })
         })
       }
 
@@ -224,6 +242,10 @@ export async function createPost(input: {
       throw error
     } finally {
       tx.close()
+    }
+
+    for (const runPostCommitAssetTask of postCommitAssetTasks) {
+      await runPostCommitAssetTask()
     }
 
     await input.communityRepository.recordCommunityPostProjection({
