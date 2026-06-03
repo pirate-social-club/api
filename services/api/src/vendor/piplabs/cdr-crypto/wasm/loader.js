@@ -8,6 +8,7 @@
  *   const raw = wasm.tdh2Encrypt(globalPubKey, plaintext, label);
  */
 import createCbMpcModule from "./cb-mpc-tdh2.js";
+import bundledWasmModule from "./cb-mpc-tdh2.wasm";
 import { getCbMpcTdh2WasmBinary } from "./cb-mpc-tdh2-wasm-binary.js";
 /** Ed25519 curve code in cb-mpc (NID_ED25519 = 0x043f = 1087) */
 export const CURVE_ED25519 = 1087;
@@ -307,10 +308,20 @@ export async function initWasm() {
     const Module = await createCbMpcModule({
         wasmBinary,
         instantiateWasm(imports, receiveInstance) {
-            const wasmModule = new WebAssembly.Module(wasmBinary);
-            const instance = new WebAssembly.Instance(wasmModule, imports);
-            receiveInstance(instance, wasmModule);
-            return instance.exports;
+            try {
+                const instance = new WebAssembly.Instance(bundledWasmModule, imports);
+                receiveInstance(instance, bundledWasmModule);
+                return instance.exports;
+            }
+            catch (moduleError) {
+                if (globalThis.caches) {
+                    throw moduleError;
+                }
+                const wasmModule = new WebAssembly.Module(wasmBinary);
+                const instance = new WebAssembly.Instance(wasmModule, imports);
+                receiveInstance(instance, wasmModule);
+                return instance.exports;
+            }
         },
     });
     const ptrSize = Module._wasm_ptr_size();
