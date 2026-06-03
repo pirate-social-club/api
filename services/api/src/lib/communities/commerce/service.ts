@@ -682,6 +682,8 @@ export async function createAssetForPost(input: {
       lockedDeliveryStorageRef,
       lockedDeliveryMetadataJson,
     ],
+  }).catch((error) => {
+    throw new Error(`asset_insert_failed:${error instanceof Error ? error.message : String(error)}`)
   })
   return serializeAsset(createdAssetRow)
 }
