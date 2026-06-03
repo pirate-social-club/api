@@ -51,8 +51,55 @@ type ListingDonationConfig = {
   donation_share_pct: number | null
 }
 
+type ListingVinylReleaseConfig = {
+  vinyl_release_provider: CommunityListing["vinyl_release_provider"] | null
+  vinyl_release_url: string | null
+}
+
 type CommunityListingRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
 type ListingExecutor = Pick<Client, "execute">
+type ListingAssetKind = NonNullable<Awaited<ReturnType<typeof getAssetRow>>>["asset_kind"]
+
+function resolveListingVinylReleaseConfig(input: {
+  assetKind?: ListingAssetKind | "live_room" | null
+  provider: CreateCommunityListingRequest["vinyl_release_provider"] | null | undefined
+  url: string | null | undefined
+}): ListingVinylReleaseConfig {
+  const provider = input.provider?.trim() || null
+  const url = input.url?.trim() || null
+
+  if (!provider && !url) {
+    return {
+      vinyl_release_provider: null,
+      vinyl_release_url: null,
+    }
+  }
+
+  if (input.assetKind !== "song_audio") {
+    throw badRequestError("Vinyl releases are only available for song listings")
+  }
+  if (provider !== "elasticstage") {
+    throw badRequestError("Unsupported vinyl release provider")
+  }
+  if (!url) {
+    throw badRequestError("vinyl_release_url is required when vinyl_release_provider is set")
+  }
+
+  let parsedUrl: URL
+  try {
+    parsedUrl = new URL(url)
+  } catch {
+    throw badRequestError("vinyl_release_url must be a valid URL")
+  }
+  if (parsedUrl.protocol !== "https:") {
+    throw badRequestError("vinyl_release_url must be an HTTPS URL")
+  }
+
+  return {
+    vinyl_release_provider: provider,
+    vinyl_release_url: url,
+  }
+}
 
 async function resolveListingDonationConfig(input: {
   env: Env
@@ -172,6 +219,7 @@ export async function createCommunityListingInTransaction(input: {
   client: ListingExecutor
 }): Promise<CommunityListing> {
   const { assetId, liveRoomId } = resolveRequestedListingTarget(input.body)
+  let assetKind: ListingAssetKind | "live_room" | null = null
   const membership = await getCommunityMembershipState(input.client, input.communityId, input.userId)
   if (!canAccessCommunity(membership)) {
     throw notFoundError("Community not found")
@@ -184,6 +232,7 @@ export async function createCommunityListingInTransaction(input: {
     if (!asset) {
       throw notFoundError("Asset not found")
     }
+    assetKind = asset.asset_kind
     assertAssetReadyForStoryRoyaltyCommerce(asset, input.env)
     if (asset.creator_user_id !== input.userId && !hasCommunityRole(membership, OWNER_OR_ADMIN_ROLE)) {
       throw notFoundError("Asset not found")
@@ -192,6 +241,7 @@ export async function createCommunityListingInTransaction(input: {
       throw badRequestError("Asset already has a listing")
     }
   } else if (liveRoomId) {
+    assetKind = "live_room"
     const liveRoom = await getLiveRoomListingTarget(input.client, input.communityId, liveRoomId)
     if (!liveRoom) {
       throw notFoundError("Live room not found")
@@ -219,16 +269,22 @@ export async function createCommunityListingInTransaction(input: {
     requestedPartnerId: input.body.donation_partner,
     requestedShareBps: input.body.donation_share_bps,
   })
+  const vinylReleaseConfig = resolveListingVinylReleaseConfig({
+    assetKind,
+    provider: input.body.vinyl_release_provider,
+    url: input.body.vinyl_release_url,
+  })
   const listingId = makeId("lst")
   const createdAt = nowIso()
   await input.client.execute({
     sql: `
       INSERT INTO listings (
         listing_id, community_id, asset_id, live_room_id, listing_mode, status, price_usd,
-        regional_pricing_policy_json, created_by_user_id, created_at, updated_at
+        regional_pricing_policy_json, vinyl_release_provider, vinyl_release_url,
+        created_by_user_id, created_at, updated_at
       ) VALUES (
         ?1, ?2, ?3, ?4, 'fixed_price', ?5, ?6,
-        ?7, ?8, ?9, ?9
+        ?7, ?8, ?9, ?10, ?11, ?11
       )
     `,
     args: [
@@ -243,6 +299,8 @@ export async function createCommunityListingInTransaction(input: {
         donation_partner_id: donationConfig.donation_partner_id,
         donation_share_pct: donationConfig.donation_share_pct,
       }),
+      vinylReleaseConfig.vinyl_release_provider,
+      vinylReleaseConfig.vinyl_release_url,
       input.userId,
       createdAt,
     ],

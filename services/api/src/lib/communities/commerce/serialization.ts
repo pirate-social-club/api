@@ -122,6 +122,8 @@ export function serializeListing(row: ListingRow): CommunityListing {
     regional_pricing_enabled: policy.regionalPricingEnabled,
     donation_partner: policy.donationPartnerId,
     donation_share_bps: pctToBps(policy.donationSharePct),
+    vinyl_release_provider: row.vinyl_release_provider,
+    vinyl_release_url: row.vinyl_release_url,
     created_by_user: `usr_${row.created_by_user_id}`,
     created: unixSeconds(row.created_at),
   }
@@ -203,6 +205,8 @@ export function serializePurchase(
     donation_partner: row.donation_partner_id,
     donation_share_bps: pctToBps(row.donation_share_pct),
     donation_amount_cents: usdToCents(row.donation_amount_usd),
+    vinyl_release_provider: row.vinyl_release_provider,
+    vinyl_release_url: row.vinyl_release_url,
     purchase_entitlement: entitlement.purchase_entitlement_id,
     entitlement_kind: entitlement.entitlement_kind,
     entitlement_target_ref: row.asset_id ? `asset_${entitlement.target_ref}` : entitlement.target_ref,

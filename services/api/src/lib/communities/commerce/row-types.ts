@@ -61,6 +61,8 @@ export type ListingRow = {
   status: CommunityListing["status"]
   price_usd: number
   regional_pricing_policy_json: string | null
+  vinyl_release_provider: CommunityListing["vinyl_release_provider"] | null
+  vinyl_release_url: string | null
   created_by_user_id: string
   created_at: string
   updated_at: string
@@ -169,6 +171,8 @@ export type PurchaseRow = {
   donation_partner_id: string | null
   donation_share_pct: number | null
   donation_amount_usd: number | null
+  vinyl_release_provider: CommunityPurchase["vinyl_release_provider"] | null
+  vinyl_release_url: string | null
   created_at: string
 }
 

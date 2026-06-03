@@ -7882,6 +7882,18 @@ const spec = {
             "minimum": 0,
             "nullable": true
           },
+          "vinyl_release_provider": {
+            "type": "string",
+            "enum": [
+              "elasticstage"
+            ],
+            "nullable": true
+          },
+          "vinyl_release_url": {
+            "type": "string",
+            "format": "uri",
+            "nullable": true
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -7959,6 +7971,18 @@ const spec = {
           "donation_share_bps": {
             "type": "integer",
             "minimum": 0,
+            "nullable": true
+          },
+          "vinyl_release_provider": {
+            "type": "string",
+            "enum": [
+              "elasticstage"
+            ],
+            "nullable": true
+          },
+          "vinyl_release_url": {
+            "type": "string",
+            "format": "uri",
             "nullable": true
           },
           "created_by_user": {
@@ -8112,6 +8136,18 @@ const spec = {
           "donation_amount_cents": {
             "type": "integer",
             "minimum": 0,
+            "nullable": true
+          },
+          "vinyl_release_provider": {
+            "type": "string",
+            "enum": [
+              "elasticstage"
+            ],
+            "nullable": true
+          },
+          "vinyl_release_url": {
+            "type": "string",
+            "format": "uri",
             "nullable": true
           },
           "purchase_entitlement": {
@@ -8597,6 +8633,18 @@ const spec = {
           "donation_amount_cents": {
             "type": "integer",
             "minimum": 0,
+            "nullable": true
+          },
+          "vinyl_release_provider": {
+            "type": "string",
+            "enum": [
+              "elasticstage"
+            ],
+            "nullable": true
+          },
+          "vinyl_release_url": {
+            "type": "string",
+            "format": "uri",
             "nullable": true
           },
           "entitlement_kind": {

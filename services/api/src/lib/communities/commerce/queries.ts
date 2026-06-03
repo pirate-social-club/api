@@ -110,6 +110,8 @@ function toListingRow(row: unknown): ListingRow {
     status: requiredString(row, "status") as CommunityListing["status"],
     price_usd: Number(numberOrNull(row, "price_usd") ?? 0),
     regional_pricing_policy_json: stringOrNull(row, "regional_pricing_policy_json"),
+    vinyl_release_provider: stringOrNull(row, "vinyl_release_provider") as ListingRow["vinyl_release_provider"] | null,
+    vinyl_release_url: stringOrNull(row, "vinyl_release_url"),
     created_by_user_id: requiredString(row, "created_by_user_id"),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
@@ -310,7 +312,8 @@ export async function getListingRowById(
   const row = await executeFirst(client, {
     sql: `
       SELECT listing_id, community_id, asset_id, live_room_id, listing_mode, status, price_usd,
-             regional_pricing_policy_json, created_by_user_id, created_at, updated_at
+             regional_pricing_policy_json, vinyl_release_provider, vinyl_release_url,
+             created_by_user_id, created_at, updated_at
       FROM listings
       WHERE community_id = ?1
         AND listing_id = ?2
@@ -332,7 +335,8 @@ export async function getListingRowByAssetId(
   const row = await executeFirst(client, {
     sql: `
       SELECT listing_id, community_id, asset_id, live_room_id, listing_mode, status, price_usd,
-             regional_pricing_policy_json, created_by_user_id, created_at, updated_at
+             regional_pricing_policy_json, vinyl_release_provider, vinyl_release_url,
+             created_by_user_id, created_at, updated_at
       FROM listings
       WHERE community_id = ?1
         AND asset_id = ?2
@@ -352,7 +356,8 @@ export async function getListingRowByLiveRoomId(
   const row = await executeFirst(client, {
     sql: `
       SELECT listing_id, community_id, asset_id, live_room_id, listing_mode, status, price_usd,
-             regional_pricing_policy_json, created_by_user_id, created_at, updated_at
+             regional_pricing_policy_json, vinyl_release_provider, vinyl_release_url,
+             created_by_user_id, created_at, updated_at
       FROM listings
       WHERE community_id = ?1
         AND live_room_id = ?2
@@ -379,7 +384,8 @@ export async function listListingRows(
   const result = await client.execute({
     sql: `
       SELECT listing_id, community_id, asset_id, live_room_id, listing_mode, status, price_usd,
-             regional_pricing_policy_json, created_by_user_id, created_at, updated_at
+             regional_pricing_policy_json, vinyl_release_provider, vinyl_release_url,
+             created_by_user_id, created_at, updated_at
       FROM listings
       WHERE community_id = ?1
         ${cursorClause}
@@ -593,7 +599,7 @@ export async function listPurchaseRows(
              buyer_wallet_address, buyer_wallet_address_normalized, buyer_chain_ref,
              settlement_wallet_attachment_id, purchase_price_usd, pricing_tier, settlement_mode, settlement_chain,
              settlement_token, settlement_tx_ref, donation_partner_id, donation_share_pct,
-             donation_amount_usd, created_at
+             donation_amount_usd, vinyl_release_provider, vinyl_release_url, created_at
       FROM purchases
       WHERE community_id = ?1
         AND buyer_user_id = ?2
@@ -626,6 +632,8 @@ export async function listPurchaseRows(
     donation_partner_id: stringOrNull(row, "donation_partner_id"),
     donation_share_pct: numberOrNull(row, "donation_share_pct"),
     donation_amount_usd: numberOrNull(row, "donation_amount_usd"),
+    vinyl_release_provider: stringOrNull(row, "vinyl_release_provider") as PurchaseRow["vinyl_release_provider"] | null,
+    vinyl_release_url: stringOrNull(row, "vinyl_release_url"),
     created_at: requiredString(row, "created_at"),
   }))
 }
@@ -642,7 +650,7 @@ export async function getPurchaseRow(
              buyer_wallet_address, buyer_wallet_address_normalized, buyer_chain_ref,
              settlement_wallet_attachment_id, purchase_price_usd, pricing_tier, settlement_mode, settlement_chain,
              settlement_token, settlement_tx_ref, donation_partner_id, donation_share_pct,
-             donation_amount_usd, created_at
+             donation_amount_usd, vinyl_release_provider, vinyl_release_url, created_at
       FROM purchases
       WHERE community_id = ?1
         AND purchase_id = ?2
@@ -671,6 +679,8 @@ export async function getPurchaseRow(
     donation_partner_id: stringOrNull(row, "donation_partner_id"),
     donation_share_pct: numberOrNull(row, "donation_share_pct"),
     donation_amount_usd: numberOrNull(row, "donation_amount_usd"),
+    vinyl_release_provider: stringOrNull(row, "vinyl_release_provider") as PurchaseRow["vinyl_release_provider"] | null,
+    vinyl_release_url: stringOrNull(row, "vinyl_release_url"),
     created_at: requiredString(row, "created_at"),
   } : null
 }

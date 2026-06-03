@@ -20,6 +20,7 @@ import {
   listLatestEntitlementRowsByPurchaseIds,
   getPurchaseQuoteRow,
   getPurchaseRow,
+  getListingRowById,
   listPurchaseAllocationLegRowsByPurchaseIds,
   listPurchaseAllocationLegRows,
   listPurchaseRows,
@@ -180,6 +181,11 @@ async function finalizeLocalPurchaseSettlement(input: {
     }
   }
 
+  const listing = await getListingRowById(input.client, input.communityId, input.quote.listing_id)
+  if (!listing) {
+    throw notFoundError("Listing not found")
+  }
+
   const tx = await input.client.transaction("write")
   try {
     await tx.execute({
@@ -189,13 +195,13 @@ async function finalizeLocalPurchaseSettlement(input: {
           buyer_wallet_address, buyer_wallet_address_normalized, buyer_chain_ref,
           settlement_wallet_attachment_id, purchase_price_usd, pricing_tier, settlement_chain,
           settlement_mode, settlement_token, settlement_tx_ref, donation_partner_id, donation_share_pct,
-          donation_amount_usd, donation_settlement_ref, created_at
+          donation_amount_usd, donation_settlement_ref, vinyl_release_provider, vinyl_release_url, created_at
         ) VALUES (
           ?1, ?2, ?3, ?4, ?5, ?6, ?7,
           ?8, ?9, ?10,
           ?11, ?12, ?13, ?14,
           ?15, ?16, ?17, ?18,
-          ?19, ?20, ?21, ?22
+          ?19, ?20, ?21, ?22, ?23, ?24
         )
         ON CONFLICT(purchase_id) DO NOTHING
       `,
@@ -221,6 +227,8 @@ async function finalizeLocalPurchaseSettlement(input: {
         input.donationPartnerId ? input.donationSharePct : null,
         input.donationPartnerId ? input.donationAmountUsd : null,
         Array.from(input.charityPayouts.values())[0]?.settlementRef ?? null,
+        listing.vinyl_release_provider ?? null,
+        listing.vinyl_release_url,
         input.createdAt,
       ],
     })

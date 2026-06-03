@@ -135,6 +135,8 @@ export function serializeSettlement(
     donation_partner: purchase.donation_partner_id,
     donation_share_bps: pctToBps(purchase.donation_share_pct),
     donation_amount_cents: usdToCents(purchase.donation_amount_usd),
+    vinyl_release_provider: purchase.vinyl_release_provider,
+    vinyl_release_url: purchase.vinyl_release_url,
     entitlement_kind: toSettlementEntitlementKind(entitlement.entitlement_kind),
     entitlement_target_ref: purchase.asset_id ? `asset_${entitlement.target_ref}` : entitlement.target_ref,
     purchase_entitlement: entitlement.purchase_entitlement_id,
