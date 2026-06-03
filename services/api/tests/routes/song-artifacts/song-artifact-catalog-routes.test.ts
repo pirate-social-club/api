@@ -4,12 +4,9 @@ import { app } from "../../../src/index"
 import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { setStoryRoyaltyRegistrarForTests } from "../../../src/lib/story/story-royalty-registration-service"
-import {
-  DERIVATIVE_SOURCE_FANOUT_CONCURRENCY,
-  MAX_DERIVATIVE_SOURCE_FANOUT_COMMUNITIES,
-  mapDerivativeSourceFanoutWithConcurrency,
-  resolveDerivativeSourceFanoutCommunityIds,
-} from "../../../src/lib/communities/commerce/service"
+import { upsertStoryRegisteredAssetProjection } from "../../../src/lib/communities/commerce/derivative-source-projection"
+import type { Client } from "../../../src/lib/sql-client"
+import type { Env } from "../../../src/types"
 import {
   completeUniqueHumanVerification,
   exchangeJwt,
@@ -50,7 +47,7 @@ type DerivativeSourceListBody = {
 }
 
 async function createCommunityForTest(input: {
-  env: Parameters<typeof requestJson>[2]
+  env: Env
   accessToken: string
   displayName: string
 }): Promise<string> {
@@ -76,7 +73,7 @@ async function createCommunityForTest(input: {
 }
 
 async function setMembershipProjection(input: {
-  client: Pick<ReturnType<typeof createClient>, "execute">
+  client: Pick<Client, "execute">
   communityId: string
   userId: string
   state: "not_member" | "pending_request" | "member" | "banned"
@@ -198,6 +195,38 @@ async function insertDerivativeSourceAsset(input: {
   }
 }
 
+async function insertDerivativeSourceProjection(input: {
+  env: Env
+  communityId: string
+  creatorUserId: string
+  assetId: string
+  title: string
+  assetKind: "song_audio" | "video_file"
+  storyIpId?: string
+  storyLicenseTermsId?: string
+  postStatus?: "published" | "deleted" | "hidden" | "removed"
+}): Promise<void> {
+  const now = new Date().toISOString()
+  await upsertStoryRegisteredAssetProjection({
+    env: input.env,
+    projection: {
+      communityId: input.communityId,
+      assetId: input.assetId,
+      displayTitle: input.title,
+      creatorUserId: input.creatorUserId,
+      assetKind: input.assetKind,
+      licensePreset: "commercial-remix",
+      commercialRevSharePct: 15,
+      storyIpId: input.storyIpId ?? `0x${input.assetId.padEnd(40, "0").slice(0, 40)}`,
+      storyLicenseTermsId: input.storyLicenseTermsId ?? "17",
+      sourcePostId: `post_${input.assetId}`,
+      sourcePostStatus: input.postStatus ?? "published",
+      sourceUpdatedAt: now,
+      createdAt: now,
+    },
+  })
+}
+
 beforeEach(() => {
   resetRuntimeCaches()
   originalFetch = globalThis.fetch
@@ -212,50 +241,6 @@ afterEach(async () => {
 })
 
 describe("song artifact catalog routes", () => {
-  test("runs derivative source fan-out with bounded concurrency", async () => {
-    let active = 0
-    let maxActive = 0
-
-    const results = await mapDerivativeSourceFanoutWithConcurrency(
-      Array.from({ length: DERIVATIVE_SOURCE_FANOUT_CONCURRENCY + 3 }, (_, index) => index),
-      DERIVATIVE_SOURCE_FANOUT_CONCURRENCY,
-      async (index) => {
-        active += 1
-        maxActive = Math.max(maxActive, active)
-        await new Promise((resolve) => setTimeout(resolve, 1))
-        active -= 1
-        return index
-      },
-    )
-
-    expect(results).toHaveLength(DERIVATIVE_SOURCE_FANOUT_CONCURRENCY + 3)
-    expect(maxActive).toBe(DERIVATIVE_SOURCE_FANOUT_CONCURRENCY)
-  })
-
-  test("caps global derivative source fan-out to member communities only", () => {
-    const memberships = Array.from({ length: 30 }, (_, index) => ({
-      projection_id: `cmp_${index}`,
-      community_id: `cmt_fanout_${index.toString().padStart(2, "0")}`,
-      user_id: "usr_fanout",
-      membership_state: index === 3 ? "banned" : index === 7 ? "pending_request" : "member",
-      role_summary_json: null,
-      source_updated_at: "2026-01-01T00:00:00.000Z",
-      created_at: "2026-01-01T00:00:00.000Z",
-      updated_at: "2026-01-01T00:00:00.000Z",
-    } as const))
-
-    const communityIds = resolveDerivativeSourceFanoutCommunityIds(memberships)
-    expect(communityIds).toHaveLength(MAX_DERIVATIVE_SOURCE_FANOUT_COMMUNITIES)
-    expect(communityIds).not.toContain("cmt_fanout_03")
-    expect(communityIds).not.toContain("cmt_fanout_07")
-    expect(communityIds).toEqual(
-      memberships
-        .filter((membership) => membership.membership_state === "member")
-        .slice(0, MAX_DERIVATIVE_SOURCE_FANOUT_COMMUNITIES)
-        .map((membership) => membership.community_id),
-    )
-  })
-
   test("lists Story-registered derivative sources for community members", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
@@ -439,7 +424,7 @@ describe("song artifact catalog routes", () => {
     expect(outsiderSources.status).toBe(404)
   })
 
-  test("lists global derivative sources across member communities", async () => {
+  test("lists global derivative sources from the control-plane projection", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
 
@@ -458,13 +443,6 @@ describe("song artifact catalog routes", () => {
       accessToken: viewer.accessToken,
       displayName: "Global Composer Club",
     })
-    await setMembershipProjection({
-      client: ctx.client,
-      communityId: sourceCommunityId,
-      userId: viewer.userId,
-      state: "member",
-      ordinal: 1,
-    })
 
     await insertDerivativeSourceAsset({
       communityDbRoot: ctx.communityDbRoot,
@@ -478,6 +456,16 @@ describe("song artifact catalog routes", () => {
       storyIpId: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       storyLicenseTermsId: "21",
     })
+    await insertDerivativeSourceProjection({
+      env: ctx.env,
+      communityId: sourceCommunityId,
+      creatorUserId: sourceOwner.userId,
+      assetId: "ast_global_source",
+      title: "Across the Water",
+      assetKind: "song_audio",
+      storyIpId: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      storyLicenseTermsId: "21",
+    })
     await insertDerivativeSourceAsset({
       communityDbRoot: ctx.communityDbRoot,
       communityId: composerCommunityId,
@@ -487,6 +475,16 @@ describe("song artifact catalog routes", () => {
       assetKind: "song_audio",
       rightsBasis: "original",
       publicationStatus: "story_published",
+      storyIpId: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      storyLicenseTermsId: "22",
+    })
+    await insertDerivativeSourceProjection({
+      env: ctx.env,
+      communityId: composerCommunityId,
+      creatorUserId: viewer.userId,
+      assetId: "ast_local_source",
+      title: "Local Harbor",
+      assetKind: "song_audio",
       storyIpId: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       storyLicenseTermsId: "22",
     })
@@ -553,12 +551,6 @@ describe("song artifact catalog routes", () => {
       accessToken: viewer.accessToken,
       displayName: "Community Scope Composer Club",
     })
-    await setMembershipProjection({
-      client: ctx.client,
-      communityId: sourceCommunityId,
-      userId: viewer.userId,
-      state: "member",
-    })
 
     await insertDerivativeSourceAsset({
       communityDbRoot: ctx.communityDbRoot,
@@ -597,7 +589,7 @@ describe("song artifact catalog routes", () => {
     }
   })
 
-  test("global derivative sources do not leak banned or non-member communities", async () => {
+  test("global derivative sources are not limited by source-community membership", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
 
@@ -638,6 +630,14 @@ describe("song artifact catalog routes", () => {
       rightsBasis: "original",
       publicationStatus: "story_published",
     })
+    await insertDerivativeSourceProjection({
+      env: ctx.env,
+      communityId: bannedCommunityId,
+      creatorUserId: sourceOwner.userId,
+      assetId: "ast_banned_source",
+      title: "Banned Source",
+      assetKind: "song_audio",
+    })
     await insertDerivativeSourceAsset({
       communityDbRoot: ctx.communityDbRoot,
       communityId: nonMemberCommunityId,
@@ -647,6 +647,14 @@ describe("song artifact catalog routes", () => {
       assetKind: "song_audio",
       rightsBasis: "original",
       publicationStatus: "story_published",
+    })
+    await insertDerivativeSourceProjection({
+      env: ctx.env,
+      communityId: nonMemberCommunityId,
+      creatorUserId: sourceOwner.userId,
+      assetId: "ast_non_member_source",
+      title: "Non Member Source",
+      assetKind: "song_audio",
     })
 
     const response = await app.request(
@@ -660,8 +668,10 @@ describe("song artifact catalog routes", () => {
     )
     expect(response.status).toBe(200)
     const body = await json(response) as DerivativeSourceListBody
-    expect(body.items.map((item) => item.asset)).not.toContain("asset_ast_banned_source")
-    expect(body.items.map((item) => item.asset)).not.toContain("asset_ast_non_member_source")
+    expect(body.items.map((item) => item.asset).sort()).toEqual([
+      "asset_ast_banned_source",
+      "asset_ast_non_member_source",
+    ])
   })
 
   test("global derivative source kind and query filters still apply", async () => {
@@ -683,12 +693,6 @@ describe("song artifact catalog routes", () => {
       accessToken: viewer.accessToken,
       displayName: "Global Filter Composer Club",
     })
-    await setMembershipProjection({
-      client: ctx.client,
-      communityId: sourceCommunityId,
-      userId: viewer.userId,
-      state: "member",
-    })
 
     await insertDerivativeSourceAsset({
       communityDbRoot: ctx.communityDbRoot,
@@ -700,6 +704,14 @@ describe("song artifact catalog routes", () => {
       rightsBasis: "original",
       publicationStatus: "story_published",
     })
+    await insertDerivativeSourceProjection({
+      env: ctx.env,
+      communityId: sourceCommunityId,
+      creatorUserId: sourceOwner.userId,
+      assetId: "ast_filter_song",
+      title: "Needle Song",
+      assetKind: "song_audio",
+    })
     await insertDerivativeSourceAsset({
       communityDbRoot: ctx.communityDbRoot,
       communityId: sourceCommunityId,
@@ -709,6 +721,23 @@ describe("song artifact catalog routes", () => {
       assetKind: "video_file",
       rightsBasis: "original",
       publicationStatus: "story_published",
+    })
+    await insertDerivativeSourceProjection({
+      env: ctx.env,
+      communityId: sourceCommunityId,
+      creatorUserId: sourceOwner.userId,
+      assetId: "ast_filter_video",
+      title: "Needle Video",
+      assetKind: "video_file",
+    })
+    await insertDerivativeSourceProjection({
+      env: ctx.env,
+      communityId: sourceCommunityId,
+      creatorUserId: sourceOwner.userId,
+      assetId: "ast_filter_removed_song",
+      title: "Needle Removed Song",
+      assetKind: "song_audio",
+      postStatus: "removed",
     })
 
     const videoResponse = await app.request(
@@ -723,6 +752,19 @@ describe("song artifact catalog routes", () => {
     expect(videoResponse.status).toBe(200)
     const videoBody = await json(videoResponse) as DerivativeSourceListBody
     expect(videoBody.items.map((item) => item.asset)).toEqual(["asset_ast_filter_video"])
+
+    const songResponse = await app.request(
+      `http://pirate.test/communities/${composerCommunityId}/derivative-sources?scope=global&kind=song&q=Needle`,
+      {
+        headers: {
+          authorization: `Bearer ${viewer.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(songResponse.status).toBe(200)
+    const songBody = await json(songResponse) as DerivativeSourceListBody
+    expect(songBody.items.map((item) => item.asset)).toEqual(["asset_ast_filter_song"])
 
     const missingResponse = await app.request(
       `http://pirate.test/communities/${composerCommunityId}/derivative-sources?scope=global&kind=song&q=Missing`,

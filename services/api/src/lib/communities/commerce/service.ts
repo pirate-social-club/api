@@ -13,11 +13,8 @@ import { isPubliclyReadablePost } from "../../posts/post-access"
 import { fetchSongArtifactBytes } from "../../song-artifacts/song-artifact-storage"
 import { sha256Hex } from "../../crypto"
 import { getProfilePublicHandleLabel } from "../../auth/auth-serializers"
-import { listCommunityMembershipProjectionRowsByUserId } from "../../auth/auth-db-community-queries"
-import type { CommunityMembershipProjectionRow } from "../../auth/auth-db-community-rows"
 import type { UserRepository } from "../../auth/repositories"
 import type { ProfileRepository } from "../../auth/repositories"
-import { getControlPlaneClient } from "../../runtime-deps"
 import {
   isStoryRoyaltyRegistrationConfigured,
   maybeRegisterStoryRoyaltyForAsset,
@@ -42,6 +39,10 @@ import {
   fetchPrimaryAssetContent,
   prepareLockedAssetDelivery,
 } from "./asset-delivery"
+import {
+  listStoryRegisteredAssetProjectionRows,
+  upsertStoryRegisteredAssetProjection,
+} from "./derivative-source-projection"
 import type {
   Asset,
   AssetAccessResponse,
@@ -73,46 +74,6 @@ function derivativeSourceStoryRef(row: DerivativeSourceRow): string | null {
 
 export type DerivativeSourceScope = "community" | "global"
 
-export const MAX_DERIVATIVE_SOURCE_FANOUT_COMMUNITIES = 25
-export const DERIVATIVE_SOURCE_FANOUT_CONCURRENCY = 5
-
-export function resolveDerivativeSourceFanoutCommunityIds(
-  memberships: CommunityMembershipProjectionRow[],
-): string[] {
-  return memberships
-    .filter((membership) => membership.membership_state === "member")
-    .map((membership) => membership.community_id)
-    .slice(0, MAX_DERIVATIVE_SOURCE_FANOUT_COMMUNITIES)
-}
-
-function sortDerivativeSourceRows(rows: DerivativeSourceRow[]): DerivativeSourceRow[] {
-  return rows.sort((a, b) => {
-    const updatedCompare = b.updated_at.localeCompare(a.updated_at)
-    if (updatedCompare !== 0) return updatedCompare
-    return b.asset_id.localeCompare(a.asset_id)
-  })
-}
-
-export async function mapDerivativeSourceFanoutWithConcurrency<T, R>(
-  items: T[],
-  concurrency: number,
-  mapper: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = []
-  let nextIndex = 0
-  const workerCount = Math.min(concurrency, items.length)
-
-  await Promise.all(Array.from({ length: workerCount }, async () => {
-    while (nextIndex < items.length) {
-      const item = items[nextIndex]!
-      nextIndex += 1
-      results.push(await mapper(item))
-    }
-  }))
-
-  return results
-}
-
 async function requireDerivativeSourceComposerCommunity(input: {
   env: Env
   userId: string
@@ -127,74 +88,18 @@ async function requireDerivativeSourceComposerCommunity(input: {
   }
 }
 
-async function listCommunityDerivativeSourceRows(input: {
-  env: Env
-  communityId: string
-  kind?: DerivativeSourceKind | null
-  query?: string | null
-  limit: number
-  communityRepository: CommunityDatabaseBindingRepository
-}): Promise<DerivativeSourceRow[]> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
-  try {
-    return await listDerivativeSourceRows({
-      client: db.client,
-      communityId: input.communityId,
-      kind: input.kind,
-      query: input.query,
-      limit: input.limit,
-    })
-  } finally {
-    db.close()
-  }
-}
-
 async function listGlobalDerivativeSourceRows(input: {
   env: Env
-  userId: string
   kind?: DerivativeSourceKind | null
   query?: string | null
   limit: number
-  communityRepository: CommunityDatabaseBindingRepository
 }): Promise<DerivativeSourceRow[]> {
-  const controlPlane = getControlPlaneClient(input.env)
-  const memberships = await listCommunityMembershipProjectionRowsByUserId(controlPlane, input.userId)
-  const memberMemberships = memberships.filter((membership) => membership.membership_state === "member")
-  const memberCommunityIds = resolveDerivativeSourceFanoutCommunityIds(memberships)
-
-  if (memberMemberships.length > MAX_DERIVATIVE_SOURCE_FANOUT_COMMUNITIES) {
-    console.warn("[communities-commerce] derivative source global fan-out capped", {
-      userId: input.userId,
-      selectedCommunities: MAX_DERIVATIVE_SOURCE_FANOUT_COMMUNITIES,
-    })
-  }
-
-  const perCommunityFetch = Math.max(input.limit * 2, 50)
-  const rowsByCommunity = await mapDerivativeSourceFanoutWithConcurrency(
-    memberCommunityIds,
-    DERIVATIVE_SOURCE_FANOUT_CONCURRENCY,
-    async (communityId) => {
-      try {
-        return await listCommunityDerivativeSourceRows({
-          env: input.env,
-          communityId,
-          kind: input.kind,
-          query: input.query,
-          limit: perCommunityFetch,
-          communityRepository: input.communityRepository,
-        })
-      } catch (error) {
-        console.warn("[communities-commerce] derivative source global fan-out community skipped", {
-          communityId,
-          error: error instanceof Error ? error.message : String(error),
-        })
-        return []
-      }
-    },
-  )
-  const rows = rowsByCommunity.flat()
-
-  return sortDerivativeSourceRows(rows).slice(0, input.limit)
+  return await listStoryRegisteredAssetProjectionRows({
+    env: input.env,
+    kind: input.kind,
+    query: input.query,
+    limit: input.limit,
+  })
 }
 
 async function derivativeSourceRowsToResponse(input: {
@@ -270,6 +175,26 @@ function shouldAttemptStoryRoyaltyRegistration(input: {
 
 function buildPublicAssetContentPath(communityId: string, assetId: string): string {
   return `/public-communities/${encodeURIComponent(`com_${communityId}`)}/assets/${encodeURIComponent(`asset_${assetId}`)}/content`
+}
+
+function isProjectableStoryRegisteredAsset(input: {
+  assetKind: Asset["asset_kind"]
+  publicationStatus: Asset["publication_status"]
+  storyStatus: Asset["story_status"]
+  storyRoyaltyRegistrationStatus: "none" | "pending" | "registered" | "failed"
+  storyIpId: string | null
+  storyLicenseTermsId: string | null
+}): input is typeof input & {
+  assetKind: "song_audio" | "video_file"
+  storyIpId: string
+  storyLicenseTermsId: string
+} {
+  return isStoryRoyaltyAssetKind(input.assetKind)
+    && input.publicationStatus === "story_published"
+    && input.storyStatus === "published"
+    && input.storyRoyaltyRegistrationStatus === "registered"
+    && Boolean(input.storyIpId?.trim())
+    && Boolean(input.storyLicenseTermsId?.trim())
 }
 
 type AuthorizedAssetAccess = {
@@ -628,6 +553,44 @@ export async function createAssetForPost(input: {
       lockedDeliveryMetadataJson,
     ],
   })
+  const projectionCandidate = {
+    assetKind: input.assetKind,
+    publicationStatus,
+    storyStatus,
+    storyRoyaltyRegistrationStatus,
+    storyIpId,
+    storyLicenseTermsId,
+  }
+  if (isProjectableStoryRegisteredAsset(projectionCandidate)) {
+    try {
+      await upsertStoryRegisteredAssetProjection({
+        env: input.env,
+        projection: {
+          communityId: input.communityId,
+          assetId: input.post.asset_id,
+          displayTitle: input.displayTitle?.trim() || input.post.title?.trim() || null,
+          creatorUserId: input.post.author_user_id ?? "",
+          assetKind: projectionCandidate.assetKind,
+          licensePreset: effectiveLicensePreset,
+          commercialRevSharePct: effectiveCommercialRevSharePct,
+          storyIpId: projectionCandidate.storyIpId,
+          storyLicenseTermsId: projectionCandidate.storyLicenseTermsId,
+          sourcePostId: input.post.post_id,
+          sourcePostStatus: input.post.status ?? "published",
+          sourceUpdatedAt: input.post.updated_at ?? createdAt,
+          createdAt,
+        },
+      })
+    } catch (error) {
+      logPipelineInfo("[commerce] Story registered asset projection upsert failed", {
+        level: "warn",
+        community_id: input.communityId,
+        post_id: input.post.post_id,
+        asset_id: input.post.asset_id,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
   const asset = await getAssetRow(input.client, input.communityId, input.post.asset_id)
   if (!asset) {
     throw notFoundError("Asset not found")
@@ -726,11 +689,9 @@ export async function listDerivativeSources(input: {
     })
     rows = await listGlobalDerivativeSourceRows({
       env: input.env,
-      userId: input.userId,
       kind: input.kind,
       query: input.query,
       limit: input.limit,
-      communityRepository: input.communityRepository,
     })
   } else {
     const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)

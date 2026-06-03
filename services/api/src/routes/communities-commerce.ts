@@ -142,7 +142,6 @@ export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedE
   communities.get("/:communityId/derivative-sources", async (c) => {
     const { actor, communityId, communityRepository, profileRepository } = await getResolvedCommunityRouteContext(c)
     const scope = derivativeSourceScope(c.req.query("scope"))
-    // TODO: Replace global fan-out with a control-plane Story-registered asset projection.
     const result = await listDerivativeSources({
       env: c.env,
       userId: actor.userId,

@@ -9,6 +9,8 @@ import { ensureRemoteThreadCommentLockColumns } from "./ensure-remote-thread-com
 import { ensureRemoteCommentGuestAuthorship } from "./ensure-remote-comment-guest-authorship"
 import { ensureRemoteLiveRoomTables } from "./ensure-remote-live-room-tables"
 import { ensureRemotePostSongTitleColumn } from "./ensure-remote-post-song-title-column"
+import { ensureRemoteCommerceVinylReleaseColumns } from "./ensure-remote-commerce-vinyl-release-columns"
+import { logPipelineInfo } from "../observability/pipeline-log"
 import type { Env } from "../../env"
 
 export type OpenCommunityDbOptions = {
@@ -17,6 +19,7 @@ export type OpenCommunityDbOptions = {
   ensureRemoteCommentGuestAuthorship?: (client: Client) => Promise<void>
   ensureRemoteLiveRoomTables?: (client: Client) => Promise<void>
   ensureRemotePostSongTitleColumn?: (client: Client) => Promise<void>
+  ensureRemoteCommerceVinylReleaseColumns?: (client: Client) => Promise<void>
 }
 
 const remoteMembershipIndexPreflightComplete = new Set<string>()
@@ -24,11 +27,13 @@ const remoteThreadCommentLockColumnPreflightComplete = new Set<string>()
 const remoteCommentGuestAuthorshipPreflightComplete = new Set<string>()
 const remoteLiveRoomTablePreflightComplete = new Set<string>()
 const remotePostSongTitleColumnPreflightComplete = new Set<string>()
+const remoteCommerceVinylReleaseColumnPreflightComplete = new Set<string>()
 const remoteMembershipIndexPreflightInFlight = new Map<string, Promise<void>>()
 const remoteThreadCommentLockColumnPreflightInFlight = new Map<string, Promise<void>>()
 const remoteCommentGuestAuthorshipPreflightInFlight = new Map<string, Promise<void>>()
 const remoteLiveRoomTablePreflightInFlight = new Map<string, Promise<void>>()
 const remotePostSongTitleColumnPreflightInFlight = new Map<string, Promise<void>>()
+const remoteCommerceVinylReleaseColumnPreflightInFlight = new Map<string, Promise<void>>()
 
 function formatPreflightError(error: unknown): Record<string, string> {
   if (!error || typeof error !== "object") {
@@ -62,7 +67,8 @@ async function runRemoteCommunityDbPreflight(input: {
     try {
       await input.run()
     } catch (error) {
-      console.warn("[community-db-factory] remote community db preflight skipped", {
+      logPipelineInfo("[community-db-factory] remote community db preflight skipped", {
+        level: "warn",
         label: input.label,
         ...formatPreflightError(error),
       })
@@ -128,6 +134,7 @@ export async function openCommunityDb(
     await ensureRemoteThreadCommentLockColumns(client)
     await ensureRemoteCommentGuestAuthorship(client)
     await ensureRemotePostSongTitleColumn(client)
+    await ensureRemoteCommerceVinylReleaseColumns(client)
     return {
       client,
       databaseUrl,
@@ -156,11 +163,13 @@ export async function openCommunityDb(
     await ensureCommunityDbSchema(client)
     await ensureRemoteThreadCommentLockColumns(client)
     await ensureRemotePostSongTitleColumn(client)
+    await ensureRemoteCommerceVinylReleaseColumns(client)
   } else {
     const ensureIndexes = options?.ensureRemoteMembershipStateIndexes ?? ensureRemoteCommunityMembershipStateIndexes
     const ensureLockColumns = options?.ensureRemoteThreadCommentLockColumns ?? ensureRemoteThreadCommentLockColumns
     const ensureGuestAuthorship = options?.ensureRemoteCommentGuestAuthorship ?? ensureRemoteCommentGuestAuthorship
     const ensureSongTitleColumn = options?.ensureRemotePostSongTitleColumn ?? ensureRemotePostSongTitleColumn
+    const ensureVinylReleaseColumns = options?.ensureRemoteCommerceVinylReleaseColumns ?? ensureRemoteCommerceVinylReleaseColumns
     const ensureLiveRoomTables = options?.ensureRemoteLiveRoomTables ?? ensureRemoteLiveRoomTables
     await Promise.all([
       runRemoteCommunityDbPreflight({
@@ -189,6 +198,13 @@ export async function openCommunityDb(
         complete: remotePostSongTitleColumnPreflightComplete,
         inFlight: remotePostSongTitleColumnPreflightInFlight,
         run: () => ensureSongTitleColumn(client),
+      }),
+      runRemoteCommunityDbPreflight({
+        databaseUrl: binding.database_url,
+        label: "commerce_vinyl_release_columns",
+        complete: remoteCommerceVinylReleaseColumnPreflightComplete,
+        inFlight: remoteCommerceVinylReleaseColumnPreflightInFlight,
+        run: () => ensureVinylReleaseColumns(client),
       }),
       runRemoteCommunityDbPreflight({
         databaseUrl: binding.database_url,

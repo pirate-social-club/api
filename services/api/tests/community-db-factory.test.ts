@@ -16,6 +16,7 @@ import { ensureRemoteThreadCommentLockColumns } from "../src/lib/communities/ens
 import { ensureRemoteCommentGuestAuthorship } from "../src/lib/communities/ensure-remote-comment-guest-authorship"
 import { ensureRemoteLiveRoomTables } from "../src/lib/communities/ensure-remote-live-room-tables"
 import { ensureRemotePostSongTitleColumn } from "../src/lib/communities/ensure-remote-post-song-title-column"
+import { ensureRemoteCommerceVinylReleaseColumns } from "../src/lib/communities/ensure-remote-commerce-vinyl-release-columns"
 
 const cleanupPaths: string[] = []
 const COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS = 120_000
@@ -314,6 +315,7 @@ describe("openCommunityDb", () => {
     let ensureLiveRoomTableCalls = 0
     let ensureSongTitleColumnCalls = 0
     let ensureGuestAuthorshipCalls = 0
+    let ensureVinylReleaseColumnCalls = 0
     const db = await openCommunityDb(
       {
         TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
@@ -325,6 +327,7 @@ describe("openCommunityDb", () => {
         ensureRemoteThreadCommentLockColumns: async () => { ensureLockColumnCalls += 1 },
         ensureRemoteCommentGuestAuthorship: async () => { ensureGuestAuthorshipCalls += 1 },
         ensureRemotePostSongTitleColumn: async () => { ensureSongTitleColumnCalls += 1 },
+        ensureRemoteCommerceVinylReleaseColumns: async () => { ensureVinylReleaseColumnCalls += 1 },
         ensureRemoteLiveRoomTables: async () => { ensureLiveRoomTableCalls += 1 },
       },
     )
@@ -343,6 +346,7 @@ describe("openCommunityDb", () => {
         ensureRemoteThreadCommentLockColumns: async () => { ensureLockColumnCalls += 1 },
         ensureRemoteCommentGuestAuthorship: async () => { ensureGuestAuthorshipCalls += 1 },
         ensureRemotePostSongTitleColumn: async () => { ensureSongTitleColumnCalls += 1 },
+        ensureRemoteCommerceVinylReleaseColumns: async () => { ensureVinylReleaseColumnCalls += 1 },
         ensureRemoteLiveRoomTables: async () => { ensureLiveRoomTableCalls += 1 },
       },
     )
@@ -353,6 +357,7 @@ describe("openCommunityDb", () => {
     expect(ensureLockColumnCalls).toBe(1)
     expect(ensureGuestAuthorshipCalls).toBe(1)
     expect(ensureSongTitleColumnCalls).toBe(1)
+    expect(ensureVinylReleaseColumnCalls).toBe(1)
     expect(ensureLiveRoomTableCalls).toBe(1)
   })
 
@@ -407,6 +412,7 @@ describe("openCommunityDb", () => {
     let ensureLiveRoomTableCalls = 0
     let ensureSongTitleColumnCalls = 0
     let ensureGuestAuthorshipCalls = 0
+    let ensureVinylReleaseColumnCalls = 0
     const db = await openCommunityDb(
       {
         TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
@@ -429,6 +435,12 @@ describe("openCommunityDb", () => {
         ensureRemoteCommentGuestAuthorship: async () => { ensureGuestAuthorshipCalls += 1 },
         ensureRemotePostSongTitleColumn: async () => {
           ensureSongTitleColumnCalls += 1
+          throw Object.assign(new Error("SQLite error: out of memory"), {
+            code: "SQLITE_NOMEM",
+          })
+        },
+        ensureRemoteCommerceVinylReleaseColumns: async () => {
+          ensureVinylReleaseColumnCalls += 1
           throw Object.assign(new Error("SQLite error: out of memory"), {
             code: "SQLITE_NOMEM",
           })
@@ -456,6 +468,7 @@ describe("openCommunityDb", () => {
         ensureRemoteThreadCommentLockColumns: async () => { ensureLockColumnCalls += 1 },
         ensureRemoteCommentGuestAuthorship: async () => { ensureGuestAuthorshipCalls += 1 },
         ensureRemotePostSongTitleColumn: async () => { ensureSongTitleColumnCalls += 1 },
+        ensureRemoteCommerceVinylReleaseColumns: async () => { ensureVinylReleaseColumnCalls += 1 },
         ensureRemoteLiveRoomTables: async () => { ensureLiveRoomTableCalls += 1 },
       },
     )
@@ -466,6 +479,7 @@ describe("openCommunityDb", () => {
     expect(ensureLockColumnCalls).toBe(1)
     expect(ensureGuestAuthorshipCalls).toBe(1)
     expect(ensureSongTitleColumnCalls).toBe(1)
+    expect(ensureVinylReleaseColumnCalls).toBe(1)
     expect(ensureLiveRoomTableCalls).toBe(1)
   })
 
@@ -909,6 +923,40 @@ describe("openCommunityDb", () => {
       expect(annotationsUrlChecksum).toBe("4ffa5faa01551ecf40fdcdfdb8a4a892e359110b17d077c287fbc91584718b7b")
 
       await ensureRemotePostSongTitleColumn(client)
+    } finally {
+      client.close()
+    }
+  }, COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS)
+
+  testWithTimeout("ensures commerce vinyl release columns on remote community database open", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-remote-vinyl-release-"))
+    cleanupPaths.push(rootDir)
+
+    const databasePath = join(rootDir, `${randomUUID()}.db`)
+    await applyPartialCommunitySchema(databasePath, 1093)
+
+    const client = createClient({ url: `file:${databasePath}` })
+    try {
+      const beforeListingColumns = await getTableColumns(databasePath, "listings")
+      expect(beforeListingColumns).not.toContain("vinyl_release_provider")
+      expect(beforeListingColumns).not.toContain("vinyl_release_url")
+      const beforePurchaseColumns = await getTableColumns(databasePath, "purchases")
+      expect(beforePurchaseColumns).not.toContain("vinyl_release_provider")
+      expect(beforePurchaseColumns).not.toContain("vinyl_release_url")
+
+      await ensureRemoteCommerceVinylReleaseColumns(client)
+
+      const afterListingColumns = await getTableColumns(databasePath, "listings")
+      expect(afterListingColumns).toContain("vinyl_release_provider")
+      expect(afterListingColumns).toContain("vinyl_release_url")
+      const afterPurchaseColumns = await getTableColumns(databasePath, "purchases")
+      expect(afterPurchaseColumns).toContain("vinyl_release_provider")
+      expect(afterPurchaseColumns).toContain("vinyl_release_url")
+
+      const checksum = await getMigrationChecksum(databasePath, "1094_vinyl_release_listings.sql")
+      expect(checksum).toBe("04680b4600a34ce5275e33294b2e8d91d2fd869d66d0d82583dc1fe03d60cf1b")
+
+      await ensureRemoteCommerceVinylReleaseColumns(client)
     } finally {
       client.close()
     }
