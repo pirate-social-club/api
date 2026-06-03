@@ -3894,4 +3894,24 @@ ALTER TABLE community_assistant_policy
 `,
     checksum: "aa1afa65af9f4845eff8c1d4d138725ef4eb85e1991a6ba0b8327ee62ccb72a7",
   },
+  {
+    name: "1094_vinyl_release_listings.sql",
+    sql: `ALTER TABLE listings
+ADD COLUMN vinyl_release_provider TEXT CHECK (
+    vinyl_release_provider IS NULL OR vinyl_release_provider IN ('elasticstage')
+);
+
+ALTER TABLE listings
+ADD COLUMN vinyl_release_url TEXT;
+
+ALTER TABLE purchases
+ADD COLUMN vinyl_release_provider TEXT CHECK (
+    vinyl_release_provider IS NULL OR vinyl_release_provider IN ('elasticstage')
+);
+
+ALTER TABLE purchases
+ADD COLUMN vinyl_release_url TEXT;
+`,
+    checksum: "04680b4600a34ce5275e33294b2e8d91d2fd869d66d0d82583dc1fe03d60cf1b",
+  },
 ] as const;
