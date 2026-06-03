@@ -3895,6 +3895,39 @@ ALTER TABLE community_assistant_policy
     checksum: "aa1afa65af9f4845eff8c1d4d138725ef4eb85e1991a6ba0b8327ee62ccb72a7",
   },
   {
+    name: "1091_source_language_detection_metadata.sql",
+    sql: `ALTER TABLE posts ADD COLUMN source_language_confidence REAL;
+ALTER TABLE posts ADD COLUMN source_language_reliable INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE posts ADD COLUMN source_language_detector TEXT;
+ALTER TABLE posts ADD COLUMN source_language_detected_at TEXT;
+ALTER TABLE posts ADD COLUMN source_language_source_hash TEXT;
+
+ALTER TABLE comments ADD COLUMN source_language_confidence REAL;
+ALTER TABLE comments ADD COLUMN source_language_reliable INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE comments ADD COLUMN source_language_detector TEXT;
+ALTER TABLE comments ADD COLUMN source_language_detected_at TEXT;
+ALTER TABLE comments ADD COLUMN source_language_source_hash TEXT;
+`,
+    checksum: "097efb5dc33531c123a937af4ecfa25e02063ad95866698a2363661f2528654f",
+  },
+  {
+    name: "1092_community_localization_language_detection_metadata.sql",
+    sql: `ALTER TABLE community_localization_meta ADD COLUMN source_language_confidence REAL;
+ALTER TABLE community_localization_meta ADD COLUMN source_language_reliable INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE community_localization_meta ADD COLUMN source_language_detector TEXT;
+ALTER TABLE community_localization_meta ADD COLUMN source_language_detected_at TEXT;
+`,
+    checksum: "92aa83967f665a82a118edd869589fc06ca3fc786322075c43c5a6a0c879f9e5",
+  },
+  {
+    name: "1093_post_song_stem_presentation.sql",
+    sql: `ALTER TABLE posts ADD COLUMN song_instrumental_audio_json TEXT;
+ALTER TABLE posts ADD COLUMN song_vocal_audio_json TEXT;
+
+`,
+    checksum: "804d2d8a4464bebaf654874d64aa92c759e4b64bdb5a5d3388e30ab940b85b09",
+  },
+  {
     name: "1094_vinyl_release_listings.sql",
     sql: `ALTER TABLE listings
 ADD COLUMN vinyl_release_provider TEXT CHECK (
