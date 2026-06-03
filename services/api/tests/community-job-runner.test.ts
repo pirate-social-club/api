@@ -523,46 +523,48 @@ describe("community-job-runner", () => {
       db.close()
     }
 
-    for (let attempt = 1; attempt <= 8; attempt += 1) {
-      const processed = await processNextCommunityJob({
-        env,
-        communityId,
-        communityRepository: repo,
+    const firstAttempt = await processNextCommunityJob({
+      env,
+      communityId,
+      communityRepository: repo,
+    })
+    expect(firstAttempt?.job_type).toBe("comment_body_mirror")
+    expect(firstAttempt?.status).toBe("failed")
+    expect(firstAttempt?.attempt_count).toBe(1)
+    expect(firstAttempt?.available_at).not.toBeNull()
+
+    const immediateRetry = await processNextCommunityJob({
+      env,
+      communityId,
+      communityRepository: repo,
+    })
+    expect(immediateRetry).toBeNull()
+
+    const jobDb = await openCommunityDb(env, repo, communityId)
+    try {
+      await jobDb.client.execute({
+        sql: `
+          UPDATE community_jobs
+          SET attempt_count = 7,
+              available_at = ?2
+          WHERE subject_id = ?1
+            AND job_type = 'comment_body_mirror'
+        `,
+        args: [comment.comment_id, "1970-01-01T00:00:00.000Z"],
       })
-      expect(processed?.job_type).toBe("comment_body_mirror")
-      expect(processed?.status).toBe("failed")
-      expect(processed?.attempt_count).toBe(attempt)
-
-      if (attempt < 8) {
-        expect(processed?.available_at).not.toBeNull()
-      } else {
-        expect(processed?.available_at).toBeNull()
-      }
-
-      const immediateRetry = await processNextCommunityJob({
-        env,
-        communityId,
-        communityRepository: repo,
-      })
-      expect(immediateRetry).toBeNull()
-
-      if (attempt < 8) {
-        const jobDb = await openCommunityDb(env, repo, communityId)
-        try {
-          await jobDb.client.execute({
-            sql: `
-              UPDATE community_jobs
-              SET available_at = ?2
-              WHERE subject_id = ?1
-                AND job_type = 'comment_body_mirror'
-            `,
-            args: [comment.comment_id, "1970-01-01T00:00:00.000Z"],
-          })
-        } finally {
-          jobDb.close()
-        }
-      }
+    } finally {
+      jobDb.close()
     }
+
+    const finalAttempt = await processNextCommunityJob({
+      env,
+      communityId,
+      communityRepository: repo,
+    })
+    expect(finalAttempt?.job_type).toBe("comment_body_mirror")
+    expect(finalAttempt?.status).toBe("failed")
+    expect(finalAttempt?.attempt_count).toBe(8)
+    expect(finalAttempt?.available_at).toBeNull()
 
     const finalRetry = await processNextCommunityJob({
       env,
@@ -620,6 +622,7 @@ describe("community-job-runner", () => {
       membershipMode: "gated",
     })
 
+    const collectionPayloads: Array<{ path?: string; payload?: unknown }> = []
     setSwarmPublisherForTests(async (input) => {
       if ("topic" in input && "reference" in input) {
         return {
@@ -628,6 +631,10 @@ describe("community-job-runner", () => {
         }
       }
       if ("files" in input) {
+        collectionPayloads.push(...input.files.map((file) => ({
+          path: file.path,
+          payload: file.payload,
+        })))
         return { reference: `swarm-manifest:${input.indexDocument ?? "index"}` }
       }
       return { reference: `swarm-ref:${input.path}` }
@@ -639,6 +646,19 @@ describe("community-job-runner", () => {
       communityId: openCommunityId,
       threadRootPostId: openSeed.postId,
       body: { body: "Open community comment" },
+      userRepository: users,
+      communityRepository: openRepo,
+    })
+    const openAnonymousComment = await createComment({
+      env,
+      userId: "usr_alice",
+      communityId: openCommunityId,
+      threadRootPostId: openSeed.postId,
+      body: {
+        body: "Open community anonymous comment",
+        identity_mode: "anonymous",
+        anonymous_scope: "thread_stable",
+      },
       userRepository: users,
       communityRepository: openRepo,
     })
@@ -737,6 +757,9 @@ describe("community-job-runner", () => {
       expect((await getCommentById(verifyOpenDb.client, openComment.comment_id))?.swarm_body_ref).toBe(
         `swarm-ref:comments/${openComment.comment_id}.json`,
       )
+      expect((await getCommentById(verifyOpenDb.client, openAnonymousComment.comment_id))?.swarm_body_ref).toBe(
+        `swarm-ref:comments/${openAnonymousComment.comment_id}.json`,
+      )
       expect((await getCommentById(verifyOpenDb.client, secondOpenComment.comment_id))?.swarm_body_ref).toBe(
         `swarm-ref:comments/${secondOpenComment.comment_id}.json`,
       )
@@ -746,6 +769,10 @@ describe("community-job-runner", () => {
     } finally {
       verifyOpenDb.close()
     }
+    const anonymousSnapshotPayload = collectionPayloads.find((entry) =>
+      entry.path === `comments/${openAnonymousComment.comment_id}.json`
+    )?.payload as { author_user_id?: string | null } | undefined
+    expect(anonymousSnapshotPayload?.author_user_id ?? null).toBeNull()
 
     const verifyGatedDb = await openCommunityDb(env, gatedRepo, gatedCommunityId)
     try {

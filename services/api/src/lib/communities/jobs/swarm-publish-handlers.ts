@@ -6,6 +6,7 @@ import {
   listThreadCommentsForSnapshot,
   updateCommentSwarmBodyRef,
 } from "../../comments/community-comment-store"
+import type { Comment } from "../../comments/comment-types"
 import { internalError } from "../../errors"
 import { nowIso } from "../../helpers"
 import { getPostById } from "../../posts/community-post-query-store"
@@ -27,6 +28,16 @@ type CommentBodyMirrorPayload = {
 
 type ThreadSnapshotPayload = {
   thread_root_post_id?: string
+}
+
+function serializeSwarmComment(comment: Comment): Comment {
+  if (comment.identity_mode !== "anonymous" && comment.authorship_mode !== "guest") {
+    return comment
+  }
+  return {
+    ...comment,
+    author_user_id: null,
+  }
 }
 
 export async function runCommentBodyMirror(input: CommunityJobHandlerInput): Promise<string | null> {
@@ -60,7 +71,7 @@ export async function runCommentBodyMirror(input: CommunityJobHandlerInput): Pro
         schema_version: 1,
         community_id: comment.community_id,
         thread_root_post_id: comment.thread_root_post_id,
-        comment,
+        comment: serializeSwarmComment(comment),
       },
     })
 
@@ -144,7 +155,7 @@ export async function runThreadSnapshotPublish(input: CommunityJobHandlerInput):
         },
         ...comments.map((comment) => ({
           path: `comments/${comment.comment_id}.json`,
-          payload: comment,
+          payload: serializeSwarmComment(comment),
         })),
       ],
     })
