@@ -74,6 +74,13 @@ function derivativeSourceStoryRef(row: DerivativeSourceRow): string | null {
 
 export type DerivativeSourceScope = "community" | "global"
 
+function derivativeSourceComposerUserIdCandidates(userId: string): string[] {
+  const trimmed = userId.trim()
+  if (!trimmed) return [userId]
+  const internalUserId = trimmed.replace(/^(usr_)+/, "")
+  return Array.from(new Set([trimmed, internalUserId, `usr_${internalUserId}`, `usr_${trimmed}`]))
+}
+
 async function requireDerivativeSourceComposerCommunity(input: {
   env: Env
   userId: string
@@ -82,7 +89,16 @@ async function requireDerivativeSourceComposerCommunity(input: {
 }): Promise<void> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
-    await requireCommunityMember(db.client, input.communityId, input.userId)
+    let lastError: unknown = null
+    for (const candidateUserId of derivativeSourceComposerUserIdCandidates(input.userId)) {
+      try {
+        await requireCommunityMember(db.client, input.communityId, candidateUserId)
+        return
+      } catch (error) {
+        lastError = error
+      }
+    }
+    throw lastError
   } finally {
     db.close()
   }

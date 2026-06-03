@@ -5,6 +5,9 @@ import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { setStoryRoyaltyRegistrarForTests } from "../../../src/lib/story/story-royalty-registration-service"
 import { upsertStoryRegisteredAssetProjection } from "../../../src/lib/communities/commerce/derivative-source-projection"
+import { listDerivativeSources } from "../../../src/lib/communities/commerce/service"
+import { getCommunityRepository } from "../../../src/lib/communities/db-community-repository"
+import { getProfileRepository } from "../../../src/lib/auth/repositories"
 import type { Client } from "../../../src/lib/sql-client"
 import type { Env } from "../../../src/types"
 import {
@@ -70,6 +73,41 @@ async function createCommunityForTest(input: {
     }
   }
   return body.community.id.replace(/^com_/, "")
+}
+
+async function rewriteCommunityAccessUserId(input: {
+  communityDbRoot: string
+  communityId: string
+  fromUserId: string
+  toUserId: string
+}): Promise<void> {
+  const client = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+  try {
+    await client.execute({
+      sql: `
+        UPDATE community_memberships
+        SET user_id = ?3, updated_at = ?4
+        WHERE community_id = ?1
+          AND user_id = ?2
+      `,
+      args: [input.communityId, input.fromUserId, input.toUserId, new Date().toISOString()],
+    })
+    await client.execute({
+      sql: `
+        UPDATE community_roles
+        SET user_id = ?3,
+            granted_by_user_id = CASE WHEN granted_by_user_id = ?2 THEN ?3 ELSE granted_by_user_id END,
+            updated_at = ?4
+        WHERE community_id = ?1
+          AND user_id = ?2
+      `,
+      args: [input.communityId, input.fromUserId, input.toUserId, new Date().toISOString()],
+    })
+  } finally {
+    client.close()
+  }
 }
 
 async function setMembershipProjection(input: {
@@ -504,6 +542,86 @@ describe("song artifact catalog routes", () => {
       "asset_ast_global_source",
       "asset_ast_local_source",
     ])
+  })
+
+  test("lists global derivative sources when composer membership stores a public user id", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const viewer = await exchangeJwt(ctx.env, "global-derivative-public-member-viewer")
+    await completeUniqueHumanVerification(ctx.env, viewer.accessToken)
+    const sourceOwner = await exchangeJwt(ctx.env, "global-derivative-public-member-source-owner")
+    await completeUniqueHumanVerification(ctx.env, sourceOwner.accessToken)
+
+    const sourceCommunityId = await createCommunityForTest({
+      env: ctx.env,
+      accessToken: sourceOwner.accessToken,
+      displayName: "Global Public Member Source Club",
+    })
+    const composerCommunityId = await createCommunityForTest({
+      env: ctx.env,
+      accessToken: viewer.accessToken,
+      displayName: "Global Public Member Composer Club",
+    })
+    await rewriteCommunityAccessUserId({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: composerCommunityId,
+      fromUserId: viewer.userId,
+      toUserId: `usr_${viewer.userId}`,
+    })
+    const composerClient = createClient({
+      url: buildLocalCommunityDbUrl(ctx.communityDbRoot, composerCommunityId),
+    })
+    try {
+      const membershipRows = await composerClient.execute({
+        sql: "SELECT user_id FROM community_memberships WHERE community_id = ?1 ORDER BY user_id",
+        args: [composerCommunityId],
+      })
+      const roleRows = await composerClient.execute({
+        sql: "SELECT user_id FROM community_roles WHERE community_id = ?1 ORDER BY user_id",
+        args: [composerCommunityId],
+      })
+      expect(membershipRows.rows.map((row) => String(row.user_id))).toEqual([`usr_${viewer.userId}`])
+      expect(roleRows.rows.map((row) => String(row.user_id))).toEqual([`usr_${viewer.userId}`])
+    } finally {
+      composerClient.close()
+    }
+
+    await insertDerivativeSourceProjection({
+      env: ctx.env,
+      communityId: sourceCommunityId,
+      creatorUserId: sourceOwner.userId,
+      assetId: "ast_global_public_member_source",
+      title: "Public Member Source",
+      assetKind: "song_audio",
+      storyIpId: "0xcccccccccccccccccccccccccccccccccccccccc",
+      storyLicenseTermsId: "23",
+    })
+    const directResult = await listDerivativeSources({
+      env: ctx.env,
+      userId: viewer.userId,
+      scope: "global",
+      communityId: composerCommunityId,
+      kind: "song",
+      query: null,
+      limit: 25,
+      communityRepository: getCommunityRepository(ctx.env),
+      profileRepository: getProfileRepository(ctx.env),
+    })
+    expect(directResult.items.map((item) => item.asset)).toEqual(["asset_ast_global_public_member_source"])
+
+    const response = await app.request(
+      `http://pirate.test/communities/${composerCommunityId}/derivative-sources?scope=global&kind=song`,
+      {
+        headers: {
+          authorization: `Bearer ${viewer.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(response.status).toBe(200)
+    const body = await json(response) as DerivativeSourceListBody
+    expect(body.items.map((item) => item.asset)).toEqual(["asset_ast_global_public_member_source"])
   })
 
   test("global derivative sources require membership in the composer community", async () => {
