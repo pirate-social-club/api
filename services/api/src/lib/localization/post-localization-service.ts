@@ -35,7 +35,11 @@ function parseAudioDescriptor(value: unknown): Omit<SongPresentationDownloadable
 }
 
 function parseJsonAudioDescriptor(value: unknown): Omit<SongPresentationDownloadableAudio, "kind"> | null {
-  if (typeof value !== "string" || !value.trim()) {
+  if (typeof value !== "string") {
+    return parseAudioDescriptor(value)
+  }
+
+  if (!value.trim()) {
     return null
   }
 
