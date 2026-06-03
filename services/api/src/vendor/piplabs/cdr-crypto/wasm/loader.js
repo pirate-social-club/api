@@ -8,6 +8,7 @@
  *   const raw = wasm.tdh2Encrypt(globalPubKey, plaintext, label);
  */
 import createCbMpcModule from "./cb-mpc-tdh2.js";
+import bundledWasmModule from "./cb-mpc-tdh2.wasm";
 /** Ed25519 curve code in cb-mpc (NID_ED25519 = 0x043f = 1087) */
 export const CURVE_ED25519 = 1087;
 /**
@@ -302,7 +303,16 @@ let wasmInstance = null;
 export async function initWasm() {
     if (wasmInstance)
         return;
-    const Module = await createCbMpcModule();
+    const moduleArg = bundledWasmModule instanceof WebAssembly.Module
+        ? {
+            instantiateWasm(imports, receiveInstance) {
+                void WebAssembly.instantiate(bundledWasmModule, imports).then((instance) => {
+                    receiveInstance(instance, bundledWasmModule);
+                });
+            },
+        }
+        : {};
+    const Module = await createCbMpcModule(moduleArg);
     const ptrSize = Module._wasm_ptr_size();
     if (ptrSize !== 4) {
         console.warn(`Unexpected WASM pointer size: ${ptrSize} (expected 4)`);
