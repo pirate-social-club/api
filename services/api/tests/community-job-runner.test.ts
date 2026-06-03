@@ -199,6 +199,68 @@ describe("community-job-runner", () => {
     expect(repo.postProjections.get(postId)?.source_post_id).toBe(postId)
   })
 
+  test("leaves skipped job types queued while processing later runnable jobs", async () => {
+    const rootDir = await createCommunityJobRunnerRoot("pirate-community-job-skip-")
+
+    const databasePath = join(rootDir, "skip-preview.db")
+    const communityId = "cmt_job_skip_preview"
+    const env: Env = {
+      LOCAL_COMMUNITY_DB_ROOT: rootDir,
+    }
+    const repo = buildCommunityRepository(databasePath, communityId)
+    const { postId } = await seedCommunityState({
+      env,
+      repo,
+      communityId,
+      memberUserIds: ["usr_owner"],
+    })
+
+    const db = await openCommunityDb(env, repo, communityId)
+    try {
+      await enqueueCommunityJob({
+        client: db.client,
+        communityId,
+        jobType: "song_preview_generate",
+        subjectType: "song_artifact_bundle",
+        subjectId: "sab_needs_bun",
+        payloadJson: JSON.stringify({ song_artifact_bundle: "sab_needs_bun" }),
+        createdAt: "2026-01-01T00:00:00.000Z",
+      })
+      await enqueueCommunityJob({
+        client: db.client,
+        communityId,
+        jobType: "post_projection_sync",
+        subjectType: "post",
+        subjectId: postId,
+        payloadJson: JSON.stringify({ post_id: postId }),
+        createdAt: "2026-01-01T00:00:01.000Z",
+      })
+    } finally {
+      db.close()
+    }
+
+    const processed = await processNextCommunityJob({
+      env,
+      communityId,
+      communityRepository: repo,
+      skipJobTypes: ["song_preview_generate"],
+    })
+
+    expect(processed?.job_type).toBe("post_projection_sync")
+    expect(processed?.result_ref).toBe(postId)
+
+    const verifyDb = await openCommunityDb(env, repo, communityId)
+    try {
+      const jobs = await fetchCommunityJobs(verifyDb.client)
+      const previewJob = jobs.find((job) => job.job_type === "song_preview_generate")
+      expect(previewJob?.status).toBe("queued")
+      expect(previewJob?.attempt_count).toBe(0)
+      expect(previewJob?.error_code).toBeNull()
+    } finally {
+      verifyDb.close()
+    }
+  })
+
   test("processes live-room viewer session prune jobs", async () => {
     const rootDir = await createCommunityJobRunnerRoot("pirate-community-live-room-prune-")
 

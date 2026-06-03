@@ -4,6 +4,33 @@ import type { CreateSongArtifactBundleRequest } from "../../types"
 
 export type SongPreviewWindow = NonNullable<CreateSongArtifactBundleRequest["preview_window"]>
 
+const DEFAULT_FFMPEG_BIN = "ffmpeg"
+const FFMPEG_TIMEOUT_MS = 60_000
+
+type BunPipe = {
+  write: (chunk: Uint8Array) => void
+  end: () => void
+}
+
+type BunSubprocess = {
+  stdin: BunPipe | null
+  stdout: ReadableStream<Uint8Array>
+  stderr: ReadableStream<Uint8Array>
+  exited: Promise<number>
+  kill: (signal?: string) => void
+}
+
+type BunRuntime = {
+  spawn: (
+    command: string[],
+    options: {
+      stdin: "pipe"
+      stdout: "pipe"
+      stderr: "pipe"
+    }
+  ) => BunSubprocess
+}
+
 export function parseSongPreviewWindow(input: CreateSongArtifactBundleRequest["preview_window"]): SongPreviewWindow | null {
   if (!input) {
     return null
@@ -43,13 +70,116 @@ function estimateWavDurationMs(bytes: Uint8Array): number | null {
   return Math.max(1, Math.round((dataSize / byteRate) * 1000))
 }
 
+function getBunRuntime(): BunRuntime | null {
+  const runtime = (globalThis as typeof globalThis & { Bun?: BunRuntime }).Bun
+  return runtime && typeof runtime.spawn === "function" ? runtime : null
+}
+
+function trimEnvValue(value: string | undefined): string {
+  return String(value ?? "").trim()
+}
+
+function secondsFromMs(ms: number): string {
+  return (Math.max(0, ms) / 1000).toFixed(3)
+}
+
+function cleanFfmpegError(stderr: string, fallback: string): string {
+  const message = stderr.trim().replace(/\s+/g, " ")
+  return message ? message.slice(0, 500) : fallback
+}
+
+async function cropAudioPreviewWithBunFfmpeg(input: {
+  ffmpegBin: string
+  sourceBytes: Uint8Array
+  previewWindow: SongPreviewWindow
+}): Promise<Uint8Array> {
+  const runtime = getBunRuntime()
+  if (!runtime) {
+    throw providerUnavailable("Song preview cropping requires the Bun community job worker")
+  }
+
+  let process: BunSubprocess
+  try {
+    process = runtime.spawn([
+      input.ffmpegBin,
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-i",
+      "pipe:0",
+      "-ss",
+      secondsFromMs(input.previewWindow.start_ms),
+      "-t",
+      secondsFromMs(input.previewWindow.duration_ms),
+      "-map",
+      "0:a:0",
+      "-vn",
+      "-codec:a",
+      "libmp3lame",
+      "-b:a",
+      "128k",
+      "-f",
+      "mp3",
+      "pipe:1",
+    ], {
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw providerUnavailable(`Song preview cropping requires ffmpeg: ${message}`)
+  }
+
+  const stdoutPromise = new Response(process.stdout).arrayBuffer()
+  const stderrPromise = new Response(process.stderr).text()
+
+  if (!process.stdin) {
+    process.kill("SIGKILL")
+    throw providerUnavailable("Song preview cropping could not open ffmpeg stdin")
+  }
+  process.stdin.write(input.sourceBytes)
+  process.stdin.end()
+
+  let timeoutId: ReturnType<typeof setTimeout> | undefined
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timeoutId = setTimeout(() => {
+      try {
+        process.kill("SIGKILL")
+      } catch {
+        // The process may have exited between the timeout and kill attempt.
+      }
+      reject(providerUnavailable("Song preview cropping timed out"))
+    }, FFMPEG_TIMEOUT_MS)
+  })
+
+  let exitCode: number
+  try {
+    exitCode = await Promise.race([process.exited, timeoutPromise])
+  } finally {
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId)
+    }
+  }
+
+  const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise])
+  if (exitCode !== 0) {
+    throw providerUnavailable(`Song preview cropping failed: ${cleanFfmpegError(stderr, `ffmpeg exited with code ${exitCode}`)}`)
+  }
+  if (stdout.byteLength === 0) {
+    throw providerUnavailable(`Song preview cropping failed: ${cleanFfmpegError(stderr, "ffmpeg produced an empty preview")}`)
+  }
+
+  return new Uint8Array(stdout)
+}
+
 export async function cropAudioPreviewWithFfmpeg(input: {
   env: Env
   sourceBytes: Uint8Array
   sourceMimeType: string
   previewWindow: SongPreviewWindow
 }): Promise<{ bytes: Uint8Array; durationMs: number | null }> {
-  if (String(input.env.SONG_PREVIEW_FFMPEG_BIN || "").trim() === "__test_passthrough__") {
+  if (trimEnvValue(input.env.SONG_PREVIEW_FFMPEG_BIN) === "__test_passthrough__") {
     const durationMs = estimateWavDurationMs(input.sourceBytes)
     return {
       bytes: input.sourceBytes,
@@ -60,5 +190,14 @@ export async function cropAudioPreviewWithFfmpeg(input: {
   }
 
   void input.sourceMimeType
-  throw providerUnavailable("Song preview cropping requires a Node-only ffmpeg worker")
+  const ffmpegBin = trimEnvValue(input.env.SONG_PREVIEW_FFMPEG_BIN) || DEFAULT_FFMPEG_BIN
+  const bytes = await cropAudioPreviewWithBunFfmpeg({
+    ffmpegBin,
+    sourceBytes: input.sourceBytes,
+    previewWindow: input.previewWindow,
+  })
+  return {
+    bytes,
+    durationMs: input.previewWindow.duration_ms,
+  }
 }

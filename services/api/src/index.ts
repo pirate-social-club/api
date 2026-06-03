@@ -478,6 +478,7 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
       communityRepository,
       maxCommunities: 100,
       maxJobsPerCommunity: 25,
+      skipJobTypes: ["song_preview_generate"],
     })
     if (summary.processed_jobs > 0) {
       console.info("[community-jobs] scheduled processed", JSON.stringify({

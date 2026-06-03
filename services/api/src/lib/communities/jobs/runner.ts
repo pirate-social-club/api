@@ -7,6 +7,7 @@ import {
   getCommunityJobById,
   markCommunityJobRunning,
   markCommunityJobSucceeded,
+  type CommunityJobType,
   type CommunityJobRow,
 } from "./store"
 import { runCommunityJob } from "./handlers"
@@ -107,6 +108,7 @@ export async function processNextCommunityJob(input: {
   env: Env
   communityId: string
   communityRepository: CommunityJobRepository
+  skipJobTypes?: CommunityJobType[] | null
 }): Promise<CommunityJobRow | null> {
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
@@ -115,6 +117,7 @@ export async function processNextCommunityJob(input: {
       communityId: input.communityId,
       now: nowIso(),
       maxAttempts: COMMUNITY_JOB_MAX_ATTEMPTS,
+      skipJobTypes: input.skipJobTypes,
     })
     if (!next) {
       return null
@@ -135,6 +138,7 @@ export async function processCommunityJobsForCommunity(input: {
   communityId: string
   communityRepository: CommunityJobRepository
   maxJobs?: number
+  skipJobTypes?: CommunityJobType[] | null
 }): Promise<CommunityJobCommunityProcessingSummary> {
   const maxJobs = Math.max(1, Math.trunc(input.maxJobs ?? 25))
   const jobs: CommunityJobRow[] = []
@@ -144,6 +148,7 @@ export async function processCommunityJobsForCommunity(input: {
       env: input.env,
       communityId: input.communityId,
       communityRepository: input.communityRepository,
+      skipJobTypes: input.skipJobTypes,
     })
     if (!processed) {
       break
@@ -164,6 +169,7 @@ export async function processAvailableCommunityJobs(input: {
   communityIds?: string[] | null
   maxCommunities?: number
   maxJobsPerCommunity?: number
+  skipJobTypes?: CommunityJobType[] | null
 }): Promise<CommunityJobProcessingSummary> {
   const communityIds = (input.communityIds?.length
     ? input.communityIds
@@ -178,6 +184,7 @@ export async function processAvailableCommunityJobs(input: {
       communityId,
       communityRepository: input.communityRepository,
       maxJobs: input.maxJobsPerCommunity ?? 25,
+      skipJobTypes: input.skipJobTypes,
     })
     if (processed.processed_jobs > 0) {
       communities.push(processed)
@@ -196,6 +203,7 @@ export async function runCommunityJobWorkerLoop(input: {
   communityIds?: string[] | null
   maxCommunities?: number
   maxJobsPerCommunity?: number
+  skipJobTypes?: CommunityJobType[] | null
   pollIntervalMs?: number
   stopWhenIdle?: boolean
   signal?: AbortSignal
@@ -210,6 +218,7 @@ export async function runCommunityJobWorkerLoop(input: {
       communityIds: input.communityIds ?? null,
       maxCommunities: input.maxCommunities ?? 100,
       maxJobsPerCommunity: input.maxJobsPerCommunity ?? 25,
+      skipJobTypes: input.skipJobTypes,
     })
 
     await input.onTick?.(summary)

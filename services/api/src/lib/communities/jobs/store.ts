@@ -103,7 +103,10 @@ export async function findNextRunnableCommunityJob(input: {
   now: string
   communityId?: string | null
   maxAttempts?: number
+  skipJobTypes?: CommunityJobType[] | null
 }): Promise<CommunityJobRow | null> {
+  const skipJobTypes = [...new Set(input.skipJobTypes ?? [])]
+  const skipJobTypePlaceholders = skipJobTypes.map((_, index) => `?${index + 4}`).join(", ")
   const row = await executeFirst(input.client, {
     sql: `
       SELECT ${COMMUNITY_JOB_SELECT_COLUMNS}
@@ -112,10 +115,11 @@ export async function findNextRunnableCommunityJob(input: {
         AND (?1 IS NULL OR community_id = ?1)
         AND (available_at IS NULL OR available_at <= ?2)
         AND (?3 IS NULL OR attempt_count < ?3)
+        ${skipJobTypes.length > 0 ? `AND job_type NOT IN (${skipJobTypePlaceholders})` : ""}
       ORDER BY created_at ASC, job_id ASC
       LIMIT 1
     `,
-    args: [input.communityId ?? null, input.now, input.maxAttempts ?? null],
+    args: [input.communityId ?? null, input.now, input.maxAttempts ?? null, ...skipJobTypes],
   })
 
   return row ? toCommunityJobRow(row) : null
