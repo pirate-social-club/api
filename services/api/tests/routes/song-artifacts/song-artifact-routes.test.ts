@@ -1277,6 +1277,45 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
       },
     ])
 
+    const publicThreadRead = await app.request(
+      `http://pirate.test/public-posts/${postBody.id}/thread?limit=10`,
+      {},
+      ctx.env,
+    )
+    expect(publicThreadRead.status).toBe(200)
+    const publicThreadBody = await json(publicThreadRead) as {
+      post?: {
+        song_presentation?: {
+          downloadable_audio?: Array<{
+            kind: string
+            storage_ref: string
+            mime_type: string
+          }> | null
+        } | null
+      }
+    }
+    expect(publicThreadBody.post?.song_presentation?.downloadable_audio?.map((item) => ({
+      kind: item.kind,
+      storage_ref: item.storage_ref,
+      mime_type: item.mime_type,
+    }))).toEqual([
+      {
+        kind: "original",
+        storage_ref: uploadIntentBody.storage_ref,
+        mime_type: "audio/mpeg",
+      },
+      {
+        kind: "instrumental",
+        storage_ref: instrumentalUploadIntentBody.storage_ref,
+        mime_type: "audio/mpeg",
+      },
+      {
+        kind: "vocals",
+        storage_ref: vocalUploadIntentBody.storage_ref,
+        mime_type: "audio/mpeg",
+      },
+    ])
+
     const bundleRead = await app.request(
       `http://pirate.test/communities/${communityId}/song-artifacts/${bundleBody.id}`,
       {

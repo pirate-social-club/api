@@ -18,6 +18,7 @@ import { listPublicPostComments } from "../lib/comments/comment-service"
 import { listPublicPostCommentsFromCommunityDb } from "../lib/comments/comment-read-service"
 import { getPublicPost } from "../lib/posts/post-service"
 import { getPublicPostFromCommunityDb } from "../lib/posts/post-read-service"
+import { getControlPlaneClient } from "../lib/runtime-deps"
 import {
   absoluteUrl,
   configuredApiOrigin,
@@ -236,6 +237,7 @@ publicPosts.get("/:postId/thread", async (c) => {
     const locale = c.req.query("locale") ?? null
     const post = await getPublicPostFromCommunityDb({
       client: db.client,
+      songArtifactExecutor: getControlPlaneClient(c.env),
       communityId: projection.community_id,
       communityRepository,
       profileRepository: getProfileRepository(c.env),
