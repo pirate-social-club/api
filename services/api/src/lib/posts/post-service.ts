@@ -199,7 +199,7 @@ export async function createPost(input: {
           userRepository: input.userRepository,
         })
       }
-      if (post.post_type === "video" && post.access_mode && resolvedVideoAsset) {
+      if (post.post_type === "video" && shouldCreateVideoAssetForPost(post) && resolvedVideoAsset) {
         await createAssetForPost({
           env: input.env,
           client: tx,
@@ -252,4 +252,15 @@ export async function createPost(input: {
   } finally {
     db.close()
   }
+}
+
+function shouldCreateVideoAssetForPost(post: Post): boolean {
+  return Boolean(
+    post.asset_id?.trim()
+    && (
+      post.access_mode != null
+      || post.rights_basis === "derivative"
+      || (post.upstream_asset_refs?.length ?? 0) > 0
+    ),
+  )
 }

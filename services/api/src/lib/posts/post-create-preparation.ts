@@ -16,6 +16,9 @@ import { mergeAnalysisState, type PostAnalysisProvider } from "./post-analysis"
 import { prepareSongPostAsset, prepareVideoPostAsset } from "./post-create-asset-preparation"
 import { resolveCrosspostSource } from "./post-create-crosspost-source"
 import type { PostWriteRequest } from "./post-create-validation"
+import { decodePublicAssetId } from "../public-ids"
+
+const STORY_IP_REF_PATTERN = /^story:ip:0x[a-fA-F0-9]{40}#licenseTermsId=\d+$/
 
 type PostCreatePreparationCommunityRepository =
   & CommunityReadRepository
@@ -64,6 +67,62 @@ function buildAnalysisOverride(input: {
       ? "18_plus"
       : "none",
     status: input.analysisState === "review_required" ? "draft" : "published",
+  }
+}
+
+async function validateVideoDerivativeSongRefs(input: {
+  client: Client
+  communityId: string
+  body: CreatePostRequest
+}): Promise<void> {
+  if (input.body.post_type !== "video" || input.body.rights_basis !== "derivative") {
+    return
+  }
+
+  const assetIds = new Set<string>()
+  for (const sourceRef of input.body.upstream_asset_refs ?? []) {
+    const normalized = sourceRef.trim()
+    if (!normalized) continue
+    if (STORY_IP_REF_PATTERN.test(normalized)) {
+      continue
+    }
+    if (!normalized.startsWith("story:asset:")) {
+      throw badRequestError("video upstream_asset_refs must be Story asset or IP refs")
+    }
+    const decodedAssetId = decodePublicAssetId(normalized.slice("story:asset:".length))
+    if (!decodedAssetId.startsWith("ast_")) {
+      throw badRequestError("video upstream_asset_refs must be Story asset or IP refs")
+    }
+    assetIds.add(decodedAssetId)
+  }
+
+  if (assetIds.size === 0) {
+    return
+  }
+
+  const ids = [...assetIds]
+  const placeholders = ids.map((_, index) => `?${index + 2}`).join(", ")
+  const result = await input.client.execute({
+    sql: `
+      SELECT asset_id, asset_kind, story_ip_id, story_license_terms_id
+      FROM assets
+      WHERE community_id = ?1
+        AND asset_id IN (${placeholders})
+    `,
+    args: [input.communityId, ...ids],
+  })
+  const rowsByAssetId = new Map(result.rows.map((row) => [String(row.asset_id), row]))
+
+  for (const assetId of ids) {
+    const row = rowsByAssetId.get(assetId)
+    if (
+      !row ||
+      row.asset_kind !== "song_audio" ||
+      !String(row.story_ip_id ?? "").trim() ||
+      !String(row.story_license_terms_id ?? "").trim()
+    ) {
+      throw badRequestError("video upstream_asset_refs must reference registered song assets")
+    }
   }
 }
 
@@ -183,6 +242,11 @@ export async function preparePostCreate(input: {
   }
 
   if (input.body.post_type === "video") {
+    await validateVideoDerivativeSongRefs({
+      client: input.communityDbClient,
+      communityId: input.communityId,
+      body: input.body,
+    })
     const preparedVideo = await prepareVideoPostAsset({
       env: input.env,
       requestUrl: input.requestUrl,

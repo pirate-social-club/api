@@ -64,8 +64,14 @@ function sourceRefForRow(row: Pick<UpstreamSourceRow, "story_ip_id" | "story_lic
   return `story:asset:${row.asset_id}`
 }
 
-function relationshipForSourceKind(kind: DerivativeSourceKind): PostDerivativeSource["relationship_type"] {
-  return kind === "video" ? "references_video" : "remix_of"
+function relationshipForSourceKind(input: {
+  postType: LocalizedPostResponse["post"]["post_type"]
+  sourceKind: DerivativeSourceKind
+}): PostDerivativeSource["relationship_type"] {
+  if (input.sourceKind === "video") {
+    return "references_video"
+  }
+  return input.postType === "video" ? "references_song" : "remix_of"
 }
 
 function shortStoryIp(storyIp: string): string {
@@ -149,7 +155,10 @@ function findRowForRef(parsed: ParsedUpstreamRef, rows: UpstreamSourceRow[]): Up
   return null
 }
 
-function fallbackSource(parsed: ParsedUpstreamRef): PostDerivativeSource | null {
+function fallbackSource(
+  parsed: ParsedUpstreamRef,
+  postType: LocalizedPostResponse["post"]["post_type"],
+): PostDerivativeSource | null {
   if (parsed.kind !== "story_ip") {
     return null
   }
@@ -157,7 +166,7 @@ function fallbackSource(parsed: ParsedUpstreamRef): PostDerivativeSource | null 
     source_ref: parsed.sourceRef,
     title: `Story IP ${shortStoryIp(parsed.storyIp)}`,
     kind: "song",
-    relationship_type: "remix_of",
+    relationship_type: postType === "video" ? "references_song" : "remix_of",
     story_ip: parsed.storyIp,
     story_license_terms: parsed.licenseTermsId,
   }
@@ -204,7 +213,7 @@ export async function hydrateDerivativeSourcesForResponses(input: {
     response.derivative_sources = postRefs.map((parsed) => {
       const row = findRowForRef(parsed, rows)
       if (!row) {
-        return fallbackSource(parsed)
+        return fallbackSource(parsed, response.post.post_type)
       }
       const profile = profilesByUserId.get(row.creator_user_id) ?? null
       const kind = derivativeSourceKindFromAssetKind(row.asset_kind)
@@ -212,7 +221,10 @@ export async function hydrateDerivativeSourcesForResponses(input: {
         source_ref: sourceRefForRow(row),
         title: row.display_title?.trim() || "Untitled asset",
         kind,
-        relationship_type: relationshipForSourceKind(kind),
+        relationship_type: relationshipForSourceKind({
+          postType: response.post.post_type,
+          sourceKind: kind,
+        }),
         community: `com_${row.community_id}`,
         asset: `asset_${row.asset_id}`,
         source_post: `post_${row.source_post_id}`,

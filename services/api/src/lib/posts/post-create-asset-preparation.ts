@@ -19,6 +19,10 @@ export type PreparedVideoPostAsset = {
   resolvedVideoAsset: Awaited<ReturnType<typeof resolveVideoPostAsset>>
 }
 
+function hasUpstreamAssetRefs(body: CreatePostRequest): boolean {
+  return (body.upstream_asset_refs ?? []).some((value) => value.trim().length > 0)
+}
+
 export async function prepareSongPostAsset(input: {
   env: Env
   userId: string
@@ -74,6 +78,10 @@ export async function prepareVideoPostAsset(input: {
   body: CreatePostRequest
 }): Promise<PreparedVideoPostAsset> {
   const accessMode = input.body.access_mode ?? "public"
+  const shouldCreateAsset =
+    Boolean(input.body.access_mode) ||
+    input.body.rights_basis === "derivative" ||
+    hasUpstreamAssetRefs(input.body)
   const resolvedVideo = await resolveVideoPostAsset({
     env: input.env,
     userId: input.userId,
@@ -116,7 +124,7 @@ export async function prepareVideoPostAsset(input: {
       identity_mode: "public",
       media_refs: accessMode === "locked" ? lockedPosterMediaRefs : publicVideoMediaRefs,
       access_mode: input.body.access_mode,
-      asset_id: input.body.access_mode ? input.body.asset_id ?? makeId("ast") : input.body.asset_id,
+      asset_id: shouldCreateAsset ? input.body.asset_id ?? makeId("ast") : input.body.asset_id,
       rights_basis: input.body.rights_basis ?? (input.body.license_preset || accessMode === "locked" ? "original" : "none"),
     },
     resolvedVideoAsset: resolvedVideo,

@@ -214,8 +214,12 @@ export function assertPostCreateRequest(body: CreatePostRequest, _communityId: s
     if (body.access_mode !== "locked" && (body.license_preset || body.commercial_rev_share_pct != null)) {
       throw badRequestError("license_preset is only supported for locked video asset posts")
     }
-    if (body.rights_basis === "derivative") {
-      throw badRequestError("derivative video posts are not supported yet")
+    const upstreamAssetRefs = body.upstream_asset_refs?.map((value) => value.trim()).filter(Boolean) ?? []
+    if (body.rights_basis === "derivative" && upstreamAssetRefs.length === 0) {
+      throw badRequestError("derivative video posts require upstream_asset_refs")
+    }
+    if (upstreamAssetRefs.length > 0 && body.rights_basis !== "derivative") {
+      throw badRequestError("video upstream_asset_refs require derivative rights_basis")
     }
     validateAssetLicense({
       body,
