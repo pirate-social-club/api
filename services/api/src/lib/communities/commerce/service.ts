@@ -337,7 +337,15 @@ export async function createAssetForPost(input: {
   if (!input.post.asset_id?.trim()) {
     throw badRequestError("Post is missing asset_id")
   }
-  const existing = await getAssetRow(input.client, input.communityId, input.post.asset_id)
+  const existing = await getAssetRow(input.client, input.communityId, input.post.asset_id).catch((error) => {
+    console.warn("[commerce] existing asset lookup failed before create", {
+      community_id: input.communityId,
+      asset_id: input.post.asset_id,
+      error_name: error instanceof Error ? error.name : typeof error,
+      error_message: error instanceof Error ? error.message : String(error),
+    })
+    return null
+  })
   if (existing) {
     return serializeAsset(existing)
   }
