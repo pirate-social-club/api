@@ -303,11 +303,11 @@ let wasmInstance = null;
 export async function initWasm() {
     if (wasmInstance)
         return;
-    const moduleArg = bundledWasmModule instanceof WebAssembly.Module
+    const moduleArg = typeof bundledWasmModule !== "string" && bundledWasmModule
         ? {
             instantiateWasm(imports, receiveInstance) {
-                void WebAssembly.instantiate(bundledWasmModule, imports).then((instance) => {
-                    receiveInstance(instance, bundledWasmModule);
+                void WebAssembly.instantiate(bundledWasmModule, imports).then((result) => {
+                    receiveInstance(result instanceof WebAssembly.Instance ? result : result.instance, bundledWasmModule);
                 });
             },
         }
