@@ -925,7 +925,7 @@ describe("song artifact locked routes", () => {
 
 
 
-  test("rejects song publishing when Story royalty registration is unavailable", async () => {
+  test("rejects song asset creation when Story royalty registration is unavailable", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
 
     installLockedSongFetchMocks({
@@ -1046,14 +1046,24 @@ describe("song artifact locked routes", () => {
     })
     try {
       const postRows = await communityDb.execute({
-        sql: "SELECT COUNT(*) AS count FROM posts WHERE idempotency_key = ?1",
+        sql: `
+          SELECT idempotency_key, post_type, asset_id, rights_basis, upstream_asset_refs_json
+          FROM posts
+          WHERE idempotency_key = ?1
+        `,
         args: ["song-post-derivative-commerce-1"],
       })
       const assetRows = await communityDb.execute({
         sql: "SELECT COUNT(*) AS count FROM assets WHERE asset_id = ?1",
         args: ["ast_story_failed_derivative_route"],
       })
-      expect(Number(postRows.rows[0]?.count ?? 0)).toBe(0)
+      expect(postRows.rows).toHaveLength(1)
+      expect(postRows.rows[0]).toMatchObject({
+        post_type: "song",
+        asset_id: "ast_story_failed_derivative_route",
+        rights_basis: "derivative",
+        upstream_asset_refs_json: JSON.stringify(["acr:custom-file:source-track"]),
+      })
       expect(Number(assetRows.rows[0]?.count ?? 0)).toBe(0)
     } finally {
       communityDb.close()
