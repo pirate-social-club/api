@@ -138,11 +138,16 @@ export async function createPost(input: {
       communityDbClient: db.client,
       communityRepository: input.communityRepository,
       postAnalysisProvider,
+    }).catch((error) => {
+      throw new Error(`post_prepare_create_failed:${error instanceof Error ? error.message : String(error)}`)
     })
     const createdAt = nowIso()
-    const tx = await db.client.transaction("write")
+    const tx = await db.client.transaction("write").catch((error) => {
+      throw new Error(`post_transaction_open_failed:${error instanceof Error ? error.message : String(error)}`)
+    })
     let post: Post
     const requireStoryRoyaltyRegistration = true
+    let txPhase = "insert_post"
     try {
       post = await insertPost({
         client: tx,
@@ -154,6 +159,7 @@ export async function createPost(input: {
         agentWriteAuthorization: agentWriteAuthorization ?? undefined,
       })
 
+      txPhase = "enqueue_translation_jobs"
       await enqueuePostTranslationPrewarmJobs({
         client: tx,
         communityId: input.communityId,
@@ -161,6 +167,7 @@ export async function createPost(input: {
         createdAt,
       })
 
+      txPhase = "enqueue_post_labels"
       await enqueuePostLabelIfNeeded({
         client: tx,
         community,
@@ -169,6 +176,7 @@ export async function createPost(input: {
         createdAt,
       })
 
+      txPhase = "enqueue_embed_hydration"
       await enqueueEmbedHydrateIfNeeded({
         client: tx,
         communityId: input.communityId,
@@ -177,6 +185,7 @@ export async function createPost(input: {
       })
 
       if (analysisOverride?.analysis_state === "review_required") {
+        txPhase = "record_review_required"
         await recordReviewRequiredPostModeration({
           executor: tx,
           communityId: input.communityId,
@@ -187,6 +196,7 @@ export async function createPost(input: {
       }
 
       if (post.post_type === "song" && post.song_artifact_bundle_id && resolvedSongBundleForAsset) {
+        txPhase = "create_song_asset"
         await createSongAssetForPost({
           env: input.env,
           client: tx,
@@ -200,6 +210,7 @@ export async function createPost(input: {
         })
       }
       if (post.post_type === "video" && shouldCreateVideoAssetForPost(post) && resolvedVideoAsset) {
+        txPhase = "create_video_asset"
         await createAssetForPost({
           env: input.env,
           client: tx,
@@ -218,10 +229,11 @@ export async function createPost(input: {
         })
       }
 
+      txPhase = "commit"
       await tx.commit()
     } catch (error) {
       await safeRollback(tx, "[posts] rollback failed while creating post")
-      throw error
+      throw new Error(`post_transaction_phase:${txPhase}:${error instanceof Error ? error.message : String(error)}`)
     } finally {
       tx.close()
     }
