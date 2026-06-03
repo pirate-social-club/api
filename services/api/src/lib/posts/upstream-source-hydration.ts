@@ -191,6 +191,14 @@ export async function hydrateDerivativeSourcesForResponses(input: {
     client: input.client,
     communityId: input.communityId,
     refs,
+  }).catch((error) => {
+    console.warn("[upstream-source-hydration] source lookup failed", {
+      community_id: input.communityId,
+      ref_count: refs.length,
+      error_name: error instanceof Error ? error.name : typeof error,
+      error_message: error instanceof Error ? error.message : String(error),
+    })
+    return []
   })
   const creatorUserIds = Array.from(new Set(rows.map((row) => row.creator_user_id)))
   const profilesByUserId = input.profileRepository
