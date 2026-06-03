@@ -122,6 +122,8 @@ async function readLatestDkgGlobalPubKey(params: {
   dkgAddress: string
 }): Promise<Uint8Array> {
   const iface = new Interface(DKG_ABI)
+  const finalizedTopic = iface.getEvent("Finalized")?.topicHash
+  const { CURVE_ED25519 } = await loadCdrCrypto()
   const latestBlock = BigInt(await params.provider.getBlockNumber())
   let windowSize = DKG_LOG_SCAN_WINDOW
   let fromBlock = latestBlock > windowSize ? latestBlock - windowSize : 0n
@@ -132,6 +134,7 @@ async function readLatestDkgGlobalPubKey(params: {
     try {
       logs = await params.provider.getLogs({
         address: params.dkgAddress,
+        topics: finalizedTopic ? [finalizedTopic] : undefined,
         fromBlock: Number(fromBlock),
         toBlock: Number(toBlock),
       })
@@ -153,7 +156,6 @@ async function readLatestDkgGlobalPubKey(params: {
           data: log.data,
         })
         if (parsed?.name !== "Finalized") continue
-        const { CURVE_ED25519 } = await loadCdrCrypto()
         return prefixCurveCode(getBytes(String(parsed.args.globalPubKey)), CURVE_ED25519)
       } catch {
         // Ignore unrelated logs.
