@@ -218,6 +218,7 @@ export async function markCommunityJobSucceeded(input: {
       SET status = 'succeeded',
           result_ref = ?2,
           error_code = NULL,
+          available_at = NULL,
           updated_at = ?3
       WHERE job_id = ?1
     `,

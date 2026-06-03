@@ -3,6 +3,8 @@ import { enqueueCommunityJob } from "../communities/jobs/store"
 import { CONTENT_TRANSLATION_PREWARM_LOCALES, sameLanguageLocale } from "../localization/content-locale"
 import { nowIso } from "../helpers"
 import type { Community, LocalizedPostResponse, Post } from "../../types"
+import { isRetryableLinkSummaryErrorMessage } from "./link-enrichment/retryable-errors"
+import { normalizeLinkUrl } from "./link-enrichment/url-normalization"
 
 const DEFAULT_EMBED_RECHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
 const ACTIVE_MARKET_EMBED_RECHECK_INTERVAL_MS = 5 * 60 * 1000
@@ -164,6 +166,61 @@ export function linkPostNeedsHydrationOnRead(post: Post, now?: string): boolean 
     return !Number.isFinite(lastCheckedAtMs)
       || !Number.isFinite(checkedAtMs)
       || checkedAtMs - lastCheckedAtMs >= embedRecheckIntervalMs(embed)
+  })
+}
+
+function failedLinkSummaryNormalizedUrl(post: Post): string | null {
+  const snapshot = post.link_enrichment_snapshot_json
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+    return null
+  }
+  const summary = (snapshot as { summary?: { status?: unknown } | null }).summary
+  if (summary?.status !== "failed") {
+    return null
+  }
+  const error = (snapshot as { error?: unknown }).error
+  const errorMessage = typeof error === "string" ? error : ""
+  if (!isRetryableLinkSummaryErrorMessage(errorMessage)) {
+    return null
+  }
+  const snapshotUrl = (snapshot as { normalized_url?: unknown }).normalized_url
+  if (typeof snapshotUrl === "string" && snapshotUrl.trim()) {
+    return snapshotUrl.trim()
+  }
+  return post.link_url ? normalizeLinkUrl(post.link_url) : null
+}
+
+export function linkPostNeedsSummaryRepairOnRead(post: Post): boolean {
+  return Boolean(
+    post.post_type === "link"
+    && post.link_url?.trim()
+    && failedLinkSummaryNormalizedUrl(post),
+  )
+}
+
+export async function enqueueLinkSummaryRepairOnReadIfNeeded(input: {
+  client: DbExecutor
+  communityId: string
+  post: Post
+  now?: string
+}): Promise<void> {
+  const normalizedUrl = failedLinkSummaryNormalizedUrl(input.post)
+  if (!normalizedUrl) {
+    return
+  }
+
+  await enqueueCommunityJob({
+    client: input.client,
+    communityId: input.communityId,
+    jobType: "link_summary_materialize",
+    subjectType: "link_enrichment",
+    subjectId: normalizedUrl,
+    payloadJson: JSON.stringify({
+      normalized_url: normalizedUrl,
+      post_id: input.post.post_id,
+      reason: "read_repair",
+    }),
+    createdAt: input.now ?? nowIso(),
   })
 }
 

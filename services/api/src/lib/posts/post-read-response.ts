@@ -8,7 +8,11 @@ import { getLatestThreadSnapshotForRead } from "../comments/community-comment-st
 import { buildLocalizedPostResponse } from "../localization/post-localization-service"
 import type { AgeGateViewerState } from "./age-gate-viewer-state"
 import { hydrateCrosspostSourcesForResponses } from "./crosspost-source-hydration"
-import { enqueueEmbedHydrateOnReadIfNeeded, enqueuePostTranslationOnReadIfNeeded } from "./post-jobs"
+import {
+  enqueueEmbedHydrateOnReadIfNeeded,
+  enqueueLinkSummaryRepairOnReadIfNeeded,
+  enqueuePostTranslationOnReadIfNeeded,
+} from "./post-jobs"
 import { hydrateDerivativeSourcesForResponses } from "./upstream-source-hydration"
 import { getPostReadMetrics } from "./community-post-metrics-store"
 import type { CommentThreadSnapshot, LocalizedPostResponse, Post } from "../../types"
@@ -101,6 +105,11 @@ export async function hydrateAndEnqueuePostReadResponses(input: {
       client: input.client,
       communityId: input.communityId,
       response,
+    })
+    await enqueueLinkSummaryRepairOnReadIfNeeded({
+      client: input.client,
+      communityId: input.communityId,
+      post: response.post,
     })
     await enqueueEmbedHydrateOnReadIfNeeded({
       client: input.client,

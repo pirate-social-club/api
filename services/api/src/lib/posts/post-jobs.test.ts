@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { embedRecheckIntervalMs, linkPostNeedsHydrationOnRead } from "./post-jobs"
+import { embedRecheckIntervalMs, linkPostNeedsHydrationOnRead, linkPostNeedsSummaryRepairOnRead } from "./post-jobs"
 import type { Post } from "../../types"
 
 type PostEmbed = NonNullable<Post["embeds"]>[number]
@@ -106,6 +106,39 @@ describe("link post hydration on read", () => {
         title: "Example story",
       },
     }))).toBe(false)
+  })
+
+  test("does not use embed hydration for generic link posts with existing failed summary snapshots", () => {
+    expect(linkPostNeedsHydrationOnRead(linkPost({
+      link_enrichment_snapshot_json: {
+        version: 1,
+        status: "ready",
+        summary: {
+          status: "failed",
+          summary_paragraph: null,
+          short_summary: null,
+          key_points: [],
+        },
+        error: "OpenRouter link summary response schema mismatch: invalid summary_paragraph",
+      },
+    }))).toBe(false)
+  })
+
+  test("repairs generic link posts with retryable failed summary snapshots through the summary job", () => {
+    expect(linkPostNeedsSummaryRepairOnRead(linkPost({
+      link_enrichment_snapshot_json: {
+        version: 1,
+        status: "ready",
+        normalized_url: "https://example.test/story",
+        summary: {
+          status: "failed",
+          summary_paragraph: null,
+          short_summary: null,
+          key_points: [],
+        },
+        error: "OpenRouter link summary request failed with http_401",
+      },
+    }))).toBe(true)
   })
 
   test("keeps stale embed rechecks for supported embeds", () => {

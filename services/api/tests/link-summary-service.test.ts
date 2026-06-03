@@ -132,6 +132,97 @@ describe("link summary materialization", () => {
     expect(summary.key_points).toEqual(["First point.", "Second point.", "Third point."])
   })
 
+  test("rethrows retryable OpenRouter summary failures and leaves the record pending", async () => {
+    const controlPlaneClient = await createControlPlaneClient()
+    await controlPlaneClient.execute({
+      sql: `
+        INSERT INTO link_enrichments (
+          link_enrichment_id, normalized_url, canonical_url, provider, status,
+          title, description, publisher, published_at, image_url,
+          markdown, summary_json, summary_status, summary_model, error,
+          fetched_at, summarized_at, created_at, updated_at
+        ) VALUES (
+          'len_retry', 'https://example.com/retry', 'https://example.com/retry',
+          'firecrawl', 'ready', 'Retry title', NULL, 'Example News',
+          NULL, NULL, '# Retry title\\n\\nArticle body.',
+          NULL, NULL, NULL, NULL,
+          '2026-05-02T09:00:00.000Z', NULL,
+          '2026-05-02T09:00:00.000Z', '2026-05-02T09:00:00.000Z'
+        )
+      `,
+    })
+
+    await expect(generateAndStoreLinkSummary({
+      env: {
+        OPENROUTER_API_KEY: "or-test",
+        OPENROUTER_BASE_URL: "https://openrouter.test/v1",
+      },
+      controlPlaneClient,
+      normalizedUrl: "https://example.com/retry",
+      now: "2026-05-02T10:00:00.000Z",
+      fetcher: (async () => new Response("Unauthorized", { status: 401 })) as typeof fetch,
+    })).rejects.toThrow("OpenRouter link summary request failed with http_401")
+
+    const rows = await controlPlaneClient.execute("SELECT summary_json, summary_status, error, summarized_at FROM link_enrichments")
+    expect(rows.rows[0]?.summary_json).toBeNull()
+    expect(rows.rows[0]?.summary_status).toBe("pending")
+    expect(rows.rows[0]?.error).toBeNull()
+    expect(rows.rows[0]?.summarized_at).toBe("2026-05-02T10:00:00.000Z")
+  })
+
+  test("stores terminal summary schema failures as failed snapshots", async () => {
+    const controlPlaneClient = await createControlPlaneClient()
+    await controlPlaneClient.execute({
+      sql: `
+        INSERT INTO link_enrichments (
+          link_enrichment_id, normalized_url, canonical_url, provider, status,
+          title, description, publisher, published_at, image_url,
+          markdown, summary_json, summary_status, summary_model, error,
+          fetched_at, summarized_at, created_at, updated_at
+        ) VALUES (
+          'len_schema', 'https://example.com/schema', 'https://example.com/schema',
+          'firecrawl', 'ready', 'Schema title', NULL, 'Example News',
+          NULL, NULL, '# Schema title\\n\\nArticle body.',
+          NULL, NULL, NULL, NULL,
+          '2026-05-02T09:00:00.000Z', NULL,
+          '2026-05-02T09:00:00.000Z', '2026-05-02T09:00:00.000Z'
+        )
+      `,
+    })
+
+    const result = await generateAndStoreLinkSummary({
+      env: {
+        OPENROUTER_API_KEY: "or-test",
+        OPENROUTER_BASE_URL: "https://openrouter.test/v1",
+      },
+      controlPlaneClient,
+      normalizedUrl: "https://example.com/schema",
+      now: "2026-05-02T10:00:00.000Z",
+      fetcher: (async () => new Response(JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                summary_paragraph: "",
+                short_summary: "A short summary.",
+                key_points: ["First point.", "Second point.", "Third point."],
+              }),
+            },
+          },
+        ],
+      }), {
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch,
+    })
+
+    expect(result.resultRef).toBe("failed:OpenRouter link summary response schema mismatch: invalid summary_paragraph")
+    const rows = await controlPlaneClient.execute("SELECT summary_json, summary_status, error FROM link_enrichments")
+    expect(rows.rows[0]?.summary_json).toBeNull()
+    expect(rows.rows[0]?.summary_status).toBe("failed")
+    expect(rows.rows[0]?.error).toBe("OpenRouter link summary response schema mismatch: invalid summary_paragraph")
+    expect(result.snapshotJson).toContain("\"status\":\"failed\"")
+  })
+
   test("stores localized link summary translations in the snapshot", async () => {
     const controlPlaneClient = await createControlPlaneClient()
     await controlPlaneClient.execute({

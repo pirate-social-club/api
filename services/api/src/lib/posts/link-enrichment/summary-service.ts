@@ -14,6 +14,7 @@ import {
   parseStoredLinkSummaryTranslationInput,
 } from "./summary-translation-input"
 import { requestLinkSummaryTranslation } from "./translation-provider"
+import { isRetryableLinkSummaryError } from "./retryable-errors"
 
 export async function generateAndStoreLinkSummary(input: {
   env: Env
@@ -98,6 +99,9 @@ export async function generateAndStoreLinkSummary(input: {
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
+    if (isRetryableLinkSummaryError(error)) {
+      throw error
+    }
     const failed = await updateLinkEnrichmentSummary({
       client: input.controlPlaneClient,
       normalizedUrl: input.normalizedUrl,
