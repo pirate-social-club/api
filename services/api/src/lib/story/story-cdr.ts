@@ -189,6 +189,14 @@ function parseVaultAllocatedUuid(logs: Array<{ topics: readonly string[]; data: 
   throw new Error("VaultAllocated event not found in transaction logs")
 }
 
+async function cdrStep<T>(name: string, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run()
+  } catch (error) {
+    throw new Error(`${name}:${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
 export async function uploadCdrEncryptedDataKey(params: {
   env: Env
   dataKey: Uint8Array
@@ -243,8 +251,8 @@ export async function uploadCdrEncryptedDataKey(params: {
   const writerSigner = new Wallet(writerConfig.value.privateKey, provider)
   const cdrContract = new Contract(contracts.cdrAddress, CDR_ABI, provider)
 
-  const allocateFee = BigInt(await cdrContract.allocateFee())
-  const allocateTx = await sendContractTxWithPolicy({
+  const allocateFee = BigInt(await cdrStep("cdr_allocate_fee", () => cdrContract.allocateFee()))
+  const allocateTx = await cdrStep("cdr_allocate_tx", () => sendContractTxWithPolicy({
     provider,
     signer: writerSigner,
     contractAddress: contracts.cdrAddress,
@@ -259,8 +267,8 @@ export async function uploadCdrEncryptedDataKey(params: {
     ],
     gasPolicy: gasPolicy.value,
     value: allocateFee,
-  })
-  const allocateReceipt = await provider.waitForTransaction(String(allocateTx.hash || ""), 1, txWaitTimeoutMs)
+  }))
+  const allocateReceipt = await cdrStep("cdr_allocate_receipt", () => provider.waitForTransaction(String(allocateTx.hash || ""), 1, txWaitTimeoutMs))
   if (!allocateReceipt || allocateReceipt.status !== 1) {
     throw new Error("cdr_allocate_failed")
   }
@@ -269,24 +277,26 @@ export async function uploadCdrEncryptedDataKey(params: {
     && log.topics.every((topic) => typeof topic === "string")
     && typeof log.data === "string"
   ))
-  const cdrVaultUuid = parseVaultAllocatedUuid(allocateLogs)
+  const cdrVaultUuid = await cdrStep("cdr_allocate_uuid", async () => parseVaultAllocatedUuid(allocateLogs))
 
-  const globalPubKey = await readLatestDkgGlobalPubKey({
+  const globalPubKey = await cdrStep("cdr_dkg_global_key", () => readLatestDkgGlobalPubKey({
     provider,
     dkgAddress: contracts.dkgAddress,
-  })
-  const { tdh2Encrypt } = await loadCdrCrypto()
-  const ciphertext = await tdh2Encrypt({
+  }))
+  const { tdh2Encrypt } = await cdrStep("cdr_crypto_load", () => loadCdrCrypto())
+  const ciphertext = await cdrStep("cdr_tdh2_encrypt", () => tdh2Encrypt({
     plaintext: params.dataKey,
     globalPubKey,
     label: uuidToLabel(cdrVaultUuid),
-  })
-  const accessAuxData = params.buildAccessAuxData
-    ? await params.buildAccessAuxData(cdrVaultUuid)
-    : (params.accessAuxData ?? "0x")
+  }))
+  const accessAuxData = await cdrStep("cdr_access_aux_data", async () => (
+    params.buildAccessAuxData
+      ? await params.buildAccessAuxData(cdrVaultUuid)
+      : (params.accessAuxData ?? "0x")
+  ))
 
-  const writeFee = BigInt(await cdrContract.writeFee())
-  const writeTx = await sendContractTxWithPolicy({
+  const writeFee = BigInt(await cdrStep("cdr_write_fee", () => cdrContract.writeFee()))
+  const writeTx = await cdrStep("cdr_write_tx", () => sendContractTxWithPolicy({
     provider,
     signer: writerSigner,
     contractAddress: contracts.cdrAddress,
@@ -299,8 +309,8 @@ export async function uploadCdrEncryptedDataKey(params: {
     ],
     gasPolicy: gasPolicy.value,
     value: writeFee,
-  })
-  const writeReceipt = await provider.waitForTransaction(String(writeTx.hash || ""), 1, txWaitTimeoutMs)
+  }))
+  const writeReceipt = await cdrStep("cdr_write_receipt", () => provider.waitForTransaction(String(writeTx.hash || ""), 1, txWaitTimeoutMs))
   if (!writeReceipt || writeReceipt.status !== 1) {
     throw new Error("cdr_write_failed")
   }
