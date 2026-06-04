@@ -15,6 +15,11 @@ This directory contains vendored third-party code used by the API worker.
 Do not update these files without recording the upstream source URL, upstream commit or release,
 license, build command, and refreshed SHA-256 checksums below.
 
+Local runtime patch:
+- `wasm/loader.js` and `wasm/loader.d.ts` are patched locally to import `cb-mpc-tdh2.wasm`
+  as bundled bytes and pass it to the Emscripten module via `wasmBinary`. This avoids runtime
+  filesystem resolution in the Cloudflare Worker `nodejs_compat` environment.
+
 ## SHA-256 Checksums
 
 Checksums were generated from `services/api/src/vendor/piplabs/cdr-crypto/`.
@@ -47,8 +52,8 @@ de57b7f98f85c4d37ee4426b69ae206e0bb2316a09bb5d88d5b7b9dd1a8f86a0  ./types.d.ts
 a7de897b48fe57bf54d6f84169135ff2e89e2fc95ea0a0a815761cc29a41efee  ./types.js.map
 f23a647cb2de2c4ffbcb349b53b982d57bf1df4a0e49003d0d00e372d56528d8  ./wasm/cb-mpc-tdh2.js
 1ffbe6366d89c33102c86e108e679f9592016b23fd31f09b0be4ad2e4b14ae9e  ./wasm/cb-mpc-tdh2.wasm
-94159422cdd88d90341bc5768a0d1f1af8a22d1b1d504aac15e766371b867ec4  ./wasm/loader.d.ts
+e340fadbba80e95e86c2cc530e99ed55c85733ea6edbe978ca2f7d1b03f0bb13  ./wasm/loader.d.ts
 bcee6c5449c3c282cb7d874c0430504331fb1c6eb6d345d20da61d9ea8003077  ./wasm/loader.d.ts.map
-2dd055d73eb2ef13bab6f5bfdef552514494765cd95707f3d92f7f5d5c7f6787  ./wasm/loader.js
+a3d7bac008dc50a801d5eec4466ed84ac7cdb6ea3148086d50b7f12ca1d0ced3  ./wasm/loader.js
 9a03e7e28d158ea0c2ec60c70cde5f4d09bf43166f2e7610d126e508516e0f28  ./wasm/loader.js.map
 ```

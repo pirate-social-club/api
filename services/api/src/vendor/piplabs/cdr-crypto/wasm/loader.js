@@ -8,6 +8,7 @@
  *   const raw = wasm.tdh2Encrypt(globalPubKey, plaintext, label);
  */
 import createCbMpcModule from "./cb-mpc-tdh2.js";
+import bundledWasmBinary from "./cb-mpc-tdh2.wasm";
 /** Ed25519 curve code in cb-mpc (NID_ED25519 = 0x043f = 1087) */
 export const CURVE_ED25519 = 1087;
 /**
@@ -295,14 +296,30 @@ export class CbMpcWasm {
     }
 }
 let wasmInstance = null;
+async function normalizeWasmBinary(binary) {
+    if (binary instanceof ArrayBuffer)
+        return binary;
+    if (ArrayBuffer.isView(binary)) {
+        return binary.buffer.slice(binary.byteOffset, binary.byteOffset + binary.byteLength);
+    }
+    if (typeof binary === "string") {
+        if (typeof Bun !== "undefined" && typeof Bun.file === "function") {
+            return await Bun.file(binary).arrayBuffer();
+        }
+        throw new Error("CDR WASM binary import resolved to a path string; configure the worker bundler to import cb-mpc-tdh2.wasm as Data");
+    }
+    throw new Error("CDR WASM binary import did not resolve to bytes");
+}
 /**
  * Initialize the WASM module. Must be called once before using tdh2Encrypt/tdh2Combine.
  * Subsequent calls are no-ops and return immediately.
  */
-export async function initWasm() {
+export async function initWasm(options = {}) {
     if (wasmInstance)
         return;
-    const Module = await createCbMpcModule();
+    const Module = await createCbMpcModule({
+        wasmBinary: await normalizeWasmBinary(options.wasmBinary ?? bundledWasmBinary),
+    });
     const ptrSize = Module._wasm_ptr_size();
     if (ptrSize !== 4) {
         console.warn(`Unexpected WASM pointer size: ${ptrSize} (expected 4)`);

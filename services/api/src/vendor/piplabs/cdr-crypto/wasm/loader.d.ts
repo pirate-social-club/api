@@ -85,7 +85,9 @@ export declare class CbMpcWasm {
  * Initialize the WASM module. Must be called once before using tdh2Encrypt/tdh2Combine.
  * Subsequent calls are no-ops and return immediately.
  */
-export declare function initWasm(): Promise<void>;
+export declare function initWasm(options?: {
+    wasmBinary?: ArrayBuffer | Uint8Array | string;
+}): Promise<void>;
 /**
  * Return the initialized WASM instance, or null if initWasm() has not been called.
  */
