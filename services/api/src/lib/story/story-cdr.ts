@@ -6,6 +6,8 @@ import {
   DEFAULT_STORY_CHAIN_ID,
   DEFAULT_STORY_RPC_URL,
   DEFAULT_STORY_TX_WAIT_TIMEOUT_MS,
+  resolveStoryRpcUrl,
+  resolveStoryRpcUrls,
 } from "./story-runtime-config"
 
 const STORY_MAINNET_CHAIN_ID = 1514
@@ -48,6 +50,8 @@ export type StoryCdrUploadResult = {
 }
 
 let cdrCryptoReadyPromise: Promise<CdrCryptoModule> | null = null
+let cdrCryptoLoaderForTests: (() => Promise<CdrCryptoModule>) | null = null
+let storyJsonRpcProviderFactoryForTests: ((rpcUrl: string, chainId: number) => JsonRpcProvider) | null = null
 let testUploader: ((params: {
   env: Env
   dataKey: Uint8Array
@@ -107,6 +111,9 @@ function prefixCurveCode(rawPoint: Uint8Array, curveCode: number): Uint8Array {
 }
 
 async function loadCdrCrypto(): Promise<CdrCryptoModule> {
+  if (cdrCryptoLoaderForTests) {
+    return await cdrCryptoLoaderForTests()
+  }
   if (!cdrCryptoReadyPromise) {
     cdrCryptoReadyPromise = (async () => {
       const mod = await import("../../vendor/piplabs/cdr-crypto/index.js") as unknown as CdrCryptoModule
@@ -117,13 +124,51 @@ async function loadCdrCrypto(): Promise<CdrCryptoModule> {
   return cdrCryptoReadyPromise
 }
 
+function setCdrCryptoLoaderForTests(loader: (() => Promise<CdrCryptoModule>) | null): void {
+  cdrCryptoLoaderForTests = loader
+}
+
+function setStoryJsonRpcProviderFactoryForTests(
+  factory: ((rpcUrl: string, chainId: number) => JsonRpcProvider) | null,
+): void {
+  storyJsonRpcProviderFactoryForTests = factory
+}
+
+function createStoryJsonRpcProvider(rpcUrl: string, chainId: number): JsonRpcProvider {
+  return storyJsonRpcProviderFactoryForTests?.(rpcUrl, chainId) ?? new JsonRpcProvider(rpcUrl, chainId)
+}
+
+function shouldShrinkDkgLogWindow(message: string): boolean {
+  return message.includes("block range is too large")
+    || message.includes("too many results")
+    || message.includes("query returned more than")
+    || message.includes("response size")
+    || message.includes("limit exceeded")
+    || message.includes("exceeds maximum")
+}
+
 async function readLatestDkgGlobalPubKey(params: {
   provider: JsonRpcProvider
   dkgAddress: string
 }): Promise<Uint8Array> {
-  const iface = new Interface(DKG_ABI)
-  const finalizedTopic = iface.getEvent("Finalized")?.topicHash
   const { CURVE_ED25519 } = await loadCdrCrypto()
+  return await scanLatestDkgGlobalPubKey({
+    ...params,
+    curveCode: CURVE_ED25519,
+  })
+}
+
+async function scanLatestDkgGlobalPubKey(params: {
+  provider: JsonRpcProvider
+  dkgAddress: string
+  curveCode: number
+}): Promise<Uint8Array> {
+  const iface = new Interface(DKG_ABI)
+  const finalizedEvent = iface.getEvent("Finalized")
+  if (!finalizedEvent) {
+    throw new Error("Finalized event ABI missing")
+  }
+  const finalizedTopic = finalizedEvent.topicHash
   const latestBlock = BigInt(await params.provider.getBlockNumber())
   let windowSize = DKG_LOG_SCAN_WINDOW
   let fromBlock = latestBlock > windowSize ? latestBlock - windowSize : 0n
@@ -134,13 +179,13 @@ async function readLatestDkgGlobalPubKey(params: {
     try {
       logs = await params.provider.getLogs({
         address: params.dkgAddress,
-        topics: finalizedTopic ? [finalizedTopic] : undefined,
+        topics: [finalizedTopic],
         fromBlock: Number(fromBlock),
         toBlock: Number(toBlock),
       })
     } catch (error) {
       const message = error instanceof Error ? error.message.toLowerCase() : String(error || "").toLowerCase()
-      if (message.includes("block range is too large") && windowSize > DKG_LOG_SCAN_WINDOW_MIN) {
+      if (shouldShrinkDkgLogWindow(message) && windowSize > DKG_LOG_SCAN_WINDOW_MIN) {
         windowSize = windowSize / 2n
         if (windowSize < DKG_LOG_SCAN_WINDOW_MIN) windowSize = DKG_LOG_SCAN_WINDOW_MIN
         fromBlock = toBlock > windowSize ? toBlock - windowSize : 0n
@@ -150,22 +195,67 @@ async function readLatestDkgGlobalPubKey(params: {
     }
     for (let index = logs.length - 1; index >= 0; index -= 1) {
       const log = logs[index]!
+      let parsed
       try {
-        const parsed = iface.parseLog({
+        parsed = iface.parseLog({
           topics: [...log.topics],
           data: log.data,
         })
-        if (parsed?.name !== "Finalized") continue
-        return prefixCurveCode(getBytes(String(parsed.args.globalPubKey)), CURVE_ED25519)
       } catch {
         // Ignore unrelated logs.
+        continue
       }
+      if (parsed?.name !== "Finalized") continue
+      return prefixCurveCode(getBytes(String(parsed.args.globalPubKey)), params.curveCode)
     }
     if (fromBlock === 0n) break
     toBlock = fromBlock - 1n
     fromBlock = toBlock > windowSize ? toBlock - windowSize : 0n
   }
   throw new Error("No Finalized event found - DKG may not have completed yet")
+}
+
+async function readLatestDkgGlobalPubKeyWithFallback(params: {
+  env: Pick<Env, "STORY_RPC_URL" | "STORY_RPC_FALLBACK_URLS">
+  chainId: number
+  dkgAddress: string
+  primaryProvider: JsonRpcProvider
+}): Promise<Uint8Array> {
+  const { CURVE_ED25519 } = await loadCdrCrypto()
+  const rpcUrls = resolveStoryRpcUrls(params.env)
+  let lastError: unknown = null
+  for (let index = 0; index < rpcUrls.length; index += 1) {
+    const provider = index === 0
+      ? params.primaryProvider
+      : createStoryJsonRpcProvider(rpcUrls[index]!, params.chainId)
+    try {
+      return await scanLatestDkgGlobalPubKey({
+        provider,
+        dkgAddress: params.dkgAddress,
+        curveCode: CURVE_ED25519,
+      })
+    } catch (error) {
+      lastError = error
+      if (index + 1 < rpcUrls.length) {
+        console.warn("[story] DKG global public key lookup failed; retrying fallback RPC", {
+          rpc_index: index,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    } finally {
+      if (provider !== params.primaryProvider) {
+        void provider.destroy()
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError || "DKG global public key lookup failed"))
+}
+
+export const __storyCdrTestHooks = {
+  readLatestDkgGlobalPubKey,
+  readLatestDkgGlobalPubKeyWithFallback,
+  setCdrCryptoLoaderForTests,
+  setStoryJsonRpcProviderFactoryForTests,
 }
 
 function parseVaultAllocatedUuid(logs: Array<{ topics: readonly string[]; data: string }>): number {
@@ -236,10 +326,7 @@ export async function uploadCdrEncryptedDataKey(params: {
   })
   if (!gasPolicy.ok) throw new Error(gasPolicy.error)
 
-  const provider = new JsonRpcProvider(
-    String(params.env.STORY_RPC_URL || DEFAULT_STORY_RPC_URL).trim() || DEFAULT_STORY_RPC_URL,
-    chainId,
-  )
+  const provider = createStoryJsonRpcProvider(resolveStoryRpcUrl(params.env) || DEFAULT_STORY_RPC_URL, chainId)
   const writerSigner = new Wallet(writerConfig.value.privateKey, provider)
   const cdrContract = new Contract(contracts.cdrAddress, CDR_ABI, provider)
 
@@ -271,8 +358,10 @@ export async function uploadCdrEncryptedDataKey(params: {
   ))
   const cdrVaultUuid = parseVaultAllocatedUuid(allocateLogs)
 
-  const globalPubKey = await readLatestDkgGlobalPubKey({
-    provider,
+  const globalPubKey = await readLatestDkgGlobalPubKeyWithFallback({
+    env: params.env,
+    chainId,
+    primaryProvider: provider,
     dkgAddress: contracts.dkgAddress,
   })
   const { tdh2Encrypt } = await loadCdrCrypto()
@@ -326,10 +415,7 @@ export async function estimateStoryCdrLockedPublishMinimumBalanceWei(env: Env): 
     throw new Error(`CDR backend upload is not configured for Story chain ${chainId}`)
   }
 
-  const provider = new JsonRpcProvider(
-    String(env.STORY_RPC_URL || DEFAULT_STORY_RPC_URL).trim() || DEFAULT_STORY_RPC_URL,
-    chainId,
-  )
+  const provider = createStoryJsonRpcProvider(resolveStoryRpcUrl(env) || DEFAULT_STORY_RPC_URL, chainId)
   try {
     const cdrContract = new Contract(contracts.cdrAddress, CDR_ABI, provider)
     const [allocateFeeRaw, writeFeeRaw] = await Promise.all([
