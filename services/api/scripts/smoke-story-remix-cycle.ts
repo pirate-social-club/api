@@ -59,6 +59,12 @@ function normalizeApiBaseUrl(value: string): string {
   return value.replace(/\/+$/, "")
 }
 
+function readSmokeAccessMode(): "public" | "locked" {
+  const value = readEnv("PIRATE_SMOKE_ACCESS_MODE", "public").toLowerCase()
+  if (value === "public" || value === "locked") return value
+  throw new Error(`PIRATE_SMOKE_ACCESS_MODE must be public or locked, got ${value}`)
+}
+
 function decodePublicId(value: string, prefix: string): string {
   const normalized = value.trim()
   const publicPrefix = `${prefix}_`
@@ -427,6 +433,10 @@ async function readAsset(input: {
   session: SmokeSession
   asset: string
 }): Promise<{
+  access_mode?: string | null
+  locked_delivery_status?: string | null
+  locked_delivery_error?: string | null
+  story_cdr_vault_uuid?: number | null
   story_ip?: string | null
   story_license_terms?: string | null
   story_royalty_registration_status?: string | null
@@ -673,10 +683,19 @@ async function main(): Promise<void> {
   } as Record<string, string | undefined>
   const apiBaseUrl = normalizeApiBaseUrl(readEnv("PIRATE_SMOKE_API_BASE_URL", "http://127.0.0.1:8787"))
   const communityId = requireEnv("PIRATE_SMOKE_COMMUNITY_ID").replace(/^com_/, "")
+  const accessMode = readSmokeAccessMode()
   const titlePrefix = readEnv("PIRATE_SMOKE_TITLE_PREFIX", "Palestine, Don't Cry")
   const skipVerification = hasFlag("--skip-verification")
   const useLocalSetup = shouldUseLocalMembershipSetup(apiBaseUrl)
   const settlePurchase = hasFlag("--settle-purchase")
+  console.log("[smoke] config", {
+    apiBaseUrl,
+    communityId,
+    access_mode: accessMode,
+    skipVerification,
+    useLocalSetup,
+    settlePurchase,
+  })
 
   const author = await createSession({
     apiBaseUrl,
@@ -719,7 +738,7 @@ async function main(): Promise<void> {
     title: originalTitle,
     bundle: originalBundle,
     songMode: "original",
-    accessMode: "public",
+    accessMode,
     rightsBasis: "original",
   })
   const originalAsset = await readAsset({
@@ -731,10 +750,16 @@ async function main(): Promise<void> {
   console.log("[smoke] original asset", {
     post: originalPost.post,
     asset: originalPost.asset,
+    access_mode: originalAsset.access_mode ?? null,
+    locked_delivery_status: originalAsset.locked_delivery_status ?? null,
+    story_cdr_vault_uuid: originalAsset.story_cdr_vault_uuid ?? null,
     story_ip: originalAsset.story_ip ?? null,
     story_license_terms: originalAsset.story_license_terms ?? null,
     story_royalty_registration_status: originalAsset.story_royalty_registration_status ?? null,
   })
+  if (accessMode === "locked" && originalAsset.locked_delivery_status !== "ready") {
+    throw new Error(`original locked delivery was not ready: ${JSON.stringify(originalAsset)}`)
+  }
   if (originalAsset.story_royalty_registration_status !== "registered") {
     throw new Error(`original asset was not Story registered: ${JSON.stringify(originalAsset)}`)
   }
@@ -795,7 +820,7 @@ async function main(): Promise<void> {
     title: remixTitle,
     bundle: remixBundle,
     songMode: "remix",
-    accessMode: "public",
+    accessMode,
     rightsBasis: "derivative",
     upstreamAssetRefs,
   })
@@ -808,10 +833,16 @@ async function main(): Promise<void> {
   console.log("[smoke] remix asset", {
     post: remixPost.post,
     asset: remixPost.asset,
+    access_mode: remixAsset.access_mode ?? null,
+    locked_delivery_status: remixAsset.locked_delivery_status ?? null,
+    story_cdr_vault_uuid: remixAsset.story_cdr_vault_uuid ?? null,
     story_ip: remixAsset.story_ip ?? null,
     story_royalty_registration_status: remixAsset.story_royalty_registration_status ?? null,
     parents: remixAsset.story_derivative_parent_ip_ids ?? null,
   })
+  if (accessMode === "locked" && remixAsset.locked_delivery_status !== "ready") {
+    throw new Error(`remix locked delivery was not ready: ${JSON.stringify(remixAsset)}`)
+  }
   if (remixAsset.story_royalty_registration_status !== "registered") {
     throw new Error(`remix asset was not Story registered: ${JSON.stringify(remixAsset)}`)
   }
