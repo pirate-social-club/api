@@ -1,6 +1,7 @@
 import type { Client } from "../../sql-client"
 import { badRequestError, notFoundError, providerUnavailable } from "../../errors"
 import { nowIso } from "../../helpers"
+import { logPipelineInfo } from "../../observability/pipeline-log"
 import {
   ANY_COMMUNITY_ROLE,
   getCommunityMembershipState,
