@@ -2184,6 +2184,10 @@ describe("song artifact locked routes", () => {
 
   test("creates a members-only locked video commerce asset with Story CDR access", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
+    const storyPublishCalls: Array<{
+      rightsBasis: "none" | "original" | "derivative"
+      upstreamAssetRefs: string[] | null
+    }> = []
     setStoryRuntimeFundingAssertionForTests(async () => {})
     setStoryCdrUploaderForTests(async () => ({
       cdrVaultUuid: 9090,
@@ -2193,13 +2197,35 @@ describe("song artifact locked routes", () => {
         write: "0xwrite-video",
       },
     }))
-    setStoryAssetPublisherForTests(async () => ({
-      entitlementConfiguredTxHash: "0xconfigure-video",
-      publishTxHash: "0xpublish-video",
-    }))
+    setStoryAssetPublisherForTests(async (input) => {
+      storyPublishCalls.push({
+        rightsBasis: input.rightsBasis,
+        upstreamAssetRefs: input.upstreamAssetRefs,
+      })
+      return {
+        entitlementConfiguredTxHash: "0xconfigure-video",
+        publishTxHash: "0xpublish-video",
+      }
+    })
     setStoryRoyaltyRegistrarForTests(async (input) => {
       expect(input.assetKind).toBe("video_file")
       expect(input.bundle).toBeNull()
+      if (input.rightsBasis === "derivative") {
+        expect(input.licensePreset).toBe("non-commercial")
+        expect(input.upstreamAssetRefs).toEqual(["story:ip:0x1111111111111111111111111111111111111111#licenseTermsId=19"])
+        return {
+          storyIpId: "0x5050505050505050505050505050505050505050",
+          storyIpNftContract: "0x4040404040404040404040404040404040404040",
+          storyIpNftTokenId: "910",
+          storyLicenseTermsId: "23",
+          storyLicenseTemplate: null,
+          storyRoyaltyPolicy: "0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E",
+          storyDerivativeParentIpIds: ["0x1111111111111111111111111111111111111111"],
+          storyRevenueToken: "0x1514000000000000000000000000000000000000",
+          storyRoyaltyRegistrationStatus: "registered",
+          storyDerivativeRegisteredAt: "2026-06-04T00:00:00.000Z",
+        }
+      }
       expect(input.rightsBasis).toBe("original")
       expect(input.licensePreset).toBe("non-commercial")
       return {
@@ -2393,6 +2419,76 @@ describe("song artifact locked routes", () => {
     expect(previewRangeResponse.headers.get("accept-ranges")).toBe("bytes")
     expect(previewRangeResponse.headers.get("content-range")).toBe(`bytes 0-3/${previewBytes.byteLength}`)
     expect(new Uint8Array(await previewRangeResponse.arrayBuffer())).toEqual(previewBytes.slice(0, 4))
+
+    const derivativeVideoBytes = new TextEncoder().encode("locked-derivative-video-bytes")
+    const derivativeVideoUpload = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "primary_video",
+      mimeType: "video/mp4",
+      filename: "locked-derivative-video.mp4",
+      bytes: derivativeVideoBytes,
+    })
+    const derivativePost = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        idempotency_key: "locked-video-commerce-derivative-1",
+        post_type: "video",
+        title: "Members-only derivative video",
+        visibility: "members_only",
+        access_mode: "locked",
+        license_preset: "non-commercial",
+        rights_basis: "derivative",
+        upstream_asset_refs: ["story:ip:0x1111111111111111111111111111111111111111#licenseTermsId=19"],
+        media_refs: [{
+          storage_ref: derivativeVideoUpload.storage_ref,
+          mime_type: "video/mp4",
+          size_bytes: derivativeVideoBytes.byteLength,
+          poster_ref: "http://pirate.test/community-media/post_image/locked-derivative-video-cover.jpg",
+          poster_mime_type: "image/jpeg",
+          poster_size_bytes: 4567,
+          poster_width: 1280,
+          poster_height: 720,
+          poster_frame_ms: 1000,
+        }],
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(derivativePost.status).toBe(201)
+    const derivativePostBody = await json(derivativePost) as {
+      asset: string
+      access_mode: string
+    }
+    expect(derivativePostBody.access_mode).toBe("locked")
+
+    const derivativeAssetResponse = await app.request(
+      `http://pirate.test/communities/${communityId}/assets/${derivativePostBody.asset}`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(derivativeAssetResponse.status).toBe(200)
+    const derivativeAssetBody = await json(derivativeAssetResponse) as {
+      access_mode: string
+      rights_basis: string
+      story_ip: string | null
+      story_derivative_parent_ip_ids: string[] | null
+      story_royalty_registration_status: string
+    }
+    expect(derivativeAssetBody.access_mode).toBe("locked")
+    expect(derivativeAssetBody.rights_basis).toBe("derivative")
+    expect(derivativeAssetBody.story_ip).toBe("0x5050505050505050505050505050505050505050")
+    expect(derivativeAssetBody.story_derivative_parent_ip_ids).toEqual(["0x1111111111111111111111111111111111111111"])
+    expect(derivativeAssetBody.story_royalty_registration_status).toBe("registered")
+    expect(storyPublishCalls).toContainEqual({
+      rightsBasis: "derivative",
+      upstreamAssetRefs: ["story:ip:0x1111111111111111111111111111111111111111#licenseTermsId=19"],
+    })
 
     const wrongPreviewPost = await requestJson(
       `http://pirate.test/communities/${communityId}/posts`,

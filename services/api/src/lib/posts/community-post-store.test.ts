@@ -754,6 +754,30 @@ describe("assertPostCreateRequest", () => {
     ).not.toThrow()
   })
 
+  test("requires upstream refs for derivative video posts", () => {
+    expect(() =>
+      assertPostCreateRequest(
+        videoAssetRequest({
+          rights_basis: "derivative",
+          upstream_asset_refs: [],
+        }),
+        "cmt_test",
+      )
+    ).toThrow("upstream_asset_refs is required for derivative video posts")
+  })
+
+  test("allows locked derivative video posts with source refs", () => {
+    expect(() =>
+      assertPostCreateRequest(
+        videoAssetRequest({
+          rights_basis: "derivative",
+          upstream_asset_refs: ["story:asset:ast_source_song"],
+        }),
+        "cmt_test",
+      )
+    ).not.toThrow()
+  })
+
   test("rejects video license fields when no locked video asset is created", () => {
     expect(() =>
       assertPostCreateRequest(
