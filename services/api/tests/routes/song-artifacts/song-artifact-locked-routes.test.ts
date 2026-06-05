@@ -561,6 +561,214 @@ describe("song artifact locked routes", () => {
     }
   }, 30_000)
 
+  testWithTimeout("repairs a partially completed locked delivery instead of rerunning Story publish", async () => {
+    const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
+    setStoryRuntimeFundingAssertionForTests(async () => {
+      throw new Error("partial repair should not assert Story signer funding")
+    })
+    setStoryCdrUploaderForTests(async () => {
+      throw new Error("partial repair should not write CDR again")
+    })
+    setStoryAssetPublisherForTests(async () => {
+      throw new Error("partial repair should not publish Story again")
+    })
+    setStoryRoyaltyRegistrarForTests(async () => {
+      throw new Error("partial repair should not register Story royalties again")
+    })
+    installLockedSongFetchMocks({
+      originalFetch,
+      storedObjects,
+    })
+
+    const ctx = await createRouteTestContext({
+      STORY_LOCKED_DELIVERY_ASYNC: "true",
+      FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
+      FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
+      FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
+      FILEBASE_MEDIA_BUCKET: "pirate-media",
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      OPENROUTER_MODEL: "google/gemini-3.1-flash-lite-preview",
+      ACRCLOUD_ACCESS_KEY: "test-acrcloud-access",
+      ACRCLOUD_ACCESS_SECRET: "test-acrcloud-secret",
+      ACRCLOUD_HOST: "acrcloud.test",
+      ELEVENLABS_API_KEY: "test-elevenlabs-key",
+      ELEVENLABS_FORCE_ALIGNMENT_URL: "https://elevenlabs.test/forced-alignment",
+      STORY_CONTRACT_OWNER_PRIVATE_KEY: "0x1000000000000000000000000000000000000000000000000000000000000001",
+      STORY_OPERATOR_PRIVATE_KEY: "0x2000000000000000000000000000000000000000000000000000000000000002",
+      STORY_CDR_WRITER_PRIVATE_KEY: "0x3000000000000000000000000000000000000000000000000000000000000003",
+      STORY_ACCESS_CONTROLLER_PRIVATE_KEY: "0x4000000000000000000000000000000000000000000000000000000000000004",
+    })
+    cleanup = ctx.cleanup
+
+    const author = await exchangeJwt(ctx.env, "song-author-partial-locked-repair")
+    await attachPrimaryWallet({
+      client: ctx.client,
+      userId: author.userId,
+      walletAttachmentId: "wal_song_author_partial_locked_repair",
+      walletAddress: "0xaaa0000000000000000000000000000000000000",
+    })
+    await verifyForLockedCommerce(ctx.env, author.userId, author.accessToken)
+    const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "Partial Repair Song Club")
+    const primaryUpload = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "primary_audio",
+      mimeType: "audio/mpeg",
+      filename: "partial-repair-anthem.mp3",
+      bytes: new Uint8Array([71, 72, 73, 74]),
+    })
+    const bundleCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifacts`,
+      {
+        primary_audio: {
+          song_artifact_upload: primaryUpload.id,
+        },
+        preview_window: {
+          start_ms: 0,
+          duration_ms: 30_000,
+        },
+        title: "Partial Repair Anthem",
+        lyrics: "Partial repair line",
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(bundleCreate.status).toBe(201)
+    const bundleBody = await json(bundleCreate) as { id: string }
+    await markGeneratedPreviewReady({
+      env: ctx.env,
+      communityId,
+      songArtifactBundleId: bundleBody.id.replace(/^sab_/, ""),
+      previewStorageRef: `http://pirate.test/generated-preview/${communityId}/partial-repair-anthem.mp3`,
+      previewSizeBytes: 4,
+    })
+
+    const postCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        idempotency_key: "song-post-partial-locked-repair-1",
+        post_type: "song",
+        identity_mode: "public",
+        title: "Partial repair anthem",
+        access_mode: "locked",
+        song_mode: "original",
+        rights_basis: "original",
+        license_preset: "non-commercial",
+        song_artifact_bundle: bundleBody.id,
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(postCreate.status).toBe(201)
+    const postBody = await json(postCreate) as {
+      asset: string
+      status: string
+    }
+    expect(postBody.status).toBe("published")
+    const assetId = postBody.asset.replace(/^asset_/, "")
+
+    const communityDb = createClient({
+      url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
+    })
+    const jobRows = await communityDb.execute({
+      sql: `
+        SELECT job_id
+        FROM community_jobs
+        WHERE job_type = 'locked_asset_delivery_prepare'
+          AND subject_id = ?1
+      `,
+      args: [assetId],
+    })
+    expect(jobRows.rows).toHaveLength(1)
+    const jobId = String(jobRows.rows[0]?.job_id ?? "")
+    const now = new Date().toISOString()
+    await communityDb.execute({
+      sql: `
+        UPDATE assets
+        SET publication_status = 'story_requested',
+            story_status = 'failed',
+            story_error = 'story_publish_failed:duplicate entitlement class',
+            story_ip_id = '0x7171717171717171717171717171717171717171',
+            story_ip_nft_contract = '0x7272727272727272727272727272727272727272',
+            story_ip_nft_token_id = '717',
+            story_publish_model = 'story_ip_v1',
+            story_license_terms_id = '71',
+            story_royalty_policy = '0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E',
+            story_royalty_policy_id = '0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E',
+            story_revenue_token = '0x1714000000000000000000000000000000000000',
+            story_royalty_registration_status = 'registered',
+            story_publish_tx_ref = '0xpublish-partial-repair',
+            story_asset_version_id = ?2,
+            story_cdr_vault_uuid = 7171,
+            story_namespace = ?3,
+            story_entitlement_token_id = '717171',
+            story_read_condition = '0x29a859d9012ffc73443af5e3264c1605d44f6bcc',
+            story_write_condition = '0xa8e49520c4d681d34fde757c41f5a06b87b52e43',
+            locked_delivery_status = 'failed',
+            locked_delivery_ref = ?4,
+            locked_delivery_error = 'story_publish_failed:duplicate entitlement class',
+            locked_delivery_storage_ref = 'locked-assets/partial-repair.enc',
+            locked_delivery_secret_json = ?5,
+            updated_at = ?6
+        WHERE asset_id = ?1
+      `,
+      args: [
+        assetId,
+        `0x${"71".repeat(32)}`,
+        `0x${"72".repeat(32)}`,
+        `/communities/${communityId}/assets/${assetId}/content`,
+        JSON.stringify({
+          algorithm: "AES-GCM",
+          iv_b64: "AAECAwQFBgcICQoL",
+          mime_type: "audio/mpeg",
+        }),
+        now,
+      ],
+    })
+    communityDb.close()
+
+    const processRepository = getCommunityRepository(ctx.env)
+    let processed
+    try {
+      processed = await processCommunityJobById({
+        env: ctx.env,
+        communityId,
+        jobId,
+        communityRepository: processRepository,
+      })
+    } finally {
+      await processRepository.close?.()
+    }
+    expect(processed?.status).toBe("succeeded")
+
+    const assetAfterRepair = await app.request(
+      `http://pirate.test/communities/${communityId}/assets/asset_${assetId}`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(assetAfterRepair.status).toBe(200)
+    const assetAfterRepairBody = await json(assetAfterRepair) as {
+      locked_delivery_status: string
+      locked_delivery_error: string | null
+      story_status: string
+      story_error: string | null
+      story_cdr_vault_uuid: number
+      story_entitlement_token: string | null
+    }
+    expect(assetAfterRepairBody.locked_delivery_status).toBe("ready")
+    expect(assetAfterRepairBody.locked_delivery_error).toBeNull()
+    expect(assetAfterRepairBody.story_status).toBe("published")
+    expect(assetAfterRepairBody.story_error).toBeNull()
+    expect(assetAfterRepairBody.story_cdr_vault_uuid).toBe(7171)
+    expect(assetAfterRepairBody.story_entitlement_token).toBe("717171")
+  }, 30_000)
+
   testWithTimeout("allows locked song publishing while preview is pending and gates access until preview is ready", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
     setStoryRuntimeFundingAssertionForTests(async () => {})

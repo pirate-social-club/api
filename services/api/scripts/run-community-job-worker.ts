@@ -22,6 +22,25 @@ function hasConfiguredValue(value: string | undefined): boolean {
   return String(value ?? "").trim().length > 0
 }
 
+function redactedConnectionLabel(value: string): string {
+  if (!value.includes("://")) {
+    return value
+  }
+  try {
+    const url = new URL(value)
+    if (url.username) url.username = "redacted"
+    if (url.password) url.password = "redacted"
+    for (const key of [...url.searchParams.keys()]) {
+      if (/token|key|secret|password|auth/i.test(key)) {
+        url.searchParams.set(key, "redacted")
+      }
+    }
+    return url.toString()
+  } catch {
+    return "[remote-control-plane-url]"
+  }
+}
+
 function envFlag(value: string | undefined, defaultValue: boolean): boolean {
   if (value == null || value.trim() === "") return defaultValue
   const normalized = value.trim().toLowerCase()
@@ -100,7 +119,7 @@ async function main(): Promise<void> {
   console.log(
     [
       "community job worker starting",
-      `control-plane db: ${localDevStorage.controlPlaneDbPath ?? localDevStorage.controlPlaneDbUrl}`,
+      `control-plane db: ${localDevStorage.controlPlaneDbPath ?? redactedConnectionLabel(localDevStorage.controlPlaneDbUrl)}`,
       `community db root: ${localDevStorage.communityDbRoot}`,
       `wrangler env: ${wranglerEnvironment ?? "none"}`,
       `poll interval ms: ${pollIntervalMs}`,
@@ -134,14 +153,25 @@ async function main(): Promise<void> {
     const communityIds = (explicitCommunityIds.length ? explicitCommunityIds : [...new Set([...activeCommunityIds, ...localCommunityIds])])
       .slice(0, maxCommunitiesPerTick)
 
-    const summary = await processAvailableCommunityJobs({
-      env,
-      communityRepository,
-      communityIds,
-      maxCommunities: maxCommunitiesPerTick,
-      maxJobsPerCommunity,
-      skipJobTypes,
-    })
+    let summary: Awaited<ReturnType<typeof processAvailableCommunityJobs>>
+    try {
+      summary = await processAvailableCommunityJobs({
+        env,
+        communityRepository,
+        communityIds,
+        maxCommunities: maxCommunitiesPerTick,
+        maxJobsPerCommunity,
+        skipJobTypes,
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.warn(`community job worker: failed to process jobs (${message}); retrying after ${pollIntervalMs}ms`)
+      if (abortController.signal.aborted) {
+        return
+      }
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs))
+      continue
+    }
 
     if (summary.processed_jobs === 0) {
       if (stopWhenIdle) {

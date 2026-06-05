@@ -222,6 +222,56 @@ export function shouldPrepareLockedDeliveryAsync(env: Pick<Env, "ENVIRONMENT" | 
   return envFlag(env.STORY_LOCKED_DELIVERY_ASYNC, !isLocalEnvironment(env.ENVIRONMENT))
 }
 
+function hasRecoverableCompletedLockedDelivery(input: {
+  asset: AssetRow
+  requireStoryRoyaltyRegistration: boolean
+}): boolean {
+  const asset = input.asset
+  const hasDeliveryMetadata = Boolean(
+    asset.story_asset_version_id?.trim()
+      && asset.story_cdr_vault_uuid
+      && asset.story_cdr_vault_uuid > 0
+      && asset.story_namespace?.trim()
+      && asset.story_entitlement_token_id?.trim()
+      && asset.story_read_condition?.trim()
+      && asset.story_write_condition?.trim()
+      && asset.locked_delivery_ref?.trim()
+      && asset.locked_delivery_storage_ref?.trim()
+      && asset.locked_delivery_secret_json?.trim()
+      && asset.story_publish_tx_ref?.trim(),
+  )
+  if (!hasDeliveryMetadata) {
+    return false
+  }
+  if (!input.requireStoryRoyaltyRegistration) {
+    return true
+  }
+  return asset.story_royalty_registration_status === "registered" && Boolean(asset.story_ip_id?.trim())
+}
+
+async function markRecoverableLockedDeliveryReady(input: {
+  client: Pick<Client, "execute">
+  communityId: string
+  asset: AssetRow
+}): Promise<Asset> {
+  await input.client.execute({
+    sql: `
+      UPDATE assets
+      SET publication_status = 'story_published',
+          story_status = 'published',
+          story_error = NULL,
+          locked_delivery_status = 'ready',
+          locked_delivery_error = NULL,
+          updated_at = ?3
+      WHERE community_id = ?1
+        AND asset_id = ?2
+    `,
+    args: [input.communityId, input.asset.asset_id, nowIso()],
+  })
+  const repaired = await getAssetRow(input.client, input.communityId, input.asset.asset_id)
+  return serializeAsset(repaired ?? input.asset)
+}
+
 function buildPublicAssetContentPath(communityId: string, assetId: string): string {
   return `/public-communities/${encodeURIComponent(`com_${communityId}`)}/assets/${encodeURIComponent(`asset_${assetId}`)}/content`
 }
@@ -705,6 +755,23 @@ export async function prepareRequestedLockedAssetDelivery(input: {
   }
   if (asset.locked_delivery_status === "ready") {
     return serializeAsset(asset)
+  }
+  const requiresStoryRoyaltyRegistration = shouldAttemptStoryRoyaltyRegistration({
+    assetKind: asset.asset_kind,
+    rightsBasis: asset.rights_basis,
+    hasSongBundle: Boolean(asset.song_artifact_bundle_id),
+  })
+  if (
+    hasRecoverableCompletedLockedDelivery({
+      asset,
+      requireStoryRoyaltyRegistration: requiresStoryRoyaltyRegistration,
+    })
+  ) {
+    return await markRecoverableLockedDeliveryReady({
+      client: input.client,
+      communityId: input.communityId,
+      asset,
+    })
   }
 
   const post = await getPostById(input.client as Client, asset.source_post_id)
