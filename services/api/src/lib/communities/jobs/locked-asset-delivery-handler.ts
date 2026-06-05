@@ -28,6 +28,7 @@ export async function runLockedAssetDeliveryPrepare(input: CommunityJobHandlerIn
       communityId: input.job.community_id,
       assetId,
       userRepository: getUserRepository(input.env),
+      markFailureAsTerminal: input.job.attempt_count >= COMMUNITY_JOB_MAX_ATTEMPTS,
     })
     return assetId
   } finally {

@@ -745,6 +745,7 @@ export async function prepareRequestedLockedAssetDelivery(input: {
   communityId: string
   assetId: string
   userRepository: UserRepository
+  markFailureAsTerminal?: boolean
 }): Promise<Asset> {
   const asset = await getAssetRow(input.client, input.communityId, input.assetId)
   if (!asset) {
@@ -869,18 +870,27 @@ export async function prepareRequestedLockedAssetDelivery(input: {
     lockedDeliveryMetadataJson = lockedDelivery.lockedDeliveryMetadataJson
   } catch (error) {
     const lockedDeliveryError = error instanceof Error ? error.message : String(error)
+    const terminalFailure = input.markFailureAsTerminal ?? true
     await input.client.execute({
       sql: `
         UPDATE assets
-        SET story_status = 'failed',
-            story_error = ?3,
-            locked_delivery_status = 'failed',
-            locked_delivery_error = ?3,
-            updated_at = ?4
+        SET story_status = ?3,
+            story_error = ?4,
+            locked_delivery_status = ?5,
+            locked_delivery_error = ?6,
+            updated_at = ?7
         WHERE community_id = ?1
           AND asset_id = ?2
       `,
-      args: [input.communityId, asset.asset_id, lockedDeliveryError, nowIso()],
+      args: [
+        input.communityId,
+        asset.asset_id,
+        terminalFailure ? "failed" : "requested",
+        lockedDeliveryError,
+        terminalFailure ? "failed" : "requested",
+        lockedDeliveryError,
+        nowIso(),
+      ],
     })
     throw error
   }

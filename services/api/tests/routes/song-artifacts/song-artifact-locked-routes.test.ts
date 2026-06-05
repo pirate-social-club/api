@@ -1199,7 +1199,7 @@ describe("song artifact locked routes", () => {
     expect(processed?.status).toBe("failed")
     expect(processed?.error_code).toContain("cdr_write_failed:test forced CDR failure")
 
-    const assetAfterJob = await app.request(
+    const assetAfterRetryableFailure = await app.request(
       `http://pirate.test/communities/${communityId}/assets/${assetId}`,
       {
         headers: {
@@ -1208,15 +1208,15 @@ describe("song artifact locked routes", () => {
       },
       ctx.env,
     )
-    expect(assetAfterJob.status).toBe(200)
-    const assetAfterJobBody = await json(assetAfterJob) as {
+    expect(assetAfterRetryableFailure.status).toBe(200)
+    const assetAfterRetryableFailureBody = await json(assetAfterRetryableFailure) as {
       locked_delivery_status: string
       locked_delivery_error: string | null
       story_status: string
     }
-    expect(assetAfterJobBody.locked_delivery_status).toBe("failed")
-    expect(assetAfterJobBody.locked_delivery_error).toContain("cdr_write_failed:test forced CDR failure")
-    expect(assetAfterJobBody.story_status).toBe("failed")
+    expect(assetAfterRetryableFailureBody.locked_delivery_status).toBe("requested")
+    expect(assetAfterRetryableFailureBody.locked_delivery_error).toContain("cdr_write_failed:test forced CDR failure")
+    expect(assetAfterRetryableFailureBody.story_status).toBe("requested")
 
     const postAfterJob = await app.request(
       `http://pirate.test/posts/${postBody.id}`,
@@ -1235,7 +1235,7 @@ describe("song artifact locked routes", () => {
     }
     expect(postAfterJobBody.post.status).toBe("published")
 
-    const accessAfterFailure = await app.request(
+    const accessAfterRetryableFailure = await app.request(
       `http://pirate.test/communities/${communityId}/assets/${assetId}/access`,
       {
         headers: {
@@ -1244,17 +1244,89 @@ describe("song artifact locked routes", () => {
       },
       ctx.env,
     )
-    expect(accessAfterFailure.status).toBe(200)
-    const accessAfterFailureBody = await json(accessAfterFailure) as {
+    expect(accessAfterRetryableFailure.status).toBe(200)
+    const accessAfterRetryableFailureBody = await json(accessAfterRetryableFailure) as {
       access_granted: boolean
       decision_reason: string
       locked_delivery_status: string
       delivery_kind: string | null
     }
-    expect(accessAfterFailureBody.access_granted).toBe(false)
-    expect(accessAfterFailureBody.decision_reason).toBe("delivery_pending")
-    expect(accessAfterFailureBody.locked_delivery_status).toBe("failed")
-    expect(accessAfterFailureBody.delivery_kind).toBeNull()
+    expect(accessAfterRetryableFailureBody.access_granted).toBe(false)
+    expect(accessAfterRetryableFailureBody.decision_reason).toBe("delivery_pending")
+    expect(accessAfterRetryableFailureBody.locked_delivery_status).toBe("requested")
+    expect(accessAfterRetryableFailureBody.delivery_kind).toBeNull()
+
+    const terminalFailureDb = createClient({
+      url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
+    })
+    await terminalFailureDb.execute({
+      sql: `
+        UPDATE community_jobs
+        SET status = 'failed',
+            attempt_count = ?2,
+            available_at = NULL,
+            updated_at = ?3
+        WHERE job_id = ?1
+      `,
+      args: [jobId, Math.max(1, COMMUNITY_JOB_MAX_ATTEMPTS - 1), new Date().toISOString()],
+    })
+    terminalFailureDb.close()
+
+    const terminalProcessRepository = getCommunityRepository(ctx.env)
+    let terminalProcessed
+    try {
+      terminalProcessed = await processCommunityJobById({
+        env: ctx.env,
+        communityId,
+        jobId,
+        communityRepository: terminalProcessRepository,
+      })
+    } finally {
+      await terminalProcessRepository.close?.()
+    }
+    expect(terminalProcessed?.status).toBe("failed")
+    expect(terminalProcessed?.attempt_count).toBe(COMMUNITY_JOB_MAX_ATTEMPTS)
+    expect(terminalProcessed?.error_code).toContain("cdr_write_failed:test forced CDR failure")
+
+    const assetAfterTerminalFailure = await app.request(
+      `http://pirate.test/communities/${communityId}/assets/${assetId}`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(assetAfterTerminalFailure.status).toBe(200)
+    const assetAfterTerminalFailureBody = await json(assetAfterTerminalFailure) as {
+      locked_delivery_status: string
+      locked_delivery_error: string | null
+      story_status: string
+    }
+    expect(assetAfterTerminalFailureBody.locked_delivery_status).toBe("failed")
+    expect(assetAfterTerminalFailureBody.locked_delivery_error).toContain("cdr_write_failed:test forced CDR failure")
+    expect(assetAfterTerminalFailureBody.story_status).toBe("failed")
+
+    const accessAfterTerminalFailure = await app.request(
+      `http://pirate.test/communities/${communityId}/assets/${assetId}/access`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(accessAfterTerminalFailure.status).toBe(200)
+    const accessAfterTerminalFailureBody = await json(accessAfterTerminalFailure) as {
+      access_granted: boolean
+      decision_reason: string
+      locked_delivery_status: string
+      delivery_kind: string | null
+    }
+    expect(accessAfterTerminalFailureBody.access_granted).toBe(false)
+    expect(accessAfterTerminalFailureBody.decision_reason).toBe("delivery_pending")
+    expect(accessAfterTerminalFailureBody.locked_delivery_status).toBe("failed")
+    expect(accessAfterTerminalFailureBody.delivery_kind).toBeNull()
   }, 30_000)
 
   testWithTimeout("publishes a locked song, sells access, and decrypts the purchased asset", async () => {
