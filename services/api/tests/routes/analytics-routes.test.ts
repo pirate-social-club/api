@@ -116,6 +116,53 @@ describe("analytics routes", () => {
     expect(result.rows[0]?.properties_json).toBe(JSON.stringify({ tab: "posts" }))
   })
 
+  test("client analytics route queues community follow contract drift signals", async () => {
+    const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanup = setup.cleanup
+    const env = buildTestEnv({
+      DEV_MEMORY_STORE_ENABLED: "false",
+      CONTROL_PLANE_DATABASE_URL: `file:${setup.databasePath}`,
+      ANALYTICS_ENABLED: "true",
+      ANALYTICS_HMAC_SECRET: "analytics-secret",
+      ENVIRONMENT: "staging",
+    })
+
+    const response = await app.request("http://pirate.test/analytics/events", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        event_id: "evt_route_follow_contract_drift",
+        event_name: "community_follow_contract_drift",
+        community_id: "cmt_route_community",
+        properties: {
+          action: "follow",
+          drift_kind: "missing_community",
+          expected_community_id: "com_cmt_route_community",
+          ignored: "not_allowed",
+        },
+      }),
+    }, env)
+
+    expect(response.status).toBe(202)
+
+    const result = await setup.client.execute({
+      sql: `
+        SELECT event_name, community_id, properties_json
+        FROM analytics_outbox
+        WHERE analytics_event_id = ?1
+      `,
+      args: ["evt_route_follow_contract_drift"],
+    })
+
+    expect(result.rows[0]?.event_name).toBe("community_follow_contract_drift")
+    expect(result.rows[0]?.community_id).toBe("cmt_route_community")
+    expect(result.rows[0]?.properties_json).toBe(JSON.stringify({
+      action: "follow",
+      drift_kind: "missing_community",
+      expected_community_id: "com_cmt_route_community",
+    }))
+  })
+
   test("client analytics route canonicalizes community route slugs for community views", async () => {
     const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
     cleanup = setup.cleanup

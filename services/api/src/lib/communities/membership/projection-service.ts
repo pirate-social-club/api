@@ -8,6 +8,7 @@ import {
 } from "./projection-source-store"
 import { openCommunityDb } from "../community-db-factory"
 import { nowIso } from "../../helpers"
+import { publicCommunityId } from "../../public-ids"
 import type { Env } from "../../../env"
 import type {
   CommunityFollowResult,
@@ -65,7 +66,7 @@ export async function activateCommunityFollow(input: {
   })
 
   return {
-    community_id: input.communityId,
+    community: publicCommunityId(input.communityId),
     following: true,
     follower_count: result.followerCount,
   }

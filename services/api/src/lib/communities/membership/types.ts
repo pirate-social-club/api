@@ -12,7 +12,7 @@ export type MembershipResult = {
 }
 
 export type CommunityFollowResult = {
-  community_id: string
+  community: string
   following: boolean
   follower_count: number | null
 }

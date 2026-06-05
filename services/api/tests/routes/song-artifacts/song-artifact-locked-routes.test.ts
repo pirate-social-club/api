@@ -1953,6 +1953,83 @@ describe("song artifact locked routes", () => {
     expect(charityPayoutCalls).toHaveLength(1)
     expect(royaltySettlementCalls).toHaveLength(1)
 
+    const purchaseEffects = await app.request(
+      `http://pirate.test/communities/${communityId}/purchases/${purchaseBody.id}/settlement-effects`,
+      {
+        headers: {
+          authorization: `Bearer ${buyer.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(purchaseEffects.status).toBe(200)
+    const purchaseEffectsBody = await json(purchaseEffects) as {
+      items: Array<{
+        quote: string
+        purchase: string
+        effect_kind: string
+        effect_ref: string
+        status: string
+        settlement_ref: string | null
+        provider_receipt_ref: string | null
+        tax_receipt_ref: string | null
+        attempt_count: number
+      }>
+      next_cursor: string | null
+    }
+    expect(purchaseEffectsBody.next_cursor).toBeNull()
+    expect(purchaseEffectsBody.items).toHaveLength(4)
+    expect(purchaseEffectsBody.items.map((effect) => effect.effect_kind).sort()).toEqual([
+      "buyer_funding_receipt",
+      "charity_payout",
+      "story_entitlement_mint",
+      "story_royalty_payment",
+    ])
+    expect(purchaseEffectsBody.items).toContainEqual(expect.objectContaining({
+      quote: quoteBody.id,
+      purchase: purchaseBody.id,
+      effect_kind: "buyer_funding_receipt",
+      effect_ref: "0xfunding-paid-song-1",
+      status: "confirmed",
+      settlement_ref: "0xfunding-paid-song-1",
+      attempt_count: 1,
+    }))
+    expect(purchaseEffectsBody.items).toContainEqual(expect.objectContaining({
+      effect_kind: "charity_payout",
+      effect_ref: "charity:don_charity_water:60",
+      status: "confirmed",
+      settlement_ref: "endaoment:settlement:donation-0001",
+      provider_receipt_ref: "endaoment:receipt:donation-0001",
+      tax_receipt_ref: "endaoment:tax:donation-0001",
+      attempt_count: 1,
+    }))
+    expect(purchaseEffectsBody.items).toContainEqual(expect.objectContaining({
+      effect_kind: "story_royalty_payment",
+      effect_ref: assetId.replace(/^asset_/, ""),
+      status: "confirmed",
+      settlement_ref: "0xroyalty-paid-song",
+      provider_receipt_ref: "0xroyalty-paid-song",
+      attempt_count: 1,
+    }))
+    expect(purchaseEffectsBody.items).toContainEqual(expect.objectContaining({
+      effect_kind: "story_entitlement_mint",
+      status: "confirmed",
+      settlement_ref: "0xentitlement-paid-song",
+      provider_receipt_ref: null,
+      attempt_count: 1,
+    }))
+
+    const authorPurchaseEffects = await app.request(
+      `http://pirate.test/communities/${communityId}/purchases/${purchaseBody.id}/settlement-effects`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(authorPurchaseEffects.status).toBe(404)
+
     const communityDb = createClient({
       url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
     })
@@ -2607,6 +2684,7 @@ describe("song artifact locked routes", () => {
     )
     expect(purchaseSettle.status).toBe(201)
     const purchaseBody = await json(purchaseSettle) as {
+      id: string
       settlement_mode: string
       settlement_tx_ref: string
       allocations: Array<{
@@ -2657,6 +2735,65 @@ describe("song artifact locked routes", () => {
         royaltyPolicy: "0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E",
       },
     ])
+
+    const derivativePurchaseEffects = await app.request(
+      `http://pirate.test/communities/${communityId}/purchases/${purchaseBody.id}/settlement-effects`,
+      {
+        headers: {
+          authorization: `Bearer ${buyer.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(derivativePurchaseEffects.status).toBe(200)
+    const derivativePurchaseEffectsBody = await json(derivativePurchaseEffects) as {
+      items: Array<{
+        quote: string
+        purchase: string
+        effect_kind: string
+        effect_ref: string
+        status: string
+        settlement_ref: string | null
+        provider_receipt_ref: string | null
+        tax_receipt_ref: string | null
+        attempt_count: number
+      }>
+      next_cursor: string | null
+    }
+    expect(derivativePurchaseEffectsBody.next_cursor).toBeNull()
+    expect(derivativePurchaseEffectsBody.items).toHaveLength(5)
+    expect(derivativePurchaseEffectsBody.items.map((effect) => effect.effect_kind).sort()).toEqual([
+      "buyer_funding_receipt",
+      "charity_payout",
+      "story_entitlement_mint",
+      "story_parent_royalty_vault_transfer",
+      "story_royalty_payment",
+    ])
+    expect(derivativePurchaseEffectsBody.items).toContainEqual(expect.objectContaining({
+      quote: quoteBody.id,
+      purchase: purchaseBody.id,
+      effect_kind: "story_royalty_payment",
+      effect_ref: assetId.replace(/^asset_/, ""),
+      status: "confirmed",
+      settlement_ref: "0xroyalty-derivative",
+      provider_receipt_ref: "0xroyalty-derivative",
+      attempt_count: 1,
+    }))
+    expect(derivativePurchaseEffectsBody.items).toContainEqual(expect.objectContaining({
+      effect_kind: "story_parent_royalty_vault_transfer",
+      effect_ref: `${assetId.replace(/^asset_/, "")}:0x3333333333333333333333333333333333333333`,
+      status: "confirmed",
+      settlement_ref: "0xparent-vault-derivative",
+      provider_receipt_ref: "0xparent-vault-derivative",
+      attempt_count: 1,
+    }))
+    expect(derivativePurchaseEffectsBody.items).toContainEqual(expect.objectContaining({
+      effect_kind: "story_entitlement_mint",
+      status: "confirmed",
+      settlement_ref: "0xentitlement-derivative",
+      provider_receipt_ref: null,
+      attempt_count: 1,
+    }))
 
     const communityDb = createClient({
       url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
