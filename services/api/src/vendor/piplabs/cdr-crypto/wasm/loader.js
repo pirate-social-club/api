@@ -296,19 +296,26 @@ export class CbMpcWasm {
     }
 }
 let wasmInstance = null;
-async function normalizeWasmBinary(binary) {
-    if (binary instanceof ArrayBuffer)
-        return binary;
-    if (ArrayBuffer.isView(binary)) {
-        return binary.buffer.slice(binary.byteOffset, binary.byteOffset + binary.byteLength);
+function isWasmModule(value) {
+    return typeof WebAssembly?.Module === "function" && value instanceof WebAssembly.Module;
+}
+async function normalizeWasmImport(wasmImport) {
+    if (isWasmModule(wasmImport))
+        return { wasmModule: wasmImport };
+    if (wasmImport instanceof ArrayBuffer)
+        return { wasmBinary: wasmImport };
+    if (ArrayBuffer.isView(wasmImport)) {
+        return {
+            wasmBinary: wasmImport.buffer.slice(wasmImport.byteOffset, wasmImport.byteOffset + wasmImport.byteLength),
+        };
     }
-    if (typeof binary === "string") {
+    if (typeof wasmImport === "string") {
         if (typeof Bun !== "undefined" && typeof Bun.file === "function") {
-            return await Bun.file(binary).arrayBuffer();
+            return { wasmBinary: await Bun.file(wasmImport).arrayBuffer() };
         }
-        throw new Error("CDR WASM binary import resolved to a path string; configure the worker bundler to import cb-mpc-tdh2.wasm as Data");
+        throw new Error("CDR WASM import resolved to a path string; configure the worker bundler to import cb-mpc-tdh2.wasm as CompiledWasm");
     }
-    throw new Error("CDR WASM binary import did not resolve to bytes");
+    throw new Error("CDR WASM import did not resolve to a compiled module or bytes");
 }
 /**
  * Initialize the WASM module. Must be called once before using tdh2Encrypt/tdh2Combine.
@@ -317,10 +324,10 @@ async function normalizeWasmBinary(binary) {
 export async function initWasm(options = {}) {
     if (wasmInstance)
         return;
-    const wasmBinary = await normalizeWasmBinary(options.wasmBinary ?? bundledWasmBinary);
+    const wasmImport = await normalizeWasmImport(options.wasmModule ?? options.wasmBinary ?? bundledWasmBinary);
     const Module = await createCbMpcModule({
         locateFile: (path) => path,
-        wasmBinary,
+        ...wasmImport,
     });
     const ptrSize = Module._wasm_ptr_size();
     if (ptrSize !== 4) {

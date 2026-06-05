@@ -86,7 +86,8 @@ export declare class CbMpcWasm {
  * Subsequent calls are no-ops and return immediately.
  */
 export declare function initWasm(options?: {
-    wasmBinary?: ArrayBuffer | Uint8Array | string;
+    wasmModule?: WebAssembly.Module;
+    wasmBinary?: WebAssembly.Module | ArrayBuffer | Uint8Array | string;
 }): Promise<void>;
 /**
  * Return the initialized WASM instance, or null if initWasm() has not been called.

@@ -17,8 +17,11 @@ license, build command, and refreshed SHA-256 checksums below.
 
 Local runtime patch:
 - `wasm/loader.js` and `wasm/loader.d.ts` are patched locally to import `cb-mpc-tdh2.wasm`
-  as bundled bytes and pass it to the Emscripten module via `wasmBinary`. This avoids runtime
-  filesystem resolution in the Cloudflare Worker `nodejs_compat` environment.
+- `wasm/cb-mpc-tdh2.js`, `wasm/loader.js`, and `wasm/loader.d.ts` are patched locally to
+  accept a precompiled `WebAssembly.Module` from Wrangler's `CompiledWasm` rule and pass it to
+  the Emscripten module via `wasmModule`. This avoids runtime filesystem resolution and dynamic
+  WASM compilation in the Cloudflare Worker `nodejs_compat` environment. Local Bun tests still
+  use the `wasmBinary` fallback path.
 
 ## SHA-256 Checksums
 
@@ -50,10 +53,10 @@ de57b7f98f85c4d37ee4426b69ae206e0bb2316a09bb5d88d5b7b9dd1a8f86a0  ./types.d.ts
 3136757f20b30fdccaeb16dd32585e4ccf89056ac4870fdc0b57b26d54c9fb75  ./types.d.ts.map
 01ae2a5b120382f9a648ced7ee8507493a134f216d100fc61600c6c9738235d2  ./types.js
 a7de897b48fe57bf54d6f84169135ff2e89e2fc95ea0a0a815761cc29a41efee  ./types.js.map
-3768221ee53e2fab02a64e097b0285451b02505e19bb178dbacb3039e9d3dfef  ./wasm/cb-mpc-tdh2.js
+d66551683ed5432ec9c4524cfda6c68b626255937dba4451dd9d0d9de8f2a99c  ./wasm/cb-mpc-tdh2.js
 1ffbe6366d89c33102c86e108e679f9592016b23fd31f09b0be4ad2e4b14ae9e  ./wasm/cb-mpc-tdh2.wasm
-e340fadbba80e95e86c2cc530e99ed55c85733ea6edbe978ca2f7d1b03f0bb13  ./wasm/loader.d.ts
+d0a5a43fb1d972b6b11181cd32082eacdf7d74761e17370a782c8b78d85d55d9  ./wasm/loader.d.ts
 bcee6c5449c3c282cb7d874c0430504331fb1c6eb6d345d20da61d9ea8003077  ./wasm/loader.d.ts.map
-e2209e70a3fa56588734595a30ea4b2b3db8137885a74c566019270142825f1a  ./wasm/loader.js
+54d3c807e4444888d43e2b1ce1d76c9a617cd9a1bda77bf9e92d60c458dddf4a  ./wasm/loader.js
 9a03e7e28d158ea0c2ec60c70cde5f4d09bf43166f2e7610d126e508516e0f28  ./wasm/loader.js.map
 ```

@@ -6,7 +6,7 @@
   "compatibility_flags": ["nodejs_compat"],
   "rules": [
     {
-      "type": "Data",
+      "type": "CompiledWasm",
       "globs": ["**/*.wasm"],
       "fallthrough": false
     }
