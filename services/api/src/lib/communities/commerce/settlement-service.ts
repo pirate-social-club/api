@@ -67,6 +67,7 @@ import {
   beginPurchaseSettlementEffectAttempt,
   confirmPurchaseSettlementEffect,
   failPurchaseSettlementEffect,
+  listPurchaseSettlementEffectsByPurchase,
   listPurchaseSettlementEffectsByQuote,
   type PurchaseSettlementEffectRow,
 } from "./settlement-effects"
@@ -91,11 +92,14 @@ import {
 } from "./purchase-settlement-serialization"
 import type {
   CommunityPurchase,
+  CommunityPurchaseSettlementEffect,
+  CommunityPurchaseSettlementEffectListResponse,
   CommunityPurchaseListResponse,
   CommunityPurchaseSettlement,
   CommunityPurchaseSettlementRequest,
   Env,
 } from "../../../types"
+import { nullableUnixSeconds, unixSeconds } from "../../../serializers/time"
 
 type CommunitySettlementRepository = CommunityDatabaseBindingRepository & Pick<CommunityReadRepository, "listActiveCommunities">
 
@@ -130,6 +134,27 @@ export type PurchaseSettlementReconciliationSummary = {
   failed: number
   stillPending: number
   errors: number
+}
+
+function serializePurchaseSettlementEffect(row: PurchaseSettlementEffectRow): CommunityPurchaseSettlementEffect {
+  return {
+    object: "purchase_settlement_effect",
+    community: `com_${row.community_id}`,
+    quote: `pq_${row.quote_id}`,
+    purchase: `pur_${row.purchase_id}`,
+    effect_kind: row.effect_kind,
+    effect_ref: row.effect_key,
+    status: row.status,
+    settlement_ref: row.settlement_ref,
+    provider_receipt_ref: row.provider_receipt_ref,
+    tax_receipt_ref: row.tax_receipt_ref,
+    failure_reason: row.failure_reason,
+    attempt_count: row.attempt_count,
+    submitted: nullableUnixSeconds(row.submitted_at),
+    confirmed: nullableUnixSeconds(row.confirmed_at),
+    failed: nullableUnixSeconds(row.failed_at),
+    created: unixSeconds(row.created_at),
+  }
 }
 
 async function finalizeLocalPurchaseSettlement(input: {
@@ -1122,6 +1147,34 @@ export async function getCommunityPurchase(input: {
     }
     const allocations = await listPurchaseAllocationLegRows(db.client, purchase.purchase_id)
     return serializePurchase(purchase, entitlement, allocations)
+  } finally {
+    db.close()
+  }
+}
+
+export async function listCommunityPurchaseSettlementEffects(input: {
+  env: Env
+  userId: string
+  communityId: string
+  purchaseId: string
+  communityRepository: CommunityDatabaseBindingRepository
+}): Promise<CommunityPurchaseSettlementEffectListResponse> {
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  try {
+    await requireCommunityMember(db.client, input.communityId, input.userId)
+    const purchase = await getPurchaseRow(db.client, input.communityId, input.purchaseId)
+    if (!purchase || !buyerMatchesFields(userBuyer(input.userId), purchase)) {
+      throw notFoundError("Purchase not found")
+    }
+    const effects = await listPurchaseSettlementEffectsByPurchase({
+      client: db.client,
+      communityId: input.communityId,
+      purchaseId: purchase.purchase_id,
+    })
+    return {
+      items: effects.map((effect) => serializePurchaseSettlementEffect(effect)),
+      next_cursor: null,
+    }
   } finally {
     db.close()
   }
