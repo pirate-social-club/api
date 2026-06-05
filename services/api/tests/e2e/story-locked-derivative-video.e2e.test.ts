@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import { SignJWT } from "jose"
 import { Wallet } from "ethers"
+import { deflateSync } from "node:zlib"
 
 type ApiInput = {
   body?: unknown
   bytes?: Uint8Array
   contentType?: string
+  form?: FormData
   method: "GET" | "POST"
   ok?: number[]
   path: string
@@ -40,6 +42,13 @@ type DerivativeSource = {
   title?: string | null
 }
 
+type CommunityMediaUpload = {
+  kind: string
+  media_ref: string
+  mime_type: string
+  size_bytes: number
+}
+
 const runLiveE2E = process.env.PIRATE_E2E_STORY_LOCKED_DERIVATIVE_VIDEO === "1"
 const liveTest = runLiveE2E ? test : test.skip
 
@@ -58,7 +67,7 @@ function apiBaseUrl(): string {
 }
 
 function communityId(): string {
-  return requireEnv("PIRATE_E2E_COMMUNITY_ID").replace(/^com_/u, "")
+  return requireEnv("PIRATE_E2E_COMMUNITY_ID")
 }
 
 function isStagingApiUrl(value: string): boolean {
@@ -108,6 +117,8 @@ function logE2EStep(message: string, details?: Record<string, unknown>): void {
 async function api<T>(input: ApiInput): Promise<T> {
   const requestBody = input.bytes
     ? new Blob([bytesToArrayBuffer(input.bytes)], { type: input.contentType ?? "application/octet-stream" })
+    : input.form
+      ? input.form
     : (input.body == null ? undefined : JSON.stringify(input.body))
   const response = await fetch(`${apiBaseUrl()}${input.path}`, {
     method: input.method,
@@ -265,6 +276,90 @@ async function createSongBundle(input: {
   return bundle.id
 }
 
+function writeUint32(bytes: Uint8Array, offset: number, value: number): void {
+  bytes[offset] = (value >>> 24) & 0xff
+  bytes[offset + 1] = (value >>> 16) & 0xff
+  bytes[offset + 2] = (value >>> 8) & 0xff
+  bytes[offset + 3] = value & 0xff
+}
+
+function crc32(bytes: Uint8Array): number {
+  let crc = 0xffffffff
+  for (const byte of bytes) {
+    crc ^= byte
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0)
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0
+}
+
+function pngChunk(type: string, data: Uint8Array): Uint8Array {
+  const typeBytes = new TextEncoder().encode(type)
+  const chunk = new Uint8Array(12 + data.byteLength)
+  writeUint32(chunk, 0, data.byteLength)
+  chunk.set(typeBytes, 4)
+  chunk.set(data, 8)
+
+  const crcInput = new Uint8Array(typeBytes.byteLength + data.byteLength)
+  crcInput.set(typeBytes)
+  crcInput.set(data, typeBytes.byteLength)
+  writeUint32(chunk, 8 + data.byteLength, crc32(crcInput))
+  return chunk
+}
+
+function concatBytes(parts: Uint8Array[]): Uint8Array {
+  const total = parts.reduce((sum, part) => sum + part.byteLength, 0)
+  const output = new Uint8Array(total)
+  let offset = 0
+  for (const part of parts) {
+    output.set(part, offset)
+    offset += part.byteLength
+  }
+  return output
+}
+
+function makePosterPngBytes(width = 320, height = 180): Uint8Array {
+  const ihdr = new Uint8Array(13)
+  writeUint32(ihdr, 0, width)
+  writeUint32(ihdr, 4, height)
+  ihdr[8] = 8
+  ihdr[9] = 2
+
+  const stride = 1 + (width * 3)
+  const raw = new Uint8Array(stride * height)
+  for (let y = 0; y < height; y += 1) {
+    const rowOffset = y * stride
+    raw[rowOffset] = 0
+    for (let x = 0; x < width; x += 1) {
+      const pixelOffset = rowOffset + 1 + (x * 3)
+      raw[pixelOffset] = (36 + Math.floor((x / width) * 90)) & 0xff
+      raw[pixelOffset + 1] = (84 + Math.floor((y / height) * 100)) & 0xff
+      raw[pixelOffset + 2] = (140 + Math.floor(((x + y) / (width + height)) * 90)) & 0xff
+    }
+  }
+
+  return concatBytes([
+    Uint8Array.of(137, 80, 78, 71, 13, 10, 26, 10),
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", new Uint8Array(deflateSync(raw))),
+    pngChunk("IEND", new Uint8Array()),
+  ])
+}
+
+async function uploadPosterMedia(session: Session): Promise<CommunityMediaUpload> {
+  const posterBytes = makePosterPngBytes()
+  const form = new FormData()
+  form.set("kind", "post_image")
+  form.set("file", new File([bytesToArrayBuffer(posterBytes)], "story-e2e-video-poster.png", { type: "image/png" }))
+  return await api<CommunityMediaUpload>({
+    method: "POST",
+    path: "/community-media",
+    token: session.accessToken,
+    form,
+  })
+}
+
 async function createOriginalSongPost(input: {
   bundle: string
   session: Session
@@ -304,6 +399,12 @@ async function createLockedDerivativeVideoPost(input: {
     mimeType: "video/mp4",
     session: input.session,
   })
+  const poster = await uploadPosterMedia(input.session)
+  logE2EStep("uploaded video poster", {
+    mediaRef: poster.media_ref,
+    mimeType: poster.mime_type,
+    sizeBytes: poster.size_bytes,
+  })
   const body = await api<{ asset?: string | null; id: string }>({
     method: "POST",
     path: `/communities/${encodeURIComponent(communityId())}/posts`,
@@ -317,9 +418,9 @@ async function createLockedDerivativeVideoPost(input: {
         mime_type: "video/mp4",
         poster_frame_ms: 0,
         poster_height: 720,
-        poster_mime_type: "image/jpeg",
-        poster_ref: "ipfs://story-locked-derivative-video-e2e-poster",
-        poster_size_bytes: 1024,
+        poster_mime_type: poster.mime_type,
+        poster_ref: poster.media_ref,
+        poster_size_bytes: poster.size_bytes,
         poster_width: 1280,
         size_bytes: videoBytes.byteLength,
         storage_ref: video.storage_ref,
