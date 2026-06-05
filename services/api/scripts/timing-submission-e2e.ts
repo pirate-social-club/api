@@ -738,12 +738,21 @@ async function pollUntil<T>(input: {
 }): Promise<T> {
   const startedAt = Date.now()
   let lastValue: T | null = null
+  let lastReadError: string | null = null
   while (Date.now() - startedAt < input.timeoutMs) {
-    lastValue = await input.read()
+    try {
+      lastValue = await input.read()
+      lastReadError = null
+    } catch (error) {
+      lastReadError = error instanceof Error ? error.message : String(error)
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, input.intervalMs))
+      continue
+    }
     if (input.ready(lastValue)) return lastValue
     await new Promise((resolvePromise) => setTimeout(resolvePromise, input.intervalMs))
   }
-  throw new Error(`timed out after ${input.timeoutMs}ms; last=${JSON.stringify(lastValue)}`)
+  const lastErrorSuffix = lastReadError ? `; last_read_error=${lastReadError}` : ""
+  throw new Error(`timed out after ${input.timeoutMs}ms; last=${JSON.stringify(lastValue)}${lastErrorSuffix}`)
 }
 
 async function runOne(input: {
