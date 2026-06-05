@@ -43,6 +43,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   e2e:
@@ -63,6 +64,15 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Fetch staging API E2E secrets
+        env:
+          INFISICAL_IDENTITY_ID: a7b5d0b2-0891-4b63-b0e6-946a8c513458
+          INFISICAL_PROJECT_ID: 5acea78e-7813-4d8a-b29c-9b862a0b1c71
+          INFISICAL_ENV: staging
+          INFISICAL_SECRET_PATH: /services/api
+          SECRET_NAMES: AUTH_UPSTREAM_JWT_SHARED_SECRET
+        run: scripts/ci/fetch-infisical-secrets.sh
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
