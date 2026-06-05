@@ -30,6 +30,11 @@ import {
   getResolvedCommunityRouteContext,
   requireJsonBody,
 } from "./communities-route-helpers"
+import {
+  SUBMIT_TRACE_HEADER,
+  submitTraceRequestFields,
+  withSubmitTraceTiming,
+} from "../lib/observability/submit-trace"
 
 type ComposerLinkPreviewResponse = {
   kind: "embed" | "link"
@@ -63,10 +68,23 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
   communities.post("/:communityId/posts", async (c) => {
     const { actor, communityId, communityRepository, userRepository, profileRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<CreatePostRequest>(c, "Invalid post create payload")
+    const traceFields = {
+      ...submitTraceRequestFields({
+        contentLengthHeader: c.req.header("content-length"),
+        sessionIdHeader: c.req.header("x-pirate-session-id"),
+        submitTraceHeader: c.req.header(SUBMIT_TRACE_HEADER),
+      }),
+      access_mode: body.access_mode ?? "public",
+      community_id: publicCommunityId(communityId),
+      media_ref_count: body.media_refs?.length ?? 0,
+      post_type: body.post_type,
+      rights_basis: body.rights_basis ?? null,
+      upstream_asset_ref_count: body.upstream_asset_refs?.length ?? 0,
+    }
     if (actor.authType !== "admin") {
       assertAgentDelegatedWriteMatchesActor({ actor, body })
     }
-    const result = await createPost({
+    const result = await withSubmitTraceTiming("[create-post-submit] post create", traceFields, () => createPost({
       env: c.env,
       requestUrl: c.req.url,
       userId: actor.userId,
@@ -82,6 +100,13 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
       userRepository,
       profileRepository,
       communityRepository,
+    }))
+    console.info("[create-post-submit] post create:result", {
+      ...traceFields,
+      asset_id: result.asset_id ?? null,
+      post_id: result.post_id,
+      status: result.status,
+      story_royalty_registration_status: result.asset_story?.story_royalty_registration_status ?? null,
     })
     await trackApiEvent(c.env, c.req, {
       eventName: "post_created",

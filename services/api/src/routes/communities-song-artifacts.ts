@@ -23,8 +23,14 @@ import type {
 import {
   decodePublicSongArtifactBundleId,
   decodePublicSongArtifactUploadId,
+  publicCommunityId,
 } from "../lib/public-ids"
 import { badRequestError } from "../lib/errors"
+import {
+  SUBMIT_TRACE_HEADER,
+  submitTraceRequestFields,
+  withSubmitTraceTiming,
+} from "../lib/observability/submit-trace"
 
 const DEFAULT_SONG_ARTIFACT_LIST_LIMIT = 25
 const MAX_SONG_ARTIFACT_LIST_LIMIT = 50
@@ -43,45 +49,78 @@ export function registerCommunitySongArtifactRoutes(communities: Hono<Authentica
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<CreateSongArtifactUploadRequest>(c, "Invalid song artifact upload payload")
 
-    const result = await createSongArtifactUpload({
+    const traceFields = {
+      ...submitTraceRequestFields({
+        contentLengthHeader: c.req.header("content-length"),
+        sessionIdHeader: c.req.header("x-pirate-session-id"),
+        submitTraceHeader: c.req.header(SUBMIT_TRACE_HEADER),
+      }),
+      artifact_kind: body.artifact_kind,
+      community_id: publicCommunityId(communityId),
+      mime_type: body.mime_type,
+      size_bytes: body.size_bytes,
+    }
+    const result = await withSubmitTraceTiming("[create-post-submit] song artifact upload intent", traceFields, () => createSongArtifactUpload({
       env: c.env,
       userId: actor.userId,
       communityId,
       body,
       communityRepository,
       origin: getRequestOrigin(c),
-    })
+    }))
     return c.json(result, 201)
   })
 
   communities.put("/:communityId/song-artifact-uploads/:songArtifactUploadId/content", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
-    const content = await readSongArtifactContent(c)
-
-    const result = await uploadSongArtifactContent({
-      env: c.env,
-      userId: actor.userId,
-      communityId,
-      songArtifactUploadId: decodePublicSongArtifactUploadId(c.req.param("songArtifactUploadId")),
-      content,
-      communityRepository,
-      origin: getRequestOrigin(c),
+    const publicUploadId = c.req.param("songArtifactUploadId")
+    const traceFields = {
+      ...submitTraceRequestFields({
+        contentLengthHeader: c.req.header("content-length"),
+        sessionIdHeader: c.req.header("x-pirate-session-id"),
+        submitTraceHeader: c.req.header(SUBMIT_TRACE_HEADER),
+      }),
+      community_id: publicCommunityId(communityId),
+      song_artifact_upload_id: publicUploadId,
+    }
+    const result = await withSubmitTraceTiming("[create-post-submit] song artifact content upload", traceFields, async () => {
+      const content = await readSongArtifactContent(c)
+      return await uploadSongArtifactContent({
+        env: c.env,
+        userId: actor.userId,
+        communityId,
+        songArtifactUploadId: decodePublicSongArtifactUploadId(publicUploadId),
+        content,
+        communityRepository,
+        origin: getRequestOrigin(c),
+      })
     })
     return c.json(result, 200)
   })
 
   communities.post("/:communityId/song-artifact-uploads/:songArtifactUploadId/content", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
-    const content = await readSongArtifactContent(c)
-
-    const result = await uploadSongArtifactContent({
-      env: c.env,
-      userId: actor.userId,
-      communityId,
-      songArtifactUploadId: decodePublicSongArtifactUploadId(c.req.param("songArtifactUploadId")),
-      content,
-      communityRepository,
-      origin: getRequestOrigin(c),
+    const publicUploadId = c.req.param("songArtifactUploadId")
+    const traceFields = {
+      ...submitTraceRequestFields({
+        contentLengthHeader: c.req.header("content-length"),
+        sessionIdHeader: c.req.header("x-pirate-session-id"),
+        submitTraceHeader: c.req.header(SUBMIT_TRACE_HEADER),
+      }),
+      community_id: publicCommunityId(communityId),
+      song_artifact_upload_id: publicUploadId,
+    }
+    const result = await withSubmitTraceTiming("[create-post-submit] song artifact content upload", traceFields, async () => {
+      const content = await readSongArtifactContent(c)
+      return await uploadSongArtifactContent({
+        env: c.env,
+        userId: actor.userId,
+        communityId,
+        songArtifactUploadId: decodePublicSongArtifactUploadId(publicUploadId),
+        content,
+        communityRepository,
+        origin: getRequestOrigin(c),
+      })
     })
     return c.json(result, 200)
   })
