@@ -1,5 +1,6 @@
 import { getCommunityRepository } from "../src/lib/communities/db-community-repository"
 import { processAvailableCommunityJobs } from "../src/lib/communities/jobs/runner"
+import type { CommunityJobType } from "../src/lib/communities/jobs/store"
 import type { Env } from "../src/types"
 import { readDevVarsFromCwd } from "./_lib/dev-vars"
 import {
@@ -63,6 +64,14 @@ async function main(): Promise<void> {
   const pollIntervalMs = parsePositiveInt(env.COMMUNITY_JOB_WORKER_INTERVAL_MS, 2000)
   const maxJobsPerCommunity = parsePositiveInt(env.COMMUNITY_JOB_WORKER_MAX_JOBS_PER_COMMUNITY, 25)
   const maxCommunitiesPerTick = parsePositiveInt(env.COMMUNITY_JOB_WORKER_MAX_COMMUNITIES_PER_TICK, 100)
+  const explicitCommunityIds = String(process.env.COMMUNITY_JOB_WORKER_COMMUNITY_IDS || "")
+    .split(",")
+    .map((value) => value.trim().replace(/^com_/, ""))
+    .filter(Boolean)
+  const skipJobTypes = String(process.env.COMMUNITY_JOB_WORKER_SKIP_JOB_TYPES || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean) as CommunityJobType[]
   const stopWhenIdle = String(process.env.STOP_WHEN_IDLE || "").trim() === "1"
   const openRouterConfigured = hasConfiguredValue(env.OPENROUTER_API_KEY)
   const abortController = new AbortController()
@@ -79,6 +88,8 @@ async function main(): Promise<void> {
       `poll interval ms: ${pollIntervalMs}`,
       `max jobs/community: ${maxJobsPerCommunity}`,
       `max communities/tick: ${maxCommunitiesPerTick}`,
+      `community filter: ${explicitCommunityIds.length ? explicitCommunityIds.join(",") : "all active"}`,
+      `skip job types: ${skipJobTypes.length ? skipJobTypes.join(",") : "none"}`,
       `stop when idle: ${stopWhenIdle ? "yes" : "no"}`,
       `openrouter configured: ${openRouterConfigured ? "yes" : "no"}`,
     ].join("\n"),
@@ -102,7 +113,7 @@ async function main(): Promise<void> {
       console.warn(`community job worker: failed to list active communities (${message}); falling back to local db scan`)
     }
 
-    const communityIds = [...new Set([...activeCommunityIds, ...localCommunityIds])]
+    const communityIds = (explicitCommunityIds.length ? explicitCommunityIds : [...new Set([...activeCommunityIds, ...localCommunityIds])])
       .slice(0, maxCommunitiesPerTick)
 
     const summary = await processAvailableCommunityJobs({
@@ -111,6 +122,7 @@ async function main(): Promise<void> {
       communityIds,
       maxCommunities: maxCommunitiesPerTick,
       maxJobsPerCommunity,
+      skipJobTypes,
     })
 
     if (summary.processed_jobs === 0) {
