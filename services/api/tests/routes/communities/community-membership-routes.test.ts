@@ -230,6 +230,117 @@ describe("community membership routes", () => {
     expect((await json(rejectedEligibility) as { status: string }).status).toBe("requestable")
   })
 
+  test("follow and unfollow return public contract shape and update preview state", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "community-follow-shape-creator")
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Follow Shape Club",
+      membership_mode: "request",
+    }, ctx.env, creator.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: { id?: string; community_id?: string }
+    }
+    const communityId = createdCommunityId(communityCreateBody)
+    expect(communityId.startsWith("com_cmt_")).toBe(true)
+
+    const follower = await exchangeJwt(ctx.env, "community-follow-shape-follower")
+    const initialPreview = await app.request(
+      `http://pirate.test/communities/${communityId}/preview`,
+      { headers: { authorization: `Bearer ${follower.accessToken}` } },
+      ctx.env,
+    )
+    expect(initialPreview.status).toBe(200)
+    const initialPreviewBody = await json(initialPreview) as {
+      viewer_following: boolean | null
+      follower_count: number | null
+    }
+    expect(initialPreviewBody.viewer_following).toBe(false)
+    const initialFollowerCount = initialPreviewBody.follower_count ?? 0
+
+    const follow = await app.request(
+      `http://pirate.test/communities/${communityId}/follow`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${follower.accessToken}`,
+          "content-type": "application/json",
+        },
+        body: "{}",
+      },
+      ctx.env,
+    )
+    expect(follow.status).toBe(200)
+    const followBody = await json(follow) as {
+      community?: string
+      community_id?: string
+      following?: boolean
+      follower_count?: number | null
+    }
+    expect(followBody).toEqual({
+      community: communityId,
+      following: true,
+      follower_count: initialFollowerCount + 1,
+    })
+    expect("community_id" in followBody).toBe(false)
+    expect(followBody.community?.startsWith("com_cmt_")).toBe(true)
+
+    const followedPreview = await app.request(
+      `http://pirate.test/communities/${communityId}/preview`,
+      { headers: { authorization: `Bearer ${follower.accessToken}` } },
+      ctx.env,
+    )
+    expect(followedPreview.status).toBe(200)
+    const followedPreviewBody = await json(followedPreview) as {
+      viewer_following: boolean | null
+      follower_count: number | null
+    }
+    expect(followedPreviewBody.viewer_following).toBe(true)
+    expect(followedPreviewBody.follower_count).toBe(initialFollowerCount + 1)
+
+    const unfollow = await app.request(
+      `http://pirate.test/communities/${communityId}/unfollow`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${follower.accessToken}`,
+          "content-type": "application/json",
+        },
+        body: "{}",
+      },
+      ctx.env,
+    )
+    expect(unfollow.status).toBe(200)
+    const unfollowBody = await json(unfollow) as {
+      community?: string
+      community_id?: string
+      following?: boolean
+      follower_count?: number | null
+    }
+    expect(unfollowBody).toEqual({
+      community: communityId,
+      following: false,
+      follower_count: initialFollowerCount,
+    })
+    expect("community_id" in unfollowBody).toBe(false)
+    expect(unfollowBody.community?.startsWith("com_cmt_")).toBe(true)
+
+    const unfollowedPreview = await app.request(
+      `http://pirate.test/communities/${communityId}/preview`,
+      { headers: { authorization: `Bearer ${follower.accessToken}` } },
+      ctx.env,
+    )
+    expect(unfollowedPreview.status).toBe(200)
+    const unfollowedPreviewBody = await json(unfollowedPreview) as {
+      viewer_following: boolean | null
+      follower_count: number | null
+    }
+    expect(unfollowedPreviewBody.viewer_following).toBe(false)
+    expect(unfollowedPreviewBody.follower_count).toBe(initialFollowerCount)
+  })
+
   test("community create rejects open membership", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup

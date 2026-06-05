@@ -30,6 +30,7 @@ export type AnalyticsEventName =
   | "home_feed_viewed"
   | "community_viewed"
   | "community_followed"
+  | "community_follow_contract_drift"
   | "community_join_requested"
   | "community_join_succeeded"
   | "post_composer_opened"
