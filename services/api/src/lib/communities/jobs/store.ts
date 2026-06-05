@@ -17,6 +17,7 @@ export type CommunityJobType =
   | "link_summary_materialize"
   | "link_summary_translation_materialize"
   | "song_preview_generate"
+  | "locked_asset_delivery_prepare"
   | "live_room_viewer_sessions_prune"
 export type CommunityJobStatus = "queued" | "running" | "succeeded" | "failed"
 
@@ -123,6 +124,29 @@ export async function findNextRunnableCommunityJob(input: {
   })
 
   return row ? toCommunityJobRow(row) : null
+}
+
+export async function resetStaleRunningCommunityJobs(input: {
+  client: DbExecutor
+  now: string
+  staleBefore: string
+  communityId?: string | null
+}): Promise<number> {
+  const result = await input.client.execute({
+    sql: `
+      UPDATE community_jobs
+      SET status = 'failed',
+          error_code = 'stale_running_timeout',
+          available_at = ?2,
+          updated_at = ?2
+      WHERE status = 'running'
+        AND updated_at <= ?1
+        AND (?3 IS NULL OR community_id = ?3)
+    `,
+    args: [input.staleBefore, input.now, input.communityId ?? null],
+  })
+
+  return result.rowsAffected ?? 0
 }
 
 export async function enqueueCommunityJob(input: {

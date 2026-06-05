@@ -28,15 +28,21 @@ import {
   enqueuePostLabelIfNeeded,
   enqueuePostTranslationPrewarmJobs,
 } from "./post-jobs"
+import { enqueueCommunityJob } from "../communities/jobs/store"
+import { processCommunityJobById } from "../communities/jobs/runner"
+import type { CommunityJobRepository } from "../communities/jobs/runner-types"
 import { eligibilityFailed } from "../errors"
-import { nowIso } from "../helpers"
+import { isLocalEnvironment, nowIso } from "../helpers"
+import { withRequestControlPlaneClients } from "../runtime-deps"
+import type { DbExecutor } from "../db-helpers"
 import type { Env } from "../../env"
-import type { CreatePostRequest, Post } from "../../types"
+import type { Asset, CreatePostRequest, Post } from "../../types"
 import type { AltchaProofInput } from "../verification/altcha-provider"
 import { preparePostCreate } from "./post-create-preparation"
 import { recordReviewRequiredPostModeration } from "./post-moderation-recording"
 import { assertPostCreateRequest } from "./post-create-validation"
 
+type PostWaitUntil = (promise: Promise<void>) => void
 type PostAssetCreator = typeof createAssetForPost
 type SongPostAssetCreator = typeof createSongAssetForPost
 let postAssetCreatorForRuntime: PostAssetCreator = createAssetForPost
@@ -76,6 +82,54 @@ type PostServiceCommunityRepository =
   & CommunityDatabaseBindingRepository
   & CommunityPostProjectionRepository
 
+async function enqueueLockedAssetDeliveryJobIfRequested(input: {
+  env: Env
+  client: DbExecutor
+  communityId: string
+  post: Post
+  asset: Asset
+  createdAt: string
+  communityRepository: PostServiceCommunityRepository
+  waitUntil?: PostWaitUntil
+}): Promise<void> {
+  if (input.asset.locked_delivery_status !== "requested") {
+    return
+  }
+
+  const job = await enqueueCommunityJob({
+    client: input.client,
+    communityId: input.communityId,
+    jobType: "locked_asset_delivery_prepare",
+    subjectType: "asset",
+    subjectId: input.asset.id.replace(/^asset_/, ""),
+    payloadJson: JSON.stringify({ post_id: input.post.post_id }),
+    createdAt: input.createdAt,
+  })
+
+  if (!isLocalEnvironment(input.env.ENVIRONMENT)) {
+    return
+  }
+
+  input.waitUntil?.(withRequestControlPlaneClients(async () => {
+    try {
+      await processCommunityJobById({
+        env: input.env,
+        communityId: input.communityId,
+        jobId: job.job_id,
+        communityRepository: input.communityRepository as unknown as CommunityJobRepository,
+      })
+    } catch (error) {
+      console.error("[posts] immediate locked delivery job processing failed", {
+        community_id: input.communityId,
+        post_id: input.post.post_id,
+        asset_id: input.asset.id,
+        job_id: job.job_id,
+        error,
+      })
+    }
+  }))
+}
+
 export async function createPost(input: {
   env: Env
   requestUrl: string
@@ -87,6 +141,7 @@ export async function createPost(input: {
   userRepository: UserRepository
   profileRepository: ProfileRepository
   communityRepository: PostServiceCommunityRepository
+  waitUntil?: PostWaitUntil
 }): Promise<Post> {
   const communityRow = await input.communityRepository.getCommunityById(input.communityId)
   if (!isCommunityLive(communityRow)) {
@@ -155,7 +210,7 @@ export async function createPost(input: {
     const createdAt = nowIso()
     const tx = await db.client.transaction("write")
     let post: Post
-    const postCommitAssetTasks: Array<{ label: string; run: () => Promise<void> }> = []
+    const postCommitAssetTasks: Array<() => Promise<void>> = []
     const requireStoryRoyaltyRegistration = true
     try {
       post = await insertPost({
@@ -201,44 +256,58 @@ export async function createPost(input: {
       }
 
       if (post.post_type === "song" && post.song_artifact_bundle_id && resolvedSongBundleForAsset) {
-        postCommitAssetTasks.push({
-          label: "song_asset",
-          run: async () => {
-            await songPostAssetCreatorForRuntime({
-              env: input.env,
-              client: db.client,
-              communityId: input.communityId,
-              post,
-              bundle: resolvedSongBundleForAsset.bundle,
-              licensePreset: input.body.license_preset ?? null,
-              commercialRevSharePct: input.body.commercial_rev_share_pct ?? null,
-              requireStoryRoyaltyRegistration,
-              userRepository: input.userRepository,
-            })
-          },
+        postCommitAssetTasks.push(async () => {
+          const asset = await songPostAssetCreatorForRuntime({
+            env: input.env,
+            client: db.client,
+            communityId: input.communityId,
+            post,
+            bundle: resolvedSongBundleForAsset.bundle,
+            licensePreset: input.body.license_preset ?? null,
+            commercialRevSharePct: input.body.commercial_rev_share_pct ?? null,
+            requireStoryRoyaltyRegistration,
+            userRepository: input.userRepository,
+          })
+          await enqueueLockedAssetDeliveryJobIfRequested({
+            env: input.env,
+            client: db.client,
+            communityId: input.communityId,
+            post,
+            asset,
+            createdAt,
+            communityRepository: input.communityRepository,
+            waitUntil: input.waitUntil,
+          })
         })
       }
       if (post.post_type === "video" && post.access_mode && resolvedVideoAsset) {
-        postCommitAssetTasks.push({
-          label: post.access_mode === "locked" ? "locked_video_asset" : "video_asset",
-          run: async () => {
-            await postAssetCreatorForRuntime({
-              env: input.env,
-              client: db.client,
-              communityId: input.communityId,
-              post,
-              assetKind: "video_file",
-              storageRef: resolvedVideoAsset.upload.gateway_url || resolvedVideoAsset.upload.storage_ref,
-              mimeType: resolvedVideoAsset.upload.mime_type,
-              contentHash: resolvedVideoAsset.upload.content_hash ?? null,
-              artifactKind: "primary_video",
-              bundleId: null,
-              licensePreset: input.body.license_preset ?? null,
-              commercialRevSharePct: input.body.commercial_rev_share_pct ?? null,
-              requireStoryRoyaltyRegistration,
-              userRepository: input.userRepository,
-            })
-          },
+        postCommitAssetTasks.push(async () => {
+          const asset = await postAssetCreatorForRuntime({
+            env: input.env,
+            client: db.client,
+            communityId: input.communityId,
+            post,
+            assetKind: "video_file",
+            storageRef: resolvedVideoAsset.upload.gateway_url || resolvedVideoAsset.upload.storage_ref,
+            mimeType: resolvedVideoAsset.upload.mime_type,
+            contentHash: resolvedVideoAsset.upload.content_hash ?? null,
+            artifactKind: "primary_video",
+            bundleId: null,
+            licensePreset: input.body.license_preset ?? null,
+            commercialRevSharePct: input.body.commercial_rev_share_pct ?? null,
+            requireStoryRoyaltyRegistration,
+            userRepository: input.userRepository,
+          })
+          await enqueueLockedAssetDeliveryJobIfRequested({
+            env: input.env,
+            client: db.client,
+            communityId: input.communityId,
+            post,
+            asset,
+            createdAt,
+            communityRepository: input.communityRepository,
+            waitUntil: input.waitUntil,
+          })
         })
       }
 
@@ -250,37 +319,8 @@ export async function createPost(input: {
       tx.close()
     }
 
-    for (const task of postCommitAssetTasks) {
-      const startedAt = Date.now()
-      console.info("[create-post-submit] post commit asset task:start", {
-        access_mode: post.access_mode ?? "public",
-        community_id: input.communityId,
-        post_id: post.post_id,
-        post_type: post.post_type,
-        task: task.label,
-      })
-      try {
-        await task.run()
-        console.info("[create-post-submit] post commit asset task:done", {
-          access_mode: post.access_mode ?? "public",
-          community_id: input.communityId,
-          duration_ms: Date.now() - startedAt,
-          post_id: post.post_id,
-          post_type: post.post_type,
-          task: task.label,
-        })
-      } catch (error) {
-        console.warn("[create-post-submit] post commit asset task:failed", {
-          access_mode: post.access_mode ?? "public",
-          community_id: input.communityId,
-          duration_ms: Date.now() - startedAt,
-          error: error instanceof Error ? error.message : String(error),
-          post_id: post.post_id,
-          post_type: post.post_type,
-          task: task.label,
-        })
-        throw error
-      }
+    for (const runPostCommitAssetTask of postCommitAssetTasks) {
+      await runPostCommitAssetTask()
     }
 
     await input.communityRepository.recordCommunityPostProjection({

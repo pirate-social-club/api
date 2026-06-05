@@ -263,6 +263,32 @@ rtk bun run deploy:staging
 
 After deploy, set the API Worker verifier URL to the Container Worker `/verify` endpoint and use the same shared secret on the API Worker.
 
+### Song Preview Container
+
+Paid-song preview cropping must not run inside the Cloudflare API Worker because
+native `ffmpeg` is only available in a Node/Bun runtime. The API schedules
+`song_preview_generate` jobs, then forwards them to
+`../song-preview-container` through the `SONG_PREVIEW_SERVICE` binding.
+
+Production/staging requirements:
+
+- Deploy `../song-preview-container` before deploying the API Worker.
+- Set `SONG_PREVIEW_SHARED_SECRET` on both Workers.
+- Set the container Worker's `CONTROL_PLANE_DATABASE_URL`,
+  `FILEBASE_S3_ACCESS_KEY`, and `FILEBASE_S3_SECRET_KEY` secrets.
+- Keep the API `SONG_PREVIEW_SERVICE` binding enabled in `wrangler.jsonc`; use
+  `SONG_PREVIEW_SERVICE_URL` only for manual/local experiments.
+
+### Async Locked Delivery
+
+Locked post creation can run Story CDR delivery and Story royalty registration
+through the `locked_asset_delivery_prepare` community job instead of doing that
+work on the request path. `STORY_LOCKED_DELIVERY_ASYNC=false` is the production
+kill switch; outside local/test the default is async when unset.
+
+Before promoting to production, run the staging real-file timing harness and
+review `docs/runbooks/async-locked-delivery.md`.
+
 ## Mint A Dev JWT
 
 ```bash

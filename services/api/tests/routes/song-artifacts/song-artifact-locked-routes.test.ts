@@ -5,6 +5,9 @@ import { app } from "../../../src/index"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { getCommunityRepository } from "../../../src/lib/communities/db-community-repository"
 import { buildLocalCommunityDbPath } from "../../../src/lib/communities/community-local-db"
+import { processCommunityJobById } from "../../../src/lib/communities/jobs/runner"
+import { COMMUNITY_JOB_MAX_ATTEMPTS } from "../../../src/lib/communities/jobs/runner-types"
+import { reconcileRequestedLockedAssetDeliveryJobs } from "../../../src/lib/communities/jobs/locked-asset-delivery-handler"
 import { reconcileStaleCommunityPurchaseSettlements } from "../../../src/lib/communities/commerce/settlement-service"
 import { setStoryAccessProofSignerForTests } from "../../../src/lib/story/story-access-proof-service"
 import { setStoryAssetPublisherForTests } from "../../../src/lib/story/story-publish-service"
@@ -89,6 +92,23 @@ async function markGeneratedPreviewReady(input: {
   })
 }
 
+async function markGeneratedPreviewFailed(input: {
+  env: Env
+  communityId: string
+  songArtifactBundleId: string
+  previewError: string
+}): Promise<void> {
+  await updateSongArtifactBundlePreview({
+    client: getControlPlaneClient(input.env),
+    communityId: input.communityId,
+    songArtifactBundleId: input.songArtifactBundleId,
+    previewAudio: null,
+    previewStatus: "failed",
+    previewError: input.previewError,
+    updatedAt: new Date().toISOString(),
+  })
+}
+
 beforeEach(() => {
   resetRuntimeCaches()
   originalFetch = globalThis.fetch
@@ -111,6 +131,924 @@ afterEach(async () => {
 })
 
 describe("song artifact locked routes", () => {
+  testWithTimeout("creates locked song delivery asynchronously and finalizes it through the community job", async () => {
+    const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
+    setStoryRuntimeFundingAssertionForTests(async () => {})
+    setStoryCdrUploaderForTests(async () => ({
+      cdrVaultUuid: 5151,
+      writerAddress: "0x0000000000000000000000000000000000000cd1",
+      txHashes: {
+        allocate: "0xalloc-async",
+        write: "0xwrite-async",
+      },
+    }))
+    setStoryAssetPublisherForTests(async () => ({
+      entitlementConfiguredTxHash: "0xconfigure-async",
+      publishTxHash: "0xpublish-async",
+    }))
+    setStoryRoyaltyRegistrarForTests(async () => ({
+      storyIpId: "0x5151515151515151515151515151515151515151",
+      storyIpNftContract: "0x5252525252525252525252525252525252525252",
+      storyIpNftTokenId: "515",
+      storyLicenseTermsId: "51",
+      storyLicenseTemplate: null,
+      storyRoyaltyPolicy: "0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E",
+      storyDerivativeParentIpIds: null,
+      storyRevenueToken: "0x1514000000000000000000000000000000000000",
+      storyRoyaltyRegistrationStatus: "registered",
+      storyDerivativeRegisteredAt: null,
+    }))
+    installLockedSongFetchMocks({
+      originalFetch,
+      storedObjects,
+    })
+
+    const ctx = await createRouteTestContext({
+      STORY_LOCKED_DELIVERY_ASYNC: "true",
+      FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
+      FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
+      FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
+      FILEBASE_MEDIA_BUCKET: "pirate-media",
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      OPENROUTER_MODEL: "google/gemini-3.1-flash-lite-preview",
+      ACRCLOUD_ACCESS_KEY: "test-acrcloud-access",
+      ACRCLOUD_ACCESS_SECRET: "test-acrcloud-secret",
+      ACRCLOUD_HOST: "acrcloud.test",
+      ELEVENLABS_API_KEY: "test-elevenlabs-key",
+      ELEVENLABS_FORCE_ALIGNMENT_URL: "https://elevenlabs.test/forced-alignment",
+      STORY_CONTRACT_OWNER_PRIVATE_KEY: "0x1000000000000000000000000000000000000000000000000000000000000001",
+      STORY_OPERATOR_PRIVATE_KEY: "0x2000000000000000000000000000000000000000000000000000000000000002",
+      STORY_CDR_WRITER_PRIVATE_KEY: "0x3000000000000000000000000000000000000000000000000000000000000003",
+      STORY_ACCESS_CONTROLLER_PRIVATE_KEY: "0x4000000000000000000000000000000000000000000000000000000000000004",
+    })
+    cleanup = ctx.cleanup
+
+    const author = await exchangeJwt(ctx.env, "song-author-async-locked")
+    const buyer = await exchangeJwt(ctx.env, "song-buyer-async-requested")
+    await attachPrimaryWallet({
+      client: ctx.client,
+      userId: author.userId,
+      walletAttachmentId: "wal_song_author_async_locked",
+      walletAddress: "0xaaa0000000000000000000000000000000000000",
+    })
+    await verifyForLockedCommerce(ctx.env, author.userId, author.accessToken)
+    const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "Async Paid Song Club")
+    await addCommunityMember(String(ctx.env.LOCAL_COMMUNITY_DB_ROOT), communityId, buyer.userId)
+    const primaryUpload = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "primary_audio",
+      mimeType: "audio/mpeg",
+      filename: "async-paid-anthem.mp3",
+      bytes: new Uint8Array([31, 32, 33, 34]),
+    })
+    const bundleCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifacts`,
+      {
+        primary_audio: {
+          song_artifact_upload: primaryUpload.id,
+        },
+        preview_window: {
+          start_ms: 0,
+          duration_ms: 30_000,
+        },
+        title: "Async Paid Anthem",
+        lyrics: "Async paid line",
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(bundleCreate.status).toBe(201)
+    const bundleBody = await json(bundleCreate) as { id: string }
+    await markGeneratedPreviewReady({
+      env: ctx.env,
+      communityId,
+      songArtifactBundleId: bundleBody.id.replace(/^sab_/, ""),
+      previewStorageRef: `http://pirate.test/generated-preview/${communityId}/async-paid-anthem.mp3`,
+      previewSizeBytes: 4,
+    })
+
+    const postCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        idempotency_key: "song-post-async-locked-1",
+        post_type: "song",
+        identity_mode: "public",
+        title: "Async paid anthem",
+        access_mode: "locked",
+        song_mode: "original",
+        rights_basis: "original",
+        license_preset: "non-commercial",
+        song_artifact_bundle: bundleBody.id,
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(postCreate.status).toBe(201)
+    const postBody = await json(postCreate) as {
+      asset: string
+      id: string
+      status: string
+    }
+    expect(postBody.status).toBe("published")
+    const assetId = postBody.asset
+
+    const assetBeforeJob = await app.request(
+      `http://pirate.test/communities/${communityId}/assets/${assetId}`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(assetBeforeJob.status).toBe(200)
+    const assetBeforeJobBody = await json(assetBeforeJob) as {
+      locked_delivery_status: string
+      story_status: string
+    }
+    expect(assetBeforeJobBody.locked_delivery_status).toBe("requested")
+    expect(assetBeforeJobBody.story_status).toBe("requested")
+
+    const creatorAccessBeforeJob = await app.request(
+      `http://pirate.test/communities/${communityId}/assets/${assetId}/access`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(creatorAccessBeforeJob.status).toBe(200)
+    const creatorAccessBeforeJobBody = await json(creatorAccessBeforeJob) as {
+      access_granted: boolean
+      decision_reason: string
+      locked_delivery_status: string
+      delivery_kind: string | null
+    }
+    expect(creatorAccessBeforeJobBody.access_granted).toBe(false)
+    expect(creatorAccessBeforeJobBody.decision_reason).toBe("delivery_pending")
+    expect(creatorAccessBeforeJobBody.locked_delivery_status).toBe("requested")
+    expect(creatorAccessBeforeJobBody.delivery_kind).toBeNull()
+
+    const buyerAccessBeforeJob = await app.request(
+      `http://pirate.test/communities/${communityId}/assets/${assetId}/access`,
+      {
+        headers: {
+          authorization: `Bearer ${buyer.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(buyerAccessBeforeJob.status).toBe(200)
+    const buyerAccessBeforeJobBody = await json(buyerAccessBeforeJob) as {
+      access_granted: boolean
+      decision_reason: string
+      locked_delivery_status: string
+      delivery_kind: string | null
+    }
+    expect(buyerAccessBeforeJobBody.access_granted).toBe(false)
+    expect(buyerAccessBeforeJobBody.decision_reason).toBe("delivery_pending")
+    expect(buyerAccessBeforeJobBody.locked_delivery_status).toBe("requested")
+    expect(buyerAccessBeforeJobBody.delivery_kind).toBeNull()
+
+    const listingCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/listings`,
+      {
+        asset: assetId,
+        price_cents: 399,
+        regional_pricing_enabled: false,
+        status: "active",
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(listingCreate.status).toBe(201)
+    const listingBody = await json(listingCreate) as {
+      id: string
+      status: string
+    }
+    expect(listingBody.status).toBe("active")
+
+    const publicBuyerWallet = Wallet.createRandom()
+    const publicQuoteIssuedAt = Math.floor(Date.now() / 1000)
+    const publicQuoteMessage = publicPurchaseQuoteMessage({
+      communityId,
+      listing: listingBody.id,
+      walletAddress: publicBuyerWallet.address,
+      chainRef: "eip155",
+      nonce: "public-requested-quote-nonce",
+      issuedAt: publicQuoteIssuedAt,
+    })
+    const publicQuoteBeforeJob = await requestJson(
+      `http://pirate.test/public-communities/${communityId}/purchase-quotes`,
+      {
+        listing: listingBody.id,
+        ...routedCheckoutQuoteFields,
+        wallet_proof: {
+          wallet_address: publicBuyerWallet.address,
+          chain_ref: "eip155",
+          nonce: "public-requested-quote-nonce",
+          issued_at: publicQuoteIssuedAt,
+          signature: await publicBuyerWallet.signMessage(publicQuoteMessage),
+        },
+      },
+      ctx.env,
+    )
+    expect(publicQuoteBeforeJob.status).toBe(404)
+
+    const communityDb = createClient({
+      url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
+    })
+    const jobRows = await communityDb.execute({
+      sql: `
+        SELECT job_id, job_type, subject_id, status
+        FROM community_jobs
+        WHERE job_type = 'locked_asset_delivery_prepare'
+          AND subject_id = ?1
+      `,
+      args: [assetId.replace(/^asset_/, "")],
+    })
+    expect(jobRows.rows).toHaveLength(1)
+    const originalJobId = String(jobRows.rows[0]?.job_id ?? "")
+    expect(String(jobRows.rows[0]?.status)).toBe("queued")
+    await communityDb.execute({
+      sql: "DELETE FROM community_jobs WHERE job_id = ?1",
+      args: [originalJobId],
+    })
+    const orphanedJobRows = await communityDb.execute({
+      sql: `
+        SELECT job_id
+        FROM community_jobs
+        WHERE job_type = 'locked_asset_delivery_prepare'
+          AND subject_id = ?1
+      `,
+      args: [assetId.replace(/^asset_/, "")],
+    })
+    expect(orphanedJobRows.rows).toHaveLength(0)
+    communityDb.close()
+
+    const reconcileRepository = getCommunityRepository(ctx.env)
+    try {
+      const reconciled = await reconcileRequestedLockedAssetDeliveryJobs({
+        env: ctx.env,
+        communityRepository: reconcileRepository,
+        communityIds: [communityId],
+      })
+      expect(reconciled.enqueued_jobs).toBe(1)
+    } finally {
+      await reconcileRepository.close?.()
+    }
+
+    const reconciledCommunityDb = createClient({
+      url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
+    })
+    const reconciledJobRows = await reconciledCommunityDb.execute({
+      sql: `
+        SELECT job_id, job_type, subject_id, status
+        FROM community_jobs
+        WHERE job_type = 'locked_asset_delivery_prepare'
+          AND subject_id = ?1
+      `,
+      args: [assetId.replace(/^asset_/, "")],
+    })
+    expect(reconciledJobRows.rows).toHaveLength(1)
+    let jobId = String(reconciledJobRows.rows[0]?.job_id ?? "")
+    expect(jobId).not.toBe(originalJobId)
+    expect(String(reconciledJobRows.rows[0]?.status)).toBe("queued")
+    await reconciledCommunityDb.execute({
+      sql: `
+        UPDATE community_jobs
+        SET status = 'failed',
+            error_code = 'transient_test_failure',
+            attempt_count = ?2,
+            updated_at = ?3
+        WHERE job_id = ?1
+      `,
+      args: [jobId, Math.max(1, COMMUNITY_JOB_MAX_ATTEMPTS - 1), new Date().toISOString()],
+    })
+    reconciledCommunityDb.close()
+
+    const retriableFailedReconcileRepository = getCommunityRepository(ctx.env)
+    try {
+      const retriableFailedReconcile = await reconcileRequestedLockedAssetDeliveryJobs({
+        env: ctx.env,
+        communityRepository: retriableFailedReconcileRepository,
+        communityIds: [communityId],
+      })
+      expect(retriableFailedReconcile.enqueued_jobs).toBe(0)
+    } finally {
+      await retriableFailedReconcileRepository.close?.()
+    }
+
+    const terminalFailedCommunityDb = createClient({
+      url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
+    })
+    await terminalFailedCommunityDb.execute({
+      sql: `
+        UPDATE community_jobs
+        SET status = 'failed',
+            error_code = 'terminal_test_failure',
+            attempt_count = ?2,
+            updated_at = ?3
+        WHERE job_id = ?1
+      `,
+      args: [jobId, COMMUNITY_JOB_MAX_ATTEMPTS, new Date().toISOString()],
+    })
+    terminalFailedCommunityDb.close()
+
+    const terminalFailedReconcileRepository = getCommunityRepository(ctx.env)
+    try {
+      const terminalFailedReconcile = await reconcileRequestedLockedAssetDeliveryJobs({
+        env: ctx.env,
+        communityRepository: terminalFailedReconcileRepository,
+        communityIds: [communityId],
+      })
+      expect(terminalFailedReconcile.enqueued_jobs).toBe(1)
+    } finally {
+      await terminalFailedReconcileRepository.close?.()
+    }
+
+    const terminalReconciledCommunityDb = createClient({
+      url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
+    })
+    const terminalReconciledJobRows = await terminalReconciledCommunityDb.execute({
+      sql: `
+        SELECT job_id, status
+        FROM community_jobs
+        WHERE job_type = 'locked_asset_delivery_prepare'
+          AND subject_id = ?1
+        ORDER BY created_at DESC, job_id DESC
+      `,
+      args: [assetId.replace(/^asset_/, "")],
+    })
+    expect(terminalReconciledJobRows.rows).toHaveLength(2)
+    jobId = String(terminalReconciledJobRows.rows[0]?.job_id ?? "")
+    expect(String(terminalReconciledJobRows.rows[0]?.status)).toBe("queued")
+    expect(jobId).not.toBe(originalJobId)
+    terminalReconciledCommunityDb.close()
+
+    const processRepository = getCommunityRepository(ctx.env)
+    let processed
+    try {
+      processed = await processCommunityJobById({
+        env: ctx.env,
+        communityId,
+        jobId,
+        communityRepository: processRepository,
+      })
+    } finally {
+      await processRepository.close?.()
+    }
+    expect(processed?.status).toBe("succeeded")
+
+    const assetAfterJob = await app.request(
+      `http://pirate.test/communities/${communityId}/assets/${assetId}`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(assetAfterJob.status).toBe(200)
+    const assetAfterJobBody = await json(assetAfterJob) as {
+      locked_delivery_status: string
+      story_cdr_vault_uuid: number
+      story_ip: string | null
+      story_royalty_registration_status: string | null
+    }
+    expect(assetAfterJobBody.locked_delivery_status).toBe("ready")
+    expect(assetAfterJobBody.story_cdr_vault_uuid).toBe(5151)
+    expect(assetAfterJobBody.story_ip).toBe("0x5151515151515151515151515151515151515151")
+    expect(assetAfterJobBody.story_royalty_registration_status).toBe("registered")
+
+    const noOpReconcileRepository = getCommunityRepository(ctx.env)
+    try {
+      const noOpReconcile = await reconcileRequestedLockedAssetDeliveryJobs({
+        env: ctx.env,
+        communityRepository: noOpReconcileRepository,
+        communityIds: [communityId],
+      })
+      expect(noOpReconcile.enqueued_jobs).toBe(0)
+    } finally {
+      await noOpReconcileRepository.close?.()
+    }
+
+    const settledCommunityDb = createClient({
+      url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
+    })
+    try {
+      const settledJobRows = await settledCommunityDb.execute({
+        sql: `
+          SELECT job_id, status, attempt_count
+          FROM community_jobs
+          WHERE job_type = 'locked_asset_delivery_prepare'
+            AND subject_id = ?1
+          ORDER BY created_at DESC, job_id DESC
+        `,
+        args: [assetId.replace(/^asset_/, "")],
+      })
+      expect(settledJobRows.rows).toHaveLength(2)
+      expect(String(settledJobRows.rows[0]?.job_id ?? "")).toBe(jobId)
+      expect(String(settledJobRows.rows[0]?.status ?? "")).toBe("succeeded")
+      expect(String(settledJobRows.rows[1]?.status ?? "")).toBe("failed")
+      expect(Number(settledJobRows.rows[1]?.attempt_count ?? 0)).toBe(COMMUNITY_JOB_MAX_ATTEMPTS)
+    } finally {
+      settledCommunityDb.close()
+    }
+  }, 30_000)
+
+  testWithTimeout("allows locked song publishing while preview is pending and gates access until preview is ready", async () => {
+    const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
+    setStoryRuntimeFundingAssertionForTests(async () => {})
+    setStoryCdrUploaderForTests(async () => ({
+      cdrVaultUuid: 6161,
+      writerAddress: "0x0000000000000000000000000000000000000cd2",
+      txHashes: {
+        allocate: "0xalloc-preview-pending",
+        write: "0xwrite-preview-pending",
+      },
+    }))
+    setStoryAssetPublisherForTests(async () => ({
+      entitlementConfiguredTxHash: "0xconfigure-preview-pending",
+      publishTxHash: "0xpublish-preview-pending",
+    }))
+    setStoryRoyaltyRegistrarForTests(async () => ({
+      storyIpId: "0x6161616161616161616161616161616161616161",
+      storyIpNftContract: "0x6262626262626262626262626262626262626262",
+      storyIpNftTokenId: "616",
+      storyLicenseTermsId: "61",
+      storyLicenseTemplate: null,
+      storyRoyaltyPolicy: "0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E",
+      storyDerivativeParentIpIds: null,
+      storyRevenueToken: "0x1614000000000000000000000000000000000000",
+      storyRoyaltyRegistrationStatus: "registered",
+      storyDerivativeRegisteredAt: null,
+    }))
+    setStoryAccessProofSignerForTests(async (input) => ({
+      digest: "0xd1e57061",
+      signature: `0x${"61".repeat(65)}` as `0x${string}`,
+      signerAddress: "0x0000000000000000000000000000000000000acc",
+      proof: {
+        vaultUuid: input.vaultUuid,
+        caller: input.callerAddress,
+        accessRef: input.accessRef,
+        scope: "0xb8c1a2b531e7c9d996686b1cc6dcd49d2d7037be365b6d380ebaf489440d4f18",
+        expiry: input.expiry,
+        namespace: input.namespace,
+      },
+    }))
+    installLockedSongFetchMocks({
+      originalFetch,
+      storedObjects,
+    })
+
+    const ctx = await createRouteTestContext({
+      STORY_LOCKED_DELIVERY_ASYNC: "true",
+      FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
+      FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
+      FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
+      FILEBASE_MEDIA_BUCKET: "pirate-media",
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      OPENROUTER_MODEL: "google/gemini-3.1-flash-lite-preview",
+      ACRCLOUD_ACCESS_KEY: "test-acrcloud-access",
+      ACRCLOUD_ACCESS_SECRET: "test-acrcloud-secret",
+      ACRCLOUD_HOST: "acrcloud.test",
+      ELEVENLABS_API_KEY: "test-elevenlabs-key",
+      ELEVENLABS_FORCE_ALIGNMENT_URL: "https://elevenlabs.test/forced-alignment",
+      STORY_CONTRACT_OWNER_PRIVATE_KEY: "0x1000000000000000000000000000000000000000000000000000000000000001",
+      STORY_OPERATOR_PRIVATE_KEY: "0x2000000000000000000000000000000000000000000000000000000000000002",
+      STORY_CDR_WRITER_PRIVATE_KEY: "0x3000000000000000000000000000000000000000000000000000000000000003",
+      STORY_ACCESS_CONTROLLER_PRIVATE_KEY: "0x4000000000000000000000000000000000000000000000000000000000000004",
+    })
+    cleanup = ctx.cleanup
+
+    const author = await exchangeJwt(ctx.env, "song-author-preview-pending")
+    const buyer = await exchangeJwt(ctx.env, "song-buyer-preview-pending")
+    await attachPrimaryWallet({
+      client: ctx.client,
+      userId: author.userId,
+      walletAttachmentId: "wal_song_author_preview_pending",
+      walletAddress: "0xaaa1000000000000000000000000000000000000",
+    })
+    await verifyForLockedCommerce(ctx.env, author.userId, author.accessToken)
+    const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "Preview Pending Song Club")
+    await addCommunityMember(String(ctx.env.LOCAL_COMMUNITY_DB_ROOT), communityId, buyer.userId)
+    const primaryUpload = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "primary_audio",
+      mimeType: "audio/mpeg",
+      filename: "preview-pending-anthem.mp3",
+      bytes: new Uint8Array([41, 42, 43, 44]),
+    })
+    const bundleCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifacts`,
+      {
+        primary_audio: {
+          song_artifact_upload: primaryUpload.id,
+        },
+        preview_window: {
+          start_ms: 0,
+          duration_ms: 30_000,
+        },
+        title: "Preview Pending Anthem",
+        lyrics: "Preview pending line",
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(bundleCreate.status).toBe(201)
+    const bundleBody = await json(bundleCreate) as { id: string }
+
+    const postCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        idempotency_key: "song-post-preview-pending-1",
+        post_type: "song",
+        identity_mode: "public",
+        title: "Preview pending anthem",
+        access_mode: "locked",
+        song_mode: "original",
+        rights_basis: "original",
+        license_preset: "non-commercial",
+        song_artifact_bundle: bundleBody.id,
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(postCreate.status).toBe(201)
+    const postBody = await json(postCreate) as {
+      asset: string
+    }
+    expect(typeof postBody.asset === "string" && postBody.asset.length > 0).toBe(true)
+    const assetId = postBody.asset
+
+    const communityDb = createClient({
+      url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
+    })
+    const jobRows = await communityDb.execute({
+      sql: `
+        SELECT job_id
+        FROM community_jobs
+        WHERE job_type = 'locked_asset_delivery_prepare'
+          AND subject_id = ?1
+      `,
+      args: [assetId.replace(/^asset_/, "")],
+    })
+    communityDb.close()
+    expect(jobRows.rows).toHaveLength(1)
+    const jobId = String(jobRows.rows[0]?.job_id ?? "")
+    const processRepository = getCommunityRepository(ctx.env)
+    try {
+      const processed = await processCommunityJobById({
+        env: ctx.env,
+        communityId,
+        jobId,
+        communityRepository: processRepository,
+      })
+      expect(processed?.status).toBe("succeeded")
+    } finally {
+      await processRepository.close?.()
+    }
+
+    const creatorAccessBeforePreview = await app.request(
+      `http://pirate.test/communities/${communityId}/assets/${assetId}/access`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(creatorAccessBeforePreview.status).toBe(200)
+    const creatorAccessBeforePreviewBody = await json(creatorAccessBeforePreview) as {
+      access_granted: boolean
+      bundle_preview_status: string | null
+      decision_reason: string
+      story_cdr_access: unknown
+    }
+    expect(creatorAccessBeforePreviewBody.access_granted).toBe(false)
+    expect(creatorAccessBeforePreviewBody.decision_reason).toBe("preview_pending")
+    expect(creatorAccessBeforePreviewBody.bundle_preview_status).toBe("pending")
+    expect(creatorAccessBeforePreviewBody.story_cdr_access).toBeNull()
+
+    const buyerAccessBeforePreview = await app.request(
+      `http://pirate.test/communities/${communityId}/assets/${assetId}/access`,
+      {
+        headers: {
+          authorization: `Bearer ${buyer.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(buyerAccessBeforePreview.status).toBe(200)
+    const buyerAccessBeforePreviewBody = await json(buyerAccessBeforePreview) as {
+      access_granted: boolean
+      bundle_preview_status: string | null
+      decision_reason: string
+    }
+    expect(buyerAccessBeforePreviewBody.access_granted).toBe(false)
+    expect(buyerAccessBeforePreviewBody.decision_reason).toBe("preview_pending")
+    expect(buyerAccessBeforePreviewBody.bundle_preview_status).toBe("pending")
+
+    await markGeneratedPreviewReady({
+      env: ctx.env,
+      communityId,
+      songArtifactBundleId: bundleBody.id.replace(/^sab_/, ""),
+      previewStorageRef: `http://pirate.test/generated-preview/${communityId}/preview-pending-anthem.mp3`,
+      previewSizeBytes: 4,
+    })
+
+    const creatorAccessAfterPreview = await app.request(
+      `http://pirate.test/communities/${communityId}/assets/${assetId}/access`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(creatorAccessAfterPreview.status).toBe(200)
+    const creatorAccessAfterPreviewBody = await json(creatorAccessAfterPreview) as {
+      access_granted: boolean
+      bundle_preview_status: string | null
+      decision_reason: string
+      story_cdr_access?: { vault_uuid?: number } | null
+    }
+    expect(creatorAccessAfterPreviewBody.access_granted).toBe(true)
+    expect(creatorAccessAfterPreviewBody.decision_reason).toBe("creator")
+    expect(creatorAccessAfterPreviewBody.bundle_preview_status).toBe("completed")
+    expect(creatorAccessAfterPreviewBody.story_cdr_access?.vault_uuid).toBe(6161)
+
+    const buyerAccessAfterPreview = await app.request(
+      `http://pirate.test/communities/${communityId}/assets/${assetId}/access`,
+      {
+        headers: {
+          authorization: `Bearer ${buyer.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(buyerAccessAfterPreview.status).toBe(200)
+    const buyerAccessAfterPreviewBody = await json(buyerAccessAfterPreview) as {
+      access_granted: boolean
+      bundle_preview_status: string | null
+      decision_reason: string
+    }
+    expect(buyerAccessAfterPreviewBody.access_granted).toBe(false)
+    expect(buyerAccessAfterPreviewBody.decision_reason).toBe("purchase_required")
+    expect(buyerAccessAfterPreviewBody.bundle_preview_status).toBe("completed")
+
+    const failedPreviewUpload = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "primary_audio",
+      mimeType: "audio/mpeg",
+      filename: "failed-preview-anthem.mp3",
+      bytes: new Uint8Array([45, 46, 47, 48]),
+    })
+    const failedBundleCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifacts`,
+      {
+        primary_audio: {
+          song_artifact_upload: failedPreviewUpload.id,
+        },
+        preview_window: {
+          start_ms: 0,
+          duration_ms: 30_000,
+        },
+        title: "Failed Preview Anthem",
+        lyrics: "Failed preview line",
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(failedBundleCreate.status).toBe(201)
+    const failedBundleBody = await json(failedBundleCreate) as { id: string }
+    await markGeneratedPreviewFailed({
+      env: ctx.env,
+      communityId,
+      songArtifactBundleId: failedBundleBody.id.replace(/^sab_/, ""),
+      previewError: "ffmpeg exited with test failure",
+    })
+    const failedPreviewPostCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        idempotency_key: "song-post-failed-preview-1",
+        post_type: "song",
+        identity_mode: "public",
+        title: "Failed preview anthem",
+        access_mode: "locked",
+        song_mode: "original",
+        rights_basis: "original",
+        license_preset: "non-commercial",
+        song_artifact_bundle: failedBundleBody.id,
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(failedPreviewPostCreate.status).toBe(400)
+    const failedPreviewPostBody = await json(failedPreviewPostCreate) as { message: string }
+    expect(failedPreviewPostBody.message).toBe("Song preview is not ready for locked publishing")
+  }, 30_000)
+
+  testWithTimeout("marks async locked song delivery failed when CDR write fails", async () => {
+    const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
+    setStoryRuntimeFundingAssertionForTests(async () => {})
+    setStoryCdrUploaderForTests(async () => {
+      throw new Error("cdr_write_failed:test forced CDR failure")
+    })
+    installLockedSongFetchMocks({
+      originalFetch,
+      storedObjects,
+    })
+
+    const ctx = await createRouteTestContext({
+      STORY_LOCKED_DELIVERY_ASYNC: "true",
+      FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
+      FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
+      FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
+      FILEBASE_MEDIA_BUCKET: "pirate-media",
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      OPENROUTER_MODEL: "google/gemini-3.1-flash-lite-preview",
+      ACRCLOUD_ACCESS_KEY: "test-acrcloud-access",
+      ACRCLOUD_ACCESS_SECRET: "test-acrcloud-secret",
+      ACRCLOUD_HOST: "acrcloud.test",
+      ELEVENLABS_API_KEY: "test-elevenlabs-key",
+      ELEVENLABS_FORCE_ALIGNMENT_URL: "https://elevenlabs.test/forced-alignment",
+      STORY_CONTRACT_OWNER_PRIVATE_KEY: "0x1000000000000000000000000000000000000000000000000000000000000001",
+      STORY_OPERATOR_PRIVATE_KEY: "0x2000000000000000000000000000000000000000000000000000000000000002",
+      STORY_CDR_WRITER_PRIVATE_KEY: "0x3000000000000000000000000000000000000000000000000000000000000003",
+      STORY_ACCESS_CONTROLLER_PRIVATE_KEY: "0x4000000000000000000000000000000000000000000000000000000000000004",
+    })
+    cleanup = ctx.cleanup
+
+    const author = await exchangeJwt(ctx.env, "song-author-async-locked-failure")
+    await attachPrimaryWallet({
+      client: ctx.client,
+      userId: author.userId,
+      walletAttachmentId: "wal_song_author_async_locked_failure",
+      walletAddress: "0xaaa1000000000000000000000000000000000000",
+    })
+    await verifyForLockedCommerce(ctx.env, author.userId, author.accessToken)
+    const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "Async Failed Paid Song Club")
+    const primaryUpload = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "primary_audio",
+      mimeType: "audio/mpeg",
+      filename: "async-failed-paid-anthem.mp3",
+      bytes: new Uint8Array([41, 42, 43, 44]),
+    })
+    const bundleCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifacts`,
+      {
+        primary_audio: {
+          song_artifact_upload: primaryUpload.id,
+        },
+        preview_window: {
+          start_ms: 0,
+          duration_ms: 30_000,
+        },
+        title: "Async Failed Paid Anthem",
+        lyrics: "Async failed paid line",
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(bundleCreate.status).toBe(201)
+    const bundleBody = await json(bundleCreate) as { id: string }
+    await markGeneratedPreviewReady({
+      env: ctx.env,
+      communityId,
+      songArtifactBundleId: bundleBody.id.replace(/^sab_/, ""),
+      previewStorageRef: `http://pirate.test/generated-preview/${communityId}/async-failed-paid-anthem.mp3`,
+      previewSizeBytes: 4,
+    })
+
+    const postCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        idempotency_key: "song-post-async-locked-failure-1",
+        post_type: "song",
+        identity_mode: "public",
+        title: "Async failed paid anthem",
+        access_mode: "locked",
+        song_mode: "original",
+        rights_basis: "original",
+        license_preset: "non-commercial",
+        song_artifact_bundle: bundleBody.id,
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(postCreate.status).toBe(201)
+    const postBody = await json(postCreate) as {
+      asset: string
+      id: string
+      status: string
+    }
+    expect(postBody.status).toBe("published")
+    const assetId = postBody.asset
+
+    const communityDb = createClient({
+      url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
+    })
+    const jobRows = await communityDb.execute({
+      sql: `
+        SELECT job_id
+        FROM community_jobs
+        WHERE job_type = 'locked_asset_delivery_prepare'
+          AND subject_id = ?1
+      `,
+      args: [assetId.replace(/^asset_/, "")],
+    })
+    expect(jobRows.rows).toHaveLength(1)
+    const jobId = String(jobRows.rows[0]?.job_id ?? "")
+    communityDb.close()
+
+    const processRepository = getCommunityRepository(ctx.env)
+    let processed
+    try {
+      processed = await processCommunityJobById({
+        env: ctx.env,
+        communityId,
+        jobId,
+        communityRepository: processRepository,
+      })
+    } finally {
+      await processRepository.close?.()
+    }
+    expect(processed?.status).toBe("failed")
+    expect(processed?.error_code).toContain("cdr_write_failed:test forced CDR failure")
+
+    const assetAfterJob = await app.request(
+      `http://pirate.test/communities/${communityId}/assets/${assetId}`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(assetAfterJob.status).toBe(200)
+    const assetAfterJobBody = await json(assetAfterJob) as {
+      locked_delivery_status: string
+      locked_delivery_error: string | null
+      story_status: string
+    }
+    expect(assetAfterJobBody.locked_delivery_status).toBe("failed")
+    expect(assetAfterJobBody.locked_delivery_error).toContain("cdr_write_failed:test forced CDR failure")
+    expect(assetAfterJobBody.story_status).toBe("failed")
+
+    const postAfterJob = await app.request(
+      `http://pirate.test/posts/${postBody.id}`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(postAfterJob.status).toBe(200)
+    const postAfterJobBody = await json(postAfterJob) as {
+      post: {
+        status: string
+      }
+    }
+    expect(postAfterJobBody.post.status).toBe("published")
+
+    const accessAfterFailure = await app.request(
+      `http://pirate.test/communities/${communityId}/assets/${assetId}/access`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(accessAfterFailure.status).toBe(200)
+    const accessAfterFailureBody = await json(accessAfterFailure) as {
+      access_granted: boolean
+      decision_reason: string
+      locked_delivery_status: string
+      delivery_kind: string | null
+    }
+    expect(accessAfterFailureBody.access_granted).toBe(false)
+    expect(accessAfterFailureBody.decision_reason).toBe("delivery_pending")
+    expect(accessAfterFailureBody.locked_delivery_status).toBe("failed")
+    expect(accessAfterFailureBody.delivery_kind).toBeNull()
+  }, 30_000)
+
   testWithTimeout("publishes a locked song, sells access, and decrypts the purchased asset", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
     const royaltySettlementCalls: Array<{

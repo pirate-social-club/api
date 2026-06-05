@@ -8,7 +8,7 @@
     {
       "type": "CompiledWasm",
       "globs": ["**/*.wasm"],
-      "fallthrough": false
+      "fallthrough": true
     }
   ],
   "triggers": {
@@ -85,6 +85,10 @@
         {
           "binding": "COMMUNITY_PROVISION_OPERATOR",
           "service": "community-provision-operator-staging"
+        },
+        {
+          "binding": "SONG_PREVIEW_SERVICE",
+          "service": "pirate-song-preview-container-staging"
         }
       ],
       "vars": {
@@ -134,6 +138,10 @@
         {
           "binding": "COMMUNITY_PROVISION_OPERATOR",
           "service": "community-provision-operator"
+        },
+        {
+          "binding": "SONG_PREVIEW_SERVICE",
+          "service": "song-preview-container"
         }
       ],
       "vars": {

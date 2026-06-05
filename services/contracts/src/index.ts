@@ -1440,8 +1440,9 @@ export type AssetAccessResponse = {
   source_post_status: "draft" | "published" | "hidden";
   story_status: "none" | "requested" | "published" | "failed";
   locked_delivery_status: "none" | "requested" | "ready" | "failed";
+  bundle_preview_status?: "pending" | "processing" | "completed" | "failed" | null;
   access_granted: boolean;
-  decision_reason: "public" | "creator" | "moderator" | "purchase_entitlement" | "purchase_required" | "delivery_pending";
+  decision_reason: "public" | "creator" | "moderator" | "purchase_entitlement" | "purchase_required" | "delivery_pending" | "preview_pending";
   delivery_kind: "primary_content_ref" | "locked_delivery_ref" | "story_cdr_ref" | null;
   delivery_ref: string | null;
   story_cdr_access?: ({

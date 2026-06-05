@@ -2,7 +2,7 @@ import { getCommunityRepository } from "../src/lib/communities/db-community-repo
 import { processAvailableCommunityJobs } from "../src/lib/communities/jobs/runner"
 import type { CommunityJobType } from "../src/lib/communities/jobs/store"
 import type { Env } from "../src/types"
-import { readDevVarsFromCwd } from "./_lib/dev-vars"
+import { readDevVarsFromCwd, readWranglerVarsFromCwd } from "./_lib/dev-vars"
 import {
   applyLocalControlPlaneMigrations,
   ensureLocalDevStorage,
@@ -28,10 +28,27 @@ function envFlag(value: string | undefined, defaultValue: boolean): boolean {
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on"
 }
 
+function normalizeWranglerEnvironment(value: string | undefined): string | null {
+  const normalized = String(value ?? "").trim().toLowerCase()
+  if (!normalized) return null
+  if (normalized === "dev" || normalized === "local") return "development"
+  if (normalized === "prod") return "production"
+  return normalized
+}
+
 async function main(): Promise<void> {
   const devVars = readDevVarsFromCwd()
+  const wranglerEnvironment = normalizeWranglerEnvironment(
+    process.env.PIRATE_COMMUNITY_JOB_WORKER_WRANGLER_ENV
+      ?? process.env.WRANGLER_ENV
+      ?? process.env.ENVIRONMENT,
+  )
+  const wranglerVars = wranglerEnvironment
+    ? readWranglerVarsFromCwd("wrangler.jsonc", wranglerEnvironment)
+    : {}
   const rawEnv = {
     ...devVars,
+    ...wranglerVars,
     ...process.env,
     ...(envFlag(process.env.PIRATE_DEV_USE_REMOTE_CONTROL_PLANE, false)
       ? {}
@@ -85,6 +102,7 @@ async function main(): Promise<void> {
       "community job worker starting",
       `control-plane db: ${localDevStorage.controlPlaneDbPath ?? localDevStorage.controlPlaneDbUrl}`,
       `community db root: ${localDevStorage.communityDbRoot}`,
+      `wrangler env: ${wranglerEnvironment ?? "none"}`,
       `poll interval ms: ${pollIntervalMs}`,
       `max jobs/community: ${maxJobsPerCommunity}`,
       `max communities/tick: ${maxCommunitiesPerTick}`,

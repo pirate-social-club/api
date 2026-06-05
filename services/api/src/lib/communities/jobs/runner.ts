@@ -7,6 +7,7 @@ import {
   getCommunityJobById,
   markCommunityJobRunning,
   markCommunityJobSucceeded,
+  resetStaleRunningCommunityJobs,
   type CommunityJobType,
   type CommunityJobRow,
 } from "./store"
@@ -20,6 +21,8 @@ import { recordCommunityJobFailure } from "./runner-failure"
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms))
 }
+
+const STALE_RUNNING_JOB_TIMEOUT_MS = 15 * 60 * 1000
 
 type CommunityJobCommunityProcessingSummary = {
   community_id: string
@@ -142,6 +145,18 @@ export async function processCommunityJobsForCommunity(input: {
 }): Promise<CommunityJobCommunityProcessingSummary> {
   const maxJobs = Math.max(1, Math.trunc(input.maxJobs ?? 25))
   const jobs: CommunityJobRow[] = []
+  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  try {
+    const now = nowIso()
+    await resetStaleRunningCommunityJobs({
+      client: db.client,
+      communityId: input.communityId,
+      now,
+      staleBefore: new Date(Date.parse(now) - STALE_RUNNING_JOB_TIMEOUT_MS).toISOString(),
+    })
+  } finally {
+    db.close()
+  }
 
   while (jobs.length < maxJobs) {
     const processed = await processNextCommunityJob({

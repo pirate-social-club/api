@@ -52,7 +52,7 @@ export async function resolveSongPostBundle(input: {
   }
   if (
     input.accessMode === "locked"
-    && (bundle.preview_status !== "completed" || !bundle.preview_audio?.storage_ref || !bundle.preview_audio.mime_type)
+    && bundle.preview_status === "failed"
   ) {
     throw badRequestError("Song preview is not ready for locked publishing")
   }

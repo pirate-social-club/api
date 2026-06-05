@@ -95,7 +95,7 @@ async function cropAudioPreviewWithBunFfmpeg(input: {
 }): Promise<Uint8Array> {
   const runtime = getBunRuntime()
   if (!runtime) {
-    throw providerUnavailable("Song preview cropping requires the Bun community job worker")
+    throw providerUnavailable("Song preview cropping requires a Node-only ffmpeg worker")
   }
 
   let process: BunSubprocess

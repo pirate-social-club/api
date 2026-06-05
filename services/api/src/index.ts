@@ -45,13 +45,14 @@ import { flushAnalyticsOutbox, isAnalyticsEnabled, syncCommunityHealthCounts } f
 import { getCommunityRepository } from "./lib/communities/db-community-repository"
 import { reconcileStaleCommunityPurchaseSettlements } from "./lib/communities/commerce/settlement-service"
 import { processAvailableCommunityJobs } from "./lib/communities/jobs/runner"
+import { reconcileRequestedLockedAssetDeliveryJobs } from "./lib/communities/jobs/locked-asset-delivery-handler"
 import { reconcileCommunityMembershipAndFollowProjections } from "./lib/communities/membership/projection-service"
 import { getCommunityProvisionOperatorVersion } from "./lib/communities/provisioning/operator-client"
 import { HttpError, errorResponse } from "./lib/errors"
 import { refreshScheduledMaterializedPublicHomeFeeds } from "./lib/feed/materialized-public-feed"
 import { reconcileRoyaltyClaimEvents } from "./lib/royalties/royalty-claim-history"
 import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/runtime-deps"
-import { makeSentryOptions, captureScheduledError } from "./lib/sentry"
+import { makeSentryOptions, captureScheduledError, captureScheduledWarning } from "./lib/sentry"
 import { LiveRoomRuntimeDO } from "./lib/communities/live-rooms/runtime"
 import type { Env } from "./env"
 
@@ -473,13 +474,35 @@ async function syncScheduledCommunityHealthCounts(env: Env): Promise<void> {
 
 async function processScheduledCommunityJobs(env: Env): Promise<void> {
   const communityRepository = getCommunityRepository(env)
+  const canProcessSongPreviewJobs = Boolean(
+    env.SONG_PREVIEW_SHARED_SECRET?.trim()
+      && (env.SONG_PREVIEW_SERVICE_URL?.trim() || env.SONG_PREVIEW_SERVICE),
+  )
   try {
+    const reconciledLockedDelivery = await reconcileRequestedLockedAssetDeliveryJobs({
+      env,
+      communityRepository,
+      maxCommunities: 100,
+      maxAssetsPerCommunity: 25,
+    })
+    if (reconciledLockedDelivery.enqueued_jobs > 0) {
+      console.info("[community-jobs] reconciled locked delivery jobs", JSON.stringify(reconciledLockedDelivery))
+      captureScheduledWarning(
+        env,
+        "Locked delivery reconciliation enqueued orphaned jobs",
+        "community_jobs_locked_delivery_reconciliation",
+        reconciledLockedDelivery,
+        {
+          urgency: reconciledLockedDelivery.enqueued_jobs > 5 ? "high" : "low",
+        },
+      )
+    }
     const summary = await processAvailableCommunityJobs({
       env,
       communityRepository,
       maxCommunities: 100,
       maxJobsPerCommunity: 25,
-      skipJobTypes: ["song_preview_generate"],
+      skipJobTypes: canProcessSongPreviewJobs ? [] : ["song_preview_generate"],
     })
     if (summary.processed_jobs > 0) {
       console.info("[community-jobs] scheduled processed", JSON.stringify({

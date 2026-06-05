@@ -19,6 +19,7 @@ import {
 } from "./content-materialization-handlers"
 import { runEmbedHydrate } from "./embed-hydration-handler"
 import { runLiveRoomViewerSessionsPrune } from "./live-room-maintenance-handler"
+import { runLockedAssetDeliveryPrepare } from "./locked-asset-delivery-handler"
 import { runSongPreviewGenerate } from "./song-preview-handler"
 import type { CommunityJobHandlerInput } from "./handler-types"
 
@@ -49,6 +50,8 @@ export async function runCommunityJob(input: CommunityJobHandlerInput): Promise<
       return runCommunityTextTranslationMaterialize(input)
     case "song_preview_generate":
       return runSongPreviewGenerate(input)
+    case "locked_asset_delivery_prepare":
+      return runLockedAssetDeliveryPrepare(input)
     case "live_room_viewer_sessions_prune":
       return runLiveRoomViewerSessionsPrune(input)
     default:
