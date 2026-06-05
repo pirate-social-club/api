@@ -1273,6 +1273,7 @@ export type CreateSongArtifactUploadRequest = {
   filename?: string | null;
   size_bytes?: number | null;
   content_hash?: string | null;
+  upload_mode?: "proxy" | "direct_multipart";
 };
 
 export type CreateSongArtifactBundleRequest = {
@@ -1469,7 +1470,7 @@ export type SongArtifactUpload = {
   community: string;
   uploader_user: string;
   artifact_kind: "primary_audio" | "cover_art" | "preview_audio" | "preview_video" | "canvas_video" | "instrumental_audio" | "vocal_audio" | "primary_video";
-  status: "pending_upload" | "uploaded" | "failed";
+  status: "pending_upload" | "uploaded" | "failed" | "cancelled";
   storage_ref: string;
   mime_type: string;
   filename?: string | null;
@@ -1482,6 +1483,18 @@ export type SongArtifactUpload = {
   gateway_url?: string | null;
   ipfs_cid?: string | null;
   upload_url: string;
+  upload_session?: ({
+    id: string;
+    status: "created" | "parts_uploading" | "completing" | "head_verifying" | "uploaded" | "aborting" | "aborted";
+    object_key: string;
+    upload_id: string;
+    part_size_bytes: number;
+    total_parts: number;
+    expires_at: string;
+    sign_part_url: string;
+    complete: string;
+    abort: string;
+  }) | null;
   created: number;
 };
 

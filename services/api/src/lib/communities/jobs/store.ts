@@ -18,6 +18,7 @@ export type CommunityJobType =
   | "link_summary_translation_materialize"
   | "song_preview_generate"
   | "locked_asset_delivery_prepare"
+  | "song_artifact_session_reaper"
   | "live_room_viewer_sessions_prune"
 export type CommunityJobStatus = "queued" | "running" | "succeeded" | "failed"
 

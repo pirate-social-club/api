@@ -1,3 +1,4 @@
+import { badRequestError } from "../errors"
 import { makeId } from "../helpers"
 import { decodePublicSongArtifactBundleId } from "../public-ids"
 import {
@@ -8,6 +9,14 @@ import { buildPublicSongArtifactContentUrl } from "../song-artifacts/song-artifa
 import type { Env } from "../../env"
 import type { CreatePostRequest } from "../../types"
 import type { PostWriteRequest } from "./post-create-validation"
+
+export const LOCKED_VIDEO_MAX_BYTES = 50 * 1024 * 1024
+
+function assertLockedVideoSize(sizeBytes: number | null | undefined): void {
+  if (sizeBytes != null && sizeBytes > LOCKED_VIDEO_MAX_BYTES) {
+    throw badRequestError("Locked videos are currently limited to 50MB while chunked encryption is being built")
+  }
+}
 
 export type PreparedSongPostAsset = {
   writeBody: PostWriteRequest
@@ -81,6 +90,9 @@ export async function prepareVideoPostAsset(input: {
     communityId: input.communityId,
     mediaRefs: input.body.media_refs,
   })
+  if (accessMode === "locked") {
+    assertLockedVideoSize(resolvedVideo.upload.size_bytes)
+  }
   const publicVideoMediaRefs = resolvedVideo.mediaRefs.map((mediaRef) => ({
     ...mediaRef,
     storage_ref: buildPublicSongArtifactContentUrl(

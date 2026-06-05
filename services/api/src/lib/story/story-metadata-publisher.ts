@@ -1,6 +1,7 @@
 import type { Env } from "../../env"
 import { sha256Hex, toArrayBuffer } from "../crypto"
 import { providerUnavailable } from "../errors"
+import { readFilebaseCid } from "../storage/filebase-cid"
 import { resolveFilebaseConfig } from "../storage/filebase-config"
 import { buildS3SignedRequest } from "../storage/s3-signing"
 import { publishJsonToSwarm } from "../swarm/swarm-publisher"
@@ -36,14 +37,6 @@ function buildIpfsReferenceUri(cid: string): string {
   return `ipfs://${cid}`
 }
 
-function requireFilebaseCid(response: Response): string {
-  const cid = response.headers.get("x-amz-meta-cid")?.trim()
-  if (!cid) {
-    throw providerUnavailable("Filebase Story metadata upload did not return an IPFS CID")
-  }
-  return cid
-}
-
 async function publishJsonToFilebase(input: {
   env: Env
   path: string
@@ -69,7 +62,10 @@ async function publishJsonToFilebase(input: {
   }
 
   return {
-    uri: buildIpfsReferenceUri(requireFilebaseCid(response)),
+    uri: buildIpfsReferenceUri(await readFilebaseCid({
+      response,
+      errorMessage: "Filebase Story metadata upload did not return an IPFS CID",
+    })),
   }
 }
 

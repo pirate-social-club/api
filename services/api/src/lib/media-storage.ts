@@ -1,6 +1,7 @@
 import { badRequestError, notFoundError, providerUnavailable } from "./errors"
 import { makeId } from "./helpers"
 import { sha256Hex } from "./crypto"
+import { readFilebaseCid } from "./storage/filebase-cid"
 import { resolveFilebaseConfig } from "./storage/filebase-config"
 import { buildS3SignedRequest, EMPTY_SHA256_HEX } from "./storage/s3-signing"
 import type { Env } from "../env"
@@ -121,14 +122,6 @@ function buildGatewayMediaRef(env: Env, cid: string): string {
   return `${normalizedGateway}/${encodeURIComponent(cid)}`
 }
 
-function requireFilebaseCid(response: Response): string {
-  const cid = response.headers.get("x-amz-meta-cid")?.trim()
-  if (!cid) {
-    throw providerUnavailable("Filebase upload did not return an IPFS CID")
-  }
-  return cid
-}
-
 export async function uploadMedia<TKind extends string>(input: UploadMediaInput<TKind>): Promise<{
   kind: TKind
   media_ref: string
@@ -162,7 +155,7 @@ export async function uploadMedia<TKind extends string>(input: UploadMediaInput<
       `Filebase upload failed with status ${response.status}${responseText ? `: ${responseText}` : ""}`,
     )
   }
-  const ipfsCid = requireFilebaseCid(response)
+  const ipfsCid = await readFilebaseCid({ response })
 
   return {
     kind: input.kind,

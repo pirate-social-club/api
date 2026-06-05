@@ -44,6 +44,7 @@ import {
 import { flushAnalyticsOutbox, isAnalyticsEnabled, syncCommunityHealthCounts } from "./lib/analytics"
 import { getCommunityRepository } from "./lib/communities/db-community-repository"
 import { reconcileStaleCommunityPurchaseSettlements } from "./lib/communities/commerce/settlement-service"
+import { reconcileStaleSongArtifactUploadSessionJobs } from "./lib/communities/jobs/song-artifact-session-reaper-handler"
 import { processAvailableCommunityJobs } from "./lib/communities/jobs/runner"
 import { reconcileRequestedLockedAssetDeliveryJobs } from "./lib/communities/jobs/locked-asset-delivery-handler"
 import { reconcileCommunityMembershipAndFollowProjections } from "./lib/communities/membership/projection-service"
@@ -494,6 +495,23 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
         reconciledLockedDelivery,
         {
           urgency: reconciledLockedDelivery.enqueued_jobs > 5 ? "high" : "low",
+        },
+      )
+    }
+    const reconciledUploadSessions = await reconcileStaleSongArtifactUploadSessionJobs({
+      env,
+      communityRepository,
+      maxCommunities: 100,
+    })
+    if (reconciledUploadSessions.enqueued_jobs > 0) {
+      console.info("[community-jobs] reconciled stale song artifact upload sessions", JSON.stringify(reconciledUploadSessions))
+      captureScheduledWarning(
+        env,
+        "Song artifact upload session reaper jobs enqueued",
+        "community_jobs_song_artifact_session_reaper",
+        reconciledUploadSessions,
+        {
+          urgency: reconciledUploadSessions.enqueued_jobs > 5 ? "high" : "low",
         },
       )
     }
