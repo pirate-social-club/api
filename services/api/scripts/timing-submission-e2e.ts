@@ -1,8 +1,8 @@
 // @ts-nocheck
 
 import { existsSync } from "node:fs"
-import { readFile, writeFile } from "node:fs/promises"
-import { basename, extname, join } from "node:path"
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises"
+import { basename, dirname, extname, join } from "node:path"
 import { SignJWT } from "jose"
 import { Wallet } from "ethers"
 import { solveChallenge, type Challenge, type Payload } from "altcha-lib"
@@ -32,6 +32,13 @@ type TimingEvent = {
   ts_iso: string
   meta?: Record<string, unknown>
   error?: string
+}
+type ApiVersionPayload = {
+  build_timestamp?: string | null
+  environment?: string | null
+  git_ref?: string | null
+  git_sha?: string | null
+  service?: string | null
 }
 
 const env = {
@@ -73,6 +80,8 @@ Common options:
   PIRATE_TIMING_REQUEST_TIMEOUT_MS Per-request timeout. Defaults to 300000.
   --poster-file                    Optional real poster image for video runs.
   --output                         Optional JSONL output path.
+  --expect-git-sha,
+  PIRATE_TIMING_EXPECT_GIT_SHA     Fail if /__version does not match before/after each run.
   --access-token                   Same as PIRATE_TIMING_ACCESS_TOKEN.
   --skip-verification              Skip remote verification session completion.
   --skip-post-altcha               Do not solve/send post_create ALTCHA proof.
@@ -250,6 +259,80 @@ async function requestJson<T>(input: {
     throw error
   } finally {
     clearTimeout(timeout)
+  }
+}
+
+async function readApiVersion(apiBaseUrl: string): Promise<ApiVersionPayload> {
+  return requestJson<ApiVersionPayload>({
+    apiBaseUrl,
+    path: "/__version",
+  })
+}
+
+async function recordTimingEvent(input: {
+  event: TimingEvent
+  events: TimingEvent[]
+  outputPath: string | null
+}): Promise<void> {
+  input.events.push(input.event)
+  console.log(JSON.stringify(input.event))
+  if (input.outputPath) {
+    await appendFile(input.outputPath, `${JSON.stringify(input.event)}\n`, "utf8")
+  }
+}
+
+async function assertApiVersion(input: {
+  apiBaseUrl: string
+  events: TimingEvent[]
+  expectedGitSha: string
+  kind: TimingKind
+  outputPath: string | null
+  outputTarget: string
+  runId: string
+  runIndex: number
+  stage: string
+  summaryExcluded: boolean
+}): Promise<void> {
+  const startedAt = performance.now()
+  try {
+    const version = await readApiVersion(input.apiBaseUrl)
+    if (version.git_sha !== input.expectedGitSha) {
+      throw new Error(`expected API git_sha ${input.expectedGitSha}, got ${version.git_sha ?? "null"}`)
+    }
+    await recordTimingEvent({
+      events: input.events,
+      outputPath: input.outputPath,
+      event: {
+        run_id: input.runId,
+        run_index: input.runIndex,
+        summary_excluded: input.summaryExcluded || undefined,
+        target: input.outputTarget,
+        kind: input.kind,
+        stage: input.stage,
+        status: "ok",
+        ms: performance.now() - startedAt,
+        ts_iso: new Date().toISOString(),
+        meta: version,
+      },
+    })
+  } catch (error) {
+    await recordTimingEvent({
+      events: input.events,
+      outputPath: input.outputPath,
+      event: {
+        run_id: input.runId,
+        run_index: input.runIndex,
+        summary_excluded: input.summaryExcluded || undefined,
+        target: input.outputTarget,
+        kind: input.kind,
+        stage: input.stage,
+        status: "error",
+        ms: performance.now() - startedAt,
+        ts_iso: new Date().toISOString(),
+        error: error instanceof Error ? error.message : String(error),
+      },
+    })
+    throw error
   }
 }
 
@@ -648,6 +731,7 @@ async function runOne(input: {
   events: TimingEvent[]
   kind: TimingKind
   outputTarget: string
+  recordEvent: (event: TimingEvent) => Promise<void>
   pollIntervalMs: number
   readyTimeoutMs: number
   runIndex: number
@@ -680,8 +764,7 @@ async function runOne(input: {
         ts_iso: new Date().toISOString(),
         meta,
       }
-      input.events.push(event)
-      console.log(JSON.stringify(event))
+      await input.recordEvent(event)
       return result
     } catch (error) {
       const event = {
@@ -697,8 +780,7 @@ async function runOne(input: {
         meta,
         error: error instanceof Error ? error.message : String(error),
       }
-      input.events.push(event)
-      console.log(JSON.stringify(event))
+      await input.recordEvent(event)
       throw error
     }
   }
@@ -981,6 +1063,7 @@ async function main(): Promise<void> {
   const pollIntervalMs = Math.max(250, Number(readEnv("PIRATE_TIMING_POLL_INTERVAL_MS", "2000")))
   const readyTimeoutMs = Math.max(1000, Number(readEnv("PIRATE_TIMING_READY_TIMEOUT_MS", "180000")))
   const outputPath = readFlag("--output") || readEnv("PIRATE_TIMING_OUTPUT")
+  const expectedGitSha = readFlag("--expect-git-sha") || readEnv("PIRATE_TIMING_EXPECT_GIT_SHA")
   if (hasFlag("--skip-owner-access") && !isLocalApiUrl(apiBaseUrl) && !hasFlag("--allow-remote-skip-owner-access")) {
     throw new Error("--skip-owner-access is only allowed for localhost runs unless --allow-remote-skip-owner-access is set")
   }
@@ -989,6 +1072,15 @@ async function main(): Promise<void> {
   const posterFile = posterPath ? await readFixture(posterPath, "image/jpeg") : null
   const target = isLocalApiUrl(apiBaseUrl) ? "local" : "remote"
   const runPrefix = `timing_${kind}_${Date.now()}`
+  if (outputPath) {
+    await mkdir(dirname(outputPath), { recursive: true })
+    await writeFile(outputPath, "", "utf8")
+  }
+  const recordEvent = (event: TimingEvent) => recordTimingEvent({
+    event,
+    events,
+    outputPath,
+  })
 
   console.log("[timing] config", {
     apiBaseUrl,
@@ -1010,12 +1102,27 @@ async function main(): Promise<void> {
       : null,
     pollIntervalMs,
     readyTimeoutMs,
+    expectedGitSha: expectedGitSha || null,
   })
 
   for (let index = 0; index < runs + warmupRuns; index += 1) {
     const runId = `${runPrefix}_${index + 1}`
     const summaryExcluded = index < warmupRuns
     try {
+      if (expectedGitSha) {
+        await assertApiVersion({
+          apiBaseUrl,
+          events,
+          expectedGitSha,
+          kind,
+          outputPath,
+          outputTarget: target,
+          runId,
+          runIndex: index + 1,
+          stage: "api_version_before",
+          summaryExcluded,
+        })
+      }
       await runOne({
         apiBaseUrl,
         communityId,
@@ -1025,22 +1132,39 @@ async function main(): Promise<void> {
         outputTarget: target,
         pollIntervalMs,
         posterFile,
+        recordEvent,
         readyTimeoutMs,
         runId,
         runIndex: index + 1,
         summaryExcluded,
         skipVerification: hasFlag("--skip-verification"),
       })
+      if (expectedGitSha) {
+        await assertApiVersion({
+          apiBaseUrl,
+          events,
+          expectedGitSha,
+          kind,
+          outputPath,
+          outputTarget: target,
+          runId,
+          runIndex: index + 1,
+          stage: "api_version_after",
+          summaryExcluded,
+        })
+      }
     } catch (error) {
       console.error("[timing] run failed", {
         run_id: runId,
         error: error instanceof Error ? error.message : String(error),
       })
+      if (expectedGitSha) {
+        throw error
+      }
     }
   }
 
   if (outputPath) {
-    await writeFile(outputPath, `${events.map((event) => JSON.stringify(event)).join("\n")}\n`, "utf8")
     console.log(`[timing] wrote ${outputPath}`)
   }
   summarize(events)
