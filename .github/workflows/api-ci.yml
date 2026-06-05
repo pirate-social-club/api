@@ -11,6 +11,7 @@ on:
       - "services/community-provision-operator/**"
       - "services/contracts/**"
       - "services/shared/**"
+      - "services/song-preview-container/**"
       - "services/zkpassport-verifier-container/**"
   push:
     paths:
@@ -22,6 +23,7 @@ on:
       - "services/community-provision-operator/**"
       - "services/contracts/**"
       - "services/shared/**"
+      - "services/song-preview-container/**"
       - "services/zkpassport-verifier-container/**"
   workflow_dispatch:
 
@@ -136,6 +138,22 @@ jobs:
 
       - name: Test ZKPassport verifier container
         working-directory: services/zkpassport-verifier-container
+        run: bun run test
+
+      - name: Install song preview container dependencies
+        working-directory: services/song-preview-container
+        run: bun install --frozen-lockfile
+
+      - name: Audit song preview container dependencies
+        working-directory: services/song-preview-container
+        run: bun audit --audit-level=high
+
+      - name: Typecheck song preview container
+        working-directory: services/song-preview-container
+        run: bun run check
+
+      - name: Test song preview container
+        working-directory: services/song-preview-container
         run: bun run test
 
       - name: Install API dependencies
