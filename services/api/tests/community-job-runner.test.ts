@@ -261,6 +261,75 @@ describe("community-job-runner", () => {
     }
   })
 
+  test("includes newly-created communities in the scheduled polling window", async () => {
+    const rootDir = await createCommunityJobRunnerRoot("pirate-community-job-newest-")
+
+    const databasePath = join(rootDir, "newest.db")
+    const communityId = "cmt_job_newest"
+    const env: Env = {
+      LOCAL_COMMUNITY_DB_ROOT: rootDir,
+    }
+    const baseRepo = buildCommunityRepository(databasePath, communityId)
+    const { postId } = await seedCommunityState({
+      env,
+      repo: baseRepo,
+      communityId,
+      memberUserIds: ["usr_owner"],
+    })
+
+    const db = await openCommunityDb(env, baseRepo, communityId)
+    try {
+      await db.client.execute("DELETE FROM community_jobs")
+      await enqueueCommunityJob({
+        client: db.client,
+        communityId,
+        jobType: "post_projection_sync",
+        subjectType: "post",
+        subjectId: postId,
+        payloadJson: JSON.stringify({ post_id: postId }),
+        createdAt: "2026-06-05T00:00:00.000Z",
+      })
+    } finally {
+      db.close()
+    }
+
+    const newestCommunity = await baseRepo.getCommunityById(communityId)
+    expect(newestCommunity).toBeTruthy()
+    const oldCommunities: CommunityRow[] = Array.from({ length: 100 }, (_, index) => {
+      const createdAt = new Date(Date.UTC(2026, 0, 1, 0, index, 0)).toISOString()
+      return {
+        ...newestCommunity!,
+        community_id: `cmt_old_${String(index).padStart(3, "0")}`,
+        created_at: createdAt,
+        updated_at: createdAt,
+      }
+    })
+    const repo: TestCommunityRepository = {
+      ...baseRepo,
+      async listActiveCommunities() {
+        return [
+          ...oldCommunities,
+          {
+            ...newestCommunity!,
+            created_at: "2026-06-05T00:00:00.000Z",
+            updated_at: "2026-06-05T00:00:00.000Z",
+          },
+        ]
+      },
+    }
+
+    const summary = await processAvailableCommunityJobs({
+      env,
+      communityRepository: repo,
+      maxCommunities: 1,
+      maxJobsPerCommunity: 1,
+    })
+
+    expect(summary.processed_jobs).toBe(1)
+    expect(summary.communities.map((community) => community.community_id)).toEqual([communityId])
+    expect(repo.postProjections.get(postId)?.source_post_id).toBe(postId)
+  })
+
   test("processes live-room viewer session prune jobs", async () => {
     const rootDir = await createCommunityJobRunnerRoot("pirate-community-live-room-prune-")
 

@@ -67,7 +67,7 @@ Usage:
 
 Required:
   --community-id,
-  PIRATE_TIMING_COMMUNITY_ID       Community id to publish into. If omitted, creates a temporary open timing community per run.
+  PIRATE_TIMING_COMMUNITY_ID       Community id to publish into. If omitted, creates a temporary timing community per run.
   --file, PIRATE_TIMING_FILE       Real audio/video file to upload.
 
 Common options:
@@ -78,6 +78,8 @@ Common options:
   PIRATE_TIMING_RUNS               Number of measured runs. Defaults to 1; use 20 for real staging measurements.
   PIRATE_TIMING_WARMUP_RUNS        Runs to execute and exclude from summary. Defaults to 0.
   PIRATE_TIMING_REQUEST_TIMEOUT_MS Per-request timeout. Defaults to 300000.
+  PIRATE_TIMING_REUSE_CREATED_COMMUNITY
+                                      Create one temporary community and reuse its creator session for all runs.
   --poster-file                    Optional real poster image for video runs.
   --output                         Optional JSONL output path.
   --expect-git-sha,
@@ -508,7 +510,7 @@ async function createTimingCommunity(input: {
       display_name: `Timing E2E ${input.runId}`,
       description: "Temporary staging timing community for real-file submission measurements.",
       governance_mode: "centralized",
-      membership_mode: "open",
+      membership_mode: "request",
       default_age_gate_policy: "none",
       allow_anonymous_identity: false,
       handle_policy: {
@@ -759,6 +761,8 @@ async function runOne(input: {
   skipVerification: boolean
   file: { bytes: Uint8Array; filename: string; mimeType: string }
   posterFile?: { bytes: Uint8Array; filename: string; mimeType: string } | null
+  sharedSession?: Session | null
+  usingSharedCreatedCommunity: boolean
 }): Promise<void> {
   const locked = input.kind.endsWith("-locked")
   const song = input.kind.startsWith("song-")
@@ -804,11 +808,29 @@ async function runOne(input: {
     }
   }
 
-  session = await measure("auth", () => createSession({
-    accessToken: readFlag("--access-token") || readEnv("PIRATE_TIMING_ACCESS_TOKEN"),
-    apiBaseUrl: input.apiBaseUrl,
-    subject: `timing-${input.kind}-${Date.now()}-${input.runIndex}`,
-  }))
+  if (input.sharedSession) {
+    session = input.sharedSession
+    const sharedAuthEvent = {
+      run_id: input.runId,
+      run_index: input.runIndex,
+      summary_excluded: input.summaryExcluded || undefined,
+      target: input.outputTarget,
+      kind: input.kind,
+      stage: "shared_auth_context",
+      status: "ok" as const,
+      ms: 0,
+      ts_iso: new Date().toISOString(),
+      meta: { user_id: session.userId },
+    }
+    input.events.push(sharedAuthEvent)
+    console.log(JSON.stringify(sharedAuthEvent))
+  } else {
+    session = await measure("auth", () => createSession({
+      accessToken: readFlag("--access-token") || readEnv("PIRATE_TIMING_ACCESS_TOKEN"),
+      apiBaseUrl: input.apiBaseUrl,
+      subject: `timing-${input.kind}-${Date.now()}-${input.runIndex}`,
+    }))
+  }
 
   if (input.communityId) {
     if (isLocalApiUrl(input.apiBaseUrl) && !hasFlag("--no-local-membership-setup")) {
@@ -823,7 +845,11 @@ async function runOne(input: {
           session: session!,
         })
       })
-    } else if (!isLocalApiUrl(input.apiBaseUrl) && !hasFlag("--no-remote-membership-join")) {
+    } else if (
+      !input.usingSharedCreatedCommunity
+      && !isLocalApiUrl(input.apiBaseUrl)
+      && !hasFlag("--no-remote-membership-join")
+    ) {
       await measure("remote_membership_join", () => ensureRemoteMembership({
         apiBaseUrl: input.apiBaseUrl,
         communityId: input.communityId!,
@@ -832,7 +858,7 @@ async function runOne(input: {
     }
   }
 
-  if (!input.skipVerification && !isLocalApiUrl(input.apiBaseUrl)) {
+  if (!input.sharedSession && !input.skipVerification && !isLocalApiUrl(input.apiBaseUrl)) {
     await measure("verification", () => completeUniqueHuman({
       apiBaseUrl: input.apiBaseUrl,
       session: session!,
@@ -1105,6 +1131,11 @@ async function main(): Promise<void> {
   const readyTimeoutMs = Math.max(1000, Number(readEnv("PIRATE_TIMING_READY_TIMEOUT_MS", "180000")))
   const outputPath = readFlag("--output") || readEnv("PIRATE_TIMING_OUTPUT")
   const expectedGitSha = readFlag("--expect-git-sha") || readEnv("PIRATE_TIMING_EXPECT_GIT_SHA")
+  const reuseCreatedCommunity = readEnv("PIRATE_TIMING_REUSE_CREATED_COMMUNITY", "false") === "true"
+    || hasFlag("--reuse-created-community")
+  if (reuseCreatedCommunity && communityId) {
+    throw new Error("PIRATE_TIMING_REUSE_CREATED_COMMUNITY cannot be combined with PIRATE_TIMING_COMMUNITY_ID")
+  }
   if (hasFlag("--skip-owner-access") && !isLocalApiUrl(apiBaseUrl) && !hasFlag("--allow-remote-skip-owner-access")) {
     throw new Error("--skip-owner-access is only allowed for localhost runs unless --allow-remote-skip-owner-access is set")
   }
@@ -1122,10 +1153,77 @@ async function main(): Promise<void> {
     events,
     outputPath,
   })
+  let sharedSession: Session | null = null
+  let sharedCommunityId: string | null = null
+  if (reuseCreatedCommunity) {
+    const setupRunId = `${runPrefix}_setup`
+    async function measureSetup<T>(stage: string, fn: () => Promise<T>, meta?: Record<string, unknown>): Promise<T> {
+      const startedAt = performance.now()
+      try {
+        const result = await fn()
+        await recordEvent({
+          run_id: setupRunId,
+          run_index: 0,
+          summary_excluded: true,
+          target,
+          kind,
+          stage,
+          status: "ok",
+          ms: performance.now() - startedAt,
+          ts_iso: new Date().toISOString(),
+          meta,
+        })
+        return result
+      } catch (error) {
+        await recordEvent({
+          run_id: setupRunId,
+          run_index: 0,
+          summary_excluded: true,
+          target,
+          kind,
+          stage,
+          status: "error",
+          ms: performance.now() - startedAt,
+          ts_iso: new Date().toISOString(),
+          meta,
+          error: error instanceof Error ? error.message : String(error),
+        })
+        throw error
+      }
+    }
+    sharedSession = await measureSetup("shared_auth", () => createSession({
+      accessToken: readFlag("--access-token") || readEnv("PIRATE_TIMING_ACCESS_TOKEN"),
+      apiBaseUrl,
+      subject: `timing-${kind}-${Date.now()}-shared`,
+    }))
+    if (!hasFlag("--skip-verification") && !isLocalApiUrl(apiBaseUrl)) {
+      await measureSetup("shared_verification", () => completeUniqueHuman({
+        apiBaseUrl,
+        session: sharedSession!,
+      }))
+    }
+    sharedCommunityId = await measureSetup("shared_community_create", () => createTimingCommunity({
+      apiBaseUrl,
+      runId: setupRunId,
+      token: sharedSession!.accessToken,
+    }))
+    await recordEvent({
+      run_id: setupRunId,
+      run_index: 0,
+      summary_excluded: true,
+      target,
+      kind,
+      stage: "shared_community_context",
+      status: "ok",
+      ms: 0,
+      ts_iso: new Date().toISOString(),
+      meta: { community_id: publicCommunityId(sharedCommunityId) },
+    })
+  }
 
   console.log("[timing] config", {
     apiBaseUrl,
-    communityId,
+    communityId: sharedCommunityId ?? communityId,
     kind,
     runs,
     warmupRuns,
@@ -1166,7 +1264,7 @@ async function main(): Promise<void> {
       }
       await runOne({
         apiBaseUrl,
-        communityId,
+        communityId: sharedCommunityId ?? communityId,
         events,
         file,
         kind,
@@ -1179,6 +1277,8 @@ async function main(): Promise<void> {
         runIndex: index + 1,
         summaryExcluded,
         skipVerification: hasFlag("--skip-verification"),
+        sharedSession,
+        usingSharedCreatedCommunity: sharedCommunityId !== null,
       })
       if (expectedGitSha) {
         await assertApiVersion({
