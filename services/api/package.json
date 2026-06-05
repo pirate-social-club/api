@@ -29,6 +29,7 @@
     "check": "bun run generate:agent-tools && tsgo --noEmit",
     "lint": "biome check .",
     "test": "bun test",
+    "test:e2e:story-locked-derivative-video": "bun test tests/e2e/story-locked-derivative-video.e2e.test.ts",
     "test:unit": "bun test src tests/lib",
     "test:routes": "bun test --max-concurrency=1 tests/routes tests/community-membership-reconciliation.test.ts",
     "coverage": "bun test --coverage",

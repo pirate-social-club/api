@@ -1,0 +1,86 @@
+name: story-locked-derivative-video-e2e
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: "Pirate API base URL to test"
+        required: true
+        default: "https://api-staging.pirate.sc"
+      community_id:
+        description: "Community ID or handle to post into"
+        required: true
+      author_subject:
+        description: "JWT subject for the E2E author"
+        required: true
+        default: "android-staging-smoke-owner-20260517103926"
+      asset_ready_timeout_ms:
+        description: "Maximum wait for Story/locked assets to become ready"
+        required: true
+        default: "420000"
+  workflow_call:
+    inputs:
+      api_base_url:
+        type: string
+        required: false
+        default: "https://api-staging.pirate.sc"
+      community_id:
+        type: string
+        required: true
+      author_subject:
+        type: string
+        required: false
+        default: "android-staging-smoke-owner-20260517103926"
+      asset_ready_timeout_ms:
+        type: string
+        required: false
+        default: "420000"
+    secrets:
+      AUTH_UPSTREAM_JWT_SHARED_SECRET:
+        required: true
+      PIRATE_E2E_AUTHOR_PRIVATE_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: Story locked derivative video E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AUTH_UPSTREAM_JWT_AUDIENCE: pirate-api-staging
+      AUTH_UPSTREAM_JWT_ISSUER: pirate-staging-upstream
+      AUTH_UPSTREAM_JWT_SHARED_SECRET: ${{ secrets.AUTH_UPSTREAM_JWT_SHARED_SECRET }}
+      PIRATE_E2E_API_BASE_URL: ${{ inputs.api_base_url }}
+      PIRATE_E2E_ASSET_READY_TIMEOUT_MS: ${{ inputs.asset_ready_timeout_ms }}
+      PIRATE_E2E_AUTHOR_PRIVATE_KEY: ${{ secrets.PIRATE_E2E_AUTHOR_PRIVATE_KEY }}
+      PIRATE_E2E_AUTHOR_SUBJECT: ${{ inputs.author_subject }}
+      PIRATE_E2E_COMMUNITY_ID: ${{ inputs.community_id }}
+      PIRATE_E2E_STORY_LOCKED_DERIVATIVE_VIDEO: "1"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.21
+
+      - name: Install shared dependencies
+        working-directory: services/shared
+        run: bun install --frozen-lockfile
+
+      - name: Install contracts dependencies
+        working-directory: services/contracts
+        run: bun install --frozen-lockfile
+
+      - name: Install API dependencies
+        working-directory: services/api
+        run: bun install --frozen-lockfile
+
+      - name: Run Story locked derivative video E2E
+        working-directory: services/api
+        run: bun run test:e2e:story-locked-derivative-video
