@@ -32,7 +32,7 @@ import { enqueueCommunityJob } from "../communities/jobs/store"
 import { processCommunityJobById } from "../communities/jobs/runner"
 import type { CommunityJobRepository } from "../communities/jobs/runner-types"
 import { eligibilityFailed } from "../errors"
-import { isLocalEnvironment, nowIso } from "../helpers"
+import { nowIso } from "../helpers"
 import { withRequestControlPlaneClients } from "../runtime-deps"
 import type { DbExecutor } from "../db-helpers"
 import type { Env } from "../../env"
@@ -105,10 +105,6 @@ async function enqueueLockedAssetDeliveryJobIfRequested(input: {
     payloadJson: JSON.stringify({ post_id: input.post.post_id }),
     createdAt: input.createdAt,
   })
-
-  if (!isLocalEnvironment(input.env.ENVIRONMENT)) {
-    return
-  }
 
   input.waitUntil?.(withRequestControlPlaneClients(async () => {
     try {
