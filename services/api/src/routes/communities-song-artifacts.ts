@@ -5,6 +5,12 @@ import {
   uploadSongArtifactContent,
 } from "../lib/song-artifacts/song-artifact-upload-service"
 import {
+  abortMultipartSongArtifactUpload,
+  completeMultipartSongArtifactUpload,
+  createMultipartSongArtifactUpload,
+  mintSongArtifactPartSignedUrl,
+} from "../lib/song-artifacts/song-artifact-upload-session-service"
+import {
   createSongArtifactBundle,
   getSongArtifactBundleForCreator,
   listSongArtifactBundlesForCreator,
@@ -31,6 +37,12 @@ import {
   submitTraceRequestFields,
   withSubmitTraceTiming,
 } from "../lib/observability/submit-trace"
+
+type CompleteSongArtifactMultipartUploadRequest = {
+  upload_id: string
+  parts: Array<{ part_number: number; etag: string }>
+  content_hash?: string | null
+}
 
 const DEFAULT_SONG_ARTIFACT_LIST_LIMIT = 25
 const MAX_SONG_ARTIFACT_LIST_LIMIT = 50
@@ -60,15 +72,85 @@ export function registerCommunitySongArtifactRoutes(communities: Hono<Authentica
       mime_type: body.mime_type,
       size_bytes: body.size_bytes,
     }
-    const result = await withSubmitTraceTiming("[create-post-submit] song artifact upload intent", traceFields, () => createSongArtifactUpload({
+    const result = await withSubmitTraceTiming("[create-post-submit] song artifact upload intent", traceFields, () => (
+      body.upload_mode === "direct_multipart"
+        ? createMultipartSongArtifactUpload({
+          env: c.env,
+          userId: actor.userId,
+          communityId,
+          body,
+          communityRepository,
+          origin: getRequestOrigin(c),
+        })
+        : createSongArtifactUpload({
+          env: c.env,
+          userId: actor.userId,
+          communityId,
+          body,
+          communityRepository,
+          origin: getRequestOrigin(c),
+        })
+    ))
+    return c.json(result, 201)
+  })
+
+  communities.get("/:communityId/song-artifact-uploads/:songArtifactUploadId/sessions/:sessionId/parts/:partNumber/signed-url", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const partNumberParam = c.req.param("partNumber")
+    if (!/^[1-9]\d*$/.test(partNumberParam)) {
+      throw badRequestError("Invalid multipart part number")
+    }
+    const partNumber = Number.parseInt(partNumberParam, 10)
+    if (!Number.isSafeInteger(partNumber)) {
+      throw badRequestError("Invalid multipart part number")
+    }
+    const result = await mintSongArtifactPartSignedUrl({
       env: c.env,
       userId: actor.userId,
       communityId,
-      body,
+      songArtifactUploadId: decodePublicSongArtifactUploadId(c.req.param("songArtifactUploadId")),
+      sessionId: c.req.param("sessionId"),
+      partNumber,
       communityRepository,
-      origin: getRequestOrigin(c),
-    }))
-    return c.json(result, 201)
+    })
+    return c.json(result, 200)
+  })
+
+  communities.post("/:communityId/song-artifact-uploads/:songArtifactUploadId/sessions/:sessionId/complete", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const body = await requireJsonBody<CompleteSongArtifactMultipartUploadRequest>(c, "Invalid multipart completion payload")
+    if (!body.upload_id?.trim() || !Array.isArray(body.parts)) {
+      throw badRequestError("Invalid multipart completion payload")
+    }
+    const result = await completeMultipartSongArtifactUpload({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      songArtifactUploadId: decodePublicSongArtifactUploadId(c.req.param("songArtifactUploadId")),
+      sessionId: c.req.param("sessionId"),
+      uploadId: body.upload_id,
+      parts: body.parts.map((part) => ({
+        partNumber: part.part_number,
+        etag: part.etag,
+      })),
+      contentHash: body.content_hash,
+      communityRepository,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.post("/:communityId/song-artifact-uploads/:songArtifactUploadId/sessions/:sessionId/abort", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    await abortMultipartSongArtifactUpload({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      songArtifactUploadId: decodePublicSongArtifactUploadId(c.req.param("songArtifactUploadId")),
+      sessionId: c.req.param("sessionId"),
+      reason: "user_cancelled",
+      communityRepository,
+    })
+    return c.json({ object: "song_artifact_upload_session_abort", status: "aborted" }, 200)
   })
 
   communities.put("/:communityId/song-artifact-uploads/:songArtifactUploadId/content", async (c) => {

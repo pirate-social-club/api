@@ -191,6 +191,7 @@ export async function markSongArtifactUploadUploaded(input: {
           updated_at = ?12
       WHERE community_id = ?1
         AND song_artifact_upload_id = ?2
+        AND status = 'pending_upload'
     `,
     args: [
       input.communityId,
@@ -211,6 +212,35 @@ export async function markSongArtifactUploadUploaded(input: {
   const updated = await getSongArtifactUploadRow(input.client, input.communityId, input.songArtifactUploadId)
   if (!updated) {
     throw internalError("Song artifact upload is missing after update")
+  }
+  return serializeSongArtifactUpload(updated)
+}
+
+export async function markSongArtifactUploadCancelled(input: {
+  client: Client
+  communityId: string
+  songArtifactUploadId: string
+  updatedAt: string
+}): Promise<SongArtifactUpload> {
+  await input.client.execute({
+    sql: `
+      UPDATE song_artifact_uploads
+      SET status = 'cancelled',
+          updated_at = ?3
+      WHERE community_id = ?1
+        AND song_artifact_upload_id = ?2
+        AND status = 'pending_upload'
+    `,
+    args: [
+      input.communityId,
+      input.songArtifactUploadId,
+      input.updatedAt,
+    ],
+  })
+
+  const updated = await getSongArtifactUploadRow(input.client, input.communityId, input.songArtifactUploadId)
+  if (!updated) {
+    throw internalError("Song artifact upload is missing after cancellation")
   }
   return serializeSongArtifactUpload(updated)
 }

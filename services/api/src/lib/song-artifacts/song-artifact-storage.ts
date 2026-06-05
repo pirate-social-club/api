@@ -1,5 +1,6 @@
 import { badRequestError, notFoundError, providerUnavailable } from "../errors"
 import { sha256Hex, toArrayBuffer } from "../crypto"
+import { readFilebaseCid } from "../storage/filebase-cid"
 import { resolveFilebaseConfig } from "../storage/filebase-config"
 import { buildS3SignedRequest, EMPTY_SHA256_HEX } from "../storage/s3-signing"
 import type { Env } from "../../env"
@@ -119,6 +120,14 @@ export function assertSongArtifactSize(kind: SongArtifactKind, sizeBytes: number
   }
 }
 
+function normalizePayloadHashHex(payloadHashHex: string | null | undefined): string | null {
+  const normalized = payloadHashHex?.trim().replace(/^0x/i, "").toLowerCase() || null
+  if (normalized && !/^[a-f0-9]{64}$/.test(normalized)) {
+    throw badRequestError("payloadHashHex must be a SHA-256 hex digest")
+  }
+  return normalized
+}
+
 function extensionForMimeType(mimeType: string): string {
   switch (mimeType) {
     case "audio/aac":
@@ -183,7 +192,7 @@ export function buildPublicSongArtifactContentUrl(
   ).toString()
 }
 
-function buildSongArtifactObjectKey(
+export function buildSongArtifactObjectKey(
   communityId: string,
   songArtifactUploadId: string,
   kind: SongArtifactKind,
@@ -204,14 +213,6 @@ export function buildFilebaseObjectUrl(origin: string, path: string): string {
 export function buildIpfsGatewayUrl(env: Env, cid: string): string {
   const gateway = String(env.IPFS_GATEWAY_URL || "https://dweb.link/ipfs").trim()
   return `${gateway.replace(/\/+$/, "")}/${encodeURIComponent(cid)}`
-}
-
-function requireFilebaseCid(response: Response): string {
-  const cid = response.headers.get("x-amz-meta-cid")?.trim()
-  if (!cid) {
-    throw providerUnavailable("Filebase upload did not return an IPFS CID")
-  }
-  return cid
 }
 
 export async function uploadFilebaseObject(input: {
@@ -246,7 +247,7 @@ export async function uploadFilebaseObject(input: {
     )
   }
 
-  const ipfsCid = requireFilebaseCid(response)
+  const ipfsCid = await readFilebaseCid({ response })
   const config = resolveFilebaseConfig(input.env)
   return {
     storageBucket: config.bucket,
@@ -264,6 +265,7 @@ export async function uploadSongArtifactBytes(input: {
   artifactKind: SongArtifactKind
   mimeType: string
   bytes: Uint8Array
+  payloadHashHex?: string | null
   origin: string
 }): Promise<{
   storageRef: string
@@ -279,7 +281,7 @@ export async function uploadSongArtifactBytes(input: {
   assertSongArtifactMimeType(input.artifactKind, normalizedMimeType)
   assertSongArtifactSize(input.artifactKind, input.bytes.byteLength)
 
-  const payloadHash = await sha256Hex(input.bytes)
+  const payloadHash = normalizePayloadHashHex(input.payloadHashHex) || await sha256Hex(input.bytes)
   const objectKey = buildSongArtifactObjectKey(
     input.communityId,
     input.songArtifactUploadId,
@@ -304,7 +306,7 @@ export async function uploadSongArtifactBytes(input: {
     )
   }
 
-  const ipfsCid = requireFilebaseCid(response)
+  const ipfsCid = await readFilebaseCid({ response })
   const config = resolveFilebaseConfig(input.env)
   const storageRef = buildSongArtifactContentUrl(input.origin, input.communityId, input.songArtifactUploadId)
   return {
