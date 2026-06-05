@@ -317,8 +317,10 @@ async function normalizeWasmBinary(binary) {
 export async function initWasm(options = {}) {
     if (wasmInstance)
         return;
+    const wasmBinary = await normalizeWasmBinary(options.wasmBinary ?? bundledWasmBinary);
     const Module = await createCbMpcModule({
-        wasmBinary: await normalizeWasmBinary(options.wasmBinary ?? bundledWasmBinary),
+        locateFile: (path) => path,
+        wasmBinary,
     });
     const ptrSize = Module._wasm_ptr_size();
     if (ptrSize !== 4) {
