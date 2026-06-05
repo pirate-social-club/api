@@ -215,7 +215,7 @@ export async function markCommunityJobRunning(input: {
   jobId: string
   now: string
 }): Promise<CommunityJobRow | null> {
-  await input.client.execute({
+  const result = await input.client.execute({
     sql: `
       UPDATE community_jobs
       SET status = 'running',
@@ -227,6 +227,9 @@ export async function markCommunityJobRunning(input: {
     `,
     args: [input.jobId, input.now],
   })
+  if ((result.rowsAffected ?? 0) === 0) {
+    return null
+  }
 
   return getCommunityJobById({
     client: input.client,
