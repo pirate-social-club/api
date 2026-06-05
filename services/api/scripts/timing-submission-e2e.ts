@@ -67,7 +67,7 @@ Usage:
 
 Required:
   --community-id,
-  PIRATE_TIMING_COMMUNITY_ID       Community id to publish into. If omitted, creates a temporary timing community per run.
+  PIRATE_TIMING_COMMUNITY_ID       Community id to publish into. If omitted, creates a temporary open timing community per run.
   --file, PIRATE_TIMING_FILE       Real audio/video file to upload.
 
 Common options:
@@ -508,7 +508,7 @@ async function createTimingCommunity(input: {
       display_name: `Timing E2E ${input.runId}`,
       description: "Temporary staging timing community for real-file submission measurements.",
       governance_mode: "centralized",
-      membership_mode: "request",
+      membership_mode: "open",
       default_age_gate_policy: "none",
       allow_anonymous_identity: false,
       handle_policy: {
@@ -538,6 +538,25 @@ async function createTimingCommunity(input: {
     })
   }
   return communityId
+}
+
+async function ensureRemoteMembership(input: {
+  apiBaseUrl: string
+  communityId: string
+  session: Session
+}): Promise<void> {
+  const joined = await requestJson<{ status?: string | null }>({
+    apiBaseUrl: input.apiBaseUrl,
+    body: {
+      note: "Timing harness publisher",
+    },
+    method: "POST",
+    path: `/communities/${encodeURIComponent(input.communityId)}/join`,
+    token: input.session.accessToken,
+  })
+  if (joined.status !== "joined") {
+    throw new Error(`fixed remote timing community did not join immediately; status=${joined.status ?? "unknown"}`)
+  }
 }
 
 function ensureLocalMembership(input: {
@@ -791,18 +810,26 @@ async function runOne(input: {
     subject: `timing-${input.kind}-${Date.now()}-${input.runIndex}`,
   }))
 
-  if (input.communityId && isLocalApiUrl(input.apiBaseUrl) && !hasFlag("--no-local-membership-setup")) {
-    await measure("local_membership_setup", async () => {
-      ensureLocalMembership({
-        communityId: input.communityId,
-        session: session!,
+  if (input.communityId) {
+    if (isLocalApiUrl(input.apiBaseUrl) && !hasFlag("--no-local-membership-setup")) {
+      await measure("local_membership_setup", async () => {
+        ensureLocalMembership({
+          communityId: input.communityId!,
+          session: session!,
+        })
       })
-    })
-    await measure("local_verification_setup", async () => {
-      ensureLocalVerification({
-        session: session!,
+      await measure("local_verification_setup", async () => {
+        ensureLocalVerification({
+          session: session!,
+        })
       })
-    })
+    } else if (!isLocalApiUrl(input.apiBaseUrl) && !hasFlag("--no-remote-membership-join")) {
+      await measure("remote_membership_join", () => ensureRemoteMembership({
+        apiBaseUrl: input.apiBaseUrl,
+        communityId: input.communityId!,
+        session: session!,
+      }))
+    }
   }
 
   if (!input.skipVerification && !isLocalApiUrl(input.apiBaseUrl)) {
@@ -817,6 +844,20 @@ async function runOne(input: {
     runId: input.runId,
     token: session!.accessToken,
   }))
+  const communityContextEvent = {
+    run_id: input.runId,
+    run_index: input.runIndex,
+    summary_excluded: input.summaryExcluded || undefined,
+    target: input.outputTarget,
+    kind: input.kind,
+    stage: "community_context",
+    status: "ok" as const,
+    ms: 0,
+    ts_iso: new Date().toISOString(),
+    meta: { community_id: communityId.startsWith("com_") ? communityId : publicCommunityId(communityId) },
+  }
+  input.events.push(communityContextEvent)
+  console.log(JSON.stringify(communityContextEvent))
 
   if (!hasFlag("--skip-post-altcha")) {
     postAltcha = await measure("altcha_post_create", () => solveAltchaProof({
