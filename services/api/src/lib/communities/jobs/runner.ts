@@ -35,6 +35,44 @@ type CommunityJobProcessingSummary = {
   communities: CommunityJobCommunityProcessingSummary[]
 }
 
+function createdAtMs(community: { created_at?: string | null }): number {
+  const parsed = Date.parse(community.created_at ?? "")
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function selectScheduledCommunityJobPollIds(
+  communities: Array<{ community_id: string; created_at?: string | null }>,
+  maxCommunities: number,
+): string[] {
+  if (communities.length <= maxCommunities) {
+    return communities.map((community) => community.community_id)
+  }
+
+  const recentCount = Math.max(1, Math.min(maxCommunities, Math.ceil(maxCommunities / 4)))
+  const newest = communities
+    .slice()
+    .sort((left, right) => {
+      const createdDiff = createdAtMs(right) - createdAtMs(left)
+      return createdDiff !== 0 ? createdDiff : right.community_id.localeCompare(left.community_id)
+    })
+    .slice(0, recentCount)
+
+  const selected = new Set(newest.map((community) => community.community_id))
+  const remaining = communities.filter((community) => !selected.has(community.community_id))
+  const rotatingCount = maxCommunities - selected.size
+  if (rotatingCount <= 0 || remaining.length === 0) {
+    return Array.from(selected)
+  }
+
+  const minuteBucket = Math.floor(Date.now() / 60_000)
+  const start = remaining.length === 0 ? 0 : (minuteBucket * rotatingCount) % remaining.length
+  for (let index = 0; index < rotatingCount && index < remaining.length; index += 1) {
+    selected.add(remaining[(start + index) % remaining.length]!.community_id)
+  }
+
+  return Array.from(selected)
+}
+
 export async function processCommunityJobById(input: {
   env: Env
   communityId: string
@@ -186,10 +224,13 @@ export async function processAvailableCommunityJobs(input: {
   maxJobsPerCommunity?: number
   skipJobTypes?: CommunityJobType[] | null
 }): Promise<CommunityJobProcessingSummary> {
-  const communityIds = (input.communityIds?.length
-    ? input.communityIds
-    : (await input.communityRepository.listActiveCommunities()).map((community) => community.community_id))
-    .slice(0, Math.max(1, Math.trunc(input.maxCommunities ?? 100)))
+  const maxCommunities = Math.max(1, Math.trunc(input.maxCommunities ?? 100))
+  const communityIds = input.communityIds?.length
+    ? input.communityIds.slice(0, maxCommunities)
+    : selectScheduledCommunityJobPollIds(
+      await input.communityRepository.listActiveCommunities(),
+      maxCommunities,
+    )
 
   const communities: CommunityJobCommunityProcessingSummary[] = []
 
