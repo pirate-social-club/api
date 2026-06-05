@@ -1,4 +1,4 @@
-import { Interface, JsonRpcProvider, Wallet, getAddress } from "ethers"
+import { Interface, JsonRpcProvider, Transaction, Wallet, getAddress } from "ethers"
 import type { TransactionResponse } from "ethers"
 import type { ConfigResult } from "./config-result"
 
@@ -163,12 +163,61 @@ export async function sendContractTxWithPolicy(params: {
     value: params.value ?? 0n,
     gasPolicy: params.gasPolicy,
   })
-  return params.signer.sendTransaction({
-    to,
-    data,
-    value: params.value ?? 0n,
-    gasLimit: overrides.gasLimit,
-    maxFeePerGas: overrides.maxFeePerGas,
-    maxPriorityFeePerGas: overrides.maxPriorityFeePerGas,
-  })
+  try {
+    return await params.signer.sendTransaction({
+      to,
+      data,
+      value: params.value ?? 0n,
+      gasLimit: overrides.gasLimit,
+      maxFeePerGas: overrides.maxFeePerGas,
+      maxPriorityFeePerGas: overrides.maxPriorityFeePerGas,
+    })
+  } catch (error) {
+    const alreadyKnownTxHash = extractAlreadyKnownRawTransactionHash(error)
+    if (!alreadyKnownTxHash) {
+      throw error
+    }
+    return {
+      hash: alreadyKnownTxHash,
+      wait: async (confirms?: number, timeout?: number) => {
+        return await params.provider.waitForTransaction(alreadyKnownTxHash, confirms, timeout)
+      },
+    } as TransactionResponse
+  }
+}
+
+export function extractAlreadyKnownRawTransactionHash(error: unknown): string | null {
+  if (!isAlreadyKnownTransactionError(error)) {
+    return null
+  }
+  const rawTransaction = extractRawTransactionFromError(error)
+  if (!rawTransaction) {
+    return null
+  }
+  try {
+    return Transaction.from(rawTransaction).hash
+  } catch {
+    return null
+  }
+}
+
+function isAlreadyKnownTransactionError(error: unknown): boolean {
+  const directMessage = typeof error === "object" && error != null && "message" in error
+    ? String((error as { message?: unknown }).message ?? "")
+    : String(error ?? "")
+  const nestedMessage = typeof error === "object" && error != null && "error" in error
+    ? String((error as { error?: { message?: unknown } }).error?.message ?? "")
+    : ""
+  return /\balready known\b/i.test(directMessage) || /\balready known\b/i.test(nestedMessage)
+}
+
+function extractRawTransactionFromError(error: unknown): string | null {
+  if (typeof error !== "object" || error == null) {
+    return null
+  }
+  const payloadParams = (error as { payload?: { params?: unknown } }).payload?.params
+  if (Array.isArray(payloadParams) && typeof payloadParams[0] === "string" && payloadParams[0].startsWith("0x")) {
+    return payloadParams[0]
+  }
+  return null
 }
