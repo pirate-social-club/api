@@ -171,6 +171,7 @@ app.use(
       "X-Pirate-Altcha",
       "X-Pirate-Anonymous-Id",
       "X-Pirate-Session-Id",
+      "X-Pirate-Submit-Trace-Id",
     ],
   }),
 )
