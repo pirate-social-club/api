@@ -218,16 +218,8 @@ function shouldAttemptStoryRoyaltyRegistration(input: {
   return input.assetKind !== "song_audio" || input.hasSongBundle
 }
 
-export function shouldPrepareLockedDeliveryAsync(env: Pick<Env, "ENVIRONMENT" | "STORY_LOCKED_DELIVERY_ASYNC">): boolean {
-  return envFlag(env.STORY_LOCKED_DELIVERY_ASYNC, !isLocalEnvironment(env.ENVIRONMENT))
-}
-
-function hasRecoverableCompletedLockedDelivery(input: {
-  asset: AssetRow
-  requireStoryRoyaltyRegistration: boolean
-}): boolean {
-  const asset = input.asset
-  const hasDeliveryMetadata = Boolean(
+function hasLockedDeliveryMetadata(asset: AssetRow): boolean {
+  return Boolean(
     asset.story_asset_version_id?.trim()
       && asset.story_cdr_vault_uuid
       && asset.story_cdr_vault_uuid > 0
@@ -240,13 +232,83 @@ function hasRecoverableCompletedLockedDelivery(input: {
       && asset.locked_delivery_secret_json?.trim()
       && asset.story_publish_tx_ref?.trim(),
   )
-  if (!hasDeliveryMetadata) {
+}
+
+export function shouldPrepareLockedDeliveryAsync(env: Pick<Env, "ENVIRONMENT" | "STORY_LOCKED_DELIVERY_ASYNC">): boolean {
+  return envFlag(env.STORY_LOCKED_DELIVERY_ASYNC, !isLocalEnvironment(env.ENVIRONMENT))
+}
+
+function hasRecoverableCompletedLockedDelivery(input: {
+  asset: AssetRow
+  requireStoryRoyaltyRegistration: boolean
+}): boolean {
+  const asset = input.asset
+  if (!hasLockedDeliveryMetadata(asset)) {
     return false
   }
   if (!input.requireStoryRoyaltyRegistration) {
     return true
   }
   return asset.story_royalty_registration_status === "registered" && Boolean(asset.story_ip_id?.trim())
+}
+
+async function checkpointPreparedLockedDelivery(input: {
+  client: Pick<Client, "execute">
+  communityId: string
+  assetId: string
+  storyStatus: Asset["story_status"]
+  publicationStatus: Asset["publication_status"]
+  storyPublishTxRef: string | null
+  storyAssetVersionId: string | null
+  storyCdrVaultUuid: number | null
+  storyNamespace: string | null
+  storyEntitlementTokenId: string | null
+  storyReadCondition: string | null
+  storyWriteCondition: string | null
+  lockedDeliveryRef: string | null
+  lockedDeliveryStorageRef: string | null
+  lockedDeliveryMetadataJson: string | null
+}): Promise<void> {
+  await input.client.execute({
+    sql: `
+      UPDATE assets
+      SET publication_status = ?3,
+          story_status = ?4,
+          story_error = NULL,
+          story_publish_tx_ref = ?5,
+          story_asset_version_id = ?6,
+          story_cdr_vault_uuid = ?7,
+          story_namespace = ?8,
+          story_entitlement_token_id = ?9,
+          story_read_condition = ?10,
+          story_write_condition = ?11,
+          locked_delivery_status = 'requested',
+          locked_delivery_ref = ?12,
+          locked_delivery_error = NULL,
+          locked_delivery_storage_ref = ?13,
+          locked_delivery_secret_json = ?14,
+          updated_at = ?15
+      WHERE community_id = ?1
+        AND asset_id = ?2
+    `,
+    args: [
+      input.communityId,
+      input.assetId,
+      input.publicationStatus,
+      input.storyStatus,
+      input.storyPublishTxRef,
+      input.storyAssetVersionId,
+      input.storyCdrVaultUuid,
+      input.storyNamespace,
+      input.storyEntitlementTokenId,
+      input.storyReadCondition,
+      input.storyWriteCondition,
+      input.lockedDeliveryRef,
+      input.lockedDeliveryStorageRef,
+      input.lockedDeliveryMetadataJson,
+      nowIso(),
+    ],
+  })
 }
 
 async function markRecoverableLockedDeliveryReady(input: {
@@ -834,65 +896,87 @@ export async function prepareRequestedLockedAssetDelivery(input: {
   let effectiveLicensePreset = asset.license_preset as StoryLicensePreset | null
   let effectiveCommercialRevSharePct = asset.commercial_rev_share_pct
 
-  try {
-    const lockedDelivery = await prepareLockedAssetDelivery({
-      env: input.env,
-      communityId: input.communityId,
-      assetId: asset.asset_id,
-      creatorWalletAddress,
-      storageRef: asset.primary_content_ref,
-      mimeType: upload.mime_type,
-      contentHash: asset.primary_content_hash,
-      artifactKind,
-      bundleId: asset.song_artifact_bundle_id,
-      rightsBasis: asset.rights_basis,
-      upstreamAssetRefs: post.upstream_asset_refs ?? null,
-    })
-    storyStatus = lockedDelivery.storyStatus
-    if (lockedDelivery.storyStatus === "published") {
-      publicationStatus = "story_published"
+  if (hasLockedDeliveryMetadata(asset)) {
+    storyStatus = "published"
+    publicationStatus = "story_published"
+  } else {
+    try {
+      const lockedDelivery = await prepareLockedAssetDelivery({
+        env: input.env,
+        communityId: input.communityId,
+        assetId: asset.asset_id,
+        creatorWalletAddress,
+        storageRef: asset.primary_content_ref,
+        mimeType: upload.mime_type,
+        contentHash: asset.primary_content_hash,
+        artifactKind,
+        bundleId: asset.song_artifact_bundle_id,
+        rightsBasis: asset.rights_basis,
+        upstreamAssetRefs: post.upstream_asset_refs ?? null,
+      })
+      storyStatus = lockedDelivery.storyStatus
+      if (lockedDelivery.storyStatus === "published") {
+        publicationStatus = "story_published"
+      }
+      storyPublishTxRef = lockedDelivery.storyPublishTxRef
+      storyIpId = lockedDelivery.storyIpId
+      storyRoyaltyPolicyId = lockedDelivery.storyRoyaltyPolicyId
+      storyDerivativeParentIpIdsJson = lockedDelivery.storyDerivativeParentIpIdsJson
+      if (lockedDelivery.storyRoyaltyRegistrationStatus) {
+        storyRoyaltyRegistrationStatus = lockedDelivery.storyRoyaltyRegistrationStatus
+      }
+      storyAssetVersionId = lockedDelivery.storyAssetVersionId
+      storyCdrVaultUuid = lockedDelivery.storyCdrVaultUuid
+      storyNamespace = lockedDelivery.storyNamespace
+      storyEntitlementTokenId = lockedDelivery.storyEntitlementTokenId
+      storyReadCondition = lockedDelivery.storyReadCondition
+      storyWriteCondition = lockedDelivery.storyWriteCondition
+      lockedDeliveryRef = lockedDelivery.lockedDeliveryRef
+      lockedDeliveryStorageRef = lockedDelivery.lockedDeliveryStorageRef
+      lockedDeliveryMetadataJson = lockedDelivery.lockedDeliveryMetadataJson
+      await checkpointPreparedLockedDelivery({
+        client: input.client,
+        communityId: input.communityId,
+        assetId: asset.asset_id,
+        storyStatus,
+        publicationStatus,
+        storyPublishTxRef,
+        storyAssetVersionId,
+        storyCdrVaultUuid,
+        storyNamespace,
+        storyEntitlementTokenId,
+        storyReadCondition,
+        storyWriteCondition,
+        lockedDeliveryRef,
+        lockedDeliveryStorageRef,
+        lockedDeliveryMetadataJson,
+      })
+    } catch (error) {
+      const lockedDeliveryError = error instanceof Error ? error.message : String(error)
+      const terminalFailure = input.markFailureAsTerminal ?? true
+      await input.client.execute({
+        sql: `
+          UPDATE assets
+          SET story_status = ?3,
+              story_error = ?4,
+              locked_delivery_status = ?5,
+              locked_delivery_error = ?6,
+              updated_at = ?7
+          WHERE community_id = ?1
+            AND asset_id = ?2
+        `,
+        args: [
+          input.communityId,
+          asset.asset_id,
+          terminalFailure ? "failed" : "requested",
+          lockedDeliveryError,
+          terminalFailure ? "failed" : "requested",
+          lockedDeliveryError,
+          nowIso(),
+        ],
+      })
+      throw error
     }
-    storyPublishTxRef = lockedDelivery.storyPublishTxRef
-    storyIpId = lockedDelivery.storyIpId
-    storyRoyaltyPolicyId = lockedDelivery.storyRoyaltyPolicyId
-    storyDerivativeParentIpIdsJson = lockedDelivery.storyDerivativeParentIpIdsJson
-    if (lockedDelivery.storyRoyaltyRegistrationStatus) {
-      storyRoyaltyRegistrationStatus = lockedDelivery.storyRoyaltyRegistrationStatus
-    }
-    storyAssetVersionId = lockedDelivery.storyAssetVersionId
-    storyCdrVaultUuid = lockedDelivery.storyCdrVaultUuid
-    storyNamespace = lockedDelivery.storyNamespace
-    storyEntitlementTokenId = lockedDelivery.storyEntitlementTokenId
-    storyReadCondition = lockedDelivery.storyReadCondition
-    storyWriteCondition = lockedDelivery.storyWriteCondition
-    lockedDeliveryRef = lockedDelivery.lockedDeliveryRef
-    lockedDeliveryStorageRef = lockedDelivery.lockedDeliveryStorageRef
-    lockedDeliveryMetadataJson = lockedDelivery.lockedDeliveryMetadataJson
-  } catch (error) {
-    const lockedDeliveryError = error instanceof Error ? error.message : String(error)
-    const terminalFailure = input.markFailureAsTerminal ?? true
-    await input.client.execute({
-      sql: `
-        UPDATE assets
-        SET story_status = ?3,
-            story_error = ?4,
-            locked_delivery_status = ?5,
-            locked_delivery_error = ?6,
-            updated_at = ?7
-        WHERE community_id = ?1
-          AND asset_id = ?2
-      `,
-      args: [
-        input.communityId,
-        asset.asset_id,
-        terminalFailure ? "failed" : "requested",
-        lockedDeliveryError,
-        terminalFailure ? "failed" : "requested",
-        lockedDeliveryError,
-        nowIso(),
-      ],
-    })
-    throw error
   }
 
   const shouldRegisterRoyalty = shouldAttemptStoryRoyaltyRegistration({

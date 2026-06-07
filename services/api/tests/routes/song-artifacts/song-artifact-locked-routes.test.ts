@@ -769,6 +769,230 @@ describe("song artifact locked routes", () => {
     expect(assetAfterRepairBody.story_entitlement_token).toBe("717171")
   }, 30_000)
 
+  testWithTimeout("retries royalty registration from a locked delivery checkpoint", async () => {
+    const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
+    let cdrCalls = 0
+    let publishCalls = 0
+    let royaltyCalls = 0
+    setStoryRuntimeFundingAssertionForTests(async () => {})
+    setStoryCdrUploaderForTests(async () => {
+      cdrCalls += 1
+      return {
+        cdrVaultUuid: 6262,
+        writerAddress: "0x0000000000000000000000000000000000000cd2",
+        txHashes: {
+          allocate: "0xalloc-checkpoint",
+          write: "0xwrite-checkpoint",
+        },
+      }
+    })
+    setStoryAssetPublisherForTests(async () => {
+      publishCalls += 1
+      return {
+        entitlementConfiguredTxHash: "0xconfigure-checkpoint",
+        publishTxHash: "0xpublish-checkpoint",
+      }
+    })
+    setStoryRoyaltyRegistrarForTests(async () => {
+      royaltyCalls += 1
+      if (royaltyCalls === 1) {
+        throw new Error("story royalty transient test failure")
+      }
+      return {
+        storyIpId: "0x6262626262626262626262626262626262626262",
+        storyIpNftContract: "0x6363636363636363636363636363636363636363",
+        storyIpNftTokenId: "626",
+        storyLicenseTermsId: "62",
+        storyLicenseTemplate: null,
+        storyRoyaltyPolicy: "0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E",
+        storyDerivativeParentIpIds: null,
+        storyRevenueToken: "0x2624000000000000000000000000000000000000",
+        storyRoyaltyRegistrationStatus: "registered",
+        storyDerivativeRegisteredAt: null,
+      }
+    })
+    installLockedSongFetchMocks({
+      originalFetch,
+      storedObjects,
+    })
+
+    const ctx = await createRouteTestContext({
+      STORY_LOCKED_DELIVERY_ASYNC: "true",
+      FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
+      FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
+      FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
+      FILEBASE_MEDIA_BUCKET: "pirate-media",
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      OPENROUTER_MODEL: "google/gemini-3.1-flash-lite-preview",
+      ACRCLOUD_ACCESS_KEY: "test-acrcloud-access",
+      ACRCLOUD_ACCESS_SECRET: "test-acrcloud-secret",
+      ACRCLOUD_HOST: "acrcloud.test",
+      ELEVENLABS_API_KEY: "test-elevenlabs-key",
+      ELEVENLABS_FORCE_ALIGNMENT_URL: "https://elevenlabs.test/forced-alignment",
+      STORY_CONTRACT_OWNER_PRIVATE_KEY: "0x1000000000000000000000000000000000000000000000000000000000000001",
+      STORY_OPERATOR_PRIVATE_KEY: "0x2000000000000000000000000000000000000000000000000000000000000002",
+      STORY_CDR_WRITER_PRIVATE_KEY: "0x3000000000000000000000000000000000000000000000000000000000000003",
+      STORY_ACCESS_CONTROLLER_PRIVATE_KEY: "0x4000000000000000000000000000000000000000000000000000000000000004",
+    })
+    cleanup = ctx.cleanup
+
+    const author = await exchangeJwt(ctx.env, "song-author-checkpoint-retry")
+    await attachPrimaryWallet({
+      client: ctx.client,
+      userId: author.userId,
+      walletAttachmentId: "wal_song_author_checkpoint_retry",
+      walletAddress: "0xaaa0000000000000000000000000000000000000",
+    })
+    await verifyForLockedCommerce(ctx.env, author.userId, author.accessToken)
+    const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "Checkpoint Retry Song Club")
+    const primaryUpload = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "primary_audio",
+      mimeType: "audio/mpeg",
+      filename: "checkpoint-retry-anthem.mp3",
+      bytes: new Uint8Array([62, 63, 64, 65]),
+    })
+    const bundleCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifacts`,
+      {
+        primary_audio: {
+          song_artifact_upload: primaryUpload.id,
+        },
+        preview_window: {
+          start_ms: 0,
+          duration_ms: 30_000,
+        },
+        title: "Checkpoint Retry Anthem",
+        lyrics: "Checkpoint retry line",
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(bundleCreate.status).toBe(201)
+    const bundleBody = await json(bundleCreate) as { id: string }
+    await markGeneratedPreviewReady({
+      env: ctx.env,
+      communityId,
+      songArtifactBundleId: bundleBody.id.replace(/^sab_/, ""),
+      previewStorageRef: `http://pirate.test/generated-preview/${communityId}/checkpoint-retry-anthem.mp3`,
+      previewSizeBytes: 4,
+    })
+
+    const postCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        idempotency_key: "song-post-checkpoint-retry-1",
+        post_type: "song",
+        identity_mode: "public",
+        title: "Checkpoint retry anthem",
+        access_mode: "locked",
+        song_mode: "original",
+        rights_basis: "original",
+        license_preset: "non-commercial",
+        song_artifact_bundle: bundleBody.id,
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(postCreate.status).toBe(201)
+    const postBody = await json(postCreate) as {
+      asset: string
+      status: string
+    }
+    expect(postBody.status).toBe("published")
+    const assetId = postBody.asset.replace(/^asset_/, "")
+
+    const communityDb = createClient({
+      url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
+    })
+    const jobRows = await communityDb.execute({
+      sql: `
+        SELECT job_id
+        FROM community_jobs
+        WHERE job_type = 'locked_asset_delivery_prepare'
+          AND subject_id = ?1
+      `,
+      args: [assetId],
+    })
+    expect(jobRows.rows).toHaveLength(1)
+    const jobId = String(jobRows.rows[0]?.job_id ?? "")
+    communityDb.close()
+
+    const firstRepository = getCommunityRepository(ctx.env)
+    try {
+      const firstProcessed = await processCommunityJobById({
+        env: ctx.env,
+        communityId,
+        jobId,
+        communityRepository: firstRepository,
+      })
+      expect(firstProcessed?.status).toBe("failed")
+    } finally {
+      await firstRepository.close?.()
+    }
+
+    const checkpointDb = createClient({
+      url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
+    })
+    const checkpointRows = await checkpointDb.execute({
+      sql: `
+        SELECT locked_delivery_status, story_royalty_registration_status, story_cdr_vault_uuid,
+               story_publish_tx_ref, locked_delivery_storage_ref, locked_delivery_secret_json
+        FROM assets
+        WHERE asset_id = ?1
+      `,
+      args: [assetId],
+    })
+    checkpointDb.close()
+    expect(checkpointRows.rows).toHaveLength(1)
+    expect(String(checkpointRows.rows[0]?.locked_delivery_status)).toBe("requested")
+    expect(String(checkpointRows.rows[0]?.story_royalty_registration_status)).toBe("pending")
+    expect(Number(checkpointRows.rows[0]?.story_cdr_vault_uuid ?? 0)).toBe(6262)
+    expect(String(checkpointRows.rows[0]?.story_publish_tx_ref)).toBe("0xpublish-checkpoint")
+    expect(String(checkpointRows.rows[0]?.locked_delivery_storage_ref)).toContain("locked-assets/")
+    expect(String(checkpointRows.rows[0]?.locked_delivery_secret_json)).toContain("AES-GCM")
+
+    const secondRepository = getCommunityRepository(ctx.env)
+    try {
+      const secondProcessed = await processCommunityJobById({
+        env: ctx.env,
+        communityId,
+        jobId,
+        communityRepository: secondRepository,
+      })
+      expect(secondProcessed?.status).toBe("succeeded")
+    } finally {
+      await secondRepository.close?.()
+    }
+
+    expect(cdrCalls).toBe(1)
+    expect(publishCalls).toBe(1)
+    expect(royaltyCalls).toBe(2)
+
+    const readyDb = createClient({
+      url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
+    })
+    const readyRows = await readyDb.execute({
+      sql: `
+        SELECT locked_delivery_status, story_royalty_registration_status, story_ip_id,
+               story_cdr_vault_uuid, story_publish_tx_ref
+        FROM assets
+        WHERE asset_id = ?1
+      `,
+      args: [assetId],
+    })
+    readyDb.close()
+    expect(readyRows.rows).toHaveLength(1)
+    expect(String(readyRows.rows[0]?.locked_delivery_status)).toBe("ready")
+    expect(String(readyRows.rows[0]?.story_royalty_registration_status)).toBe("registered")
+    expect(String(readyRows.rows[0]?.story_ip_id)).toBe("0x6262626262626262626262626262626262626262")
+    expect(Number(readyRows.rows[0]?.story_cdr_vault_uuid ?? 0)).toBe(6262)
+    expect(String(readyRows.rows[0]?.story_publish_tx_ref)).toBe("0xpublish-checkpoint")
+  }, 30_000)
+
   testWithTimeout("allows locked song publishing while preview is pending and gates access until preview is ready", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
     setStoryRuntimeFundingAssertionForTests(async () => {})
