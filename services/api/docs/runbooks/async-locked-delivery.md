@@ -84,8 +84,8 @@ The harness preflights Story testnet funding and Turso capacity before it
 creates communities or spends gas. For remote locked 20-runs, the default Story
 funding preflight requires:
 
-- `STORY_OPERATOR_PRIVATE_KEY` / CDR signer balance >= 5 IP for 20 locked runs
-- `STORY_RUNTIME_FUNDER_PRIVATE_KEY + STORY_OPERATOR_PRIVATE_KEY` balance >= 9 IP
+- `STORY_OPERATOR_PRIVATE_KEY` / CDR signer balance >= 20 IP for 20 locked runs
+- `STORY_RUNTIME_FUNDER_PRIVATE_KEY + STORY_OPERATOR_PRIVATE_KEY` balance >= 25 IP
 - `MUSIC_PURCHASE_STORY_SETTLEMENT_PRIVATE_KEY` balance > 0
 
 Fund the staging Story runtime funder before long runs:
@@ -98,7 +98,7 @@ After funding, top up runtime signers:
 
 ```bash
 rtk env infisical run --project-config-dir ../../../core --env=staging --path=/services/api -- \
-  rtk bun run scripts/fund-story-runtime-signers.ts --target-balance-wei=5000000000000000000
+  rtk bun run scripts/fund-story-runtime-signers.ts --target-balance-wei=20000000000000000000
 ```
 
 Do not use production timing runs for development iteration.

@@ -95,10 +95,10 @@ Common options:
 Preflight options:
   PIRATE_TIMING_PREFLIGHT_MIN_STORY_IP
                                       Minimum combined funder + operator IP for remote locked runs.
-                                      Defaults to max(1.5, (runs + warmups) * 0.45).
+                                      Defaults to max(1.5, (runs + warmups) * 1.25).
   PIRATE_TIMING_PREFLIGHT_MIN_OPERATOR_IP
                                       Minimum operator/CDR signer IP for remote locked runs.
-                                      Defaults to max(1.0, (runs + warmups) * 0.25).
+                                      Defaults to max(1.0, (runs + warmups) * 1.0).
   PIRATE_TIMING_TURSO_DATABASE_LIMIT  Defaults to 100.
   PIRATE_TIMING_TURSO_REQUIRED_SLOTS  Defaults to temporary communities needed by this command.
 
@@ -218,11 +218,11 @@ async function assertStoryFundingPreflight(input: {
   const balances = await readStorySignerBalances()
   const minTotalIp = readPositiveNumberEnv(
     "PIRATE_TIMING_PREFLIGHT_MIN_STORY_IP",
-    Math.max(1.5, (input.runs + input.warmupRuns) * 0.45),
+    Math.max(1.5, (input.runs + input.warmupRuns) * 1.25),
   )
   const minOperatorIp = readPositiveNumberEnv(
     "PIRATE_TIMING_PREFLIGHT_MIN_OPERATOR_IP",
-    Math.max(1.0, (input.runs + input.warmupRuns) * 0.25),
+    Math.max(1.0, (input.runs + input.warmupRuns) * 1.0),
   )
   const totalIp = (balances.funderIp ?? 0) + (balances.operatorIp ?? 0)
   const operatorIp = balances.operatorIp ?? 0
