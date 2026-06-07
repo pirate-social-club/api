@@ -140,10 +140,6 @@ export async function publishLockedAssetVersionToStory(input: {
   if (testPublisher) {
     return await testPublisher(input)
   }
-  const ownerPrivateKey = normalizePrivateKey(input.env.STORY_CONTRACT_OWNER_PRIVATE_KEY)
-  if (!ownerPrivateKey) {
-    throw new Error("STORY_CONTRACT_OWNER_PRIVATE_KEY missing/invalid")
-  }
   const operatorConfig = resolveStoryOperatorDirectSigner(input.env)
   if (!operatorConfig.ok) throw new Error(operatorConfig.error)
   if (!operatorConfig.value) {
@@ -179,7 +175,6 @@ export async function publishLockedAssetVersionToStory(input: {
   if (!gasPolicy.ok) throw new Error(gasPolicy.error)
 
   const provider = new JsonRpcProvider(rpcUrl, chainId)
-  const ownerSigner = new Wallet(ownerPrivateKey, provider)
   const operatorSigner = new Wallet(operatorConfig.value.privateKey, provider)
 
   const entitlementContract = new Contract(
@@ -195,6 +190,11 @@ export async function publishLockedAssetVersionToStory(input: {
     cdrVaultUuid: input.cdrVaultUuid,
   })
   if (entitlementClassStatus === "missing") {
+    const ownerPrivateKey = normalizePrivateKey(input.env.STORY_CONTRACT_OWNER_PRIVATE_KEY)
+    if (!ownerPrivateKey) {
+      throw new Error("STORY_CONTRACT_OWNER_PRIVATE_KEY missing/invalid")
+    }
+    const ownerSigner = new Wallet(ownerPrivateKey, provider)
     const configureTx = await sendContractTxWithPolicy({
       provider,
       signer: ownerSigner,
