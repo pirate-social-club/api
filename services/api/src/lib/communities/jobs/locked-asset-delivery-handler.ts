@@ -1,5 +1,6 @@
 import { getUserRepository } from "../../auth/repositories"
 import { nowIso } from "../../helpers"
+import { logPipelineError } from "../../observability/pipeline-log"
 import { requiredString } from "../../sql-row"
 import { prepareRequestedLockedAssetDelivery } from "../commerce/service"
 import { openCommunityDb } from "../community-db-factory"
@@ -12,10 +13,20 @@ type LockedAssetDeliveryReconcileCommunitySummary = {
   enqueued_jobs: number
 }
 
+type LockedAssetDeliveryReconcileCommunityFailureSummary = {
+  community_id: string
+  error: string
+}
+
 type LockedAssetDeliveryReconcileSummary = {
   checked_communities: number
   enqueued_jobs: number
   communities: LockedAssetDeliveryReconcileCommunitySummary[]
+  failed_communities: LockedAssetDeliveryReconcileCommunityFailureSummary[]
+}
+
+function formatLockedAssetDeliveryReconcileError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 export async function runLockedAssetDeliveryPrepare(input: CommunityJobHandlerInput): Promise<string | null> {
@@ -49,10 +60,12 @@ export async function reconcileRequestedLockedAssetDeliveryJobs(input: {
     .slice(0, Math.max(1, Math.trunc(input.maxCommunities ?? 100)))
   const maxAssetsPerCommunity = Math.max(1, Math.trunc(input.maxAssetsPerCommunity ?? 25))
   const communities: LockedAssetDeliveryReconcileCommunitySummary[] = []
+  const failedCommunities: LockedAssetDeliveryReconcileCommunityFailureSummary[] = []
 
   for (const communityId of communityIds) {
-    const db = await openCommunityDb(input.env, input.communityRepository, communityId)
+    let db: Awaited<ReturnType<typeof openCommunityDb>> | null = null
     try {
+      db = await openCommunityDb(input.env, input.communityRepository, communityId)
       const missingJobs = await db.client.execute({
         sql: `
           SELECT asset_id, source_post_id
@@ -99,8 +112,18 @@ export async function reconcileRequestedLockedAssetDeliveryJobs(input: {
           enqueued_jobs: enqueuedJobs,
         })
       }
+    } catch (error) {
+      const message = formatLockedAssetDeliveryReconcileError(error)
+      failedCommunities.push({
+        community_id: communityId,
+        error: message,
+      })
+      logPipelineError("[community-jobs] locked delivery reconciliation community failed", {
+        community_id: communityId,
+        error: message,
+      })
     } finally {
-      db.close()
+      db?.close()
     }
   }
 
@@ -108,5 +131,6 @@ export async function reconcileRequestedLockedAssetDeliveryJobs(input: {
     checked_communities: communityIds.length,
     enqueued_jobs: communities.reduce((sum, community) => sum + community.enqueued_jobs, 0),
     communities,
+    failed_communities: failedCommunities,
   }
 }

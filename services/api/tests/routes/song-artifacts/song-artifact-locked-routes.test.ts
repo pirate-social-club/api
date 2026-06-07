@@ -390,14 +390,28 @@ describe("song artifact locked routes", () => {
     expect(orphanedJobRows.rows).toHaveLength(0)
     communityDb.close()
 
+    const brokenReconcileCommunityId = "cmt_locked_reconcile_broken"
     const reconcileRepository = getCommunityRepository(ctx.env)
     try {
+      const resilientReconcileRepository = Object.create(reconcileRepository) as typeof reconcileRepository
+      resilientReconcileRepository.getPrimaryCommunityDatabaseBinding = async (requestedCommunityId: string) => {
+        if (requestedCommunityId === brokenReconcileCommunityId) {
+          throw new Error("mock locked delivery reconcile db 502")
+        }
+        return reconcileRepository.getPrimaryCommunityDatabaseBinding(requestedCommunityId)
+      }
       const reconciled = await reconcileRequestedLockedAssetDeliveryJobs({
         env: ctx.env,
-        communityRepository: reconcileRepository,
-        communityIds: [communityId],
+        communityRepository: resilientReconcileRepository,
+        communityIds: [brokenReconcileCommunityId, communityId],
       })
       expect(reconciled.enqueued_jobs).toBe(1)
+      expect(reconciled.failed_communities).toEqual([
+        {
+          community_id: brokenReconcileCommunityId,
+          error: "mock locked delivery reconcile db 502",
+        },
+      ])
     } finally {
       await reconcileRepository.close?.()
     }
