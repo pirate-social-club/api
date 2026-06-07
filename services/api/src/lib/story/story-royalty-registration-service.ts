@@ -1,12 +1,16 @@
 import { StoryClient, WIP_TOKEN_ADDRESS, PILFlavor, royaltyPolicyLapAddress } from "@story-protocol/core-sdk"
-import { http } from "viem"
+import { fallback, http } from "viem"
 import { privateKeyToAccount } from "viem/accounts"
 import type { Client } from "../sql-client"
 import type { Env } from "../../env"
 import type { Post, SongArtifactBundle } from "../../types"
 import { nowIso } from "../helpers"
 import { resolveStoryOperatorDirectSigner } from "./story-direct-signer"
-import { resolveStoryChainId, resolveStoryRpcUrl, resolveStoryRuntimeSignerTargetBalanceWei } from "./story-runtime-config"
+import {
+  resolveStoryChainId,
+  resolveStoryRpcUrls,
+  resolveStoryRuntimeSignerTargetBalanceWei,
+} from "./story-runtime-config"
 import { getAssetRow } from "../communities/commerce/queries"
 import { decodePublicAssetId } from "../public-ids"
 import { publishStoryJsonMetadata } from "./story-metadata-publisher"
@@ -150,7 +154,7 @@ function createStoryRoyaltySdkClient(input: {
 
   return StoryClient.newClient({
     account: privateKeyToAccount(input.operatorPrivateKey),
-    transport: http(resolveStoryRpcUrl(input.env)),
+    transport: fallback(resolveStoryRpcUrls(input.env).map((url) => http(url))),
     chainId: resolveStoryChainName(input.env),
   }) as StoryRoyaltySdkClient
 }
