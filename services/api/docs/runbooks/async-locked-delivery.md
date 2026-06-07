@@ -84,9 +84,15 @@ The harness preflights Story testnet funding and Turso capacity before it
 creates communities or spends gas. For remote locked 20-runs, the default Story
 funding preflight requires:
 
-- `STORY_OPERATOR_PRIVATE_KEY` / CDR signer balance >= 20 IP for 20 locked runs
-- `STORY_RUNTIME_FUNDER_PRIVATE_KEY + STORY_OPERATOR_PRIVATE_KEY` balance >= 25 IP
+- `STORY_OPERATOR_PRIVATE_KEY` / CDR signer balance >= 3 IP for 20 locked runs
+- `STORY_RUNTIME_FUNDER_PRIVATE_KEY + STORY_OPERATOR_PRIVATE_KEY` balance >= 5 IP
 - `MUSIC_PURCHASE_STORY_SETTLEMENT_PRIVATE_KEY` balance > 0
+
+Royalty registration must use the Story direct transaction fee caps. The
+uncapped Story SDK path previously accepted Aeneid RPC fee suggestions around
+500 gwei, making `mintAndRegisterIpAndAttachPILTerms` cost roughly 0.575 IP per
+run. The capped path uses `STORY_DIRECT_TX_MAX_FEE_PER_GAS_WEI` and
+`STORY_DIRECT_TX_MAX_PRIORITY_FEE_PER_GAS_WEI` like CDR/publish transactions.
 
 Fund the staging Story runtime funder before long runs:
 
@@ -98,7 +104,7 @@ After funding, top up runtime signers:
 
 ```bash
 rtk env infisical run --project-config-dir ../../../core --env=staging --path=/services/api -- \
-  rtk bun run scripts/fund-story-runtime-signers.ts --target-balance-wei=20000000000000000000
+  rtk bun run scripts/fund-story-runtime-signers.ts --target-balance-wei=3000000000000000000
 ```
 
 Do not use production timing runs for development iteration.

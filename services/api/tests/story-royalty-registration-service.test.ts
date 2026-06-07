@@ -11,6 +11,7 @@ import { listStoryRegisteredAssetProjectionRows } from "../src/lib/communities/c
 import { insertPost } from "../src/lib/posts/community-post-create-store"
 import { createControlPlaneTestClient } from "./helpers"
 import {
+  capStoryRoyaltyRpcFeeResponseForTests,
   isStoryRoyaltyRegistrationConfigured,
   maybeRegisterStoryRoyaltyForAsset,
   resolvePilTermsForLicense,
@@ -46,6 +47,46 @@ function buildRepository(): CommunityDatabaseBindingRepository {
 }
 
 const testWallet = "0x2222222222222222222222222222222222222222"
+
+test("caps Story royalty SDK fee RPC responses", async () => {
+  const gasPolicy = {
+    maxFeePerGasCapWei: 5_000_000_000n,
+    maxPriorityFeePerGasCapWei: 2_000_000_000n,
+    gasLimitCap: 1_500_000n,
+    gasEstimateBufferBps: 12_000n,
+  }
+  const requestBody = JSON.stringify([
+    { jsonrpc: "2.0", id: 1, method: "eth_maxPriorityFeePerGas" },
+    { jsonrpc: "2.0", id: 2, method: "eth_gasPrice" },
+    { jsonrpc: "2.0", id: 3, method: "eth_feeHistory" },
+  ])
+  const response = new Response(JSON.stringify([
+    { jsonrpc: "2.0", id: 1, result: "0x746a528800" },
+    { jsonrpc: "2.0", id: 2, result: "0x746a528800" },
+    {
+      jsonrpc: "2.0",
+      id: 3,
+      result: {
+        oldestBlock: "0x1",
+        baseFeePerGas: ["0x746a528800", "0x3b9aca00"],
+        gasUsedRatio: [0.5],
+        reward: [["0x746a528800", "0x3b9aca00"]],
+      },
+    },
+  ]), {
+    headers: { "content-type": "application/json" },
+  })
+
+  const capped = await capStoryRoyaltyRpcFeeResponseForTests(response, requestBody, gasPolicy)
+  const body = await capped.json() as Array<{ result: unknown }>
+
+  expect(body[0]?.result).toBe("0x77359400")
+  expect(body[1]?.result).toBe("0x12a05f200")
+  expect(body[2]?.result).toMatchObject({
+    baseFeePerGas: ["0x12a05f200", "0x3b9aca00"],
+    reward: [["0x77359400", "0x3b9aca00"]],
+  })
+})
 
 function buildUser(userId: string): User {
   const now = new Date().toISOString()

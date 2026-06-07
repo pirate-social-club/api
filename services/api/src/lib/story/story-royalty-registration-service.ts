@@ -15,6 +15,7 @@ import { getAssetRow } from "../communities/commerce/queries"
 import { decodePublicAssetId } from "../public-ids"
 import { publishStoryJsonMetadata } from "./story-metadata-publisher"
 import { assertStoryRuntimeSignerFunding } from "./story-runtime-funding"
+import { resolveDirectTxGasPolicy, type DirectTxGasPolicy } from "../evm-direct-tx"
 
 type StoryRoyaltyClient = Pick<Client, "execute">
 type StoryRoyaltyRightsBasis = "none" | "original" | "derivative"
@@ -94,6 +95,18 @@ type StoryRoyaltySdkClient = {
   license?: StoryLicenseClient
 }
 
+type JsonRpcPayload = {
+  id?: unknown
+  jsonrpc?: string
+  method?: string
+}
+
+type JsonRpcResponsePayload = {
+  id?: unknown
+  jsonrpc?: string
+  result?: unknown
+}
+
 let testRoyaltyRegistrar: ((input: {
   env: Env
   client: StoryRoyaltyClient
@@ -152,11 +165,156 @@ function createStoryRoyaltySdkClient(input: {
     return testStoryRoyaltySdkClientFactory(input)
   }
 
+  const gasPolicy = resolveStoryRoyaltyGasPolicy(input.env)
   return StoryClient.newClient({
     account: privateKeyToAccount(input.operatorPrivateKey),
-    transport: fallback(resolveStoryRpcUrls(input.env).map((url) => http(url))),
+    transport: fallback(resolveStoryRpcUrls(input.env).map((url) => cappedStoryRoyaltyHttp(url, gasPolicy))),
     chainId: resolveStoryChainName(input.env),
   }) as StoryRoyaltySdkClient
+}
+
+function resolveStoryRoyaltyGasPolicy(
+  env: Pick<
+    Env,
+    | "STORY_DIRECT_TX_MAX_FEE_PER_GAS_WEI"
+    | "STORY_DIRECT_TX_MAX_PRIORITY_FEE_PER_GAS_WEI"
+    | "STORY_DIRECT_TX_GAS_LIMIT_MAX"
+    | "STORY_DIRECT_TX_GAS_ESTIMATE_BUFFER_BPS"
+  >,
+): DirectTxGasPolicy {
+  const gasPolicy = resolveDirectTxGasPolicy({
+    maxFeePerGasCapWeiRaw: env.STORY_DIRECT_TX_MAX_FEE_PER_GAS_WEI,
+    maxPriorityFeePerGasCapWeiRaw: env.STORY_DIRECT_TX_MAX_PRIORITY_FEE_PER_GAS_WEI,
+    gasLimitCapRaw: env.STORY_DIRECT_TX_GAS_LIMIT_MAX,
+    gasEstimateBufferBpsRaw: env.STORY_DIRECT_TX_GAS_ESTIMATE_BUFFER_BPS,
+    maxFeePerGasCapField: "STORY_DIRECT_TX_MAX_FEE_PER_GAS_WEI",
+    maxPriorityFeePerGasCapField: "STORY_DIRECT_TX_MAX_PRIORITY_FEE_PER_GAS_WEI",
+    gasLimitCapField: "STORY_DIRECT_TX_GAS_LIMIT_MAX",
+    gasEstimateBufferBpsField: "STORY_DIRECT_TX_GAS_ESTIMATE_BUFFER_BPS",
+  })
+  if (!gasPolicy.ok) throw new Error(gasPolicy.error)
+  return gasPolicy.value
+}
+
+function cappedStoryRoyaltyHttp(url: string, gasPolicy: DirectTxGasPolicy) {
+  return http(url, {
+    fetchFn: async (input, init) => {
+      const response = await fetch(input, init)
+      return await capStoryRoyaltyRpcFeeResponseForTests(response, init?.body, gasPolicy)
+    },
+  })
+}
+
+export async function capStoryRoyaltyRpcFeeResponseForTests(
+  response: Response,
+  requestBody: BodyInit | null | undefined,
+  gasPolicy: DirectTxGasPolicy,
+): Promise<Response> {
+  if (!response.ok || !requestBody) return response
+  const requestPayload = parseJsonRpcPayload(requestBody)
+  if (!requestPayload) return response
+
+  const text = await response.text()
+  if (!text) return new Response(text, response)
+  let responsePayload: unknown
+  try {
+    responsePayload = JSON.parse(text) as unknown
+  } catch {
+    return new Response(text, response)
+  }
+
+  const capped = Array.isArray(requestPayload) && Array.isArray(responsePayload)
+    ? responsePayload.map((entry, index) => capJsonRpcResponseResult(entry, requestPayload[index], gasPolicy))
+    : capJsonRpcResponseResult(responsePayload, Array.isArray(requestPayload) ? null : requestPayload, gasPolicy)
+
+  return new Response(JSON.stringify(capped), response)
+}
+
+function parseJsonRpcPayload(body: BodyInit): JsonRpcPayload | JsonRpcPayload[] | null {
+  if (typeof body !== "string") return null
+  try {
+    const parsed = JSON.parse(body) as unknown
+    if (Array.isArray(parsed)) return parsed.filter(isJsonRpcPayload)
+    return isJsonRpcPayload(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function isJsonRpcPayload(value: unknown): value is JsonRpcPayload {
+  return typeof value === "object" && value != null && "method" in value
+}
+
+function capJsonRpcResponseResult(
+  responsePayload: unknown,
+  requestPayload: JsonRpcPayload | null | undefined,
+  gasPolicy: DirectTxGasPolicy,
+): unknown {
+  if (
+    !requestPayload?.method ||
+    typeof responsePayload !== "object" ||
+    responsePayload == null ||
+    !("result" in responsePayload)
+  ) {
+    return responsePayload
+  }
+  const payload = responsePayload as JsonRpcResponsePayload
+  return {
+    ...payload,
+    result: capStoryRoyaltyRpcResult(requestPayload.method, payload.result, gasPolicy),
+  }
+}
+
+function capStoryRoyaltyRpcResult(
+  method: string,
+  result: unknown,
+  gasPolicy: DirectTxGasPolicy,
+): unknown {
+  if (method === "eth_maxPriorityFeePerGas") {
+    return capRpcQuantity(result, gasPolicy.maxPriorityFeePerGasCapWei)
+  }
+  if (method === "eth_gasPrice") {
+    return capRpcQuantity(result, gasPolicy.maxFeePerGasCapWei)
+  }
+  if (method === "eth_feeHistory") {
+    return capFeeHistoryResult(result, gasPolicy)
+  }
+  return result
+}
+
+function capFeeHistoryResult(result: unknown, gasPolicy: DirectTxGasPolicy): unknown {
+  if (typeof result !== "object" || result == null) return result
+  const value = result as {
+    baseFeePerGas?: unknown
+    reward?: unknown
+  }
+  return {
+    ...value,
+    baseFeePerGas: Array.isArray(value.baseFeePerGas)
+      ? value.baseFeePerGas.map((entry) => capRpcQuantity(entry, gasPolicy.maxFeePerGasCapWei))
+      : value.baseFeePerGas,
+    reward: Array.isArray(value.reward)
+      ? value.reward.map((row) =>
+        Array.isArray(row)
+          ? row.map((entry) => capRpcQuantity(entry, gasPolicy.maxPriorityFeePerGasCapWei))
+          : row
+      )
+      : value.reward,
+  }
+}
+
+function capRpcQuantity(value: unknown, cap: bigint): unknown {
+  const parsed = parseRpcQuantity(value)
+  if (parsed == null || parsed <= cap) return value
+  return `0x${cap.toString(16)}`
+}
+
+function parseRpcQuantity(value: unknown): bigint | null {
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  if (/^0x[0-9a-fA-F]+$/.test(trimmed)) return BigInt(trimmed)
+  if (/^\d+$/.test(trimmed)) return BigInt(trimmed)
+  return null
 }
 
 function normalizeStoryRoyaltyRightsBasis(
