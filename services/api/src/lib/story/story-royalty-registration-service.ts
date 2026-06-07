@@ -1,5 +1,5 @@
-import { StoryClient, WIP_TOKEN_ADDRESS, PILFlavor, royaltyPolicyLapAddress } from "@story-protocol/core-sdk"
-import { fallback, http } from "viem"
+import { StoryClient, WIP_TOKEN_ADDRESS, PILFlavor, royaltyPolicyLapAddress, aeneid, mainnet } from "@story-protocol/core-sdk"
+import { createWalletClient, fallback, http } from "viem"
 import { privateKeyToAccount } from "viem/accounts"
 import type { Client } from "../sql-client"
 import type { Env } from "../../env"
@@ -166,11 +166,26 @@ function createStoryRoyaltySdkClient(input: {
   }
 
   const gasPolicy = resolveStoryRoyaltyGasPolicy(input.env)
-  return StoryClient.newClient({
+  const transport = fallback(resolveStoryRpcUrls(input.env).map((url) => cappedStoryRoyaltyHttp(url, gasPolicy)))
+  const wallet = createWalletClient({
     account: privateKeyToAccount(input.operatorPrivateKey),
-    transport: fallback(resolveStoryRpcUrls(input.env).map((url) => cappedStoryRoyaltyHttp(url, gasPolicy))),
+    chain: resolveStoryViemChain(input.env),
+    transport,
+  })
+  const uncappedWriteContract = wallet.writeContract.bind(wallet)
+  wallet.writeContract = async (request: unknown) => {
+    return await uncappedWriteContract(capStoryRoyaltyWriteContractRequestForTests(request, gasPolicy) as never)
+  }
+
+  return StoryClient.newClient({
+    wallet,
+    transport,
     chainId: resolveStoryChainName(input.env),
   }) as StoryRoyaltySdkClient
+}
+
+function resolveStoryViemChain(env: Pick<Env, "STORY_CHAIN_ID">): typeof aeneid | typeof mainnet {
+  return resolveStoryChainId(env) === 1514 ? mainnet : aeneid
 }
 
 function resolveStoryRoyaltyGasPolicy(
@@ -315,6 +330,25 @@ function parseRpcQuantity(value: unknown): bigint | null {
   if (/^0x[0-9a-fA-F]+$/.test(trimmed)) return BigInt(trimmed)
   if (/^\d+$/.test(trimmed)) return BigInt(trimmed)
   return null
+}
+
+export function capStoryRoyaltyWriteContractRequestForTests(
+  request: unknown,
+  gasPolicy: DirectTxGasPolicy,
+): unknown {
+  if (typeof request !== "object" || request == null) return request
+  const value = request as Record<string, unknown>
+  return {
+    ...value,
+    gasPrice: undefined,
+    maxFeePerGas: capBigintField(value.maxFeePerGas, gasPolicy.maxFeePerGasCapWei),
+    maxPriorityFeePerGas: capBigintField(value.maxPriorityFeePerGas, gasPolicy.maxPriorityFeePerGasCapWei),
+  }
+}
+
+function capBigintField(value: unknown, cap: bigint): bigint {
+  if (typeof value === "bigint" && value > 0n && value < cap) return value
+  return cap
 }
 
 function normalizeStoryRoyaltyRightsBasis(

@@ -12,6 +12,7 @@ import { insertPost } from "../src/lib/posts/community-post-create-store"
 import { createControlPlaneTestClient } from "./helpers"
 import {
   capStoryRoyaltyRpcFeeResponseForTests,
+  capStoryRoyaltyWriteContractRequestForTests,
   isStoryRoyaltyRegistrationConfigured,
   maybeRegisterStoryRoyaltyForAsset,
   resolvePilTermsForLicense,
@@ -86,6 +87,41 @@ test("caps Story royalty SDK fee RPC responses", async () => {
     baseFeePerGas: ["0x12a05f200", "0x3b9aca00"],
     reward: [["0x77359400", "0x3b9aca00"]],
   })
+})
+
+test("caps Story royalty SDK writeContract requests", () => {
+  const gasPolicy = {
+    maxFeePerGasCapWei: 5_000_000_000n,
+    maxPriorityFeePerGasCapWei: 2_000_000_000n,
+    gasLimitCap: 1_500_000n,
+    gasEstimateBufferBps: 12_000n,
+  }
+
+  const capped = capStoryRoyaltyWriteContractRequestForTests({
+    address: "0x1111111111111111111111111111111111111111",
+    gasPrice: 500_000_000_007n,
+    maxFeePerGas: 500_000_000_007n,
+    maxPriorityFeePerGas: 500_000_000_007n,
+  }, gasPolicy) as {
+    gasPrice?: bigint
+    maxFeePerGas?: bigint
+    maxPriorityFeePerGas?: bigint
+  }
+
+  expect(capped.gasPrice).toBeUndefined()
+  expect(capped.maxFeePerGas).toBe(5_000_000_000n)
+  expect(capped.maxPriorityFeePerGas).toBe(2_000_000_000n)
+
+  const low = capStoryRoyaltyWriteContractRequestForTests({
+    maxFeePerGas: 3_000_000_000n,
+    maxPriorityFeePerGas: 1_000_000_000n,
+  }, gasPolicy) as {
+    maxFeePerGas?: bigint
+    maxPriorityFeePerGas?: bigint
+  }
+
+  expect(low.maxFeePerGas).toBe(3_000_000_000n)
+  expect(low.maxPriorityFeePerGas).toBe(1_000_000_000n)
 })
 
 function buildUser(userId: string): User {
