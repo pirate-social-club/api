@@ -41,6 +41,7 @@ import type { SongArtifactCommunityRepository } from "./song-artifact-types"
 const DIRECT_MULTIPART_PART_BYTES = 10 * 1024 * 1024
 const DIRECT_MULTIPART_SESSION_TTL_MS = 60 * 60 * 1000
 const DIRECT_MULTIPART_PART_URL_TTL_SECONDS = 300
+export const DIRECT_MULTIPART_VIDEO_MAX_BYTES = 2 * 1024 * 1024 * 1024
 const MAX_MULTIPART_PARTS = 10_000
 const POST_COMPLETE_HEAD_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 16000] as const
 
@@ -72,6 +73,9 @@ function sleep(ms: number): Promise<void> {
 export function computeMultipartPartPlan(totalSizeBytes: number): { partSizeBytes: number; totalParts: number } {
   if (!Number.isSafeInteger(totalSizeBytes) || totalSizeBytes <= 0) {
     throw badRequestError("direct_multipart upload requires a positive size_bytes")
+  }
+  if (totalSizeBytes > DIRECT_MULTIPART_VIDEO_MAX_BYTES) {
+    throw badRequestError("Video uploads are currently limited to 2GB")
   }
   const totalParts = Math.max(1, Math.ceil(totalSizeBytes / DIRECT_MULTIPART_PART_BYTES))
   if (totalParts > MAX_MULTIPART_PARTS) {
