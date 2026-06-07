@@ -992,19 +992,28 @@ export async function prepareRequestedLockedAssetDelivery(input: {
 
   if (shouldRegisterRoyalty && storyRoyaltyRegistrationStatus === "failed") {
     const sanitizedStoryError = sanitizeStoryRegistrationFailure(storyError)
+    const terminalFailure = input.markFailureAsTerminal ?? true
     await input.client.execute({
       sql: `
         UPDATE assets
-        SET story_status = 'failed',
-            story_error = ?3,
-            story_royalty_registration_status = 'failed',
-            locked_delivery_status = 'failed',
-            locked_delivery_error = ?3,
-            updated_at = ?4
+        SET story_status = ?3,
+            story_error = ?4,
+            story_royalty_registration_status = ?5,
+            locked_delivery_status = ?6,
+            locked_delivery_error = ?4,
+            updated_at = ?7
         WHERE community_id = ?1
           AND asset_id = ?2
       `,
-      args: [input.communityId, asset.asset_id, sanitizedStoryError, nowIso()],
+      args: [
+        input.communityId,
+        asset.asset_id,
+        terminalFailure ? "failed" : "requested",
+        sanitizedStoryError,
+        terminalFailure ? "failed" : "pending",
+        terminalFailure ? "failed" : "requested",
+        nowIso(),
+      ],
     })
     throw providerUnavailable(storyRegistrationFailureMessage(storyError), {
       reason: "story_royalty_registration_failed",
