@@ -8,12 +8,15 @@ stay blocked until the asset reaches `locked_delivery_status = "ready"`.
 
 ## Health Signals
 
-- Locked video `post_create` p95 should stay under 5 seconds in staging and
-  production. Local real-file timing currently shows about 650ms for 4 MB locked
-  video after warmup.
+- Locked video `post_create` p95 should stay under 10 seconds in staging and
+  under 5 seconds in production once the edge path is warm. Isolated staging
+  real-file runs on 4 MB videos have shown `post_create` around 5-6 seconds
+  while Story/CDR readiness completes in the background.
 - `locked_asset_delivery_prepare` jobs should normally start from the immediate
   `waitUntil` kick after post creation. `job_run_to_ready` may still take tens of
-  seconds because it performs the Story/CDR work in the background.
+  seconds to a few minutes because it performs CDR, Story publish, and royalty
+  registration in the background. Staging Story testnet runs have observed about
+  90-150 seconds.
 - The scheduled log line
   `[community-jobs] reconciled locked delivery jobs` should be rare. A single
   tick with `enqueued_jobs > 0` means a safety net repaired an orphan. Repeated
@@ -63,15 +66,63 @@ Before production, run the real-file timing harness against staging with real
 Filebase and Story testnet configuration:
 
 ```bash
-PIRATE_TIMING_API_BASE_URL=https://api-staging.pirate.sc \
-PIRATE_TIMING_COMMUNITY_ID=<staging-community-id> \
+PIRATE_TIMING_API_BASE_URL=https://pirate-api-submission-speed-staging.hippiehecton.workers.dev \
+PIRATE_TIMING_KIND=video-locked \
 PIRATE_TIMING_RUNS=20 \
-PIRATE_TIMING_WARMUP_RUNS=1 \
-rtk bun run timing:local-runs --label staging-async
+PIRATE_TIMING_REUSE_CREATED_COMMUNITY=true \
+PIRATE_TIMING_READY_TIMEOUT_MS=600000 \
+PIRATE_TIMING_REQUEST_TIMEOUT_MS=60000 \
+PIRATE_TIMING_EXPECT_GIT_SHA=<deployed-api-sha> \
+PIRATE_TIMING_OUTPUT=scripts/generated-timing-runs/staging-20/video-locked-isolated-<sha>-20run-final.jsonl \
+rtk env infisical run --project-config-dir ../../../core --env=staging --path=/services/api -- \
+  rtk bun run timing:submission-e2e \
+    --file ./scripts/generated-fixtures/4mb.mp4 \
+    --poster-file ./scripts/generated-fixtures/poster.jpg
 ```
 
-Use a staging community and funded test wallet. Do not use production timing
-runs for development iteration.
+The harness preflights Story testnet funding and Turso capacity before it
+creates communities or spends gas. For remote locked 20-runs, the default Story
+funding preflight requires:
+
+- `STORY_OPERATOR_PRIVATE_KEY` / CDR signer balance >= 1 IP
+- `STORY_RUNTIME_FUNDER_PRIVATE_KEY + STORY_OPERATOR_PRIVATE_KEY` balance >= 9 IP
+- `MUSIC_PURCHASE_STORY_SETTLEMENT_PRIVATE_KEY` balance > 0
+
+Fund the staging Story runtime funder before long runs:
+
+```text
+0x3d02720a1C05129eE233796124494e0765B9A61A
+```
+
+After funding, top up runtime signers:
+
+```bash
+rtk env infisical run --project-config-dir ../../../core --env=staging --path=/services/api -- \
+  rtk bun run scripts/fund-story-runtime-signers.ts --target-balance-wei=1800000000000000000
+```
+
+Do not use production timing runs for development iteration.
+
+### Current Staging Evidence
+
+Latest isolated staging deployment for the API feature code:
+
+- Worker: `pirate-api-submission-speed-staging`
+- URL: `https://pirate-api-submission-speed-staging.hippiehecton.workers.dev`
+- Verified API SHA: `0718d3d`
+
+Real-file timing evidence gathered before the final 20-run funding gate:
+
+- Locked song 20-run succeeded on SHA `bb62204`:
+  - publish path p50: about 16.6 seconds
+  - `post_create` p50: about 5.8 seconds
+  - `job_run_to_ready` p50: about 92 seconds
+- Locked video real-file staging runs on SHA `b9142f5`:
+  - successful run 1: `post_create` 5.7 seconds, `job_run_to_ready` 151.7 seconds
+  - successful run 2: `post_create` 5.5 seconds, `job_run_to_ready` 141.0 seconds
+
+The full locked-video 20-run remains a production gate. It is blocked until the
+Story testnet funder has enough IP for the harness preflight.
 
 ## Local A/B Timing
 
@@ -86,4 +137,3 @@ PIRATE_TIMING_COMMUNITY_ID=cmt_... rtk bash scripts/timing-runs.sh async
 
 The async run should move the old locked delivery cost from `post_create` to
 `job_run_to_ready`.
-
