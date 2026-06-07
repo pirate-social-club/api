@@ -97,7 +97,8 @@ Preflight options:
                                       Minimum combined funder + operator IP for remote locked runs.
                                       Defaults to max(1.5, (runs + warmups) * 0.45).
   PIRATE_TIMING_PREFLIGHT_MIN_OPERATOR_IP
-                                      Minimum operator/CDR signer IP for remote locked runs. Defaults to 1.0.
+                                      Minimum operator/CDR signer IP for remote locked runs.
+                                      Defaults to max(1.0, (runs + warmups) * 0.25).
   PIRATE_TIMING_TURSO_DATABASE_LIMIT  Defaults to 100.
   PIRATE_TIMING_TURSO_REQUIRED_SLOTS  Defaults to temporary communities needed by this command.
 
@@ -219,7 +220,10 @@ async function assertStoryFundingPreflight(input: {
     "PIRATE_TIMING_PREFLIGHT_MIN_STORY_IP",
     Math.max(1.5, (input.runs + input.warmupRuns) * 0.45),
   )
-  const minOperatorIp = readPositiveNumberEnv("PIRATE_TIMING_PREFLIGHT_MIN_OPERATOR_IP", 1.0)
+  const minOperatorIp = readPositiveNumberEnv(
+    "PIRATE_TIMING_PREFLIGHT_MIN_OPERATOR_IP",
+    Math.max(1.0, (input.runs + input.warmupRuns) * 0.25),
+  )
   const totalIp = (balances.funderIp ?? 0) + (balances.operatorIp ?? 0)
   const operatorIp = balances.operatorIp ?? 0
   const settlementIp = balances.settlementIp ?? 0
@@ -1257,7 +1261,7 @@ async function main(): Promise<void> {
   const runs = Math.max(1, Number(readEnv("PIRATE_TIMING_RUNS", "1")))
   const warmupRuns = Math.max(0, Number(readEnv("PIRATE_TIMING_WARMUP_RUNS", "0")))
   const pollIntervalMs = Math.max(250, Number(readEnv("PIRATE_TIMING_POLL_INTERVAL_MS", "2000")))
-  const readyTimeoutMs = Math.max(1000, Number(readEnv("PIRATE_TIMING_READY_TIMEOUT_MS", "180000")))
+  const readyTimeoutMs = Math.max(1000, Number(readEnv("PIRATE_TIMING_READY_TIMEOUT_MS", "1800000")))
   const outputPath = readFlag("--output") || readEnv("PIRATE_TIMING_OUTPUT")
   const expectedGitSha = readFlag("--expect-git-sha") || readEnv("PIRATE_TIMING_EXPECT_GIT_SHA")
   const reuseCreatedCommunity = readEnv("PIRATE_TIMING_REUSE_CREATED_COMMUNITY", "false") === "true"

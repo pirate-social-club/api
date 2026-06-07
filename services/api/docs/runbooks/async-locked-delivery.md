@@ -70,7 +70,7 @@ PIRATE_TIMING_API_BASE_URL=https://pirate-api-submission-speed-staging.hippiehec
 PIRATE_TIMING_KIND=video-locked \
 PIRATE_TIMING_RUNS=20 \
 PIRATE_TIMING_REUSE_CREATED_COMMUNITY=true \
-PIRATE_TIMING_READY_TIMEOUT_MS=600000 \
+PIRATE_TIMING_READY_TIMEOUT_MS=1800000 \
 PIRATE_TIMING_REQUEST_TIMEOUT_MS=60000 \
 PIRATE_TIMING_EXPECT_GIT_SHA=<deployed-api-sha> \
 PIRATE_TIMING_OUTPUT=scripts/generated-timing-runs/staging-20/video-locked-isolated-<sha>-20run-final.jsonl \
@@ -84,7 +84,7 @@ The harness preflights Story testnet funding and Turso capacity before it
 creates communities or spends gas. For remote locked 20-runs, the default Story
 funding preflight requires:
 
-- `STORY_OPERATOR_PRIVATE_KEY` / CDR signer balance >= 1 IP
+- `STORY_OPERATOR_PRIVATE_KEY` / CDR signer balance >= 5 IP for 20 locked runs
 - `STORY_RUNTIME_FUNDER_PRIVATE_KEY + STORY_OPERATOR_PRIVATE_KEY` balance >= 9 IP
 - `MUSIC_PURCHASE_STORY_SETTLEMENT_PRIVATE_KEY` balance > 0
 
@@ -98,7 +98,7 @@ After funding, top up runtime signers:
 
 ```bash
 rtk env infisical run --project-config-dir ../../../core --env=staging --path=/services/api -- \
-  rtk bun run scripts/fund-story-runtime-signers.ts --target-balance-wei=1800000000000000000
+  rtk bun run scripts/fund-story-runtime-signers.ts --target-balance-wei=5000000000000000000
 ```
 
 Do not use production timing runs for development iteration.

@@ -289,8 +289,9 @@ kill switch; outside local/test the default is async when unset.
 Before promoting to production, run the staging real-file timing harness and
 review `docs/runbooks/async-locked-delivery.md`. Remote locked timing runs now
 preflight Story testnet signer funding and Turso database capacity before
-creating communities or spending gas; fund the staging Story runtime funder
-listed in the runbook before a 20-run.
+creating communities or spending gas. Before a 20-run, fund the staging Story
+runtime funder listed in the runbook and top up the operator/CDR signer to the
+runbook target.
 
 ## Mint A Dev JWT
 
