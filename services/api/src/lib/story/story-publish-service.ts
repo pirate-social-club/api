@@ -1,4 +1,4 @@
-import { JsonRpcProvider, Wallet, getAddress } from "ethers"
+import { Contract, JsonRpcProvider, Wallet, getAddress } from "ethers"
 import type { Env } from "../../env"
 import { resolveDirectTxGasPolicy, sendContractTxWithPolicy } from "../evm-direct-tx"
 import { parseExpectedEvmAddress } from "../evm-signer"
@@ -13,10 +13,12 @@ import {
 } from "./story-runtime-config"
 
 const PURCHASE_ENTITLEMENT_TOKEN_ABI = [
+  "function entitlementClasses(uint256 tokenId) view returns (bytes32 assetVersionId, uint32 cdrVaultUuid, bool active)",
   "function configureEntitlementClass(uint256 tokenId, bytes32 assetVersionId, uint32 cdrVaultUuid, bool active)",
 ] as const
 
 const ASSET_PUBLISH_COORDINATOR_ABI = [
+  "function publishedAssetVersions(bytes32 assetVersionId) view returns (bool)",
   "function publishAssetVersion(address publisher, bytes32 assetVersionId, uint32 cdrVaultUuid, bytes32 namespace, bytes32 contentHash, bytes32 storageRefHash, uint256 entitlementTokenId, address readCondition, address writeCondition)",
 ] as const
 
@@ -68,6 +70,57 @@ function normalizePrivateKey(raw: string | null | undefined): string | null {
   if (!value) return null
   const withPrefix = value.startsWith("0x") ? value : `0x${value}`
   return /^0x[a-fA-F0-9]{64}$/.test(withPrefix) ? withPrefix : null
+}
+
+function normalizeBytes32(value: unknown): string {
+  return String(value || "").trim().toLowerCase()
+}
+
+export function classifyExistingEntitlementClassForPublish(input: {
+  existingAssetVersionId: unknown
+  existingCdrVaultUuid: unknown
+  existingActive: unknown
+  assetVersionId: `0x${string}`
+  cdrVaultUuid: number
+}): "missing" | "matching" {
+  const existingAssetVersionId = normalizeBytes32(input.existingAssetVersionId)
+  const existingCdrVaultUuid = Number(input.existingCdrVaultUuid ?? 0)
+  const existingActive = Boolean(input.existingActive)
+  if (!existingActive && /^0x0{64}$/.test(existingAssetVersionId)) {
+    return "missing"
+  }
+  if (
+    existingActive
+    && existingAssetVersionId === input.assetVersionId.toLowerCase()
+    && existingCdrVaultUuid === input.cdrVaultUuid
+  ) {
+    return "matching"
+  }
+  throw new Error(
+    `story_entitlement_class_mismatch:${JSON.stringify({
+      expectedAssetVersionId: input.assetVersionId,
+      expectedCdrVaultUuid: input.cdrVaultUuid,
+      existingAssetVersionId,
+      existingCdrVaultUuid,
+      existingActive,
+    })}`,
+  )
+}
+
+async function resolveEntitlementClassStatus(input: {
+  contract: Contract
+  entitlementTokenId: bigint
+  assetVersionId: `0x${string}`
+  cdrVaultUuid: number
+}): Promise<"missing" | "matching"> {
+  const existing = await input.contract.entitlementClasses(input.entitlementTokenId)
+  return classifyExistingEntitlementClassForPublish({
+    existingAssetVersionId: existing?.assetVersionId ?? existing?.[0],
+    existingCdrVaultUuid: existing?.cdrVaultUuid ?? existing?.[1] ?? 0,
+    existingActive: existing?.active ?? existing?.[2],
+    assetVersionId: input.assetVersionId,
+    cdrVaultUuid: input.cdrVaultUuid,
+  })
 }
 
 export async function publishLockedAssetVersionToStory(input: {
@@ -129,57 +182,82 @@ export async function publishLockedAssetVersionToStory(input: {
   const ownerSigner = new Wallet(ownerPrivateKey, provider)
   const operatorSigner = new Wallet(operatorConfig.value.privateKey, provider)
 
-  const configureTx = await sendContractTxWithPolicy({
+  const entitlementContract = new Contract(
+    STORY_DELIVERY_CONTRACTS.purchaseEntitlementToken,
+    PURCHASE_ENTITLEMENT_TOKEN_ABI,
     provider,
-    signer: ownerSigner,
-    contractAddress: STORY_DELIVERY_CONTRACTS.purchaseEntitlementToken,
-    abi: PURCHASE_ENTITLEMENT_TOKEN_ABI,
-    functionName: "configureEntitlementClass",
-    args: [
-      input.entitlementTokenId,
-      input.assetVersionId,
-      input.cdrVaultUuid,
-      true,
-    ],
-    gasPolicy: gasPolicy.value,
+  )
+  let entitlementConfiguredTxHash = "already_configured"
+  const entitlementClassStatus = await resolveEntitlementClassStatus({
+    contract: entitlementContract,
+    entitlementTokenId: input.entitlementTokenId,
+    assetVersionId: input.assetVersionId,
+    cdrVaultUuid: input.cdrVaultUuid,
   })
-  const configureReceipt = await configureTx.wait()
-  if (!configureReceipt || configureReceipt.status !== 1) {
-    throw new Error("story_entitlement_class_configure_failed")
+  if (entitlementClassStatus === "missing") {
+    const configureTx = await sendContractTxWithPolicy({
+      provider,
+      signer: ownerSigner,
+      contractAddress: STORY_DELIVERY_CONTRACTS.purchaseEntitlementToken,
+      abi: PURCHASE_ENTITLEMENT_TOKEN_ABI,
+      functionName: "configureEntitlementClass",
+      args: [
+        input.entitlementTokenId,
+        input.assetVersionId,
+        input.cdrVaultUuid,
+        true,
+      ],
+      gasPolicy: gasPolicy.value,
+    })
+    const configureReceipt = await configureTx.wait()
+    if (!configureReceipt || configureReceipt.status !== 1) {
+      throw new Error("story_entitlement_class_configure_failed")
+    }
+    entitlementConfiguredTxHash = String(configureTx.hash || "")
   }
 
-  await ensureStoryPublishOperatorAuthorized({
-    env: input.env,
+  const publishCoordinator = new Contract(
+    STORY_DELIVERY_CONTRACTS.assetPublishCoordinatorV1,
+    ASSET_PUBLISH_COORDINATOR_ABI,
     provider,
-    operatorAddress: operatorSigner.address,
-  })
+  )
+  let publishTxHash = "already_published"
+  const alreadyPublished = Boolean(await publishCoordinator.publishedAssetVersions(input.assetVersionId))
+  if (!alreadyPublished) {
+    await ensureStoryPublishOperatorAuthorized({
+      env: input.env,
+      provider,
+      operatorAddress: operatorSigner.address,
+    })
 
-  const publishTx = await sendContractTxWithPolicy({
-    provider,
-    contractAddress: STORY_DELIVERY_CONTRACTS.assetPublishCoordinatorV1,
-    abi: ASSET_PUBLISH_COORDINATOR_ABI,
-    functionName: "publishAssetVersion",
-    args: [
-      getAddress(publisherAddress),
-      input.assetVersionId,
-      input.cdrVaultUuid,
-      input.namespace,
-      input.contentHash,
-      input.storageRefHash,
-      input.entitlementTokenId,
-      getAddress(readConditionAddress),
-      getAddress(writeConditionAddress),
-    ],
-    gasPolicy: gasPolicy.value,
-    signer: operatorSigner,
-  })
-  const publishReceipt = await provider.waitForTransaction(String(publishTx.hash || ""), 1, txWaitTimeoutMs)
-  if (!publishReceipt || publishReceipt.status !== 1) {
-    throw new Error("story_publish_asset_version_failed")
+    const publishTx = await sendContractTxWithPolicy({
+      provider,
+      contractAddress: STORY_DELIVERY_CONTRACTS.assetPublishCoordinatorV1,
+      abi: ASSET_PUBLISH_COORDINATOR_ABI,
+      functionName: "publishAssetVersion",
+      args: [
+        getAddress(publisherAddress),
+        input.assetVersionId,
+        input.cdrVaultUuid,
+        input.namespace,
+        input.contentHash,
+        input.storageRefHash,
+        input.entitlementTokenId,
+        getAddress(readConditionAddress),
+        getAddress(writeConditionAddress),
+      ],
+      gasPolicy: gasPolicy.value,
+      signer: operatorSigner,
+    })
+    const publishReceipt = await provider.waitForTransaction(String(publishTx.hash || ""), 1, txWaitTimeoutMs)
+    if (!publishReceipt || publishReceipt.status !== 1) {
+      throw new Error("story_publish_asset_version_failed")
+    }
+    publishTxHash = String(publishTx.hash || "")
   }
 
   return {
-    entitlementConfiguredTxHash: String(configureTx.hash || ""),
-    publishTxHash: String(publishTx.hash || ""),
+    entitlementConfiguredTxHash,
+    publishTxHash,
   }
 }
