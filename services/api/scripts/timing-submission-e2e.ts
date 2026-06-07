@@ -4,7 +4,7 @@ import { existsSync } from "node:fs"
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises"
 import { basename, dirname, extname, join } from "node:path"
 import { SignJWT } from "jose"
-import { Wallet } from "ethers"
+import { JsonRpcProvider, Wallet, formatEther } from "ethers"
 import { solveChallenge, type Challenge, type Payload } from "altcha-lib"
 import { deriveKey } from "altcha-lib/algorithms/pbkdf2"
 // @ts-expect-error The API tsconfig only loads bun-types/test, but this script runs under Bun.
@@ -90,6 +90,16 @@ Common options:
   --skip-owner-access              Skip final owner access read. Localhost only unless --allow-remote-skip-owner-access is set.
   --allow-remote-skip-owner-access Permit --skip-owner-access against non-local API URLs.
   --skip-song-preview-wait         Try song post creation without waiting for preview first.
+  --skip-preflight                 Skip remote funding/Turso capacity checks.
+
+Preflight options:
+  PIRATE_TIMING_PREFLIGHT_MIN_STORY_IP
+                                      Minimum combined funder + operator IP for remote locked runs.
+                                      Defaults to max(1.5, (runs + warmups) * 0.45).
+  PIRATE_TIMING_PREFLIGHT_MIN_OPERATOR_IP
+                                      Minimum operator/CDR signer IP for remote locked runs. Defaults to 1.0.
+  PIRATE_TIMING_TURSO_DATABASE_LIMIT  Defaults to 100.
+  PIRATE_TIMING_TURSO_REQUIRED_SLOTS  Defaults to temporary communities needed by this command.
 
 Output:
   One JSON object per stage, plus a summary table with mean, p50, and p95.
@@ -137,6 +147,13 @@ function unixSeconds(value: string): number {
   return Math.floor(new Date(value).getTime() / 1000)
 }
 
+function readPositiveNumberEnv(name: string, fallback: number): number {
+  const raw = readEnv(name)
+  if (!raw) return fallback
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
 function resolveSqlitePathFromUrl(value: string | undefined, fallback: string): string {
   const raw = value?.trim() || fallback
   return raw.startsWith("file:") ? raw.slice("file:".length) : raw
@@ -161,6 +178,109 @@ function percentile(values: number[], pct: number): number {
   const sorted = [...values].sort((a, b) => a - b)
   const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil((pct / 100) * sorted.length) - 1))
   return sorted[index]!
+}
+
+async function readStorySignerBalances(): Promise<{
+  funderIp: number | null
+  operatorIp: number | null
+  settlementIp: number | null
+  addresses: Record<string, string>
+}> {
+  const provider = new JsonRpcProvider(readEnv("STORY_RPC_URL", "https://aeneid.storyrpc.io"), Number(readEnv("STORY_CHAIN_ID", "1315")))
+  const addresses: Record<string, string> = {}
+  async function balanceForPrivateKey(envName: string): Promise<number | null> {
+    const raw = String(env[envName] || "").trim()
+    if (!/^(0x)?[0-9a-fA-F]{64}$/.test(raw)) return null
+    const wallet = new Wallet(raw.startsWith("0x") ? raw : `0x${raw}`)
+    addresses[envName] = wallet.address
+    return Number(formatEther(await provider.getBalance(wallet.address)))
+  }
+  try {
+    return {
+      funderIp: await balanceForPrivateKey("STORY_RUNTIME_FUNDER_PRIVATE_KEY"),
+      operatorIp: await balanceForPrivateKey("STORY_OPERATOR_PRIVATE_KEY"),
+      settlementIp: await balanceForPrivateKey("MUSIC_PURCHASE_STORY_SETTLEMENT_PRIVATE_KEY"),
+      addresses,
+    }
+  } finally {
+    await provider.destroy()
+  }
+}
+
+async function assertStoryFundingPreflight(input: {
+  kind: TimingKind
+  runs: number
+  warmupRuns: number
+  target: string
+}): Promise<void> {
+  if (input.target !== "remote" || !input.kind.endsWith("-locked")) return
+  const balances = await readStorySignerBalances()
+  const minTotalIp = readPositiveNumberEnv(
+    "PIRATE_TIMING_PREFLIGHT_MIN_STORY_IP",
+    Math.max(1.5, (input.runs + input.warmupRuns) * 0.45),
+  )
+  const minOperatorIp = readPositiveNumberEnv("PIRATE_TIMING_PREFLIGHT_MIN_OPERATOR_IP", 1.0)
+  const totalIp = (balances.funderIp ?? 0) + (balances.operatorIp ?? 0)
+  const operatorIp = balances.operatorIp ?? 0
+  const settlementIp = balances.settlementIp ?? 0
+  console.log("[timing] story funding preflight", {
+    min_total_ip: minTotalIp,
+    min_operator_ip: minOperatorIp,
+    funder_ip: balances.funderIp,
+    operator_ip: balances.operatorIp,
+    settlement_ip: balances.settlementIp,
+    addresses: balances.addresses,
+  })
+  if (operatorIp < minOperatorIp || totalIp < minTotalIp || settlementIp <= 0) {
+    throw new Error(
+      [
+        "Story funding preflight failed:",
+        `operator=${operatorIp.toFixed(3)} IP (need >= ${minOperatorIp})`,
+        `funder+operator=${totalIp.toFixed(3)} IP (need >= ${minTotalIp})`,
+        `settlement=${settlementIp.toFixed(3)} IP`,
+      ].join(" "),
+    )
+  }
+}
+
+async function assertTursoCapacityPreflight(input: {
+  communityId: string | null
+  reuseCreatedCommunity: boolean
+  runs: number
+  warmupRuns: number
+  target: string
+}): Promise<void> {
+  if (input.target !== "remote" || input.communityId) return
+  const organizationSlug = readEnv("TURSO_ORGANIZATION_SLUG")
+  const apiToken = readEnv("TURSO_PLATFORM_API_TOKEN")
+  if (!organizationSlug || !apiToken) {
+    console.warn("[timing] Turso capacity preflight skipped: TURSO_ORGANIZATION_SLUG or TURSO_PLATFORM_API_TOKEN is missing")
+    return
+  }
+  const databaseLimit = Math.trunc(readPositiveNumberEnv("PIRATE_TIMING_TURSO_DATABASE_LIMIT", 100))
+  const defaultRequiredSlots = input.reuseCreatedCommunity ? 1 : input.runs + input.warmupRuns
+  const requiredSlots = Math.trunc(readPositiveNumberEnv("PIRATE_TIMING_TURSO_REQUIRED_SLOTS", defaultRequiredSlots))
+  const response = await fetch(`https://api.turso.tech/v1/organizations/${encodeURIComponent(organizationSlug)}/databases`, {
+    headers: {
+      authorization: `Bearer ${apiToken}`,
+    },
+  })
+  if (!response.ok) {
+    throw new Error(`Turso capacity preflight failed: GET /databases returned ${response.status}: ${await response.text()}`)
+  }
+  const body = await response.json() as { databases?: unknown[] }
+  const databaseCount = Array.isArray(body.databases) ? body.databases.length : 0
+  console.log("[timing] Turso capacity preflight", {
+    organization: organizationSlug,
+    database_count: databaseCount,
+    database_limit: databaseLimit,
+    required_slots: requiredSlots,
+  })
+  if (databaseCount + requiredSlots > databaseLimit) {
+    throw new Error(
+      `Turso capacity preflight failed: ${databaseCount} existing DBs + ${requiredSlots} required slots exceeds limit ${databaseLimit}`,
+    )
+  }
 }
 
 function summarize(events: TimingEvent[]): void {
@@ -1162,6 +1282,21 @@ async function main(): Promise<void> {
     events,
     outputPath,
   })
+  if (!hasFlag("--skip-preflight")) {
+    await assertStoryFundingPreflight({
+      kind,
+      runs,
+      warmupRuns,
+      target,
+    })
+    await assertTursoCapacityPreflight({
+      communityId,
+      reuseCreatedCommunity,
+      runs,
+      warmupRuns,
+      target,
+    })
+  }
   let sharedSession: Session | null = null
   let sharedCommunityId: string | null = null
   if (reuseCreatedCommunity) {
