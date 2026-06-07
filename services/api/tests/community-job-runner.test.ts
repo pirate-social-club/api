@@ -330,6 +330,111 @@ describe("community-job-runner", () => {
     expect(repo.postProjections.get(postId)?.source_post_id).toBe(postId)
   })
 
+  test("continues processing later communities when one community database fails to open", async () => {
+    const rootDir = await createCommunityJobRunnerRoot("pirate-community-job-community-failure-")
+
+    const databasePath = join(rootDir, "healthy.db")
+    const brokenCommunityId = "cmt_job_broken_db"
+    const healthyCommunityId = "cmt_job_healthy_after_failure"
+    const env: Env = {
+      LOCAL_COMMUNITY_DB_ROOT: rootDir,
+    }
+    const healthyRepo = buildCommunityRepository(databasePath, healthyCommunityId)
+    const { postId } = await seedCommunityState({
+      env,
+      repo: healthyRepo,
+      communityId: healthyCommunityId,
+      memberUserIds: ["usr_owner"],
+    })
+
+    const healthyDb = await openCommunityDb(env, healthyRepo, healthyCommunityId)
+    try {
+      await enqueueCommunityJob({
+        client: healthyDb.client,
+        communityId: healthyCommunityId,
+        jobType: "post_projection_sync",
+        subjectType: "post",
+        subjectId: postId,
+        payloadJson: JSON.stringify({ post_id: postId }),
+        createdAt: "2026-06-05T00:00:00.000Z",
+      })
+    } finally {
+      healthyDb.close()
+    }
+
+    const healthyCommunity = await healthyRepo.getCommunityById(healthyCommunityId)
+    expect(healthyCommunity).toBeTruthy()
+
+    const combinedRepo = {
+      async getCommunityById(communityId: string) {
+        if (communityId === brokenCommunityId) {
+          return {
+            ...healthyCommunity!,
+            community_id: brokenCommunityId,
+            display_name: "Broken Community DB",
+          }
+        }
+        return healthyRepo.getCommunityById(communityId)
+      },
+      async listActiveCommunities() {
+        return [
+          {
+            ...healthyCommunity!,
+            community_id: brokenCommunityId,
+            display_name: "Broken Community DB",
+            created_at: "2026-06-05T00:00:00.000Z",
+            updated_at: "2026-06-05T00:00:00.000Z",
+          },
+          healthyCommunity!,
+        ]
+      },
+      async getPrimaryCommunityDatabaseBinding(communityId: string) {
+        if (communityId === brokenCommunityId) {
+          throw new Error("mock community db 502")
+        }
+        return healthyRepo.getPrimaryCommunityDatabaseBinding(communityId)
+      },
+      async getActiveCommunityDbCredential(bindingId: string) {
+        return healthyRepo.getActiveCommunityDbCredential(bindingId)
+      },
+      async recordCommunityPostProjection(input: Parameters<TestCommunityRepository["recordCommunityPostProjection"]>[0]) {
+        return healthyRepo.recordCommunityPostProjection(input)
+      },
+      async getCommunityPostProjectionByPostId(postId: string) {
+        return healthyRepo.getCommunityPostProjectionByPostId(postId)
+      },
+      async updateCommunityPostProjectionStatus(input: Parameters<TestCommunityRepository["updateCommunityPostProjectionStatus"]>[0]) {
+        return healthyRepo.updateCommunityPostProjectionStatus(input)
+      },
+      async updateCommunityPostProjectionPayload(input: Parameters<TestCommunityRepository["updateCommunityPostProjectionPayload"]>[0]) {
+        return healthyRepo.updateCommunityPostProjectionPayload(input)
+      },
+      async updateCommunityPostProjectionMetrics(input: Parameters<TestCommunityRepository["updateCommunityPostProjectionMetrics"]>[0]) {
+        return healthyRepo.updateCommunityPostProjectionMetrics(input)
+      },
+      async recordCommunityCommentProjection(input: Parameters<TestCommunityRepository["recordCommunityCommentProjection"]>[0]) {
+        return healthyRepo.recordCommunityCommentProjection(input)
+      },
+      async getCommunityCommentProjectionByCommentId(commentId: string) {
+        return healthyRepo.getCommunityCommentProjectionByCommentId(commentId)
+      },
+    } satisfies CommunityJobRepository
+
+    const summary = await processAvailableCommunityJobs({
+      env,
+      communityRepository: combinedRepo,
+      communityIds: [brokenCommunityId, healthyCommunityId],
+      maxJobsPerCommunity: 1,
+    })
+
+    expect(summary.processed_jobs).toBe(1)
+    expect(summary.communities.map((community) => community.community_id)).toEqual([healthyCommunityId])
+    expect(summary.failed_communities).toHaveLength(1)
+    expect(summary.failed_communities[0]?.community_id).toBe(brokenCommunityId)
+    expect(summary.failed_communities[0]?.error).toContain("mock community db 502")
+    expect(healthyRepo.postProjections.get(postId)?.source_post_id).toBe(postId)
+  })
+
   test("processes live-room viewer session prune jobs", async () => {
     const rootDir = await createCommunityJobRunnerRoot("pirate-community-live-room-prune-")
 

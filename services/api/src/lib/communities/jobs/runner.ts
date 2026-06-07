@@ -30,9 +30,19 @@ type CommunityJobCommunityProcessingSummary = {
   jobs: CommunityJobRow[]
 }
 
+type CommunityJobCommunityFailureSummary = {
+  community_id: string
+  error: string
+}
+
 type CommunityJobProcessingSummary = {
   processed_jobs: number
   communities: CommunityJobCommunityProcessingSummary[]
+  failed_communities: CommunityJobCommunityFailureSummary[]
+}
+
+function formatCommunityJobRunnerError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 function createdAtMs(community: { created_at?: string | null }): number {
@@ -233,23 +243,37 @@ export async function processAvailableCommunityJobs(input: {
     )
 
   const communities: CommunityJobCommunityProcessingSummary[] = []
+  const failedCommunities: CommunityJobCommunityFailureSummary[] = []
 
   for (const communityId of communityIds) {
-    const processed = await processCommunityJobsForCommunity({
-      env: input.env,
-      communityId,
-      communityRepository: input.communityRepository,
-      maxJobs: input.maxJobsPerCommunity ?? 25,
-      skipJobTypes: input.skipJobTypes,
-    })
-    if (processed.processed_jobs > 0) {
-      communities.push(processed)
+    try {
+      const processed = await processCommunityJobsForCommunity({
+        env: input.env,
+        communityId,
+        communityRepository: input.communityRepository,
+        maxJobs: input.maxJobsPerCommunity ?? 25,
+        skipJobTypes: input.skipJobTypes,
+      })
+      if (processed.processed_jobs > 0) {
+        communities.push(processed)
+      }
+    } catch (error) {
+      const message = formatCommunityJobRunnerError(error)
+      failedCommunities.push({
+        community_id: communityId,
+        error: message,
+      })
+      logPipelineError("[community-jobs] community processing failed", {
+        community_id: communityId,
+        error: message,
+      })
     }
   }
 
   return {
     processed_jobs: communities.reduce((sum, community) => sum + community.processed_jobs, 0),
     communities,
+    failed_communities: failedCommunities,
   }
 }
 
