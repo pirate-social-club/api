@@ -28,6 +28,7 @@ import {
 } from "../../story/story-cdr"
 import { resolveStoryCdrWriterDirectSigner } from "../../story/story-direct-signer"
 import { publishLockedAssetVersionToStory } from "../../story/story-publish-service"
+import { assertStoryDeliveryRuntimePreflight } from "../../story/story-delivery-preflight"
 import { assertStoryRuntimeSignerFunding } from "../../story/story-runtime-funding"
 import {
   resolveStoryChainId,
@@ -331,6 +332,8 @@ export async function prepareLockedAssetDelivery(input: {
   if (testLockedAssetDeliveryPreparer) {
     return await testLockedAssetDeliveryPreparer(input)
   }
+
+  await assertStoryDeliveryRuntimePreflight(input.env)
 
   const controlPlaneClient = getControlPlaneClient(input.env)
   const upload = await findUploadedSongArtifactByStorageRef({

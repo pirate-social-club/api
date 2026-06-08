@@ -53,6 +53,7 @@ import { refreshScheduledMaterializedPublicHomeFeeds } from "./lib/feed/material
 import { reconcileRoyaltyClaimEvents } from "./lib/royalties/royalty-claim-history"
 import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/runtime-deps"
 import { makeSentryOptions, captureScheduledError, captureScheduledWarning } from "./lib/sentry"
+import { assertStoryDeliveryRuntimePreflight } from "./lib/story/story-delivery-preflight"
 import { LiveRoomRuntimeDO } from "./lib/communities/live-rooms/runtime"
 import type { Env } from "./env"
 
@@ -553,6 +554,27 @@ async function reconcileScheduledPurchaseSettlements(env: Env): Promise<void> {
   }
 }
 
+const loggedStoryDeliveryPreflightFingerprints = new Set<string>()
+
+async function preflightScheduledStoryDeliveryRuntime(env: Env): Promise<void> {
+  try {
+    const summary = await assertStoryDeliveryRuntimePreflight(env)
+    if (!summary.skipped && !loggedStoryDeliveryPreflightFingerprints.has(summary.fingerprint)) {
+      loggedStoryDeliveryPreflightFingerprints.add(summary.fingerprint)
+      console.info("[story-delivery] runtime preflight ok", JSON.stringify({
+        owner_address: summary.ownerAddress,
+        operator_address: summary.operatorAddress,
+        access_signer_address: summary.accessSignerAddress,
+        settlement_address: summary.settlementAddress,
+        contracts: summary.contracts,
+      }))
+    }
+  } catch (error) {
+    console.error("[story-delivery] runtime preflight failed", error)
+    captureScheduledError(env, error, "story_delivery_runtime_preflight")
+  }
+}
+
 async function reconcileScheduledCommunityMembershipProjections(env: Env): Promise<void> {
   const communityRepository = getCommunityRepository(env)
   try {
@@ -582,6 +604,7 @@ const handler: ExportedHandler<Env> = {
   fetch: (req, env, ctx) => fetchWithPublicReadCache(req, env, ctx),
 
   scheduled: async (_controller, env, ctx) => {
+    ctx.waitUntil(withRequestControlPlaneClients(() => preflightScheduledStoryDeliveryRuntime(env)))
     ctx.waitUntil(withRequestControlPlaneClients(() => flushScheduledAnalytics(env)))
     ctx.waitUntil(withRequestControlPlaneClients(() => syncScheduledCommunityHealthCounts(env)))
     ctx.waitUntil(withRequestControlPlaneClients(() => processScheduledCommunityJobs(env)))
