@@ -2,7 +2,7 @@ import { Contract, JsonRpcProvider, Wallet, getAddress } from "ethers"
 import type { Env } from "../../env"
 import { resolveDirectTxGasPolicy, sendContractTxWithPolicy } from "../evm-direct-tx"
 import { normalizeDirectSignerPrivateKey } from "./story-direct-signer"
-import { STORY_DELIVERY_CONTRACTS } from "./story-runtime-config"
+import { resolveStoryDeliveryContracts, type StoryDeliveryContractEnv } from "./story-runtime-config"
 
 const PUBLISH_COORDINATOR_ABI = [
   "function isPublishOperator(address operator) view returns (bool)",
@@ -55,7 +55,7 @@ async function ensureOwnerAuthorizedCall(params: {
     | "STORY_DIRECT_TX_MAX_PRIORITY_FEE_PER_GAS_WEI"
     | "STORY_DIRECT_TX_GAS_LIMIT_MAX"
     | "STORY_DIRECT_TX_GAS_ESTIMATE_BUFFER_BPS"
-  >
+  > & StoryDeliveryContractEnv
   provider: JsonRpcProvider
   contractAddress: string
   abi: readonly string[]
@@ -92,18 +92,19 @@ export async function ensureStoryPublishOperatorAuthorized(params: {
     | "STORY_DIRECT_TX_MAX_PRIORITY_FEE_PER_GAS_WEI"
     | "STORY_DIRECT_TX_GAS_LIMIT_MAX"
     | "STORY_DIRECT_TX_GAS_ESTIMATE_BUFFER_BPS"
-  >
+  > & StoryDeliveryContractEnv
   provider: JsonRpcProvider
   operatorAddress: string
 }): Promise<void> {
   const operatorAddress = getAddress(params.operatorAddress)
-  const contract = new Contract(STORY_DELIVERY_CONTRACTS.assetPublishCoordinatorV1, PUBLISH_COORDINATOR_ABI, params.provider)
+  const deliveryContracts = resolveStoryDeliveryContracts(params.env)
+  const contract = new Contract(deliveryContracts.assetPublishCoordinatorV1, PUBLISH_COORDINATOR_ABI, params.provider)
   const active = Boolean(await contract.isPublishOperator(operatorAddress))
   if (active) return
   await ensureOwnerAuthorizedCall({
     env: params.env,
     provider: params.provider,
-    contractAddress: STORY_DELIVERY_CONTRACTS.assetPublishCoordinatorV1,
+    contractAddress: deliveryContracts.assetPublishCoordinatorV1,
     abi: PUBLISH_COORDINATOR_ABI,
     functionName: "setPublishOperator",
     args: [operatorAddress, true],
@@ -118,18 +119,19 @@ export async function ensureStorySettlementOperatorAuthorized(params: {
     | "STORY_DIRECT_TX_MAX_PRIORITY_FEE_PER_GAS_WEI"
     | "STORY_DIRECT_TX_GAS_LIMIT_MAX"
     | "STORY_DIRECT_TX_GAS_ESTIMATE_BUFFER_BPS"
-  >
+  > & StoryDeliveryContractEnv
   provider: JsonRpcProvider
   operatorAddress: string
 }): Promise<void> {
   const operatorAddress = getAddress(params.operatorAddress)
-  const contract = new Contract(STORY_DELIVERY_CONTRACTS.marketplaceSettlementV1, MARKETPLACE_SETTLEMENT_ABI, params.provider)
+  const deliveryContracts = resolveStoryDeliveryContracts(params.env)
+  const contract = new Contract(deliveryContracts.marketplaceSettlementV1, MARKETPLACE_SETTLEMENT_ABI, params.provider)
   const active = Boolean(await contract.isSettlementOperator(operatorAddress))
   if (active) return
   await ensureOwnerAuthorizedCall({
     env: params.env,
     provider: params.provider,
-    contractAddress: STORY_DELIVERY_CONTRACTS.marketplaceSettlementV1,
+    contractAddress: deliveryContracts.marketplaceSettlementV1,
     abi: MARKETPLACE_SETTLEMENT_ABI,
     functionName: "setSettlementOperator",
     args: [operatorAddress, true],
@@ -144,13 +146,14 @@ export async function ensureStoryEntitlementMinterAuthorized(params: {
     | "STORY_DIRECT_TX_MAX_PRIORITY_FEE_PER_GAS_WEI"
     | "STORY_DIRECT_TX_GAS_LIMIT_MAX"
     | "STORY_DIRECT_TX_GAS_ESTIMATE_BUFFER_BPS"
-  >
+  > & StoryDeliveryContractEnv
   provider: JsonRpcProvider
   minterAddress: string
 }): Promise<void> {
   const minterAddress = getAddress(params.minterAddress)
+  const deliveryContracts = resolveStoryDeliveryContracts(params.env)
   const contract = new Contract(
-    STORY_DELIVERY_CONTRACTS.purchaseEntitlementToken,
+    deliveryContracts.purchaseEntitlementToken,
     PURCHASE_ENTITLEMENT_TOKEN_ABI,
     params.provider,
   )
@@ -159,7 +162,7 @@ export async function ensureStoryEntitlementMinterAuthorized(params: {
   await ensureOwnerAuthorizedCall({
     env: params.env,
     provider: params.provider,
-    contractAddress: STORY_DELIVERY_CONTRACTS.purchaseEntitlementToken,
+    contractAddress: deliveryContracts.purchaseEntitlementToken,
     abi: PURCHASE_ENTITLEMENT_TOKEN_ABI,
     functionName: "setSettlementMinter",
     args: [minterAddress, true],
@@ -174,18 +177,19 @@ export async function ensureStoryAccessSignerAuthorized(params: {
     | "STORY_DIRECT_TX_MAX_PRIORITY_FEE_PER_GAS_WEI"
     | "STORY_DIRECT_TX_GAS_LIMIT_MAX"
     | "STORY_DIRECT_TX_GAS_ESTIMATE_BUFFER_BPS"
-  >
+  > & StoryDeliveryContractEnv
   provider: JsonRpcProvider
   signerAddress: string
 }): Promise<void> {
   const signerAddress = getAddress(params.signerAddress)
-  const contract = new Contract(STORY_DELIVERY_CONTRACTS.pirateSignerRegistry, PIRATE_SIGNER_REGISTRY_ABI, params.provider)
+  const deliveryContracts = resolveStoryDeliveryContracts(params.env)
+  const contract = new Contract(deliveryContracts.pirateSignerRegistry, PIRATE_SIGNER_REGISTRY_ABI, params.provider)
   const active = Boolean(await contract.isActiveSigner(signerAddress))
   if (active) return
   await ensureOwnerAuthorizedCall({
     env: params.env,
     provider: params.provider,
-    contractAddress: STORY_DELIVERY_CONTRACTS.pirateSignerRegistry,
+    contractAddress: deliveryContracts.pirateSignerRegistry,
     abi: PIRATE_SIGNER_REGISTRY_ABI,
     functionName: "setSigner",
     args: [signerAddress, true],

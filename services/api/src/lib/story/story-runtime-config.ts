@@ -1,4 +1,5 @@
 import type { Env } from "../../env"
+import { parseExpectedEvmAddress } from "../evm-signer"
 
 export const DEFAULT_STORY_CHAIN_ID = 1315
 export const DEFAULT_STORY_RPC_URL = "https://aeneid.storyrpc.io"
@@ -14,6 +15,70 @@ export const STORY_DELIVERY_CONTRACTS = {
   assetPublishCoordinatorV1: "0xAD6919367E72F3D2390E837bEbf042368c2acfDf",
   marketplaceSettlementV1: "0x71c7ee1B0F108C7AC76AF12D70D8BE6fE13F8847",
 } as const
+
+export type StoryDeliveryContracts = {
+  purchaseEntitlementToken: string
+  pirateSignerRegistry: string
+  tokenGateCondition: string
+  signedAccessConditionV1: string
+  assetPublishCoordinatorV1: string
+  marketplaceSettlementV1: string
+}
+
+export type StoryDeliveryContractEnv = Pick<
+  Env,
+  | "STORY_PURCHASE_ENTITLEMENT_TOKEN_CONTRACT"
+  | "STORY_PIRATE_SIGNER_REGISTRY_CONTRACT"
+  | "STORY_TOKEN_GATE_CONDITION_CONTRACT"
+  | "STORY_SIGNED_ACCESS_CONDITION_CONTRACT"
+  | "STORY_ASSET_PUBLISH_COORDINATOR_CONTRACT"
+  | "STORY_MARKETPLACE_SETTLEMENT_CONTRACT"
+>
+
+function resolveStoryDeliveryContractAddress(raw: string | null | undefined, fallback: string, field: string): string {
+  const value = String(raw || "").trim()
+  if (!value) return fallback
+  const address = parseExpectedEvmAddress(value)
+  if (!address) {
+    throw new Error(`${field} missing/invalid`)
+  }
+  return address
+}
+
+export function resolveStoryDeliveryContracts(env: StoryDeliveryContractEnv): StoryDeliveryContracts {
+  return {
+    purchaseEntitlementToken: resolveStoryDeliveryContractAddress(
+      env.STORY_PURCHASE_ENTITLEMENT_TOKEN_CONTRACT,
+      STORY_DELIVERY_CONTRACTS.purchaseEntitlementToken,
+      "STORY_PURCHASE_ENTITLEMENT_TOKEN_CONTRACT",
+    ),
+    pirateSignerRegistry: resolveStoryDeliveryContractAddress(
+      env.STORY_PIRATE_SIGNER_REGISTRY_CONTRACT,
+      STORY_DELIVERY_CONTRACTS.pirateSignerRegistry,
+      "STORY_PIRATE_SIGNER_REGISTRY_CONTRACT",
+    ),
+    tokenGateCondition: resolveStoryDeliveryContractAddress(
+      env.STORY_TOKEN_GATE_CONDITION_CONTRACT,
+      STORY_DELIVERY_CONTRACTS.tokenGateCondition,
+      "STORY_TOKEN_GATE_CONDITION_CONTRACT",
+    ),
+    signedAccessConditionV1: resolveStoryDeliveryContractAddress(
+      env.STORY_SIGNED_ACCESS_CONDITION_CONTRACT,
+      STORY_DELIVERY_CONTRACTS.signedAccessConditionV1,
+      "STORY_SIGNED_ACCESS_CONDITION_CONTRACT",
+    ),
+    assetPublishCoordinatorV1: resolveStoryDeliveryContractAddress(
+      env.STORY_ASSET_PUBLISH_COORDINATOR_CONTRACT,
+      STORY_DELIVERY_CONTRACTS.assetPublishCoordinatorV1,
+      "STORY_ASSET_PUBLISH_COORDINATOR_CONTRACT",
+    ),
+    marketplaceSettlementV1: resolveStoryDeliveryContractAddress(
+      env.STORY_MARKETPLACE_SETTLEMENT_CONTRACT,
+      STORY_DELIVERY_CONTRACTS.marketplaceSettlementV1,
+      "STORY_MARKETPLACE_SETTLEMENT_CONTRACT",
+    ),
+  }
+}
 
 export function resolveStoryChainId(env: Pick<Env, "STORY_CHAIN_ID">): number {
   const raw = String(env.STORY_CHAIN_ID || "").trim()

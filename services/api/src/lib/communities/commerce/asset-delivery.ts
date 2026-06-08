@@ -31,9 +31,9 @@ import { publishLockedAssetVersionToStory } from "../../story/story-publish-serv
 import { assertStoryRuntimeSignerFunding } from "../../story/story-runtime-funding"
 import {
   resolveStoryChainId,
+  resolveStoryDeliveryContracts,
   resolveStoryRpcUrl,
   resolveStoryRuntimeSignerTargetBalanceWei,
-  STORY_DELIVERY_CONTRACTS,
 } from "../../story/story-runtime-config"
 import {
   buildAssetContentPath,
@@ -209,6 +209,7 @@ export async function buildStoryCdrAccessPackage(input: {
     throw notFoundError("Locked asset CDR metadata not found")
   }
   const chainId = resolveStoryChainId(input.env)
+  const deliveryContracts = resolveStoryDeliveryContracts(input.env)
   const cdrContracts = resolveStoryCdrContracts(chainId)
   if (!cdrContracts) {
     throw badRequestError("Story CDR contracts are not configured for this chain")
@@ -225,10 +226,10 @@ export async function buildStoryCdrAccessPackage(input: {
     userId: input.userId,
     decisionReason: input.decisionReason,
   })
-  const readConditionAddress = input.asset.story_read_condition || STORY_DELIVERY_CONTRACTS.signedAccessConditionV1
+  const readConditionAddress = input.asset.story_read_condition || deliveryContracts.signedAccessConditionV1
   const ciphertextRef = input.ciphertextRef ?? buildAssetContentPath(input.asset.community_id, input.asset.asset_id)
   if (
-    readConditionAddress === STORY_DELIVERY_CONTRACTS.tokenGateCondition
+    readConditionAddress === deliveryContracts.tokenGateCondition
     && input.decisionReason === "purchase_entitlement"
   ) {
     return {
@@ -368,8 +369,9 @@ export async function prepareLockedAssetDelivery(input: {
   })
   const namespace = deriveStoryNamespace(assetVersionId)
   const entitlementTokenId = deriveEntitlementTokenId(assetVersionId)
-  const readConditionAddress = STORY_DELIVERY_CONTRACTS.tokenGateCondition
-  const writeConditionAddress = STORY_DELIVERY_CONTRACTS.signedAccessConditionV1
+  const deliveryContracts = resolveStoryDeliveryContracts(input.env)
+  const readConditionAddress = deliveryContracts.tokenGateCondition
+  const writeConditionAddress = deliveryContracts.signedAccessConditionV1
   const storyPublishRightsBasis = input.rightsBasis === "original" || input.rightsBasis === "derivative"
     ? input.rightsBasis
     : "none"
@@ -388,7 +390,7 @@ export async function prepareLockedAssetDelivery(input: {
       throw badRequestError("STORY_CDR_WRITER_PRIVATE_KEY missing/invalid")
     }
     const readConditionData = encodeTokenGateConditionData({
-      entitlementTokenAddress: STORY_DELIVERY_CONTRACTS.purchaseEntitlementToken,
+      entitlementTokenAddress: deliveryContracts.purchaseEntitlementToken,
       tokenId: entitlementTokenId,
       minBalance: 1n,
     })

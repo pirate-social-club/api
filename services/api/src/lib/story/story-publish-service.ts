@@ -6,7 +6,7 @@ import { resolveStoryOperatorDirectSigner } from "./story-direct-signer"
 import { ensureStoryPublishOperatorAuthorized } from "./story-runtime-authorization"
 import {
   DEFAULT_STORY_RPC_URL,
-  STORY_DELIVERY_CONTRACTS,
+  resolveStoryDeliveryContracts,
   resolveStoryChainId,
   resolveStoryRpcUrl,
   resolveStoryTxWaitTimeoutMs,
@@ -176,9 +176,10 @@ export async function publishLockedAssetVersionToStory(input: {
 
   const provider = new JsonRpcProvider(rpcUrl, chainId)
   const operatorSigner = new Wallet(operatorConfig.value.privateKey, provider)
+  const deliveryContracts = resolveStoryDeliveryContracts(input.env)
 
   const entitlementContract = new Contract(
-    STORY_DELIVERY_CONTRACTS.purchaseEntitlementToken,
+    deliveryContracts.purchaseEntitlementToken,
     PURCHASE_ENTITLEMENT_TOKEN_ABI,
     provider,
   )
@@ -198,7 +199,7 @@ export async function publishLockedAssetVersionToStory(input: {
     const configureTx = await sendContractTxWithPolicy({
       provider,
       signer: ownerSigner,
-      contractAddress: STORY_DELIVERY_CONTRACTS.purchaseEntitlementToken,
+      contractAddress: deliveryContracts.purchaseEntitlementToken,
       abi: PURCHASE_ENTITLEMENT_TOKEN_ABI,
       functionName: "configureEntitlementClass",
       args: [
@@ -217,7 +218,7 @@ export async function publishLockedAssetVersionToStory(input: {
   }
 
   const publishCoordinator = new Contract(
-    STORY_DELIVERY_CONTRACTS.assetPublishCoordinatorV1,
+    deliveryContracts.assetPublishCoordinatorV1,
     ASSET_PUBLISH_COORDINATOR_ABI,
     provider,
   )
@@ -232,7 +233,7 @@ export async function publishLockedAssetVersionToStory(input: {
 
     const publishTx = await sendContractTxWithPolicy({
       provider,
-      contractAddress: STORY_DELIVERY_CONTRACTS.assetPublishCoordinatorV1,
+      contractAddress: deliveryContracts.assetPublishCoordinatorV1,
       abi: ASSET_PUBLISH_COORDINATOR_ABI,
       functionName: "publishAssetVersion",
       args: [
