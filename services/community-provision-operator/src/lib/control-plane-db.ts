@@ -7,7 +7,31 @@ type PostgresQueryable = {
   query: (sql: string, values?: unknown[]) => Promise<{ rows: unknown[]; rowCount?: number | null }>;
 };
 
+const defaultNeonFetchEndpoint = neonConfig.fetchEndpoint;
+const defaultNeonWsProxy = neonConfig.wsProxy;
+
+function isPlanetScalePostgresHost(host: string): boolean {
+  return host.toLowerCase().endsWith(".pg.psdb.cloud");
+}
+
 neonConfig.poolQueryViaFetch = true;
+neonConfig.fetchEndpoint = (host, port, options) => {
+  if (isPlanetScalePostgresHost(host)) {
+    return `https://${host}/sql`;
+  }
+  return typeof defaultNeonFetchEndpoint === "function"
+    ? defaultNeonFetchEndpoint(host, port, options)
+    : defaultNeonFetchEndpoint;
+};
+neonConfig.pipelineConnect = false;
+neonConfig.wsProxy = (host, port) => {
+  if (isPlanetScalePostgresHost(host)) {
+    return `${host}/v2?address=${host}:${port}`;
+  }
+  return typeof defaultNeonWsProxy === "function"
+    ? defaultNeonWsProxy(host, port)
+    : defaultNeonWsProxy;
+};
 
 function normalizeSqlArg(value: unknown): unknown {
   if (value === undefined) {
