@@ -5,7 +5,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { createClient } from "@libsql/client"
-import { openCommunityDb } from "../src/lib/communities/community-db-factory"
+import type { Client } from "@libsql/client"
+import { ensureRemoteCommunityDbReadyForTests, openCommunityDb } from "../src/lib/communities/community-db-factory"
 import { encryptCommunityDbCredential } from "../src/lib/communities/community-db-credential-crypto"
 import { enqueueCommunityJob } from "../src/lib/communities/jobs/store"
 import type { CommunityDatabaseBindingRepository } from "../src/lib/communities/db-community-repository"
@@ -25,6 +26,7 @@ const LEGACY_1064_THREAD_COMMENT_LOCKS_CHECKSUM =
   "bdb8e886939b733f10afff54e25f83cc39ed49c2a6501b7f7604ac3357b8d61f"
 const LEGACY_1080_POST_COMMENT_LOCKS_CHECKSUM =
   "cc64b1844768fc2cd585bd76daab9e75a32c596ddbdfbe8d7ac060d38cc5d23f"
+const noopRemoteDatabaseReady = async () => {}
 
 afterEach(async () => {
   await Promise.all(cleanupPaths.splice(0).map((path) => rm(path, { recursive: true, force: true })))
@@ -323,6 +325,7 @@ describe("openCommunityDb", () => {
       repo,
       "cmt_remote",
       {
+        ensureRemoteDatabaseReady: noopRemoteDatabaseReady,
         ensureRemoteMembershipStateIndexes: async () => { ensureCalls += 1 },
         ensureRemoteThreadCommentLockColumns: async () => { ensureLockColumnCalls += 1 },
         ensureRemoteCommentGuestAuthorship: async () => { ensureGuestAuthorshipCalls += 1 },
@@ -342,6 +345,7 @@ describe("openCommunityDb", () => {
       repo,
       "cmt_remote",
       {
+        ensureRemoteDatabaseReady: noopRemoteDatabaseReady,
         ensureRemoteMembershipStateIndexes: async () => { ensureCalls += 1 },
         ensureRemoteThreadCommentLockColumns: async () => { ensureLockColumnCalls += 1 },
         ensureRemoteCommentGuestAuthorship: async () => { ensureGuestAuthorshipCalls += 1 },
@@ -420,6 +424,7 @@ describe("openCommunityDb", () => {
       repo,
       "cmt_remote_preflight_fail",
       {
+        ensureRemoteDatabaseReady: noopRemoteDatabaseReady,
         ensureRemoteMembershipStateIndexes: async () => {
           ensureCalls += 1
           throw Object.assign(new Error("SQLite error: init_step failed: out of memory"), {
@@ -464,6 +469,7 @@ describe("openCommunityDb", () => {
       repo,
       "cmt_remote_preflight_fail",
       {
+        ensureRemoteDatabaseReady: noopRemoteDatabaseReady,
         ensureRemoteMembershipStateIndexes: async () => { ensureCalls += 1 },
         ensureRemoteThreadCommentLockColumns: async () => { ensureLockColumnCalls += 1 },
         ensureRemoteCommentGuestAuthorship: async () => { ensureGuestAuthorshipCalls += 1 },
@@ -481,6 +487,32 @@ describe("openCommunityDb", () => {
     expect(ensureSongTitleColumnCalls).toBe(1)
     expect(ensureVinylReleaseColumnCalls).toBe(1)
     expect(ensureLiveRoomTableCalls).toBe(1)
+  })
+
+  test("retries remote community database readiness on transient libSQL 404s", async () => {
+    let executeCalls = 0
+    const client = {
+      async execute() {
+        executeCalls += 1
+        if (executeCalls < 3) {
+          throw new Error("SERVER_ERROR: Server returned HTTP status 404")
+        }
+        return { rows: [] }
+      },
+      async batch() {
+        return []
+      },
+      async transaction() {
+        throw new Error("transaction should not be called")
+      },
+    }
+
+    await ensureRemoteCommunityDbReadyForTests(
+      client as unknown as Client,
+      "libsql://main-cmt-transient-pirate-prod.aws-us-east-1.turso.io",
+    )
+
+    expect(executeCalls).toBe(3)
   })
 
   testWithTimeout("applies pending template migrations for existing local community databases", async () => {

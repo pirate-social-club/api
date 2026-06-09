@@ -14,6 +14,7 @@ import { logPipelineInfo } from "../observability/pipeline-log"
 import type { Env } from "../../env"
 
 export type OpenCommunityDbOptions = {
+  ensureRemoteDatabaseReady?: (client: Client, databaseUrl: string) => Promise<void>
   ensureRemoteMembershipStateIndexes?: (client: Client) => Promise<void>
   ensureRemoteThreadCommentLockColumns?: (client: Client) => Promise<void>
   ensureRemoteCommentGuestAuthorship?: (client: Client) => Promise<void>
@@ -35,6 +36,10 @@ const remoteLiveRoomTablePreflightInFlight = new Map<string, Promise<void>>()
 const remotePostSongTitleColumnPreflightInFlight = new Map<string, Promise<void>>()
 const remoteCommerceVinylReleaseColumnPreflightInFlight = new Map<string, Promise<void>>()
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 function formatPreflightError(error: unknown): Record<string, string> {
   if (!error || typeof error !== "object") {
     return { message: String(error) }
@@ -45,6 +50,48 @@ function formatPreflightError(error: unknown): Record<string, string> {
     code: typeof record.code === "string" ? record.code : "",
   }
 }
+
+function isRetryableRemoteCommunityDbReadinessError(error: unknown): boolean {
+  const message = (error instanceof Error ? error.message : String(error)).toUpperCase()
+  return message.includes("HTTP STATUS 404")
+    || message.includes("HTTP STATUS 503")
+    || message.includes("HTTP STATUS 504")
+    || message.includes("SERVER_ERROR: SERVER RETURNED HTTP STATUS 404")
+    || message.includes("SERVER_ERROR: SERVER RETURNED HTTP STATUS 503")
+    || message.includes("SERVER_ERROR: SERVER RETURNED HTTP STATUS 504")
+    || message.includes("DATABASE NOT FOUND")
+    || message.includes("DATABASE_UNAVAILABLE")
+}
+
+async function ensureRemoteCommunityDbReady(client: Client, databaseUrl: string): Promise<void> {
+  const delaysMs = [250, 500, 1000, 2000, 4000]
+  for (let attempt = 0; attempt <= delaysMs.length; attempt += 1) {
+    try {
+      await client.execute("SELECT 1")
+      return
+    } catch (error) {
+      if (!isRetryableRemoteCommunityDbReadinessError(error) || attempt === delaysMs.length) {
+        throw error
+      }
+      logPipelineInfo("[community-db-factory] remote community db readiness retry", {
+        level: "warn",
+        database_url_host: (() => {
+          try {
+            return new URL(databaseUrl).host
+          } catch {
+            return "invalid"
+          }
+        })(),
+        attempt: attempt + 1,
+        delay_ms: delaysMs[attempt],
+        ...formatPreflightError(error),
+      })
+      await sleep(delaysMs[attempt])
+    }
+  }
+}
+
+export const ensureRemoteCommunityDbReadyForTests = ensureRemoteCommunityDbReady
 
 async function runRemoteCommunityDbPreflight(input: {
   databaseUrl: string
@@ -165,6 +212,9 @@ export async function openCommunityDb(
     await ensureRemotePostSongTitleColumn(client)
     await ensureRemoteCommerceVinylReleaseColumns(client)
   } else {
+    const ensureDatabaseReady = options?.ensureRemoteDatabaseReady ?? ensureRemoteCommunityDbReady
+    await ensureDatabaseReady(client, binding.database_url)
+
     const ensureIndexes = options?.ensureRemoteMembershipStateIndexes ?? ensureRemoteCommunityMembershipStateIndexes
     const ensureLockColumns = options?.ensureRemoteThreadCommentLockColumns ?? ensureRemoteThreadCommentLockColumns
     const ensureGuestAuthorship = options?.ensureRemoteCommentGuestAuthorship ?? ensureRemoteCommentGuestAuthorship
