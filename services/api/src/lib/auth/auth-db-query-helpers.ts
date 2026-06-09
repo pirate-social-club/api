@@ -14,6 +14,7 @@ export function requireControlPlaneDbUrl(env: Env): string {
 }
 
 const UNSUPPORTED_LIBSQL_URL_PARAMS = ["channel_binding", "sslmode"] as const
+const UNSUPPORTED_WORKER_POSTGRES_URL_PARAMS = ["sslcert", "sslkey", "sslrootcert"] as const
 
 function isPostgresUrl(value: string): boolean {
   const normalized = value.trim().toLowerCase()
@@ -22,10 +23,6 @@ function isPostgresUrl(value: string): boolean {
 
 export function normalizeControlPlaneDbUrl(rawUrl: string): string {
   if (!rawUrl) {
-    return rawUrl
-  }
-
-  if (isPostgresUrl(rawUrl)) {
     return rawUrl
   }
 
@@ -40,8 +37,11 @@ export function normalizeControlPlaneDbUrl(rawUrl: string): string {
   const hash = hashStart === -1 ? "" : rawUrl.slice(hashStart)
   const params = new URLSearchParams(query)
   const originalQuery = params.toString()
+  const unsupportedParams = isPostgresUrl(rawUrl)
+    ? UNSUPPORTED_WORKER_POSTGRES_URL_PARAMS
+    : UNSUPPORTED_LIBSQL_URL_PARAMS
 
-  for (const key of UNSUPPORTED_LIBSQL_URL_PARAMS) {
+  for (const key of unsupportedParams) {
     params.delete(key)
   }
 
