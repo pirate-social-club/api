@@ -107,6 +107,14 @@ rtk env infisical run --project-config-dir ../../../core --env=staging --path=/s
   rtk bun run scripts/fund-story-runtime-signers.ts --target-balance-wei=3000000000000000000
 ```
 
+When `STORY_ENTITLEMENT_CLASS_CONFIGURER_CONTRACT` is configured, also top up the
+narrow class-configurer runtime signer explicitly:
+
+```bash
+rtk env infisical run --project-config-dir ../../../core --env=staging --path=/services/api -- \
+  rtk bun run scripts/fund-story-runtime-signers.ts --signer=story-entitlement-class-configurer --target-balance-wei=3000000000000000000
+```
+
 Do not use production timing runs for development iteration.
 
 ### Current Staging Evidence
