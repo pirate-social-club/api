@@ -59,6 +59,9 @@ describe("postgresifySql", () => {
 
 describe("neonConfig.fetchEndpoint", () => {
   test("uses PlanetScale's SQL endpoint for PlanetScale Postgres hosts", () => {
-    expect(neonConfig.fetchEndpoint("us-east-3.pg.psdb.cloud")).toBe("https://us-east-3.pg.psdb.cloud/sql")
+    const fetchEndpoint = neonConfig.fetchEndpoint
+    expect(typeof fetchEndpoint).toBe("function")
+    expect(typeof fetchEndpoint === "function" ? fetchEndpoint("us-east-3.pg.psdb.cloud", 5432) : null)
+      .toBe("https://us-east-3.pg.psdb.cloud/sql")
   })
 })

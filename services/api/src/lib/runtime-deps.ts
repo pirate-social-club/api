@@ -18,7 +18,9 @@ neonConfig.fetchEndpoint = (host, port, options) => {
   if (host.toLowerCase().endsWith(".pg.psdb.cloud")) {
     return `https://${host}/sql`
   }
-  return defaultNeonFetchEndpoint(host, port, options)
+  return typeof defaultNeonFetchEndpoint === "function"
+    ? defaultNeonFetchEndpoint(host, port, options)
+    : defaultNeonFetchEndpoint
 }
 
 const LIBSQL_BUSY_RETRY_TIMEOUT_MS = 5000
