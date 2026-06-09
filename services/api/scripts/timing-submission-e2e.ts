@@ -84,6 +84,7 @@ Common options:
   --output                         Optional JSONL output path.
   --expect-git-sha,
   PIRATE_TIMING_EXPECT_GIT_SHA     Fail if /__version does not match before/after each run.
+  PIRATE_TIMING_CONTINUE_ON_ERROR  Continue after a failed measured run. SHA mismatches still abort.
   --access-token                   Same as PIRATE_TIMING_ACCESS_TOKEN.
   --skip-verification              Skip remote verification session completion.
   --skip-post-altcha               Do not solve/send post_create ALTCHA proof.
@@ -111,6 +112,16 @@ function readEnv(name: string, fallback = ""): string {
   const cli = readFlag(`--${name.toLowerCase().replaceAll("_", "-")}`)
   if (cli) return cli
   return env[name]?.trim() || fallback
+}
+
+function readBooleanEnv(name: string): boolean {
+  const value = readEnv(name).toLowerCase()
+  return value === "1" || value === "true" || value === "yes" || value === "on"
+}
+
+function isApiVersionMismatch(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.startsWith("expected API git_sha ")
 }
 
 function requireEnv(name: string): string {
@@ -1264,6 +1275,7 @@ async function main(): Promise<void> {
   const readyTimeoutMs = Math.max(1000, Number(readEnv("PIRATE_TIMING_READY_TIMEOUT_MS", "1800000")))
   const outputPath = readFlag("--output") || readEnv("PIRATE_TIMING_OUTPUT")
   const expectedGitSha = readFlag("--expect-git-sha") || readEnv("PIRATE_TIMING_EXPECT_GIT_SHA")
+  const continueOnError = readBooleanEnv("PIRATE_TIMING_CONTINUE_ON_ERROR")
   const reuseCreatedCommunity = readEnv("PIRATE_TIMING_REUSE_CREATED_COMMUNITY", "false") === "true"
     || hasFlag("--reuse-created-community")
   if (reuseCreatedCommunity && communityId) {
@@ -1390,6 +1402,7 @@ async function main(): Promise<void> {
     pollIntervalMs,
     readyTimeoutMs,
     expectedGitSha: expectedGitSha || null,
+    continueOnError,
   })
 
   for (let index = 0; index < runs + warmupRuns; index += 1) {
@@ -1447,7 +1460,7 @@ async function main(): Promise<void> {
         run_id: runId,
         error: error instanceof Error ? error.message : String(error),
       })
-      if (expectedGitSha) {
+      if (isApiVersionMismatch(error) || !continueOnError) {
         throw error
       }
     }
