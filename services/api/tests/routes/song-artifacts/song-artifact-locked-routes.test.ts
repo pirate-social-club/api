@@ -563,10 +563,49 @@ describe("song artifact locked routes", () => {
     const originalJobId = String(jobRows.rows[0]?.job_id ?? "")
     expect(String(jobRows.rows[0]?.status)).toBe("queued")
     await communityDb.execute({
+      sql: `
+        UPDATE community_jobs
+        SET status = 'running',
+            attempt_count = 1,
+            updated_at = ?2
+        WHERE job_id = ?1
+      `,
+      args: [originalJobId, new Date(Date.now() - 16 * 60 * 1000).toISOString()],
+    })
+    communityDb.close()
+
+    const staleRunningReconcileRepository = getCommunityRepository(ctx.env)
+    try {
+      const staleRunningReconcile = await reconcileRequestedLockedAssetDeliveryJobs({
+        env: ctx.env,
+        communityRepository: staleRunningReconcileRepository,
+        communityIds: [communityId],
+      })
+      expect(staleRunningReconcile.enqueued_jobs).toBe(0)
+      expect(staleRunningReconcile.stale_running_jobs).toBe(1)
+    } finally {
+      await staleRunningReconcileRepository.close?.()
+    }
+
+    const staleResetCommunityDb = createClient({
+      url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
+    })
+    const staleResetJobRows = await staleResetCommunityDb.execute({
+      sql: `
+        SELECT status, error_code
+        FROM community_jobs
+        WHERE job_id = ?1
+      `,
+      args: [originalJobId],
+    })
+    expect(staleResetJobRows.rows).toHaveLength(1)
+    expect(String(staleResetJobRows.rows[0]?.status)).toBe("failed")
+    expect(String(staleResetJobRows.rows[0]?.error_code)).toBe("stale_running_timeout")
+    await staleResetCommunityDb.execute({
       sql: "DELETE FROM community_jobs WHERE job_id = ?1",
       args: [originalJobId],
     })
-    const orphanedJobRows = await communityDb.execute({
+    const orphanedJobRows = await staleResetCommunityDb.execute({
       sql: `
         SELECT job_id
         FROM community_jobs
@@ -576,7 +615,7 @@ describe("song artifact locked routes", () => {
       args: [assetId.replace(/^asset_/, "")],
     })
     expect(orphanedJobRows.rows).toHaveLength(0)
-    communityDb.close()
+    staleResetCommunityDb.close()
 
     const brokenReconcileCommunityId = "cmt_locked_reconcile_broken"
     const reconcileRepository = getCommunityRepository(ctx.env)
