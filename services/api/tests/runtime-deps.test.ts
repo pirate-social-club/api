@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { neonConfig } from "@neondatabase/serverless"
 import { postgresifySql } from "../src/lib/runtime-deps"
 
 describe("postgresifySql", () => {
@@ -53,5 +54,11 @@ describe("postgresifySql", () => {
       INSERT OR REPLACE INTO unknown_table (id, updated_at)
       VALUES (?1, ?2)
     `)).toThrow("Unsupported INSERT OR REPLACE table for PostgreSQL translation: unknown_table")
+  })
+})
+
+describe("neonConfig.fetchEndpoint", () => {
+  test("uses PlanetScale's SQL endpoint for PlanetScale Postgres hosts", () => {
+    expect(neonConfig.fetchEndpoint("us-east-3.pg.psdb.cloud")).toBe("https://us-east-3.pg.psdb.cloud/sql")
   })
 })

@@ -11,7 +11,15 @@ type PostgresQueryable = {
   query: (sql: string, values?: unknown[]) => Promise<{ rows: unknown[]; rowCount?: number | null }>
 }
 
+const defaultNeonFetchEndpoint = neonConfig.fetchEndpoint
+
 neonConfig.poolQueryViaFetch = true
+neonConfig.fetchEndpoint = (host, port, options) => {
+  if (host.toLowerCase().endsWith(".pg.psdb.cloud")) {
+    return `https://${host}/sql`
+  }
+  return defaultNeonFetchEndpoint(host, port, options)
+}
 
 const LIBSQL_BUSY_RETRY_TIMEOUT_MS = 5000
 const LIBSQL_BUSY_RETRY_DELAY_MS = 50
