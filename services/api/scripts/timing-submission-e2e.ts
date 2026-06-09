@@ -100,6 +100,9 @@ Preflight options:
   PIRATE_TIMING_PREFLIGHT_MIN_OPERATOR_IP
                                       Minimum operator/CDR signer IP for remote locked runs.
                                       Defaults to max(1.0, (runs + warmups) * 0.15).
+  PIRATE_TIMING_PREFLIGHT_MIN_RUNTIME_SIGNER_IP
+                                      Minimum balance for required per-role runtime signers such as the
+                                      CDR writer and entitlement class configurer. Defaults to 0.25.
   PIRATE_TIMING_TURSO_DATABASE_LIMIT  Defaults to 100.
   PIRATE_TIMING_TURSO_REQUIRED_SLOTS  Defaults to temporary communities needed by this command.
 
