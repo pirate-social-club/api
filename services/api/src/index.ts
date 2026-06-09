@@ -45,6 +45,7 @@ import { flushAnalyticsOutbox, isAnalyticsEnabled, syncCommunityHealthCounts } f
 import { getCommunityRepository } from "./lib/communities/db-community-repository"
 import { reconcileStaleCommunityPurchaseSettlements } from "./lib/communities/commerce/settlement-service"
 import { processAvailableCommunityJobs } from "./lib/communities/jobs/runner"
+import type { CommunityJobType } from "./lib/communities/jobs/store"
 import { reconcileRequestedLockedAssetDeliveryJobs } from "./lib/communities/jobs/locked-asset-delivery-handler"
 import { reconcileCommunityMembershipAndFollowProjections } from "./lib/communities/membership/projection-service"
 import { getCommunityProvisionOperatorVersion } from "./lib/communities/provisioning/operator-client"
@@ -473,18 +474,72 @@ async function syncScheduledCommunityHealthCounts(env: Env): Promise<void> {
   }
 }
 
+const SCHEDULED_COMMUNITY_JOB_TYPES = new Set<CommunityJobType>([
+  "comment_projection_sync",
+  "post_projection_sync",
+  "comment_body_mirror",
+  "thread_snapshot_publish",
+  "embed_hydrate",
+  "link_preview_fetch",
+  "post_label_materialize",
+  "post_translation_materialize",
+  "comment_translation_materialize",
+  "community_text_translation_materialize",
+  "link_summary_materialize",
+  "link_summary_translation_materialize",
+  "song_preview_generate",
+  "locked_asset_delivery_prepare",
+  "live_room_viewer_sessions_prune",
+])
+
+function parseScheduledPositiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number(value ?? "")
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback
+  }
+  return Math.trunc(parsed)
+}
+
+function parseScheduledCommunityIds(value: string | undefined): string[] | null {
+  const ids = String(value ?? "")
+    .split(",")
+    .map((entry) => entry.trim().replace(/^com_/, ""))
+    .filter(Boolean)
+  return ids.length ? ids : null
+}
+
+function parseScheduledJobTypes(value: string | undefined): CommunityJobType[] {
+  const parsed: CommunityJobType[] = []
+  for (const entry of String(value ?? "").split(",")) {
+    const jobType = entry.trim()
+    if (SCHEDULED_COMMUNITY_JOB_TYPES.has(jobType as CommunityJobType)) {
+      parsed.push(jobType as CommunityJobType)
+    }
+  }
+  return [...new Set(parsed)]
+}
+
 async function processScheduledCommunityJobs(env: Env): Promise<void> {
   const communityRepository = getCommunityRepository(env)
   const canProcessSongPreviewJobs = Boolean(
     env.SONG_PREVIEW_SHARED_SECRET?.trim()
       && (env.SONG_PREVIEW_SERVICE_URL?.trim() || env.SONG_PREVIEW_SERVICE),
   )
+  const maxCommunities = parseScheduledPositiveInt(env.COMMUNITY_JOB_WORKER_MAX_COMMUNITIES_PER_TICK, 100)
+  const maxJobsPerCommunity = parseScheduledPositiveInt(env.COMMUNITY_JOB_WORKER_MAX_JOBS_PER_COMMUNITY, 25)
+  const communityIds = parseScheduledCommunityIds(env.COMMUNITY_JOB_WORKER_COMMUNITY_IDS)
+  const configuredSkipJobTypes = parseScheduledJobTypes(env.COMMUNITY_JOB_WORKER_SKIP_JOB_TYPES)
+  const skipJobTypes = [
+    ...configuredSkipJobTypes,
+    ...(canProcessSongPreviewJobs ? [] : ["song_preview_generate" as const]),
+  ]
   try {
     const reconciledLockedDelivery = await reconcileRequestedLockedAssetDeliveryJobs({
       env,
       communityRepository,
-      maxCommunities: 100,
-      maxAssetsPerCommunity: 25,
+      communityIds,
+      maxCommunities,
+      maxAssetsPerCommunity: maxJobsPerCommunity,
     })
     if (reconciledLockedDelivery.enqueued_jobs > 0) {
       console.info("[community-jobs] reconciled locked delivery jobs", JSON.stringify(reconciledLockedDelivery))
@@ -501,9 +556,10 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
     const summary = await processAvailableCommunityJobs({
       env,
       communityRepository,
-      maxCommunities: 100,
-      maxJobsPerCommunity: 25,
-      skipJobTypes: canProcessSongPreviewJobs ? [] : ["song_preview_generate"],
+      communityIds,
+      maxCommunities,
+      maxJobsPerCommunity,
+      skipJobTypes,
     })
     if (summary.processed_jobs > 0) {
       console.info("[community-jobs] scheduled processed", JSON.stringify({

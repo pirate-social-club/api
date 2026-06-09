@@ -150,8 +150,10 @@ export type Env = {
   STORY_ROYALTY_MAX_LICENSE_TOKENS?: string
   STORY_ROYALTY_POLICY_LAP_ADDRESS?: string
   COMMUNITY_JOB_WORKER_INTERVAL_MS?: string
+  COMMUNITY_JOB_WORKER_COMMUNITY_IDS?: string
   COMMUNITY_JOB_WORKER_MAX_JOBS_PER_COMMUNITY?: string
   COMMUNITY_JOB_WORKER_MAX_COMMUNITIES_PER_TICK?: string
+  COMMUNITY_JOB_WORKER_SKIP_JOB_TYPES?: string
   // Defaults to async outside local/test. Set false as a production kill switch; set true in tests to opt into the async path.
   STORY_LOCKED_DELIVERY_ASYNC?: string
   SONG_PREVIEW_SERVICE?: Fetcher
