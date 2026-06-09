@@ -200,8 +200,8 @@ async function readStorySignerBalances(): Promise<{
 }> {
   const provider = new JsonRpcProvider(readEnv("STORY_RPC_URL", "https://aeneid.storyrpc.io"), Number(readEnv("STORY_CHAIN_ID", "1315")))
   const addresses: Record<string, string> = {}
-  async function balanceForPrivateKey(envName: string): Promise<number | null> {
-    const raw = String(env[envName] || "").trim()
+  async function balanceForPrivateKey(envName: string, fallbackEnvName?: string): Promise<number | null> {
+    const raw = String(env[envName] || (fallbackEnvName ? env[fallbackEnvName] : "") || "").trim()
     if (!/^(0x)?[0-9a-fA-F]{64}$/.test(raw)) return null
     const wallet = new Wallet(raw.startsWith("0x") ? raw : `0x${raw}`)
     addresses[envName] = wallet.address
@@ -210,8 +210,10 @@ async function readStorySignerBalances(): Promise<{
   try {
     return {
       funderIp: await balanceForPrivateKey("STORY_RUNTIME_FUNDER_PRIVATE_KEY"),
-      operatorIp: await balanceForPrivateKey("STORY_OPERATOR_PRIVATE_KEY"),
+      operatorIp: await balanceForPrivateKey("STORY_OPERATOR_PRIVATE_KEY", "STORY_RUNTIME_PRIVATE_KEY"),
+      cdrWriterIp: await balanceForPrivateKey("STORY_CDR_WRITER_PRIVATE_KEY", "STORY_RUNTIME_PRIVATE_KEY"),
       settlementIp: await balanceForPrivateKey("MUSIC_PURCHASE_STORY_SETTLEMENT_PRIVATE_KEY"),
+      entitlementClassConfigurerIp: await balanceForPrivateKey("STORY_ENTITLEMENT_CLASS_CONFIGURER_PRIVATE_KEY"),
       addresses,
     }
   } finally {
@@ -237,22 +239,42 @@ async function assertStoryFundingPreflight(input: {
   )
   const totalIp = (balances.funderIp ?? 0) + (balances.operatorIp ?? 0)
   const operatorIp = balances.operatorIp ?? 0
+  const cdrWriterIp = balances.cdrWriterIp ?? operatorIp
   const settlementIp = balances.settlementIp ?? 0
+  const classConfigurerConfigured = Boolean(
+    String(env.STORY_ENTITLEMENT_CLASS_CONFIGURER_CONTRACT || "").trim()
+      || String(env.STORY_ENTITLEMENT_CLASS_CONFIGURER_PRIVATE_KEY || "").trim(),
+  )
+  const minRuntimeSignerIp = readPositiveNumberEnv("PIRATE_TIMING_PREFLIGHT_MIN_RUNTIME_SIGNER_IP", 0.25)
+  const entitlementClassConfigurerIp = balances.entitlementClassConfigurerIp ?? 0
   console.log("[timing] story funding preflight", {
     min_total_ip: minTotalIp,
     min_operator_ip: minOperatorIp,
+    min_runtime_signer_ip: minRuntimeSignerIp,
     funder_ip: balances.funderIp,
     operator_ip: balances.operatorIp,
+    cdr_writer_ip: balances.cdrWriterIp,
     settlement_ip: balances.settlementIp,
+    entitlement_class_configurer_ip: balances.entitlementClassConfigurerIp,
     addresses: balances.addresses,
   })
-  if (operatorIp < minOperatorIp || totalIp < minTotalIp || settlementIp <= 0) {
+  if (
+    operatorIp < minOperatorIp
+    || cdrWriterIp < minRuntimeSignerIp
+    || totalIp < minTotalIp
+    || settlementIp <= 0
+    || (classConfigurerConfigured && entitlementClassConfigurerIp < minRuntimeSignerIp)
+  ) {
     throw new Error(
       [
         "Story funding preflight failed:",
         `operator=${operatorIp.toFixed(3)} IP (need >= ${minOperatorIp})`,
+        `cdr_writer=${cdrWriterIp.toFixed(3)} IP (need >= ${minRuntimeSignerIp})`,
         `funder+operator=${totalIp.toFixed(3)} IP (need >= ${minTotalIp})`,
         `settlement=${settlementIp.toFixed(3)} IP`,
+        ...(classConfigurerConfigured
+          ? [`entitlement_class_configurer=${entitlementClassConfigurerIp.toFixed(3)} IP (need >= ${minRuntimeSignerIp})`]
+          : []),
       ].join(" "),
     )
   }
