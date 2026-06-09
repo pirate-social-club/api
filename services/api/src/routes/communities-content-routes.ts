@@ -35,6 +35,7 @@ import {
   submitTraceRequestFields,
   withSubmitTraceTiming,
 } from "../lib/observability/submit-trace"
+import { envFlag } from "../lib/helpers"
 
 type ComposerLinkPreviewResponse = {
   kind: "embed" | "link"
@@ -65,6 +66,9 @@ function serializeComposerLinkPreview(preview: ComposerLinkPreviewResult): Compo
 }
 
 function getPostCreateWaitUntil(c: Context<AuthenticatedEnv>): ((promise: Promise<void>) => void) | undefined {
+  if (!envFlag(c.env.STORY_LOCKED_DELIVERY_POST_WAIT_UNTIL_ENABLED, false)) {
+    return undefined
+  }
   try {
     const executionCtx = c.executionCtx
     return (promise) => executionCtx.waitUntil(promise)

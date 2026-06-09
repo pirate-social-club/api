@@ -156,6 +156,7 @@ export type Env = {
   COMMUNITY_JOB_WORKER_SKIP_JOB_TYPES?: string
   // Defaults to async outside local/test. Set false as a production kill switch; set true in tests to opt into the async path.
   STORY_LOCKED_DELIVERY_ASYNC?: string
+  STORY_LOCKED_DELIVERY_POST_WAIT_UNTIL_ENABLED?: string
   SONG_PREVIEW_SERVICE?: Fetcher
   SONG_PREVIEW_SERVICE_URL?: string
   SONG_PREVIEW_SHARED_SECRET?: string

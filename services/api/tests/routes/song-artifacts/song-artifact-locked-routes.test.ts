@@ -184,6 +184,7 @@ describe("song artifact locked routes", () => {
 
     const ctx = await createRouteTestContext({
       STORY_LOCKED_DELIVERY_ASYNC: "true",
+      STORY_LOCKED_DELIVERY_POST_WAIT_UNTIL_ENABLED: "true",
       FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
       FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
       FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",

@@ -80,6 +80,8 @@ Common options:
   PIRATE_TIMING_REQUEST_TIMEOUT_MS Per-request timeout. Defaults to 300000.
   PIRATE_TIMING_REUSE_CREATED_COMMUNITY
                                       Create one temporary community and reuse its creator session for all runs.
+  PIRATE_TIMING_SHARED_COMMUNITY_WAIT_MS
+                                      Sleep after shared community creation before the first measured run.
   --poster-file                    Optional real poster image for video runs.
   --output                         Optional JSONL output path.
   --expect-git-sha,
@@ -120,6 +122,10 @@ function readEnv(name: string, fallback = ""): string {
 function readBooleanEnv(name: string): boolean {
   const value = readEnv(name).toLowerCase()
   return value === "1" || value === "true" || value === "yes" || value === "on"
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function isApiVersionMismatch(error: unknown): boolean {
@@ -1412,6 +1418,12 @@ async function main(): Promise<void> {
       ts_iso: new Date().toISOString(),
       meta: { community_id: publicCommunityId(sharedCommunityId) },
     })
+    const sharedCommunityWaitMs = Math.max(0, Number(readEnv("PIRATE_TIMING_SHARED_COMMUNITY_WAIT_MS", "0")))
+    if (sharedCommunityWaitMs > 0) {
+      await measureSetup("shared_community_wait", () => sleep(sharedCommunityWaitMs), {
+        wait_ms: sharedCommunityWaitMs,
+      })
+    }
   }
 
   console.log("[timing] config", {
