@@ -1039,6 +1039,7 @@ async function runOne(input: {
   }
 
   if (song) {
+    const submitTraceId = `${input.runId}:post`
     const upload = await measure("upload_intent", () => createSongArtifactUpload({
       apiBaseUrl: input.apiBaseUrl,
       artifactKind: "primary_audio",
@@ -1092,7 +1093,10 @@ async function runOne(input: {
     }
     const post = await measure("post_create", () => requestJson<{ id: string; asset?: string | null }>({
       apiBaseUrl: input.apiBaseUrl,
-      headers: postAltcha ? { "x-pirate-altcha": postAltcha } : undefined,
+      headers: {
+        "x-pirate-submit-trace-id": submitTraceId,
+        ...(postAltcha ? { "x-pirate-altcha": postAltcha } : {}),
+      },
       path: `/communities/${encodeURIComponent(communityId)}/posts`,
       token: session!.accessToken,
       body: {
@@ -1110,6 +1114,7 @@ async function runOne(input: {
     }))
     assetId = post.asset ?? null
   } else {
+    const submitTraceId = `${input.runId}:post`
     const videoUpload = await measure("upload_intent", () => createSongArtifactUpload({
       apiBaseUrl: input.apiBaseUrl,
       artifactKind: "primary_video",
@@ -1148,7 +1153,10 @@ async function runOne(input: {
     ])
     const post = await measure("post_create", () => requestJson<{ id: string; asset?: string | null }>({
       apiBaseUrl: input.apiBaseUrl,
-      headers: postAltcha ? { "x-pirate-altcha": postAltcha } : undefined,
+      headers: {
+        "x-pirate-submit-trace-id": submitTraceId,
+        ...(postAltcha ? { "x-pirate-altcha": postAltcha } : {}),
+      },
       path: `/communities/${encodeURIComponent(communityId)}/posts`,
       token: session!.accessToken,
       body: {
