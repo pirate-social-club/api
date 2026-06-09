@@ -1,5 +1,8 @@
 import { generateSongPreviewForBundle } from "../../song-artifacts/song-artifact-preview-service"
+import { updateSongArtifactBundlePreview } from "../../song-artifacts/song-artifact-repository"
 import { providerUnavailable } from "../../errors"
+import { nowIso } from "../../helpers"
+import { getControlPlaneClient } from "../../runtime-deps"
 import type { CommunityJobHandlerInput } from "./handler-types"
 import { parseJobPayload } from "./payload"
 
@@ -18,8 +21,16 @@ type SongPreviewServiceResponse = {
   storage_ref?: string | null
 }
 
+type SongPreviewFailureUpdater = typeof updateSongArtifactBundlePreview
+
 type BunRuntime = {
   spawn?: unknown
+}
+
+let songPreviewFailureUpdater: SongPreviewFailureUpdater = updateSongArtifactBundlePreview
+
+export function setSongPreviewFailureUpdaterForTests(updater: SongPreviewFailureUpdater | null): void {
+  songPreviewFailureUpdater = updater ?? updateSongArtifactBundlePreview
 }
 
 function trimEnvValue(value: string | undefined): string {
@@ -71,6 +82,27 @@ function canRunLocalFfmpegWorker(input: CommunityJobHandlerInput): boolean {
 async function readErrorBody(response: Response): Promise<string | null> {
   const text = await response.text().catch(() => "")
   return text.trim() ? text.trim().slice(0, 500) : null
+}
+
+function previewFailureMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  return message || "preview_generation_failed"
+}
+
+async function markRemoteSongPreviewFailed(
+  input: CommunityJobHandlerInput,
+  songArtifactBundleId: string,
+  error: unknown,
+): Promise<void> {
+  await songPreviewFailureUpdater({
+    client: getControlPlaneClient(input.env),
+    communityId: input.job.community_id,
+    songArtifactBundleId,
+    previewAudio: null,
+    previewStatus: "failed",
+    previewError: previewFailureMessage(error),
+    updatedAt: nowIso(),
+  })
 }
 
 async function runRemoteSongPreviewGenerate(
@@ -131,9 +163,15 @@ async function runRemoteSongPreviewGenerate(
 
 export async function runSongPreviewGenerate(input: CommunityJobHandlerInput): Promise<string | null> {
   const payload = parseJobPayload<SongPreviewGeneratePayload>(input.job.payload_json)
+  const songArtifactBundleId = payload?.song_artifact_bundle ?? input.job.subject_id
   const endpoint = songPreviewServiceEndpoint(input)
   if (endpoint || input.env.SONG_PREVIEW_SERVICE) {
-    return await runRemoteSongPreviewGenerate(input, endpoint, payload)
+    try {
+      return await runRemoteSongPreviewGenerate(input, endpoint, payload)
+    } catch (error) {
+      await markRemoteSongPreviewFailed(input, songArtifactBundleId, error)
+      throw error
+    }
   }
 
   if (!canRunLocalFfmpegWorker(input)) {
@@ -145,7 +183,7 @@ export async function runSongPreviewGenerate(input: CommunityJobHandlerInput): P
   return await generateSongPreviewForBundle({
     env: input.env,
     communityId: input.job.community_id,
-    songArtifactBundleId: payload?.song_artifact_bundle ?? input.job.subject_id,
+    songArtifactBundleId,
     expectedPrimaryAudioContentHash: payload?.primary_audio_content_hash ?? null,
   })
 }
