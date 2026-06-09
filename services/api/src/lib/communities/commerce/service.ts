@@ -41,6 +41,7 @@ import { getControlPlaneClient } from "../../runtime-deps"
 import {
   buildStoryCdrAccessPackage,
   fetchPrimaryAssetContent,
+  type LockedAssetDeliveryCheckpoint,
   prepareLockedAssetDelivery,
 } from "./asset-delivery"
 import {
@@ -232,6 +233,34 @@ function hasLockedDeliveryMetadata(asset: AssetRow): boolean {
       && asset.locked_delivery_secret_json?.trim()
       && asset.story_publish_tx_ref?.trim(),
   )
+}
+
+function lockedDeliveryCheckpointFromAsset(asset: AssetRow): LockedAssetDeliveryCheckpoint | null {
+  if (
+    !asset.story_asset_version_id?.trim()
+    || !asset.story_cdr_vault_uuid
+    || asset.story_cdr_vault_uuid <= 0
+    || !asset.story_namespace?.trim()
+    || !asset.story_entitlement_token_id?.trim()
+    || !asset.story_read_condition?.trim()
+    || !asset.story_write_condition?.trim()
+    || !asset.locked_delivery_ref?.trim()
+    || !asset.locked_delivery_storage_ref?.trim()
+    || !asset.locked_delivery_secret_json?.trim()
+  ) {
+    return null
+  }
+  return {
+    storyAssetVersionId: asset.story_asset_version_id,
+    storyCdrVaultUuid: asset.story_cdr_vault_uuid,
+    storyNamespace: asset.story_namespace,
+    storyEntitlementTokenId: asset.story_entitlement_token_id,
+    storyReadCondition: asset.story_read_condition,
+    storyWriteCondition: asset.story_write_condition,
+    lockedDeliveryRef: asset.locked_delivery_ref,
+    lockedDeliveryStorageRef: asset.locked_delivery_storage_ref,
+    lockedDeliveryMetadataJson: asset.locked_delivery_secret_json,
+  }
 }
 
 export function shouldPrepareLockedDeliveryAsync(env: Pick<Env, "ENVIRONMENT" | "STORY_LOCKED_DELIVERY_ASYNC">): boolean {
@@ -901,6 +930,7 @@ export async function prepareRequestedLockedAssetDelivery(input: {
     publicationStatus = "story_published"
   } else {
     try {
+      const existingCheckpoint = lockedDeliveryCheckpointFromAsset(asset)
       const lockedDelivery = await prepareLockedAssetDelivery({
         env: input.env,
         communityId: input.communityId,
@@ -913,6 +943,26 @@ export async function prepareRequestedLockedAssetDelivery(input: {
         bundleId: asset.song_artifact_bundle_id,
         rightsBasis: asset.rights_basis,
         upstreamAssetRefs: post.upstream_asset_refs ?? null,
+        checkpoint: existingCheckpoint,
+        onCheckpoint: existingCheckpoint
+          ? undefined
+          : (checkpoint) => checkpointPreparedLockedDelivery({
+              client: input.client,
+              communityId: input.communityId,
+              assetId: asset.asset_id,
+              storyStatus: "requested",
+              publicationStatus: "story_requested",
+              storyPublishTxRef: null,
+              storyAssetVersionId: checkpoint.storyAssetVersionId,
+              storyCdrVaultUuid: checkpoint.storyCdrVaultUuid,
+              storyNamespace: checkpoint.storyNamespace,
+              storyEntitlementTokenId: checkpoint.storyEntitlementTokenId,
+              storyReadCondition: checkpoint.storyReadCondition,
+              storyWriteCondition: checkpoint.storyWriteCondition,
+              lockedDeliveryRef: checkpoint.lockedDeliveryRef,
+              lockedDeliveryStorageRef: checkpoint.lockedDeliveryStorageRef,
+              lockedDeliveryMetadataJson: checkpoint.lockedDeliveryMetadataJson,
+            }),
       })
       storyStatus = lockedDelivery.storyStatus
       if (lockedDelivery.storyStatus === "published") {

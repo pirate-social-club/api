@@ -1,4 +1,4 @@
-import { Contract, JsonRpcProvider, Wallet } from "ethers"
+import { Contract, getAddress, JsonRpcProvider, Wallet } from "ethers"
 import type { Env } from "../../env"
 import { type DirectTxGasPolicy, resolveDirectTxGasPolicy, sendContractTxWithPolicy } from "../evm-direct-tx"
 import { parseExpectedEvmAddress } from "../evm-signer"

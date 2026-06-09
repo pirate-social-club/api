@@ -80,6 +80,18 @@ type LockedAssetDeliveryResult = {
   lockedDeliveryMetadataJson: string
 }
 
+export type LockedAssetDeliveryCheckpoint = {
+  storyAssetVersionId: string
+  storyCdrVaultUuid: number
+  storyNamespace: string
+  storyEntitlementTokenId: string
+  storyReadCondition: string
+  storyWriteCondition: string
+  lockedDeliveryRef: string
+  lockedDeliveryStorageRef: string
+  lockedDeliveryMetadataJson: string
+}
+
 let testLockedAssetDeliveryPreparer: ((input: {
   env: Env
   communityId: string
@@ -92,6 +104,8 @@ let testLockedAssetDeliveryPreparer: ((input: {
   bundleId: string | null
   rightsBasis: Post["rights_basis"]
   upstreamAssetRefs: string[] | null
+  checkpoint?: LockedAssetDeliveryCheckpoint | null
+  onCheckpoint?: (checkpoint: LockedAssetDeliveryCheckpoint) => Promise<void>
 }) => Promise<LockedAssetDeliveryResult>) | null = null
 
 export function setLockedAssetDeliveryPreparerForTests(
@@ -107,6 +121,8 @@ export function setLockedAssetDeliveryPreparerForTests(
     bundleId: string | null
     rightsBasis: Post["rights_basis"]
     upstreamAssetRefs: string[] | null
+    checkpoint?: LockedAssetDeliveryCheckpoint | null
+    onCheckpoint?: (checkpoint: LockedAssetDeliveryCheckpoint) => Promise<void>
   }) => Promise<LockedAssetDeliveryResult>) | null,
 ): void {
   testLockedAssetDeliveryPreparer = preparer
@@ -312,6 +328,8 @@ export async function prepareLockedAssetDelivery(input: {
   bundleId: string | null
   rightsBasis: Post["rights_basis"]
   upstreamAssetRefs: string[] | null
+  checkpoint?: LockedAssetDeliveryCheckpoint | null
+  onCheckpoint?: (checkpoint: LockedAssetDeliveryCheckpoint) => Promise<void>
 }): Promise<{
   storyStatus: Asset["story_status"]
   storyPublishTxRef: string
@@ -354,25 +372,14 @@ export async function prepareLockedAssetDelivery(input: {
   if (plaintext.byteLength > 50 * 1024 * 1024) {
     console.warn(`[story] locked asset ${input.assetId} is ${plaintext.byteLength} bytes; chunked encryption should replace whole-payload encryption before raising size caps`)
   }
-  const { ciphertext, dataKey, metadata } = await encryptLockedPayload(plaintext)
-  metadata.mime_type = input.mimeType
-
   const objectKey = `locked-assets/${input.communityId}/${input.assetId}/payload.bin`
-  await uploadFilebaseObject({
-    env: input.env,
-    objectKey,
-    mimeType: "application/octet-stream",
-    bytes: ciphertext,
-  })
   const primaryContentHash = (input.contentHash?.trim() || `0x${await sha256Hex(plaintext)}`) as `0x${string}`
-  const assetVersionId = deriveStoryAssetVersionId({
+  const derivedAssetVersionId = deriveStoryAssetVersionId({
     communityId: input.communityId,
     assetId: input.assetId,
     bundleId: input.bundleId ?? input.storageRef,
     primaryContentHash,
   })
-  const namespace = deriveStoryNamespace(assetVersionId)
-  const entitlementTokenId = deriveEntitlementTokenId(assetVersionId)
   const deliveryContracts = resolveStoryDeliveryContracts(input.env)
   const readConditionAddress = deliveryContracts.tokenGateCondition
   const writeConditionAddress = deliveryContracts.signedAccessConditionV1
@@ -400,39 +407,68 @@ export async function prepareLockedAssetDelivery(input: {
     if (!writerConfig.value) {
       throw badRequestError("STORY_CDR_WRITER_PRIVATE_KEY missing/invalid")
     }
-    const readConditionData = encodeTokenGateConditionData({
-      entitlementTokenAddress: deliveryContracts.purchaseEntitlementToken,
-      tokenId: entitlementTokenId,
-      minBalance: 1n,
-    })
-    const writeConditionData = encodeWriteConditionOperatorData(writerConfig.value.address)
-    let cdrUpload: Awaited<ReturnType<typeof uploadCdrEncryptedDataKey>>
-    try {
-      cdrUpload = await uploadCdrEncryptedDataKey({
+    let checkpoint = input.checkpoint ?? null
+    if (!checkpoint) {
+      const { ciphertext, dataKey, metadata } = await encryptLockedPayload(plaintext)
+      metadata.mime_type = input.mimeType
+      await uploadFilebaseObject({
         env: input.env,
-        dataKey,
-        readConditionAddr: readConditionAddress,
-        writeConditionAddr: writeConditionAddress,
-        readConditionData,
-        writeConditionData,
-        accessAuxData: "0x",
+        objectKey,
+        mimeType: "application/octet-stream",
+        bytes: ciphertext,
       })
-    } catch (error) {
-      throw new Error(`cdr_write_failed:${formatCdrWriteFailure(error, input.env)}`)
+      const assetVersionId = derivedAssetVersionId
+      const namespace = deriveStoryNamespace(assetVersionId)
+      const entitlementTokenId = deriveEntitlementTokenId(assetVersionId)
+      const readConditionData = encodeTokenGateConditionData({
+        entitlementTokenAddress: deliveryContracts.purchaseEntitlementToken,
+        tokenId: entitlementTokenId,
+        minBalance: 1n,
+      })
+      const writeConditionData = encodeWriteConditionOperatorData(writerConfig.value.address)
+      let cdrUpload: Awaited<ReturnType<typeof uploadCdrEncryptedDataKey>>
+      try {
+        cdrUpload = await uploadCdrEncryptedDataKey({
+          env: input.env,
+          dataKey,
+          readConditionAddr: readConditionAddress,
+          writeConditionAddr: writeConditionAddress,
+          readConditionData,
+          writeConditionData,
+          accessAuxData: "0x",
+        })
+      } catch (error) {
+        throw new Error(`cdr_write_failed:${formatCdrWriteFailure(error, input.env)}`)
+      }
+      checkpoint = {
+        storyAssetVersionId: assetVersionId,
+        storyCdrVaultUuid: cdrUpload.cdrVaultUuid,
+        storyNamespace: namespace,
+        storyEntitlementTokenId: entitlementTokenId.toString(),
+        storyReadCondition: readConditionAddress,
+        storyWriteCondition: writeConditionAddress,
+        lockedDeliveryRef: buildAssetContentPath(input.communityId, input.assetId),
+        lockedDeliveryStorageRef: objectKey,
+        lockedDeliveryMetadataJson: JSON.stringify(metadata),
+      }
+      await input.onCheckpoint?.(checkpoint)
+    } else if (checkpoint.storyAssetVersionId.toLowerCase() !== derivedAssetVersionId.toLowerCase()) {
+      throw badRequestError("Locked delivery checkpoint does not match asset version")
     }
+    const entitlementTokenId = BigInt(checkpoint.storyEntitlementTokenId)
     let storyPublish: Awaited<ReturnType<typeof publishLockedAssetVersionToStory>>
     try {
       storyPublish = await publishLockedAssetVersionToStory({
         env: input.env,
         publisherAddress: input.creatorWalletAddress,
-        assetVersionId,
-        cdrVaultUuid: cdrUpload.cdrVaultUuid,
-        namespace,
+        assetVersionId: checkpoint.storyAssetVersionId as `0x${string}`,
+        cdrVaultUuid: checkpoint.storyCdrVaultUuid,
+        namespace: checkpoint.storyNamespace as `0x${string}`,
         contentHash: primaryContentHash,
-        storageRefHash: deriveStorageRefHash(objectKey),
+        storageRefHash: deriveStorageRefHash(checkpoint.lockedDeliveryStorageRef),
         entitlementTokenId,
-        readConditionAddress,
-        writeConditionAddress,
+        readConditionAddress: checkpoint.storyReadCondition,
+        writeConditionAddress: checkpoint.storyWriteCondition,
         rightsBasis: storyPublishRightsBasis,
         upstreamAssetRefs: input.upstreamAssetRefs,
       })
@@ -449,16 +485,16 @@ export async function prepareLockedAssetDelivery(input: {
         ? JSON.stringify(storyPublish.storyDerivativeParentIpIds)
         : null,
       storyRoyaltyRegistrationStatus: storyPublish.storyRoyaltyRegistrationStatus ?? null,
-      storyAssetVersionId: assetVersionId,
-      storyCdrVaultUuid: cdrUpload.cdrVaultUuid,
-      storyNamespace: namespace,
+      storyAssetVersionId: checkpoint.storyAssetVersionId,
+      storyCdrVaultUuid: checkpoint.storyCdrVaultUuid,
+      storyNamespace: checkpoint.storyNamespace,
       storyEntitlementTokenId: entitlementTokenId.toString(),
-      storyReadCondition: readConditionAddress,
-      storyWriteCondition: writeConditionAddress,
+      storyReadCondition: checkpoint.storyReadCondition,
+      storyWriteCondition: checkpoint.storyWriteCondition,
       lockedDeliveryStatus: "ready",
-      lockedDeliveryRef: buildAssetContentPath(input.communityId, input.assetId),
-      lockedDeliveryStorageRef: objectKey,
-      lockedDeliveryMetadataJson: JSON.stringify(metadata),
+      lockedDeliveryRef: checkpoint.lockedDeliveryRef,
+      lockedDeliveryStorageRef: checkpoint.lockedDeliveryStorageRef,
+      lockedDeliveryMetadataJson: checkpoint.lockedDeliveryMetadataJson,
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)
@@ -471,6 +507,9 @@ export async function prepareLockedAssetDelivery(input: {
       )
     ) {
       console.warn(`[story] local fallback for locked delivery: ${errorMessage}`)
+      const assetVersionId = derivedAssetVersionId
+      const namespace = deriveStoryNamespace(assetVersionId)
+      const entitlementTokenId = deriveEntitlementTokenId(assetVersionId)
       return {
         storyStatus: "published",
         storyPublishTxRef: hashBytes32FromParts("local-story-publish", assetVersionId),
@@ -487,7 +526,7 @@ export async function prepareLockedAssetDelivery(input: {
         lockedDeliveryStatus: "ready",
         lockedDeliveryRef: buildAssetContentPath(input.communityId, input.assetId),
         lockedDeliveryStorageRef: objectKey,
-        lockedDeliveryMetadataJson: JSON.stringify(metadata),
+        lockedDeliveryMetadataJson: JSON.stringify({ mime_type: input.mimeType }),
       }
     }
     throw error instanceof Error ? error : new Error(errorMessage)

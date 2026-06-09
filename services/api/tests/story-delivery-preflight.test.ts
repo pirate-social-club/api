@@ -82,7 +82,7 @@ describe("story delivery runtime preflight", () => {
     expect(config.entitlementClassConfigurerContract).toBe("0x7777777777777777777777777777777777777777")
     expect(config.entitlementClassConfigurerAddress).toBe(new Wallet(entitlementClassConfigurerPrivateKey).address)
     expect(config.fingerprint).toContain("0x7777777777777777777777777777777777777777")
-    expect(config.fingerprint).toContain(config.entitlementClassConfigurerAddress)
+    expect(config.fingerprint).toContain(config.entitlementClassConfigurerAddress ?? "")
   })
 
   test("fails before RPC work when required signer config is missing", () => {
