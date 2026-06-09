@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { neonConfig } from "@neondatabase/serverless";
 import { createHandler, type Env } from "./index";
 
 const baseEnv: Env = {
@@ -11,6 +12,21 @@ const baseEnv: Env = {
   TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "2",
   COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN: "operator-shared-token",
 };
+
+describe("control-plane Postgres driver configuration", () => {
+  test("uses PlanetScale endpoints for fetch and interactive transactions", () => {
+    const fetchEndpoint = neonConfig.fetchEndpoint;
+    const wsProxy = neonConfig.wsProxy;
+
+    expect(typeof fetchEndpoint).toBe("function");
+    expect(typeof fetchEndpoint === "function" ? fetchEndpoint("us-east-3.pg.psdb.cloud", 5432) : null)
+      .toBe("https://us-east-3.pg.psdb.cloud/sql");
+    expect(neonConfig.pipelineConnect).toBe(false);
+    expect(typeof wsProxy).toBe("function");
+    expect(typeof wsProxy === "function" ? wsProxy("us-east-3.pg.psdb.cloud", 5432) : null)
+      .toBe("us-east-3.pg.psdb.cloud/v2?address=us-east-3.pg.psdb.cloud:5432");
+  });
+});
 
 function handlerRequest(
   handler: ReturnType<typeof createHandler>,

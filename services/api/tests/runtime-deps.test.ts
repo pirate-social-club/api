@@ -65,3 +65,13 @@ describe("neonConfig.fetchEndpoint", () => {
       .toBe("https://us-east-3.pg.psdb.cloud/sql")
   })
 })
+
+describe("neonConfig WebSocket settings", () => {
+  test("uses PlanetScale's WebSocket proxy for interactive transactions", () => {
+    const wsProxy = neonConfig.wsProxy
+    expect(neonConfig.pipelineConnect).toBe(false)
+    expect(typeof wsProxy).toBe("function")
+    expect(typeof wsProxy === "function" ? wsProxy("us-east-3.pg.psdb.cloud", 5432) : null)
+      .toBe("us-east-3.pg.psdb.cloud/v2?address=us-east-3.pg.psdb.cloud:5432")
+  })
+})

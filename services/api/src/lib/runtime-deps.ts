@@ -12,15 +12,29 @@ type PostgresQueryable = {
 }
 
 const defaultNeonFetchEndpoint = neonConfig.fetchEndpoint
+const defaultNeonWsProxy = neonConfig.wsProxy
+
+function isPlanetScalePostgresHost(host: string): boolean {
+  return host.toLowerCase().endsWith(".pg.psdb.cloud")
+}
 
 neonConfig.poolQueryViaFetch = true
 neonConfig.fetchEndpoint = (host, port, options) => {
-  if (host.toLowerCase().endsWith(".pg.psdb.cloud")) {
+  if (isPlanetScalePostgresHost(host)) {
     return `https://${host}/sql`
   }
   return typeof defaultNeonFetchEndpoint === "function"
     ? defaultNeonFetchEndpoint(host, port, options)
     : defaultNeonFetchEndpoint
+}
+neonConfig.pipelineConnect = false
+neonConfig.wsProxy = (host, port) => {
+  if (isPlanetScalePostgresHost(host)) {
+    return `${host}/v2?address=${host}:${port}`
+  }
+  return typeof defaultNeonWsProxy === "function"
+    ? defaultNeonWsProxy(host, port)
+    : defaultNeonWsProxy
 }
 
 const LIBSQL_BUSY_RETRY_TIMEOUT_MS = 5000
