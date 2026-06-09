@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { createClient } from "@libsql/client"
 import { Wallet } from "ethers"
-import { app } from "../../../src/index"
+import handler, { app } from "../../../src/index"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { getCommunityRepository } from "../../../src/lib/communities/db-community-repository"
 import { buildLocalCommunityDbPath } from "../../../src/lib/communities/community-local-db"
@@ -68,6 +68,25 @@ const routedCheckoutQuoteFields = {
   client_estimated_hop_count: 1,
 }
 
+function createExecutionContext() {
+  const waitUntilPromises: Promise<unknown>[] = []
+  return {
+    ctx: {
+      waitUntil: (promise: Promise<unknown>) => {
+        waitUntilPromises.push(promise)
+      },
+    } as ExecutionContext,
+    waitUntilPromises,
+  }
+}
+
+function fetchHandler(request: Request, env: Parameters<NonNullable<typeof handler.fetch>>[1], ctx: ExecutionContext): Promise<Response> {
+  if (!handler.fetch) {
+    throw new Error("handler fetch is not configured")
+  }
+  return Promise.resolve(handler.fetch(request as Parameters<NonNullable<typeof handler.fetch>>[0], env, ctx))
+}
+
 async function markGeneratedPreviewReady(input: {
   env: Env
   communityId: string
@@ -131,6 +150,174 @@ afterEach(async () => {
 })
 
 describe("song artifact locked routes", () => {
+  testWithTimeout("kicks locked delivery processing through route waitUntil after creating an async locked song", async () => {
+    const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
+    setStoryRuntimeFundingAssertionForTests(async () => {})
+    setStoryCdrUploaderForTests(async () => ({
+      cdrVaultUuid: 5252,
+      writerAddress: "0x0000000000000000000000000000000000000cd2",
+      txHashes: {
+        allocate: "0xalloc-wait-until",
+        write: "0xwrite-wait-until",
+      },
+    }))
+    setStoryAssetPublisherForTests(async () => ({
+      entitlementConfiguredTxHash: "0xconfigure-wait-until",
+      publishTxHash: "0xpublish-wait-until",
+    }))
+    setStoryRoyaltyRegistrarForTests(async () => ({
+      storyIpId: "0x5252525252525252525252525252525252525252",
+      storyIpNftContract: "0x5353535353535353535353535353535353535353",
+      storyIpNftTokenId: "525",
+      storyLicenseTermsId: "52",
+      storyLicenseTemplate: null,
+      storyRoyaltyPolicy: "0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E",
+      storyDerivativeParentIpIds: null,
+      storyRevenueToken: "0x2525000000000000000000000000000000000000",
+      storyRoyaltyRegistrationStatus: "registered",
+      storyDerivativeRegisteredAt: null,
+    }))
+    installLockedSongFetchMocks({
+      originalFetch,
+      storedObjects,
+    })
+
+    const ctx = await createRouteTestContext({
+      STORY_LOCKED_DELIVERY_ASYNC: "true",
+      FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
+      FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
+      FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
+      FILEBASE_MEDIA_BUCKET: "pirate-media",
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      OPENROUTER_MODEL: "google/gemini-3.1-flash-lite-preview",
+      ACRCLOUD_ACCESS_KEY: "test-acrcloud-access",
+      ACRCLOUD_ACCESS_SECRET: "test-acrcloud-secret",
+      ACRCLOUD_HOST: "acrcloud.test",
+      ELEVENLABS_API_KEY: "test-elevenlabs-key",
+      ELEVENLABS_FORCE_ALIGNMENT_URL: "https://elevenlabs.test/forced-alignment",
+      STORY_CONTRACT_OWNER_PRIVATE_KEY: "0x1000000000000000000000000000000000000000000000000000000000000001",
+      STORY_OPERATOR_PRIVATE_KEY: "0x2000000000000000000000000000000000000000000000000000000000000002",
+      STORY_CDR_WRITER_PRIVATE_KEY: "0x3000000000000000000000000000000000000000000000000000000000000003",
+      STORY_ACCESS_CONTROLLER_PRIVATE_KEY: "0x4000000000000000000000000000000000000000000000000000000000000004",
+    })
+    cleanup = ctx.cleanup
+
+    const author = await exchangeJwt(ctx.env, "song-author-wait-until-locked")
+    await attachPrimaryWallet({
+      client: ctx.client,
+      userId: author.userId,
+      walletAttachmentId: "wal_song_author_wait_until_locked",
+      walletAddress: "0xaaa0000000000000000000000000000000000001",
+    })
+    await verifyForLockedCommerce(ctx.env, author.userId, author.accessToken)
+    const communityId = await createOpenSongCommunity(ctx.env, author.accessToken, "WaitUntil Paid Song Club")
+    const primaryUpload = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "primary_audio",
+      mimeType: "audio/mpeg",
+      filename: "wait-until-paid-anthem.mp3",
+      bytes: new Uint8Array([41, 42, 43, 44]),
+    })
+    const bundleCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/song-artifacts`,
+      {
+        primary_audio: {
+          song_artifact_upload: primaryUpload.id,
+        },
+        preview_window: {
+          start_ms: 0,
+          duration_ms: 30_000,
+        },
+        title: "WaitUntil Paid Anthem",
+        lyrics: "Wait until line",
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(bundleCreate.status).toBe(201)
+    const bundleBody = await json(bundleCreate) as { id: string }
+    await markGeneratedPreviewReady({
+      env: ctx.env,
+      communityId,
+      songArtifactBundleId: bundleBody.id.replace(/^sab_/, ""),
+      previewStorageRef: `http://pirate.test/generated-preview/${communityId}/wait-until-paid-anthem.mp3`,
+      previewSizeBytes: 4,
+    })
+
+    const execution = createExecutionContext()
+    const postCreate = await fetchHandler(new Request(`http://pirate.test/communities/${communityId}/posts`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${author.accessToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        idempotency_key: "song-post-wait-until-locked-1",
+        post_type: "song",
+        identity_mode: "public",
+        title: "WaitUntil paid anthem",
+        access_mode: "locked",
+        song_mode: "original",
+        rights_basis: "original",
+        license_preset: "non-commercial",
+        song_artifact_bundle: bundleBody.id,
+      }),
+    }), ctx.env, execution.ctx)
+    expect(postCreate.status).toBe(201)
+    const postBody = await json(postCreate) as {
+      asset: string
+      id: string
+      status: string
+    }
+    expect(postBody.status).toBe("published")
+    expect(execution.waitUntilPromises.length).toBeGreaterThan(0)
+
+    await Promise.all(execution.waitUntilPromises)
+
+    const assetAfterWaitUntil = await app.request(
+      `http://pirate.test/communities/${communityId}/assets/${postBody.asset}`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(assetAfterWaitUntil.status).toBe(200)
+    const assetAfterWaitUntilBody = await json(assetAfterWaitUntil) as {
+      locked_delivery_status: string
+      story_cdr_vault_uuid: number
+      story_ip: string | null
+      story_royalty_registration_status: string | null
+    }
+    expect(assetAfterWaitUntilBody.locked_delivery_status).toBe("ready")
+    expect(assetAfterWaitUntilBody.story_cdr_vault_uuid).toBe(5252)
+    expect(assetAfterWaitUntilBody.story_ip).toBe("0x5252525252525252525252525252525252525252")
+    expect(assetAfterWaitUntilBody.story_royalty_registration_status).toBe("registered")
+
+    const communityDb = createClient({
+      url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
+    })
+    try {
+      const jobRows = await communityDb.execute({
+        sql: `
+          SELECT status
+          FROM community_jobs
+          WHERE job_type = 'locked_asset_delivery_prepare'
+            AND subject_id = ?1
+        `,
+        args: [postBody.asset.replace(/^asset_/, "")],
+      })
+      expect(jobRows.rows).toHaveLength(1)
+      expect(String(jobRows.rows[0]?.status)).toBe("succeeded")
+    } finally {
+      communityDb.close()
+    }
+  }, 30_000)
+
   testWithTimeout("creates locked song delivery asynchronously and finalizes it through the community job", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
     setStoryRuntimeFundingAssertionForTests(async () => {})

@@ -1,4 +1,4 @@
-import { Hono } from "hono"
+import { Hono, type Context } from "hono"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import { assertAgentDelegatedWriteMatchesActor } from "../lib/agents/agent-write-authorization"
 import { trackApiEvent } from "../lib/analytics/track"
@@ -64,6 +64,15 @@ function serializeComposerLinkPreview(preview: ComposerLinkPreviewResult): Compo
   }
 }
 
+function getPostCreateWaitUntil(c: Context<AuthenticatedEnv>): ((promise: Promise<void>) => void) | undefined {
+  try {
+    const executionCtx = c.executionCtx
+    return (promise) => executionCtx.waitUntil(promise)
+  } catch {
+    return undefined
+  }
+}
+
 export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.post("/:communityId/posts", async (c) => {
     const { actor, communityId, communityRepository, userRepository, profileRepository } = await getResolvedCommunityRouteContext(c)
@@ -100,6 +109,7 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
       userRepository,
       profileRepository,
       communityRepository,
+      waitUntil: getPostCreateWaitUntil(c),
     }))
     console.info("[create-post-submit] post create:result", {
       ...traceFields,
