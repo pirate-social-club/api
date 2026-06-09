@@ -1,6 +1,7 @@
 import { formatEther } from "ethers"
 import type { Env } from "../src/types"
 import {
+  ALL_STORY_RUNTIME_SIGNERS,
   STORY_RUNTIME_SIGNERS,
   fundStoryRuntimeSigners,
   getStoryRuntimeSignerBalances,
@@ -18,7 +19,7 @@ function parseSignerNames(argv: string[]): StoryRuntimeSignerName[] | null {
     .map((value) => value.slice("--signer=".length).trim())
     .filter(Boolean)
   if (rawValues.length === 0) return null
-  const allowed = new Set<StoryRuntimeSignerName>(STORY_RUNTIME_SIGNERS.map((entry) => entry.name))
+  const allowed = new Set<StoryRuntimeSignerName>(ALL_STORY_RUNTIME_SIGNERS.map((entry) => entry.name))
   const signers: StoryRuntimeSignerName[] = []
   for (const value of rawValues) {
     if (!allowed.has(value as StoryRuntimeSignerName)) {

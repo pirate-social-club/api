@@ -8,6 +8,7 @@ import {
   resolveStoryRuntimeSignerTargetBalanceWei,
 } from "./story-runtime-config"
 import {
+  resolveStoryEntitlementClassConfigurerDirectSigner,
   resolveStoryCdrWriterDirectSigner,
   resolveStoryOperatorDirectSigner,
   resolveStorySettlementDirectSigner,
@@ -19,7 +20,16 @@ export const STORY_RUNTIME_SIGNERS = [
   { name: "story-settlement" },
 ] as const
 
-export type StoryRuntimeSignerName = typeof STORY_RUNTIME_SIGNERS[number]["name"]
+export const STORY_OPTIONAL_RUNTIME_SIGNERS = [
+  { name: "story-entitlement-class-configurer" },
+] as const
+
+export const ALL_STORY_RUNTIME_SIGNERS = [
+  ...STORY_RUNTIME_SIGNERS,
+  ...STORY_OPTIONAL_RUNTIME_SIGNERS,
+] as const
+
+export type StoryRuntimeSignerName = typeof ALL_STORY_RUNTIME_SIGNERS[number]["name"]
 
 export type StoryRuntimeSignerBalance = {
   name: StoryRuntimeSignerName
@@ -110,6 +120,12 @@ function resolveStoryRuntimeSignerAddress(
     if (!signer.value) throw new Error("STORY_CDR_WRITER_PRIVATE_KEY missing/invalid")
     return getAddress(signer.value.address) as `0x${string}`
   }
+  if (signerName === "story-entitlement-class-configurer") {
+    const signer = resolveStoryEntitlementClassConfigurerDirectSigner(env)
+    if (!signer.ok) throw new Error(signer.error)
+    if (!signer.value) throw new Error("STORY_ENTITLEMENT_CLASS_CONFIGURER_PRIVATE_KEY missing/invalid")
+    return getAddress(signer.value.address) as `0x${string}`
+  }
   const signer = resolveStorySettlementDirectSigner(env)
   if (!signer.ok) throw new Error(signer.error)
   if (!signer.value) throw new Error("MUSIC_PURCHASE_STORY_SETTLEMENT_PRIVATE_KEY missing/invalid")
@@ -120,13 +136,10 @@ export function listStoryRuntimeSignerAddresses(
   env: Env,
   names: readonly StoryRuntimeSignerName[] = STORY_RUNTIME_SIGNERS.map((entry) => entry.name),
 ): Array<{ name: StoryRuntimeSignerName; address: `0x${string}` }> {
-  const selected = new Set(names)
-  return STORY_RUNTIME_SIGNERS
-    .filter((entry) => selected.has(entry.name))
-    .map((entry) => ({
-      name: entry.name,
-      address: resolveStoryRuntimeSignerAddress(env, entry.name),
-    }))
+  return [...new Set(names)].map((name) => ({
+    name,
+    address: resolveStoryRuntimeSignerAddress(env, name),
+  }))
 }
 
 function buildFundingCacheKey(env: Env, names: readonly StoryRuntimeSignerName[]): string {

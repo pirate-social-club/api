@@ -99,3 +99,14 @@ export function resolveStorySettlementDirectSigner(
     expectedAddressField: "MUSIC_PURCHASE_STORY_SETTLEMENT_PKP_ADDRESS",
   })
 }
+
+export function resolveStoryEntitlementClassConfigurerDirectSigner(
+  env: Pick<Env, "STORY_ENTITLEMENT_CLASS_CONFIGURER_PRIVATE_KEY" | "STORY_ENTITLEMENT_CLASS_CONFIGURER_ADDRESS">,
+): ConfigResult<StoryDirectSignerConfig | null> {
+  return resolveStoryDirectSignerConfig({
+    privateKeyValue: env.STORY_ENTITLEMENT_CLASS_CONFIGURER_PRIVATE_KEY,
+    privateKeyField: "STORY_ENTITLEMENT_CLASS_CONFIGURER_PRIVATE_KEY",
+    expectedAddressValue: env.STORY_ENTITLEMENT_CLASS_CONFIGURER_ADDRESS,
+    expectedAddressField: "STORY_ENTITLEMENT_CLASS_CONFIGURER_ADDRESS",
+  })
+}

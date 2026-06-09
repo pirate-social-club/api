@@ -35,6 +35,11 @@ export type StoryDeliveryContractEnv = Pick<
   | "STORY_MARKETPLACE_SETTLEMENT_CONTRACT"
 >
 
+export type StoryEntitlementClassConfigurerEnv = Pick<
+  Env,
+  "STORY_ENTITLEMENT_CLASS_CONFIGURER_CONTRACT"
+>
+
 function resolveStoryDeliveryContractAddress(raw: string | null | undefined, fallback: string, field: string): string {
   const value = String(raw || "").trim()
   if (!value) return fallback
@@ -78,6 +83,18 @@ export function resolveStoryDeliveryContracts(env: StoryDeliveryContractEnv): St
       "STORY_MARKETPLACE_SETTLEMENT_CONTRACT",
     ),
   }
+}
+
+export function resolveStoryEntitlementClassConfigurerContract(
+  env: StoryEntitlementClassConfigurerEnv,
+): string | null {
+  const raw = String(env.STORY_ENTITLEMENT_CLASS_CONFIGURER_CONTRACT || "").trim()
+  if (!raw) return null
+  const address = parseExpectedEvmAddress(raw)
+  if (!address) {
+    throw new Error("STORY_ENTITLEMENT_CLASS_CONFIGURER_CONTRACT missing/invalid")
+  }
+  return address
 }
 
 export function resolveStoryChainId(env: Pick<Env, "STORY_CHAIN_ID">): number {

@@ -1,19 +1,27 @@
-import { Contract, JsonRpcProvider, Wallet, getAddress } from "ethers"
+import { Contract, JsonRpcProvider, Wallet } from "ethers"
 import type { Env } from "../../env"
-import { resolveDirectTxGasPolicy, sendContractTxWithPolicy } from "../evm-direct-tx"
+import { type DirectTxGasPolicy, resolveDirectTxGasPolicy, sendContractTxWithPolicy } from "../evm-direct-tx"
 import { parseExpectedEvmAddress } from "../evm-signer"
-import { resolveStoryOperatorDirectSigner } from "./story-direct-signer"
+import {
+  resolveStoryEntitlementClassConfigurerDirectSigner,
+  resolveStoryOperatorDirectSigner,
+} from "./story-direct-signer"
 import { ensureStoryPublishOperatorAuthorized } from "./story-runtime-authorization"
 import {
   DEFAULT_STORY_RPC_URL,
   resolveStoryDeliveryContracts,
   resolveStoryChainId,
+  resolveStoryEntitlementClassConfigurerContract,
   resolveStoryRpcUrl,
   resolveStoryTxWaitTimeoutMs,
 } from "./story-runtime-config"
 
 const PURCHASE_ENTITLEMENT_TOKEN_ABI = [
   "function entitlementClasses(uint256 tokenId) view returns (bytes32 assetVersionId, uint32 cdrVaultUuid, bool active)",
+  "function configureEntitlementClass(uint256 tokenId, bytes32 assetVersionId, uint32 cdrVaultUuid, bool active)",
+] as const
+
+const ENTITLEMENT_CLASS_CONFIGURER_ABI = [
   "function configureEntitlementClass(uint256 tokenId, bytes32 assetVersionId, uint32 cdrVaultUuid, bool active)",
 ] as const
 
@@ -74,6 +82,70 @@ function normalizePrivateKey(raw: string | null | undefined): string | null {
 
 function normalizeBytes32(value: unknown): string {
   return String(value || "").trim().toLowerCase()
+}
+
+async function configureEntitlementClassForPublish(input: {
+  env: Env
+  provider: JsonRpcProvider
+  purchaseEntitlementTokenAddress: string
+  entitlementTokenId: bigint
+  assetVersionId: `0x${string}`
+  cdrVaultUuid: number
+  gasPolicy: DirectTxGasPolicy
+}): Promise<string> {
+  const entitlementClassConfigurerContract = resolveStoryEntitlementClassConfigurerContract(input.env)
+  if (entitlementClassConfigurerContract) {
+    const configurerConfig = resolveStoryEntitlementClassConfigurerDirectSigner(input.env)
+    if (!configurerConfig.ok) throw new Error(configurerConfig.error)
+    if (!configurerConfig.value) {
+      throw new Error("STORY_ENTITLEMENT_CLASS_CONFIGURER_PRIVATE_KEY missing/invalid")
+    }
+    const configurerSigner = new Wallet(configurerConfig.value.privateKey, input.provider)
+    const configureTx = await sendContractTxWithPolicy({
+      provider: input.provider,
+      signer: configurerSigner,
+      contractAddress: entitlementClassConfigurerContract,
+      abi: ENTITLEMENT_CLASS_CONFIGURER_ABI,
+      functionName: "configureEntitlementClass",
+      args: [
+        input.entitlementTokenId,
+        input.assetVersionId,
+        input.cdrVaultUuid,
+        true,
+      ],
+      gasPolicy: input.gasPolicy,
+    })
+    const configureReceipt = await configureTx.wait()
+    if (!configureReceipt || configureReceipt.status !== 1) {
+      throw new Error("story_entitlement_class_configure_failed")
+    }
+    return String(configureTx.hash || "")
+  }
+
+  const ownerPrivateKey = normalizePrivateKey(input.env.STORY_CONTRACT_OWNER_PRIVATE_KEY)
+  if (!ownerPrivateKey) {
+    throw new Error("STORY_CONTRACT_OWNER_PRIVATE_KEY missing/invalid")
+  }
+  const ownerSigner = new Wallet(ownerPrivateKey, input.provider)
+  const configureTx = await sendContractTxWithPolicy({
+    provider: input.provider,
+    signer: ownerSigner,
+    contractAddress: input.purchaseEntitlementTokenAddress,
+    abi: PURCHASE_ENTITLEMENT_TOKEN_ABI,
+    functionName: "configureEntitlementClass",
+    args: [
+      input.entitlementTokenId,
+      input.assetVersionId,
+      input.cdrVaultUuid,
+      true,
+    ],
+    gasPolicy: input.gasPolicy,
+  })
+  const configureReceipt = await configureTx.wait()
+  if (!configureReceipt || configureReceipt.status !== 1) {
+    throw new Error("story_entitlement_class_configure_failed")
+  }
+  return String(configureTx.hash || "")
 }
 
 export function classifyExistingEntitlementClassForPublish(input: {
@@ -191,30 +263,15 @@ export async function publishLockedAssetVersionToStory(input: {
     cdrVaultUuid: input.cdrVaultUuid,
   })
   if (entitlementClassStatus === "missing") {
-    const ownerPrivateKey = normalizePrivateKey(input.env.STORY_CONTRACT_OWNER_PRIVATE_KEY)
-    if (!ownerPrivateKey) {
-      throw new Error("STORY_CONTRACT_OWNER_PRIVATE_KEY missing/invalid")
-    }
-    const ownerSigner = new Wallet(ownerPrivateKey, provider)
-    const configureTx = await sendContractTxWithPolicy({
+    entitlementConfiguredTxHash = await configureEntitlementClassForPublish({
+      env: input.env,
       provider,
-      signer: ownerSigner,
-      contractAddress: deliveryContracts.purchaseEntitlementToken,
-      abi: PURCHASE_ENTITLEMENT_TOKEN_ABI,
-      functionName: "configureEntitlementClass",
-      args: [
-        input.entitlementTokenId,
-        input.assetVersionId,
-        input.cdrVaultUuid,
-        true,
-      ],
+      purchaseEntitlementTokenAddress: deliveryContracts.purchaseEntitlementToken,
+      entitlementTokenId: input.entitlementTokenId,
+      assetVersionId: input.assetVersionId,
+      cdrVaultUuid: input.cdrVaultUuid,
       gasPolicy: gasPolicy.value,
     })
-    const configureReceipt = await configureTx.wait()
-    if (!configureReceipt || configureReceipt.status !== 1) {
-      throw new Error("story_entitlement_class_configure_failed")
-    }
-    entitlementConfiguredTxHash = String(configureTx.hash || "")
   }
 
   const publishCoordinator = new Contract(

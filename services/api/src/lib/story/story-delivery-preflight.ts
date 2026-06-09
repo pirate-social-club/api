@@ -1,9 +1,11 @@
 import { Contract, JsonRpcProvider, Wallet, getAddress } from "ethers"
 import type { Env } from "../../env"
 import { isLocalEnvironment } from "../helpers"
+import { parseExpectedEvmAddress } from "../evm-signer"
 import {
   normalizeDirectSignerPrivateKey,
   resolveStoryAccessControllerDirectSigner,
+  resolveStoryEntitlementClassConfigurerDirectSigner,
   resolveStoryOperatorDirectSigner,
   resolveStorySettlementDirectSigner,
 } from "./story-direct-signer"
@@ -11,6 +13,7 @@ import {
   type StoryDeliveryContracts,
   resolveStoryChainId,
   resolveStoryDeliveryContracts,
+  resolveStoryEntitlementClassConfigurerContract,
   resolveStoryRpcUrl,
 } from "./story-runtime-config"
 
@@ -34,6 +37,10 @@ const PIRATE_SIGNER_REGISTRY_ABI = [
   "function isActiveSigner(address signer) view returns (bool)",
 ] as const
 
+const ENTITLEMENT_CLASS_CONFIGURER_ABI = [
+  "function isClassConfigurer(address configurer) view returns (bool)",
+] as const
+
 export type StoryDeliveryPreflightConfig = {
   chainId: number
   rpcUrl: string
@@ -41,6 +48,8 @@ export type StoryDeliveryPreflightConfig = {
   operatorAddress: string
   accessSignerAddress: string
   settlementAddress: string
+  entitlementClassConfigurerContract: string | null
+  entitlementClassConfigurerAddress: string | null
   contracts: StoryDeliveryContracts
   fingerprint: string
 }
@@ -60,16 +69,36 @@ export function shouldRunStoryDeliveryRuntimePreflight(env: Pick<Env, "ENVIRONME
   return !isLocalEnvironment(env.ENVIRONMENT)
 }
 
-function resolveOwnerAddress(env: Pick<Env, "STORY_CONTRACT_OWNER_PRIVATE_KEY">): string {
-  const privateKey = normalizeDirectSignerPrivateKey(env.STORY_CONTRACT_OWNER_PRIVATE_KEY)
-  if (!privateKey) {
-    throw new Error("STORY_CONTRACT_OWNER_PRIVATE_KEY missing/invalid")
+function resolveOwnerAddress(
+  env: Pick<Env, "STORY_DELIVERY_OWNER_ADDRESS" | "STORY_CONTRACT_OWNER_PRIVATE_KEY">,
+  options: { allowConfiguredOwnerOnly: boolean },
+): string {
+  const configuredOwner = parseExpectedEvmAddress(env.STORY_DELIVERY_OWNER_ADDRESS)
+  if (String(env.STORY_DELIVERY_OWNER_ADDRESS || "").trim()) {
+    if (!configuredOwner) {
+      throw new Error("STORY_DELIVERY_OWNER_ADDRESS missing/invalid")
+    }
   }
-  return getAddress(new Wallet(privateKey).address)
+
+  const privateKey = normalizeDirectSignerPrivateKey(env.STORY_CONTRACT_OWNER_PRIVATE_KEY)
+  if (privateKey) {
+    const derivedOwner = getAddress(new Wallet(privateKey).address)
+    if (configuredOwner && configuredOwner !== derivedOwner) {
+      throw new Error(`STORY_DELIVERY_OWNER_ADDRESS mismatch: expected ${configuredOwner}, derived ${derivedOwner}`)
+    }
+    return derivedOwner
+  }
+  if (configuredOwner && options.allowConfiguredOwnerOnly) {
+    return configuredOwner
+  }
+  throw new Error("STORY_CONTRACT_OWNER_PRIVATE_KEY missing/invalid")
 }
 
 export function resolveStoryDeliveryPreflightConfig(env: Env): StoryDeliveryPreflightConfig {
-  const ownerAddress = resolveOwnerAddress(env)
+  const entitlementClassConfigurerContract = resolveStoryEntitlementClassConfigurerContract(env)
+  const ownerAddress = resolveOwnerAddress(env, {
+    allowConfiguredOwnerOnly: Boolean(entitlementClassConfigurerContract),
+  })
   const operatorConfig = resolveStoryOperatorDirectSigner(env)
   if (!operatorConfig.ok) throw new Error(operatorConfig.error)
   if (!operatorConfig.value) throw new Error("STORY_OPERATOR_PRIVATE_KEY missing/invalid")
@@ -80,6 +109,14 @@ export function resolveStoryDeliveryPreflightConfig(env: Env): StoryDeliveryPref
   if (!settlementConfig.ok) throw new Error(settlementConfig.error)
   if (!settlementConfig.value) throw new Error("MUSIC_PURCHASE_STORY_SETTLEMENT_PRIVATE_KEY missing/invalid")
 
+  let entitlementClassConfigurerAddress: string | null = null
+  if (entitlementClassConfigurerContract) {
+    const configurerConfig = resolveStoryEntitlementClassConfigurerDirectSigner(env)
+    if (!configurerConfig.ok) throw new Error(configurerConfig.error)
+    if (!configurerConfig.value) throw new Error("STORY_ENTITLEMENT_CLASS_CONFIGURER_PRIVATE_KEY missing/invalid")
+    entitlementClassConfigurerAddress = configurerConfig.value.address
+  }
+
   const config = {
     chainId: resolveStoryChainId(env),
     rpcUrl: resolveStoryRpcUrl(env),
@@ -87,6 +124,8 @@ export function resolveStoryDeliveryPreflightConfig(env: Env): StoryDeliveryPref
     operatorAddress: operatorConfig.value.address,
     accessSignerAddress: accessConfig.value.address,
     settlementAddress: settlementConfig.value.address,
+    entitlementClassConfigurerContract,
+    entitlementClassConfigurerAddress,
     contracts: resolveStoryDeliveryContracts(env),
   }
 
@@ -98,7 +137,7 @@ export function resolveStoryDeliveryPreflightConfig(env: Env): StoryDeliveryPref
 
 async function assertAddressHasCode(input: {
   provider: JsonRpcProvider
-  name: keyof StoryDeliveryContracts
+  name: keyof StoryDeliveryContracts | "entitlementClassConfigurer"
   address: string
 }): Promise<void> {
   const code = await input.provider.getCode(input.address)
@@ -109,10 +148,12 @@ async function assertAddressHasCode(input: {
 
 async function assertOwner(input: {
   provider: JsonRpcProvider
-  name: keyof Pick<
-    StoryDeliveryContracts,
-    "purchaseEntitlementToken" | "pirateSignerRegistry" | "assetPublishCoordinatorV1" | "marketplaceSettlementV1"
-  >
+  name:
+    | keyof Pick<
+      StoryDeliveryContracts,
+      "purchaseEntitlementToken" | "pirateSignerRegistry" | "assetPublishCoordinatorV1" | "marketplaceSettlementV1"
+    >
+    | "entitlementClassConfigurer"
   address: string
   ownerAddress: string
 }): Promise<void> {
@@ -134,15 +175,23 @@ async function runStoryDeliveryRuntimePreflight(
 ): Promise<StoryDeliveryPreflightSummary> {
   const provider = new JsonRpcProvider(config.rpcUrl, config.chainId)
 
-  await Promise.all((Object.entries(config.contracts) as [keyof StoryDeliveryContracts, string][])
-    .map(([name, address]) => assertAddressHasCode({ provider, name, address })))
+  const codeChecks = (Object.entries(config.contracts) as [keyof StoryDeliveryContracts, string][])
+    .map(([name, address]) => assertAddressHasCode({ provider, name, address }))
+  if (config.entitlementClassConfigurerContract) {
+    codeChecks.push(assertAddressHasCode({
+      provider,
+      name: "entitlementClassConfigurer",
+      address: config.entitlementClassConfigurerContract,
+    }))
+  }
+  await Promise.all(codeChecks)
 
   await Promise.all([
     assertOwner({
       provider,
       name: "purchaseEntitlementToken",
       address: config.contracts.purchaseEntitlementToken,
-      ownerAddress: config.ownerAddress,
+      ownerAddress: config.entitlementClassConfigurerContract ?? config.ownerAddress,
     }),
     assertOwner({
       provider,
@@ -162,6 +211,16 @@ async function runStoryDeliveryRuntimePreflight(
       address: config.contracts.marketplaceSettlementV1,
       ownerAddress: config.ownerAddress,
     }),
+    ...(config.entitlementClassConfigurerContract
+      ? [
+          assertOwner({
+            provider,
+            name: "entitlementClassConfigurer" as const,
+            address: config.entitlementClassConfigurerContract,
+            ownerAddress: config.ownerAddress,
+          }),
+        ]
+      : []),
   ])
 
   const publishCoordinator = new Contract(
@@ -184,23 +243,37 @@ async function runStoryDeliveryRuntimePreflight(
     PIRATE_SIGNER_REGISTRY_ABI,
     provider,
   )
+  const entitlementClassConfigurer = config.entitlementClassConfigurerContract
+    ? new Contract(
+        config.entitlementClassConfigurerContract,
+        ENTITLEMENT_CLASS_CONFIGURER_ABI,
+        provider,
+      )
+    : null
 
   const [
     publishOperatorActive,
     settlementOperatorActive,
     settlementMinterActive,
     accessSignerActive,
+    classConfigurerActive,
   ] = await Promise.all([
     publishCoordinator.isPublishOperator(config.operatorAddress),
     marketplaceSettlement.isSettlementOperator(config.settlementAddress),
     purchaseEntitlementToken.isSettlementMinter(config.settlementAddress),
     signerRegistry.isActiveSigner(config.accessSignerAddress),
+    entitlementClassConfigurer && config.entitlementClassConfigurerAddress
+      ? entitlementClassConfigurer.isClassConfigurer(config.entitlementClassConfigurerAddress)
+      : true,
   ])
 
   assertGrant(Boolean(publishOperatorActive), "publish_operator", config.operatorAddress)
   assertGrant(Boolean(settlementOperatorActive), "settlement_operator", config.settlementAddress)
   assertGrant(Boolean(settlementMinterActive), "settlement_minter", config.settlementAddress)
   assertGrant(Boolean(accessSignerActive), "access_signer", config.accessSignerAddress)
+  if (config.entitlementClassConfigurerAddress) {
+    assertGrant(Boolean(classConfigurerActive), "entitlement_class_configurer", config.entitlementClassConfigurerAddress)
+  }
 
   return {
     ...config,

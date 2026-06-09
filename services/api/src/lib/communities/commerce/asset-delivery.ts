@@ -29,10 +29,11 @@ import {
 import { resolveStoryCdrWriterDirectSigner } from "../../story/story-direct-signer"
 import { publishLockedAssetVersionToStory } from "../../story/story-publish-service"
 import { assertStoryDeliveryRuntimePreflight } from "../../story/story-delivery-preflight"
-import { assertStoryRuntimeSignerFunding } from "../../story/story-runtime-funding"
+import { assertStoryRuntimeSignerFunding, type StoryRuntimeSignerFundingRequirement } from "../../story/story-runtime-funding"
 import {
   resolveStoryChainId,
   resolveStoryDeliveryContracts,
+  resolveStoryEntitlementClassConfigurerContract,
   resolveStoryRpcUrl,
   resolveStoryRuntimeSignerTargetBalanceWei,
 } from "../../story/story-runtime-config"
@@ -381,10 +382,17 @@ export async function prepareLockedAssetDelivery(input: {
   try {
     const cdrWriterMinimumBalanceWei = await estimateStoryCdrLockedPublishMinimumBalanceWei(input.env)
     const storyOperatorMinimumBalanceWei = resolveStoryRuntimeSignerTargetBalanceWei(input.env)
-    await assertStoryRuntimeSignerFunding(input.env, [
+    const fundingRequirements: StoryRuntimeSignerFundingRequirement[] = [
       { name: "story-cdr-writer", minBalanceWei: cdrWriterMinimumBalanceWei },
       { name: "story-operator", minBalanceWei: storyOperatorMinimumBalanceWei },
-    ])
+    ]
+    if (resolveStoryEntitlementClassConfigurerContract(input.env)) {
+      fundingRequirements.push({
+        name: "story-entitlement-class-configurer",
+        minBalanceWei: storyOperatorMinimumBalanceWei,
+      })
+    }
+    await assertStoryRuntimeSignerFunding(input.env, fundingRequirements)
     const writerConfig = resolveStoryCdrWriterDirectSigner(input.env)
     if (!writerConfig.ok) {
       throw badRequestError(writerConfig.error)
