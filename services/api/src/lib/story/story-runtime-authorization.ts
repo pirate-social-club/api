@@ -2,7 +2,12 @@ import { Contract, JsonRpcProvider, Wallet, getAddress } from "ethers"
 import type { Env } from "../../env"
 import { resolveDirectTxGasPolicy, sendContractTxWithPolicy } from "../evm-direct-tx"
 import { normalizeDirectSignerPrivateKey } from "./story-direct-signer"
-import { resolveStoryDeliveryContracts, type StoryDeliveryContractEnv } from "./story-runtime-config"
+import {
+  resolveStoryDeliveryContracts,
+  resolveStoryEntitlementClassConfigurerContract,
+  type StoryDeliveryContractEnv,
+  type StoryEntitlementClassConfigurerEnv,
+} from "./story-runtime-config"
 
 const PUBLISH_COORDINATOR_ABI = [
   "function isPublishOperator(address operator) view returns (bool)",
@@ -146,7 +151,7 @@ export async function ensureStoryEntitlementMinterAuthorized(params: {
     | "STORY_DIRECT_TX_MAX_PRIORITY_FEE_PER_GAS_WEI"
     | "STORY_DIRECT_TX_GAS_LIMIT_MAX"
     | "STORY_DIRECT_TX_GAS_ESTIMATE_BUFFER_BPS"
-  > & StoryDeliveryContractEnv
+  > & StoryDeliveryContractEnv & StoryEntitlementClassConfigurerEnv
   provider: JsonRpcProvider
   minterAddress: string
 }): Promise<void> {
@@ -159,6 +164,9 @@ export async function ensureStoryEntitlementMinterAuthorized(params: {
   )
   const active = Boolean(await contract.isSettlementMinter(minterAddress))
   if (active) return
+  if (resolveStoryEntitlementClassConfigurerContract(params.env)) {
+    throw new Error(`story_runtime_authorization_missing_cold_owner_grant:setSettlementMinter:${minterAddress}`)
+  }
   await ensureOwnerAuthorizedCall({
     env: params.env,
     provider: params.provider,

@@ -115,6 +115,13 @@ rtk env infisical run --project-config-dir ../../../core --env=staging --path=/s
   rtk bun run scripts/fund-story-runtime-signers.ts --signer=story-entitlement-class-configurer --target-balance-wei=3000000000000000000
 ```
 
+To rotate `STORY_ENTITLEMENT_CLASS_CONFIGURER_PRIVATE_KEY`, first have the durable Story
+delivery owner grant the new signer with `setClassConfigurer(newSigner, true)` on
+`PurchaseEntitlementClassConfigurer`. Then update the API signer secrets, verify runtime
+preflight, and revoke the old signer. Settlement-minter rotation is also a durable-owner
+operation after migration: recover `PurchaseEntitlementToken` ownership, rotate the minter
+grant directly on the token, then transfer token ownership back to the class configurer.
+
 Do not use production timing runs for development iteration.
 
 ### Current Staging Evidence
