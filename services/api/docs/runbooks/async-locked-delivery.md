@@ -122,6 +122,11 @@ preflight, and revoke the old signer. Settlement-minter rotation is also a durab
 operation after migration: recover `PurchaseEntitlementToken` ownership, rotate the minter
 grant directly on the token, then transfer token ownership back to the class configurer.
 
+Before production rollout, verify `MUSIC_PURCHASE_STORY_SETTLEMENT_PRIVATE_KEY` derives to the
+address granted by `PurchaseEntitlementToken.isSettlementMinter(...)`. A June 2026 audit found
+prod deriving to the operator address (`0xc77...F4BB`) instead of the expected settlement signer
+for the current stack (`0x5263...D2F`); fix or explicitly re-grant before prod traffic.
+
 Do not use production timing runs for development iteration.
 
 ### Current Staging Evidence
