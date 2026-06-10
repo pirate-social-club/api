@@ -134,6 +134,14 @@
     },
     "production": {
       "name": "api-core",
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "LIVE_ROOM_RUNTIME",
+            "class_name": "LiveRoomRuntimeDO"
+          }
+        ]
+      },
       "services": [
         {
           "binding": "COMMUNITY_PROVISION_OPERATOR",
