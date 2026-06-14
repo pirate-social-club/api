@@ -13,6 +13,9 @@ import {
   getCommunityFollowerCount,
 } from "./membership/follow-store"
 import { openCommunityDb } from "./community-db-factory"
+import type { ReadClient } from "../sql-client"
+
+type CommunityReadClient = ReadClient
 import {
   buildLocalizedCommunityPreview,
   enqueueCommunityTextTranslationOnReadIfNeeded,
@@ -238,7 +241,7 @@ async function getCommunityRoleSummary(input: {
 }
 
 async function getCommunityOwnerUserId(
-  client: Awaited<ReturnType<typeof openCommunityDb>>["client"],
+  client: CommunityReadClient,
   communityId: string,
 ): Promise<string | null> {
   const result = await client.execute({
@@ -261,7 +264,7 @@ async function getCommunityOwnerUserId(
 }
 
 async function listCommunityModeratorRoleAssignments(
-  client: Awaited<ReturnType<typeof openCommunityDb>>["client"],
+  client: CommunityReadClient,
   communityId: string,
 ): Promise<Array<{ userId: string; role: "admin" | "moderator" }>> {
   const result = await client.execute({
@@ -354,7 +357,7 @@ export async function getPublicCommunityPreview(input: {
 
 export async function getPublicCommunityPreviewFromCommunityDb(input: {
   env: Env
-  client: Awaited<ReturnType<typeof openCommunityDb>>["client"]
+  client: CommunityReadClient
   communityId: string
   locale?: string | null
   communityRepository: CommunityPreviewRepository
@@ -378,7 +381,7 @@ export async function getPublicCommunityPreviewFromCommunityDb(input: {
 }
 
 async function listPublicCommunityRules(input: {
-  client: Awaited<ReturnType<typeof openCommunityDb>>["client"]
+  client: CommunityReadClient
   communityId: string
 }): Promise<CommunityPreviewRule[]> {
   const result = await input.client.execute({
@@ -408,7 +411,7 @@ async function listPublicCommunityRules(input: {
 
 async function buildCommunityPreview(input: {
   env: Env
-  client: Awaited<ReturnType<typeof openCommunityDb>>["client"]
+  client: CommunityReadClient
   communityId: string
   communityDisplayName: string
   communityCreatedAt: string
