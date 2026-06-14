@@ -19,6 +19,7 @@
     "zkpassport:verifier": "bun run scripts/zkpassport-verifier-service.ts",
     "check:community-schema-guards": "bun run scripts/check-community-schema-guards.ts",
     "check:control-plane-fixtures": "bun run scripts/check-control-plane-fixtures.ts",
+    "backfill:source-language-detection": "bun run scripts/backfill-source-language-detection.ts",
     "sync:control-plane-fixtures": "bun run scripts/check-control-plane-fixtures.ts --write",
     "generate:agent-tools": "bun run scripts/generate-agent-tools.ts",
     "generate:agent-skill": "bun run scripts/generate-agent-skill.ts",
@@ -29,15 +30,12 @@
     "check": "bun run generate:agent-tools && tsgo --noEmit",
     "lint": "biome check .",
     "test": "bun test",
-    "test:e2e:story-locked-derivative-video": "bun test tests/e2e/story-locked-derivative-video.e2e.test.ts",
     "test:unit": "bun test src tests/lib",
     "test:routes": "bun test --max-concurrency=1 tests/routes tests/community-membership-reconciliation.test.ts",
     "coverage": "bun test --coverage",
     "mint:dev-jwt": "bun run scripts/mint-dev-jwt.ts",
+    "e2e:story-video-royalty-cycle": "bun run scripts/e2e-story-video-royalty-cycle.ts",
     "smoke:story-remix-cycle": "bun run scripts/smoke-story-remix-cycle.ts",
-    "timing:fixtures": "bun run scripts/generate-timing-fixtures.ts",
-    "timing:local-runs": "bun run scripts/timing-local-runs.ts",
-    "timing:submission-e2e": "bun run scripts/timing-submission-e2e.ts",
     "live-room:e2e:local": "bun run scripts/live-room-local-e2e.ts",
     "live-room:smoke:paid-staging": "bun run scripts/live-room-paid-staging-smoke.ts",
     "seed:local-smoke": "bun run scripts/seed-community-lifecycle.ts --mode local-smoke --manifest scripts/seed-manifests/local-smoke.json",
@@ -73,6 +71,7 @@
   },
   "overrides": {
     "axios": "^1.16.0",
+    "esbuild": "^0.28.1",
     "underscore": "^1.13.8"
   },
   "devDependencies": {
