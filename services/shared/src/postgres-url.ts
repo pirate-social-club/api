@@ -1,11 +1,4 @@
-// DROP-IN ARTIFACT — move to api/services/shared/src/postgres-url.ts and add
-//   export * from "./postgres-url.js"
-// to api/services/shared/src/index.ts, then import these from "@pirate/api-shared"
-// in services/api/src/lib/runtime-deps.ts AND
-// services/community-provision-operator/src/lib/control-plane-db.ts (drop the
-// inline copies). See MIGRATION_HANDOFF_control-plane-prod.md §5/§9.
-//
-// MIRROR NOTE: `isPlanetScalePostgresUrl` and the `sslrootcert=system` strip
+// MIRROR NOTE: `isPlanetScalePostgresUrl` and `normalizePostgresConnectionStringForDriver`
 // mirror core/scripts/lib/postgres-url.ts (`isPlanetScalePostgresUrl` /
 // `normalizePostgresUrlForClient`). There is NO shared import across the
 // api/ <-> core/ sibling-repo boundary (vendored split, by decision) — if you

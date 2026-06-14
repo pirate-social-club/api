@@ -1,14 +1,10 @@
-// DROP-IN ARTIFACT — move alongside postgres-url.ts (api/services/shared/src/).
-// Replaces the inline PlanetScale assertions in
-// api/services/api/tests/runtime-deps.test.ts:73-93 once both consumers import
-// from "@pirate/api-shared". Run: bun test (from services/shared).
 import { describe, expect, test } from "bun:test"
 import { neonConfig } from "@neondatabase/serverless"
 import {
   configurePostgresDriverForUrl,
   isPlanetScalePostgresUrl,
   normalizePostgresConnectionStringForDriver,
-} from "./postgres-url"
+} from "./postgres-url.js"
 
 const PSDB = "postgresql://role.br123:pw@us-east-3.pg.psdb.cloud:5432/postgres?sslmode=verify-full&sslrootcert=system"
 const NEON = "postgresql://user:pw@example.neon.tech/postgres"
