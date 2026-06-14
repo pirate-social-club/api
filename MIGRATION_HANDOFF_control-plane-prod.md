@@ -151,3 +151,38 @@ curl -fsS https://api.pirate.sc/health/provisioning
 
 If 1–3 hold and 4 is green, the incident is fully closed: prod is clean, the
 PlanetScale fix is live, and no diagnosis residue remains.
+
+## 9. Drop-in artifact for the §5 dedup (ready files)
+
+Pre-written so the dedup is a copy + import-swap, not a re-derivation. Files:
+
+- `api-tier1-prod/handoff-artifacts/postgres-url.ts` — the shared module
+  (`isPlanetScalePostgresUrl` / `configurePostgresDriverForUrl` /
+  `normalizePostgresConnectionStringForDriver`), matching the api/ consumer copy
+  body-for-body, with the mirror tripwire comment to `core/`.
+- `api-tier1-prod/handoff-artifacts/postgres-url.test.ts` — its bun test.
+
+**Do this in the same commit that lands the (currently uncommitted) inline copies**
+— not as a separate consumer-less `main` PR:
+
+1. Move `postgres-url.ts` → `api/services/shared/src/postgres-url.ts` and
+   `postgres-url.test.ts` → `api/services/shared/src/postgres-url.test.ts`
+   (strip the leading "DROP-IN ARTIFACT" banner comments).
+2. Add to `api/services/shared/src/index.ts`: `export * from "./postgres-url.js"`.
+3. In `services/api/src/lib/runtime-deps.ts` (currently lines ~14-58) and
+   `services/community-provision-operator/src/lib/control-plane-db.ts` (~10-54):
+   delete the inline trio + the `defaultNeon*`/`poolQueryViaFetch` module block,
+   and `import { isPlanetScalePostgresUrl, configurePostgresDriverForUrl, normalizePostgresConnectionStringForDriver } from "@pirate/api-shared"`.
+   (The `poolQueryViaFetch`/default-capture side effects now live in the shared
+   module's import — verify each consumer still imports it before first DB use.)
+4. Focused checks (no broad `bun run check`):
+   ```
+   rtk bun run check:hygiene
+   rtk bun run --cwd services/shared check
+   rtk bun run --cwd services/api check
+   rtk bun run --cwd services/community-provision-operator check
+   ```
+
+Net: ~50 LOC moved, 1 new file + 1 re-export line + 2 import swaps + 1 test
+relocation, no behavior change. `core/scripts/lib/postgres-url.ts` stays as-is
+(vendored split; the tripwire comment keeps the two in sync by hand).
