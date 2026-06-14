@@ -89,11 +89,17 @@ exact change the migration is already shipping — just landed on the prod line.
   lift (binding + secret + DNS + re-test of every operator query) — a follow-up,
   not the incident fix.
 
-**Follow-up (not a blocker):** collapse the 3-way duplication — a single shared
-module under `api/services/.../lib/postgres-url.ts` consumed by both
-`runtime-deps.ts` and `control-plane-db.ts`, dropping the inline copies; whether
-to also unify with `core/`'s canonical copy is a structural choice independent of
-this incident.
+**Follow-up (not a blocker) — decided:** collapse only the **two `api/` copies**
+(`runtime-deps.ts:33-69` + `control-plane-db.ts:111-150`) into one
+`api/services/<shared>/lib/postgres-url.ts` consumed by both. **Leave the
+vendored split with `core/`** — do *not* hoist a cross-repo shared package:
+`api/` cannot import from `core/scripts/` (sibling repos per `core/AGENTS.md`),
+and ~50 LOC of pure URL/string handling does not justify a cross-repo import
+surface (version pinning, release sync, extra package.jsons). `core/`'s copy
+stays canonical for `core/` scripts. Add a one-line tripwire comment in the new
+shared `api/` file — "if you change these bodies, also update
+`core/scripts/lib/postgres-url.ts`" — so the next editor sees both copies.
+Revisit only if the helpers grow non-trivial logic (pooling, credential rotation).
 
 ## 5. What this PR (#39) actually buys — reframed
 

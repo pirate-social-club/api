@@ -59,12 +59,26 @@ This is the exact change you're already shipping, just on the prod line.
   shape, wrong size for an incident (binding + secret + DNS + full operator
   query re-test). Follow-up, not blocker.
 
-## 5. Follow-up (after the unblock, not part of it)
+## 5. Follow-up (after the unblock, not part of it) — decided
 
-Collapse the 3-way duplication: one shared module under
-`api/services/.../lib/postgres-url.ts` consumed by both `runtime-deps.ts` and the
-operator's `control-plane-db.ts`; drop the inline copies. Whether to also unify
-with `core/`'s canonical copy is a structural call independent of this incident.
+Collapse the **two `api/` copies** only — `runtime-deps.ts:33-69` and the
+operator's `control-plane-db.ts:111-150` — into one
+`api/services/<shared>/lib/postgres-url.ts` consumed by both. These are the
+copies with real drift risk (same repo, both in the prod hot path).
+
+**Leave the vendored split with `core/`.** Do **not** hoist a cross-repo shared
+package: `api/` cannot import from `core/scripts/` (sibling repos, per
+`core/AGENTS.md`), and ~50 LOC of pure URL/string handling doesn't justify a
+cross-repo import surface (version pinning, release-time sync, more
+package.jsons, CODEOWNERS). `core/scripts/lib/postgres-url.ts` stays canonical
+for the `core/` scripts that legitimately live there.
+
+**One tripwire to add** when you make the shared `api/` file: a top-of-file
+comment — `// Mirror of core/scripts/lib/postgres-url.ts — if you change these
+function bodies, update that copy too (sibling repo, no shared import).` So the
+next person who touches the helpers sees both copies. That's the whole follow-up;
+revisit the structure only if these helpers grow non-trivial logic (pooling,
+credential rotation, real driver init).
 
 ## 6. Related PR (#39) — prevention, and a red you should expect
 
@@ -88,3 +102,39 @@ After §3 deploys to prod:
   `region-aws-us-east-1`) — the DB from the original failed run — once the
   control plane is reachable (operator `doctor`/`reap-stale`). It was left intact
   because confirming it's unbound needs a working control plane.
+
+## 8. Confirm prod is clean after you deploy on top (incident close-out)
+
+Triage left the prod operator on **clean base version `641936fa`** with the
+original 7 secrets. Two temporary instrumented versions were deployed during
+diagnosis and then superseded — **`2cee44f1` and `bfd3aaed` must NOT be the
+active version**; if either is, something rolled back. After your §3 deploy lands,
+run these to confirm the prod line is in the claimed state (run from
+`services/community-provision-operator`):
+
+```bash
+# 1. Secrets: exactly the original 7 — no CP_MAINTENANCE / CP_MAINTENANCE_DELETE_DB
+bunx wrangler secret list --env production
+#    expect: COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN, CONTROL_PLANE_DATABASE_URL,
+#    TURSO_COMMUNITY_DB_WRAP_KEY, TURSO_COMMUNITY_DB_WRAP_KEY_VERSION,
+#    TURSO_CONTROL_PLANE_AUTH_TOKEN, TURSO_ORGANIZATION_SLUG, TURSO_PLATFORM_API_TOKEN
+
+# 2. Active version is YOUR §3 deploy (or 641936fa if not yet deployed) —
+#    never the temp instrumented 2cee44f1 / bfd3aaed
+bunx wrangler deployments list --env production
+bunx wrangler versions list --env production
+
+# 3. Source line carries no leftover instrumentation (it was never committed;
+#    this just proves it)
+git grep -nE "CP-MAINT|runCpMaintenance|CP_MAINTENANCE" \
+  origin/release/api-tier1-prod -- services/community-provision-operator \
+  || echo "clean: no instrumentation on release line"
+
+# 4. Functional green (needs PR #39's API route deployed; else verify via a real
+#    community create + wrangler tail)
+curl -fsS https://api.pirate.sc/health/provisioning
+#    expect: 200 {"ok":true,"control_plane_ok":true,...}
+```
+
+If 1–3 hold and 4 is green, the incident is fully closed: prod is clean, the
+PlanetScale fix is live, and no diagnosis residue remains.
