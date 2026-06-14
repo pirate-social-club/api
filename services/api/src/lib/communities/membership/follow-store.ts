@@ -1,11 +1,11 @@
-import type { Client } from "../../sql-client"
+import type { ReadClient } from "../../sql-client"
 import { executeFirst } from "../../db-helpers"
 import { rowValue, stringOrNull } from "../../sql-row"
 
 export type CommunityFollowStatus = "active" | "inactive"
 
 export async function getCommunityFollowStatus(
-  client: Client,
+  client: ReadClient,
   communityId: string,
   userId: string,
 ): Promise<CommunityFollowStatus | null> {
@@ -28,7 +28,7 @@ export async function getCommunityFollowStatus(
 }
 
 export async function getCommunityFollowerCount(
-  client: Client,
+  client: ReadClient,
   communityId: string,
 ): Promise<number | null> {
   const row = await executeFirst(
@@ -49,7 +49,7 @@ export async function getCommunityFollowerCount(
 }
 
 export async function countActiveCommunityFollows(
-  client: Client,
+  client: ReadClient,
   communityId: string,
 ): Promise<number> {
   const row = await executeFirst(
@@ -70,7 +70,7 @@ export async function countActiveCommunityFollows(
 }
 
 export async function setCommunityFollowActive(input: {
-  client: Client
+  client: ReadClient
   communityId: string
   userId: string
   now: string
@@ -111,7 +111,7 @@ export async function setCommunityFollowActive(input: {
 }
 
 export async function setCommunityFollowInactive(input: {
-  client: Client
+  client: ReadClient
   communityId: string
   userId: string
   now: string
