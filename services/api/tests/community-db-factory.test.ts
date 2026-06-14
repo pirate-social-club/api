@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { createClient } from "@libsql/client"
-import { openCommunityDb } from "../src/lib/communities/community-db-factory"
+import { openCommunityDb, withRequestCommunityDbClients } from "../src/lib/communities/community-db-factory"
 import { encryptCommunityDbCredential } from "../src/lib/communities/community-db-credential-crypto"
 import { enqueueCommunityJob } from "../src/lib/communities/jobs/store"
 import type { CommunityDatabaseBindingRepository } from "../src/lib/communities/db-community-repository"
@@ -974,4 +974,148 @@ describe("openCommunityDb", () => {
       db.close()
     }
   }, COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS)
+})
+
+describe("withRequestCommunityDbClients", () => {
+  test("shares the same Turso handle across openCommunityDb calls in one request and opens a fresh one outside", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-share-handle-"))
+    cleanupPaths.push(rootDir)
+    const databasePath = join(rootDir, `${randomUUID()}.db`)
+
+    const shared = await withRequestCommunityDbClients(async () => {
+      const first = await openCommunityDb(
+        { LOCAL_COMMUNITY_DB_ROOT: rootDir },
+        buildRepository(databasePath),
+        "cmt_shared",
+      )
+      const second = await openCommunityDb(
+        { LOCAL_COMMUNITY_DB_ROOT: rootDir },
+        buildRepository(databasePath),
+        "cmt_shared",
+      )
+      return { first, second }
+    })
+
+    expect(shared.second.client).toBe(shared.first.client)
+    expect(shared.second.databaseUrl).toBe(shared.first.databaseUrl)
+    shared.second.close()
+    shared.first.close()
+
+    const outsideFirst = await openCommunityDb(
+      { LOCAL_COMMUNITY_DB_ROOT: rootDir },
+      buildRepository(databasePath),
+      "cmt_shared",
+    )
+    try {
+      const outsideSecond = await openCommunityDb(
+        { LOCAL_COMMUNITY_DB_ROOT: rootDir },
+        buildRepository(databasePath),
+        "cmt_shared",
+      )
+      try {
+        expect(outsideSecond.client).not.toBe(outsideFirst.client)
+      } finally {
+        outsideSecond.close()
+      }
+    } finally {
+      outsideFirst.close()
+    }
+  })
+
+  test("caches separate handles per community id within the same request", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-share-handle-"))
+    cleanupPaths.push(rootDir)
+    const databasePathA = join(rootDir, `a-${randomUUID()}.db`)
+    const databasePathB = join(rootDir, `b-${randomUUID()}.db`)
+
+    const repoA = buildRepository(databasePathA)
+    const repoB = buildRepository(databasePathB)
+
+    const result = await withRequestCommunityDbClients(async () => {
+      const aFirst = await openCommunityDb({ LOCAL_COMMUNITY_DB_ROOT: rootDir }, repoA, "cmt_a")
+      const aSecond = await openCommunityDb({ LOCAL_COMMUNITY_DB_ROOT: rootDir }, repoA, "cmt_a")
+      const bFirst = await openCommunityDb({ LOCAL_COMMUNITY_DB_ROOT: rootDir }, repoB, "cmt_b")
+      return { aFirst, aSecond, bFirst }
+    })
+
+    expect(result.aSecond.client).toBe(result.aFirst.client)
+    expect(result.bFirst.client).not.toBe(result.aFirst.client)
+  })
+
+  test("dedupes concurrent opens for the same community into a single client", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-share-handle-"))
+    cleanupPaths.push(rootDir)
+    const databasePath = join(rootDir, `${randomUUID()}.db`)
+
+    // Both opens start before either has populated the cache. Without in-flight
+    // de-duplication each would create its own client; with it they share one.
+    const result = await withRequestCommunityDbClients(async () => {
+      const [first, second, third] = await Promise.all([
+        openCommunityDb({ LOCAL_COMMUNITY_DB_ROOT: rootDir }, buildRepository(databasePath), "cmt_concurrent"),
+        openCommunityDb({ LOCAL_COMMUNITY_DB_ROOT: rootDir }, buildRepository(databasePath), "cmt_concurrent"),
+        openCommunityDb({ LOCAL_COMMUNITY_DB_ROOT: rootDir }, buildRepository(databasePath), "cmt_concurrent"),
+      ])
+      return { first, second, third }
+    })
+
+    expect(result.second.client).toBe(result.first.client)
+    expect(result.third.client).toBe(result.first.client)
+    expect(result.second.databaseUrl).toBe(result.first.databaseUrl)
+  })
+
+  test("exposes a no-op close for cached handles inside the request scope and closes the underlying client once the scope ends", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-share-handle-"))
+    cleanupPaths.push(rootDir)
+    const databasePath = join(rootDir, `${randomUUID()}.db`)
+
+    let underlyingClosed = 0
+    let cachedClientRef: { close: () => void } | null = null
+    let cachedHandleClose: (() => void) | null = null
+    let underlyingBeforeScopeExit: number | null = null
+    let reopenedClientRef: { close: () => void } | null = null
+
+    await withRequestCommunityDbClients(async () => {
+      const first = await openCommunityDb(
+        { LOCAL_COMMUNITY_DB_ROOT: rootDir },
+        buildRepository(databasePath),
+        "cmt_request_close",
+      )
+      const originalClose = first.client.close.bind(first.client)
+      first.client.close = () => {
+        underlyingClosed += 1
+        originalClose()
+      }
+      const second = await openCommunityDb(
+        { LOCAL_COMMUNITY_DB_ROOT: rootDir },
+        buildRepository(databasePath),
+        "cmt_request_close",
+      )
+      cachedClientRef = first.client
+      cachedHandleClose = second.close
+      second.close()
+    })
+
+    expect(cachedClientRef).not.toBeNull()
+    expect(cachedHandleClose).not.toBeNull()
+    const closeFn: () => void = cachedHandleClose as unknown as () => void
+    expect(typeof closeFn).toBe("function")
+    expect(underlyingClosed).toBe(1)
+    underlyingBeforeScopeExit = underlyingClosed
+    closeFn()
+    expect(underlyingClosed).toBe(underlyingBeforeScopeExit)
+
+    const reopened = await openCommunityDb(
+      { LOCAL_COMMUNITY_DB_ROOT: rootDir },
+      buildRepository(databasePath),
+      "cmt_request_close",
+    )
+    try {
+      reopenedClientRef = reopened.client
+      expect(reopened.client).not.toBe(cachedClientRef)
+    } finally {
+      reopened.close()
+    }
+
+    expect(reopenedClientRef).not.toBeNull()
+  })
 })

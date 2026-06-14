@@ -11,6 +11,12 @@ export type QueryResult = {
   lastInsertRowid?: unknown
 }
 
+export interface ReadClient {
+  execute(statement: InStatement | string): Promise<QueryResult>
+  batch(statements: InStatement[], mode?: "read" | "write"): Promise<QueryResult[]>
+  close?(): void | Promise<void>
+}
+
 export interface Transaction {
   execute(statement: InStatement | string): Promise<QueryResult>
   batch(statements: InStatement[], mode?: "read" | "write"): Promise<QueryResult[]>
@@ -19,9 +25,6 @@ export interface Transaction {
   close(): void
 }
 
-export interface Client {
-  execute(statement: InStatement | string): Promise<QueryResult>
-  batch(statements: InStatement[], mode?: "read" | "write"): Promise<QueryResult[]>
+export interface Client extends ReadClient {
   transaction(mode?: "read" | "write"): Promise<Transaction>
-  close?(): void | Promise<void>
 }
