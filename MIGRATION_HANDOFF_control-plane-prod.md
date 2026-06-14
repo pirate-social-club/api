@@ -22,6 +22,18 @@ The Turso control plane no longer exists (the `pirate-prod` org is 158
 **There is nothing to repoint the secret to.** The fix is code: ship the
 PlanetScale driver wiring to the prod operator.
 
+> **Why `@neondatabase/serverless` is in this code at all (it is not a second
+> database):** "Neon" here is the *driver library*, not the vendor. It is a
+> `pg`-compatible Postgres client that talks Postgres **over HTTP/WebSocket** —
+> required because Cloudflare Workers can't open raw TCP sockets that the normal
+> `pg` driver needs. The migration's `configurePostgresDriverForUrl` repoints
+> that driver's endpoints at PlanetScale's hosts (`fetchEndpoint` →
+> `https://${host}/sql`, `wsProxy` → `${host}/v2?address=…`); for a non-PlanetScale
+> URL it resets to the driver's Neon defaults. So we use **PlanetScale the
+> database, through the Neon serverless driver as the Workers Postgres-over-HTTP
+> client.** Long-term this bridge is better replaced by Cloudflare **Hyperdrive**
+> (standard driver, no per-host `neonConfig` special-casing) — see §4.
+
 ## 2. Migration state (both layers are live on your branch)
 
 `migration/turso-to-d1` HEAD `714b837` carries **two** in-flight layers:

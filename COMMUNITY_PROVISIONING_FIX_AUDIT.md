@@ -32,6 +32,13 @@ i.e. **PlanetScale Postgres**. The deployed prod operator
 `fs.readFileSync(<sslrootcert>)` to load a CA file. The Cloudflare Workers
 runtime has **no filesystem**, so it throws `Ir.readFileSync is not a function`.
 
+> Note: `@neondatabase/serverless` here is the **driver library, not a second
+> database**. It is a `pg`-compatible Postgres-over-HTTP/WS client used because
+> Workers can't open raw TCP. PlanetScale Postgres is reached *through* it by
+> repointing `neonConfig` endpoints (the migration's `configurePostgresDriverForUrl`).
+> So the stack is PlanetScale-the-DB via the Neon-the-driver; there is no Neon
+> database in play.
+
 The Pool is created lazily, so `open_control_plane` (just `new Pool`) succeeds;
 the parse+`readFileSync` fires on the **first query**, which is
 `load_next_rotation` (`provision-runtime.ts:161`) — matching the observed step.
