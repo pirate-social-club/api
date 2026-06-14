@@ -128,6 +128,86 @@ function isPostgresControlPlaneUrl(url: string): boolean {
   return normalized.startsWith("postgres://") || normalized.startsWith("postgresql://");
 }
 
+const LOCAL_CONTROL_PLANE_ENVIRONMENTS = new Set(["development", "test"]);
+
+const REMOTE_CONTROL_PLANE_SCHEMES = new Set([
+  "libsql:",
+  "https:",
+  "http:",
+  "wss:",
+  "ws:",
+  "postgres:",
+  "postgresql:",
+]);
+
+export class ControlPlaneUrlError extends Error {
+  readonly code = "control_plane_url_invalid";
+  constructor(message: string) {
+    super(message);
+    this.name = "ControlPlaneUrlError";
+  }
+}
+
+function parseUrlScheme(url: string): string | null {
+  const match = /^([a-z][a-z0-9+.-]*:)/i.exec(url.trim());
+  return match ? match[1].toLowerCase() : null;
+}
+
+/**
+ * Rejects a control-plane URL the Cloudflare Workers runtime cannot use.
+ *
+ * `@libsql/client` resolves `file:`/path URLs through `fs.readFileSync`, which
+ * does not exist in the Workers runtime. A misconfigured
+ * `CONTROL_PLANE_DATABASE_URL` therefore *constructs* fine and only blows up at
+ * the first query (`Ir.readFileSync is not a function`) — deep inside
+ * provisioning at `load_next_rotation`, long after irreversible Turso resources
+ * have been created. This converts that late, cryptic failure into an explicit,
+ * actionable error at the request boundary.
+ *
+ * Local file URLs are allowed in `development`/`test`, where the runtime is
+ * Node/Bun and local SQLite is the intended control plane for tests. The scheme
+ * is intentionally only echoed (never the full URL) so credentials/tokens in
+ * the connection string cannot leak into error messages or logs.
+ */
+export function assertRemoteControlPlaneUrl(
+  url: string,
+  options: { environment?: string | null } = {},
+): void {
+  const environment = (options.environment ?? "").trim().toLowerCase();
+  if (LOCAL_CONTROL_PLANE_ENVIRONMENTS.has(environment)) {
+    return;
+  }
+
+  const trimmed = url.trim();
+  if (!trimmed) {
+    throw new ControlPlaneUrlError(
+      "CONTROL_PLANE_DATABASE_URL is empty; a remote control-plane URL is required.",
+    );
+  }
+
+  const scheme = parseUrlScheme(trimmed);
+  if (!scheme) {
+    throw new ControlPlaneUrlError(
+      "CONTROL_PLANE_DATABASE_URL has no URL scheme; the Workers runtime requires a remote " +
+        "libsql://, https://, or postgres:// URL (a bare path is read as a local file and fails in production).",
+    );
+  }
+
+  if (scheme === "file:") {
+    throw new ControlPlaneUrlError(
+      `CONTROL_PLANE_DATABASE_URL uses the "file:" scheme for environment "${environment || "production"}"; ` +
+        "the Workers runtime has no filesystem. Point it at a remote libsql://, https://, or postgres:// control plane.",
+    );
+  }
+
+  if (!REMOTE_CONTROL_PLANE_SCHEMES.has(scheme)) {
+    throw new ControlPlaneUrlError(
+      `CONTROL_PLANE_DATABASE_URL uses unsupported scheme "${scheme}"; ` +
+        "expected one of libsql://, https://, http://, wss://, ws://, postgres://, postgresql://.",
+    );
+  }
+}
+
 function openPostgresControlPlaneDatabase(url: string): ControlPlaneDatabase {
   const pool = new Pool({ connectionString: url, max: 4 });
 

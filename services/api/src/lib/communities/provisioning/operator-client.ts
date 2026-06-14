@@ -131,6 +131,50 @@ export async function getCommunityProvisionOperatorVersion(env: Env): Promise<Co
   }
 }
 
+export type CommunityProvisionOperatorHealth = {
+  ok: boolean
+  configured: boolean
+  control_plane_ok: boolean
+  environment: string | null
+  error_code: string | null
+}
+
+/**
+ * Probes the operator's authenticated `/health/deep` endpoint, which actually
+ * opens the control plane (validates CONTROL_PLANE_DATABASE_URL and runs
+ * `SELECT 1`). This is the check the plain `/health` endpoint cannot do, and is
+ * what surfaces a misconfigured (e.g. `file:`) control-plane URL before a real
+ * community-creation request hits it.
+ */
+export async function getCommunityProvisionOperatorHealth(env: Env): Promise<CommunityProvisionOperatorHealth> {
+  if (!env.COMMUNITY_PROVISION_OPERATOR) {
+    return { ok: false, configured: false, control_plane_ok: false, environment: null, error_code: "operator_binding_unconfigured" }
+  }
+  const authToken = trim(env.COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN)
+  if (!authToken) {
+    return { ok: false, configured: false, control_plane_ok: false, environment: null, error_code: "operator_auth_unconfigured" }
+  }
+
+  try {
+    const response = await env.COMMUNITY_PROVISION_OPERATOR.fetch(
+      new Request("https://internal/health/deep", {
+        headers: { authorization: `Bearer ${authToken}` },
+      }),
+    )
+    const body = parsedRecord(await response.json().catch(() => null))
+    const controlPlaneOk = body.control_plane_ok === true
+    return {
+      ok: response.ok && body.ok === true && controlPlaneOk,
+      configured: true,
+      control_plane_ok: controlPlaneOk,
+      environment: typeof body.environment === "string" ? body.environment : null,
+      error_code: typeof body.error_code === "string" ? body.error_code : (response.ok ? null : "operator_http_error"),
+    }
+  } catch {
+    return { ok: false, configured: true, control_plane_ok: false, environment: null, error_code: "operator_unreachable" }
+  }
+}
+
 export async function provisionCommunityViaOperator(input: {
   env: Env
   communityId: string
