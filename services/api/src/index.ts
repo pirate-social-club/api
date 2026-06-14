@@ -46,7 +46,7 @@ import { getCommunityRepository } from "./lib/communities/db-community-repositor
 import { reconcileStaleCommunityPurchaseSettlements } from "./lib/communities/commerce/settlement-service"
 import { processAvailableCommunityJobs } from "./lib/communities/jobs/runner"
 import { reconcileCommunityMembershipAndFollowProjections } from "./lib/communities/membership/projection-service"
-import { getCommunityProvisionOperatorVersion } from "./lib/communities/provisioning/operator-client"
+import { getCommunityProvisionOperatorHealth, getCommunityProvisionOperatorVersion } from "./lib/communities/provisioning/operator-client"
 import { HttpError, errorResponse } from "./lib/errors"
 import { refreshScheduledMaterializedPublicHomeFeeds } from "./lib/feed/materialized-public-feed"
 import { reconcileRoyaltyClaimEvents } from "./lib/royalties/royalty-claim-history"
@@ -180,6 +180,23 @@ app.use("*", async (_c, next) => {
 })
 
 app.get("/health", (c) => c.json({ ok: true }))
+// Deep provisioning health: fans out to the operator's `/health/deep`, which
+// opens the control plane. Returns booleans only (no connection strings or
+// secrets) so a post-deploy smoke check can curl it without credentials.
+app.get("/health/provisioning", async (c) => {
+  const health = await getCommunityProvisionOperatorHealth(c.env)
+  return c.json(
+    {
+      ok: health.ok,
+      configured: health.configured,
+      control_plane_ok: health.control_plane_ok,
+      environment: health.environment,
+      ...(health.ok ? {} : { error_code: health.error_code }),
+    },
+    health.ok ? 200 : 503,
+    { "cache-control": "no-store" },
+  )
+})
 app.get("/__version", async (c) => c.json(await buildVersionPayload(c.env), 200, {
   "cache-control": "no-store",
 }))
