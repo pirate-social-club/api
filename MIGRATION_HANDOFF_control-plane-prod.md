@@ -61,10 +61,23 @@ This is the exact change you're already shipping, just on the prod line.
 
 ## 5. Follow-up (after the unblock, not part of it) — decided
 
-Collapse the **two `api/` copies** only — `runtime-deps.ts:33-69` and the
-operator's `control-plane-db.ts:111-150` — into one
-`api/services/<shared>/lib/postgres-url.ts` consumed by both. These are the
-copies with real drift risk (same repo, both in the prod hot path).
+**Sequencing reality (verified):** the inline copies are **uncommitted WIP**, on
+no committed branch. They live in working trees only — the migration worktree
+(`runtime-deps.ts` + `control-plane-db.ts`, amid ~175 uncommitted files) and the
+prod-line `api-tier1-prod` worktree (same two files, the unblock being applied).
+`origin/main` has no PlanetScale helpers at all. So the dedup **must be folded
+into the commit that lands these copies** — a standalone `main` PR would add a
+consumer-less `services/shared` module, i.e. *another* copy, not a dedup.
+
+**The dedup:** when committing the inline copies, instead point both consumers at
+the shared package. Create `api/services/shared/src/postgres-url.ts` (the 3
+functions, body-for-body from `core/scripts/lib/postgres-url.ts`), re-export it
+from `api/services/shared/src/index.ts` (`export * from "./postgres-url.js"`),
+and `import { … } from "@pirate/api-shared"` in both
+`services/api/src/lib/runtime-deps.ts` and
+`services/community-provision-operator/src/lib/control-plane-db.ts` rather than
+inlining. `@pirate/api-shared` is the repo's real cross-service package
+(`services/shared/package.json`), so this is the api/ convention, not a new home.
 
 **Leave the vendored split with `core/`.** Do **not** hoist a cross-repo shared
 package: `api/` cannot import from `core/scripts/` (sibling repos, per
