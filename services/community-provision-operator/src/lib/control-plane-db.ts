@@ -7,7 +7,51 @@ type PostgresQueryable = {
   query: (sql: string, values?: unknown[]) => Promise<{ rows: unknown[]; rowCount?: number | null }>;
 };
 
+const defaultNeonFetchEndpoint = neonConfig.fetchEndpoint;
+const defaultNeonWsProxy = neonConfig.wsProxy;
+const defaultNeonPipelineConnect = neonConfig.pipelineConnect;
+
 neonConfig.poolQueryViaFetch = true;
+
+// PlanetScale Postgres (*.pg.psdb.cloud) speaks the Neon HTTP/WS protocol but at
+// its own endpoints, and sends `sslrootcert=system` which the bundled pg driver
+// would try to fs.readFileSync() (fails in Workers). Rewire the endpoints and
+// strip the cert param so the control-plane connection works in production.
+function isPlanetScalePostgresUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.hostname.toLowerCase().endsWith(".pg.psdb.cloud");
+  } catch {
+    return false;
+  }
+}
+
+function configurePostgresDriverForUrl(url: string): void {
+  neonConfig.poolQueryViaFetch = true;
+
+  if (!isPlanetScalePostgresUrl(url)) {
+    neonConfig.fetchEndpoint = defaultNeonFetchEndpoint;
+    neonConfig.wsProxy = defaultNeonWsProxy;
+    neonConfig.pipelineConnect = defaultNeonPipelineConnect;
+    return;
+  }
+
+  neonConfig.fetchEndpoint = (host) => `https://${host}/sql`;
+  neonConfig.wsProxy = (host, port) => `${host}/v2?address=${host}:${port}`;
+  neonConfig.pipelineConnect = false;
+}
+
+function normalizePostgresConnectionStringForDriver(value: string): string {
+  if (!isPlanetScalePostgresUrl(value)) {
+    return value;
+  }
+
+  const url = new URL(value);
+  if (url.searchParams.get("sslrootcert") === "system") {
+    url.searchParams.delete("sslrootcert");
+  }
+  return url.toString();
+}
 
 function normalizeSqlArg(value: unknown): unknown {
   if (value === undefined) {
@@ -185,7 +229,8 @@ export function assertRemoteControlPlaneUrl(
 }
 
 function openPostgresControlPlaneDatabase(url: string): ControlPlaneDatabase {
-  const pool = new Pool({ connectionString: url, max: 4 });
+  configurePostgresDriverForUrl(url);
+  const pool = new Pool({ connectionString: normalizePostgresConnectionStringForDriver(url), max: 4 });
 
   return {
     ...createPostgresQueryable(pool),
