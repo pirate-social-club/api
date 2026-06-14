@@ -43,9 +43,21 @@ the parse+`readFileSync` fires on the **first query**, which is
   plane no longer exists — its data was migrated to PlanetScale.
 - The prod operator code (`api-tier1-prod`) predates PlanetScale support. The
   PlanetScale connection handling (`isPlanetScalePostgresUrl`,
-  `configurePostgresDriverForUrl`, `normalizePostgresConnectionStringForDriver`
-  in `core/scripts/lib/postgres-url.ts`) exists **only on the migration branch
-  (`api/`)**, not in prod.
+  `configurePostgresDriverForUrl` — which rewires `neonConfig.fetchEndpoint` →
+  `https://${host}/sql` and `wsProxy` → `${host}/v2?address=${host}:${port}` —
+  and `normalizePostgresConnectionStringForDriver`, which strips
+  `sslrootcert=system`) is **absent from the prod release line** but exists in
+  **three places** on the migration branch `migration/turso-to-d1`:
+  1. `core/scripts/lib/postgres-url.ts` — canonical, tested.
+  2. `api/services/api/src/lib/runtime-deps.ts:33-69` — API-service copy
+     (exported, used by API control-plane access).
+  3. `api/services/community-provision-operator/src/lib/control-plane-db.ts:111-150`
+     — operator copy (inline).
+
+  The `api/` worktree carries two copies because it cannot import from
+  `core/scripts/lib/` across the repo boundary. (Earlier drafts of this doc said
+  the helper exists "only in `core/`/only on `api/`" — that understated the
+  3-way duplication; correcting the debt picture here.)
 
 So: the control-plane data moved to PlanetScale, but the operator code that can
 *talk* to PlanetScale was never deployed to prod. Every control-plane operation
@@ -59,18 +71,29 @@ driver can reach (not a PlanetScale `postgresql://` with `sslrootcert`).
 ## 4. The fix is the migration's — NOT a secret change and NOT in this branch
 
 There is **no Turso control plane to repoint to** (the data is in PlanetScale).
-The correct fix is to deploy PlanetScale-capable control-plane support to the
-prod operator — i.e. land the migration branch's PlanetScale driver/URL
-normalization (or Hyperdrive-based Postgres access) on `release/api-tier1-prod`
-and deploy. Porting that code here unilaterally would collide head-on with the
-in-flight migration, so it is intentionally **out of scope**.
 
-Interim options for whoever owns the migration:
-- Deploy the migration's PlanetScale operator code to prod (preferred), **or**
-- Normalize the connection string so the driver never calls `fs` (strip
-  `sslrootcert`, configure TLS programmatically) — but note Neon's fetch driver
-  cannot speak PlanetScale's protocol anyway, so a driver change is likely
-  required regardless.
+**Targeted unblock (recommended):** bring the migration branch's already-written
+operator file
+`api/services/community-provision-operator/src/lib/control-plane-db.ts` (the one
+with `configurePostgresDriverForUrl` + `normalizePostgresConnectionStringForDriver`
+inline, lines 111-150) onto `release/api-tier1-prod`, with its test coverage
+(`api/services/api/tests/runtime-deps.test.ts:73-93`), and deploy. This is the
+exact change the migration is already shipping — just landed on the prod line.
+
+**Do NOT:**
+- Port `core/scripts/lib/postgres-url.ts` into the prod operator — that crosses a
+  repo boundary `api/` legitimately cannot import, and would create a **4th**
+  copy of these helpers.
+- Reach for Hyperdrive as the immediate unblock. It is the right long-term shape
+  (one standard Postgres protocol, no per-host special-casing) but a much larger
+  lift (binding + secret + DNS + re-test of every operator query) — a follow-up,
+  not the incident fix.
+
+**Follow-up (not a blocker):** collapse the 3-way duplication — a single shared
+module under `api/services/.../lib/postgres-url.ts` consumed by both
+`runtime-deps.ts` and `control-plane-db.ts`, dropping the inline copies; whether
+to also unify with `core/`'s canonical copy is a structural choice independent of
+this incident.
 
 ## 5. What this PR (#39) actually buys — reframed
 
@@ -82,6 +105,13 @@ this class of failure is caught at deploy instead of by a user:
   against the control plane. **This is the part that WOULD have caught the
   incident** — a post-deploy smoke check goes red the moment the control plane
   is unreachable, regardless of *why*. Keep these.
+  - **Expected consequence reviewers must know:** if this PR is deployed to prod
+    *before* the migration's PlanetScale fix (§4), `/health/deep` and the smoke
+    will go **red with the same `Ir.readFileSync` error** as user-visible
+    provisioning. That is **correct, intended behavior** — a loud alarm saying
+    "control plane unreachable, migration fix needed" — not a broken PR. The red
+    clears once §4 lands. Do not interpret a red smoke against current prod as a
+    defect in this PR.
 - **`assertRemoteControlPlaneUrl()` guard:** rejects `file:`/schemeless/empty
   URLs. **Honest limitation: it would NOT have caught this bug** — a PlanetScale
   `postgresql://` URL passes the scheme allow-list. Its value is narrower than
@@ -118,8 +148,13 @@ deleting the gate secret:**
    exists. It was **not** deleted here because confirming it is truly unbound
    requires a working control plane (now PlanetScale). Reap it once the control
    plane is reachable (operator `doctor`/`reap-stale`, or platform delete).
-3. **Community DBs are still on Turso** (158). If the migration intends to move
-   those too, that is separate and not started.
+3. **Community DBs are physically still on Turso** (158), but the Turso→D1 move
+   is **in flight on the same branch**, not separate/unstarted: `migration/turso-to-d1`
+   HEAD `714b837` ("Turso→D1 migration: read path, D1 read client, request-scoped
+   sharing") is adding the D1 read path now. So `migration/turso-to-d1` carries
+   **two layers at once** — control-plane → PlanetScale **and** community-DB →
+   D1. Handoff recipients should treat both as live when sequencing the prod
+   deploy; do not read "DBs still on Turso" as "migration not started."
 
 ## 8. Audit checklist
 
