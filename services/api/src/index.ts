@@ -200,6 +200,17 @@ app.get("/health/provisioning", async (c) => {
 app.get("/__version", async (c) => c.json(await buildVersionPayload(c.env), 200, {
   "cache-control": "no-store",
 }))
+// DEBUG: proxy pg_stat_activity from operator (temporary — remove after diagnosing connection leaks)
+app.get("/__debug/pg-connections", async (c) => {
+  if (!c.env.COMMUNITY_PROVISION_OPERATOR || !c.env.COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN) {
+    return c.json({ error: "operator not configured" }, 503)
+  }
+  const resp = await c.env.COMMUNITY_PROVISION_OPERATOR.fetch(new Request("https://internal/debug/pg-connections", {
+    headers: { authorization: `Bearer ${c.env.COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN}` },
+  }))
+  const body = await resp.json()
+  return c.json(body, resp.status as never)
+})
 app.route("/", discovery)
 app.route("/", agents)
 app.route("/analytics", analytics)
