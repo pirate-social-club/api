@@ -240,6 +240,17 @@ export async function pingPostgresControlPlane(url: string, timeoutMs = 5_000): 
   }
 }
 
+/**
+ * Creates a stateless neon() HTTP client for a Postgres URL.
+ * Each call sends a pure HTTP POST — no persistent connection, no pool slot.
+ * Use this for diagnostic queries or operations that must not allocate a slot
+ * (e.g. when the connection pool is exhausted).
+ */
+export function createStatelessPostgresClient(url: string) {
+  configurePostgresDriverForUrl(url);
+  return neon(normalizePostgresConnectionStringForDriver(url));
+}
+
 export function openControlPlaneDatabase(input: {
   url: string;
   authToken?: string | null;

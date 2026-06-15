@@ -4,7 +4,7 @@ import { provisionCommunityRuntime } from "./lib/provision-runtime";
 import { rotateCommunityToken } from "./lib/rotate-token";
 import { doctorControlPlane } from "./lib/doctor";
 import { migrateCommunityDatabase } from "./lib/community-bootstrap";
-import { assertRemoteControlPlaneUrl, isPostgresControlPlaneUrl, openControlPlaneDatabase, pingPostgresControlPlane } from "./lib/control-plane-db";
+import { assertRemoteControlPlaneUrl, createStatelessPostgresClient, isPostgresControlPlaneUrl, openControlPlaneDatabase, pingPostgresControlPlane } from "./lib/control-plane-db";
 import { errorMessage, requireText, trim } from "./lib/helpers";
 import { reapStaleCommunityProvisioningJobs } from "./lib/reap-stale";
 
@@ -268,28 +268,41 @@ export function createHandler(deps: OperatorDeps = {}) {
       }
     }
 
-    // DEBUG: temporarily expose pg_stat_activity to diagnose connection leaks
+    // DEBUG: use stateless neon() HTTP client to inspect connections (bypasses pool slot limits)
     if (url.pathname === "/debug/pg-connections" && request.method === "GET") {
       const controlPlaneUrl = requireControlPlaneUrl(env);
       if (!isPostgresControlPlaneUrl(controlPlaneUrl)) {
         return json({ error: "not postgres" }, { status: 400 });
       }
-      const db = openControlPlaneDbFn({ url: controlPlaneUrl, authToken: null });
       try {
-        const rows = await db.sql`
-          SELECT pid, state, wait_event_type, wait_event, query_start, state_change,
-                 left(query, 80) AS query_snippet
-          FROM pg_stat_activity
-          WHERE datname = current_database()
-          ORDER BY query_start DESC NULLS LAST
-          LIMIT 30
+        const sql = createStatelessPostgresClient(controlPlaneUrl);
+        const rows = await sql`
+          SELECT pid, state, wait_event_type, left(query, 60) AS q
+          FROM pg_stat_activity WHERE datname = current_database()
+          ORDER BY state LIMIT 40
         `;
-        const total = await db.sql`SELECT count(*) AS n FROM pg_stat_activity WHERE datname = current_database()`;
-        return json({ total: (total as Array<{n: number}>)[0]?.n, rows });
+        const total = await sql`SELECT count(*) AS n FROM pg_stat_activity WHERE datname = current_database()`;
+        return json({ total: (total as Array<{n: unknown}>)[0]?.n, rows });
       } catch (error) {
         return json({ error: errorMessage(error) }, { status: 503 });
-      } finally {
-        await db.close().catch(() => {});
+      }
+    }
+    // DEBUG: terminate all non-self backend connections to drain a saturated pool
+    if (url.pathname === "/debug/pg-terminate" && request.method === "POST") {
+      const controlPlaneUrl = requireControlPlaneUrl(env);
+      if (!isPostgresControlPlaneUrl(controlPlaneUrl)) {
+        return json({ error: "not postgres" }, { status: 400 });
+      }
+      try {
+        const sql = createStatelessPostgresClient(controlPlaneUrl);
+        const result = await sql`
+          SELECT pg_terminate_backend(pid), pid, state, left(query, 60) AS q
+          FROM pg_stat_activity
+          WHERE datname = current_database() AND pid <> pg_backend_pid()
+        `;
+        return json({ terminated: result.length, rows: result });
+      } catch (error) {
+        return json({ error: errorMessage(error) }, { status: 503 });
       }
     }
 

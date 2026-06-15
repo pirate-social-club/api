@@ -211,6 +211,18 @@ app.get("/__debug/pg-connections", async (c) => {
   const body = await resp.json()
   return c.json(body, resp.status as never)
 })
+// DEBUG: terminate all non-self PlanetScale connections to drain a saturated pool
+app.post("/__debug/pg-terminate", async (c) => {
+  if (!c.env.COMMUNITY_PROVISION_OPERATOR || !c.env.COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN) {
+    return c.json({ error: "operator not configured" }, 503)
+  }
+  const resp = await c.env.COMMUNITY_PROVISION_OPERATOR.fetch(new Request("https://internal/debug/pg-terminate", {
+    method: "POST",
+    headers: { authorization: `Bearer ${c.env.COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN}` },
+  }))
+  const body = await resp.json()
+  return c.json(body, resp.status as never)
+})
 app.route("/", discovery)
 app.route("/", agents)
 app.route("/analytics", analytics)
@@ -584,18 +596,10 @@ async function reconcileScheduledCommunityMembershipProjections(env: Env): Promi
 const handler: ExportedHandler<Env> = {
   fetch: (req, env, ctx) => fetchWithPublicReadCache(req, env, ctx),
 
-  scheduled: async (_controller, env, ctx) => {
-    // Each job runs in its own withRequestControlPlaneClients so it opens one
-    // connection, completes, and closes it independently. Sequential sharing
-    // under one context caused the combined run to exceed Workers' waitUntil
-    // limit (15 min), leaving the single connection open indefinitely.
-    ctx.waitUntil(withRequestControlPlaneClients(() => flushScheduledAnalytics(env)))
-    ctx.waitUntil(withRequestControlPlaneClients(() => syncScheduledCommunityHealthCounts(env)))
-    ctx.waitUntil(withRequestControlPlaneClients(() => processScheduledCommunityJobs(env)))
-    ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledCommunityMembershipProjections(env)))
-    ctx.waitUntil(withRequestControlPlaneClients(() => refreshScheduledMaterializedPublicHomeFeeds(env)))
-    ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledRoyaltyClaims(env)))
-    ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledPurchaseSettlements(env)))
+  // TEMP: cron suspended to drain saturated PlanetScale connection pool.
+  // Restore once /__debug/pg-connections returns successfully.
+  scheduled: async (_controller, _env, _ctx) => {
+    console.info("[cron] suspended: PlanetScale connection drain in progress")
   },
 }
 
