@@ -4,7 +4,7 @@ import { provisionCommunityRuntime } from "./lib/provision-runtime";
 import { rotateCommunityToken } from "./lib/rotate-token";
 import { doctorControlPlane } from "./lib/doctor";
 import { migrateCommunityDatabase } from "./lib/community-bootstrap";
-import { assertRemoteControlPlaneUrl, openControlPlaneDatabase } from "./lib/control-plane-db";
+import { assertRemoteControlPlaneUrl, isPostgresControlPlaneUrl, openControlPlaneDatabase, pingPostgresControlPlane } from "./lib/control-plane-db";
 import { errorMessage, requireText, trim } from "./lib/helpers";
 import { reapStaleCommunityProvisioningJobs } from "./lib/reap-stale";
 
@@ -219,6 +219,30 @@ export function createHandler(deps: OperatorDeps = {}) {
         );
       }
 
+      if (isPostgresControlPlaneUrl(controlPlaneUrl)) {
+        // Use the stateless neon() HTTP client with AbortController so the fetch
+        // is cancelled at the network level on timeout. Pool-based SELECT 1
+        // abandoned by Promise.race would still queue at PlanetScale and grab a
+        // slot once one frees — leaking connections with every failed health check.
+        try {
+          await pingPostgresControlPlane(controlPlaneUrl, 5_000);
+          return json({ ...base, ok: true, control_plane_ok: true });
+        } catch (error) {
+          console.error("[health/deep] postgres ping failed:", errorMessage(error));
+          return json(
+            {
+              ...base,
+              ok: false,
+              control_plane_ok: false,
+              check: "control_plane_query",
+              error_code: "control_plane_unreachable",
+              message: errorMessage(error).slice(0, 300),
+            },
+            { status: 503 },
+          );
+        }
+      }
+
       const db = openControlPlaneDbFn({
         url: controlPlaneUrl,
         authToken: trim(env.TURSO_CONTROL_PLANE_AUTH_TOKEN) || null,
@@ -227,6 +251,7 @@ export function createHandler(deps: OperatorDeps = {}) {
         await db.sql`SELECT 1`;
         return json({ ...base, ok: true, control_plane_ok: true });
       } catch (error) {
+        console.error("[health/deep] control plane query failed:", errorMessage(error));
         return json(
           {
             ...base,
@@ -239,7 +264,7 @@ export function createHandler(deps: OperatorDeps = {}) {
           { status: 503 },
         );
       } finally {
-        await db.close().catch(() => {});
+        await db.close().catch((e) => console.error("[health/deep] pool close failed", e));
       }
     }
 

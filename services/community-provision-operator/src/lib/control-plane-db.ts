@@ -1,8 +1,31 @@
 import { createClient } from "@libsql/client";
 import type { Client as LibsqlClient, Transaction as LibsqlTransaction, InArgs } from "@libsql/core/api";
-import { Pool } from "@neondatabase/serverless";
-import { configurePostgresDriverForUrl, normalizePostgresConnectionStringForDriver } from "@pirate/api-shared";
+import { Pool, neon, neonConfig } from "@neondatabase/serverless";
+import { isPlanetScalePostgresUrl, normalizePostgresConnectionStringForDriver } from "@pirate/api-shared";
 import type { ControlPlaneDatabase, ControlPlaneQueryable } from "./types";
+
+// Use the LOCAL neonConfig singleton (same instance as Pool and neon() imported above).
+// @pirate/api-shared bundles its own @neondatabase/serverless copy with a separate singleton;
+// configuring from there has no effect on Pool/neon() here.
+// poolQueryViaFetch is safe for all Postgres providers: it routes pool.query() through HTTP
+// instead of persistent WebSocket connections, preventing slot exhaustion.
+neonConfig.poolQueryViaFetch = true;
+
+const _defaultFetchEndpoint = neonConfig.fetchEndpoint;
+const _defaultWsProxy = neonConfig.wsProxy;
+const _defaultPipelineConnect = neonConfig.pipelineConnect;
+
+function configureLocalNeonForUrl(url: string): void {
+  if (!isPlanetScalePostgresUrl(url)) {
+    neonConfig.fetchEndpoint = _defaultFetchEndpoint;
+    neonConfig.wsProxy = _defaultWsProxy;
+    neonConfig.pipelineConnect = _defaultPipelineConnect;
+    return;
+  }
+  neonConfig.fetchEndpoint = (host: string) => `https://${host}/sql`;
+  neonConfig.wsProxy = (host: string, port: string | number) => `${host}/v2?address=${host}:${port}`;
+  neonConfig.pipelineConnect = false;
+}
 
 type PostgresQueryable = {
   query: (sql: string, values?: unknown[]) => Promise<{ rows: unknown[]; rowCount?: number | null }>;
@@ -98,7 +121,7 @@ function createPostgresQueryable(executor: PostgresQueryable): ControlPlaneQuery
   };
 }
 
-function isPostgresControlPlaneUrl(url: string): boolean {
+export function isPostgresControlPlaneUrl(url: string): boolean {
   const normalized = url.trim().toLowerCase();
   return normalized.startsWith("postgres://") || normalized.startsWith("postgresql://");
 }
@@ -184,8 +207,16 @@ export function assertRemoteControlPlaneUrl(
 }
 
 function openPostgresControlPlaneDatabase(url: string): ControlPlaneDatabase {
-  configurePostgresDriverForUrl(url);
-  const pool = new Pool({ connectionString: normalizePostgresConnectionStringForDriver(url), max: 4 });
+  configureLocalNeonForUrl(url);
+  // max: 1 — scoped to a single operator request; one connection is enough.
+  // connectionTimeoutMillis: fail fast rather than queue behind a stuck slot.
+  // idleTimeoutMillis: recycle the slot even if pool.end() doesn't flush server-side.
+  const pool = new Pool({
+    connectionString: normalizePostgresConnectionStringForDriver(url),
+    max: 1,
+    connectionTimeoutMillis: 5_000,
+    idleTimeoutMillis: 30_000,
+  });
 
   return {
     ...createPostgresQueryable(pool),
@@ -210,6 +241,28 @@ function openPostgresControlPlaneDatabase(url: string): ControlPlaneDatabase {
     },
   };
 }
+
+/**
+ * Stateless ping of the Postgres control plane using the neon() HTTP client
+ * rather than a Pool. The AbortController signal is wired into the fetch so
+ * that when the deadline fires the HTTP request is CANCELLED at the network
+ * level — unlike Promise.race, which abandons the in-flight fetch and causes
+ * PlanetScale to queue then leak the connection once a slot eventually opens.
+ */
+export async function pingPostgresControlPlane(url: string, timeoutMs = 5_000): Promise<void> {
+  configureLocalNeonForUrl(url);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error("ping timeout")), timeoutMs);
+  try {
+    const sql = neon(normalizePostgresConnectionStringForDriver(url), {
+      fetchOptions: { signal: controller.signal },
+    });
+    await sql`SELECT 1`;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 
 export function openControlPlaneDatabase(input: {
   url: string;
