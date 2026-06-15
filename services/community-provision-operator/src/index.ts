@@ -4,7 +4,7 @@ import { provisionCommunityRuntime } from "./lib/provision-runtime";
 import { rotateCommunityToken } from "./lib/rotate-token";
 import { doctorControlPlane } from "./lib/doctor";
 import { migrateCommunityDatabase } from "./lib/community-bootstrap";
-import { assertRemoteControlPlaneUrl, createStatelessPostgresClient, getNeonHttpEndpointInfo, isPostgresControlPlaneUrl, openControlPlaneDatabase, pingPostgresControlPlane } from "./lib/control-plane-db";
+import { assertRemoteControlPlaneUrl, isPostgresControlPlaneUrl, openControlPlaneDatabase, pingPostgresControlPlane } from "./lib/control-plane-db";
 import { errorMessage, requireText, trim } from "./lib/helpers";
 import { reapStaleCommunityProvisioningJobs } from "./lib/reap-stale";
 
@@ -265,87 +265,6 @@ export function createHandler(deps: OperatorDeps = {}) {
         );
       } finally {
         await db.close().catch((e) => console.error("[health/deep] pool close failed", e));
-      }
-    }
-
-    // DEBUG: use stateless neon() HTTP client to inspect connections (bypasses pool slot limits)
-    if (url.pathname === "/debug/pg-connections" && request.method === "GET") {
-      const controlPlaneUrl = requireControlPlaneUrl(env);
-      if (!isPostgresControlPlaneUrl(controlPlaneUrl)) {
-        return json({ error: "not postgres" }, { status: 400 });
-      }
-      try {
-        const sql = createStatelessPostgresClient(controlPlaneUrl);
-        const rows = await sql`
-          SELECT pid, state, wait_event_type, left(query, 60) AS q
-          FROM pg_stat_activity WHERE datname = current_database()
-          ORDER BY state LIMIT 40
-        `;
-        const total = await sql`SELECT count(*) AS n FROM pg_stat_activity WHERE datname = current_database()`;
-        return json({ total: (total as Array<{n: unknown}>)[0]?.n, rows });
-      } catch (error) {
-        return json({ error: errorMessage(error) }, { status: 503 });
-      }
-    }
-    // DEBUG: terminate all non-self backend connections to drain a saturated pool
-    if (url.pathname === "/debug/pg-terminate" && request.method === "POST") {
-      const controlPlaneUrl = requireControlPlaneUrl(env);
-      if (!isPostgresControlPlaneUrl(controlPlaneUrl)) {
-        return json({ error: "not postgres" }, { status: 400 });
-      }
-      try {
-        const sql = createStatelessPostgresClient(controlPlaneUrl);
-        const result = await sql`
-          SELECT pg_terminate_backend(pid), pid, state, left(query, 60) AS q
-          FROM pg_stat_activity
-          WHERE datname = current_database() AND pid <> pg_backend_pid()
-        `;
-        return json({ terminated: result.length, rows: result });
-      } catch (error) {
-        return json({ error: errorMessage(error) }, { status: 503 });
-      }
-    }
-
-    // DEBUG: show what HTTP endpoint neon() would request for the current control plane URL
-    if (url.pathname === "/debug/pg-neon-url" && request.method === "GET") {
-      const controlPlaneUrl = requireControlPlaneUrl(env);
-      if (!isPostgresControlPlaneUrl(controlPlaneUrl)) {
-        return json({ error: "not postgres" }, { status: 400 });
-      }
-      return json(getNeonHttpEndpointInfo(controlPlaneUrl));
-    }
-    // DEBUG: raw HTTP probe to PlanetScale's /sql endpoint, bypassing neon driver
-    if (url.pathname === "/debug/pg-probe" && request.method === "GET") {
-      const controlPlaneUrl = requireControlPlaneUrl(env);
-      if (!isPostgresControlPlaneUrl(controlPlaneUrl)) {
-        return json({ error: "not postgres" }, { status: 400 });
-      }
-      try {
-        const parsed = new URL(controlPlaneUrl);
-        const host = parsed.hostname;
-        const sqlEndpoint = `https://${host}/sql`;
-        const auth = btoa(`${decodeURIComponent(parsed.username)}:${decodeURIComponent(parsed.password)}`);
-        const probeResp = await fetch(sqlEndpoint, {
-          method: "POST",
-          headers: {
-            "authorization": `Basic ${auth}`,
-            "content-type": "application/json",
-            "neon-connection-string": `postgresql://${parsed.hostname}${parsed.pathname}`,
-          },
-          body: JSON.stringify({ query: "SELECT 1 AS n", params: [] }),
-        });
-        const respText = await probeResp.text().catch(() => "(unreadable)");
-        return json({
-          endpoint: sqlEndpoint,
-          status: probeResp.status,
-          statusText: probeResp.statusText,
-          cf_ray: probeResp.headers.get("cf-ray"),
-          content_type: probeResp.headers.get("content-type"),
-          server: probeResp.headers.get("server"),
-          body: respText.slice(0, 1000),
-        });
-      } catch (error) {
-        return json({ error: errorMessage(error) }, { status: 503 });
       }
     }
 

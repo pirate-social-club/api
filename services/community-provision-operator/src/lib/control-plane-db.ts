@@ -2,17 +2,17 @@ import { createClient } from "@libsql/client";
 import type { Client as LibsqlClient, Transaction as LibsqlTransaction, InArgs } from "@libsql/core/api";
 import { Pool, neon, neonConfig } from "@neondatabase/serverless";
 import { normalizePostgresConnectionStringForDriver } from "@pirate/api-shared";
+import type { ControlPlaneDatabase, ControlPlaneQueryable } from "./types";
 
 // Configure THIS module's neonConfig (same instance as Pool and neon() above).
 // @pirate/api-shared bundles its own @neondatabase/serverless copy, so calling
 // configurePostgresDriverForUrl() from there sets a DIFFERENT neonConfig singleton
-// and has no effect on the Pool/neon() imported here. We wire PlanetScale settings
+// and has no effect on the Pool/neon() imported here. Wire PlanetScale settings
 // directly on the local neonConfig instead.
 neonConfig.fetchEndpoint = (host: string) => `https://${host}/sql`;
 neonConfig.wsProxy = (host: string, port: string | number) => `${host}/v2?address=${host}:${port}`;
 neonConfig.pipelineConnect = false;
 neonConfig.poolQueryViaFetch = true;
-import type { ControlPlaneDatabase, ControlPlaneQueryable } from "./types";
 
 type PostgresQueryable = {
   query: (sql: string, values?: unknown[]) => Promise<{ rows: unknown[]; rowCount?: number | null }>;
@@ -248,37 +248,6 @@ export async function pingPostgresControlPlane(url: string, timeoutMs = 5_000): 
   }
 }
 
-/**
- * Creates a stateless neon() HTTP client for a Postgres URL.
- * Each call sends a pure HTTP POST — no persistent connection, no pool slot.
- * Use this for diagnostic queries or operations that must not allocate a slot
- * (e.g. when the connection pool is exhausted).
- */
-export function createStatelessPostgresClient(url: string) {
-  return neon(normalizePostgresConnectionStringForDriver(url));
-}
-
-/**
- * Returns diagnostic info about what HTTP endpoint neon() would call for a URL.
- * Used to debug whether configurePostgresDriverForUrl is wiring fetchEndpoint correctly.
- */
-export function getNeonHttpEndpointInfo(url: string): Record<string, unknown> {
-  const normalized = normalizePostgresConnectionStringForDriver(url);
-  let hostname = "";
-  let port = "";
-  try {
-    const parsed = new URL(normalized);
-    hostname = parsed.hostname;
-    port = parsed.port;
-  } catch {
-    hostname = "(parse error)";
-  }
-  const fetchEndpoint = neonConfig.fetchEndpoint;
-  const resolvedEndpoint = typeof fetchEndpoint === "function"
-    ? (fetchEndpoint as (host: string, port: string) => string)(hostname, port)
-    : String(fetchEndpoint);
-  return { hostname, port, resolvedEndpoint, isFunction: typeof fetchEndpoint === "function" };
-}
 
 export function openControlPlaneDatabase(input: {
   url: string;

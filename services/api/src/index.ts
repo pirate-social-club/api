@@ -200,50 +200,6 @@ app.get("/health/provisioning", async (c) => {
 app.get("/__version", async (c) => c.json(await buildVersionPayload(c.env), 200, {
   "cache-control": "no-store",
 }))
-// DEBUG: proxy pg_stat_activity from operator (temporary — remove after diagnosing connection leaks)
-app.get("/__debug/pg-connections", async (c) => {
-  if (!c.env.COMMUNITY_PROVISION_OPERATOR || !c.env.COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN) {
-    return c.json({ error: "operator not configured" }, 503)
-  }
-  const resp = await c.env.COMMUNITY_PROVISION_OPERATOR.fetch(new Request("https://internal/debug/pg-connections", {
-    headers: { authorization: `Bearer ${c.env.COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN}` },
-  }))
-  const body = await resp.json()
-  return c.json(body, resp.status as never)
-})
-// DEBUG: show what URL neon() would construct for the control plane
-app.get("/__debug/pg-neon-url", async (c) => {
-  if (!c.env.COMMUNITY_PROVISION_OPERATOR || !c.env.COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN) {
-    return c.json({ error: "operator not configured" }, 503)
-  }
-  const resp = await c.env.COMMUNITY_PROVISION_OPERATOR.fetch(new Request("https://internal/debug/pg-neon-url", {
-    headers: { authorization: `Bearer ${c.env.COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN}` },
-  }))
-  return c.json(await resp.json(), resp.status as never)
-})
-// DEBUG: raw HTTP probe to PlanetScale SQL endpoint (bypass neon driver)
-app.get("/__debug/pg-probe", async (c) => {
-  if (!c.env.COMMUNITY_PROVISION_OPERATOR || !c.env.COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN) {
-    return c.json({ error: "operator not configured" }, 503)
-  }
-  const resp = await c.env.COMMUNITY_PROVISION_OPERATOR.fetch(new Request("https://internal/debug/pg-probe", {
-    headers: { authorization: `Bearer ${c.env.COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN}` },
-  }))
-  const body = await resp.json()
-  return c.json(body, resp.status as never)
-})
-// DEBUG: terminate all non-self PlanetScale connections to drain a saturated pool
-app.post("/__debug/pg-terminate", async (c) => {
-  if (!c.env.COMMUNITY_PROVISION_OPERATOR || !c.env.COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN) {
-    return c.json({ error: "operator not configured" }, 503)
-  }
-  const resp = await c.env.COMMUNITY_PROVISION_OPERATOR.fetch(new Request("https://internal/debug/pg-terminate", {
-    method: "POST",
-    headers: { authorization: `Bearer ${c.env.COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN}` },
-  }))
-  const body = await resp.json()
-  return c.json(body, resp.status as never)
-})
 app.route("/", discovery)
 app.route("/", agents)
 app.route("/analytics", analytics)
