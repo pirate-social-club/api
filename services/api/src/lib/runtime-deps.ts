@@ -2,16 +2,30 @@ import { createClient as createLibsqlClient } from "@libsql/client"
 import type { Client as LibsqlClient, Transaction as LibsqlTransaction } from "@libsql/client"
 import { Pool, neonConfig } from "@neondatabase/serverless"
 import { AsyncLocalStorage } from "node:async_hooks"
-import { normalizePostgresConnectionStringForDriver } from "@pirate/api-shared"
+import { isPlanetScalePostgresUrl, normalizePostgresConnectionStringForDriver } from "@pirate/api-shared"
 
-// Configure THIS module's neonConfig (same instance as Pool above).
-// @pirate/api-shared has a separate @neondatabase/serverless copy with its own
-// neonConfig singleton — calling configurePostgresDriverForUrl() there does NOT
-// affect this Pool. Wire PlanetScale settings directly on the local neonConfig.
-neonConfig.fetchEndpoint = (host: string) => `https://${host}/sql`;
-neonConfig.wsProxy = (host: string, port: string | number) => `${host}/v2?address=${host}:${port}`;
-neonConfig.pipelineConnect = false;
-neonConfig.poolQueryViaFetch = true;
+// Use the LOCAL neonConfig singleton (same instance as Pool imported above).
+// @pirate/api-shared bundles its own @neondatabase/serverless copy with a separate singleton;
+// configuring from there has no effect on Pool here.
+// poolQueryViaFetch is safe for all Postgres providers: routes pool.query() through HTTP
+// instead of persistent WebSocket connections, preventing slot exhaustion.
+neonConfig.poolQueryViaFetch = true
+
+const _defaultFetchEndpoint = neonConfig.fetchEndpoint
+const _defaultWsProxy = neonConfig.wsProxy
+const _defaultPipelineConnect = neonConfig.pipelineConnect
+
+function configureLocalNeonForUrl(url: string): void {
+  if (!isPlanetScalePostgresUrl(url)) {
+    neonConfig.fetchEndpoint = _defaultFetchEndpoint
+    neonConfig.wsProxy = _defaultWsProxy
+    neonConfig.pipelineConnect = _defaultPipelineConnect
+    return
+  }
+  neonConfig.fetchEndpoint = (host: string) => `https://${host}/sql`
+  neonConfig.wsProxy = (host: string, port: string | number) => `${host}/v2?address=${host}:${port}`
+  neonConfig.pipelineConnect = false
+}
 import { globalSingleton } from "./db-helpers"
 import { requireControlPlaneDbUrl } from "./auth/auth-db-query-helpers"
 import type { Client, InStatement, QueryResult, QueryResultRow, Transaction } from "./sql-client"
@@ -366,6 +380,7 @@ function getRequestScopedPostgresClient(url: string): Client | null {
     return null
   }
 
+  configureLocalNeonForUrl(url)
   const cacheKey = `pg:${url}`
   let client = store.clients.get(cacheKey)
   if (!client) {

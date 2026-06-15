@@ -1,18 +1,31 @@
 import { createClient } from "@libsql/client";
 import type { Client as LibsqlClient, Transaction as LibsqlTransaction, InArgs } from "@libsql/core/api";
 import { Pool, neon, neonConfig } from "@neondatabase/serverless";
-import { normalizePostgresConnectionStringForDriver } from "@pirate/api-shared";
+import { isPlanetScalePostgresUrl, normalizePostgresConnectionStringForDriver } from "@pirate/api-shared";
 import type { ControlPlaneDatabase, ControlPlaneQueryable } from "./types";
 
-// Configure THIS module's neonConfig (same instance as Pool and neon() above).
-// @pirate/api-shared bundles its own @neondatabase/serverless copy, so calling
-// configurePostgresDriverForUrl() from there sets a DIFFERENT neonConfig singleton
-// and has no effect on the Pool/neon() imported here. Wire PlanetScale settings
-// directly on the local neonConfig instead.
-neonConfig.fetchEndpoint = (host: string) => `https://${host}/sql`;
-neonConfig.wsProxy = (host: string, port: string | number) => `${host}/v2?address=${host}:${port}`;
-neonConfig.pipelineConnect = false;
+// Use the LOCAL neonConfig singleton (same instance as Pool and neon() imported above).
+// @pirate/api-shared bundles its own @neondatabase/serverless copy with a separate singleton;
+// configuring from there has no effect on Pool/neon() here.
+// poolQueryViaFetch is safe for all Postgres providers: it routes pool.query() through HTTP
+// instead of persistent WebSocket connections, preventing slot exhaustion.
 neonConfig.poolQueryViaFetch = true;
+
+const _defaultFetchEndpoint = neonConfig.fetchEndpoint;
+const _defaultWsProxy = neonConfig.wsProxy;
+const _defaultPipelineConnect = neonConfig.pipelineConnect;
+
+function configureLocalNeonForUrl(url: string): void {
+  if (!isPlanetScalePostgresUrl(url)) {
+    neonConfig.fetchEndpoint = _defaultFetchEndpoint;
+    neonConfig.wsProxy = _defaultWsProxy;
+    neonConfig.pipelineConnect = _defaultPipelineConnect;
+    return;
+  }
+  neonConfig.fetchEndpoint = (host: string) => `https://${host}/sql`;
+  neonConfig.wsProxy = (host: string, port: string | number) => `${host}/v2?address=${host}:${port}`;
+  neonConfig.pipelineConnect = false;
+}
 
 type PostgresQueryable = {
   query: (sql: string, values?: unknown[]) => Promise<{ rows: unknown[]; rowCount?: number | null }>;
@@ -194,6 +207,7 @@ export function assertRemoteControlPlaneUrl(
 }
 
 function openPostgresControlPlaneDatabase(url: string): ControlPlaneDatabase {
+  configureLocalNeonForUrl(url);
   // max: 1 — scoped to a single operator request; one connection is enough.
   // connectionTimeoutMillis: fail fast rather than queue behind a stuck slot.
   // idleTimeoutMillis: recycle the slot even if pool.end() doesn't flush server-side.
@@ -236,6 +250,7 @@ function openPostgresControlPlaneDatabase(url: string): ControlPlaneDatabase {
  * PlanetScale to queue then leak the connection once a slot eventually opens.
  */
 export async function pingPostgresControlPlane(url: string, timeoutMs = 5_000): Promise<void> {
+  configureLocalNeonForUrl(url);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error("ping timeout")), timeoutMs);
   try {
