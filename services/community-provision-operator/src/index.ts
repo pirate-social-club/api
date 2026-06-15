@@ -239,7 +239,7 @@ export function createHandler(deps: OperatorDeps = {}) {
           { status: 503 },
         );
       } finally {
-        await db.close().catch(() => {});
+        await db.close().catch((e) => console.error("[health/deep] pool close failed", e));
       }
     }
 

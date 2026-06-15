@@ -574,13 +574,17 @@ const handler: ExportedHandler<Env> = {
   fetch: (req, env, ctx) => fetchWithPublicReadCache(req, env, ctx),
 
   scheduled: async (_controller, env, ctx) => {
-    ctx.waitUntil(withRequestControlPlaneClients(() => flushScheduledAnalytics(env)))
-    ctx.waitUntil(withRequestControlPlaneClients(() => syncScheduledCommunityHealthCounts(env)))
-    ctx.waitUntil(withRequestControlPlaneClients(() => processScheduledCommunityJobs(env)))
-    ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledCommunityMembershipProjections(env)))
-    ctx.waitUntil(withRequestControlPlaneClients(() => refreshScheduledMaterializedPublicHomeFeeds(env)))
-    ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledRoyaltyClaims(env)))
-    ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledPurchaseSettlements(env)))
+    // Single shared context: all jobs run sequentially under one withRequestControlPlaneClients
+    // so they share one Postgres connection rather than opening 7 in parallel.
+    ctx.waitUntil(withRequestControlPlaneClients(async () => {
+      await flushScheduledAnalytics(env)
+      await syncScheduledCommunityHealthCounts(env)
+      await processScheduledCommunityJobs(env)
+      await reconcileScheduledCommunityMembershipProjections(env)
+      await refreshScheduledMaterializedPublicHomeFeeds(env)
+      await reconcileScheduledRoyaltyClaims(env)
+      await reconcileScheduledPurchaseSettlements(env)
+    }))
   },
 }
 

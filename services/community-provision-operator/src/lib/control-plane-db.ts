@@ -185,7 +185,15 @@ export function assertRemoteControlPlaneUrl(
 
 function openPostgresControlPlaneDatabase(url: string): ControlPlaneDatabase {
   configurePostgresDriverForUrl(url);
-  const pool = new Pool({ connectionString: normalizePostgresConnectionStringForDriver(url), max: 4 });
+  // max: 1 — scoped to a single operator request; one connection is enough.
+  // connectionTimeoutMillis: fail fast rather than queue behind a stuck slot.
+  // idleTimeoutMillis: recycle the slot even if pool.end() doesn't flush server-side.
+  const pool = new Pool({
+    connectionString: normalizePostgresConnectionStringForDriver(url),
+    max: 1,
+    connectionTimeoutMillis: 5_000,
+    idleTimeoutMillis: 30_000,
+  });
 
   return {
     ...createPostgresQueryable(pool),

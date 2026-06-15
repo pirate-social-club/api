@@ -361,7 +361,15 @@ function getRequestScopedPostgresClient(url: string): Client | null {
   let client = store.clients.get(cacheKey)
   if (!client) {
     configurePostgresDriverForUrl(url)
-    client = new PostgresClientAdapter(new Pool({ connectionString: normalizePostgresConnectionStringForDriver(url), max: 4 }))
+    // max: 1 — one connection per request is sufficient.
+    // connectionTimeoutMillis: fail fast rather than queue behind a stuck slot.
+    // idleTimeoutMillis: recycle the slot even if pool.end() doesn't flush server-side.
+    client = new PostgresClientAdapter(new Pool({
+      connectionString: normalizePostgresConnectionStringForDriver(url),
+      max: 1,
+      connectionTimeoutMillis: 5_000,
+      idleTimeoutMillis: 30_000,
+    }))
     store.clients.set(cacheKey, client)
   }
   return new RequestScopedClientAdapter(client)
@@ -380,8 +388,11 @@ function getControlPlaneClient(env: Env): Client {
     if (requestScopedClient) {
       return requestScopedClient
     }
-    configurePostgresDriverForUrl(url)
-    return new PostgresClientAdapter(new Pool({ connectionString: normalizePostgresConnectionStringForDriver(url), max: 4 }))
+    throw new Error(
+      "getControlPlaneClient called outside withRequestControlPlaneClients — " +
+      "Postgres control-plane I/O must be request-scoped to avoid exhausting PlanetScale connection slots. " +
+      "Wrap the call site in withRequestControlPlaneClients().",
+    )
   }
 
   const cacheKey = `cp:${getControlPlaneCacheKey(env)}`
