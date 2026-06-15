@@ -1,6 +1,6 @@
 import { createClient } from "@libsql/client";
 import type { Client as LibsqlClient, Transaction as LibsqlTransaction, InArgs } from "@libsql/core/api";
-import { Pool } from "@neondatabase/serverless";
+import { Pool, neon } from "@neondatabase/serverless";
 import { configurePostgresDriverForUrl, normalizePostgresConnectionStringForDriver } from "@pirate/api-shared";
 import type { ControlPlaneDatabase, ControlPlaneQueryable } from "./types";
 
@@ -98,7 +98,7 @@ function createPostgresQueryable(executor: PostgresQueryable): ControlPlaneQuery
   };
 }
 
-function isPostgresControlPlaneUrl(url: string): boolean {
+export function isPostgresControlPlaneUrl(url: string): boolean {
   const normalized = url.trim().toLowerCase();
   return normalized.startsWith("postgres://") || normalized.startsWith("postgresql://");
 }
@@ -217,6 +217,27 @@ function openPostgresControlPlaneDatabase(url: string): ControlPlaneDatabase {
       await pool.end();
     },
   };
+}
+
+/**
+ * Stateless ping of the Postgres control plane using the neon() HTTP client
+ * rather than a Pool. The AbortController signal is wired into the fetch so
+ * that when the deadline fires the HTTP request is CANCELLED at the network
+ * level — unlike Promise.race, which abandons the in-flight fetch and causes
+ * PlanetScale to queue then leak the connection once a slot eventually opens.
+ */
+export async function pingPostgresControlPlane(url: string, timeoutMs = 5_000): Promise<void> {
+  configurePostgresDriverForUrl(url);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error("ping timeout")), timeoutMs);
+  try {
+    const sql = neon(normalizePostgresConnectionStringForDriver(url), {
+      fetchOptions: { signal: controller.signal },
+    });
+    await sql`SELECT 1`;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export function openControlPlaneDatabase(input: {

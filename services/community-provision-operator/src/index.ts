@@ -4,7 +4,7 @@ import { provisionCommunityRuntime } from "./lib/provision-runtime";
 import { rotateCommunityToken } from "./lib/rotate-token";
 import { doctorControlPlane } from "./lib/doctor";
 import { migrateCommunityDatabase } from "./lib/community-bootstrap";
-import { assertRemoteControlPlaneUrl, openControlPlaneDatabase } from "./lib/control-plane-db";
+import { assertRemoteControlPlaneUrl, isPostgresControlPlaneUrl, openControlPlaneDatabase, pingPostgresControlPlane } from "./lib/control-plane-db";
 import { errorMessage, requireText, trim } from "./lib/helpers";
 import { reapStaleCommunityProvisioningJobs } from "./lib/reap-stale";
 
@@ -173,7 +173,6 @@ export function createHandler(deps: OperatorDeps = {}) {
 
   return async function handle(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    console.log("[operator] handle called:", request.method, url.pathname);
 
     if (url.pathname === "/health") {
       return json({
@@ -199,7 +198,6 @@ export function createHandler(deps: OperatorDeps = {}) {
     // `file:` URL the Workers runtime cannot read) is caught immediately after
     // deploy instead of at the first provisioning request.
     if (url.pathname === "/health/deep") {
-      console.log("[health/deep] handler entered — WITH POSTGRES");
       const base = {
         service: "community-provision-operator",
         environment: trim(env.ENVIRONMENT) || null,
@@ -221,21 +219,36 @@ export function createHandler(deps: OperatorDeps = {}) {
         );
       }
 
+      if (isPostgresControlPlaneUrl(controlPlaneUrl)) {
+        // Use the stateless neon() HTTP client with AbortController so the fetch
+        // is cancelled at the network level on timeout. Pool-based SELECT 1
+        // abandoned by Promise.race would still queue at PlanetScale and grab a
+        // slot once one frees — leaking connections with every failed health check.
+        try {
+          await pingPostgresControlPlane(controlPlaneUrl, 5_000);
+          return json({ ...base, ok: true, control_plane_ok: true });
+        } catch (error) {
+          console.error("[health/deep] postgres ping failed:", errorMessage(error));
+          return json(
+            {
+              ...base,
+              ok: false,
+              control_plane_ok: false,
+              check: "control_plane_query",
+              error_code: "control_plane_unreachable",
+              message: errorMessage(error).slice(0, 300),
+            },
+            { status: 503 },
+          );
+        }
+      }
+
       const db = openControlPlaneDbFn({
         url: controlPlaneUrl,
         authToken: trim(env.TURSO_CONTROL_PLANE_AUTH_TOKEN) || null,
       });
       try {
-        // Race against a 3s deadline — Neon's HTTP fetch doesn't respect
-        // connectionTimeoutMillis so we enforce the timeout here instead.
-        console.log("[health/deep] starting Promise.race vs 3s timeout");
-        await Promise.race([
-          db.sql`SELECT 1`.then((r) => { console.log("[health/deep] SELECT 1 resolved"); return r; }),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => { console.log("[health/deep] timeout fired"); reject(new Error("control_plane_health_timeout")); }, 3_000),
-          ),
-        ]);
-        console.log("[health/deep] race resolved — query succeeded");
+        await db.sql`SELECT 1`;
         return json({ ...base, ok: true, control_plane_ok: true });
       } catch (error) {
         console.error("[health/deep] control plane query failed:", errorMessage(error));
@@ -421,6 +434,4 @@ const handler = {
   fetch: createHandler(),
 };
 
-// DEBUG: bypass Sentry to isolate service binding hang
-export default handler;
-// export default withSentry(makeSentryOptions, handler);
+export default withSentry(makeSentryOptions, handler);
