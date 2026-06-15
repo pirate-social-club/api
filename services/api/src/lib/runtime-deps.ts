@@ -1,8 +1,17 @@
 import { createClient as createLibsqlClient } from "@libsql/client"
 import type { Client as LibsqlClient, Transaction as LibsqlTransaction } from "@libsql/client"
-import { Pool } from "@neondatabase/serverless"
+import { Pool, neonConfig } from "@neondatabase/serverless"
 import { AsyncLocalStorage } from "node:async_hooks"
-import { configurePostgresDriverForUrl, normalizePostgresConnectionStringForDriver } from "@pirate/api-shared"
+import { normalizePostgresConnectionStringForDriver } from "@pirate/api-shared"
+
+// Configure THIS module's neonConfig (same instance as Pool above).
+// @pirate/api-shared has a separate @neondatabase/serverless copy with its own
+// neonConfig singleton — calling configurePostgresDriverForUrl() there does NOT
+// affect this Pool. Wire PlanetScale settings directly on the local neonConfig.
+neonConfig.fetchEndpoint = (host: string) => `https://${host}/sql`;
+neonConfig.wsProxy = (host: string, port: string | number) => `${host}/v2?address=${host}:${port}`;
+neonConfig.pipelineConnect = false;
+neonConfig.poolQueryViaFetch = true;
 import { globalSingleton } from "./db-helpers"
 import { requireControlPlaneDbUrl } from "./auth/auth-db-query-helpers"
 import type { Client, InStatement, QueryResult, QueryResultRow, Transaction } from "./sql-client"
@@ -360,7 +369,6 @@ function getRequestScopedPostgresClient(url: string): Client | null {
   const cacheKey = `pg:${url}`
   let client = store.clients.get(cacheKey)
   if (!client) {
-    configurePostgresDriverForUrl(url)
     // max: 1 — one connection per request is sufficient.
     // connectionTimeoutMillis: fail fast rather than queue behind a stuck slot.
     // idleTimeoutMillis: recycle the slot even if pool.end() doesn't flush server-side.

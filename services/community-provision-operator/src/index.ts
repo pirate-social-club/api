@@ -4,7 +4,7 @@ import { provisionCommunityRuntime } from "./lib/provision-runtime";
 import { rotateCommunityToken } from "./lib/rotate-token";
 import { doctorControlPlane } from "./lib/doctor";
 import { migrateCommunityDatabase } from "./lib/community-bootstrap";
-import { assertRemoteControlPlaneUrl, createStatelessPostgresClient, isPostgresControlPlaneUrl, openControlPlaneDatabase, pingPostgresControlPlane } from "./lib/control-plane-db";
+import { assertRemoteControlPlaneUrl, createStatelessPostgresClient, getNeonHttpEndpointInfo, isPostgresControlPlaneUrl, openControlPlaneDatabase, pingPostgresControlPlane } from "./lib/control-plane-db";
 import { errorMessage, requireText, trim } from "./lib/helpers";
 import { reapStaleCommunityProvisioningJobs } from "./lib/reap-stale";
 
@@ -301,6 +301,49 @@ export function createHandler(deps: OperatorDeps = {}) {
           WHERE datname = current_database() AND pid <> pg_backend_pid()
         `;
         return json({ terminated: result.length, rows: result });
+      } catch (error) {
+        return json({ error: errorMessage(error) }, { status: 503 });
+      }
+    }
+
+    // DEBUG: show what HTTP endpoint neon() would request for the current control plane URL
+    if (url.pathname === "/debug/pg-neon-url" && request.method === "GET") {
+      const controlPlaneUrl = requireControlPlaneUrl(env);
+      if (!isPostgresControlPlaneUrl(controlPlaneUrl)) {
+        return json({ error: "not postgres" }, { status: 400 });
+      }
+      return json(getNeonHttpEndpointInfo(controlPlaneUrl));
+    }
+    // DEBUG: raw HTTP probe to PlanetScale's /sql endpoint, bypassing neon driver
+    if (url.pathname === "/debug/pg-probe" && request.method === "GET") {
+      const controlPlaneUrl = requireControlPlaneUrl(env);
+      if (!isPostgresControlPlaneUrl(controlPlaneUrl)) {
+        return json({ error: "not postgres" }, { status: 400 });
+      }
+      try {
+        const parsed = new URL(controlPlaneUrl);
+        const host = parsed.hostname;
+        const sqlEndpoint = `https://${host}/sql`;
+        const auth = btoa(`${decodeURIComponent(parsed.username)}:${decodeURIComponent(parsed.password)}`);
+        const probeResp = await fetch(sqlEndpoint, {
+          method: "POST",
+          headers: {
+            "authorization": `Basic ${auth}`,
+            "content-type": "application/json",
+            "neon-connection-string": `postgresql://${parsed.hostname}${parsed.pathname}`,
+          },
+          body: JSON.stringify({ query: "SELECT 1 AS n", params: [] }),
+        });
+        const respText = await probeResp.text().catch(() => "(unreadable)");
+        return json({
+          endpoint: sqlEndpoint,
+          status: probeResp.status,
+          statusText: probeResp.statusText,
+          cf_ray: probeResp.headers.get("cf-ray"),
+          content_type: probeResp.headers.get("content-type"),
+          server: probeResp.headers.get("server"),
+          body: respText.slice(0, 1000),
+        });
       } catch (error) {
         return json({ error: errorMessage(error) }, { status: 503 });
       }

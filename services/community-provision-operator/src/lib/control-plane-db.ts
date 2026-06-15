@@ -1,7 +1,17 @@
 import { createClient } from "@libsql/client";
 import type { Client as LibsqlClient, Transaction as LibsqlTransaction, InArgs } from "@libsql/core/api";
-import { Pool, neon } from "@neondatabase/serverless";
-import { configurePostgresDriverForUrl, normalizePostgresConnectionStringForDriver } from "@pirate/api-shared";
+import { Pool, neon, neonConfig } from "@neondatabase/serverless";
+import { normalizePostgresConnectionStringForDriver } from "@pirate/api-shared";
+
+// Configure THIS module's neonConfig (same instance as Pool and neon() above).
+// @pirate/api-shared bundles its own @neondatabase/serverless copy, so calling
+// configurePostgresDriverForUrl() from there sets a DIFFERENT neonConfig singleton
+// and has no effect on the Pool/neon() imported here. We wire PlanetScale settings
+// directly on the local neonConfig instead.
+neonConfig.fetchEndpoint = (host: string) => `https://${host}/sql`;
+neonConfig.wsProxy = (host: string, port: string | number) => `${host}/v2?address=${host}:${port}`;
+neonConfig.pipelineConnect = false;
+neonConfig.poolQueryViaFetch = true;
 import type { ControlPlaneDatabase, ControlPlaneQueryable } from "./types";
 
 type PostgresQueryable = {
@@ -184,7 +194,6 @@ export function assertRemoteControlPlaneUrl(
 }
 
 function openPostgresControlPlaneDatabase(url: string): ControlPlaneDatabase {
-  configurePostgresDriverForUrl(url);
   // max: 1 — scoped to a single operator request; one connection is enough.
   // connectionTimeoutMillis: fail fast rather than queue behind a stuck slot.
   // idleTimeoutMillis: recycle the slot even if pool.end() doesn't flush server-side.
@@ -227,7 +236,6 @@ function openPostgresControlPlaneDatabase(url: string): ControlPlaneDatabase {
  * PlanetScale to queue then leak the connection once a slot eventually opens.
  */
 export async function pingPostgresControlPlane(url: string, timeoutMs = 5_000): Promise<void> {
-  configurePostgresDriverForUrl(url);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error("ping timeout")), timeoutMs);
   try {
@@ -247,8 +255,29 @@ export async function pingPostgresControlPlane(url: string, timeoutMs = 5_000): 
  * (e.g. when the connection pool is exhausted).
  */
 export function createStatelessPostgresClient(url: string) {
-  configurePostgresDriverForUrl(url);
   return neon(normalizePostgresConnectionStringForDriver(url));
+}
+
+/**
+ * Returns diagnostic info about what HTTP endpoint neon() would call for a URL.
+ * Used to debug whether configurePostgresDriverForUrl is wiring fetchEndpoint correctly.
+ */
+export function getNeonHttpEndpointInfo(url: string): Record<string, unknown> {
+  const normalized = normalizePostgresConnectionStringForDriver(url);
+  let hostname = "";
+  let port = "";
+  try {
+    const parsed = new URL(normalized);
+    hostname = parsed.hostname;
+    port = parsed.port;
+  } catch {
+    hostname = "(parse error)";
+  }
+  const fetchEndpoint = neonConfig.fetchEndpoint;
+  const resolvedEndpoint = typeof fetchEndpoint === "function"
+    ? (fetchEndpoint as (host: string, port: string) => string)(hostname, port)
+    : String(fetchEndpoint);
+  return { hostname, port, resolvedEndpoint, isFunction: typeof fetchEndpoint === "function" };
 }
 
 export function openControlPlaneDatabase(input: {
