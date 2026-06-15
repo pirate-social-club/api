@@ -173,6 +173,7 @@ export function createHandler(deps: OperatorDeps = {}) {
 
   return async function handle(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    console.log("[operator] handle called:", request.method, url.pathname);
 
     if (url.pathname === "/health") {
       return json({
