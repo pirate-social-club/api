@@ -268,6 +268,31 @@ export function createHandler(deps: OperatorDeps = {}) {
       }
     }
 
+    // DEBUG: temporarily expose pg_stat_activity to diagnose connection leaks
+    if (url.pathname === "/debug/pg-connections" && request.method === "GET") {
+      const controlPlaneUrl = requireControlPlaneUrl(env);
+      if (!isPostgresControlPlaneUrl(controlPlaneUrl)) {
+        return json({ error: "not postgres" }, { status: 400 });
+      }
+      const db = openControlPlaneDbFn({ url: controlPlaneUrl, authToken: null });
+      try {
+        const rows = await db.sql`
+          SELECT pid, state, wait_event_type, wait_event, query_start, state_change,
+                 left(query, 80) AS query_snippet
+          FROM pg_stat_activity
+          WHERE datname = current_database()
+          ORDER BY query_start DESC NULLS LAST
+          LIMIT 30
+        `;
+        const total = await db.sql`SELECT count(*) AS n FROM pg_stat_activity WHERE datname = current_database()`;
+        return json({ total: (total as Array<{n: number}>)[0]?.n, rows });
+      } catch (error) {
+        return json({ error: errorMessage(error) }, { status: 503 });
+      } finally {
+        await db.close().catch(() => {});
+      }
+    }
+
     if (request.method !== "POST") {
       return new Response("Method Not Allowed", { status: 405 });
     }
