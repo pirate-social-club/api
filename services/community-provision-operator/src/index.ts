@@ -224,9 +224,17 @@ export function createHandler(deps: OperatorDeps = {}) {
         authToken: trim(env.TURSO_CONTROL_PLANE_AUTH_TOKEN) || null,
       });
       try {
-        await db.sql`SELECT 1`;
+        // Race against a 6s deadline — Neon's HTTP fetch doesn't respect
+        // connectionTimeoutMillis so we enforce the timeout here instead.
+        await Promise.race([
+          db.sql`SELECT 1`,
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("control_plane_health_timeout")), 6_000),
+          ),
+        ]);
         return json({ ...base, ok: true, control_plane_ok: true });
       } catch (error) {
+        console.error("[health/deep] control plane query failed:", errorMessage(error));
         return json(
           {
             ...base,
