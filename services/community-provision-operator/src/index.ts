@@ -199,7 +199,10 @@ export function createHandler(deps: OperatorDeps = {}) {
     // `file:` URL the Workers runtime cannot read) is caught immediately after
     // deploy instead of at the first provisioning request.
     if (url.pathname === "/health/deep") {
-      console.log("[health/deep] handler entered");
+      console.log("[health/deep] handler entered — NOOP DEBUG");
+      // DEBUG: return immediately without hitting Postgres to test service binding
+      return json({ ok: true, control_plane_ok: true, debug: "noop", environment: trim(env.ENVIRONMENT) || null });
+      // eslint-disable-next-line no-unreachable
       const base = {
         service: "community-provision-operator",
         environment: trim(env.ENVIRONMENT) || null,
