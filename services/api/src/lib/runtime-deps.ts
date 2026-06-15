@@ -13,28 +13,48 @@ type PostgresQueryable = {
 
 const defaultNeonFetchEndpoint = neonConfig.fetchEndpoint
 const defaultNeonWsProxy = neonConfig.wsProxy
-
-function isPlanetScalePostgresHost(host: string): boolean {
-  return host.toLowerCase().endsWith(".pg.psdb.cloud")
-}
+const defaultNeonPipelineConnect = neonConfig.pipelineConnect
 
 neonConfig.poolQueryViaFetch = true
-neonConfig.fetchEndpoint = (host, port, options) => {
-  if (isPlanetScalePostgresHost(host)) {
-    return `https://${host}/sql`
+
+// PlanetScale Postgres (*.pg.psdb.cloud) speaks the Neon HTTP/WS protocol but at
+// its own endpoints, and sends `sslrootcert=system` which the bundled pg driver
+// would try to fs.readFileSync() (fails in Workers). Rewire the endpoints and
+// strip the cert param so the control-plane connection works in production.
+function isPlanetScalePostgresUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    return url.hostname.toLowerCase().endsWith(".pg.psdb.cloud")
+  } catch {
+    return false
   }
-  return typeof defaultNeonFetchEndpoint === "function"
-    ? defaultNeonFetchEndpoint(host, port, options)
-    : defaultNeonFetchEndpoint
 }
-neonConfig.pipelineConnect = false
-neonConfig.wsProxy = (host, port) => {
-  if (isPlanetScalePostgresHost(host)) {
-    return `${host}/v2?address=${host}:${port}`
+
+function configurePostgresDriverForUrl(url: string): void {
+  neonConfig.poolQueryViaFetch = true
+
+  if (!isPlanetScalePostgresUrl(url)) {
+    neonConfig.fetchEndpoint = defaultNeonFetchEndpoint
+    neonConfig.wsProxy = defaultNeonWsProxy
+    neonConfig.pipelineConnect = defaultNeonPipelineConnect
+    return
   }
-  return typeof defaultNeonWsProxy === "function"
-    ? defaultNeonWsProxy(host, port)
-    : defaultNeonWsProxy
+
+  neonConfig.fetchEndpoint = (host) => `https://${host}/sql`
+  neonConfig.wsProxy = (host, port) => `${host}/v2?address=${host}:${port}`
+  neonConfig.pipelineConnect = false
+}
+
+function normalizePostgresConnectionStringForDriver(value: string): string {
+  if (!isPlanetScalePostgresUrl(value)) {
+    return value
+  }
+
+  const url = new URL(value)
+  if (url.searchParams.get("sslrootcert") === "system") {
+    url.searchParams.delete("sslrootcert")
+  }
+  return url.toString()
 }
 
 const LIBSQL_BUSY_RETRY_TIMEOUT_MS = 5000
@@ -385,7 +405,8 @@ function getRequestScopedPostgresClient(url: string): Client | null {
   const cacheKey = `pg:${url}`
   let client = store.clients.get(cacheKey)
   if (!client) {
-    client = new PostgresClientAdapter(new Pool({ connectionString: url, max: 4 }))
+    configurePostgresDriverForUrl(url)
+    client = new PostgresClientAdapter(new Pool({ connectionString: normalizePostgresConnectionStringForDriver(url), max: 4 }))
     store.clients.set(cacheKey, client)
   }
   return new RequestScopedClientAdapter(client)
@@ -404,7 +425,8 @@ function getControlPlaneClient(env: Env): Client {
     if (requestScopedClient) {
       return requestScopedClient
     }
-    return new PostgresClientAdapter(new Pool({ connectionString: url, max: 4 }))
+    configurePostgresDriverForUrl(url)
+    return new PostgresClientAdapter(new Pool({ connectionString: normalizePostgresConnectionStringForDriver(url), max: 4 }))
   }
 
   const cacheKey = `cp:${getControlPlaneCacheKey(env)}`
