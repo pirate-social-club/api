@@ -419,4 +419,6 @@ const handler = {
   fetch: createHandler(),
 };
 
-export default withSentry(makeSentryOptions, handler);
+// DEBUG: bypass Sentry to isolate service binding hang
+export default handler;
+// export default withSentry(makeSentryOptions, handler);
