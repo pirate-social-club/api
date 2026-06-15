@@ -1,7 +1,8 @@
 import { createClient as createLibsqlClient } from "@libsql/client"
 import type { Client as LibsqlClient, Transaction as LibsqlTransaction } from "@libsql/client"
-import { Pool, neonConfig } from "@neondatabase/serverless"
+import { Pool } from "@neondatabase/serverless"
 import { AsyncLocalStorage } from "node:async_hooks"
+import { configurePostgresDriverForUrl, normalizePostgresConnectionStringForDriver } from "@pirate/api-shared"
 import { globalSingleton } from "./db-helpers"
 import { requireControlPlaneDbUrl } from "./auth/auth-db-query-helpers"
 import type { Client, InStatement, QueryResult, QueryResultRow, Transaction } from "./sql-client"
@@ -10,8 +11,6 @@ import type { Env } from "../env"
 type PostgresQueryable = {
   query: (sql: string, values?: unknown[]) => Promise<{ rows: unknown[]; rowCount?: number | null }>
 }
-
-neonConfig.poolQueryViaFetch = true
 
 const LIBSQL_BUSY_RETRY_TIMEOUT_MS = 5000
 const LIBSQL_BUSY_RETRY_DELAY_MS = 50
@@ -361,7 +360,8 @@ function getRequestScopedPostgresClient(url: string): Client | null {
   const cacheKey = `pg:${url}`
   let client = store.clients.get(cacheKey)
   if (!client) {
-    client = new PostgresClientAdapter(new Pool({ connectionString: url, max: 4 }))
+    configurePostgresDriverForUrl(url)
+    client = new PostgresClientAdapter(new Pool({ connectionString: normalizePostgresConnectionStringForDriver(url), max: 4 }))
     store.clients.set(cacheKey, client)
   }
   return new RequestScopedClientAdapter(client)
@@ -380,7 +380,8 @@ function getControlPlaneClient(env: Env): Client {
     if (requestScopedClient) {
       return requestScopedClient
     }
-    return new PostgresClientAdapter(new Pool({ connectionString: url, max: 4 }))
+    configurePostgresDriverForUrl(url)
+    return new PostgresClientAdapter(new Pool({ connectionString: normalizePostgresConnectionStringForDriver(url), max: 4 }))
   }
 
   const cacheKey = `cp:${getControlPlaneCacheKey(env)}`

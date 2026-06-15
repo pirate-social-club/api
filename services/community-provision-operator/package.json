@@ -10,7 +10,8 @@
     "check:migrations": "bun run scripts/check-migration-manifest.ts",
     "backfill:migrations": "bun run scripts/backfill-community-migrations.ts",
     "check": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "smoke:provision": "bun run scripts/smoke-provision.ts"
   },
   "dependencies": {
     "@libsql/client": "^0.17.2",
