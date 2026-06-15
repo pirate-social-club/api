@@ -574,17 +574,17 @@ const handler: ExportedHandler<Env> = {
   fetch: (req, env, ctx) => fetchWithPublicReadCache(req, env, ctx),
 
   scheduled: async (_controller, env, ctx) => {
-    // Single shared context: all jobs run sequentially under one withRequestControlPlaneClients
-    // so they share one Postgres connection rather than opening 7 in parallel.
-    ctx.waitUntil(withRequestControlPlaneClients(async () => {
-      await flushScheduledAnalytics(env)
-      await syncScheduledCommunityHealthCounts(env)
-      await processScheduledCommunityJobs(env)
-      await reconcileScheduledCommunityMembershipProjections(env)
-      await refreshScheduledMaterializedPublicHomeFeeds(env)
-      await reconcileScheduledRoyaltyClaims(env)
-      await reconcileScheduledPurchaseSettlements(env)
-    }))
+    // Each job runs in its own withRequestControlPlaneClients so it opens one
+    // connection, completes, and closes it independently. Sequential sharing
+    // under one context caused the combined run to exceed Workers' waitUntil
+    // limit (15 min), leaving the single connection open indefinitely.
+    ctx.waitUntil(withRequestControlPlaneClients(() => flushScheduledAnalytics(env)))
+    ctx.waitUntil(withRequestControlPlaneClients(() => syncScheduledCommunityHealthCounts(env)))
+    ctx.waitUntil(withRequestControlPlaneClients(() => processScheduledCommunityJobs(env)))
+    ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledCommunityMembershipProjections(env)))
+    ctx.waitUntil(withRequestControlPlaneClients(() => refreshScheduledMaterializedPublicHomeFeeds(env)))
+    ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledRoyaltyClaims(env)))
+    ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledPurchaseSettlements(env)))
   },
 }
 
