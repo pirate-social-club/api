@@ -198,6 +198,7 @@ export function createHandler(deps: OperatorDeps = {}) {
     // `file:` URL the Workers runtime cannot read) is caught immediately after
     // deploy instead of at the first provisioning request.
     if (url.pathname === "/health/deep") {
+      console.log("[health/deep] handler entered");
       const base = {
         service: "community-provision-operator",
         environment: trim(env.ENVIRONMENT) || null,
