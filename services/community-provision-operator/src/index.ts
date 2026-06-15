@@ -199,10 +199,7 @@ export function createHandler(deps: OperatorDeps = {}) {
     // `file:` URL the Workers runtime cannot read) is caught immediately after
     // deploy instead of at the first provisioning request.
     if (url.pathname === "/health/deep") {
-      console.log("[health/deep] handler entered — NOOP DEBUG");
-      // DEBUG: return immediately without hitting Postgres to test service binding
-      return json({ ok: true, control_plane_ok: true, debug: "noop", environment: trim(env.ENVIRONMENT) || null });
-      // eslint-disable-next-line no-unreachable
+      console.log("[health/deep] handler entered — WITH POSTGRES");
       const base = {
         service: "community-provision-operator",
         environment: trim(env.ENVIRONMENT) || null,
@@ -229,14 +226,16 @@ export function createHandler(deps: OperatorDeps = {}) {
         authToken: trim(env.TURSO_CONTROL_PLANE_AUTH_TOKEN) || null,
       });
       try {
-        // Race against a 6s deadline — Neon's HTTP fetch doesn't respect
+        // Race against a 3s deadline — Neon's HTTP fetch doesn't respect
         // connectionTimeoutMillis so we enforce the timeout here instead.
+        console.log("[health/deep] starting Promise.race vs 3s timeout");
         await Promise.race([
-          db.sql`SELECT 1`,
+          db.sql`SELECT 1`.then((r) => { console.log("[health/deep] SELECT 1 resolved"); return r; }),
           new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error("control_plane_health_timeout")), 6_000),
+            setTimeout(() => { console.log("[health/deep] timeout fired"); reject(new Error("control_plane_health_timeout")); }, 3_000),
           ),
         ]);
+        console.log("[health/deep] race resolved — query succeeded");
         return json({ ...base, ok: true, control_plane_ok: true });
       } catch (error) {
         console.error("[health/deep] control plane query failed:", errorMessage(error));
