@@ -400,6 +400,7 @@ export function serializeCommunity(env: Env, row: CommunityRow, local: LocalComm
     status: row.status === "suspended" ? "frozen" : row.status,
     provisioning_state: row.provisioning_state,
     membership_mode: local?.membership_mode ?? "gated",
+    karaoke_enabled: local?.karaoke_enabled ?? false,
     allow_anonymous_identity: local?.allow_anonymous_identity ?? false,
     anonymous_identity_scope: local?.anonymous_identity_scope ?? null,
     allowed_disclosed_qualifiers: allowedDisclosedQualifiers,

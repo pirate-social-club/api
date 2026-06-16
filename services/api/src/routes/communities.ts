@@ -10,6 +10,7 @@ import { registerCommunityContentRoutes } from "./communities-content-routes"
 import { registerCommunityCreateRoutes } from "./communities-create-routes"
 import { registerCommunityHandleRoutes } from "./communities-handles-routes"
 import { registerCommunityLiveRoomRoutes } from "./communities-live-rooms"
+import { registerCommunityKaraokeSessionRoutes } from "./communities-karaoke-session-routes"
 import { registerCommunityMembershipRoutes } from "./communities-membership-routes"
 import { registerCommunityModerationRoutes } from "./communities-moderation-routes"
 import { registerCommunityRoleRoutes } from "./communities-role-routes"
@@ -26,6 +27,7 @@ const agentDelegatedAccess = () => new Response(null, { status: 204 })
 communityAuthPolicy.get("/:communityId/song-artifact-uploads/:uploadId/content", publicAccess)
 communityAuthPolicy.on("HEAD", "/:communityId/song-artifact-uploads/:uploadId/content", publicAccess)
 communityAuthPolicy.get("/:communityId/telegram-bot-username", publicAccess)
+communityAuthPolicy.get("/:communityId/posts/:postId/karaoke", publicAccess)
 communityAuthPolicy.post("/:communityId/posts", agentDelegatedAccess)
 communityAuthPolicy.post("/:communityId/posts/:postId/comments", agentDelegatedAccess)
 
@@ -83,6 +85,7 @@ registerCommunityRoleRoutes(communities)
 registerCommunityCommerceRoutes(communities)
 registerCommunitySongArtifactRoutes(communities)
 registerCommunityLiveRoomRoutes(communities)
+registerCommunityKaraokeSessionRoutes(communities)
 registerCommunityTelegramRoutes(communities)
 
 export default communities

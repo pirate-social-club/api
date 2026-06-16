@@ -98,6 +98,7 @@ export type LocalCommunitySnapshot = {
   banner_ref: string | null
   status: "draft" | "active" | "frozen" | "archived" | "deleted"
   membership_mode: "open" | "request" | "gated"
+  karaoke_enabled: boolean
   default_age_gate_policy: "none" | "18_plus"
   allow_anonymous_identity: boolean
   anonymous_identity_scope: "community_stable" | "thread_stable" | "post_ephemeral" | null
@@ -629,6 +630,7 @@ export async function bootstrapLocalCommunityDb(input: LocalCommunityBootstrapIn
       banner_ref: input.bannerRef,
       status: "active",
       membership_mode: input.membershipMode,
+      karaoke_enabled: false,
       default_age_gate_policy: input.defaultAgeGatePolicy,
       allow_anonymous_identity: input.allowAnonymousIdentity,
       anonymous_identity_scope: input.anonymousIdentityScope,
