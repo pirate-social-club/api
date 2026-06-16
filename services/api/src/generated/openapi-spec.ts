@@ -60,13 +60,13 @@ const spec = {
       "name": "Questions"
     },
     {
+      "name": "Karaoke"
+    },
+    {
       "name": "Feeds"
     },
     {
       "name": "Tracks"
-    },
-    {
-      "name": "Scrobbles"
     },
     {
       "name": "Moderation"
@@ -3061,6 +3061,235 @@ const spec = {
         "operationId": "get_communities_by_community_id_posts"
       }
     },
+    "/communities/{community_id}/posts/{post_id}/karaoke": {
+      "get": {
+        "tags": [
+          "Posts"
+        ],
+        "summary": "Get karaoke payload for a song post",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/PostId"
+          },
+          {
+            "$ref": "#/components/parameters/Locale"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SongKaraokePayload"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "operationId": "get_communities_by_community_id_posts_by_post_id_karaoke"
+      }
+    },
+    "/communities/{community_id}/posts/{post_id}/karaoke/sessions": {
+      "post": {
+        "tags": [
+          "Karaoke"
+        ],
+        "summary": "Create or replay a karaoke session for a post",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/PostId"
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-request-id",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 256
+            }
+          },
+          {
+            "in": "header",
+            "name": "origin",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KaraokeSession"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "post_communities_by_community_id_posts_by_post_id_karaoke_sessions"
+      }
+    },
+    "/karaoke/sessions/{session_id}/websocket": {
+      "get": {
+        "tags": [
+          "Karaoke"
+        ],
+        "summary": "Upgrade to the karaoke session WebSocket",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/KaraokeSessionId"
+          },
+          {
+            "in": "query",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "upgrade",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "websocket"
+              ]
+            }
+          },
+          {
+            "in": "header",
+            "name": "origin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-request-id",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 256
+            }
+          }
+        ],
+        "responses": {
+          "101": {},
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "426": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_karaoke_sessions_by_session_id_websocket"
+      }
+    },
     "/communities/{community_id}/posts/{post_id}/comments": {
       "get": {
         "tags": [
@@ -4730,6 +4959,14 @@ const spec = {
       "PostId": {
         "in": "path",
         "name": "post_id",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "KaraokeSessionId": {
+        "in": "path",
+        "name": "session_id",
         "required": true,
         "schema": {
           "type": "string"
@@ -7191,6 +7428,7 @@ const spec = {
           "status",
           "provisioning_state",
           "membership_mode",
+          "karaoke_enabled",
           "allow_anonymous_identity",
           "human_verification_lane",
           "human_verification_lane_origin",
@@ -7242,6 +7480,18 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "store_url": {
+            "type": "string",
+            "nullable": true
+          },
+          "store_label": {
+            "type": "string",
+            "nullable": true
+          },
+          "country_code": {
+            "type": "string",
+            "nullable": true
+          },
           "namespace_verification": {
             "type": "string",
             "nullable": true
@@ -7289,6 +7539,9 @@ const spec = {
               "request",
               "gated"
             ]
+          },
+          "karaoke_enabled": {
+            "type": "boolean"
           },
           "allow_anonymous_identity": {
             "type": "boolean"
@@ -8839,6 +9092,7 @@ const spec = {
           "object",
           "display_name",
           "membership_mode",
+          "karaoke_enabled",
           "human_verification_lane",
           "moderators",
           "membership_gate_summaries",
@@ -8880,6 +9134,18 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "store_url": {
+            "type": "string",
+            "nullable": true
+          },
+          "store_label": {
+            "type": "string",
+            "nullable": true
+          },
+          "country_code": {
+            "type": "string",
+            "nullable": true
+          },
           "membership_mode": {
             "type": "string",
             "enum": [
@@ -8887,6 +9153,9 @@ const spec = {
               "request",
               "gated"
             ]
+          },
+          "karaoke_enabled": {
+            "type": "boolean"
           },
           "allow_anonymous_identity": {
             "type": "boolean"
@@ -8993,6 +9262,14 @@ const spec = {
             "items": {
               "$ref": "./communities-core.yaml#/MembershipGateSummary"
             }
+          },
+          "gate_match_mode": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "all",
+              "any"
+            ]
           },
           "rules": {
             "type": "array",
@@ -9885,6 +10162,29 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "source_language_confidence": {
+            "type": "number",
+            "format": "double",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 1
+          },
+          "source_language_reliable": {
+            "type": "boolean"
+          },
+          "source_language_detector": {
+            "type": "string",
+            "nullable": true
+          },
+          "source_language_detected_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "source_language_source_hash": {
+            "type": "string",
+            "nullable": true
+          },
           "translation_policy": {
             "type": "string",
             "enum": [
@@ -10030,6 +10330,179 @@ const spec = {
             "nullable": true
           }
         }
+      },
+      "SongKaraokePayload": {
+        "type": "object",
+        "required": [
+          "id",
+          "object"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "song_karaoke_payload"
+            ]
+          },
+          "song": {
+            "type": "string",
+            "nullable": true
+          },
+          "post": {
+            "type": "string",
+            "nullable": true
+          },
+          "community": {
+            "type": "string",
+            "nullable": true
+          },
+          "title": {
+            "type": "string",
+            "nullable": true
+          },
+          "artist_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "artwork_src": {
+            "type": "string",
+            "nullable": true
+          },
+          "instrumental_audio_url": {
+            "type": "string",
+            "nullable": true
+          },
+          "karaoke_lines": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "index",
+                "kind",
+                "text",
+                "start_ms",
+                "end_ms",
+                "words"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "index": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "lyric",
+                    "section"
+                  ]
+                },
+                "text": {
+                  "type": "string"
+                },
+                "start_ms": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "end_ms": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "words": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "text",
+                      "start_ms",
+                      "end_ms"
+                    ],
+                    "properties": {
+                      "text": {
+                        "type": "string"
+                      },
+                      "start_ms": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "end_ms": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "confidence": {
+                        "type": "number",
+                        "nullable": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "raw_lines": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        }
+      },
+      "KaraokeSession": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "attempt",
+          "protocol_version",
+          "websocket_url",
+          "token_expires_at",
+          "session_expires_at",
+          "scoring_policy"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "karaoke_session"
+            ]
+          },
+          "attempt": {
+            "type": "string"
+          },
+          "protocol_version": {
+            "type": "integer",
+            "enum": [
+              1
+            ]
+          },
+          "websocket_url": {
+            "type": "string"
+          },
+          "token_expires_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "session_expires_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "scoring_policy": {
+            "$ref": "#/components/schemas/KaraokeScoringPolicy"
+          }
+        },
+        "additionalProperties": false
       },
       "CommentListResponse": {
         "type": "object",
@@ -10223,6 +10696,33 @@ const spec = {
             "items": {
               "$ref": "./posts.yaml#/MediaDescriptor"
             }
+          },
+          "source_language": {
+            "type": "string",
+            "nullable": true
+          },
+          "source_language_confidence": {
+            "type": "number",
+            "format": "double",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 1
+          },
+          "source_language_reliable": {
+            "type": "boolean"
+          },
+          "source_language_detector": {
+            "type": "string",
+            "nullable": true
+          },
+          "source_language_detected_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "source_language_source_hash": {
+            "type": "string",
+            "nullable": true
           },
           "status": {
             "type": "string",
@@ -10483,6 +10983,14 @@ const spec = {
           "content_hash": {
             "type": "string",
             "nullable": true
+          },
+          "upload_mode": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "proxy",
+              "direct_multipart"
+            ]
           }
         }
       },
@@ -10536,7 +11044,8 @@ const spec = {
             "enum": [
               "pending_upload",
               "uploaded",
-              "failed"
+              "failed",
+              "cancelled"
             ]
           },
           "storage_ref": {
@@ -10581,8 +11090,70 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "ipfs_cid": {
+            "type": "string",
+            "nullable": true
+          },
           "upload_url": {
             "type": "string"
+          },
+          "upload_session": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "status",
+              "object_key",
+              "upload_id",
+              "part_size_bytes",
+              "total_parts",
+              "expires_at",
+              "sign_part_url",
+              "complete",
+              "abort"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "created",
+                  "parts_uploading",
+                  "completing",
+                  "head_verifying",
+                  "uploaded",
+                  "aborting",
+                  "aborted"
+                ]
+              },
+              "object_key": {
+                "type": "string"
+              },
+              "upload_id": {
+                "type": "string"
+              },
+              "part_size_bytes": {
+                "type": "integer"
+              },
+              "total_parts": {
+                "type": "integer"
+              },
+              "expires_at": {
+                "type": "string"
+              },
+              "sign_part_url": {
+                "type": "string"
+              },
+              "complete": {
+                "type": "string"
+              },
+              "abort": {
+                "type": "string"
+              }
+            }
           },
           "created": {
             "type": "integer",
@@ -10895,6 +11466,11 @@ const spec = {
             "$ref": "#/components/schemas/SongPresentation",
             "nullable": true
           },
+          "viewer_gate_state": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
+          },
           "asset_story": {
             "type": "object",
             "nullable": true,
@@ -10912,6 +11488,13 @@ const spec = {
                   "failed"
                 ]
               }
+            }
+          },
+          "derivative_sources": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "$ref": "#/components/schemas/PostDerivativeSource"
             }
           },
           "upvote_count": {
@@ -11396,6 +11979,68 @@ const spec = {
           }
         }
       },
+      "KaraokeScoringPolicy": {
+        "type": "object",
+        "oneOf": [
+          {
+            "type": "object",
+            "title": "KaraokeScoringPolicyDisabled",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "disabled"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "title": "KaraokeScoringPolicyEnabled",
+            "required": [
+              "kind",
+              "provider",
+              "model",
+              "retention"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "enabled"
+                ]
+              },
+              "provider": {
+                "type": "string",
+                "enum": [
+                  "assistant",
+                  "elevenlabs",
+                  "mistral",
+                  "openai"
+                ]
+              },
+              "model": {
+                "type": "string"
+              },
+              "retention": {
+                "type": "string",
+                "enum": [
+                  "not_stored"
+                ]
+              },
+              "voice_coach_enabled": {
+                "type": "boolean",
+                "default": false
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
       "SongPresentation": {
         "type": "object",
         "required": [
@@ -11415,6 +12060,153 @@ const spec = {
           "duration_ms": {
             "type": "integer",
             "minimum": 0,
+            "nullable": true
+          },
+          "downloadable_audio": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "object",
+              "required": [
+                "kind",
+                "storage_ref",
+                "mime_type"
+              ],
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "original",
+                    "instrumental",
+                    "vocals",
+                    "preview"
+                  ]
+                },
+                "storage_ref": {
+                  "type": "string"
+                },
+                "mime_type": {
+                  "type": "string"
+                },
+                "size_bytes": {
+                  "type": "integer",
+                  "nullable": true
+                },
+                "duration_ms": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "nullable": true
+                },
+                "filename": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "decentralized_storage": {
+                  "type": "object",
+                  "nullable": true,
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "alignment_status": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "pending",
+              "processing",
+              "completed",
+              "failed"
+            ]
+          },
+          "timed_lyrics_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "timed_lyrics": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
+          }
+        }
+      },
+      "PostDerivativeSource": {
+        "type": "object",
+        "required": [
+          "source_ref",
+          "title",
+          "kind",
+          "relationship_type"
+        ],
+        "properties": {
+          "source_ref": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "song",
+              "video"
+            ]
+          },
+          "relationship_type": {
+            "type": "string",
+            "enum": [
+              "remix_of",
+              "references_song",
+              "references_video",
+              "inspired_by",
+              "samples"
+            ]
+          },
+          "community": {
+            "type": "string",
+            "nullable": true
+          },
+          "asset": {
+            "type": "string",
+            "nullable": true
+          },
+          "source_post": {
+            "type": "string",
+            "nullable": true
+          },
+          "story_ip": {
+            "type": "string",
+            "nullable": true
+          },
+          "story_license_terms": {
+            "type": "string",
+            "nullable": true
+          },
+          "license_preset": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "non-commercial",
+              "commercial-use",
+              "commercial-remix"
+            ]
+          },
+          "commercial_rev_share_pct": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "nullable": true
+          },
+          "creator_user": {
+            "type": "string",
+            "nullable": true
+          },
+          "creator_handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "creator_display_name": {
+            "type": "string",
             "nullable": true
           }
         }

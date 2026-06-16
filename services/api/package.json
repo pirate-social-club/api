@@ -31,6 +31,8 @@
     "test": "bun test",
     "test:unit": "bun test src tests/lib",
     "test:routes": "bun test --max-concurrency=1 tests/routes tests/community-membership-reconciliation.test.ts",
+    "test:integration": "vitest run --config vitest.config.ts",
+    "check:integration": "tsgo --noEmit -p tests/integration/tsconfig.json",
     "coverage": "bun test --coverage",
     "mint:dev-jwt": "bun run scripts/mint-dev-jwt.ts",
     "smoke:story-remix-cycle": "bun run scripts/smoke-story-remix-cycle.ts",
@@ -55,6 +57,7 @@
     "@noble/hashes": "^1.8.0",
     "@pirate/api-contracts": "file:../contracts",
     "@pirate/api-shared": "file:../shared",
+    "@pirate/karaoke-runtime": "file:../../../web/packages/karaoke-runtime",
     "@privy-io/node": "^0.11.0",
     "@selfxyz/core": "^1.2.0-beta.1",
     "@sentry/cloudflare": "^10.51.0",
@@ -73,6 +76,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.13",
+    "@cloudflare/vitest-pool-workers": "0.8.71",
     "@cloudflare/workers-types": "^4.20260405.0",
     "@types/bun": "^1.3.13",
     "@types/node": "24.5.2",
@@ -80,6 +84,7 @@
     "bun-types": "^1.3.14",
     "knip": "^6.14.2",
     "typescript": "^5.8.3",
+    "vitest": "3.2.4",
     "wrangler": "^4.13.2",
     "yaml": "^2.8.1"
   }

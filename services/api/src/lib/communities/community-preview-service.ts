@@ -529,6 +529,7 @@ async function buildCommunityPreview(input: {
     }),
     country_code: countryCode,
     membership_mode: membershipMode,
+    karaoke_enabled: Number(localRow?.karaoke_enabled ?? 0) === 1,
     allow_anonymous_identity: Number(localRow?.allow_anonymous_identity ?? 0) === 1,
     anonymous_identity_scope: anonymousIdentityScope,
     guest_comment_policy: parsePreviewGuestCommentPolicy(settings),

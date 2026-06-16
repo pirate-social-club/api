@@ -157,6 +157,10 @@ export type Env = {
   LIVE_ROOM_JACKTRIP_BUFFER_STRATEGY?: string
   LIVE_ROOM_JACKTRIP_LINUX_AUDIO_SETUP_RECOMMENDED?: string
   LIVE_ROOM_RUNTIME?: DurableObjectNamespace
+  KARAOKE_SESSION_RUNTIME?: DurableObjectNamespace
+  KARAOKE_GATEWAY_SIGNING_KEY?: string
+  ELEVENLABS_STT_MODEL?: string
+  ELEVENLABS_STT_WEBSOCKET_URL?: string
   // Singleton lease arbiter ensuring only one scheduled (cron) batch runs at a time.
   SCHEDULED_CRON_LOCK?: DurableObjectNamespace
   STORY_TX_WAIT_TIMEOUT_MS?: string

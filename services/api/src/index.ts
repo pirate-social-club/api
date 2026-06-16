@@ -10,6 +10,7 @@ import communityMedia from "./routes/community-media"
 import comments from "./routes/comments"
 import communities from "./routes/communities"
 import discovery from "./routes/discovery"
+import karaokeSessions from "./routes/karaoke-sessions"
 import feed from "./routes/feed"
 import geo from "./routes/geo"
 import jobs from "./routes/jobs"
@@ -55,9 +56,10 @@ import { runScheduledBatch, type NamedTask } from "./lib/scheduled-job-runner"
 import { createDurableObjectCronLock, ScheduledCronLockDO } from "./lib/scheduled-cron-lock"
 import { makeSentryOptions, captureScheduledError } from "./lib/sentry"
 import { LiveRoomRuntimeDO } from "./lib/communities/live-rooms/runtime"
+import { KaraokeSessionRuntimeDO } from "./lib/karaoke/session-do"
 import type { Env } from "./env"
 
-export { LiveRoomRuntimeDO }
+export { LiveRoomRuntimeDO, KaraokeSessionRuntimeDO }
 export { ScheduledCronLockDO }
 
 declare const __PIRATE_BUILD_GIT_REF__: string | undefined
@@ -215,6 +217,7 @@ app.route("/communities", communities)
 app.route("/feed", feed)
 app.route("/geo", geo)
 app.route("/jobs", jobs)
+app.route("/karaoke/sessions", karaokeSessions)
 app.route("/mcp", mcp)
 app.route("/notifications", notifications)
 app.route("/oauth", oauth)

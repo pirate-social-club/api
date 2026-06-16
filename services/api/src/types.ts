@@ -335,6 +335,35 @@ export type SongPresentation = {
   downloadable_audio?: SongPresentationDownloadableAudio[] | null
 }
 
+export type SongKaraokeLine = {
+  id: string
+  index: number
+  kind: "lyric" | "section"
+  text: string
+  start_ms: number
+  end_ms: number
+  words: Array<{
+    text: string
+    start_ms: number
+    end_ms: number
+    confidence?: number | null
+  }>
+}
+
+export type SongKaraokePayload = {
+  id: string
+  object: "song_karaoke_payload"
+  song?: string | null
+  post?: string | null
+  community?: string | null
+  title?: string | null
+  artist_name?: string | null
+  artwork_src?: string | null
+  instrumental_audio_url?: string | null
+  karaoke_lines?: SongKaraokeLine[] | null
+  raw_lines?: Array<Record<string, unknown>> | null
+}
+
 export type CrosspostSourceStatus = "available" | "deleted" | "removed" | "unavailable"
 
 export type CrosspostSource = {
@@ -588,6 +617,7 @@ export type Community = {
   artist_identity_id?: string | null
   community_agent_user_id?: string | null
   membership_mode: "open" | "request" | "gated"
+  karaoke_enabled: boolean
   allow_anonymous_identity: boolean
   anonymous_identity_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null
   human_verification_lane: HumanVerificationLane
@@ -666,6 +696,7 @@ export type CommunityPreview = {
   store_label?: string | null
   country_code?: string | null
   membership_mode: "open" | "request" | "gated"
+  karaoke_enabled: boolean
   allow_anonymous_identity?: boolean
   anonymous_identity_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null
   guest_comment_policy?: "disallow" | "altcha_required"

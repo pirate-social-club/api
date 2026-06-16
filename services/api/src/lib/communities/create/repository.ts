@@ -240,6 +240,7 @@ export async function loadCommunityLocalSnapshot(
       banner_ref: row.banner_ref == null ? null : String(row.banner_ref),
       status: String(row.status) as LocalCommunitySnapshot["status"],
       membership_mode: String(row.membership_mode) as LocalCommunitySnapshot["membership_mode"],
+      karaoke_enabled: Boolean(Number(row.karaoke_enabled ?? 0)),
       default_age_gate_policy: String(row.default_age_gate_policy) as LocalCommunitySnapshot["default_age_gate_policy"],
       allow_anonymous_identity: Boolean(Number(row.allow_anonymous_identity ?? 0)),
       anonymous_identity_scope: row.anonymous_identity_scope == null

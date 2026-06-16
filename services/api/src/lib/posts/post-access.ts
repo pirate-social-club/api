@@ -27,7 +27,7 @@ export async function requireMemberAccess(
 }
 
 export function canReadNonPublishedPost(
-  post: Post,
+  post: Pick<Post, "author_user_id">,
   membership: CommunityMembershipRow,
   userId: string,
 ): boolean {
