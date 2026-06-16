@@ -147,7 +147,7 @@
         "HNS_VERIFIER_BASE_URL": "https://verifier.pirate.sc/hns",
         "PIRATE_CHECKOUT_TX_WAIT_TIMEOUT_MS": "20000",
         "TURSO_COMMUNITY_DB_WRAP_KEY_VERSION": "2",
-	        "COMMUNITY_READ_ROUTING_ENABLED": "false",
+	        "COMMUNITY_READ_ROUTING_ENABLED": "true",
 	        "COMMUNITY_PROVISION_EXPECTED_ORGANIZATION_SLUG": "pirate-social",
 	        "COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION": "aws-us-east-1",
 	        "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
