@@ -23,6 +23,8 @@ export type Env = {
   TURSO_COMMUNITY_DB_WRAP_KEY?: string
   TURSO_COMMUNITY_DB_WRAP_KEY_VERSION?: string
   LOCAL_COMMUNITY_DB_ROOT?: string
+  /** Phase-0 flag: route community reads through the routing directory. "true" enables; default off. */
+  COMMUNITY_READ_ROUTING_ENABLED?: string
   COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN?: string
   COMMUNITY_PROVISION_EXPECTED_ORGANIZATION_SLUG?: string
   COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION?: string

@@ -12,7 +12,7 @@ import {
   getCommunityFollowStatus,
   getCommunityFollowerCount,
 } from "./membership/follow-store"
-import { openCommunityDb } from "./community-db-factory"
+import { openCommunityReadClient } from "./community-read-access"
 import type { ReadClient } from "../sql-client"
 
 type CommunityReadClient = ReadClient
@@ -300,7 +300,7 @@ async function buildPreviewForViewer(input: {
 }): Promise<CommunityPreview> {
   const community = await getActiveCommunityForPreview(input.communityRepository, input.communityId)
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const gatePolicy = await getMembershipGatePolicy(db.client, input.communityId)
     const membership = input.viewer

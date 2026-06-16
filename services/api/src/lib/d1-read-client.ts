@@ -34,6 +34,18 @@ const EMPTY_READ_META: D1ReadMeta = { servedByRegion: null, servedByPrimary: nul
 // introspection pragmas are permitted. Everything else — including assignment
 // pragmas such as `PRAGMA user_version = 1`, which mutate database state — is
 // rejected. A blacklist would silently admit any verb it forgot to enumerate.
+//
+// SCOPE: this is a GUARDRAIL for our own trusted query builders, NOT a SQL
+// authorizer for untrusted input. It is a lexical check, not a parser — it does
+// not understand string literals or dialect quirks. If user-shaped SQL ever
+// reaches this client, replace this with SQLite authorizer-level enforcement
+// (or never pass raw SQL strings at all). Two known limits, both fail-closed:
+// statement batching is rejected wholesale (so a `;` inside a string literal is
+// also rejected), and the CTE check rejects any data- or schema-mutating verb
+// anywhere in the statement (so a read CTE that merely names a column `update`
+// is rejected). Both err toward rejecting a legal read, never admitting a write.
+const WRITE_OR_DDL_VERB =
+  /\b(INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP|ATTACH|DETACH|VACUUM|ANALYZE|REINDEX|TRUNCATE|GRANT|REVOKE|PRAGMA)\b/i
 const APPROVED_READ_PRAGMAS = new Set([
   "table_info",
   "table_xinfo",
@@ -57,16 +69,31 @@ function stripLeadingNoise(sql: string): string {
   return current
 }
 
+/**
+ * Reject statement batching. A single trailing `;` is fine; anything after it
+ * (a second statement like `SELECT 1; DROP TABLE t`) is not. Conservative: a
+ * `;` inside a string literal trips this too — the safe direction for a guard.
+ */
+function hasStatementBatch(sql: string): boolean {
+  return sql.replace(/;\s*$/, "").includes(";")
+}
+
 function isReadOnlyStatement(sql: string): boolean {
   const stripped = stripLeadingNoise(sql)
+
+  // Defense in depth: no statement batching, regardless of the leading verb.
+  if (hasStatementBatch(stripped)) {
+    return false
+  }
 
   if (/^SELECT\b/i.test(stripped)) {
     return true
   }
 
-  // A CTE is read-only only if it does not wrap a write (`WITH x AS (...) DELETE ...`).
+  // A CTE is read-only only if it wraps neither a write nor any DDL
+  // (`WITH x AS (...) DELETE ...`, `WITH x AS (...) CREATE ...`, etc.).
   if (/^WITH\b/i.test(stripped)) {
-    return !/\b(INSERT|UPDATE|DELETE|REPLACE)\b/i.test(stripped)
+    return !WRITE_OR_DDL_VERB.test(stripped)
   }
 
   const pragma = stripped.match(/^PRAGMA\s+([A-Za-z_]+)/i)

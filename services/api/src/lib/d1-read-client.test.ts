@@ -236,6 +236,46 @@ describe("D1ReadClientAdapter read-only enforcement", () => {
   })
 })
 
+describe("D1ReadClientAdapter hardened guard", () => {
+  const rejected = [
+    // Statement batching — a leading SELECT must not smuggle a second statement.
+    "SELECT id FROM a; DROP TABLE a",
+    "SELECT 1; SELECT 2",
+    // DDL / connection verbs beyond the original write set.
+    "ATTACH DATABASE 'x.db' AS x",
+    "DETACH DATABASE x",
+    "VACUUM",
+    "REINDEX a",
+    "ANALYZE a",
+    // A CTE that wraps DDL (not just a DML write).
+    "WITH doomed AS (SELECT id FROM a) DROP TABLE a",
+  ]
+
+  for (const sql of rejected) {
+    test(`rejects: ${sql.slice(0, 32)}`, async () => {
+      const db = new FakeD1Database()
+      const adapter = new D1ReadClientAdapter(asD1DatabaseLike(db))
+      await expect(adapter.execute(sql)).rejects.toMatchObject({ code: "read_only_violation" })
+      expect(db.prepared).toHaveLength(0)
+    })
+  }
+
+  const allowed = [
+    "SELECT id FROM a", // no semicolon
+    "SELECT id FROM a;", // single trailing semicolon is fine
+    "SELECT id FROM a; ", // trailing semicolon + whitespace
+    "WITH live AS (SELECT id FROM a) SELECT * FROM live", // read-only CTE still allowed
+  ]
+
+  for (const sql of allowed) {
+    test(`allows: ${sql.slice(0, 40)}`, async () => {
+      const adapter = new D1ReadClientAdapter(asD1DatabaseLike(new FakeD1Database()))
+      const result = await adapter.execute(sql)
+      expect(result.rows).toEqual([])
+    })
+  }
+})
+
 describe("D1ReadClientAdapter PRAGMA boundary", () => {
   test("approved introspection pragmas are allowed", async () => {
     const db = new FakeD1Database()
