@@ -87,6 +87,13 @@ export type UpsertTursoRoutingRowInput = {
  *
  * Returns whether a new row was inserted (false = the community already had a
  * routing row). D1 rows are written by the provisioning path (PR2+), not here.
+ *
+ * Home of the runtime (in-worker) seeding path: PR2+ provisioning calls this
+ * when a community is created/migrated. The Phase-0 bulk backfill deliberately
+ * does NOT call this — it runs as a one-shot operator script
+ * (`community-provision-operator/scripts/backfill-community-routing.ts`) over
+ * the operator's Postgres layer. This function and its test pin the routing
+ * INSERT contract (column shape + idempotent, non-regressing ON CONFLICT).
  */
 export async function upsertTursoCommunityRoutingRow(
   executor: DbExecutor,
