@@ -24,16 +24,15 @@ import type { CommunityDatabaseBindingRepository } from "./community-repository-
  * directory and then opens the same Turso client the legacy path would.
  */
 
-const ROUTING_FLAG = "COMMUNITY_READ_ROUTING_ENABLED"
-
 export type CommunityReadHandle = {
   client: ReadClient
   close: () => void | Promise<void>
 }
 
 function routingEnabled(env: Env): boolean {
-  const raw = (env as unknown as Record<string, unknown>)[ROUTING_FLAG]
-  return String(raw ?? "").trim().toLowerCase() === "true"
+  // Typed access (Env declares COMMUNITY_READ_ROUTING_ENABLED) so a rename is a
+  // compile error rather than a silent always-off. Undefined → off (safe).
+  return String(env.COMMUNITY_READ_ROUTING_ENABLED ?? "").trim().toLowerCase() === "true"
 }
 
 function getResolver(): CommunityBindingResolver {
