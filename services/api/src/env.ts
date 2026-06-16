@@ -157,6 +157,8 @@ export type Env = {
   LIVE_ROOM_JACKTRIP_BUFFER_STRATEGY?: string
   LIVE_ROOM_JACKTRIP_LINUX_AUDIO_SETUP_RECOMMENDED?: string
   LIVE_ROOM_RUNTIME?: DurableObjectNamespace
+  // Singleton lease arbiter ensuring only one scheduled (cron) batch runs at a time.
+  SCHEDULED_CRON_LOCK?: DurableObjectNamespace
   STORY_TX_WAIT_TIMEOUT_MS?: string
   STORY_RUNTIME_SIGNER_MIN_BALANCE_WEI?: string
   STORY_RUNTIME_SIGNER_TARGET_BALANCE_WEI?: string

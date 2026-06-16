@@ -51,11 +51,14 @@ import { HttpError, errorResponse } from "./lib/errors"
 import { refreshScheduledMaterializedPublicHomeFeeds } from "./lib/feed/materialized-public-feed"
 import { reconcileRoyaltyClaimEvents } from "./lib/royalties/royalty-claim-history"
 import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/runtime-deps"
+import { runScheduledBatch, type NamedTask } from "./lib/scheduled-job-runner"
+import { createDurableObjectCronLock, ScheduledCronLockDO } from "./lib/scheduled-cron-lock"
 import { makeSentryOptions, captureScheduledError } from "./lib/sentry"
 import { LiveRoomRuntimeDO } from "./lib/communities/live-rooms/runtime"
 import type { Env } from "./env"
 
 export { LiveRoomRuntimeDO }
+export { ScheduledCronLockDO }
 
 declare const __PIRATE_BUILD_GIT_REF__: string | undefined
 declare const __PIRATE_BUILD_GIT_SHA__: string | undefined
@@ -570,21 +573,79 @@ async function reconcileScheduledCommunityMembershipProjections(env: Env): Promi
   }
 }
 
+// The cron fires every minute. Each scheduled job opens its OWN control-plane
+// connection (via withRequestControlPlaneClients) — one connection, opened and
+// closed independently, to respect Workers' 15-min waitUntil limit. Running all
+// jobs at once opened N connections simultaneously and, coinciding with request
+// traffic, burst the control-plane Postgres primary's small max_connections
+// (observed: intermittent `remaining connection slots are reserved for SUPERUSER`).
+// Cap concurrency so the cron contributes at most SCHEDULED_JOB_CONCURRENCY
+// connections at a time; jobs are short so total runtime stays well under 15 min.
+// At most this many scheduled jobs run concurrently → the cron contributes
+// ≤ SCHEDULED_JOB_CONCURRENCY control-plane connections per invocation.
+const SCHEDULED_JOB_CONCURRENCY = 2
+// Stop STARTING new jobs after this elapsed wall-time; in-flight jobs (≤ the
+// concurrency cap, each internally bounded) finish. Keeps a batch comfortably
+// under the 60s cron interval (no overlapping invocations stacking connections)
+// and far inside the Worker invocation limit (no mid-flight kill leaking a slot).
+const SCHEDULED_BATCH_DEADLINE_MS = 30_000
+// Lease longer than the worst-case batch (deadline + slowest in-flight job) so we
+// never expire mid-batch, but bounded so a crashed batch self-heals. Released
+// promptly on normal completion.
+const SCHEDULED_LEASE_TTL_MS = 120_000
+
 const handler: ExportedHandler<Env> = {
   fetch: (req, env, ctx) => fetchWithPublicReadCache(req, env, ctx),
 
-  scheduled: async (_controller, env, ctx) => {
-    // Each job runs in its own withRequestControlPlaneClients so it opens one
-    // connection, completes, and closes it independently. Sequential sharing
-    // under one context caused the combined run to exceed Workers' waitUntil
-    // limit (15 min), leaving the single connection open indefinitely.
-    ctx.waitUntil(withRequestControlPlaneClients(() => flushScheduledAnalytics(env)))
-    ctx.waitUntil(withRequestControlPlaneClients(() => syncScheduledCommunityHealthCounts(env)))
-    ctx.waitUntil(withRequestControlPlaneClients(() => processScheduledCommunityJobs(env)))
-    ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledCommunityMembershipProjections(env)))
-    ctx.waitUntil(withRequestControlPlaneClients(() => refreshScheduledMaterializedPublicHomeFeeds(env)))
-    ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledRoyaltyClaims(env)))
-    ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledPurchaseSettlements(env)))
+  scheduled: (controller, env, ctx) => {
+    // Each job opens its OWN control-plane connection (its own
+    // withRequestControlPlaneClients — one connection, opened and closed
+    // independently). Bounded concurrency caps peak connections; the deadline
+    // bounds when new connections stop opening (it does NOT cancel in-flight
+    // jobs — see runner docs / overlap caveat).
+    const jobs: NamedTask[] = [
+      { name: "flush_analytics", run: () => flushScheduledAnalytics(env) },
+      { name: "sync_community_health_counts", run: () => syncScheduledCommunityHealthCounts(env) },
+      { name: "process_community_jobs", run: () => processScheduledCommunityJobs(env) },
+      { name: "reconcile_membership_projections", run: () => reconcileScheduledCommunityMembershipProjections(env) },
+      { name: "refresh_materialized_public_feeds", run: () => refreshScheduledMaterializedPublicHomeFeeds(env) },
+      { name: "reconcile_royalty_claims", run: () => reconcileScheduledRoyaltyClaims(env) },
+      { name: "reconcile_purchase_settlements", run: () => reconcileScheduledPurchaseSettlements(env) },
+    ].map((job) => ({ name: job.name, run: () => withRequestControlPlaneClients(job.run) }))
+    // Rotate the start order each minute so a deadline-trimmed tail never starves
+    // the same jobs run after run.
+    const minute = Math.floor((controller.scheduledTime || Date.now()) / 60_000)
+    const offset = ((minute % jobs.length) + jobs.length) % jobs.length
+    const ordered = [...jobs.slice(offset), ...jobs.slice(0, offset)]
+
+    // The DO lease is REQUIRED. Rather than silently run without overlap
+    // protection (which could re-trigger control-plane connection exhaustion), a
+    // missing binding fails loudly and starts zero jobs — a deploy misconfig to
+    // fix immediately, not mask.
+    if (!env.SCHEDULED_CRON_LOCK) {
+      const error = new Error("SCHEDULED_CRON_LOCK durable object binding is missing; refusing to run the scheduled batch without overlap protection")
+      console.error("[scheduled]", error.message)
+      captureScheduledError(env, error, "scheduled_cron_lock_binding_missing")
+      return
+    }
+    // A DO lease guarantees only ONE batch runs cluster-wide: if a prior
+    // invocation is still in flight, this one acquires nothing and starts zero
+    // jobs (so overlapping invocations can't stack control-plane connections).
+    const lock = createDurableObjectCronLock(env.SCHEDULED_CRON_LOCK as DurableObjectNamespace<ScheduledCronLockDO>)
+    const owner = crypto.randomUUID()
+    ctx.waitUntil(
+      runScheduledBatch({
+        deadlineMs: SCHEDULED_BATCH_DEADLINE_MS,
+        leaseTtlMs: SCHEDULED_LEASE_TTL_MS,
+        limit: SCHEDULED_JOB_CONCURRENCY,
+        lock,
+        onError: (error, name) => console.error(`[scheduled] job failed: ${name}`, error),
+        onLeaseHeld: () => console.warn("[scheduled] lease held by another invocation — skipping batch (0 jobs started)"),
+        onSkipped: (skipped) => console.warn(`[scheduled] deferred ${skipped.length} job(s) past the ${SCHEDULED_BATCH_DEADLINE_MS}ms deadline: ${skipped.join(", ")}`),
+        owner,
+        tasks: ordered,
+      }),
+    )
   },
 }
 

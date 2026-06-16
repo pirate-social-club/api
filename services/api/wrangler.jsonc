@@ -15,6 +15,10 @@
       {
         "name": "LIVE_ROOM_RUNTIME",
         "class_name": "LiveRoomRuntimeDO"
+      },
+      {
+        "name": "SCHEDULED_CRON_LOCK",
+        "class_name": "ScheduledCronLockDO"
       }
     ]
   },
@@ -22,6 +26,10 @@
     {
       "tag": "v1_live_room_runtime",
       "new_sqlite_classes": ["LiveRoomRuntimeDO"]
+    },
+    {
+      "tag": "v2_scheduled_cron_lock",
+      "new_sqlite_classes": ["ScheduledCronLockDO"]
     }
   ],
   "vars": {
@@ -65,6 +73,10 @@
           {
             "name": "LIVE_ROOM_RUNTIME",
             "class_name": "LiveRoomRuntimeDO"
+          },
+          {
+            "name": "SCHEDULED_CRON_LOCK",
+            "class_name": "ScheduledCronLockDO"
           }
         ]
       },
@@ -72,6 +84,10 @@
         {
           "tag": "v1_live_room_runtime",
           "new_sqlite_classes": ["LiveRoomRuntimeDO"]
+        },
+        {
+          "tag": "v2_scheduled_cron_lock",
+          "new_sqlite_classes": ["ScheduledCronLockDO"]
         }
       ],
       "services": [
@@ -123,6 +139,28 @@
     },
     "production": {
       "name": "api-core",
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "LIVE_ROOM_RUNTIME",
+            "class_name": "LiveRoomRuntimeDO"
+          },
+          {
+            "name": "SCHEDULED_CRON_LOCK",
+            "class_name": "ScheduledCronLockDO"
+          }
+        ]
+      },
+      "migrations": [
+        {
+          "tag": "v1_live_room_runtime",
+          "new_sqlite_classes": ["LiveRoomRuntimeDO"]
+        },
+        {
+          "tag": "v2_scheduled_cron_lock",
+          "new_sqlite_classes": ["ScheduledCronLockDO"]
+        }
+      ],
       "services": [
         {
           "binding": "COMMUNITY_PROVISION_OPERATOR",
