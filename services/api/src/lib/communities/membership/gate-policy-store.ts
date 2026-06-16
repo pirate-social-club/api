@@ -1,9 +1,9 @@
-import type { Client } from "../../sql-client"
+import type { ReadClient } from "../../sql-client"
 import { validateGatePolicy } from "./gate-policy-validation"
 import type { CommunityGateScope, GatePolicy } from "./gate-types"
 
 export async function getGatePolicy(
-  client: Client,
+  client: ReadClient,
   communityId: string,
   scope: CommunityGateScope,
 ): Promise<GatePolicy | null> {
@@ -25,6 +25,6 @@ export async function getGatePolicy(
   return validateGatePolicy(parsed)
 }
 
-export async function getMembershipGatePolicy(client: Client, communityId: string): Promise<GatePolicy | null> {
+export async function getMembershipGatePolicy(client: ReadClient, communityId: string): Promise<GatePolicy | null> {
   return getGatePolicy(client, communityId, "membership")
 }

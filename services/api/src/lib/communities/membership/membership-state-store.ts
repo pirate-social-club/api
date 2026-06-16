@@ -1,8 +1,8 @@
-import type { Client } from "../../sql-client"
+import type { ReadClient } from "../../sql-client"
 import { executeFirst } from "../../db-helpers"
 import { rowValue, stringOrNull } from "../../sql-row"
 
-type MembershipExecutor = Pick<Client, "execute">
+type MembershipExecutor = Pick<ReadClient, "execute">
 
 export type CommunityRole = "owner" | "admin" | "moderator"
 
@@ -108,7 +108,7 @@ export function canAccessCommunity(state: CommunityMembershipRow): boolean {
 }
 
 export async function getCommunityMemberCount(
-  client: Client,
+  client: MembershipExecutor,
   communityId: string,
 ): Promise<number | null> {
   const row = await executeFirst(
@@ -146,7 +146,7 @@ export async function getCommunityMemberCount(
 }
 
 export async function upsertCommunityMembership(input: {
-  client: Pick<Client, "execute">
+  client: MembershipExecutor
   communityId: string
   userId: string
   now: string
