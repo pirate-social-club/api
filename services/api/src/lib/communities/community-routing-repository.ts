@@ -67,3 +67,45 @@ export async function getCommunityDatabaseRoutingRow(
 
   return row ? toCommunityDatabaseRoutingRow(row) : null
 }
+
+export type UpsertTursoRoutingRowInput = {
+  communityId: string
+  tursoDatabaseBindingId: string
+  now: string
+  provisioningState?: CommunityProvisioningState
+}
+
+/**
+ * Seed (or no-op) a `backend='turso'` routing row for an existing community.
+ *
+ * This is the Phase-0 backfill writer: it makes the routing directory describe
+ * the world as it already is (every live community is on Turso) so the read
+ * router can be consulted without 404-ing communities that predate the
+ * directory. It is intentionally `ON CONFLICT DO NOTHING` — re-running never
+ * mutates an existing row (including one already flipped to `d1`), so the
+ * backfill is safe to run repeatedly and cannot regress a migrated community.
+ *
+ * Returns whether a new row was inserted (false = the community already had a
+ * routing row). D1 rows are written by the provisioning path (PR2+), not here.
+ */
+export async function upsertTursoCommunityRoutingRow(
+  executor: DbExecutor,
+  input: UpsertTursoRoutingRowInput,
+): Promise<{ inserted: boolean }> {
+  const result = await executor.execute({
+    sql: `
+      INSERT INTO community_database_routing
+        (community_id, backend, provisioning_state, turso_database_binding_id, created_at, updated_at)
+      VALUES (?1, 'turso', ?2, ?3, ?4, ?4)
+      ON CONFLICT (community_id) DO NOTHING
+    `,
+    args: [
+      input.communityId,
+      input.provisioningState ?? "ready",
+      input.tursoDatabaseBindingId,
+      input.now,
+    ],
+  })
+
+  return { inserted: (result.rowsAffected ?? 0) > 0 }
+}
