@@ -46,7 +46,16 @@ function sqlLiteral(value: unknown): string {
   if (typeof value === "bigint") return value.toString();
   if (typeof value === "boolean") return value ? "1" : "0";
   if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
-    const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : new Uint8Array((value as ArrayBufferView).buffer);
+    // Respect a view's byteOffset/byteLength — a subarray's underlying buffer
+    // may be larger; serializing the whole buffer would corrupt the blob.
+    const bytes =
+      value instanceof ArrayBuffer
+        ? new Uint8Array(value)
+        : new Uint8Array(
+            (value as ArrayBufferView).buffer,
+            (value as ArrayBufferView).byteOffset,
+            (value as ArrayBufferView).byteLength,
+          );
     let hex = "";
     for (const b of bytes) hex += b.toString(16).padStart(2, "0");
     return `X'${hex}'`;

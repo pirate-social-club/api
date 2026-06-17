@@ -13,6 +13,11 @@ import { runShardBatch, runShardRead } from "./shard-read"
  *     arbitrary binding.
  *  2. Every statement passes the shared read-only guard server-side. There is no
  *     write/transaction method on this class; the write path is PR3.
+ *
+ * INVARIANT FOR NEW METHODS: any RPC method that touches a community's D1 MUST go
+ * through runShardRead/runShardBatch (or call assertCommunityBinding + resolveD1
+ * itself) — never resolveD1 alone, or the (communityId, bindingName) authorization
+ * is bypassed.
  */
 export class CommunityD1Shard extends WorkerEntrypoint<Env> {
   execute(input: ShardReadRequest): Promise<ShardQueryResult> {
