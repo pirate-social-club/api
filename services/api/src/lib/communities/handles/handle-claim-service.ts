@@ -856,71 +856,92 @@ export async function reserveCommunityHandle(input: {
   const desired = normalizeCommunityHandleLabel(input.body.desired_label)
   const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
-    const tx = await db.client.transaction("write")
-    try {
-      const policy = await getNamespacePolicy(tx, input.communityId)
-      if (!policy) {
-        throw eligibilityFailed("Community names are not available for this community")
-      }
-      const settings = parseSettings(policy.settings_json)
-      assertLabelLength(desired.labelNormalized, settings)
-      if (isReservedLabel(desired.labelNormalized, settings)) {
-        const reason = "Desired label is already reserved"
-        throw conflictError(reason, availabilityDetails("reserved", reason))
-      }
-      const blockingHandle = await getBlockingHandleForLabel(tx, policy.namespace_id, desired.labelNormalized)
-      if (blockingHandle) {
-        const status = requiredString(blockingHandle, "status")
-        const reason = status === "reserved"
-          ? "Desired label is already reserved"
-          : "Desired label is unavailable"
-        throw conflictError(reason, availabilityDetails(status === "reserved" ? "reserved" : "taken", reason))
-      }
-      const now = nowIso()
-      const handleId = makeId("ch")
-      await tx.execute({
-        sql: `
-          INSERT INTO community_handles (
-            community_handle_id, community_id, user_id, namespace_id, handle_claim_quote_id,
-            label_normalized, label_display, status, issuance_source, price_cents, currency,
-            pricing_model, pricing_tier, settlement_wallet_attachment_id, funding_tx_ref, settlement_tx_ref,
-            lease_started_at, lease_expires_at, created_at, updated_at
-          ) VALUES (
-            ?1, ?2, ?3, ?4, NULL,
-            ?5, ?6, 'reserved', 'admin_grant', 0, 'USD',
-            NULL, 'reserved', NULL, NULL, NULL,
-            NULL, NULL, ?7, ?7
-          )
-        `,
-        args: [
-          handleId,
-          input.communityId,
-          input.userId,
-          policy.namespace_id,
-          desired.labelNormalized,
-          desired.labelDisplay,
-          now,
-        ],
-      })
-      const result = await tx.execute({
-        sql: `SELECT * FROM community_handles WHERE community_handle_id = ?1 LIMIT 1`,
-        args: [handleId],
-      })
-      const handle = result.rows[0]
-      if (!handle) {
-        throw internalError("Created reserved community handle row is missing")
-      }
-      await tx.commit()
-      return serializeHandle(handle)
-    } catch (error) {
-      await tx.rollback().catch(() => undefined)
-      throw error
-    } finally {
-      tx.close()
-    }
+    return serializeHandle(await reserveCommunityHandleOnClient(db.client, {
+      communityId: input.communityId,
+      userId: input.userId,
+      desired,
+    }))
   } finally {
     db.close()
   }
+}
+
+/**
+ * Buffer-safe reservation. The namespace policy + blocking-handle reads and all
+ * validation run on the base client BEFORE the write tx (a buffered D1 write tx
+ * can't read them back mid-flight); the tx body is a single INSERT guarded by the
+ * namespace/label unique constraint (the real concurrency protection); the created
+ * row is read back AFTER commit. Returns the raw handle row. Exported for buffer tests.
+ */
+export async function reserveCommunityHandleOnClient(
+  client: Client,
+  input: { communityId: string; userId: string; desired: { labelNormalized: string; labelDisplay: string } },
+): Promise<QueryResultRow> {
+  const policy = await getNamespacePolicy(client, input.communityId)
+  if (!policy) {
+    throw eligibilityFailed("Community names are not available for this community")
+  }
+  const settings = parseSettings(policy.settings_json)
+  assertLabelLength(input.desired.labelNormalized, settings)
+  if (isReservedLabel(input.desired.labelNormalized, settings)) {
+    const reason = "Desired label is already reserved"
+    throw conflictError(reason, availabilityDetails("reserved", reason))
+  }
+  const blockingHandle = await getBlockingHandleForLabel(client, policy.namespace_id, input.desired.labelNormalized)
+  if (blockingHandle) {
+    const status = requiredString(blockingHandle, "status")
+    const reason = status === "reserved"
+      ? "Desired label is already reserved"
+      : "Desired label is unavailable"
+    throw conflictError(reason, availabilityDetails(status === "reserved" ? "reserved" : "taken", reason))
+  }
+
+  const now = nowIso()
+  const handleId = makeId("ch")
+  const tx = await client.transaction("write")
+  try {
+    await tx.execute({
+      sql: `
+        INSERT INTO community_handles (
+          community_handle_id, community_id, user_id, namespace_id, handle_claim_quote_id,
+          label_normalized, label_display, status, issuance_source, price_cents, currency,
+          pricing_model, pricing_tier, settlement_wallet_attachment_id, funding_tx_ref, settlement_tx_ref,
+          lease_started_at, lease_expires_at, created_at, updated_at
+        ) VALUES (
+          ?1, ?2, ?3, ?4, NULL,
+          ?5, ?6, 'reserved', 'admin_grant', 0, 'USD',
+          NULL, 'reserved', NULL, NULL, NULL,
+          NULL, NULL, ?7, ?7
+        )
+      `,
+      args: [
+        handleId,
+        input.communityId,
+        input.userId,
+        policy.namespace_id,
+        input.desired.labelNormalized,
+        input.desired.labelDisplay,
+        now,
+      ],
+    })
+    await tx.commit()
+  } catch (error) {
+    await tx.rollback().catch(() => undefined)
+    throw error
+  } finally {
+    tx.close()
+  }
+
+  // Readback AFTER commit — the buffered tx can't read the inserted row.
+  const result = await client.execute({
+    sql: `SELECT * FROM community_handles WHERE community_handle_id = ?1 LIMIT 1`,
+    args: [handleId],
+  })
+  const handle = result.rows[0]
+  if (!handle) {
+    throw internalError("Created reserved community handle row is missing")
+  }
+  return handle
 }
 
 export async function revokeCommunityHandle(input: {
