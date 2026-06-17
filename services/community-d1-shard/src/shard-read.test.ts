@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test"
-import { resolveD1, runShardBatch, runShardRead, ShardReadError, type D1BindingEnv } from "./shard-read"
+import {
+  assertCommunityBinding,
+  resolveD1,
+  runShardBatch,
+  runShardRead,
+  ShardReadError,
+  type ShardEnv,
+} from "./shard-read"
 
 type FakeCall = { sql: string; args: unknown[] }
 
@@ -30,8 +37,11 @@ function fakeD1(rows: Record<string, unknown>[] = [{ x: 1 }]) {
   }
 }
 
-function envWith(db: unknown): D1BindingEnv {
-  return { DB_CMTY_PILOT: db as D1Database } as D1BindingEnv
+function envWith(db: unknown): ShardEnv {
+  return {
+    DB_CMTY_PILOT: db as D1Database,
+    COMMUNITY_D1_BINDING_MAP_JSON: JSON.stringify({ cmt_1: "DB_CMTY_PILOT" }),
+  } as ShardEnv
 }
 
 describe("resolveD1 binding allowlist", () => {
@@ -125,4 +135,46 @@ describe("runShardBatch", () => {
     ).rejects.toMatchObject({ code: "shard_read_only_violation" })
     expect(db.calls).toHaveLength(0)
   })
+})
+
+describe("assertCommunityBinding (community↔binding allowlist)", () => {
+  test("allows the mapped (community, binding) pair", () => {
+    expect(() => assertCommunityBinding(envWith(fakeD1()), "cmt_1", "DB_CMTY_PILOT")).not.toThrow()
+  })
+
+  test("rejects a valid binding requested by an UNMAPPED community (cross-tenant guard)", () => {
+    try {
+      assertCommunityBinding(envWith(fakeD1()), "cmt_other", "DB_CMTY_PILOT")
+      throw new Error("should have thrown")
+    } catch (e) {
+      expect((e as ShardReadError).code).toBe("shard_binding_not_allowed")
+    }
+  })
+
+  test("rejects a community pointed at a DIFFERENT binding than its mapping", () => {
+    try {
+      assertCommunityBinding(envWith(fakeD1()), "cmt_1", "DB_OTHER")
+      throw new Error("should have thrown")
+    } catch (e) {
+      expect((e as ShardReadError).code).toBe("shard_binding_not_allowed")
+    }
+  })
+
+  test("fail-closed when the binding map is missing/invalid", () => {
+    const env = { DB_CMTY_PILOT: fakeD1() } as unknown as ShardEnv // no COMMUNITY_D1_BINDING_MAP_JSON
+    try {
+      assertCommunityBinding(env, "cmt_1", "DB_CMTY_PILOT")
+      throw new Error("should have thrown")
+    } catch (e) {
+      expect((e as ShardReadError).code).toBe("shard_binding_not_allowed")
+    }
+  })
+})
+
+test("runShardRead rejects a valid binding requested by the wrong community (never touches D1)", async () => {
+  const db = fakeD1()
+  await expect(
+    runShardRead(envWith(db), { communityId: "cmt_other", bindingName: "DB_CMTY_PILOT", statement: "SELECT 1" }),
+  ).rejects.toMatchObject({ code: "shard_binding_not_allowed" })
+  expect(db.calls).toHaveLength(0)
 })

@@ -54,6 +54,13 @@ export interface ShardReadRpc {
 export const SHARD_READ_ERROR = {
   /** bindingName is not in the shard's allowlist of bound D1 namespaces. */
   UNKNOWN_BINDING: "shard_unknown_binding",
+  /**
+   * The (communityId, bindingName) pair is not authorized on this shard: the
+   * community is not mapped here, or it maps to a DIFFERENT binding. Guards
+   * against a stale/poisoned routing row for community A pointing at community
+   * B's (otherwise valid) D1 binding on the same shard.
+   */
+  BINDING_NOT_ALLOWED: "shard_binding_not_allowed",
   /** A statement failed the shard's read-only guard. */
   READ_ONLY_VIOLATION: "shard_read_only_violation",
 } as const

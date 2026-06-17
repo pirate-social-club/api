@@ -6,6 +6,13 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": {
     "enabled": true
+  },
+  "vars": {
+    // (communityId → bindingName) allowlist of communities this shard serves.
+    // A read is authorized only if the community is mapped here AND maps to the
+    // requested binding (assertCommunityBinding) — guards cross-tenant access via
+    // a stale/poisoned routing row. Updated as communities are migrated onto this shard.
+    "COMMUNITY_D1_BINDING_MAP_JSON": "{}"
   }
   // d1_databases is added at provisioning time, e.g.:
   //   "d1_databases": [

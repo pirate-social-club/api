@@ -14,12 +14,46 @@ import {
  * shell over `runShardRead` / `runShardBatch`.
  */
 
-export type D1BindingEnv = { [binding: string]: D1Database | undefined }
+export type ShardEnv = {
+  COMMUNITY_D1_BINDING_MAP_JSON?: string
+  [binding: string]: D1Database | string | undefined
+}
 
 export class ShardReadError extends Error {
   constructor(readonly code: string, message: string) {
     super(message)
     this.name = "ShardReadError"
+  }
+}
+
+/** Parse the `(communityId → bindingName)` allowlist; fail-closed to {} on bad/missing JSON. */
+function communityBindingMap(env: ShardEnv): Record<string, string> {
+  const raw = typeof env.COMMUNITY_D1_BINDING_MAP_JSON === "string" ? env.COMMUNITY_D1_BINDING_MAP_JSON : ""
+  if (!raw.trim()) return {}
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, string>
+    }
+  } catch {
+    // fall through to fail-closed
+  }
+  return {}
+}
+
+/**
+ * Authorize a (communityId, bindingName) pair against this shard's allowlist.
+ * Rejects unless the community is mapped here AND maps to exactly this binding —
+ * so a stale/poisoned routing row for community A cannot read community B's
+ * (otherwise valid) D1 binding on the same shard.
+ */
+export function assertCommunityBinding(env: ShardEnv, communityId: string, bindingName: string): void {
+  const expected = communityBindingMap(env)[communityId]
+  if (!expected || expected !== bindingName) {
+    throw new ShardReadError(
+      SHARD_READ_ERROR.BINDING_NOT_ALLOWED,
+      `community ${communityId} is not authorized to read binding ${bindingName} on this shard`,
+    )
   }
 }
 
@@ -29,7 +63,7 @@ export class ShardReadError extends Error {
  * stale/poisoned control-plane routing row cannot steer us to an arbitrary
  * binding — unknown names are rejected, not silently served.
  */
-export function resolveD1(env: D1BindingEnv, bindingName: string): D1Database {
+export function resolveD1(env: ShardEnv, bindingName: string): D1Database {
   const candidate = env[bindingName]
   if (
     !candidate ||
@@ -65,13 +99,15 @@ function toResult(result: D1Result): ShardQueryResult {
   }
 }
 
-export async function runShardRead(env: D1BindingEnv, input: ShardReadRequest): Promise<ShardQueryResult> {
+export async function runShardRead(env: ShardEnv, input: ShardReadRequest): Promise<ShardQueryResult> {
+  assertCommunityBinding(env, input.communityId, input.bindingName)
   const db = resolveD1(env, input.bindingName)
   const result = await prepareReadOnly(db, input.statement).all()
   return toResult(result)
 }
 
-export async function runShardBatch(env: D1BindingEnv, input: ShardBatchReadRequest): Promise<ShardQueryResult[]> {
+export async function runShardBatch(env: ShardEnv, input: ShardBatchReadRequest): Promise<ShardQueryResult[]> {
+  assertCommunityBinding(env, input.communityId, input.bindingName)
   const db = resolveD1(env, input.bindingName)
   const prepared = input.statements.map((statement) => prepareReadOnly(db, statement))
   const results = await db.batch(prepared)
