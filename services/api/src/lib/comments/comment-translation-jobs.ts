@@ -4,7 +4,8 @@ import { enqueueCommunityJob } from "../communities/jobs/store"
 import { buildLocalizedCommentListItem } from "../localization/comment-localization-service"
 import { CONTENT_TRANSLATION_PREWARM_LOCALES, sameLanguageLocale } from "../localization/content-locale"
 import { nowIso } from "../helpers"
-import type { Comment, CommentListResponse } from "./comment-types"
+import type { CommentListResponse } from "./comment-types"
+import type { CommentWriteDraft } from "./community-comment-store"
 
 async function enqueueCommentTranslationJob(input: {
   client: DbExecutor
@@ -30,7 +31,7 @@ async function enqueueCommentTranslationJob(input: {
 export async function enqueueCommentTranslationPrewarmJobs(input: {
   client: DbExecutor
   communityId: string
-  comment: Comment
+  comment: CommentWriteDraft
   createdAt: string
 }): Promise<void> {
   if (input.comment.status !== "published" || !String(input.comment.body ?? "").trim()) {

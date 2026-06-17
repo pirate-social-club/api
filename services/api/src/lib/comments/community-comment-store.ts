@@ -53,6 +53,30 @@ function replyLockSelectColumnsForSchema(schema: CommentProjectionSchema): strin
     : "0 AS replies_locked, NULL AS replies_locked_at, NULL AS replies_locked_by_user_id, NULL AS replies_lock_reason"
 }
 
+/**
+ * Deterministic projection of a freshly inserted comment row. insertComment returns
+ * this instead of reading the row back, so it is safe inside a buffered D1 write tx
+ * (a readback sees nothing until commit). Callers that need the fully hydrated
+ * Comment must read it back AFTER commit via getCommentById.
+ */
+export type CommentWriteDraft = Pick<
+  Comment,
+  | "comment_id"
+  | "community_id"
+  | "thread_root_post_id"
+  | "parent_comment_id"
+  | "author_user_id"
+  | "identity_mode"
+  | "anonymous_scope"
+  | "anonymous_label"
+  | "body"
+  | "source_language"
+  | "status"
+  | "depth"
+  | "created_at"
+  | "updated_at"
+>
+
 export async function insertComment(input: {
   executor: DbExecutor
   communityId: string
@@ -72,7 +96,7 @@ export async function insertComment(input: {
     agentOwnerHandleSnapshot: string
     agentOwnershipProviderSnapshot: NonNullable<Comment["agent_ownership_provider_snapshot"]>
   }
-}): Promise<Comment> {
+}): Promise<CommentWriteDraft> {
   const commentId = makeId("cmt")
   const identityMode = input.body.identity_mode ?? "public"
   const anonymousScope = identityMode === "anonymous" ? (input.body.anonymous_scope ?? null) : null
@@ -127,11 +151,22 @@ export async function insertComment(input: {
     ],
   })
 
-  const created = await getCommentById(input.executor, commentId)
-  if (!created) {
-    throw internalError("Comment row is missing after insert")
+  return {
+    comment_id: commentId,
+    community_id: input.communityId,
+    thread_root_post_id: input.threadRootPostId,
+    parent_comment_id: input.parentCommentId,
+    author_user_id: input.authorUserId,
+    identity_mode: identityMode,
+    anonymous_scope: anonymousScope,
+    anonymous_label: anonymousLabel,
+    body: input.body.body?.trim() ?? "",
+    source_language: input.sourceLanguage,
+    status: "published",
+    depth: input.depth,
+    created_at: input.createdAt,
+    updated_at: input.createdAt,
   }
-  return created
 }
 
 export async function getCommentById(executor: DbExecutor, commentId: string): Promise<Comment | null> {

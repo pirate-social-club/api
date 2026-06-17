@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { markCommentDeleted, setCommentStatus, upsertCommentVote } from "./community-comment-store"
+import { insertComment, markCommentDeleted, setCommentStatus, upsertCommentVote } from "./community-comment-store"
 import type { DbExecutor } from "../db-helpers"
 
 /**
@@ -27,6 +27,31 @@ const hasRead = (sqls: string[]) =>
   sqls.some((s) => /pragma/i.test(s)) || sqls.some((s) => /^\s*select\b/i.test(s))
 
 describe("comment write helpers (buffer-safe)", () => {
+  test("insertComment issues no in-tx readback and returns a deterministic draft", async () => {
+    const { executor, sqls } = recordingExecutor()
+    const draft = await insertComment({
+      executor,
+      communityId: "cmt_buf",
+      threadRootPostId: "pst_buf",
+      parentCommentId: null,
+      authorUserId: "usr_buf",
+      body: { body: "hello", idempotency_key: "buf-c-1" },
+      sourceLanguage: "en",
+      depth: 0,
+      createdAt: "2026-06-17T00:00:00.000Z",
+      contentHash: "0xabc",
+    })
+
+    expect(draft.comment_id).toMatch(/^cmt_/)
+    expect(draft.status).toBe("published")
+    expect(draft.body).toBe("hello")
+    expect(draft.created_at).toBe("2026-06-17T00:00:00.000Z")
+
+    expect(hasRead(sqls)).toBe(false)
+    expect(sqls.some((s) => /insert\s+into\s+comments\b/i.test(s))).toBe(true)
+  })
+
+
   test("upsertCommentVote issues no in-tx read; writes the vote and the count update", async () => {
     const { executor, sqls } = recordingExecutor()
     const result = await upsertCommentVote({
