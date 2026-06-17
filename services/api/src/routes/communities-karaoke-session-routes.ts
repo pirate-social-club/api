@@ -1,7 +1,10 @@
 import type { Hono } from "hono"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import { resolveCommunityKaraokeScoringPolicy } from "../lib/communities/community-karaoke-policy-service"
-import { badRequestError, HttpError } from "../lib/errors"
+import { getCommunityRepository } from "../lib/communities/db-community-repository"
+import { resolveCommunityIdentifier } from "../lib/communities/community-identifier"
+import { getProfileRepository, getUserRepository } from "../lib/auth/repositories"
+import { badRequestError, HttpError, notFoundError } from "../lib/errors"
 import { issueKaraokeGatewayToken } from "../lib/karaoke/gateway-token"
 import {
   claimKaraokeSessionCreation,
@@ -48,6 +51,27 @@ function websocketBaseUrl(requestUrl: string, sessionId: string): string {
 }
 
 export function registerCommunityKaraokeSessionRoutes(communities: Hono<AuthenticatedEnv>): void {
+  communities.get("/:communityId/posts/:postId/karaoke", async (c) => {
+    const communityRepository = getCommunityRepository(c.env)
+    const communityId = await resolveCommunityIdentifier(
+      communityRepository,
+      c.req.param("communityId")?.trim() ?? "",
+    )
+    if (!communityId) {
+      throw notFoundError("Post not found")
+    }
+    const payload = await getPostKaraokePayload({
+      communityId,
+      communityRepository,
+      env: c.env,
+      locale: c.req.query("locale") ?? null,
+      postId: decodePublicPostId(c.req.param("postId")),
+      profileRepository: getProfileRepository(c.env),
+      userRepository: getUserRepository(c.env),
+    })
+    return c.json(payload, 200)
+  })
+
   communities.post("/:communityId/posts/:postId/karaoke/sessions", async (c) => {
     const actor = c.get("actor")
     if (actor.authType === "admin" || actor.authType === "agent_delegated") {
