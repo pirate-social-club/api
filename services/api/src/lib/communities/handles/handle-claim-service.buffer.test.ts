@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { reserveCommunityHandleOnClient } from "./handle-claim-service"
+import { applyHandleClaimWrites, reserveCommunityHandleOnClient } from "./handle-claim-service"
 import type { Client } from "../../sql-client"
 
 /**
@@ -89,5 +89,54 @@ describe("reserveCommunityHandleOnClient (buffer-safe)", () => {
     expect(txSqls[0]).toMatch(/insert\s+into\s+community_handles/i)
     // The readback ran on the base client after the tx.
     expect(baseSqls.some((s) => /community_handle_id\s*=\s*\?1/i.test(s))).toBe(true)
+  })
+})
+
+const claimWritesInput = {
+  communityId: "cmt_h",
+  userId: "usr_h",
+  quoteId: "hcq_1",
+  namespaceId: "ns_h",
+  namespaceNormalizedLabel: "club",
+  labelNormalized: "alice",
+  labelDisplay: "alice",
+  priceCents: 0,
+  pricingModel: null,
+  pricingTier: null,
+  settlementWalletAttachmentId: null,
+  protocolOwnerWalletAttachmentId: null,
+  fundingTxRef: null,
+  settlementTxRef: null,
+  protocolIssuanceRequired: false,
+  protocolOwner: null,
+  now: "2026-06-17T00:00:00.000Z",
+}
+
+describe("applyHandleClaimWrites (buffer-safe)", () => {
+  test("tx body is write-only (INSERT handle + UPDATE quote); readback post-commit", async () => {
+    const { client, baseSqls, txSqls } = recordingClient()
+    const handle = await applyHandleClaimWrites(client, claimWritesInput)
+
+    expect(handle).toBe(HANDLE_ROW)
+    // No read leaked into the buffered tx.
+    expect(hasRead(txSqls)).toBe(false)
+    expect(txSqls.some((s) => /insert\s+into\s+community_handles/i.test(s))).toBe(true)
+    expect(txSqls.some((s) => /update\s+community_handle_claim_quotes/i.test(s))).toBe(true)
+    // No protocol issuance write when not required.
+    expect(txSqls.some((s) => /community_handle_protocol_issuances/i.test(s))).toBe(false)
+    // The hydrated readback ran on the base client AFTER the tx.
+    expect(baseSqls.some((s) => /community_handle_id\s*=\s*\?1/i.test(s))).toBe(true)
+  })
+
+  test("protocol issuance required → tx also writes the issuance, still no in-tx read", async () => {
+    const { client, txSqls } = recordingClient()
+    await applyHandleClaimWrites(client, {
+      ...claimWritesInput,
+      protocolIssuanceRequired: true,
+      protocolOwner: { walletAttachmentId: "wal_1", scriptPubkeyHex: "00aa" },
+    })
+
+    expect(hasRead(txSqls)).toBe(false)
+    expect(txSqls.some((s) => /insert\s+into\s+community_handle_protocol_issuances/i.test(s))).toBe(true)
   })
 })

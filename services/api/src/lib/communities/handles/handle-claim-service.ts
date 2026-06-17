@@ -1471,123 +1471,194 @@ export async function claimCommunityHandle(input: {
 
   const writeDb = await openCommunityDb(input.env, input.communityRepository, input.communityId)
   try {
-    const tx = await writeDb.client.transaction("write")
-    try {
-      const quote = await getClaimQuote(tx, {
-        quoteId,
-        communityId: input.communityId,
-        userId: input.userId,
-      })
+    // Final, authoritative validation on the base client BEFORE the tx. A buffered
+    // D1 write tx can't read the quote/handle back mid-flight, and
+    // assertClaimQuoteStillClaimable both reads (policy, active handle, blocking
+    // handle, membership) and writes (expireStaleHandleQuotes) — none of which would
+    // observe correct state inside the buffered batch. The (namespace, label) partial
+    // unique index is the real concurrency gate for the write below.
+    const quote = await getClaimQuote(writeDb.client, {
+      quoteId,
+      communityId: input.communityId,
+      userId: input.userId,
+    })
 
-      const existingForQuote = await getExistingHandleForQuote(tx, quoteId)
-      if (existingForQuote) {
-        await tx.commit()
-        return serializeHandle(existingForQuote)
-      }
-
-      const now = nowIso()
-      const checked = await assertClaimQuoteStillClaimable({
-        executor: tx,
-        communityId: input.communityId,
-        userId: input.userId,
-        quoteId,
-        quote,
-        now,
-        paymentVerified,
-      })
-      if (checked.protocolIssuanceRequired && !protocolOwner) {
-        throw eligibilityFailed("protocol_owner_wallet_attachment is required for protocol-issued names", {
-          protocol_owner_wallet_attachment: "missing",
-        })
-      }
-      const persistedProtocolOwnerWalletAttachmentId = checked.protocolIssuanceRequired
-        ? protocolOwner?.walletAttachmentId ?? null
-        : null
-
-      const handleId = makeId("ch")
-      await tx.execute({
-        sql: `
-          INSERT INTO community_handles (
-            community_handle_id, community_id, user_id, namespace_id, handle_claim_quote_id,
-            label_normalized, label_display, status, issuance_source, price_cents, currency,
-            pricing_model, pricing_tier, settlement_wallet_attachment_id, protocol_owner_wallet_attachment_id, funding_tx_ref, settlement_tx_ref,
-            lease_started_at, lease_expires_at, created_at, updated_at
-          ) VALUES (
-            ?1, ?2, ?3, ?4, ?5,
-            ?6, ?7, 'active', 'claim', ?8, 'USD',
-            ?9, ?10, ?11, ?12, ?13, ?14,
-            ?15, NULL, ?15, ?15
-          )
-        `,
-        args: [
-          handleId,
-          input.communityId,
-          input.userId,
-          checked.policy.namespace_id,
-          quoteId,
-          checked.labelNormalized,
-          checked.labelDisplay,
-          checked.priceCents,
-          stringOrNull(rowValue(quote, "pricing_model")),
-          stringOrNull(rowValue(quote, "pricing_tier")),
-          input.body.settlement_wallet_attachment?.trim() || null,
-          persistedProtocolOwnerWalletAttachmentId,
-          input.body.funding_tx_ref?.trim() || null,
-          input.body.settlement_tx_ref?.trim() || input.body.funding_tx_ref?.trim() || null,
-          now,
-        ],
-      })
-
-      if (checked.protocolIssuanceRequired) {
-        if (!protocolOwner) {
-          throw internalError("Protocol owner wallet validation result is missing")
-        }
-        await createProtocolIssuanceForHandle({
-          executor: tx,
-          communityId: input.communityId,
-          namespaceId: checked.policy.namespace_id,
-          namespaceNormalizedLabel: checked.policy.normalized_label,
-          communityHandleId: handleId,
-          labelNormalized: checked.labelNormalized,
-          scriptPubkeyHex: protocolOwner.scriptPubkeyHex,
-          now,
-        })
-      }
-
-      await tx.execute({
-        sql: `
-          UPDATE community_handle_claim_quotes
-          SET status = 'claimed',
-              claimed_at = ?2,
-              updated_at = ?2
-          WHERE handle_claim_quote_id = ?1
-        `,
-        args: [quoteId, now],
-      })
-
-      const handleResult = await tx.execute({
-        sql: `
-          SELECT ${HANDLE_PROTOCOL_ISSUANCE_SELECT}
-          FROM community_handles ch
-          ${HANDLE_PROTOCOL_ISSUANCE_JOIN}
-          WHERE ch.community_handle_id = ?1
-          LIMIT 1
-        `,
-        args: [handleId],
-      })
-      const handle = handleResult.rows[0]
-      if (!handle) {
-        throw internalError("Created community handle row is missing")
-      }
-      await tx.commit()
-      return serializeHandle(handle)
-    } catch (error) {
-      await tx.rollback().catch(() => undefined)
-      throw error
-    } finally {
-      tx.close()
+    const existingForQuote = await getExistingHandleForQuote(writeDb.client, quoteId)
+    if (existingForQuote) {
+      return serializeHandle(existingForQuote)
     }
+
+    const now = nowIso()
+    const checked = await assertClaimQuoteStillClaimable({
+      executor: writeDb.client,
+      communityId: input.communityId,
+      userId: input.userId,
+      quoteId,
+      quote,
+      now,
+      paymentVerified,
+    })
+    if (checked.protocolIssuanceRequired && !protocolOwner) {
+      throw eligibilityFailed("protocol_owner_wallet_attachment is required for protocol-issued names", {
+        protocol_owner_wallet_attachment: "missing",
+      })
+    }
+    const persistedProtocolOwnerWalletAttachmentId = checked.protocolIssuanceRequired
+      ? protocolOwner?.walletAttachmentId ?? null
+      : null
+
+    return serializeHandle(await applyHandleClaimWrites(writeDb.client, {
+      communityId: input.communityId,
+      userId: input.userId,
+      quoteId,
+      namespaceId: checked.policy.namespace_id,
+      namespaceNormalizedLabel: checked.policy.normalized_label,
+      labelNormalized: checked.labelNormalized,
+      labelDisplay: checked.labelDisplay,
+      priceCents: checked.priceCents,
+      pricingModel: stringOrNull(rowValue(quote, "pricing_model")),
+      pricingTier: stringOrNull(rowValue(quote, "pricing_tier")),
+      settlementWalletAttachmentId: input.body.settlement_wallet_attachment?.trim() || null,
+      protocolOwnerWalletAttachmentId: persistedProtocolOwnerWalletAttachmentId,
+      fundingTxRef: input.body.funding_tx_ref?.trim() || null,
+      settlementTxRef: input.body.settlement_tx_ref?.trim() || input.body.funding_tx_ref?.trim() || null,
+      protocolIssuanceRequired: checked.protocolIssuanceRequired,
+      protocolOwner,
+      now,
+    }))
   } finally {
     writeDb.close()
   }
+}
+
+/**
+ * Buffer-safe write phase of a handle claim. All validation/reads happen in the
+ * caller on the base client BEFORE this runs; here the tx body is write-only (handle
+ * INSERT + optional protocol issuance + quote transition, atomic via db.batch). The
+ * (namespace, label) partial unique index rejects a concurrent winner at commit(); we
+ * then resolve idempotently. The created row is read back AFTER commit. Exported for
+ * buffer-safety regression tests.
+ */
+export async function applyHandleClaimWrites(
+  client: Client,
+  input: {
+    communityId: string
+    userId: string
+    quoteId: string
+    namespaceId: string
+    namespaceNormalizedLabel: string
+    labelNormalized: string
+    labelDisplay: string
+    priceCents: number
+    pricingModel: string | null
+    pricingTier: string | null
+    settlementWalletAttachmentId: string | null
+    protocolOwnerWalletAttachmentId: string | null
+    fundingTxRef: string | null
+    settlementTxRef: string | null
+    protocolIssuanceRequired: boolean
+    protocolOwner: { walletAttachmentId: string; scriptPubkeyHex: string } | null
+    now: string
+  },
+): Promise<QueryResultRow> {
+  const handleId = makeId("ch")
+  const tx = await client.transaction("write")
+  try {
+    await tx.execute({
+      sql: `
+        INSERT INTO community_handles (
+          community_handle_id, community_id, user_id, namespace_id, handle_claim_quote_id,
+          label_normalized, label_display, status, issuance_source, price_cents, currency,
+          pricing_model, pricing_tier, settlement_wallet_attachment_id, protocol_owner_wallet_attachment_id, funding_tx_ref, settlement_tx_ref,
+          lease_started_at, lease_expires_at, created_at, updated_at
+        ) VALUES (
+          ?1, ?2, ?3, ?4, ?5,
+          ?6, ?7, 'active', 'claim', ?8, 'USD',
+          ?9, ?10, ?11, ?12, ?13, ?14,
+          ?15, NULL, ?15, ?15
+        )
+      `,
+      args: [
+        handleId,
+        input.communityId,
+        input.userId,
+        input.namespaceId,
+        input.quoteId,
+        input.labelNormalized,
+        input.labelDisplay,
+        input.priceCents,
+        input.pricingModel,
+        input.pricingTier,
+        input.settlementWalletAttachmentId,
+        input.protocolOwnerWalletAttachmentId,
+        input.fundingTxRef,
+        input.settlementTxRef,
+        input.now,
+      ],
+    })
+
+    if (input.protocolIssuanceRequired) {
+      if (!input.protocolOwner) {
+        throw internalError("Protocol owner wallet validation result is missing")
+      }
+      await createProtocolIssuanceForHandle({
+        executor: tx,
+        communityId: input.communityId,
+        namespaceId: input.namespaceId,
+        namespaceNormalizedLabel: input.namespaceNormalizedLabel,
+        communityHandleId: handleId,
+        labelNormalized: input.labelNormalized,
+        scriptPubkeyHex: input.protocolOwner.scriptPubkeyHex,
+        now: input.now,
+      })
+    }
+
+    await tx.execute({
+      sql: `
+        UPDATE community_handle_claim_quotes
+        SET status = 'claimed',
+            claimed_at = ?2,
+            updated_at = ?2
+        WHERE handle_claim_quote_id = ?1
+          AND status = 'quoted'
+      `,
+      args: [input.quoteId, input.now],
+    })
+
+    await tx.commit()
+  } catch (error) {
+    await tx.rollback().catch(() => undefined)
+    // The (namespace, label) partial unique index may have rejected the INSERT at
+    // commit because a concurrent claim won the label. Resolve idempotently:
+    const racedForQuote = await getExistingHandleForQuote(client, input.quoteId)
+    if (racedForQuote) {
+      return racedForQuote
+    }
+    const blocking = await getBlockingHandleForLabel(client, input.namespaceId, input.labelNormalized)
+    if (blocking) {
+      const blockingStatus = requiredString(blocking, "status")
+      const reason = "Payment was verified, but this name became unavailable before the claim completed"
+      throw conflictError(reason, availabilityDetails(blockingStatus === "reserved" ? "reserved" : "taken", reason))
+    }
+    throw error
+  } finally {
+    tx.close()
+  }
+
+  // Readback AFTER commit — the buffered tx can't read the inserted row.
+  const handleResult = await client.execute({
+    sql: `
+      SELECT ${HANDLE_PROTOCOL_ISSUANCE_SELECT}
+      FROM community_handles ch
+      ${HANDLE_PROTOCOL_ISSUANCE_JOIN}
+      WHERE ch.community_handle_id = ?1
+      LIMIT 1
+    `,
+    args: [handleId],
+  })
+  const handle = handleResult.rows[0]
+  if (!handle) {
+    throw internalError("Created community handle row is missing")
+  }
+  return handle
 }
