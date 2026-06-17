@@ -200,6 +200,41 @@ export type CommunityWriteHandle = {
  * replacement — only buffer-safe write surfaces (write-only tx bodies) may adopt
  * it until the result-dependent transactions are refactored.
  */
+export type CommunityWriteAccessDeps = {
+  enabled: boolean
+  resolver: CommunityBindingResolver
+  controlPlane: DbExecutor
+  /** Open the D1-backed Client for a resolved d1 binding (throws if shard absent). */
+  openD1: (binding: ResolvedCommunityBinding) => Client
+  /** Legacy direct-open path (the current Turso open via `openCommunityDb`). */
+  openLegacy: () => Promise<CommunityWriteHandle>
+}
+
+/**
+ * Pure write-access decision (injectable for tests): flag off → legacy; flag on
+ * → resolve the directory, d1 → D1 client, turso → legacy, routing miss → legacy.
+ */
+export async function resolveCommunityWriteHandle(
+  deps: CommunityWriteAccessDeps,
+  communityId: string,
+): Promise<CommunityWriteHandle> {
+  if (!deps.enabled) {
+    return deps.openLegacy()
+  }
+  try {
+    const binding = await deps.resolver.resolve(deps.controlPlane, communityId)
+    if (binding.backend === "d1") {
+      return { client: deps.openD1(binding), close: () => {} }
+    }
+    return deps.openLegacy()
+  } catch (error) {
+    if (isRoutingFallback(error)) {
+      return deps.openLegacy()
+    }
+    throw error
+  }
+}
+
 export async function openCommunityWriteClient(
   env: Env,
   repo: CommunityDatabaseBindingRepository,
@@ -210,30 +245,30 @@ export async function openCommunityWriteClient(
     return { client: handle.client, close: () => handle.close() }
   }
 
+  // When the flag is off, never touch the control plane or resolver.
   if (!routingEnabled(env)) {
     return openLegacy()
   }
 
-  try {
-    const binding = await getResolver().resolve(getControlPlaneClient(env), communityId)
-    if (binding.backend === "d1") {
-      const shard = env.COMMUNITY_D1_SHARD
-      if (!shard) {
-        throw new HttpError(
-          503,
-          "d1_backend_not_provisioned",
-          `Community ${communityId} routes to d1 but the shard backend is not provisioned`,
-          true,
-        )
-      }
-      return { client: makeCommunityD1Client(shard, binding), close: () => {} }
-    }
-    // backend === 'turso' → legacy direct open.
-    return openLegacy()
-  } catch (error) {
-    if (isRoutingFallback(error)) {
-      return openLegacy()
-    }
-    throw error
-  }
+  return resolveCommunityWriteHandle(
+    {
+      enabled: true,
+      resolver: getResolver(),
+      controlPlane: getControlPlaneClient(env),
+      openD1: (binding) => {
+        const shard = env.COMMUNITY_D1_SHARD
+        if (!shard) {
+          throw new HttpError(
+            503,
+            "d1_backend_not_provisioned",
+            `Community ${communityId} routes to d1 but the shard backend is not provisioned`,
+            true,
+          )
+        }
+        return makeCommunityD1Client(shard, binding)
+      },
+      openLegacy,
+    },
+    communityId,
+  )
 }

@@ -3,15 +3,17 @@ import { createClient, type Client } from "@libsql/client"
 import { CommunityBindingResolver } from "./community-binding-resolver"
 import {
   resolveCommunityReadHandle,
+  resolveCommunityWriteHandle,
   openShardReadClientNotProvisioned,
   makeShardReadClient,
   type CommunityReadAccessDeps,
   type CommunityReadHandle,
+  type CommunityWriteAccessDeps,
 } from "./community-read-access"
 import type { CommunityReadInvoker } from "./community-read-router"
 import type { ResolvedCommunityBinding } from "./community-binding-resolver"
 import { HttpError } from "../errors"
-import type { ReadClient } from "../sql-client"
+import type { Client as ApiClient, ReadClient } from "../sql-client"
 
 let cp: Client
 
@@ -183,4 +185,61 @@ test("makeShardReadClient throws if the d1 routing row has no binding_name", () 
   } as ResolvedCommunityBinding
   const shard = { execute: async () => ({ rows: [] }), batch: async () => [] }
   expect(() => makeShardReadClient(shard, binding)).toThrow(HttpError)
+})
+
+function writeDeps(overrides: Partial<CommunityWriteAccessDeps>): CommunityWriteAccessDeps {
+  return {
+    enabled: true,
+    resolver: new CommunityBindingResolver(),
+    controlPlane: cp,
+    openD1: () => ({ ...STUB_READ_CLIENT, __tag: "d1", transaction: async () => { throw new Error("unused") } } as unknown as ApiClient),
+    openLegacy: async () => ({ client: { ...STUB_READ_CLIENT, __tag: "legacy" } as unknown as ApiClient, close: () => {} }),
+    ...overrides,
+  }
+}
+
+async function seedD1Row(communityId: string): Promise<void> {
+  await cp.execute({
+    sql: `
+      INSERT INTO community_database_routing
+        (community_id, backend, provisioning_state, shard_worker_id, binding_name, region, migrated_at, created_at, updated_at)
+      VALUES (?1, 'd1', 'ready', 'shard-1', 'DB_CMTY_PILOT', 'enam', 't1', 't0', 't1')
+    `,
+    args: [communityId],
+  })
+}
+
+test("write: flag off → legacy (no resolver/control-plane touch)", async () => {
+  let resolved = false
+  const deps = writeDeps({ enabled: false, openD1: () => { resolved = true; return {} as Client } })
+  const h = await resolveCommunityWriteHandle(deps, "cmt_x")
+  expect((h.client as { __tag?: string }).__tag).toBe("legacy")
+  expect(resolved).toBe(false)
+})
+
+test("write: backend='d1' → D1 client", async () => {
+  await seedD1Row("cmt_d1w")
+  const h = await resolveCommunityWriteHandle(writeDeps({}), "cmt_d1w")
+  expect((h.client as { __tag?: string }).__tag).toBe("d1")
+})
+
+test("write: backend='turso' → legacy", async () => {
+  await seedTursoRow("cmt_tw")
+  const h = await resolveCommunityWriteHandle(writeDeps({}), "cmt_tw")
+  expect((h.client as { __tag?: string }).__tag).toBe("legacy")
+})
+
+test("write: no routing row → falls back to legacy", async () => {
+  const h = await resolveCommunityWriteHandle(writeDeps({}), "cmt_missing_w")
+  expect((h.client as { __tag?: string }).__tag).toBe("legacy")
+})
+
+test("write: backend='d1' but shard absent → propagates d1_backend_not_provisioned", async () => {
+  await seedD1Row("cmt_d1noshard")
+  const deps = writeDeps({
+    openD1: () => {
+      throw new HttpError(503, "d1_backend_not_provisioned", "no shard", true)
+    },
+  })
+  await expect(resolveCommunityWriteHandle(deps, "cmt_d1noshard")).rejects.toMatchObject({ code: "d1_backend_not_provisioned" })
 })
