@@ -222,6 +222,47 @@ describe("runShardWrite (atomic write batch)", () => {
     expect(db.calls).toHaveLength(0)
   })
 
+  test("rejects SELECT on the write path (reads use execute/batch)", async () => {
+    const db = fakeD1()
+    await expect(
+      runShardWrite(envWith(db), { communityId: "cmt_1", bindingName: "DB_CMTY_PILOT", statements: [{ sql: "SELECT 1" }] }),
+    ).rejects.toMatchObject({ code: "shard_write_not_allowed" })
+    expect(db.calls).toHaveLength(0)
+  })
+
+  test("rejects unknown / non-DML leading verbs (BEGIN, EXPLAIN, gibberish)", async () => {
+    for (const sql of ["BEGIN", "COMMIT", "EXPLAIN SELECT 1", "FROBNICATE t"]) {
+      const db = fakeD1()
+      await expect(
+        runShardWrite(envWith(db), { communityId: "cmt_1", bindingName: "DB_CMTY_PILOT", statements: [{ sql }] }),
+      ).rejects.toMatchObject({ code: "shard_write_not_allowed" })
+      expect(db.calls).toHaveLength(0)
+    }
+  })
+
+  test("accepts a write CTE (WITH ... INSERT)", async () => {
+    const db = fakeD1()
+    const r = await runShardWrite(envWith(db), {
+      communityId: "cmt_1",
+      bindingName: "DB_CMTY_PILOT",
+      statements: [{ sql: "WITH src AS (SELECT 1 AS id) INSERT INTO t (id) SELECT id FROM src" }],
+    })
+    expect(r).toHaveLength(1)
+    expect(db.calls).toHaveLength(1)
+  })
+
+  test("rejects a read-only CTE on the write path (WITH ... SELECT)", async () => {
+    const db = fakeD1()
+    await expect(
+      runShardWrite(envWith(db), {
+        communityId: "cmt_1",
+        bindingName: "DB_CMTY_PILOT",
+        statements: [{ sql: "WITH x AS (SELECT 1) SELECT * FROM x" }],
+      }),
+    ).rejects.toMatchObject({ code: "shard_write_not_allowed" })
+    expect(db.calls).toHaveLength(0)
+  })
+
   test("empty batch is a no-op", async () => {
     const db = fakeD1()
     expect(await runShardWrite(envWith(db), { communityId: "cmt_1", bindingName: "DB_CMTY_PILOT", statements: [] })).toEqual([])

@@ -84,20 +84,28 @@ export function readOnlyVerb(sql: string): string {
   return stripLeadingNoise(sql).split(/\s|\(/, 1)[0]?.toUpperCase() || "statement"
 }
 
-// Verbs that change schema or the connection — never allowed on the runtime
-// WRITE path (the shard `batchWrite`). DML (INSERT/UPDATE/DELETE/REPLACE) and
-// SELECT are fine; schema is managed by migrations, not runtime writes.
+// Schema/connection verbs — never allowed on the runtime WRITE path (managed by
+// migrations, not runtime writes). Kept as defense-in-depth alongside the
+// positive allowlist below.
 const FORBIDDEN_WRITE_VERB =
   /\b(CREATE|ALTER|DROP|ATTACH|DETACH|VACUUM|ANALYZE|REINDEX|TRUNCATE|GRANT|REVOKE|PRAGMA)\b/i
 
+const DML_VERB = /\b(INSERT|UPDATE|DELETE|REPLACE)\b/i
+
 /**
- * Guard for the runtime write path: allow DML + SELECT, reject DDL/PRAGMA/
- * connection verbs and statement batching. Same fail-closed lexical posture as
- * the read guard (a column literally named `create` in a write trips it — safe
- * direction). NOT a SQL authorizer; a guardrail for our own query builders.
+ * Guard for the runtime write path (shard `batchWrite`): a POSITIVE ALLOWLIST.
+ * Allows only leading-DML (`INSERT`/`UPDATE`/`DELETE`/`REPLACE`) and write CTEs
+ * (`WITH ... <DML>`); rejects everything else — `SELECT` (reads use execute/batch),
+ * `BEGIN`/`COMMIT`, `EXPLAIN`, unknown verbs — plus DDL/PRAGMA and statement
+ * batching. Same fail-closed lexical posture as the read guard (not a SQL
+ * authorizer; a guardrail for our own query builders).
  */
 export function isWriteAllowedStatement(sql: string): boolean {
   const stripped = stripLeadingNoise(sql)
   if (hasStatementBatch(stripped)) return false
-  return !FORBIDDEN_WRITE_VERB.test(stripped)
+  if (FORBIDDEN_WRITE_VERB.test(stripped)) return false
+  if (/^(INSERT|UPDATE|DELETE|REPLACE)\b/i.test(stripped)) return true
+  // A CTE is a write only if it wraps a DML verb (WITH x AS (...) INSERT ...).
+  if (/^WITH\b/i.test(stripped)) return DML_VERB.test(stripped)
+  return false
 }
