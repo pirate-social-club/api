@@ -2,7 +2,7 @@ import type { DbExecutor } from "../db-helpers"
 import { requiredString, rowValue, stringOrNull } from "../sql-row"
 import type { Community, PostLabel } from "../../types"
 
-type CommunityLabelRow = {
+export type CommunityLabelRow = {
   label_id: string
   community_id: string
   label: string
@@ -74,9 +74,17 @@ export async function getCommunityLabelById(input: {
   return row ? toCommunityLabelRow(row) : null
 }
 
+/**
+ * Write-only label sync. Buffer-safe: callers MUST pass the current labels
+ * (`existingLabels`, read on the base client BEFORE any write tx) rather than having
+ * this read them — a buffered D1 write tx can't read them back mid-flight. The
+ * existing rows drive created_at/description preservation and the archive-removed
+ * pass; here they only feed write args.
+ */
 export async function syncCommunityLabels(input: {
   executor: DbExecutor
   communityId: string
+  existingLabels: CommunityLabelRow[]
   definitions: Array<{
     label_id: string
     label: string
@@ -86,11 +94,7 @@ export async function syncCommunityLabels(input: {
   }>
   now: string
 }): Promise<void> {
-  const existing = await listCommunityLabels({
-    executor: input.executor,
-    communityId: input.communityId,
-    includeArchived: true,
-  })
+  const existing = input.existingLabels
   const existingById = new Map(existing.map((row) => [row.label_id, row] as const))
   const incomingIds = new Set<string>()
 
