@@ -1,6 +1,6 @@
 import type { DbExecutor } from "../db-helpers"
 import type { Client } from "../sql-client"
-import { internalError, providerUnavailable } from "../errors"
+import { providerUnavailable } from "../errors"
 import { executeFirst } from "../db-helpers"
 import { makeId } from "../helpers"
 import {
@@ -13,6 +13,7 @@ import {
   postAssetStoryJoinForSchema,
   postSelectColumnsForSchema,
   resolvePostProjectionSchema,
+  type PostProjectionSchema,
 } from "./community-post-projection"
 import {
   serializePost,
@@ -20,8 +21,28 @@ import {
 } from "./community-post-serialization"
 import type { Post } from "../../types"
 import { decodePublicSongArtifactBundleId } from "../public-ids"
-import { getPostById } from "./community-post-query-store"
 import type { PostWriteRequest } from "./post-create-validation"
+
+/**
+ * Deterministic projection of exactly what an insert WROTE — NOT hydrated DB
+ * state. Returned by `insertPost` for the in-tx enqueue helpers, which read only
+ * these fields. A buffered D1 write tx cannot read a just-written row back, so
+ * the canonical hydrated `Post` is fetched after commit via `getPostById`.
+ */
+export type PostWriteDraft = Pick<
+  Post,
+  | "post_id"
+  | "post_type"
+  | "status"
+  | "title"
+  | "body"
+  | "caption"
+  | "link_url"
+  | "source_language"
+  | "translation_policy"
+  | "embeds"
+  | "link_enrichment_snapshot_json"
+>
 
 export { assertPostCreateRequest, type PostWriteRequest } from "./post-create-validation"
 
@@ -96,6 +117,9 @@ export async function insertPost(input: {
   authorUserId: string
   body: PostWriteRequest
   createdAt: string
+  // Resolved by the caller BEFORE the write tx (a buffered D1 tx can't see schema
+  // reads either) and threaded in.
+  projectionSchema: PostProjectionSchema
   analysisOverride?: Pick<Post, "analysis_state" | "content_safety_state" | "age_gate_policy" | "status">
   agentWriteAuthorization?: {
     agentId: string
@@ -105,7 +129,7 @@ export async function insertPost(input: {
     agentOwnerHandleSnapshot: string
     agentOwnershipProviderSnapshot: NonNullable<Post["agent_ownership_provider_snapshot"]>
   }
-}): Promise<Post> {
+}): Promise<PostWriteDraft> {
   const postId = makeId("pst")
   const identityMode = input.body.identity_mode ?? "public"
   const postType = input.body.post_type ?? "text"
@@ -146,7 +170,7 @@ export async function insertPost(input: {
   const contentSafetyState = input.analysisOverride?.content_safety_state ?? "safe"
   const status = input.analysisOverride?.status ?? "published"
   const ageGatePolicy = input.analysisOverride?.age_gate_policy ?? "none"
-  const projectionSchema = await resolvePostProjectionSchema(input.client)
+  const projectionSchema = input.projectionSchema
   if (crosspostSourceJson !== null && !projectionSchema.hasCrosspostSourceJson) {
     throw providerUnavailable("Community database migration is still rolling out", {
       missing_column: "posts.crosspost_source_json",
@@ -260,9 +284,21 @@ export async function insertPost(input: {
     hasPostEvents: projectionSchema.hasPostEvents,
   })
 
-  const created = await getPostById(input.client, postId)
-  if (!created) {
-    throw internalError("Post row is missing after insert")
+  // Buffer-safe: NO in-tx readback (a buffered D1 write tx would return nothing
+  // until commit). Return a deterministic draft of exactly what we wrote — the
+  // fields the in-tx enqueue helpers need. The caller reads the canonical
+  // hydrated row via getPostById(db.client, postId) AFTER commit.
+  return {
+    post_id: postId,
+    post_type: postType,
+    status,
+    title,
+    body: input.body.body ?? null,
+    caption: input.body.caption ?? null,
+    link_url: input.body.link_url ?? null,
+    source_language: sourceLanguage,
+    translation_policy: translationPolicy,
+    embeds: [],
+    link_enrichment_snapshot_json: null,
   }
-  return created
 }

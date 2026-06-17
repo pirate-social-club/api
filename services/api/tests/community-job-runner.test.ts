@@ -7,7 +7,7 @@ import type { CommunityJobRepository } from "../src/lib/communities/jobs/runner-
 import type { CommunityRow } from "../src/lib/auth/auth-db-rows"
 import { createComment } from "../src/lib/comments/comment-service"
 import { getCommentById } from "../src/lib/comments/community-comment-store"
-import { insertPost } from "../src/lib/posts/community-post-create-store"
+import { insertPostForTest as insertPost } from "./community-test-helpers"
 import { getPostById } from "../src/lib/posts/community-post-query-store"
 import { setSwarmPublisherForTests } from "../src/lib/swarm/swarm-publisher"
 import type { Env } from "../src/types"
