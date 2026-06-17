@@ -1,3 +1,5 @@
+import type { ShardReadRpc } from "@pirate/api-shared"
+
 export type Env = {
   // Runtime
   BUILD_GIT_REF?: string
@@ -25,6 +27,8 @@ export type Env = {
   LOCAL_COMMUNITY_DB_ROOT?: string
   /** Phase-0 flag: route community reads through the routing directory. "true" enables; default off. */
   COMMUNITY_READ_ROUTING_ENABLED?: string
+  /** PR2: read-only RPC binding to the community D1 shard Worker (absent until provisioned). */
+  COMMUNITY_D1_SHARD?: ShardReadRpc
   COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN?: string
   COMMUNITY_PROVISION_EXPECTED_ORGANIZATION_SLUG?: string
   COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION?: string

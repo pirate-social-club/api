@@ -4,10 +4,12 @@ import { CommunityBindingResolver } from "./community-binding-resolver"
 import {
   resolveCommunityReadHandle,
   openShardReadClientNotProvisioned,
+  makeShardReadClient,
   type CommunityReadAccessDeps,
   type CommunityReadHandle,
 } from "./community-read-access"
 import type { CommunityReadInvoker } from "./community-read-router"
+import type { ResolvedCommunityBinding } from "./community-binding-resolver"
 import { HttpError } from "../errors"
 import type { ReadClient } from "../sql-client"
 
@@ -132,4 +134,53 @@ test("stale binding from invoker → cache invalidated and error propagates", as
     "cmty_stale",
   )
   expect((handle.client as { __tag?: string }).__tag).toBe("legacy")
+})
+
+test("makeShardReadClient dispatches execute/batch to the shard RPC with communityId + bindingName", async () => {
+  const calls: Array<[string, unknown]> = []
+  const shard = {
+    execute: async (input: unknown) => {
+      calls.push(["execute", input])
+      return { rows: [{ ok: 1 }] }
+    },
+    batch: async (input: unknown) => {
+      calls.push(["batch", input])
+      return [{ rows: [] }]
+    },
+  }
+  const binding = {
+    communityId: "cmt_d1",
+    backend: "d1",
+    provisioningState: "ready",
+    shardWorkerId: "shard-1",
+    bindingName: "DB_CMTY_PILOT",
+    region: "enam",
+    tursoDatabaseBindingId: null,
+    decommissionedAt: null,
+  } as ResolvedCommunityBinding
+
+  const client = makeShardReadClient(shard, binding)
+  const r = await client.execute("SELECT 1")
+  expect(r.rows).toEqual([{ ok: 1 }])
+  expect(calls[0][1]).toMatchObject({ communityId: "cmt_d1", bindingName: "DB_CMTY_PILOT", statement: "SELECT 1" })
+
+  // Write batch mode is rejected client-side (defense in depth; shard also guards).
+  await expect(client.batch([{ sql: "INSERT INTO t VALUES (1)" }], "write")).rejects.toMatchObject({
+    code: "read_only_violation",
+  })
+})
+
+test("makeShardReadClient throws if the d1 routing row has no binding_name", () => {
+  const binding = {
+    communityId: "cmt_d1",
+    backend: "d1",
+    provisioningState: "ready",
+    shardWorkerId: "shard-1",
+    bindingName: null,
+    region: "enam",
+    tursoDatabaseBindingId: null,
+    decommissionedAt: null,
+  } as ResolvedCommunityBinding
+  const shard = { execute: async () => ({ rows: [] }), batch: async () => [] }
+  expect(() => makeShardReadClient(shard, binding)).toThrow(HttpError)
 })

@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "community-d1-shard-staging",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-09",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  }
+  // d1_databases is added at provisioning time, e.g.:
+  //   "d1_databases": [
+  //     { "binding": "DB_CMTY_PILOT", "database_name": "cmty-pilot-staging", "database_id": "<from wrangler d1 create>" }
+  //   ]
+  // The RPC surface validates the requested bindingName against these bound
+  // namespaces (resolveD1), so only declared D1s here are reachable.
+}

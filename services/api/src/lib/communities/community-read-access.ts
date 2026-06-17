@@ -1,9 +1,11 @@
+import type { ShardReadRpc, ShardSqlStatement } from "@pirate/api-shared"
 import type { Env } from "../../env"
 import type { DbExecutor } from "../db-helpers"
 import { globalSingleton } from "../db-helpers"
 import { HttpError } from "../errors"
 import { getControlPlaneClient } from "../runtime-deps"
-import type { ReadClient } from "../sql-client"
+import type { InStatement, ReadClient } from "../sql-client"
+import type { ResolvedCommunityBinding } from "./community-binding-resolver"
 import { CommunityBindingResolver } from "./community-binding-resolver"
 import { openCommunityDb } from "./community-db-factory"
 import {
@@ -55,10 +57,9 @@ function isRoutingFallback(error: unknown): boolean {
 }
 
 /**
- * The shard read invoker for PR1. The shard Worker hosting per-community D1
- * bindings is not deployed yet, so no community should resolve to
- * `backend='d1'`. Fail loud (retryable) rather than silently mis-serve, so a
- * premature d1 flip in the directory is caught instead of hidden.
+ * Fallback shard invoker when no shard binding is bound on this Worker (e.g. a
+ * community was flipped to `backend='d1'` before the shard service is deployed
+ * to this env). Fail loud (retryable) rather than silently mis-serve.
  */
 export const openShardReadClientNotProvisioned: CommunityReadInvoker = async (binding) => {
   throw new HttpError(
@@ -67,6 +68,48 @@ export const openShardReadClientNotProvisioned: CommunityReadInvoker = async (bi
     `Community ${binding.communityId} routes to d1 but the shard read backend is not provisioned yet`,
     true,
   )
+}
+
+/** A ShardSqlStatement is structurally an InStatement; pass through unchanged. */
+function toShardStatement(statement: InStatement | string): ShardSqlStatement | string {
+  return statement as ShardSqlStatement | string
+}
+
+/**
+ * PR2: real D1 read client backed by the shard Worker over the service-binding
+ * RPC. Returns a `ReadClient` (no `transaction`) so the write surface is
+ * unrepresentable here — writes remain PR3. The shard re-validates `bindingName`
+ * and re-runs the read-only guard server-side; this side rejects write batch.
+ */
+export function makeShardReadClient(shard: ShardReadRpc, binding: ResolvedCommunityBinding): ReadClient {
+  const bindingName = binding.bindingName
+  if (!bindingName) {
+    throw new HttpError(500, "binding_not_found", `d1 routing row for ${binding.communityId} has no binding_name`)
+  }
+  return {
+    execute: (statement) =>
+      shard.execute({ communityId: binding.communityId, bindingName, statement: toShardStatement(statement) }),
+    batch: async (statements, mode) => {
+      if (mode === "write") {
+        throw new HttpError(400, "read_only_violation", "Write batch is not allowed on the D1 shard read client")
+      }
+      return shard.batch({
+        communityId: binding.communityId,
+        bindingName,
+        statements: statements.map((s) => toShardStatement(s) as ShardSqlStatement),
+      })
+    },
+  }
+}
+
+/** Build the shard invoker for this Worker: real client if the shard binding is
+ * present, else the fail-loud not-provisioned stub. */
+function shardReadInvokerFor(env: Env): CommunityReadInvoker {
+  const shard = env.COMMUNITY_D1_SHARD
+  if (!shard) {
+    return openShardReadClientNotProvisioned
+  }
+  return async (binding) => makeShardReadClient(shard, binding)
 }
 
 export type CommunityReadAccessDeps = {
@@ -133,7 +176,7 @@ export async function openCommunityReadClient(
       resolver: getResolver(),
       controlPlane: getControlPlaneClient(env),
       openTursoReadClient,
-      openShardReadClient: openShardReadClientNotProvisioned,
+      openShardReadClient: shardReadInvokerFor(env),
       openLegacy,
     },
     communityId,

@@ -19,3 +19,5 @@ export function makeId(prefix: string): string {
 }
 
 export * from "./postgres-url.js"
+export * from "./shard-read-contract.js"
+export * from "./sql-read-guard.js"
