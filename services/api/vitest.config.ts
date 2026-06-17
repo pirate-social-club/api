@@ -26,6 +26,11 @@ export default defineWorkersConfig({
               useSQLite: true,
             },
           },
+          // Real D1 for the Turso→D1 shard write integration test (shard-write.integration.ts):
+          // proves buffered write tx → atomic batchWrite → real D1.
+          d1Databases: {
+            DB_CMTY_PILOT: "shard-write-pilot-test",
+          },
           bindings: {
             ENVIRONMENT: "test",
             // 48 chars — exceeds the 32-char minimum enforced by the signer.

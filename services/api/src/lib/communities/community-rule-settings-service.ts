@@ -4,7 +4,7 @@ import type {
 } from "./db-community-repository"
 import { notFoundError } from "../errors"
 import { nowIso } from "../helpers"
-import { openCommunityDb } from "./community-db-factory"
+import { openCommunityWriteClient } from "./community-read-access"
 import {
   loadCommunityProjection,
   communityMutationActorFromUserId,
@@ -35,7 +35,10 @@ export async function updateCommunityRules(input: {
     actor: input.actor ?? communityMutationActorFromUserId(input.userId ?? ""),
     action: "community.rules_updated",
   })
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  // PR3 pilot: this write surface is buffer-safe (write-only tx body), so it may
+  // route to D1 for backend='d1' communities. Other (result-dependent) write
+  // surfaces stay on openCommunityDb until refactored.
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
 
   try {
     const rules = normalizeInputRules(input.body.rules)

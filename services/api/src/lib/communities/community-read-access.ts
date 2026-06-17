@@ -4,9 +4,10 @@ import type { DbExecutor } from "../db-helpers"
 import { globalSingleton } from "../db-helpers"
 import { HttpError } from "../errors"
 import { getControlPlaneClient } from "../runtime-deps"
-import type { InStatement, ReadClient } from "../sql-client"
+import type { Client, InStatement, ReadClient } from "../sql-client"
 import type { ResolvedCommunityBinding } from "./community-binding-resolver"
 import { CommunityBindingResolver } from "./community-binding-resolver"
+import { makeCommunityD1Client } from "./community-d1-client"
 import { openCommunityDb } from "./community-db-factory"
 import {
   routeCommunityRead,
@@ -177,6 +178,95 @@ export async function openCommunityReadClient(
       controlPlane: getControlPlaneClient(env),
       openTursoReadClient,
       openShardReadClient: shardReadInvokerFor(env),
+      openLegacy,
+    },
+    communityId,
+  )
+}
+
+export type CommunityWriteHandle = {
+  client: Client
+  close: () => void | Promise<void>
+}
+
+/**
+ * PR3 cutover write/read access for a community. When the flag is on and the
+ * community's routing row is `backend='d1'`, returns the D1-backed Client (reads
+ * + buffered-batch writes via the shard). Otherwise — flag off, `backend='turso'`,
+ * or a routing miss — returns the legacy Turso Client via `openCommunityDb`.
+ *
+ * This is the per-surface cutover seam: a call site opted into D1 writes uses
+ * this instead of `openCommunityDb`. It is NOT a blanket `openCommunityDb`
+ * replacement — only buffer-safe write surfaces (write-only tx bodies) may adopt
+ * it until the result-dependent transactions are refactored.
+ */
+export type CommunityWriteAccessDeps = {
+  enabled: boolean
+  resolver: CommunityBindingResolver
+  controlPlane: DbExecutor
+  /** Open the D1-backed Client for a resolved d1 binding (throws if shard absent). */
+  openD1: (binding: ResolvedCommunityBinding) => Client
+  /** Legacy direct-open path (the current Turso open via `openCommunityDb`). */
+  openLegacy: () => Promise<CommunityWriteHandle>
+}
+
+/**
+ * Pure write-access decision (injectable for tests): flag off → legacy; flag on
+ * → resolve the directory, d1 → D1 client, turso → legacy, routing miss → legacy.
+ */
+export async function resolveCommunityWriteHandle(
+  deps: CommunityWriteAccessDeps,
+  communityId: string,
+): Promise<CommunityWriteHandle> {
+  if (!deps.enabled) {
+    return deps.openLegacy()
+  }
+  try {
+    const binding = await deps.resolver.resolve(deps.controlPlane, communityId)
+    if (binding.backend === "d1") {
+      return { client: deps.openD1(binding), close: () => {} }
+    }
+    return deps.openLegacy()
+  } catch (error) {
+    if (isRoutingFallback(error)) {
+      return deps.openLegacy()
+    }
+    throw error
+  }
+}
+
+export async function openCommunityWriteClient(
+  env: Env,
+  repo: CommunityDatabaseBindingRepository,
+  communityId: string,
+): Promise<CommunityWriteHandle> {
+  const openLegacy = async (): Promise<CommunityWriteHandle> => {
+    const handle = await openCommunityDb(env, repo, communityId)
+    return { client: handle.client, close: () => handle.close() }
+  }
+
+  // When the flag is off, never touch the control plane or resolver.
+  if (!routingEnabled(env)) {
+    return openLegacy()
+  }
+
+  return resolveCommunityWriteHandle(
+    {
+      enabled: true,
+      resolver: getResolver(),
+      controlPlane: getControlPlaneClient(env),
+      openD1: (binding) => {
+        const shard = env.COMMUNITY_D1_SHARD
+        if (!shard) {
+          throw new HttpError(
+            503,
+            "d1_backend_not_provisioned",
+            `Community ${communityId} routes to d1 but the shard backend is not provisioned`,
+            true,
+          )
+        }
+        return makeCommunityD1Client(shard, binding)
+      },
       openLegacy,
     },
     communityId,

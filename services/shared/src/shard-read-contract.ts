@@ -39,16 +39,36 @@ export type ShardBatchReadRequest = {
   statements: ShardSqlStatement[]
 }
 
-/**
- * The shard's RPC surface, as seen by the API across the service binding. The
- * shard's `CommunityD1Shard` WorkerEntrypoint implements this; the API types its
- * `COMMUNITY_D1_SHARD` binding as this interface — so neither side imports the
- * other's package, only this shared contract. READ-ONLY: no write/transaction.
- */
 export interface ShardReadRpc {
   execute(input: ShardReadRequest): Promise<ShardQueryResult>
   batch(input: ShardBatchReadRequest): Promise<ShardQueryResult[]>
 }
+
+/**
+ * PR3 write surface. A community write transaction is buffered on the API side
+ * and committed as ONE atomic D1 `batch()` — D1 has no interactive transactions,
+ * and the community write-tx bodies are write-only atomic units, so this maps
+ * cleanly. `statements` run atomically (all-or-nothing) in order. DML only:
+ * the shard rejects DDL/PRAGMA/ATTACH (schema is managed by migrations, not the
+ * runtime write path).
+ */
+export type ShardWriteRequest = {
+  communityId: string
+  bindingName: string
+  statements: ShardSqlStatement[]
+}
+
+export interface ShardWriteRpc {
+  batchWrite(input: ShardWriteRequest): Promise<ShardQueryResult[]>
+}
+
+/**
+ * Full shard RPC surface, as seen by the API across the service binding. The
+ * shard's `CommunityD1Shard` WorkerEntrypoint implements this; the API types its
+ * `COMMUNITY_D1_SHARD` binding as this interface — so neither side imports the
+ * other's package, only this shared contract.
+ */
+export interface ShardRpc extends ShardReadRpc, ShardWriteRpc {}
 
 /** Error codes the shard RPC surface raises (mapped to HttpError on the API side). */
 export const SHARD_READ_ERROR = {
@@ -63,4 +83,6 @@ export const SHARD_READ_ERROR = {
   BINDING_NOT_ALLOWED: "shard_binding_not_allowed",
   /** A statement failed the shard's read-only guard. */
   READ_ONLY_VIOLATION: "shard_read_only_violation",
+  /** A write-path statement was DDL/PRAGMA/connection verb (not allowed at runtime). */
+  WRITE_NOT_ALLOWED: "shard_write_not_allowed",
 } as const
