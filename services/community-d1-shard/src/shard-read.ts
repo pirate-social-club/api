@@ -1,11 +1,13 @@
 import {
   isReadOnlyStatement,
+  isWriteAllowedStatement,
   readOnlyVerb,
   SHARD_READ_ERROR,
   type ShardBatchReadRequest,
   type ShardQueryResult,
   type ShardReadRequest,
   type ShardSqlStatement,
+  type ShardWriteRequest,
 } from "@pirate/api-shared"
 
 /**
@@ -78,17 +80,28 @@ export function resolveD1(env: ShardEnv, bindingName: string): D1Database {
   return candidate as D1Database
 }
 
-function prepareReadOnly(db: D1Database, statement: ShardSqlStatement | string): D1PreparedStatement {
+function prepareGuarded(
+  db: D1Database,
+  statement: ShardSqlStatement | string,
+  allowed: (sql: string) => boolean,
+  errorCode: string,
+  guardName: string,
+): D1PreparedStatement {
   const sql = typeof statement === "string" ? statement : statement.sql
   const args = typeof statement === "string" ? [] : statement.args ?? []
-  if (!isReadOnlyStatement(sql)) {
-    throw new ShardReadError(
-      SHARD_READ_ERROR.READ_ONLY_VIOLATION,
-      `Statement rejected by shard read-only guard: ${readOnlyVerb(sql)}`,
-    )
+  if (!allowed(sql)) {
+    throw new ShardReadError(errorCode, `Statement rejected by shard ${guardName} guard: ${readOnlyVerb(sql)}`)
   }
   const prepared = db.prepare(sql)
   return args.length > 0 ? prepared.bind(...args) : prepared
+}
+
+function prepareReadOnly(db: D1Database, statement: ShardSqlStatement | string): D1PreparedStatement {
+  return prepareGuarded(db, statement, isReadOnlyStatement, SHARD_READ_ERROR.READ_ONLY_VIOLATION, "read-only")
+}
+
+function prepareWrite(db: D1Database, statement: ShardSqlStatement): D1PreparedStatement {
+  return prepareGuarded(db, statement, isWriteAllowedStatement, SHARD_READ_ERROR.WRITE_NOT_ALLOWED, "write")
 }
 
 function toResult(result: D1Result): ShardQueryResult {
@@ -110,6 +123,21 @@ export async function runShardBatch(env: ShardEnv, input: ShardBatchReadRequest)
   assertCommunityBinding(env, input.communityId, input.bindingName)
   const db = resolveD1(env, input.bindingName)
   const prepared = input.statements.map((statement) => prepareReadOnly(db, statement))
+  const results = await db.batch(prepared)
+  return results.map(toResult)
+}
+
+/**
+ * PR3 write path. Runs the buffered statements of one community write transaction
+ * as a single ATOMIC D1 batch (all-or-nothing). Same (communityId, bindingName)
+ * authorization as reads; DML/SELECT only (DDL/PRAGMA rejected). Empty batch is a
+ * no-op (returns []).
+ */
+export async function runShardWrite(env: ShardEnv, input: ShardWriteRequest): Promise<ShardQueryResult[]> {
+  assertCommunityBinding(env, input.communityId, input.bindingName)
+  const db = resolveD1(env, input.bindingName)
+  if (input.statements.length === 0) return []
+  const prepared = input.statements.map((statement) => prepareWrite(db, statement))
   const results = await db.batch(prepared)
   return results.map(toResult)
 }

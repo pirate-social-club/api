@@ -79,7 +79,25 @@ export function isReadOnlyStatement(sql: string): boolean {
   return false
 }
 
-/** The leading verb of a statement, for read-only-violation error messages. */
+/** The leading verb of a statement, for violation error messages. */
 export function readOnlyVerb(sql: string): string {
   return stripLeadingNoise(sql).split(/\s|\(/, 1)[0]?.toUpperCase() || "statement"
+}
+
+// Verbs that change schema or the connection — never allowed on the runtime
+// WRITE path (the shard `batchWrite`). DML (INSERT/UPDATE/DELETE/REPLACE) and
+// SELECT are fine; schema is managed by migrations, not runtime writes.
+const FORBIDDEN_WRITE_VERB =
+  /\b(CREATE|ALTER|DROP|ATTACH|DETACH|VACUUM|ANALYZE|REINDEX|TRUNCATE|GRANT|REVOKE|PRAGMA)\b/i
+
+/**
+ * Guard for the runtime write path: allow DML + SELECT, reject DDL/PRAGMA/
+ * connection verbs and statement batching. Same fail-closed lexical posture as
+ * the read guard (a column literally named `create` in a write trips it — safe
+ * direction). NOT a SQL authorizer; a guardrail for our own query builders.
+ */
+export function isWriteAllowedStatement(sql: string): boolean {
+  const stripped = stripLeadingNoise(sql)
+  if (hasStatementBatch(stripped)) return false
+  return !FORBIDDEN_WRITE_VERB.test(stripped)
 }
