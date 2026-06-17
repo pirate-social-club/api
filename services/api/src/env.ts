@@ -42,6 +42,10 @@ export type Env = {
   AUTH_UPSTREAM_JWT_ISSUER?: string
   AUTH_UPSTREAM_JWT_AUDIENCE?: string
   AUTH_UPSTREAM_JWT_SHARED_SECRET?: string
+  // Staging-only test issuer (see lib/auth/staging-test-auth.ts). Fails closed unless
+  // ENVIRONMENT=staging AND STAGING_TEST_AUTH_ENABLED opted in AND the secret is set.
+  STAGING_TEST_AUTH_ENABLED?: string
+  STAGING_TEST_JWT_SHARED_SECRET?: string
   PIRATE_APP_JWT_PRIVATE_KEY?: string
   PIRATE_APP_JWT_PUBLIC_KEY?: string
   PIRATE_APP_JWT_ISSUER?: string
