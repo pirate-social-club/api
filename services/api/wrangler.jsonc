@@ -111,6 +111,11 @@
         {
           "binding": "COMMUNITY_PROVISION_OPERATOR",
           "service": "community-provision-operator-staging"
+        },
+        {
+          "binding": "COMMUNITY_D1_SHARD",
+          "service": "community-d1-shard-staging",
+          "entrypoint": "CommunityD1Shard"
         }
       ],
       "vars": {
