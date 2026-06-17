@@ -1,6 +1,5 @@
 import type { DbExecutor } from "../db-helpers"
 import { executeFirst } from "../db-helpers"
-import { internalError } from "../errors"
 import { makeId } from "../helpers"
 import { requiredString, rowValue, stringOrNull } from "../sql-row"
 import type {
@@ -123,20 +122,22 @@ export async function createModerationSignal(input: {
       input.now,
     ],
   })
-  const row = await executeFirst(input.executor, {
-    sql: `
-      SELECT moderation_signal_id, community_id, post_id, comment_id, analysis_result_ref,
-             source, signal_type, severity, provider, provider_label, evidence_ref, created_at
-      FROM moderation_signals
-      WHERE moderation_signal_id = ?1
-      LIMIT 1
-    `,
-    args: [moderationSignalId],
-  })
-  if (!row) {
-    throw internalError("Moderation signal is missing after insert")
+  // Deterministic projection of the inserted row — buffer-safe (no in-tx readback).
+  // This runs inside the post-create write tx via recordReviewRequiredPostModeration.
+  return {
+    moderation_signal_id: moderationSignalId,
+    community_id: input.communityId,
+    post_id: input.postId,
+    comment_id: null,
+    analysis_result_ref: input.analysisResultRef,
+    source: "platform_analysis",
+    signal_type: input.signalType,
+    severity: input.severity,
+    provider: input.provider,
+    provider_label: input.providerLabel,
+    evidence_ref: input.evidenceRef,
+    created_at: input.now,
   }
-  return serializeModerationSignal(row)
 }
 
 export async function getOpenModerationCaseForTarget(input: {
@@ -200,14 +201,21 @@ export async function createModerationCase(input: {
     `,
     args: [moderationCaseId, input.communityId, postId, commentId, input.priority, input.openedBy, input.now],
   })
-  const created = await getModerationCaseById({
-    executor: input.executor,
-    moderationCaseId,
-  })
-  if (!created) {
-    throw internalError("Moderation case is missing after insert")
+  // Deterministic projection of the inserted row — no readback, so this is safe inside
+  // a buffered D1 write tx. Mirrors the INSERT column values exactly.
+  return {
+    moderation_case_id: moderationCaseId,
+    community_id: input.communityId,
+    post_id: postId,
+    comment_id: commentId,
+    status: "open",
+    queue_scope: "community",
+    priority: input.priority,
+    opened_by: input.openedBy,
+    created_at: input.now,
+    updated_at: input.now,
+    resolved_at: null,
   }
-  return created
 }
 
 export async function updateModerationCaseOpenedBy(input: {
@@ -299,19 +307,17 @@ export async function createUserReport(input: {
       input.now,
     ],
   })
-  const created = await executeFirst(input.executor, {
-    sql: `
-      SELECT user_report_id, community_id, post_id, comment_id, reporter_user_id, reason_code, note, created_at
-      FROM user_reports
-      WHERE user_report_id = ?1
-      LIMIT 1
-    `,
-    args: [userReportId],
-  })
-  if (!created) {
-    throw internalError("User report is missing after insert")
+  // Deterministic projection of the inserted row — buffer-safe (no in-tx readback).
+  return {
+    user_report_id: userReportId,
+    community_id: input.communityId,
+    post_id: postId,
+    comment_id: commentId,
+    reporter_user_id: input.reporterUserId,
+    reason_code: input.body.reason_code,
+    note: input.body.note?.trim() || null,
+    created_at: input.now,
   }
-  return serializeUserReport(created)
 }
 
 function serializeModerationCaseListItem(row: unknown): ModerationCaseListItem {
@@ -450,20 +456,18 @@ export async function createModerationAction(input: {
       input.nextAgeGatePolicy ?? null,
     ],
   })
-  const created = await executeFirst(input.executor, {
-    sql: `
-      SELECT moderation_action_id, moderation_case_id, community_id, post_id, comment_id,
-             actor_user_id, action_type, note, created_at
-      FROM moderation_actions
-      WHERE moderation_action_id = ?1
-      LIMIT 1
-    `,
-    args: [moderationActionId],
-  })
-  if (!created) {
-    throw internalError("Moderation action is missing after insert")
+  // Deterministic projection of the inserted row — buffer-safe (no in-tx readback).
+  return {
+    moderation_action_id: moderationActionId,
+    moderation_case_id: input.moderationCase.moderation_case_id,
+    community_id: input.moderationCase.community_id,
+    post_id: input.moderationCase.post_id,
+    comment_id: input.moderationCase.comment_id,
+    actor_user_id: input.actorUserId,
+    action_type: input.body.action_type,
+    note: input.body.note?.trim() || null,
+    created_at: input.now,
   }
-  return serializeModerationAction(created)
 }
 
 export async function setPostModerationStatus(input: {

@@ -6,7 +6,7 @@ import { notFoundError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { decodePublicId } from "../public-ids"
 import { openCommunityDb } from "./community-db-factory"
-import { syncCommunityLabels } from "./community-label-store"
+import { listCommunityLabels, syncCommunityLabels } from "./community-label-store"
 import {
   assertUpdateCommunityLabelPolicyRequest,
   assertUpdateCommunityReferenceLinksRequest,
@@ -203,6 +203,15 @@ export async function updateCommunityLabelPolicy(input: {
       allowed_post_types: definition.allowed_post_types,
     }))
 
+    // Read existing labels BEFORE the tx — a buffered D1 write tx can't read them
+    // back, and syncCommunityLabels needs them to preserve created_at/description
+    // and to archive removed labels. The tx body below stays write-only.
+    const existingLabels = await listCommunityLabels({
+      executor: db.client,
+      communityId: input.communityId,
+      includeArchived: true,
+    })
+
     const tx = await db.client.transaction("write")
     try {
       await tx.execute({
@@ -225,6 +234,7 @@ export async function updateCommunityLabelPolicy(input: {
       await syncCommunityLabels({
         executor: tx,
         communityId: input.communityId,
+        existingLabels,
         definitions: definitions.map((definition) => ({
           label_id: definition.id,
           label: definition.label,

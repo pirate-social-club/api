@@ -72,7 +72,7 @@ export async function deletePost(input: {
     const deletedAt = nowIso()
     const tx = await db.client.transaction("write")
     try {
-      const deleted = await markPostDeleted({
+      await markPostDeleted({
         executor: tx,
         postId: input.postId,
         now: deletedAt,
@@ -85,11 +85,13 @@ export async function deletePost(input: {
         updatedAt: deletedAt,
       })
 
+      // Response is deterministic from the write (status/updated_at are exactly
+      // what markPostDeleted set) — no in-tx readback needed.
       return {
         post: {
-          post_id: deleted.post_id,
-          status: deleted.status,
-          updated_at: deleted.updated_at,
+          post_id: input.postId,
+          status: "deleted",
+          updated_at: deletedAt,
         },
         deletedAt,
         alreadyDeleted: false,

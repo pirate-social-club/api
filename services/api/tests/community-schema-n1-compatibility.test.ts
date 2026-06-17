@@ -9,7 +9,7 @@ import { REQUIRED_COMMUNITY_DB_MIGRATION } from "../src/lib/community-db-schema-
 import { HttpError } from "../src/lib/errors"
 import { insertComment, listTopLevelComments } from "../src/lib/comments/community-comment-store"
 import { getCommunityMembershipState } from "../src/lib/communities/membership/membership-state-store"
-import { insertPost } from "../src/lib/posts/community-post-create-store"
+import { insertPostForTest as insertPost } from "./community-test-helpers"
 import { listPublishedLocalizedPosts } from "../src/lib/posts/community-post-feed"
 import { getPostById } from "../src/lib/posts/community-post-query-store"
 import { upsertPostVote } from "../src/lib/posts/community-post-vote-store"
