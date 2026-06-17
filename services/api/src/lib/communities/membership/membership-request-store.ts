@@ -164,9 +164,29 @@ export async function resolveMembershipRequest(input: {
   decision: "approved" | "rejected"
   now: string
 }): Promise<MembershipRequestRow | null> {
+  // Read the pending request BEFORE the tx — a buffered D1 write tx can't surface
+  // rowsAffected or read the row back mid-flight, and the approved-path membership
+  // upsert needs the applicant_user_id. The UPDATE below stays guarded by
+  // status='pending', so a concurrent resolve still can't double-apply.
+  const existing = await executeFirst(input.client, {
+    sql: `
+      ${MEMBERSHIP_REQUEST_SELECT}
+      WHERE community_id = ?1
+        AND membership_request_id = ?2
+        AND status = 'pending'
+      LIMIT 1
+    `,
+    args: [input.communityId, input.requestId],
+  })
+  if (!existing) {
+    return null
+  }
+  const request = toMembershipRequestRow(existing as Record<string, unknown>)
+  const nextStatus = input.decision === "approved" ? "approved" : "rejected"
+
   const tx = await input.client.transaction("write")
   try {
-    const updated = await tx.execute({
+    await tx.execute({
       sql: `
         UPDATE membership_requests
         SET status = ?4,
@@ -177,35 +197,8 @@ export async function resolveMembershipRequest(input: {
           AND membership_request_id = ?2
           AND status = 'pending'
       `,
-      args: [
-        input.communityId,
-        input.requestId,
-        input.reviewerUserId,
-        input.decision === "approved" ? "approved" : "rejected",
-        input.now,
-      ],
+      args: [input.communityId, input.requestId, input.reviewerUserId, nextStatus, input.now],
     })
-    if (!updated.rowsAffected || updated.rowsAffected === 0) {
-      await tx.rollback()
-      tx.close()
-      return null
-    }
-
-    const selected = await executeFirst(tx, {
-      sql: `
-        ${MEMBERSHIP_REQUEST_SELECT}
-        WHERE community_id = ?1
-          AND membership_request_id = ?2
-        LIMIT 1
-      `,
-      args: [input.communityId, input.requestId],
-    })
-    if (!selected) {
-      await tx.rollback()
-      tx.close()
-      return null
-    }
-    const request = toMembershipRequestRow(selected as Record<string, unknown>)
 
     if (input.decision === "approved") {
       await upsertCommunityMembership({
@@ -218,7 +211,8 @@ export async function resolveMembershipRequest(input: {
 
     await tx.commit()
     tx.close()
-    return request
+    // Deterministic projection of the resolved row — the tx can't read it back.
+    return { ...request, status: nextStatus, updated_at: input.now }
   } catch (error) {
     await tx.rollback().catch((rollbackError) => {
       console.error("[membership-requests] rollback failed while reviewing membership request", rollbackError)
