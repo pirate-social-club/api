@@ -65,14 +65,17 @@
     "agora-token": "^2.0.3",
     "altcha-lib": "^2.0.3",
     "ethers": "^6.16.0",
-    "hono": "^4.8.5",
+    "hono": "^4.12.25",
     "jose": "^6.2.2",
     "viem": "^2.48.1"
   },
   "overrides": {
     "axios": "^1.16.0",
     "esbuild": "^0.28.1",
-    "underscore": "^1.13.8"
+    "form-data": "^4.0.6",
+    "hono": "^4.12.25",
+    "underscore": "^1.13.8",
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.13",
