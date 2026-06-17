@@ -4,7 +4,7 @@ import type {
 } from "./db-community-repository"
 import { badRequestError, internalError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
-import { openCommunityDb } from "./community-db-factory"
+import { openCommunityWriteClient } from "./community-read-access"
 import {
   type EndaomentOrganizationSearchResult,
   communityMutationActorFromUserId,
@@ -144,7 +144,12 @@ export async function updateCommunityDonationPolicy(input: {
     actor: input.actor ?? communityMutationActorFromUserId(input.userId ?? ""),
     action: "community.donation_policy_updated",
   })
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  // Routed through openCommunityWriteClient: when COMMUNITY_READ_ROUTING is off this is
+  // legacy Turso; when on it follows the community's control_plane_routing backend (D1
+  // or Turso fallback). The pre-tx settings read runs on the base client and the tx body
+  // is write-only (INSERT donation_partners ON CONFLICT + UPDATE communities), so it is
+  // D1-buffer-safe.
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
 
   try {
     const result = await db.client.execute({
