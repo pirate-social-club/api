@@ -133,13 +133,17 @@ export async function reportPost(input: {
       return existingReport
     }
     const now = nowIso()
+    // Read the open case BEFORE the tx — a buffered D1 write tx can't read it back
+    // mid-flight. createModerationCase/createUserReport are deterministic (no
+    // readback), so the tx body below is write-only.
+    const existingCase = await getOpenModerationCaseForTarget({
+      executor: db.client,
+      communityId: input.communityId,
+      target: { postId: input.postId },
+    })
     const tx = await db.client.transaction("write")
     try {
-      let moderationCase = await getOpenModerationCaseForTarget({
-        executor: tx,
-        communityId: input.communityId,
-        target: { postId: input.postId },
-      })
+      let moderationCase = existingCase
       if (!moderationCase) {
         moderationCase = await createModerationCase({
           executor: tx,
@@ -215,13 +219,15 @@ export async function reportComment(input: {
       return existingReport
     }
     const now = nowIso()
+    // Read the open case BEFORE the tx (see reportPost) — the tx body stays write-only.
+    const existingCase = await getOpenModerationCaseForTarget({
+      executor: db.client,
+      communityId: input.communityId,
+      target: { commentId: input.commentId },
+    })
     const tx = await db.client.transaction("write")
     try {
-      let moderationCase = await getOpenModerationCaseForTarget({
-        executor: tx,
-        communityId: input.communityId,
-        target: { commentId: input.commentId },
-      })
+      let moderationCase = existingCase
       if (!moderationCase) {
         moderationCase = await createModerationCase({
           executor: tx,
