@@ -4,9 +4,10 @@ import type { DbExecutor } from "../db-helpers"
 import { globalSingleton } from "../db-helpers"
 import { HttpError } from "../errors"
 import { getControlPlaneClient } from "../runtime-deps"
-import type { InStatement, ReadClient } from "../sql-client"
+import type { Client, InStatement, ReadClient } from "../sql-client"
 import type { ResolvedCommunityBinding } from "./community-binding-resolver"
 import { CommunityBindingResolver } from "./community-binding-resolver"
+import { makeCommunityD1Client } from "./community-d1-client"
 import { openCommunityDb } from "./community-db-factory"
 import {
   routeCommunityRead,
@@ -181,4 +182,58 @@ export async function openCommunityReadClient(
     },
     communityId,
   )
+}
+
+export type CommunityWriteHandle = {
+  client: Client
+  close: () => void | Promise<void>
+}
+
+/**
+ * PR3 cutover write/read access for a community. When the flag is on and the
+ * community's routing row is `backend='d1'`, returns the D1-backed Client (reads
+ * + buffered-batch writes via the shard). Otherwise — flag off, `backend='turso'`,
+ * or a routing miss — returns the legacy Turso Client via `openCommunityDb`.
+ *
+ * This is the per-surface cutover seam: a call site opted into D1 writes uses
+ * this instead of `openCommunityDb`. It is NOT a blanket `openCommunityDb`
+ * replacement — only buffer-safe write surfaces (write-only tx bodies) may adopt
+ * it until the result-dependent transactions are refactored.
+ */
+export async function openCommunityWriteClient(
+  env: Env,
+  repo: CommunityDatabaseBindingRepository,
+  communityId: string,
+): Promise<CommunityWriteHandle> {
+  const openLegacy = async (): Promise<CommunityWriteHandle> => {
+    const handle = await openCommunityDb(env, repo, communityId)
+    return { client: handle.client, close: () => handle.close() }
+  }
+
+  if (!routingEnabled(env)) {
+    return openLegacy()
+  }
+
+  try {
+    const binding = await getResolver().resolve(getControlPlaneClient(env), communityId)
+    if (binding.backend === "d1") {
+      const shard = env.COMMUNITY_D1_SHARD
+      if (!shard) {
+        throw new HttpError(
+          503,
+          "d1_backend_not_provisioned",
+          `Community ${communityId} routes to d1 but the shard backend is not provisioned`,
+          true,
+        )
+      }
+      return { client: makeCommunityD1Client(shard, binding), close: () => {} }
+    }
+    // backend === 'turso' → legacy direct open.
+    return openLegacy()
+  } catch (error) {
+    if (isRoutingFallback(error)) {
+      return openLegacy()
+    }
+    throw error
+  }
 }
